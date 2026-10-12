@@ -12,6 +12,7 @@ use super::seed::snapshot_seed;
 use crate::{
     coordinator::unified::{
         OffsetRecordBatchBuilder,
+        assignor::TopicIdPartition,
         member_records::{
             MemberRecordFamilies, MemberRecordLists, MemberTombstone, MemberValues,
             append_removed_members, append_target_records,
@@ -313,11 +314,11 @@ fn deleting_topics(state: &ShareGroupState) -> Vec<DeletingTopic> {
 /// Groups `partitions` into one named, sorted row per topic.
 fn topic_partitions_infos<'a>(
     state: &ShareGroupState,
-    partitions: impl Iterator<Item = &'a (Uuid, i32)>,
+    partitions: impl Iterator<Item = &'a TopicIdPartition>,
 ) -> Vec<TopicPartitionsInfo> {
     let mut by_topic: HashMap<Uuid, Vec<i32>> = HashMap::new();
-    for (tid, p) in partitions {
-        by_topic.entry(*tid).or_default().push(*p);
+    for tp in partitions {
+        by_topic.entry(tp.topic_id).or_default().push(tp.partition);
     }
     let mut topics: Vec<TopicPartitionsInfo> = by_topic
         .into_iter()
@@ -360,6 +361,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+    use crate::coordinator::unified::share::state::share_partition;
 
     #[test]
     fn state_partition_metadata_names_every_topic_it_lists() {
@@ -367,10 +369,10 @@ mod tests {
         let forgotten = Uuid([2; 16]);
         let mut state = ShareGroupState::new("g");
         for partition in [1, 0] {
-            state.initialized.insert((named, partition));
+            state.initialized.insert(share_partition(named, partition));
         }
-        state.initialized.insert((forgotten, 0));
-        state.initializing.insert((named, 2), 5);
+        state.initialized.insert(share_partition(forgotten, 0));
+        state.initializing.insert(share_partition(named, 2), 5);
         state.topic_names.insert(named, "orders".to_owned());
         state.deleting.insert(forgotten, "carts".to_owned());
         state.deleting.insert(named, "orders".to_owned());

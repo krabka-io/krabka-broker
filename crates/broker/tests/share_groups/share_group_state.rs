@@ -244,6 +244,14 @@ async fn delete_groups_deletes_an_empty_share_group_and_its_state() {
     }
 }
 
+/// A group member, the epoch it last held, and the topics it subscribes to.
+#[derive(Clone, Copy)]
+struct MemberSubscription<'a> {
+    member_id: &'a str,
+    epoch: i32,
+    topics: &'a [&'a str],
+}
+
 /// Heartbeats until `done` holds for the share state of every partition in
 /// `partitions` of `topic`. Each member in `members` sends one heartbeat per
 /// pass, with its own subscription and with the member epoch of its last
@@ -253,18 +261,19 @@ async fn heartbeat_until(
     broker: &krabka_broker::BrokerHandle,
     client: &krabka_client_core::Client,
     group: &str,
-    members: &[(&str, i32, &[&str])],
+    members: &[MemberSubscription<'_>],
     topic: uuid::Uuid,
     partitions: std::ops::Range<i32>,
     present: bool,
 ) {
-    let mut epochs: Vec<i32> = members.iter().map(|(_, epoch, _)| *epoch).collect();
+    let mut epochs: Vec<i32> = members.iter().map(|member| member.epoch).collect();
     let reached = tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
-            for ((member_id, _, subscription), epoch) in members.iter().zip(epochs.iter_mut()) {
-                let mut hb = heartbeat(group, member_id, *epoch);
+            for (member, epoch) in members.iter().zip(epochs.iter_mut()) {
+                let mut hb = heartbeat(group, member.member_id, *epoch);
                 hb.subscribed_topic_names = Some(
-                    subscription
+                    member
+                        .topics
                         .iter()
                         .map(|topic| (*topic).to_owned())
                         .collect(),
@@ -300,17 +309,11 @@ async fn heartbeat_until_initialized(
     broker: &krabka_broker::BrokerHandle,
     client: &krabka_client_core::Client,
     group: &str,
-    members: &[(&str, i32, &str)],
+    members: &[MemberSubscription<'_>],
     topic: uuid::Uuid,
     partitions: std::ops::Range<i32>,
 ) {
-    let subscriptions: Vec<[&str; 1]> = members.iter().map(|(_, _, topic)| [*topic]).collect();
-    let members: Vec<(&str, i32, &[&str])> = members
-        .iter()
-        .zip(subscriptions.iter())
-        .map(|((member_id, epoch, _), subscription)| (*member_id, *epoch, &subscription[..]))
-        .collect();
-    heartbeat_until(broker, client, group, &members, topic, partitions, true).await;
+    heartbeat_until(broker, client, group, members, topic, partitions, true).await;
 }
 
 /// A topic that is deleted loses its share state, as Kafka's
@@ -332,7 +335,11 @@ async fn a_deleted_topic_loses_its_share_state() {
     join.subscribed_topic_names = Some(vec!["doomed".into(), "kept".into()]);
     let joined = client.send(join).await.unwrap();
     assert!(joined.error_code == 0, "join failed");
-    let members = [("member-a", joined.member_epoch, subscription)];
+    let members = [MemberSubscription {
+        member_id: "member-a",
+        epoch: joined.member_epoch,
+        topics: subscription,
+    }];
     heartbeat_until(&broker, &client, "g-doomed", &members, doomed, 0..2, true).await;
     heartbeat_until(&broker, &client, "g-doomed", &members, kept, 0..2, true).await;
 
@@ -389,7 +396,11 @@ async fn unassigned_partitions_keep_their_share_state() {
             &broker,
             &client,
             group,
-            &[("member-a", first.member_epoch, "a")],
+            &[MemberSubscription {
+                member_id: "member-a",
+                epoch: first.member_epoch,
+                topics: &["a"],
+            }],
             topic_a,
             0..2,
         )
@@ -404,7 +415,11 @@ async fn unassigned_partitions_keep_their_share_state() {
                 &broker,
                 &client,
                 group,
-                &[("member-b", second.member_epoch, "b")],
+                &[MemberSubscription {
+                    member_id: "member-b",
+                    epoch: second.member_epoch,
+                    topics: &["b"],
+                }],
                 topic_b,
                 0..2,
             )
@@ -415,7 +430,11 @@ async fn unassigned_partitions_keep_their_share_state() {
                 &broker,
                 &client,
                 group,
-                &[("member-a", first.member_epoch, "b")],
+                &[MemberSubscription {
+                    member_id: "member-a",
+                    epoch: first.member_epoch,
+                    topics: &["b"],
+                }],
                 topic_b,
                 0..2,
             )
@@ -464,7 +483,11 @@ async fn every_initialized_partition_starts_uninitialized() {
         &broker,
         &client,
         "g-grow",
-        &[("member-a", joined.member_epoch, "t-grow")],
+        &[MemberSubscription {
+            member_id: "member-a",
+            epoch: joined.member_epoch,
+            topics: &["t-grow"],
+        }],
         tid,
         0..2,
     )
@@ -489,7 +512,11 @@ async fn every_initialized_partition_starts_uninitialized() {
         &broker,
         &client,
         "g-grow",
-        &[("member-a", joined.member_epoch, "t-grow")],
+        &[MemberSubscription {
+            member_id: "member-a",
+            epoch: joined.member_epoch,
+            topics: &["t-grow"],
+        }],
         tid,
         0..4,
     )

@@ -5,7 +5,7 @@
 //! second one leaves a *live* site that could misbehave. The cut is one-way,
 //! for the reasons the crate documentation gives.
 
-use std::{net::SocketAddr, time::Duration};
+use std::time::Duration;
 
 use krabka_broker::{Broker, BrokerConfig, BrokerError, BrokerHandle};
 use krabka_protocol::primitives::uuid::Uuid as WireUuid;
@@ -33,6 +33,12 @@ pub struct LinkedCluster {
     configs: Vec<BrokerConfig>,
     links: Vec<SiteLink>,
     _dirs: Vec<TempDir>,
+}
+
+/// A site's broker configuration and the directory behind it.
+struct NodeMeta {
+    config: BrokerConfig,
+    dir: TempDir,
 }
 
 impl LinkedCluster {
@@ -63,7 +69,7 @@ impl LinkedCluster {
         for index in 0..3 {
             links.push(SiteLink::start(controller_addrs[index], client_addrs[index]).await);
         }
-        let voters: Vec<(u64, SocketAddr)> = (0..3)
+        let voters: Vec<_> = (0..3)
             .map(|index| {
                 (
                     u64::try_from(index + 1).unwrap(),
@@ -75,7 +81,7 @@ impl LinkedCluster {
         let topology = support::RoleTopology::new(&client_addrs, &controller_addrs, &voters);
 
         let mut starts = Vec::with_capacity(3);
-        let mut metas: Vec<(BrokerConfig, TempDir)> = Vec::with_capacity(3);
+        let mut metas: Vec<NodeMeta> = Vec::with_capacity(3);
         for (index, (data, controller)) in
             support::listener_pairs(client_listeners, controller_listeners)
         {
@@ -98,13 +104,13 @@ impl LinkedCluster {
             starts.push(tokio::spawn(async move {
                 Broker::start_with_listeners(spawn_cfg, Some(controller), Some(data)).await
             }));
-            metas.push((cfg, dir));
+            metas.push(NodeMeta { config: cfg, dir });
         }
 
         let mut handles = Vec::with_capacity(3);
         let mut configs = Vec::with_capacity(3);
         let mut dirs = Vec::with_capacity(3);
-        for (start, (cfg, dir)) in starts.into_iter().zip(metas) {
+        for (start, NodeMeta { config: cfg, dir }) in starts.into_iter().zip(metas) {
             let handle = support::await_broker_start(start).await?;
             handles.push(Some(handle));
             configs.push(cfg);

@@ -267,8 +267,20 @@ mod tests {
     /// transactional offsets, and a commit marker must not bring them back.
     #[test]
     fn a_plain_tombstone_after_the_transaction_drops_its_offset() {
-        let rows: [(&str, Vec<Record>, CommittedOffsets); 3] = [
-            (
+        /// One case: what the log holds after the tombstones, and the offsets
+        /// the scan keeps.
+        struct Row {
+            name: &'static str,
+            tombstones: Vec<Record>,
+            expected: CommittedOffsets,
+        }
+        let row = |name, tombstones, expected| Row {
+            name,
+            tombstones,
+            expected,
+        };
+        let rows = [
+            row(
                 "no tombstone",
                 vec![],
                 HashMap::from([
@@ -282,7 +294,7 @@ mod tests {
                     ("h".to_string(), vec![(("t".to_string(), 0), entry(20))]),
                 ]),
             ),
-            (
+            row(
                 "one key of one group",
                 vec![tombstone("g", "orders", 0)],
                 HashMap::from([
@@ -293,7 +305,7 @@ mod tests {
                     ("h".to_string(), vec![(("t".to_string(), 0), entry(20))]),
                 ]),
             ),
-            (
+            row(
                 "every key of a deleted group",
                 vec![tombstone("g", "orders", 0), tombstone("g", "orders", 1)],
                 HashMap::from([
@@ -302,7 +314,12 @@ mod tests {
                 ]),
             ),
         ];
-        for (name, tombstones, expected) in rows {
+        for Row {
+            name,
+            tombstones,
+            expected,
+        } in rows
+        {
             let dir = tempfile::tempdir().unwrap();
             let mut log =
                 krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();

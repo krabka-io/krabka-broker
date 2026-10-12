@@ -39,7 +39,7 @@ use crate::{
         quotas::{QuotaEntity, QuotaValue, UserQuotaSetup, alter_user_quota},
     },
     support::acl::{ClusterAclSetup, TopicAclSetup, cluster_acl_record, topic_acl_record},
-    topic_admin::{drive_create_topics_sasl, drive_delete_topics_sasl},
+    topic_admin::{TopicMutationResult, drive_create_topics_sasl, drive_delete_topics_sasl},
 };
 
 /// Install Alice's shared mutation quota and return its complete wire response.
@@ -97,16 +97,20 @@ async fn controller_mutation_rate_throttles_create_topics() {
 
     // This operation crosses the limit but is accepted under strict quota
     // semantics because the bucket was not already exhausted.
-    let (throttle_ms, err_code) =
-        drive_create_topics_sasl(addr, "alice", "alice-secret", "throttled-topic", 10).await;
+    let TopicMutationResult {
+        throttle_time_ms: throttle_ms,
+        error_code: err_code,
+    } = drive_create_topics_sasl(addr, "alice", "alice-secret", "throttled-topic", 10).await;
     check!(
         err_code == 0,
         "create-topics should succeed (alice has Cluster Create ACL)"
     );
     check!(throttle_ms == 0);
 
-    let (throttle_ms, err_code) =
-        drive_create_topics_sasl(addr, "alice", "alice-secret", "rejected-topic", 1).await;
+    let TopicMutationResult {
+        throttle_time_ms: throttle_ms,
+        error_code: err_code,
+    } = drive_create_topics_sasl(addr, "alice", "alice-secret", "rejected-topic", 1).await;
     check!(
         err_code == krabka_broker::codes::THROTTLING_QUOTA_EXCEEDED,
         "expected strict quota rejection, got error {err_code}"
@@ -127,8 +131,10 @@ async fn unthrottled_create_topics_unaffected() {
     // admin is super_user, no ACL seeding needed.
     let _ = handle; // keep alive
 
-    let (throttle_ms, err_code) =
-        drive_create_topics_sasl(addr, "admin", "admin-secret", "unthrottled-topic", 10).await;
+    let TopicMutationResult {
+        throttle_time_ms: throttle_ms,
+        error_code: err_code,
+    } = drive_create_topics_sasl(addr, "admin", "admin-secret", "unthrottled-topic", 10).await;
     assert!(err_code == 0);
     assert!(throttle_ms == 0);
 }
@@ -164,7 +170,8 @@ async fn controller_mutation_rate_throttles_delete_topics() {
         .await;
 
     // Pre-create topic as admin (no quota for admin) with 10 partitions.
-    let (_, ec) = drive_create_topics_sasl(addr, "admin", "admin-secret", "to-delete", 10).await;
+    let TopicMutationResult { error_code: ec, .. } =
+        drive_create_topics_sasl(addr, "admin", "admin-secret", "to-delete", 10).await;
     assert!(ec == 0);
 
     // Grant alice Topic Delete on "to-delete".
@@ -199,8 +206,10 @@ async fn controller_mutation_rate_throttles_delete_topics() {
         })
         .await;
 
-    let (throttle_ms, err_code) =
-        drive_delete_topics_sasl(addr, "alice", "alice-secret", "to-delete").await;
+    let TopicMutationResult {
+        throttle_time_ms: throttle_ms,
+        error_code: err_code,
+    } = drive_delete_topics_sasl(addr, "alice", "alice-secret", "to-delete").await;
     assert!(err_code == 0);
     assert!(
         throttle_ms > 0,

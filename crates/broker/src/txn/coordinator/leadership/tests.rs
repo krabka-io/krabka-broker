@@ -29,6 +29,20 @@ fn image(topic_id: Uuid, leader: NodeId, leader_epoch: LeaderEpoch) -> MetadataI
 #[derive(Clone, Copy)]
 struct LoadGeneration(u64);
 
+/// The term of a leadership: the generation of its load and the load's status.
+#[derive(Clone, Copy)]
+struct TermSpec {
+    generation: LoadGeneration,
+    status: LoadStatus,
+}
+
+/// A partition to load, with the generation of its new load.
+#[derive(Clone, Copy)]
+struct LoadSpec {
+    partition: PartitionIndex,
+    generation: LoadGeneration,
+}
+
 #[derive(Clone, Copy, Default)]
 enum LocalLog {
     #[default]
@@ -39,12 +53,12 @@ enum LocalLog {
 fn leadership(
     topic_id: Uuid,
     leader_epoch: LeaderEpoch,
-    term: Option<(LoadGeneration, LoadStatus)>,
+    term: Option<TermSpec>,
 ) -> StatePartitionLeadership {
     StatePartitionLeadership {
         topic_id,
         leader_epoch,
-        term: term.map(|(generation, status)| LeaderTerm {
+        term: term.map(|TermSpec { generation, status }| LeaderTerm {
             generation: generation.0,
             status,
         }),
@@ -77,21 +91,26 @@ fn unopened_step(name: &'static str) -> Step {
         after: Some(leadership(
             Uuid::from_u128(1),
             LeaderEpoch(0),
-            Some((LoadGeneration(1), LoadStatus::Pending)),
+            Some(TermSpec {
+                generation: LoadGeneration(1),
+                status: LoadStatus::Pending,
+            }),
         )),
         ..Default::default()
     }
 }
 
-fn changes(
-    unload: &[PartitionIndex],
-    load: &[(PartitionIndex, LoadGeneration)],
-) -> LeadershipChanges {
+fn changes(unload: &[PartitionIndex], load: &[LoadSpec]) -> LeadershipChanges {
     LeadershipChanges {
         unload: unload.to_vec(),
         load: load
             .iter()
-            .map(|&(partition, generation)| (partition, generation.0))
+            .map(
+                |&LoadSpec {
+                     partition,
+                     generation,
+                 }| (partition, generation.0),
+            )
             .collect(),
     }
 }
@@ -129,7 +148,10 @@ fn an_election_loads_and_a_resignation_unloads() {
     let loaded_epoch_0 = Some(leadership(
         Uuid::from_u128(1),
         LeaderEpoch(0),
-        Some((LoadGeneration(1), LoadStatus::Loaded)),
+        Some(TermSpec {
+            generation: LoadGeneration(1),
+            status: LoadStatus::Loaded,
+        }),
     ));
     run(vec![
         Step {
@@ -139,11 +161,20 @@ fn an_election_loads_and_a_resignation_unloads() {
         Step {
             name: "this broker is elected at epoch 0",
             image: image(Uuid::from_u128(1), THIS_BROKER, LeaderEpoch(0)),
-            changes: changes(&[], &[(PartitionIndex(0), LoadGeneration(1))]),
+            changes: changes(
+                &[],
+                &[LoadSpec {
+                    partition: PartitionIndex(0),
+                    generation: LoadGeneration(1),
+                }],
+            ),
             after: Some(leadership(
                 Uuid::from_u128(1),
                 LeaderEpoch(0),
-                Some((LoadGeneration(1), LoadStatus::Loading)),
+                Some(TermSpec {
+                    generation: LoadGeneration(1),
+                    status: LoadStatus::Loading,
+                }),
             )),
             load_ends: Some(LoadStatus::Loaded),
             ..Default::default()
@@ -175,11 +206,20 @@ fn an_election_loads_and_a_resignation_unloads() {
         Step {
             name: "this broker is elected again at epoch 2",
             image: image(Uuid::from_u128(1), THIS_BROKER, LeaderEpoch(2)),
-            changes: changes(&[], &[(PartitionIndex(0), LoadGeneration(2))]),
+            changes: changes(
+                &[],
+                &[LoadSpec {
+                    partition: PartitionIndex(0),
+                    generation: LoadGeneration(2),
+                }],
+            ),
             after: Some(leadership(
                 Uuid::from_u128(1),
                 LeaderEpoch(2),
-                Some((LoadGeneration(2), LoadStatus::Loading)),
+                Some(TermSpec {
+                    generation: LoadGeneration(2),
+                    status: LoadStatus::Loading,
+                }),
             )),
             ..Default::default()
         },
@@ -188,12 +228,18 @@ fn an_election_loads_and_a_resignation_unloads() {
             image: image(Uuid::from_u128(1), THIS_BROKER, LeaderEpoch(3)),
             changes: changes(
                 &[PartitionIndex(0)],
-                &[(PartitionIndex(0), LoadGeneration(3))],
+                &[LoadSpec {
+                    partition: PartitionIndex(0),
+                    generation: LoadGeneration(3),
+                }],
             ),
             after: Some(leadership(
                 Uuid::from_u128(1),
                 LeaderEpoch(3),
-                Some((LoadGeneration(3), LoadStatus::Loading)),
+                Some(TermSpec {
+                    generation: LoadGeneration(3),
+                    status: LoadStatus::Loading,
+                }),
             )),
             load_ends: Some(LoadStatus::Failed),
             ..Default::default()
@@ -204,7 +250,10 @@ fn an_election_loads_and_a_resignation_unloads() {
             after: Some(leadership(
                 Uuid::from_u128(1),
                 LeaderEpoch(3),
-                Some((LoadGeneration(3), LoadStatus::Failed)),
+                Some(TermSpec {
+                    generation: LoadGeneration(3),
+                    status: LoadStatus::Failed,
+                }),
             )),
             ..Default::default()
         },
@@ -213,12 +262,18 @@ fn an_election_loads_and_a_resignation_unloads() {
             image: image(Uuid::from_u128(1), THIS_BROKER, LeaderEpoch(4)),
             changes: changes(
                 &[PartitionIndex(0)],
-                &[(PartitionIndex(0), LoadGeneration(4))],
+                &[LoadSpec {
+                    partition: PartitionIndex(0),
+                    generation: LoadGeneration(4),
+                }],
             ),
             after: Some(leadership(
                 Uuid::from_u128(1),
                 LeaderEpoch(4),
-                Some((LoadGeneration(4), LoadStatus::Loading)),
+                Some(TermSpec {
+                    generation: LoadGeneration(4),
+                    status: LoadStatus::Loading,
+                }),
             )),
             load_ends: Some(LoadStatus::Loaded),
             ..Default::default()
@@ -228,7 +283,10 @@ fn an_election_loads_and_a_resignation_unloads() {
             after: Some(leadership(
                 Uuid::from_u128(1),
                 LeaderEpoch(4),
-                Some((LoadGeneration(4), LoadStatus::Loaded)),
+                Some(TermSpec {
+                    generation: LoadGeneration(4),
+                    status: LoadStatus::Loaded,
+                }),
             )),
             ..Default::default()
         },
@@ -247,11 +305,20 @@ fn an_election_loads_and_a_resignation_unloads() {
         Step {
             name: "the topic is created a third time and this broker leads it at epoch 0",
             image: image(Uuid::from_u128(3), THIS_BROKER, LeaderEpoch(0)),
-            changes: changes(&[], &[(PartitionIndex(0), LoadGeneration(5))]),
+            changes: changes(
+                &[],
+                &[LoadSpec {
+                    partition: PartitionIndex(0),
+                    generation: LoadGeneration(5),
+                }],
+            ),
             after: Some(leadership(
                 Uuid::from_u128(3),
                 LeaderEpoch(0),
-                Some((LoadGeneration(5), LoadStatus::Loading)),
+                Some(TermSpec {
+                    generation: LoadGeneration(5),
+                    status: LoadStatus::Loading,
+                }),
             )),
             ..Default::default()
         },
@@ -266,11 +333,20 @@ fn an_election_before_the_log_opens_loads_once_it_opens() {
         Step {
             name: "the log opened",
             image: image(Uuid::from_u128(1), THIS_BROKER, LeaderEpoch(0)),
-            changes: changes(&[], &[(PartitionIndex(0), LoadGeneration(2))]),
+            changes: changes(
+                &[],
+                &[LoadSpec {
+                    partition: PartitionIndex(0),
+                    generation: LoadGeneration(2),
+                }],
+            ),
             after: Some(leadership(
                 Uuid::from_u128(1),
                 LeaderEpoch(0),
-                Some((LoadGeneration(2), LoadStatus::Loading)),
+                Some(TermSpec {
+                    generation: LoadGeneration(2),
+                    status: LoadStatus::Loading,
+                }),
             )),
             ..Default::default()
         },

@@ -41,12 +41,25 @@ pub(crate) enum CompletionAttempt {
     Retry,
 }
 
-/// The `(marker, complete state)` that finish a transaction in `prepare`, or
+/// The marker and the `Complete*` state that finish a prepared transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PreparedCompletion {
+    pub(crate) marker: MarkerType,
+    pub(crate) complete: TxnState,
+}
+
+/// The marker and complete state that finish a transaction in `prepare`, or
 /// `None` when `prepare` is not a `Prepare*` state.
-pub(crate) fn completion_for(prepare: TxnState) -> Option<(MarkerType, TxnState)> {
+pub(crate) fn completion_for(prepare: TxnState) -> Option<PreparedCompletion> {
     match prepare {
-        TxnState::PrepareCommit => Some((MarkerType::Commit, TxnState::CompleteCommit)),
-        TxnState::PrepareAbort => Some((MarkerType::Abort, TxnState::CompleteAbort)),
+        TxnState::PrepareCommit => Some(PreparedCompletion {
+            marker: MarkerType::Commit,
+            complete: TxnState::CompleteCommit,
+        }),
+        TxnState::PrepareAbort => Some(PreparedCompletion {
+            marker: MarkerType::Abort,
+            complete: TxnState::CompleteAbort,
+        }),
         TxnState::Empty
         | TxnState::Ongoing
         | TxnState::CompleteCommit
@@ -173,7 +186,7 @@ impl TxnCoordinator {
             return CompletionAttempt::NothingToComplete;
         };
         let mut prepared = handle.lock().await.clone();
-        let Some((marker, complete)) = completion_for(prepared.state) else {
+        let Some(PreparedCompletion { marker, complete }) = completion_for(prepared.state) else {
             return CompletionAttempt::NothingToComplete;
         };
         if let Err(error) = self

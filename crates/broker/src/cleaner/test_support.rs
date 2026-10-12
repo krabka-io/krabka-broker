@@ -113,12 +113,18 @@ pub(super) fn record_count(partition: &Partition) -> usize {
     read.batches.iter().map(|batch| batch.records.len()).sum()
 }
 
+/// A registered compactable partition, and its record count before any sweep.
+pub(super) struct CompactablePartition {
+    pub(super) partition: Arc<Partition>,
+    pub(super) record_count: usize,
+}
+
 /// Register a compactable partition and capture its original record count.
 pub(super) async fn register_compactable(
     root: &TempDir,
     registry: &PartitionRegistry,
     topic: &str,
-) -> (Arc<Partition>, usize) {
+) -> CompactablePartition {
     let partition = compactable_partition(
         root,
         CompactionSetup {
@@ -129,5 +135,8 @@ pub(super) async fn register_compactable(
     .await;
     let initial_count = record_count(&partition);
     registry.insert(topic.into(), PartitionIndex(0), partition.clone());
-    (partition, initial_count)
+    CompactablePartition {
+        partition,
+        record_count: initial_count,
+    }
 }

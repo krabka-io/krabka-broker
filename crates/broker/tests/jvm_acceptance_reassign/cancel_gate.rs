@@ -212,23 +212,31 @@ async fn approve_a_cancel(bootstrap: &str) {
 
     let first = approve(bootstrap, APPROVER_ONE, proposal_id).await;
     check!(
-        first.0 == 1 && first.0 < first.1,
+        first.held == 1 && first.held < first.required,
         "one approval is one distinct principal and must not be enough: {first:?}",
     );
     let second = approve(bootstrap, APPROVER_TWO, proposal_id).await;
     check!(
-        second.0 == second.1,
+        second.held == second.required,
         "two distinct principals must satisfy the rule: {second:?}",
     );
 }
 
-/// Add one approval as `operator`, and answer with `(held, required)`.
+/// The approvals a proposal holds, and the approvals it requires.
+#[derive(Debug)]
+struct Approvals {
+    held: i32,
+    required: i32,
+}
+
+/// Add one approval as `operator`, and answer with the approvals now held.
 async fn approve(
     bootstrap: &str,
     operator: (&str, &str),
     proposal_id: krabka_protocol::primitives::uuid::Uuid,
-) -> (i32, i32) {
-    approve_proposal(bootstrap, operator, proposal_id).await
+) -> Approvals {
+    let (held, required) = approve_proposal(bootstrap, operator, proposal_id).await;
+    Approvals { held, required }
 }
 
 /// The gate off, then on and unapproved, then on and approved -- the same
@@ -260,7 +268,7 @@ async fn reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool
 
     // Keep one valid target offline so every cancel below observes a real
     // in-flight reassignment instead of racing replica catch-up.
-    let (handles, plan) =
+    let OfflineReassignment { handles, plan } =
         offline_reassignment([h1, h2, h3], &side, &props, "partition record").await;
     let ungated = reassign(&side, &props, &["--cancel", "--preserve-throttles"], &plan);
     check!(
@@ -309,7 +317,7 @@ async fn reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool
     wait_three_brokers_registered(&h1, &h2, &h3, 3).await;
 
     // ── 2. the gate on, with no proposal ───────────────────────────────────
-    let (handles, plan) = offline_reassignment(
+    let OfflineReassignment { handles, plan } = offline_reassignment(
         [h1, h2, h3],
         &side,
         &props,
@@ -364,12 +372,19 @@ async fn reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool
     }
 }
 
+/// The brokers still live while one target is offline, and the plan whose
+/// reassignment is in flight.
+struct OfflineReassignment {
+    handles: [Option<BrokerHandle>; 3],
+    plan: String,
+}
+
 async fn offline_reassignment(
     brokers: [BrokerHandle; 3],
     side: &Side<'_>,
     props: &str,
     context: &str,
-) -> ([Option<BrokerHandle>; 3], String) {
+) -> OfflineReassignment {
     let (target, handles, _current) = offline_for_partition(brokers, TOPIC, context).await;
     let handle = handles[0].as_ref().expect("bootstrap broker stays live");
     let plan = start_a_reassignment(
@@ -379,5 +394,5 @@ async fn offline_reassignment(
         i32::try_from(target).expect("a node id fits"),
     )
     .await;
-    (handles, plan)
+    OfflineReassignment { handles, plan }
 }

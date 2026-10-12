@@ -219,11 +219,17 @@ pub(crate) mod test_support {
         pub partition: PartitionIndex,
     }
 
+    /// A coordinator and the metadata image it runs over.
+    pub(crate) struct StateFixture {
+        pub coordinator: Arc<ShareCoordinator>,
+        pub image: krabka_metadata::MetadataImage,
+    }
+
     /// A led coordinator with partition state at epoch 17 and start offset 90.
     pub(crate) async fn initialized_state(
         log_dir: &Path,
         setup: StateFixtureSetup,
-    ) -> (Arc<ShareCoordinator>, krabka_metadata::MetadataImage) {
+    ) -> StateFixture {
         let StateFixtureSetup {
             topic,
             partitions,
@@ -236,18 +242,15 @@ pub(crate) mod test_support {
             .initialize(&image, "share-group", topic, partition.0, 17, Offset(90))
             .await
             .expect("initialize state");
-        (coordinator, image)
+        StateFixture { coordinator, image }
     }
 
     /// Stored read fixtures: leader epoch 3, start offset 101 and one terminal batch.
-    pub(crate) async fn stored_state(
-        log_dir: &Path,
-        setup: StateFixtureSetup,
-    ) -> (Arc<ShareCoordinator>, krabka_metadata::MetadataImage) {
+    pub(crate) async fn stored_state(log_dir: &Path, setup: StateFixtureSetup) -> StateFixture {
         let StateFixtureSetup {
             topic, partition, ..
         } = setup;
-        let (coordinator, image) = initialized_state(log_dir, setup).await;
+        let StateFixture { coordinator, image } = initialized_state(log_dir, setup).await;
         coordinator
             .read(&image, "share-group", topic, partition.0, 3)
             .await
@@ -262,7 +265,7 @@ pub(crate) mod test_support {
             )
             .await
             .expect("write state");
-        (coordinator, image)
+        StateFixture { coordinator, image }
     }
 
     pub(crate) async fn retain_leadership(coordinator: &Arc<ShareCoordinator>, led: bool) {
@@ -368,7 +371,10 @@ pub(crate) mod test_support {
         ($rows:expr, $topic:expr, ($partitions:expr, $partition:expr), $serve:ident) => {
             for (index, (led, req, expected)) in $rows.into_iter().enumerate() {
                 let dir = tempfile::TempDir::new().expect("tempdir");
-                let (coordinator, image) = super::super::test_support::stored_state(
+                let $crate::share_coordinator::handlers::test_support::StateFixture {
+                    coordinator,
+                    image,
+                } = super::super::test_support::stored_state(
                     dir.path(),
                     $crate::share_coordinator::handlers::test_support::StateFixtureSetup {
                         topic: $topic,

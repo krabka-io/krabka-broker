@@ -62,6 +62,7 @@
 //! the producer's verification with the transaction coordinator (KIP-890, see
 //! [`verification`]), then the KIP-447 fencing checks.
 
+use krabka_ids::PartitionIndex;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::owned::{
     txn_offset_commit_request::TxnOffsetCommitRequest,
@@ -81,7 +82,9 @@ mod ordering_tests;
 mod test_support;
 
 use self::{
-    batch::{AppendedTxnOffsets, append_txn_batch},
+    batch::{
+        AppendChecks, AppendedTxnOffsets, LocalOffsets, RowSweep, TxnBatchWrite, append_txn_batch,
+    },
     existence::unknown_partitions,
     response::{build_response, error_response},
 };
@@ -102,7 +105,7 @@ use crate::{
     },
     error::BrokerError,
     handlers::{RequestContext, group_partition_loading},
-    txn::{util::now_millis, version::resolve_txn_version},
+    txn::{state::TopicPartition, util::now_millis, version::resolve_txn_version},
 };
 
 pub(crate) async fn handle(
@@ -113,34 +116,9 @@ pub(crate) async fn handle(
 ) -> Result<TxnOffsetCommitResponse, BrokerError> {
     let partitions = broker.partitions.clone();
 
-    // ── ACL preamble: Write on TransactionalId ────────────────
-    {
-        let image = broker.controller.current_image();
-        let authorizer = broker.config.authorizer.as_ref();
-        let tid_req = AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: ResourceType::TransactionalId,
-            resource_name: req.transactional_id.as_str(),
-            operation: AclOperation::Write,
-        };
-        if authorizer.authorize(&*image, &tid_req) == AuthorizationResult::Deny {
-            return Ok(error_response(
-                &req,
-                codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
-            ));
-        }
-        // Group Read gate.
-        let group_req = AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: ResourceType::Group,
-            resource_name: req.group_id.as_str(),
-            operation: AclOperation::Read,
-        };
-        if authorizer.authorize(&*image, &group_req) == AuthorizationResult::Deny {
-            return Ok(error_response(&req, codes::GROUP_AUTHORIZATION_FAILED));
-        }
+    // ── ACL preamble: Write on TransactionalId, Read on the group ──
+    if let Some(code) = preamble_refusal(broker, ctx, &req) {
+        return Ok(error_response(&req, code));
     }
 
     // ── KIP-1319: name every topic and give it its id ──────────
@@ -247,8 +225,7 @@ pub(crate) async fn handle(
     // check then runs under the append lock with the guard the verification
     // started.
     let producer_check =
-        match verification::verify_producer(broker, &req, version, (offsets_partition, txnv)).await
-        {
+        match verification::verify_producer(broker, &req, version, offsets_partition, txnv).await {
             Ok(check) => check,
             Err(code) => return respond(code),
         };
@@ -298,7 +275,10 @@ pub(crate) async fn handle(
                 &streams,
                 &req.member_id,
                 req.generation_id_or_member_epoch,
-                reserved.clone(),
+                reserved
+                    .iter()
+                    .map(|key| (key.topic.clone(), key.partition.get()))
+                    .collect(),
             )
             .await
         } else {
@@ -309,7 +289,10 @@ pub(crate) async fn handle(
                     group_instance_id: req.group_instance_id.clone(),
                     generation_or_epoch: req.generation_id_or_member_epoch,
                     fence: CommitFence::Transactional,
-                    partitions: committed_partitions(&req, &reserved),
+                    partitions: reserved
+                        .iter()
+                        .map(|key| (topic_id_of(&req, &key.topic), key.partition.get()))
+                        .collect(),
                 },
             )
             .await
@@ -345,11 +328,21 @@ pub(crate) async fn handle(
         || broker.config.features.unstable_api_versions == UnstableApiVersions::Enabled;
     let appended = match append_txn_batch(
         &req,
-        (&partitions, &*broker.controller, broker.config.node_id),
+        LocalOffsets {
+            registry: &partitions,
+            metadata: &*broker.controller,
+            node_id: broker.config.node_id,
+        },
         offsets_partition,
         now_ms,
-        (&denied_topics, &unknown_rows),
-        (producer_check, record_topic_ids),
+        RowSweep {
+            denied_topics: &denied_topics,
+            unknown_rows: &unknown_rows,
+        },
+        AppendChecks {
+            producer_check,
+            record_topic_ids,
+        },
     )
     .await
     {
@@ -373,7 +366,11 @@ pub(crate) async fn handle(
     //    order is what tells the actor that it was. Kafka's runtime applies a
     //    write to the shard when it appends it, before the write commits, so
     //    the mark goes on here too.
-    let Some((appended, write)) = appended else {
+    let Some(TxnBatchWrite {
+        offsets: appended,
+        write,
+    }) = appended
+    else {
         // 5. Every row was denied or unknown: those rows keep their codes.
         return respond(codes::NONE);
     };
@@ -401,6 +398,40 @@ pub(crate) async fn handle(
             respond(batch::append_error_code(&error))
         }
     }
+}
+
+/// The code that refuses every row of `req` before the topic sweep: the
+/// principal may not `Write` the transactional id, or may not `Read` the
+/// group. `None` when both gates pass.
+fn preamble_refusal(
+    broker: &Broker,
+    ctx: &RequestContext<'_>,
+    req: &TxnOffsetCommitRequest,
+) -> Option<i16> {
+    let image = broker.controller.current_image();
+    let authorizer = broker.config.authorizer.as_ref();
+    let tid_req = AuthorizationRequest {
+        principal: ctx.principal,
+        host: ctx.peer,
+        resource_type: ResourceType::TransactionalId,
+        resource_name: req.transactional_id.as_str(),
+        operation: AclOperation::Write,
+    };
+    if authorizer.authorize(&*image, &tid_req) == AuthorizationResult::Deny {
+        return Some(codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED);
+    }
+    // Group Read gate.
+    let group_req = AuthorizationRequest {
+        principal: ctx.principal,
+        host: ctx.peer,
+        resource_type: ResourceType::Group,
+        resource_name: req.group_id.as_str(),
+        operation: AclOperation::Read,
+    };
+    if authorizer.authorize(&*image, &group_req) == AuthorizationResult::Deny {
+        return Some(codes::GROUP_AUTHORIZATION_FAILED);
+    }
+    None
 }
 
 /// The first `TxnOffsetCommit` version that names each topic by `TopicId`
@@ -455,38 +486,34 @@ fn fencing_code(code: i16, version: i16) -> i16 {
 fn reserved_keys(
     req: &TxnOffsetCommitRequest,
     denied_topics: &std::collections::HashSet<String>,
-    unknown_rows: &std::collections::HashSet<(String, i32)>,
-) -> Vec<(String, i32)> {
+    unknown_rows: &std::collections::HashSet<TopicPartition>,
+) -> Vec<TopicPartition> {
     req.topics
         .iter()
         .filter(|topic| !denied_topics.contains(&topic.name))
         .flat_map(|topic| {
             topic.partitions.iter().filter_map(|partition| {
-                let key = (topic.name.clone(), partition.partition_index);
+                let key = TopicPartition {
+                    topic: topic.name.clone(),
+                    partition: PartitionIndex(partition.partition_index),
+                };
                 (!unknown_rows.contains(&key)).then_some(key)
             })
         })
         .collect()
 }
 
-/// The `(topic id, partition)` of every `reserved` key, with the topic id
-/// [`resolve_topics`] gave its topic. These are the partitions Kafka's
-/// `commitTransactionalOffset` runs the per-partition validator on.
-fn committed_partitions(
+/// The topic id [`resolve_topics`] gave `name`, or the zero id for a topic the
+/// request does not name. The per-partition validator of Kafka's
+/// `commitTransactionalOffset` sees this id for every `reserved` key.
+fn topic_id_of(
     req: &TxnOffsetCommitRequest,
-    reserved: &[(String, i32)],
-) -> Vec<(krabka_protocol::primitives::uuid::Uuid, i32)> {
-    reserved
+    name: &str,
+) -> krabka_protocol::primitives::uuid::Uuid {
+    req.topics
         .iter()
-        .map(|(name, partition)| {
-            let topic_id = req
-                .topics
-                .iter()
-                .find(|topic| &topic.name == name)
-                .map_or_else(Default::default, |topic| topic.topic_id);
-            (topic_id, *partition)
-        })
-        .collect()
+        .find(|topic| topic.name == name)
+        .map_or_else(Default::default, |topic| topic.topic_id)
 }
 
 /// Reserves (`reserve = true`) or releases the keys of an append on the group
@@ -494,7 +521,7 @@ fn committed_partitions(
 async fn reserve_offsets(
     handle: &GroupActorHandle,
     producer_id: i64,
-    keys: Vec<(String, i32)>,
+    keys: Vec<TopicPartition>,
     reserve: bool,
 ) -> Result<(), ()> {
     let (reply, ack) = tokio::sync::oneshot::channel();
@@ -503,7 +530,10 @@ async fn reserve_offsets(
         .send(GroupActorMessage::TxnOffsetReservation(
             TxnOffsetReservation {
                 producer_id,
-                keys,
+                keys: keys
+                    .into_iter()
+                    .map(|key| (key.topic, key.partition.get()))
+                    .collect(),
                 reserve,
                 reply,
             },
@@ -532,7 +562,11 @@ async fn mark_offsets_pending(
         .send(GroupActorMessage::AddPendingTxnOffsets {
             producer_id,
             written_at: appended.written_at,
-            keys: appended.keys,
+            keys: appended
+                .keys
+                .into_iter()
+                .map(|key| (key.topic, key.partition.get()))
+                .collect(),
             reply,
         })
         .await
@@ -595,7 +629,10 @@ mod tests {
             7,
             AppendedTxnOffsets {
                 written_at: 4,
-                keys: vec![("orders".to_string(), 0)],
+                keys: vec![TopicPartition {
+                    topic: "orders".to_string(),
+                    partition: PartitionIndex(0),
+                }],
             },
             "g",
         )
@@ -629,7 +666,10 @@ mod tests {
             7,
             AppendedTxnOffsets {
                 written_at: 5,
-                keys: vec![("orders".to_string(), 1)],
+                keys: vec![TopicPartition {
+                    topic: "orders".to_string(),
+                    partition: PartitionIndex(1),
+                }],
             },
             "g",
         )

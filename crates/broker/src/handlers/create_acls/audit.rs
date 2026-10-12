@@ -6,11 +6,11 @@
 //! join over the request, the results, and the submitted records. That join is
 //! worth its own file.
 
-use krabka_metadata::MetadataRecord;
 use krabka_protocol::owned::{
     create_acls_request::CreateAclsRequest, create_acls_response::AclCreationResult,
 };
 
+use super::ValidCreation;
 use crate::{
     codes,
     handlers::{RequestContext, audit_admin_success, audit_resource},
@@ -19,12 +19,17 @@ use crate::{
 pub(super) fn created_acl_resources(
     req: &CreateAclsRequest,
     results: &[AclCreationResult],
-    to_submit: &[(usize, MetadataRecord)],
+    to_submit: &[ValidCreation],
 ) -> Vec<krabka_audit::AuditResource> {
     to_submit
         .iter()
-        .filter(|(idx, _)| results[*idx].error_code == codes::NONE)
-        .map(|(idx, _)| audit_resource("Acl", req.creations[*idx].resource_name.clone()))
+        .filter(|creation| results[creation.result_index].error_code == codes::NONE)
+        .map(|creation| {
+            audit_resource(
+                "Acl",
+                req.creations[creation.result_index].resource_name.clone(),
+            )
+        })
         .collect()
 }
 
@@ -41,6 +46,7 @@ pub(super) fn audit_created_acls(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
+    use krabka_metadata::MetadataRecord;
 
     use super::*;
     use crate::handlers::create_acls::{
@@ -55,14 +61,14 @@ mod tests {
             creation("topic-bad", "User:bob", OPERATION_WRITE),
         ]);
         let submitted = vec![
-            (
-                0usize,
-                MetadataRecord::V1AccessControlEntry(validate(&req.creations[0]).unwrap()),
-            ),
-            (
-                1usize,
-                MetadataRecord::V1AccessControlEntry(validate(&req.creations[1]).unwrap()),
-            ),
+            ValidCreation {
+                result_index: 0,
+                record: MetadataRecord::V1AccessControlEntry(validate(&req.creations[0]).unwrap()),
+            },
+            ValidCreation {
+                result_index: 1,
+                record: MetadataRecord::V1AccessControlEntry(validate(&req.creations[1]).unwrap()),
+            },
         ];
         let results = vec![
             acl_success_result(),

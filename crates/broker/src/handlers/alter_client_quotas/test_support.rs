@@ -8,22 +8,37 @@ use krabka_protocol::owned::alter_client_quotas_request::{
     AlterClientQuotasRequest, EntityData, EntryData, OpData,
 };
 
-pub(super) fn entry(entity: Vec<(&str, Option<&str>)>, ops: Vec<(&str, f64, bool)>) -> EntryData {
+/// One component of a quota entity: its type and optional name.
+#[derive(Clone, Copy)]
+pub(super) struct EntityPart<'a> {
+    pub(super) entity_type: &'a str,
+    pub(super) entity_name: Option<&'a str>,
+}
+
+/// One operation on a quota key: the key, its value, and whether it removes the key.
+#[derive(Clone, Copy)]
+pub(super) struct QuotaOp {
+    pub(super) key: &'static str,
+    pub(super) value: f64,
+    pub(super) remove: bool,
+}
+
+pub(super) fn entry(entity: Vec<EntityPart<'_>>, ops: Vec<QuotaOp>) -> EntryData {
     EntryData {
         entity: entity
             .into_iter()
-            .map(|(t, n)| EntityData {
-                entity_type: t.into(),
-                entity_name: n.map(Into::into),
+            .map(|part| EntityData {
+                entity_type: part.entity_type.into(),
+                entity_name: part.entity_name.map(Into::into),
                 ..Default::default()
             })
             .collect(),
         ops: ops
             .into_iter()
-            .map(|(k, v, r)| OpData {
-                key: k.into(),
-                value: v,
-                remove: r,
+            .map(|op| OpData {
+                key: op.key.into(),
+                value: op.value,
+                remove: op.remove,
                 ..Default::default()
             })
             .collect(),

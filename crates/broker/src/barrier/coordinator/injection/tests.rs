@@ -9,7 +9,9 @@ use krabka_units::millis;
 use super::*;
 use crate::{
     barrier::{
-        coordinator::test_support::{Fixture, GROUP, GroupSpecSetup, RetainedCutCount, spec},
+        coordinator::test_support::{
+            DataTopic, Fixture, GROUP, GroupSpecSetup, RetainedCutCount, spec,
+        },
         marker::parse_barrier_marker,
         persistence::{MissingPartition, PartitionOffset, TopicOffsets},
     },
@@ -150,7 +152,10 @@ async fn an_exhausted_group_epoch_rejects_injection() {
 async fn a_partition_that_carries_no_marker_makes_the_cut_partial() {
     // Only partition 0 of `orders` is open here, so partition 1 stays
     // unmarked until the deadline runs out.
-    let fixture = Fixture::with_data_partitions(&[("orders", 1)]);
+    let fixture = Fixture::with_data_partitions(&[DataTopic {
+        name: "orders",
+        partitions: 1,
+    }]);
     let coordinator = fixture
         .coordinator_with_group(GROUP, spec(GroupSpecSetup::default()))
         .await;

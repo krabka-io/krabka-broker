@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use super::{actor::MetadataProvider, reconciler};
+use super::{actor::MetadataProvider, assignor::TopicIdPartition, reconciler};
 use crate::metadata_source::MetadataSource;
 
 /// `MetadataProvider` backed by `krabka_raft::ControllerHandle::current_image()`.
@@ -23,7 +23,7 @@ impl MetadataProvider for ImageMetadataProvider {
         let image = self.controller.current_image();
         let mut topic_id_by_name = std::collections::HashMap::new();
         let mut partitions_per_topic = std::collections::HashMap::new();
-        let mut partition_racks: std::collections::HashMap<(ProtoUuid, i32), Vec<String>> =
+        let mut partition_racks: std::collections::HashMap<TopicIdPartition, Vec<String>> =
             std::collections::HashMap::new();
         for topic in image.topics() {
             let proto_id = ProtoUuid(*topic.topic_id.as_bytes());
@@ -42,7 +42,13 @@ impl MetadataProvider for ImageMetadataProvider {
                     .filter_map(|&node_id| image.broker(node_id).and_then(|b| b.rack.clone()))
                     .collect();
                 if !racks.is_empty() {
-                    partition_racks.insert((proto_id, pr.partition), racks);
+                    partition_racks.insert(
+                        TopicIdPartition {
+                            topic_id: proto_id,
+                            partition: pr.partition,
+                        },
+                        racks,
+                    );
                 }
             }
         }
@@ -130,10 +136,17 @@ mod tests {
         check!(snapshot.topic_id_by_name.get("input") == Some(&proto_topic_id));
         check!(snapshot.partitions_per_topic.get(&proto_topic_id) == Some(&2));
         check!(
-            snapshot.partition_racks.get(&(proto_topic_id, 0))
-                == Some(&vec!["rack-a".to_string(), "rack-b".to_string()])
+            snapshot.partition_racks.get(&TopicIdPartition {
+                topic_id: proto_topic_id,
+                partition: 0
+            }) == Some(&vec!["rack-a".to_string(), "rack-b".to_string()])
         );
-        check!(snapshot.partition_racks.get(&(proto_topic_id, 1)) == None);
+        check!(
+            snapshot.partition_racks.get(&TopicIdPartition {
+                topic_id: proto_topic_id,
+                partition: 1
+            }) == None
+        );
     }
 
     /// The consumer and share groups hash the provider's snapshot, and the

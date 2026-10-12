@@ -13,8 +13,8 @@ use crate::{
         UNCLEAN_RECOVERY_STRATEGY,
     },
     leader_election::test_support::{
-        ElectionSetup, ElrFinalization, ExpectedPartitionSetup, TopicConfigSetup,
-        elected_partition, expected_clean_election, expected_partition, failover,
+        ElectionSetup, ElrFinalization, ExpectedPartitionSetup, TopicConfigOverride,
+        TopicConfigSetup, elected_partition, expected_clean_election, expected_partition, failover,
         failover_with_alive, img_with_partition, liveness_with_alive, mark_witnesses_in_image,
         one_partition_change, set_cluster_default, set_topic_configs,
     },
@@ -24,7 +24,10 @@ use crate::{
 fn unclean_single_isr_image() -> krabka_metadata::MetadataImage {
     img_with_partition(ElectionSetup {
         isr: &[krabka_raft::NodeId(1)],
-        configs: &[(UNCLEAN_LEADER_ELECTION_ENABLE, "true")],
+        configs: &[TopicConfigOverride::new(
+            UNCLEAN_LEADER_ELECTION_ENABLE,
+            "true",
+        )],
         ..Default::default()
     })
 }
@@ -183,7 +186,10 @@ async fn failover_unclean_false_string_keeps_default_safe_behavior() {
     // Explicit `false` must behave the same as unset.
     let setup = ElectionSetup {
         isr: &[krabka_raft::NodeId(1)],
-        configs: &[(UNCLEAN_LEADER_ELECTION_ENABLE, "false")],
+        configs: &[TopicConfigOverride::new(
+            UNCLEAN_LEADER_ELECTION_ENABLE,
+            "false",
+        )],
         ..Default::default()
     };
     let img = img_with_partition(setup);
@@ -217,7 +223,10 @@ async fn failover_unclean_does_not_apply_when_isr_still_has_alive_member() {
     // fires when alive_isr is empty.)
     let img = img_with_partition(ElectionSetup {
         isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
-        configs: &[(UNCLEAN_LEADER_ELECTION_ENABLE, "true")],
+        configs: &[TopicConfigOverride::new(
+            UNCLEAN_LEADER_ELECTION_ENABLE,
+            "true",
+        )],
         ..Default::default()
     });
     let plan = failover_with_alive(&img, /*dead=*/ NodeId(1), &[2u64, 3]).await;
@@ -260,7 +269,10 @@ async fn failover_balanced_strategy_requests_recovery_not_immediate_change() {
     // partition to the URM via `recoveries`.
     let img = img_with_partition(ElectionSetup {
         isr: &[krabka_raft::NodeId(1)],
-        configs: &[(UNCLEAN_RECOVERY_STRATEGY, "Balanced")],
+        configs: &[TopicConfigOverride::new(
+            UNCLEAN_RECOVERY_STRATEGY,
+            "Balanced",
+        )],
         ..Default::default()
     });
     let plan = failover_with_alive(&img, /*dead=*/ NodeId(1), &[2u64, 3]).await;
@@ -296,7 +308,7 @@ async fn topic_none_overrides_cluster_strategy_and_uses_cluster_legacy_flag() {
     set_topic_configs(
         &mut img,
         TopicConfigSetup {
-            entries: &[(UNCLEAN_RECOVERY_STRATEGY, "None")],
+            entries: &[TopicConfigOverride::new(UNCLEAN_RECOVERY_STRATEGY, "None")],
             ..Default::default()
         },
     );
@@ -339,7 +351,10 @@ async fn failover_scan_reads_the_witness_role_out_of_the_image() {
 #[tokio::test]
 async fn failover_scan_leaves_a_witness_only_survivor_unavailable() {
     let mut img = img_with_partition(ElectionSetup {
-        configs: &[(UNCLEAN_LEADER_ELECTION_ENABLE, "true")],
+        configs: &[TopicConfigOverride::new(
+            UNCLEAN_LEADER_ELECTION_ENABLE,
+            "true",
+        )],
         ..Default::default()
     });
     mark_witnesses_in_image(&mut img, &[2]);
@@ -357,7 +372,7 @@ async fn failover_scan_leaves_a_witness_only_survivor_unavailable() {
 struct ElrScanCase<'a> {
     label: &'a str,
     /// Extra topic-config overrides, on top of the published ELR.
-    policy: &'a [(&'a str, &'a str)],
+    policy: &'a [TopicConfigOverride<'a>],
 }
 
 /// KIP-966 through the whole dead-broker scan: the emitted record, the
@@ -379,25 +394,31 @@ async fn failover_elects_an_eligible_leader_replica_cleanly_under_every_policy()
         },
         ElrScanCase {
             label: "unclean election enabled",
-            policy: &[(UNCLEAN_LEADER_ELECTION_ENABLE, "true")],
+            policy: &[TopicConfigOverride::new(
+                UNCLEAN_LEADER_ELECTION_ENABLE,
+                "true",
+            )],
         },
         ElrScanCase {
             label: "balanced offset-aware recovery",
-            policy: &[(UNCLEAN_RECOVERY_STRATEGY, "Balanced")],
+            policy: &[TopicConfigOverride::new(
+                UNCLEAN_RECOVERY_STRATEGY,
+                "Balanced",
+            )],
         },
         ElrScanCase {
             label: "aggressive recovery and unclean election together",
             policy: &[
-                (UNCLEAN_RECOVERY_STRATEGY, "Aggressive"),
-                (UNCLEAN_LEADER_ELECTION_ENABLE, "true"),
+                TopicConfigOverride::new(UNCLEAN_RECOVERY_STRATEGY, "Aggressive"),
+                TopicConfigOverride::new(UNCLEAN_LEADER_ELECTION_ENABLE, "true"),
             ],
         },
     ];
     for case in cases {
         let mut img = preferred_replica_alone_in_isr();
-        let mut overrides: Vec<(&str, &str)> = vec![
-            (ELIGIBLE_LEADER_REPLICAS, "0:2:"),
-            (MIN_INSYNC_REPLICAS, "2"),
+        let mut overrides: Vec<TopicConfigOverride<'_>> = vec![
+            TopicConfigOverride::new(ELIGIBLE_LEADER_REPLICAS, "0:2:"),
+            TopicConfigOverride::new(MIN_INSYNC_REPLICAS, "2"),
         ];
         overrides.extend_from_slice(case.policy);
         set_topic_configs(
@@ -453,9 +474,9 @@ async fn a_dead_eligible_leader_replica_leaves_the_unclean_election_to_decide() 
         &mut img,
         TopicConfigSetup {
             entries: &[
-                (ELIGIBLE_LEADER_REPLICAS, "0:2:"),
-                (MIN_INSYNC_REPLICAS, "2"),
-                (UNCLEAN_LEADER_ELECTION_ENABLE, "true"),
+                TopicConfigOverride::new(ELIGIBLE_LEADER_REPLICAS, "0:2:"),
+                TopicConfigOverride::new(MIN_INSYNC_REPLICAS, "2"),
+                TopicConfigOverride::new(UNCLEAN_LEADER_ELECTION_ENABLE, "true"),
             ],
             ..Default::default()
         },
@@ -486,7 +507,7 @@ async fn a_dead_eligible_leader_replica_leaves_the_unclean_election_to_decide() 
 async fn a_partition_with_nothing_to_elect_publishes_the_last_leader_as_last_known() {
     struct Case {
         label: &'static str,
-        overrides: &'static [(&'static str, &'static str)],
+        overrides: &'static [TopicConfigOverride<'static>],
         alive: &'static [u64],
         recoveries: Vec<(String, i32, RecoveryStrategy)>,
     }
@@ -494,23 +515,38 @@ async fn a_partition_with_nothing_to_elect_publishes_the_last_leader_as_last_kno
         Case {
             label: "ISR [1], ELR [2, 3], and 2 and 3 are down: ELR [1, 2, 3], last-known [1]",
             overrides: &[
-                (ELIGIBLE_LEADER_REPLICAS, "0:2,3:"),
-                (MIN_INSYNC_REPLICAS, "2"),
+                TopicConfigOverride {
+                    key: ELIGIBLE_LEADER_REPLICAS,
+                    value: "0:2,3:",
+                },
+                TopicConfigOverride {
+                    key: MIN_INSYNC_REPLICAS,
+                    value: "2",
+                },
             ],
             alive: &[],
             recoveries: vec![],
         },
         Case {
             label: "an alive replica outside the ISR and the ELR is not elected without the toggle",
-            overrides: &[(MIN_INSYNC_REPLICAS, "2")],
+            overrides: &[TopicConfigOverride {
+                key: MIN_INSYNC_REPLICAS,
+                value: "2",
+            }],
             alive: &[2, 3],
             recoveries: vec![],
         },
         Case {
             label: "a partition handed to the offset-aware recovery has no leader either",
             overrides: &[
-                (MIN_INSYNC_REPLICAS, "2"),
-                (UNCLEAN_RECOVERY_STRATEGY, "Balanced"),
+                TopicConfigOverride {
+                    key: MIN_INSYNC_REPLICAS,
+                    value: "2",
+                },
+                TopicConfigOverride {
+                    key: UNCLEAN_RECOVERY_STRATEGY,
+                    value: "Balanced",
+                },
             ],
             alive: &[2, 3],
             recoveries: vec![("t".to_owned(), 0, RecoveryStrategy::Balanced)],
@@ -587,7 +623,7 @@ async fn a_partition_with_nothing_to_elect_publishes_the_last_leader_as_last_kno
 async fn a_failover_that_keeps_a_leader_leaves_the_last_known_elr_empty() {
     let img = img_with_partition(ElectionSetup {
         elr: ElrFinalization::Enabled,
-        configs: &[(MIN_INSYNC_REPLICAS, "3")],
+        configs: &[TopicConfigOverride::new(MIN_INSYNC_REPLICAS, "3")],
         ..Default::default()
     });
     let plan = failover_with_alive(&img, /*dead=*/ NodeId(3), &[1u64, 2]).await;

@@ -21,8 +21,9 @@ use krabka_protocol::owned::common::{
 
 use super::write_freeze::topic_refusal;
 use crate::txn::{
-    coordinator::produce_verification::verification_code,
+    coordinator::produce_verification::{HeldTransaction, verification_code},
     state::{TopicPartition, TxnEntry},
+    util::ProducerIdentity,
 };
 
 /// Collapses a requested topic list to one row per topic and one row per
@@ -36,14 +37,22 @@ use crate::txn::{
 /// therefore gets exactly one response row for it, not one per request
 /// entry (#883).
 pub(super) fn dedup_topics(topics: &[AddPartitionsToTxnTopic]) -> Vec<AddPartitionsToTxnTopic> {
+    /// The partitions of one topic in first-occurrence order, and the set of
+    /// them that were already seen.
+    #[derive(Default)]
+    struct TopicPartitions {
+        partitions: Vec<i32>,
+        seen: HashSet<i32>,
+    }
+
     let mut order: Vec<String> = Vec::new();
-    let mut partitions_by_topic: HashMap<String, (Vec<i32>, HashSet<i32>)> = HashMap::new();
+    let mut partitions_by_topic: HashMap<String, TopicPartitions> = HashMap::new();
     for topic in topics {
-        let (partitions, seen) = partitions_by_topic
+        let TopicPartitions { partitions, seen } = partitions_by_topic
             .entry(topic.name.clone())
             .or_insert_with(|| {
                 order.push(topic.name.clone());
-                (Vec::new(), HashSet::new())
+                TopicPartitions::default()
             });
         for &partition in &topic.partitions {
             if seen.insert(partition) {
@@ -54,7 +63,7 @@ pub(super) fn dedup_topics(topics: &[AddPartitionsToTxnTopic]) -> Vec<AddPartiti
     order
         .into_iter()
         .map(|name| {
-            let (partitions, _) = partitions_by_topic
+            let TopicPartitions { partitions, .. } = partitions_by_topic
                 .remove(&name)
                 .expect("every ordered name was inserted into the map above");
             AddPartitionsToTxnTopic {
@@ -70,11 +79,17 @@ pub(super) fn dedup_topics(topics: &[AddPartitionsToTxnTopic]) -> Vec<AddPartiti
 /// [`verification_code`](crate::txn::coordinator::produce_verification::verification_code).
 fn verify_partition_code(
     entry: &TxnEntry,
-    requested: (krabka_log::ProducerId, i16),
+    requested: ProducerIdentity,
     tp: &TopicPartition,
 ) -> i16 {
     verification_code(
-        (entry.producer_id, entry.producer_epoch, entry.state),
+        HeldTransaction {
+            identity: ProducerIdentity {
+                producer_id: entry.producer_id,
+                producer_epoch: entry.producer_epoch,
+            },
+            state: entry.state,
+        },
         entry.partitions.contains(tp),
         requested,
     )
@@ -90,6 +105,10 @@ pub(super) fn verify_partitions(
     topics: &[AddPartitionsToTxnTopic],
     (denied, frozen): (&HashSet<String>, &HashSet<String>),
 ) -> Vec<AddPartitionsToTxnTopicResult> {
+    let requested = ProducerIdentity {
+        producer_id: requested.0,
+        producer_epoch: requested.1,
+    };
     topics
         .iter()
         .map(|t| {
@@ -166,7 +185,7 @@ mod tests {
     use crate::{
         codes,
         txn::{
-            handlers::add_partitions_to_txn::test_support::{topic, topic_result},
+            handlers::add_partitions_to_txn::test_support::{PartitionCode, topic, topic_result},
             state::TxnEntry,
         },
     };
@@ -183,7 +202,10 @@ mod tests {
             topic: "b".into(),
             partition: PartitionIndex(0),
         };
-        let identity = (krabka_log::ProducerId(1), 0);
+        let identity = ProducerIdentity {
+            producer_id: krabka_log::ProducerId(1),
+            producer_epoch: 0,
+        };
         assert!(verify_partition_code(&e, identity, &present) == codes::NONE);
         assert!(verify_partition_code(&e, identity, &absent) == codes::TRANSACTION_ABORTABLE);
     }
@@ -211,10 +233,31 @@ mod tests {
         let expected = vec![
             topic_result(
                 "alpha",
-                &[(1, codes::NONE), (2, codes::TRANSACTION_ABORTABLE)],
+                &[
+                    PartitionCode {
+                        partition: 1,
+                        code: codes::NONE,
+                    },
+                    PartitionCode {
+                        partition: 2,
+                        code: codes::TRANSACTION_ABORTABLE,
+                    },
+                ],
             ),
-            topic_result("denied", &[(3, codes::TOPIC_AUTHORIZATION_FAILED)]),
-            topic_result("frozen", &[(4, codes::POLICY_VIOLATION)]),
+            topic_result(
+                "denied",
+                &[PartitionCode {
+                    partition: 3,
+                    code: codes::TOPIC_AUTHORIZATION_FAILED,
+                }],
+            ),
+            topic_result(
+                "frozen",
+                &[PartitionCode {
+                    partition: 4,
+                    code: codes::POLICY_VIOLATION,
+                }],
+            ),
         ];
         assert!(rows == expected);
     }
@@ -234,10 +277,31 @@ mod tests {
         let expected = vec![
             topic_result(
                 "alpha",
-                &[(1, codes::NOT_COORDINATOR), (2, codes::NOT_COORDINATOR)],
+                &[
+                    PartitionCode {
+                        partition: 1,
+                        code: codes::NOT_COORDINATOR,
+                    },
+                    PartitionCode {
+                        partition: 2,
+                        code: codes::NOT_COORDINATOR,
+                    },
+                ],
             ),
-            topic_result("denied", &[(5, codes::TOPIC_AUTHORIZATION_FAILED)]),
-            topic_result("frozen", &[(6, codes::POLICY_VIOLATION)]),
+            topic_result(
+                "denied",
+                &[PartitionCode {
+                    partition: 5,
+                    code: codes::TOPIC_AUTHORIZATION_FAILED,
+                }],
+            ),
+            topic_result(
+                "frozen",
+                &[PartitionCode {
+                    partition: 6,
+                    code: codes::POLICY_VIOLATION,
+                }],
+            ),
         ];
         assert!(rows == expected);
     }
@@ -251,8 +315,14 @@ mod tests {
         let expected = vec![topic_result(
             "alpha",
             &[
-                (4, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED),
-                (5, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED),
+                PartitionCode {
+                    partition: 4,
+                    code: codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
+                },
+                PartitionCode {
+                    partition: 5,
+                    code: codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
+                },
             ],
         )];
         assert!(rows == expected);
@@ -263,38 +333,57 @@ mod tests {
     /// duplicated request entry must collapse to one response row.
     #[test]
     fn dedup_topics_collapses_duplicate_topics_and_partitions() {
-        type Case<'a> = (
-            &'a str,
-            Vec<AddPartitionsToTxnTopic>,
-            Vec<(&'a str, Vec<i32>)>,
-        );
-        let cases: Vec<Case> = vec![
-            (
-                "duplicate partition index within one topic",
-                vec![topic("a", &[0, 0])],
-                vec![("a", vec![0])],
-            ),
-            (
-                "the same topic named twice",
-                vec![topic("a", &[0]), topic("a", &[1])],
-                vec![("a", vec![0, 1])],
-            ),
-            (
-                "the same topic and partition named twice",
-                vec![topic("a", &[0]), topic("a", &[0])],
-                vec![("a", vec![0])],
-            ),
-            (
-                "distinct topics are unaffected, in first-occurrence order",
-                vec![topic("b", &[0]), topic("a", &[0])],
-                vec![("b", vec![0]), ("a", vec![0])],
-            ),
+        /// One case: what the request names, and the topic rows that remain.
+        struct Case {
+            label: &'static str,
+            topics: Vec<AddPartitionsToTxnTopic>,
+            expected: Vec<DedupedTopic>,
+        }
+        /// A topic that remains, with its partitions in first-occurrence order.
+        #[derive(Debug, PartialEq, Eq)]
+        struct DedupedTopic {
+            name: String,
+            partitions: Vec<i32>,
+        }
+        let deduped_topic = |name: &str, partitions: &[i32]| DedupedTopic {
+            name: name.to_owned(),
+            partitions: partitions.to_vec(),
+        };
+        let cases = vec![
+            Case {
+                label: "duplicate partition index within one topic",
+                topics: vec![topic("a", &[0, 0])],
+                expected: vec![deduped_topic("a", &[0])],
+            },
+            Case {
+                label: "the same topic named twice",
+                topics: vec![topic("a", &[0]), topic("a", &[1])],
+                expected: vec![deduped_topic("a", &[0, 1])],
+            },
+            Case {
+                label: "the same topic and partition named twice",
+                topics: vec![topic("a", &[0]), topic("a", &[0])],
+                expected: vec![deduped_topic("a", &[0])],
+            },
+            Case {
+                label: "distinct topics are unaffected, in first-occurrence order",
+                topics: vec![topic("b", &[0]), topic("a", &[0])],
+                expected: vec![deduped_topic("b", &[0]), deduped_topic("a", &[0])],
+            },
         ];
-        for (label, topics, expected) in cases {
+        for Case {
+            label,
+            topics,
+            expected,
+        } in cases
+        {
             let deduped = dedup_topics(&topics);
-            let names_and_partitions: Vec<(&str, Vec<i32>)> = deduped
+            let names_and_partitions: Vec<DedupedTopic> = deduped
                 .iter()
-                .map(|t| (t.name.as_str(), t.partitions.clone()))
+                .map(|t| DedupedTopic {
+                    name: t.name.clone(),
+                    partitions: t.partitions.clone(),
+                })
                 .collect();
             assert!(names_and_partitions == expected, "{label}");
         }

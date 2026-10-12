@@ -18,8 +18,8 @@ use tokio::net::TcpStream;
 use crate::{
     harness::metadata_probe,
     oauthbearer::{
-        now_unix_secs, oauthbearer_authenticate, oauthbearer_fixture, oauthbearer_initial,
-        oauthbearer_session_start, start_oauthbearer_broker, unsecured_jws,
+        OauthbearerSession, now_unix_secs, oauthbearer_authenticate, oauthbearer_fixture,
+        oauthbearer_initial, oauthbearer_session_start, start_oauthbearer_broker, unsecured_jws,
     },
 };
 
@@ -33,7 +33,10 @@ async fn sasl_oauthbearer_happy_path() {
         oauthbearer_fixture(krabka_security::OAuthBearerValidator::default(), None).await;
 
     let result: Result<(), io::Error> = async {
-        let (mut stream, mut corr) = oauthbearer_session_start(addr).await?;
+        let OauthbearerSession {
+            mut stream,
+            mut corr,
+        } = oauthbearer_session_start(addr).await?;
 
         let token = unsecured_jws("svc-account", now_unix_secs() + 3600);
         authenticate_success(
@@ -70,7 +73,10 @@ async fn sasl_oauthbearer_invalid_token_two_round_failure() {
     let addr = handle.listen_addr();
 
     let result: Result<(), io::Error> = async {
-        let (mut stream, mut corr) = oauthbearer_session_start(addr).await?;
+        let OauthbearerSession {
+            mut stream,
+            mut corr,
+        } = oauthbearer_session_start(addr).await?;
 
         // Expired token (exp an hour in the past, zero skew).
         let token = unsecured_jws("admin", now_unix_secs() - 3600);
@@ -83,10 +89,16 @@ async fn sasl_oauthbearer_invalid_token_two_round_failure() {
     result.expect("OAUTHBEARER failure handshake must complete");
 }
 
-/// Generate a fresh ES256 key and return `(key_pair, jwks_json)`.
+/// A signing key pair and the JWKS document that advertises its public key.
+struct Es256Key {
+    key_pair: ring::signature::EcdsaKeyPair,
+    jwks: String,
+}
+
+/// Generate a fresh ES256 key and return it with its JWKS.
 ///
 /// The JWKS advertises the matching public key under `kid`.
-fn es256_key(kid: &str) -> (ring::signature::EcdsaKeyPair, String) {
+fn es256_key(kid: &str) -> Es256Key {
     let rng = SystemRandom::new();
     let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).unwrap();
     let kp =
@@ -97,7 +109,7 @@ fn es256_key(kid: &str) -> (ring::signature::EcdsaKeyPair, String) {
         B64.encode(&point[1..33]),
         B64.encode(&point[33..65]),
     );
-    (kp, jwks)
+    Es256Key { key_pair: kp, jwks }
 }
 
 /// Sign an ES256 JWS with `kp`, `kid` in the header and `claims` as the payload.
@@ -128,11 +140,14 @@ fn signed_validator(jwks_json: &str) -> krabka_security::OAuthBearerValidator {
 /// `SaslAuthenticate` path.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sasl_oauthbearer_signed_token_happy_path() {
-    let (kp, jwks) = es256_key("k1");
+    let Es256Key { key_pair: kp, jwks } = es256_key("k1");
     let (_log_dir, handle, addr) = oauthbearer_fixture(signed_validator(&jwks), None).await;
 
     let result: Result<(), io::Error> = async {
-        let (mut stream, mut corr) = oauthbearer_session_start(addr).await?;
+        let OauthbearerSession {
+            mut stream,
+            mut corr,
+        } = oauthbearer_session_start(addr).await?;
 
         let claims = format!(
             "{{\"sub\":\"svc-account\",\"exp\":{}}}",
@@ -164,12 +179,21 @@ async fn sasl_oauthbearer_signed_token_happy_path() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sasl_oauthbearer_signed_token_wrong_key_two_round_failure() {
     // JWKS advertises key A's public key; the token is signed by key B.
-    let (_kp_a, jwks_a) = es256_key("k1");
-    let (kp_b, _jwks_b) = es256_key("k1");
+    let Es256Key {
+        key_pair: _kp_a,
+        jwks: jwks_a,
+    } = es256_key("k1");
+    let Es256Key {
+        key_pair: kp_b,
+        jwks: _jwks_b,
+    } = es256_key("k1");
     let (_log_dir, handle, addr) = oauthbearer_fixture(signed_validator(&jwks_a), None).await;
 
     let result: Result<(), io::Error> = async {
-        let (mut stream, mut corr) = oauthbearer_session_start(addr).await?;
+        let OauthbearerSession {
+            mut stream,
+            mut corr,
+        } = oauthbearer_session_start(addr).await?;
 
         let claims = format!("{{\"sub\":\"admin\",\"exp\":{}}}", now_unix_secs() + 3600);
         let token = es256_token(&kp_b, "k1", &claims);

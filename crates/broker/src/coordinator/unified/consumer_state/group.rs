@@ -483,8 +483,16 @@ mod tests {
     use super::*;
     use crate::coordinator::{
         test_support::sorted_epoch_pairs,
-        unified::consumer_state::test_support::{Topics, member, subscribed_member},
+        unified::consumer_state::test_support::{NamedTopic, Topics, member, subscribed_member},
     };
+
+    /// Who a member is and the epoch it is at, ordered to compare member lists.
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct MemberIdentity<'a> {
+        member_id: &'a str,
+        instance_id: Option<&'a str>,
+        member_epoch: i32,
+    }
 
     #[test]
     fn state_name_follows_kafka_consumer_group_state() {
@@ -831,7 +839,7 @@ mod tests {
         }
 
         let mut g = GroupState::new("g");
-        let topics = Topics(vec![("t", T)]);
+        let topics = Topics(vec![NamedTopic { name: "t", id: T }]);
         g.add_or_update_member(subscribed_member("m1", &["t"]));
         let epochs = |g: &GroupState| sorted_epoch_pairs(g.members["m1"].assignment_epochs.get(&T));
         let mut steps = Vec::new();
@@ -1062,19 +1070,24 @@ mod tests {
 
         g.replace_static_member("s1", "m1");
 
-        let mut members: Vec<(&str, Option<&str>, i32)> = g
+        let mut members: Vec<MemberIdentity<'_>> = g
             .members
             .values()
-            .map(|m| {
-                (
-                    m.member_id.as_str(),
-                    m.instance_id.as_deref(),
-                    m.member_epoch,
-                )
+            .map(|m| MemberIdentity {
+                member_id: m.member_id.as_str(),
+                instance_id: m.instance_id.as_deref(),
+                member_epoch: m.member_epoch,
             })
             .collect();
         members.sort_unstable();
-        assert!(members == vec![("m1", Some("i1"), 0)]);
+        assert!(
+            members
+                == vec![MemberIdentity {
+                    member_id: "m1",
+                    instance_id: Some("i1"),
+                    member_epoch: 0,
+                }]
+        );
         assert!(g.current_member_for_instance("i1") == Some("m1"));
         assert!(g.current_member_for_instance("i2") == None);
     }

@@ -274,14 +274,15 @@ pub fn boot_config(
     config: BrokerConfig,
 ) -> impl std::future::Future<Output = (BrokerHandle, Client)> {
     Box::pin(async move {
-        start_broker_client(
+        let started = start_broker_client(
             config,
             BrokerClientSetup {
                 client_id: "schema-validation-test",
                 ..Default::default()
             },
         )
-        .await
+        .await;
+        (started.broker, started.client)
     })
 }
 

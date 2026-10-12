@@ -98,21 +98,30 @@ fn alive() -> HashSet<u64> {
     HashSet::from([2])
 }
 
-async fn broker_with(config: BreakGlassConfig) -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_no_audit_with(move |cfg| {
+/// A running broker and the temporary directory that holds its data.
+struct StartedBroker {
+    handle: BrokerHandle,
+    dir: tempfile::TempDir,
+}
+
+async fn broker_with(config: BreakGlassConfig) -> StartedBroker {
+    let (handle, dir) = start_broker_no_audit_with(move |cfg| {
         cfg.authorizer = std::sync::Arc::new(AllowAllAuthorizer);
         cfg.break_glass = config;
     })
-    .await
+    .await;
+    StartedBroker { handle, dir }
+}
+
+/// The row of an election and the records the request would append.
+struct ElectionOutcome {
+    row: PartitionResult,
+    records: Vec<MetadataRecord>,
 }
 
 /// Drive one partition through the election, and answer its row beside the
 /// records the request would append.
-async fn elect(
-    broker: &Broker,
-    image: &MetadataImage,
-    election: ElectionType,
-) -> (PartitionResult, Vec<MetadataRecord>) {
+async fn elect(broker: &Broker, image: &MetadataImage, election: ElectionType) -> ElectionOutcome {
     let alive = alive();
     let witnesses = HashSet::new();
     test_ctx!(ctx, "admin");
@@ -126,12 +135,20 @@ async fn elect(
     };
     let mut batch = ElectionBatch::default();
     let row = elect_one(&env, &mut batch, TOPIC, 0).await;
-    (row, std::mem::take(&mut batch.records))
+    ElectionOutcome {
+        row,
+        records: std::mem::take(&mut batch.records),
+    }
 }
 
 #[tokio::test]
 async fn an_unclean_election_with_no_proposal_is_refused_and_appends_nothing() {
-    let (handle, _dir, row, records) = election_fixture(ElectionCaseSetup::default()).await;
+    let ElectionFixture {
+        handle,
+        dir: _dir,
+        row,
+        records,
+    } = election_fixture(ElectionCaseSetup::default()).await;
 
     check!(row.error_code == codes::POLICY_VIOLATION);
     check!(
@@ -144,12 +161,12 @@ async fn an_unclean_election_with_no_proposal_is_refused_and_appends_nothing() {
 
 #[tokio::test]
 async fn an_approved_unclean_election_appends_the_consume_beside_the_leader_change() {
-    let (handle, _dir) = broker_with(gated_config()).await;
+    let StartedBroker { handle, dir: _dir } = broker_with(gated_config()).await;
     let broker = handle.broker_arc_for_test();
     let proposal = approved_proposal(BreakGlassAction::UncleanElectLeaders, "orders-0");
     let image = image_with(std::slice::from_ref(&proposal));
 
-    let (row, records) = elect(&broker, &image, ElectionType::Unclean).await;
+    let ElectionOutcome { row, records } = elect(&broker, &image, ElectionType::Unclean).await;
 
     check!(row.error_code == codes::NONE);
     // The consume and the transition it authorized are one raft append.
@@ -174,7 +191,7 @@ async fn an_approved_unclean_election_appends_the_consume_beside_the_leader_chan
 
 #[tokio::test]
 async fn a_topic_wide_proposal_is_spent_once_for_every_partition_it_covers() {
-    let (handle, _dir) = broker_with(gated_config()).await;
+    let StartedBroker { handle, dir: _dir } = broker_with(gated_config()).await;
     let broker = handle.broker_arc_for_test();
     let image = image_with(&[approved_proposal(
         BreakGlassAction::UncleanElectLeaders,
@@ -213,7 +230,12 @@ async fn a_topic_wide_proposal_is_spent_once_for_every_partition_it_covers() {
 
 #[tokio::test]
 async fn a_preferred_election_is_never_gated() {
-    let (handle, _dir, row, records) = election_fixture(ElectionCaseSetup {
+    let ElectionFixture {
+        handle,
+        dir: _dir,
+        row,
+        records,
+    } = election_fixture(ElectionCaseSetup {
         election: ElectionType::Preferred,
         ..Default::default()
     })
@@ -229,7 +251,12 @@ async fn a_preferred_election_is_never_gated() {
 
 #[tokio::test]
 async fn a_broker_with_no_approver_set_gates_nothing() {
-    let (handle, _dir, row, records) = election_fixture(ElectionCaseSetup {
+    let ElectionFixture {
+        handle,
+        dir: _dir,
+        row,
+        records,
+    } = election_fixture(ElectionCaseSetup {
         config: BreakGlassConfig::default(),
         ..Default::default()
     })
@@ -242,7 +269,7 @@ async fn a_broker_with_no_approver_set_gates_nothing() {
 
 #[tokio::test]
 async fn the_wire_handler_refuses_an_unclean_election_that_no_proposal_covers() {
-    let (handle, _dir) = broker_with(gated_config()).await;
+    let StartedBroker { handle, dir: _dir } = broker_with(gated_config()).await;
     let broker = handle.broker_arc_for_test();
     test_ctx!(ctx, "admin");
     let request = |election_type| ElectLeadersRequest {
@@ -402,18 +429,27 @@ async fn seed_preferred_topic(broker: &Broker) {
 #[tokio::test]
 async fn the_handler_elects_exactly_the_partitions_the_request_names() {
     const NOT_NEEDED: &str = "Leader election not needed for topic partition.";
-    let (broker_handle, _dir) = broker_with(BreakGlassConfig::default()).await;
+    let StartedBroker {
+        handle: broker_handle,
+        dir: _dir,
+    } = broker_with(BreakGlassConfig::default()).await;
     let broker = broker_handle.broker_arc_for_test();
     seed_preferred_topic(&broker).await;
     test_ctx!(ctx, "admin");
-    let cases: Vec<(Option<Vec<TopicPartitions>>, Vec<ReplicaElectionResult>)> = vec![
-        (
-            Some(vec![named(TOPIC, &[])]),
-            vec![topic_rows(TOPIC, vec![])],
-        ),
-        (
-            Some(vec![named(TOPIC, &[0, 9])]),
-            vec![topic_rows(
+    /// The topic list of a request and the topic rows it must answer with.
+    struct ElectCase {
+        topic_partitions: Option<Vec<TopicPartitions>>,
+        expected: Vec<ReplicaElectionResult>,
+    }
+
+    let cases: Vec<ElectCase> = vec![
+        ElectCase {
+            topic_partitions: Some(vec![named(TOPIC, &[])]),
+            expected: vec![topic_rows(TOPIC, vec![])],
+        },
+        ElectCase {
+            topic_partitions: Some(vec![named(TOPIC, &[0, 9])]),
+            expected: vec![topic_rows(
                 TOPIC,
                 vec![
                     row(0, codes::ELECTION_NOT_NEEDED, NOT_NEEDED),
@@ -424,10 +460,10 @@ async fn the_handler_elects_exactly_the_partitions_the_request_names() {
                     ),
                 ],
             )],
-        ),
-        (
-            Some(vec![named("missing", &[0]), named(TOPIC, &[])]),
-            vec![
+        },
+        ElectCase {
+            topic_partitions: Some(vec![named("missing", &[0]), named(TOPIC, &[])]),
+            expected: vec![
                 topic_rows(
                     "missing",
                     vec![row(
@@ -438,9 +474,13 @@ async fn the_handler_elects_exactly_the_partitions_the_request_names() {
                 ),
                 topic_rows(TOPIC, vec![]),
             ],
-        ),
+        },
     ];
-    for (topic_partitions, expected) in cases {
+    for ElectCase {
+        topic_partitions,
+        expected,
+    } in cases
+    {
         let request = ElectLeadersRequest {
             election_type: WIRE_ELECTION_PREFERRED,
             topic_partitions: topic_partitions.clone(),
@@ -505,16 +545,24 @@ struct ElectionCaseSetup<'a> {
     proposals: &'a [BreakGlassProposalRecord],
 }
 
-async fn election_fixture(
-    setup: ElectionCaseSetup<'_>,
-) -> (
-    BrokerHandle,
-    tempfile::TempDir,
-    PartitionResult,
-    Vec<MetadataRecord>,
-) {
-    let (handle, dir) = Box::pin(broker_with(setup.config)).await;
+/// A running broker, the temporary directory that holds its data, and the row
+/// and records of an election it drove.
+struct ElectionFixture {
+    handle: BrokerHandle,
+    dir: tempfile::TempDir,
+    row: PartitionResult,
+    records: Vec<MetadataRecord>,
+}
+
+async fn election_fixture(setup: ElectionCaseSetup<'_>) -> ElectionFixture {
+    let StartedBroker { handle, dir } = Box::pin(broker_with(setup.config)).await;
     let broker = handle.broker_arc_for_test();
-    let (row, records) = elect(&broker, &image_with(setup.proposals), setup.election).await;
-    (handle, dir, row, records)
+    let ElectionOutcome { row, records } =
+        elect(&broker, &image_with(setup.proposals), setup.election).await;
+    ElectionFixture {
+        handle,
+        dir,
+        row,
+        records,
+    }
 }

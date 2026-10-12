@@ -24,6 +24,16 @@ pub use refresh::run;
 /// debt that Kafka would already have forgotten.
 pub(crate) const REPLICATION_QUOTA_WINDOW: Time = secs(11);
 
+/// One `partition:broker` entry of a `*.throttled.replicas` list: the replica
+/// of `partition` that sits on `broker`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThrottledReplica {
+    /// The partition index.
+    pub partition: i32,
+    /// The broker that holds the replica.
+    pub broker: NodeId,
+}
+
 /// Topic-level `*.throttled.replicas` config value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThrottledReplicas {
@@ -32,7 +42,7 @@ pub enum ThrottledReplicas {
     /// `"*"` wildcard: all replicas of this topic are throttled.
     All,
     /// `"partition:broker,partition:broker,..."`: specific pairs.
-    List(Vec<(i32, NodeId)>),
+    List(Vec<ThrottledReplica>),
 }
 
 impl ThrottledReplicas {
@@ -62,7 +72,10 @@ impl ThrottledReplicas {
                 .ok_or_else(|| format!("invalid pair {element:?}"))?;
             let p: i32 = p_str.parse().map_err(|e| format!("partition: {e}"))?;
             let n: u64 = n_str.parse().map_err(|e| format!("broker: {e}"))?;
-            out.push((p, NodeId(n)));
+            out.push(ThrottledReplica {
+                partition: p,
+                broker: NodeId(n),
+            });
         }
         if out.is_empty() {
             return Ok(Self::None);
@@ -87,8 +100,8 @@ impl ThrottledReplicas {
             Self::List(entries) => ThrottledPartitions::Listed(
                 entries
                     .iter()
-                    .filter(|&&(_, node)| node == broker)
-                    .map(|&(partition, _)| partition)
+                    .filter(|entry| entry.broker == broker)
+                    .map(|entry| entry.partition)
                     .collect(),
             ),
         }
@@ -161,6 +174,13 @@ mod tests {
 
     use super::*;
 
+    fn replica(partition: i32, broker: u64) -> ThrottledReplica {
+        ThrottledReplica {
+            partition,
+            broker: NodeId(broker),
+        }
+    }
+
     #[test]
     fn empty_string_parses_as_none() {
         assert!(ThrottledReplicas::parse("").unwrap() == ThrottledReplicas::None);
@@ -174,10 +194,10 @@ mod tests {
     #[test]
     fn pairs_parse_in_order() {
         for (input, want) in [
-            ("0:1", vec![(0, NodeId(1))]),
+            ("0:1", vec![replica(0, 1)]),
             (
                 "0:1,0:2,1:3",
-                vec![(0, NodeId(1)), (0, NodeId(2)), (1, NodeId(3))],
+                vec![replica(0, 1), replica(0, 2), replica(1, 3)],
             ),
         ] {
             assert!(
@@ -269,11 +289,11 @@ mod tests {
             (" * ", ThrottledReplicas::All),
             (
                 " 0:1 , 2:3 ",
-                ThrottledReplicas::List(vec![(0, NodeId(1)), (2, NodeId(3))]),
+                ThrottledReplicas::List(vec![replica(0, 1), replica(2, 3)]),
             ),
             (
                 "0:1,,1:2",
-                ThrottledReplicas::List(vec![(0, NodeId(1)), (1, NodeId(2))]),
+                ThrottledReplicas::List(vec![replica(0, 1), replica(1, 2)]),
             ),
         ];
         for (input, want) in cases {

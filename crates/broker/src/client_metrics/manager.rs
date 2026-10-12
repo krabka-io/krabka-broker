@@ -444,7 +444,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        test_support::{attrs, expect_assignment, img_with},
+        test_support::{ConfigEntry, attrs, expect_assignment, img_with},
         *,
     };
     use crate::{client_metrics::config::INTERVAL_MS_DEFAULT, test_support::KafkaErrorCode};
@@ -518,7 +518,19 @@ mod tests {
     #[test]
     fn push_checks_follow_kafkas_order_and_timestamps() {
         let m = manager();
-        let img = img_with("all", &[("metrics", "*"), ("interval.ms", "60000")]);
+        let img = img_with(
+            "all",
+            &[
+                ConfigEntry {
+                    key: "metrics",
+                    value: "*",
+                },
+                ConfigEntry {
+                    key: "interval.ms",
+                    value: "60000",
+                },
+            ],
+        );
         let attrs = attrs();
         let t = Instant::now();
         let right = expect_assignment(m.get_subscription_at(&img, &attrs, t)).subscription_id;
@@ -626,55 +638,149 @@ mod tests {
     fn the_terminating_flag_follows_the_target() {
         use UnstableApiVersions::{Disabled, Enabled};
 
-        // (seconds after the get, terminating, compression supported, outcome)
-        type Move = (u64, bool, bool, Outcome);
+        /// One push, and what the manager answers with.
+        struct Move {
+            /// Seconds after the get.
+            after_secs: u64,
+            terminating: bool,
+            compression_supported: bool,
+            outcome: Outcome,
+        }
+        struct Row {
+            name: &'static str,
+            unstable: UnstableApiVersions,
+            steps: [Move; 3],
+        }
         let unsupported = || reject_push(KafkaErrorCode(codes::UNSUPPORTED_COMPRESSION_TYPE));
         let locked = || reject_push(KafkaErrorCode(codes::INVALID_REQUEST));
-        let rows: [(&str, UnstableApiVersions, [Move; 3]); 4] = [
-            (
-                "4.3.1: a rejected terminating push locks the instance",
-                Disabled,
-                [
-                    (0, true, false, unsupported()),
-                    (60, false, true, locked()),
-                    (120, false, true, ACCEPT),
+        let rows: [Row; 4] = [
+            Row {
+                name: "4.3.1: a rejected terminating push locks the instance",
+                unstable: Disabled,
+                steps: [
+                    Move {
+                        after_secs: 0,
+                        terminating: true,
+                        compression_supported: false,
+                        outcome: unsupported(),
+                    },
+                    Move {
+                        after_secs: 60,
+                        terminating: false,
+                        compression_supported: true,
+                        outcome: locked(),
+                    },
+                    Move {
+                        after_secs: 120,
+                        terminating: false,
+                        compression_supported: true,
+                        outcome: ACCEPT,
+                    },
                 ],
-            ),
-            (
-                "trunk: a rejected terminating push leaves the instance open",
-                Enabled,
-                [
-                    (0, true, false, unsupported()),
-                    (60, false, true, ACCEPT),
-                    (120, false, true, ACCEPT),
+            },
+            Row {
+                name: "trunk: a rejected terminating push leaves the instance open",
+                unstable: Enabled,
+                steps: [
+                    Move {
+                        after_secs: 0,
+                        terminating: true,
+                        compression_supported: false,
+                        outcome: unsupported(),
+                    },
+                    Move {
+                        after_secs: 60,
+                        terminating: false,
+                        compression_supported: true,
+                        outcome: ACCEPT,
+                    },
+                    Move {
+                        after_secs: 120,
+                        terminating: false,
+                        compression_supported: true,
+                        outcome: ACCEPT,
+                    },
                 ],
-            ),
-            (
-                "4.3.1: the push that the lock refuses resets the flag",
-                Disabled,
-                [
-                    (0, true, true, ACCEPT),
-                    (60, false, true, locked()),
-                    (120, false, true, ACCEPT),
+            },
+            Row {
+                name: "4.3.1: the push that the lock refuses resets the flag",
+                unstable: Disabled,
+                steps: [
+                    Move {
+                        after_secs: 0,
+                        terminating: true,
+                        compression_supported: true,
+                        outcome: ACCEPT,
+                    },
+                    Move {
+                        after_secs: 60,
+                        terminating: false,
+                        compression_supported: true,
+                        outcome: locked(),
+                    },
+                    Move {
+                        after_secs: 120,
+                        terminating: false,
+                        compression_supported: true,
+                        outcome: ACCEPT,
+                    },
                 ],
-            ),
-            (
-                "trunk: an accepted terminating push locks until expiry",
-                Enabled,
-                [
-                    (0, true, true, ACCEPT),
-                    (60, false, true, locked()),
-                    (120, false, true, locked()),
+            },
+            Row {
+                name: "trunk: an accepted terminating push locks until expiry",
+                unstable: Enabled,
+                steps: [
+                    Move {
+                        after_secs: 0,
+                        terminating: true,
+                        compression_supported: true,
+                        outcome: ACCEPT,
+                    },
+                    Move {
+                        after_secs: 60,
+                        terminating: false,
+                        compression_supported: true,
+                        outcome: locked(),
+                    },
+                    Move {
+                        after_secs: 120,
+                        terminating: false,
+                        compression_supported: true,
+                        outcome: locked(),
+                    },
                 ],
-            ),
+            },
         ];
-        let img = img_with("all", &[("metrics", "*"), ("interval.ms", "60000")]);
+        let img = img_with(
+            "all",
+            &[
+                ConfigEntry {
+                    key: "metrics",
+                    value: "*",
+                },
+                ConfigEntry {
+                    key: "interval.ms",
+                    value: "60000",
+                },
+            ],
+        );
         let attrs = attrs();
-        for (name, unstable, steps) in rows {
+        for Row {
+            name,
+            unstable,
+            steps,
+        } in rows
+        {
             let m = manager();
             let t = Instant::now();
             let id = expect_assignment(m.get_subscription_at(&img, &attrs, t)).subscription_id;
-            for (secs, terminating, compression_supported, expected) in steps {
+            for Move {
+                after_secs: secs,
+                terminating,
+                compression_supported,
+                outcome: expected,
+            } in steps
+            {
                 let check = PushCheck {
                     terminating,
                     compression_supported,
@@ -703,7 +809,19 @@ mod tests {
     /// reserved ids get `INVALID_REQUEST` (#673).
     #[test]
     fn push_without_an_instance_builds_one() {
-        let img = img_with("all", &[("metrics", "*"), ("interval.ms", "60000")]);
+        let img = img_with(
+            "all",
+            &[
+                ConfigEntry {
+                    key: "metrics",
+                    value: "*",
+                },
+                ConfigEntry {
+                    key: "interval.ms",
+                    value: "60000",
+                },
+            ],
+        );
         let attrs = attrs();
         let current = subscription_id(
             &compute_subscription(&img, &attrs, INTERVAL_MS_DEFAULT),
@@ -759,8 +877,32 @@ mod tests {
     #[test]
     fn a_subscription_change_rebuilds_the_instance() {
         let m = manager();
-        let before = img_with("all", &[("metrics", "*"), ("interval.ms", "60000")]);
-        let after = img_with("all", &[("metrics", "*"), ("interval.ms", "30000")]);
+        let before = img_with(
+            "all",
+            &[
+                ConfigEntry {
+                    key: "metrics",
+                    value: "*",
+                },
+                ConfigEntry {
+                    key: "interval.ms",
+                    value: "60000",
+                },
+            ],
+        );
+        let after = img_with(
+            "all",
+            &[
+                ConfigEntry {
+                    key: "metrics",
+                    value: "*",
+                },
+                ConfigEntry {
+                    key: "interval.ms",
+                    value: "30000",
+                },
+            ],
+        );
         let attrs = attrs();
         let t = Instant::now();
         let secs = |s| t + Duration::from_secs(s);
@@ -828,7 +970,19 @@ mod tests {
     #[test]
     fn get_throttle_follows_kafka() {
         let m = manager();
-        let img = img_with("all", &[("metrics", "*"), ("interval.ms", "100")]);
+        let img = img_with(
+            "all",
+            &[
+                ConfigEntry {
+                    key: "metrics",
+                    value: "*",
+                },
+                ConfigEntry {
+                    key: "interval.ms",
+                    value: "100",
+                },
+            ],
+        );
         let attrs = attrs();
         let t = Instant::now();
         let ms = |n| t + Duration::from_millis(n);
@@ -922,7 +1076,19 @@ mod tests {
     #[test]
     fn closing_the_connection_drops_the_instance() {
         let m = manager();
-        let img = img_with("all", &[("metrics", "*"), ("interval.ms", "60000")]);
+        let img = img_with(
+            "all",
+            &[
+                ConfigEntry {
+                    key: "metrics",
+                    value: "*",
+                },
+                ConfigEntry {
+                    key: "interval.ms",
+                    value: "60000",
+                },
+            ],
+        );
         let t = Instant::now();
         let get = |connection: &str, secs| {
             m.get_subscription_at(&img, &attrs_on(connection), t + Duration::from_secs(secs))
@@ -966,7 +1132,19 @@ mod tests {
         ];
         for (name, interval, idle, expired) in rows {
             let m = manager();
-            let img = img_with("all", &[("metrics", "*"), ("interval.ms", interval)]);
+            let img = img_with(
+                "all",
+                &[
+                    ConfigEntry {
+                        key: "metrics",
+                        value: "*",
+                    },
+                    ConfigEntry {
+                        key: "interval.ms",
+                        value: interval,
+                    },
+                ],
+            );
             let attrs = attrs();
             let id = subscription_id(
                 &compute_subscription(&img, &attrs, INTERVAL_MS_DEFAULT),
@@ -1014,7 +1192,19 @@ mod tests {
     #[test]
     fn an_expired_instances_connection_does_not_own_its_successor() {
         let m = manager();
-        let img = img_with("all", &[("metrics", "*"), ("interval.ms", "60000")]);
+        let img = img_with(
+            "all",
+            &[
+                ConfigEntry {
+                    key: "metrics",
+                    value: "*",
+                },
+                ConfigEntry {
+                    key: "interval.ms",
+                    value: "60000",
+                },
+            ],
+        );
         let attrs = attrs();
         let id = subscription_id(
             &compute_subscription(&img, &attrs, INTERVAL_MS_DEFAULT),

@@ -10,7 +10,10 @@ use std::collections::BTreeSet;
 use tokio::sync::oneshot;
 
 use super::{chrono_now_ms, retention::append_tombstones};
-use crate::coordinator::unified::{group::CoordinatorGroup, offsets_log::OffsetsLog};
+use crate::coordinator::{
+    topic_deletion::DeletedTopic,
+    unified::{group::CoordinatorGroup, offsets_log::OffsetsLog},
+};
 
 #[cfg(test)]
 mod tests;
@@ -21,7 +24,7 @@ mod tests;
 pub(super) async fn reply_delete_topic_offsets(
     group: &mut CoordinatorGroup,
     offsets_log: &dyn OffsetsLog,
-    topics: &[(String, uuid::Uuid)],
+    topics: &[DeletedTopic],
     reply: oneshot::Sender<Vec<(String, i32)>>,
 ) -> bool {
     let _ = reply.send(delete_topic_offsets(group, offsets_log, topics).await);
@@ -43,13 +46,13 @@ pub(super) async fn reply_delete_topic_offsets(
 async fn delete_topic_offsets(
     group: &mut CoordinatorGroup,
     offsets_log: &dyn OffsetsLog,
-    topics: &[(String, uuid::Uuid)],
+    topics: &[DeletedTopic],
 ) -> Vec<(String, i32)> {
     let deleted_id = |name: &str| {
         topics
             .iter()
-            .find(|(topic, _)| topic == name)
-            .map(|(_, id)| *id)
+            .find(|topic| topic.name == name)
+            .map(|topic| topic.topic_id)
     };
     let committed = group
         .committed_offsets

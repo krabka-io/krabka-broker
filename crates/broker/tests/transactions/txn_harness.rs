@@ -25,7 +25,7 @@ use crate::support::{
     client::connect_client,
     sasl::sasl_plaintext_mechanisms,
     transaction_wire::{TransactionTopicSetup, create_topic as create_transaction_topic},
-    transactions::{InitProducerSetup, new_producer_request},
+    transactions::{InitProducerSetup, ProducerIdentity, new_producer_request},
 };
 
 pub async fn boot_single() -> (BrokerHandle, String, TempDir) {
@@ -97,7 +97,7 @@ async fn create_topic_with_configs(
 pub async fn init_transaction(
     client: &krabka_client_core::Client,
     transactional_id: &str,
-) -> (i64, i16) {
+) -> ProducerIdentity {
     support::find_coordinator(client, support::KEY_TYPE_TRANSACTION, transactional_id).await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -110,7 +110,7 @@ pub async fn init_transaction(
             .await
             .unwrap();
         if response.error_code == 0 {
-            return (response.producer_id, response.producer_epoch);
+            return ProducerIdentity::from_wire((response.producer_id, response.producer_epoch));
         }
         // COORDINATOR_LOAD_IN_PROGRESS, COORDINATOR_NOT_AVAILABLE and
         // NOT_COORDINATOR are the answers of a coordinator that is not ready.

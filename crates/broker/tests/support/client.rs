@@ -312,6 +312,12 @@ pub struct BrokerClientSetup<'a> {
     pub client_context: &'a str,
 }
 
+/// A running broker and a client connected to it.
+pub struct BrokerWithClient {
+    pub broker: BrokerHandle,
+    pub client: Client,
+}
+
 /// Start a configured broker and connect the fixture's explicitly named client.
 /// The caller retains its original directory guard and readiness policy.
 ///
@@ -320,7 +326,7 @@ pub struct BrokerClientSetup<'a> {
 pub async fn start_broker_client(
     config: BrokerConfig,
     setup: BrokerClientSetup<'_>,
-) -> (BrokerHandle, Client) {
+) -> BrokerWithClient {
     let broker = configured_broker(config, Some(setup.broker_context)).await;
     let client = connect_owned(
         broker.listen_addr().to_string(),
@@ -328,7 +334,7 @@ pub async fn start_broker_client(
         setup.client_context,
     )
     .await;
-    (broker, client)
+    BrokerWithClient { broker, client }
 }
 
 /// Start a configured broker and connect a default or explicitly named client.

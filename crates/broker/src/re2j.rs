@@ -296,7 +296,7 @@ pub(crate) fn compile_full_match(pattern: &str) -> Result<regex::Regex, String> 
 
 #[cfg(test)]
 mod tests {
-    use assert2::{assert, check};
+    use assert2::check;
 
     use super::*;
 
@@ -331,12 +331,13 @@ mod tests {
             ("[", false),
             ("(", false),
         ];
-        let expected: Vec<(&str, bool)> = cases.to_vec();
-        let actual: Vec<(&str, bool)> = cases
-            .iter()
-            .map(|(pattern, _)| (*pattern, compile_full_match(pattern).is_ok()))
-            .collect();
-        assert!(actual == expected);
+        for (pattern, compiles) in cases {
+            check!(
+                compile_full_match(pattern).is_ok() == compiles,
+                "{pattern:?} should {}compile",
+                if compiles { "" } else { "not " }
+            );
+        }
     }
 
     #[test]

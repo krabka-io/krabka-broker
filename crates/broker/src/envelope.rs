@@ -564,18 +564,34 @@ mod tests {
         let mut truncated_body = valid.to_vec();
         truncated_body.truncate(4);
 
-        let cases: [(&str, Option<Vec<u8>>); 5] = [
-            ("null principal", None),
-            ("empty principal", Some(Vec::new())),
-            ("version prefix only", Some(vec![0x00])),
-            (
-                "schema version above the supported range",
-                Some(wrong_version),
-            ),
-            ("body truncated mid-string", Some(truncated_body)),
+        struct Case {
+            case: &'static str,
+            bytes: Option<Vec<u8>>,
+        }
+        let cases: [Case; 5] = [
+            Case {
+                case: "null principal",
+                bytes: None,
+            },
+            Case {
+                case: "empty principal",
+                bytes: Some(Vec::new()),
+            },
+            Case {
+                case: "version prefix only",
+                bytes: Some(vec![0x00]),
+            },
+            Case {
+                case: "schema version above the supported range",
+                bytes: Some(wrong_version),
+            },
+            Case {
+                case: "body truncated mid-string",
+                bytes: Some(truncated_body),
+            },
         ];
 
-        for (case, bytes) in cases {
+        for Case { case, bytes } in cases {
             check!(
                 deserialize_principal(bytes.as_deref())
                     == Err(EnvelopeError::PrincipalDeserializationFailure),
@@ -615,34 +631,45 @@ mod tests {
             octets[12..].copy_from_slice(&[10, 1, 2, 3]);
             octets
         };
-        let cases: [(&str, &[u8], Result<std::net::IpAddr, EnvelopeError>); 6] = [
-            ("four octets are an IPv4 address", &[10, 1, 2, 3], {
-                Ok(std::net::IpAddr::from([10, 1, 2, 3]))
-            }),
-            (
-                "sixteen octets are an IPv6 address",
-                &[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-                Ok("2001:db8::1".parse().expect("literal IPv6 address")),
-            ),
-            (
-                "an IPv4-mapped IPv6 address folds to its IPv4 form",
-                &mapped_v4,
-                Ok(std::net::IpAddr::from([10, 1, 2, 3])),
-            ),
-            ("an empty address", &[], Err(EnvelopeError::InvalidRequest)),
-            (
-                "three octets",
-                &[10, 1, 2],
-                Err(EnvelopeError::InvalidRequest),
-            ),
-            (
-                "five octets",
-                &[10, 1, 2, 3, 4],
-                Err(EnvelopeError::InvalidRequest),
-            ),
+        struct Case<'a> {
+            case: &'static str,
+            bytes: &'a [u8],
+            want: Result<std::net::IpAddr, EnvelopeError>,
+        }
+        let cases: [Case<'_>; 6] = [
+            Case {
+                case: "four octets are an IPv4 address",
+                bytes: &[10, 1, 2, 3],
+                want: { Ok(std::net::IpAddr::from([10, 1, 2, 3])) },
+            },
+            Case {
+                case: "sixteen octets are an IPv6 address",
+                bytes: &[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+                want: Ok("2001:db8::1".parse().expect("literal IPv6 address")),
+            },
+            Case {
+                case: "an IPv4-mapped IPv6 address folds to its IPv4 form",
+                bytes: &mapped_v4,
+                want: Ok(std::net::IpAddr::from([10, 1, 2, 3])),
+            },
+            Case {
+                case: "an empty address",
+                bytes: &[],
+                want: Err(EnvelopeError::InvalidRequest),
+            },
+            Case {
+                case: "three octets",
+                bytes: &[10, 1, 2],
+                want: Err(EnvelopeError::InvalidRequest),
+            },
+            Case {
+                case: "five octets",
+                bytes: &[10, 1, 2, 3, 4],
+                want: Err(EnvelopeError::InvalidRequest),
+            },
         ];
 
-        for (case, bytes, want) in cases {
+        for Case { case, bytes, want } in cases {
             check!(
                 deserialize_client_host_address(bytes) == want,
                 "case: {case}"
@@ -684,28 +711,40 @@ mod tests {
     /// is what a JVM socket reports for such a peer.
     #[test]
     fn a_client_host_address_round_trips_as_inet_address_get_address_writes_it() {
-        let cases: [(&str, std::net::IpAddr, &[u8], std::net::IpAddr); 3] = [
-            (
-                "an IPv4 address is four octets",
-                std::net::IpAddr::from([10, 1, 2, 3]),
-                &[10, 1, 2, 3],
-                std::net::IpAddr::from([10, 1, 2, 3]),
-            ),
-            (
-                "an IPv6 address is sixteen octets",
-                std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
-                &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-                std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
-            ),
-            (
-                "an IPv4-mapped IPv6 address is the four IPv4 octets",
-                "::ffff:10.1.2.3".parse().expect("literal IPv6 address"),
-                &[10, 1, 2, 3],
-                std::net::IpAddr::from([10, 1, 2, 3]),
-            ),
+        struct Case {
+            case: &'static str,
+            ip: std::net::IpAddr,
+            octets: &'static [u8],
+            decoded: std::net::IpAddr,
+        }
+        let cases: [Case; 3] = [
+            Case {
+                case: "an IPv4 address is four octets",
+                ip: std::net::IpAddr::from([10, 1, 2, 3]),
+                octets: &[10, 1, 2, 3],
+                decoded: std::net::IpAddr::from([10, 1, 2, 3]),
+            },
+            Case {
+                case: "an IPv6 address is sixteen octets",
+                ip: std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+                octets: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+                decoded: std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+            },
+            Case {
+                case: "an IPv4-mapped IPv6 address is the four IPv4 octets",
+                ip: "::ffff:10.1.2.3".parse().expect("literal IPv6 address"),
+                octets: &[10, 1, 2, 3],
+                decoded: std::net::IpAddr::from([10, 1, 2, 3]),
+            },
         ];
 
-        for (case, ip, octets, decoded) in cases {
+        for Case {
+            case,
+            ip,
+            octets,
+            decoded,
+        } in cases
+        {
             let bytes = serialize_client_host_address(ip);
 
             check!(bytes.as_ref() == octets, "case: {case}");
@@ -847,16 +886,30 @@ mod tests {
     /// tagged-fields section is cut off, is refused.
     #[test]
     fn a_response_too_short_for_its_header_is_refused() {
-        let cases: [(&str, &[u8], bool); 2] = [
-            ("three bytes", &[0, 0, 1], false),
-            (
-                "a tagged-fields count with no fields after it",
-                &[0, 0, 0, 1, 1],
-                true,
-            ),
+        struct Case {
+            case: &'static str,
+            data: &'static [u8],
+            flexible: bool,
+        }
+        let cases: [Case; 2] = [
+            Case {
+                case: "three bytes",
+                data: &[0, 0, 1],
+                flexible: false,
+            },
+            Case {
+                case: "a tagged-fields count with no fields after it",
+                data: &[0, 0, 0, 1, 1],
+                flexible: true,
+            },
         ];
 
-        for (case, data, flexible) in cases {
+        for Case {
+            case,
+            data,
+            flexible,
+        } in cases
+        {
             check!(
                 unwrap_response(19, flexible, &Bytes::copy_from_slice(data)).is_err(),
                 "case: {case}"
@@ -1059,152 +1112,164 @@ mod tests {
             krabka_protocol::owned::unregister_controller_request::UnregisterControllerRequest,
         >(0);
         let truncated = &create_topics[..create_topics.len() - 1];
-        let cases: [(&str, Bytes, _, Result<(), EnvelopeError>); 14] = [
-            (
-                "a frame too short to hold a header",
-                Bytes::from_static(&[0, 19, 0]),
-                Disabled,
-                Err(EnvelopeError::UnsupportedVersion),
-            ),
-            (
-                "Produce is not forwardable",
-                request_frame(EmbeddedFrameSetup {
+        struct Case {
+            case: &'static str,
+            frame: Bytes,
+            unstable: crate::api_catalog::UnstableApiVersions,
+            want: Result<(), EnvelopeError>,
+        }
+        let cases: [Case; 14] = [
+            Case {
+                case: "a frame too short to hold a header",
+                frame: Bytes::from_static(&[0, 19, 0]),
+                unstable: Disabled,
+                want: Err(EnvelopeError::UnsupportedVersion),
+            },
+            Case {
+                case: "Produce is not forwardable",
+                frame: request_frame(EmbeddedFrameSetup {
                     api_key: krabka_ids::ApiKey(0),
                     api_version: krabka_ids::ApiVersion(9),
                     body: b"",
                     ..Default::default()
                 }),
-                Disabled,
-                Err(EnvelopeError::InvalidRequest),
-            ),
-            (
-                "a nested Envelope is not forwardable",
-                request_frame(EmbeddedFrameSetup {
+                unstable: Disabled,
+                want: Err(EnvelopeError::InvalidRequest),
+            },
+            Case {
+                case: "a nested Envelope is not forwardable",
+                frame: request_frame(EmbeddedFrameSetup {
                     api_key: krabka_ids::ApiKey(58),
                     api_version: krabka_ids::ApiVersion(0),
                     body: b"",
                     ..Default::default()
                 }),
-                Disabled,
-                Err(EnvelopeError::InvalidRequest),
-            ),
-            (
-                "a non-forwardable key is refused before its body is read",
-                request_frame(EmbeddedFrameSetup {
+                unstable: Disabled,
+                want: Err(EnvelopeError::InvalidRequest),
+            },
+            Case {
+                case: "a non-forwardable key is refused before its body is read",
+                frame: request_frame(EmbeddedFrameSetup {
                     api_key: krabka_ids::ApiKey(3),
                     api_version: krabka_ids::ApiVersion(12),
                     body: b"garbage",
                     ..Default::default()
                 }),
-                Disabled,
-                Err(EnvelopeError::InvalidRequest),
-            ),
-            (
-                "the removed LeaderAndIsr has no valid version",
-                request_frame(EmbeddedFrameSetup {
+                unstable: Disabled,
+                want: Err(EnvelopeError::InvalidRequest),
+            },
+            Case {
+                case: "the removed LeaderAndIsr has no valid version",
+                frame: request_frame(EmbeddedFrameSetup {
                     api_key: krabka_ids::ApiKey(4),
                     api_version: krabka_ids::ApiVersion(0),
                     body: b"",
                     ..Default::default()
                 }),
-                Disabled,
-                Err(EnvelopeError::UnsupportedVersion),
-            ),
-            (
-                "the removed ControlledShutdown has no valid version",
-                request_frame(EmbeddedFrameSetup {
+                unstable: Disabled,
+                want: Err(EnvelopeError::UnsupportedVersion),
+            },
+            Case {
+                case: "the removed ControlledShutdown has no valid version",
+                frame: request_frame(EmbeddedFrameSetup {
                     api_key: krabka_ids::ApiKey(7),
                     api_version: krabka_ids::ApiVersion(0),
                     body: b"",
                     ..Default::default()
                 }),
-                Enabled,
-                Err(EnvelopeError::UnsupportedVersion),
-            ),
-            (
-                "an api key past the release's last is unknown",
-                request_frame(EmbeddedFrameSetup {
+                unstable: Enabled,
+                want: Err(EnvelopeError::UnsupportedVersion),
+            },
+            Case {
+                case: "an api key past the release's last is unknown",
+                frame: request_frame(EmbeddedFrameSetup {
                     api_key: krabka_ids::ApiKey(93),
                     api_version: krabka_ids::ApiVersion(0),
                     body: b"",
                     ..Default::default()
                 }),
-                Disabled,
-                Err(EnvelopeError::UnsupportedVersion),
-            ),
-            (
-                "a negative api key is unknown",
-                request_frame(EmbeddedFrameSetup {
+                unstable: Disabled,
+                want: Err(EnvelopeError::UnsupportedVersion),
+            },
+            Case {
+                case: "a negative api key is unknown",
+                frame: request_frame(EmbeddedFrameSetup {
                     api_key: krabka_ids::ApiKey(-1),
                     api_version: krabka_ids::ApiVersion(0),
                     body: b"",
                     ..Default::default()
                 }),
-                Enabled,
-                Err(EnvelopeError::UnsupportedVersion),
-            ),
-            (
-                "trunk's UnregisterController is unknown to 4.3.1",
-                request_frame(EmbeddedFrameSetup {
+                unstable: Enabled,
+                want: Err(EnvelopeError::UnsupportedVersion),
+            },
+            Case {
+                case: "trunk's UnregisterController is unknown to 4.3.1",
+                frame: request_frame(EmbeddedFrameSetup {
                     api_key: krabka_ids::ApiKey(94),
                     api_version: krabka_ids::ApiVersion(0),
                     body: &unregister_controller,
                     ..Default::default()
                 }),
-                Disabled,
-                Err(EnvelopeError::UnsupportedVersion),
-            ),
-            (
-                "trunk's UnregisterController is known under the flag",
-                request_frame(EmbeddedFrameSetup {
+                unstable: Disabled,
+                want: Err(EnvelopeError::UnsupportedVersion),
+            },
+            Case {
+                case: "trunk's UnregisterController is known under the flag",
+                frame: request_frame(EmbeddedFrameSetup {
                     api_key: krabka_ids::ApiKey(94),
                     api_version: krabka_ids::ApiVersion(0),
                     body: &unregister_controller,
                     ..Default::default()
                 }),
-                Enabled,
-                Ok(()),
-            ),
-            (
-                "a body that does not decode",
-                request_frame(EmbeddedFrameSetup {
+                unstable: Enabled,
+                want: Ok(()),
+            },
+            Case {
+                case: "a body that does not decode",
+                frame: request_frame(EmbeddedFrameSetup {
                     body: b"garbage",
                     ..Default::default()
                 }),
-                Disabled,
-                Err(EnvelopeError::UnsupportedVersion),
-            ),
-            (
-                "a body cut short",
-                request_frame(EmbeddedFrameSetup {
+                unstable: Disabled,
+                want: Err(EnvelopeError::UnsupportedVersion),
+            },
+            Case {
+                case: "a body cut short",
+                frame: request_frame(EmbeddedFrameSetup {
                     body: truncated,
                     ..Default::default()
                 }),
-                Disabled,
-                Err(EnvelopeError::UnsupportedVersion),
-            ),
-            (
-                "a version the request type does not have",
-                request_frame(EmbeddedFrameSetup {
+                unstable: Disabled,
+                want: Err(EnvelopeError::UnsupportedVersion),
+            },
+            Case {
+                case: "a version the request type does not have",
+                frame: request_frame(EmbeddedFrameSetup {
                     api_version: krabka_ids::ApiVersion(99),
                     body: &create_topics,
                     ..Default::default()
                 }),
-                Disabled,
-                Err(EnvelopeError::UnsupportedVersion),
-            ),
-            (
-                "a body that decodes",
-                request_frame(EmbeddedFrameSetup {
+                unstable: Disabled,
+                want: Err(EnvelopeError::UnsupportedVersion),
+            },
+            Case {
+                case: "a body that decodes",
+                frame: request_frame(EmbeddedFrameSetup {
                     body: &create_topics,
                     ..Default::default()
                 }),
-                Disabled,
-                Ok(()),
-            ),
+                unstable: Disabled,
+                want: Ok(()),
+            },
         ];
 
-        for (case, frame, unstable, want) in cases {
+        for Case {
+            case,
+            frame,
+            unstable,
+            want,
+        } in cases
+        {
             check!(
                 unwrap_request(&frame, |_, _| true, unstable).map(|_| ()) == want,
                 "case: {case}"

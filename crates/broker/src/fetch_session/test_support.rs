@@ -24,12 +24,16 @@ pub(super) struct SessionSlotCount(pub usize);
 /// the handle that advances it, so a test can put successive allocations on
 /// distinct points in the cache's recency order. The test advances logical
 /// time with `clock.advance(..)` instead of a sleep between allocations.
-pub(super) fn manual_cache(
-    max_slots: SessionSlotCount,
-) -> (FetchSessionCache, Arc<ManualMonotonicClock>) {
+pub(super) fn manual_cache(max_slots: SessionSlotCount) -> ManualCache {
     let clock = ManualMonotonicClock::new_shared();
     let cache = FetchSessionCache::with_clock(max_slots.0, clock.clone());
-    (cache, clock)
+    ManualCache { cache, clock }
+}
+
+/// A cache, and the manual clock that stamps and advances it.
+pub(super) struct ManualCache {
+    pub(super) cache: FetchSessionCache,
+    pub(super) clock: Arc<ManualMonotonicClock>,
 }
 
 /// A `Fetch` version that names topics, which the fixtures below build.
@@ -187,12 +191,16 @@ pub(super) fn allocate_session(
 }
 
 /// A ten-slot cache with the case's initial session already installed.
-pub(super) fn allocated_cache(
-    setup: SessionAllocationSetup,
-) -> (FetchSessionCache, FetchSessionId) {
+pub(super) fn allocated_cache(setup: SessionAllocationSetup) -> AllocatedCache {
     let cache = FetchSessionCache::new(10);
     let id = allocate_session(&cache, setup);
-    (cache, id)
+    AllocatedCache { cache, id }
+}
+
+/// A cache, and the id of the session installed in it.
+pub(super) struct AllocatedCache {
+    pub(super) cache: FetchSessionCache,
+    pub(super) id: FetchSessionId,
 }
 
 #[derive(krabka_macros::FieldDefaults)]

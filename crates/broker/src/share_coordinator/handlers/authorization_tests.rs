@@ -88,9 +88,16 @@ enum Response {
     ReadSummary(ReadShareGroupStateSummaryResponse),
 }
 
+/// A request as the broker receives it.
+struct EncodedRequest {
+    api_key: i16,
+    version: i16,
+    body: Bytes,
+}
+
 impl Request {
     /// The api key, the version and the encoded body.
-    fn encode(&self) -> (i16, i16, Bytes) {
+    fn encode(&self) -> EncodedRequest {
         match self {
             Self::Initialize => {
                 let version = initialize_share_group_state_request::MAX_VERSION;
@@ -114,11 +121,11 @@ impl Request {
                         .to_vec(),
                     ..Default::default()
                 };
-                (
-                    initialize_share_group_state_request::API_KEY,
+                EncodedRequest {
+                    api_key: initialize_share_group_state_request::API_KEY,
                     version,
-                    encode_request(&request, version),
-                )
+                    body: encode_request(&request, version),
+                }
             }
             Self::Read => {
                 let version = read_share_group_state_request::MAX_VERSION;
@@ -138,11 +145,11 @@ impl Request {
                         .to_vec(),
                     ..Default::default()
                 };
-                (
-                    read_share_group_state_request::API_KEY,
+                EncodedRequest {
+                    api_key: read_share_group_state_request::API_KEY,
                     version,
-                    encode_request(&request, version),
-                )
+                    body: encode_request(&request, version),
+                }
             }
             Self::Write => {
                 let version = write_share_group_state_request::MAX_VERSION;
@@ -165,11 +172,11 @@ impl Request {
                         .to_vec(),
                     ..Default::default()
                 };
-                (
-                    write_share_group_state_request::API_KEY,
+                EncodedRequest {
+                    api_key: write_share_group_state_request::API_KEY,
                     version,
-                    encode_request(&request, version),
-                )
+                    body: encode_request(&request, version),
+                }
             }
             Self::Delete => {
                 let version = delete_share_group_state_request::MAX_VERSION;
@@ -191,11 +198,11 @@ impl Request {
                         .to_vec(),
                     ..Default::default()
                 };
-                (
-                    delete_share_group_state_request::API_KEY,
+                EncodedRequest {
+                    api_key: delete_share_group_state_request::API_KEY,
                     version,
-                    encode_request(&request, version),
-                )
+                    body: encode_request(&request, version),
+                }
             }
             Self::ReadSummary => {
                 let version = read_share_group_state_summary_request::MAX_VERSION;
@@ -217,11 +224,11 @@ impl Request {
                         .to_vec(),
                     ..Default::default()
                 };
-                (
-                    read_share_group_state_summary_request::API_KEY,
+                EncodedRequest {
+                    api_key: read_share_group_state_summary_request::API_KEY,
                     version,
-                    encode_request(&request, version),
-                )
+                    body: encode_request(&request, version),
+                }
             }
         }
     }
@@ -406,32 +413,97 @@ async fn share_state_rpcs_need_cluster_action() {
         ))
     };
 
-    let steps: Vec<(&str, Request, Response)> = vec![
-        ("none", Request::Initialize, refused(&Request::Initialize)),
-        (CLIENT, Request::Initialize, refused(&Request::Initialize)),
+    struct Step {
+        caller: &'static str,
+        request: Request,
+        expected: Response,
+    }
+    let steps: Vec<Step> = vec![
+        Step {
+            caller: "none",
+            request: Request::Initialize,
+            expected: refused(&Request::Initialize),
+        },
+        Step {
+            caller: CLIENT,
+            request: Request::Initialize,
+            expected: refused(&Request::Initialize),
+        },
         // Kafka's uninitialized summary: start offset and count -1.
-        (BROKER, Request::ReadSummary, summary(0, -1, -1)),
-        (BROKER, Request::Initialize, initialized()),
-        (CLIENT, Request::Write, refused(&Request::Write)),
-        (CLIENT, Request::Read, refused(&Request::Read)),
-        (CLIENT, Request::ReadSummary, refused(&Request::ReadSummary)),
-        (BROKER, Request::Read, read(INITIAL_START_OFFSET)),
-        (CLIENT, Request::Delete, refused(&Request::Delete)),
-        (
-            BROKER,
-            Request::ReadSummary,
-            summary(STATE_EPOCH, INITIAL_START_OFFSET, 0),
-        ),
-        (BROKER, Request::Write, written()),
-        (BROKER, Request::Read, read(WRITTEN_START_OFFSET)),
-        (BROKER, Request::Delete, deleted()),
+        Step {
+            caller: BROKER,
+            request: Request::ReadSummary,
+            expected: summary(0, -1, -1),
+        },
+        Step {
+            caller: BROKER,
+            request: Request::Initialize,
+            expected: initialized(),
+        },
+        Step {
+            caller: CLIENT,
+            request: Request::Write,
+            expected: refused(&Request::Write),
+        },
+        Step {
+            caller: CLIENT,
+            request: Request::Read,
+            expected: refused(&Request::Read),
+        },
+        Step {
+            caller: CLIENT,
+            request: Request::ReadSummary,
+            expected: refused(&Request::ReadSummary),
+        },
+        Step {
+            caller: BROKER,
+            request: Request::Read,
+            expected: read(INITIAL_START_OFFSET),
+        },
+        Step {
+            caller: CLIENT,
+            request: Request::Delete,
+            expected: refused(&Request::Delete),
+        },
+        Step {
+            caller: BROKER,
+            request: Request::ReadSummary,
+            expected: summary(STATE_EPOCH, INITIAL_START_OFFSET, 0),
+        },
+        Step {
+            caller: BROKER,
+            request: Request::Write,
+            expected: written(),
+        },
+        Step {
+            caller: BROKER,
+            request: Request::Read,
+            expected: read(WRITTEN_START_OFFSET),
+        },
+        Step {
+            caller: BROKER,
+            request: Request::Delete,
+            expected: deleted(),
+        },
     ];
 
     let address = peer();
-    for (step, (caller, request, expected)) in steps.into_iter().enumerate() {
+    for (
+        step,
+        Step {
+            caller,
+            request,
+            expected,
+        },
+    ) in steps.into_iter().enumerate()
+    {
         let user = principal(caller);
         let ctx = request_context(&user, &address, "share-state-authorization");
-        let (api_key, version, body) = request.encode();
+        let EncodedRequest {
+            api_key,
+            version,
+            body,
+        } = request.encode();
         let bytes = dispatch_context(&broker, api_key, version, &body, &ctx).await;
         check!(
             request.decode(version, &bytes) == expected,

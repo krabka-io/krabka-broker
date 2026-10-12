@@ -42,8 +42,11 @@
 use std::path::{Path, PathBuf};
 
 use krabka_metadata::MetadataImage;
-use krabka_raft::kraft::controller::checkpoint::{
-    latest_checkpoint_id, load_checkpoint_by_id, retain_latest_checkpoint, write_checkpoint,
+use krabka_raft::kraft::{
+    controller::checkpoint::{
+        latest_checkpoint_id, load_checkpoint_by_id, retain_latest_checkpoint, write_checkpoint,
+    },
+    snapshot_fetch::SnapshotId,
 };
 use tracing::{debug, info, warn};
 
@@ -63,6 +66,14 @@ const OBSERVER_SUBDIR: &str = "observer";
 /// — so a fixed placeholder is honest where a copied one would not be.
 const OBSERVER_EPOCH: i32 = 0;
 
+/// What a checkpoint restores: the image and the offset to fetch from next.
+pub(super) struct Resumed {
+    /// The image the checkpoint holds.
+    pub(super) image: MetadataImage,
+    /// The offset after the last record the checkpoint covers.
+    pub(super) fetch_offset: u64,
+}
+
 /// The KIP-630 checkpoint directory a broker-only observer reads and writes.
 pub(super) struct ObserverStore {
     dir: PathBuf,
@@ -70,7 +81,7 @@ pub(super) struct ObserverStore {
     /// the store then holds only the snapshots fetched from a controller.
     interval: u64,
     /// Id of the checkpoint currently on disk, if any.
-    persisted: Option<(i64, i32)>,
+    persisted: Option<SnapshotId>,
     /// Timestamp of the last applied batch represented by the current image.
     last_applied_record_timestamp_ms: i64,
 }
@@ -92,7 +103,7 @@ impl ObserverStore {
 
     /// The image and next fetch offset to resume from, or `None` when this node
     /// has no checkpoint and must replicate the log from its start.
-    pub(super) fn resume(&mut self, cluster_id: uuid::Uuid) -> Option<(MetadataImage, u64)> {
+    pub(super) fn resume(&mut self, cluster_id: uuid::Uuid) -> Option<Resumed> {
         let (end_offset, epoch) = self.persisted?;
         let bytes = load_checkpoint_by_id(&self.dir, end_offset, epoch)?;
         let records = match krabka_raft::deserialize_metadata_snapshot_image(&bytes) {
@@ -126,15 +137,15 @@ impl ObserverStore {
             records = records.len(),
             "observer resuming from its metadata checkpoint"
         );
-        Some((
-            MetadataImage::from_records(cluster_id, &records),
+        Some(Resumed {
+            image: MetadataImage::from_records(cluster_id, &records),
             fetch_offset,
-        ))
+        })
     }
 
     /// Persist the exact checkpoint bytes fetched from a controller under the
     /// id the controller named them by.
-    pub(super) fn save_fetched_snapshot(&mut self, id: (i64, i32), bytes: &[u8]) {
+    pub(super) fn save_fetched_snapshot(&mut self, id: SnapshotId, bytes: &[u8]) {
         if let Ok(timestamp_ms) = krabka_raft::metadata_snapshot_last_contained_log_timestamp(bytes)
         {
             self.last_applied_record_timestamp_ms = timestamp_ms;
@@ -200,7 +211,7 @@ impl ObserverStore {
     /// it rolls; nothing fetches from this one. A failed write is not fatal:
     /// the observer keeps serving from memory and resumes from the previous
     /// checkpoint, or from the log start, after a restart.
-    fn write(&mut self, id: (i64, i32), bytes: &[u8]) {
+    fn write(&mut self, id: SnapshotId, bytes: &[u8]) {
         let (end_offset, epoch) = id;
         if let Err(error) = write_checkpoint(&self.dir, end_offset, epoch, bytes) {
             warn!(%error, end_offset, epoch, "observer checkpoint write failed");
@@ -246,7 +257,10 @@ mod tests {
         store.maybe_checkpoint(&image, 9);
 
         let mut reopened = ObserverStore::open(dir.path(), 4);
-        let (restored, fetch_offset) = reopened.resume(Uuid::nil()).expect("a checkpoint exists");
+        let Resumed {
+            image: restored,
+            fetch_offset,
+        } = reopened.resume(Uuid::nil()).expect("a checkpoint exists");
         assert!(fetch_offset == 9);
         assert!(reopened.last_applied_record_timestamp_ms() == 1_700_000_000_123);
         assert!(restored.topic("resumed").is_some());
@@ -268,14 +282,14 @@ mod tests {
         );
 
         store.maybe_checkpoint(&image, 10);
-        let (_, fetch_offset) = ObserverStore::open(dir.path(), 10)
+        let Resumed { fetch_offset, .. } = ObserverStore::open(dir.path(), 10)
             .resume(Uuid::nil())
             .expect("the interval was reached");
         assert!(fetch_offset == 10);
 
         // The next one measures from the checkpoint just written, not from 0.
         store.maybe_checkpoint(&image, 19);
-        let (_, fetch_offset) = ObserverStore::open(dir.path(), 10)
+        let Resumed { fetch_offset, .. } = ObserverStore::open(dir.path(), 10)
             .resume(Uuid::nil())
             .expect("the previous checkpoint stands");
         assert!(fetch_offset == 10);
@@ -313,7 +327,7 @@ mod tests {
             .flatten()
             .collect();
         assert!(entries.len() == 1);
-        let (_, fetch_offset) = ObserverStore::open(dir.path(), 1)
+        let Resumed { fetch_offset, .. } = ObserverStore::open(dir.path(), 1)
             .resume(Uuid::nil())
             .expect("the latest checkpoint");
         assert!(fetch_offset == 8);
@@ -342,7 +356,10 @@ mod tests {
                 .expect("serialize");
         reopened.save_fetched_snapshot((4, 1), &replacement);
 
-        let (restored, fetch_offset) = ObserverStore::open(dir.path(), 1)
+        let Resumed {
+            image: restored,
+            fetch_offset,
+        } = ObserverStore::open(dir.path(), 1)
             .resume(Uuid::nil())
             .expect("the replacement is the store's checkpoint now");
         assert!(fetch_offset == 4);

@@ -368,9 +368,12 @@ async fn process_resource_once(
             };
             handle_broker_scoped(
                 &resource,
-                image,
-                serving,
-                (&log_dirs, broker.config.features.unstable_api_versions),
+                BrokerConfigContext {
+                    image,
+                    serving,
+                    log_dirs: &log_dirs,
+                    unstable: broker.config.features.unstable_api_versions,
+                },
                 &mut out,
                 &mut to_submit,
             );

@@ -77,7 +77,10 @@ pub(super) async fn run_offset_aware_recovery(
     }
     let proposal = match spend_before_recovery(broker, batch, consumed, &target).await {
         Ok(proposal) => proposal,
-        Err((error_code, message)) => {
+        Err(SpendRefusal {
+            code: error_code,
+            message,
+        }) => {
             return PartitionResult {
                 partition_id: partition,
                 error_code,
@@ -156,6 +159,13 @@ fn consumed_transition<'a>(
     }
 }
 
+/// The refusal when the quorum did not take the consume: the error code and
+/// the submit failure text.
+struct SpendRefusal {
+    code: i16,
+    message: String,
+}
+
 /// Append the consumed proposal for a partition the URM will elect, and answer
 /// the proposal it names.
 ///
@@ -169,7 +179,7 @@ async fn spend_before_recovery(
     batch: &mut ElectionBatch,
     consumed: Option<MetadataRecord>,
     target: &str,
-) -> Result<Option<Uuid>, (i16, String)> {
+) -> Result<Option<Uuid>, SpendRefusal> {
     match spend_before_local_action(
         broker,
         &mut batch.spent,
@@ -183,10 +193,10 @@ async fn spend_before_recovery(
         Ok(proposal_id) => Ok(proposal_id),
         Err(error) => {
             tracing::warn!(%error, "elect-leaders could not spend the break-glass approval");
-            Err((
-                submit_failure_code(&error, codes::COORDINATOR_NOT_AVAILABLE),
-                format!("submit failed: {error}"),
-            ))
+            Err(SpendRefusal {
+                code: submit_failure_code(&error, codes::COORDINATOR_NOT_AVAILABLE),
+                message: format!("submit failed: {error}"),
+            })
         }
     }
 }

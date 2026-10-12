@@ -23,11 +23,13 @@ use super::records::{PendingShareRecords, flush_pending, state_partition_metadat
 use crate::{
     coordinator::unified::{
         GroupCoordinator,
+        assignor::TopicIdPartition,
         offsets_log::OffsetsLog,
         reconciler::ReconcileInput,
         share::{
-            config::ShareGroupConfig, persistence::ShareGroupStatePartitionMetadataValue,
-            state::ShareGroupState,
+            config::ShareGroupConfig,
+            persistence::ShareGroupStatePartitionMetadataValue,
+            state::{IdentifiedTopic, NamedTopic, ShareGroupState},
         },
     },
     share_coordinator::{
@@ -78,9 +80,9 @@ pub(super) fn prepare_initialize(
     state.forget_unused_topic_names();
     let calls = to_init
         .iter()
-        .map(|&(topic_id, partition)| InitializeCall {
-            topic_id,
-            partition,
+        .map(|tp| InitializeCall {
+            topic_id: tp.topic_id,
+            partition: tp.partition,
             start_offset: UNINITIALIZED_START_OFFSET,
         })
         .collect();
@@ -165,36 +167,43 @@ impl TopicImage {
     }
 
     /// The name and partition count of the topic with `topic_id`.
-    pub(super) fn by_id(&self, topic_id: &Uuid) -> Option<(String, i32)> {
+    pub(super) fn by_id(&self, topic_id: &Uuid) -> Option<NamedTopic> {
         match self {
-            Self::Image(image) => image
-                .topic_by_id(&uuid::Uuid::from_bytes(topic_id.0))
-                .map(|topic| (topic.name.clone(), image.topic_partition_count(&topic.name))),
+            Self::Image(image) => {
+                image
+                    .topic_by_id(&uuid::Uuid::from_bytes(topic_id.0))
+                    .map(|topic| NamedTopic {
+                        name: topic.name.clone(),
+                        partition_count: image.topic_partition_count(&topic.name),
+                    })
+            }
             Self::Snapshot(input) => input
                 .topic_id_by_name
                 .iter()
                 .find(|(_, id)| *id == topic_id)
-                .map(|(name, id)| {
-                    (
-                        name.clone(),
-                        input.partitions_per_topic.get(id).copied().unwrap_or(0),
-                    )
+                .map(|(name, id)| NamedTopic {
+                    name: name.clone(),
+                    partition_count: input.partitions_per_topic.get(id).copied().unwrap_or(0),
                 }),
         }
     }
 
     /// The topic id and partition count of the topic named `topic_name`.
-    pub(super) fn by_name(&self, topic_name: &str) -> Option<(uuid::Uuid, i32)> {
+    pub(super) fn by_name(&self, topic_name: &str) -> Option<IdentifiedTopic> {
         match self {
-            Self::Image(image) => image
-                .topic(topic_name)
-                .map(|topic| (topic.topic_id, image.topic_partition_count(topic_name))),
-            Self::Snapshot(input) => input.topic_id_by_name.get(topic_name).map(|id| {
-                (
-                    uuid::Uuid::from_bytes(id.0),
-                    input.partitions_per_topic.get(id).copied().unwrap_or(0),
-                )
+            Self::Image(image) => image.topic(topic_name).map(|topic| IdentifiedTopic {
+                topic_id: topic.topic_id,
+                partition_count: image.topic_partition_count(topic_name),
             }),
+            Self::Snapshot(input) => {
+                input
+                    .topic_id_by_name
+                    .get(topic_name)
+                    .map(|id| IdentifiedTopic {
+                        topic_id: uuid::Uuid::from_bytes(id.0),
+                        partition_count: input.partitions_per_topic.get(id).copied().unwrap_or(0),
+                    })
+            }
         }
     }
 }
@@ -219,6 +228,13 @@ struct InitializeCall {
     topic_id: Uuid,
     partition: i32,
     start_offset: i64,
+}
+
+/// Whether the persister initialized a share partition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InitializeOutcome {
+    pub partition: TopicIdPartition,
+    pub initialized: bool,
 }
 
 /// Run `calls` against the persister together, at `state_epoch`, and send the
@@ -260,7 +276,13 @@ fn spawn_initialize(
                         "share-state Initialize failed; will retry next heartbeat",
                     );
                 }
-                ((call.topic_id, call.partition), result.is_ok())
+                InitializeOutcome {
+                    partition: TopicIdPartition {
+                        topic_id: call.topic_id,
+                        partition: call.partition,
+                    },
+                    initialized: result.is_ok(),
+                }
             }
         }))
         .await;
@@ -286,7 +308,7 @@ fn spawn_initialize(
 /// and `uninitializeShareGroupState` write it.
 pub(super) async fn apply_initialized(
     state: &mut ShareGroupState,
-    outcomes: &[((Uuid, i32), bool)],
+    outcomes: &[InitializeOutcome],
     offsets_log: &dyn OffsetsLog,
     coordinator: &GroupCoordinator,
     now_ms: i64,
@@ -294,7 +316,11 @@ pub(super) async fn apply_initialized(
     if outcomes.is_empty() {
         return;
     }
-    for &(partition, initialized) in outcomes {
+    for &InitializeOutcome {
+        partition,
+        initialized,
+    } in outcomes
+    {
         if initialized {
             state.mark_initialized(partition);
         } else {
@@ -339,20 +365,20 @@ fn partitions_to_initialize(
     input: &ReconcileInput,
     now_ms: i64,
     retry_ms: i64,
-) -> Vec<(Uuid, i32)> {
+) -> Vec<TopicIdPartition> {
     let subscribed: HashSet<&String> = state
         .members
         .values()
         .flat_map(|m| m.subscribed_topic_names.iter())
         .collect();
-    let covered = |tp: &(Uuid, i32)| {
+    let covered = |tp: &TopicIdPartition| {
         state.initialized.contains(tp)
             || state
                 .initializing
                 .get(tp)
                 .is_some_and(|&at| now_ms.saturating_sub(at) < retry_ms)
     };
-    let mut out: Vec<(Uuid, i32)> = subscribed
+    let mut out: Vec<TopicIdPartition> = subscribed
         .into_iter()
         .filter_map(|name| input.topic_id_by_name.get(name))
         .flat_map(|topic_id| {
@@ -361,11 +387,14 @@ fn partitions_to_initialize(
                 .get(topic_id)
                 .copied()
                 .unwrap_or(0);
-            (0..count).map(move |p| (*topic_id, p))
+            (0..count).map(move |partition| TopicIdPartition {
+                topic_id: *topic_id,
+                partition,
+            })
         })
         .filter(|tp| !covered(tp))
         .collect();
-    out.sort_unstable_by_key(|(topic_id, partition)| (topic_id.0, *partition));
+    out.sort_unstable_by_key(|tp| (tp.topic_id.0, tp.partition));
     out
 }
 
@@ -390,7 +419,7 @@ mod tests {
                     unavailable_persister_coordinator,
                 },
                 persistence::{ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo},
-                state::ShareMemberState,
+                state::{ShareMemberState, share_partition},
             },
             test_support::{fixed_source, make_share_persister},
         },
@@ -408,12 +437,30 @@ mod tests {
             partitions_per_topic: HashMap::from([(orders, 4)]),
             ..ReconcileInput::default()
         };
-        // (row, initializing partition 1 recorded at, expected partitions)
+        struct Row {
+            row: &'static str,
+            /// When initializing partition 1 was recorded.
+            recorded_at: i64,
+            expected: Vec<i32>,
+        }
         let rows = [
-            ("fresh initializing entry is covered", 950, vec![2, 3]),
-            ("stale initializing entry is retried", 800, vec![1, 2, 3]),
+            Row {
+                row: "fresh initializing entry is covered",
+                recorded_at: 950,
+                expected: vec![2, 3],
+            },
+            Row {
+                row: "stale initializing entry is retried",
+                recorded_at: 800,
+                expected: vec![1, 2, 3],
+            },
         ];
-        for (row, recorded_at, expected) in rows {
+        for Row {
+            row,
+            recorded_at,
+            expected,
+        } in rows
+        {
             let mut state = ShareGroupState::new("g");
             state.members.insert(
                 "m".to_owned(),
@@ -424,9 +471,14 @@ mod tests {
                     HashSet::from(["orders".to_owned(), "missing".to_owned()]),
                 ),
             );
-            state.initialized.insert((orders, 0));
-            state.initializing.insert((orders, 1), recorded_at);
-            let expected: Vec<(Uuid, i32)> = expected.into_iter().map(|p| (orders, p)).collect();
+            state.initialized.insert(share_partition(orders, 0));
+            state
+                .initializing
+                .insert(share_partition(orders, 1), recorded_at);
+            let expected: Vec<TopicIdPartition> = expected
+                .into_iter()
+                .map(|partition| share_partition(orders, partition))
+                .collect();
             assert!(
                 partitions_to_initialize(&state, &input, 1_000, 100) == expected,
                 "{row}"
@@ -534,8 +586,14 @@ mod tests {
         handle
             .tx
             .send(ShareGroupActorMessage::ShareStateInitialized(vec![
-                ((topic_id, 0), true),
-                ((topic_id, 1), false),
+                InitializeOutcome {
+                    partition: share_partition(topic_id, 0),
+                    initialized: true,
+                },
+                InitializeOutcome {
+                    partition: share_partition(topic_id, 1),
+                    initialized: false,
+                },
             ]))
             .await
             .expect("send the outcome");
@@ -575,7 +633,7 @@ mod tests {
             "m".into(),
             ShareMemberState::joining("m", "c", "h", ["t".to_owned()].into()),
         );
-        state.mark_initialized((topic_id, 0));
+        state.mark_initialized(share_partition(topic_id, 0));
         state.topic_names.insert(topic_id, "t".to_owned());
 
         let (value, initialize) = prepare_initialize(
@@ -618,29 +676,51 @@ mod tests {
                 ..ReconcileInput::default()
             })
         };
-        // (row, image, expected initialized, initializing, deleting, changed)
+        struct Row {
+            row: &'static str,
+            image: TopicImage,
+            /// The expected initialized set.
+            initialized: HashSet<TopicIdPartition>,
+            /// The expected initializing partitions.
+            initializing: Vec<TopicIdPartition>,
+            /// The expected deleting topics.
+            deleting: Vec<Uuid>,
+            changed: bool,
+        }
         let rows = [
-            (
-                "a deleted topic goes",
-                image(),
-                HashSet::from([(kept, 0)]),
-                vec![(kept, 1)],
-                vec![],
-                true,
-            ),
-            (
-                "an unloaded image deletes nothing",
-                TopicImage::Snapshot(ReconcileInput::default()),
-                HashSet::from([(kept, 0), (gone, 0)]),
-                vec![(kept, 1), (gone, 1)],
-                vec![gone],
-                false,
-            ),
+            Row {
+                row: "a deleted topic goes",
+                image: image(),
+                initialized: HashSet::from([share_partition(kept, 0)]),
+                initializing: vec![share_partition(kept, 1)],
+                deleting: vec![],
+                changed: true,
+            },
+            Row {
+                row: "an unloaded image deletes nothing",
+                image: TopicImage::Snapshot(ReconcileInput::default()),
+                initialized: HashSet::from([share_partition(kept, 0), share_partition(gone, 0)]),
+                initializing: vec![share_partition(kept, 1), share_partition(gone, 1)],
+                deleting: vec![gone],
+                changed: false,
+            },
         ];
-        for (row, image, initialized, initializing, deleting, changed) in rows {
+        for Row {
+            row,
+            image,
+            initialized,
+            initializing,
+            deleting,
+            changed,
+        } in rows
+        {
             let mut state = ShareGroupState::new("g");
-            state.initialized.extend([(kept, 0), (gone, 0)]);
-            state.initializing.extend([((kept, 1), 7), ((gone, 1), 7)]);
+            state
+                .initialized
+                .extend([share_partition(kept, 0), share_partition(gone, 0)]);
+            state
+                .initializing
+                .extend([(share_partition(kept, 1), 7), (share_partition(gone, 1), 7)]);
             state.deleting.insert(gone, "gone".to_owned());
             state.topic_names.insert(kept, "kept".to_owned());
             state.topic_names.insert(gone, "gone".to_owned());
@@ -649,8 +729,8 @@ mod tests {
 
             assert!(state.cleanup_deleted_topics(&deleted) == changed, "{row}");
             assert!(state.initialized == initialized, "{row}");
-            let mut held: Vec<(Uuid, i32)> = state.initializing.keys().copied().collect();
-            held.sort_unstable_by_key(|(topic_id, partition)| (topic_id.0, *partition));
+            let mut held: Vec<TopicIdPartition> = state.initializing.keys().copied().collect();
+            held.sort_unstable_by_key(|tp| (tp.topic_id.0, tp.partition));
             assert!(held == initializing, "{row}");
             assert!(
                 state.deleting.keys().copied().collect::<Vec<_>>() == deleting,

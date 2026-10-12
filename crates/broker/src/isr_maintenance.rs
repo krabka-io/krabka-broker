@@ -154,7 +154,8 @@ mod tests {
     use super::*;
     use crate::{
         isr_maintenance::test_support::{
-            IsrSetup, fake_source, fixture_partition, partition, set_replica_state, topic,
+            IsrSetup, StaleFollower, fake_source, fixture_partition, partition, set_replica_state,
+            topic,
         },
         metadata_source::MetadataSource,
         test_support::{PartitionEpoch, StandalonePartitionSetup, plaintext_controller_dialer},
@@ -186,7 +187,10 @@ mod tests {
             &part,
             IsrSetup {
                 leader_epoch: krabka_ids::LeaderEpoch(10),
-                stale_followers: &[(NodeId(2), Duration::from_secs(30))],
+                stale_followers: &[StaleFollower {
+                    node: NodeId(2),
+                    caught_up_age: Duration::from_secs(30),
+                }],
                 ..Default::default()
             },
         )

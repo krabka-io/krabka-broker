@@ -306,16 +306,20 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
+    /// A tiered partition with the manual clock that drives its delivery
+    /// timeline and the log configuration it was built with.
+    struct TieredDelivery {
+        timeline: Arc<qubit_clock::ManualMonotonicClock>,
+        partition: Arc<Partition>,
+        config: krabka_log::LogConfig,
+    }
+
     fn tiered_delivery_partition(
         logs: &tempfile::TempDir,
         topic: &str,
         leader: krabka_ids::NodeId,
         policy: DeliveryPolicy,
-    ) -> (
-        Arc<qubit_clock::ManualMonotonicClock>,
-        Arc<Partition>,
-        krabka_log::LogConfig,
-    ) {
+    ) -> TieredDelivery {
         use krabka_log::LogConfig;
         use krabka_units::{bytes, millis};
 
@@ -346,7 +350,11 @@ mod tests {
                 ],
             },
         );
-        (timeline, partition, config)
+        TieredDelivery {
+            timeline,
+            partition,
+            config,
+        }
     }
 
     #[tokio::test]
@@ -367,7 +375,11 @@ mod tests {
         broker_fixture!((broker_handle, _dir, broker), allow_all);
         let logs = tempfile::tempdir().unwrap();
         let remote = tempfile::tempdir().unwrap();
-        let (timeline, partition, mut config) = tiered_delivery_partition(
+        let TieredDelivery {
+            timeline,
+            partition,
+            mut config,
+        } = tiered_delivery_partition(
             &logs,
             TOPIC,
             krabka_ids::NodeId(7),
@@ -435,15 +447,26 @@ mod tests {
         use krabka_remote_storage::TopicIdPartition;
 
         use crate::{
-            handlers::list_offsets::test_support::remote_topic,
+            handlers::list_offsets::{
+                test_support::{ClientBroker, remote_topic},
+                v0::{LatestOffsets, latest_offsets_for_test},
+            },
             remote_log_manager::{ArchiveMode, copy_eligible, test_support::tier},
         };
         for initial_policy in [DeliveryPolicy::Scheduled, DeliveryPolicy::Immediate] {
             const TOPIC: &str = "scheduled-latest-archived";
-            let (broker_handle, client, _dirs) = remote_topic(TOPIC, vec![]).await;
+            let ClientBroker {
+                broker: broker_handle,
+                client,
+                dirs: _dirs,
+            } = remote_topic(TOPIC, vec![]).await;
             let broker = broker_handle.broker_arc_for_test();
             let logs = tempfile::tempdir().unwrap();
-            let (timeline, partition, config) = tiered_delivery_partition(
+            let TieredDelivery {
+                timeline,
+                partition,
+                config,
+            } = tiered_delivery_partition(
                 &logs,
                 TOPIC,
                 krabka_ids::NodeId(broker.config.node_id.get()),
@@ -498,8 +521,11 @@ mod tests {
             test_ctx!(ctx, "admin");
             assert!(list_partition(&broker, TOPIC, LATEST_TIMESTAMP, &ctx).await == latest_row(2));
             assert!(
-                super::super::v0::latest_offsets_for_test(&broker, TOPIC).await
-                    == (codes::NONE, vec![2])
+                latest_offsets_for_test(&broker, TOPIC).await
+                    == LatestOffsets {
+                        error_code: codes::NONE,
+                        offsets: vec![2]
+                    }
             );
             partition.log.lock().unwrap().set_config(LogConfig {
                 delivery_policy: DeliveryPolicy::Immediate,
@@ -516,8 +542,11 @@ mod tests {
             assert!(partition.high_watermark().await == Offset(6));
             assert!(list_partition(&broker, TOPIC, LATEST_TIMESTAMP, &ctx).await == latest_row(6));
             assert!(
-                super::super::v0::latest_offsets_for_test(&broker, TOPIC).await
-                    == (codes::NONE, vec![6])
+                latest_offsets_for_test(&broker, TOPIC).await
+                    == LatestOffsets {
+                        error_code: codes::NONE,
+                        offsets: vec![6]
+                    }
             );
             partition.log.lock().unwrap().set_config(LogConfig {
                 delivery_policy: DeliveryPolicy::Scheduled,

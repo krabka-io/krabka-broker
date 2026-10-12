@@ -28,15 +28,16 @@ use super::{
     FIRST_TOPIC_ID_VERSION, test_support::expected_refused_partition as refused_partition,
 };
 use crate::{
-    authorizer::AllowAllAuthorizer,
+    authorizer::{AllowAllAuthorizer, Authorizer},
     broker::BrokerHandle,
     codes,
     fetch_session::{FINAL_EPOCH, INITIAL_EPOCH, INVALID_SESSION_ID},
     handlers::test_support::{
-        ClientTopicSetup, ReplicatedTopicSetup, check_cases, check_denied_topic_cases,
-        create_topic as create_topic_from_test_support, seed_partition_replicas,
+        CaseOutcomes, ClientTopicSetup, ReplicatedTopicSetup, StartedBroker, WireTopic,
+        check_cases, check_denied_topic_cases, create_topic as create_topic_from_test_support,
+        seed_partition_replicas,
     },
-    test_support::{DenyAll, KafkaErrorCode, start_broker_with_authorizer_no_audit as start},
+    test_support::{DenyAll, KafkaErrorCode, start_broker_with_authorizer_no_audit},
 };
 
 /// An id that no topic in these tests has.
@@ -56,7 +57,17 @@ use crate::handlers::test_support::{
 };
 
 /// The actual or the expected outcome of one [`Case`].
-type Outcome = (i16, TopicRef, FetchResponse);
+#[derive(Debug, PartialEq)]
+struct Outcome {
+    version: i16,
+    topic: TopicRef,
+    response: FetchResponse,
+}
+
+async fn start(authorizer: Arc<dyn Authorizer>) -> StartedBroker {
+    let (broker, dir) = start_broker_with_authorizer_no_audit(authorizer).await;
+    StartedBroker { broker, dir }
+}
 
 /// The empty record set, as a client decodes it.
 fn no_records() -> RecordsPayload {
@@ -131,13 +142,20 @@ async fn fetch(broker: &BrokerHandle, version: i16, request: &FetchRequest) -> F
 /// name at v12 and earlier, the id at v13 and later.
 async fn drive(
     broker: &BrokerHandle,
-    known: Option<(&str, WireUuid)>,
+    known: Option<WireTopic<'_>>,
     case: Case,
-) -> (Outcome, Outcome) {
-    let (known_name, known_id) = known.unwrap_or(("", WireUuid::ZERO));
-    let (name, topic_id) = case
-        .topic
-        .wire_reference((known_name, known_id), (UNKNOWN_NAME, UNKNOWN_ID));
+) -> CaseOutcomes<Outcome> {
+    let known = known.unwrap_or(WireTopic {
+        name: "",
+        id: WireUuid::ZERO,
+    });
+    let WireTopic { name, id: topic_id } = case.topic.wire_reference(
+        known,
+        WireTopic {
+            name: UNKNOWN_NAME,
+            id: UNKNOWN_ID,
+        },
+    );
     let request = FetchRequest {
         max_wait_ms: 0,
         min_bytes: 0,
@@ -160,10 +178,18 @@ async fn drive(
         super::test_support::TopicRepresentation::for_version(krabka_ids::ApiVersion(case.version));
     let expected =
         super::test_support::expected_single_topic(representation, (name, topic_id), partition);
-    (
-        (case.version, case.topic, actual),
-        (case.version, case.topic, expected),
-    )
+    CaseOutcomes {
+        actual: Outcome {
+            version: case.version,
+            topic: case.topic,
+            response: actual,
+        },
+        expected: Outcome {
+            version: case.version,
+            topic: case.topic,
+            response: expected,
+        },
+    }
 }
 
 #[tokio::test]
@@ -181,11 +207,19 @@ async fn topic_row_error_follows_version_and_topic_reference() {
             Case::new(version, TopicRef::ZeroId, codes::UNKNOWN_TOPIC_ID),
         ]);
     }
-    let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
+    let StartedBroker { broker, dir: _dir } = start(Arc::new(AllowAllAuthorizer)).await;
     let known_id = create_topic(&broker, "resolution").await;
 
     check_cases(cases, async |case| {
-        drive(&broker, Some(("resolution", known_id)), case).await
+        drive(
+            &broker,
+            Some(WireTopic {
+                name: "resolution",
+                id: known_id,
+            }),
+            case,
+        )
+        .await
     })
     .await;
     broker.shutdown().await;
@@ -209,7 +243,7 @@ async fn unresolved_id_answers_before_topic_authorization() {
 /// The broker answers every row instead, as Kafka does for one such row.
 #[tokio::test]
 async fn every_unresolved_id_keeps_its_own_topic_row() {
-    let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
+    let StartedBroker { broker, dir: _dir } = start(Arc::new(AllowAllAuthorizer)).await;
     let request = FetchRequest {
         max_wait_ms: 0,
         min_bytes: 0,
@@ -250,7 +284,7 @@ async fn every_unresolved_id_keeps_its_own_topic_row() {
 /// first response and every incremental response carry 100 for it.
 #[tokio::test]
 async fn a_fetch_session_repeats_unknown_topic_id() {
-    let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
+    let StartedBroker { broker, dir: _dir } = start(Arc::new(AllowAllAuthorizer)).await;
     let opened = fetch(
         &broker,
         MAX_VERSION,
@@ -315,7 +349,7 @@ async fn a_partition_the_metadata_holds_and_this_broker_does_not_host_is_not_lea
     const UNHOSTED: i32 = 0;
     const ABSENT: i32 = 7;
 
-    let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
+    let StartedBroker { broker, dir: _dir } = start(Arc::new(AllowAllAuthorizer)).await;
     // Node 1, this broker, is not a replica: node 2 leads and node 3 follows.
     let topic_id = uuid::Uuid::from_u128(0x51);
     seed_partition_replicas(

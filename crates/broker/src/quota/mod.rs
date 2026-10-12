@@ -236,16 +236,25 @@ pub(crate) mod test_support {
 
     use crate::throttle::TokenBucket;
 
+    /// A quota rate, the bytes charged against it and the throttle that
+    /// charge must earn.
+    pub(crate) struct FractionalBandwidthCase {
+        pub(crate) rate: f64,
+        pub(crate) bytes: u64,
+        pub(crate) delay: Time,
+    }
+
     /// Independent expected throttles for producer and consumer quotas.
-    pub(crate) fn fractional_bandwidth_cases() -> [(f64, u64, Time); 7] {
+    pub(crate) fn fractional_bandwidth_cases() -> [FractionalBandwidthCase; 7] {
+        let case = |rate, bytes, delay| FractionalBandwidthCase { rate, bytes, delay };
         [
-            (1024.0, 1024, <Time as TimeExt>::ZERO),
-            (1024.0, 2048, secs(1)),
-            (0.5, 1, secs(1)),
-            (0.5, 100, secs(199)),
-            (0.25, 1, secs(3)),
-            (1.5, 1, <Time as TimeExt>::ZERO),
-            (1.5, 3, secs(1)),
+            case(1024.0, 1024, <Time as TimeExt>::ZERO),
+            case(1024.0, 2048, secs(1)),
+            case(0.5, 1, secs(1)),
+            case(0.5, 100, secs(199)),
+            case(0.25, 1, secs(3)),
+            case(1.5, 1, <Time as TimeExt>::ZERO),
+            case(1.5, 3, secs(1)),
         ]
     }
 
@@ -256,7 +265,7 @@ pub(crate) mod test_support {
     ) {
         let mut actual = Vec::new();
         let mut expected = Vec::new();
-        for (rate, bytes, delay) in fractional_bandwidth_cases() {
+        for FractionalBandwidthCase { rate, bytes, delay } in fractional_bandwidth_cases() {
             let image = image_with_quota(QuotaRecordSetup {
                 key,
                 value: QuotaValue(rate),
@@ -333,16 +342,17 @@ pub(crate) mod test_support {
         pub rate: QuotaValue,
     }
 
-    pub(crate) fn alice_bucket(
-        setup: UserBucketSetup<'_>,
-    ) -> (
-        std::sync::Arc<super::QuotaBuckets>,
-        std::sync::Arc<TokenBucket>,
-    ) {
+    /// A bucket table and the one bucket that `alice_bucket` created in it.
+    pub(crate) struct AliceBucket {
+        pub(crate) buckets: std::sync::Arc<super::QuotaBuckets>,
+        pub(crate) bucket: std::sync::Arc<TokenBucket>,
+    }
+
+    pub(crate) fn alice_bucket(setup: UserBucketSetup<'_>) -> AliceBucket {
         let buckets = std::sync::Arc::new(super::QuotaBuckets::new());
         let key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
         let bucket = buckets.get_or_create(setup.key, &key, setup.rate.0);
-        (buckets, bucket)
+        AliceBucket { buckets, bucket }
     }
 
     /// The 5,000-byte pair used to compare lookup precedence with bucket refresh.

@@ -21,8 +21,8 @@ use krabka_protocol::owned::{
 
 use crate::{
     authorizer::AuthorizationResult,
-    broker::BrokerHandle,
     codes,
+    handlers::test_support::StartedBroker,
     test_support::{
         decode_response, encode_request, peer, principal, start_broker_no_audit_with,
         try_dispatch_context,
@@ -50,8 +50,10 @@ test_authorizer!(ReadOneGroup, (self, _source, request), {
     }
 });
 
-async fn start() -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(ReadOneGroup)).await
+async fn start() -> StartedBroker {
+    let (broker, dir) =
+        start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(ReadOneGroup)).await;
+    StartedBroker { broker, dir }
 }
 
 /// One row: the group id, the member id, and the top-level error code of
@@ -143,7 +145,7 @@ fn acknowledge_response(error_code: i16) -> ShareAcknowledgeResponse {
 
 #[tokio::test]
 async fn group_and_member_ids_are_checked_in_kafka_order() {
-    let (broker, _dir) = start().await;
+    let StartedBroker { broker, dir: _dir } = start().await;
     let shared = broker.broker_arc_for_test();
     request_identity!(
         (user, address, ctx),
@@ -206,7 +208,7 @@ async fn group_and_member_ids_are_checked_in_kafka_order() {
 /// member still serves it.
 #[tokio::test]
 async fn a_member_the_group_does_not_know_still_fetches() {
-    let (broker, _dir) = start().await;
+    let StartedBroker { broker, dir: _dir } = start().await;
     let shared = broker.broker_arc_for_test();
     request_identity!(
         (user, address, ctx),

@@ -16,7 +16,7 @@ use krabka_units::{ByteSize, Time, kibibytes};
 use super::{
     kerberos_name::{KerberosNameError, KerberosRule, short_name},
     response::{fail_authenticate, sasl_ok},
-    state::{ConnectionAuth, SaslExchange, session_expiry},
+    state::{ConnectionAuth, SaslExchange, SessionExpiry, session_expiry},
 };
 use crate::time_util::now_ms;
 
@@ -184,7 +184,10 @@ fn finish_gssapi(
         Ok(s) => s,
         Err(e) => return fail_authenticate(&format!("GSSAPI principal mapping failed: {e}")),
     };
-    let (expires_at_ms, session_lifetime_ms) = session_expiry(now_ms(), None, max_reauth);
+    let SessionExpiry {
+        expires_at_ms,
+        session_lifetime_ms,
+    } = session_expiry(now_ms(), None, max_reauth);
     *auth = ConnectionAuth::Authenticated {
         principal: Principal {
             name: short,
@@ -258,7 +261,13 @@ mod tests {
         }
     }
 
-    fn mapped_gssapi(realm: &str) -> (ConnectionAuth, SaslAuthenticateResponse) {
+    /// The connection state and the response that a finished exchange left.
+    struct Finished {
+        auth: ConnectionAuth,
+        response: SaslAuthenticateResponse,
+    }
+
+    fn mapped_gssapi(realm: &str) -> Finished {
         let config = gssapi_config("/unused.keytab", Some(realm), vec![KerberosRule::Default]);
         let mut auth = gssapi_pending();
         let response = finish_gssapi(
@@ -268,7 +277,7 @@ mod tests {
             &mut auth,
             None,
         );
-        (auth, response)
+        Finished { auth, response }
     }
 
     #[test]
@@ -279,7 +288,10 @@ mod tests {
 
     #[test]
     fn finish_gssapi_maps_principal_and_returns_empty_success() {
-        let (auth, resp) = mapped_gssapi("KRABKA.TEST");
+        let Finished {
+            auth,
+            response: resp,
+        } = mapped_gssapi("KRABKA.TEST");
 
         assert_success_authenticate_response(&resp, b"", 0);
         match auth {
@@ -301,7 +313,10 @@ mod tests {
 
     #[test]
     fn finish_gssapi_mapping_error_returns_auth_failure() {
-        let (auth, resp) = mapped_gssapi("OTHER.REALM");
+        let Finished {
+            auth,
+            response: resp,
+        } = mapped_gssapi("OTHER.REALM");
 
         assert_failed_authenticate_response(&resp, None);
         assert!(matches!(auth, ConnectionAuth::Negotiating { .. }));

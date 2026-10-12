@@ -32,7 +32,8 @@ use crate::{
     codes,
     handlers::test_support::{
         AcknowledgementMode, AcknowledgementPartitionSetup, AcknowledgementSetup, ClientTopicSetup,
-        ProduceRecordsSetup, ShareSessionEpoch, ShareWireSetup, acknowledge_batches_request,
+        OffsetRun, ProduceRecordsSetup, ShareSessionEpoch, ShareWireSetup, StartedBroker,
+        WireAckBatch, WirePartitionAcknowledgements, acknowledge_batches_request,
         acquired_share_records, create_topic as create_topic_from_test_support,
         initialize_earliest_share, produce_records, share_acknowledge_wire, share_fetch_wire,
         share_record_states,
@@ -55,8 +56,15 @@ const MISSING_PARTITION: i32 = 3;
 const ACCEPT: i8 = 1;
 const RENEW: i8 = 4;
 
-/// One acknowledgement batch: `(first_offset, last_offset, types)`.
-type Batch = (i64, i64, &'static [i8]);
+/// One acknowledgement batch: its offsets and types.
+type Batch = WireAckBatch<'static>;
+
+/// The row's `(error_code, acknowledge_error_code)` of a `ShareFetch`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct RowCodes {
+    error_code: i16,
+    acknowledge_error_code: i16,
+}
 
 /// Denies topic `Read` to [`DENIED`] and allows everything else.
 #[derive(Debug)]
@@ -73,8 +81,10 @@ test_authorizer!(DenyOnePrincipal, (self, _source, request), {
     }
 });
 
-async fn start() -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(DenyOnePrincipal)).await
+async fn start() -> StartedBroker {
+    let (broker, dir) =
+        start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(DenyOnePrincipal)).await;
+    StartedBroker { broker, dir }
 }
 
 async fn create_topic(broker: &BrokerHandle) -> WireUuid {
@@ -116,7 +126,7 @@ async fn acquire_all(broker: &BrokerHandle, group: &str, topic_id: WireUuid) {
     )
     .await;
     let acquired: Vec<_> = acquired_share_records(&response.responses[0].partitions[0]);
-    assert!(acquired == vec![(0, 2)], "{response:?}");
+    assert!(acquired == vec![OffsetRun::new(0, 2)], "{response:?}");
 }
 
 /// A `ShareFetch` that names each `(partition, batches)` row of `rows`.
@@ -212,8 +222,8 @@ struct Case {
     user: &'static str,
     partition: i32,
     batches: &'static [Batch],
-    /// `ShareFetch`: the row's `(error_code, acknowledge_error_code)`.
-    fetch: (i16, i16),
+    /// `ShareFetch`: the row's error codes.
+    fetch: RowCodes,
     /// `ShareAcknowledge`: the row's error code.
     acknowledge: i16,
     /// The state of each offset left in the window of partition 0 after the
@@ -229,7 +239,10 @@ fn cases() -> Vec<Case> {
         user: READER,
         partition: 0,
         batches,
-        fetch: (codes::NONE, codes::INVALID_REQUEST),
+        fetch: RowCodes {
+            error_code: codes::NONE,
+            acknowledge_error_code: codes::INVALID_REQUEST,
+        },
         acknowledge: codes::INVALID_REQUEST,
         states: HELD,
     };
@@ -238,8 +251,15 @@ fn cases() -> Vec<Case> {
             name: "allowed and valid",
             user: READER,
             partition: 0,
-            batches: &[(0, 2, &[ACCEPT])],
-            fetch: (codes::NONE, codes::NONE),
+            batches: &[WireAckBatch {
+                first: 0,
+                last: 2,
+                types: &[ACCEPT],
+            }],
+            fetch: RowCodes {
+                error_code: codes::NONE,
+                acknowledge_error_code: codes::NONE,
+            },
             acknowledge: codes::NONE,
             // The accepted prefix leaves the window with the SPSO.
             states: &[],
@@ -248,11 +268,15 @@ fn cases() -> Vec<Case> {
             name: "denied and valid",
             user: DENIED,
             partition: 0,
-            batches: &[(0, 2, &[ACCEPT])],
-            fetch: (
-                codes::TOPIC_AUTHORIZATION_FAILED,
-                codes::TOPIC_AUTHORIZATION_FAILED,
-            ),
+            batches: &[WireAckBatch {
+                first: 0,
+                last: 2,
+                types: &[ACCEPT],
+            }],
+            fetch: RowCodes {
+                error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+                acknowledge_error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+            },
             acknowledge: codes::TOPIC_AUTHORIZATION_FAILED,
             states: HELD,
         },
@@ -260,29 +284,86 @@ fn cases() -> Vec<Case> {
             name: "denied and invalid",
             user: DENIED,
             partition: 0,
-            batches: &[(2, 0, &[ACCEPT])],
-            fetch: (codes::TOPIC_AUTHORIZATION_FAILED, codes::INVALID_REQUEST),
+            batches: &[WireAckBatch {
+                first: 2,
+                last: 0,
+                types: &[ACCEPT],
+            }],
+            fetch: RowCodes {
+                error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+                acknowledge_error_code: codes::INVALID_REQUEST,
+            },
             acknowledge: codes::INVALID_REQUEST,
             states: HELD,
         },
-        invalid("first offset past last", &[(2, 0, &[ACCEPT])]),
+        invalid(
+            "first offset past last",
+            &[WireAckBatch {
+                first: 2,
+                last: 0,
+                types: &[ACCEPT],
+            }],
+        ),
         invalid(
             "overlapping batches",
-            &[(0, 1, &[ACCEPT]), (0, 2, &[ACCEPT])],
+            &[
+                WireAckBatch {
+                    first: 0,
+                    last: 1,
+                    types: &[ACCEPT],
+                },
+                WireAckBatch {
+                    first: 0,
+                    last: 2,
+                    types: &[ACCEPT],
+                },
+            ],
         ),
-        invalid("no acknowledge type", &[(0, 2, &[])]),
-        invalid("type count not the range", &[(0, 2, &[ACCEPT, ACCEPT])]),
-        invalid("type out of range", &[(0, 2, &[5])]),
-        invalid("renew without IsRenewAck", &[(0, 2, &[RENEW])]),
+        invalid(
+            "no acknowledge type",
+            &[WireAckBatch {
+                first: 0,
+                last: 2,
+                types: &[],
+            }],
+        ),
+        invalid(
+            "type count not the range",
+            &[WireAckBatch {
+                first: 0,
+                last: 2,
+                types: &[ACCEPT, ACCEPT],
+            }],
+        ),
+        invalid(
+            "type out of range",
+            &[WireAckBatch {
+                first: 0,
+                last: 2,
+                types: &[5],
+            }],
+        ),
+        invalid(
+            "renew without IsRenewAck",
+            &[WireAckBatch {
+                first: 0,
+                last: 2,
+                types: &[RENEW],
+            }],
+        ),
         Case {
             name: "partition the metadata does not hold",
             user: READER,
             partition: MISSING_PARTITION,
-            batches: &[(0, 0, &[ACCEPT])],
-            fetch: (
-                codes::UNKNOWN_TOPIC_OR_PARTITION,
-                codes::UNKNOWN_TOPIC_OR_PARTITION,
-            ),
+            batches: &[WireAckBatch {
+                first: 0,
+                last: 0,
+                types: &[ACCEPT],
+            }],
+            fetch: RowCodes {
+                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+                acknowledge_error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+            },
             acknowledge: codes::UNKNOWN_TOPIC_OR_PARTITION,
             states: HELD,
         },
@@ -291,7 +372,7 @@ fn cases() -> Vec<Case> {
 
 #[tokio::test]
 async fn acknowledge_checks_run_in_kafka_order() {
-    let (broker, _dir) = start().await;
+    let StartedBroker { broker, dir: _dir } = start().await;
     let topic_id = create_topic(&broker).await;
     produce(&broker).await;
 
@@ -306,11 +387,14 @@ async fn acknowledge_checks_run_in_kafka_order() {
                 user: case.user,
                 group: &group,
                 topic_id,
-                rows: [(case.partition, case.batches)]
-                    .iter()
-                    .copied()
-                    .map(AcknowledgementPartitionSetup::from_wire)
-                    .collect(),
+                rows: [WirePartitionAcknowledgements {
+                    index: case.partition,
+                    batches: case.batches,
+                }]
+                .iter()
+                .copied()
+                .map(AcknowledgementPartitionSetup::from_wire)
+                .collect(),
                 ..Default::default()
             },
         )
@@ -329,7 +413,11 @@ async fn acknowledge_checks_run_in_kafka_order() {
         expected.push((
             "ShareFetch",
             case.name,
-            (case.partition, case.fetch.0, case.fetch.1),
+            (
+                case.partition,
+                case.fetch.error_code,
+                case.fetch.acknowledge_error_code,
+            ),
             case.states.to_vec(),
         ));
 
@@ -341,7 +429,12 @@ async fn acknowledge_checks_run_in_kafka_order() {
                 user: case.user,
                 group: &group,
                 topic_id,
-                partition: AcknowledgementPartitionSetup::from_wire((case.partition, case.batches)),
+                partition: AcknowledgementPartitionSetup::from_wire(
+                    WirePartitionAcknowledgements {
+                        index: case.partition,
+                        batches: case.batches,
+                    },
+                ),
             },
         )
         .await;
@@ -367,7 +460,7 @@ async fn acknowledge_checks_run_in_kafka_order() {
 /// acknowledgement answers only the fetch error.
 #[tokio::test]
 async fn a_denied_row_without_acknowledgements_has_no_acknowledge_error() {
-    let (broker, _dir) = start().await;
+    let StartedBroker { broker, dir: _dir } = start().await;
     let topic_id = create_topic(&broker).await;
     produce(&broker).await;
     acquire_all(&broker, "no-acks", topic_id).await;
@@ -385,8 +478,13 @@ async fn a_denied_row_without_acknowledgements_has_no_acknowledge_error() {
     let row = &response.responses[0].partitions[0];
 
     assert!(
-        (row.error_code, row.acknowledge_error_code)
-            == (codes::TOPIC_AUTHORIZATION_FAILED, codes::NONE)
+        RowCodes {
+            error_code: row.error_code,
+            acknowledge_error_code: row.acknowledge_error_code
+        } == RowCodes {
+            error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+            acknowledge_error_code: codes::NONE
+        }
     );
     broker.shutdown().await;
 }

@@ -66,15 +66,19 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_users(
     start_three_broker_sasl_plaintext_jvm_cluster_configured(setup, |_| {}).await
 }
 
+/// `N` started brokers, the configs they started from, and the directories
+/// that back them.
+pub(crate) struct StartedCluster<const N: usize> {
+    pub(crate) brokers: [krabka_broker::BrokerHandle; N],
+    pub(crate) configs: [BrokerConfig; N],
+    pub(crate) dirs: [tempfile::TempDir; N],
+}
+
 pub(crate) async fn start_sasl_cluster<const N: usize>(
     listeners: [JvmListeners; N],
     setup: SaslClusterSetup<'_>,
     adjust: impl Fn(&mut BrokerConfig),
-) -> (
-    [krabka_broker::BrokerHandle; N],
-    [BrokerConfig; N],
-    [tempfile::TempDir; N],
-) {
+) -> StartedCluster<N> {
     use krabka_broker::config::{InterBrokerCredentials, ListenerSpec};
     use krabka_security::{ListenerProtocol, SaslMechanism};
 
@@ -147,20 +151,23 @@ pub(crate) async fn start_sasl_cluster<const N: usize>(
     for start in starts {
         brokers.push(start.await.expect("broker start task"));
     }
-    (
-        brokers
+    StartedCluster {
+        brokers: brokers
             .try_into()
             .unwrap_or_else(|_| panic!("broker count")),
         configs,
         dirs,
-    )
+    }
 }
 
 pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_configured(
     setup: SaslClusterSetup<'_>,
     adjust: impl Fn(&mut BrokerConfig),
 ) -> SaslCluster {
-    let ([h0, h1, h2], [cfg0, cfg1, cfg2], [dir0, dir1, dir2]) =
-        start_sasl_cluster(super::ports::cluster_listeners(), setup, adjust).await;
+    let StartedCluster {
+        brokers: [h0, h1, h2],
+        configs: [cfg0, cfg1, cfg2],
+        dirs: [dir0, dir1, dir2],
+    } = start_sasl_cluster(super::ports::cluster_listeners(), setup, adjust).await;
     (h0, h1, h2, cfg0, cfg1, cfg2, dir0, dir1, dir2)
 }

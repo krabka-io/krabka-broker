@@ -394,7 +394,10 @@ mod tests {
         let mgr = manager_with_image_and_partitions(
             image_with_strategies(
                 tid,
-                [("earliest", "earliest"), ("duration", "by_duration:PT1H")],
+                [
+                    strategy("earliest", "earliest"),
+                    strategy("duration", "by_duration:PT1H"),
+                ],
             ),
             registry,
         );
@@ -452,7 +455,7 @@ mod tests {
         let registry = Arc::new(PartitionRegistry::new());
         registry.insert("t".into(), PartitionIndex(0), Arc::new(partition));
         let mgr = manager_with_image_and_partitions(
-            image_with_strategies(tid, [("duration", "by_duration:P100000D")]),
+            image_with_strategies(tid, [strategy("duration", "by_duration:P100000D")]),
             registry,
         );
         mgr.set_read_sources(Some(Arc::new(reader)), None);
@@ -512,9 +515,9 @@ mod tests {
         let mgr = manager_with_image_and_partitions(
             image_with_strategies(
                 tid,
-                strategies
-                    .iter()
-                    .filter_map(|(group, value, _)| value.map(|value| (*group, value))),
+                strategies.iter().filter_map(|(group, value, _)| {
+                    value.map(|value| GroupStrategy { group, value })
+                }),
             ),
             reg,
         );
@@ -528,11 +531,21 @@ mod tests {
         }
     }
 
+    /// A group and its `share.auto.offset.reset` value.
+    struct GroupStrategy<'a> {
+        group: &'a str,
+        value: &'a str,
+    }
+
+    fn strategy<'a>(group: &'a str, value: &'a str) -> GroupStrategy<'a> {
+        GroupStrategy { group, value }
+    }
+
     /// A metadata image holding topic `t` (one partition, led here) under
     /// `tid`, and a `share.auto.offset.reset` for each `(group, value)`.
     fn image_with_strategies<'a>(
         tid: uuid::Uuid,
-        strategies: impl IntoIterator<Item = (&'a str, &'a str)>,
+        strategies: impl IntoIterator<Item = GroupStrategy<'a>>,
     ) -> Arc<MetadataImage> {
         let mut records = vec![
             MetadataRecord::V1Topic(TopicRecord {
@@ -547,7 +560,7 @@ mod tests {
                 NodeId(1),
             )),
         ];
-        for (group, value) in strategies {
+        for GroupStrategy { group, value } in strategies {
             records.push(MetadataRecord::V1GroupConfig(GroupConfigRecord {
                 group_id: group.to_string(),
                 configs: maplit::btreemap! {
@@ -605,8 +618,8 @@ mod tests {
             image_with_strategies(
                 tid,
                 [
-                    ("two-hours", "by_duration:PT2H"),
-                    ("four-hours", "by_duration:PT4H"),
+                    strategy("two-hours", "by_duration:PT2H"),
+                    strategy("four-hours", "by_duration:PT4H"),
                 ],
             ),
             reg,

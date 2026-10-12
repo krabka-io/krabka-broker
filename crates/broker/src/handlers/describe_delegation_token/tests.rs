@@ -447,25 +447,89 @@ async fn describe_acl_on_token_id_grants_exactly_that_token() {
 async fn describe_tokens_acl_on_the_owner_grants_all_of_their_tokens() {
     use AclOperation::{All, CreateTokens, DescribeTokens};
     use PermissionType::{Allow, Deny};
-    type Case = (
-        &'static [(AclOperation, PermissionType)],
-        &'static str,
-        bool,
-        &'static [&'static str],
-    );
-    let cases: &[Case] = &[
-        (&[(DescribeTokens, Allow)], "bob", false, &["t-a1", "t-a2"]),
-        (&[(CreateTokens, Allow)], "bob", false, &[]),
-        (
-            &[(CreateTokens, Deny), (DescribeTokens, Allow)],
-            "bob",
-            false,
-            &["t-a1", "t-a2"],
-        ),
-        (&[(All, Allow), (DescribeTokens, Deny)], "bob", false, &[]),
-        (&[(DescribeTokens, Allow)], "mallory", true, &["t-c"]),
+    /// An ACL operation and whether it is allowed or denied.
+    #[derive(Debug, Clone, Copy)]
+    struct AclGrant {
+        operation: AclOperation,
+        permission_type: PermissionType,
+    }
+
+    /// The ACLs on the owner, the caller, whether the default allows, and the
+    /// token ids the caller sees.
+    #[derive(Clone, Copy)]
+    struct OwnerCase {
+        operations: &'static [AclGrant],
+        principal: &'static str,
+        default_allow: bool,
+        expected: &'static [&'static str],
+    }
+
+    let cases: &[OwnerCase] = &[
+        OwnerCase {
+            operations: &[AclGrant {
+                operation: DescribeTokens,
+                permission_type: Allow,
+            }],
+            principal: "bob",
+            default_allow: false,
+            expected: &["t-a1", "t-a2"],
+        },
+        OwnerCase {
+            operations: &[AclGrant {
+                operation: CreateTokens,
+                permission_type: Allow,
+            }],
+            principal: "bob",
+            default_allow: false,
+            expected: &[],
+        },
+        OwnerCase {
+            operations: &[
+                AclGrant {
+                    operation: CreateTokens,
+                    permission_type: Deny,
+                },
+                AclGrant {
+                    operation: DescribeTokens,
+                    permission_type: Allow,
+                },
+            ],
+            principal: "bob",
+            default_allow: false,
+            expected: &["t-a1", "t-a2"],
+        },
+        OwnerCase {
+            operations: &[
+                AclGrant {
+                    operation: All,
+                    permission_type: Allow,
+                },
+                AclGrant {
+                    operation: DescribeTokens,
+                    permission_type: Deny,
+                },
+            ],
+            principal: "bob",
+            default_allow: false,
+            expected: &[],
+        },
+        OwnerCase {
+            operations: &[AclGrant {
+                operation: DescribeTokens,
+                permission_type: Allow,
+            }],
+            principal: "mallory",
+            default_allow: true,
+            expected: &["t-c"],
+        },
     ];
-    for &(operations, principal, default_allow, expected) in cases {
+    for &OwnerCase {
+        operations,
+        principal,
+        default_allow,
+        expected,
+    } in cases
+    {
         token_fixture!(dir, controller, secret);
         seed_token(
             &controller,
@@ -496,7 +560,11 @@ async fn describe_tokens_acl_on_the_owner_grants_all_of_their_tokens() {
         let mut token_deny = describe_token_acl("*", "*");
         token_deny.permission_type = Deny;
         seed_acl(&controller, token_deny).await;
-        for &(operation, permission_type) in operations {
+        for &AclGrant {
+            operation,
+            permission_type,
+        } in operations
+        {
             seed_acl(
                 &controller,
                 AclEntry {
@@ -561,16 +629,49 @@ async fn unrelated_caller_sees_nothing() {
 /// `Describe` ACL.
 #[tokio::test]
 async fn requester_of_a_token_minted_for_another_owner_finds_and_sees_it() {
-    // (caller, `owners` filter, expected token ids)
-    type Case<'a> = (&'a str, Option<&'a [&'a str]>, &'a [&'a str]);
-    let cases: [Case<'_>; 7] = [
-        ("admin", None, &["t-minted"]),
-        ("admin", Some(&["admin"]), &["t-minted"]),
-        ("admin", Some(&["alice"]), &["t-minted"]),
-        ("admin", Some(&["carol"]), &[]),
-        ("alice", None, &["t-minted"]),
-        ("bob", Some(&["admin"]), &["t-minted"]),
-        ("eve", Some(&["admin"]), &[]),
+    /// The caller, the `owners` filter, and the expected token ids.
+    struct OwnersCase<'a> {
+        caller: &'a str,
+        owners: Option<&'a [&'a str]>,
+        expected: &'a [&'a str],
+    }
+
+    let cases: [OwnersCase<'_>; 7] = [
+        OwnersCase {
+            caller: "admin",
+            owners: None,
+            expected: &["t-minted"],
+        },
+        OwnersCase {
+            caller: "admin",
+            owners: Some(&["admin"]),
+            expected: &["t-minted"],
+        },
+        OwnersCase {
+            caller: "admin",
+            owners: Some(&["alice"]),
+            expected: &["t-minted"],
+        },
+        OwnersCase {
+            caller: "admin",
+            owners: Some(&["carol"]),
+            expected: &[],
+        },
+        OwnersCase {
+            caller: "alice",
+            owners: None,
+            expected: &["t-minted"],
+        },
+        OwnersCase {
+            caller: "bob",
+            owners: Some(&["admin"]),
+            expected: &["t-minted"],
+        },
+        OwnersCase {
+            caller: "eve",
+            owners: Some(&["admin"]),
+            expected: &[],
+        },
     ];
 
     token_fixture!(dir, controller, secret);
@@ -585,7 +686,12 @@ async fn requester_of_a_token_minted_for_another_owner_finds_and_sees_it() {
     )
     .await;
 
-    for (caller, owners, expected) in cases {
+    for OwnersCase {
+        caller,
+        owners,
+        expected,
+    } in cases
+    {
         let req = DescribeDelegationTokenRequest {
             owners: owners.map(|names| {
                 names

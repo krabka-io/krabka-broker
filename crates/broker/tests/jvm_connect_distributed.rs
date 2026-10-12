@@ -195,8 +195,8 @@ impl ConnectWorker {
     async fn wait_for_rest(&self) {
         let deadline = tokio::time::Instant::now() + REST_BUDGET;
         loop {
-            if let Ok((status, _)) = http(&self.rest, "GET", "/connectors", None)
-                && status == 200
+            if let Ok(response) = http(&self.rest, "GET", "/connectors", None)
+                && response.status == 200
             {
                 return;
             }
@@ -216,7 +216,7 @@ impl ConnectWorker {
     /// `PUT /connectors/<name>/config`, which creates or replaces a connector.
     /// `PUT` rather than `POST /connectors`, so a retry is not a conflict.
     fn put_connector(&self, name: &str, config: &str) {
-        let (status, body) = http(
+        let RestResponse { status, body } = http(
             &self.rest,
             "PUT",
             &format!("/connectors/{name}/config"),
@@ -240,7 +240,7 @@ impl ConnectWorker {
         let path = format!("/connectors/{name}/status");
         loop {
             let body = match http(&self.rest, "GET", &path, None) {
-                Ok((200, body)) => body,
+                Ok(RestResponse { status: 200, body }) => body,
                 _ => String::new(),
             };
             assert!(
@@ -293,6 +293,12 @@ impl ConnectWorker {
     }
 }
 
+/// The status code and body of one HTTP response.
+struct RestResponse {
+    status: u16,
+    body: String,
+}
+
 /// One HTTP/1.1 exchange against `addr`, returning the status code and the
 /// body.
 ///
@@ -301,12 +307,7 @@ impl ConnectWorker {
 /// everything up to EOF and neither `Content-Length` nor chunked framing has
 /// to be parsed. Timeouts are set on both directions so a wedged worker fails
 /// the surrounding wait rather than blocking the test forever.
-fn http(
-    addr: &str,
-    method: &str,
-    path: &str,
-    body: Option<&str>,
-) -> std::io::Result<(u16, String)> {
+fn http(addr: &str, method: &str, path: &str, body: Option<&str>) -> std::io::Result<RestResponse> {
     let mut stream = TcpStream::connect(addr)?;
     stream.set_read_timeout(Some(Duration::from_secs(30)))?;
     stream.set_write_timeout(Some(Duration::from_secs(30)))?;
@@ -340,7 +341,7 @@ fn http(
     let body = text
         .split_once("\r\n\r\n")
         .map_or(String::new(), |(_, rest)| rest.to_owned());
-    Ok((status, body))
+    Ok(RestResponse { status, body })
 }
 
 /// `kafka-configs --describe --entity-type topics` for one topic, as text.

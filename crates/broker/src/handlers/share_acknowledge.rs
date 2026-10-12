@@ -297,12 +297,12 @@ mod tests {
         authorizer::AllowAllAuthorizer,
         broker::BrokerHandle,
         handlers::test_support::{
-            ClientTopicSetup, create_topic as create_topic_from_test_support,
+            ClientTopicSetup, StartedBroker, create_topic as create_topic_from_test_support,
         },
         share_partition::session::FetchPartitions,
         test_support::{
-            ShareApiSupport, ShareBrokerSetup, dispatch_wire, peer, principal, start_share_broker,
-            test_ctx,
+            ShareApiSupport, ShareBrokerSetup, dispatch_wire, peer, principal, start_broker_with,
+            start_share_broker, test_ctx,
         },
     };
 
@@ -414,16 +414,23 @@ mod tests {
         .await
     }
 
+    /// The response to one (version, topic reference) case.
+    #[derive(Debug, PartialEq)]
+    struct CaseResponse {
+        version: i16,
+        topic: TopicRef,
+        response: ShareAcknowledgeResponse,
+    }
+
+    /// The responses that `drive` got and the ones it expected.
+    struct DrivenCases {
+        actual: Vec<CaseResponse>,
+        expected: Vec<CaseResponse>,
+    }
+
     /// Run one case per (version, topic reference) on `broker`, each in its
     /// own share session. `known_error` is the code for a topic that exists.
-    async fn drive(
-        broker: &BrokerHandle,
-        known: ProtoUuid,
-        known_error: i16,
-    ) -> (
-        Vec<(i16, TopicRef, ShareAcknowledgeResponse)>,
-        Vec<(i16, TopicRef, ShareAcknowledgeResponse)>,
-    ) {
+    async fn drive(broker: &BrokerHandle, known: ProtoUuid, known_error: i16) -> DrivenCases {
         let mut actual = Vec::new();
         let mut expected = Vec::new();
         for version in [
@@ -441,16 +448,20 @@ mod tests {
             ] {
                 let member = format!("member-{version}-{topic:?}");
                 let response = acknowledge(broker, version, &member, topic_id).await;
-                actual.push((version, topic, response));
+                actual.push(CaseResponse {
+                    version,
+                    topic,
+                    response,
+                });
                 let row = PartitionData {
                     partition_index: 0,
                     error_code,
                     ..Default::default()
                 };
-                expected.push((
+                expected.push(CaseResponse {
                     version,
                     topic,
-                    ShareAcknowledgeResponse {
+                    response: ShareAcknowledgeResponse {
                         // The wire carries the lock timeout from v2 on. An
                         // older version decodes the field's default, 0.
                         acquisition_lock_timeout_ms: if version >= 2 { 30_000 } else { 0 },
@@ -461,25 +472,29 @@ mod tests {
                         }],
                         ..Default::default()
                     },
-                ));
+                });
             }
         }
-        (actual, expected)
+        DrivenCases { actual, expected }
     }
 
     #[tokio::test]
     async fn partition_row_error_follows_topic_id() {
         initialized_share_topic!(
             (broker_handle, _dir, known),
-            crate::test_support::start_share_broker(
-                std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer),
-                crate::test_support::ShareBrokerSetup::default()
-            ),
+            async {
+                let (broker, dir) = start_share_broker(
+                    std::sync::Arc::new(AllowAllAuthorizer),
+                    ShareBrokerSetup::default(),
+                )
+                .await;
+                StartedBroker { broker, dir }
+            },
             "ack-resolution",
             "g1"
         );
 
-        let (actual, expected) = drive(&broker_handle, known, codes::NONE).await;
+        let DrivenCases { actual, expected } = drive(&broker_handle, known, codes::NONE).await;
 
         assert!(actual == expected);
         broker_handle.shutdown().await;
@@ -492,14 +507,18 @@ mod tests {
     async fn unresolved_id_answers_before_topic_authorization() {
         initialized_share_topic!(
             (broker_handle, _dir, known),
-            crate::test_support::start_broker_with(|cfg| {
-                cfg.authorizer = std::sync::Arc::new(DenyTopicRead);
-            }),
+            async {
+                let (broker, dir) = start_broker_with(|cfg| {
+                    cfg.authorizer = std::sync::Arc::new(DenyTopicRead);
+                })
+                .await;
+                StartedBroker { broker, dir }
+            },
             "ack-resolution",
             "g1"
         );
 
-        let (actual, expected) =
+        let DrivenCases { actual, expected } =
             drive(&broker_handle, known, codes::TOPIC_AUTHORIZATION_FAILED).await;
 
         assert!(actual == expected);

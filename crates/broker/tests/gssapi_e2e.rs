@@ -70,11 +70,17 @@ fn gssapi_fixtures() -> PathBuf {
     manifest_dir().join("tests/fixtures/gssapi")
 }
 
+/// A running broker and the directory that backs it.
+struct HostGssapiBroker {
+    broker: BrokerHandle,
+    dir: tempfile::TempDir,
+}
+
 /// Spawn an in-process Krabka broker on `LISTEN`.
 ///
 /// The broker has one `SASL_PLAINTEXT` listener that advertises `GSSAPI`. The
 /// KDC fixture's `kafka.keytab` backs that listener.
-async fn start_host_gssapi_broker() -> (BrokerHandle, tempfile::TempDir) {
+async fn start_host_gssapi_broker() -> HostGssapiBroker {
     init_tracing_with("krabka_broker=debug,info");
 
     let kdc_url =
@@ -123,7 +129,10 @@ async fn start_host_gssapi_broker() -> (BrokerHandle, tempfile::TempDir) {
 
     let handle = Broker::start(cfg).await.expect("start gssapi broker");
     eprintln!("KRABKA[test] gssapi broker started listen={LISTEN} advertised={BOOTSTRAP}");
-    (handle, dir)
+    HostGssapiBroker {
+        broker: handle,
+        dir,
+    }
 }
 
 /// Build the common `docker run` argument prefix for a cp-kafka GSSAPI tool.
@@ -190,7 +199,7 @@ fn run_gssapi_tool(tool_args: &[&str]) -> std::process::Output {
 async fn cp_kafka_gssapi_client_round_trip() {
     const TOPIC: &str = "krabka-gssapi-itest";
 
-    let (broker, _dir) = start_host_gssapi_broker().await;
+    let HostGssapiBroker { broker, dir: _dir } = start_host_gssapi_broker().await;
 
     // 1. Create the topic over a GSSAPI-authenticated AdminClient.
     run_gssapi_tool(&[

@@ -89,12 +89,19 @@ enum ProducerExpiry {
     Swept,
 }
 
+/// The key and value of a one-record data batch.
+#[derive(Clone, Copy)]
+struct RecordPayload<'a> {
+    key: &'a str,
+    value: &'a str,
+}
+
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 struct RecordSetup<'a> {
     producer: Option<ProducerBatchIdentity>,
     transaction: BatchTransaction,
-    #[default(("k", "v"))]
-    payload: (&'a str, &'a str),
+    #[default(RecordPayload { key: "k", value: "v" })]
+    payload: RecordPayload<'a>,
     timestamp: UnixMillis,
 }
 
@@ -103,7 +110,7 @@ fn record(setup: RecordSetup<'_>) -> RecordBatch {
     let RecordSetup {
         producer,
         transaction,
-        payload: (key, value),
+        payload: RecordPayload { key, value },
         timestamp,
     } = setup;
     let (producer_id, producer_epoch, base_sequence) = producer.map_or((-1, -1, -1), |producer| {
@@ -152,28 +159,43 @@ fn histories(now_ms: UnixMillis) -> Vec<History> {
     let superseded = vec![
         record(RecordSetup {
             producer: idempotent(ProducerSequence(0)),
-            payload: ("a", "p-a"),
+            payload: RecordPayload {
+                key: "a",
+                value: "p-a",
+            },
             timestamp: now_ms,
             ..Default::default()
         }),
         record(RecordSetup {
             producer: idempotent(ProducerSequence(1)),
-            payload: ("b", "p-b"),
+            payload: RecordPayload {
+                key: "b",
+                value: "p-b",
+            },
             timestamp: now_ms,
             ..Default::default()
         }),
         record(RecordSetup {
-            payload: ("a", "a-2"),
+            payload: RecordPayload {
+                key: "a",
+                value: "a-2",
+            },
             timestamp: now_ms,
             ..Default::default()
         }),
         record(RecordSetup {
-            payload: ("b", "b-3"),
+            payload: RecordPayload {
+                key: "b",
+                value: "b-3",
+            },
             timestamp: now_ms,
             ..Default::default()
         }),
         record(RecordSetup {
-            payload: ("c", "c-4"),
+            payload: RecordPayload {
+                key: "c",
+                value: "c-4",
+            },
             timestamp: now_ms,
             ..Default::default()
         }),
@@ -185,7 +207,10 @@ fn histories(now_ms: UnixMillis) -> Vec<History> {
                 sequence: ProducerSequence::default(),
             }),
             transaction: BatchTransaction::Transactional,
-            payload: ("a", "t-a"),
+            payload: RecordPayload {
+                key: "a",
+                value: "t-a",
+            },
             timestamp: now_ms,
         }),
         build_marker_batch(
@@ -196,12 +221,18 @@ fn histories(now_ms: UnixMillis) -> Vec<History> {
             17,
         ),
         record(RecordSetup {
-            payload: ("a", "a-2"),
+            payload: RecordPayload {
+                key: "a",
+                value: "a-2",
+            },
             timestamp: now_ms,
             ..Default::default()
         }),
         record(RecordSetup {
-            payload: ("c", "c-3"),
+            payload: RecordPayload {
+                key: "c",
+                value: "c-3",
+            },
             timestamp: now_ms,
             ..Default::default()
         }),

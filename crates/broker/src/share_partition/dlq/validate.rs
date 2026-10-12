@@ -92,6 +92,13 @@ pub(super) enum TopicState {
     Missing,
 }
 
+/// The settings of a group whose dead-letter topic passed validation, and the
+/// state of the topic.
+pub(super) struct ValidatedGroup {
+    pub(super) settings: GroupSettings,
+    pub(super) topic_state: TopicState,
+}
+
 /// Checks the topic of `group` against the cluster's rules, in Kafka's order:
 ///
 /// 1. the group names a topic;
@@ -110,7 +117,7 @@ pub(super) fn validate(
     group: &str,
     settings: Option<GroupSettings>,
     cluster: &ClusterSettings,
-) -> Result<(GroupSettings, TopicState), DlqError> {
+) -> Result<ValidatedGroup, DlqError> {
     let Some(settings) = settings else {
         return Err(DlqError::Config(format!(
             "Configured DLQ topic name in share group: {group} is empty."
@@ -141,7 +148,10 @@ pub(super) fn validate(
         )));
     }
     if exists {
-        return Ok((settings, TopicState::Exists));
+        return Ok(ValidatedGroup {
+            settings,
+            topic_state: TopicState::Exists,
+        });
     }
     if !cluster.auto_create {
         return Err(DlqError::Config(format!(
@@ -149,7 +159,10 @@ pub(super) fn validate(
              {group}, topic: {topic}."
         )));
     }
-    Ok((settings, TopicState::Missing))
+    Ok(ValidatedGroup {
+        settings,
+        topic_state: TopicState::Missing,
+    })
 }
 
 #[cfg(test)]
@@ -206,7 +219,7 @@ mod tests {
             GroupSettings::resolve(image, "g"),
             &ClusterSettings::resolve(image, NODE),
         )
-        .map(|(_, state)| state)
+        .map(|validated| validated.topic_state)
     }
 
     fn config_error(message: &str) -> Result<TopicState, DlqError> {

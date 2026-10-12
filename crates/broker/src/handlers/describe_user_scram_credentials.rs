@@ -242,13 +242,26 @@ mod tests {
     use super::*;
     use crate::authorizer::AuthorizationResult;
 
-    fn img_with_scram(users: &[(&str, SaslMechanism, u32)]) -> MetadataImage {
+    /// A SCRAM credential to seed: its user, mechanism and iteration count.
+    #[derive(Clone, Copy)]
+    struct SeededUser<'a> {
+        user: &'a str,
+        mechanism: SaslMechanism,
+        iterations: u32,
+    }
+
+    fn img_with_scram(users: &[SeededUser<'_>]) -> MetadataImage {
         let mut img = MetadataImage::new(uuid::Uuid::nil());
-        for (user, mech, iters) in users {
+        for SeededUser {
+            user,
+            mechanism,
+            iterations,
+        } in users
+        {
             img.apply(&MetadataRecord::V1ScramCredential(ScramCredentialRecord {
                 user: (*user).into(),
-                mechanism: *mech,
-                iterations: *iters,
+                mechanism: *mechanism,
+                iterations: *iterations,
                 salt: vec![1, 2, 3],
                 server_key: vec![4, 5, 6],
                 stored_key: vec![7, 8, 9],
@@ -280,7 +293,7 @@ mod tests {
 
     fn run_handle_filter(
         users_filter: Option<Vec<String>>,
-        seeded: &[(&str, SaslMechanism, u32)],
+        seeded: &[SeededUser<'_>],
     ) -> DescribeUserScramCredentialsResponse {
         let req = scram_users_request(users_filter);
         let image = img_with_scram(seeded);
@@ -292,8 +305,16 @@ mod tests {
         let resp = run_handle_filter(
             None,
             &[
-                ("alice", SaslMechanism::ScramSha512, 4096),
-                ("bob", SaslMechanism::ScramSha512, 8192),
+                SeededUser {
+                    user: "alice",
+                    mechanism: SaslMechanism::ScramSha512,
+                    iterations: 4096,
+                },
+                SeededUser {
+                    user: "bob",
+                    mechanism: SaslMechanism::ScramSha512,
+                    iterations: 8192,
+                },
             ],
         );
         assert!(resp.results.len() == 2);
@@ -306,8 +327,16 @@ mod tests {
         let resp = run_handle_filter(
             Some(vec!["alice".into()]),
             &[
-                ("alice", SaslMechanism::ScramSha512, 4096),
-                ("bob", SaslMechanism::ScramSha512, 8192),
+                SeededUser {
+                    user: "alice",
+                    mechanism: SaslMechanism::ScramSha512,
+                    iterations: 4096,
+                },
+                SeededUser {
+                    user: "bob",
+                    mechanism: SaslMechanism::ScramSha512,
+                    iterations: 8192,
+                },
             ],
         );
         let expected = vec![tagged_wire!(DescribeUserScramCredentialsResult {
@@ -326,7 +355,11 @@ mod tests {
     fn unknown_user_returns_resource_not_found() {
         let resp = run_handle_filter(
             Some(vec!["ghost".into()]),
-            &[("alice", SaslMechanism::ScramSha512, 4096)],
+            &[SeededUser {
+                user: "alice",
+                mechanism: SaslMechanism::ScramSha512,
+                iterations: 4096,
+            }],
         );
         let expected = vec![tagged_wire!(DescribeUserScramCredentialsResult {
             user: "ghost".to_string(),
@@ -346,8 +379,16 @@ mod tests {
         let resp = run_handle_filter(
             Some(vec!["alice".into(), "bob".into(), "alice".into()]),
             &[
-                ("alice", SaslMechanism::ScramSha512, 4096),
-                ("bob", SaslMechanism::ScramSha512, 8192),
+                SeededUser {
+                    user: "alice",
+                    mechanism: SaslMechanism::ScramSha512,
+                    iterations: 4096,
+                },
+                SeededUser {
+                    user: "bob",
+                    mechanism: SaslMechanism::ScramSha512,
+                    iterations: 8192,
+                },
             ],
         );
 
@@ -384,8 +425,16 @@ mod tests {
         let resp = run_handle_filter(
             Some(vec!["alice".into()]),
             &[
-                ("alice", SaslMechanism::ScramSha512, 8192),
-                ("alice", SaslMechanism::ScramSha256, 4096),
+                SeededUser {
+                    user: "alice",
+                    mechanism: SaslMechanism::ScramSha512,
+                    iterations: 8192,
+                },
+                SeededUser {
+                    user: "alice",
+                    mechanism: SaslMechanism::ScramSha256,
+                    iterations: 4096,
+                },
             ],
         );
 

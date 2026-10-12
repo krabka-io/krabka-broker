@@ -9,7 +9,9 @@ use qubit_clock::Timer;
 
 use super::*;
 use crate::{
-    cleaner::test_support::{CompactionSetup, compactable_partition, record_count},
+    cleaner::test_support::{
+        CompactablePartition, CompactionSetup, compactable_partition, record_count,
+    },
     partition::Partition,
     test_support::{BrokenTimer, TimerFailure, park_manual_timer, sweep_registry_fixture},
 };
@@ -90,14 +92,12 @@ async fn run_ticks_until_shutdown() {
 ///
 /// The shutdown token handed to the task is dropped uncancelled, so the only
 /// way the returned task can finish is the timer giving out.
-async fn spawn_on(
-    dir: &tempfile::TempDir,
-    topic: &str,
-    timer: Arc<dyn Timer>,
-) -> (tokio::task::JoinHandle<()>, Arc<Partition>, usize) {
+async fn spawn_on(dir: &tempfile::TempDir, topic: &str, timer: Arc<dyn Timer>) -> SpawnedCleaner {
     let registry = Arc::new(PartitionRegistry::new());
-    let (partition, before) =
-        super::test_support::register_compactable(dir, &registry, topic).await;
+    let CompactablePartition {
+        partition,
+        record_count: before,
+    } = super::test_support::register_compactable(dir, &registry, topic).await;
     let task = tokio::spawn(run(
         registry,
         CleanerConfig {
@@ -108,14 +108,30 @@ async fn spawn_on(
         CancellationToken::new(),
         BrokerMetrics::new(),
     ));
-    (task, partition, before)
+    SpawnedCleaner {
+        task,
+        partition,
+        before,
+    }
+}
+
+/// A running cleaner task, the partition it sweeps, and that partition's
+/// pre-sweep record count.
+struct SpawnedCleaner {
+    task: tokio::task::JoinHandle<()>,
+    partition: Arc<Partition>,
+    before: usize,
 }
 
 /// Both initial timer failures end the task before it can compact the partition.
 async fn check_initial_timer_failure(topic: &str, failure: TimerFailure) {
     let dir = tempfile::tempdir().expect("log root");
     let timer = BrokenTimer::dead(failure);
-    let (task, partition, before) = spawn_on(&dir, topic, timer.injectable()).await;
+    let SpawnedCleaner {
+        task,
+        partition,
+        before,
+    } = spawn_on(&dir, topic, timer.injectable()).await;
     task.await.expect("cleaner task exits");
     check!(record_count(&partition) == before);
     check!(timer.registrations() == 1);
@@ -137,7 +153,11 @@ async fn run_stops_when_the_first_deadline_is_armed_but_never_completes() {
 async fn run_sweeps_once_and_stops_when_the_interval_cannot_be_re_armed() {
     let dir = tempfile::tempdir().expect("log root");
     let timer = BrokenTimer::dead_after(1, TimerFailure::Registration);
-    let (task, partition, before) = spawn_on(&dir, "unrearmable", timer.injectable()).await;
+    let SpawnedCleaner {
+        task,
+        partition,
+        before,
+    } = spawn_on(&dir, "unrearmable", timer.injectable()).await;
 
     // The start-up deadline is honoured, so the first sweep compacts the
     // partition. The interval the loop re-arms afterwards is refused, and the

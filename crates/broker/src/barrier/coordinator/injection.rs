@@ -11,7 +11,7 @@ use krabka_log::Offset;
 use krabka_units::{Time, convert::TimeExt as _};
 use tracing::{info, warn};
 
-use super::{BarrierCoordinator, clamp_timeout};
+use super::{AppendRecord, BarrierCoordinator, clamp_timeout};
 use crate::{
     barrier::{
         error::BarrierError,
@@ -143,10 +143,10 @@ impl BarrierCoordinator {
         // here cannot let another coordinator reuse this epoch.
         self.append_records(
             group,
-            vec![(
-                RecordKey::injection_start(group, epoch),
-                Some(encode_injection_start(&start)?.into()),
-            )],
+            vec![AppendRecord {
+                key: RecordKey::injection_start(group, epoch),
+                value: Some(encode_injection_start(&start)?.into()),
+            }],
         )
         .await?;
         entry.pending = Some(PendingInjection {
@@ -242,16 +242,25 @@ impl BarrierCoordinator {
         let held: Vec<i64> = entry.cuts.keys().copied().collect();
         let expired = expired_cut_epochs(epoch, entry.definition.retained_cuts, &held);
         let mut records = vec![
-            (RecordKey::cut(group, epoch), Some(encode_cut(&cut)?.into())),
-            (
-                RecordKey::group(group),
-                Some(encode_group(&definition)?.into()),
-            ),
+            AppendRecord {
+                key: RecordKey::cut(group, epoch),
+                value: Some(encode_cut(&cut)?.into()),
+            },
+            AppendRecord {
+                key: RecordKey::group(group),
+                value: Some(encode_group(&definition)?.into()),
+            },
             // The cut supersedes the injection-start record of its own epoch.
-            (RecordKey::injection_start(group, epoch), None),
+            AppendRecord {
+                key: RecordKey::injection_start(group, epoch),
+                value: None,
+            },
         ];
         for epoch in &expired {
-            records.push((RecordKey::cut(group, *epoch), None));
+            records.push(AppendRecord {
+                key: RecordKey::cut(group, *epoch),
+                value: None,
+            });
         }
         self.append_records(group, records).await?;
 

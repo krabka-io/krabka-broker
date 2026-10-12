@@ -13,7 +13,7 @@ use std::sync::Arc;
 use krabka_protocol::owned::init_producer_id_response::InitProducerIdResponse;
 use krabka_verified::transaction::InitProducerIdIdentityDecision;
 
-use super::identity::{next_init_producer_identity, stage_recovery_identity};
+use super::identity::{ProducerIdentity, next_init_producer_identity, stage_recovery_identity};
 use crate::{
     codes,
     error::BrokerError,
@@ -56,6 +56,11 @@ pub(super) async fn handle_transactional(
     request_identity: (i64, i16),
 ) -> Result<InitProducerIdResponse, BrokerError> {
     let now_ms = now_millis();
+    let (requested_pid, requested_epoch) = request_identity;
+    let request_identity = RequestedIdentity {
+        producer_id: requested_pid,
+        producer_epoch: requested_epoch,
+    };
 
     match coord.get(tid) {
         None => {
@@ -113,8 +118,10 @@ pub(super) async fn handle_transactional(
                         if enable_2pc {
                             entry.txn_timeout_ms = i32::MAX;
                         }
-                        let (next_pid, next_epoch) =
-                            stage_recovery_identity(&mut entry, &coord.producer_ids).await?;
+                        let ProducerIdentity {
+                            id: next_pid,
+                            epoch: next_epoch,
+                        } = stage_recovery_identity(&mut entry, &coord.producer_ids).await?;
                         entry.last_update_ms = now_ms;
                         Some((
                             entry.clone(),
@@ -309,8 +316,10 @@ pub(super) async fn handle_transactional(
                 return Ok(fenced_response());
             }
             let (previous_pid, previous_epoch) = client_producer_identity(&e3);
-            let (new_pid, new_epoch) =
-                next_init_producer_identity(&e3, &coord.producer_ids).await?;
+            let ProducerIdentity {
+                id: new_pid,
+                epoch: new_epoch,
+            } = next_init_producer_identity(&e3, &coord.producer_ids).await?;
             let mut staged =
                 TxnEntry::new_empty(tid.to_string(), new_pid, new_epoch, txn_timeout, now_ms);
             // The transition keeps the transaction version of the record before
@@ -320,7 +329,7 @@ pub(super) async fn handle_transactional(
             // `prepareProducerIdRotation` record the epoch the entry held, so
             // a retry of this call is recognised. A caller that named no
             // identity records no last epoch.
-            if request_identity.0 >= 0 {
+            if request_identity.producer_id >= 0 {
                 staged.last_producer_epoch = previous_epoch;
             }
             if new_pid != previous_pid {
@@ -344,13 +353,21 @@ pub(super) async fn handle_transactional(
     }
 }
 
+/// The producer id and epoch that an `InitProducerId` request names, as the
+/// wire carries them. A producer that names no identity sends `-1` for both.
+#[derive(Clone, Copy)]
+struct RequestedIdentity {
+    producer_id: i64,
+    producer_epoch: i16,
+}
+
 /// What `request_identity` may do to `entry` (KIP-360).
 ///
 /// The caller holds `entry`'s lock, and the mutation the verdict admits runs
 /// under that same guard.
 fn identity_decision(
     entry: &TxnEntry,
-    request_identity: (i64, i16),
+    request_identity: RequestedIdentity,
 ) -> InitProducerIdIdentityDecision {
     let (entry_pid, entry_epoch) = client_producer_identity(entry);
     krabka_verified::transaction::init_producer_id_identity_decision(
@@ -358,13 +375,13 @@ fn identity_decision(
         entry_epoch,
         entry.last_producer_epoch,
         entry.prev_producer_id.get(),
-        request_identity.0,
-        request_identity.1,
+        request_identity.producer_id,
+        request_identity.producer_epoch,
     )
 }
 
 /// Whether `request_identity` is fenced against `entry`'s live identity.
-fn is_fenced(entry: &TxnEntry, request_identity: (i64, i16)) -> bool {
+fn is_fenced(entry: &TxnEntry, request_identity: RequestedIdentity) -> bool {
     identity_decision(entry, request_identity) == InitProducerIdIdentityDecision::Fenced
 }
 
@@ -372,7 +389,7 @@ fn is_fenced(entry: &TxnEntry, request_identity: (i64, i16)) -> bool {
 /// Callers hold the same entry lock while checking and staging their mutation.
 fn pending_or_fenced_response(
     entry: &TxnEntry,
-    request_identity: (i64, i16),
+    request_identity: RequestedIdentity,
 ) -> Option<InitProducerIdResponse> {
     pending_completion_response(entry, request_identity)
         .or_else(|| is_fenced(entry, request_identity).then(fenced_response))
@@ -382,7 +399,7 @@ fn pending_or_fenced_response(
 /// happened answers the entry's identity and writes nothing.
 fn retried_bump_response(
     entry: &TxnEntry,
-    request_identity: (i64, i16),
+    request_identity: RequestedIdentity,
 ) -> Option<InitProducerIdResponse> {
     if identity_decision(entry, request_identity) != InitProducerIdIdentityDecision::Retry {
         return None;
@@ -410,7 +427,10 @@ fn retried_bump_response(
 /// partitions may already hold.
 fn pending_completion_response(
     entry: &TxnEntry,
-    (request_pid, request_epoch): (i64, i16),
+    RequestedIdentity {
+        producer_id: request_pid,
+        producer_epoch: request_epoch,
+    }: RequestedIdentity,
 ) -> Option<InitProducerIdResponse> {
     completion_for(entry.state)?;
     let names_this_transaction = request_pid < 0
@@ -469,6 +489,23 @@ mod tests {
         test_support::{StandalonePartitionSetup, open_partition, spawn_standalone_partition},
         txn::{bootstrap, state::TopicPartition, version::TxnVersion},
     };
+
+    /// A coordinator seeded with a transaction, and the partition that a test
+    /// reads back: `__transaction_state-0` for a completed transaction and the
+    /// data partition for an ongoing one.
+    struct SeededCoordinator {
+        coordinator: Arc<TxnCoordinator>,
+        partition: Arc<Partition>,
+    }
+
+    /// An `InitProducerId` answer: the error code, the producer id and the
+    /// producer epoch.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct Answer {
+        error_code: i16,
+        producer_id: i64,
+        producer_epoch: i16,
+    }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum LogMutation {
@@ -647,7 +684,7 @@ mod tests {
     async fn coordinator_with_completed_transaction(
         dir: &std::path::Path,
         tid: &str,
-    ) -> (Arc<TxnCoordinator>, Arc<Partition>) {
+    ) -> SeededCoordinator {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         image.apply(&MetadataRecord::V1Topic(TopicRecord {
             name: bootstrap::TOPIC.to_string(),
@@ -697,7 +734,10 @@ mod tests {
             .put(entry, TxnVersion::Verified)
             .await
             .expect("seed __transaction_state");
-        (coordinator, part)
+        SeededCoordinator {
+            coordinator,
+            partition: part,
+        }
     }
 
     /// Seeds one `TxnEntry` into a coordinator that already leads its
@@ -724,7 +764,10 @@ mod tests {
         const UNKNOWN: &str = "tid-unknown";
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let (coordinator, _part) = coordinator_with_completed_transaction(dir.path(), SEEDED).await;
+        let SeededCoordinator {
+            coordinator,
+            partition: _part,
+        } = coordinator_with_completed_transaction(dir.path(), SEEDED).await;
         check!(coordinator.get(UNKNOWN).is_none());
 
         let response = init_verified(
@@ -749,8 +792,11 @@ mod tests {
     async fn coordinator_with_ongoing_transaction(
         dir: &std::path::Path,
         tid: &str,
-    ) -> (Arc<TxnCoordinator>, Arc<Partition>) {
-        let (coordinator, _state) = coordinator_with_completed_transaction(dir, tid).await;
+    ) -> SeededCoordinator {
+        let SeededCoordinator {
+            coordinator,
+            partition: _part,
+        } = coordinator_with_completed_transaction(dir, tid).await;
         let data_dir = partition_dir(dir, "orders", 0);
         std::fs::create_dir_all(&data_dir).expect("create the data partition directory");
         let data = spawn_standalone_partition(
@@ -777,7 +823,10 @@ mod tests {
             .put(ongoing, TxnVersion::Verified)
             .await
             .expect("seed the ongoing transaction");
-        (coordinator, data)
+        SeededCoordinator {
+            coordinator,
+            partition: data,
+        }
     }
 
     /// The producer epoch of the one control marker in `partition`.
@@ -810,8 +859,8 @@ mod tests {
             /// The last epoch the completed abort records, `-1` for none.
             last_epoch: i16,
             /// What the producer that held the fenced epoch is answered when it
-            /// names it again: `(error code, producer id, producer epoch)`.
-            stale: (i16, i64, i16),
+            /// names it again.
+            stale: Answer,
             /// The epoch the retry of a producer that names no identity
             /// hands to the client.
             retried_epoch: i16,
@@ -822,7 +871,11 @@ mod tests {
                 txnv: TxnVersion::Flexible,
                 aborted_epoch: 4,
                 last_epoch: -1,
-                stale: (codes::PRODUCER_FENCED, -1, -1),
+                stale: Answer {
+                    error_code: codes::PRODUCER_FENCED,
+                    producer_id: -1,
+                    producer_epoch: -1,
+                },
                 retried_epoch: 5,
             },
             Case {
@@ -830,14 +883,20 @@ mod tests {
                 txnv: TxnVersion::Verified,
                 aborted_epoch: 4,
                 last_epoch: 3,
-                stale: (codes::NONE, 1000, 4),
+                stale: Answer {
+                    error_code: codes::NONE,
+                    producer_id: 1000,
+                    producer_epoch: 4,
+                },
                 retried_epoch: 5,
             },
         ];
         for case in cases {
             let dir = tempfile::tempdir().expect("tempdir");
-            let (coordinator, data) =
-                coordinator_with_ongoing_transaction(dir.path(), "tid-fenced").await;
+            let SeededCoordinator {
+                coordinator,
+                partition: data,
+            } = coordinator_with_ongoing_transaction(dir.path(), "tid-fenced").await;
 
             let fenced = handle_transactional(
                 &coordinator,
@@ -910,9 +969,9 @@ mod tests {
             check!(
                 stale
                     == InitProducerIdResponse {
-                        error_code: case.stale.0,
-                        producer_id: case.stale.1,
-                        producer_epoch: case.stale.2,
+                        error_code: case.stale.error_code,
+                        producer_id: case.stale.producer_id,
+                        producer_epoch: case.stale.producer_epoch,
                         ..Default::default()
                     },
                 "{}: the stale identity",
@@ -956,55 +1015,107 @@ mod tests {
 
         struct Step {
             name: &'static str,
-            request: (i64, i16),
-            answer: (i16, i64, i16),
+            request: RequestedIdentity,
+            answer: Answer,
             /// Whether the call appended a `__transaction_state` record.
             log_mutation: LogMutation,
         }
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let (coordinator, part) = coordinator_with_completed_transaction(dir.path(), TID).await;
+        let SeededCoordinator {
+            coordinator,
+            partition: part,
+        } = coordinator_with_completed_transaction(dir.path(), TID).await;
         let steps = [
             Step {
                 name: "the live identity bumps the epoch",
-                request: (1000, 3),
-                answer: (codes::NONE, 1000, 4),
+                request: RequestedIdentity {
+                    producer_id: 1000,
+                    producer_epoch: 3,
+                },
+                answer: Answer {
+                    error_code: codes::NONE,
+                    producer_id: 1000,
+                    producer_epoch: 4,
+                },
                 log_mutation: LogMutation::Appended,
             },
             Step {
                 name: "the retry answers the bumped epoch and writes nothing",
-                request: (1000, 3),
-                answer: (codes::NONE, 1000, 4),
+                request: RequestedIdentity {
+                    producer_id: 1000,
+                    producer_epoch: 3,
+                },
+                answer: Answer {
+                    error_code: codes::NONE,
+                    producer_id: 1000,
+                    producer_epoch: 4,
+                },
                 log_mutation: LogMutation::Unchanged,
             },
             Step {
                 name: "the bumped epoch bumps again",
-                request: (1000, 4),
-                answer: (codes::NONE, 1000, 5),
+                request: RequestedIdentity {
+                    producer_id: 1000,
+                    producer_epoch: 4,
+                },
+                answer: Answer {
+                    error_code: codes::NONE,
+                    producer_id: 1000,
+                    producer_epoch: 5,
+                },
                 log_mutation: LogMutation::Appended,
             },
             Step {
                 name: "an older epoch is fenced",
-                request: (1000, 3),
-                answer: (codes::PRODUCER_FENCED, -1, -1),
+                request: RequestedIdentity {
+                    producer_id: 1000,
+                    producer_epoch: 3,
+                },
+                answer: Answer {
+                    error_code: codes::PRODUCER_FENCED,
+                    producer_id: -1,
+                    producer_epoch: -1,
+                },
                 log_mutation: LogMutation::Unchanged,
             },
             Step {
                 name: "another producer id is fenced",
-                request: (1001, 5),
-                answer: (codes::PRODUCER_FENCED, -1, -1),
+                request: RequestedIdentity {
+                    producer_id: 1001,
+                    producer_epoch: 5,
+                },
+                answer: Answer {
+                    error_code: codes::PRODUCER_FENCED,
+                    producer_id: -1,
+                    producer_epoch: -1,
+                },
                 log_mutation: LogMutation::Unchanged,
             },
             Step {
                 name: "a caller that names no identity bumps",
-                request: (-1, -1),
-                answer: (codes::NONE, 1000, 6),
+                request: RequestedIdentity {
+                    producer_id: -1,
+                    producer_epoch: -1,
+                },
+                answer: Answer {
+                    error_code: codes::NONE,
+                    producer_id: 1000,
+                    producer_epoch: 6,
+                },
                 log_mutation: LogMutation::Appended,
             },
             Step {
                 name: "and records no last epoch, so the old epoch is fenced",
-                request: (1000, 5),
-                answer: (codes::PRODUCER_FENCED, -1, -1),
+                request: RequestedIdentity {
+                    producer_id: 1000,
+                    producer_epoch: 5,
+                },
+                answer: Answer {
+                    error_code: codes::PRODUCER_FENCED,
+                    producer_id: -1,
+                    producer_epoch: -1,
+                },
                 log_mutation: LogMutation::Unchanged,
             },
         ];
@@ -1019,18 +1130,18 @@ mod tests {
                 60_000,
                 false,
                 false,
-                step.request,
+                (step.request.producer_id, step.request.producer_epoch),
             )
             .await
             .expect("init responds");
             expected.push((step.name, step.answer, step.log_mutation));
             actual.push((
                 step.name,
-                (
-                    response.error_code,
-                    response.producer_id,
-                    response.producer_epoch,
-                ),
+                Answer {
+                    error_code: response.error_code,
+                    producer_id: response.producer_id,
+                    producer_epoch: response.producer_epoch,
+                },
                 if part.log_end_offset().0 > before {
                     LogMutation::Appended
                 } else {
@@ -1049,7 +1160,10 @@ mod tests {
         const TID: &str = "tid-rotated";
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let (coordinator, _part) = coordinator_with_completed_transaction(dir.path(), TID).await;
+        let SeededCoordinator {
+            coordinator,
+            partition: _part,
+        } = coordinator_with_completed_transaction(dir.path(), TID).await;
         {
             let handle = coordinator.get(TID).expect("the seeded entry");
             let mut entry = handle.lock().await;
@@ -1095,7 +1209,10 @@ mod tests {
         const TID: &str = "tid-overlapping-init";
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let (coordinator, _part) = coordinator_with_completed_transaction(dir.path(), TID).await;
+        let SeededCoordinator {
+            coordinator,
+            partition: _part,
+        } = coordinator_with_completed_transaction(dir.path(), TID).await;
 
         // Both calls park on the entry lock while the test holds it.
         let handle = coordinator.get(TID).expect("the seeded entry");
@@ -1138,8 +1255,10 @@ mod tests {
         const TID: &str = "tid-fresh-race";
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let (coordinator, _part) =
-            coordinator_with_completed_transaction(dir.path(), "tid-seeded").await;
+        let SeededCoordinator {
+            coordinator,
+            partition: _part,
+        } = coordinator_with_completed_transaction(dir.path(), "tid-seeded").await;
         check!(coordinator.get(TID).is_none());
 
         let write_lock = coordinator.lock_state_partition_for(TID).await;
@@ -1205,8 +1324,10 @@ mod tests {
         // (transaction version, whether the fence is recorded as failed)
         for (txnv, failed_fence) in [(TxnVersion::Flexible, true), (TxnVersion::Verified, false)] {
             let dir = tempfile::tempdir().expect("tempdir");
-            let (coordinator, _part) =
-                coordinator_with_completed_transaction(dir.path(), TID).await;
+            let SeededCoordinator {
+                coordinator,
+                partition: _part,
+            } = coordinator_with_completed_transaction(dir.path(), TID).await;
 
             // An ongoing transaction over a partition this broker does not
             // host yet: the abort marker cannot be delivered, so the fan-out
@@ -1304,7 +1425,10 @@ mod tests {
         const TID: &str = "tid-parked-init";
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let (coordinator, part) = coordinator_with_completed_transaction(dir.path(), TID).await;
+        let SeededCoordinator {
+            coordinator,
+            partition: part,
+        } = coordinator_with_completed_transaction(dir.path(), TID).await;
         assert!(part.log_end_offset() == 1);
 
         // The test holds the entry lock, so both tasks below park on it in
@@ -1364,7 +1488,8 @@ mod tests {
         const TID: &str = "tid-abort-rotation";
 
         let tmp = tempfile::tempdir().expect("tempdir");
-        let (coordinator, _) = coordinator_with_completed_transaction(tmp.path(), TID).await;
+        let SeededCoordinator { coordinator, .. } =
+            coordinator_with_completed_transaction(tmp.path(), TID).await;
 
         // An Ongoing transaction at the exhausted epoch boundary, with no
         // partitions, so the abort's marker fan-out succeeds at once and its
@@ -1437,7 +1562,10 @@ mod tests {
         const TID: &str = "tid-stale-token-across-fence";
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let (coordinator, _part) = coordinator_with_completed_transaction(dir.path(), TID).await;
+        let SeededCoordinator {
+            coordinator,
+            partition: _part,
+        } = coordinator_with_completed_transaction(dir.path(), TID).await;
 
         // The seeded entry starts at epoch 3. Bump it once (3 -> 4) so the
         // legitimate 4 -> 5 bump below has a live epoch to name.
@@ -1523,7 +1651,10 @@ mod tests {
         const TID: &str = "tid-stale-retry-vs-live-ongoing";
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let (coordinator, part) = coordinator_with_completed_transaction(dir.path(), TID).await;
+        let SeededCoordinator {
+            coordinator,
+            partition: part,
+        } = coordinator_with_completed_transaction(dir.path(), TID).await;
 
         // Bumps epoch 3 -> 4 and records 3 as the last epoch, exactly as a
         // caller whose response was lost would leave it.
@@ -1593,7 +1724,10 @@ mod tests {
         const TID: &str = "tid-durable-publish";
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let (coordinator, part) = coordinator_with_completed_transaction(dir.path(), TID).await;
+        let SeededCoordinator {
+            coordinator,
+            partition: part,
+        } = coordinator_with_completed_transaction(dir.path(), TID).await;
 
         // Captured before the bump call, the way a concurrent caller parked
         // on this same tid's lock would hold it.

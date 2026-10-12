@@ -45,12 +45,19 @@ use crate::{
 
 const VERSION: i16 = 2;
 
+/// A partition to trim and the offset to trim it to.
+#[derive(Clone, Copy)]
+struct TrimTarget {
+    index: PartitionIndex,
+    offset: Offset,
+}
+
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 struct TrimRequestSetup<'a> {
     #[default("orders")]
     topic: &'a str,
-    #[default(&[(PartitionIndex(0), Offset(-1))])]
-    partitions: &'a [(PartitionIndex, Offset)],
+    #[default(&[TrimTarget { index: PartitionIndex(0), offset: Offset(-1) }])]
+    partitions: &'a [TrimTarget],
     #[default(RequestTimeoutMillis(5_000))]
     timeout: RequestTimeoutMillis,
 }
@@ -65,7 +72,7 @@ fn request(setup: TrimRequestSetup<'_>) -> DeleteRecordsRequest {
             partitions: setup
                 .partitions
                 .iter()
-                .map(|&(index, offset)| DeleteRecordsPartition {
+                .map(|&TrimTarget { index, offset }| DeleteRecordsPartition {
                     partition_index: index.0,
                     offset: offset.0,
                     ..Default::default()
@@ -170,7 +177,10 @@ async fn check_trim_frontier(
         ctx,
         TrimRequestSetup {
             topic: setup.topic,
-            partitions: &[(PartitionIndex(0), setup.offset)],
+            partitions: &[TrimTarget {
+                index: PartitionIndex(0),
+                offset: setup.offset,
+            }],
             ..Default::default()
         },
     )
@@ -219,8 +229,14 @@ async fn handle_denied_topic_returns_topic_auth_rows() {
     let req = request(TrimRequestSetup {
         topic: "secret",
         partitions: &[
-            (PartitionIndex(0), Offset(3)),
-            (PartitionIndex(2), Offset(-1)),
+            TrimTarget {
+                index: PartitionIndex(0),
+                offset: Offset(3),
+            },
+            TrimTarget {
+                index: PartitionIndex(2),
+                offset: Offset(-1),
+            },
         ],
         ..Default::default()
     });
@@ -246,7 +262,10 @@ async fn handle_unknown_partition_preserves_requested_index() {
     request_identity!((p, peer), principal("admin"));
     let req = request(TrimRequestSetup {
         topic: "missing",
-        partitions: &[(PartitionIndex(4), Offset(0))],
+        partitions: &[TrimTarget {
+            index: PartitionIndex(4),
+            offset: Offset(0),
+        }],
         ..Default::default()
     });
 
@@ -288,11 +307,18 @@ struct PendingBatchTopicSetup<'a> {
     delivery_mode: Option<&'a str>,
 }
 
+/// A topic config key and the value it is set to.
+#[derive(Clone, Copy)]
+struct ConfigPair<'a> {
+    name: &'a str,
+    value: &'a str,
+}
+
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 struct ConfiguredPendingBatchSetup<'a> {
     #[default("orders")]
     topic: &'a str,
-    configs: &'a [(&'a str, &'a str)],
+    configs: &'a [ConfigPair<'a>],
 }
 
 // Create `topic` with the given `delivery.mode`, then append one batch
@@ -307,8 +333,11 @@ async fn topic_holding_a_pending_batch(
         topic,
         delivery_mode,
     } = setup;
-    let configs: Vec<(&str, &str)> = delivery_mode
-        .map(|mode| (DELIVERY_MODE, mode))
+    let configs: Vec<ConfigPair<'_>> = delivery_mode
+        .map(|mode| ConfigPair {
+            name: DELIVERY_MODE,
+            value: mode,
+        })
         .into_iter()
         .collect();
     topic_with_configs_holding_a_pending_batch(
@@ -338,8 +367,8 @@ async fn topic_with_configs_holding_a_pending_batch(
     let config = |key: &str| {
         configs
             .iter()
-            .find(|(name, _)| *name == key)
-            .map(|(_, value)| *value)
+            .find(|pair| pair.name == key)
+            .map(|pair| pair.value)
     };
     let delivery_mode = config(DELIVERY_MODE);
     let expected_cleanup = config(CLEANUP_POLICY)
@@ -347,9 +376,10 @@ async fn topic_with_configs_holding_a_pending_batch(
             parse_cleanup_policy(policy).expect("a valid cleanup.policy")
         });
     let version = create_topics_response::MAX_VERSION;
+    let pairs: Vec<_> = configs.iter().map(|pair| (pair.name, pair.value)).collect();
     let create = configured_topic_request(CreateTopicSetup {
         topic,
-        configs,
+        configs: &pairs,
         ..Default::default()
     });
     let created = create_topics_handle(&broker, create, version, ctx)
@@ -658,7 +688,10 @@ async fn a_compact_only_topic_refuses_a_trim() {
             &ctx,
             ConfiguredPendingBatchSetup {
                 topic,
-                configs: &[(CLEANUP_POLICY, policy)],
+                configs: &[ConfigPair {
+                    name: CLEANUP_POLICY,
+                    value: policy,
+                }],
             },
         )
         .await;
@@ -672,7 +705,10 @@ async fn a_compact_only_topic_refuses_a_trim() {
             &test_context(&admin, &peer),
             TrimRequestSetup {
                 topic,
-                partitions: &[(PartitionIndex(0), Offset(2))],
+                partitions: &[TrimTarget {
+                    index: PartitionIndex(0),
+                    offset: Offset(2),
+                }],
                 ..Default::default()
             },
         )
@@ -735,8 +771,14 @@ async fn a_partition_hosted_elsewhere_answers_not_leader_or_follower() {
         TrimRequestSetup {
             topic,
             partitions: &[
-                (PartitionIndex(0), Offset(1)),
-                (PartitionIndex(1), Offset(1)),
+                TrimTarget {
+                    index: PartitionIndex(0),
+                    offset: Offset(1),
+                },
+                TrimTarget {
+                    index: PartitionIndex(1),
+                    offset: Offset(1),
+                },
             ],
             ..Default::default()
         },
@@ -829,7 +871,10 @@ async fn an_internal_topic_refuses_a_trim() {
         &test_context(&admin, &peer),
         TrimRequestSetup {
             topic: OFFSETS_TOPIC,
-            partitions: &[(PartitionIndex(missing), Offset(-1))],
+            partitions: &[TrimTarget {
+                index: PartitionIndex(missing),
+                offset: Offset(-1),
+            }],
             ..Default::default()
         },
     )
@@ -1007,7 +1052,10 @@ async fn delete_to(broker: &Broker, setup: DeleteToSetup<'_>) -> Vec<DeleteRecor
     request_identity!((admin, peer, ctx), principal("admin"), test_context);
     let request = request(TrimRequestSetup {
         topic: setup.topic,
-        partitions: &[(PartitionIndex(0), setup.offset)],
+        partitions: &[TrimTarget {
+            index: PartitionIndex(0),
+            offset: setup.offset,
+        }],
         timeout: setup.timeout,
     });
     drive(broker, &request, &ctx).await.topics

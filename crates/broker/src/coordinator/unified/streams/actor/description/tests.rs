@@ -35,14 +35,17 @@ use crate::{
 };
 
 fn coordinator(plugin: TopologyDescriptionPlugin) -> Arc<GroupCoordinator> {
-    coordinator_and_log(plugin).0
+    coordinator_and_log(plugin).coordinator
 }
 
 /// A coordinator whose streams groups use `plugin`, and the offsets log it
 /// writes.
-fn coordinator_and_log(
-    plugin: TopologyDescriptionPlugin,
-) -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
+struct CoordinatorAndLog {
+    coordinator: Arc<GroupCoordinator>,
+    log: Arc<InMemoryOffsetsLog>,
+}
+
+fn coordinator_and_log(plugin: TopologyDescriptionPlugin) -> CoordinatorAndLog {
     let log = Arc::new(InMemoryOffsetsLog::default());
     let coordinator = coordinator_with_log(
         StreamsGroupConfig {
@@ -51,7 +54,7 @@ fn coordinator_and_log(
         },
         Arc::clone(&log),
     );
-    (coordinator, log)
+    CoordinatorAndLog { coordinator, log }
 }
 
 /// The value of the last group metadata record that `log` holds.
@@ -198,7 +201,8 @@ async fn one_member_of_a_group_is_asked_for_the_description() {
 /// one asked.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_push_is_stored_and_ends_the_asking() {
-    let (coordinator, log) = coordinator_and_log(TopologyDescriptionPlugin::InMemory);
+    let CoordinatorAndLog { coordinator, log } =
+        coordinator_and_log(TopologyDescriptionPlugin::InMemory);
     let handle = coordinator.get_or_create_streams("app");
     let first = heartbeat(&handle, join("a"), 1).await;
     assert!(first.topology_description_required);
@@ -368,7 +372,7 @@ async fn the_description_epochs_are_written_with_the_plugin_only() {
         TopologyDescriptionPlugin::None,
         TopologyDescriptionPlugin::InMemory,
     ] {
-        let (coordinator, log) = coordinator_and_log(plugin);
+        let CoordinatorAndLog { coordinator, log } = coordinator_and_log(plugin);
         let handle = coordinator.get_or_create_streams("app");
         let mut request = join("a");
         let loaded = to_stored_topology(request.topology.as_mut().expect("a topology"));

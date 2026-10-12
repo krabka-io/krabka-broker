@@ -39,9 +39,16 @@ pub(super) struct Fetched {
     pub(super) last_resolved: i64,
 }
 
+/// An inclusive range of source offsets, `[first, last]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct OffsetSpan {
+    pub(super) first: i64,
+    pub(super) last: i64,
+}
+
 /// Collects the records of one range from the batches of a read.
 struct Collector {
-    range: (i64, i64),
+    range: OffsetSpan,
     /// The most bytes of records to collect, and the size limit of one: the
     /// `max.message.bytes` of the dead-letter topic.
     budget: usize,
@@ -54,19 +61,19 @@ struct Collector {
 }
 
 impl Collector {
-    fn new(range: (i64, i64), budget: usize) -> Self {
+    fn new(range: OffsetSpan, budget: usize) -> Self {
         Self {
             range,
             budget,
             collected: 0,
             records: BTreeMap::new(),
-            last_resolved: range.0 - 1,
+            last_resolved: range.first - 1,
             deferred: false,
         }
     }
 
     fn stopped(&self) -> bool {
-        self.deferred || self.collected >= self.budget || self.last_resolved >= self.range.1
+        self.deferred || self.collected >= self.budget || self.last_resolved >= self.range.last
     }
 
     /// Takes the records of `batch` that the range still wants.
@@ -79,7 +86,7 @@ impl Collector {
             if offset <= self.last_resolved {
                 continue;
             }
-            if offset > self.range.1 {
+            if offset > self.range.last {
                 return;
             }
             let size = record.encoded_len();
@@ -108,7 +115,7 @@ impl Collector {
     /// progress will not do better with a fresh budget, so the remainder
     /// takes headers alone.
     fn give_up(mut self) -> Fetched {
-        self.last_resolved = self.range.1;
+        self.last_resolved = self.range.last;
         self.finish()
     }
 
@@ -212,11 +219,12 @@ async fn read_raw(
 pub(super) async fn fetch(
     partition: Option<&Arc<Partition>>,
     tier: Option<&SourceTier<'_>>,
-    (first, last): (i64, i64),
+    range: OffsetSpan,
     budget: usize,
     policy: RecordDecompressionPolicy,
 ) -> Fetched {
-    let mut collector = Collector::new((first, last), budget);
+    let OffsetSpan { first, last } = range;
+    let mut collector = Collector::new(range, budget);
     let Some(partition) = partition else {
         return collector.give_up();
     };
@@ -268,13 +276,13 @@ mod tests {
             fetch(
                 Some(&partition),
                 Some(&tier),
-                (0, 1),
+                OffsetSpan { first: 0, last: 1 },
                 1 << 20,
                 RecordDecompressionPolicy::default()
             )
             .await
                 == Fetched {
-                    records: records(&[(0, b"cold-0"), (1, b"cold-1")]),
+                    records: records(&[at(0, b"cold-0"), at(1, b"cold-1")]),
                     last_resolved: 1
                 }
         );
@@ -283,7 +291,7 @@ mod tests {
             fetch(
                 Some(&partition),
                 Some(&tier),
-                (0, 0),
+                OffsetSpan { first: 0, last: 0 },
                 1 << 20,
                 RecordDecompressionPolicy::default()
             )
@@ -297,35 +305,51 @@ mod tests {
             fetch(
                 Some(&partition),
                 Some(&tier),
-                (1, 1),
+                OffsetSpan { first: 1, last: 1 },
                 1 << 20,
                 RecordDecompressionPolicy::default()
             )
             .await
                 == Fetched {
-                    records: records(&[(1, b"cold-1")]),
+                    records: records(&[at(1, b"cold-1")]),
                     last_resolved: 1
                 }
         );
     }
 
-    fn records(pairs: &[(i64, &'static [u8])]) -> BTreeMap<i64, SourceRecord> {
+    /// The value of the record at an offset.
+    struct ValueAt {
+        offset: i64,
+        value: &'static [u8],
+    }
+
+    fn at(offset: i64, value: &'static [u8]) -> ValueAt {
+        ValueAt { offset, value }
+    }
+
+    fn records(pairs: &[ValueAt]) -> BTreeMap<i64, SourceRecord> {
         pairs
             .iter()
-            .map(|(offset, value)| {
+            .map(|pair| {
                 (
-                    *offset,
+                    pair.offset,
                     SourceRecord {
                         key: None,
-                        value: Some(Bytes::from_static(value)),
+                        value: Some(Bytes::from_static(pair.value)),
                     },
                 )
             })
             .collect()
     }
 
+    /// A partition, and the directory that must outlive it.
+    struct TestPartition {
+        dir: tempfile::TempDir,
+        part: Arc<Partition>,
+    }
+
     /// A partition holding three batches: offsets 0-1, 2-3 and 4.
-    async fn partition() -> (tempfile::TempDir, Arc<Partition>) {
+    async fn partition() -> TestPartition {
         let dir = tempfile::tempdir().expect("temp dir");
         let registry = PartitionRegistry::new();
         open_data_partition(
@@ -354,19 +378,19 @@ mod tests {
         let part = registry
             .get("t", krabka_ids::PartitionIndex(0))
             .expect("partition registered");
-        (dir, part)
+        TestPartition { dir, part }
     }
 
     /// The records of the range, across batches, and none outside it, and the
     /// whole range resolved.
     #[tokio::test]
     async fn the_range_is_read_across_batches() {
-        let (_dir, part) = partition().await;
+        let TestPartition { dir: _dir, part } = partition().await;
 
         let fetched = fetch(
             Some(&part),
             None,
-            (1, 3),
+            OffsetSpan { first: 1, last: 3 },
             1 << 20,
             RecordDecompressionPolicy::default(),
         )
@@ -375,7 +399,7 @@ mod tests {
         assert!(
             fetched
                 == Fetched {
-                    records: records(&[(1, b"b"), (2, b"c"), (3, b"d")]),
+                    records: records(&[at(1, b"b"), at(2, b"c"), at(3, b"d")]),
                     last_resolved: 3,
                 }
         );
@@ -387,7 +411,7 @@ mod tests {
     /// skipped for good.
     #[tokio::test]
     async fn a_budget_that_is_used_up_leaves_the_rest_for_a_later_round() {
-        let (_dir, part) = partition().await;
+        let TestPartition { dir: _dir, part } = partition().await;
         // One record of these is a few bytes of value and overhead.
         let one = RecordBatch {
             records: vec![krabka_protocol::records::Record {
@@ -403,7 +427,7 @@ mod tests {
         let two = fetch(
             Some(&part),
             None,
-            (0, 4),
+            OffsetSpan { first: 0, last: 4 },
             one * 2 + 1,
             RecordDecompressionPolicy::default(),
         )
@@ -412,7 +436,7 @@ mod tests {
         let none = fetch(
             Some(&part),
             None,
-            (0, 4),
+            OffsetSpan { first: 0, last: 4 },
             one - 1,
             RecordDecompressionPolicy::default(),
         )
@@ -422,7 +446,7 @@ mod tests {
             (two, none)
                 == (
                     Fetched {
-                        records: records(&[(0, b"a"), (1, b"b")]),
+                        records: records(&[at(0, b"a"), at(1, b"b")]),
                         last_resolved: 1,
                     },
                     Fetched {
@@ -437,12 +461,12 @@ mod tests {
     /// no longer has, gives up on the range: headers alone.
     #[tokio::test]
     async fn an_unreadable_range_gives_up_on_the_remainder() {
-        let (_dir, part) = partition().await;
+        let TestPartition { dir: _dir, part } = partition().await;
 
         let missing = fetch(
             None,
             None,
-            (0, 2),
+            OffsetSpan { first: 0, last: 2 },
             1 << 20,
             RecordDecompressionPolicy::default(),
         )
@@ -450,7 +474,7 @@ mod tests {
         let past_the_end = fetch(
             Some(&part),
             None,
-            (9, 10),
+            OffsetSpan { first: 9, last: 10 },
             1 << 20,
             RecordDecompressionPolicy::default(),
         )

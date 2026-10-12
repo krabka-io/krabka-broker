@@ -14,7 +14,7 @@ use crate::{
         docker_run_kafka_tool_with_image_and_mount, nc_check_connectivity, plain_client_properties,
         start_sasl_plaintext_broker_with_super_user, write_plain_props,
     },
-    oracle::secured_sides,
+    oracle::{SecuredSide, secured_sides},
 };
 
 /// JVM acceptance: `kafka-acls.sh` end-to-end provision flow.
@@ -191,8 +191,14 @@ fn acls(side: &Side<'_>, props: Option<&str>, args: &[&str]) -> CliRun {
     side.run_with_files("kafka-acls", &full, &files, None)
 }
 
-/// One expected binding, in the four fields that identify it.
-type Expected = (&'static str, &'static str, &'static str, &'static str);
+/// One expected binding, in the four fields that identify it: resource type,
+/// resource name, operation and permission.
+struct Expected {
+    resource_type: &'static str,
+    resource_name: &'static str,
+    operation: &'static str,
+    permission: &'static str,
+}
 
 /// One shorthand, the principal that owns its bindings, and the part of its
 /// expansion that is not in doubt.
@@ -202,8 +208,7 @@ struct ShorthandCase {
     principal: &'static str,
     /// The `--add` arguments after `--bootstrap-server`.
     add: &'static [&'static str],
-    /// `(resource type, resource name, operation, permission)` for the
-    /// bindings the expansion certainly contains. It need not be the whole
+    /// The bindings the expansion certainly contains. It need not be the whole
     /// expansion; the oracle settles the rest.
     must_contain: &'static [Expected],
     /// The host every binding of this case carries.
@@ -224,8 +229,18 @@ const SHORTHAND_CASES: &[ShorthandCase] = &[
             ACL_TOPIC,
         ],
         must_contain: &[
-            ("TOPIC", ACL_TOPIC, "WRITE", "ALLOW"),
-            ("TOPIC", ACL_TOPIC, "DESCRIBE", "ALLOW"),
+            Expected {
+                resource_type: "TOPIC",
+                resource_name: ACL_TOPIC,
+                operation: "WRITE",
+                permission: "ALLOW",
+            },
+            Expected {
+                resource_type: "TOPIC",
+                resource_name: ACL_TOPIC,
+                operation: "DESCRIBE",
+                permission: "ALLOW",
+            },
         ],
         host: "*",
     },
@@ -245,8 +260,18 @@ const SHORTHAND_CASES: &[ShorthandCase] = &[
         // the producer cannot claim a producer id, however complete its topic
         // rights are.
         must_contain: &[
-            ("TOPIC", ACL_TOPIC, "WRITE", "ALLOW"),
-            ("CLUSTER", "kafka-cluster", "IDEMPOTENT_WRITE", "ALLOW"),
+            Expected {
+                resource_type: "TOPIC",
+                resource_name: ACL_TOPIC,
+                operation: "WRITE",
+                permission: "ALLOW",
+            },
+            Expected {
+                resource_type: "CLUSTER",
+                resource_name: "kafka-cluster",
+                operation: "IDEMPOTENT_WRITE",
+                permission: "ALLOW",
+            },
         ],
         host: "*",
     },
@@ -264,9 +289,24 @@ const SHORTHAND_CASES: &[ShorthandCase] = &[
             ACL_TXN_ID,
         ],
         must_contain: &[
-            ("TOPIC", ACL_TOPIC, "WRITE", "ALLOW"),
-            ("TRANSACTIONAL_ID", ACL_TXN_ID, "WRITE", "ALLOW"),
-            ("TRANSACTIONAL_ID", ACL_TXN_ID, "DESCRIBE", "ALLOW"),
+            Expected {
+                resource_type: "TOPIC",
+                resource_name: ACL_TOPIC,
+                operation: "WRITE",
+                permission: "ALLOW",
+            },
+            Expected {
+                resource_type: "TRANSACTIONAL_ID",
+                resource_name: ACL_TXN_ID,
+                operation: "WRITE",
+                permission: "ALLOW",
+            },
+            Expected {
+                resource_type: "TRANSACTIONAL_ID",
+                resource_name: ACL_TXN_ID,
+                operation: "DESCRIBE",
+                permission: "ALLOW",
+            },
         ],
         host: "*",
     },
@@ -284,9 +324,24 @@ const SHORTHAND_CASES: &[ShorthandCase] = &[
             ACL_GROUP,
         ],
         must_contain: &[
-            ("TOPIC", ACL_TOPIC, "READ", "ALLOW"),
-            ("TOPIC", ACL_TOPIC, "DESCRIBE", "ALLOW"),
-            ("GROUP", ACL_GROUP, "READ", "ALLOW"),
+            Expected {
+                resource_type: "TOPIC",
+                resource_name: ACL_TOPIC,
+                operation: "READ",
+                permission: "ALLOW",
+            },
+            Expected {
+                resource_type: "TOPIC",
+                resource_name: ACL_TOPIC,
+                operation: "DESCRIBE",
+                permission: "ALLOW",
+            },
+            Expected {
+                resource_type: "GROUP",
+                resource_name: ACL_GROUP,
+                operation: "READ",
+                permission: "ALLOW",
+            },
         ],
         host: "*",
     },
@@ -301,7 +356,12 @@ const SHORTHAND_CASES: &[ShorthandCase] = &[
             "ClusterAction",
             "--cluster",
         ],
-        must_contain: &[("CLUSTER", "kafka-cluster", "CLUSTER_ACTION", "ALLOW")],
+        must_contain: &[Expected {
+            resource_type: "CLUSTER",
+            resource_name: "kafka-cluster",
+            operation: "CLUSTER_ACTION",
+            permission: "ALLOW",
+        }],
         host: "*",
     },
     ShorthandCase {
@@ -321,7 +381,12 @@ const SHORTHAND_CASES: &[ShorthandCase] = &[
         // A deny binding that lost its host would deny that principal from
         // everywhere, which is a far larger outage than the one the operator
         // asked for -- so the host is asserted, not just the permission.
-        must_contain: &[("TOPIC", ACL_TOPIC, "READ", "DENY")],
+        must_contain: &[Expected {
+            resource_type: "TOPIC",
+            resource_name: ACL_TOPIC,
+            operation: "READ",
+            permission: "DENY",
+        }],
         host: DENIED_HOST,
     },
 ];
@@ -330,17 +395,15 @@ const SHORTHAND_CASES: &[ShorthandCase] = &[
 fn expected_bindings(case: &ShorthandCase) -> BTreeSet<AclBinding> {
     case.must_contain
         .iter()
-        .map(
-            |(resource_type, resource_name, operation, permission)| AclBinding {
-                resource_type: (*resource_type).to_owned(),
-                resource_name: (*resource_name).to_owned(),
-                pattern_type: "LITERAL".to_owned(),
-                principal: case.principal.to_owned(),
-                host: case.host.to_owned(),
-                operation: (*operation).to_owned(),
-                permission: (*permission).to_owned(),
-            },
-        )
+        .map(|expected| AclBinding {
+            resource_type: expected.resource_type.to_owned(),
+            resource_name: expected.resource_name.to_owned(),
+            pattern_type: "LITERAL".to_owned(),
+            principal: case.principal.to_owned(),
+            host: case.host.to_owned(),
+            operation: expected.operation.to_owned(),
+            permission: expected.permission.to_owned(),
+        })
         .collect()
 }
 
@@ -380,7 +443,7 @@ async fn acl_shorthands_expand_as_apache_kafka_expands_them() {
 
     for case in SHORTHAND_CASES {
         let mut listings: Vec<BTreeSet<AclBinding>> = Vec::new();
-        for (side, props) in secured_sides(&oracle_side, &krabka_side, &admin_props) {
+        for SecuredSide { side, props } in secured_sides(&oracle_side, &krabka_side, &admin_props) {
             let added = acls(side, props, case.add);
             assert!(
                 added.succeeded(),
@@ -431,7 +494,7 @@ async fn acl_shorthands_expand_as_apache_kafka_expands_them() {
         .find(|case| case.label == "--consumer")
         .expect("the --consumer case");
     let mut remaining: Vec<BTreeSet<AclBinding>> = Vec::new();
-    for (side, props) in secured_sides(&oracle_side, &krabka_side, &admin_props) {
+    for SecuredSide { side, props } in secured_sides(&oracle_side, &krabka_side, &admin_props) {
         let mut remove: Vec<&str> = vec!["--remove", "--force"];
         remove.extend(removing.add.iter().skip(1).copied());
         acls(side, props, &remove).expect_success();

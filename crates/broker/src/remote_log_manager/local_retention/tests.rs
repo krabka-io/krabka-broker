@@ -14,26 +14,16 @@ use crate::{
         ArchiveMode,
         local_retention::finished_segment_ranges,
         test_support::{
-            self as fixtures, archived_backends, batch, copy_exports, leading_partition_over,
+            self as fixtures, ArchivedRetention, Backends, PartitionSnapshot, RetentionPolicy,
+            SealedRange, TempDirs, archived_backends, batch, copy_exports, leading_partition_over,
             local_backends, partition_log_fixture, partition_snapshot,
-            rolled_tiered_partition_with_config, synth_export, three_exports, tier, tp,
+            rolled_tiered_partition_with_config, sealed_ranges, synth_export, three_exports, tier,
+            tp,
         },
     },
     test_support::UnixMillis,
     time_util::now_ms,
 };
-
-// The sealed segments of `log` as `(base, last)` offset ranges.
-/// The sealed segments a copy would see. A rolled segment is tierable once
-/// its rollover flush publishes the boundary snapshot, so this waits for the
-/// flush first.
-fn sealed_ranges(log: &mut Log) -> Vec<(Offset, Offset)> {
-    log.sync().expect("flush rolled segments");
-    log.tierable_segments()
-        .iter()
-        .map(|export| (export.base_offset, export.last_offset))
-        .collect()
-}
 
 /// A rolled, tiered partition whose sealed segments expire after one millisecond.
 fn short_retention_partition(log_dir: &std::path::Path) -> std::sync::Arc<Partition> {
@@ -48,6 +38,12 @@ fn short_retention_partition(log_dir: &std::path::Path) -> std::sync::Arc<Partit
     )
 }
 
+// The newest timestamp and the size of an active segment.
+struct ActiveTail {
+    max_timestamp: i64,
+    size: u32,
+}
+
 // One `local_retention_decision` case over a log whose active segment
 // starts at offset 20.
 struct RollCase {
@@ -56,7 +52,7 @@ struct RollCase {
     covered_through: Option<i64>,
     // The active segment's newest timestamp and size, or `None` when the
     // high watermark has not passed the log end.
-    active: Option<(i64, u32)>,
+    active: Option<ActiveTail>,
     retention: Option<Time>,
     retention_size: Option<ByteSize>,
     expected: LocalRetentionDecision,
@@ -75,7 +71,10 @@ fn the_walk_rolls_a_breached_active_segment_only_where_kafka_would() {
             label: "a lone active segment past the window rolls",
             sealed: vec![],
             covered_through: None,
-            active: Some((100, 50)),
+            active: Some(ActiveTail {
+                max_timestamp: 100,
+                size: 50,
+            }),
             retention: Some(millis(1_000)),
             retention_size: None,
             expected: LocalRetentionDecision {
@@ -87,7 +86,10 @@ fn the_walk_rolls_a_breached_active_segment_only_where_kafka_would() {
             label: "a lone active segment inside the window stays",
             sealed: vec![],
             covered_through: None,
-            active: Some((9_500, 50)),
+            active: Some(ActiveTail {
+                max_timestamp: 9_500,
+                size: 50,
+            }),
             retention: Some(millis(1_000)),
             retention_size: None,
             expected: LocalRetentionDecision {
@@ -99,7 +101,10 @@ fn the_walk_rolls_a_breached_active_segment_only_where_kafka_would() {
             label: "an empty active segment never rolls",
             sealed: vec![],
             covered_through: None,
-            active: Some((100, 0)),
+            active: Some(ActiveTail {
+                max_timestamp: 100,
+                size: 0,
+            }),
             retention: Some(millis(1_000)),
             retention_size: None,
             expected: LocalRetentionDecision {
@@ -160,7 +165,10 @@ fn the_walk_rolls_a_breached_active_segment_only_where_kafka_would() {
             label: "a size debt that covers the active segment rolls it",
             sealed: two_sealed(),
             covered_through: Some(19),
-            active: Some((9_500, 50)),
+            active: Some(ActiveTail {
+                max_timestamp: 9_500,
+                size: 50,
+            }),
             retention: None,
             retention_size: Some(bytes(0)),
             expected: LocalRetentionDecision {
@@ -172,7 +180,10 @@ fn the_walk_rolls_a_breached_active_segment_only_where_kafka_would() {
             label: "a size debt short of the active segment keeps it",
             sealed: two_sealed(),
             covered_through: Some(19),
-            active: Some((9_500, 50)),
+            active: Some(ActiveTail {
+                max_timestamp: 9_500,
+                size: 50,
+            }),
             retention: None,
             retention_size: Some(bytes(50)),
             expected: LocalRetentionDecision {
@@ -182,7 +193,7 @@ fn the_walk_rolls_a_breached_active_segment_only_where_kafka_would() {
         },
     ];
     for case in cases {
-        let active_size = case.active.map_or(0, |(_, size)| size);
+        let active_size = case.active.as_ref().map_or(0, |tail| tail.size);
         let sealed_size: u32 = case
             .sealed
             .iter()
@@ -191,14 +202,12 @@ fn the_walk_rolls_a_breached_active_segment_only_where_kafka_would() {
         let local = LocalSegments {
             delivery_watermark: None,
             sealed: &case.sealed,
-            active: case
-                .active
-                .map(|(max_timestamp, size)| ActiveSegmentExport {
-                    base_offset: Offset(20),
-                    max_timestamp,
-                    last_modified_ms: max_timestamp,
-                    size: bytes(size),
-                }),
+            active: case.active.as_ref().map(|tail| ActiveSegmentExport {
+                base_offset: Offset(20),
+                max_timestamp: tail.max_timestamp,
+                last_modified_ms: tail.max_timestamp,
+                size: bytes(tail.size),
+            }),
             size: bytes(sealed_size + active_size),
         };
         check!(
@@ -406,7 +415,7 @@ fn local_retention_target_skips_unfinished_segments_and_stops() {
     let exports = three_exports();
     // The tier holds 0..=9 and 20..=29 but not 10..=19, so its unbroken
     // cover ends at 9 and the walk stops at seg1.
-    let covered = remote_covered_through(&[(0, 9), (20, 29)], 0);
+    let covered = remote_covered_through(&[OffsetRange::new(0, 9), OffsetRange::new(20, 29)], 0);
     assert!(covered == Some(9));
     let target =
         local_retention_target(&exports, covered, Some(millis(1)), None, bytes(192), 10_000);
@@ -420,7 +429,7 @@ fn local_retention_target_skips_unfinished_segments_and_stops() {
 /// of the replica's oldest local segment, and the bound they imply.
 struct CoverCase {
     label: &'static str,
-    finished: &'static [(i64, i64)],
+    finished: &'static [OffsetRange],
     local_start: i64,
     expected: Option<i64>,
 }
@@ -430,13 +439,16 @@ fn remote_covered_through_walks_an_unbroken_prefix() {
     let cases = [
         CoverCase {
             label: "obsolete disconnected prefix cannot suppress the local anchor",
-            finished: &[(0, 9), (20, 29)],
+            finished: &[
+                OffsetRange { start: 0, end: 9 },
+                OffsetRange { start: 20, end: 29 },
+            ],
             local_start: 20,
             expected: Some(29),
         },
         CoverCase {
             label: "obsolete ranges alone do not cover the local anchor",
-            finished: &[(0, 9)],
+            finished: &[OffsetRange { start: 0, end: 9 }],
             local_start: 20,
             expected: None,
         },
@@ -448,31 +460,41 @@ fn remote_covered_through_walks_an_unbroken_prefix() {
         },
         CoverCase {
             label: "one segment from the local start",
-            finished: &[(0, 9)],
+            finished: &[OffsetRange { start: 0, end: 9 }],
             local_start: 0,
             expected: Some(9),
         },
         CoverCase {
             label: "abutting segments join, in any listed order",
-            finished: &[(20, 29), (0, 9), (10, 19)],
+            finished: &[
+                OffsetRange::new(20, 29),
+                OffsetRange::new(0, 9),
+                OffsetRange::new(10, 19),
+            ],
             local_start: 0,
             expected: Some(29),
         },
         CoverCase {
             label: "a gap stops the walk, and a later segment cannot bridge it",
-            finished: &[(0, 9), (20, 29)],
+            finished: &[
+                OffsetRange { start: 0, end: 9 },
+                OffsetRange { start: 20, end: 29 },
+            ],
             local_start: 0,
             expected: Some(9),
         },
         CoverCase {
             label: "the tier starts past the oldest local segment",
-            finished: &[(10, 19)],
+            finished: &[OffsetRange { start: 10, end: 19 }],
             local_start: 0,
             expected: None,
         },
         CoverCase {
             label: "remote retention dropped the head, but the local log moved too",
-            finished: &[(10, 19), (20, 29)],
+            finished: &[
+                OffsetRange { start: 10, end: 19 },
+                OffsetRange { start: 20, end: 29 },
+            ],
             local_start: 10,
             expected: Some(29),
         },
@@ -504,7 +526,7 @@ fn a_local_segment_the_tier_covers_only_in_part_is_not_droppable() {
             ..Default::default()
         }),
     ];
-    let covered = remote_covered_through(&[(0, 99)], 0);
+    let covered = remote_covered_through(&[OffsetRange::new(0, 99)], 0);
     check!(covered == Some(99));
     check!(
         local_retention_target(&exports, covered, Some(millis(1)), None, bytes(128), 10_000)
@@ -513,7 +535,7 @@ fn a_local_segment_the_tier_covers_only_in_part_is_not_droppable() {
 
     // Once the leader copies 100..=199 too, the follower's first segment is
     // covered whole and goes.
-    let covered = remote_covered_through(&[(0, 99), (100, 199)], 0);
+    let covered = remote_covered_through(&[OffsetRange::new(0, 99), OffsetRange::new(100, 199)], 0);
     check!(covered == Some(199));
     check!(
         local_retention_target(&exports, covered, Some(millis(1)), None, bytes(128), 10_000)
@@ -564,7 +586,7 @@ fn local_retention_target_uses_already_resolved_effective_ms() {
 /// integration against a real `Log` and no broker fixtures.
 fn local_retention_drive(
     log: &mut Log,
-    finished: &[(i64, i64)],
+    finished: &[OffsetRange],
     log_config: &LogConfig,
     now_ms: i64,
 ) -> usize {
@@ -591,7 +613,10 @@ fn local_retention_drive(
 
 #[tokio::test]
 async fn local_retention_drive_deletes_copied_segments() {
-    let (log_dir, remote_dir) = fixtures::temporary_dirs();
+    let TempDirs {
+        local: log_dir,
+        remote: remote_dir,
+    } = fixtures::temporary_dirs();
     let mut log = Log::open(
         log_dir.path(),
         LogConfig {
@@ -608,10 +633,10 @@ async fn local_retention_drive_deletes_copied_segments() {
     assert!(exports.len() >= 2, "test needs multiple sealed segments");
     let log_config = log.config_snapshot();
 
-    let (_rsm, rlmm) = archived_backends(remote_dir.path(), &exports).await;
+    let Backends { rsm: _rsm, rlmm } = archived_backends(remote_dir.path(), &exports).await;
 
     // Gather finished ranges the same way `local_retention_pass` would.
-    let finished: Vec<(i64, i64)> =
+    let finished: Vec<OffsetRange> =
         finished_segment_ranges(&rlmm.list_remote_log_segments(&tp()).unwrap());
     assert!(finished.len() == exports.len());
 
@@ -645,15 +670,20 @@ macro_rules! evicted_local_segments {
         let active_base = $exports.last().unwrap().last_offset + 1;
         $assertion!(log.local_log_start_offset() == active_base);
         let sealed = sealed_ranges(&mut log);
-        $assertion!(sealed == vec![(active_base, log.log_end_offset() - 1)]);
+        $assertion!(sealed == vec![SealedRange::new(active_base, log.log_end_offset() - 1)]);
     }};
 }
 
 #[tokio::test]
 async fn local_retention_pass_deletes_finished_segments_and_returns_count() {
-    let (log_dir, remote_dir) = fixtures::temporary_dirs();
+    let TempDirs {
+        local: log_dir,
+        remote: remote_dir,
+    } = fixtures::temporary_dirs();
     let partition = short_retention_partition(log_dir.path());
-    let (exports, _rsm, _rlmm, removed) = fixtures::archived_local_retention(
+    let ArchivedRetention {
+        exports, removed, ..
+    } = fixtures::archived_local_retention(
         &partition,
         remote_dir.path(),
         UnstableApiVersions::Disabled,
@@ -669,9 +699,12 @@ async fn local_retention_pass_deletes_finished_segments_and_returns_count() {
 async fn local_retention_still_evicts_under_a_write_once_archive() {
     let log_dir = tempfile::tempdir().unwrap();
     let partition = short_retention_partition(log_dir.path());
-    let (exports, log_config) = fixtures::multiple_segment_snapshot(&partition);
+    let PartitionSnapshot {
+        exports,
+        config: log_config,
+    } = fixtures::multiple_segment_snapshot(&partition);
 
-    let (rsm, rlmm) = fixtures::write_once_backends();
+    let Backends { rsm, rlmm } = fixtures::write_once_backends();
     let copied = copy_exports(&tier(ArchiveMode::WriteOnce, &rsm, &rlmm), exports.clone()).await;
     check!(copied == exports.len());
 
@@ -683,7 +716,10 @@ async fn local_retention_still_evicts_under_a_write_once_archive() {
         &exports,
         &log_config,
         &rlmm,
-        (UnstableApiVersions::Disabled, now_ms() + 1_000_000),
+        RetentionPolicy {
+            unstable: UnstableApiVersions::Disabled,
+            now_ms: now_ms() + 1_000_000,
+        },
     )
     .await;
 
@@ -745,8 +781,9 @@ async fn future_stamped_segments_leave_the_disk_only_under_trunks_rule() {
         }
         log.sync().unwrap();
         let partition = leading_partition_over(PartitionIndex(0), log_dir.path(), log);
-        let (exports, _rsm, _rlmm, removed) =
-            fixtures::archived_local_retention(&partition, remote_dir.path(), unstable).await;
+        let ArchivedRetention {
+            exports, removed, ..
+        } = fixtures::archived_local_retention(&partition, remote_dir.path(), unstable).await;
 
         check!(
             removed == if evicted { exports.len() } else { 0 },
@@ -800,8 +837,8 @@ async fn scheduled_local_retention_keeps_the_pending_prefix_until_its_clock_boun
         assert!(reopened.log_end_offset() == Offset(6));
         *log = reopened;
     }
-    let (exports, _) = partition_snapshot(&partition);
-    let (_rsm, rlmm) = archived_backends(remote_dir.path(), &exports).await;
+    let PartitionSnapshot { exports, .. } = partition_snapshot(&partition);
+    let Backends { rsm: _rsm, rlmm } = archived_backends(remote_dir.path(), &exports).await;
     let before_due = pass_over(&partition, &rlmm, 2_099).await;
     check!(before_due.removed == 1);
     check!(before_due.local_log_start == Offset(2));
@@ -820,7 +857,7 @@ async fn scheduled_local_retention_keeps_the_pending_prefix_until_its_clock_boun
 #[derive(Debug, PartialEq, Eq)]
 struct PassOutcome {
     removed: usize,
-    sealed: Vec<(Offset, Offset)>,
+    sealed: Vec<SealedRange>,
     active_base: Option<Offset>,
     local_log_start: Offset,
 }
@@ -832,7 +869,10 @@ async fn pass_over(
     rlmm: &Arc<dyn RemoteLogMetadataManager>,
     now_ms: i64,
 ) -> PassOutcome {
-    let (exports, log_config) = partition_snapshot(partition);
+    let PartitionSnapshot {
+        exports,
+        config: log_config,
+    } = partition_snapshot(partition);
     let removed = local_retention_pass(
         &tp(),
         partition,
@@ -886,7 +926,7 @@ async fn a_breached_active_segment_rolls_then_tiers_then_leaves_the_disk() {
         pass_over(&partition, &rlmm, now_ms()).await
             == PassOutcome {
                 removed: 0,
-                sealed: vec![(Offset(0), Offset(5))],
+                sealed: vec![SealedRange::new(Offset(0), Offset(5))],
                 active_base: Some(Offset(6)),
                 local_log_start: Offset(0),
             },
@@ -935,7 +975,10 @@ async fn the_roll_waits_for_the_high_watermark_and_for_the_walk_to_reach_it() {
             false,
         ),
     ] {
-        let (log_dir, remote_dir) = fixtures::temporary_dirs();
+        let TempDirs {
+            local: log_dir,
+            remote: remote_dir,
+        } = fixtures::temporary_dirs();
         let partition = rolled_tiered_partition_with_config(
             log_dir.path(),
             LogConfig {
@@ -946,8 +989,11 @@ async fn the_roll_waits_for_the_high_watermark_and_for_the_walk_to_reach_it() {
                 ..LogConfig::default()
             },
         );
-        let (exports, log_config) = partition_snapshot(&partition);
-        let (_rsm, rlmm) = archived_backends(remote_dir.path(), &exports).await;
+        let PartitionSnapshot {
+            exports,
+            config: log_config,
+        } = partition_snapshot(&partition);
+        let Backends { rsm: _rsm, rlmm } = archived_backends(remote_dir.path(), &exports).await;
         let active_before = {
             let mut log = fixtures::partition_log_guard(&partition);
             if rolled_since {
@@ -1000,7 +1046,10 @@ fn timed_active_case(
         label,
         sealed,
         covered_through,
-        active: Some((300, 50)),
+        active: Some(ActiveTail {
+            max_timestamp: 300,
+            size: 50,
+        }),
         retention: Some(millis(1_000)),
         retention_size: None,
         expected,

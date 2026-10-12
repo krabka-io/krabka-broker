@@ -133,7 +133,9 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::test_support::{ecdsa_pair_for_host, serve_loopback_tls};
+    use crate::test_support::{
+        EcdsaPair, LoopbackTlsServer, ecdsa_pair_for_host, serve_loopback_tls,
+    };
 
     /// Records observed requests so tests can assert on the bytes.
     #[derive(Debug, Default)]
@@ -162,14 +164,15 @@ mod tests {
         userinfo_body: Option<&'static str>,
     }
 
-    async fn serve_https(
-        setup: HttpsResponseSetup,
-    ) -> (
-        SocketAddr,
-        CancellationToken,
-        std::path::PathBuf,
-        Arc<ObservedRequests>,
-    ) {
+    /// A running HTTPS server, its trust bundle and the requests it saw.
+    struct HttpsServer {
+        addr: SocketAddr,
+        shutdown: CancellationToken,
+        ca_path: std::path::PathBuf,
+        observed: Arc<ObservedRequests>,
+    }
+
+    async fn serve_https(setup: HttpsResponseSetup) -> HttpsServer {
         let HttpsResponseSetup {
             introspect_body,
             introspect_status,
@@ -178,7 +181,11 @@ mod tests {
         let introspect_status = introspect_status.0;
         let observed = Arc::new(ObservedRequests::default());
         let observed_in_task = observed.clone();
-        let (addr, shutdown, cert_path) = serve_loopback_tls(move |mut tls| {
+        let LoopbackTlsServer {
+            addr,
+            shutdown,
+            cert_path,
+        } = serve_loopback_tls(move |mut tls| {
             let observed = observed_in_task.clone();
             async move {
                             let mut buf = vec![0u8; 8192];
@@ -241,7 +248,12 @@ mod tests {
             }
         }).await;
 
-        (addr, shutdown, cert_path, observed)
+        HttpsServer {
+            addr,
+            shutdown,
+            ca_path: cert_path,
+            observed,
+        }
     }
 
     /// A trusted HTTPS introspection client without a user-info endpoint.
@@ -277,22 +289,39 @@ mod tests {
     }
 
     /// A server and trusted client, retaining the request observations and shutdown handle.
+    /// A trusted client of a running server, with the server's shutdown handle
+    /// and request observations.
+    struct HttpsFixture {
+        client: Arc<dyn IntrospectionClient>,
+        shutdown: CancellationToken,
+        observed: Arc<ObservedRequests>,
+    }
+
     async fn https_fixture(
         response: HttpsResponseSetup,
         client: HttpsClientSetup<'_>,
-    ) -> (
-        Arc<dyn IntrospectionClient>,
-        CancellationToken,
-        Arc<ObservedRequests>,
-    ) {
-        let (addr, shutdown, ca, observed) = serve_https(response).await;
-        (https_client(addr, &ca, client), shutdown, observed)
+    ) -> HttpsFixture {
+        let HttpsServer {
+            addr,
+            shutdown,
+            ca_path,
+            observed,
+        } = serve_https(response).await;
+        HttpsFixture {
+            client: https_client(addr, &ca_path, client),
+            shutdown,
+            observed,
+        }
     }
 
     #[tokio::test]
     async fn introspection_fetches_active_token_over_https_with_custom_trust() {
         let body = r#"{"active":true,"sub":"alice"}"#;
-        let (client, srv_shutdown, _observed) = https_fixture(
+        let HttpsFixture {
+            client,
+            shutdown: srv_shutdown,
+            observed: _observed,
+        } = https_fixture(
             HttpsResponseSetup {
                 introspect_body: body,
                 ..Default::default()
@@ -312,7 +341,11 @@ mod tests {
 
     #[tokio::test]
     async fn introspection_returns_inactive_when_idp_says_inactive() {
-        let (client, srv_shutdown, _) = https_fixture(
+        let HttpsFixture {
+            client,
+            shutdown: srv_shutdown,
+            ..
+        } = https_fixture(
             HttpsResponseSetup {
                 introspect_body: r#"{"active":false}"#,
                 ..Default::default()
@@ -327,7 +360,11 @@ mod tests {
 
     #[tokio::test]
     async fn introspection_returns_transport_error_on_non_2xx() {
-        let (client, srv_shutdown, _) = https_fixture(
+        let HttpsFixture {
+            client,
+            shutdown: srv_shutdown,
+            ..
+        } = https_fixture(
             HttpsResponseSetup {
                 introspect_body: r#"{"error":"x"}"#,
                 introspect_status: HttpStatusCode(500),
@@ -346,7 +383,12 @@ mod tests {
 
     #[tokio::test]
     async fn introspection_userinfo_endpoint_is_called_after_active_introspection() {
-        let (addr, srv_shutdown, ca, observed) = serve_https(HttpsResponseSetup {
+        let HttpsServer {
+            addr,
+            shutdown: srv_shutdown,
+            ca_path: ca,
+            observed,
+        } = serve_https(HttpsResponseSetup {
             introspect_body: r#"{"active":true,"sub":"alice"}"#,
             userinfo_body: Some(r#"{"preferred_username":"alice","email":"a@b.c"}"#),
             ..Default::default()
@@ -370,7 +412,11 @@ mod tests {
 
     #[tokio::test]
     async fn introspection_userinfo_endpoint_is_not_called_when_endpoint_unset() {
-        let (client, srv_shutdown, _) = https_fixture(
+        let HttpsFixture {
+            client,
+            shutdown: srv_shutdown,
+            ..
+        } = https_fixture(
             HttpsResponseSetup {
                 introspect_body: r#"{"active":true,"sub":"a"}"#,
                 ..Default::default()
@@ -386,7 +432,11 @@ mod tests {
     #[tokio::test]
     async fn introspection_handles_keycloak_response_shape() {
         let body = r#"{"active":true,"sub":"svc-account-kafka-client","client_id":"kafka-client","scope":"kafka.write profile","exp":9999999999}"#;
-        let (client, srv_shutdown, _) = https_fixture(
+        let HttpsFixture {
+            client,
+            shutdown: srv_shutdown,
+            ..
+        } = https_fixture(
             HttpsResponseSetup {
                 introspect_body: body,
                 ..Default::default()
@@ -402,7 +452,11 @@ mod tests {
 
     #[tokio::test]
     async fn introspection_basic_auth_sent_with_configured_client_id_and_secret() {
-        let (client, srv_shutdown, observed) = https_fixture(
+        let HttpsFixture {
+            client,
+            shutdown: srv_shutdown,
+            observed,
+        } = https_fixture(
             HttpsResponseSetup {
                 introspect_body: r#"{"active":true,"sub":"a"}"#,
                 ..Default::default()
@@ -424,7 +478,11 @@ mod tests {
 
     #[tokio::test]
     async fn introspection_form_body_token_field() {
-        let (client, srv_shutdown, observed) = https_fixture(
+        let HttpsFixture {
+            client,
+            shutdown: srv_shutdown,
+            observed,
+        } = https_fixture(
             HttpsResponseSetup {
                 introspect_body: r#"{"active":true,"sub":"a"}"#,
                 ..Default::default()
@@ -447,7 +505,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let (cert, _key) = ecdsa_pair_for_host("127.0.0.1");
+        let EcdsaPair { cert, .. } = ecdsa_pair_for_host("127.0.0.1");
         let ca_path = dir.path().join("ca.pem");
         std::fs::write(&ca_path, cert.pem()).unwrap();
         drop(listener);

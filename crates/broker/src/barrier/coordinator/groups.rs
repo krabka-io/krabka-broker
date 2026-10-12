@@ -5,12 +5,13 @@
 //! them turns on the group record, and none of them runs the injection
 //! protocol, so they sit in their own file.
 
-use std::{sync::Arc, time::Instant};
+use std::time::Instant;
 
 use krabka_units::{Time, convert::TimeExt as _};
-use tokio::sync::Mutex;
 
-use super::{BarrierCoordinator, validate_group_name, validate_spec_limits};
+use super::{
+    AppendRecord, BarrierCoordinator, NamedGroup, validate_group_name, validate_spec_limits,
+};
 use crate::{
     barrier::{
         STATE_TOPIC,
@@ -197,10 +198,10 @@ impl BarrierCoordinator {
         };
         self.append_records(
             group,
-            vec![(
-                RecordKey::group(group),
-                Some(encode_group(&definition)?.into()),
-            )],
+            vec![AppendRecord {
+                key: RecordKey::group(group),
+                value: Some(encode_group(&definition)?.into()),
+            }],
         )
         .await?;
 
@@ -222,12 +223,21 @@ impl BarrierCoordinator {
     pub(crate) async fn delete_group(&self, group: &str) -> Result<(), BarrierError> {
         let mut entry = self.lock_defined_group(group).await?;
 
-        let mut records = vec![(RecordKey::group(group), None)];
+        let mut records = vec![AppendRecord {
+            key: RecordKey::group(group),
+            value: None,
+        }];
         for epoch in entry.cuts.keys().copied() {
-            records.push((RecordKey::cut(group, epoch), None));
+            records.push(AppendRecord {
+                key: RecordKey::cut(group, epoch),
+                value: None,
+            });
         }
         if let Some(pending) = &entry.pending {
-            records.push((RecordKey::injection_start(group, pending.epoch), None));
+            records.push(AppendRecord {
+                key: RecordKey::injection_start(group, pending.epoch),
+                value: None,
+            });
         }
         self.append_records(group, records).await?;
 
@@ -242,24 +252,32 @@ impl BarrierCoordinator {
     /// Describe the named groups, or every group this broker holds when
     /// `names` is empty.
     pub(crate) async fn describe_groups(&self, names: &[String]) -> Vec<GroupDescription> {
-        let selected: Vec<(String, Arc<Mutex<GroupEntry>>)> = if names.is_empty() {
+        let selected: Vec<NamedGroup> = if names.is_empty() {
             self.groups
                 .iter()
-                .map(|e| (e.key().clone(), e.value().clone()))
+                .map(|e| NamedGroup {
+                    name: e.key().clone(),
+                    entry: e.value().clone(),
+                })
                 .collect()
         } else {
             names
                 .iter()
                 .filter_map(|name| {
-                    self.groups
-                        .get(name)
-                        .map(|e| (name.clone(), e.value().clone()))
+                    self.groups.get(name).map(|e| NamedGroup {
+                        name: name.clone(),
+                        entry: e.value().clone(),
+                    })
                 })
                 .collect()
         };
 
         let mut out = Vec::with_capacity(selected.len());
-        for (group, handle) in selected {
+        for NamedGroup {
+            name: group,
+            entry: handle,
+        } in selected
+        {
             let entry = handle.lock().await;
             if !entry.is_defined() {
                 continue;

@@ -6,19 +6,19 @@
 use std::{sync::Arc, time::Duration};
 
 use krabka_log::Offset;
-use krabka_protocol::owned::fetch_response::{FetchableTopicResponse, PartitionData};
+use krabka_protocol::owned::fetch_response::PartitionData;
 use krabka_units::convert::ByteSizeExt as _;
 use tokio::sync::Notify;
 
 use super::{
     plan::{
-        PendingRead, ReadRole, apply_epoch_checks, leader_refusal, record_follower_position,
-        required_leader,
+        PendingRead, ReadRole, TopicPartitionRef, apply_epoch_checks, leader_refusal,
+        record_follower_position, required_leader,
     },
     read::{LiveOffsets, ReadRequest, do_read},
     remote::try_remote_read,
     request::EffectivePartition,
-    response::group_into_topic_responses,
+    response::{GroupedResponses, group_into_topic_responses},
 };
 use crate::{
     broker::Broker, codes, diskless::read::try_diskless_read, metrics::RequestPhases,
@@ -250,7 +250,7 @@ pub(super) async fn execute_pending_reads(
     max_wait_ms: i32,
     sendfile_capable: bool,
     phases: &RequestPhases,
-) -> (Vec<FetchableTopicResponse>, Vec<Vec<u64>>) {
+) -> GroupedResponses {
     let mut state = LongPollState {
         // Kafka's `fetchMinBytes = min(minBytes, fetchMaxBytes)`: a floor the
         // response's own cap could never clear is not a floor at all.
@@ -282,7 +282,10 @@ pub(super) async fn execute_pending_reads(
         // consumer fetch from this replica.
         if let Some(refused) = leader_refusal(
             &broker.controller.current_image(),
-            (&read.topic_name, read.partition_index),
+            TopicPartitionRef {
+                topic: &read.topic_name,
+                partition_index: read.partition_index,
+            },
             &partition,
             required_leader(read.fetch_only_leader, broker.config.node_id, &partition),
         ) {
@@ -639,6 +642,7 @@ mod tests {
     };
     use object_store::{ObjectStoreExt as _, PutPayload, path::Path};
 
+    use super::super::{plan::FetchMode, response::GroupedResponses};
     use crate::{
         broker::{Broker, spawn_partition},
         codes::{NONE, OFFSET_OUT_OF_RANGE},
@@ -886,8 +890,9 @@ mod tests {
         // A response budget far smaller than either partition's one batch:
         // the first partition's read still serves it whole, which alone
         // spends the entire budget before the second partition is read.
-        let (topics, _cpu) =
-            super::execute_pending_reads(&broker, pending, 0, 8, 0, false, &phases).await;
+        let GroupedResponses {
+            responses: topics, ..
+        } = super::execute_pending_reads(&broker, pending, 0, 8, 0, false, &phases).await;
 
         let served_a = &topics[0].partitions[0];
         let served_b = &topics[1].partitions[0];
@@ -934,8 +939,9 @@ mod tests {
             ]
         };
         let phases = RequestPhases::default();
-        let (topics, _) =
-            super::execute_pending_reads(&broker, pending(), 0, 150, 0, false, &phases).await;
+        let GroupedResponses {
+            responses: topics, ..
+        } = super::execute_pending_reads(&broker, pending(), 0, 150, 0, false, &phases).await;
         let first_bytes = topics[0].partitions[0]
             .records
             .as_ref()
@@ -960,11 +966,15 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
+    /// A local partition and the temporary directory that holds its log.
+    struct ConsumerPartition {
+        partition: std::sync::Arc<Partition>,
+        dir: tempfile::TempDir,
+    }
+
     /// A local partition whose log holds `batches`, with its high watermark
     /// at the log end, read as a consumer (`fetch_only_leader` off).
-    async fn consumer_partition(
-        mut batches: Vec<RecordBatch>,
-    ) -> (std::sync::Arc<Partition>, tempfile::TempDir) {
+    async fn consumer_partition(mut batches: Vec<RecordBatch>) -> ConsumerPartition {
         let (part, dir) = test_partition(std::sync::Arc::new(tokio::sync::Notify::new()));
         let end = {
             let mut log = part.log.lock().expect("log mutex poisoned");
@@ -974,7 +984,10 @@ mod tests {
             log.log_end_offset()
         };
         part.replica_state.lock().await.hw = end;
-        (std::sync::Arc::new(part), dir)
+        ConsumerPartition {
+            partition: std::sync::Arc::new(part),
+            dir,
+        }
     }
 
     /// A consumer read of `topic`'s partition 0 from offset 0.
@@ -1070,16 +1083,23 @@ mod tests {
         for (name, read_committed, want_aborted) in cases {
             // The first partition spends the response's one progress
             // exception; the second is read at a zero budget after it.
-            let (spender, _spender_dir) = consumer_partition(vec![sized_batch(&[b'x'; 512])]).await;
-            let (aborted, _aborted_dir) = consumer_partition(aborted_transaction()).await;
+            let ConsumerPartition {
+                partition: spender,
+                dir: _spender_dir,
+            } = consumer_partition(vec![sized_batch(&[b'x'; 512])]).await;
+            let ConsumerPartition {
+                partition: aborted,
+                dir: _aborted_dir,
+            } = consumer_partition(aborted_transaction()).await;
             let pending = vec![
                 consumer_read("spender", &spender, read_committed),
                 consumer_read("aborted", &aborted, read_committed),
             ];
 
             let phases = RequestPhases::default();
-            let (topics, _cpu) =
-                super::execute_pending_reads(&broker, pending, 0, 8, 0, false, &phases).await;
+            let GroupedResponses {
+                responses: topics, ..
+            } = super::execute_pending_reads(&broker, pending, 0, 8, 0, false, &phases).await;
 
             assert!(
                 served_base_offsets(&topics[0].partitions[0]) == vec![0],
@@ -1279,9 +1299,10 @@ mod tests {
         // response's first-nonempty exception. B cannot use it for the whole
         // batch its WAL source returns beyond the remaining byte budget.
         for budget in [1, batch_a.len() + 1] {
-            let (topics, _cpu) =
-                super::execute_pending_reads(&broker, pending(), 0, budget, 0, false, &phases)
-                    .await;
+            let GroupedResponses {
+                responses: topics, ..
+            } = super::execute_pending_reads(&broker, pending(), 0, budget, 0, false, &phases)
+                .await;
             let served_a = &topics[0].partitions[0];
             let served_b = &topics[1].partitions[0];
             assert!(served_a.error_code == NONE);
@@ -1532,7 +1553,10 @@ mod tests {
         );
 
         for (name, read_committed, want_aborted) in aborted_isolation_cases!() {
-            let (part, _part_dir) = consumer_partition(Vec::new()).await;
+            let ConsumerPartition {
+                partition: part,
+                dir: _part_dir,
+            } = consumer_partition(Vec::new()).await;
             let mut pending = [consumer_read("reread", &part, read_committed)];
             let phases = RequestPhases::default();
             let mut state = state_for(&pending, PollStateSetup::default());
@@ -1732,7 +1756,9 @@ mod tests {
         };
         let pending = vec![planned_follower(TOPIC, &part, &request, crate::codes::NONE)];
         let phases = RequestPhases::default();
-        let (topics, _cpu) = super::execute_pending_reads(
+        let GroupedResponses {
+            responses: topics, ..
+        } = super::execute_pending_reads(
             &broker,
             pending,
             min_bytes,
@@ -1806,7 +1832,10 @@ mod tests {
             topic,
             WireUuid::ZERO,
             request,
-            (false, true),
+            FetchMode {
+                read_committed: false,
+                is_follower_fetch: true,
+            },
             Some(std::sync::Arc::clone(part)),
             super::PartitionData {
                 partition_index: 0,

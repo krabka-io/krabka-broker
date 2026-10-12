@@ -76,19 +76,24 @@ const REMOTE_CLIENT: &[u8] = &[10, 1, 2, 3];
 /// hop cannot match the relayed bytes to the client that is waiting.
 const EMBEDDED_CORRELATION_ID: i32 = 0x5A5A_1234;
 
-async fn start_broker() -> (BrokerHandle, tempfile::TempDir) {
+/// A running broker and the directory that backs it.
+struct EnvelopeBroker {
+    broker: BrokerHandle,
+    dir: tempfile::TempDir,
+}
+
+async fn start_broker() -> EnvelopeBroker {
     start_broker_with(|_| {}).await
 }
 
-async fn start_broker_with(
-    customize: impl FnOnce(&mut BrokerConfig),
-) -> (BrokerHandle, tempfile::TempDir) {
+async fn start_broker_with(customize: impl FnOnce(&mut BrokerConfig)) -> EnvelopeBroker {
     support::init_tracing();
-    start_with_bound_listeners(customize).await
+    let (broker, dir) = start_with_bound_listeners(customize).await;
+    EnvelopeBroker { broker, dir }
 }
 
 /// Let the plaintext forwarding peer pass the outer gate, preserving inner-principal authorization.
-async fn start_forwarder() -> (BrokerHandle, tempfile::TempDir) {
+async fn start_forwarder() -> EnvelopeBroker {
     start_broker_with(|config| {
         config.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(
             std::iter::once("ANONYMOUS".to_owned()).collect(),
@@ -258,7 +263,7 @@ macro_rules! check_refused {
 async fn a_forwarded_create_topics_is_served_and_answered_in_the_clients_own_bytes() {
     const TOPIC: &str = "envelope-forwarded-topic";
 
-    let (broker, _dir) = start_broker().await;
+    let EnvelopeBroker { broker, dir: _dir } = start_broker().await;
 
     let response = send_envelope(
         broker.controller_addr(),
@@ -304,7 +309,7 @@ async fn a_forwarded_create_topics_is_served_and_answered_in_the_clients_own_byt
 /// forwarding hop has to translate the code for its own client.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_envelope_the_controller_refuses_reports_kafkas_own_error_code() {
-    let (broker, _dir) = start_broker().await;
+    let EnvelopeBroker { broker, dir: _dir } = start_broker().await;
     let addr = broker.controller_addr();
 
     let produce = request_frame(RequestFrameSetup {
@@ -376,7 +381,7 @@ async fn advertised_api_versions(addr: std::net::SocketAddr) -> ApiVersionsRespo
 /// JVM broker with no forwarding path at all.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn envelope_is_advertised_on_the_controller_listener_and_nowhere_else() {
-    let (broker, _dir) = start_broker().await;
+    let EnvelopeBroker { broker, dir: _dir } = start_broker().await;
 
     let controller = advertised_api_versions(broker.controller_addr()).await;
     let client = advertised_api_versions(broker.listen_addr()).await;
@@ -406,6 +411,13 @@ fn embedded_create_topics_response(response: &EnvelopeResponse) -> CreateTopicsR
     )
 }
 
+/// A topic and the error code its `CreateTopics` row carried.
+#[derive(Debug, PartialEq)]
+struct TopicOutcome {
+    topic: String,
+    error_code: i16,
+}
+
 /// A host ACL on a forwarded request must be evaluated against the client's
 /// own address, not the forwarding broker's.
 ///
@@ -423,7 +435,7 @@ fn embedded_create_topics_response(response: &EnvelopeResponse) -> CreateTopicsR
 ///   launders the request.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_forwarded_request_authorizes_against_the_embedded_client_host() {
-    let (broker, _dir) = start_forwarder().await;
+    let EnvelopeBroker { broker, dir: _dir } = start_forwarder().await;
 
     for (principal, host) in [("User:alice", "10.1.2.3"), ("User:bob", "127.0.0.1")] {
         broker
@@ -440,7 +452,7 @@ async fn a_forwarded_request_authorizes_against_the_embedded_client_host() {
     // case cannot hide the other: reading the connection's address gets the
     // first wrong *and* the second wrong, and a report of only one of them
     // would read like a one-sided mistake.
-    let mut outcome: Vec<(&str, i16)> = Vec::new();
+    let mut outcome: Vec<TopicOutcome> = Vec::new();
     for (principal, topic) in [
         (JVM_USER_ALICE, "envelope-host-acl-alice"),
         (JVM_USER_BOB, "envelope-host-acl-bob"),
@@ -455,28 +467,40 @@ async fn a_forwarded_request_authorizes_against_the_embedded_client_host() {
         )
         .await;
 
-        let rows: Vec<(String, i16)> = embedded_create_topics_response(&response)
+        let rows: Vec<TopicOutcome> = embedded_create_topics_response(&response)
             .topics
             .into_iter()
-            .map(|row| (row.name, row.error_code))
+            .map(|row| TopicOutcome {
+                topic: row.name,
+                error_code: row.error_code,
+            })
             .collect();
         check!(
             rows.len() == 1,
             "one row per single-topic CreateTopics: {rows:?}"
         );
-        outcome.push((topic, rows.first().map_or(i16::MIN, |row| row.1)));
+        outcome.push(TopicOutcome {
+            topic: topic.to_owned(),
+            error_code: rows.first().map_or(i16::MIN, |row| row.error_code),
+        });
     }
 
     check!(
         outcome
             == vec![
                 // Allowed from the address the envelope names.
-                ("envelope-host-acl-alice", 0),
+                TopicOutcome {
+                    topic: "envelope-host-acl-alice".to_owned(),
+                    error_code: 0,
+                },
                 // Allowed only from the forwarding hop's address, so the
                 // cluster-wide Create is refused; the per-topic Create
                 // fallback (#698) has no ACL for this topic either, so the
                 // per-topic error, TOPIC_AUTHORIZATION_FAILED, wins.
-                ("envelope-host-acl-bob", 29),
+                TopicOutcome {
+                    topic: "envelope-host-acl-bob".to_owned(),
+                    error_code: 29,
+                },
             ]
     );
 }
@@ -491,7 +515,7 @@ async fn a_forwarded_request_authorizes_against_the_embedded_client_host() {
 async fn an_unparseable_client_host_address_is_an_invalid_request() {
     const TOPIC: &str = "envelope-bad-client-host";
 
-    let (broker, _dir) = start_broker().await;
+    let EnvelopeBroker { broker, dir: _dir } = start_broker().await;
 
     let response = send_envelope(
         broker.controller_addr(),
@@ -519,7 +543,7 @@ async fn an_unparseable_client_host_address_is_an_invalid_request() {
 /// 0.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_forwarded_allocate_producer_ids_needs_cluster_action_for_the_embedded_principal() {
-    let (broker, _dir) = start_forwarder().await;
+    let EnvelopeBroker { broker, dir: _dir } = start_forwarder().await;
     broker.wait_until_brokers_registered(1).await;
     broker
         .submit_metadata_record_for_test(cluster_acl_record(ClusterAclSetup::default()))
@@ -614,7 +638,7 @@ async fn a_forwarded_allocate_producer_ids_needs_cluster_action_for_the_embedded
 async fn an_envelope_from_a_peer_without_cluster_action_is_refused() {
     const TOPIC: &str = "envelope-no-cluster-action";
 
-    let (broker, _dir) = start_broker_with(|config| {
+    let EnvelopeBroker { broker, dir: _dir } = start_broker_with(|config| {
         config.super_users = std::collections::HashSet::new();
         config.authorizer =
             std::sync::Arc::new(SimpleAclAuthorizer::new(config.super_users.clone()));
@@ -642,7 +666,7 @@ async fn an_envelope_from_a_peer_without_cluster_action_is_refused() {
 async fn an_embedded_version_the_broker_does_not_serve_is_refused() {
     const TOPIC: &str = "envelope-unsupported-version";
 
-    let (broker, _dir) = start_broker().await;
+    let EnvelopeBroker { broker, dir: _dir } = start_broker().await;
 
     let beyond = krabka_protocol::owned::create_topics_request::MAX_VERSION + 1;
     let request_data = request_frame(RequestFrameSetup {
@@ -682,7 +706,7 @@ async fn an_embedded_version_the_broker_does_not_serve_is_refused() {
 async fn an_embedded_request_the_controller_cannot_parse_is_answered_in_the_envelope() {
     const TOPIC: &str = "envelope-after-refusals";
 
-    let (broker, _dir) = start_broker().await;
+    let EnvelopeBroker { broker, dir: _dir } = start_broker().await;
     let create_topics_version = krabka_protocol::owned::create_topics_request::MAX_VERSION;
     let embedded = |api_key: i16, version: i16, body: &[u8]| {
         request_frame(RequestFrameSetup {
@@ -767,7 +791,7 @@ async fn an_embedded_trunk_api_key_is_refused_unless_unstable_api_versions_are_e
         krabka_broker::api_catalog::UnstableApiVersions::Disabled,
         krabka_broker::api_catalog::UnstableApiVersions::Enabled,
     ] {
-        let (broker, _dir) = start_broker_with(|config| {
+        let EnvelopeBroker { broker, dir: _dir } = start_broker_with(|config| {
             config.features.unstable_api_versions = unstable;
         })
         .await;
@@ -976,17 +1000,25 @@ async fn sasl_plain(stream: &mut tokio::net::TcpStream, user: &str, password: &s
 /// `ConnectionAuth` out of the envelope rather than a `RequestContext`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_forwarded_request_carries_the_clients_own_delegation_token_flag() {
-    const FORWARDER: (&str, &str) = ("forwarder", "forwarder-secret");
+    struct Credential {
+        user: &'static str,
+        password: &'static str,
+    }
 
-    let (broker, _dir) = start_broker_with(|config| {
+    const FORWARDER: Credential = Credential {
+        user: "forwarder",
+        password: "forwarder-secret",
+    };
+
+    let EnvelopeBroker { broker, dir: _dir } = start_broker_with(|config| {
         config.controller_listener_protocol = ListenerProtocol::SaslPlaintext;
         config.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
         config
             .plain_credentials
-            .insert(FORWARDER.0.to_owned(), FORWARDER.1.to_owned());
+            .insert(FORWARDER.user.to_owned(), FORWARDER.password.to_owned());
         config.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
-            username: FORWARDER.0.to_owned(),
-            password: FORWARDER.1.to_owned(),
+            username: FORWARDER.user.to_owned(),
+            password: FORWARDER.password.to_owned(),
         });
         // Without a master key the handler answers
         // `DELEGATION_TOKEN_AUTH_DISABLED` before it ever reads the flag, and
@@ -999,7 +1031,7 @@ async fn a_forwarded_request_carries_the_clients_own_delegation_token_flag() {
     let mut stream = tokio::net::TcpStream::connect(broker.controller_addr())
         .await
         .expect("connect controller listener");
-    sasl_plain(&mut stream, FORWARDER.0, FORWARDER.1).await;
+    sasl_plain(&mut stream, FORWARDER.user, FORWARDER.password).await;
 
     let refused = send_envelope_on(
         &mut stream,

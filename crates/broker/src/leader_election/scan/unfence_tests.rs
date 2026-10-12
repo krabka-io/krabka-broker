@@ -11,6 +11,7 @@
 use assert2::assert;
 
 use super::*;
+use crate::leader_election::test_support::TopicConfigOverride;
 
 /// The image of a partition `t-0` with replicas `[1, 2, 3]`, led by broker 1
 /// alone in its record, and with `published` as its ELR state.
@@ -19,8 +20,8 @@ fn leaderless_image(published: &str) -> MetadataImage {
         isr: &[krabka_raft::NodeId(1)],
         elr: ElrFinalization::Enabled,
         configs: &[
-            (MIN_INSYNC_REPLICAS, "2"),
-            (ELIGIBLE_LEADER_REPLICAS, published),
+            TopicConfigOverride::new(MIN_INSYNC_REPLICAS, "2"),
+            TopicConfigOverride::new(ELIGIBLE_LEADER_REPLICAS, published),
         ],
         ..Default::default()
     })

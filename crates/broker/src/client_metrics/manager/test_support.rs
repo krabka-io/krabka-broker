@@ -10,16 +10,23 @@ use uuid::Uuid;
 
 use super::{ClientAttributes, SubscriptionAssignment, SubscriptionDecision};
 
-pub(super) fn img_with(name: &str, kvs: &[(&str, &str)]) -> MetadataImage {
+/// One key and value of a client metrics config.
+#[derive(Clone, Copy)]
+pub(super) struct ConfigEntry<'a> {
+    pub(super) key: &'a str,
+    pub(super) value: &'a str,
+}
+
+pub(super) fn img_with(name: &str, kvs: &[ConfigEntry<'_>]) -> MetadataImage {
     let mut img = MetadataImage::new(Uuid::nil());
     apply_config(&mut img, name, kvs);
     img
 }
 
-pub(super) fn apply_config(img: &mut MetadataImage, name: &str, kvs: &[(&str, &str)]) {
+pub(super) fn apply_config(img: &mut MetadataImage, name: &str, kvs: &[ConfigEntry<'_>]) {
     let mut cfgs = BTreeMap::new();
-    for (k, v) in kvs {
-        cfgs.insert((*k).to_string(), (*v).to_string());
+    for ConfigEntry { key, value } in kvs {
+        cfgs.insert((*key).to_string(), (*value).to_string());
     }
     img.apply(&MetadataRecord::V1ClientMetricsConfig(
         ClientMetricsConfigRecord {

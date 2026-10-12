@@ -78,7 +78,11 @@ macro_rules! throttled_response {
 /// exact value is not load-bearing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn producer_byte_rate_throttles_produce() {
-    let (handle, _dir, resp) = throttled_producer_fixture("throttle-produce").await;
+    let ThrottledProducer {
+        handle,
+        dir: _dir,
+        response: resp,
+    } = throttled_producer_fixture("throttle-produce").await;
 
     check_successful_produce(&resp);
     assert!(
@@ -105,7 +109,11 @@ async fn producer_byte_rate_throttles_produce() {
 /// cause the throttle.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_percentage_throttles_produce() {
-    let (handle, _dir, addr) = quota_fixture().await;
+    let QuotaFixture {
+        handle,
+        dir: _dir,
+        addr,
+    } = quota_fixture().await;
 
     prepare_quota_topic(
         &handle,
@@ -154,7 +162,11 @@ use crate::support::client::metric_value;
 /// quota asks for nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn producer_byte_rate_throttle_moves_the_throttle_metrics() {
-    let (handle, _dir, resp) = throttled_producer_fixture("throttle-metrics").await;
+    let ThrottledProducer {
+        handle,
+        dir: _dir,
+        response: resp,
+    } = throttled_producer_fixture("throttle-metrics").await;
     assert!(
         resp.throttle_time_ms > 0,
         "expected throttle_time_ms > 0, got {}",
@@ -207,7 +219,11 @@ async fn producer_byte_rate_throttle_moves_the_throttle_metrics() {
 /// The rate and burst reasoning is the same as Test 2.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn consumer_byte_rate_throttles_fetch() {
-    let (handle, _dir, addr) = quota_fixture().await;
+    let QuotaFixture {
+        handle,
+        dir: _dir,
+        addr,
+    } = quota_fixture().await;
 
     prepare_quota_topic(
         &handle,
@@ -299,7 +315,11 @@ async fn consumer_byte_rate_throttles_fetch() {
 /// Test 4: a `(user, client-id)` quota overrides a user-only quota.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_client_tuple_overrides_user_specific() {
-    let (handle, _dir, addr) = quota_fixture().await;
+    let QuotaFixture {
+        handle,
+        dir: _dir,
+        addr,
+    } = quota_fixture().await;
 
     prepare_quota_topic(
         &handle,
@@ -402,7 +422,11 @@ async fn user_client_tuple_overrides_user_specific() {
 /// field, which is what a leading-int32 patch and nothing more looks like.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_percentage_throttle_is_echoed_on_a_patched_api() {
-    let (handle, _dir, addr) = quota_fixture().await;
+    let QuotaFixture {
+        handle,
+        dir: _dir,
+        addr,
+    } = quota_fixture().await;
 
     // One connection for every alice request: re-authenticating would charge
     // each handshake to the same quota bucket.
@@ -503,7 +527,11 @@ async fn drive_api_versions(stream: &mut TcpStream, corr_id: i32) -> ApiVersions
 /// `AddOffsetsToTxn` test above does on the patched path.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_percentage_throttle_is_reported_on_api_versions() {
-    let (handle, _dir, addr) = quota_fixture().await;
+    let QuotaFixture {
+        handle,
+        dir: _dir,
+        addr,
+    } = quota_fixture().await;
 
     let mut stream = alice_quota_connection(addr, "SASL authenticate for ApiVersions").await;
 
@@ -583,16 +611,21 @@ async fn produce_when_acl_applied(
     }
 }
 
-async fn quota_fixture() -> (
-    krabka_broker::BrokerHandle,
-    tempfile::TempDir,
-    std::net::SocketAddr,
-) {
-    start_single_broker_sasl_plaintext_with_users(
+/// A SASL broker with its quota users, the directory that backs it, and its
+/// listen address.
+struct QuotaFixture {
+    handle: krabka_broker::BrokerHandle,
+    dir: tempfile::TempDir,
+    addr: std::net::SocketAddr,
+}
+
+async fn quota_fixture() -> QuotaFixture {
+    let (handle, dir, addr) = start_single_broker_sasl_plaintext_with_users(
         "admin",
         &[("admin", "admin-secret"), ("alice", "alice-secret")],
     )
-    .await
+    .await;
+    QuotaFixture { handle, dir, addr }
 }
 
 async fn prepare_quota_topic(
@@ -634,15 +667,21 @@ fn check_successful_produce(response: &krabka_protocol::owned::produce_response:
     );
 }
 
+/// A throttled broker, the directory that backs it, and the response to its
+/// first successful produce.
+struct ThrottledProducer {
+    handle: krabka_broker::BrokerHandle,
+    dir: tempfile::TempDir,
+    response: krabka_protocol::owned::produce_response::ProduceResponse,
+}
+
 /// A successful Produce request after Alice's topic ACL and 128-byte quota become visible.
-async fn throttled_producer_fixture(
-    topic: &str,
-) -> (
-    krabka_broker::BrokerHandle,
-    tempfile::TempDir,
-    krabka_protocol::owned::produce_response::ProduceResponse,
-) {
-    let (handle, directory, addr) = quota_fixture().await;
+async fn throttled_producer_fixture(topic: &str) -> ThrottledProducer {
+    let QuotaFixture {
+        handle,
+        dir: directory,
+        addr,
+    } = quota_fixture().await;
     prepare_quota_topic(&handle, addr, topic, krabka_metadata::AclOperation::Write).await;
     set_alice_quota(&handle, addr, QuotaSettingSetup::low_producer()).await;
     let response = produce_when_acl_applied(
@@ -654,7 +693,11 @@ async fn throttled_producer_fixture(
         },
     )
     .await;
-    (handle, directory, response)
+    ThrottledProducer {
+        handle,
+        dir: directory,
+        response,
+    }
 }
 
 #[derive(krabka_macros::FieldDefaults)]

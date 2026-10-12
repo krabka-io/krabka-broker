@@ -52,7 +52,20 @@ struct ProtocolJoinSetup<'a> {
     member_id: &'a str,
     #[default("consumer")]
     protocol_type: &'a str,
-    protocols: &'a [(&'a str, &'a [u8])],
+    protocols: &'a [ProposedProtocol<'a>],
+}
+
+/// A protocol a member proposes: its name and its metadata.
+#[derive(Clone, Copy)]
+struct ProposedProtocol<'a> {
+    name: &'a str,
+    metadata: &'a [u8],
+}
+
+impl<'a> ProposedProtocol<'a> {
+    const fn new(name: &'a str, metadata: &'a [u8]) -> Self {
+        Self { name, metadata }
+    }
 }
 
 fn join_group_request(setup: ProtocolJoinSetup<'_>) -> JoinGroupRequest {
@@ -69,8 +82,11 @@ fn join_group_request(setup: ProtocolJoinSetup<'_>) -> JoinGroupRequest {
             protocols: setup
                 .protocols
                 .iter()
-                .map(|(name, meta)| {
-                    join_protocol((*name).to_string(), Bytes::copy_from_slice(meta))
+                .map(|protocol| {
+                    join_protocol(
+                        protocol.name.to_string(),
+                        Bytes::copy_from_slice(protocol.metadata),
+                    )
                 })
                 .collect(),
         })
@@ -85,7 +101,7 @@ async fn bootstrap_member_id(
     client: &Client,
     group_id: &str,
     protocol_type: &str,
-    protocols: &[(&str, &[u8])],
+    protocols: &[ProposedProtocol<'_>],
 ) -> String {
     let req = join_group_request(ProtocolJoinSetup {
         group_id,
@@ -116,7 +132,7 @@ async fn second_join(
     group_id: &str,
     member_id: &str,
     protocol_type: &str,
-    protocols: &[(&str, &[u8])],
+    protocols: &[ProposedProtocol<'_>],
 ) -> JoinGroupResponse {
     let req = join_group_request(ProtocolJoinSetup {
         group_id,
@@ -140,7 +156,7 @@ async fn full_join(
     client: &Client,
     group_id: &str,
     protocol_type: &str,
-    protocols: &[(&str, &[u8])],
+    protocols: &[ProposedProtocol<'_>],
 ) -> JoinGroupResponse {
     let member_id = bootstrap_member_id(client, group_id, protocol_type, protocols).await;
     second_join(client, group_id, &member_id, protocol_type, protocols).await
@@ -159,18 +175,18 @@ async fn empty_intersection_returns_inconsistent_group_protocol() {
         &bootstrap,
         group_id,
         [
-            (
-                "member-a",
-                RANGE_ONLY,
-                "member A second JoinGroup timed out",
-                "member A task panic",
-            ),
-            (
-                "member-b",
-                COOPERATIVE_ONLY,
-                "member B second JoinGroup timed out",
-                "member B task panic",
-            ),
+            RacingMember {
+                client_id: "member-a",
+                protocols: RANGE_ONLY,
+                timeout_context: "member A second JoinGroup timed out",
+                join_context: "member A task panic",
+            },
+            RacingMember {
+                client_id: "member-b",
+                protocols: COOPERATIVE_ONLY,
+                timeout_context: "member B second JoinGroup timed out",
+                join_context: "member B task panic",
+            },
         ],
     )
     .await;
@@ -197,24 +213,24 @@ async fn vote_picks_cooperative_when_majority() {
         &bootstrap,
         group_id,
         [
-            (
-                "member-a",
-                COOPERATIVE_FIRST,
-                "member A second JoinGroup timed out",
-                "member A task panic",
-            ),
-            (
-                "member-b",
-                COOPERATIVE_FIRST,
-                "member B second JoinGroup timed out",
-                "member B task panic",
-            ),
-            (
-                "member-c",
-                RANGE_FIRST,
-                "member C second JoinGroup timed out",
-                "member C task panic",
-            ),
+            RacingMember {
+                client_id: "member-a",
+                protocols: COOPERATIVE_FIRST,
+                timeout_context: "member A second JoinGroup timed out",
+                join_context: "member A task panic",
+            },
+            RacingMember {
+                client_id: "member-b",
+                protocols: COOPERATIVE_FIRST,
+                timeout_context: "member B second JoinGroup timed out",
+                join_context: "member B task panic",
+            },
+            RacingMember {
+                client_id: "member-c",
+                protocols: RANGE_FIRST,
+                timeout_context: "member C second JoinGroup timed out",
+                join_context: "member C task panic",
+            },
         ],
     )
     .await;
@@ -245,18 +261,18 @@ async fn vote_ties_broken_lexicographically() {
         &bootstrap,
         group_id,
         [
-            (
-                "member-a",
-                RANGE_FIRST,
-                "member A second JoinGroup timed out",
-                "member A task panic",
-            ),
-            (
-                "member-b",
-                COOPERATIVE_FIRST,
-                "member B second JoinGroup timed out",
-                "member B task panic",
-            ),
+            RacingMember {
+                client_id: "member-a",
+                protocols: RANGE_FIRST,
+                timeout_context: "member A second JoinGroup timed out",
+                join_context: "member A task panic",
+            },
+            RacingMember {
+                client_id: "member-b",
+                protocols: COOPERATIVE_FIRST,
+                timeout_context: "member B second JoinGroup timed out",
+                join_context: "member B task panic",
+            },
         ],
     )
     .await;
@@ -281,7 +297,13 @@ async fn vote_ties_broken_lexicographically() {
 async fn single_member_picks_its_first_protocol() {
     let (handle, bootstrap, _tempdir) = start_broker().await;
     let client = connect_client(&bootstrap, "single-member").await;
-    let resp = full_join(&client, "cg-single", "consumer", &[("range", b"")]).await;
+    let resp = full_join(
+        &client,
+        "cg-single",
+        "consumer",
+        &[ProposedProtocol::new("range", b"")],
+    )
+    .await;
     handle.shutdown().await;
 
     assert!(
@@ -307,7 +329,13 @@ async fn protocol_type_mismatch_rejected() {
 
     // Member A: full two-step, completes the rebalance. After this the
     // group has `protocol_type = Some("consumer")` and is Stable.
-    let resp_a = full_join(&client_a, group_id, "consumer", &[("range", b"")]).await;
+    let resp_a = full_join(
+        &client_a,
+        group_id,
+        "consumer",
+        &[ProposedProtocol::new("range", b"")],
+    )
+    .await;
     assert!(
         resp_a.error_code == ERR_NONE,
         "member A must complete first-round rebalance, got {resp_a:?}"
@@ -321,7 +349,7 @@ async fn protocol_type_mismatch_rejected() {
         .send(join_group_request(ProtocolJoinSetup {
             group_id,
             protocol_type: "stream",
-            protocols: &[("range", b"")],
+            protocols: &[ProposedProtocol::new("range", b"")],
             ..Default::default()
         }))
         .await
@@ -339,13 +367,27 @@ async fn protocol_type_mismatch_rejected() {
     );
 }
 
-type Protocols = &'static [(&'static str, &'static [u8])];
-type RacingMember = (&'static str, Protocols, &'static str, &'static str);
+type Protocols = &'static [ProposedProtocol<'static>];
 
-const RANGE_ONLY: Protocols = &[("range", b"")];
-const COOPERATIVE_ONLY: Protocols = &[("cooperative-sticky", b"")];
-const RANGE_FIRST: Protocols = &[("range", b""), ("cooperative-sticky", b"")];
-const COOPERATIVE_FIRST: Protocols = &[("cooperative-sticky", b""), ("range", b"")];
+/// One member of a race: its client id, the protocols it proposes, and the
+/// messages for a timed-out or panicked second join.
+struct RacingMember {
+    client_id: &'static str,
+    protocols: Protocols,
+    timeout_context: &'static str,
+    join_context: &'static str,
+}
+
+const RANGE_ONLY: Protocols = &[ProposedProtocol::new("range", b"")];
+const COOPERATIVE_ONLY: Protocols = &[ProposedProtocol::new("cooperative-sticky", b"")];
+const RANGE_FIRST: Protocols = &[
+    ProposedProtocol::new("range", b""),
+    ProposedProtocol::new("cooperative-sticky", b""),
+];
+const COOPERATIVE_FIRST: Protocols = &[
+    ProposedProtocol::new("cooperative-sticky", b""),
+    ProposedProtocol::new("range", b""),
+];
 
 // Connect every member, then bootstrap every id, then spawn every second join.
 // Awaiting the tasks in input order preserves the original racing window.
@@ -355,18 +397,24 @@ async fn race_consumer_joins<const N: usize>(
     members: [RacingMember; N],
 ) -> [JoinGroupResponse; N] {
     let mut clients = Vec::with_capacity(N);
-    for (client_id, _, _, _) in &members {
-        clients.push(connect_client(bootstrap, client_id).await);
+    for member in &members {
+        clients.push(connect_client(bootstrap, member.client_id).await);
     }
     let mut member_ids = Vec::with_capacity(N);
-    for (client, (_, protocols, _, _)) in clients.iter().zip(&members) {
-        member_ids.push(bootstrap_member_id(client, group, "consumer", protocols).await);
+    for (client, member) in clients.iter().zip(&members) {
+        member_ids.push(bootstrap_member_id(client, group, "consumer", member.protocols).await);
     }
     let groups: Vec<_> = (0..N).map(|_| group.to_owned()).collect();
     let mut joins = Vec::with_capacity(N);
-    for (((client, member_id), group), (_, protocols, timeout_context, join_context)) in
+    for (((client, member_id), group), member) in
         clients.into_iter().zip(member_ids).zip(groups).zip(members)
     {
+        let RacingMember {
+            protocols,
+            timeout_context,
+            join_context,
+            ..
+        } = member;
         let task = tokio::spawn(async move {
             tokio::time::timeout(
                 Duration::from_secs(10),

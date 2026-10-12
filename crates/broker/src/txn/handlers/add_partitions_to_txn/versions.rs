@@ -244,7 +244,10 @@ mod tests {
         },
         txn::handlers::add_partitions_to_txn::{
             handle,
-            test_support::{enlisted, seed_transaction, start_coordinator, topic, topic_result},
+            test_support::{
+                CoordinatorBroker, PartitionCode, PartitionSpec, TopicRows, TopicSpec, enlisted,
+                partition_set, seed_transaction, start_coordinator, topic, topic_result,
+            },
         },
     };
 
@@ -296,28 +299,24 @@ mod tests {
         struct Entry {
             epoch: i16,
             verify_only: bool,
-            topics: &'static [(&'static str, &'static [i32])],
+            topics: &'static [TopicSpec],
         }
-        fn entry(
-            epoch: i16,
-            verify_only: bool,
-            topics: &'static [(&'static str, &'static [i32])],
-        ) -> Entry {
+        fn entry(epoch: i16, verify_only: bool, topics: &'static [TopicSpec]) -> Entry {
             Entry {
                 epoch,
                 verify_only,
                 topics,
             }
         }
-        /// The `(topic, [(partition, code)])` rows one entry answers.
-        type Rows = &'static [(&'static str, &'static [(i32, i16)])];
+        /// The topic rows one entry answers.
+        type Rows = &'static [TopicRows];
         struct Case {
             name: &'static str,
             entries: [Entry; 2],
             /// Per entry, the rows it answers.
             results: [Rows; 2],
             /// The partitions in the transaction after the request.
-            enlisted: &'static [(&'static str, i32)],
+            enlisted: &'static [PartitionSpec],
         }
         const EPOCH: i16 = 2;
         const NONE: i16 = codes::NONE;
@@ -328,46 +327,194 @@ mod tests {
             Case {
                 name: "both entries add the second entry's partitions",
                 entries: [
-                    entry(EPOCH, false, &[("a", &[0])]),
-                    entry(EPOCH, false, &[("b", &[0])]),
+                    entry(
+                        EPOCH,
+                        false,
+                        &[TopicSpec {
+                            name: "a",
+                            partitions: &[0],
+                        }],
+                    ),
+                    entry(
+                        EPOCH,
+                        false,
+                        &[TopicSpec {
+                            name: "b",
+                            partitions: &[0],
+                        }],
+                    ),
                 ],
-                results: [&[("a", &[(0, NONE)])], &[("a", &[(0, NONE)])]],
-                enlisted: &[("b", 0)],
+                results: [
+                    &[TopicRows {
+                        name: "a",
+                        rows: &[PartitionCode {
+                            partition: 0,
+                            code: NONE,
+                        }],
+                    }],
+                    &[TopicRows {
+                        name: "a",
+                        rows: &[PartitionCode {
+                            partition: 0,
+                            code: NONE,
+                        }],
+                    }],
+                ],
+                enlisted: &[PartitionSpec {
+                    topic: "b",
+                    partition: 0,
+                }],
             },
             Case {
                 name: "each entry is checked with its own producer epoch",
                 entries: [
-                    entry(EPOCH - 1, false, &[("a", &[0])]),
-                    entry(EPOCH, false, &[("b", &[0])]),
+                    entry(
+                        EPOCH - 1,
+                        false,
+                        &[TopicSpec {
+                            name: "a",
+                            partitions: &[0],
+                        }],
+                    ),
+                    entry(
+                        EPOCH,
+                        false,
+                        &[TopicSpec {
+                            name: "b",
+                            partitions: &[0],
+                        }],
+                    ),
                 ],
-                results: [&[("a", &[(0, FENCED)])], &[("a", &[(0, NONE)])]],
-                enlisted: &[("b", 0)],
+                results: [
+                    &[TopicRows {
+                        name: "a",
+                        rows: &[PartitionCode {
+                            partition: 0,
+                            code: FENCED,
+                        }],
+                    }],
+                    &[TopicRows {
+                        name: "a",
+                        rows: &[PartitionCode {
+                            partition: 0,
+                            code: NONE,
+                        }],
+                    }],
+                ],
+                enlisted: &[PartitionSpec {
+                    topic: "b",
+                    partition: 0,
+                }],
             },
             Case {
                 name: "a failed partition check lists the checked partitions",
                 entries: [
-                    entry(EPOCH, false, &[("a", &[0])]),
-                    entry(EPOCH, false, &[("b", &[0]), ("missing", &[0])]),
+                    entry(
+                        EPOCH,
+                        false,
+                        &[TopicSpec {
+                            name: "a",
+                            partitions: &[0],
+                        }],
+                    ),
+                    entry(
+                        EPOCH,
+                        false,
+                        &[
+                            TopicSpec {
+                                name: "b",
+                                partitions: &[0],
+                            },
+                            TopicSpec {
+                                name: "missing",
+                                partitions: &[0],
+                            },
+                        ],
+                    ),
                 ],
                 results: [
-                    &[("b", &[(0, NOT_ATTEMPTED)]), ("missing", &[(0, UNKNOWN)])],
-                    &[("b", &[(0, NOT_ATTEMPTED)]), ("missing", &[(0, UNKNOWN)])],
+                    &[
+                        TopicRows {
+                            name: "b",
+                            rows: &[PartitionCode {
+                                partition: 0,
+                                code: NOT_ATTEMPTED,
+                            }],
+                        },
+                        TopicRows {
+                            name: "missing",
+                            rows: &[PartitionCode {
+                                partition: 0,
+                                code: UNKNOWN,
+                            }],
+                        },
+                    ],
+                    &[
+                        TopicRows {
+                            name: "b",
+                            rows: &[PartitionCode {
+                                partition: 0,
+                                code: NOT_ATTEMPTED,
+                            }],
+                        },
+                        TopicRows {
+                            name: "missing",
+                            rows: &[PartitionCode {
+                                partition: 0,
+                                code: UNKNOWN,
+                            }],
+                        },
+                    ],
                 ],
                 enlisted: &[],
             },
             Case {
                 name: "the verify-only entry verifies what the add entry added",
                 entries: [
-                    entry(EPOCH, false, &[("a", &[0])]),
-                    entry(EPOCH, true, &[("b", &[0])]),
+                    entry(
+                        EPOCH,
+                        false,
+                        &[TopicSpec {
+                            name: "a",
+                            partitions: &[0],
+                        }],
+                    ),
+                    entry(
+                        EPOCH,
+                        true,
+                        &[TopicSpec {
+                            name: "b",
+                            partitions: &[0],
+                        }],
+                    ),
                 ],
-                results: [&[("a", &[(0, NONE)])], &[("b", &[(0, NONE)])]],
-                enlisted: &[("b", 0)],
+                results: [
+                    &[TopicRows {
+                        name: "a",
+                        rows: &[PartitionCode {
+                            partition: 0,
+                            code: NONE,
+                        }],
+                    }],
+                    &[TopicRows {
+                        name: "b",
+                        rows: &[PartitionCode {
+                            partition: 0,
+                            code: NONE,
+                        }],
+                    }],
+                ],
+                enlisted: &[PartitionSpec {
+                    topic: "b",
+                    partition: 0,
+                }],
             },
         ];
 
-        let (broker_handle, _dir) =
-            start_coordinator(Arc::new(ControllerPeerAllowed(DenyAll))).await;
+        let CoordinatorBroker {
+            handle: broker_handle,
+            dir: _dir,
+        } = start_coordinator(Arc::new(ControllerPeerAllowed(DenyAll))).await;
         let broker = broker_handle.broker_arc_for_test();
         test_ctx!(ctx, "ANONYMOUS");
         for (index, case) in (0_i64..).zip(&cases) {
@@ -386,7 +533,7 @@ mod tests {
                         topics: entry
                             .topics
                             .iter()
-                            .map(|&(name, partitions)| topic(name, partitions))
+                            .map(|&TopicSpec { name, partitions }| topic(name, partitions))
                             .collect(),
                         ..Default::default()
                     })
@@ -404,7 +551,7 @@ mod tests {
                         transactional_id: tid.clone(),
                         topic_results: rows
                             .iter()
-                            .map(|&(name, rows)| topic_result(name, rows))
+                            .map(|&TopicRows { name, rows }| topic_result(name, rows))
                             .collect(),
                         ..Default::default()
                     })
@@ -412,12 +559,11 @@ mod tests {
                 ..Default::default()
             };
             assert!(resp == expected, "{}", case.name);
-            let want: std::collections::BTreeSet<(String, i32)> = case
-                .enlisted
-                .iter()
-                .map(|&(topic, partition)| (topic.to_owned(), partition))
-                .collect();
-            assert!(enlisted(&broker, &tid).await == want, "{}", case.name);
+            assert!(
+                enlisted(&broker, &tid).await == partition_set(case.enlisted),
+                "{}",
+                case.name
+            );
         }
         broker_handle.shutdown().await;
     }
@@ -444,8 +590,14 @@ mod tests {
             results_by_topic_v3_and_below: vec![topic_result(
                 "alpha",
                 &[
-                    (3, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED),
-                    (4, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED),
+                    PartitionCode {
+                        partition: 3,
+                        code: codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
+                    },
+                    PartitionCode {
+                        partition: 4,
+                        code: codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
+                    },
                 ],
             )],
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),

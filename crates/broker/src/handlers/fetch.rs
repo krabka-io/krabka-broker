@@ -55,14 +55,16 @@ mod topic_resolution_tests;
 
 use self::{
     node_endpoints::fetch_node_endpoints,
-    plan::{PendingPlanContext, build_pending_reads},
+    plan::{FetchMode, PendingPlanContext, build_pending_reads},
     read_loop::execute_pending_reads,
     request::{FetchPreparation, prepare_fetch},
     response::{
-        charge_fetch_cpu, downconvert_legacy_responses, record_fetch_metrics,
+        GroupedResponses, charge_fetch_cpu, downconvert_legacy_responses, record_fetch_metrics,
         withhold_current_leader_before_kip_951,
     },
-    session::{commit_fetch_session, prepare_fetch_session, refresh_fetch_session_metrics},
+    session::{
+        FetchKind, commit_fetch_session, prepare_fetch_session, refresh_fetch_session_metrics,
+    },
     throttle::{
         apply_consumer_fetch_quota, consumer_quota_window_bytes, fetch_response_size,
         throttle_follower_responses,
@@ -157,7 +159,7 @@ pub(crate) async fn handle(
         FetchRequest::decode(&mut cur, version)?
     };
 
-    let preparation = match prepare_fetch(broker, (&req, version), ctx) {
+    let preparation = match prepare_fetch(broker, &req, version, ctx) {
         Ok(preparation) => preparation,
         Err(code) => {
             let resp = FetchResponse {
@@ -215,7 +217,10 @@ pub(crate) async fn handle(
         authorization: &authorization,
         rack_id: &req.rack_id,
         version,
-        mode: (read_committed, is_follower_fetch),
+        mode: FetchMode {
+            read_committed,
+            is_follower_fetch,
+        },
         follower_id: effective_replica_id,
         follower_broker_epoch: req.replica_state.replica_epoch,
     };
@@ -237,7 +242,10 @@ pub(crate) async fn handle(
     );
     // A read that fails answers its own partition's row and never fails the
     // fetch (see `do_read`), so this call has no error to return.
-    let (mut responses, cpu_micros_by_idx) = execute_pending_reads(
+    let GroupedResponses {
+        mut responses,
+        cpu_micros: cpu_micros_by_idx,
+    } = execute_pending_reads(
         broker,
         pending,
         req.min_bytes,
@@ -325,7 +333,10 @@ pub(crate) async fn handle(
     resp.session_id = commit_fetch_session(
         broker,
         commit,
-        (is_follower_fetch, version),
+        FetchKind {
+            is_follower_fetch,
+            version,
+        },
         &ctx.principal.name,
     );
     Ok((resp, version))
@@ -572,10 +583,16 @@ mod tests {
         }
     });
 
+    /// A running broker and the topic id of its one diskless-WAL shard.
+    struct WalShardBroker {
+        handle: BrokerHandle,
+        topic_id: uuid::Uuid,
+    }
+
     /// Start a broker holding one routable diskless-WAL shard, so a KIP-595
     /// Fetch addressed at it takes the routed branch of [`super::handle`].
     /// Returns the handle and the shard's topic id.
-    async fn broker_with_routable_wal_shard(dir: &std::path::Path) -> (BrokerHandle, uuid::Uuid) {
+    async fn broker_with_routable_wal_shard(dir: &std::path::Path) -> WalShardBroker {
         let broker_handle = Broker::start(BrokerConfig::for_tests(dir.to_path_buf()))
             .await
             .expect("start broker");
@@ -620,7 +637,10 @@ mod tests {
                 voters: vec![local_node_id, krabka_raft::NodeId(2)],
                 leader_epoch: 0,
             }});
-        (broker_handle, topic_id)
+        WalShardBroker {
+            handle: broker_handle,
+            topic_id,
+        }
     }
 
     /// Keep the WAL broker, directory and request context in their original scopes.
@@ -638,7 +658,10 @@ mod tests {
         };
         (@broker ($directory:ident, $handle:ident, $topic_id:ident, $broker:ident)) => {
             let $directory = tempfile::tempdir().expect("tempdir");
-            let ($handle, $topic_id) = broker_with_routable_wal_shard($directory.path()).await;
+            let WalShardBroker {
+                handle: $handle,
+                topic_id: $topic_id,
+            } = broker_with_routable_wal_shard($directory.path()).await;
             let $broker = $handle.broker_arc_for_test();
         };
         (@identity ($principal:ident, $peer:ident)) => {

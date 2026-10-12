@@ -256,41 +256,57 @@ mod tests {
     async fn only_a_controller_without_an_active_leader_answers_not_leader() {
         /// Builds the refusal of the controller for one case.
         type Refusal = fn() -> RaftError;
-        // (what, the refusal of the controller, the leader of the `NotLeader`
-        // that `assign` returns, or `None` for another error)
-        let cases: [(&str, Refusal, Option<Option<NodeId>>); 6] = [
-            (
-                "no leader is known",
-                || RaftError::NotLeader {
+        /// What the case is, the refusal of the controller, and the leader of
+        /// the `NotLeader` that `assign` returns, or `None` for another error.
+        struct RefusalCase {
+            what: &'static str,
+            refusal: Refusal,
+            want: Option<Option<NodeId>>,
+        }
+        let cases: [RefusalCase; 6] = [
+            RefusalCase {
+                what: "no leader is known",
+                refusal: || RaftError::NotLeader {
                     current_leader: None,
                 },
-                Some(None),
-            ),
-            (
-                "the leader moved",
-                || RaftError::NotLeader {
+                want: Some(None),
+            },
+            RefusalCase {
+                what: "the leader moved",
+                refusal: || RaftError::NotLeader {
                     current_leader: Some(NodeId(2)),
                 },
-                Some(Some(NodeId(2))),
-            ),
-            (
-                "an election is in progress",
-                || RaftError::LeaderUnknown,
-                Some(None),
-            ),
-            (
-                "the new leader has not committed its epoch",
-                || RaftError::UncommittedTail,
-                Some(None),
-            ),
-            (
-                "the reservation chain is invalid",
-                || RaftError::ChangeRejected("pending offset reservation chain is invalid".into()),
-                None,
-            ),
-            ("the controller stopped", || RaftError::Shutdown, None),
+                want: Some(Some(NodeId(2))),
+            },
+            RefusalCase {
+                what: "an election is in progress",
+                refusal: || RaftError::LeaderUnknown,
+                want: Some(None),
+            },
+            RefusalCase {
+                what: "the new leader has not committed its epoch",
+                refusal: || RaftError::UncommittedTail,
+                want: Some(None),
+            },
+            RefusalCase {
+                what: "the reservation chain is invalid",
+                refusal: || {
+                    RaftError::ChangeRejected("pending offset reservation chain is invalid".into())
+                },
+                want: None,
+            },
+            RefusalCase {
+                what: "the controller stopped",
+                refusal: || RaftError::Shutdown,
+                want: None,
+            },
         ];
-        for (what, refusal, want) in cases {
+        for RefusalCase {
+            what,
+            refusal,
+            want,
+        } in cases
+        {
             let source = Arc::new(
                 FakeMetadataSource::builder()
                     .term(7)

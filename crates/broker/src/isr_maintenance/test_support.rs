@@ -58,7 +58,14 @@ pub(super) struct IsrSetup<'a> {
     pub leader: NodeId,
     pub leader_epoch: LeaderEpoch,
     pub partition_epoch: PartitionEpoch,
-    pub stale_followers: &'a [(NodeId, Duration)],
+    pub stale_followers: &'a [StaleFollower],
+}
+
+/// A follower that was last caught up `caught_up_age` ago.
+#[derive(Clone, Copy)]
+pub(super) struct StaleFollower {
+    pub node: NodeId,
+    pub caught_up_age: Duration,
 }
 
 pub(super) async fn set_replica_state(part: &Partition, setup: IsrSetup<'_>) {
@@ -74,7 +81,11 @@ pub(super) async fn set_replica_state(part: &Partition, setup: IsrSetup<'_>) {
     let mut st = part.replica_state.lock().await;
     st.install_isr(isr, replicas, leader, now);
     st.current_leader_epoch = leader_epoch;
-    for &(follower, last_caught_up_age) in stale_followers {
+    for &StaleFollower {
+        node: follower,
+        caught_up_age: last_caught_up_age,
+    } in stale_followers
+    {
         st.per_follower.insert(
             follower,
             FollowerStats {

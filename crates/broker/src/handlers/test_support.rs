@@ -351,18 +351,40 @@ pub(crate) enum TopicRef {
     ZeroId,
 }
 
+/// A topic as a request names it: by name, by id, or by both.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WireTopic<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) id: WireUuid,
+}
+
 impl TopicRef {
     pub(crate) fn wire_reference<'a>(
         self,
-        known: (&'a str, WireUuid),
-        unknown: (&'a str, WireUuid),
-    ) -> (&'a str, WireUuid) {
+        known: WireTopic<'a>,
+        unknown: WireTopic<'a>,
+    ) -> WireTopic<'a> {
         match self {
-            Self::KnownName => (known.0, WireUuid::ZERO),
-            Self::UnknownName => (unknown.0, WireUuid::ZERO),
-            Self::KnownId => ("", known.1),
-            Self::UnknownId => ("", unknown.1),
-            Self::ZeroId => ("", WireUuid::ZERO),
+            Self::KnownName => WireTopic {
+                name: known.name,
+                id: WireUuid::ZERO,
+            },
+            Self::UnknownName => WireTopic {
+                name: unknown.name,
+                id: WireUuid::ZERO,
+            },
+            Self::KnownId => WireTopic {
+                name: "",
+                id: known.id,
+            },
+            Self::UnknownId => WireTopic {
+                name: "",
+                id: unknown.id,
+            },
+            Self::ZeroId => WireTopic {
+                name: "",
+                id: WireUuid::ZERO,
+            },
         }
     }
 }
@@ -496,6 +518,12 @@ pub(crate) fn acl(setup: AclSetup<'_>) -> krabka_metadata::AclEntry {
     }
 }
 
+/// A started in-process broker, and the directory that must outlive it.
+pub(crate) struct StartedBroker {
+    pub(crate) broker: BrokerHandle,
+    pub(crate) dir: tempfile::TempDir,
+}
+
 pub(crate) async fn start_allow_all_no_audit() -> (BrokerHandle, tempfile::TempDir) {
     start_broker_no_audit_with(|config| {
         config.authorizer = Arc::new(AllowAllAuthorizer);
@@ -578,15 +606,24 @@ pub(crate) async fn share_acknowledge_wire(
     .await
 }
 
+/// The outcome that a table case produced and the outcome it must produce.
+pub(crate) struct CaseOutcomes<T> {
+    pub(crate) actual: T,
+    pub(crate) expected: T,
+}
+
 /// Compare each table case's complete actual and expected outcome.
 pub(crate) async fn check_cases<C, T: std::fmt::Debug + PartialEq>(
     cases: impl IntoIterator<Item = C>,
-    mut drive: impl AsyncFnMut(C) -> (T, T),
+    mut drive: impl AsyncFnMut(C) -> CaseOutcomes<T>,
 ) {
     let mut actual = Vec::new();
     let mut expected = Vec::new();
     for case in cases {
-        let (got, want) = drive(case).await;
+        let CaseOutcomes {
+            actual: got,
+            expected: want,
+        } = drive(case).await;
         actual.push(got);
         expected.push(want);
     }
@@ -596,10 +633,10 @@ pub(crate) async fn check_cases<C, T: std::fmt::Debug + PartialEq>(
 /// Run an independent denied-topic model against one broker, comparing every full outcome.
 pub(crate) async fn check_denied_topic_cases<T: std::fmt::Debug + PartialEq>(
     cases: impl IntoIterator<Item = TopicResolutionCase>,
-    start: impl std::future::Future<Output = (BrokerHandle, tempfile::TempDir)>,
-    mut drive: impl AsyncFnMut(&BrokerHandle, TopicResolutionCase) -> (T, T),
+    start: impl std::future::Future<Output = StartedBroker>,
+    mut drive: impl AsyncFnMut(&BrokerHandle, TopicResolutionCase) -> CaseOutcomes<T>,
 ) {
-    let (broker, _dir) = start.await;
+    let StartedBroker { broker, dir: _dir } = start.await;
     check_cases(cases, async |case| drive(&broker, case).await).await;
     broker.shutdown().await;
 }
@@ -701,7 +738,20 @@ pub(crate) struct AcknowledgementPartitionSetup {
     pub batches: Vec<AcknowledgementBatchSetup>,
 }
 
-type WirePartitionAcknowledgements<'a, 'b> = (i32, &'a [(i64, i64, &'b [i8])]);
+/// A literal acknowledgement batch: its offsets and its per-offset types.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WireAckBatch<'a> {
+    pub(crate) first: i64,
+    pub(crate) last: i64,
+    pub(crate) types: &'a [i8],
+}
+
+/// A literal table row: a partition index and its acknowledgement batches.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WirePartitionAcknowledgements<'a, 'b> {
+    pub(crate) index: i32,
+    pub(crate) batches: &'a [WireAckBatch<'b>],
+}
 
 impl AcknowledgementPartitionSetup {
     /// One acknowledgement code covering an inclusive offset range on partition zero.
@@ -720,16 +770,20 @@ impl AcknowledgementPartitionSetup {
     }
 
     /// Adapt the literal wire tables used by malformed-request cases.
-    pub(crate) fn from_wire((index, batches): WirePartitionAcknowledgements<'_, '_>) -> Self {
+    pub(crate) fn from_wire(
+        WirePartitionAcknowledgements { index, batches }: WirePartitionAcknowledgements<'_, '_>,
+    ) -> Self {
         Self {
             index: krabka_ids::PartitionIndex(index),
             batches: batches
                 .iter()
-                .map(|&(first, last, types)| AcknowledgementBatchSetup {
-                    first_offset: krabka_log::Offset(first),
-                    last_offset: krabka_log::Offset(last),
-                    types: types.iter().copied().map(AcknowledgementCode).collect(),
-                })
+                .map(
+                    |&WireAckBatch { first, last, types }| AcknowledgementBatchSetup {
+                        first_offset: krabka_log::Offset(first),
+                        last_offset: krabka_log::Offset(last),
+                        types: types.iter().copied().map(AcknowledgementCode).collect(),
+                    },
+                )
                 .collect(),
         }
     }
@@ -1145,12 +1199,30 @@ pub(crate) async fn wait_until_creation_ends(broker: &Broker, topic: &str) {
     .expect("the creation ends");
 }
 
+/// An inclusive range of offsets in a share fetch or acknowledgement, such as
+/// an acquired row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OffsetRun {
+    pub(crate) first_offset: i64,
+    pub(crate) last_offset: i64,
+}
+
+impl OffsetRun {
+    /// The run `[first_offset, last_offset]`.
+    pub(crate) fn new(first_offset: i64, last_offset: i64) -> Self {
+        Self {
+            first_offset,
+            last_offset,
+        }
+    }
+}
+
 pub(crate) fn acquired_share_records(
     row: &krabka_protocol::owned::share_fetch_response::PartitionData,
-) -> Vec<(i64, i64)> {
+) -> Vec<OffsetRun> {
     row.acquired_records
         .iter()
-        .map(|range| (range.first_offset, range.last_offset))
+        .map(|range| OffsetRun::new(range.first_offset, range.last_offset))
         .collect()
 }
 
@@ -1244,7 +1316,10 @@ macro_rules! topic_case_outcomes {
 /// Create the share topic before loading group/partition zero's persisted state.
 macro_rules! initialized_share_topic {
     (($handle:ident, $directory:ident, $topic_id:ident), $start:expr, $topic:expr, $group:expr) => {
-        let ($handle, $directory) = $start.await;
+        let StartedBroker {
+            broker: $handle,
+            dir: $directory,
+        } = $start.await;
         let $topic_id = create_topic(&$handle, $topic).await;
         crate::test_support::initialize_share_state(
             &$handle,

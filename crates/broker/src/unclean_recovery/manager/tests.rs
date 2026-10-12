@@ -144,13 +144,15 @@ fn gated(mode: BackgroundUncleanRecovery) -> BreakGlassConfig {
     }
 }
 
-async fn audited_candidate(
-    mode: BackgroundUncleanRecovery,
-) -> (
-    krabka_audit::AuditReceiver,
-    Arc<MetadataImage>,
-    UncleanRecoveryManager,
-) {
+/// A manager over a partition whose audit rows can be read, with the image it
+/// reads and the receiver of the rows.
+struct AuditedCandidate {
+    events: krabka_audit::AuditReceiver,
+    image: Arc<MetadataImage>,
+    manager: UncleanRecoveryManager,
+}
+
+async fn audited_candidate(mode: BackgroundUncleanRecovery) -> AuditedCandidate {
     let (audit_log, events) = AuditLog::new(8);
     let source = source_with(Some(NODE), image_with_partition(1, &[1, 2]));
     let image = source.current_image();
@@ -160,7 +162,11 @@ async fn audited_candidate(
         &gated(mode),
         audit_log,
     );
-    (events, image, manager)
+    AuditedCandidate {
+        events,
+        image,
+        manager,
+    }
 }
 
 /// A manager whose break-glass configuration and audit log the caller picks.
@@ -224,7 +230,11 @@ async fn commit_fixture_election(
             image,
             partition,
             election,
-            (partition.partition_epoch, &selected_replicas, false),
+            SelectedRecovery {
+                partition_epoch: partition.partition_epoch,
+                replicas: &selected_replicas,
+                current_leader_alive: false,
+            },
         )
         .await
 }
@@ -492,7 +502,11 @@ async fn commit_rejects_exhausted_metadata_epochs() {
                 &current,
                 partition,
                 fallback_to(2),
-                (partition.partition_epoch, &replicas, false),
+                SelectedRecovery {
+                    partition_epoch: partition.partition_epoch,
+                    replicas: &replicas,
+                    current_leader_alive: false,
+                },
             )
             .await;
 
@@ -558,7 +572,11 @@ async fn commit_fences_every_change_since_replica_selection() {
                 &image,
                 pr,
                 fallback_to(winner),
-                (selected_epoch, &selected_replicas, leader_alive),
+                SelectedRecovery {
+                    partition_epoch: selected_epoch,
+                    replicas: &selected_replicas,
+                    current_leader_alive: leader_alive,
+                },
             )
             .await;
 
@@ -598,7 +616,11 @@ async fn a_recovery_that_nobody_bypassed_is_applied_rather_than_bypassed() {
         ),
     ];
     for (label, mode, job, expected_phase) in cases {
-        let (mut events, image, mgr) = audited_candidate(mode).await;
+        let AuditedCandidate {
+            mut events,
+            image,
+            manager: mgr,
+        } = audited_candidate(mode).await;
         let outcome = commit_fixture_election(&mgr, &image, &job, fallback_to(2)).await;
 
         check!(
@@ -719,7 +741,10 @@ async fn recover_one_dedups_in_flight_job() {
         liveness_with_alive(&[]).await,
     ));
     // Pre-mark this partition as already recovering.
-    mgr.in_flight.lock().await.insert(("t".to_string(), 0));
+    mgr.in_flight.lock().await.insert(InFlightKey {
+        topic: "t".to_string(),
+        partition: 0,
+    });
     let (tx, rx) = oneshot::channel();
     let j = RecoveryJob {
         reply: Some(tx),
@@ -891,8 +916,11 @@ async fn an_applied_election_names_the_proposal_that_authorized_it() {
         ("a background recovery names none", job(), String::new()),
     ];
     for (label, job, expected) in cases {
-        let (mut events, image, mgr) =
-            audited_candidate(BackgroundUncleanRecovery::AuditOnly).await;
+        let AuditedCandidate {
+            mut events,
+            image,
+            manager: mgr,
+        } = audited_candidate(BackgroundUncleanRecovery::AuditOnly).await;
         let outcome = commit_fixture_election(
             &mgr,
             &image,

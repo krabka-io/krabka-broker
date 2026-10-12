@@ -82,7 +82,11 @@ fn fetch_topic(name: &str, topic_id: WireUuid, partitions: Vec<FetchPartition>) 
 /// batch appears on the next incremental as the only partition.
 #[tokio::test]
 async fn new_session_then_incremental_filters_unchanged_partitions() {
-    let (p, _tid, r1) = Box::pin(topic_session(3, 100)).await;
+    let TopicSession {
+        p,
+        tid: _tid,
+        response: r1,
+    } = Box::pin(topic_session(3, 100)).await;
     check!(r1.error_code == 0, "no top-level error");
     check!(r1.session_id > 0, "broker allocated a session id");
     assert!(r1.responses.len() == 1, "new session emits full response");
@@ -129,7 +133,11 @@ async fn new_session_then_incremental_filters_unchanged_partitions() {
 /// they never reappear on later fetches, even after a produce.
 #[tokio::test]
 async fn forgotten_topics_drop_partitions_from_subscription() {
-    let (p, tid, r1) = Box::pin(topic_session(3, 100)).await;
+    let TopicSession {
+        p,
+        tid,
+        response: r1,
+    } = Box::pin(topic_session(3, 100)).await;
     let sid = r1.session_id;
     assert!(sid > 0);
 
@@ -197,7 +205,11 @@ async fn unknown_session_id_returns_not_found() {
 /// A stale epoch on a valid session gives `INVALID_FETCH_SESSION_EPOCH`.
 #[tokio::test]
 async fn stale_session_epoch_returns_invalid_epoch() {
-    let (p, _tid, r1) = Box::pin(topic_session(1, 0)).await;
+    let TopicSession {
+        p,
+        tid: _tid,
+        response: r1,
+    } = Box::pin(topic_session(1, 0)).await;
     let sid = r1.session_id;
     assert!(sid > 0);
 
@@ -220,7 +232,11 @@ async fn stale_session_epoch_returns_invalid_epoch() {
 /// entry. A later request with the same id is `NOT_FOUND`.
 #[tokio::test]
 async fn close_session_drops_cache_entry() {
-    let (p, tid, r1) = Box::pin(topic_session(1, 0)).await;
+    let TopicSession {
+        p,
+        tid,
+        response: r1,
+    } = Box::pin(topic_session(1, 0)).await;
     let sid = r1.session_id;
     assert!(sid > 0);
 
@@ -340,18 +356,19 @@ async fn open_session(
         .expect("new session")
 }
 
+/// A started broker, the topic id of `t`, and the response that opened a full
+/// fetch session on it.
+struct TopicSession {
+    p: support::InProcess,
+    tid: WireUuid,
+    response: krabka_protocol::owned::fetch_response::FetchResponse,
+}
+
 /// Creates t and opens a full fetch session with the caller's wait and partition count.
-async fn topic_session(
-    partitions: i32,
-    max_wait_ms: i32,
-) -> (
-    support::InProcess,
-    WireUuid,
-    krabka_protocol::owned::fetch_response::FetchResponse,
-) {
+async fn topic_session(partitions: i32, max_wait_ms: i32) -> TopicSession {
     let p = support::start().await;
     create_topic(&p, "t", partitions).await;
     let tid = topic_id_for(&p.client, "t").await;
     let response = open_session(&p.client, tid, partitions, max_wait_ms).await;
-    (p, tid, response)
+    TopicSession { p, tid, response }
 }

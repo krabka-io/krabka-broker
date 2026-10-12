@@ -501,17 +501,32 @@ mod tests {
                 is_fenced: false,
             })
         };
-        let cases: [(&str, Vec<DescribeClusterBroker>, &[i32]); 3] = [
-            ("EXTERNAL", vec![broker_row(43, "EXTERNAL", 30_001)], &[43]),
-            ("INTERNAL", vec![], &[-1]),
-            (
-                "PLAINTEXT",
-                vec![
+        /// A listener name, the broker rows it must answer with, and the controller ids.
+        struct ListenerCase {
+            listener: &'static str,
+            expected_brokers: Vec<DescribeClusterBroker>,
+            controllers: &'static [i32],
+        }
+
+        let cases: [ListenerCase; 3] = [
+            ListenerCase {
+                listener: "EXTERNAL",
+                expected_brokers: vec![broker_row(43, "EXTERNAL", 30_001)],
+                controllers: &[43],
+            },
+            ListenerCase {
+                listener: "INTERNAL",
+                expected_brokers: vec![],
+                controllers: &[-1],
+            },
+            ListenerCase {
+                listener: "PLAINTEXT",
+                expected_brokers: vec![
                     broker_row(42, "PLAINTEXT", 30_000),
                     broker_row(43, "PLAINTEXT", 30_000),
                 ],
-                &[1, 42, 43],
-            ),
+                controllers: &[1, 42, 43],
+            },
         ];
 
         let (broker_handle, _dir) = start_broker(Arc::new(AllowAllAuthorizer)).await;
@@ -527,7 +542,12 @@ mod tests {
         let broker = broker_handle.broker_arc_for_test();
         request_identity!((p, peer), principal("admin"));
 
-        for (listener, expected_brokers, controllers) in cases {
+        for ListenerCase {
+            listener,
+            expected_brokers,
+            controllers,
+        } in cases
+        {
             let ctx = RequestContext::new(
                 &p,
                 &peer,

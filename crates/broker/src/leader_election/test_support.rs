@@ -29,6 +29,19 @@ pub enum ElrFinalization {
     Enabled,
 }
 
+/// One topic-config override a test sets, by config name.
+#[derive(Clone, Copy)]
+pub struct TopicConfigOverride<'a> {
+    pub key: &'a str,
+    pub value: &'a str,
+}
+
+impl<'a> TopicConfigOverride<'a> {
+    pub const fn new(key: &'a str, value: &'a str) -> Self {
+        Self { key, value }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct ElectionSetup<'a> {
     pub topic: &'a str,
@@ -37,7 +50,7 @@ pub struct ElectionSetup<'a> {
     pub replicas: &'a [NodeId],
     pub isr: &'a [NodeId],
     pub dirs: &'a [Uuid],
-    pub configs: &'a [(&'a str, &'a str)],
+    pub configs: &'a [TopicConfigOverride<'a>],
     pub elr: ElrFinalization,
 }
 
@@ -257,7 +270,7 @@ pub fn recovery_handle_for_tests() -> UncleanRecoveryHandle {
 pub struct TopicConfigSetup<'a> {
     #[default("t")]
     pub topic: &'a str,
-    pub entries: &'a [(&'a str, &'a str)],
+    pub entries: &'a [TopicConfigOverride<'a>],
 }
 
 /// Apply the complete override map in one record, with ELR state in its own records.
@@ -265,8 +278,8 @@ pub fn set_topic_configs(img: &mut MetadataImage, setup: TopicConfigSetup<'_>) {
     let TopicConfigSetup { topic, entries } = setup;
     let overrides: BTreeMap<String, String> = entries
         .iter()
-        .filter(|(key, _)| *key != ELIGIBLE_LEADER_REPLICAS)
-        .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+        .filter(|entry| entry.key != ELIGIBLE_LEADER_REPLICAS)
+        .map(|entry| (entry.key.to_owned(), entry.value.to_owned()))
         .collect();
     if !overrides.is_empty() {
         img.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
@@ -274,11 +287,11 @@ pub fn set_topic_configs(img: &mut MetadataImage, setup: TopicConfigSetup<'_>) {
             overrides,
         }));
     }
-    for (_, value) in entries
+    for entry in entries
         .iter()
-        .filter(|(key, _)| *key == ELIGIBLE_LEADER_REPLICAS)
+        .filter(|entry| entry.key == ELIGIBLE_LEADER_REPLICAS)
     {
-        for record in test_records(topic, value) {
+        for record in test_records(topic, entry.value) {
             img.apply(&record);
         }
     }
@@ -309,18 +322,24 @@ pub fn partition_batches(batches: &[Vec<MetadataRecord>]) -> Vec<Vec<MetadataRec
         .collect()
 }
 
-/// The `(broker, fencing change)` pairs of the registration changes a liveness
-/// tick published, in submission order.
-pub fn fencing_updates(
-    batches: &[Vec<MetadataRecord>],
-) -> Vec<(u64, krabka_metadata::FencingChange)> {
+/// One broker's fencing change, as a liveness tick published it.
+#[derive(Debug, PartialEq)]
+pub struct FencingUpdate {
+    pub node_id: u64,
+    pub change: krabka_metadata::FencingChange,
+}
+
+/// The fencing changes of the registration changes a liveness tick published,
+/// in submission order.
+pub fn fencing_updates(batches: &[Vec<MetadataRecord>]) -> Vec<FencingUpdate> {
     batches
         .iter()
         .flatten()
         .filter_map(|record| match record {
-            MetadataRecord::V1BrokerRegistrationChange(change) => {
-                Some((change.node_id.0, change.fenced))
-            }
+            MetadataRecord::V1BrokerRegistrationChange(change) => Some(FencingUpdate {
+                node_id: change.node_id.0,
+                change: change.fenced,
+            }),
             _ => None,
         })
         .collect()

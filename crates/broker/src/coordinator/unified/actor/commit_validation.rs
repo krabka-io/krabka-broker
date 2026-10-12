@@ -326,16 +326,32 @@ mod tests {
         assert!(second.error_code == codes::NONE);
         // `a` still owns both partitions and is told to revoke one; then it
         // reports that it did.
-        let revoke =
-            rpc::consumer_heartbeat_owning(&handle, &a, first_epoch, &[(TOPIC, &[0, 1])]).await;
+        let revoke = rpc::consumer_heartbeat_owning(
+            &handle,
+            &a,
+            first_epoch,
+            &[rpc::OwnedPartitions {
+                topic_id: TOPIC,
+                partitions: &[0, 1],
+            }],
+        )
+        .await;
         let kept: Vec<i32> = revoke
             .assignment
             .iter()
             .flat_map(|assignment| &assignment.topic_partitions)
             .flat_map(|tp| tp.partitions.iter().copied())
             .collect();
-        let owned =
-            rpc::consumer_heartbeat_owning(&handle, &a, first_epoch, &[(TOPIC, &kept)]).await;
+        let owned = rpc::consumer_heartbeat_owning(
+            &handle,
+            &a,
+            first_epoch,
+            &[rpc::OwnedPartitions {
+                topic_id: TOPIC,
+                partitions: &kept,
+            }],
+        )
+        .await;
         assert!(owned.error_code == codes::NONE);
         let current_epoch = owned.member_epoch;
         assert!(current_epoch > first_epoch);

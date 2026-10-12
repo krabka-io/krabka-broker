@@ -14,8 +14,8 @@ use crate::{
         PartitionDelivery,
         metrics::NoDeliveryMetrics,
         test_support::{
-            BOUND_MS, NOW_MS, RecordingMetrics, ScheduleSetup, register, scheduled_partition,
-            wait_parked, wait_until, wall_at,
+            BOUND_MS, NOW_MS, RecordingMetrics, ReportedWatermark, ScheduleSetup, register,
+            scheduled_partition, wait_parked, wait_until, wall_at,
         },
     },
     partition::Partition,
@@ -25,7 +25,10 @@ use crate::{
 const THIS_BROKER: u64 = 7;
 
 fn key(topic: &str) -> PartitionKey {
-    (topic.to_owned(), PartitionIndex(0))
+    PartitionKey {
+        topic: topic.to_owned(),
+        index: PartitionIndex(0),
+    }
 }
 
 #[test]
@@ -103,6 +106,14 @@ fn the_sleep_is_capped_by_the_idle_bound_and_floored_by_the_minimum() {
     }
 }
 
+/// A [`Harness`] with one scheduled partition registered, and the directory
+/// that holds the partition's log.
+struct HarnessWithPartition {
+    dir: tempfile::TempDir,
+    harness: Harness,
+    partition: Arc<Partition>,
+}
+
 /// A scheduler wired to a manual timeline, with the registry and the recorder
 /// a test asserts on.
 ///
@@ -131,11 +142,15 @@ impl Harness {
         }
     }
 
-    fn with_partition(setup: ScheduleSetup<'_>) -> (tempfile::TempDir, Self, Arc<Partition>) {
+    fn with_partition(setup: ScheduleSetup<'_>) -> HarnessWithPartition {
         let dir = tempfile::tempdir().expect("log root");
         let harness = Self::new();
         let partition = harness.scheduled(&dir, setup);
-        (dir, harness, partition)
+        HarnessWithPartition {
+            dir,
+            harness,
+            partition,
+        }
     }
 
     fn scheduled(&self, dir: &tempfile::TempDir, setup: ScheduleSetup<'_>) -> Arc<Partition> {
@@ -174,7 +189,11 @@ fn active_and_delayed_activations() -> Vec<UnixMillis> {
 #[tokio::test]
 async fn a_batch_that_is_not_due_holds_the_watermark_and_then_releases_it() {
     // One batch that is already active, then one that comes due in 10s.
-    let (_dir, harness, partition) = Harness::with_partition(ScheduleSetup {
+    let HarnessWithPartition {
+        dir: _dir,
+        harness,
+        partition: partition,
+    } = Harness::with_partition(ScheduleSetup {
         activations: active_and_delayed_activations(),
         ..Default::default()
     });
@@ -221,7 +240,11 @@ async fn a_batch_that_is_not_due_holds_the_watermark_and_then_releases_it() {
 
 #[tokio::test]
 async fn a_topic_that_delivers_immediately_reports_nothing() {
-    let (_dir, harness, immediate) = Harness::with_partition(ScheduleSetup {
+    let HarnessWithPartition {
+        dir: _dir,
+        harness,
+        partition: immediate,
+    } = Harness::with_partition(ScheduleSetup {
         topic: "immediate",
         policy: DeliveryPolicy::Immediate,
         activations: vec![crate::test_support::UnixMillis(NOW_MS + 10_000)],
@@ -242,7 +265,11 @@ async fn a_topic_that_delivers_immediately_reports_nothing() {
 
 #[tokio::test]
 async fn a_partition_this_broker_does_not_lead_is_left_alone() {
-    let (_dir, harness, followed) = Harness::with_partition(ScheduleSetup {
+    let HarnessWithPartition {
+        dir: _dir,
+        harness,
+        partition: followed,
+    } = Harness::with_partition(ScheduleSetup {
         topic: "followed",
         activations: vec![crate::test_support::UnixMillis(NOW_MS - 60_000)],
         leader: krabka_ids::NodeId(THIS_BROKER + 1),
@@ -263,7 +290,11 @@ async fn a_partition_this_broker_does_not_lead_is_left_alone() {
 
 #[tokio::test]
 async fn the_scheduler_adopts_a_leader_partition_so_a_produce_can_rearm_it() {
-    let (_dir, harness, partition) = Harness::with_partition(ScheduleSetup {
+    let HarnessWithPartition {
+        dir: _dir,
+        harness,
+        partition: partition,
+    } = Harness::with_partition(ScheduleSetup {
         topic: "adopted",
         activations: vec![crate::test_support::UnixMillis(NOW_MS - 60_000)],
         ..Default::default()
@@ -286,34 +317,57 @@ async fn the_scheduler_adopts_a_leader_partition_so_a_produce_can_rearm_it() {
     task.await.expect("the scheduler task exits");
 }
 
-fn reported_sweep(
-    harness: &Harness,
-    metrics: &dyn DeliveryMetrics,
-) -> (DeadlineHeap, Arc<DeliveryWaker>) {
+/// The heap a sweep left, and the waker it was given.
+struct ReportedSweep {
+    heap: DeadlineHeap,
+    waker: Arc<DeliveryWaker>,
+}
+
+fn reported_sweep(harness: &Harness, metrics: &dyn DeliveryMetrics) -> ReportedSweep {
     let mut heap = DeadlineHeap::default();
     let waker = Arc::new(DeliveryWaker::new());
     sweep(
-        (harness.registry.as_ref(), NodeId(THIS_BROKER)),
-        (NOW_MS, true),
+        SweepRegistry {
+            partitions: harness.registry.as_ref(),
+            node_id: NodeId(THIS_BROKER),
+        },
+        SweepClock {
+            now_ms: NOW_MS,
+            advance_all: true,
+        },
         &mut heap,
-        (metrics, &waker),
+        SweepReporting {
+            metrics,
+            waker: &waker,
+        },
     );
-    (heap, waker)
+    ReportedSweep { heap, waker }
 }
 
 #[tokio::test]
 async fn the_sweep_reports_the_watermark_and_the_pending_count() {
-    let (_dir, harness, _partition) = Harness::with_partition(ScheduleSetup {
+    let HarnessWithPartition {
+        dir: _dir,
+        harness,
+        partition: _partition,
+    } = Harness::with_partition(ScheduleSetup {
         topic: "reported",
         activations: active_and_delayed_activations(),
         ..Default::default()
     });
 
-    let (mut heap, _waker) = reported_sweep(&harness, harness.metrics.as_ref());
+    let ReportedSweep {
+        mut heap,
+        waker: _waker,
+    } = reported_sweep(&harness, harness.metrics.as_ref());
 
     let watermarks = harness.metrics.watermarks();
     assert!(let [_] = watermarks.as_slice(), "{watermarks:?}");
-    let (topic, partition, delivery) = &watermarks[0];
+    let ReportedWatermark {
+        topic,
+        partition,
+        delivery,
+    } = &watermarks[0];
     check!(topic == "reported");
     check!(*partition == PartitionIndex(0));
     check!(
@@ -329,13 +383,20 @@ async fn the_sweep_reports_the_watermark_and_the_pending_count() {
 
 #[tokio::test]
 async fn a_sweep_with_no_metrics_of_its_own_still_advances_the_watermark() {
-    let (_dir, harness, partition) = Harness::with_partition(ScheduleSetup {
+    let HarnessWithPartition {
+        dir: _dir,
+        harness,
+        partition: partition,
+    } = Harness::with_partition(ScheduleSetup {
         topic: "quiet",
         activations: vec![crate::test_support::UnixMillis(NOW_MS - 60_000)],
         ..Default::default()
     });
 
-    let (mut heap, _waker) = reported_sweep(&harness, &NoDeliveryMetrics);
+    let ReportedSweep {
+        mut heap,
+        waker: _waker,
+    } = reported_sweep(&harness, &NoDeliveryMetrics);
 
     check!(partition.delivery_watermark() == Offset(2));
     check!(heap.earliest().is_none());
@@ -353,7 +414,11 @@ async fn check_dead_start(
 
 #[tokio::test]
 async fn the_scheduler_stops_without_sweeping_when_the_first_deadline_is_refused() {
-    let (_dir, harness, _partition) = Harness::with_partition(ScheduleSetup {
+    let HarnessWithPartition {
+        dir: _dir,
+        harness,
+        partition: _partition,
+    } = Harness::with_partition(ScheduleSetup {
         topic: "unarmable",
         activations: vec![crate::test_support::UnixMillis(NOW_MS + 10_000)],
         ..Default::default()
@@ -381,7 +446,11 @@ async fn the_scheduler_stops_when_the_first_deadline_is_armed_but_never_complete
 
 #[tokio::test]
 async fn the_scheduler_sweeps_once_and_stops_when_the_next_sleep_cannot_be_armed() {
-    let (_dir, harness, partition) = Harness::with_partition(ScheduleSetup {
+    let HarnessWithPartition {
+        dir: _dir,
+        harness,
+        partition: partition,
+    } = Harness::with_partition(ScheduleSetup {
         topic: "unrearmable",
         activations: vec![crate::test_support::UnixMillis(NOW_MS - 60_000)],
         ..Default::default()

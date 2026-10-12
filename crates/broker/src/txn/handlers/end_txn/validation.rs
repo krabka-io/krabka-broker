@@ -7,12 +7,14 @@ use krabka_log::ProducerId;
 use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
 use krabka_protocol::owned::end_txn_request::EndTxnRequest;
 
-use super::state_table::{EndTxnDecision, end_txn_decision};
+use super::state_table::{EndTxnDecision, TableRules, end_txn_decision};
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
     codes,
     handlers::RequestContext,
-    txn::{coordinator::TxnCoordinator, state::TxnEntry, version::TxnVersion},
+    txn::{
+        coordinator::TxnCoordinator, state::TxnEntry, util::ProducerIdentity, version::TxnVersion,
+    },
 };
 
 pub(super) enum EndTxnValidation {
@@ -65,9 +67,15 @@ pub(super) async fn validate_end_txn(
         let state = entry.lock().await;
         end_txn_decision(
             &state,
-            (ProducerId(request.producer_id), request.producer_epoch),
+            ProducerIdentity {
+                producer_id: ProducerId(request.producer_id),
+                producer_epoch: request.producer_epoch,
+            },
             request.committed,
-            (client_version.verified(), trunk_rules),
+            TableRules {
+                verified: client_version.verified(),
+                trunk_rules,
+            },
         )
     };
     match decision {

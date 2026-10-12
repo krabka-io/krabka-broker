@@ -15,7 +15,7 @@ use krabka_protocol::owned::{
 };
 
 use super::{
-    end_offsets::NetworkLatestOffsets,
+    end_offsets::{ErrorAnswer, NetworkLatestOffsets},
     rows::{describe_topics, unauthorized_topic},
     topics::initialized_topics,
 };
@@ -90,13 +90,16 @@ pub(super) async fn describe_group(
     // existence from such a caller.
     let (requested, unauthorized) = if let Some(topics) = group.topics {
         let allowed = allowed_topics(broker, image, ctx, &topics);
-        let (requested, denied): (Vec<_>, Vec<_>) = topics
-            .into_iter()
-            .partition(|topic| allowed.contains(topic.topic_name.as_str()));
-        (
-            requested,
-            denied.into_iter().map(unauthorized_topic).collect(),
-        )
+        let mut requested = Vec::new();
+        let mut unauthorized = Vec::new();
+        for topic in topics {
+            if allowed.contains(topic.topic_name.as_str()) {
+                requested.push(topic);
+            } else {
+                unauthorized.push(unauthorized_topic(topic));
+            }
+        }
+        (requested, unauthorized)
     } else {
         let metadata = ng.and_then(|ng| ng.share_state_partition_metadata(&gid));
         let initialized = initialized_topics(metadata.as_ref(), image);
@@ -121,7 +124,10 @@ pub(super) async fn describe_group(
         }
         // `KafkaApis` answers a failed coordinator call with the group-level
         // error and no topics, the unauthorized ones included.
-        Err((error_code, message)) => DescribeShareGroupOffsetsResponseGroup {
+        Err(ErrorAnswer {
+            code: error_code,
+            message,
+        }) => DescribeShareGroupOffsetsResponseGroup {
             group_id: gid,
             error_code,
             error_message: Some(message.to_owned()),

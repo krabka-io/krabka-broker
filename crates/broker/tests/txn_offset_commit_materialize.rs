@@ -29,8 +29,9 @@ use crate::support::{
     offsets::{offset_commit_topic, offset_fetch_group, offset_fetch_request, offset_fetch_topic},
     topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request},
     transactions::{
-        EndTransactionSetup, InitProducerSetup, ProducerIdentity, TransactionOutcome,
-        end_transaction_request, init_producer_request, txn_offset_partition, txn_offset_topic,
+        EndTransactionSetup, InitProducerSetup, ProducerEpoch, ProducerIdentity,
+        TransactionOutcome, end_transaction_request, init_producer_request, txn_offset_partition,
+        txn_offset_topic,
     },
 };
 
@@ -131,14 +132,14 @@ async fn fetch_offset(
 }
 
 /// Drive `InitProducerId → AddOffsetsToTxn → TxnOffsetCommit(offset)` for
-/// `(tid, group_id)`. Returns `(producer_id, producer_epoch)` so the caller
-/// can finalize the transaction with `EndTxn`.
+/// `(tid, group_id)`. Returns the producer identity so the caller can finalize
+/// the transaction with `EndTxn`.
 async fn begin_and_commit_offsets(
     client: &krabka_client_core::Client,
     tid: &str,
     group_id: &str,
     offset: i64,
-) -> (i64, i16) {
+) -> ProducerIdentity {
     support::find_coordinator(client, support::KEY_TYPE_TRANSACTION, tid).await;
     // Even after FindCoordinator resolves, InitProducerId can briefly observe
     // NOT_COORDINATOR while the elected leader installs locally — retry it.
@@ -207,7 +208,10 @@ async fn begin_and_commit_offsets(
         "TxnOffsetCommit: {toc:?}"
     );
 
-    (pid, epoch)
+    ProducerIdentity {
+        id: krabka_ids::ProducerId(pid),
+        epoch: ProducerEpoch(epoch),
+    }
 }
 
 /// The COMMIT marker materializes the buffered txn offsets into the group's
@@ -222,7 +226,7 @@ async fn txn_offset_commit_visible_via_offset_fetch_after_commit_marker() {
     let tid = "tid-commit";
     let group = "g-commit";
 
-    let (pid, epoch) = begin_and_commit_offsets(&p.client, tid, group, 3).await;
+    let producer = begin_and_commit_offsets(&p.client, tid, group, 3).await;
 
     // Pre-commit: the transactional offset is held under the LSO and NOT yet
     // surfaced — Kafka makes it visible to OffsetFetch only after the marker.
@@ -236,7 +240,7 @@ async fn txn_offset_commit_visible_via_offset_fetch_after_commit_marker() {
         &p.client,
         tid,
         EndTransactionSetup {
-            producer: ProducerIdentity::from_wire((pid, epoch)),
+            producer,
             ..Default::default()
         },
     )
@@ -262,14 +266,14 @@ async fn txn_offset_commit_dropped_on_abort_marker() {
     let tid = "tid-abort";
     let group = "g-abort";
 
-    let (pid, epoch) = begin_and_commit_offsets(&p.client, tid, group, 5).await;
+    let producer = begin_and_commit_offsets(&p.client, tid, group, 5).await;
 
     // EndTxn(abort): the buffer is dropped without applying.
     finish_transaction(
         &p.client,
         tid,
         EndTransactionSetup {
-            producer: ProducerIdentity::from_wire((pid, epoch)),
+            producer,
             outcome: TransactionOutcome::Abort,
         },
     )
@@ -412,7 +416,7 @@ async fn require_stable_offset_fetch_is_unstable_until_the_commit_marker() {
     let group = "g-require-stable";
 
     commit_stable_offset(&p.client, group, krabka_ids::Offset(3)).await;
-    let (pid, epoch) = begin_and_commit_offsets(&p.client, tid, group, 9).await;
+    let producer = begin_and_commit_offsets(&p.client, tid, group, 9).await;
 
     let unstable = OffsetFetchResponsePartitions {
         partition_index: 0,
@@ -436,7 +440,7 @@ async fn require_stable_offset_fetch_is_unstable_until_the_commit_marker() {
         &p.client,
         tid,
         EndTransactionSetup {
-            producer: ProducerIdentity::from_wire((pid, epoch)),
+            producer,
             ..Default::default()
         },
     )
@@ -464,13 +468,13 @@ async fn require_stable_offset_fetch_becomes_stable_again_after_an_abort_marker(
     let group = "g-require-stable-abort";
 
     commit_stable_offset(&p.client, group, krabka_ids::Offset(3)).await;
-    let (pid, epoch) = begin_and_commit_offsets(&p.client, tid, group, 9).await;
+    let producer = begin_and_commit_offsets(&p.client, tid, group, 9).await;
 
     finish_transaction(
         &p.client,
         tid,
         EndTransactionSetup {
-            producer: ProducerIdentity::from_wire((pid, epoch)),
+            producer,
             outcome: TransactionOutcome::Abort,
         },
     )

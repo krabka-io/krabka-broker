@@ -59,19 +59,26 @@ mod tests {
 
     /// The three counts of a group: records written, produce attempts, and
     /// failed writes.
-    fn counts(metrics: &BrokerMetrics, group_id: &str) -> (u64, u64, u64) {
+    #[derive(Debug, PartialEq, Eq)]
+    struct Counts {
+        records: u64,
+        produce_requests: u64,
+        failed_produce_requests: u64,
+    }
+
+    fn counts(metrics: &BrokerMetrics, group_id: &str) -> Counts {
         let label = label(group_id);
-        (
-            metrics.share_group_dlq_records.get_or_create(&label).get(),
-            metrics
+        Counts {
+            records: metrics.share_group_dlq_records.get_or_create(&label).get(),
+            produce_requests: metrics
                 .share_group_dlq_produce_requests
                 .get_or_create(&label)
                 .get(),
-            metrics
+            failed_produce_requests: metrics
                 .share_group_dlq_failed_produce_requests
                 .get_or_create(&label)
                 .get(),
-        )
+        }
     }
 
     /// Each meter counts for its own group, and eviction takes one group's
@@ -90,7 +97,12 @@ mod tests {
         metrics.evict_share_group_dlq_series("g1");
         let after = (counts(&metrics, "g1"), counts(&metrics, "g2"));
 
-        assert!(before == ((3, 2, 1), (1, 1, 0)));
-        assert!(after == ((0, 0, 0), (1, 1, 0)));
+        let counts_of = |records, produce_requests, failed_produce_requests| Counts {
+            records,
+            produce_requests,
+            failed_produce_requests,
+        };
+        assert!(before == (counts_of(3, 2, 1), counts_of(1, 1, 0)));
+        assert!(after == (counts_of(0, 0, 0), counts_of(1, 1, 0)));
     }
 }

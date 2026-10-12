@@ -12,7 +12,9 @@ use crate::support::{
     self,
     discovery::coordinator_lookup_request,
     records::ProducerValuesSetup,
-    transactions::{InitProducerSetup, claim_idempotent_producer, new_producer_request},
+    transactions::{
+        InitProducerSetup, ProducerIdentity, claim_idempotent_producer, new_producer_request,
+    },
 };
 pub(crate) use crate::support::{client::create_topic_named as create_topic, topic_id_for};
 
@@ -25,7 +27,7 @@ pub(crate) async fn init_producer(p: &support::InProcess) -> (i64, i16) {
 pub(crate) async fn init_transactional_producer(
     p: &support::InProcess,
     transactional_id: &str,
-) -> (i64, i16) {
+) -> ProducerIdentity {
     let coordinator = p
         .client
         .send(coordinator_lookup_request(
@@ -54,7 +56,7 @@ pub(crate) async fn init_transactional_producer(
             .await
             .expect("transactional InitProducerId");
         if init.error_code == 0 {
-            return (init.producer_id, init.producer_epoch);
+            return ProducerIdentity::from_wire((init.producer_id, init.producer_epoch));
         }
         assert!(
             matches!(init.error_code, 15 | 16) && tokio::time::Instant::now() < deadline,

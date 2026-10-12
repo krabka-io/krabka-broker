@@ -64,12 +64,19 @@ use support::share::coordinator_key as share_coordinator_key;
 
 use crate::support::{share::ShareProduceSetup, topics::CreateTopicSetup};
 
+/// A running broker and the directory that backs it.
+struct StartedBroker {
+    broker: BrokerHandle,
+    dir: tempfile::TempDir,
+}
+
 /// Boots one broker bound to `0.0.0.0:9092` that advertises
 /// `host.docker.internal:9092`. The Docker container's connect after Metadata
 /// then targets a hostname it can resolve. This mirrors
 /// `jvm_consumer_group_next_gen.rs::start_host_broker`.
-async fn start_host_broker() -> (BrokerHandle, tempfile::TempDir) {
-    support::start_jvm_single("krabka_broker=info,info", |_| {}).await
+async fn start_host_broker() -> StartedBroker {
+    let (broker, dir) = support::start_jvm_single("krabka_broker=info,info", |_| {}).await;
+    StartedBroker { broker, dir }
 }
 async fn connect() -> Client {
     support::client::connect_owned(
@@ -215,15 +222,17 @@ fn set_share_auto_offset_reset(bootstrap: &str, group: &str, value: &str) {
     );
 }
 
-async fn prepare_share_topic(
-    broker: &BrokerHandle,
-    topic: &str,
-    group: &str,
-) -> (Client, uuid::Uuid) {
+/// A client and the id of the share topic it created.
+struct ShareTopic {
+    client: Client,
+    tid: uuid::Uuid,
+}
+
+async fn prepare_share_topic(broker: &BrokerHandle, topic: &str, group: &str) -> ShareTopic {
     let client = connect().await;
     let tid = create_topic(broker, &client, topic).await;
     bootstrap_share_state(broker, &client, &share_coordinator_key(group, tid, 0)).await;
-    (client, tid)
+    ShareTopic { client, tid }
 }
 
 /// The main differential test. A real JVM `KafkaShareConsumer` joins a fresh
@@ -234,12 +243,12 @@ async fn prepare_share_topic(
 #[ignore = "requires Docker"]
 async fn jvm_share_consumer_reads_krabka() {
     let bootstrap = bootstrap_addr();
-    let (broker, _dir) = start_host_broker().await;
+    let StartedBroker { broker, dir: _dir } = start_host_broker().await;
     let topic = "kip932-jvm";
     let group = "jvm-share-g";
     let values = ["share-alpha", "share-bravo", "share-charlie", "share-delta"];
 
-    let (client, tid) = prepare_share_topic(&broker, topic, group).await;
+    let ShareTopic { client, tid } = prepare_share_topic(&broker, topic, group).await;
     produce(&client, topic, tid, &values).await;
 
     // Drive the real JVM KafkaShareConsumer. The group config sets the
@@ -269,7 +278,7 @@ async fn jvm_share_consumer_reads_krabka() {
 #[ignore = "requires Docker"]
 async fn jvm_share_groups_describe_state() {
     let bootstrap = bootstrap_addr();
-    let (broker, _dir) = start_host_broker().await;
+    let StartedBroker { broker, dir: _dir } = start_host_broker().await;
     let topic = "kip932-jvm-d";
     let group = "jvm-share-gd";
     let values = ["d-one", "d-two"];
@@ -307,7 +316,7 @@ async fn jvm_share_groups_describe_state() {
 #[ignore = "requires Docker"]
 async fn jvm_share_groups_list() {
     let bootstrap = bootstrap_addr();
-    let (broker, _dir) = start_host_broker().await;
+    let StartedBroker { broker, dir: _dir } = start_host_broker().await;
     let topic = "kip932-jvm-l";
     let group = "jvm-share-gl";
     let values = ["l-one", "l-two"];
@@ -338,13 +347,13 @@ async fn jvm_share_groups_list() {
 #[ignore = "requires Docker"]
 async fn jvm_share_consumer_by_duration_skips_records_outside_the_window() {
     let bootstrap = bootstrap_addr();
-    let (broker, _dir) = start_host_broker().await;
+    let StartedBroker { broker, dir: _dir } = start_host_broker().await;
     let topic = "kip932-jvm-dur";
     let group = "jvm-share-gdur";
     let stale = ["dur-stale-one", "dur-stale-two"];
     let recent = ["dur-recent-one", "dur-recent-two"];
 
-    let (client, tid) = prepare_share_topic(&broker, topic, group).await;
+    let ShareTopic { client, tid } = prepare_share_topic(&broker, topic, group).await;
     let now = now_ms();
     produce_at(&client, topic, tid, &stale, now - 2 * 60 * 60 * 1_000).await;
     produce_at(&client, topic, tid, &recent, now).await;
@@ -379,12 +388,12 @@ async fn jvm_share_consumer_by_duration_skips_records_outside_the_window() {
 #[ignore = "requires Docker"]
 async fn jvm_share_consumer_defaults_to_latest() {
     let bootstrap = bootstrap_addr();
-    let (broker, _dir) = start_host_broker().await;
+    let StartedBroker { broker, dir: _dir } = start_host_broker().await;
     let topic = "kip932-jvm-latest";
     let group = "jvm-share-glatest";
     let values = ["latest-alpha", "latest-bravo"];
 
-    let (client, tid) = prepare_share_topic(&broker, topic, group).await;
+    let ShareTopic { client, tid } = prepare_share_topic(&broker, topic, group).await;
     produce(&client, topic, tid, &values).await;
 
     let consumed = docker_run(&[
@@ -430,7 +439,7 @@ async fn register_jvm_share_group(
     group: &str,
     values: &[&str],
 ) {
-    let (client, tid) = prepare_share_topic(broker, topic, group).await;
+    let ShareTopic { client, tid } = prepare_share_topic(broker, topic, group).await;
     produce(&client, topic, tid, values).await;
     let bootstrap = bootstrap_addr();
     set_share_auto_offset_reset(bootstrap, group, "earliest");

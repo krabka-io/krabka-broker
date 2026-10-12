@@ -121,7 +121,11 @@ context_handler! {
         // INVALID_TOPIC_EXCEPTION for a name `Topic.validate` refuses).
         // Fetch-all (empty `topics`): walk every topic from the image,
         // alphabetical for deterministic pagination.
-        let (named, ordered_names, cursor_partition) = resolve_names(&image, &req);
+        let ResolvedNames {
+            named,
+            ordered_names,
+            cursor_partition,
+        } = resolve_names(&image, &req);
 
         // ── 3. Batch-authorize Describe on all candidate topics. ───────────
         let acl_by_name = authorize_topics(
@@ -375,10 +379,18 @@ fn invalid_request_response(
     }
 }
 
+/// The topics a request resolves to: whether it named them, their names in
+/// the order the response lists them, and the partition the listing resumes at.
+struct ResolvedNames {
+    named: bool,
+    ordered_names: Vec<String>,
+    cursor_partition: i32,
+}
+
 fn resolve_names(
     image: &krabka_metadata::MetadataImage,
     req: &DescribeTopicPartitionsRequest,
-) -> (bool, Vec<String>, i32) {
+) -> ResolvedNames {
     let named = !req.topics.is_empty();
     let mut ordered_names: Vec<String> = if named {
         let mut deduped: Vec<String> = req.topics.iter().map(|topic| topic.name.clone()).collect();
@@ -394,7 +406,11 @@ fn resolve_names(
         ordered_names.retain(|candidate| candidate.as_str() >= cursor.topic_name.as_str());
         cursor.partition_index
     });
-    (named, ordered_names, cursor_partition)
+    ResolvedNames {
+        named,
+        ordered_names,
+        cursor_partition,
+    }
 }
 
 #[cfg(test)]
@@ -772,26 +788,32 @@ mod tests {
     /// requested topic, in request order, none of them paginated.
     #[tokio::test]
     async fn invalid_cursor_fails_the_whole_request() {
-        let cases: [(&str, Option<RequestCursor>); 2] = [
-            (
-                "cursor topic absent from a non-empty topic list",
-                Some(RequestCursor {
+        /// A case name and the invalid cursor the request carries.
+        struct InvalidCursorCase {
+            name: &'static str,
+            cursor: Option<RequestCursor>,
+        }
+
+        let cases: [InvalidCursorCase; 2] = [
+            InvalidCursorCase {
+                name: "cursor topic absent from a non-empty topic list",
+                cursor: Some(RequestCursor {
                     topic_name: "missing".into(),
                     partition_index: 0,
                     ..Default::default()
                 }),
-            ),
-            (
-                "negative cursor partition index",
-                Some(RequestCursor {
+            },
+            InvalidCursorCase {
+                name: "negative cursor partition index",
+                cursor: Some(RequestCursor {
                     topic_name: "a".into(),
                     partition_index: -1,
                     ..Default::default()
                 }),
-            ),
+            },
         ];
 
-        for (name, cursor) in cases {
+        for InvalidCursorCase { name, cursor } in cases {
             seeded_topics_fixture!(
                 (broker_handle, _dir, broker, ctx),
                 Arc::new(crate::authorizer::AllowAllAuthorizer),
@@ -926,16 +948,40 @@ mod tests {
     #[tokio::test]
     async fn missing_topic_row_follows_topic_validate() {
         let too_long = "a".repeat(250);
-        let cases: [(&str, i16, bool); 5] = [
-            (
-                "__transaction_state",
-                codes::UNKNOWN_TOPIC_OR_PARTITION,
-                true,
-            ),
-            ("no-such-topic", codes::UNKNOWN_TOPIC_OR_PARTITION, false),
-            ("bad/name", codes::INVALID_TOPIC_EXCEPTION, false),
-            ("..", codes::INVALID_TOPIC_EXCEPTION, false),
-            (&too_long, codes::INVALID_TOPIC_EXCEPTION, false),
+        /// A requested name, the error code its row carries, and whether the
+        /// topic is internal.
+        struct MissingTopicCase<'a> {
+            name: &'a str,
+            error_code: i16,
+            is_internal: bool,
+        }
+
+        let cases: [MissingTopicCase<'_>; 5] = [
+            MissingTopicCase {
+                name: "__transaction_state",
+                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+                is_internal: true,
+            },
+            MissingTopicCase {
+                name: "no-such-topic",
+                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+                is_internal: false,
+            },
+            MissingTopicCase {
+                name: "bad/name",
+                error_code: codes::INVALID_TOPIC_EXCEPTION,
+                is_internal: false,
+            },
+            MissingTopicCase {
+                name: "..",
+                error_code: codes::INVALID_TOPIC_EXCEPTION,
+                is_internal: false,
+            },
+            MissingTopicCase {
+                name: &too_long,
+                error_code: codes::INVALID_TOPIC_EXCEPTION,
+                is_internal: false,
+            },
         ];
         broker_fixture!(
             (broker_handle, _dir, broker),
@@ -943,7 +989,12 @@ mod tests {
             context(ctx, "admin")
         );
 
-        for (name, error_code, is_internal) in cases {
+        for MissingTopicCase {
+            name,
+            error_code,
+            is_internal,
+        } in cases
+        {
             let req = request(DescribeTopicsSetup {
                 topics: vec![name].into_iter().map(str::to_owned).collect(),
                 ..Default::default()

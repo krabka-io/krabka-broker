@@ -15,7 +15,11 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use super::{IpNames, buckets::QuotaBuckets, ip_names::system_lookup};
+use super::{
+    IpNames,
+    buckets::{BucketKey, LiveBucket, QuotaBuckets},
+    ip_names::system_lookup,
+};
 use crate::metadata_source::watch_image_loop;
 
 pub async fn run(
@@ -108,7 +112,14 @@ fn token_rate(quota_key: &str, rate: f64) -> f64 {
 
 fn refresh_buckets(image: &MetadataImage, buckets: &QuotaBuckets) {
     let window = buckets.quota_window();
-    for ((quota_key, entity_key), entry) in buckets.iter() {
+    for LiveBucket {
+        key: BucketKey {
+            quota_key,
+            entity_key,
+        },
+        entry,
+    } in buckets.iter()
+    {
         let new_rate = configured_rate(image, buckets.ip_names(), &quota_key, &entity_key)
             .map_or(0.0, |rate| token_rate(&quota_key, rate));
 
@@ -171,8 +182,8 @@ mod tests {
     use super::{super::bucket_rate, *};
     use crate::{
         quota::test_support::{
-            QuotaRecordSetup, QuotaValue, UserBucketSetup, alice_app1_producer_quota, alice_bucket,
-            app1_producer_quota, image_with_quota as quota_image,
+            AliceBucket, QuotaRecordSetup, QuotaValue, UserBucketSetup, alice_app1_producer_quota,
+            alice_bucket, app1_producer_quota, image_with_quota as quota_image,
         },
         throttle::TokenBucket,
     };
@@ -216,7 +227,7 @@ mod tests {
 
     #[test]
     fn refresh_updates_existing_bucket_rate() {
-        let (buckets, b) = alice_bucket(UserBucketSetup::default());
+        let AliceBucket { buckets, bucket: b } = alice_bucket(UserBucketSetup::default());
         assert!(b.byte_rate() == bucket_rate(0.0));
 
         let img = img_with_quota(QuotaRecordSetup {
@@ -229,7 +240,7 @@ mod tests {
 
     #[test]
     fn refresh_zeroes_bucket_when_quota_removed_from_image() {
-        let (buckets, b) = alice_bucket(UserBucketSetup {
+        let AliceBucket { buckets, bucket: b } = alice_bucket(UserBucketSetup {
             rate: QuotaValue(1024.0),
             ..Default::default()
         });
@@ -245,13 +256,47 @@ mod tests {
     /// `ip` entity, as on the accept path.
     #[test]
     fn refresh_keeps_the_ip_connection_creation_rate() {
-        let cases: [(&str, Option<&str>, f64, f64); 4] = [
-            ("the exact ip entity", Some("127.0.0.1"), 3.0, 3.0),
-            ("the default ip entity", None, 3.0, 3.0),
-            ("another ip entity", Some("10.0.0.1"), 3.0, 0.0),
-            ("a rate under one per second", Some("127.0.0.1"), 0.5, 0.5),
+        /// An `ip` entity configured at `rate`, and the rate the exact-address
+        /// bucket must keep.
+        struct IpRateCase<'a> {
+            case: &'a str,
+            entity_name: Option<&'a str>,
+            rate: f64,
+            expected: f64,
+        }
+        let cases: [IpRateCase<'_>; 4] = [
+            IpRateCase {
+                case: "the exact ip entity",
+                entity_name: Some("127.0.0.1"),
+                rate: 3.0,
+                expected: 3.0,
+            },
+            IpRateCase {
+                case: "the default ip entity",
+                entity_name: None,
+                rate: 3.0,
+                expected: 3.0,
+            },
+            IpRateCase {
+                case: "another ip entity",
+                entity_name: Some("10.0.0.1"),
+                rate: 3.0,
+                expected: 0.0,
+            },
+            IpRateCase {
+                case: "a rate under one per second",
+                entity_name: Some("127.0.0.1"),
+                rate: 0.5,
+                expected: 0.5,
+            },
         ];
-        for (case, entity_name, rate, expected) in cases {
+        for IpRateCase {
+            case,
+            entity_name,
+            rate,
+            expected,
+        } in cases
+        {
             let buckets = Arc::new(QuotaBuckets::new());
             let key: EntityKey = vec![("ip".into(), Some("127.0.0.1".into()))];
             let b = buckets.get_or_create("connection_creation_rate", &key, 1.0);
@@ -507,18 +552,53 @@ mod tests {
     /// neither rounds it to a whole byte per second nor to no limit.
     #[test]
     fn refresh_keeps_a_fractional_byte_rate() {
-        let cases: [(&str, f64, f64); 6] = [
-            ("consumer_byte_rate", 2048.0, 2048.0),
-            ("consumer_byte_rate", 1.5, 1.5),
-            ("consumer_byte_rate", 0.5, 0.5),
-            ("producer_byte_rate", 2048.0, 2048.0),
-            ("producer_byte_rate", 1.5, 1.5),
-            ("producer_byte_rate", 0.5, 0.5),
+        /// A quota key configured at `rate`, and the rate its bucket must keep.
+        struct FractionalRateCase {
+            quota_key: &'static str,
+            rate: f64,
+            want: f64,
+        }
+        let cases: [FractionalRateCase; 6] = [
+            FractionalRateCase {
+                quota_key: "consumer_byte_rate",
+                rate: 2048.0,
+                want: 2048.0,
+            },
+            FractionalRateCase {
+                quota_key: "consumer_byte_rate",
+                rate: 1.5,
+                want: 1.5,
+            },
+            FractionalRateCase {
+                quota_key: "consumer_byte_rate",
+                rate: 0.5,
+                want: 0.5,
+            },
+            FractionalRateCase {
+                quota_key: "producer_byte_rate",
+                rate: 2048.0,
+                want: 2048.0,
+            },
+            FractionalRateCase {
+                quota_key: "producer_byte_rate",
+                rate: 1.5,
+                want: 1.5,
+            },
+            FractionalRateCase {
+                quota_key: "producer_byte_rate",
+                rate: 0.5,
+                want: 0.5,
+            },
         ];
         let mut actual = Vec::new();
         let mut expected = Vec::new();
-        for (quota_key, rate, want) in cases {
-            let (buckets, b) = alice_bucket(UserBucketSetup {
+        for FractionalRateCase {
+            quota_key,
+            rate,
+            want,
+        } in cases
+        {
+            let AliceBucket { buckets, bucket: b } = alice_bucket(UserBucketSetup {
                 key: quota_key,
                 rate: QuotaValue(1024.0),
             });

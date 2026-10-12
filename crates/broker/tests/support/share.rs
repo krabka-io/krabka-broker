@@ -244,21 +244,29 @@ impl<'a> From<ShareTopicSetup<'a>> for CreateTopicSetup<'a> {
     }
 }
 
+/// A broker, client and materialized data topic, with the directory behind it.
+pub struct TopicFixture {
+    pub broker: krabka_broker::BrokerHandle,
+    pub client: Arc<Client>,
+    pub dir: tempfile::TempDir,
+    pub tid: uuid::Uuid,
+}
+
 /// A broker, client and materialized data topic, retaining the fixture directory.
 pub async fn topic_fixture(
     setup: ShareTopicSetup<'_>,
     customize: impl FnOnce(&mut BrokerConfig),
-) -> (
-    krabka_broker::BrokerHandle,
-    Arc<Client>,
-    tempfile::TempDir,
-    uuid::Uuid,
-) {
+) -> TopicFixture {
     let dir = tempfile::TempDir::new().unwrap();
     let mut config = broker_config(dir.path().to_path_buf());
     customize(&mut config);
     let (broker, client, tid) = start_topic(config, setup).await;
-    (broker, client, dir, tid)
+    TopicFixture {
+        broker,
+        client,
+        dir,
+        tid,
+    }
 }
 
 /// A topic fixture that holds this binary's broker permit for the test's lifetime.
@@ -273,7 +281,12 @@ pub async fn permitted_topic_fixture(
     uuid::Uuid,
 ) {
     let permit = broker_test_permit().await;
-    let (broker, client, dir, tid) = topic_fixture(setup, customize).await;
+    let TopicFixture {
+        broker,
+        client,
+        dir,
+        tid,
+    } = topic_fixture(setup, customize).await;
     (permit, broker, client, dir, tid)
 }
 
@@ -571,14 +584,26 @@ pub struct StartGroupTopicSetup<'a> {
     pub group: &'a str,
 }
 
+/// A running broker, a client connected to it and the id of the data topic it
+/// hosts.
+pub struct StartedShareTopic {
+    pub broker: krabka_broker::BrokerHandle,
+    pub client: Arc<Client>,
+    pub topic_id: uuid::Uuid,
+}
+
 /// Bootstrap the share-state topic after creating the requested data topic.
 pub async fn start_group_topic(
     config: BrokerConfig,
     setup: StartGroupTopicSetup<'_>,
-) -> (krabka_broker::BrokerHandle, Arc<Client>, uuid::Uuid) {
+) -> StartedShareTopic {
     let (broker, client, topic_id) = Box::pin(start_topic(config, setup.topic)).await;
     bootstrap_share_state(&broker, &client, setup.group).await;
-    (broker, client, topic_id)
+    StartedShareTopic {
+        broker,
+        client,
+        topic_id,
+    }
 }
 
 pub async fn crash_follower(

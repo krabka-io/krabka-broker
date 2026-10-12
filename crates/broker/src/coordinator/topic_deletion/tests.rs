@@ -7,7 +7,7 @@ use assert2::check;
 use krabka_metadata::{DeleteTopicRecord, MetadataRecord, TopicRecord};
 use uuid::Uuid;
 
-use super::{deleted_topics, on_topics_deleted};
+use super::{DeletedTopic, GroupDeletedOffsets, deleted_topics, on_topics_deleted};
 use crate::{
     authorizer::AllowAllAuthorizer,
     coordinator::{
@@ -42,20 +42,46 @@ fn delete(name: &str) -> MetadataRecord {
 
 #[test]
 fn deleted_topics_compares_topic_ids() {
-    type Row = (&'static str, Vec<MetadataRecord>, Vec<(String, Uuid)>);
+    struct Row {
+        name: &'static str,
+        changes: Vec<MetadataRecord>,
+        expected: Vec<DeletedTopic>,
+    }
     let base = [topic("orders", 10), topic("payments", 20)];
-    let orders = || vec![("orders".to_string(), Uuid::from_u128(10))];
+    let orders = || {
+        vec![DeletedTopic {
+            name: "orders".to_string(),
+            topic_id: Uuid::from_u128(10),
+        }]
+    };
     let rows: [Row; 4] = [
-        ("no change", vec![], vec![]),
-        ("a new topic", vec![topic("refunds", 30)], vec![]),
-        ("one topic deleted", vec![delete("orders")], orders()),
-        (
-            "deleted and created again with the same name",
-            vec![delete("orders"), topic("orders", 11)],
-            orders(),
-        ),
+        Row {
+            name: "no change",
+            changes: vec![],
+            expected: vec![],
+        },
+        Row {
+            name: "a new topic",
+            changes: vec![topic("refunds", 30)],
+            expected: vec![],
+        },
+        Row {
+            name: "one topic deleted",
+            changes: vec![delete("orders")],
+            expected: orders(),
+        },
+        Row {
+            name: "deleted and created again with the same name",
+            changes: vec![delete("orders"), topic("orders", 11)],
+            expected: orders(),
+        },
     ];
-    for (name, changes, expected) in rows {
+    for Row {
+        name,
+        changes,
+        expected,
+    } in rows
+    {
         let previous = image(&base);
         let next = image(&[base.as_slice(), changes.as_slice()].concat());
         check!(deleted_topics(&previous, &next) == expected, "{name}");
@@ -68,13 +94,37 @@ fn deleted_topics_compares_topic_ids() {
 /// topic id, so they may belong to the new topic.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_loaded_partition_applies_the_remembered_deletions() {
-    let rows: [(&str, Vec<MetadataRecord>, usize); 2] = [
-        ("the name is gone", vec![], 1),
-        ("the name exists again", vec![topic("orders", 11)], 0),
+    struct Row {
+        name: &'static str,
+        current: Vec<MetadataRecord>,
+        expected_groups: usize,
+    }
+    let rows = [
+        Row {
+            name: "the name is gone",
+            current: vec![],
+            expected_groups: 1,
+        },
+        Row {
+            name: "the name exists again",
+            current: vec![topic("orders", 11)],
+            expected_groups: 0,
+        },
     ];
-    for (name, current, expected_groups) in rows {
+    for Row {
+        name,
+        current,
+        expected_groups,
+    } in rows
+    {
         let (coordinator, _log) = make_coord_with_log();
-        super::remember_deletions(&coordinator, &[("orders".to_string(), Uuid::from_u128(10))]);
+        super::remember_deletions(
+            &coordinator,
+            &[DeletedTopic {
+                name: "orders".to_string(),
+                topic_id: Uuid::from_u128(10),
+            }],
+        );
         let group = CoordinatorGroup::seeded(
             "g",
             GroupKind::Classic(ClassicGroup::new("g")),
@@ -106,15 +156,24 @@ async fn on_topics_deleted_tombstones_offsets_in_every_owned_group() {
     let changed = on_topics_deleted(
         &coordinator,
         |group_id| group_id != "not-owned",
-        &[("orders".to_string(), Uuid::from_u128(10))],
+        &[DeletedTopic {
+            name: "orders".to_string(),
+            topic_id: Uuid::from_u128(10),
+        }],
     )
     .await;
 
     check!(
         changed
             == vec![
-                ("a".to_string(), vec![("orders".to_string(), 0)]),
-                ("b".to_string(), vec![("orders".to_string(), 0)]),
+                GroupDeletedOffsets {
+                    group_id: "a".to_string(),
+                    offsets: vec![("orders".to_string(), 0)],
+                },
+                GroupDeletedOffsets {
+                    group_id: "b".to_string(),
+                    offsets: vec![("orders".to_string(), 0)],
+                },
             ]
     );
     check!(log.batches().await.len() == 2);
@@ -240,7 +299,10 @@ async fn a_recreated_topic_does_not_inherit_the_old_committed_offsets() {
     let changed = super::on_topics_deleted(
         &broker.group_coordinator,
         |_| true,
-        &[(TOPIC.to_string(), old_id)],
+        &[DeletedTopic {
+            name: TOPIC.to_string(),
+            topic_id: old_id,
+        }],
     )
     .await;
     check!(changed.is_empty());

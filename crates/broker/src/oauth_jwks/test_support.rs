@@ -41,7 +41,7 @@ pub fn dormant_timer() -> Arc<dyn Timer> {
 /// Yield-polls until `cond` holds. A bounded hang-guard makes a real stall
 /// fail the test deterministically instead of spinning forever.
 pub(crate) use crate::test_support::await_until;
-use crate::test_support::serve_loopback_tls;
+use crate::test_support::{LoopbackTlsServer, serve_loopback_tls};
 
 fn spawn_axum_server(
     listener: tokio::net::TcpListener,
@@ -123,7 +123,11 @@ pub async fn serve_jwks_https(
 ) -> (std::net::SocketAddr, CancellationToken, std::path::PathBuf) {
     use tokio::io::AsyncWriteExt as _;
 
-    serve_loopback_tls(move |mut tls| async move {
+    let LoopbackTlsServer {
+        addr,
+        shutdown,
+        cert_path,
+    } = serve_loopback_tls(move |mut tls| async move {
         use tokio::io::AsyncReadExt as _;
         // Drain a minimal request line + headers (we
         // don't parse — just ignore until empty line).
@@ -138,7 +142,8 @@ pub async fn serve_jwks_https(
         let _ = tls.write_all(body.as_bytes()).await;
         let _ = tls.shutdown().await;
     })
-    .await
+    .await;
+    (addr, shutdown, cert_path)
 }
 
 /// Serves a fixed body and counts how many HTTP requests reached the

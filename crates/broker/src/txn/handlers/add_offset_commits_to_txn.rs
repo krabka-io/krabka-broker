@@ -26,7 +26,7 @@ use crate::{
     txn::{
         coordinator::TxnCoordinator,
         state::{TopicPartition, TxnEntry, TxnState},
-        util::{now_millis, producer_fenced_wire_code},
+        util::{ProducerIdentity, now_millis, producer_fenced_wire_code},
         version::{TxnVersion, resolve_txn_version},
     },
 };
@@ -96,7 +96,10 @@ fn serve(
         let code = add_offsets_partition(
             &coord,
             &req.transactional_id,
-            (ProducerId(req.producer_id), req.producer_epoch),
+            ProducerIdentity {
+                producer_id: ProducerId(req.producer_id),
+                producer_epoch: req.producer_epoch,
+            },
             offsets_partition,
             txnv,
         )
@@ -120,16 +123,16 @@ enum AddOffsetsDecision {
 /// holds.
 fn decide(
     entry: &TxnEntry,
-    (producer_id, producer_epoch): (ProducerId, i16),
+    producer: ProducerIdentity,
     offsets_partition: &TopicPartition,
 ) -> AddOffsetsDecision {
     if entry.has_staged_producer_identity() {
         return AddOffsetsDecision::Answer(codes::CONCURRENT_TRANSACTIONS);
     }
-    if entry.producer_id != producer_id {
+    if entry.producer_id != producer.producer_id {
         return AddOffsetsDecision::Answer(codes::INVALID_PRODUCER_ID_MAPPING);
     }
-    if entry.producer_epoch != producer_epoch {
+    if entry.producer_epoch != producer.producer_epoch {
         return AddOffsetsDecision::Answer(codes::PRODUCER_FENCED);
     }
     match entry.state {
@@ -163,7 +166,7 @@ fn add_partition(entry: &mut TxnEntry, offsets_partition: TopicPartition, now_ms
 async fn add_offsets_partition(
     coord: &TxnCoordinator,
     transactional_id: &str,
-    producer: (ProducerId, i16),
+    producer: ProducerIdentity,
     offsets_partition: TopicPartition,
     txnv: TxnVersion,
 ) -> i16 {

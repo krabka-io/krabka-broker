@@ -84,7 +84,13 @@ async fn handshake_against(
 async fn reload_tls_swaps_served_cert() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let (_log_dir, _pem_dir, cert_path, key_path, mut cfg) = cert_fixture();
+    let CertFixture {
+        log_dir: _log_dir,
+        pem_dir: _pem_dir,
+        cert_path,
+        key_path,
+        mut cfg,
+    } = cert_fixture();
     // Disable the periodic watcher; this test drives reloads via the
     // explicit `BrokerHandle::reload_tls()` so it doesn't depend on
     // poll-tick timing.
@@ -134,7 +140,13 @@ async fn reload_tls_swaps_served_cert() {
 async fn periodic_watcher_reloads_on_mtime_change() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let (_log_dir, _pem_dir, cert_path, key_path, mut cfg) = cert_fixture();
+    let CertFixture {
+        log_dir: _log_dir,
+        pem_dir: _pem_dir,
+        cert_path,
+        key_path,
+        mut cfg,
+    } = cert_fixture();
     cfg.tls_reload_interval = krabka_units::millis(100);
 
     let handle = Broker::start(cfg).await.expect("broker start");
@@ -172,13 +184,17 @@ async fn periodic_watcher_reloads_on_mtime_change() {
     handle.shutdown().await;
 }
 
-fn cert_fixture() -> (
-    tempfile::TempDir,
-    tempfile::TempDir,
-    std::path::PathBuf,
-    std::path::PathBuf,
-    krabka_broker::BrokerConfig,
-) {
+/// The directories a case keeps alive, the certificate and key paths it
+/// rotates, and the broker config that serves them.
+struct CertFixture {
+    log_dir: tempfile::TempDir,
+    pem_dir: tempfile::TempDir,
+    cert_path: std::path::PathBuf,
+    key_path: std::path::PathBuf,
+    cfg: krabka_broker::BrokerConfig,
+}
+
+fn cert_fixture() -> CertFixture {
     let log_dir = tempfile::tempdir().unwrap();
     let pem_dir = tempfile::tempdir().unwrap();
     let cert_path = write(pem_dir.path(), "cert.pem", DEV_CERT_A);
@@ -194,5 +210,11 @@ fn cert_fixture() -> (
             client_auth: ClientAuthMode::Disabled,
         },
     );
-    (log_dir, pem_dir, cert_path, key_path, cfg)
+    CertFixture {
+        log_dir,
+        pem_dir,
+        cert_path,
+        key_path,
+        cfg,
+    }
 }

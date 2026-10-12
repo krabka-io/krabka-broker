@@ -454,7 +454,13 @@ pub(crate) fn check_two_members_expired(actual: (usize, i32, i32)) {
     assert2::check!(actual == (0, 4, 2));
 }
 
-type AssignmentAnswer = (&'static str, i32, bool);
+/// One case's assignment epoch, and whether its timestamp fell in the window.
+#[derive(Debug, PartialEq, Eq)]
+struct AssignmentAnswer {
+    case: &'static str,
+    epoch: i32,
+    in_window: bool,
+}
 
 /// Compare each assignment epoch and its timestamp window with an independent expected row.
 #[derive(Default)]
@@ -472,9 +478,16 @@ impl AssignmentIntervalResults {
         written: i64,
         expected: (i32, bool),
     ) {
-        self.observed
-            .push((case, epoch, (window.0..=window.1).contains(&written)));
-        self.expected.push((case, expected.0, expected.1));
+        self.observed.push(AssignmentAnswer {
+            case,
+            epoch,
+            in_window: (window.0..=window.1).contains(&written),
+        });
+        self.expected.push(AssignmentAnswer {
+            case,
+            epoch: expected.0,
+            in_window: expected.1,
+        });
     }
 
     pub(crate) fn check(&self) {
@@ -532,17 +545,23 @@ pub(crate) fn assignment_tombstones<R>(
 }
 
 /// The replay oracle and ordered Kafka deletion records for one protocol.
+pub(crate) struct ReplayFixtures<Expected, Deletion> {
+    /// Builds the expected outcome of a replay from a seed update.
+    pub(crate) expected_seed: Expected,
+    /// Makes the records that delete a whole group, in Kafka's order.
+    pub(crate) deletion: Deletion,
+}
+
+/// The replay oracle and ordered Kafka deletion records for one protocol.
 pub(crate) fn replay_fixtures<S, R>(
     seed: impl Fn() -> S,
     tombstone: impl Fn(&str, &str) -> R,
     setup: AssignmentDeletionSetup<'_>,
-) -> (
-    impl Fn(SeedUpdate<'_, S>) -> ReplayOutcome<S>,
-    impl Fn() -> Vec<R>,
-) {
-    (expected_seed(seed), move || {
-        assignment_tombstones(&tombstone, setup)
-    })
+) -> ReplayFixtures<impl Fn(SeedUpdate<'_, S>) -> ReplayOutcome<S>, impl Fn() -> Vec<R>> {
+    ReplayFixtures {
+        expected_seed: expected_seed(seed),
+        deletion: move || assignment_tombstones(&tombstone, setup),
+    }
 }
 
 /// A member deletion that leaves its target assignment behind.
@@ -569,15 +588,16 @@ pub(crate) fn replay_tombstone_constructor<K, R>(
 
 /// Independent rejection case when a member tombstone leaves its target assignment behind.
 pub(crate) fn member_deletion_with_target_case<R, S>(
-    (member, target): (R, R),
+    member: R,
+    target: R,
     tombstone: impl FnMut(&str, &str) -> R,
     error: &str,
 ) -> ReplayCase<'static, R, S> {
-    (
-        "a member tombstone while the member has a target",
-        undeleted_target_records(member, target, tombstone),
-        Err(error.into()),
-    )
+    ReplayCase {
+        case: "a member tombstone while the member has a target",
+        records: undeleted_target_records(member, target, tombstone),
+        expected: Err(error.into()),
+    }
 }
 
 /// Independent Kafka expectation for deleting a group while its member remains.
@@ -585,18 +605,18 @@ pub(crate) fn group_deletion_with_member_case<R, S>(
     member: R,
     mut tombstone: impl FnMut(&str, &str) -> R,
 ) -> ReplayCase<'static, R, S> {
-    (
-        "a group tombstone with a member left",
-        vec![
+    ReplayCase {
+        case: "a group tombstone with a member left",
+        records: vec![
             member,
             tombstone("target-epoch", ""),
             tombstone("group", ""),
         ],
-        Err(
+        expected: Err(
             "Received a tombstone record to delete group g but the group still has 1 members."
                 .into(),
         ),
-    )
+    }
 }
 
 /// Build the expected seed after applying a case's changes.
@@ -622,7 +642,11 @@ pub(crate) fn replay_outcome<R, S>(
 }
 
 /// Independently supplied records and expected replay results for one protocol.
-pub(crate) type ReplayCase<'a, R, S> = (&'a str, Vec<R>, ReplayOutcome<S>);
+pub(crate) struct ReplayCase<'a, R, S> {
+    pub(crate) case: &'a str,
+    pub(crate) records: Vec<R>,
+    pub(crate) expected: ReplayOutcome<S>,
+}
 
 /// The independent absence expectations shared by every modern protocol's deletion replay.
 pub(crate) fn deletion_replay_cases<R: Clone, S>(
@@ -631,16 +655,16 @@ pub(crate) fn deletion_replay_cases<R: Clone, S>(
 ) -> [ReplayCase<'static, R, S>; 2] {
     full_group.extend(deletion.iter().cloned());
     [
-        (
-            "Kafka's deletion order removes the whole group",
-            full_group,
-            Ok(None),
-        ),
-        (
-            "tombstones of a group the log does not hold are ignored",
-            deletion,
-            Ok(None),
-        ),
+        ReplayCase {
+            case: "Kafka's deletion order removes the whole group",
+            records: full_group,
+            expected: Ok(None),
+        },
+        ReplayCase {
+            case: "tombstones of a group the log does not hold are ignored",
+            records: deletion,
+            expected: Ok(None),
+        },
     ]
 }
 
@@ -651,10 +675,15 @@ pub(crate) fn check_replay_cases<R, S: PartialEq + std::fmt::Debug>(
     seed: impl Fn(&GroupCoordinator) -> Option<S>,
     cached: impl Fn(&GroupCoordinator) -> Option<S>,
 ) {
-    for (case, log, expected) in rows {
+    for ReplayCase {
+        case,
+        records,
+        expected,
+    } in rows
+    {
         let coordinator = make_coord();
         let outcome = replay_outcome(
-            log,
+            records,
             |record| replay(&coordinator, record),
             || seed(&coordinator),
         );

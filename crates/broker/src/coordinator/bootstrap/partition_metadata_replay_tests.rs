@@ -9,16 +9,13 @@
 use assert2::check;
 use bytes::Bytes;
 
-use super::test_support::replay_log;
+use super::test_support::{LogRecord, ReplayedCoordinator, replay_log};
 use crate::coordinator::unified::{
     GroupSeed,
     persistence_next_gen::{
         GroupMetadataValue, NextGenKey, PartitionMetadataValue, SubscribedTopicMetadata, encode_key,
     },
 };
-
-/// One replayed record: its key, and its value or `None` for a tombstone.
-type LogRecord = (Bytes, Option<Bytes>);
 
 /// What a replay leaves for group `g`.
 #[derive(Debug, PartialEq)]
@@ -57,7 +54,10 @@ fn value() -> Bytes {
 
 /// Replays one batch per record and returns what it left for group `g`.
 fn replay(records: Vec<LogRecord>) -> Outcome {
-    let (coordinator, replayed) = replay_log(records);
+    let ReplayedCoordinator {
+        coordinator,
+        replayed,
+    } = replay_log(records);
     if replayed.is_err() {
         return Outcome::Failed;
     }
@@ -69,13 +69,11 @@ fn replay(records: Vec<LogRecord>) -> Outcome {
 #[test]
 fn partition_metadata_replays_as_kafka_4_3_1_does() {
     let epoch = |epoch: i32| {
-        Some(
-            GroupMetadataValue {
-                epoch,
-                metadata_hash: 0,
-            }
-            .encode(),
-        )
+        GroupMetadataValue {
+            epoch,
+            metadata_hash: 0,
+        }
+        .encode()
     };
     // A group that the replay creates is Kafka's new `ConsumerGroup`, at
     // group and assignment epoch 1.
@@ -88,50 +86,63 @@ fn partition_metadata_replays_as_kafka_4_3_1_does() {
     version_1[1] = 1;
     let truncated = value().slice(..5);
 
-    let cases: Vec<(&str, Vec<LogRecord>, Outcome)> = vec![
-        (
-            "a value creates an empty consumer group that holds the record",
-            vec![(key(partition_metadata), Some(value()))],
-            Outcome::Group(Box::new(marked(1))),
-        ),
-        (
-            "a value marks an existing group",
-            vec![
-                (key(group_metadata), epoch(4)),
-                (key(partition_metadata), Some(value())),
+    struct Case {
+        name: &'static str,
+        records: Vec<LogRecord>,
+        expected: Outcome,
+    }
+    let cases = vec![
+        Case {
+            name: "a value creates an empty consumer group that holds the record",
+            records: vec![LogRecord::put(key(partition_metadata), value())],
+            expected: Outcome::Group(Box::new(marked(1))),
+        },
+        Case {
+            name: "a value marks an existing group",
+            records: vec![
+                LogRecord::put(key(group_metadata), epoch(4)),
+                LogRecord::put(key(partition_metadata), value()),
             ],
-            Outcome::Group(Box::new(marked(4))),
-        ),
-        (
-            "a tombstone clears the mark",
-            vec![
-                (key(group_metadata), epoch(4)),
-                (key(partition_metadata), Some(value())),
-                (key(partition_metadata), None),
+            expected: Outcome::Group(Box::new(marked(4))),
+        },
+        Case {
+            name: "a tombstone clears the mark",
+            records: vec![
+                LogRecord::put(key(group_metadata), epoch(4)),
+                LogRecord::put(key(partition_metadata), value()),
+                LogRecord::tombstone(key(partition_metadata)),
             ],
-            Outcome::Group(Box::new(GroupSeed {
+            expected: Outcome::Group(Box::new(GroupSeed {
                 group_epoch: 4,
                 ..GroupSeed::new_group()
             })),
-        ),
-        (
-            "a tombstone of a group the log does not hold is ignored",
-            vec![(key(partition_metadata), None)],
-            Outcome::NoGroup,
-        ),
-        (
-            "a value version Kafka does not know fails the load",
-            vec![(key(partition_metadata), Some(Bytes::from(version_1)))],
-            Outcome::Failed,
-        ),
-        (
-            "a value that does not decode fails the load",
-            vec![(key(partition_metadata), Some(truncated))],
-            Outcome::Failed,
-        ),
+        },
+        Case {
+            name: "a tombstone of a group the log does not hold is ignored",
+            records: vec![LogRecord::tombstone(key(partition_metadata))],
+            expected: Outcome::NoGroup,
+        },
+        Case {
+            name: "a value version Kafka does not know fails the load",
+            records: vec![LogRecord::put(
+                key(partition_metadata),
+                Bytes::from(version_1),
+            )],
+            expected: Outcome::Failed,
+        },
+        Case {
+            name: "a value that does not decode fails the load",
+            records: vec![LogRecord::put(key(partition_metadata), truncated)],
+            expected: Outcome::Failed,
+        },
     ];
 
-    for (name, records, expected) in cases {
+    for Case {
+        name,
+        records,
+        expected,
+    } in cases
+    {
         check!(replay(records) == expected, "{name}");
     }
 }

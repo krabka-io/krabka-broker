@@ -3,13 +3,18 @@
 //! topic and its overrides, and they build the request-side resource and
 //! per-key config structures that each scope handler consumes.
 
+use std::collections::BTreeMap;
+
 pub(super) use assert2::{assert, check};
 use krabka_metadata::{MetadataImage, MetadataRecord, NodeId, TopicConfigRecord};
-use krabka_protocol::owned::incremental_alter_configs_request::AlterConfigsResource;
 pub(super) use krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig;
+use krabka_protocol::owned::{
+    incremental_alter_configs_request::AlterConfigsResource,
+    incremental_alter_configs_response::AlterConfigsResourceResponse,
+};
 
 use super::{OP_DELETE, OP_SET, RESOURCE_TYPE_BROKER, RESOURCE_TYPE_TOPIC};
-use crate::test_support::{broker_registration, string_pairs};
+use crate::test_support::broker_registration;
 
 pub(super) fn make_image_with_broker(node_id: NodeId) -> MetadataImage {
     let mut img = MetadataImage::new(uuid::Uuid::nil());
@@ -48,7 +53,38 @@ pub(super) fn make_topic_resource(
     make_scoped_resource(RESOURCE_TYPE_TOPIC, name, configs)
 }
 
-pub(super) fn image_with_topic_config(name: &str, overrides: &[(&str, &str)]) -> MetadataImage {
+/// One stored topic override: a config key and its value.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct StoredOverride<'a> {
+    key: &'a str,
+    value: &'a str,
+}
+
+impl<'a> StoredOverride<'a> {
+    pub(super) fn new(key: &'a str, value: &'a str) -> Self {
+        Self { key, value }
+    }
+}
+
+/// The override map that stores `overrides`.
+pub(super) fn overrides_map(overrides: &[StoredOverride<'_>]) -> BTreeMap<String, String> {
+    overrides
+        .iter()
+        .map(|stored| (stored.key.to_owned(), stored.value.to_owned()))
+        .collect()
+}
+
+/// What an `IncrementalAlterConfigs` scope handler answered, and the records
+/// it staged.
+pub(super) struct Handled {
+    pub(super) response: AlterConfigsResourceResponse,
+    pub(super) records: Vec<MetadataRecord>,
+}
+
+pub(super) fn image_with_topic_config(
+    name: &str,
+    overrides: &[StoredOverride<'_>],
+) -> MetadataImage {
     let mut img = MetadataImage::new(uuid::Uuid::nil());
     img.apply(&MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
         name: name.into(),
@@ -58,7 +94,7 @@ pub(super) fn image_with_topic_config(name: &str, overrides: &[(&str, &str)]) ->
     }));
     img.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: name.into(),
-        overrides: string_pairs(overrides),
+        overrides: overrides_map(overrides),
     }));
     img
 }

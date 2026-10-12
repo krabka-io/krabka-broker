@@ -14,7 +14,7 @@ use super::assignment::{consumer_assignment_blob, embedded_protocol_version};
 use crate::coordinator::unified::{
     actor::{GroupTombstone, PendingRecords, classic_group_metadata_record},
     classic_state::{ClassicGroup as ClassicState, Member as ClassicMember, select_protocol},
-    consumer_state::{GroupState as ConsumerState, MemberState},
+    consumer_state::GroupState as ConsumerState,
     reconciler::ReconcileInput,
 };
 
@@ -40,7 +40,7 @@ pub(crate) fn convert_consumer_to_classic(
 ) -> ClassicState {
     let mut classic = ClassicState::new(state.group_id.clone());
     classic.protocol_type = Some("consumer".into());
-    let mut members: Vec<(&String, &MemberState)> = state
+    let mut members: Vec<_> = state
         .members
         .iter()
         .filter(|(member_id, _)| !leaving.contains(member_id))

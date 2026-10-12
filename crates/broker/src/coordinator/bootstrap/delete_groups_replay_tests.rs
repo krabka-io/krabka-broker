@@ -10,19 +10,18 @@
 use std::sync::Arc;
 
 use assert2::check;
-use bytes::Bytes;
 use krabka_log::{Offset, ProducerId};
 use krabka_protocol::records::Record;
 
 use super::replay::{finalize, replay_records};
 use crate::{
     coordinator::{
-        persistence::{GroupMetadataValue, Key},
+        persistence::GroupMetadataValue,
         test_support::{
-            DeletionTarget, DeletionTombstonesSetup, OffsetRecordSetup,
-            TopicDeletionTombstonesSetup, default_coordinator, deletion_tombstones, offset_record,
-            parsed_offset_records, replay_offset_batch as batch, temp_log,
-            topic_deletion_tombstones,
+            DeletionTarget, DeletionTombstonesSetup, NamedPartition, OffsetRecordSetup,
+            OffsetsRecord, TempLog, TopicDeletionTombstonesSetup, default_coordinator,
+            deletion_tombstones, offset_record, parsed_offset_records,
+            replay_offset_batch as batch, temp_log, topic_deletion_tombstones,
         },
         unified::{
             GroupCoordinator, actor::test_support::empty_metadata,
@@ -59,7 +58,7 @@ struct Row {
     transactional: Vec<Record>,
     /// Append a commit marker for producer 7 after the delete batch.
     marker_after_delete: MarkerAfterDelete,
-    expected_batch: Vec<(Key, Option<Bytes>)>,
+    expected_batch: Vec<OffsetsRecord>,
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -87,8 +86,14 @@ async fn a_deleted_group_and_its_offsets_stay_deleted_after_replay() {
             marker_after_delete: MarkerAfterDelete::None,
             expected_batch: deletion_tombstones(DeletionTombstonesSetup {
                 offsets: &[
-                    ("orders", krabka_ids::PartitionIndex(0)),
-                    ("payments", krabka_ids::PartitionIndex(3)),
+                    NamedPartition {
+                        topic: "orders",
+                        partition: krabka_ids::PartitionIndex(0),
+                    },
+                    NamedPartition {
+                        topic: "payments",
+                        partition: krabka_ids::PartitionIndex(3),
+                    },
                 ],
                 target: DeletionTarget::Group,
                 ..Default::default()
@@ -111,7 +116,7 @@ async fn a_deleted_group_and_its_offsets_stay_deleted_after_replay() {
     ];
 
     for row in rows {
-        let (_dir, mut log) = temp_log();
+        let TempLog { dir: _dir, mut log } = temp_log();
         // A classic GroupMetadata record makes the group exist even when it has
         // no offsets.
         let (group_key, group_value) = super::test_support::classic_group_record("g", "m1");

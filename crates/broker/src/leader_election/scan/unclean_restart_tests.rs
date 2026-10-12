@@ -9,6 +9,7 @@
 use assert2::assert;
 
 use super::*;
+use crate::leader_election::test_support::TopicConfigOverride;
 
 /// Liveness where each of `alive` heartbeated inside the current window.
 async fn alive(alive: &[u64]) -> ControllerLivenessState {
@@ -50,7 +51,7 @@ fn assert_restart_outcome(plan: &FailoverPlan, expected_unavailable: &[(String, 
 async fn a_returning_broker_leaves_the_isr_and_does_not_re_enter_the_elr() {
     let image = img_with_partition(ElectionSetup {
         elr: ElrFinalization::Enabled,
-        configs: &[(MIN_INSYNC_REPLICAS, "3")],
+        configs: &[TopicConfigOverride::new(MIN_INSYNC_REPLICAS, "3")],
         ..Default::default()
     });
 
@@ -79,7 +80,7 @@ async fn a_published_membership_is_withdrawn_without_a_partition_change() {
     let image = img_with_partition(ElectionSetup {
         isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
         elr: ElrFinalization::Enabled,
-        configs: &[(ELIGIBLE_LEADER_REPLICAS, "0:3:")],
+        configs: &[TopicConfigOverride::new(ELIGIBLE_LEADER_REPLICAS, "0:3:")],
         ..Default::default()
     });
 

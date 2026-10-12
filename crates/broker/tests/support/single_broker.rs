@@ -9,7 +9,9 @@ use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use krabka_client_core::Client;
 use tempfile::TempDir;
 
-use crate::support::client::{BrokerClientSetup, connect_owned, start_broker_client};
+use crate::support::client::{
+    BrokerClientSetup, BrokerWithClient, connect_owned, start_broker_client,
+};
 
 pub struct InProcess {
     pub broker: BrokerHandle,
@@ -52,7 +54,8 @@ pub async fn start_configured(configure: impl FnOnce(&mut BrokerConfig)) -> InPr
     // Boxed: the boot future holds the whole `BrokerConfig`, and every test
     // that awaits one of these helpers would otherwise carry it inline,
     // past `clippy::large_futures`.
-    let (broker, client) = Box::pin(boot_with_client(config, "krabka-broker-test")).await;
+    let BrokerWithClient { broker, client } =
+        Box::pin(boot_with_client(config, "krabka-broker-test")).await;
     InProcess {
         broker,
         client,
@@ -60,12 +63,12 @@ pub async fn start_configured(configure: impl FnOnce(&mut BrokerConfig)) -> InPr
     }
 }
 
-async fn boot_with_client(config: BrokerConfig, client_id: &str) -> (BrokerHandle, Client) {
+async fn boot_with_client(config: BrokerConfig, client_id: &str) -> BrokerWithClient {
     // Keep startup off the fixture's stack as LogConfig grows.
     let broker = Box::pin(Broker::start(config)).await.expect("broker start");
     broker.wait_until_broker_alive(1).await;
     let client = connect_owned(broker.listen_addr().to_string(), client_id, "client build").await;
-    (broker, client)
+    BrokerWithClient { broker, client }
 }
 
 /// Start a broker rooted at `dir` (caller owns the directory).
@@ -84,7 +87,8 @@ pub async fn start_with_dir(dir: &std::path::Path) -> (BrokerHandle, krabka_clie
     if krabka_raft::metadata_log_nonempty(&metadata_dir) {
         config.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
     }
-    boot_with_client(config, "krabka-broker-test").await
+    let BrokerWithClient { broker, client } = boot_with_client(config, "krabka-broker-test").await;
+    (broker, client)
 }
 
 /// Start a broker configured with an audit signing key and a given checkpoint cadence.
@@ -102,7 +106,8 @@ pub fn start_with_audit_key(
     config.audit_checkpoint_every_n = every_n;
     config.audit_checkpoint_every = krabka_units::hours(1); // only count trigger fires
     Box::pin(async move {
-        let (broker, client) = boot_with_client(config, "krabka-broker-test-audit-key").await;
+        let BrokerWithClient { broker, client } =
+            boot_with_client(config, "krabka-broker-test-audit-key").await;
         InProcess {
             broker,
             client,
@@ -129,7 +134,7 @@ pub async fn start_with_deny_all_authz() -> InProcess {
     config.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(HashSet::new()));
     // The broker's own heartbeat is denied too, so it stays fenced: it never
     // becomes alive in the liveness registry, and nothing here needs it to.
-    let (broker, client) = start_broker_client(
+    let BrokerWithClient { broker, client } = start_broker_client(
         config,
         BrokerClientSetup {
             client_id: "krabka-broker-test-deny",

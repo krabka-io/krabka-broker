@@ -62,7 +62,11 @@ fn diskless_partition_requires_distributed_identity_and_registry() {
 
     assert!(
         partition_wal(
-            ("topic", None, PartitionIndex(0)),
+            PartitionIdentity {
+                topic: "topic",
+                topic_id: None,
+                partition_id: PartitionIndex(0),
+            },
             log.clone(),
             false,
             None,
@@ -70,11 +74,15 @@ fn diskless_partition_requires_distributed_identity_and_registry() {
             3,
         )
         .expect("partition wal")
-        .0
+        .wal
         .is_none()
     );
     let error = partition_wal(
-        ("topic", None, PartitionIndex(0)),
+        PartitionIdentity {
+            topic: "topic",
+            topic_id: None,
+            partition_id: PartitionIndex(0),
+        },
         log.clone(),
         true,
         None,
@@ -90,7 +98,11 @@ fn diskless_partition_requires_distributed_identity_and_registry() {
     ));
 
     let error = partition_wal(
-        ("topic", Some(uuid::Uuid::new_v4()), PartitionIndex(0)),
+        PartitionIdentity {
+            topic: "topic",
+            topic_id: Some(uuid::Uuid::new_v4()),
+            partition_id: PartitionIndex(0),
+        },
         log,
         true,
         None,

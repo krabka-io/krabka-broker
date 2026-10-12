@@ -99,25 +99,32 @@ async fn find_coordinator(client: &Client) {
     }
 }
 
-async fn init_producer(client: &Client) -> (i64, i16) {
-    initialized_identity(
-        || async {
-            client
-                .send(init_producer_request(TID))
-                .await
-                .expect("InitProducerId")
-        },
-        retriable,
-        SETTLE,
+async fn init_producer(client: &Client) -> ProducerIdentity {
+    ProducerIdentity::from_wire(
+        initialized_identity(
+            || async {
+                client
+                    .send(init_producer_request(TID))
+                    .await
+                    .expect("InitProducerId")
+            },
+            retriable,
+            SETTLE,
+        )
+        .await,
     )
-    .await
 }
 
-async fn add_partition(client: &Client, producer: (i64, i16)) {
-    partition_added(client.send(add_partition_request(TID, TOPIC, producer))).await;
+async fn add_partition(client: &Client, producer: ProducerIdentity) {
+    partition_added(client.send(add_partition_request(
+        TID,
+        TOPIC,
+        (producer.id.0, producer.epoch.0),
+    )))
+    .await;
 }
 
-async fn produce(client: &Client, producer: Option<(i64, i16)>, values: &[&'static str]) {
+async fn produce(client: &Client, producer: Option<ProducerIdentity>, values: &[&'static str]) {
     let topic_id = client
         .send(topic_metadata_request(Some(vec![metadata_topic(
             Some(TOPIC.into()),
@@ -135,7 +142,7 @@ async fn produce(client: &Client, producer: Option<(i64, i16)>, values: &[&'stat
             transactional_id: TID,
             topic: TOPIC,
             topic_id,
-            producer: producer.map(ProducerIdentity::from_wire),
+            producer,
             values,
         },
         |request| client.send(request),
@@ -143,14 +150,14 @@ async fn produce(client: &Client, producer: Option<(i64, i16)>, values: &[&'stat
     .await;
 }
 
-async fn end_txn(client: &Client, (producer_id, epoch): (i64, i16)) -> EndTxnResponse {
+async fn end_txn(client: &Client, producer: ProducerIdentity) -> EndTxnResponse {
     retry_coordinator(
         || async {
             client
                 .send(end_transaction_request(
                     TID,
                     EndTransactionSetup {
-                        producer: ProducerIdentity::from_wire((producer_id, epoch)),
+                        producer,
                         ..Default::default()
                     },
                 ))
@@ -223,8 +230,8 @@ async fn a_transaction_commits_through_the_next_coordinator() {
     assert!(
         committed
             == EndTxnResponse {
-                producer_id: producer.0,
-                producer_epoch: producer.1 + 1,
+                producer_id: producer.id.0,
+                producer_epoch: producer.epoch.0 + 1,
                 ..Default::default()
             },
         "EndTxn through the next coordinator"

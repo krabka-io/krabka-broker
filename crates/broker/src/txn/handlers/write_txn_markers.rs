@@ -230,8 +230,23 @@ fn marker_error_code(topic: &str, partition: i32, error: &BrokerError) -> i16 {
 struct MarkerResults {
     markers: Vec<WritableTxnMarkerResult>,
     producers: std::collections::HashMap<i64, usize>,
-    topics: std::collections::HashMap<(i64, String), usize>,
-    partitions: std::collections::HashMap<(i64, String, i32), usize>,
+    topics: std::collections::HashMap<ProducerTopic, usize>,
+    partitions: std::collections::HashMap<ProducerPartition, usize>,
+}
+
+/// A topic row of one producer's result.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ProducerTopic {
+    producer_id: i64,
+    topic: String,
+}
+
+/// A partition row of one producer's result.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ProducerPartition {
+    producer_id: i64,
+    topic: String,
+    partition_index: i32,
 }
 
 impl MarkerResults {
@@ -248,7 +263,10 @@ impl MarkerResults {
         let topics = &mut self.markers[marker].topics;
         let topic_row = *self
             .topics
-            .entry((producer_id, topic.to_owned()))
+            .entry(ProducerTopic {
+                producer_id,
+                topic: topic.to_owned(),
+            })
             .or_insert_with(|| {
                 topics.push(WritableTxnMarkerTopicResult {
                     name: topic.to_owned(),
@@ -257,10 +275,11 @@ impl MarkerResults {
                 topics.len() - 1
             });
         let partitions = &mut topics[topic_row].partitions;
-        match self
-            .partitions
-            .entry((producer_id, topic.to_owned(), partition_index))
-        {
+        match self.partitions.entry(ProducerPartition {
+            producer_id,
+            topic: topic.to_owned(),
+            partition_index,
+        }) {
             std::collections::hash_map::Entry::Occupied(row) => {
                 partitions[*row.get()].error_code = error_code;
             }
@@ -304,7 +323,7 @@ mod tests {
         assert!(
             response
                 == &WriteTxnMarkersResponse {
-                    markers: vec![result(91, "orders", &[(1, expected_code)])],
+                    markers: vec![result(91, "orders", &[answer(1, expected_code)])],
                     unknown_tagged_fields: UnknownTaggedFields::default(),
                 },
             "{label}"
@@ -387,7 +406,21 @@ mod tests {
         }
     }
 
-    fn result(producer_id: i64, topic: &str, rows: &[(i32, i16)]) -> WritableTxnMarkerResult {
+    /// The code a marker result answers for one partition.
+    #[derive(Clone, Copy)]
+    struct PartitionAnswer {
+        partition_index: i32,
+        error_code: i16,
+    }
+
+    fn answer(partition_index: i32, error_code: i16) -> PartitionAnswer {
+        PartitionAnswer {
+            partition_index,
+            error_code,
+        }
+    }
+
+    fn result(producer_id: i64, topic: &str, rows: &[PartitionAnswer]) -> WritableTxnMarkerResult {
         WritableTxnMarkerResult {
             producer_id,
             topics: vec![WritableTxnMarkerTopicResult {
@@ -395,7 +428,10 @@ mod tests {
                 partitions: rows
                     .iter()
                     .map(
-                        |&(partition_index, error_code)| WritableTxnMarkerPartitionResult {
+                        |&PartitionAnswer {
+                             partition_index,
+                             error_code,
+                         }| WritableTxnMarkerPartitionResult {
                             partition_index,
                             error_code,
                             unknown_tagged_fields: UnknownTaggedFields::default(),
@@ -624,8 +660,12 @@ mod tests {
             bytes
                 == WriteTxnMarkersResponse {
                     markers: vec![
-                        result(91, "orders", &[(1, codes::NONE), (2, codes::NONE)]),
-                        result(92, "orders", &[(1, codes::NONE)]),
+                        result(
+                            91,
+                            "orders",
+                            &[answer(1, codes::NONE), answer(2, codes::NONE)]
+                        ),
+                        result(92, "orders", &[answer(1, codes::NONE)]),
                     ],
                     unknown_tagged_fields: UnknownTaggedFields::default(),
                 }
@@ -640,8 +680,10 @@ mod tests {
         let (broker_handle, _dir) = start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
         let group_id = "marker-materialization-group";
-        let (offsets_partition, part) =
-            super::test_support::local_offsets_partition_with_index(&broker, group_id);
+        let super::test_support::IndexedPartition {
+            index: offsets_partition,
+            partition: part,
+        } = super::test_support::local_offsets_partition_with_index(&broker, group_id);
         let value = OffsetCommitValue {
             offset: Offset(42),
             leader_epoch: 3,
@@ -689,8 +731,10 @@ mod tests {
         let (broker_handle, _dir) = start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
         let group_id = "abort-after-actor-exit";
-        let (offsets_partition, part) =
-            super::test_support::local_offsets_partition_with_index(&broker, group_id);
+        let super::test_support::IndexedPartition {
+            index: offsets_partition,
+            partition: part,
+        } = super::test_support::local_offsets_partition_with_index(&broker, group_id);
         part.produce_batch(super::test_support::transactional_offset_batch(
             (krabka_log::ProducerId(91), 4),
             (group_id, "orders", 2),

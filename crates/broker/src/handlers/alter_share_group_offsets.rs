@@ -474,48 +474,66 @@ mod tests {
     /// topic exists, expected top-level code, expected partition code)`.
     #[tokio::test]
     async fn acl_scenarios_match_kafka_semantics() {
-        type Row = (&'static str, bool, bool, bool, bool, i16, Option<i16>);
-        let rows: [Row; 4] = [
-            (
-                "group Read only is allowed (the normal share-consumer grant)",
-                true,
-                false,
-                false,
-                true,
-                codes::NONE,
-                Some(codes::NONE),
-            ),
-            (
-                "group Alter only, with no Read, is refused",
-                false,
-                true,
-                false,
-                true,
-                codes::GROUP_AUTHORIZATION_FAILED,
-                None,
-            ),
-            (
-                "group Read granted but the topic is denied",
-                true,
-                false,
-                true,
-                true,
-                codes::NONE,
-                Some(codes::TOPIC_AUTHORIZATION_FAILED),
-            ),
-            (
-                "group Read granted, topic unknown to the cluster",
-                true,
-                false,
-                false,
-                false,
-                codes::NONE,
-                Some(codes::UNKNOWN_TOPIC_OR_PARTITION),
-            ),
+        struct AclRow {
+            case: &'static str,
+            group_read: bool,
+            group_alter: bool,
+            topic_denied: bool,
+            topic_exists: bool,
+            top: i16,
+            partition: Option<i16>,
+        }
+        let rows: [AclRow; 4] = [
+            AclRow {
+                case: "group Read only is allowed (the normal share-consumer grant)",
+                group_read: true,
+                group_alter: false,
+                topic_denied: false,
+                topic_exists: true,
+                top: codes::NONE,
+                partition: Some(codes::NONE),
+            },
+            AclRow {
+                case: "group Alter only, with no Read, is refused",
+                group_read: false,
+                group_alter: true,
+                topic_denied: false,
+                topic_exists: true,
+                top: codes::GROUP_AUTHORIZATION_FAILED,
+                partition: None,
+            },
+            AclRow {
+                case: "group Read granted but the topic is denied",
+                group_read: true,
+                group_alter: false,
+                topic_denied: true,
+                topic_exists: true,
+                top: codes::NONE,
+                partition: Some(codes::TOPIC_AUTHORIZATION_FAILED),
+            },
+            AclRow {
+                case: "group Read granted, topic unknown to the cluster",
+                group_read: true,
+                group_alter: false,
+                topic_denied: false,
+                topic_exists: false,
+                top: codes::NONE,
+                partition: Some(codes::UNKNOWN_TOPIC_OR_PARTITION),
+            },
         ];
 
-        for (index, (case, group_read, group_alter, topic_denied, topic_exists, top, partition)) in
-            rows.into_iter().enumerate()
+        for (
+            index,
+            AclRow {
+                case,
+                group_read,
+                group_alter,
+                topic_denied,
+                topic_exists,
+                top,
+                partition,
+            },
+        ) in rows.into_iter().enumerate()
         {
             let topic_name = "acl-topic";
             let authorizer = Arc::new(ScenarioAuthorizer {

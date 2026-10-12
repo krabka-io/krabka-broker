@@ -8,6 +8,7 @@ use std::{
 };
 
 use assert2::assert;
+use bytes::Bytes;
 use krabka_raft::ControllerHandle;
 
 use crate::{
@@ -29,6 +30,35 @@ use crate::{
     metadata_source::MetadataSource,
     partition_registry::PartitionRegistry,
 };
+
+/// One record of a replayed log: its key, and its value or `None` for a
+/// tombstone.
+#[derive(Debug)]
+pub(super) struct LogRecord {
+    pub(super) key: Bytes,
+    pub(super) value: Option<Bytes>,
+}
+
+impl LogRecord {
+    /// A record that writes `value` under `key`.
+    pub(super) fn put(key: Bytes, value: Bytes) -> Self {
+        Self {
+            key,
+            value: Some(value),
+        }
+    }
+
+    /// A tombstone for `key`.
+    pub(super) fn tombstone(key: Bytes) -> Self {
+        Self { key, value: None }
+    }
+}
+
+/// A coordinator and what a replay of a log into it returned.
+pub(super) struct ReplayedCoordinator<T> {
+    pub(super) coordinator: Arc<GroupCoordinator>,
+    pub(super) replayed: T,
+}
 
 /// Start a controller, wait until it reports a leader, and return the
 /// handle.
@@ -126,10 +156,10 @@ pub(super) fn classic_group_record(
 pub(super) fn consumer_group_records(
     epoch: i32,
     classic: Option<ClassicMemberMetadata>,
-) -> [(bytes::Bytes, bytes::Bytes); 2] {
+) -> [LogRecord; 2] {
     use crate::coordinator::unified::persistence_next_gen as ng;
     [
-        (
+        LogRecord::put(
             ng::encode_key(&ng::NextGenKey::GroupMetadata {
                 group_id: "g".into(),
             })
@@ -140,7 +170,7 @@ pub(super) fn consumer_group_records(
             }
             .encode(),
         ),
-        (
+        LogRecord::put(
             ng::encode_key(&ng::NextGenKey::MemberMetadata {
                 group_id: "g".into(),
                 member_id: "m1".into(),
@@ -162,26 +192,15 @@ pub(super) fn consumer_group_records(
     ]
 }
 
-/// Replay ordinary values through the same parser and record application path.
-pub(super) fn replay_values(
-    coordinator: &Arc<GroupCoordinator>,
-    records: impl IntoIterator<Item = (bytes::Bytes, bytes::Bytes)>,
-) -> super::replay::Replayed {
-    replay_stream(
-        coordinator,
-        records.into_iter().map(|(key, value)| (key, Some(value))),
-    )
-}
-
 /// Apply a stream of record values and tombstones in log order.
 pub(super) fn replay_stream(
     coordinator: &Arc<GroupCoordinator>,
-    stream: impl IntoIterator<Item = (bytes::Bytes, Option<bytes::Bytes>)>,
+    stream: impl IntoIterator<Item = LogRecord>,
 ) -> super::replay::Replayed {
     use super::replay::{Replayed, apply_record, apply_tombstone};
     let mut replayed = Replayed::default();
     let batch = krabka_protocol::records::RecordBatch::default();
-    for (key, value) in stream {
+    for LogRecord { key, value } in stream {
         let key = parse_key(&key).unwrap();
         match value {
             Some(value) => apply_record(coordinator, &mut replayed, key, &value, &batch).unwrap(),
@@ -195,22 +214,25 @@ pub(super) fn replay_stream(
 /// k2 snapshot. The caller supplies the literal k6 value or tombstone.
 pub(super) fn replay_classic_residue(
     target_metadata: Option<bytes::Bytes>,
-) -> (Arc<GroupCoordinator>, super::replay::Replayed) {
+) -> ReplayedCoordinator<super::replay::Replayed> {
     use crate::coordinator::unified::persistence_next_gen::{NextGenKey, encode_key};
     let coordinator = bare_coordinator();
     let (key, value) = classic_group_record("g", "m1");
     let stream = [
-        (
-            encode_key(&NextGenKey::TargetAssignmentMetadata {
+        LogRecord {
+            key: encode_key(&NextGenKey::TargetAssignmentMetadata {
                 group_id: "g".into(),
             })
             .unwrap(),
-            target_metadata,
-        ),
-        (key, Some(value)),
+            value: target_metadata,
+        },
+        LogRecord::put(key, value),
     ];
     let replayed = replay_stream(&coordinator, stream);
-    (coordinator, replayed)
+    ReplayedCoordinator {
+        coordinator,
+        replayed,
+    }
 }
 
 pub(super) async fn assert_classic_replayed(coordinator: &GroupCoordinator) {
@@ -251,7 +273,7 @@ pub(super) fn commit_record_for_group(
     })
 }
 
-/// Write each `(key, value)` record (a `None` value is a tombstone) to a fresh
+/// Write each [`LogRecord`] (a `None` value is a tombstone) to a fresh
 /// log as a batch of its own, then replay that log into a [`bare_coordinator`].
 ///
 /// Returns the coordinator the replay seeded and what [`replay_records`]
@@ -259,16 +281,13 @@ pub(super) fn commit_record_for_group(
 ///
 /// [`replay_records`]: super::replay::replay_records
 pub(super) fn replay_log(
-    records: impl IntoIterator<Item = (bytes::Bytes, Option<bytes::Bytes>)>,
-) -> (
-    Arc<GroupCoordinator>,
-    Result<super::replay::Replayed, BrokerError>,
-) {
+    records: impl IntoIterator<Item = LogRecord>,
+) -> ReplayedCoordinator<Result<super::replay::Replayed, BrokerError>> {
     use krabka_protocol::records::{Record, RecordBatch};
     let coordinator = bare_coordinator();
     let dir = tempfile::tempdir().unwrap();
     let mut log = krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
-    for (key, value) in records {
+    for LogRecord { key, value } in records {
         log.append(&mut RecordBatch {
             records: vec![Record {
                 key: Some(key),
@@ -280,5 +299,8 @@ pub(super) fn replay_log(
         .unwrap();
     }
     let replayed = super::replay::replay_records(&log, &coordinator);
-    (coordinator, replayed)
+    ReplayedCoordinator {
+        coordinator,
+        replayed,
+    }
 }

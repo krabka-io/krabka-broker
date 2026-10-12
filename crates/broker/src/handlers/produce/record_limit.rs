@@ -33,11 +33,9 @@ use crate::{api_catalog::UnstableApiVersions, config_keys::resolve_max_decompres
 /// a batch the producer did not compress.
 pub(super) fn exceeds_decompressed_limit(
     prepared: &PreparedBatch,
-    (image, node, topic): (
-        &krabka_metadata::MetadataImage,
-        krabka_metadata::NodeId,
-        &str,
-    ),
+    image: &krabka_metadata::MetadataImage,
+    node: krabka_metadata::NodeId,
+    topic: &str,
     unstable: UnstableApiVersions,
     policy: RecordDecompressionPolicy,
 ) -> bool {

@@ -221,10 +221,12 @@ mod tests {
                 },
             ),
         ];
-        let (actual, expected): (Vec<_>, Vec<_>) = rows
-            .into_iter()
-            .map(|(entries, config)| (with(entries), config))
-            .unzip();
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (entries, config) in rows {
+            actual.push(with(entries));
+            expected.push(config);
+        }
         assert!(actual == expected);
         assert!(matches!(broker.for_group(None), Cow::Borrowed(_)));
     }

@@ -171,23 +171,51 @@ pub fn combine_state_batches(
 
 /// The priority of a batch: the higher delivery count wins, then the higher
 /// delivery state. `Reverse` makes the winner the first key of a map.
-type Priority = Reverse<(i16, i8)>;
+type Priority = Reverse<BatchPriority>;
+
+/// A batch's delivery count and delivery state, in the order that decides
+/// which batch wins an overlap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct BatchPriority {
+    delivery_count: i16,
+    delivery_state: i8,
+}
+
+/// A batch boundary of the sweep: an offset where a batch of some priority
+/// begins or, one past its last offset, ends.
+#[derive(Debug, Clone, Copy)]
+struct SweepEvent {
+    offset: i64,
+    is_begin: bool,
+    priority: Priority,
+}
 
 /// Kafka's event-driven sweep over the pruned batches.
 fn sweep_merge(batches: &[StateBatch]) -> Vec<StateBatch> {
-    // (offset, is_begin, priority). `false` sorts before `true`, so an END
-    // comes before a BEGIN at the same offset.
-    let mut events: Vec<(i64, bool, Priority)> = batches
+    // `false` sorts before `true`, so an END comes before a BEGIN at the same
+    // offset.
+    let mut events: Vec<SweepEvent> = batches
         .iter()
         .flat_map(|b| {
-            let priority = Reverse((b.delivery_count, b.delivery_state));
+            let priority = Reverse(BatchPriority {
+                delivery_count: b.delivery_count,
+                delivery_state: b.delivery_state,
+            });
             [
-                (b.first_offset.0, true, priority),
-                (b.last_offset.0.saturating_add(1), false, priority),
+                SweepEvent {
+                    offset: b.first_offset.0,
+                    is_begin: true,
+                    priority,
+                },
+                SweepEvent {
+                    offset: b.last_offset.0.saturating_add(1),
+                    is_begin: false,
+                    priority,
+                },
             ]
         })
         .collect();
-    events.sort_by_key(|&(offset, is_begin, _)| (offset, is_begin));
+    events.sort_by_key(|event| (event.offset, event.is_begin));
 
     let mut active: BTreeMap<Priority, usize> = BTreeMap::new();
     let mut out: Vec<StateBatch> = Vec::new();
@@ -195,14 +223,16 @@ fn sweep_merge(batches: &[StateBatch]) -> Vec<StateBatch> {
     let mut open_winner: Option<Priority> = None;
     let mut i = 0;
     while i < events.len() {
-        let offset = events[i].0;
+        let offset = events[i].offset;
         if let Some(winner) = open_winner
             && offset > open_from
         {
             append_coalesced(&mut out, open_from, offset - 1, winner);
         }
-        while i < events.len() && events[i].0 == offset {
-            let (_, is_begin, priority) = events[i];
+        while i < events.len() && events[i].offset == offset {
+            let SweepEvent {
+                is_begin, priority, ..
+            } = events[i];
             i += 1;
             if is_begin {
                 *active.entry(priority).or_insert(0) += 1;
@@ -220,7 +250,10 @@ fn sweep_merge(batches: &[StateBatch]) -> Vec<StateBatch> {
 }
 
 fn append_coalesced(out: &mut Vec<StateBatch>, from: i64, to: i64, winner: Priority) {
-    let Reverse((delivery_count, delivery_state)) = winner;
+    let Reverse(BatchPriority {
+        delivery_count,
+        delivery_state,
+    }) = winner;
     if let Some(tail) = out.last_mut()
         && tail.last_offset.0 + 1 == from
         && tail.delivery_state == delivery_state
@@ -246,13 +279,13 @@ mod tests {
         DeliveryAttemptCount, FixtureDeliveryState, StateBatchSetup, state_batch as batch,
     };
 
-    type CombinerRow = (
-        &'static str,
-        Vec<StateBatch>,
-        Vec<StateBatch>,
-        Offset,
-        Vec<StateBatch>,
-    );
+    struct CombinerRow {
+        name: &'static str,
+        so_far: Vec<StateBatch>,
+        new: Vec<StateBatch>,
+        start: Offset,
+        expected: Vec<StateBatch>,
+    }
 
     struct CombinerBatches {
         available_first_ten: StateBatch,
@@ -278,27 +311,33 @@ mod tests {
 
     fn initial_combiner_rows(batches: &CombinerBatches) -> Vec<CombinerRow> {
         vec![
-            ("both empty", vec![], vec![], Offset(0), vec![]),
-            (
-                "one batch passes through",
-                vec![],
-                vec![batches.available_at_100.clone()],
-                Offset(-1),
-                vec![batches.available_at_100.clone()],
-            ),
-            (
-                "disjoint batches stay apart and sort",
-                vec![batch(StateBatchSetup {
+            CombinerRow {
+                name: "both empty",
+                so_far: vec![],
+                new: vec![],
+                start: Offset(0),
+                expected: vec![],
+            },
+            CombinerRow {
+                name: "one batch passes through",
+                so_far: vec![],
+                new: vec![batches.available_at_100.clone()],
+                start: Offset(-1),
+                expected: vec![batches.available_at_100.clone()],
+            },
+            CombinerRow {
+                name: "disjoint batches stay apart and sort",
+                so_far: vec![batch(StateBatchSetup {
                     bounds: Offset(110)..=Offset(119),
                     ..Default::default()
                 })],
-                vec![batch(StateBatchSetup {
+                new: vec![batch(StateBatchSetup {
                     bounds: Offset(100)..=Offset(104),
                     delivery: FixtureDeliveryState::Acknowledged,
                     ..Default::default()
                 })],
-                Offset(-1),
-                vec![
+                start: Offset(-1),
+                expected: vec![
                     batch(StateBatchSetup {
                         bounds: Offset(100)..=Offset(104),
                         delivery: FixtureDeliveryState::Acknowledged,
@@ -309,30 +348,30 @@ mod tests {
                         ..Default::default()
                     }),
                 ],
-            ),
-            (
-                "adjacent equal batches coalesce",
-                vec![batch(StateBatchSetup {
+            },
+            CombinerRow {
+                name: "adjacent equal batches coalesce",
+                so_far: vec![batch(StateBatchSetup {
                     bounds: Offset(100)..=Offset(104),
                     ..Default::default()
                 })],
-                vec![batch(StateBatchSetup {
+                new: vec![batch(StateBatchSetup {
                     bounds: Offset(105)..=Offset(109),
                     ..Default::default()
                 })],
-                Offset(-1),
-                vec![batches.available_at_100.clone()],
-            ),
-            (
-                "the higher delivery count wins an overlap",
-                vec![batches.available_at_100.clone()],
-                vec![batch(StateBatchSetup {
+                start: Offset(-1),
+                expected: vec![batches.available_at_100.clone()],
+            },
+            CombinerRow {
+                name: "the higher delivery count wins an overlap",
+                so_far: vec![batches.available_at_100.clone()],
+                new: vec![batch(StateBatchSetup {
                     bounds: Offset(103)..=Offset(105),
                     attempts: DeliveryAttemptCount(2),
                     ..Default::default()
                 })],
-                Offset(-1),
-                vec![
+                start: Offset(-1),
+                expected: vec![
                     batch(StateBatchSetup {
                         bounds: Offset(100)..=Offset(102),
                         ..Default::default()
@@ -347,38 +386,38 @@ mod tests {
                         ..Default::default()
                     }),
                 ],
-            ),
-            (
-                "the higher state wins at an equal count",
-                vec![batch(StateBatchSetup {
+            },
+            CombinerRow {
+                name: "the higher state wins at an equal count",
+                so_far: vec![batch(StateBatchSetup {
                     bounds: Offset(100)..=Offset(109),
                     delivery: FixtureDeliveryState::Acknowledged,
                     ..Default::default()
                 })],
-                vec![batches.available_at_100.clone()],
-                Offset(-1),
-                vec![batch(StateBatchSetup {
+                new: vec![batches.available_at_100.clone()],
+                start: Offset(-1),
+                expected: vec![batch(StateBatchSetup {
                     bounds: Offset(100)..=Offset(109),
                     delivery: FixtureDeliveryState::Acknowledged,
                     ..Default::default()
                 })],
-            ),
-            (
-                "the start offset drops and clips",
-                vec![
+            },
+            CombinerRow {
+                name: "the start offset drops and clips",
+                so_far: vec![
                     batch(StateBatchSetup {
                         bounds: Offset(90)..=Offset(99),
                         ..Default::default()
                     }),
                     batches.available_at_100.clone(),
                 ],
-                vec![batch(StateBatchSetup {
+                new: vec![batch(StateBatchSetup {
                     bounds: Offset(95)..=Offset(104),
                     delivery: FixtureDeliveryState::Acknowledged,
                     ..Default::default()
                 })],
-                Offset(103),
-                vec![
+                start: Offset(103),
+                expected: vec![
                     batch(StateBatchSetup {
                         bounds: Offset(103)..=Offset(104),
                         delivery: FixtureDeliveryState::Acknowledged,
@@ -389,23 +428,23 @@ mod tests {
                         ..Default::default()
                     }),
                 ],
-            ),
+            },
         ]
     }
 
     fn regression_combiner_rows(batches: &CombinerBatches) -> Vec<CombinerRow> {
         vec![
             // The rows of issue #935.
-            (
-                "a later batch splits the stored one",
-                vec![batches.available_first_ten.clone()],
-                vec![batch(StateBatchSetup {
+            CombinerRow {
+                name: "a later batch splits the stored one",
+                so_far: vec![batches.available_first_ten.clone()],
+                new: vec![batch(StateBatchSetup {
                     bounds: Offset(5)..=Offset(9),
                     delivery: FixtureDeliveryState::Acknowledged,
                     ..Default::default()
                 })],
-                Offset(0),
-                vec![
+                start: Offset(0),
+                expected: vec![
                     batch(StateBatchSetup {
                         bounds: Offset(0)..=Offset(4),
                         ..Default::default()
@@ -416,62 +455,62 @@ mod tests {
                         ..Default::default()
                     }),
                 ],
-            ),
-            (
-                "a lower delivery count loses",
-                vec![batch(StateBatchSetup {
+            },
+            CombinerRow {
+                name: "a lower delivery count loses",
+                so_far: vec![batch(StateBatchSetup {
                     attempts: DeliveryAttemptCount(2),
                     ..Default::default()
                 })],
-                vec![batches.acknowledged_first_ten.clone()],
-                Offset(0),
-                vec![batch(StateBatchSetup {
+                new: vec![batches.acknowledged_first_ten.clone()],
+                start: Offset(0),
+                expected: vec![batch(StateBatchSetup {
                     attempts: DeliveryAttemptCount(2),
                     ..Default::default()
                 })],
-            ),
-            (
-                "a higher state wins over the stored batch",
-                vec![batches.available_first_ten.clone()],
-                vec![batches.acknowledged_first_ten.clone()],
-                Offset(0),
-                vec![batches.acknowledged_first_ten.clone()],
-            ),
-            (
-                "a lone batch is clipped at the start offset",
-                vec![batches.available_first_ten.clone()],
-                vec![],
-                Offset(5),
-                vec![batch(StateBatchSetup {
+            },
+            CombinerRow {
+                name: "a higher state wins over the stored batch",
+                so_far: vec![batches.available_first_ten.clone()],
+                new: vec![batches.acknowledged_first_ten.clone()],
+                start: Offset(0),
+                expected: vec![batches.acknowledged_first_ten.clone()],
+            },
+            CombinerRow {
+                name: "a lone batch is clipped at the start offset",
+                so_far: vec![batches.available_first_ten.clone()],
+                new: vec![],
+                start: Offset(5),
+                expected: vec![batch(StateBatchSetup {
                     bounds: Offset(5)..=Offset(9),
                     ..Default::default()
                 })],
-            ),
-            (
-                "adjacent equal batches coalesce at start offset 0",
-                vec![batch(StateBatchSetup {
+            },
+            CombinerRow {
+                name: "adjacent equal batches coalesce at start offset 0",
+                so_far: vec![batch(StateBatchSetup {
                     bounds: Offset(0)..=Offset(4),
                     delivery: FixtureDeliveryState::Acknowledged,
                     ..Default::default()
                 })],
-                vec![batch(StateBatchSetup {
+                new: vec![batch(StateBatchSetup {
                     delivery: FixtureDeliveryState::Acknowledged,
                     bounds: Offset(5)..=Offset(9),
                     ..Default::default()
                 })],
-                Offset(0),
-                vec![batches.acknowledged_first_ten.clone()],
-            ),
-            (
-                "an inner batch splits the stored one in three",
-                vec![batches.available_first_ten.clone()],
-                vec![batch(StateBatchSetup {
+                start: Offset(0),
+                expected: vec![batches.acknowledged_first_ten.clone()],
+            },
+            CombinerRow {
+                name: "an inner batch splits the stored one in three",
+                so_far: vec![batches.available_first_ten.clone()],
+                new: vec![batch(StateBatchSetup {
                     bounds: Offset(3)..=Offset(5),
                     delivery: FixtureDeliveryState::Archived,
                     attempts: DeliveryAttemptCount(3),
                 })],
-                Offset(-1),
-                vec![
+                start: Offset(-1),
+                expected: vec![
                     batch(StateBatchSetup {
                         bounds: Offset(0)..=Offset(2),
                         ..Default::default()
@@ -486,23 +525,23 @@ mod tests {
                         ..Default::default()
                     }),
                 ],
-            ),
-            (
-                "a batch wholly below the start offset is dropped",
-                vec![],
-                vec![
+            },
+            CombinerRow {
+                name: "a batch wholly below the start offset is dropped",
+                so_far: vec![],
+                new: vec![
                     batches.available_first_ten.clone(),
                     batch(StateBatchSetup {
                         bounds: Offset(20)..=Offset(29),
                         ..Default::default()
                     }),
                 ],
-                Offset(20),
-                vec![batch(StateBatchSetup {
+                start: Offset(20),
+                expected: vec![batch(StateBatchSetup {
                     bounds: Offset(20)..=Offset(29),
                     ..Default::default()
                 })],
-            ),
+            },
         ]
     }
 
@@ -510,7 +549,13 @@ mod tests {
     #[test]
     fn combine_matches_kafka_combiner() {
         let batches = CombinerBatches::default();
-        for (name, so_far, new, start, expected) in initial_combiner_rows(&batches)
+        for CombinerRow {
+            name,
+            so_far,
+            new,
+            start,
+            expected,
+        } in initial_combiner_rows(&batches)
             .into_iter()
             .chain(regression_combiner_rows(&batches))
         {
