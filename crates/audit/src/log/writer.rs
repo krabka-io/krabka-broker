@@ -342,13 +342,14 @@ mod tests {
             AuditLog,
             test_support::{
                 AuditEventCount, CheckpointFrequency, CheckpointSetup,
-                FailableSink as TestFailableSink, ROOMY_CAP, await_until, failed_sink_stats,
-                finish_lifecycle_writer, finish_writer, header, life, params, quiet_params,
-                roomy_spool, spawn_writer, test_signer,
+                FailableSink as TestFailableSink, ROOMY_CAP, SinkStats, await_until,
+                failed_sink_stats, finish_lifecycle_writer, finish_writer, header, life, params,
+                quiet_params, roomy_spool, spawn_writer, test_signer,
             },
         },
         sink::{AuditSink, MemorySink},
         spool::PendingLosses,
+        test_support::{TempSpool, TestSigner},
     };
 
     #[derive(
@@ -380,10 +381,13 @@ mod tests {
         }
     }
 
-    fn memory_writer(
-        directory: &std::path::Path,
-        setup: MemoryWriterSetup,
-    ) -> (Arc<AuditLog>, Arc<MemorySink>, tokio::task::JoinHandle<()>) {
+    struct MemoryWriter {
+        log: Arc<AuditLog>,
+        sink: Arc<MemorySink>,
+        handle: tokio::task::JoinHandle<()>,
+    }
+
+    fn memory_writer(directory: &std::path::Path, setup: MemoryWriterSetup) -> MemoryWriter {
         let MemoryWriterSetup {
             capacity,
             checkpoints,
@@ -392,14 +396,14 @@ mod tests {
         let (log, receiver) = AuditLog::new(capacity.0);
         let sink = Arc::new(MemorySink::default());
         let handle = spawn_writer(receiver, quiet_params(sink.clone(), spool, checkpoints));
-        (log, sink, handle)
+        MemoryWriter { log, sink, handle }
     }
 
-    type SignedWriterFixture = (
-        Vec<u8>,
-        tempfile::TempDir,
-        (Arc<AuditLog>, Arc<MemorySink>, tokio::task::JoinHandle<()>),
-    );
+    struct SignedWriterFixture {
+        public_key: Vec<u8>,
+        directory: tempfile::TempDir,
+        writer: MemoryWriter,
+    }
 
     #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
     struct SignedWriterSetup {
@@ -412,7 +416,7 @@ mod tests {
     }
 
     fn signed_writer(setup: SignedWriterSetup) -> SignedWriterFixture {
-        let (signer, public_key) = test_signer();
+        let TestSigner { signer, public_key } = test_signer();
         let directory = tempfile::tempdir().unwrap();
         let writer = memory_writer(
             directory.path(),
@@ -425,7 +429,11 @@ mod tests {
                 },
             },
         );
-        (public_key, directory, writer)
+        SignedWriterFixture {
+            public_key,
+            directory,
+            writer,
+        }
     }
 
     struct PendingLossWriter {
@@ -462,7 +470,8 @@ mod tests {
     #[tokio::test]
     async fn emitted_events_reach_the_sink_in_order() {
         let dir = tempfile::tempdir().unwrap();
-        let (log, sink, handle) = memory_writer(dir.path(), MemoryWriterSetup::default());
+        let MemoryWriter { log, sink, handle } =
+            memory_writer(dir.path(), MemoryWriterSetup::default());
 
         finish_lifecycle_writer(log, handle, &[NodeId(1), NodeId(2), NodeId(3)]).await;
 
@@ -477,7 +486,11 @@ mod tests {
     async fn chained_records_carry_seq_and_prev_hash() {
         let dir = tempfile::tempdir().unwrap();
         // no signer, huge interval => no checkpoints, just chaining
-        let (log, sink, h) = memory_writer(dir.path(), MemoryWriterSetup::default());
+        let MemoryWriter {
+            log,
+            sink,
+            handle: h,
+        } = memory_writer(dir.path(), MemoryWriterSetup::default());
         finish_lifecycle_writer(log, h, &[NodeId(1), NodeId(2)]).await;
 
         let recs = sink.records();
@@ -501,7 +514,16 @@ mod tests {
     #[tokio::test]
     async fn checkpoints_emitted_by_count_and_verify_against_recomputed_head() {
         // checkpoint every 2 records; long interval so only count triggers
-        let (pubkey, _dir, (log, sink, h)) = signed_writer(SignedWriterSetup {
+        let SignedWriterFixture {
+            public_key: pubkey,
+            directory: _dir,
+            writer:
+                MemoryWriter {
+                    log,
+                    sink,
+                    handle: h,
+                },
+        } = signed_writer(SignedWriterSetup {
             capacity: QueueCapacity(64),
             frequency: CheckpointFrequency::Every(AuditEventCount(2)),
         });
@@ -538,7 +560,16 @@ mod tests {
     #[tokio::test]
     async fn shutdown_emits_final_checkpoint_for_pending_tail() {
         // every_n large so only the shutdown path emits
-        let (pubkey, _dir, (log, sink, h)) = signed_writer(SignedWriterSetup::default());
+        let SignedWriterFixture {
+            public_key: pubkey,
+            directory: _dir,
+            writer:
+                MemoryWriter {
+                    log,
+                    sink,
+                    handle: h,
+                },
+        } = signed_writer(SignedWriterSetup::default());
         finish_lifecycle_writer(log, h, &[NodeId(1), NodeId(2), NodeId(3)]).await;
 
         let recs = sink.records();
@@ -567,7 +598,7 @@ mod tests {
 
     #[tokio::test]
     async fn writer_stops_when_a_ticker_cannot_be_armed() {
-        let (_dir, spool) = roomy_spool();
+        let TempSpool { dir: _dir, spool } = roomy_spool();
         let sink = Arc::new(MemorySink::default());
         let (log, rx) = AuditLog::new(16);
         let mut params = params(sink.clone(), spool, Arc::new(AuditStats::new()));
@@ -585,13 +616,13 @@ mod tests {
 
     #[tokio::test]
     async fn failed_checkpoint_increments_dropped() {
-        let (_dir, spool) = roomy_spool();
+        let TempSpool { dir: _dir, spool } = roomy_spool();
         let sink = Arc::new(TestFailableSink::default());
         sink.allow_n(1);
         let stats = Arc::new(AuditStats::new());
         let (log, rx) = AuditLog::new(4);
         let mut params = params(sink, spool, Arc::clone(&stats));
-        params.signer = Some(test_signer().0);
+        params.signer = Some(test_signer().signer);
         params.checkpoint_every_n = 1;
         params.spool = None;
         let handle = spawn_writer(rx, params);
@@ -610,7 +641,7 @@ mod tests {
 
     #[tokio::test]
     async fn pending_loss_marker_advances_since_checkpoint_without_spool() {
-        let (signer, _pubkey) = test_signer();
+        let TestSigner { signer, .. } = test_signer();
         let sink = Arc::new(MemorySink::default());
         let PendingLossWriter {
             log,
@@ -654,8 +685,8 @@ mod tests {
 
     #[tokio::test]
     async fn pending_loss_marker_advances_since_checkpoint_with_spool() {
-        let (signer, _pubkey) = test_signer();
-        let (sink, stats) = failed_sink_stats();
+        let TestSigner { signer, .. } = test_signer();
+        let SinkStats { sink, stats } = failed_sink_stats();
         let PendingLossWriter {
             log,
             receiver: rx,

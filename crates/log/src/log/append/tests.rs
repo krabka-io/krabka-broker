@@ -12,11 +12,11 @@ use crate::{
     io::{FileIo, LogIo},
     leader_epoch_checkpoint::EpochEntry,
     log::test_support::{
-        abort_marker, append_transaction, assert_empty_append_state, assert_only_active,
+        TempLog, abort_marker, append_transaction, assert_empty_append_state, assert_only_active,
         check_append_time_lookup, configured_test_log, gzip_value, install_stamps,
         log_append_time_log, rolling_test_log, sample_batch, sample_batch_with_epoch, sample_log,
         stamped_test_log, test_batch_at, test_log, tiny_segments, transactional_batch,
-        verbatim_from, write_with_budget,
+        EncodedVerbatim, verbatim_from, write_with_budget,
     },
     name::log_path,
     retention::now_ms,
@@ -91,7 +91,7 @@ fn assert_storage_full(error: &LogError) {
 
 #[test]
 fn partial_write_rolls_back_cursor_and_recovers_pre_append_state() {
-    let (dir, mut log) = test_log();
+    let TempLog { dir, mut log } = test_log();
     fail_after_bytes(&mut log, 16);
 
     let error = log.append(&mut sample_batch(2)).unwrap_err();
@@ -106,7 +106,7 @@ fn partial_write_rolls_back_cursor_and_recovers_pre_append_state() {
 
 #[test]
 fn shorter_append_after_partial_write_leaves_no_physical_tail() {
-    let (dir, mut log) = test_log();
+    let TempLog { dir, mut log } = test_log();
     let mut first = sample_batch(1);
     log.append(&mut first).unwrap();
     let log_path = log_path(dir.path(), 0);
@@ -222,21 +222,21 @@ fn every_appended_batch_is_assigned_its_leader_epoch() {
             (
                 "append_verbatim",
                 Box::new(|log, _, epoch| {
-                    let (_wire, vb) = verbatim_from(&test_batch_at(0), LeaderEpoch(epoch));
+                    let EncodedVerbatim { batch: vb, .. } = verbatim_from(&test_batch_at(0), LeaderEpoch(epoch));
                     log.append_verbatim(&vb).expect("append_verbatim");
                 }),
             ),
             (
                 "append_verbatim_at",
                 Box::new(|log, i, epoch| {
-                    let (_wire, vb) = verbatim_from(&test_batch_at(0), LeaderEpoch(epoch));
+                    let EncodedVerbatim { batch: vb, .. } = verbatim_from(&test_batch_at(0), LeaderEpoch(epoch));
                     log.append_verbatim_at(&vb, at(i))
                         .expect("append_verbatim_at");
                 }),
             ),
         ];
         for (path, append) in &paths {
-            let (_dir, mut log) = test_log();
+            let TempLog { dir: _dir, mut log } = test_log();
             for (i, epoch) in offered.iter().enumerate() {
                 append(&mut log, i, *epoch);
             }
@@ -250,7 +250,7 @@ fn every_appended_batch_is_assigned_its_leader_epoch() {
 
 #[test]
 fn append_at_uses_reconciled_frontier_floor() {
-    let (dir, mut log) = test_log();
+    let TempLog { dir, mut log } = test_log();
     let mut prefix = test_batch_at(0);
     log.append(&mut prefix).unwrap();
 
@@ -277,7 +277,7 @@ fn append_at_uses_reconciled_frontier_floor() {
 /// log's later reads, not the write.
 #[test]
 fn a_replicated_batch_is_not_held_to_the_decompressed_record_limit() {
-    let (_dir, mut log) = configured_test_log(LogConfig {
+    let TempLog { dir: _dir, mut log } = configured_test_log(LogConfig {
         max_decompressed_record: Some(bytes(100)),
         ..LogConfig::default()
     });
@@ -291,7 +291,7 @@ fn a_replicated_batch_is_not_held_to_the_decompressed_record_limit() {
 
 #[test]
 fn assigned_append_uses_reconciled_frontier_floor() {
-    let (_dir, mut log) = test_log();
+    let TempLog { dir: _dir, mut log } = test_log();
     log.append(&mut test_batch_at(0)).unwrap();
     log.reconcile_next_offset(Offset(3));
 
@@ -305,7 +305,7 @@ fn assigned_append_uses_reconciled_frontier_floor() {
 
 #[test]
 fn invalid_interval_is_write_free_and_a_corrected_retry_succeeds() {
-    let (_dir, mut log) = test_log();
+    let TempLog { dir: _dir, mut log } = test_log();
     let mut invalid = sample_batch(1);
     invalid.last_offset_delta = -1;
 
@@ -321,7 +321,7 @@ fn invalid_interval_is_write_free_and_a_corrected_retry_succeeds() {
 
 #[test]
 fn successor_overflow_is_rejected_before_log_mutation() {
-    let (_dir, mut log) = test_log();
+    let TempLog { dir: _dir, mut log } = test_log();
     log.reconcile_next_offset(Offset(i64::MAX));
     let mut batch = sample_batch(1);
 
@@ -333,7 +333,7 @@ fn successor_overflow_is_rejected_before_log_mutation() {
 
 #[test]
 fn sidecar_failure_rolls_back_bytes_frontiers_and_allows_retry() {
-    let (_dir, mut log) = stamped_test_log(100, 1);
+    let TempLog { dir: _dir, mut log } = stamped_test_log(100, 1);
     log.stamp_indexes.clear();
 
     let error = log.append(&mut sample_batch(1)).unwrap_err();
@@ -351,17 +351,17 @@ fn sidecar_failure_rolls_back_bytes_frontiers_and_allows_retry() {
 
 #[test]
 fn segment_bytes_are_synced_before_durable_sidecars() {
-    let (_dir, mut stamped_log) = stamped_test_log(100, 1);
+    let TempLog { dir: _dir, log: mut stamped_log } = stamped_test_log(100, 1);
     let stamp_syncs = std::sync::Arc::new(CountSync(std::sync::atomic::AtomicUsize::new(0)));
     stamped_log.test_set_io(stamp_syncs.clone());
 
     stamped_log.append(&mut sample_batch(1)).unwrap();
     assert!(stamp_syncs.0.load(std::sync::atomic::Ordering::Relaxed) == 1);
 
-    let (_dir, mut transaction_log) = test_log();
+    let TempLog { dir: _dir, log: mut transaction_log } = test_log();
     let txn_syncs = std::sync::Arc::new(CountSync(std::sync::atomic::AtomicUsize::new(0)));
     transaction_log.test_set_io(txn_syncs.clone());
-    append_transaction(&mut transaction_log, (7, 0), &["value"]);
+    append_transaction(&mut transaction_log, 7, 0, &["value"]);
     assert!(txn_syncs.0.load(std::sync::atomic::Ordering::Relaxed) == 0);
 
     transaction_log.append(&mut abort_marker(7, 0)).unwrap();
@@ -370,7 +370,7 @@ fn segment_bytes_are_synced_before_durable_sidecars() {
 
 #[test]
 fn post_roll_failure_restores_the_previous_active_segment() {
-    let (_dir, mut log) = configured_test_log(LogConfig {
+    let TempLog { dir: _dir, mut log } = configured_test_log(LogConfig {
         flush_on_append: true,
         ..tiny_segments()
     });
@@ -414,7 +414,7 @@ fn post_roll_partial_write_restores_the_previous_active_segment() {
 
 #[test]
 fn append_assigns_monotonic_offsets() {
-    let (_dir, mut log) = test_log();
+    let TempLog { dir: _dir, mut log } = test_log();
     let mut b1 = sample_batch(3);
     let mut b2 = sample_batch(2);
     let (first_offset, _) = log.append(&mut b1).unwrap();
@@ -426,7 +426,7 @@ fn append_assigns_monotonic_offsets() {
 
 #[test]
 fn append_at_matching_offset_preserves_caller_offset() {
-    let (_dir, mut log) = test_log();
+    let TempLog { dir: _dir, mut log } = test_log();
     let mut b = sample_batch(3);
     // Pretend the caller (a replicator) already knows the leader's
     // assigned offset for this batch is 0.
@@ -444,7 +444,7 @@ fn append_at_matching_offset_preserves_caller_offset() {
 /// offset, the duplicate or divergence a replicator has to notice.
 #[test]
 fn append_at_below_the_log_end_offset_errors() {
-    let (_dir, mut log) = test_log();
+    let TempLog { dir: _dir, mut log } = test_log();
     log.append(&mut sample_batch(3)).unwrap();
     let mut b = sample_batch(2);
     let err = log.append_at(&mut b, Offset(2)).unwrap_err();
@@ -463,7 +463,7 @@ fn append_at_below_the_log_end_offset_errors() {
 /// compacted leader's log has between two batches.
 #[test]
 fn append_at_past_the_log_end_offset_leaves_a_hole() {
-    let (_dir, mut log) = test_log();
+    let TempLog { dir: _dir, mut log } = test_log();
     log.append_at(&mut sample_batch(2), Offset(0)).unwrap();
     let mut b = sample_batch(2);
 
@@ -484,7 +484,7 @@ fn append_at_past_the_log_end_offset_leaves_a_hole() {
 #[test]
 fn segment_rolls_when_bytes_exceeded() {
     // tiny so we roll fast
-    let (dir, _log) = sample_log(
+    let TempLog { dir, log: _log } = sample_log(
         LogConfig {
             segment_size: bytes(200),
             ..LogConfig::default()
@@ -530,7 +530,7 @@ fn segment_ms_rolls_against_the_incoming_batch_timestamp() {
         ),
     ];
     for (segment_ms, first_ts, incoming_ts, expect_roll, label) in cases {
-        let (_dir, mut log) = configured_test_log(LogConfig {
+        let TempLog { dir: _dir, mut log } = configured_test_log(LogConfig {
             segment_size: gibibytes(1),
             segment_roll_interval: millis(segment_ms),
             ..LogConfig::default()
@@ -557,7 +557,7 @@ fn segment_ms_rolls_against_the_incoming_batch_timestamp() {
 fn an_idle_partition_never_rolls() {
     use krabka_units::prelude::millis;
 
-    let (_dir, mut log) = configured_test_log(LogConfig {
+    let TempLog { dir: _dir, mut log } = configured_test_log(LogConfig {
         segment_roll_interval: millis(1),
         ..LogConfig::default()
     });
@@ -612,7 +612,7 @@ fn a_full_offset_or_time_index_rolls_the_segment() {
         ),
     ];
     for (label, segment_index_size, rising, expected) in cases {
-        let (_dir, mut log) = configured_test_log(LogConfig {
+        let TempLog { dir: _dir, mut log } = configured_test_log(LogConfig {
             index_interval: bytes(1),
             segment_index_size,
             ..LogConfig::default()
@@ -671,7 +671,7 @@ fn roll_reopens_stampindex_for_new_segment() {
 
 #[test]
 fn append_records_epoch_transition() {
-    let (_dir, mut log) = test_log();
+    let TempLog { dir: _dir, mut log } = test_log();
     let mut b = sample_batch_with_epoch(3, 0);
     log.append(&mut b).unwrap();
     let mut b2 = sample_batch_with_epoch(2, 1); // 2 records at epoch 1
@@ -708,7 +708,7 @@ fn only_batch(log: &Log) -> RecordBatch {
 /// record while the bit is set.
 #[test]
 fn log_append_time_stamps_the_batch_and_leaves_the_producer_timestamps_alone() {
-    let (dir, mut log) = log_append_time_log();
+    let TempLog { dir, mut log } = log_append_time_log();
     let mut produced = test_batch_at(0);
     produced.base_timestamp = 1_000;
     produced.max_timestamp = 1_000;
@@ -744,7 +744,7 @@ fn log_append_time_stamps_the_batch_and_leaves_the_producer_timestamps_alone() {
 /// `logAppendTimeMs` to report and the records keep the producer's clock.
 #[test]
 fn create_time_leaves_the_batch_untouched_and_reports_no_stamp() {
-    let (dir, mut log) = test_log();
+    let TempLog { dir, mut log } = test_log();
     let mut produced = test_batch_at(0);
     let expected = RecordBatch {
         base_offset: 0,
@@ -764,7 +764,7 @@ fn create_time_leaves_the_batch_untouched_and_reports_no_stamp() {
 /// producer's own timestamp finds nothing, and the stamp finds the batch.
 #[test]
 fn offset_for_timestamp_answers_in_append_time() {
-    let (dir, mut log) = log_append_time_log();
+    let TempLog { dir, mut log } = log_append_time_log();
     let mut produced = test_batch_at(0);
     // Far enough in the past that no clock reading can collide with it.
     produced.base_timestamp = 1_000;
@@ -828,7 +828,7 @@ fn a_monotonic_scheduled_log_refuses_a_batch_that_precedes_its_schedule() {
             let end = log.log_end_offset();
 
             let result = if verbatim {
-                let (_wire, batch) =
+                let EncodedVerbatim { batch, .. } =
                     verbatim_from(&batch_delivered_at(delivery_ms), LeaderEpoch(1));
                 log.append_verbatim(&batch).map(|(base, _stamp)| base)
             } else {
@@ -863,7 +863,7 @@ fn only_a_monotonic_scheduled_log_reads_the_schedule() {
     check!(log.append(&mut batch_delivered_at(0)).is_ok());
     drop(dir);
 
-    let (dir, mut log) = test_log();
+    let TempLog { dir, mut log } = test_log();
     log.append(&mut batch_delivered_at(2_000)).unwrap();
     check!(log.append(&mut batch_delivered_at(0)).is_ok());
     drop(dir);

@@ -11,7 +11,8 @@ use crate::{
     error::RemoteStorageError,
     metadata::RemoteLogSegmentMetadata,
     storage_manager::{
-        ArtifactBody, IndexType, RemoteStorageManager, partition_dir_name, remote_operation,
+        ArtifactBody, IndexType, RemoteStorageManager, SegmentArtifact, partition_dir_name,
+        remote_operation,
         segment_file_name, segment_suffixes,
     },
 };
@@ -72,7 +73,7 @@ impl RemoteStorageManager for LocalTieredStorage {
             let dir = self.partition_dir(metadata);
             fs::create_dir_all(&dir)?;
 
-            for (suffix, body) in data.artifacts() {
+            for SegmentArtifact { suffix, body } in data.artifacts() {
                 let path = self.segment_path(metadata, suffix);
                 match body {
                     ArtifactBody::File(source) => {

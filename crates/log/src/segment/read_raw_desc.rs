@@ -160,8 +160,9 @@ mod tests {
     use krabka_units::prelude::{bytes, mebibytes};
 
     use super::*;
-    use crate::segment::test_support::{
-        DENSE_INDEX, recording_advice, test_batch_at, test_segment,
+    use crate::{
+        segment::test_support::{DENSE_INDEX, recording_advice, test_batch_at, test_segment},
+        test_support::AdviceCall,
     };
 
     // `pread` a `FileRegion` into a fresh `Vec`. These are the bytes that the
@@ -320,6 +321,12 @@ mod tests {
             .unwrap();
         let region = desc.region.expect("a read inside the segment");
         assert2::check!(region.len == usize::try_from(budget).unwrap());
-        assert2::check!(advice.take() == vec![(region.offset, 2 * budget)]);
+        assert2::check!(
+            advice.take()
+                == vec![AdviceCall {
+                    offset: region.offset,
+                    len: 2 * budget
+                }]
+        );
     }
 }

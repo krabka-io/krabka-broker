@@ -210,7 +210,10 @@ mod tests {
     use assert2::check;
 
     use super::*;
-    use crate::test_support::{accept_http_request, http_listener, s3_config, serve_http_pages};
+    use crate::test_support::{
+        HttpListener, HttpPage, HttpServer, accept_http_request, http_listener, s3_config,
+        serve_http_pages,
+    };
 
     const GCS_TEST_KEY: &str = r#"{
         "private_key":"unused",
@@ -230,8 +233,8 @@ mod tests {
                 "object-lock",
                 "<ObjectLockConfiguration><ObjectLockEnabled>Enabled</ObjectLockEnabled><Rule><DefaultRetention><Mode>COMPLIANCE</Mode><Days>30</Days></DefaultRetention></Rule></ObjectLockConfiguration>",
             ),
-        ].into_iter().map(|(query, body)| (format!("GET /bucket?{query}= HTTP/1.1"), "200 OK", body)).collect();
-        let (endpoint, server) = serve_http_pages(pages, true).await;
+        ].into_iter().map(|(query, body)| HttpPage::new(format!("GET /bucket?{query}= HTTP/1.1"), "200 OK", body)).collect();
+        let HttpServer { endpoint, server } = serve_http_pages(pages, true).await;
         let cfg = s3_config("bucket", endpoint);
 
         verify_s3_worm_bucket(&cfg).await.unwrap();
@@ -327,9 +330,9 @@ mod tests {
     /// way past that the request is the control-plane call this module claims
     /// to make. Returns the endpoint to point a `GcsConfig` at, and the task
     /// to join once the check has run.
-    async fn serve_bucket_policy(body: &'static str) -> (String, tokio::task::JoinHandle<()>) {
+    async fn serve_bucket_policy(body: &'static str) -> HttpServer {
         serve_http_pages(
-            vec![("GET /storage/v1/b/bucket?fields=".into(), "200 OK", body)],
+            vec![HttpPage::new("GET /storage/v1/b/bucket?fields=", "200 OK", body)],
             false,
         )
         .await
@@ -347,7 +350,7 @@ mod tests {
 
     #[tokio::test]
     async fn confirms_gcs_versioning_and_locked_retention() {
-        let (endpoint, server) = serve_bucket_policy(
+        let HttpServer { endpoint, server } = serve_bucket_policy(
             r#"{"versioning":{"enabled":true},"retentionPolicy":{"retentionPeriod":"86400","isLocked":true}}"#,
         )
         .await;
@@ -376,7 +379,7 @@ mod tests {
                 "locked GCS retention policy",
             ),
         ] {
-            let (endpoint, server) = serve_bucket_policy(body).await;
+            let HttpServer { endpoint, server } = serve_bucket_policy(body).await;
 
             let error = verify_gcs_worm_bucket(&gcs_cfg(endpoint))
                 .await
@@ -389,7 +392,7 @@ mod tests {
     #[tokio::test]
     async fn bucket_checks_obey_request_and_retry_deadlines() {
         for (gcs, retry_deadline) in [(false, false), (true, false), (false, true), (true, true)] {
-            let (listener, endpoint) = http_listener().await;
+            let HttpListener { listener, endpoint } = http_listener().await;
             let server = tokio::spawn(async move {
                 let _socket = accept_http_request(listener).await;
                 std::future::pending::<()>().await;

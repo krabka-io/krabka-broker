@@ -444,7 +444,12 @@ mod tests {
             }
             seg.seal().unwrap();
             check!(
-                (seg.time_index.entry_count(), seg.time_index.last_entry()) == expected,
+                (
+                    seg.time_index.entry_count(),
+                    seg.time_index
+                        .last_entry()
+                        .map(|entry| (entry.timestamp, entry.relative_offset))
+                ) == expected,
                 "{label}"
             );
         }

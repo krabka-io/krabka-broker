@@ -10,7 +10,8 @@
 use std::collections::BTreeSet;
 
 use krabka_metadata::{
-    KRaftVersionRange, Voter, VoterEndpoint, VoterSet, metadata_version::KRAFT_VERSION_FEATURE,
+    FeatureLevelRecord, KRaftVersionRange, Voter, VoterEndpoint, VoterSet,
+    metadata_version::KRAFT_VERSION_FEATURE,
 };
 use uuid::Uuid;
 
@@ -25,7 +26,7 @@ pub(super) fn is_dynamic_format(args: &FormatArgs) -> Result<bool, String> {
     let dynamic =
         args.standalone || !args.initial_controllers.is_empty() || args.no_initial_controllers;
     let mut requested = None;
-    for (name, level) in &args.feature {
+    for FeatureLevelRecord { name, level } in &args.feature {
         if name != KRAFT_VERSION_FEATURE {
             continue;
         }
@@ -242,28 +243,38 @@ mod tests {
 
         let directory = DirectoryId(Uuid::from_u128(3));
         let controllers = "3@host:9093:00000000-0000-0000-0000-000000000003";
-        // (quorum flags, listener name flag, endpoint name written)
-        let cases: [(&[&str], &[&str], &str); 4] = [
-            (
-                &["--standalone", "--controller-listener", "host:9093"],
-                &[],
-                "CONTROLLER",
-            ),
-            (
-                &["--standalone", "--controller-listener", "host:9093"],
-                &["--controller-listener-name", "CONTROLLER_PLAINTEXT"],
-                "CONTROLLER_PLAINTEXT",
-            ),
-            (
-                &["--initial-controllers", controllers],
-                &["--controller-listener-name", "controller_plaintext"],
-                "CONTROLLER_PLAINTEXT",
-            ),
-            (&["--initial-controllers", controllers], &[], "CONTROLLER"),
+        /// The quorum flags, the listener name flag, and the endpoint name
+        /// written.
+        struct Case<'a> {
+            quorum: &'a [&'a str],
+            name: &'a [&'a str],
+            written: &'a str,
+        }
+        let cases = [
+            Case {
+                quorum: &["--standalone", "--controller-listener", "host:9093"],
+                name: &[],
+                written: "CONTROLLER",
+            },
+            Case {
+                quorum: &["--standalone", "--controller-listener", "host:9093"],
+                name: &["--controller-listener-name", "CONTROLLER_PLAINTEXT"],
+                written: "CONTROLLER_PLAINTEXT",
+            },
+            Case {
+                quorum: &["--initial-controllers", controllers],
+                name: &["--controller-listener-name", "controller_plaintext"],
+                written: "CONTROLLER_PLAINTEXT",
+            },
+            Case {
+                quorum: &["--initial-controllers", controllers],
+                name: &[],
+                written: "CONTROLLER",
+            },
         ];
         let named: Vec<Vec<String>> = cases
             .iter()
-            .map(|(quorum, name, _)| {
+            .map(|Case { quorum, name, .. }| {
                 let cli = Cli::try_parse_from(
                     ["krabka-format", "--log-dir", "/data", "--node-id", "3"]
                         .into_iter()
@@ -280,7 +291,7 @@ mod tests {
             .collect();
         let expected: Vec<Vec<String>> = cases
             .iter()
-            .map(|(.., name)| vec![(*name).to_owned()])
+            .map(|Case { written, .. }| vec![(*written).to_owned()])
             .collect();
         assert2::assert!(named == expected);
     }

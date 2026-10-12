@@ -197,7 +197,7 @@ mod tests {
     use crate::{
         config::LogConfig,
         log::test_support::{
-            append_samples, install_stamps, rolled_log, rolling_test_log, sample_batch, test_log,
+            TempLog, append_samples, install_stamps, rolled_log, rolling_test_log, sample_batch, test_log,
             tiny_segments,
         },
     };
@@ -337,7 +337,7 @@ mod tests {
 
     #[test]
     fn tick_with_no_retention_is_noop() {
-        let (_dir, mut log) = test_log();
+        let TempLog { dir: _dir, mut log } = test_log();
         let mut b1 = sample_batch(2);
         let mut b2 = sample_batch(3);
         log.append(&mut b1).unwrap();

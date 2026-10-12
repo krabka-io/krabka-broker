@@ -14,13 +14,13 @@ use krabka_ids::Offset;
 use krabka_units::prelude::{ByteSize, ByteSizeExt as _, Time, TimeExt as _};
 
 use super::{Engine, KraftController, checkpoint::checkpoint_ids};
-use crate::{error::RaftError, snapshot::SnapshotReader};
+use crate::{error::RaftError, kraft::snapshot_fetch::SnapshotId, snapshot::SnapshotReader};
 
 /// One snapshot the cleaning weighs: its `(end_offset, epoch)` id and the
 /// size of its `.checkpoint` file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RetainedSnapshot {
-    pub id: (i64, i32),
+    pub id: SnapshotId,
     pub size: u64,
 }
 
@@ -42,7 +42,7 @@ pub fn retention_age_breached(now_ms: i64, last_contained_log_timestamp: i64, ma
 /// `KafkaRaftLog.snapshots` holds. A snapshot below the log start no longer
 /// starts a log a reader could continue from.
 fn retained_snapshots(dir: &std::path::Path, log_start: Offset) -> Vec<RetainedSnapshot> {
-    let mut ids: Vec<(i64, i32)> = checkpoint_ids(dir)
+    let mut ids: Vec<SnapshotId> = checkpoint_ids(dir)
         .into_iter()
         .filter(|id| id.0 >= log_start.0)
         .collect();
@@ -117,7 +117,7 @@ impl Engine {
 
     /// The `last_contained_log_timestamp` in the header of snapshot `id`, or
     /// `None` when the file does not read.
-    fn snapshot_timestamp(&self, id: (i64, i32)) -> Option<i64> {
+    fn snapshot_timestamp(&self, id: SnapshotId) -> Option<i64> {
         let bytes = super::checkpoint::load_checkpoint_by_id(&self.data_dir, id.0, id.1)?;
         SnapshotReader::last_contained_log_timestamp(&bytes).ok()
     }
@@ -127,7 +127,7 @@ impl Engine {
     /// snapshots below it. It does nothing, and returns `false`, unless `id`
     /// is above the log start, at or below the newest snapshot, and
     /// committed.
-    fn delete_before_snapshot(&mut self, id: (i64, i32), rule: &str) -> Result<bool, RaftError> {
+    fn delete_before_snapshot(&mut self, id: SnapshotId, rule: &str) -> Result<bool, RaftError> {
         let boundary = Offset(id.0);
         let latest = super::checkpoint::latest_checkpoint_id(&self.data_dir);
         let admitted = self.log.log_start_offset() < boundary
@@ -159,8 +159,8 @@ impl Engine {
 /// forgotten snapshot for `file.delete.delay.ms` for its open readers. The
 /// delete is best effort: a file that does not delete stays, and the next
 /// cleaning tries it again.
-fn delete_checkpoints_below(dir: &std::path::Path, id: (i64, i32)) -> Vec<(i64, i32)> {
-    let mut below: Vec<(i64, i32)> = checkpoint_ids(dir)
+fn delete_checkpoints_below(dir: &std::path::Path, id: SnapshotId) -> Vec<SnapshotId> {
+    let mut below: Vec<SnapshotId> = checkpoint_ids(dir)
         .into_iter()
         .filter(|found| *found < id)
         .collect();

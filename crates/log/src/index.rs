@@ -52,7 +52,8 @@ macro_rules! index_constructor {
         open_index! {
             $(#[$doc])*
             pub fn open(path: &Path) -> Result<Self, LogError> {
-                let (file, entries) = crate::index::load_index::<$raw, _>(path, $invariant, $decode)?;
+                let crate::index::OpenedIndex { file, entries } =
+                    crate::index::load_index::<$raw, _>(path, $invariant, $decode)?;
                 Ok(Self { file, io: crate::io::file_io(), entries })
             }
         }
@@ -102,23 +103,24 @@ macro_rules! seed_index_fixture {
             index.flush().unwrap();
         }
 
-        fn written_index(
-            name: &str,
-            entries: &[($key, u32)],
-        ) -> (tempfile::TempDir, std::path::PathBuf) {
+        fn written_index(name: &str, entries: &[($key, u32)]) -> crate::test_support::TempPath {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join(name);
             write_entries(&path, entries);
-            (dir, path)
+            crate::test_support::TempPath { dir, path }
         }
 
         fn populated_index(
             name: &str,
             entries: &[($key, u32)],
-        ) -> (tempfile::TempDir, std::path::PathBuf, $index) {
-            let (dir, path, mut index) = crate::index::index_fixture(name, $index::open);
+        ) -> crate::index::IndexFixture<$index> {
+            let crate::index::IndexFixture {
+                dir,
+                path,
+                mut index,
+            } = crate::index::index_fixture(name, $index::open);
             append_entries(&mut index, entries);
-            (dir, path, index)
+            crate::index::IndexFixture { dir, path, index }
         }
     };
 }
@@ -127,9 +129,18 @@ mod offset;
 mod time;
 
 pub(crate) use self::{offset::OFFSET_ENTRY_SIZE, time::TIME_ENTRY_SIZE};
-pub use self::{offset::OffsetIndex, time::TimeIndex};
+pub use self::{
+    offset::{OffsetIndex, OffsetIndexEntry},
+    time::{TimeIndex, TimeIndexEntry},
+};
 
-fn open_index_file(path: &Path) -> Result<(File, Vec<u8>), LogError> {
+/// An index file opened for read and write, with the bytes it holds.
+struct OpenedFile {
+    file: File,
+    bytes: Vec<u8>,
+}
+
+fn open_index_file(path: &Path) -> Result<OpenedFile, LogError> {
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -138,11 +149,16 @@ fn open_index_file(path: &Path) -> Result<(File, Vec<u8>), LogError> {
         .open(path)?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
-    Ok((file, bytes))
+    Ok(OpenedFile { file, bytes })
 }
 
 type IndexEntries<Key> = Vec<(Key, u32)>;
-type OpenedIndex<Key> = (File, IndexEntries<Key>);
+
+/// An index file and the entries decoded from it.
+struct OpenedIndex<Key> {
+    file: File,
+    entries: IndexEntries<Key>,
+}
 
 fn load_index<Raw, Key>(
     path: &Path,
@@ -152,13 +168,13 @@ fn load_index<Raw, Key>(
 where
     Raw: FromBytes + KnownLayout + Immutable + Unaligned,
 {
-    let (file, buf) = open_index_file(path)?;
+    let OpenedFile { file, bytes: buf } = open_index_file(path)?;
     let entry_size = std::mem::size_of::<Raw>();
     let truncated_len = (buf.len() / entry_size) * entry_size;
     let raws = <[Raw]>::ref_from_bytes(&buf[..truncated_len]).expect(invariant);
     let entries = increasing_index_entries(raws, decode);
     tracing::Span::current().record("entries", entries.len());
-    Ok((file, entries))
+    Ok(OpenedIndex { file, entries })
 }
 
 fn append_index<Key>(
@@ -167,11 +183,12 @@ fn append_index<Key>(
     target: IoTarget,
     bytes: &[u8],
     entries: &mut Vec<(Key, u32)>,
-    entry: (Key, u32),
+    key: Key,
+    coordinate: u32,
 ) -> Result<(), LogError> {
     file.seek(SeekFrom::End(0))?;
     write_all(io, target, file, bytes)?;
-    entries.push(entry);
+    entries.push((key, coordinate));
     Ok(())
 }
 
@@ -249,16 +266,25 @@ where
     decode(<[Raw]>::ref_from_bytes(&bytes).expect(invariant))
 }
 
+/// A sparse index, the path of its file, and the temporary directory that
+/// holds it.
+#[cfg(test)]
+pub(crate) struct IndexFixture<Index> {
+    pub(crate) dir: tempfile::TempDir,
+    pub(crate) path: std::path::PathBuf,
+    pub(crate) index: Index,
+}
+
 /// Open a sparse-index fixture while keeping its directory alive beside its handle.
 #[cfg(test)]
 pub(crate) fn index_fixture<Index>(
     name: &str,
     open: impl FnOnce(&Path) -> Result<Index, LogError>,
-) -> (tempfile::TempDir, std::path::PathBuf, Index) {
+) -> IndexFixture<Index> {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(name);
     let index = open(&path).unwrap();
-    (dir, path, index)
+    IndexFixture { dir, path, index }
 }
 
 /// Open a sidecar for a complete rewrite, retaining the established create/truncate flags.

@@ -20,6 +20,13 @@ const MISMATCH: i32 = 3;
 const GROUP: &str = "orders-cut";
 const TOPIC: &str = "orders";
 
+/// A running broker, its data directory, and its bootstrap address.
+struct TestBroker {
+    handle: BrokerHandle,
+    dir: tempfile::TempDir,
+    bootstrap: String,
+}
+
 /// Boot a single-node broker and return it with its bootstrap address.
 ///
 /// `BrokerConfig::for_tests` asks for 50 `__barrier_state` partitions at
@@ -27,7 +34,7 @@ const TOPIC: &str = "orders";
 /// hashes to may never open and the coordinator answers
 /// `COORDINATOR_NOT_AVAILABLE`. One partition at factor one is led here, which
 /// makes every case below deterministic.
-async fn broker() -> (BrokerHandle, tempfile::TempDir, String) {
+async fn broker() -> TestBroker {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let config = BrokerConfig {
         barrier_state_num_partitions: 1,
@@ -37,7 +44,11 @@ async fn broker() -> (BrokerHandle, tempfile::TempDir, String) {
     let handle = Broker::start(config).await.expect("broker starts");
     let bootstrap = handle.listen_addr().to_string();
     wait_for_coordinator(&bootstrap).await;
-    (handle, dir, bootstrap)
+    TestBroker {
+        handle,
+        dir,
+        bootstrap,
+    }
 }
 
 /// Block until the coordinator answers, so a case never races topic creation.
@@ -89,7 +100,11 @@ async fn create_topic(bootstrap: &str, partitions: i32) {
 /// the markers behind it are in the log.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_operator_loop_runs_end_to_end() {
-    let (_broker, _dir, bootstrap) = broker().await;
+    let TestBroker {
+        handle: _broker,
+        dir: _dir,
+        bootstrap,
+    } = broker().await;
     create_topic(&bootstrap, 3).await;
 
     check!(
@@ -141,7 +156,11 @@ async fn the_operator_loop_runs_end_to_end() {
 /// A group nobody defined is refused, not reported as an empty success.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unknown_group_is_refused() {
-    let (_broker, _dir, bootstrap) = broker().await;
+    let TestBroker {
+        handle: _broker,
+        dir: _dir,
+        bootstrap,
+    } = broker().await;
 
     check!(
         cli(&bootstrap, &["trigger", "--group", "nope"]).await == REFUSED,
@@ -162,7 +181,11 @@ async fn an_unknown_group_is_refused() {
 /// a refusal, the second a mismatch.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_epoch_with_no_cut_is_refused_rather_than_mismatched() {
-    let (_broker, _dir, bootstrap) = broker().await;
+    let TestBroker {
+        handle: _broker,
+        dir: _dir,
+        bootstrap,
+    } = broker().await;
     create_topic(&bootstrap, 1).await;
     assert!(cli(&bootstrap, &["define", "--group", GROUP, "--topic", TOPIC]).await == 0);
     assert!(cli(&bootstrap, &["trigger", "--group", GROUP]).await == 0);
@@ -193,7 +216,11 @@ async fn an_epoch_with_no_cut_is_refused_rather_than_mismatched() {
 /// how a reader sees the difference.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_group_may_name_a_topic_that_does_not_exist_yet() {
-    let (_broker, _dir, bootstrap) = broker().await;
+    let TestBroker {
+        handle: _broker,
+        dir: _dir,
+        bootstrap,
+    } = broker().await;
 
     check!(
         cli(

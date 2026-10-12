@@ -6,6 +6,7 @@
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use bytes::Bytes;
+use krabka_metadata::VoterEndpoint;
 use krabka_protocol::{
     Decode,
     owned::{
@@ -27,7 +28,10 @@ use super::codec::{
     QUORUM_EPOCH_VERSION, VOTE_VERSION, cluster_id_to_wire, encode_body, epoch_from_wire,
     epoch_to_wire, node_from_wire, node_to_wire, uuid_from_wire, uuid_to_wire,
 };
-use crate::kraft::types::{Epoch, NodeId};
+use crate::kraft::{
+    snapshot_fetch::SnapshotId,
+    types::{Epoch, NodeId},
+};
 
 macro_rules! singleton_metadata_topic {
     ($topic:ty, $partition:expr) => {{
@@ -71,10 +75,9 @@ pub enum PeerRequest {
         voter_directory_id: uuid::Uuid,
         leader_id: NodeId,
         leader_epoch: Epoch,
-        /// The leader's own listeners, `(name, host, port)`:
-        /// `LeaderEndpoints`, which a recipient whose voter set does not
-        /// name the leader dials it at.
-        leader_endpoints: Vec<(String, String, u16)>,
+        /// The leader's own listeners: `LeaderEndpoints`, which a recipient
+        /// whose voter set does not name the leader dials it at.
+        leader_endpoints: Vec<VoterEndpoint>,
     },
     EndQuorumEpoch {
         /// The sender's cluster id, which the recipient checks.
@@ -83,7 +86,7 @@ pub enum PeerRequest {
         leader_epoch: Epoch,
         /// The voters in order of replication progress, most caught up first,
         /// each with its directory id: `PreferredCandidates` (KIP-853).
-        preferred_candidates: Vec<(NodeId, uuid::Uuid)>,
+        preferred_candidates: Vec<PreferredCandidate>,
     },
     Fetch {
         /// The sender's cluster id, which the leader checks.
@@ -113,10 +116,19 @@ pub enum PeerRequest {
         /// The epoch the sender believes the leader holds:
         /// `CurrentLeaderEpoch`, which the leader checks against its own.
         current_leader_epoch: i32,
-        snapshot_id: (i64, i32),
+        snapshot_id: SnapshotId,
         position: i64,
         max_bytes: i32,
     },
+}
+
+/// A voter that an `EndQuorumEpoch` names as a preferred successor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreferredCandidate {
+    /// The voter's node id.
+    pub id: NodeId,
+    /// The voter's directory id.
+    pub directory_id: uuid::Uuid,
 }
 
 impl PeerRequest {
@@ -188,10 +200,10 @@ impl PeerRequest {
                     voter_id: node_to_wire(voter_id),
                     leader_endpoints: leader_endpoints
                         .iter()
-                        .map(|(name, host, port)| bqe_req::LeaderEndpoint {
-                            name: name.clone(),
-                            host: host.clone(),
-                            port: *port,
+                        .map(|endpoint| bqe_req::LeaderEndpoint {
+                            name: endpoint.name.clone(),
+                            host: endpoint.host.clone(),
+                            port: endpoint.port,
                             ..Default::default()
                         })
                         .collect(),
@@ -228,13 +240,13 @@ impl PeerRequest {
                             leader_epoch: epoch_to_wire(leader_epoch),
                             preferred_successors: preferred_candidates
                                 .iter()
-                                .map(|&(candidate, _)| node_to_wire(candidate))
+                                .map(|candidate| node_to_wire(candidate.id))
                                 .collect(),
                             preferred_candidates: preferred_candidates
                                 .iter()
-                                .map(|&(candidate, directory_id)| eqe_req::ReplicaInfo {
-                                    candidate_id: node_to_wire(candidate),
-                                    candidate_directory_id: uuid_to_wire(directory_id),
+                                .map(|candidate| eqe_req::ReplicaInfo {
+                                    candidate_id: node_to_wire(candidate.id),
+                                    candidate_directory_id: uuid_to_wire(candidate.directory_id),
                                     ..Default::default()
                                 })
                                 .collect(),
@@ -296,7 +308,10 @@ impl PeerRequest {
                 from,
                 current_leader_epoch,
                 snapshot_id,
-                (position, max_bytes),
+                ChunkWindow {
+                    position,
+                    max_bytes,
+                },
             )),
         }
     }
@@ -396,7 +411,11 @@ pub fn decode_begin(buf: &[u8]) -> Option<PeerRequest> {
         leader_endpoints: req
             .leader_endpoints
             .iter()
-            .map(|endpoint| (endpoint.name.clone(), endpoint.host.clone(), endpoint.port))
+            .map(|endpoint| VoterEndpoint {
+                name: endpoint.name.clone(),
+                host: endpoint.host.clone(),
+                port: endpoint.port,
+            })
             .collect(),
     })
 }
@@ -413,11 +432,9 @@ pub fn decode_end(buf: &[u8]) -> Option<PeerRequest> {
         preferred_candidates: p
             .preferred_candidates
             .iter()
-            .map(|candidate| {
-                (
-                    node_from_wire(candidate.candidate_id),
-                    uuid_from_wire(candidate.candidate_directory_id),
-                )
+            .map(|candidate| PreferredCandidate {
+                id: node_from_wire(candidate.candidate_id),
+                directory_id: uuid_from_wire(candidate.candidate_directory_id),
             })
             .collect(),
     })
@@ -442,14 +459,23 @@ pub fn decode_fetch(buf: &[u8]) -> Option<PeerRequest> {
     })
 }
 
+/// The byte window of a snapshot that a `FetchSnapshot` request asks for.
+struct ChunkWindow {
+    position: i64,
+    max_bytes: i32,
+}
+
 /// Encodes a `FetchSnapshot` request body (api 59), as Kafka's
 /// `RaftUtil.singletonFetchSnapshotRequest` builds it.
 fn encode_fetch_snapshot_request(
     cluster_id: Option<uuid::Uuid>,
     from: NodeId,
     current_leader_epoch: i32,
-    snapshot_id: (i64, i32),
-    (position, max_bytes): (i64, i32),
+    snapshot_id: SnapshotId,
+    ChunkWindow {
+        position,
+        max_bytes,
+    }: ChunkWindow,
 ) -> Bytes {
     let (end_offset, epoch) = snapshot_id;
     let req = FetchSnapshotRequest {

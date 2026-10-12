@@ -15,16 +15,16 @@ use crate::{
     action::Action,
     event::Event,
     simulation_support::{
-        SimulationTimer as SimTimer, StableFingerprint, clear_timer, earliest_timer, fingerprint,
+        NodeFingerprint, SimulationTimer as SimTimer, StableFingerprint, clear_timer, earliest_timer, fingerprint,
         reconcile_timers,
     },
-    types::{Epoch, NodeId},
+    types::NodeId,
 };
 
 impl Sim {
     // ---- fingerprint / stability ---------------------------------------------
 
-    fn fingerprint(&self) -> Vec<(NodeId, &'static str, Epoch, usize, i64)> {
+    fn fingerprint(&self) -> Vec<NodeFingerprint> {
         self.nodes
             .values()
             .map(|n| fingerprint(n.id, &n.machine, n.log.record_count(), n.high_watermark))

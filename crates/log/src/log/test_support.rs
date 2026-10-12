@@ -53,20 +53,28 @@ pub fn append_samples(log: &mut Log, batches: usize, records_per_batch: i32) {
     }
 }
 
-pub fn test_log() -> (tempfile::TempDir, Log) {
+/// An open log and the temporary directory that holds it. Dropping the value
+/// deletes the directory.
+#[derive(Debug)]
+pub struct TempLog {
+    pub dir: tempfile::TempDir,
+    pub log: Log,
+}
+
+pub fn test_log() -> TempLog {
     configured_test_log(LogConfig::default())
 }
 
-pub fn configured_test_log(config: LogConfig) -> (tempfile::TempDir, Log) {
+pub fn configured_test_log(config: LogConfig) -> TempLog {
     let dir = tempdir().unwrap();
     let log = Log::open(dir.path(), config).unwrap();
-    (dir, log)
+    TempLog { dir, log }
 }
 
-pub fn sample_log(config: LogConfig, batches: usize, records: i32) -> (tempfile::TempDir, Log) {
-    let (dir, mut log) = configured_test_log(config);
+pub fn sample_log(config: LogConfig, batches: usize, records: i32) -> TempLog {
+    let TempLog { dir, mut log } = configured_test_log(config);
     append_samples(&mut log, batches, records);
-    (dir, log)
+    TempLog { dir, log }
 }
 
 /// A refused append must not create offsets, transactions, or producer state.
@@ -109,11 +117,11 @@ pub fn synced_sample_log(
     log
 }
 
-pub fn stamped_rolling_log(first: u64, step: u64, batches: usize) -> (tempfile::TempDir, Log) {
-    let (dir, mut log) = configured_test_log(tiny_segments());
+pub fn stamped_rolling_log(first: u64, step: u64, batches: usize) -> TempLog {
+    let TempLog { dir, mut log } = configured_test_log(tiny_segments());
     install_stamps(&mut log, first, step);
     append_samples(&mut log, batches, 1);
-    (dir, log)
+    TempLog { dir, log }
 }
 
 /// Install an explicit monotonic stamp sequence on an existing log.
@@ -123,15 +131,22 @@ pub fn install_stamps(log: &mut Log, first: u64, step: u64) {
 }
 
 /// A default log with the caller's explicit stamp sequence installed.
-pub fn stamped_test_log(first: u64, step: u64) -> (tempfile::TempDir, Log) {
-    let (dir, mut log) = test_log();
+pub fn stamped_test_log(first: u64, step: u64) -> TempLog {
+    let TempLog { dir, mut log } = test_log();
     install_stamps(&mut log, first, step);
-    (dir, log)
+    TempLog { dir, log }
+}
+
+/// The stamp that the log should report for one offset.
+#[derive(Debug, Clone, Copy)]
+pub struct ExpectedStamp {
+    pub offset: i64,
+    pub stamp: Option<u64>,
 }
 
 /// Check each explicitly expected offset-to-stamp mapping.
-pub fn check_stamps(log: &Log, expected: &[(i64, Option<u64>)]) {
-    for &(offset, stamp) in expected {
+pub fn check_stamps(log: &Log, expected: &[ExpectedStamp]) {
+    for &ExpectedStamp { offset, stamp } in expected {
         assert2::check!(log.stamp_for_offset(Offset(offset)) == stamp);
     }
 }
@@ -172,7 +187,7 @@ pub fn compacting_segments() -> LogConfig {
     }
 }
 
-pub fn compact_test_log() -> (tempfile::TempDir, Log) {
+pub fn compact_test_log() -> TempLog {
     configured_test_log(compacting_segments())
 }
 
@@ -187,8 +202,15 @@ pub fn set_segment_size(log: &mut Log, size: ByteSize) {
 pub fn append_keyed_samples(log: &mut Log, batches: i64, key: impl Fn(i64) -> String) {
     for i in 0..batches {
         let key = key(i);
-        log.append(&mut keyed_batch(i, &[(0, key.as_bytes(), b"v")]))
-            .unwrap();
+        log.append(&mut keyed_batch(
+            i,
+            &[KeyedRecord {
+                offset_delta: 0,
+                key: key.as_bytes(),
+                value: b"v",
+            }],
+        ))
+        .unwrap();
     }
 }
 
@@ -209,7 +231,7 @@ pub fn rolling_test_log(dir: &std::path::Path) -> Log {
 
 /// A log configured the way Kafka's `message.timestamp.type=LogAppendTime`
 /// configures one, with everything else at its default.
-pub fn log_append_time_log() -> (tempfile::TempDir, Log) {
+pub fn log_append_time_log() -> TempLog {
     let dir = tempdir().unwrap();
     let log = Log::open(
         dir.path(),
@@ -219,7 +241,7 @@ pub fn log_append_time_log() -> (tempfile::TempDir, Log) {
         },
     )
     .unwrap();
-    (dir, log)
+    TempLog { dir, log }
 }
 
 pub fn test_batch_at(_off: i64) -> RecordBatch {
@@ -227,9 +249,17 @@ pub fn test_batch_at(_off: i64) -> RecordBatch {
     single_record_batch(0, 1_000, Bytes::from("v"))
 }
 
+/// The wire bytes of an encoded batch and the [`VerbatimBatch`] that carries
+/// them.
+#[derive(Debug)]
+pub struct EncodedVerbatim {
+    pub wire: Bytes,
+    pub batch: VerbatimBatch,
+}
+
 /// Encode a "producer" batch with a producer-chosen `base_offset` and
 /// leader epoch. Return both the wire bytes and a `VerbatimBatch`.
-pub fn verbatim_from(producer: &RecordBatch, leader_epoch: LeaderEpoch) -> (Bytes, VerbatimBatch) {
+pub fn verbatim_from(producer: &RecordBatch, leader_epoch: LeaderEpoch) -> EncodedVerbatim {
     let mut wire = bytes::BytesMut::new();
     producer.encode(&mut wire).unwrap();
     let wire = wire.freeze();
@@ -243,14 +273,14 @@ pub fn verbatim_from(producer: &RecordBatch, leader_epoch: LeaderEpoch) -> (Byte
         base_sequence: producer.base_sequence,
         is_transactional: producer.attributes.is_transactional(),
     };
-    (wire, vb)
+    EncodedVerbatim { wire, batch: vb }
 }
 
 // ---- helpers for transactional tests ----
 
 /// A transactional (non-control) batch for the given pid/epoch containing `values`.
-pub fn append_transaction(log: &mut Log, producer: (i64, i16), values: &[&str]) {
-    log.append(&mut transactional_batch(producer.0, producer.1, values))
+pub fn append_transaction(log: &mut Log, producer_id: i64, producer_epoch: i16, values: &[&str]) {
+    log.append(&mut transactional_batch(producer_id, producer_epoch, values))
         .unwrap();
 }
 
@@ -377,12 +407,30 @@ pub fn barrier_marker_from_producer(setup: HostileBarrierSetup<'_>) -> RecordBat
     }
 }
 
+/// The transaction state the log keeps for one producer id.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ProducerTransaction {
+    pub producer_id: i64,
+    pub fields: TransactionFields,
+}
+
+/// The transaction state the log keeps for a producer beside its producer
+/// entry.
+#[derive(Debug, PartialEq, Eq)]
+pub struct TransactionFields {
+    /// The coordinator epoch of its last durable end marker, `-1` before the
+    /// first one.
+    pub coordinator_epoch: i32,
+    /// The first offset of its open transaction.
+    pub first_offset: Option<Offset>,
+}
+
 /// Every piece of per-partition state that a barrier marker leaves alone,
 /// in one comparable value.
 #[derive(Debug, PartialEq, Eq)]
 pub struct PartitionState {
     pub lso: Offset,
-    pub transactions: Vec<(i64, (i32, Option<Offset>))>,
+    pub transactions: Vec<ProducerTransaction>,
     pub aborted: Vec<AbortedTxn>,
     pub producers: Vec<ProducerSnapshotEntry>,
 }
@@ -390,11 +438,11 @@ pub struct PartitionState {
 /// The transaction state the log keeps for `producer_id` beside its producer
 /// entry: the coordinator epoch of its last durable end marker, `-1` before
 /// the first one, and the first offset of its open transaction.
-pub fn transaction_fields(log: &Log, producer_id: ProducerId) -> (i32, Option<Offset>) {
-    (
-        log.transaction_marker_state(producer_id).1,
-        log.pending_transaction_start(producer_id),
-    )
+pub fn transaction_fields(log: &Log, producer_id: ProducerId) -> TransactionFields {
+    TransactionFields {
+        coordinator_epoch: log.transaction_marker_state(producer_id).1,
+        first_offset: log.pending_transaction_start(producer_id),
+    }
 }
 
 /// Collect the [`PartitionState`] of `log`, with one transaction entry per
@@ -406,7 +454,10 @@ pub fn partition_state(log: &Log, producer_ids: &[i64]) -> PartitionState {
         lso: log.lso(),
         transactions: producer_ids
             .iter()
-            .map(|pid| (*pid, transaction_fields(log, ProducerId(*pid))))
+            .map(|pid| ProducerTransaction {
+                producer_id: *pid,
+                fields: transaction_fields(log, ProducerId(*pid)),
+            })
             .collect(),
         aborted: log.aborted_in_range(Offset(0), Offset(i64::MAX)),
         producers,
@@ -419,17 +470,25 @@ pub fn sample_batch_with_epoch(n: i32, epoch: i32) -> RecordBatch {
     b
 }
 
-pub fn keyed_batch(base: i64, items: &[(i32, &[u8], &[u8])]) -> RecordBatch {
+/// A record with an explicit offset delta, key, and value.
+#[derive(Debug, Clone, Copy)]
+pub struct KeyedRecord<'a> {
+    pub offset_delta: i32,
+    pub key: &'a [u8],
+    pub value: &'a [u8],
+}
+
+pub fn keyed_batch(base: i64, items: &[KeyedRecord<'_>]) -> RecordBatch {
     let records: Vec<Record> = items
         .iter()
-        .map(|(d, k, v)| Record {
-            offset_delta: *d,
-            key: Some(Bytes::copy_from_slice(k)),
-            value: Some(Bytes::copy_from_slice(v)),
+        .map(|item| Record {
+            offset_delta: item.offset_delta,
+            key: Some(Bytes::copy_from_slice(item.key)),
+            value: Some(Bytes::copy_from_slice(item.value)),
             ..Default::default()
         })
         .collect();
-    let last_delta = items.iter().map(|(d, _, _)| *d).max().unwrap_or(0);
+    let last_delta = items.iter().map(|item| item.offset_delta).max().unwrap_or(0);
     RecordBatch {
         base_offset: base,
         last_offset_delta: last_delta,
@@ -503,7 +562,7 @@ pub(crate) fn append_path(log: &mut Log, path: AppendPath, mut batch: RecordBatc
         }
         AppendPath::Verbatim if !batch.attributes.is_control_batch() => {
             batch.base_offset = log_end.0;
-            let (_, verbatim) = verbatim_from(&batch, LeaderEpoch(0));
+            let EncodedVerbatim { batch: verbatim, .. } = verbatim_from(&batch, LeaderEpoch(0));
             log.append_verbatim_at(&verbatim, log_end).unwrap();
         }
         AppendPath::Follower | AppendPath::Verbatim => log.append_at(&mut batch, log_end).unwrap(),
@@ -514,7 +573,7 @@ pub fn snapshot_offsets(dir: &std::path::Path) -> Vec<Offset> {
     list(dir)
         .unwrap()
         .into_iter()
-        .map(|(offset, _)| offset)
+        .map(|snapshot| snapshot.offset)
         .collect()
 }
 

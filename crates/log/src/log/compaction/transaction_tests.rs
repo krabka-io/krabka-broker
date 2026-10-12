@@ -12,9 +12,10 @@ use super::*;
 use crate::{
     config::LogConfig,
     log::test_support::{
-        abort_marker, commit_marker, compacting_segments, compaction_ctx, keyed_batch,
+        abort_marker, commit_marker, compacting_segments, compaction_ctx, KeyedRecord, keyed_batch,
         set_segment_size,
     },
+    test_support::KeyValue,
     txn_index::AbortedTxn,
 };
 
@@ -26,14 +27,14 @@ struct KeyedTransactionSetup<'a> {
     #[default(ProducerId(1000))]
     producer: ProducerId,
     sequence: ProducerSequence,
-    #[default((b"k", b"v"))]
-    payload: (&'a [u8], &'a [u8]),
+    #[default(KeyValue { key: b"k", value: b"v" })]
+    payload: KeyValue<'a>,
 }
 
 /// One keyed transactional record; `Log::append` assigns its offset.
 fn transactional_keyed(setup: KeyedTransactionSetup<'_>) -> RecordBatch {
-    let (key, value) = setup.payload;
-    let mut batch = keyed_batch(0, &[(0, key, value)]);
+    let KeyValue { key, value } = setup.payload;
+    let mut batch = keyed_batch(0, &[KeyedRecord { offset_delta: 0, key: key, value: value }]);
     batch.producer_id = setup.producer.0;
     batch.producer_epoch = 0;
     batch.base_sequence = setup.sequence.0;
@@ -49,7 +50,7 @@ fn log_with_a_batch_per_segment(dir: &std::path::Path, batches: Vec<RecordBatch>
     for mut batch in batches {
         log.append(&mut batch).unwrap();
     }
-    let mut tail = keyed_batch(0, &[(0, b"tail", b"t")]);
+    let mut tail = keyed_batch(0, &[KeyedRecord { offset_delta: 0, key: b"tail", value: b"t" }]);
     log.append(&mut tail).unwrap();
     // The pass groups by `segment.bytes`; widen it so this pass merges them.
     set_segment_size(&mut log, mebibytes(1));
@@ -96,13 +97,13 @@ fn index_of_the_fixture(log: &Log) -> Vec<AbortedTxn> {
 fn committed_and_aborted_batches(tail: [RecordBatch; 2]) -> Vec<RecordBatch> {
     let mut batches = vec![
         transactional_keyed(KeyedTransactionSetup {
-            payload: (b"k", b"committed"),
+            payload: KeyValue { key: b"k", value: b"committed" },
             ..Default::default()
         }), // 0
         commit_marker(1000, 0), // 1
         transactional_keyed(KeyedTransactionSetup {
             producer: ProducerId(2000),
-            payload: (b"k", b"aborted"),
+            payload: KeyValue { key: b"k", value: b"aborted" },
             ..Default::default()
         }), // 2
     ];
@@ -116,7 +117,7 @@ fn committed_then_aborted(dir: &std::path::Path) -> Log {
         dir,
         committed_and_aborted_batches([
             abort_marker(2000, 0),                  // 3
-            keyed_batch(0, &[(0, b"after", b"a")]), // 4
+            keyed_batch(0, &[KeyedRecord { offset_delta: 0, key: b"after", value: b"a" }]), // 4
         ]),
     )
 }
@@ -208,7 +209,7 @@ fn an_aborted_batch_is_dropped_when_its_marker_lies_beyond_the_consumed_range() 
     let mut log = log_with_a_batch_per_segment(
         dir.path(),
         committed_and_aborted_batches([
-            keyed_batch(0, &[(0, b"other", b"o")]), // 3
+            keyed_batch(0, &[KeyedRecord { offset_delta: 0, key: b"other", value: b"o" }]), // 3
             abort_marker(2000, 0),                  // 4
         ]),
     );

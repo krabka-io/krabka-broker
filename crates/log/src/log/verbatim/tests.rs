@@ -10,8 +10,8 @@ use super::*;
 use crate::{
     leader_epoch_checkpoint::EpochEntry,
     log::test_support::{
-        check_append_time_lookup, install_stamps, log_append_time_log, sample_batch,
-        stamped_test_log, test_batch_at, test_log, verbatim_from,
+        TempLog, check_append_time_lookup, install_stamps, log_append_time_log, sample_batch,
+        stamped_test_log, test_batch_at, test_log, EncodedVerbatim, verbatim_from,
     },
 };
 
@@ -54,7 +54,7 @@ fn assigned_header(wire: &[u8], epoch: i32) -> Vec<u8> {
 
 #[test]
 fn append_verbatim_assigns_offsets_and_is_byte_exact() {
-    let (dir, mut log) = test_log();
+    let TempLog { dir, mut log } = test_log();
 
     // Append three single-record batches verbatim. Each producer batch
     // carries a bogus base_offset (999) that the log must overwrite.
@@ -63,7 +63,7 @@ fn append_verbatim_assigns_offsets_and_is_byte_exact() {
         let mut producer = test_batch_at(0);
         producer.base_offset = 999;
         producer.partition_leader_epoch = -1;
-        let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(4));
+        let EncodedVerbatim { batch: vb, .. } = verbatim_from(&producer, LeaderEpoch(4));
         log.append_verbatim(&vb).unwrap();
         // Re-encode the expectation with the assigned offset + epoch.
         let mut stamped = producer.clone();
@@ -89,7 +89,7 @@ fn append_verbatim_assigns_offsets_and_is_byte_exact() {
 
 #[test]
 fn append_verbatim_at_stamps_base_byte_exact() {
-    let (dir, mut log) = test_log();
+    let TempLog { dir, mut log } = test_log();
 
     let mut prefix = test_batch_at(0);
     prefix.partition_leader_epoch = 2;
@@ -98,7 +98,7 @@ fn append_verbatim_at_stamps_base_byte_exact() {
     let mut producer = test_batch_at(0);
     producer.base_offset = 999;
     producer.partition_leader_epoch = -1;
-    let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(4));
+    let EncodedVerbatim { batch: vb, .. } = verbatim_from(&producer, LeaderEpoch(4));
 
     let appended = log.append_verbatim_at(&vb, Offset(1)).unwrap();
 
@@ -139,8 +139,8 @@ fn append_verbatim_at_stamps_base_byte_exact() {
 /// offset, and takes one above it: the hole a compacted leader's log has.
 #[test]
 fn append_verbatim_at_refuses_a_base_below_the_log_end_offset_and_takes_one_above() {
-    let (dir, mut log) = test_log();
-    let (_wire, vb) = verbatim_from(&test_batch_at(0), LeaderEpoch(4));
+    let TempLog { dir, mut log } = test_log();
+    let EncodedVerbatim { batch: vb, .. } = verbatim_from(&test_batch_at(0), LeaderEpoch(4));
     log.append_verbatim_at(&vb, Offset(0)).unwrap();
 
     let err = log.append_verbatim_at(&vb, Offset(0)).unwrap_err();
@@ -172,11 +172,11 @@ fn append_verbatim_at_refuses_a_base_below_the_log_end_offset_and_takes_one_abov
 
 #[test]
 fn append_verbatim_at_uses_reconciled_frontier_floor() {
-    let (dir, mut log) = test_log();
+    let TempLog { dir, mut log } = test_log();
 
     log.reconcile_next_offset(Offset(5));
     let producer = test_batch_at(0);
-    let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(4));
+    let EncodedVerbatim { batch: vb, .. } = verbatim_from(&producer, LeaderEpoch(4));
 
     let appended = log.append_verbatim_at(&vb, Offset(5)).unwrap();
 
@@ -190,8 +190,8 @@ fn append_verbatim_matches_owned_append_bytes() {
     // The verbatim path and the owned path must write byte-identical
     // .log bytes for the same logical batch — proving passthrough does
     // not perturb the stored representation.
-    let (dir_owned, mut log_owned) = test_log();
-    let (dir_verb, mut log_verb) = test_log();
+    let TempLog { dir: dir_owned, log: mut log_owned } = test_log();
+    let TempLog { dir: dir_verb, log: mut log_verb } = test_log();
 
     let mut producer = test_batch_at(0);
     producer.base_offset = 12345; // overwritten by both paths
@@ -203,7 +203,7 @@ fn append_verbatim_matches_owned_append_bytes() {
     log_owned.append(&mut owned).unwrap();
 
     // Verbatim path: same epoch via the meta.
-    let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(9));
+    let EncodedVerbatim { batch: vb, .. } = verbatim_from(&producer, LeaderEpoch(9));
     log_verb.append_verbatim(&vb).unwrap();
 
     let end_owned = log_owned.log_end_offset();
@@ -222,11 +222,11 @@ fn append_verbatim_matches_owned_append_bytes() {
 
 #[test]
 fn append_verbatim_transactional_holds_lso() {
-    let (dir, mut log) = test_log();
+    let TempLog { dir, mut log } = test_log();
     // A transactional batch must hold the LSO at the batch's base offset
     // (it isn't stable until a commit/abort marker arrives).
     let producer = two_record_producer(77, true);
-    let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(0));
+    let EncodedVerbatim { batch: vb, .. } = verbatim_from(&producer, LeaderEpoch(0));
     log.append_verbatim(&vb).unwrap();
     // LSO stays at 0 (the open txn's first offset), not log_end (2).
     check_transaction_offsets(&log, Offset(0));
@@ -241,13 +241,13 @@ fn append_verbatim_transactional_holds_lso() {
 /// on that path, which the owned-append tests above do not exercise.
 #[test]
 fn append_verbatim_stamps_full_offset_range() {
-    let (dir, mut log) = stamped_test_log(500, 1);
+    let TempLog { dir, mut log } = stamped_test_log(500, 1);
 
     // A four-record producer batch, appended verbatim, spans offsets 0..=3.
     let mut producer = sample_batch(4);
     producer.base_offset = 999; // bogus; the log overwrites it with 0
     producer.partition_leader_epoch = -1;
-    let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(4));
+    let EncodedVerbatim { batch: vb, .. } = verbatim_from(&producer, LeaderEpoch(4));
     log.append_verbatim(&vb).unwrap();
 
     // last_offset is base(0) + delta(3) = 3.
@@ -267,10 +267,10 @@ fn append_verbatim_stamps_full_offset_range() {
 // would hold it at the batch base (0).
 #[test]
 fn non_txn_verbatim_batch_with_valid_pid_advances_lso() {
-    let (dir, mut log) = test_log();
+    let TempLog { dir, mut log } = test_log();
     let producer = two_record_producer(55, false); // valid pid, but NOT transactional
     assert2::assert!(!producer.attributes.is_transactional());
-    let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(0));
+    let EncodedVerbatim { batch: vb, .. } = verbatim_from(&producer, LeaderEpoch(0));
     log.append_verbatim(&vb).unwrap();
     check_transaction_offsets(&log, Offset(2));
     drop(dir);
@@ -283,11 +283,11 @@ fn non_txn_verbatim_batch_with_valid_pid_advances_lso() {
 /// which is what keeps the path a passthrough.
 #[test]
 fn verbatim_log_append_time_patches_three_header_fields_and_nothing_else() {
-    let (dir, mut log) = log_append_time_log();
+    let TempLog { dir, mut log } = log_append_time_log();
     let mut producer = producer_with_timestamp(1_000);
     producer.base_offset = 999;
     producer.partition_leader_epoch = -1;
-    let (wire, vb) = verbatim_from(&producer, LeaderEpoch(4));
+    let EncodedVerbatim { wire, batch: vb } = verbatim_from(&producer, LeaderEpoch(4));
 
     let (base_offset, stamp) = log.append_verbatim(&vb).unwrap();
 
@@ -331,9 +331,9 @@ fn verbatim_log_append_time_patches_three_header_fields_and_nothing_else() {
 /// `ListOffsets` by time answers in append time rather than in producer time.
 #[test]
 fn verbatim_offset_for_timestamp_answers_in_append_time() {
-    let (dir, mut log) = log_append_time_log();
+    let TempLog { dir, mut log } = log_append_time_log();
     let producer = producer_with_timestamp(1_000);
-    let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(0));
+    let EncodedVerbatim { batch: vb, .. } = verbatim_from(&producer, LeaderEpoch(0));
 
     let (_base_offset, stamp) = log.append_verbatim(&vb).unwrap();
 
@@ -346,10 +346,10 @@ fn verbatim_offset_for_timestamp_answers_in_append_time() {
 /// every byte the producer sent apart from the two fields outside the CRC.
 #[test]
 fn verbatim_create_time_reports_no_stamp() {
-    let (dir, mut log) = test_log();
+    let TempLog { dir, mut log } = test_log();
     let mut producer = test_batch_at(0);
     producer.base_offset = 999;
-    let (wire, vb) = verbatim_from(&producer, LeaderEpoch(4));
+    let EncodedVerbatim { wire, batch: vb } = verbatim_from(&producer, LeaderEpoch(4));
 
     let (base_offset, stamp) = log.append_verbatim(&vb).unwrap();
 
@@ -366,7 +366,7 @@ fn verbatim_stamped_with_log_append_time_patches_attributes_and_crc() {
     use krabka_protocol::records::TimestampType;
     let mut producer = test_batch_at(0);
     producer.attributes = producer.attributes.with_transactional(true);
-    let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(4));
+    let EncodedVerbatim { batch: vb, .. } = verbatim_from(&producer, LeaderEpoch(4));
     let stamped = vb.stamped_with_log_append_time(98765);
     assert!(stamped.max_timestamp == 98765);
     let mut cur = &stamped.bytes[..];
@@ -379,10 +379,10 @@ fn verbatim_stamped_with_log_append_time_patches_attributes_and_crc() {
 #[test]
 fn verbatim_append_flush_logic() {
     use crate::log::sync::sync_observer;
-    let (dir, mut log) = test_log();
+    let TempLog { dir, mut log } = test_log();
     // Default config: flush_on_append is false, stamp_source is None
     let producer = test_batch_at(0);
-    let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(0));
+    let EncodedVerbatim { batch: vb, .. } = verbatim_from(&producer, LeaderEpoch(0));
 
     sync_observer::take_segment_flushes();
     log.append_verbatim(&vb).unwrap();
@@ -400,7 +400,7 @@ fn verbatim_append_flush_logic() {
     txn_producer.producer_id = 100;
     txn_producer.producer_epoch = 1;
     txn_producer.attributes = txn_producer.attributes.with_transactional(true);
-    let (_wire, txn_vb) = verbatim_from(&txn_producer, LeaderEpoch(0));
+    let EncodedVerbatim { batch: txn_vb, .. } = verbatim_from(&txn_producer, LeaderEpoch(0));
     sync_observer::take_segment_flushes();
     log.append_verbatim(&txn_vb).unwrap();
     assert!(sync_observer::take_segment_flushes().is_empty());

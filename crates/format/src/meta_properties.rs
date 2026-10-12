@@ -340,7 +340,7 @@ pub fn verify_ensemble<'a>(
 fn load_properties(bytes: &[u8]) -> Result<HashMap<String, String>, MetaPropertiesError> {
     let mut props = HashMap::new();
     for line in logical_lines(bytes) {
-        let (key, value) = split_entry(&line);
+        let RawEntry { key, value } = split_entry(&line);
         props.insert(unescape(key)?, unescape(value)?);
     }
     Ok(props)
@@ -417,13 +417,19 @@ fn logical_lines(input: &[u8]) -> Vec<Vec<u8>> {
     lines
 }
 
+/// The raw key and value of one logical line, before their escapes resolve.
+struct RawEntry<'a> {
+    key: &'a [u8],
+    value: &'a [u8],
+}
+
 /// Splits a logical line into its key and its value, as `Properties.load0`
 /// does.
 ///
 /// The key ends at the first `=`, `:`, or white space that no backslash
 /// escapes. The value starts after the white space that follows, with at
 /// most one `=` or `:` among it.
-fn split_entry(line: &[u8]) -> (&[u8], &[u8]) {
+fn split_entry(line: &[u8]) -> RawEntry<'_> {
     let mut key_len = 0;
     let mut value_start = line.len();
     let mut has_separator = false;
@@ -451,7 +457,10 @@ fn split_entry(line: &[u8]) -> (&[u8], &[u8]) {
         }
         value_start += 1;
     }
-    (&line[..key_len], &line[value_start..])
+    RawEntry {
+        key: &line[..key_len],
+        value: &line[value_start..],
+    }
 }
 
 /// Resolves the escapes of a key or a value, as `Properties.loadConvert`
@@ -521,13 +530,23 @@ mod tests {
 
     /// A `verify_ensemble` case: what it is, the set, the expected cluster
     /// id and node id, and the result.
-    type EnsembleCase = (
-        &'static str,
-        Vec<(&'static str, MetaProperties)>,
-        Option<ClusterId>,
-        Option<i32>,
-        Result<Option<ClusterId>, String>,
-    );
+    struct EnsembleCase {
+        what: &'static str,
+        set: Vec<DirectoryFile>,
+        cluster_id: Option<ClusterId>,
+        node_id: Option<i32>,
+        want: Result<Option<ClusterId>, String>,
+    }
+
+    /// The `meta.properties` read from one directory.
+    struct DirectoryFile {
+        dir: &'static str,
+        meta: MetaProperties,
+    }
+
+    fn directory(dir: &'static str, meta: MetaProperties) -> DirectoryFile {
+        DirectoryFile { dir, meta }
+    }
 
     fn at(seconds: u64) -> SystemTime {
         UNIX_EPOCH + Duration::from_secs(seconds)
@@ -615,7 +634,7 @@ mod tests {
     #[test]
     fn the_reader_accepts_what_properties_load_accepts() {
         let want = meta(1, Some(DIRECTORY));
-        let files: [(&str, &str); 9] = [
+        let files = [
             (
                 "Kafka on Java 17, in hash order",
                 "#\n#Thu Feb 29 12:34:56 UTC 2024\nnode.id=1\nversion=1\n\
@@ -674,7 +693,7 @@ mod tests {
     /// throws for it, and the first fault in Kafka's order wins.
     #[test]
     fn a_bad_file_gets_kafkas_message() {
-        let cases: [(&str, &str, &str); 12] = [
+        let cases = [
             (
                 "a version that is not a number",
                 "version=one\n",
@@ -761,26 +780,31 @@ mod tests {
             node_id,
             directory_id: Some(DirectoryId(Uuid::from_u128(directory))),
         };
-        // (what, the set, --cluster-id, the node id, the result)
         let cases: Vec<EnsembleCase> = vec![
             ("nothing formatted", vec![], None, Some(1), Ok(None)),
             (
                 "one cluster, one node",
-                vec![("/a", file(c1, 1, 0x1000)), ("/b", file(c1, 1, 0x2000))],
+                vec![
+                    directory("/a", file(c1, 1, 0x1000)),
+                    directory("/b", file(c1, 1, 0x2000)),
+                ],
                 None,
                 Some(1),
                 Ok(Some(c1)),
             ),
             (
                 "the set supplies the node id",
-                vec![("/a", file(c1, 4, 0x1000)), ("/b", file(c1, 4, 0x2000))],
+                vec![
+                    directory("/a", file(c1, 4, 0x1000)),
+                    directory("/b", file(c1, 4, 0x2000)),
+                ],
                 Some(c1),
                 None,
                 Ok(Some(c1)),
             ),
             (
                 "the given cluster id disagrees",
-                vec![("/a", file(c1, 1, 0x1000))],
+                vec![directory("/a", file(c1, 1, 0x1000))],
                 Some(c2),
                 Some(1),
                 Err(format!(
@@ -789,7 +813,7 @@ mod tests {
             ),
             (
                 "the configured node id disagrees",
-                vec![("/a", file(c1, 2, 0x1000))],
+                vec![directory("/a", file(c1, 2, 0x1000))],
                 None,
                 Some(1),
                 Err(node_id_mismatch_message()
@@ -800,7 +824,10 @@ mod tests {
             ),
             (
                 "two directories disagree on the node id",
-                vec![("/a", file(c1, 3, 0x1000)), ("/b", file(c1, 4, 0x2000))],
+                vec![
+                    directory("/a", file(c1, 3, 0x1000)),
+                    directory("/b", file(c1, 4, 0x2000)),
+                ],
                 None,
                 None,
                 Err(
@@ -813,14 +840,17 @@ mod tests {
             ),
             (
                 "a reserved directory id",
-                vec![("/a", file(c1, 1, 2))],
+                vec![directory("/a", file(c1, 1, 2))],
                 None,
                 Some(1),
                 Err("Invalid reserved directory ID AAAAAAAAAAAAAAAAAAAAAg found in /a".to_owned()),
             ),
             (
                 "a shared directory id",
-                vec![("/a", file(c1, 1, 0x1000)), ("/b", file(c1, 1, 0x1000))],
+                vec![
+                    directory("/a", file(c1, 1, 0x1000)),
+                    directory("/b", file(c1, 1, 0x1000)),
+                ],
                 None,
                 Some(1),
                 Err(format!(
@@ -832,14 +862,14 @@ mod tests {
             (
                 "no directory id is no conflict",
                 vec![
-                    (
+                    directory(
                         "/a",
                         MetaProperties {
                             directory_id: None,
                             ..file(c1, 1, 0)
                         },
                     ),
-                    (
+                    directory(
                         "/b",
                         MetaProperties {
                             directory_id: None,
@@ -852,9 +882,16 @@ mod tests {
                 Ok(Some(c1)),
             ),
         ];
-        for (what, set, cluster_id, node_id, want) in cases {
+        for EnsembleCase {
+            what,
+            set,
+            cluster_id,
+            node_id,
+            want,
+        } in cases
+        {
             let got = verify_ensemble(
-                set.iter().map(|(dir, meta)| (Path::new(*dir), meta)),
+                set.iter().map(|file| (Path::new(file.dir), &file.meta)),
                 cluster_id,
                 node_id,
             );

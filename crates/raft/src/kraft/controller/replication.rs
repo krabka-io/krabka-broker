@@ -25,7 +25,7 @@ use crate::{
     error::RaftError,
     kraft::{
         event::Event,
-        snapshot_fetch::{SnapshotFetchState, SnapshotFetchStep},
+        snapshot_fetch::{SnapshotFetchState, SnapshotFetchStep, SnapshotId},
         transport::wire,
         types::{Epoch, NodeId},
     },
@@ -71,9 +71,9 @@ pub fn classify_fetch_batch(at: Offset, log_end: Offset) -> FetchBatchDispositio
 }
 
 pub fn should_start_snapshot_fetch(
-    snapshot_id: (i64, i32),
+    snapshot_id: SnapshotId,
     log_end: Offset,
-    active_snapshot_id: Option<(i64, i32)>,
+    active_snapshot_id: Option<SnapshotId>,
 ) -> bool {
     snapshot_id.0.cmp(&log_end.0).is_gt()
         && !matches!(active_snapshot_id, Some(id) if id == snapshot_id)
@@ -373,7 +373,7 @@ impl Engine {
     )]
     pub fn install_fetched_snapshot(
         &mut self,
-        id: (i64, i32),
+        id: SnapshotId,
         bytes: &[u8],
     ) -> Result<(), RaftError> {
         // `end_offset` is the snapshot id's raw offset (wire / checkpoint-filename

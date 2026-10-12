@@ -11,13 +11,17 @@ use super::{cleaned_path, swap_orphan_recover, swap_path};
 use crate::{
     error::LogError,
     name,
-    test_support::{Files, directory_files},
+    test_support::{BatchSpan, Files, directory_files, span},
 };
 
-/// The encoded bytes of one batch per `(base, last offset delta)`.
-fn batches(spans: &[(i64, i32)]) -> Vec<u8> {
+/// The encoded bytes of one batch per span.
+fn batches(spans: &[BatchSpan]) -> Vec<u8> {
     let mut wire = BytesMut::new();
-    for &(base_offset, last_offset_delta) in spans {
+    for &BatchSpan {
+        base_offset,
+        last_offset_delta,
+    } in spans
+    {
         let batch = RecordBatch {
             base_offset,
             last_offset_delta,
@@ -66,8 +70,8 @@ fn check_corrupt_files(files: &Files) {
 /// The segments at 0, 10 and 20 as they were before compaction.
 fn originals() -> Files {
     let mut files = Files::new();
-    for (base, span) in [(0, (0, 9)), (10, (10, 9)), (20, (20, 4))] {
-        files.insert(file(base, "log"), batches(&[span]));
+    for (base, batch_span) in [(0, span(0, 9)), (10, span(10, 9)), (20, span(20, 4))] {
+        files.insert(file(base, "log"), batches(&[batch_span]));
         files.insert(file(base, "index"), format!("index {base}").into_bytes());
         files.insert(file(base, "timeindex"), format!("time {base}").into_bytes());
     }
@@ -77,7 +81,7 @@ fn originals() -> Files {
 
 /// The survivor of compacting 0 and 10: gapped batches ending at offset 19.
 fn survivor_log() -> Vec<u8> {
-    batches(&[(3, 0), (12, 7)])
+    batches(&[span(3, 0), span(12, 7)])
 }
 
 /// The directory once the swap of 0 and 10 has finished: the survivor at 0,
@@ -209,7 +213,7 @@ fn a_torn_committed_swap_is_corrupt_and_nothing_is_deleted() {
 #[test]
 fn a_committed_swap_that_overlaps_itself_is_corrupt() {
     let mut files = originals_with_swaps();
-    files.insert(file(0, "log.swap"), batches(&[(5, 3), (7, 0)]));
+    files.insert(file(0, "log.swap"), batches(&[span(5, 3), span(7, 0)]));
     check_corrupt_files(&files);
 }
 

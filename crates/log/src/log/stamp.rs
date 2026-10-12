@@ -16,7 +16,7 @@ use super::{
 };
 use crate::{
     error::LogError,
-    stamp_index::{StampEntry, StampIndex},
+    stamp_index::{OffsetRange, StampEntry, StampIndex},
     stamp_source::StampSource,
 };
 
@@ -55,7 +55,7 @@ impl Log {
                 Ok((segment.base_offset(), index))
             })
             .collect::<Result<BTreeMap<_, _>, LogError>>()?;
-        let pending_ranges: Vec<(Offset, Offset)> = self
+        let pending_ranges: Vec<OffsetRange> = self
             .pending_stamp_ranges
             .values()
             .flatten()

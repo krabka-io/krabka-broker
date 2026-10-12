@@ -11,7 +11,7 @@ use crate::{
     config::LogConfig,
     leader_epoch_checkpoint::EpochEntry,
     log::test_support::{
-        append_samples, check_stamps, rolling_test_log, sample_batch, sample_batch_with_epoch,
+        TempLog, append_samples, ExpectedStamp, check_stamps, rolling_test_log, sample_batch, sample_batch_with_epoch,
         stamped_rolling_log, stamped_test_log, test_batch_at, test_log, tiny_segments,
     },
     producer_snapshot::ProducerSnapshotEntry,
@@ -30,7 +30,7 @@ use crate::{
 /// on every fetch and never rejoin the ISR.
 #[test]
 fn a_truncation_below_the_log_start_lowers_the_start_to_the_target() {
-    let (dir, mut log) = test_log();
+    let TempLog { dir, mut log } = test_log();
     append_samples(&mut log, 4, 2);
     log.set_log_start_offset(Offset(4)).expect("set log start");
 
@@ -53,7 +53,7 @@ fn a_truncation_below_the_log_start_lowers_the_start_to_the_target() {
 /// starts and ends at the target, and appends continue from there.
 #[test]
 fn a_truncation_below_every_local_segment_resets_the_log_at_the_target() {
-    let (_dir, mut log) = test_log();
+    let TempLog { dir: _dir, mut log } = test_log();
     log.reset_to(Offset(20)).unwrap();
     append_samples(&mut log, 3, 2);
     check!(log.log_start_offset() == Offset(20));
@@ -70,7 +70,7 @@ fn a_truncation_below_every_local_segment_resets_the_log_at_the_target() {
 
 #[test]
 fn truncate_to_drops_later_records() {
-    let (_dir, mut log) = test_log();
+    let TempLog { dir: _dir, mut log } = test_log();
     let mut b1 = sample_batch(3);
     let mut b2 = sample_batch(2);
     log.append(&mut b1).unwrap();
@@ -83,7 +83,7 @@ fn truncate_to_drops_later_records() {
 
 #[test]
 fn truncation_clamps_tail_state_to_the_actual_retained_batch_prefix() {
-    let (_dir, mut log) = test_log();
+    let TempLog { dir: _dir, mut log } = test_log();
     log.append(&mut sample_batch(3)).unwrap();
     log.append(&mut sample_batch(3)).unwrap();
     log.active_txn_index
@@ -224,7 +224,7 @@ fn producer_snapshots_follow_kafkas_lifecycle() {
         let offsets: Vec<Offset> = producer_snapshot::list(dir.path())
             .unwrap()
             .into_iter()
-            .map(|(offset, _)| offset)
+            .map(|snapshot| snapshot.offset)
             .collect();
         check!(offsets == expected, "{action:?}");
         let reopened = Log::open(dir.path(), config).unwrap();
@@ -234,7 +234,7 @@ fn producer_snapshots_follow_kafkas_lifecycle() {
 
 #[test]
 fn truncate_to_log_end_is_noop() {
-    let (_dir, mut log) = test_log();
+    let TempLog { dir: _dir, mut log } = test_log();
     let mut b = sample_batch(2);
     log.append(&mut b).unwrap();
     let before = log.log_end_offset();
@@ -251,7 +251,7 @@ fn truncate_to_log_end_is_noop() {
 // (`rel = 3`) leave every batch in place → log_end 4.
 #[test]
 fn truncate_to_promoted_sealed_uses_relative_offset() {
-    let (_dir, mut log) = active_segment_at_one();
+    let TempLog { dir: _dir, mut log } = active_segment_at_one();
     // Roll: seal base 1 (offsets 1,2,3), fresh active base 4, batch E.
     log.set_config(tiny_segments());
     log.append(&mut test_batch_at(4)).unwrap();
@@ -271,7 +271,7 @@ fn truncate_to_promoted_sealed_uses_relative_offset() {
 // mutant (`rel = 4`) drops nothing → log_end 4.
 #[test]
 fn truncate_to_active_segment_uses_relative_offset() {
-    let (_dir, mut log) = active_segment_at_one();
+    let TempLog { dir: _dir, mut log } = active_segment_at_one();
     assert2::assert!(log.log_end_offset() == 4);
 
     // Active base 1 survives (1 < 3); rel = 3 - 1 = 2 drops the offset-3
@@ -282,7 +282,7 @@ fn truncate_to_active_segment_uses_relative_offset() {
 
 #[test]
 fn truncate_removes_stamps_for_discarded_tail() {
-    let (dir, mut log) = stamped_test_log(10, 1);
+    let TempLog { dir, mut log } = stamped_test_log(10, 1);
     append_samples(&mut log, 2, 1);
     check!(log.stamp_for_offset(Offset(1)) == Some(11));
 
@@ -303,25 +303,25 @@ fn truncate_removes_stamps_for_discarded_tail() {
 
 #[test]
 fn truncate_preserves_stamp_indexes_before_promoted_segment() {
-    let (_dir, mut log) = stamped_rolling_log(10, 1, 3);
+    let TempLog { dir: _dir, mut log } = stamped_rolling_log(10, 1, 3);
 
     log.truncate_to(Offset(2)).unwrap();
 
-    check_stamps(&log, &[(0, Some(10)), (1, Some(11)), (2, None)]);
+    check_stamps(&log, &[ExpectedStamp { offset: 0, stamp: Some(10) }, ExpectedStamp { offset: 1, stamp: Some(11) }, ExpectedStamp { offset: 2, stamp: None }]);
 }
 
 #[test]
 fn trim_removes_only_evicted_segment_stamp_indexes() {
-    let (_dir, mut log) = stamped_rolling_log(10, 1, 3);
+    let TempLog { dir: _dir, mut log } = stamped_rolling_log(10, 1, 3);
 
     log.trim_to_offset(Offset(1)).unwrap();
 
-    check_stamps(&log, &[(0, None), (1, Some(11)), (2, Some(12))]);
+    check_stamps(&log, &[ExpectedStamp { offset: 0, stamp: None }, ExpectedStamp { offset: 1, stamp: Some(11) }, ExpectedStamp { offset: 2, stamp: Some(12) }]);
 }
 
 #[test]
 fn truncate_to_drops_stale_epoch_checkpoint_entries() {
-    let (_dir, mut log) = test_log();
+    let TempLog { dir: _dir, mut log } = test_log();
     // Epoch 1 at offsets 0..3, then epoch 7 starting at offset 3.
     let mut b1 = sample_batch_with_epoch(3, 1);
     log.append(&mut b1).unwrap();
@@ -358,7 +358,7 @@ fn a_no_op_truncation_still_drops_an_epoch_no_record_backs() {
         start_offset: Offset(start_offset),
     };
     for (name, target) in [("at the log end", 3), ("past the log end", 9)] {
-        let (_dir, mut log) = test_log();
+        let TempLog { dir: _dir, mut log } = test_log();
         log.append(&mut sample_batch_with_epoch(3, 1)).unwrap();
         log.assign_epoch_start_offset(LeaderEpoch(5), Offset(3))
             .unwrap();
@@ -405,7 +405,7 @@ fn trim_to_offset_drops_old_segments() {
 
 #[test]
 fn trim_to_offset_clamps_to_leo() {
-    let (_dir, mut log) = test_log();
+    let TempLog { dir: _dir, mut log } = test_log();
     append_samples(&mut log, 3, 1);
     let leo = log.log_end_offset();
     let new_start = log.trim_to_offset(Offset(999)).expect("trim");
@@ -415,13 +415,13 @@ fn trim_to_offset_clamps_to_leo() {
 
 #[test]
 fn trim_to_offset_rejects_negative() {
-    let (_dir, mut log) = test_log();
+    let TempLog { dir: _dir, mut log } = test_log();
     assert2::assert!(log.trim_to_offset(Offset(-5)).is_err());
 }
 
 #[test]
 fn trim_to_offset_idempotent_at_or_below_log_start() {
-    let (_dir, mut log) = test_log();
+    let TempLog { dir: _dir, mut log } = test_log();
     append_samples(&mut log, 3, 1);
     // Trim to 0 on a fresh log → no change.
     let r = log.trim_to_offset(Offset(0)).expect("trim");
@@ -472,7 +472,7 @@ fn truncation_reloads_from_the_newest_snapshot_between_log_start_and_cut() {
             producer_snapshot::list(dir.path())
                 .unwrap()
                 .into_iter()
-                .map(|(offset, _)| offset.0)
+                .map(|snapshot| snapshot.offset.0)
                 .collect::<Vec<_>>()
                 == snapshots,
             "log start {log_start}, cut {cut}"
@@ -480,8 +480,8 @@ fn truncation_reloads_from_the_newest_snapshot_between_log_start_and_cut() {
     }
 }
 
-fn active_segment_at_one() -> (tempfile::TempDir, Log) {
-    let (dir, mut log) = test_log();
+fn active_segment_at_one() -> TempLog {
+    let TempLog { dir, mut log } = test_log();
     // Batch A → active base 0.
     log.append(&mut test_batch_at(0)).unwrap();
     // Roll: seal base 0, fresh active base 1, batch B.
@@ -494,5 +494,5 @@ fn active_segment_at_one() -> (tempfile::TempDir, Log) {
     });
     log.append(&mut test_batch_at(2)).unwrap();
     log.append(&mut test_batch_at(3)).unwrap();
-    (dir, log)
+    TempLog { dir, log }
 }

@@ -16,10 +16,10 @@ use tempfile::tempdir;
 use crate::{
     Log, LogConfig, LogError, LogIo, Segment,
     log::test_support::{
-        append_samples, install_stamps, sample_batch, tiny_segments, verbatim_from,
+        append_samples, install_stamps, sample_batch, tiny_segments, EncodedVerbatim, verbatim_from,
     },
     name,
-    producer_snapshot::{self, ProducerSnapshotEntry},
+    producer_snapshot::{self, LoadedSnapshot, ProducerSnapshotEntry},
     test_support::open_log,
 };
 
@@ -34,9 +34,10 @@ fn check_boundary_snapshot(
         name::producer_snapshot_path(copy.path(), 1),
     )
     .unwrap();
-    let (_, state) = producer_snapshot::reload(copy.path(), log.producer_reload_range(Offset(1)))
-        .unwrap()
-        .unwrap();
+    let LoadedSnapshot { state, .. } =
+        producer_snapshot::reload(copy.path(), log.producer_reload_range(Offset(1)))
+            .unwrap()
+            .unwrap();
     assert!(state.into_values().collect::<Vec<_>>() == expected);
 }
 
@@ -237,7 +238,7 @@ fn stamped_appends_wait_for_earlier_rollovers_in_both_append_paths() {
         install_stamps(&mut log, 100, 1);
         let (writer, rx) = spawn_writer(log, move |log| {
             if verbatim {
-                let (_, batch) = verbatim_from(&sample_batch(1), krabka_ids::LeaderEpoch(1));
+                let EncodedVerbatim { batch, .. } = verbatim_from(&sample_batch(1), krabka_ids::LeaderEpoch(1));
                 log.append_verbatim(&batch).unwrap();
             } else {
                 log.append(&mut sample_batch(1)).unwrap();
@@ -328,7 +329,7 @@ fn failed_background_flush_is_reported_by_sync_and_both_append_paths() {
         log.append(&mut sample_batch(1)),
         Err(LogError::Io(_))
     ));
-    let (_, batch) = verbatim_from(&sample_batch(1), krabka_ids::LeaderEpoch(1));
+    let EncodedVerbatim { batch, .. } = verbatim_from(&sample_batch(1), krabka_ids::LeaderEpoch(1));
     assert!(matches!(log.append_verbatim(&batch), Err(LogError::Io(_))));
 }
 

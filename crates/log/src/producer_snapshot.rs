@@ -21,7 +21,21 @@ const HEADER_LEN: usize = 6;
 const ENTRY_LEN: usize = 46;
 
 type SnapshotState = HashMap<ProducerId, ProducerSnapshotEntry>;
-type LoadedSnapshot = (Offset, SnapshotState);
+
+/// A producer snapshot reloaded from disk: the offset of the file it came from
+/// and the state it held.
+#[derive(Debug)]
+pub(crate) struct LoadedSnapshot {
+    pub(crate) offset: Offset,
+    pub(crate) state: SnapshotState,
+}
+
+/// A `.snapshot` sidecar in a log directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SnapshotFile {
+    pub(crate) offset: Offset,
+    pub(crate) path: PathBuf,
+}
 
 /// Durable producer metadata stored in Kafka's `.snapshot` sidecar format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,7 +107,7 @@ pub(crate) fn path(dir: &Path, offset: Offset) -> PathBuf {
     name::producer_snapshot_path(dir, offset.0)
 }
 
-pub(crate) fn list(dir: &Path) -> Result<Vec<(Offset, PathBuf)>, LogError> {
+pub(crate) fn list(dir: &Path) -> Result<Vec<SnapshotFile>, LogError> {
     let mut snapshots = Vec::new();
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
@@ -109,9 +123,12 @@ pub(crate) fn list(dir: &Path) -> Result<Vec<(Offset, PathBuf)>, LogError> {
         let Ok(offset) = stem.parse::<i64>() else {
             continue;
         };
-        snapshots.push((Offset(offset), entry.path()));
+        snapshots.push(SnapshotFile {
+            offset: Offset(offset),
+            path: entry.path(),
+        });
     }
-    snapshots.sort_unstable_by_key(|(offset, _)| *offset);
+    snapshots.sort_unstable_by_key(|snapshot| snapshot.offset);
     Ok(snapshots)
 }
 
@@ -127,15 +144,15 @@ pub(crate) fn reload(
 ) -> Result<Option<LoadedSnapshot>, LogError> {
     let mut eligible = retain_reload_range(dir, range)?;
     while !eligible.is_empty() {
-        let offsets: Vec<i64> = eligible.iter().map(|(offset, _)| offset.0).collect();
+        let offsets: Vec<i64> = eligible.iter().map(|snapshot| snapshot.offset.0).collect();
         let Some(selected) = kernel::producer_snapshot_latest_index(&offsets, range) else {
             return Err(LogError::Corrupt(
                 "retained producer snapshots have no reloadable offset".into(),
             ));
         };
-        let (offset, path) = eligible.swap_remove(selected);
+        let SnapshotFile { offset, path } = eligible.swap_remove(selected);
         match read(&path, offset) {
-            Ok(entries) => return Ok(Some((offset, entries))),
+            Ok(state) => return Ok(Some(LoadedSnapshot { offset, state })),
             Err(LogError::Corrupt(_)) => {
                 // Match Kafka recovery: discard a corrupt newest snapshot and
                 // retry the preceding one instead of failing the partition.
@@ -153,13 +170,13 @@ pub(crate) fn reload(
 pub(crate) fn retain_reload_range(
     dir: &Path,
     range: ProducerReloadRange,
-) -> Result<Vec<(Offset, PathBuf)>, LogError> {
+) -> Result<Vec<SnapshotFile>, LogError> {
     let mut retained = Vec::new();
-    for (offset, path) in list(dir)? {
-        if kernel::producer_snapshot_reload_keeps(offset.0, range) {
-            retained.push((offset, path));
+    for snapshot in list(dir)? {
+        if kernel::producer_snapshot_reload_keeps(snapshot.offset.0, range) {
+            retained.push(snapshot);
         } else {
-            fs::remove_file(path)?;
+            fs::remove_file(snapshot.path)?;
         }
     }
     Ok(retained)
@@ -170,10 +187,10 @@ pub(crate) fn retain_reload_range(
 /// the newest snapshot when it lies above every segment.
 pub(crate) fn remove_strays(dir: &Path, segment_bases: &[i64]) -> Result<(), LogError> {
     let snapshots = list(dir)?;
-    let offsets: Vec<i64> = snapshots.iter().map(|(offset, _)| offset.0).collect();
-    for (index, (_, path)) in snapshots.into_iter().enumerate() {
+    let offsets: Vec<i64> = snapshots.iter().map(|snapshot| snapshot.offset.0).collect();
+    for (index, snapshot) in snapshots.into_iter().enumerate() {
         if kernel::producer_snapshot_stray(&offsets, index, segment_bases) {
-            fs::remove_file(path)?;
+            fs::remove_file(snapshot.path)?;
         }
     }
     Ok(())
@@ -189,8 +206,8 @@ pub(crate) fn remove_at(dir: &Path, offset: Offset) -> Result<(), LogError> {
 }
 
 pub(crate) fn remove_all(dir: &Path) -> Result<(), LogError> {
-    for (_, path) in list(dir)? {
-        fs::remove_file(path)?;
+    for snapshot in list(dir)? {
+        fs::remove_file(snapshot.path)?;
     }
     Ok(())
 }
@@ -500,7 +517,7 @@ fn take_i64(bytes: &[u8], cursor: &mut usize) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::FileIo;
+    use crate::{io::FileIo, test_support::TempPath};
 
     fn sample_entry() -> ProducerSnapshotEntry {
         ProducerSnapshotEntry {
@@ -523,13 +540,13 @@ mod tests {
     fn snapshot_file(
         entries: &HashMap<ProducerId, ProducerSnapshotEntry>,
         offset: i64,
-    ) -> (tempfile::TempDir, PathBuf) {
+    ) -> TempPath {
         let dir = tempfile::tempdir().unwrap();
         let path = write(&FileIo, dir.path(), Offset(offset), entries).unwrap();
-        (dir, path)
+        TempPath { dir, path }
     }
 
-    fn sample_file() -> (tempfile::TempDir, PathBuf) {
+    fn sample_file() -> TempPath {
         snapshot_file(&sample(), 102)
     }
 
@@ -550,13 +567,13 @@ mod tests {
 
     fn assert_rejected(entry: ProducerSnapshotEntry) {
         let entries = maplit::hashmap! {entry.producer_id => entry};
-        let (_dir, path) = snapshot_file(&entries, 102);
+        let TempPath { dir: _dir, path } = snapshot_file(&entries, 102);
         assert_corrupt(&path, 102);
     }
 
     #[test]
     fn kafka_v1_snapshot_round_trips() {
-        let (_dir, path) = sample_file();
+        let TempPath { dir: _dir, path } = sample_file();
         assert2::assert!(read(&path, Offset(102)).unwrap() == sample());
     }
 
@@ -565,7 +582,7 @@ mod tests {
         let mut entry = sample_entry();
         entry.producer_id = ProducerId(0);
         let entries = maplit::hashmap! {entry.producer_id => entry};
-        let (_dir, path) = snapshot_file(&entries, 102);
+        let TempPath { dir: _dir, path } = snapshot_file(&entries, 102);
         assert2::assert!(read(&path, Offset(102)).unwrap() == entries);
     }
 
@@ -604,7 +621,7 @@ mod tests {
 
     #[test]
     fn empty_snapshot_has_exact_header_length_and_round_trips() {
-        let (_dir, path) = snapshot_file(&HashMap::new(), 0);
+        let TempPath { dir: _dir, path } = snapshot_file(&HashMap::new(), 0);
         assert2::assert!(fs::metadata(&path).unwrap().len() == 10);
         assert2::assert!(read(&path, Offset(0)).unwrap().is_empty());
     }
@@ -625,7 +642,7 @@ mod tests {
 
     #[test]
     fn crc_covers_entry_count_and_entries() {
-        let (_dir, path) = sample_file();
+        let TempPath { dir: _dir, path } = sample_file();
         let mut bytes = fs::read(&path).unwrap();
         bytes[9] ^= 1;
         fs::write(&path, bytes).unwrap();
@@ -634,7 +651,7 @@ mod tests {
 
     #[test]
     fn rejects_unknown_version_and_truncated_entry() {
-        let (dir, path) = sample_file();
+        let TempPath { dir, path } = sample_file();
         let mut unknown = fs::read(&path).unwrap();
         unknown[1] = 2;
         fs::write(&path, unknown).unwrap();
@@ -660,7 +677,7 @@ mod tests {
         list(dir)
             .unwrap()
             .into_iter()
-            .map(|(offset, _)| offset.0)
+            .map(|snapshot| snapshot.offset.0)
             .collect()
     }
 
@@ -720,7 +737,7 @@ mod tests {
 
     #[test]
     fn future_entry_state_is_removed_and_previous_snapshot_is_loaded() {
-        let (dir, previous) = sample_file();
+        let TempPath { dir, path: previous } = sample_file();
         let future_state = write(&FileIo, dir.path(), Offset(103), &sample()).unwrap();
         let mut bytes = fs::read(&future_state).unwrap();
         bytes[24..32].copy_from_slice(&103_i64.to_be_bytes());
@@ -817,7 +834,7 @@ mod tests {
 
     #[test]
     fn duplicate_producer_ids_are_rejected() {
-        let (_dir, path) = sample_file();
+        let TempPath { dir: _dir, path } = sample_file();
         let mut bytes = fs::read(&path).unwrap();
         let duplicate = bytes[HEADER_LEN + 4..].to_vec();
         bytes.extend_from_slice(&duplicate);
@@ -891,7 +908,7 @@ mod tests {
     #[test]
     fn existing_snapshot_does_not_prepare_state_but_still_syncs_the_directory() {
         use std::sync::atomic::Ordering::SeqCst;
-        let (dir, destination) = sample_file();
+        let TempPath { dir, path: destination } = sample_file();
         let io = DirectoryDebt::default();
         let result = write_if_missing(&io, dir.path(), Offset(102), || {
             panic!("an existing snapshot must not encode or sort producer state")
@@ -904,7 +921,7 @@ mod tests {
 
     #[test]
     fn snapshot_read_io_failure_is_not_treated_as_corruption() {
-        let (dir, previous) = sample_file();
+        let TempPath { dir, path: previous } = sample_file();
         let unreadable = path(dir.path(), Offset(103));
         fs::create_dir(&unreadable).unwrap();
         let corrupt = write(&FileIo, dir.path(), Offset(104), &sample()).unwrap();
@@ -924,7 +941,13 @@ mod tests {
 
         let retained = retain_reload_range(dir.path(), range(1, 2)).unwrap();
 
-        assert2::check!(retained == vec![(Offset(2), path(dir.path(), Offset(2)))]);
+        assert2::check!(
+            retained
+                == vec![SnapshotFile {
+                    offset: Offset(2),
+                    path: path(dir.path(), Offset(2))
+                }]
+        );
         assert2::check!(offsets(dir.path()) == vec![2]);
     }
 

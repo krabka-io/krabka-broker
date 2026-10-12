@@ -70,12 +70,14 @@ fn put_nullable_bytes(buf: &mut Vec<u8>, b: Option<&Bytes>) {
 mod tests {
 
     use super::*;
-    use crate::message::test_support::{fixture_v0, fixture_v1, fixture_v1_null, round_trip};
+    use crate::message::test_support::{
+        RoundTrip, fixture_v0, fixture_v1, fixture_v1_null, round_trip,
+    };
 
     #[test]
     fn message_roundtrips() {
         for (_name, message) in [("v0", fixture_v0()), ("v1", fixture_v1())] {
-            let (buffer, decoded) = round_trip(&message);
+            let RoundTrip { buffer, decoded } = round_trip(&message);
             assert2::assert!(buffer.len() == message.encoded_len());
             assert2::assert!(decoded == message);
         }
@@ -84,7 +86,7 @@ mod tests {
     #[test]
     fn v1_null_key_and_value() {
         let m = fixture_v1_null();
-        let (_buffer, decoded) = round_trip(&m);
+        let RoundTrip { decoded, .. } = round_trip(&m);
         assert2::assert!(decoded == m);
     }
 
@@ -97,7 +99,7 @@ mod tests {
             key: None,
             value: None,
         };
-        let (_buffer, decoded) = round_trip(&m);
+        let RoundTrip { decoded, .. } = round_trip(&m);
         assert2::assert!(
             decoded
                 == Message {
@@ -117,7 +119,7 @@ mod tests {
             key: Some(Bytes::new()),
             value: Some(Bytes::from_static(b"v")),
         };
-        let (_buffer, decoded) = round_trip(&m);
+        let RoundTrip { decoded, .. } = round_trip(&m);
         assert2::assert!(decoded == m);
     }
 }

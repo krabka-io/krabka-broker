@@ -55,7 +55,7 @@ impl Log {
             .chain(
                 self.pending_deletes
                     .iter()
-                    .map(|(deadline, _)| deadline.duration_since(now).unwrap_or_default()),
+                    .map(|pending| pending.deadline.duration_since(now).unwrap_or_default()),
             )
             .min()
     }
@@ -77,10 +77,16 @@ impl Log {
             .expect("an open log has an active segment")
             .base_offset();
         let sample = match self.roll_jitter {
-            Some((previous, sample)) if previous == base => sample,
+            Some(RollJitter {
+                segment_base,
+                sample,
+            }) if segment_base == base => sample,
             _ => {
                 let sample = RandomState::new().hash_one(base);
-                self.roll_jitter = Some((base, sample));
+                self.roll_jitter = Some(RollJitter {
+                    segment_base: base,
+                    sample,
+                });
                 sample
             }
         };
@@ -160,13 +166,13 @@ impl Log {
         let mut paths = Vec::new();
         let result = retention::retire_files(&*self.io, &self.dir, base, extensions, &mut paths);
         if !paths.is_empty() {
-            self.pending_deletes.push((deadline, paths));
+            self.pending_deletes.push(PendingDelete { deadline, paths });
         }
         result
     }
 
     pub(super) fn reap_deleted_files(&mut self, now: SystemTime) -> Result<(), LogError> {
-        for (deadline, paths) in &mut self.pending_deletes {
+        for PendingDelete { deadline, paths } in &mut self.pending_deletes {
             if *deadline > now {
                 continue;
             }
@@ -175,7 +181,7 @@ impl Log {
                 paths.pop();
             }
         }
-        self.pending_deletes.retain(|(_, paths)| !paths.is_empty());
+        self.pending_deletes.retain(|pending| !pending.paths.is_empty());
         Ok(())
     }
 }

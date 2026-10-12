@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use krabka_kraft_core::simulation_support::NodeFingerprint;
 use krabka_raft::kraft::{
     QuorumStateMachine,
     role::Role,
@@ -103,7 +104,7 @@ impl<L: SimNodeLog> Sim<L> {
 
     /// A deterministic snapshot of every node's observable state, which detects
     /// the steady-state fixed point. It is ordered by node id, in a `BTreeMap`.
-    fn fingerprint(&self) -> Vec<(NodeId, &'static str, Epoch, usize, i64)> {
+    fn fingerprint(&self) -> Vec<NodeFingerprint> {
         self.nodes
             .values()
             .map(|n| {

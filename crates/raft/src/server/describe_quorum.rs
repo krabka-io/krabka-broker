@@ -202,16 +202,23 @@ mod tests {
     use super::*;
     use crate::server::test_support::voter;
 
+    /// A topic name with the partition indexes a request names.
+    struct RequestedTopic<'a> {
+        name: &'a str,
+        partitions: &'a [i32],
+    }
+
     /// Topic names, each with the partition indexes a request names.
-    type RequestedTopics<'a> = &'a [(&'a str, &'a [i32])];
+    type RequestedTopics<'a> = &'a [RequestedTopic<'a>];
 
     fn request(topics: RequestedTopics<'_>) -> DescribeQuorumRequest {
         DescribeQuorumRequest {
             topics: topics
                 .iter()
-                .map(|(name, partitions)| RequestTopic {
-                    topic_name: (*name).into(),
-                    partitions: partitions
+                .map(|topic| RequestTopic {
+                    topic_name: topic.name.into(),
+                    partitions: topic
+                        .partitions
                         .iter()
                         .map(|&partition_index| RequestPartition {
                             partition_index,
@@ -284,7 +291,7 @@ mod tests {
 
     #[test]
     fn the_leader_describes_every_replica() {
-        let response = describe_quorum(&request(&[(METADATA_TOPIC, &[0])]), &leader_snapshot());
+        let response = describe_quorum(&request(&[RequestedTopic { name: METADATA_TOPIC, partitions: &[0] }]), &leader_snapshot());
 
         check!(
             response
@@ -342,7 +349,7 @@ mod tests {
             ..leader_snapshot()
         };
 
-        let response = describe_quorum(&request(&[(METADATA_TOPIC, &[0])]), &snapshot);
+        let response = describe_quorum(&request(&[RequestedTopic { name: METADATA_TOPIC, partitions: &[0] }]), &snapshot);
 
         check!(
             response.topics[0].partitions[0].observers
@@ -360,7 +367,7 @@ mod tests {
         };
 
         check!(
-            describe_quorum(&request(&[(METADATA_TOPIC, &[0])]), &follower)
+            describe_quorum(&request(&[RequestedTopic { name: METADATA_TOPIC, partitions: &[0] }]), &follower)
                 == not_leader_or_follower_response()
         );
     }
@@ -383,7 +390,7 @@ mod tests {
             ..leader_snapshot()
         };
 
-        let response = describe_quorum(&request(&[(METADATA_TOPIC, &[0])]), &snapshot);
+        let response = describe_quorum(&request(&[RequestedTopic { name: METADATA_TOPIC, partitions: &[0] }]), &snapshot);
         let partition = &response.topics[0].partitions[0];
         let unmapped = partition
             .current_voters
@@ -404,13 +411,17 @@ mod tests {
     /// not this node leads.
     #[test]
     fn a_request_for_another_partition_gets_unknown_topic_or_partition() {
-        let rows: [(&str, RequestedTopics<'_>); 5] = [
-            ("another topic", &[("other", &[0])]),
-            ("partition 1", &[(METADATA_TOPIC, &[1])]),
-            ("two partitions", &[(METADATA_TOPIC, &[0, 1])]),
-            ("two topics", &[(METADATA_TOPIC, &[0]), ("other", &[0])]),
-            ("no topic", &[]),
-        ];
+        struct Row {
+            label: &'static str,
+            topics: RequestedTopics<'static>,
+        }
+        let rows = [
+Row { label: "another topic", topics: &[RequestedTopic { name: "other", partitions: &[0] }] },
+Row { label: "partition 1", topics: &[RequestedTopic { name: METADATA_TOPIC, partitions: &[1] }] },
+Row { label: "two partitions", topics: &[RequestedTopic { name: METADATA_TOPIC, partitions: &[0, 1] }] },
+Row { label: "two topics", topics: &[RequestedTopic { name: METADATA_TOPIC, partitions: &[0] }, RequestedTopic { name: "other", partitions: &[0] }] },
+Row { label: "no topic", topics: &[] },
+];
         // The oracle remains separate from production response construction.
         let expected_partition = |partition_index| PartitionData {
             partition_index,
@@ -418,13 +429,14 @@ mod tests {
             error_message: Some(UNKNOWN_TOPIC_OR_PARTITION_MESSAGE.into()),
             ..Default::default()
         };
-        for (label, topics) in rows {
+        for Row { label, topics } in rows {
             let expected = DescribeQuorumResponse {
                 topics: topics
                     .iter()
-                    .map(|(name, partitions)| TopicData {
-                        topic_name: (*name).into(),
-                        partitions: partitions
+                    .map(|topic| TopicData {
+                        topic_name: topic.name.into(),
+                        partitions: topic
+                            .partitions
                             .iter()
                             .map(|&index| expected_partition(index))
                             .collect(),

@@ -41,7 +41,7 @@ mod rlmm;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-use self::{mutations::MutationWaiters, pump::pump_loop};
+use self::{mutations::MutationWaiters, persistence::ResumePlan, pump::pump_loop};
 use crate::{
     log::{AssignmentHandle, MetadataEventLog},
     snapshot::{SNAPSHOT_FILE_NAME, Snapshot},
@@ -150,7 +150,7 @@ impl TopicBasedRemoteLogMetadataManager {
         // makes an unassigned partition a genuine `Ok(None)` rather than a
         // false hit from globally-replayed state.
         let committed = match Self::resume_from_snapshot(snapshot.as_ref(), n) {
-            Ok((committed, _assignment)) => {
+            Ok(ResumePlan { committed, .. }) => {
                 if let Some(snap) = &snapshot {
                     inner.import(snap.dump.clone());
                 }
@@ -160,7 +160,7 @@ impl TopicBasedRemoteLogMetadataManager {
                 warn!(error = ?e, "topic-based RLMM: snapshot cursor invalid; starting from empty cache");
                 Self::resume_from_snapshot(None, n)
                     .expect("missing snapshot always yields full-replay cursors")
-                    .0
+                    .committed
             }
         };
 

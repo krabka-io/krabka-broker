@@ -11,7 +11,7 @@ use crate::{
         control_state::{voter_set_from_wire, voter_set_to_wire},
         records::{leader_change_batch, typed_control_batch},
         test_support::{
-            EngineSetup, build_engine_only, elect_single_voter_engine, one_offset_batch,
+            EngineInDir, EngineSetup, build_engine_only, elect_single_voter_engine, one_offset_batch,
             topic_record, voter_set,
         },
     },
@@ -522,7 +522,7 @@ fn upgrade_leader_to_kraft_v1(leader: &mut Engine) {
 /// A leader of voters 1, 2 and 3 at `kraft.version` 1 that has committed its
 /// epoch, ready to answer `AddRaftVoter`, with a clock that has been running for
 /// 50 ms so a fetch is stamped with a nonzero time.
-fn kraft_version_one_leader() -> (Engine, tempfile::TempDir) {
+fn kraft_version_one_leader() -> EngineInDir {
     let (mut leader, dir) = build_engine_only(EngineSetup::default());
     leader.on_event(Event::ElectionTimeout);
     for epoch in [0, 1] {
@@ -536,7 +536,10 @@ fn kraft_version_one_leader() -> (Engine, tempfile::TempDir) {
     upgrade_leader_to_kraft_v1(&mut leader);
     leader.log.advance_hwm(leader.log.log_end_offset() + 10);
     leader.clock_base = Instant::now() - Duration::from_millis(50);
-    (leader, dir)
+    EngineInDir {
+        engine: leader,
+        dir,
+    }
 }
 
 /// The `AddRaftVoter` request for node `id` under `directory`.
@@ -584,37 +587,51 @@ async fn add_voter_admits_a_candidate_by_kafkas_caught_up_rule() {
     /// One fetch by the candidate: its directory, the offset it asks for
     /// (`None` is the leader's log end at that moment, `Some(-1)` the log end
     /// before this row's append) and whether the leader appends a record first.
-    type Fetch = (u128, Option<i64>, bool);
+    struct Fetch {
+        directory: u128,
+        offset: Option<i64>,
+        append_first: bool,
+    }
+    let fetch = |directory, offset, append_first| Fetch {
+        directory,
+        offset,
+        append_first,
+    };
     let candidate_directory = 7;
     let cases: [(&str, Vec<Fetch>, bool); 5] = [
         ("it never fetched", vec![], false),
         (
             "it fetched short of the end and never reached it",
-            vec![(candidate_directory, Some(0), false)],
+            vec![fetch(candidate_directory, Some(0), false)],
             false,
         ),
         (
             "it fetched at the log end",
-            vec![(candidate_directory, None, false)],
+            vec![fetch(candidate_directory, None, false)],
             true,
         ),
         (
             "it kept pace with the appends between two fetches",
             vec![
-                (candidate_directory, Some(0), false),
-                (candidate_directory, Some(-1), true),
+                fetch(candidate_directory, Some(0), false),
+                fetch(candidate_directory, Some(-1), true),
             ],
             true,
         ),
         (
             "the fetches were made under another directory id",
-            vec![(candidate_directory + 1, None, false)],
+            vec![fetch(candidate_directory + 1, None, false)],
             false,
         ),
     ];
     for (label, fetches, admitted) in cases {
-        let (mut leader, _dir) = kraft_version_one_leader();
-        for (directory, offset, append_first) in fetches {
+        let EngineInDir { engine: mut leader, dir: _dir } = kraft_version_one_leader();
+        for Fetch {
+            directory,
+            offset,
+            append_first,
+        } in fetches
+        {
             let end_before_append = leader.log.log_end_offset().0;
             if append_first {
                 leader.test_append_and_commit(&topic_record("t"));
@@ -660,7 +677,7 @@ async fn add_voter_admits_a_candidate_by_kafkas_caught_up_rule() {
 async fn an_observer_that_dropped_out_of_describe_quorum_can_still_be_added() {
     use crate::reconfig::{ReconfigOutcome, VoterChange};
 
-    let (mut leader, _dir) = kraft_version_one_leader();
+    let EngineInDir { engine: mut leader, dir: _dir } = kraft_version_one_leader();
     let candidate = ReplicaKey {
         id: NodeId(4),
         directory_id: uuid::Uuid::from_u128(7),
@@ -705,7 +722,7 @@ async fn a_check_only_add_runs_the_local_admission_checks_in_kafkas_order() {
 
     // No pending change, HWM past the epoch start, kraft.version 1: a stranger
     // passes, and nothing is appended or left pending.
-    let (mut leader, _dir) = kraft_version_one_leader();
+    let EngineInDir { engine: mut leader, dir: _dir } = kraft_version_one_leader();
     let end = leader.log.log_end_offset();
     check!(
         matches!(
@@ -770,7 +787,7 @@ async fn a_check_only_add_runs_the_local_admission_checks_in_kafkas_order() {
 async fn a_replica_keeps_its_progress_across_joining_and_leaving_the_voter_set() {
     use crate::reconfig::{ReconfigOutcome, RemoveVoter, VoterChange};
 
-    let (mut leader, _dir) = kraft_version_one_leader();
+    let EngineInDir { engine: mut leader, dir: _dir } = kraft_version_one_leader();
     let key = ReplicaKey {
         id: NodeId(4),
         directory_id: uuid::Uuid::from_u128(7),
@@ -816,7 +833,12 @@ fn validating_a_kraft_version_upgrade_runs_its_checks_and_appends_nothing() {
 
     /// What the request left behind: the reply if it was immediate, and
     /// whether the log grew.
-    fn run(elect: bool, change: VoterChange) -> (Option<Result<ReconfigOutcome, RaftError>>, bool) {
+    struct Left {
+        reply: Option<Result<ReconfigOutcome, RaftError>>,
+        grew: bool,
+    }
+
+    fn run(elect: bool, change: VoterChange) -> Left {
         let (mut engine, _dir) = build_engine_only(EngineSetup {
             ids: &[NodeId(1)],
             ..Default::default()
@@ -827,12 +849,15 @@ fn validating_a_kraft_version_upgrade_runs_its_checks_and_appends_nothing() {
         let before = engine.log.log_end_offset();
         let (reply, mut rx) = oneshot::channel();
         engine.on_reconfigure(change, reply);
-        (rx.try_recv().ok(), engine.log.log_end_offset() != before)
+        Left {
+            reply: rx.try_recv().ok(),
+            grew: engine.log.log_end_offset() != before,
+        }
     }
 
     // A follower redirects, whichever request it gets.
-    let (validated, grew) = run(false, VoterChange::ValidateKraftVersion(1));
-    let (finalized, _) = run(false, VoterChange::FinalizeKraftVersion(1));
+    let Left { reply: validated, grew } = run(false, VoterChange::ValidateKraftVersion(1));
+    let Left { reply: finalized, .. } = run(false, VoterChange::FinalizeKraftVersion(1));
     check!(matches!(
         (&validated, &finalized),
         (
@@ -843,8 +868,8 @@ fn validating_a_kraft_version_upgrade_runs_its_checks_and_appends_nothing() {
     check!(!grew);
 
     // A version nobody supports is refused the same way by both.
-    let (validated, grew) = run(true, VoterChange::ValidateKraftVersion(9));
-    let (finalized, _) = run(true, VoterChange::FinalizeKraftVersion(9));
+    let Left { reply: validated, grew } = run(true, VoterChange::ValidateKraftVersion(9));
+    let Left { reply: finalized, .. } = run(true, VoterChange::FinalizeKraftVersion(9));
     check!(matches!(validated, Some(Err(_))), "{validated:?}");
     check!(
         format!("{validated:?}") == format!("{finalized:?}"),
@@ -854,10 +879,10 @@ fn validating_a_kraft_version_upgrade_runs_its_checks_and_appends_nothing() {
 
     // An upgrade the checks admit: validating answers at once and leaves the
     // log alone, while finalizing appends the version and the voter set.
-    let (validated, grew) = run(true, VoterChange::ValidateKraftVersion(1));
+    let Left { reply: validated, grew } = run(true, VoterChange::ValidateKraftVersion(1));
     check!(matches!(validated, Some(Ok(ReconfigOutcome::Committed))));
     check!(!grew, "a validated upgrade must append nothing");
-    let (_, grew) = run(true, VoterChange::FinalizeKraftVersion(1));
+    let Left { grew, .. } = run(true, VoterChange::FinalizeKraftVersion(1));
     check!(grew, "the real upgrade appends");
 }
 
@@ -913,10 +938,25 @@ fn the_first_leader_of_a_dynamic_quorum_writes_the_bootstrap_voters() {
         config::DEFAULT_METADATA_RAFT_FETCH_MAX, kraft::controller::control_batch_image_records,
     };
 
+    #[derive(Debug, PartialEq)]
+    struct ControlBatch {
+        record_count: usize,
+        kafka_readable: bool,
+        image_records: Vec<MetadataRecord>,
+    }
+
+    /// The batches that a leader's epochs start with, under one `kraft.version`.
+    #[derive(Debug, PartialEq)]
+    struct EpochStarts {
+        kraft_version: u16,
+        first: ControlBatch,
+        later: ControlBatch,
+    }
+
     /// The control batch at `at`: its record count, whether its `LeaderChange`
     /// marker reads whole at version 0, the only version Kafka reads it at, and
     /// the image records it carries.
-    fn batch_at(engine: &Engine, at: Offset) -> (usize, bool, Vec<MetadataRecord>) {
+    fn batch_at(engine: &Engine, at: Offset) -> ControlBatch {
         use krabka_protocol::{Decode, owned::leader_change_message::LeaderChangeMessage};
 
         let batches = engine
@@ -927,11 +967,11 @@ fn the_first_leader_of_a_dynamic_quorum_writes_the_bootstrap_voters() {
         let mut marker: &[u8] = batch.records[0].value.as_ref().expect("a marker value");
         let kafka_readable =
             LeaderChangeMessage::decode(&mut marker, 0).is_ok() && marker.is_empty();
-        (
-            batch.records.len(),
+        ControlBatch {
+            record_count: batch.records.len(),
             kafka_readable,
-            control_batch_image_records(batch).expect("decode the control batch"),
-        )
+            image_records: control_batch_image_records(batch).expect("decode the control batch"),
+        }
     }
 
     let voters = voter_set(&[NodeId(1)]);
@@ -941,13 +981,29 @@ fn the_first_leader_of_a_dynamic_quorum_writes_the_bootstrap_voters() {
             voters: voters.clone(),
         }),
     ];
-    // (kraft.version, first epoch's batch, a later epoch's batch)
+    let marker_only = || ControlBatch {
+        record_count: 1,
+        kafka_readable: true,
+        image_records: vec![],
+    };
     let cases = [
-        (0_u16, (1, true, vec![]), (1, true, vec![])),
-        (1, (3, true, dynamic), (1, true, vec![])),
+        EpochStarts {
+            kraft_version: 0,
+            first: marker_only(),
+            later: marker_only(),
+        },
+        EpochStarts {
+            kraft_version: 1,
+            first: ControlBatch {
+                record_count: 3,
+                kafka_readable: true,
+                image_records: dynamic,
+            },
+            later: marker_only(),
+        },
     ];
     let mut written = Vec::new();
-    for &(kraft_version, ..) in &cases {
+    for kraft_version in cases.iter().map(|case| case.kraft_version) {
         let (mut engine, _dir) = build_engine_only(EngineSetup {
             ids: &[NodeId(1)],
             ..Default::default()
@@ -961,7 +1017,11 @@ fn the_first_leader_of_a_dynamic_quorum_writes_the_bootstrap_voters() {
         engine
             .append_leader_change(engine.core.quorum_state().leader_epoch)
             .expect("append a later epoch's marker");
-        written.push((kraft_version, first, batch_at(&engine, later_start)));
+        written.push(EpochStarts {
+            kraft_version,
+            first,
+            later: batch_at(&engine, later_start),
+        });
         // The leader's own voter set is the one it wrote, so it is unchanged.
         check!(engine.controls.latest_voters() == &voters);
     }
@@ -987,11 +1047,14 @@ fn a_new_observer_is_published_without_a_commit() {
 
     leader.record_observer_fetch(key, leader.log.log_end_offset().0);
 
-    let observers: Vec<(NodeId, uuid::Uuid)> = published
+    let observers: Vec<ReplicaKey> = published
         .borrow()
         .observers
         .iter()
-        .map(|observer| (observer.id, observer.directory_id))
+        .map(|observer| ReplicaKey {
+            id: observer.id,
+            directory_id: observer.directory_id,
+        })
         .collect();
-    assert!(observers == vec![(key.id, key.directory_id)]);
+    assert!(observers == vec![key]);
 }

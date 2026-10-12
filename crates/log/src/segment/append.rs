@@ -17,7 +17,7 @@ use super::{
     io::{write_all, write_all_vectored},
     lifecycle::WriteSnapshot,
 };
-use crate::{VerbatimBatch, error::LogError};
+use crate::{VerbatimBatch, error::LogError, index::OffsetIndexEntry};
 
 /// One batch's encoded bytes, as an append path has them.
 #[derive(Clone, Copy)]
@@ -26,6 +26,13 @@ enum BatchBytes<'a> {
     Whole(&'a Bytes),
     /// The verbatim path's patched header and the producer's untouched body.
     Split(&'a [u8], &'a [u8]),
+}
+
+/// The slices of one batch handed to the Direct I/O writer, and the joined
+/// bytes that go into the tail cache.
+struct DirectParts<'a> {
+    parts: &'a [&'a [u8]],
+    cached: Bytes,
 }
 
 impl BatchBytes<'_> {
@@ -37,13 +44,27 @@ impl BatchBytes<'_> {
     }
 }
 
+/// A verbatim batch together with the base offset it is written at.
+#[derive(Clone, Copy)]
+pub(crate) struct PlacedBatch<'a> {
+    pub(crate) batch: &'a VerbatimBatch,
+    pub(crate) base: Offset,
+}
+
+/// The last offset a batch ends at, and the segment's byte length after the
+/// batch is written.
+struct AppendCoordinates {
+    last_offset: i64,
+    size: u64,
+}
+
 impl Segment {
     fn append_coordinates(
         &self,
         base: i64,
         delta: i32,
         len: usize,
-    ) -> Result<(i64, u64), LogError> {
+    ) -> Result<AppendCoordinates, LogError> {
         let (last, _) = krabka_verified::local_append_coordinates(base, base, delta)
             .ok_or_else(|| LogError::InvalidArgument("invalid batch offset interval".into()))?;
         let len = u64::try_from(len)
@@ -52,7 +73,10 @@ impl Segment {
             .log_size
             .checked_add(len)
             .ok_or_else(|| LogError::InvalidArgument("segment byte length overflow".into()))?;
-        Ok((last, size))
+        Ok(AppendCoordinates {
+            last_offset: last,
+            size,
+        })
     }
 
     /// Append a record batch and return the byte position where the batch
@@ -196,11 +220,15 @@ impl Segment {
             };
         };
         let io = &*self.io;
-        let (parts, cached): (&[&[u8]], Bytes) = match batch {
-            BatchBytes::Whole(bytes) => (&[bytes], bytes.clone()),
-            BatchBytes::Split(header, body) => {
-                (&[header, body], Bytes::from([header, body].concat()))
-            }
+        let DirectParts { parts, cached } = match batch {
+            BatchBytes::Whole(bytes) => DirectParts {
+                parts: &[bytes],
+                cached: bytes.clone(),
+            },
+            BatchBytes::Split(header, body) => DirectParts {
+                parts: &[header, body],
+                cached: Bytes::from([header, body].concat()),
+            },
         };
         mode.writer.append(parts, |file, buf, offset| {
             io.write_direct(file, buf, offset)
@@ -228,7 +256,10 @@ impl Segment {
         index_interval: ByteSize,
         batch: BatchBytes<'_>,
     ) -> Result<u64, LogError> {
-        let (last_offset, new_log_size) = self.append_coordinates(base, delta, batch.len())?;
+        let AppendCoordinates {
+            last_offset,
+            size: new_log_size,
+        } = self.append_coordinates(base, delta, batch.len())?;
         let position = self.log_size;
         let previous = self.write_snapshot();
         let index_entry = self.index_entry_for(position, last_offset, index_interval)?;
@@ -244,14 +275,14 @@ impl Segment {
     /// Any failure restores the segment to the start of the group.
     pub(crate) fn append_verbatim_group(
         &mut self,
-        batches: &[(&VerbatimBatch, Offset)],
+        batches: &[PlacedBatch<'_>],
         index_interval: ByteSize,
     ) -> Result<(), LogError> {
         self.ensure_writable()?;
-        let size = batches.iter().map(|(batch, _)| batch.bytes.len()).sum();
+        let size = batches.iter().map(|placed| placed.batch.bytes.len()).sum();
         let mut bytes = bytes::BytesMut::with_capacity(size);
         let mut chunk_ends = Vec::with_capacity(batches.len());
-        for &(batch, base) in batches {
+        for &PlacedBatch { batch, base } in batches {
             let mut header = [0; HEADER_LEN];
             header.copy_from_slice(&batch.bytes[..HEADER_LEN]);
             patch_base_offset_and_leader_epoch(&mut header, base.0, batch.leader_epoch.0);
@@ -264,10 +295,12 @@ impl Segment {
         let snapshot = self.write_snapshot();
         let result = (|| {
             self.write_bytes(BatchBytes::Whole(&bytes), &chunk_ends)?;
-            for &(batch, base) in batches {
+            for &PlacedBatch { batch, base } in batches {
                 let position = self.log_size;
-                let (last, size) =
-                    self.append_coordinates(base.0, batch.last_offset_delta, batch.bytes.len())?;
+                let AppendCoordinates {
+                    last_offset: last,
+                    size,
+                } = self.append_coordinates(base.0, batch.last_offset_delta, batch.bytes.len())?;
                 let entry = self.index_entry_for(position, last, index_interval)?;
                 self.log_size = size;
                 self.record_batch(last, batch.max_timestamp);
@@ -288,7 +321,7 @@ impl Segment {
         &mut self,
         position: u64,
         previous: WriteSnapshot,
-        index_entry: Option<(u32, u32)>,
+        index_entry: Option<OffsetIndexEntry>,
         last_offset: i64,
         max_timestamp: i64,
     ) -> Result<u64, LogError> {
@@ -316,7 +349,7 @@ impl Segment {
         position: u64,
         last_offset: i64,
         index_interval: ByteSize,
-    ) -> Result<Option<(u32, u32)>, LogError> {
+    ) -> Result<Option<OffsetIndexEntry>, LogError> {
         // Kafka's `bytesSinceLastIndexEntry > indexIntervalBytes`: the bytes
         // written since the last entry, counted from that entry's batch (or
         // from the segment start while there is none), must exceed the
@@ -325,7 +358,7 @@ impl Segment {
         let last_indexed = self
             .offset_index
             .last_entry()
-            .map_or(0, |(_, last_pos)| u64::from(last_pos));
+            .map_or(0, |entry| u64::from(entry.position));
         let should_index = position.saturating_sub(last_indexed) > index_interval.bytes_u64();
         if !should_index {
             return Ok(None);
@@ -334,7 +367,10 @@ impl Segment {
             .map_err(|_| LogError::BadSegmentName("offset overflow in segment".into()))?;
         let pos = u32::try_from(position)
             .map_err(|_| LogError::BadSegmentName("position overflow in segment".into()))?;
-        Ok(Some((rel, pos)))
+        Ok(Some(OffsetIndexEntry {
+            relative_offset: rel,
+            position: pos,
+        }))
     }
 
     /// Account for a batch just written: it moves the last offset, and it
@@ -352,8 +388,8 @@ impl Segment {
     /// timestamp with the last offset of the batch that set it, and only when
     /// that timestamp is newer than its last entry, as Kafka's
     /// `timeIndex().maybeAppend(maxTimestampSoFar(), shallowOffsetOfMaxTimestampSoFar())`.
-    fn append_index_entries(&mut self, (rel, pos): (u32, u32)) -> Result<(), LogError> {
-        self.offset_index.append(rel, pos)?;
+    fn append_index_entries(&mut self, entry: OffsetIndexEntry) -> Result<(), LogError> {
+        self.offset_index.append(entry.relative_offset, entry.position)?;
         self.append_running_max_time_entry()
     }
 }

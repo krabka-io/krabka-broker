@@ -23,7 +23,10 @@ use super::codec::{
     QUORUM_EPOCH_VERSION, VOTE_VERSION, encode_body, epoch_from_wire, epoch_to_wire,
     node_from_wire, node_to_wire, records_payload_to_bytes,
 };
-use crate::kraft::types::{Epoch, LogOffsetMetadata, NodeId};
+use crate::kraft::{
+    snapshot_fetch::SnapshotId,
+    types::{Epoch, LogOffsetMetadata, NodeId},
+};
 
 #[cfg(test)]
 mod tests;
@@ -43,7 +46,7 @@ pub enum PeerResponse {
     },
     Fetch(FetchAnswer),
     FetchSnapshot {
-        snapshot_id: (i64, i32),
+        snapshot_id: SnapshotId,
         size: i64,
         position: i64,
         bytes: Bytes,
@@ -65,8 +68,8 @@ pub struct FetchAnswer {
     pub diverging: Option<LogOffsetMetadata>,
     /// When set, the follower's fetch offset is below the leader's pruned
     /// log-start, and the follower must `FetchSnapshot` this snapshot
-    /// instead. The tuple is `(end_offset, epoch)`.
-    pub snapshot_id: Option<(i64, i32)>,
+    /// instead.
+    pub snapshot_id: Option<SnapshotId>,
     /// Leader's high watermark at serve time, -1 in a refusal.
     pub hwm: i64,
     /// The responder's log start offset.
@@ -125,7 +128,11 @@ impl FetchAnswer {
                 .leader
                 .node_endpoint()
                 .filter(|_| version >= 17)
-                .map(|(node_id, host, port)| fetch_resp::NodeEndpoint {
+                .map(|NodeEndpointEntry {
+                    node_id,
+                    host,
+                    port,
+                }| fetch_resp::NodeEndpoint {
                     node_id,
                     host,
                     port: i32::from(port),
@@ -160,7 +167,24 @@ pub struct QuorumLeader {
     pub epoch: Epoch,
     /// The leader's controller-listener host and port. The response carries it
     /// in `NodeEndpoints` only when the leader is known.
-    pub endpoint: Option<(String, u16)>,
+    pub endpoint: Option<LeaderEndpoint>,
+}
+
+/// The host and port a leader is reached at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaderEndpoint {
+    /// The host name or address.
+    pub host: String,
+    /// The port.
+    pub port: u16,
+}
+
+/// A `NodeEndpoints` entry of a quorum response, before it takes the shape of
+/// a particular response's generated type.
+struct NodeEndpointEntry {
+    node_id: i32,
+    host: String,
+    port: u16,
 }
 
 impl QuorumLeader {
@@ -169,10 +193,14 @@ impl QuorumLeader {
     }
 
     /// The `NodeEndpoints` entry, when the leader and its endpoint are known.
-    fn node_endpoint(&self) -> Option<(i32, String, u16)> {
+    fn node_endpoint(&self) -> Option<NodeEndpointEntry> {
         let leader_id = self.leader_id?;
-        let (host, port) = self.endpoint.clone()?;
-        Some((node_to_wire(leader_id), host, port))
+        let LeaderEndpoint { host, port } = self.endpoint.clone()?;
+        Some(NodeEndpointEntry {
+            node_id: node_to_wire(leader_id),
+            host,
+            port,
+        })
     }
 }
 
@@ -206,7 +234,11 @@ pub fn encode_vote_response(
             }],
             node_endpoints: leader
                 .node_endpoint()
-                .map(|(node_id, host, port)| vote_resp::NodeEndpoint {
+                .map(|NodeEndpointEntry {
+                    node_id,
+                    host,
+                    port,
+                }| vote_resp::NodeEndpoint {
                     node_id,
                     host,
                     port,
@@ -250,7 +282,11 @@ macro_rules! quorum_epoch_response_encoder {
                     }],
                     node_endpoints: leader
                         .node_endpoint()
-                        .map(|(node_id, host, port)| $wire::NodeEndpoint {
+                        .map(|NodeEndpointEntry {
+                            node_id,
+                            host,
+                            port,
+                        }| $wire::NodeEndpoint {
                             node_id,
                             host,
                             port,
@@ -297,8 +333,21 @@ pub struct FetchSnapshotPartition {
     /// `addQuorumLeader` fills it in every answer except
     /// `UNKNOWN_TOPIC_OR_PARTITION`.
     pub current_leader: bool,
-    /// The snapshot id, size, position and bytes of a served chunk.
-    pub chunk: Option<((i64, i32), i64, i64, Bytes)>,
+    /// The chunk served, when one is.
+    pub chunk: Option<SnapshotChunk>,
+}
+
+/// A served chunk of a snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotChunk {
+    /// The snapshot the chunk belongs to.
+    pub snapshot_id: SnapshotId,
+    /// The size of the whole snapshot.
+    pub size: i64,
+    /// The byte position of the chunk within the snapshot.
+    pub position: i64,
+    /// The chunk bytes.
+    pub bytes: Bytes,
 }
 
 /// Encodes a `FetchSnapshot` response body (api 59) at `version`, as Kafka's
@@ -333,7 +382,13 @@ pub fn encode_fetch_snapshot_answer(
             ..Default::default()
         };
     }
-    if let Some(((end_offset, epoch), size, position, bytes)) = partition.chunk {
+    if let Some(SnapshotChunk {
+        snapshot_id: (end_offset, epoch),
+        size,
+        position,
+        bytes,
+    }) = partition.chunk
+    {
         snapshot.snapshot_id = fs_resp::SnapshotId {
             end_offset,
             epoch,
@@ -352,7 +407,11 @@ pub fn encode_fetch_snapshot_answer(
         }],
         node_endpoints: leader
             .node_endpoint()
-            .map(|(node_id, host, port)| fs_resp::NodeEndpoint {
+            .map(|NodeEndpointEntry {
+                node_id,
+                host,
+                port,
+            }| fs_resp::NodeEndpoint {
                 node_id,
                 host,
                 port,
@@ -367,7 +426,7 @@ pub fn encode_fetch_snapshot_answer(
 
 /// Encodes a `FetchSnapshot` response body (api 59).
 fn encode_fetch_snapshot_response(
-    snapshot_id: (i64, i32),
+    snapshot_id: SnapshotId,
     size: i64,
     position: i64,
     bytes: &Bytes,
@@ -496,7 +555,10 @@ impl PeerResponse {
                 .and_then(|endpoint| {
                     u16::try_from(endpoint.port)
                         .ok()
-                        .map(|port| (endpoint.host.clone(), port))
+                        .map(|port| LeaderEndpoint {
+                            host: endpoint.host.clone(),
+                            port,
+                        })
                 })
         });
         let leader = QuorumLeader {

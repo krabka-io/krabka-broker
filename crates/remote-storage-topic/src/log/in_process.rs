@@ -458,17 +458,28 @@ mod tests {
         let (mut stream, _h) =
             log.subscribe(vec![PartitionStart::new(0, 1), PartitionStart::new(1, 0)]);
 
-        let mut got: Vec<(i32, i64, Vec<u8>)> = Vec::new();
+        #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+        struct Delivered {
+            partition: i32,
+            offset: i64,
+            payload: Vec<u8>,
+        }
+        let delivered = |partition, offset, payload: &[u8]| Delivered {
+            partition,
+            offset,
+            payload: payload.to_vec(),
+        };
+        let mut got: Vec<Delivered> = Vec::new();
         for _ in 0..3 {
             let r = stream.next().await.unwrap();
-            got.push((r.partition, r.offset, r.payload.to_vec()));
+            got.push(delivered(r.partition, r.offset, &r.payload));
         }
         got.sort();
-        assert!(
+        assert2::assert!(
             got == vec![
-                (0, 1, b"b".to_vec()),
-                (0, 2, b"c".to_vec()),
-                (1, 0, b"x".to_vec()),
+                delivered(0, 1, b"b"),
+                delivered(0, 2, b"c"),
+                delivered(1, 0, b"x"),
             ]
         );
         // partition 1 offset 1 ("y") is the only remaining assigned record.

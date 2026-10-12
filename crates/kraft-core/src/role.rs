@@ -173,11 +173,21 @@ mod tests {
     /// previous fetch when it reaches the log end that fetch saw.
     #[test]
     fn a_fetch_updates_the_caught_up_time_by_kafkas_two_branch_rule() {
-        /// A run of fetches, each `(now, fetch offset, leader log end)`, and
-        /// the progress the last of them leaves.
+        /// One fetch of the run.
+        struct Fetch {
+            now: u64,
+            fetch_offset: i64,
+            log_end: i64,
+        }
+        let fetch = |now, fetch_offset, log_end| Fetch {
+            now,
+            fetch_offset,
+            log_end,
+        };
+        /// A run of fetches and the progress the last of them leaves.
         struct Case {
             label: &'static str,
-            fetches: &'static [(u64, i64, i64)],
+            fetches: Vec<Fetch>,
             expected: ReplicaProgress,
         }
         let progress =
@@ -190,27 +200,27 @@ mod tests {
         let cases = [
             Case {
                 label: "a first fetch short of the end",
-                fetches: &[(100, 5, 10)],
+                fetches: vec![fetch(100, 5, 10)],
                 expected: progress(5, 100, 0, 10),
             },
             Case {
                 label: "a first fetch at the end",
-                fetches: &[(100, 10, 10)],
+                fetches: vec![fetch(100, 10, 10)],
                 expected: progress(10, 100, 100, 10),
             },
             Case {
                 label: "keeping pace under appends is caught up as of the previous fetch",
-                fetches: &[(100, 5, 10), (200, 10, 20)],
+                fetches: vec![fetch(100, 5, 10), fetch(200, 10, 20)],
                 expected: progress(10, 200, 100, 20),
             },
             Case {
                 label: "still short of the previous end stays not caught up",
-                fetches: &[(100, 5, 10), (200, 9, 20)],
+                fetches: vec![fetch(100, 5, 10), fetch(200, 9, 20)],
                 expected: progress(9, 200, 0, 20),
             },
             Case {
                 label: "catching up to the current end is caught up now",
-                fetches: &[(100, 5, 10), (200, 10, 20), (300, 20, 20)],
+                fetches: vec![fetch(100, 5, 10), fetch(200, 10, 20), fetch(300, 20, 20)],
                 expected: progress(20, 300, 300, 20),
             },
         ];
@@ -221,7 +231,12 @@ mod tests {
         } in cases
         {
             let mut actual = ReplicaProgress::default();
-            for &(now, fetch_offset, log_end) in fetches {
+            for Fetch {
+                now,
+                fetch_offset,
+                log_end,
+            } in fetches
+            {
                 actual.record_fetch(SimInstant(now), fetch_offset, log_end);
             }
             assert2::assert!(actual == expected, "{label}");

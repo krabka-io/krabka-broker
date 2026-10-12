@@ -332,8 +332,12 @@ mod tests {
         let a20 = "A".repeat(20);
         let a21 = "A".repeat(21);
         let a22 = "A".repeat(22);
-        // (input, Kafka's rendering, or the error this parser gives)
-        let cases: Vec<(String, Result<&str, &str>)> = vec![
+        /// An input, and Kafka's rendering of it or the error this parser gives.
+        struct Case {
+            input: String,
+            want: Result<&'static str, &'static str>,
+        }
+        let cases: Vec<Case> = vec![
             (
                 "AQIDBAUGBwgJCgsMDQ4PEA".into(),
                 Ok("AQIDBAUGBwgJCgsMDQ4PEA"),
@@ -426,7 +430,7 @@ mod tests {
                 ),
             ),
         ];
-        for (input, want) in cases {
+        for Case { input, want } in cases {
             let want = want.map(str::to_owned).map_err(str::to_owned);
             let as_cluster = input
                 .parse::<ClusterId>()

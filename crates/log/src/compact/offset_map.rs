@@ -90,6 +90,7 @@ mod tests {
             TransactionalRecordSetup, control_batch, make_record, superseded_records,
             transactional_record, write_sealed_batches, write_sealed_segment,
         },
+        test_support::KeyValue,
     };
 
     fn offset_map_for(segments: &[&Segment], aborted: Vec<AbortedTxn>) -> HashMap<Bytes, Offset> {
@@ -171,19 +172,19 @@ mod tests {
             &[
                 transactional_record(TransactionalRecordSetup {
                     offset: Offset(5),
-                    payload: (b"k", b"committed"),
+                    payload: KeyValue { key: b"k", value: b"committed" },
                     ..Default::default()
                 }),
                 control_batch(6, 1000, 1 /* COMMIT */),
                 transactional_record(TransactionalRecordSetup {
                     offset: Offset(10),
                     producer: ProducerId(2000),
-                    payload: (b"k", b"aborted"),
+                    payload: KeyValue { key: b"k", value: b"aborted" },
                 }),
                 transactional_record(TransactionalRecordSetup {
                     offset: Offset(11),
                     producer: ProducerId(2000),
-                    payload: (b"only-aborted", b"v"),
+                    payload: KeyValue { key: b"only-aborted", value: b"v" },
                 }),
                 control_batch(12, 2000, 0 /* ABORT */),
             ],

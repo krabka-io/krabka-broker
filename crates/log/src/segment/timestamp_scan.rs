@@ -345,13 +345,16 @@ impl Segment {
         let (mut max_timestamp, mut max_timestamp_offset) = self
             .time_index
             .last_entry()
-            .map_or((i64::MIN, self.base_offset - 1), |(timestamp, relative)| {
-                (timestamp, self.base_offset + i64::from(relative))
+            .map_or((i64::MIN, self.base_offset - 1), |entry| {
+                (
+                    entry.timestamp,
+                    self.base_offset + i64::from(entry.relative_offset),
+                )
             });
         let scan_from = self
             .offset_index
             .last_entry()
-            .map_or(0, |(_, position)| u64::from(position));
+            .map_or(0, |entry| u64::from(entry.position));
         self.walk_batch_headers(scan_from, |view| {
             if view.max_timestamp > max_timestamp {
                 max_timestamp = view.max_timestamp;

@@ -45,6 +45,22 @@ const HEADER_BYTES: usize = std::mem::size_of::<i16>();
 /// The artifact name the version errors carry.
 const ARTIFACT: &str = "stampindex";
 
+/// An inclusive range of offsets, `[first, last]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OffsetRange {
+    /// The first offset of the range.
+    pub first: Offset,
+    /// The last offset of the range.
+    pub last: Offset,
+}
+
+/// The base offsets and the last offsets of a run of stamp entries, each in
+/// entry order.
+struct StampCoordinates {
+    bases: Vec<i64>,
+    lasts: Vec<i64>,
+}
+
 /// One stamped offset range. The inclusive offsets
 /// `[base_offset, last_offset]` all carry `stamp`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -302,12 +318,12 @@ impl StampIndex {
     ///
     /// # Errors
     /// Returns an error when rewriting or syncing the sidecar fails.
-    pub fn remove_ranges(&mut self, ranges: &[(Offset, Offset)]) -> Result<(), LogError> {
+    pub fn remove_ranges(&mut self, ranges: &[OffsetRange]) -> Result<(), LogError> {
         let mut entries = self.entries.clone();
-        for &(base, last) in ranges {
-            let (bases, lasts) = Self::coordinates(&entries);
+        for &OffsetRange { first, last } in ranges {
+            let StampCoordinates { bases, lasts } = Self::coordinates(&entries);
             if let Some(position) =
-                krabka_verified::exact_stamp_range_index(&bases, &lasts, base.0, last.0)
+                krabka_verified::exact_stamp_range_index(&bases, &lasts, first.0, last.0)
             {
                 entries.remove(position);
             }
@@ -343,15 +359,16 @@ impl StampIndex {
         &self.entries
     }
 
-    fn coordinates(entries: &[StampEntry]) -> (Vec<i64>, Vec<i64>) {
-        entries
+    fn coordinates(entries: &[StampEntry]) -> StampCoordinates {
+        let (bases, lasts) = entries
             .iter()
             .map(|entry| (entry.base_offset.0, entry.last_offset.0))
-            .unzip()
+            .unzip();
+        StampCoordinates { bases, lasts }
     }
 
     fn entries_valid(entries: &[StampEntry]) -> bool {
-        let (bases, lasts) = Self::coordinates(entries);
+        let StampCoordinates { bases, lasts } = Self::coordinates(entries);
         krabka_verified::stamp_ranges_valid(&bases, &lasts)
     }
 
@@ -359,7 +376,7 @@ impl StampIndex {
     /// range contains `offset`, or `None` when no entry covers it.
     #[must_use]
     pub fn stamp_for_offset(&self, offset: Offset) -> Option<u64> {
-        let (bases, lasts) = Self::coordinates(&self.entries);
+        let StampCoordinates { bases, lasts } = Self::coordinates(&self.entries);
         krabka_verified::covering_stamp_range_index(&bases, &lasts, offset.0)
             .map(|index| self.entries[index].stamp)
     }
@@ -371,15 +388,21 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::{index::index_fixture, test_support::stamp_entry};
+    use crate::{
+        index::{IndexFixture, index_fixture},
+        test_support::stamp_entry,
+    };
 
-    fn index_with(entries: &[StampEntry]) -> (TempDir, PathBuf, StampIndex) {
-        let (dir, path, mut index) =
-            index_fixture("00.stampindex", |path| StampIndex::open(path.to_path_buf()));
+    fn index_with(entries: &[StampEntry]) -> IndexFixture<StampIndex> {
+        let IndexFixture {
+            dir,
+            path,
+            mut index,
+        } = index_fixture("00.stampindex", |path| StampIndex::open(path.to_path_buf()));
         for entry in entries {
             index.append(*entry).unwrap();
         }
-        (dir, path, index)
+        IndexFixture { dir, path, index }
     }
 
     fn write_entries(path: &std::path::Path, entries: &[StampEntry]) {
@@ -516,7 +539,7 @@ mod tests {
 
     #[test]
     fn stamp_append_round_trips_through_disk() {
-        let (_dir, path, _idx) =
+        let IndexFixture { dir: _dir, path, index: _idx } =
             index_with(&[stamp_entry(5, 7, 1_000), stamp_entry(10, 12, 2_000)]);
 
         let idx2 = StampIndex::open(path).unwrap();
@@ -574,7 +597,7 @@ mod tests {
 
     #[test]
     fn out_of_order_append_stays_canonical_across_reopen() {
-        let (_dir, path, mut idx) = index_with(&[]);
+        let IndexFixture { dir: _dir, path, index: mut idx } = index_with(&[]);
         let first = stamp_entry(0, 2, 100);
         let second = stamp_entry(10, 12, 200);
         idx.append(second).unwrap();
@@ -600,7 +623,10 @@ mod tests {
         assert2::assert!(let LogError::Io(_) = idx.upsert(replacement).unwrap_err());
         assert2::assert!(idx.entries() == [original]);
         assert2::assert!(
-            let LogError::Io(_) = idx.remove_ranges(&[(Offset(0), Offset(2))]).unwrap_err()
+            let LogError::Io(_) = idx.remove_ranges(&[OffsetRange {
+                first: Offset(0),
+                last: Offset(2),
+            }]).unwrap_err()
         );
         assert2::assert!(idx.entries() == [original]);
         assert2::assert!(
@@ -613,7 +639,7 @@ mod tests {
 
     #[test]
     fn stamp_for_offset_finds_covering_range() {
-        let (_dir, _path, idx) = index_with(&[stamp_entry(0, 4, 100), stamp_entry(10, 14, 200)]);
+        let IndexFixture { dir: _dir, path: _path, index: idx } = index_with(&[stamp_entry(0, 4, 100), stamp_entry(10, 14, 200)]);
 
         // Inclusive endpoints and interior offsets resolve to their range.
         for (offset, expected) in [
@@ -631,7 +657,7 @@ mod tests {
 
     #[test]
     fn append_rejects_overlapping_ranges_but_accepts_exact_retry() {
-        let (_dir, _path, mut idx) = index_with(&[]);
+        let IndexFixture { dir: _dir, path: _path, index: mut idx } = index_with(&[]);
         let entry = stamp_entry(5, 7, 100);
         idx.append(entry).unwrap();
         idx.append(entry).unwrap();
@@ -646,7 +672,7 @@ mod tests {
 
     #[test]
     fn upsert_replaces_only_an_exact_range() {
-        let (_dir, path, mut idx) = index_with(&[stamp_entry(5, 7, 100)]);
+        let IndexFixture { dir: _dir, path, index: mut idx } = index_with(&[stamp_entry(5, 7, 100)]);
 
         idx.upsert(stamp_entry(5, 7, 200)).unwrap();
         assert2::assert!(idx.stamp_for_offset(Offset(6)) == Some(200));
@@ -660,7 +686,7 @@ mod tests {
 
     #[test]
     fn truncate_from_removes_tail_entries_on_disk() {
-        let (_dir, path, mut idx) = index_with(&[
+        let IndexFixture { dir: _dir, path, index: mut idx } = index_with(&[
             stamp_entry(0, 2, 100),
             stamp_entry(3, 6, 103),
             stamp_entry(10, 12, 110),
@@ -672,19 +698,31 @@ mod tests {
 
     #[test]
     fn remove_ranges_requires_both_exact_boundaries() {
-        let (_dir, path, mut idx) = index_with(&[stamp_entry(0, 1, 10), stamp_entry(2, 3, 20)]);
+        let IndexFixture { dir: _dir, path, index: mut idx } = index_with(&[stamp_entry(0, 1, 10), stamp_entry(2, 3, 20)]);
 
-        idx.remove_ranges(&[(Offset(0), Offset(9)), (Offset(9), Offset(3))])
+        idx.remove_ranges(&[
+            OffsetRange {
+                first: Offset(0),
+                last: Offset(9),
+            },
+            OffsetRange {
+                first: Offset(9),
+                last: Offset(3),
+            },
+        ])
             .unwrap();
         assert2::assert!(idx.entries().len() == 2);
-        idx.remove_ranges(&[(Offset(2), Offset(3))]).unwrap();
+        idx.remove_ranges(&[OffsetRange {
+            first: Offset(2),
+            last: Offset(3),
+        }]).unwrap();
 
         assert2::assert!(StampIndex::open(path).unwrap().entries() == [stamp_entry(0, 1, 10)]);
     }
 
     #[test]
     fn append_rejects_overlapping_single_offset_range_as_corrupt() {
-        let (_dir, _path, mut idx) = index_with(&[stamp_entry(0, 5, 10)]);
+        let IndexFixture { dir: _dir, path: _path, index: mut idx } = index_with(&[stamp_entry(0, 5, 10)]);
 
         // Overlapping single-offset range (last_offset == base_offset)
         let err = idx.append(stamp_entry(2, 2, 20)).unwrap_err();
@@ -709,7 +747,7 @@ mod tests {
             }
         }
         let called = Arc::new(AtomicBool::new(false));
-        let (_dir, _path, mut idx) = index_with(&[]);
+        let IndexFixture { dir: _dir, path: _path, index: mut idx } = index_with(&[]);
         idx.set_io(Arc::new(SpyIo(called.clone())));
         idx.append(stamp_entry(0, 0, 1)).unwrap();
         assert2::assert!(called.load(Ordering::SeqCst));

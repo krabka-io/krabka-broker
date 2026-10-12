@@ -10,7 +10,9 @@ use super::*;
 use crate::kraft::controller::{
     checkpoint::{checkpoint_ids, write_checkpoint},
     records::{is_kip835_noop, noop_record_value},
-    test_support::{EngineSetup, build_engine_only, elect_single_voter_engine, topic_record_named},
+    test_support::{
+        EngineInDir, EngineSetup, build_engine_only, elect_single_voter_engine, topic_record_named,
+    },
 };
 
 /// A metadata log whose every batch gets its own segment, so a cleaning that
@@ -28,14 +30,14 @@ fn one_batch_segments(
     }
 }
 
-fn engine(metadata_log: MetadataLogConfig) -> (Engine, tempfile::TempDir) {
+fn engine(metadata_log: MetadataLogConfig) -> EngineInDir {
     let (mut engine, dir) = build_engine_only(EngineSetup {
         ids: &[NodeId(1)],
         metadata_log,
         ..Default::default()
     });
     elect_single_voter_engine(&mut engine);
-    (engine, dir)
+    EngineInDir { engine, dir }
 }
 
 fn commit_topic(engine: &mut Engine, name: &str, id: u128) {
@@ -44,7 +46,7 @@ fn commit_topic(engine: &mut Engine, name: &str, id: u128) {
 }
 
 /// The snapshot ids in the partition directory, oldest first.
-fn snapshot_ids(dir: &std::path::Path) -> Vec<(i64, i32)> {
+fn snapshot_ids(dir: &std::path::Path) -> Vec<SnapshotId> {
     let mut ids = checkpoint_ids(dir);
     ids.sort_unstable();
     ids
@@ -56,7 +58,7 @@ fn snapshot_ids(dir: &std::path::Path) -> Vec<(i64, i32)> {
 struct Cleaned {
     log_start: i64,
     first_segment: bool,
-    snapshots: Vec<(i64, i32)>,
+    snapshots: Vec<SnapshotId>,
 }
 
 fn cleaned(engine: &Engine) -> Cleaned {
@@ -87,7 +89,7 @@ fn a_cleaning_moves_the_log_start_up_to_the_newest_snapshot_once_a_limit_lets_it
         ("no limit", None, None, false),
     ];
     for (what, max_retention_size, max_retention, cleans) in cases {
-        let (mut engine, _dir) = engine(one_batch_segments(max_retention_size, max_retention));
+        let EngineInDir { mut engine, dir: _dir } = engine(one_batch_segments(max_retention_size, max_retention));
         commit_topic(&mut engine, "first", 1);
         engine.write_snapshot_and_clean().expect("first snapshot");
         let first = engine.log.hwm().0;
@@ -131,7 +133,7 @@ fn a_cleaning_moves_the_log_start_up_to_the_newest_snapshot_once_a_limit_lets_it
 /// snapshot and the one before it.
 #[test]
 fn a_later_cleaning_deletes_the_snapshot_an_earlier_one_kept() {
-    let (mut engine, _dir) = engine(one_batch_segments(Some(bytes(0)), None));
+    let EngineInDir { mut engine, dir: _dir } = engine(one_batch_segments(Some(bytes(0)), None));
     let mut ids = Vec::new();
     for (name, id) in [("first", 1), ("second", 2), ("third", 3)] {
         commit_topic(&mut engine, name, id);
@@ -152,7 +154,7 @@ fn a_later_cleaning_deletes_the_snapshot_an_earlier_one_kept() {
 /// past the high watermark, whatever the limits say.
 #[test]
 fn a_cleaning_never_moves_the_log_start_past_the_high_watermark() {
-    let (mut engine, _dir) = engine(one_batch_segments(Some(bytes(0)), None));
+    let EngineInDir { mut engine, dir: _dir } = engine(one_batch_segments(Some(bytes(0)), None));
     commit_topic(&mut engine, "first", 1);
     engine.write_snapshot_and_clean().expect("first snapshot");
     // A snapshot file whose boundary nothing committed yet.
@@ -171,7 +173,7 @@ fn a_cleaning_never_moves_the_log_start_past_the_high_watermark() {
 /// the metadata image as it was.
 #[test]
 fn a_leader_appends_kip835_no_ops_that_change_nothing() {
-    let (mut engine, _dir) = engine(one_batch_segments(None, None));
+    let EngineInDir { mut engine, dir: _dir } = engine(one_batch_segments(None, None));
     commit_topic(&mut engine, "topic", 1);
     let image = engine.image.clone();
     let end = engine.log.log_end_offset();
@@ -202,17 +204,18 @@ fn only_an_empty_no_op_record_is_a_kip835_no_op() {
     .expect("encode a carried record");
     let topic = krabka_metadata::to_kraft_values(&topic_record_named("t", 1)[0], &image)
         .expect("encode a topic record");
-    let cases: [(&str, &[u8], bool); 4] = [
-        (
-            "an empty no-op",
-            &noop_record_value().expect("encode"),
-            true,
-        ),
-        ("a carried krabka record", &carried[0], false),
-        ("a topic record", &topic[0], false),
-        ("garbage", b"\xff\xff", false),
-    ];
-    for (what, value, want) in cases {
+    struct Case {
+        what: &'static str,
+        value: &'static [u8],
+        want: bool,
+    }
+    let cases = [
+Case { what: "an empty no-op", value: &noop_record_value().expect("encode"), want: true },
+Case { what: "a carried krabka record", value: &carried[0], want: false },
+Case { what: "a topic record", value: &topic[0], want: false },
+Case { what: "garbage", value: b"\xff\xff", want: false },
+];
+    for Case { what, value, want } in cases {
         check!(is_kip835_noop(value) == want, "{what}");
     }
 }

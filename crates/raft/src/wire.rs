@@ -44,6 +44,8 @@ use krabka_metadata::{
 };
 use krabka_protocol::ProtocolError;
 
+use crate::kraft::snapshot_fetch::SnapshotId;
+
 const I32_LEN: usize = 4;
 const SUBMIT_CHANGE_RESPONSE_FIXED_LEN: usize = 10;
 const METADATA_FETCH_REQUEST_LEN: usize = 32;
@@ -345,7 +347,7 @@ pub struct KrabkaMetadataFetchResponse {
     /// a controller follower (KIP-595). Without it a restarted observer fetches
     /// an offset the leader no longer holds, is served an empty slice, and
     /// never makes progress.
-    pub snapshot_id: Option<(i64, i32)>,
+    pub snapshot_id: Option<SnapshotId>,
     /// Concatenated Kafka `RecordBatch`es, one for each committed log batch.
     /// Empty whenever `snapshot_id` is set: the records the observer asked for
     /// are gone, so there is nothing to serve from the log.

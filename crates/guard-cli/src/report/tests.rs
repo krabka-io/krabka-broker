@@ -11,7 +11,7 @@ use super::*;
 /// differently; every other refusal is a refusal.
 #[test]
 fn every_broker_code_maps_to_the_exit_code_a_runbook_expects() {
-    let cases: [(&'static str, i16, i32); 12] = [
+    let cases = [
         ("no error", codes::NONE, 0),
         (
             "an action that needs an approval",

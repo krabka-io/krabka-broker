@@ -8,7 +8,7 @@ use std::{
 
 use assert2::assert;
 use krabka_parse_benches::{
-    Args, BenchmarkComparison, BenchmarkMetric, BenchmarkSummary, ParseBenchesError,
+    Args, BenchmarkComparison, BenchmarkMetric, BenchmarkSummary, NamedMetric, ParseBenchesError,
     compare_summaries, format_rfc3339_utc, parse_bencher_line, parse_benchmark_dir, read_summaries,
     resolve_commit_sha, run_from_args,
 };
@@ -59,7 +59,7 @@ fn parses_real_criterion_output_correctly() {
     let result = parse_bencher_line(line).unwrap();
 
     assert!(result.is_some());
-    let (name, metric) = result.unwrap();
+    let NamedMetric { name, metric } = result.unwrap();
     assert!(name == "log/append/1rec_64B");
     assert!((metric.ns_per_iter - 2225.0).abs() < f64::EPSILON);
     assert!((metric.variance_ns - 8.0).abs() < f64::EPSILON);
@@ -70,7 +70,7 @@ fn parses_comma_grouped_bencher_line_correctly() {
     let result = parse_bencher_line(COMMA_GROUPED_BENCHER_OUTPUT).unwrap();
 
     assert!(result.is_some());
-    let (name, metric) = result.unwrap();
+    let NamedMetric { name, metric } = result.unwrap();
     assert!(name == "log/append/100rec_1024B");
     assert!((metric.ns_per_iter - 95_979.0).abs() < f64::EPSILON);
     assert!((metric.variance_ns - 1_377_729.0).abs() < f64::EPSILON);

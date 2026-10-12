@@ -38,13 +38,20 @@ const PARTIAL_FILES: [&str; 3] = [
     META_PROPERTIES_TMP,
 ];
 
+/// A directory whose `meta.properties` reads, with what it holds.
+#[derive(Debug)]
+pub(super) struct FormattedDirectory {
+    pub(super) dir: PathBuf,
+    pub(super) meta: MetaProperties,
+}
+
 /// The state of every log directory of a run.
 #[derive(Debug, Default)]
 pub(super) struct Ensemble {
     /// Directories with no `meta.properties`, in the order given.
     pub(super) empty: Vec<PathBuf>,
     /// Directories whose `meta.properties` reads, sorted by path.
-    pub(super) formatted: Vec<(PathBuf, MetaProperties)>,
+    pub(super) formatted: Vec<FormattedDirectory>,
     /// Directories whose `meta.properties` is there but does not read,
     /// sorted by path.
     pub(super) errors: Vec<PathBuf>,
@@ -65,7 +72,10 @@ impl Ensemble {
         let mut ensemble = Self::default();
         for dir in dirs {
             match MetaProperties::read(dir) {
-                Ok(Some(meta)) => ensemble.formatted.push((dir.clone(), meta)),
+                Ok(Some(meta)) => ensemble.formatted.push(FormattedDirectory {
+                    dir: dir.clone(),
+                    meta,
+                }),
                 Ok(None) => match holds_only_partial_output(dir) {
                     Ok(true) => ensemble.empty.push(dir.clone()),
                     Ok(false) => return Err(SurveyError::Foreign(dir.clone())),
@@ -81,7 +91,7 @@ impl Ensemble {
                 }
             }
         }
-        ensemble.formatted.sort_by(|a, b| a.0.cmp(&b.0));
+        ensemble.formatted.sort_by(|a, b| a.dir.cmp(&b.dir));
         ensemble.errors.sort();
         Ok(ensemble)
     }
@@ -100,7 +110,7 @@ impl Ensemble {
         verify_ensemble(
             self.formatted
                 .iter()
-                .map(|(dir, meta)| (dir.as_path(), meta)),
+                .map(|formatted| (formatted.dir.as_path(), &formatted.meta)),
             expected,
             Some(node_id),
         )
@@ -178,20 +188,30 @@ mod tests {
         }
     }
 
-    fn formatted(entries: &[(&str, MetaProperties)]) -> Ensemble {
+    fn directory(dir: &str, meta: MetaProperties) -> FormattedDirectory {
+        FormattedDirectory {
+            dir: PathBuf::from(dir),
+            meta,
+        }
+    }
+
+    fn formatted(entries: Vec<FormattedDirectory>) -> Ensemble {
         Ensemble {
-            formatted: entries
-                .iter()
-                .map(|(dir, meta)| (PathBuf::from(dir), *meta))
-                .collect(),
+            formatted: entries,
             ..Ensemble::default()
         }
     }
 
+    type Verdict = Result<Option<ClusterId>, String>;
+
     /// A `verify` case: what it is, the formatted set, `--cluster-id`, and the
     /// expected result.
-    type Case = (&'static str, Ensemble, Option<ClusterId>, Verdict);
-    type Verdict = Result<Option<ClusterId>, String>;
+    struct Case {
+        what: &'static str,
+        ensemble: Ensemble,
+        expected: Option<ClusterId>,
+        want: Verdict,
+    }
 
     /// The formatted set agrees with `--cluster-id` and `--node-id`, with
     /// Kafka's message for each way it can fail. `verify_ensemble` has the
@@ -201,24 +221,27 @@ mod tests {
     fn verify_matches_kafka_meta_properties_ensemble() {
         let c1 = ClusterId(Uuid::from_u128(0xc1));
         let c2 = ClusterId(Uuid::from_u128(0xc2));
-        // (what, formatted set, --cluster-id, expected result), with --node-id 1
+        // With --node-id 1.
         let cases: Vec<Case> = vec![
-            ("nothing formatted", formatted(&[]), None, Ok(None)),
+            ("nothing formatted", formatted(vec![]), None, Ok(None)),
             (
                 "nothing formatted, id given",
-                formatted(&[]),
+                formatted(vec![]),
                 Some(c1),
                 Ok(Some(c1)),
             ),
             (
                 "the set supplies the id",
-                formatted(&[("/a", meta(0xc1, 1, 0x1000)), ("/b", meta(0xc1, 1, 0x2000))]),
+                formatted(vec![
+                    directory("/a", meta(0xc1, 1, 0x1000)),
+                    directory("/b", meta(0xc1, 1, 0x2000)),
+                ]),
                 None,
                 Ok(Some(c1)),
             ),
             (
                 "the given id disagrees",
-                formatted(&[("/a", meta(0xc1, 1, 0x1000))]),
+                formatted(vec![directory("/a", meta(0xc1, 1, 0x1000))]),
                 Some(c2),
                 Err(format!(
                     "Invalid cluster.id in: /a/meta.properties. Expected {c2}, but read {c1}"
@@ -226,7 +249,7 @@ mod tests {
             ),
             (
                 "another node's directory",
-                formatted(&[("/a", meta(0xc1, 2, 0x1000))]),
+                formatted(vec![directory("/a", meta(0xc1, 2, 0x1000))]),
                 Some(c1),
                 Err(node_id_mismatch_message()
                     .stored(2)
@@ -235,7 +258,13 @@ mod tests {
                     .call()),
             ),
         ];
-        for (what, ensemble, expected, want) in cases {
+        for Case {
+            what,
+            ensemble,
+            expected,
+            want,
+        } in cases
+        {
             check!(ensemble.verify(expected, 1) == want, "{what}");
         }
     }
@@ -247,9 +276,15 @@ mod tests {
         fn checkpoint(root: &Path) -> PathBuf {
             root.join(CLUSTER_METADATA).join(ZERO_CHECKPOINT_NAME)
         }
-        // (what, files to create relative to the directory, empty?)
         type Layout = fn(&Path) -> Vec<PathBuf>;
-        let cases: [(&str, Layout, bool); 7] = [
+        /// What it is, the files to create relative to the directory, and
+        /// whether the directory counts as empty.
+        struct LayoutCase {
+            what: &'static str,
+            layout: Layout,
+            empty: bool,
+        }
+        let cases = [
             ("nothing", |_| vec![], true),
             (
                 "the bootstrap files",
@@ -278,7 +313,12 @@ mod tests {
                 false,
             ),
         ];
-        for (what, layout, empty) in cases {
+        for LayoutCase {
+            what,
+            layout,
+            empty,
+        } in cases
+        {
             let tmp = tempfile::tempdir().expect("tempdir");
             let dir = tmp.path().join("data");
             std::fs::create_dir_all(&dir).expect("mkdir");

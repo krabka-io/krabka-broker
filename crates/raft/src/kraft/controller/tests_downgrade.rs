@@ -12,7 +12,8 @@ use crate::{
         checkpoint::{load_latest_checkpoint, write_checkpoint},
         recovery::replay_committed,
         test_support::{
-            EngineSetup, build_engine_only, elect_single_voter_engine, open_test_controller,
+            EngineInDir, EngineSetup, build_engine_only, elect_single_voter_engine,
+            open_test_controller,
             topic_record, voter_set,
         },
     },
@@ -30,7 +31,7 @@ fn reopen_single_voter(data_dir: std::path::PathBuf) -> Result<KraftController, 
     open_test_controller(data_dir, uuid::Uuid::nil(), voter_set(&[NodeId(1)]))
 }
 
-fn uncheckpointed_downgrade() -> (Engine, tempfile::TempDir) {
+fn uncheckpointed_downgrade() -> EngineInDir {
     let (mut engine, dir) = super::test_support::single_voter_leader_engine();
 
     let mut rx = super::test_support::submit_on_engine(&mut engine, &metadata_version_update(25));
@@ -38,7 +39,7 @@ fn uncheckpointed_downgrade() -> (Engine, tempfile::TempDir) {
     engine.downgrade_snapshot_failures_remaining = usize::MAX;
     let mut rx = super::test_support::submit_on_engine(&mut engine, &metadata_version_update(16));
     assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
-    (engine, dir)
+    EngineInDir { engine, dir }
 }
 
 #[test]
@@ -208,7 +209,7 @@ async fn restart_finishes_downgrade_checkpoint_before_exposing_the_image() {
 
 #[tokio::test]
 async fn restart_recovers_checkpoint_written_before_downgrade_prune() {
-    let (engine, dir) = uncheckpointed_downgrade();
+    let EngineInDir { engine, dir } = uncheckpointed_downgrade();
     let data_dir = dir.path().to_path_buf();
     let pending = engine
         .downgrade_snapshot_pending
@@ -231,7 +232,7 @@ async fn restart_recovers_checkpoint_written_before_downgrade_prune() {
 
 #[tokio::test]
 async fn restart_propagates_persistent_downgrade_recovery_error() {
-    let (engine, dir) = uncheckpointed_downgrade();
+    let EngineInDir { engine, dir } = uncheckpointed_downgrade();
     let data_dir = dir.path().to_path_buf();
     let pending = engine
         .downgrade_snapshot_pending

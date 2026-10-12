@@ -11,9 +11,11 @@ use krabka_protocol::records::RecordBatch;
 
 use super::{
     Log,
-    control::{batch_control_marker_coordinator_epoch, transaction_marker_flags},
+    control::{
+        TransactionMarkerFlags, batch_control_marker_coordinator_epoch, transaction_marker_flags,
+    },
 };
-use crate::{error::LogError, txn_index::AbortedTxn};
+use crate::{error::LogError, stamp_index::OffsetRange, txn_index::AbortedTxn};
 
 impl Log {
     /// Recompute the first unstable offset from every open transaction and
@@ -93,7 +95,10 @@ impl Log {
         transaction_stamp: Option<u64>,
     ) -> Result<(), LogError> {
         // Read the inner control record: key = (version: i16, type: i16) BE.
-        let (is_abort, is_commit) = transaction_marker_flags(batch)?;
+        let TransactionMarkerFlags {
+            is_abort,
+            is_commit,
+        } = transaction_marker_flags(batch)?;
         let closes = krabka_verified::transaction_marker_closes(
             is_abort,
             is_commit,
@@ -155,8 +160,8 @@ impl Log {
             let stamp = transaction_stamp
                 .or_else(|| self.stamp_source.as_ref().map(|source| source.next_stamp()));
             if let Some(stamp) = stamp {
-                for (base, last) in stamp_ranges {
-                    self.record_stamp_value(base, last, stamp)?;
+                for OffsetRange { first, last } in stamp_ranges {
+                    self.record_stamp_value(first, last, stamp)?;
                 }
             }
         }
@@ -182,9 +187,9 @@ mod tests {
     use super::*;
     use crate::{
         log::test_support::{
-            abort_marker, append_transaction, commit_marker, install_stamps, sample_batch,
-            test_batch_at, test_log, tiny_segments, transaction_entries, transaction_fields,
-            transactional_batch, verbatim_from,
+            TempLog, abort_marker, append_transaction, commit_marker, install_stamps, sample_batch,
+            test_batch_at, test_log, tiny_segments, transaction_entries, TransactionFields, transaction_fields,
+            transactional_batch, EncodedVerbatim, verbatim_from,
         },
         name,
         test_support::{AbortedTxnSetup, aborted_txn, open_log},
@@ -194,7 +199,7 @@ mod tests {
 
     #[test]
     fn transactional_batch_holds_lso() {
-        let (_dir, mut log) = test_log();
+        let TempLog { dir: _dir, mut log } = test_log();
         // First, a non-txn batch — LSO advances past it.
         let mut b0 = sample_batch(1);
         log.append(&mut b0).unwrap();
@@ -231,14 +236,17 @@ mod tests {
 
             let mut marker = commit_marker(-2, 0);
             log.append(&mut marker).unwrap();
-            assert2::assert!(transaction_fields(&log, ProducerId(-2)) == (-1, None));
+            assert2::assert!(transaction_fields(&log, ProducerId(-2)) == TransactionFields {
+ coordinator_epoch: -1,
+ first_offset: None,
+ });
 
             let mut verbatim = test_batch_at(0);
             verbatim.producer_id = -3;
             verbatim.producer_epoch = 0;
             verbatim.base_sequence = 0;
             verbatim.attributes = verbatim.attributes.with_transactional(true);
-            let (_wire, batch) = verbatim_from(&verbatim, LeaderEpoch(0));
+            let EncodedVerbatim { batch, .. } = verbatim_from(&verbatim, LeaderEpoch(0));
             log.append_verbatim(&batch).unwrap();
             assert2::assert!(log.lso() == Offset(3));
             assert2::assert!(log.stamp_for_offset(Offset(2)) == Some(41));
@@ -247,15 +255,21 @@ mod tests {
 
         let reopened = open_log(dir.path());
         assert2::assert!(reopened.lso() == reopened.log_end_offset());
-        assert2::assert!(transaction_fields(&reopened, ProducerId(-2)) == (-1, None));
-        assert2::assert!(transaction_fields(&reopened, ProducerId(-3)) == (-1, None));
+        assert2::assert!(transaction_fields(&reopened, ProducerId(-2)) == TransactionFields {
+ coordinator_epoch: -1,
+ first_offset: None,
+ });
+        assert2::assert!(transaction_fields(&reopened, ProducerId(-3)) == TransactionFields {
+ coordinator_epoch: -1,
+ first_offset: None,
+ });
         assert2::assert!(reopened.producer_state_snapshot().is_empty());
     }
 
     #[test]
     fn abort_marker_writes_txnindex_entry() {
-        let (dir, mut log) = test_log();
-        append_transaction(&mut log, (1000, 0), &["a", "b", "c"]);
+        let TempLog { dir, mut log } = test_log();
+        append_transaction(&mut log, 1000, 0, &["a", "b", "c"]);
 
         let mut a = abort_marker(1000, 0);
         log.append(&mut a).unwrap();
@@ -276,7 +290,7 @@ mod tests {
     /// `.txnindex` entry instead of the earlier unreplicated start.
     #[test]
     fn abort_marker_lso_is_held_by_an_earlier_unreplicated_transaction() {
-        let (dir, mut log) = test_log();
+        let TempLog { dir, mut log } = test_log();
 
         // Producer 1000 commits first: its marker lands at offset 2, and it
         // stays in `unreplicated` (this test never advances the high
@@ -306,7 +320,7 @@ mod tests {
 
     #[test]
     fn aborted_transaction_uses_cached_marker_segment_beyond_range_end() {
-        let (dir, mut log) = test_log();
+        let TempLog { dir, mut log } = test_log();
         let mut transaction = transactional_batch(1000, 0, &["a", "b", "c"]);
         log.append(&mut transaction).unwrap();
 
@@ -328,8 +342,8 @@ mod tests {
     // recorded `last_offset` is `3 + 1 = 4`. Mutating `+`→`-` would record 2.
     #[test]
     fn abort_marker_last_offset_uses_base_plus_delta() {
-        let (dir, mut log) = test_log();
-        append_transaction(&mut log, (1000, 0), &["a", "b", "c"]); // offsets 0..=2
+        let TempLog { dir, mut log } = test_log();
+        append_transaction(&mut log, 1000, 0, &["a", "b", "c"]); // offsets 0..=2
 
         // Abort marker spanning two offsets (delta 1): base 3, last 4.
         let mut a = abort_marker(1000, 0);
@@ -354,7 +368,7 @@ mod tests {
     // log_end. Mutating `&&`→`||` would hold LSO at the batch base (0).
     #[test]
     fn non_txn_batch_with_valid_pid_advances_lso() {
-        let (_dir, mut log) = test_log();
+        let TempLog { dir: _dir, mut log } = test_log();
         // Idempotent (not transactional) producer: pid >= 0, no transactional
         // attribute bit set.
         let mut b = sample_batch(2);
@@ -369,7 +383,7 @@ mod tests {
 
     #[test]
     fn lso_held_by_remaining_producer_after_partial_commit() {
-        let (_dir, mut log) = test_log();
+        let TempLog { dir: _dir, mut log } = test_log();
 
         // Open two producers' transactions in parallel.
         let mut t1 = transactional_batch(1000, 0, &["a", "b"]);
@@ -398,7 +412,7 @@ mod tests {
             let dir = tempdir().unwrap();
             {
                 let mut log = open_log(dir.path());
-                append_transaction(&mut log, (1000, 0), &["a", "b"]);
+                append_transaction(&mut log, 1000, 0, &["a", "b"]);
                 let held = log.lso();
                 let mut marker = if case == "malformed" {
                     let mut marker = commit_marker(1000, 0);
@@ -478,7 +492,7 @@ mod tests {
             },
         ];
         for case in cases {
-            let (_dir, mut log) = test_log();
+            let TempLog { dir: _dir, mut log } = test_log();
             log.append(&mut sample_batch(10)).unwrap(); // offsets 0 to 9
             if case.transaction {
                 log.append(&mut transactional_batch(
@@ -509,7 +523,7 @@ mod tests {
         {
             let mut log = open_log(dir.path());
             log.append(&mut sample_batch(10)).unwrap(); // offsets 0 to 9
-            append_transaction(&mut log, (1000, 0), &["a", "b"]); // offsets 10 and 11
+            append_transaction(&mut log, 1000, 0, &["a", "b"]); // offsets 10 and 11
             log.append(&mut abort_marker(1000, 0)).unwrap(); // offset 12
         }
         let mut reopened = open_log(dir.path());
@@ -521,7 +535,7 @@ mod tests {
 
     #[test]
     fn stale_pending_start_beyond_log_end_is_rejected() {
-        let (_dir, mut log) = test_log();
+        let TempLog { dir: _dir, mut log } = test_log();
         log.pending.insert(ProducerId(1000), Offset(1));
         let error = log.refresh_lso().unwrap_err();
         assert2::assert!(let LogError::Corrupt(_) = error);

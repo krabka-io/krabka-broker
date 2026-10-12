@@ -27,22 +27,36 @@ fn quorum_state_json(directory: &std::path::Path) -> String {
     std::fs::read_to_string(directory.join(QUORUM_STATE_FILE)).unwrap()
 }
 
-fn recovery_voters() -> (VoterSet, VoterSet, VoterSet) {
-    (
-        voter_set(&[NodeId(1)]),
-        voter_set(&[NodeId(1), NodeId(2)]),
-        voter_set(&[NodeId(1), NodeId(3)]),
-    )
+/// The voter sets that a recovery test replays control records against.
+struct RecoveryVoters {
+    initial: VoterSet,
+    committed: VoterSet,
+    uncommitted: VoterSet,
 }
 
-fn reopened_control_log(write: impl FnOnce(&mut KraftLog)) -> (tempfile::TempDir, KraftLog) {
+fn recovery_voters() -> RecoveryVoters {
+    RecoveryVoters {
+        initial: voter_set(&[NodeId(1)]),
+        committed: voter_set(&[NodeId(1), NodeId(2)]),
+        uncommitted: voter_set(&[NodeId(1), NodeId(3)]),
+    }
+}
+
+/// A log that was written, closed and opened again, with the directory it
+/// lives in.
+struct ReopenedLog {
+    dir: tempfile::TempDir,
+    log: KraftLog,
+}
+
+fn reopened_control_log(write: impl FnOnce(&mut KraftLog)) -> ReopenedLog {
     let dir = tempfile::tempdir().expect("tempdir");
     {
         let mut log = KraftLog::open(dir.path(), &MetadataLogConfig::default()).expect("open log");
         write(&mut log);
     }
     let log = KraftLog::open(dir.path(), &MetadataLogConfig::default()).expect("reopen log");
-    (dir, log)
+    ReopenedLog { dir, log }
 }
 
 fn replayed_control_state(log: &KraftLog, initial: VoterSet) -> QuorumState {
@@ -53,8 +67,8 @@ fn replayed_control_state(log: &KraftLog, initial: VoterSet) -> QuorumState {
 
 #[test]
 fn restart_replays_control_records_only_through_persisted_high_watermark() {
-    let (initial, committed, uncommitted) = recovery_voters();
-    let (_dir, log) = reopened_control_log(|log| {
+    let RecoveryVoters { initial, committed, uncommitted } = recovery_voters();
+    let ReopenedLog { dir: _dir, log } = reopened_control_log(|log| {
         let mut batch =
             typed_control_batch(1, &[ControlRecord::Voters(voter_set_to_wire(&committed))])
                 .expect("committed voter batch");
@@ -74,8 +88,8 @@ fn restart_replays_control_records_only_through_persisted_high_watermark() {
 
 #[test]
 fn control_replay_stops_inside_a_partially_committed_batch() {
-    let (initial, committed, uncommitted) = recovery_voters();
-    let (_dir, log) = reopened_control_log(|log| {
+    let RecoveryVoters { initial, committed, uncommitted } = recovery_voters();
+    let ReopenedLog { dir: _dir, log } = reopened_control_log(|log| {
         let mut batch = typed_control_batch(
             1,
             &[
@@ -342,17 +356,23 @@ async fn quorum_state_file_round_trips() {
     assert2::assert!(!json.contains("votedDirectoryId"));
 }
 
-fn level_one_state() -> (krabka_metadata::voters::VoterSet, QuorumState) {
+/// A `kraft.version` 1 state and the voters it was built over.
+struct LevelOneState {
+    voters: krabka_metadata::voters::VoterSet,
+    state: QuorumState,
+}
+
+fn level_one_state() -> LevelOneState {
     let voters = voter_set(&[NodeId(1), NodeId(2)]);
     let mut state = QuorumState::bootstrap(uuid::Uuid::from_u128(9), voters.clone());
     state.kraft_version = 1;
-    (voters, state)
+    LevelOneState { voters, state }
 }
 
 #[test]
 fn quorum_state_level_one_uses_voted_directory_and_omits_static_voters() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (voters, mut state) = level_one_state();
+    let LevelOneState { voters, mut state } = level_one_state();
     state.voted_key = Some(ReplicaKey {
         id: NodeId(2),
         directory_id: uuid::Uuid::from_u128(0x0102_0304),
@@ -536,7 +556,7 @@ const QUORUM_STATE_V1_FIXTURE: &str = "{\"leaderId\":-1,\"leaderEpoch\":5,\"vote
 #[test]
 fn quorum_state_v1_matches_the_fixture_and_decodes_back() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (voters, mut state) = level_one_state();
+    let LevelOneState { voters, mut state } = level_one_state();
     state.leader_epoch = 5;
     state.voted_key = Some(ReplicaKey {
         id: NodeId(2),

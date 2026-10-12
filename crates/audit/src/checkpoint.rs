@@ -117,11 +117,14 @@ mod tests {
     use assert2::check;
 
     use super::*;
-    use crate::test_support::signer;
+    use crate::test_support::{TestSigner, signer};
 
     #[test]
     fn signed_checkpoint_round_trips_through_record_and_verifies() {
-        let (s, pubkey) = signer();
+        let TestSigner {
+            signer: s,
+            public_key: pubkey,
+        } = signer();
         let head = [3u8; 32];
         let cp = Checkpoint::signed(&s, Seq(41), &head, EpochMs(1_700_000_000_000));
         check!(cp.verify(&pubkey));
@@ -143,7 +146,10 @@ mod tests {
 
     #[test]
     fn tampered_checkpoint_fails_verification() {
-        let (s, pubkey) = signer();
+        let TestSigner {
+            signer: s,
+            public_key: pubkey,
+        } = signer();
         let mut cp = Checkpoint::signed(&s, Seq(41), &[3u8; 32], EpochMs(10));
         // flip the head the signature was computed over
         cp.chain_head = [4u8; 32];
@@ -152,7 +158,7 @@ mod tests {
 
     #[test]
     fn from_value_rejects_malformed_hex_without_panicking() {
-        let (s, _) = signer();
+        let TestSigner { signer: s, .. } = signer();
         let cp = Checkpoint::signed(&s, Seq(1), &[5u8; 32], EpochMs(10));
         for (name, bad) in [
             ("non-ASCII straddling a pair", "a\u{e9}a"),

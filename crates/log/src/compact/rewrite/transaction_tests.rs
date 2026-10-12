@@ -20,8 +20,16 @@ use crate::{
             rewrite_with_map, round_over, transactional_record, write_sealed_batches,
         },
     },
+    test_support::KeyValue,
     txn_index::{AbortedTxn, TxnIndex},
 };
+
+/// The base offset and delete horizon of one output batch.
+#[derive(Debug, PartialEq, Eq)]
+struct BatchHorizon {
+    base_offset: i64,
+    delete_horizon_ms: Option<i64>,
+}
 
 fn aborted_entry(producer_id: i64, start: i64, marker: i64) -> AbortedTxn {
     AbortedTxn {
@@ -61,19 +69,19 @@ fn an_aborted_transactions_records_are_dropped_and_the_committed_value_survives(
     let dir = tempfile::tempdir().unwrap();
     let committed = transactional_record(TransactionalRecordSetup {
         offset: Offset(5),
-        payload: (b"k", b"committed"),
+        payload: KeyValue { key: b"k", value: b"committed" },
         ..Default::default()
     });
     let commit_marker = control_batch(6, 1000, 1 /* COMMIT */);
     let aborted_k = transactional_record(TransactionalRecordSetup {
         offset: Offset(10),
         producer: ProducerId(2000),
-        payload: (b"k", b"aborted"),
+        payload: KeyValue { key: b"k", value: b"aborted" },
     });
     let aborted_j = transactional_record(TransactionalRecordSetup {
         offset: Offset(11),
         producer: ProducerId(2000),
-        payload: (b"j", b"aborted"),
+        payload: KeyValue { key: b"j", value: b"aborted" },
     });
     let abort_marker = control_batch(12, 2000, 0 /* ABORT */);
     let seg = write_sealed_batches(
@@ -123,7 +131,7 @@ fn an_aborted_transaction_spanning_two_groups_keeps_its_marker_and_index_entry()
     let dir = tempfile::tempdir().unwrap();
     let aborted = transactional_record(TransactionalRecordSetup {
         producer: ProducerId(2000),
-        payload: (b"k", b"aborted"),
+        payload: KeyValue { key: b"k", value: b"aborted" },
         ..Default::default()
     });
     let abort_marker = control_batch(1, 2000, 0 /* ABORT */);
@@ -157,8 +165,8 @@ fn an_aborted_transaction_spanning_two_groups_keeps_its_marker_and_index_entry()
 /// goes, while the second marker stays plain because its data is right in
 /// front of it. A producer-wide survivor set kept both markers forever.
 ///
-/// Each case is `(label, first marker horizon, now, expected (base offset,
-/// delete horizon) of every output batch)`.
+/// Each case is `(label, first marker horizon, now, expected base offset and
+/// delete horizon of every output batch)`.
 #[test]
 fn a_marker_ages_out_once_its_own_transactions_data_is_gone() {
     for (label, first_marker_horizon, now_ms, want) in [
@@ -166,19 +174,19 @@ fn a_marker_ages_out_once_its_own_transactions_data_is_gone() {
             "no horizon yet: stamp now + delete.retention.ms",
             None,
             100,
-            vec![(0, Some(150)), (1, None), (2, None)],
+            vec![BatchHorizon { base_offset: 0, delete_horizon_ms: Some(150) }, BatchHorizon { base_offset: 1, delete_horizon_ms: None }, BatchHorizon { base_offset: 2, delete_horizon_ms: None }],
         ),
         (
             "horizon not reached: keep as it is",
             Some(500),
             100,
-            vec![(0, Some(500)), (1, None), (2, None)],
+            vec![BatchHorizon { base_offset: 0, delete_horizon_ms: Some(500) }, BatchHorizon { base_offset: 1, delete_horizon_ms: None }, BatchHorizon { base_offset: 2, delete_horizon_ms: None }],
         ),
         (
             "horizon reached: drop the marker, keep the live data and its marker",
             Some(100),
             200,
-            vec![(1, None), (2, None)],
+            vec![BatchHorizon { base_offset: 1, delete_horizon_ms: None }, BatchHorizon { base_offset: 2, delete_horizon_ms: None }],
         ),
     ] {
         let dir = tempfile::tempdir().unwrap();
@@ -189,7 +197,7 @@ fn a_marker_ages_out_once_its_own_transactions_data_is_gone() {
         }
         let live = transactional_record(TransactionalRecordSetup {
             offset: Offset(1),
-            payload: (b"k1", b"v2"),
+            payload: KeyValue { key: b"k1", value: b"v2" },
             ..Default::default()
         });
         let live_marker = control_batch(2, 1000, 1 /* COMMIT */);
@@ -197,9 +205,12 @@ fn a_marker_ages_out_once_its_own_transactions_data_is_gone() {
         let mut txn = CleanedTransactionMetadata::default();
         let out = rewrite_at(dir.path(), &[&seg], &mut txn, now_ms, &HashMap::new());
         let batches = decode_all(&fs::read(&out.log_swap).unwrap());
-        let got: Vec<(i64, Option<i64>)> = batches
+        let got: Vec<BatchHorizon> = batches
             .iter()
-            .map(|batch| (batch.base_offset, batch.delete_horizon_ms()))
+            .map(|batch| BatchHorizon {
+                base_offset: batch.base_offset,
+                delete_horizon_ms: batch.delete_horizon_ms(),
+            })
             .collect();
         assert2::assert!(got == want, "case {label}");
     }
@@ -213,7 +224,7 @@ fn a_marker_ages_out_once_its_own_transactions_data_is_gone() {
 fn a_marker_is_stamped_the_pass_after_its_data_is_removed() {
     let dir = tempfile::tempdir().unwrap();
     let superseded = transactional_record(TransactionalRecordSetup {
-        payload: (b"k", b"old"),
+        payload: KeyValue { key: b"k", value: b"old" },
         ..Default::default()
     });
     let marker = control_batch(1, 1000, 1 /* COMMIT */);

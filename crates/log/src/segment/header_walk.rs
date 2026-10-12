@@ -13,7 +13,7 @@ use krabka_units::prelude::ByteSizeExt;
 use zerocopy::FromBytes;
 
 use super::Segment;
-use crate::{config::DEFAULT_TIMESTAMP_SCAN_WINDOW, error::LogError};
+use crate::{config::DEFAULT_TIMESTAMP_SCAN_WINDOW, error::LogError, index::OffsetIndexEntry};
 
 /// The fields of one v2 batch header that an activation walk reads.
 #[derive(Debug, Clone, Copy)]
@@ -42,10 +42,13 @@ impl Segment {
     /// next segment while records in this one remain unread.
     pub(super) fn read_start_position(&self, target_rel: u32) -> Result<u64, LogError> {
         let position = match self.offset_index.floor_entry(target_rel) {
-            Some((indexed_last, position)) if indexed_last == target_rel => {
+            Some(OffsetIndexEntry {
+                relative_offset,
+                position,
+            }) if relative_offset == target_rel => {
                 return Ok(u64::from(position));
             }
-            Some((_, position)) => u64::from(position),
+            Some(OffsetIndexEntry { position, .. }) => u64::from(position),
             None => 0,
         };
         let target = self.base_offset.0 + i64::from(target_rel);

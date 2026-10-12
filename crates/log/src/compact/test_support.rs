@@ -13,7 +13,7 @@ use super::{
     CleanedTransactionMetadata, CleaningRound, ProducerLastRecord, RewriteOutput, RewriteRetention,
     build_offset_map, rewrite_segments,
 };
-use crate::{io::FileIo, segment::Segment};
+use crate::{io::FileIo, segment::Segment, test_support::KeyValue};
 
 /// Kafka's default `index.interval.bytes`. The compaction tests do not
 /// exercise sparse-index density, so they all pass the default value
@@ -115,8 +115,8 @@ pub(super) struct TransactionalRecordSetup<'a> {
     pub offset: Offset,
     #[default(ProducerId(1000))]
     pub producer: ProducerId,
-    #[default((b"k", b"v"))]
-    pub payload: (&'a [u8], &'a [u8]),
+    #[default(KeyValue { key: b"k", value: b"v" })]
+    pub payload: KeyValue<'a>,
 }
 
 /// One transactional keyed record, retaining the protocol's epoch/sequence defaults.
@@ -124,7 +124,7 @@ pub(super) fn transactional_record(setup: TransactionalRecordSetup<'_>) -> Recor
     let TransactionalRecordSetup {
         offset,
         producer,
-        payload: (key, value),
+        payload: KeyValue { key, value },
     } = setup;
     RecordBatch {
         base_offset: offset.0,

@@ -276,12 +276,23 @@ mod tests {
 
     use krabka_ids::Offset;
 
+    /// The first offset a leader epoch contributes to a segment.
+    #[derive(Clone, Copy)]
+    struct EpochStart {
+        epoch: LeaderEpoch,
+        start: Offset,
+    }
+
+    const fn epoch_start(epoch: LeaderEpoch, start: Offset) -> EpochStart {
+        EpochStart { epoch, start }
+    }
+
     #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
     struct CacheSegmentSetup<'a> {
         #[default(Uuid::from_u128(10))]
         id: Uuid,
-        #[default(&[(LeaderEpoch(0), Offset(0))])]
-        epochs: &'a [(LeaderEpoch, Offset)],
+        #[default(&[epoch_start(LeaderEpoch(0), Offset(0))])]
+        epochs: &'a [EpochStart],
         #[default(Offset(0))]
         start: Offset,
         #[default(Offset(99))]
@@ -292,7 +303,7 @@ mod tests {
         fn following_segment() -> Self {
             Self {
                 id: Uuid::from_u128(11),
-                epochs: &[(LeaderEpoch(0), Offset(100))],
+                epochs: &[epoch_start(LeaderEpoch(0), Offset(100))],
                 start: Offset(100),
                 end: Offset(199),
             }
@@ -318,7 +329,7 @@ mod tests {
                 RemoteLogSegmentState::CopySegmentStarted,
                 epochs
                     .iter()
-                    .map(|&(epoch, start)| (epoch, start.0))
+                    .map(|&EpochStart { epoch, start }| (epoch, start.0))
                     .collect(),
             ),
         )
@@ -410,7 +421,7 @@ mod tests {
 
         c.add(seg(CacheSegmentSetup {
             id: Uuid::from_u128(11),
-            epochs: &[(LeaderEpoch(1), Offset(i64::MIN))],
+            epochs: &[epoch_start(LeaderEpoch(1), Offset(i64::MIN))],
             start: Offset(i64::MIN),
             end: Offset(i64::MAX),
         }))
@@ -469,14 +480,17 @@ mod tests {
         let mut c = RemoteLogMetadataCache::default();
         // One segment spanning two epochs: epoch 0 owns [0,49], epoch 1 owns [50,99].
         c.add(seg(CacheSegmentSetup {
-            epochs: &[(LeaderEpoch(0), Offset(0)), (LeaderEpoch(1), Offset(50))],
+            epochs: &[
+                epoch_start(LeaderEpoch(0), Offset(0)),
+                epoch_start(LeaderEpoch(1), Offset(50)),
+            ],
             ..Default::default()
         }))
         .unwrap();
         c.update(&finish(Uuid::from_u128(10))).unwrap();
         // A second segment, epoch 1 only.
         c.add(seg(CacheSegmentSetup {
-            epochs: &[(LeaderEpoch(1), Offset(100))],
+            epochs: &[epoch_start(LeaderEpoch(1), Offset(100))],
             ..CacheSegmentSetup::following_segment()
         }))
         .unwrap();

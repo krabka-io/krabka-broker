@@ -228,28 +228,22 @@ mod tests {
 
     use super::*;
     use crate::test_support::{
-        accept_http_request, http_listener, read_request, respond, s3_config, serve_http_pages,
+        HttpListener, HttpPage, HttpServer, accept_http_request, http_listener, read_request,
+        respond, s3_config, serve_http_pages,
     };
 
     async fn with_listing<T>(
-        pages: Vec<(&'static str, &'static str, &'static str)>,
+        pages: Vec<HttpPage>,
         prefix: Option<&str>,
         extract: impl FnOnce(Result<Vec<IncompleteMultipartUpload>, ObjectStoreError>) -> T,
     ) -> T {
-        let pages = pages
-            .into_iter()
-            .map(|(request, status, body)| (request.into(), status, body))
-            .collect();
-        let (endpoint, server) = serve_http_pages(pages, true).await;
+        let HttpServer { endpoint, server } = serve_http_pages(pages, true).await;
         let result = extract(list_s3_multipart_uploads(&config(endpoint), prefix).await);
         server.await.unwrap();
         result
     }
 
-    async fn check_listing_error(
-        pages: Vec<(&'static str, &'static str, &'static str)>,
-        reason: &str,
-    ) {
+    async fn check_listing_error(pages: Vec<HttpPage>, reason: &str) {
         let error = with_listing(pages, None, Result::unwrap_err).await;
         check!(error.to_string().contains(reason));
     }
@@ -283,7 +277,7 @@ mod tests {
     async fn lists_incomplete_uploads_under_the_prefix() {
         let body = "<ListMultipartUploadsResult><IsTruncated>false</IsTruncated><Upload><Key>worm/a</Key><UploadId>one</UploadId></Upload></ListMultipartUploadsResult>";
         let uploads = with_listing(
-            vec![(
+            vec![HttpPage::new(
                 "GET /bucket?uploads=&prefix=worm%2F HTTP/1.1",
                 "200 OK",
                 body,
@@ -307,12 +301,12 @@ mod tests {
         let first = "<ListMultipartUploadsResult><IsTruncated>true</IsTruncated><NextKeyMarker>worm/a</NextKeyMarker><NextUploadIdMarker>one</NextUploadIdMarker><Upload><Key>worm/a</Key><UploadId>one</UploadId></Upload></ListMultipartUploadsResult>";
         let second = "<ListMultipartUploadsResult><IsTruncated>false</IsTruncated><Upload><Key>worm/b</Key><UploadId>two</UploadId></Upload></ListMultipartUploadsResult>";
         let uploads = with_listing(vec![
-            (
+            HttpPage::new(
                 "GET /bucket?uploads=&prefix=worm%2F HTTP/1.1",
                 "200 OK",
                 first,
             ),
-            (
+            HttpPage::new(
                 "GET /bucket?uploads=&prefix=worm%2F&key-marker=worm%2Fa&upload-id-marker=one HTTP/1.1",
                 "200 OK",
                 second,
@@ -328,7 +322,7 @@ mod tests {
     async fn rejects_truncated_page_without_markers() {
         let body = "<ListMultipartUploadsResult><IsTruncated>true</IsTruncated></ListMultipartUploadsResult>";
         check_listing_error(
-            vec![("GET /bucket?uploads= HTTP/1.1", "200 OK", body)],
+            vec![HttpPage::new("GET /bucket?uploads= HTTP/1.1", "200 OK", body)],
             "no continuation marker",
         )
         .await;
@@ -337,7 +331,11 @@ mod tests {
     #[tokio::test]
     async fn reports_unsuccessful_multipart_listing() {
         check_listing_error(
-            vec![("GET /bucket?uploads= HTTP/1.1", "403 Forbidden", "denied")],
+            vec![HttpPage::new(
+                "GET /bucket?uploads= HTTP/1.1",
+                "403 Forbidden",
+                "denied",
+            )],
             "403 Forbidden: denied",
         )
         .await;
@@ -345,7 +343,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_request_that_never_reaches_the_store_is_a_backend_error() {
-        let (listener, endpoint) = http_listener().await;
+        let HttpListener { listener, endpoint } = http_listener().await;
         drop(listener);
 
         let client = s3_http_client(&config(endpoint.clone())).unwrap();
@@ -374,9 +372,9 @@ mod tests {
         ] {
             let pages = statuses
                 .into_iter()
-                .map(|status| ("GET / HTTP/1.1".into(), status, "result"))
+                .map(|status| HttpPage::new("GET / HTTP/1.1", status, "result"))
                 .collect();
-            let (endpoint, server) = serve_http_pages(pages, false).await;
+            let HttpServer { endpoint, server } = serve_http_pages(pages, false).await;
             let result = read_ok_body(
                 reqwest::Client::new().get(endpoint),
                 "test control-plane",
@@ -393,7 +391,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_persistently_failing_control_plane_stops_at_the_retry_count() {
-        let (listener, endpoint) = http_listener().await;
+        let HttpListener { listener, endpoint } = http_listener().await;
         let attempts = Arc::new(AtomicUsize::new(0));
         let observed = attempts.clone();
         let server = tokio::spawn(async move {
@@ -420,7 +418,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_truncated_permission_error_preserves_status_and_does_not_retry() {
-        let (listener, endpoint) = http_listener().await;
+        let HttpListener { listener, endpoint } = http_listener().await;
         let server = tokio::spawn(async move {
             let mut socket = accept_http_request(listener).await;
             socket
