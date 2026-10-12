@@ -237,7 +237,7 @@ async fn share_fetch_checks_group_read_before_topic_read() {
             expected.push(Outcome {
                 version,
                 grants,
-                response: response,
+                response,
             });
         }
     }
@@ -333,7 +333,7 @@ async fn share_acknowledge_checks_group_read_before_topic_read() {
             expected.push(Outcome {
                 version,
                 grants,
-                response: response,
+                response,
             });
         }
     }

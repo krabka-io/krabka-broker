@@ -425,19 +425,7 @@ async fn seeded(dir: &std::path::Path, trunk: bool) -> Seeded {
 
 fn write_rows() -> Vec<WriteRow> {
     let unchanged = Some((2, 3, Offset(10), 4));
-    let negative_leader_epoch = || {
-        Err(refused(
-            codes::INVALID_REQUEST,
-            message::NEGATIVE_LEADER_EPOCH,
-        ))
-    };
-    let negative_state_epoch = || {
-        Err(refused(
-            codes::INVALID_REQUEST,
-            message::NEGATIVE_STATE_EPOCH,
-        ))
-    };
-    vec![
+    let mut rows = vec![
         // The same start offset with a lower count: 4.3.1 stores the count as
         // sent, trunk keeps the greater one.
         WriteRow {
@@ -539,6 +527,26 @@ fn write_rows() -> Vec<WriteRow> {
                 summary: unchanged,
             },
         },
+    ];
+    rows.extend(refused_write_rows());
+    rows
+}
+
+fn refused_write_rows() -> Vec<WriteRow> {
+    let unchanged = Some((2, 3, Offset(10), 4));
+    let negative_leader_epoch = || {
+        Err(refused(
+            codes::INVALID_REQUEST,
+            message::NEGATIVE_LEADER_EPOCH,
+        ))
+    };
+    let negative_state_epoch = || {
+        Err(refused(
+            codes::INVALID_REQUEST,
+            message::NEGATIVE_STATE_EPOCH,
+        ))
+    };
+    vec![
         WriteRow::same(
             WriteRequest {
                 partition: 0,

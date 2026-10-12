@@ -279,6 +279,12 @@ fn active_rows() -> Vec<Row> {
             ],
             standby: &[],
         },
+    ]
+}
+
+/// Active rows about stateful placement.
+fn active_rows_stateful() -> Vec<Row> {
+    vec![
         Row {
             name: "shouldAssignStandbyTaskToClientWithPreviousWarmupTaskOverLessLoadedClient",
             members: vec![
@@ -619,6 +625,12 @@ fn standby_rows() -> Vec<Row> {
                 },
             ],
         },
+    ]
+}
+
+/// Standby rows about cold starts.
+fn standby_rows_cold_start() -> Vec<Row> {
+    vec![
         Row {
             name: "shouldAssignTasksToProcessesReportingTaskOffsetsOnColdStartWithMultipleMembersPerProcess",
             members: vec![
@@ -810,7 +822,12 @@ fn standby_rows() -> Vec<Row> {
 
 #[test]
 fn assign_matches_kafka_sticky_task_assignor() {
-    for row in active_rows().into_iter().chain(standby_rows()) {
+    let rows = active_rows()
+        .into_iter()
+        .chain(active_rows_stateful())
+        .chain(standby_rows())
+        .chain(standby_rows_cold_start());
+    for row in rows {
         let members: Vec<AssignorMember> = row.members.iter().map(member).collect();
         let input = AssignorInput {
             tasks: maplit::btreemap! {"s".to_owned() => (0..row.partitions).collect()},

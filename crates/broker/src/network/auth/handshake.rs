@@ -227,7 +227,7 @@ mod tests {
             last_after: Option<i64>,
         }
         struct Case {
-            case: &'static str,
+            name: &'static str,
             start: fn() -> ConnectionAuth,
             last_start: Option<i64>,
             mechanism: &'static str,
@@ -236,7 +236,7 @@ mod tests {
         let enabled = [SaslMechanism::OAuthBearer, SaslMechanism::ScramSha512];
         let cases: [Case; 9] = [
             Case {
-                case: "initial, enabled",
+                name: "initial, enabled",
                 start: || ConnectionAuth::Anonymous,
                 last_start: None,
                 mechanism: "OAUTHBEARER",
@@ -249,7 +249,7 @@ mod tests {
                 },
             },
             Case {
-                case: "initial, disabled mechanism closes",
+                name: "initial, disabled mechanism closes",
                 start: || ConnectionAuth::Anonymous,
                 last_start: None,
                 mechanism: "PLAIN",
@@ -262,7 +262,7 @@ mod tests {
                 },
             },
             Case {
-                case: "initial, unknown mechanism closes",
+                name: "initial, unknown mechanism closes",
                 start: || ConnectionAuth::Anonymous,
                 last_start: None,
                 mechanism: "NOPE",
@@ -275,7 +275,7 @@ mod tests {
                 },
             },
             Case {
-                case: "session without expiry cannot re-authenticate",
+                name: "session without expiry cannot re-authenticate",
                 start: || authenticated(None),
                 last_start: None,
                 mechanism: "OAUTHBEARER",
@@ -288,7 +288,7 @@ mod tests {
                 },
             },
             Case {
-                case: "re-authentication less than a second after the last",
+                name: "re-authentication less than a second after the last",
                 start: || authenticated(Some(NOW_MS + 5_000)),
                 last_start: Some(NOW_MS - 999),
                 mechanism: "OAUTHBEARER",
@@ -301,7 +301,7 @@ mod tests {
                 },
             },
             Case {
-                case: "re-authentication, same mechanism",
+                name: "re-authentication, same mechanism",
                 start: || authenticated(Some(NOW_MS + 5_000)),
                 last_start: Some(NOW_MS - 1_000),
                 mechanism: "OAUTHBEARER",
@@ -314,7 +314,7 @@ mod tests {
                 },
             },
             Case {
-                case: "re-authentication switching to another enabled mechanism",
+                name: "re-authentication switching to another enabled mechanism",
                 start: || authenticated(Some(NOW_MS + 5_000)),
                 last_start: None,
                 mechanism: "SCRAM-SHA-512",
@@ -327,7 +327,7 @@ mod tests {
                 },
             },
             Case {
-                case: "re-authentication with an unsupported mechanism closes",
+                name: "re-authentication with an unsupported mechanism closes",
                 start: || authenticated(Some(NOW_MS + 5_000)),
                 last_start: None,
                 mechanism: "PLAIN",
@@ -340,7 +340,7 @@ mod tests {
                 },
             },
             Case {
-                case: "second handshake mid-exchange",
+                name: "second handshake mid-exchange",
                 start: || ConnectionAuth::Negotiating {
                     mechanism: SaslMechanism::OAuthBearer,
                     exchange: SaslExchange::OAuthBearer,
@@ -358,7 +358,7 @@ mod tests {
             },
         ];
         for Case {
-            case,
+            name,
             start,
             last_start,
             mechanism,
@@ -399,11 +399,11 @@ mod tests {
                         mechanisms,
                         ..Default::default()
                     },
-                "{case}"
+                "{name}"
             );
-            assert!(outcome.close_after == close_after, "{case}");
-            assert!(after(&auth) == next, "{case}");
-            assert!(last_start_ms == last_after, "{case}");
+            assert!(outcome.close_after == close_after, "{name}");
+            assert!(after(&auth) == next, "{name}");
+            assert!(last_start_ms == last_after, "{name}");
         }
     }
 }

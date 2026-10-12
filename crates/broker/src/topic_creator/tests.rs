@@ -628,7 +628,7 @@ async fn a_request_goes_again_after_a_disconnect_or_not_controller() {
     /// The case, the sender, the scripted answers, the highest version the
     /// controller advertises, and what the controller received.
     struct Case<'a> {
-        case: &'a str,
+        name: &'a str,
         sender: Sender<'a>,
         answers: &'a [Answer],
         create_topics_max: i16,
@@ -645,42 +645,42 @@ async fn a_request_goes_again_after_a_disconnect_or_not_controller() {
     };
     let cases: [Case<'_>; 7] = [
         Case {
-            case: "plain, answered at once",
+            name: "plain, answered at once",
             sender: Sender::Broker,
             answers: &[],
             create_topics_max: LATEST,
             want: vec![plain()],
         },
         Case {
-            case: "plain, after NOT_CONTROLLER",
+            name: "plain, after NOT_CONTROLLER",
             sender: Sender::Broker,
             answers: &[Answer::NotController],
             create_topics_max: LATEST,
             want: vec![plain(), plain()],
         },
         Case {
-            case: "plain, after a disconnect",
+            name: "plain, after a disconnect",
             sender: Sender::Broker,
             answers: &[Answer::Close],
             create_topics_max: LATEST,
             want: vec![plain(), plain()],
         },
         Case {
-            case: "enveloped, after NOT_CONTROLLER on the envelope",
+            name: "enveloped, after NOT_CONTROLLER on the envelope",
             sender: Sender::Principal("alice"),
             answers: &[Answer::NotController],
             create_topics_max: LATEST,
             want: vec![enveloped(LATEST), enveloped(LATEST)],
         },
         Case {
-            case: "enveloped, after NOT_CONTROLLER inside the envelope",
+            name: "enveloped, after NOT_CONTROLLER inside the envelope",
             sender: Sender::Principal("alice"),
             answers: &[Answer::EmbeddedNotController],
             create_topics_max: LATEST,
             want: vec![enveloped(LATEST), enveloped(LATEST)],
         },
         Case {
-            case: "enveloped, after a disconnect",
+            name: "enveloped, after a disconnect",
             sender: Sender::Principal("alice"),
             answers: &[Answer::Close],
             create_topics_max: LATEST,
@@ -689,7 +689,7 @@ async fn a_request_goes_again_after_a_disconnect_or_not_controller() {
         // Below v5 neither the embedded request nor its response carries a
         // tagged-fields section in its header.
         Case {
-            case: "enveloped, to a controller that stops at v4",
+            name: "enveloped, to a controller that stops at v4",
             sender: Sender::Principal("alice"),
             answers: &[],
             create_topics_max: 4,
@@ -698,7 +698,7 @@ async fn a_request_goes_again_after_a_disconnect_or_not_controller() {
     ];
 
     for Case {
-        case,
+        name,
         sender,
         answers,
         create_topics_max,
@@ -721,10 +721,10 @@ async fn a_request_goes_again_after_a_disconnect_or_not_controller() {
 
         check!(
             got == Ok(response(created_row_at(create_topics_max))),
-            "case: {case}"
+            "case: {name}"
         );
-        check!(controller.connections() == want.len(), "case: {case}");
-        check!(controller.received() == want, "case: {case}");
+        check!(controller.connections() == want.len(), "case: {name}");
+        check!(controller.received() == want, "case: {name}");
     }
 }
 

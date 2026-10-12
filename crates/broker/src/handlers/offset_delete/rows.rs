@@ -213,20 +213,12 @@ mod tests {
         )
     }
 
-    /// Every branch of the two-step decision, with the whole row list and the
-    /// keys it deletes. Topics: `t1` (4 partitions), `t2` (8 partitions),
-    /// `denied` (Read denied, 4 partitions), `ghost` (not in the metadata).
-    #[test]
-    fn build_rows_follows_kafka_order_and_codes() {
-        let decisions = HashMap::from([
-            ("t1", AuthorizationResult::Allow),
-            ("t2", AuthorizationResult::Allow),
-            ("ghost", AuthorizationResult::Allow),
-            ("denied", AuthorizationResult::Deny),
-        ]);
-        let counts = HashMap::from([("t1", 4), ("t2", 8), ("denied", 4)]);
+    /// The `build_rows` case table. Topics: `t1` (4 partitions), `t2` (8
+    /// partitions), `denied` (Read denied, 4 partitions), `ghost` (not in the
+    /// metadata).
+    fn cases() -> [Case<'static>; 8] {
         let none = named(&[]);
-        let rows: [Case<'_>; 8] = [
+        [
             Case {
                 name: "deletes every valid partition",
                 request: &[
@@ -451,6 +443,23 @@ mod tests {
                     partition: 0,
                 }],
             },
+        ]
+    }
+
+    /// Every branch of the two-step decision, with the whole row list and the
+    /// keys it deletes. Topics: `t1` (4 partitions), `t2` (8 partitions),
+    /// `denied` (Read denied, 4 partitions), `ghost` (not in the metadata).
+    #[test]
+    fn build_rows_follows_kafka_order_and_codes() {
+        let decisions = HashMap::from([
+            ("t1", AuthorizationResult::Allow),
+            ("t2", AuthorizationResult::Allow),
+            ("ghost", AuthorizationResult::Allow),
+            ("denied", AuthorizationResult::Deny),
+        ]);
+        let counts = HashMap::from([("t1", 4), ("t2", 8), ("denied", 4)]);
+        let none = named(&[]);
+        let rows = cases();
         ];
 
         for Case {

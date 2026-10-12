@@ -2067,14 +2067,9 @@ struct CheckOrderCase {
     exist: &'static [&'static str],
 }
 
-/// Kafka's `ControllerApis.createTopics` and
-/// `ReplicationControlManager.createTopics` on a single broker that already
-/// holds topic `t`: duplicate names answer one `INVALID_REQUEST` row after the
-/// controller's rows, an existing topic answers `TOPIC_ALREADY_EXISTS` ahead
-/// of every other check, a null config answers `INVALID_CONFIG`, and a request
-/// for more than 10000 partitions answers `POLICY_VIOLATION` on every row.
-#[tokio::test]
-async fn rows_follow_kafkas_check_order_and_messages() {
+/// Kafka's `createTopics` check-order cases: see
+/// [`rows_follow_kafkas_check_order_and_messages`].
+fn check_order_cases() -> Vec<CheckOrderCase> {
     const EXISTS: &str = "Topic 't' already exists.";
     // Kafka 4.3.1's text. Trunk rewords it, and krabka serves that only with
     // `unstable.api.versions.enable`: see `too_many_partitions_message_follows_the_unstable_flag`.
@@ -2091,7 +2086,7 @@ async fn rows_follow_kafkas_check_order_and_messages() {
         ],
         ..topic("m", -1, 2)
     };
-    let cases = vec![
+    vec![
         CheckOrderCase {
             label: "a name twice creates nothing",
             topics: vec![topic("n", 1, 1), topic("n", 1, 1)],
@@ -2284,7 +2279,18 @@ async fn rows_follow_kafkas_check_order_and_messages() {
             ],
             exist: &["t"],
         },
-    ];
+    ]
+}
+
+/// Kafka's `ControllerApis.createTopics` and
+/// `ReplicationControlManager.createTopics` on a single broker that already
+/// holds topic `t`: duplicate names answer one `INVALID_REQUEST` row after the
+/// controller's rows, an existing topic answers `TOPIC_ALREADY_EXISTS` ahead
+/// of every other check, a null config answers `INVALID_CONFIG`, and a request
+/// for more than 10000 partitions answers `POLICY_VIOLATION` on every row.
+#[tokio::test]
+async fn rows_follow_kafkas_check_order_and_messages() {
+    let cases = check_order_cases();
 
     let mut actual = Vec::with_capacity(cases.len());
     let mut expected = Vec::with_capacity(cases.len());

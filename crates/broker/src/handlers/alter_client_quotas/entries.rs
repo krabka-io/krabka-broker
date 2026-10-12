@@ -394,19 +394,13 @@ mod tests {
         }
     }
 
-    /// The key and value rules of Kafka's `ClientQuotaControlManager`
-    /// (#675), one row per rule.
-    #[test]
-    fn key_and_value_rules_match_kafkas_client_quota_control_manager() {
+    /// Rows for setting, unknown keys and removals.
+    fn key_rules_set_and_remove_rows() -> Vec<CaseRow> {
         let alice: Entity = vec![EntityPart {
             entity_type: "user",
             entity_name: Some("alice"),
         }];
-        let ip: Entity = vec![EntityPart {
-            entity_type: "ip",
-            entity_name: Some("10.0.0.1"),
-        }];
-        run(vec![
+        vec![
             CaseRow {
                 name: "valid set",
                 entries: vec![EntryCase {
@@ -506,6 +500,20 @@ mod tests {
                     records: vec![],
                 },
             },
+        ]
+    }
+
+    /// Rows for the value and key-scope rules.
+    fn key_rules_value_rows() -> Vec<CaseRow> {
+        let alice: Entity = vec![EntityPart {
+            entity_type: "user",
+            entity_name: Some("alice"),
+        }];
+        let ip: Entity = vec![EntityPart {
+            entity_type: "ip",
+            entity_name: Some("10.0.0.1"),
+        }];
+        vec![
             CaseRow {
                 name: "zero",
                 entries: vec![EntryCase {
@@ -680,18 +688,12 @@ mod tests {
                     records: vec![],
                 },
             },
-        ]);
+        ]
     }
 
-    /// The entity rules of Kafka's `ClientQuotaControlManager` (#675): the
-    /// allowed types and names, and how a repeated key, entity or type ends.
-    #[test]
-    fn entity_rules_match_kafkas_client_quota_control_manager() {
-        let alice: Entity = vec![EntityPart {
-            entity_type: "user",
-            entity_name: Some("alice"),
-        }];
-        run(vec![
+    /// Rows for the entity types and names.
+    fn entity_rules_name_rows() -> Vec<CaseRow> {
+                vec![
             CaseRow {
                 name: "ip combined with user",
                 entries: vec![EntryCase {
@@ -842,6 +844,16 @@ mod tests {
                     records: vec![],
                 },
             },
+        ]
+    }
+
+    /// Rows for repeated keys, entities and types.
+    fn entity_rules_duplicate_rows() -> Vec<CaseRow> {
+        let alice: Entity = vec![EntityPart {
+            entity_type: "user",
+            entity_name: Some("alice"),
+        }];
+        vec![
             CaseRow {
                 name: "unknown entity type",
                 entries: vec![EntryCase {
@@ -992,6 +1004,24 @@ mod tests {
                     )],
                 },
             },
-        ]);
+        ]
+    }
+
+    /// The key and value rules of Kafka's `ClientQuotaControlManager`
+    /// (#675), one row per rule.
+    #[test]
+    fn key_and_value_rules_match_kafkas_client_quota_control_manager() {
+        let mut rows = key_rules_set_and_remove_rows();
+        rows.extend(key_rules_value_rows());
+        run(rows);
+    }
+
+    /// The entity rules of Kafka's `ClientQuotaControlManager` (#675): the
+    /// allowed types and names, and how a repeated key, entity or type ends.
+    #[test]
+    fn entity_rules_match_kafkas_client_quota_control_manager() {
+        let mut rows = entity_rules_name_rows();
+        rows.extend(entity_rules_duplicate_rows());
+        run(rows);
     }
 }

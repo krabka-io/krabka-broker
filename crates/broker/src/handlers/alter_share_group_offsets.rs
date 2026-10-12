@@ -474,49 +474,50 @@ mod tests {
     /// topic exists, expected top-level code, expected partition code)`.
     #[tokio::test]
     async fn acl_scenarios_match_kafka_semantics() {
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum GroupGrant {
+            ReadOnly,
+            AlterOnly,
+        }
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum TopicState {
+            Granted,
+            Denied,
+            Unknown,
+        }
         struct AclRow {
             case: &'static str,
-            group_read: bool,
-            group_alter: bool,
-            topic_denied: bool,
-            topic_exists: bool,
+            group: GroupGrant,
+            topic: TopicState,
             top: i16,
             partition: Option<i16>,
         }
         let rows: [AclRow; 4] = [
             AclRow {
                 case: "group Read only is allowed (the normal share-consumer grant)",
-                group_read: true,
-                group_alter: false,
-                topic_denied: false,
-                topic_exists: true,
+                group: GroupGrant::ReadOnly,
+                topic: TopicState::Granted,
                 top: codes::NONE,
                 partition: Some(codes::NONE),
             },
             AclRow {
                 case: "group Alter only, with no Read, is refused",
-                group_read: false,
-                group_alter: true,
-                topic_denied: false,
-                topic_exists: true,
+                group: GroupGrant::AlterOnly,
+                topic: TopicState::Granted,
                 top: codes::GROUP_AUTHORIZATION_FAILED,
                 partition: None,
             },
             AclRow {
                 case: "group Read granted but the topic is denied",
-                group_read: true,
-                group_alter: false,
-                topic_denied: true,
-                topic_exists: true,
+                group: GroupGrant::ReadOnly,
+                topic: TopicState::Denied,
                 top: codes::NONE,
                 partition: Some(codes::TOPIC_AUTHORIZATION_FAILED),
             },
             AclRow {
                 case: "group Read granted, topic unknown to the cluster",
-                group_read: true,
-                group_alter: false,
-                topic_denied: false,
-                topic_exists: false,
+                group: GroupGrant::ReadOnly,
+                topic: TopicState::Unknown,
                 top: codes::NONE,
                 partition: Some(codes::UNKNOWN_TOPIC_OR_PARTITION),
             },
@@ -526,10 +527,8 @@ mod tests {
             index,
             AclRow {
                 case,
-                group_read,
-                group_alter,
-                topic_denied,
-                topic_exists,
+                group,
+                topic,
                 top,
                 partition,
             },
@@ -537,9 +536,9 @@ mod tests {
         {
             let topic_name = "acl-topic";
             let authorizer = Arc::new(ScenarioAuthorizer {
-                group_read,
-                group_alter,
-                denied_topics: if topic_denied {
+                group_read: group == GroupGrant::ReadOnly,
+                group_alter: group == GroupGrant::AlterOnly,
+                denied_topics: if topic == TopicState::Denied {
                     vec![topic_name.to_string()]
                 } else {
                     Vec::new()
@@ -549,6 +548,7 @@ mod tests {
                 start_share_broker(authorizer, ShareBrokerSetup::default()).await;
             let broker = broker_handle.broker_arc_for_test();
             test_ctx!(ctx, "alice");
+            let topic_exists = topic != TopicState::Unknown;
             if topic_exists {
                 create_topic(
                     &broker_handle,

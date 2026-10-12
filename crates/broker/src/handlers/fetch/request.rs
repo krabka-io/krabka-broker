@@ -261,6 +261,13 @@ mod tests {
             fetch_offset: i64,
         }
 
+        /// A topic's id and its partitions.
+        #[derive(Debug, PartialEq, Eq)]
+        struct IdShape {
+            topic_id: WireUuid,
+            partitions: Vec<PartitionOffset>,
+        }
+
         let cached = vec![
             (key(1, "", 0), state(10)),
             (key(2, "", 0), state(20)),
@@ -268,13 +275,6 @@ mod tests {
         ];
 
         let grouped = group_cached_into_effective_topics(&cached);
-
-        /// A topic's id and its partitions.
-        #[derive(Debug, PartialEq, Eq)]
-        struct IdShape {
-            topic_id: WireUuid,
-            partitions: Vec<PartitionOffset>,
-        }
 
         let shape: Vec<IdShape> = grouped
             .iter()

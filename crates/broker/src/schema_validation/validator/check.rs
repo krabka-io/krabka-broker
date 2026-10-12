@@ -230,7 +230,7 @@ mod tests {
     /// A registry, a validator against it and a frame it has already
     /// accepted.
     struct BoundSubjectValidator {
-        server: MockServer,
+        _server: MockServer,
         validator: SchemaValidator,
         field: Vec<u8>,
     }
@@ -245,7 +245,7 @@ mod tests {
                 .is_ok()
         );
         BoundSubjectValidator {
-            server,
+            _server: server,
             validator,
             field,
         }

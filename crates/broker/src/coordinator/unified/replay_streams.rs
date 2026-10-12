@@ -359,9 +359,6 @@ mod tests {
         },
     };
 
-    /// What a log leaves: the group that replay holds, or the message of
-    /// the exception that fails the load.
-    type Outcome = Result<Option<StreamsGroupSeed>, String>;
 
     /// One record of the replayed log.
     #[derive(Clone)]

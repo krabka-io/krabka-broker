@@ -416,6 +416,42 @@ async fn a_gated_version_is_refused_unless_its_switch_is_on() {
         refused: bool,
     }
 
+    async fn assert_gated_version(case: GatedVersion) {
+        let GatedVersion {
+            api_key,
+            name,
+            frame_version,
+            unstable,
+            legacy,
+            refused,
+        } = case;
+        let (_dir, mut cfg) = broker_config();
+        cfg.features.unstable_api_versions = unstable;
+        cfg.features.legacy_request_versions = legacy;
+        let DrivenFrames { outcomes, metrics } = drive_one_frame_per_connection(
+            cfg,
+            &[FrameRequest {
+                api_key,
+                version: frame_version,
+            }],
+        )
+        .await;
+        let label = format!("{name} v{frame_version} {unstable:?} {legacy:?}");
+        check!(outcomes == vec![Outcome::Closed], "{label}");
+        let metric = ApiKeyLabel {
+            api_key: name.into(),
+        };
+        check!(
+            (metrics
+                .unsupported_api_requests
+                .get_or_create(&metric)
+                .get()
+                == 1)
+                == refused,
+            "{label}"
+        );
+    }
+
     let cases: &[GatedVersion] = &[
         GatedVersion {
             api_key: 22,
@@ -570,40 +606,8 @@ async fn a_gated_version_is_refused_unless_its_switch_is_on() {
             refused: false,
         },
     ];
-    for &GatedVersion {
-        api_key,
-        name,
-        frame_version,
-        unstable,
-        legacy,
-        refused,
-    } in cases
-    {
-        let (_dir, mut cfg) = broker_config();
-        cfg.features.unstable_api_versions = unstable;
-        cfg.features.legacy_request_versions = legacy;
-        let DrivenFrames { outcomes, metrics } = drive_one_frame_per_connection(
-            cfg,
-            &[FrameRequest {
-                api_key,
-                version: frame_version,
-            }],
-        )
-        .await;
-        let label = format!("{name} v{frame_version} {unstable:?} {legacy:?}");
-        check!(outcomes == vec![Outcome::Closed], "{label}");
-        let metric = ApiKeyLabel {
-            api_key: name.into(),
-        };
-        check!(
-            (metrics
-                .unsupported_api_requests
-                .get_or_create(&metric)
-                .get()
-                == 1)
-                == refused,
-            "{label}"
-        );
+    for &case in cases {
+        assert_gated_version(case).await;
     }
 }
 

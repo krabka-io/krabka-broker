@@ -380,25 +380,25 @@ async fn a_stalled_partition_does_not_stop_the_sweep_reaching_the_next() {
 async fn local_retention_keeps_segments_whose_copy_never_finished() {
     /// One misbehaving store and the copy deadline it is driven under.
     struct Case {
-        case: &'static str,
+        name: &'static str,
         store: fn() -> Arc<FaultInjectingStore>,
         copy_timeout: Time,
     }
 
     let cases: [Case; 2] = [
         Case {
-            case: "throttled",
+            name: "throttled",
             store: throttling_store,
             copy_timeout: TEST_COPY_TIMEOUT,
         },
         Case {
-            case: "stalled",
+            name: "stalled",
             store: stalling_store,
             copy_timeout: SHORT_COPY_DEADLINE,
         },
     ];
     for Case {
-        case,
+        name,
         store,
         copy_timeout,
     } in cases
@@ -419,7 +419,7 @@ async fn local_retention_keeps_segments_whose_copy_never_finished() {
                     .build(),
             )
             .await;
-        check!(copied == 0, "{case}");
+        check!(copied == 0, "{name}");
 
         // Far past every segment's `local.retention.ms`, so nothing but the
         // missing remote copy can be holding these bytes on disk.
@@ -435,13 +435,13 @@ async fn local_retention_keeps_segments_whose_copy_never_finished() {
         )
         .await;
 
-        check!(removed == 0, "{case}");
+        check!(removed == 0, "{name}");
         let log = partition.log.lock().expect("partition log mutex poisoned");
         check!(
             log.local_log_start_offset() == exports[0].base_offset,
-            "{case}"
+            "{name}"
         );
-        check!(log.tierable_segments().len() == exports.len(), "{case}");
+        check!(log.tierable_segments().len() == exports.len(), "{name}");
     }
 }
 

@@ -256,12 +256,20 @@ mod tests {
     async fn only_a_controller_without_an_active_leader_answers_not_leader() {
         /// Builds the refusal of the controller for one case.
         type Refusal = fn() -> RaftError;
-        /// What the case is, the refusal of the controller, and the leader of
-        /// the `NotLeader` that `assign` returns, or `None` for another error.
+        /// What `assign` returns for a refusal.
+        #[derive(Debug, PartialEq)]
+        enum Answer {
+            /// A `NotLeader` naming the leader, when the refusal names one.
+            NotLeader(Option<NodeId>),
+            /// Any other error.
+            Other,
+        }
+        /// What the case is, the refusal of the controller, and what `assign`
+        /// answers.
         struct RefusalCase {
             what: &'static str,
             refusal: Refusal,
-            want: Option<Option<NodeId>>,
+            want: Answer,
         }
         let cases: [RefusalCase; 6] = [
             RefusalCase {
@@ -269,36 +277,36 @@ mod tests {
                 refusal: || RaftError::NotLeader {
                     current_leader: None,
                 },
-                want: Some(None),
+                want: Answer::NotLeader(None),
             },
             RefusalCase {
                 what: "the leader moved",
                 refusal: || RaftError::NotLeader {
                     current_leader: Some(NodeId(2)),
                 },
-                want: Some(Some(NodeId(2))),
+                want: Answer::NotLeader(Some(NodeId(2))),
             },
             RefusalCase {
                 what: "an election is in progress",
                 refusal: || RaftError::LeaderUnknown,
-                want: Some(None),
+                want: Answer::NotLeader(None),
             },
             RefusalCase {
                 what: "the new leader has not committed its epoch",
                 refusal: || RaftError::UncommittedTail,
-                want: Some(None),
+                want: Answer::NotLeader(None),
             },
             RefusalCase {
                 what: "the reservation chain is invalid",
                 refusal: || {
                     RaftError::ChangeRejected("pending offset reservation chain is invalid".into())
                 },
-                want: None,
+                want: Answer::Other,
             },
             RefusalCase {
                 what: "the controller stopped",
                 refusal: || RaftError::Shutdown,
-                want: None,
+                want: Answer::Other,
             },
         ];
         for RefusalCase {
@@ -321,8 +329,8 @@ mod tests {
                 .await
                 .expect_err("the controller refused the reservation");
             let got = match error {
-                BrokerError::Raft(RaftError::NotLeader { current_leader }) => Some(current_leader),
-                _ => None,
+                BrokerError::Raft(RaftError::NotLeader { current_leader }) => Answer::NotLeader(current_leader),
+                _ => Answer::Other,
             };
 
             assert2::check!(got == want, "{what}");

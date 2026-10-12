@@ -522,7 +522,7 @@ mod tests {
             krabka_audit::AuditOutcome::Failure,
             "PLAIN",
             krabka_audit::AuditPrincipal {
-                name: "".into(),
+                name: String::new(),
                 auth_method: "SaslPlain".into(),
             },
             krabka_audit::AuditEndpoint {

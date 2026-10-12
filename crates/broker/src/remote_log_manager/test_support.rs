@@ -813,8 +813,8 @@ pub(crate) use registered_sweep_fixture;
 /// retention left behind.
 pub struct ArchivedRetention {
     pub exports: Vec<SegmentExport>,
-    pub rsm: Arc<dyn RemoteStorageManager>,
-    pub rlmm: Arc<dyn RemoteLogMetadataManager>,
+    pub _rsm: Arc<dyn RemoteStorageManager>,
+    pub _rlmm: Arc<dyn RemoteLogMetadataManager>,
     pub removed: usize,
 }
 
@@ -840,8 +840,8 @@ pub async fn archived_local_retention(
     .await;
     ArchivedRetention {
         exports,
-        rsm,
-        rlmm,
+        _rsm: rsm,
+        _rlmm: rlmm,
         removed,
     }
 }

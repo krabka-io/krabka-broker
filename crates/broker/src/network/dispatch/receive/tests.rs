@@ -137,7 +137,7 @@ async fn broker_budget_waits_do_not_expire_the_client_idle_window() {
     let budget = RequestByteBudget::of(8);
     let held = budget.acquire(8).await.unwrap();
     let CountedStream {
-        reader: mut reader,
+        mut reader,
         consumed,
     } = stream(b"abcdefgh");
     let mut request = Box::pin(receive_request(

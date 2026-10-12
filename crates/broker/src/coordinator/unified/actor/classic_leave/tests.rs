@@ -337,6 +337,15 @@ async fn delete_answers_by_members_for_classic_and_consumer_groups() {
         EmptyClassic,
     }
 
+    /// Which tombstones a delete appended to the log.
+    #[derive(Debug, PartialEq)]
+    enum Tombstones {
+        None,
+        Consumer,
+        Classic,
+        Both,
+    }
+
     /// What a delete leaves behind.
     #[derive(Debug, PartialEq)]
     struct Outcome {
@@ -344,8 +353,7 @@ async fn delete_answers_by_members_for_classic_and_consumer_groups() {
         group_still_described: bool,
         type_lock: Option<GroupType>,
         seed_cached: bool,
-        consumer_tombstones_appended: bool,
-        classic_tombstone_appended: bool,
+        tombstones: Tombstones,
     }
 
     #[derive(Debug, PartialEq)]
@@ -362,8 +370,7 @@ async fn delete_answers_by_members_for_classic_and_consumer_groups() {
                 group_still_described: false,
                 type_lock: None,
                 seed_cached: false,
-                consumer_tombstones_appended: true,
-                classic_tombstone_appended: false,
+                tombstones: Tombstones::Consumer,
             },
         },
         Row {
@@ -373,8 +380,7 @@ async fn delete_answers_by_members_for_classic_and_consumer_groups() {
                 group_still_described: true,
                 type_lock: Some(GroupType::NextGen),
                 seed_cached: true,
-                consumer_tombstones_appended: false,
-                classic_tombstone_appended: false,
+                tombstones: Tombstones::None,
             },
         },
         Row {
@@ -384,8 +390,7 @@ async fn delete_answers_by_members_for_classic_and_consumer_groups() {
                 group_still_described: false,
                 type_lock: None,
                 seed_cached: false,
-                consumer_tombstones_appended: false,
-                classic_tombstone_appended: true,
+                tombstones: Tombstones::Classic,
             },
         },
     ];
@@ -420,9 +425,16 @@ async fn delete_answers_by_members_for_classic_and_consumer_groups() {
                 group_still_described: coord.describe_group("g").await.is_some(),
                 type_lock: coord.group_type("g"),
                 seed_cached: coord.cached_seed("g").is_some(),
-                consumer_tombstones_appended: log.has_next_gen_group_metadata_tombstone("g").await
-                    && log.has_next_gen_target_metadata_tombstone("g").await,
-                classic_tombstone_appended: log.has_classic_group_metadata_tombstone("g").await,
+                tombstones: match (
+                    log.has_next_gen_group_metadata_tombstone("g").await
+                        && log.has_next_gen_target_metadata_tombstone("g").await,
+                    log.has_classic_group_metadata_tombstone("g").await,
+                ) {
+                    (false, false) => Tombstones::None,
+                    (true, false) => Tombstones::Consumer,
+                    (false, true) => Tombstones::Classic,
+                    (true, true) => Tombstones::Both,
+                },
             },
         });
         expected.push(Row { setup, outcome });

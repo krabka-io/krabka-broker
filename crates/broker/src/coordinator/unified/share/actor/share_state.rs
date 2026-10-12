@@ -432,7 +432,7 @@ mod tests {
     #[test]
     fn partitions_to_initialize_skip_initialized_and_fresh_initializing() {
         struct Row {
-            row: &'static str,
+            name: &'static str,
             /// When initializing partition 1 was recorded.
             recorded_at: i64,
             expected: Vec<i32>,
@@ -446,18 +446,18 @@ mod tests {
         };
         let rows = [
             Row {
-                row: "fresh initializing entry is covered",
+                name: "fresh initializing entry is covered",
                 recorded_at: 950,
                 expected: vec![2, 3],
             },
             Row {
-                row: "stale initializing entry is retried",
+                name: "stale initializing entry is retried",
                 recorded_at: 800,
                 expected: vec![1, 2, 3],
             },
         ];
         for Row {
-            row,
+            name,
             recorded_at,
             expected,
         } in rows
@@ -482,7 +482,7 @@ mod tests {
                 .collect();
             assert!(
                 partitions_to_initialize(&state, &input, 1_000, 100) == expected,
-                "{row}"
+                "{name}"
             );
         }
     }
@@ -669,7 +669,7 @@ mod tests {
     #[test]
     fn a_topic_missing_from_the_image_leaves_every_set() {
         struct Row {
-            row: &'static str,
+            name: &'static str,
             image: TopicImage,
             /// The expected initialized set.
             initialized: HashSet<TopicIdPartition>,
@@ -691,7 +691,7 @@ mod tests {
         };
         let rows = [
             Row {
-                row: "a deleted topic goes",
+                name: "a deleted topic goes",
                 image: image(),
                 initialized: HashSet::from([share_partition(kept, 0)]),
                 initializing: vec![share_partition(kept, 1)],
@@ -699,7 +699,7 @@ mod tests {
                 changed: true,
             },
             Row {
-                row: "an unloaded image deletes nothing",
+                name: "an unloaded image deletes nothing",
                 image: TopicImage::Snapshot(ReconcileInput::default()),
                 initialized: HashSet::from([share_partition(kept, 0), share_partition(gone, 0)]),
                 initializing: vec![share_partition(kept, 1), share_partition(gone, 1)],
@@ -708,7 +708,7 @@ mod tests {
             },
         ];
         for Row {
-            row,
+            name,
             image,
             initialized,
             initializing,
@@ -729,14 +729,14 @@ mod tests {
 
             let deleted = deleted_topics(&state.state_topic_ids(), &image);
 
-            assert!(state.cleanup_deleted_topics(&deleted) == changed, "{row}");
-            assert!(state.initialized == initialized, "{row}");
+            assert!(state.cleanup_deleted_topics(&deleted) == changed, "{name}");
+            assert!(state.initialized == initialized, "{name}");
             let mut held: Vec<TopicIdPartition> = state.initializing.keys().copied().collect();
             held.sort_unstable_by_key(|tp| (tp.topic_id.0, tp.partition));
-            assert!(held == initializing, "{row}");
+            assert!(held == initializing, "{name}");
             assert!(
                 state.deleting.keys().copied().collect::<Vec<_>>() == deleting,
-                "{row}"
+                "{name}"
             );
         }
     }

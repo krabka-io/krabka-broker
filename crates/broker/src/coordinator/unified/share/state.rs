@@ -649,7 +649,7 @@ mod tests {
     #[test]
     fn offset_deletion_moves_initialized_topics_to_deleting() {
         struct Row {
-            row: &'static str,
+            name: &'static str,
             initialized: Vec<i32>,
             is_deleting: bool,
             expected: Option<Vec<i32>>,
@@ -660,7 +660,7 @@ mod tests {
         let deleting = || HashMap::from([(orders, "orders".to_owned())]);
         let rows: [Row; 3] = [
             Row {
-                row: "initialized partitions",
+                name: "initialized partitions",
                 initialized: vec![2, 0],
                 is_deleting: false,
                 expected: Some(vec![0, 2]),
@@ -668,7 +668,7 @@ mod tests {
                 after_deleting: deleting(),
             },
             Row {
-                row: "a retry of a deleting topic",
+                name: "a retry of a deleting topic",
                 initialized: vec![],
                 is_deleting: true,
                 expected: Some(vec![0, 1, 2]),
@@ -676,7 +676,7 @@ mod tests {
                 after_deleting: deleting(),
             },
             Row {
-                row: "nothing to delete",
+                name: "nothing to delete",
                 initialized: vec![],
                 is_deleting: false,
                 expected: None,
@@ -685,7 +685,7 @@ mod tests {
             },
         ];
         for Row {
-            row,
+            name,
             initialized,
             is_deleting,
             expected,
@@ -706,13 +706,13 @@ mod tests {
 
             assert!(
                 g.mark_topic_deleting(orders, "orders", 3) == expected,
-                "{row}"
+                "{name}"
             );
-            assert!(g.initialized == after_initialized, "{row}");
-            assert!(g.deleting == after_deleting, "{row}");
+            assert!(g.initialized == after_initialized, "{name}");
+            assert!(g.deleting == after_deleting, "{name}");
             assert!(
                 g.initializing == HashMap::from([(share_partition(orders, 5), 1)]),
-                "{row}"
+                "{name}"
             );
         }
     }

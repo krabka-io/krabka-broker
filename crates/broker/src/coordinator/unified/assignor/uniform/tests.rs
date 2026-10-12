@@ -162,8 +162,13 @@ fn sizes(actual: &Assignment) -> Vec<usize> {
 /// reproduce the order Kafka's expectation was computed in.
 #[test]
 fn homogeneous_builder_matches_kafka_scenarios() {
+    run(homogeneous_rows_early());
+    run(homogeneous_rows_late());
+}
+
+fn homogeneous_rows_early() -> Vec<Scenario<'static>> {
     let (first, second) = (tid(1), tid(2));
-    let run_rows = vec![
+    vec![
         Scenario {
             name: "testOneMemberNoTopicSubscription",
             group: group(HOMOGENEOUS, vec![member("A", &[], &[])]),
@@ -262,6 +267,12 @@ fn homogeneous_builder_matches_kafka_scenarios() {
                 },
             ]),
         },
+    ]
+}
+
+fn homogeneous_rows_late() -> Vec<Scenario<'static>> {
+    let (first, second) = (tid(1), tid(2));
+    vec![
         Scenario {
             // Kafka's HashSet visits topic2 before topic1.
             name: "testReassignmentWhenPartitionsAreAddedForTwoMembersTwoTopics",
@@ -377,8 +388,7 @@ fn homogeneous_builder_matches_kafka_scenarios() {
                 },
             ]),
         },
-    ];
-    run(run_rows);
+    ]
 }
 
 /// `UniformHeterogeneousAssignmentBuilderTest`, with exact expected
@@ -386,8 +396,13 @@ fn homogeneous_builder_matches_kafka_scenarios() {
 /// test IDs do.
 #[test]
 fn heterogeneous_builder_matches_kafka_scenarios() {
+    run(heterogeneous_rows_early());
+    run(heterogeneous_rows_late());
+}
+
+fn heterogeneous_rows_early() -> Vec<Scenario<'static>> {
     let (t1, t2, t3, t4) = (tid(1), tid(2), tid(3), tid(4));
-    let rows = vec![
+    vec![
         Scenario {
             name: "testTwoMembersNoTopicSubscription",
             group: group(
@@ -486,6 +501,12 @@ fn heterogeneous_builder_matches_kafka_scenarios() {
                 },
             ]),
         },
+    ]
+}
+
+fn heterogeneous_rows_late() -> Vec<Scenario<'static>> {
+    let (t1, t2, t3, t4) = (tid(1), tid(2), tid(3), tid(4));
+    vec![
         Scenario {
             name: "testReassignmentWhenPartitionsAreAddedForTwoMembers",
             group: group(
@@ -626,8 +647,7 @@ fn heterogeneous_builder_matches_kafka_scenarios() {
                 },
             ]),
         },
-    ];
-    run(rows);
+    ]
 }
 
 /// The review scenario: member A sits in rack r1, member B in r2, and every

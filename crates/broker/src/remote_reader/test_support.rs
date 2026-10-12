@@ -113,7 +113,7 @@ pub struct CountingRsm {
 }
 
 impl CountingRsm {
-    pub fn new(inner: Arc<dyn RemoteStorageManager>) -> CountedRsm {
+    pub fn counting(inner: Arc<dyn RemoteStorageManager>) -> CountedRsm {
         let index_fetches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         CountedRsm {
             rsm: Arc::new(Self {
@@ -187,7 +187,7 @@ pub fn caching_sparse_remote_segment_reader() -> CachingReader {
     let CountedRsm {
         rsm: counting,
         index_fetches,
-    } = CountingRsm::new(Arc::clone(&reader.rsm));
+    } = CountingRsm::counting(Arc::clone(&reader.rsm));
     let log_dir = tempfile::tempdir().unwrap();
     let cache = krabka_remote_storage::RemoteIndexCache::new(
         log_dir.path(),

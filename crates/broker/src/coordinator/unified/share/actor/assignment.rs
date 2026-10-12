@@ -197,7 +197,7 @@ mod tests {
     }
 
     struct Step {
-        step: &'static str,
+        name: &'static str,
         /// The partitions in the image.
         partitions: i32,
         /// The partition initialized before the step.
@@ -223,42 +223,42 @@ mod tests {
         ));
         let steps: [Step; 6] = [
             Step {
-                step: "join with nothing initialized",
+                name: "join with nothing initialized",
                 partitions: 1,
                 initialized: None,
                 epoch: 2,
                 target: vec![],
             },
             Step {
-                step: "partition 0 initialized",
+                name: "partition 0 initialized",
                 partitions: 1,
                 initialized: Some(0),
                 epoch: 3,
                 target: vec![0],
             },
             Step {
-                step: "retry",
+                name: "retry",
                 partitions: 1,
                 initialized: None,
                 epoch: 3,
                 target: vec![0],
             },
             Step {
-                step: "topic grows",
+                name: "topic grows",
                 partitions: 2,
                 initialized: None,
                 epoch: 4,
                 target: vec![0],
             },
             Step {
-                step: "partition 1 initialized",
+                name: "partition 1 initialized",
                 partitions: 2,
                 initialized: Some(1),
                 epoch: 5,
                 target: vec![0, 1],
             },
             Step {
-                step: "retry after growth",
+                name: "retry after growth",
                 partitions: 2,
                 initialized: None,
                 epoch: 5,
@@ -268,7 +268,7 @@ mod tests {
         for (
             index,
             Step {
-                step,
+                name,
                 partitions,
                 initialized,
                 epoch,
@@ -289,9 +289,9 @@ mod tests {
                     index == 0,
                 )
                 .is_ok(),
-                "{step}"
+                "{name}"
             );
-            check!(state.group_epoch == epoch, "{step}");
+            check!(state.group_epoch == epoch, "{name}");
             let got = state
                 .target
                 .per_member
@@ -299,7 +299,7 @@ mod tests {
                 .and_then(|m| m.get(&topic))
                 .cloned()
                 .unwrap_or_default();
-            check!(got == target, "{step}");
+            check!(got == target, "{name}");
         }
     }
 
