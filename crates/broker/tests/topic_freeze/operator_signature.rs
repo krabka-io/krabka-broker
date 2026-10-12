@@ -69,39 +69,32 @@ async fn start_requiring_signatures(dir: &Path, key: &OperatorKey) -> (BrokerHan
 /// hold proved entries beside attested ones, and this setting is the only thing
 /// that removes the mixture. The refused arm carries its own control: the
 /// topic never froze, so it keeps taking writes.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn require_signature_decides_whether_an_unsigned_freeze_is_accepted() {
-    for (label, require_signature, code, after) in [
-        (
-            "the default takes the operator's attestation",
-            false,
-            codes::NONE,
-            refused("literal", "orders", "incident", 1),
-        ),
-        (
-            "require_signature demands the proof",
-            true,
-            codes::OPERATOR_SIGNATURE_REQUIRED,
-            accepted(2),
-        ),
-    ] {
-        let (_keys, _logs, broker, client, _key, frozen, control) =
-            operator_case(require_signature).await;
-        crate::wire::check_produce!(&broker, &client, "orders", frozen => accepted(1),
-            "{label}");
+#[yare::parameterized(
+    attestation = { false },
+    required_signature = { true },
+)]
+#[test_macro(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn require_signature_decides_whether_an_unsigned_freeze_is_accepted(require_signature: bool) {
+    let (code, after) = if require_signature {
+        (codes::OPERATOR_SIGNATURE_REQUIRED, accepted(2))
+    } else {
+        (codes::NONE, refused("literal", "orders", "incident", 1))
+    };
+    let (_keys, _logs, broker, client, _key, frozen, control) =
+        operator_case(require_signature).await;
+    crate::wire::check_produce!(&broker, &client, "orders", frozen => accepted(1));
 
-        let response = set_freeze(
-            &client,
-            freeze_request(PATTERN_TYPE_LITERAL, "orders", "incident"),
-        )
-        .await;
-        check!(response.error_code == code, "{label}: {response:?}");
-        wait_for_registry_len(&client, usize::from(code == codes::NONE)).await;
+    let response = set_freeze(
+        &client,
+        freeze_request(PATTERN_TYPE_LITERAL, "orders", "incident"),
+    )
+    .await;
+    check!(response.error_code == code, "{response:?}");
+    wait_for_registry_len(&client, usize::from(code == codes::NONE)).await;
 
-        crate::wire::check_produce!(&broker, &client;
-            "orders", frozen => after, CONTROL, control => accepted(1); "{label}");
-        broker.shutdown().await;
-    }
+    crate::wire::check_produce!(&broker, &client;
+        "orders", frozen => after, CONTROL, control => accepted(1));
+    broker.shutdown().await;
 }
 
 /// A signed freeze reaches the registry with its `key_id` and its signature
@@ -156,45 +149,41 @@ async fn a_signed_freeze_round_trips_with_its_key_id_and_signature_intact() {
 /// freeze direction alone, so it is asserted with the setting both on and off:
 /// a thaw that started depending on it would look correct in the strict
 /// configuration and be wide open in the default one.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_unsigned_thaw_is_refused_whatever_require_signature_says() {
-    for (label, require_signature) in [
-        ("with require_signature off", false),
-        ("with require_signature on", true),
-    ] {
-        let (_keys, _logs, broker, client, key, frozen, control) =
-            operator_case(require_signature).await;
+#[yare::parameterized(
+    default = { false },
+    required_signature = { true },
+)]
+#[test_macro(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn an_unsigned_thaw_is_refused_whatever_require_signature_says(require_signature: bool) {
+    let (_keys, _logs, broker, client, key, frozen, control) =
+        operator_case(require_signature).await;
 
-        let (_cluster, response) = sign_incident(&client, &key).await;
-        check!(response.error_code == codes::NONE, "{label}: {response:?}");
-        wait_for_registry_len(&client, 1).await;
+    let (_cluster, response) = sign_incident(&client, &key).await;
+    check!(response.error_code == codes::NONE, "{response:?}");
+    wait_for_registry_len(&client, 1).await;
 
-        let thaw = set_freeze(
-            &client,
-            SetTopicFreezeRequest {
-                scope: "orders".to_owned(),
-                pattern_type: PATTERN_TYPE_LITERAL,
-                frozen: false,
-                reason: "let me back in".to_owned(),
-                proposal_id: WireUuid(*uuid::Uuid::new_v4().as_bytes()),
-                set_at_ms: now_ms(),
-                ..SetTopicFreezeRequest::default()
-            },
-        )
-        .await;
-        check!(
-            thaw.error_code == codes::OPERATOR_SIGNATURE_REQUIRED,
-            "{label}: {thaw:?}"
-        );
+    let thaw = set_freeze(
+        &client,
+        SetTopicFreezeRequest {
+            scope: "orders".to_owned(),
+            pattern_type: PATTERN_TYPE_LITERAL,
+            frozen: false,
+            reason: "let me back in".to_owned(),
+            proposal_id: WireUuid(*uuid::Uuid::new_v4().as_bytes()),
+            set_at_ms: now_ms(),
+            ..SetTopicFreezeRequest::default()
+        },
+    )
+    .await;
+    check!(
+        thaw.error_code == codes::OPERATOR_SIGNATURE_REQUIRED,
+        "{thaw:?}"
+    );
 
-        check!(
-            wait_for_registry_len(&client, 1).await[0].scope == "orders",
-            "{label}"
-        );
-        crate::wire::check_produce!(&broker, &client;
-            "orders", frozen => refused("literal", "orders", "incident", 0), CONTROL, control => accepted(1); "{label}");
-        broker.shutdown().await;
-    }
+    check!(wait_for_registry_len(&client, 1).await[0].scope == "orders");
+    crate::wire::check_produce!(&broker, &client;
+        "orders", frozen => refused("literal", "orders", "incident", 0), CONTROL, control => accepted(1));
+    broker.shutdown().await;
 }
 
 /// A signature captured from a freeze cannot be replayed as the thaw.
