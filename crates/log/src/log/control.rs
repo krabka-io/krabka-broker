@@ -255,7 +255,7 @@ mod tests {
             Log,
             test_support::{
                 BarrierEpoch, BarrierMarkerSetup, HostileBarrierSetup, KeyedRecord, PartitionState,
-                ProducerEpoch, TempLog, abort_marker, barrier_marker, barrier_marker_from_producer,
+                ProducerEpoch, ProducerTransaction, TempLog, TransactionFields, abort_marker, barrier_marker, barrier_marker_from_producer,
                 commit_marker, compact_test_log, compaction_ctx, control_key, control_value,
                 install_stamps, keyed_batch, partition_state, sample_batch, stamped_test_log,
                 test_log, transactional_batch,
@@ -717,7 +717,13 @@ mod tests {
                 partition_state(&log, &[1000])
                     == PartitionState {
                         lso: Offset(4),
-                        transactions: vec![(1000, (17, None))],
+                        transactions: vec![ProducerTransaction {
+                            producer_id: 1000,
+                            fields: TransactionFields {
+                                coordinator_epoch: 17,
+                                first_offset: None,
+                            },
+                        }],
                         aborted: want_aborted,
                         producers: vec![committed],
                     },

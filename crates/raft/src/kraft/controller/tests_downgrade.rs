@@ -13,8 +13,7 @@ use crate::{
         recovery::replay_committed,
         test_support::{
             EngineInDir, EngineSetup, build_engine_only, elect_single_voter_engine,
-            open_test_controller,
-            topic_record, voter_set,
+            open_test_controller, topic_record, voter_set,
         },
     },
     snapshot::{SnapshotReader, SnapshotWriter},

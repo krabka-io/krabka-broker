@@ -155,7 +155,10 @@ mod tests {
             ),
             (
                 "the first of two refused features",
-                vec![finalized("metadata.version", 33), finalized("share.version", 5)],
+                vec![
+                    finalized("metadata.version", 33),
+                    finalized("share.version", 5),
+                ],
                 Disabled,
                 Some(refusal("metadata.version", 33, "7-30")),
             ),
@@ -173,7 +176,10 @@ mod tests {
             ),
             (
                 "a known feature at a level it supports beside an unknown one",
-                vec![finalized("metadata.version", 30), finalized("some.future.feature", 2)],
+                vec![
+                    finalized("metadata.version", 30),
+                    finalized("some.future.feature", 2),
+                ],
                 Disabled,
                 Some(refusal("some.future.feature", 2, "0")),
             ),

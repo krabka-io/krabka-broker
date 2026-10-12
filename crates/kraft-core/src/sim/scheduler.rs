@@ -15,8 +15,8 @@ use crate::{
     action::Action,
     event::Event,
     simulation_support::{
-        NodeFingerprint, SimulationTimer as SimTimer, StableFingerprint, clear_timer, earliest_timer, fingerprint,
-        reconcile_timers,
+        NodeFingerprint, SimulationTimer as SimTimer, StableFingerprint, clear_timer,
+        earliest_timer, fingerprint, reconcile_timers,
     },
     types::NodeId,
 };

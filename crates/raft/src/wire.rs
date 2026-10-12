@@ -489,12 +489,33 @@ mod tests {
             golden: &'static [u8],
         }
         let cases = [
-Case { case: "SubmitChange request", encoded: submit_request_bytes, golden: SUBMIT_REQUEST_V0 },
-Case { case: "SubmitChange response", encoded: submit_response_bytes, golden: SUBMIT_RESPONSE_V0 },
-Case { case: "MetadataFetch request", encoded: fetch_request_bytes, golden: FETCH_REQUEST_V0 },
-Case { case: "MetadataFetch response", encoded: fetch_response_bytes, golden: FETCH_RESPONSE_V0 },
-];
-        for Case { case, encoded, golden } in cases {
+            Case {
+                case: "SubmitChange request",
+                encoded: submit_request_bytes,
+                golden: SUBMIT_REQUEST_V0,
+            },
+            Case {
+                case: "SubmitChange response",
+                encoded: submit_response_bytes,
+                golden: SUBMIT_RESPONSE_V0,
+            },
+            Case {
+                case: "MetadataFetch request",
+                encoded: fetch_request_bytes,
+                golden: FETCH_REQUEST_V0,
+            },
+            Case {
+                case: "MetadataFetch response",
+                encoded: fetch_response_bytes,
+                golden: FETCH_RESPONSE_V0,
+            },
+        ];
+        for Case {
+            case,
+            encoded,
+            golden,
+        } in cases
+        {
             check!(encoded == golden, "{case}");
         }
     }
@@ -647,12 +668,32 @@ Case { case: "MetadataFetch response", encoded: fetch_response_bytes, golden: FE
             want: [i16; 3],
         }
         let rows = [
-Row { case: "no image", image: None, want: [0, 0, 0] },
-Row { case: "feature absent", image: Some(image_at(None)), want: [0, 0, 0] },
-Row { case: "level 0", image: Some(image_at(Some(0))), want: [0, 0, 0] },
-Row { case: "level 1", image: Some(image_at(Some(1))), want: [0, 0, 0] },
-Row { case: "level above this build's maximum", image: Some(image_at(Some(KRABKA_VERSION_MAX + 1))), want: [0, 0, 0] },
-];
+            Row {
+                case: "no image",
+                image: None,
+                want: [0, 0, 0],
+            },
+            Row {
+                case: "feature absent",
+                image: Some(image_at(None)),
+                want: [0, 0, 0],
+            },
+            Row {
+                case: "level 0",
+                image: Some(image_at(Some(0))),
+                want: [0, 0, 0],
+            },
+            Row {
+                case: "level 1",
+                image: Some(image_at(Some(1))),
+                want: [0, 0, 0],
+            },
+            Row {
+                case: "level above this build's maximum",
+                image: Some(image_at(Some(KRABKA_VERSION_MAX + 1))),
+                want: [0, 0, 0],
+            },
+        ];
         let actual: Vec<_> = rows
             .iter()
             .map(|row| {

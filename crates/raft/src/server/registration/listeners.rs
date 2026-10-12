@@ -36,19 +36,27 @@ fn decode_listeners<'a>(
 ) -> Result<Vec<BrokerEndpoint>, String> {
     let mut names = HashSet::new();
     let endpoints = listeners
-        .map(|WireListener { name, host, port, protocol }| {
-            if name.is_empty() || host.is_empty() || port == 0 || !names.insert(name.to_owned()) {
-                return Err("invalid or duplicate registration listener".into());
-            }
-            let protocol = protocol_from_wire(protocol)
-                .ok_or_else(|| "unknown listener security protocol".to_owned())?;
-            Ok(BrokerEndpoint {
-                name: name.to_owned(),
-                host: host.to_owned(),
-                port,
-                protocol,
-            })
-        })
+        .map(
+            |WireListener {
+                 name,
+                 host,
+                 port,
+                 protocol,
+             }| {
+                if name.is_empty() || host.is_empty() || port == 0 || !names.insert(name.to_owned())
+                {
+                    return Err("invalid or duplicate registration listener".into());
+                }
+                let protocol = protocol_from_wire(protocol)
+                    .ok_or_else(|| "unknown listener security protocol".to_owned())?;
+                Ok(BrokerEndpoint {
+                    name: name.to_owned(),
+                    host: host.to_owned(),
+                    port,
+                    protocol,
+                })
+            },
+        )
         .collect::<Result<Vec<_>, String>>()?;
     if endpoints.is_empty() {
         return Err("registration has no listeners".into());
@@ -129,19 +137,59 @@ mod tests {
             accepted: bool,
         }
         let cases = vec![
-Row { what: "one usable listener", listeners: vec![listener("PLAINTEXT", "host", 9092, 0)], accepted: true },
-Row { what: "two, differently named", listeners: vec![listener("PLAINTEXT", "host", 9092, 0), listener("SSL", "host", 9093, 1)], accepted: true },
-Row { what: "none at all", listeners: vec![], accepted: false },
-Row { what: "a nameless listener", listeners: vec![listener("", "host", 9092, 0)], accepted: false },
-Row { what: "a hostless listener", listeners: vec![listener("PLAINTEXT", "", 9092, 0)], accepted: false },
-Row { what: "port zero", listeners: vec![listener("PLAINTEXT", "host", 0, 0)], accepted: false },
-Row { what: "a repeated name", listeners: vec![
+            Row {
+                what: "one usable listener",
+                listeners: vec![listener("PLAINTEXT", "host", 9092, 0)],
+                accepted: true,
+            },
+            Row {
+                what: "two, differently named",
+                listeners: vec![
+                    listener("PLAINTEXT", "host", 9092, 0),
+                    listener("SSL", "host", 9093, 1),
+                ],
+                accepted: true,
+            },
+            Row {
+                what: "none at all",
+                listeners: vec![],
+                accepted: false,
+            },
+            Row {
+                what: "a nameless listener",
+                listeners: vec![listener("", "host", 9092, 0)],
+                accepted: false,
+            },
+            Row {
+                what: "a hostless listener",
+                listeners: vec![listener("PLAINTEXT", "", 9092, 0)],
+                accepted: false,
+            },
+            Row {
+                what: "port zero",
+                listeners: vec![listener("PLAINTEXT", "host", 0, 0)],
+                accepted: false,
+            },
+            Row {
+                what: "a repeated name",
+                listeners: vec![
                     listener("PLAINTEXT", "host", 9092, 0),
                     listener("PLAINTEXT", "host", 9093, 0),
-                ], accepted: false },
-Row { what: "an unknown security protocol", listeners: vec![listener("PLAINTEXT", "host", 9092, 9)], accepted: false },
-];
-        for Row { what, listeners, accepted } in cases {
+                ],
+                accepted: false,
+            },
+            Row {
+                what: "an unknown security protocol",
+                listeners: vec![listener("PLAINTEXT", "host", 9092, 9)],
+                accepted: false,
+            },
+        ];
+        for Row {
+            what,
+            listeners,
+            accepted,
+        } in cases
+        {
             let got = decode_listeners(listeners.iter().copied());
             check!(got.is_ok() == accepted, "{what}: {got:?}");
         }

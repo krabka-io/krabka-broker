@@ -3,7 +3,8 @@ use assert2::check;
 use super::*;
 use crate::{
     core::test_support::{
-        CellLog, EpochRun, FakeLog, MachineLogAndActions, RunsLog, machine, three_voter_machine, voters, win_election,
+        CellLog, EpochRun, FakeLog, MachineLogAndActions, RunsLog, machine, three_voter_machine,
+        voters, win_election,
     },
     event::Event,
 };
@@ -236,8 +237,14 @@ fn a_fetch_is_valid_only_at_an_epoch_the_leader_holds_to_that_offset() {
         },
     ];
     let log = RunsLog::new(&[
-        EpochRun { epoch: 4, count: 120 },
-        EpochRun { epoch: 6, count: 80 },
+        EpochRun {
+            epoch: 4,
+            count: 120,
+        },
+        EpochRun {
+            epoch: 6,
+            count: 80,
+        },
     ]);
     for case in cases {
         let mut m = three_voter_leader(&log);
@@ -279,7 +286,10 @@ fn a_fetch_is_valid_only_at_an_epoch_the_leader_holds_to_that_offset() {
 #[test]
 fn a_fetch_at_an_epoch_the_leader_lacks_does_not_raise_the_high_watermark() {
     let mut m = three_voter_machine();
-    let at_promotion = RunsLog::new(&[EpochRun { epoch: 4, count: 120 }]);
+    let at_promotion = RunsLog::new(&[EpochRun {
+        epoch: 4,
+        count: 120,
+    }]);
     win_election(
         &mut m,
         &at_promotion,
@@ -287,8 +297,14 @@ fn a_fetch_at_an_epoch_the_leader_lacks_does_not_raise_the_high_watermark() {
         SimInstant(2000),
     );
     let log = RunsLog::new(&[
-        EpochRun { epoch: 4, count: 120 },
-        EpochRun { epoch: 6, count: 80 },
+        EpochRun {
+            epoch: 4,
+            count: 120,
+        },
+        EpochRun {
+            epoch: 6,
+            count: 80,
+        },
     ]);
     let actions = m.on_event(
         Event::ReceiveFetch {
@@ -353,8 +369,14 @@ fn a_follower_truncates_to_where_both_logs_still_hold_the_epoch() {
         },
     ];
     let log = RunsLog::new(&[
-        EpochRun { epoch: 4, count: 110 },
-        EpochRun { epoch: 5, count: 20 },
+        EpochRun {
+            epoch: 4,
+            count: 110,
+        },
+        EpochRun {
+            epoch: 5,
+            count: 20,
+        },
     ]);
     for case in cases {
         let mut m = three_voter_machine();

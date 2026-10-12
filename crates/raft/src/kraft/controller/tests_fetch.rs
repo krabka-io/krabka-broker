@@ -19,9 +19,9 @@ use crate::{
                 snapshot_fetch_response_invalid,
             },
             test_support::{
-                CapturedPeerSend, EngineInDir, EngineSetup, build_engine_only, elect_single_voter_engine,
-                one_offset_batch, record_peer_sends, recv_peer_send, recv_peer_send_with_api,
-                submit_change_with_timeout, topic_record,
+                CapturedPeerSend, EngineInDir, EngineSetup, build_engine_only,
+                elect_single_voter_engine, one_offset_batch, record_peer_sends, recv_peer_send,
+                recv_peer_send_with_api, submit_change_with_timeout, topic_record,
             },
         },
         event::SuccessorRank,
@@ -1112,7 +1112,10 @@ async fn quorum_high_watermark_keeps_the_leader_s_watermark_past_the_local_clamp
 /// the watermark on that path would report the worst laggard as caught up.
 #[tokio::test]
 async fn quorum_high_watermark_is_recorded_from_a_snapshot_redirect_too() {
-    let EngineInDir { mut engine, dir: _dir } = two_voter_engine(TwoVoterRole::Follower);
+    let EngineInDir {
+        mut engine,
+        dir: _dir,
+    } = two_voter_engine(TwoVoterRole::Follower);
 
     let redirect = wire::PeerResponse::Fetch(wire::FetchAnswer {
         diverging: None,
@@ -1136,7 +1139,10 @@ async fn quorum_high_watermark_is_recorded_from_a_snapshot_redirect_too() {
 /// quorum's, and an observer that drew level with it would call itself ready.
 #[tokio::test]
 async fn a_lagging_follower_serves_the_quorums_committed_offset() {
-    let EngineInDir { mut engine, dir: _dir } = two_voter_engine(TwoVoterRole::Follower);
+    let EngineInDir {
+        mut engine,
+        dir: _dir,
+    } = two_voter_engine(TwoVoterRole::Follower);
 
     engine.on_fetch_response(
         NodeId(2),
@@ -1264,7 +1270,10 @@ async fn a_leader_answers_a_diverging_fetch_without_truncating_its_own_log() {
 
 #[tokio::test]
 async fn quorum_state_snapshot_tracks_fetch_timestamps_and_observers() {
-    let EngineInDir { mut engine, dir: _dir } = two_voter_engine(TwoVoterRole::default());
+    let EngineInDir {
+        mut engine,
+        dir: _dir,
+    } = two_voter_engine(TwoVoterRole::default());
 
     // 1. Before Node 2 fetches, fetch_ms and caught_up_ms are -1
     let snap1 = engine.quorum_state_snapshot();
@@ -1360,7 +1369,10 @@ fn leader_with_a_running_clock() -> EngineInDir {
 /// caught up, by the two-branch rule of `ReplicaState.updateFollowerState`.
 #[test]
 fn an_observer_is_tracked_with_kafkas_caught_up_rule() {
-    let EngineInDir { mut engine, dir: _dir } = leader_with_a_running_clock();
+    let EngineInDir {
+        mut engine,
+        dir: _dir,
+    } = leader_with_a_running_clock();
     let observer = NodeId(9);
     let directory = uuid::Uuid::from_u128(9);
     let epoch = engine.core.quorum_state().leader_epoch;
@@ -1408,7 +1420,10 @@ fn an_observer_is_tracked_with_kafkas_caught_up_rule() {
 /// its log end, is answered with a divergence and records nothing.
 #[test]
 fn a_diverging_observer_fetch_is_not_progress() {
-    let EngineInDir { mut engine, dir: _dir } = leader_with_a_running_clock();
+    let EngineInDir {
+        mut engine,
+        dir: _dir,
+    } = leader_with_a_running_clock();
     let end = engine.log.log_end_offset().0;
     let epoch = engine.core.quorum_state().leader_epoch;
 
@@ -1431,7 +1446,10 @@ fn a_diverging_observer_fetch_is_not_progress() {
 /// minutes old, and leadership starts over with none.
 #[test]
 fn an_observer_silent_for_five_minutes_is_dropped() {
-    let EngineInDir { mut engine, dir: _dir } = leader_with_a_running_clock();
+    let EngineInDir {
+        mut engine,
+        dir: _dir,
+    } = leader_with_a_running_clock();
     let epoch = engine.core.quorum_state().leader_epoch;
     fetch_at(&mut engine, NodeId(9), uuid::Uuid::from_u128(9), epoch, 0);
     assert!(engine.quorum_state_snapshot().observers.len() == 1);
@@ -1460,7 +1478,10 @@ async fn kraft_controller_metadata_fetch_returns_slice() {
 
 #[tokio::test]
 async fn quorum_state_snapshot_negative_timestamp_fallback() {
-    let EngineInDir { mut engine, dir: _dir } = two_voter_engine(TwoVoterRole::default());
+    let EngineInDir {
+        mut engine,
+        dir: _dir,
+    } = two_voter_engine(TwoVoterRole::default());
 
     // When wall_clock_base is before UNIX_EPOCH, duration_since returns Err,
     // so map_or fallback -1 must be returned for all timestamps.

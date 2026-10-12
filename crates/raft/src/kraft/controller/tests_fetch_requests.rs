@@ -136,7 +136,11 @@ fn top_level(error_code: i16) -> FetchResponse {
 #[tokio::test]
 async fn a_fetch_is_checked_as_handle_fetch_request_checks_it() {
     type Edit = fn(&mut FetchRequest, i32);
-    let LeaderOf0And1 { mut engine, dir: _dir, epoch } = leader_of_0_and_1();
+    let LeaderOf0And1 {
+        mut engine,
+        dir: _dir,
+        epoch,
+    } = leader_of_0_and_1();
     let refused = |engine: &Engine, code| answer(engine, code, -1, bytes::Bytes::new());
     struct Case {
         name: &'static str,
@@ -144,32 +148,84 @@ async fn a_fetch_is_checked_as_handle_fetch_request_checks_it() {
         expected: FetchResponse,
     }
     let cases = vec![
-Case { name: "a cluster id of another cluster", edit: |request, _| request.cluster_id = Some("AAAAAAAAAAAAAAAAAAAABw".into()), expected: top_level(INCONSISTENT_CLUSTER_ID) },
-Case { name: "another topic id", edit: |request, _| request.topics[0].topic_id = WireUuid([7; 16]), expected: top_level(INVALID_REQUEST) },
-Case { name: "partition 1", edit: |request, _| partition(request).partition = 1, expected: top_level(INVALID_REQUEST) },
-Case { name: "two partitions", edit: |request, _| {
+        Case {
+            name: "a cluster id of another cluster",
+            edit: |request, _| request.cluster_id = Some("AAAAAAAAAAAAAAAAAAAABw".into()),
+            expected: top_level(INCONSISTENT_CLUSTER_ID),
+        },
+        Case {
+            name: "another topic id",
+            edit: |request, _| request.topics[0].topic_id = WireUuid([7; 16]),
+            expected: top_level(INVALID_REQUEST),
+        },
+        Case {
+            name: "partition 1",
+            edit: |request, _| partition(request).partition = 1,
+            expected: top_level(INVALID_REQUEST),
+        },
+        Case {
+            name: "two partitions",
+            edit: |request, _| {
                 let copy = request.topics[0].partitions[0].clone();
                 request.topics[0].partitions.push(copy);
-            }, expected: top_level(INVALID_REQUEST) },
-Case { name: "two topics", edit: |request, _| {
+            },
+            expected: top_level(INVALID_REQUEST),
+        },
+        Case {
+            name: "two topics",
+            edit: |request, _| {
                 let copy = request.topics[0].clone();
                 request.topics.push(copy);
-            }, expected: top_level(INVALID_REQUEST) },
-Case { name: "a negative max wait", edit: |request, _| request.max_wait_ms = -1, expected: refused(&engine, INVALID_REQUEST) },
-Case { name: "a negative fetch offset", edit: |request, _| partition(request).fetch_offset = -1, expected: refused(&engine, INVALID_REQUEST) },
-Case { name: "a negative last fetched epoch", edit: |request, _| partition(request).last_fetched_epoch = -1, expected: refused(&engine, INVALID_REQUEST) },
-Case { name: "a last fetched epoch above the current leader epoch", edit: |request, epoch| partition(request).last_fetched_epoch = epoch + 1, expected: refused(&engine, INVALID_REQUEST) },
-Case { name: "an older epoch", edit: |request, epoch| {
+            },
+            expected: top_level(INVALID_REQUEST),
+        },
+        Case {
+            name: "a negative max wait",
+            edit: |request, _| request.max_wait_ms = -1,
+            expected: refused(&engine, INVALID_REQUEST),
+        },
+        Case {
+            name: "a negative fetch offset",
+            edit: |request, _| partition(request).fetch_offset = -1,
+            expected: refused(&engine, INVALID_REQUEST),
+        },
+        Case {
+            name: "a negative last fetched epoch",
+            edit: |request, _| partition(request).last_fetched_epoch = -1,
+            expected: refused(&engine, INVALID_REQUEST),
+        },
+        Case {
+            name: "a last fetched epoch above the current leader epoch",
+            edit: |request, epoch| partition(request).last_fetched_epoch = epoch + 1,
+            expected: refused(&engine, INVALID_REQUEST),
+        },
+        Case {
+            name: "an older epoch",
+            edit: |request, epoch| {
                 partition(request).current_leader_epoch = epoch - 1;
                 partition(request).last_fetched_epoch = 0;
-            }, expected: refused(&engine, FENCED_LEADER_EPOCH) },
-Case { name: "a newer epoch", edit: |request, epoch| partition(request).current_leader_epoch = epoch + 1, expected: refused(&engine, UNKNOWN_LEADER_EPOCH) },
-];
-    for Case { name, edit, expected } in cases {
+            },
+            expected: refused(&engine, FENCED_LEADER_EPOCH),
+        },
+        Case {
+            name: "a newer epoch",
+            edit: |request, epoch| partition(request).current_leader_epoch = epoch + 1,
+            expected: refused(&engine, UNKNOWN_LEADER_EPOCH),
+        },
+    ];
+    for Case {
+        name,
+        edit,
+        expected,
+    } in cases
+    {
         let mut request = fetch(epoch, 0);
         partition(&mut request).last_fetched_epoch = 0;
         edit(&mut request, epoch);
-        let Delivery { answer: response, pending: _answer } = deliver(&mut engine, &request);
+        let Delivery {
+            answer: response,
+            pending: _answer,
+        } = deliver(&mut engine, &request);
         check!(response == Some(expected), "{name}");
     }
 }
@@ -180,13 +236,20 @@ Case { name: "a newer epoch", edit: |request, epoch| partition(request).current_
 #[tokio::test]
 async fn a_negative_replica_id_moves_no_replica_state() {
     for (name, replica_id, hwm_moves) in [("replica -1", -1, false), ("replica 0", 0, true)] {
-        let LeaderOf0And1 { mut engine, dir: _dir, epoch } = leader_of_0_and_1();
+        let LeaderOf0And1 {
+            mut engine,
+            dir: _dir,
+            epoch,
+        } = leader_of_0_and_1();
         let log_end = engine.log.log_end_offset();
         let before = engine.log.hwm();
         let mut request = fetch(epoch, log_end.0);
         request.replica_state.replica_id = replica_id;
 
-        let Delivery { answer: response, pending: _answer } = deliver(&mut engine, &request);
+        let Delivery {
+            answer: response,
+            pending: _answer,
+        } = deliver(&mut engine, &request);
 
         let hwm = if hwm_moves { log_end } else { before };
         check!(engine.log.hwm() == hwm, "{name}");
@@ -225,10 +288,17 @@ async fn a_fetch_with_nothing_new_waits_until_there_is_something_to_send() {
             WhileParked::Nothing,
         ),
     ] {
-        let LeaderOf0And1 { mut engine, dir: _dir, epoch } = leader_of_0_and_1();
+        let LeaderOf0And1 {
+            mut engine,
+            dir: _dir,
+            epoch,
+        } = leader_of_0_and_1();
         let log_end = engine.log.log_end_offset();
         // Replica 0 catches up, which commits the log.
-        let Delivery { answer: caught_up, pending: _answer } = deliver(&mut engine, &fetch(epoch, log_end.0));
+        let Delivery {
+            answer: caught_up,
+            pending: _answer,
+        } = deliver(&mut engine, &fetch(epoch, log_end.0));
         check!(caught_up.is_some(), "{name}");
         check!(engine.log.hwm() == log_end, "{name}");
 
@@ -239,7 +309,10 @@ async fn a_fetch_with_nothing_new_waits_until_there_is_something_to_send() {
         } else {
             log_end.0
         };
-        let Delivery { answer: immediate, pending: mut parked } = deliver(&mut engine, &request);
+        let Delivery {
+            answer: immediate,
+            pending: mut parked,
+        } = deliver(&mut engine, &request);
         if fetcher_hwm_behind {
             check!(
                 immediate == Some(answer(&engine, 0, log_end.0, bytes::Bytes::new())),

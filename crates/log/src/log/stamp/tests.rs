@@ -132,12 +132,12 @@ fn control_markers_are_not_stamped() {
                 offset: 0,
                 stamp: Some(1),
             }, // txn data
-            (1, Some(1)),
+            ExpectedStamp { offset: 1, stamp: Some(1) },
             ExpectedStamp {
                 offset: 2,
                 stamp: None,
             }, // commit marker: unstamped
-            (3, Some(2)), // next data batch
+            ExpectedStamp { offset: 3, stamp: Some(2) }, // next data batch
         ],
     );
 

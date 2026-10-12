@@ -727,7 +727,7 @@ mod record_limit_tests {
     use krabka_units::prelude::{ByteSize, bytes, kibibytes};
 
     use super::*;
-    use crate::segment::test_support::{DENSE_INDEX, test_segment};
+    use crate::segment::test_support::{DENSE_INDEX, TempSegment, test_segment};
 
     /// The body size of a record with a `1000`-byte value and nothing else:
     /// its attributes byte, a one-byte timestamp and offset delta, a null key,

@@ -148,7 +148,10 @@ fn fetch_answer(error_code: i16, leader: QuorumLeader) -> FetchAnswer {
 
 #[test]
 fn fetch_response_round_trips() {
-    let served = fetch_answer(0, leader(Some(2), 5, Some(leader_endpoint("controller-2", 9093))));
+    let served = fetch_answer(
+        0,
+        leader(Some(2), 5, Some(leader_endpoint("controller-2", 9093))),
+    );
     for (case, answer) in [
         ("served", served.clone()),
         (
@@ -237,7 +240,11 @@ fn a_refused_fetch_is_kafkas_empty_fetch_response() {
     for (case, answer, expected) in [
         (
             "known leader",
-            refused(leader(Some(2), 5, Some(leader_endpoint("controller-2", 9093)))),
+            refused(leader(
+                Some(2),
+                5,
+                Some(leader_endpoint("controller-2", 9093)),
+            )),
             kafka(
                 2,
                 vec![fetch_resp::NodeEndpoint {

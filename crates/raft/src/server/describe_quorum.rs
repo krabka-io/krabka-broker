@@ -291,7 +291,13 @@ mod tests {
 
     #[test]
     fn the_leader_describes_every_replica() {
-        let response = describe_quorum(&request(&[RequestedTopic { name: METADATA_TOPIC, partitions: &[0] }]), &leader_snapshot());
+        let response = describe_quorum(
+            &request(&[RequestedTopic {
+                name: METADATA_TOPIC,
+                partitions: &[0],
+            }]),
+            &leader_snapshot(),
+        );
 
         check!(
             response
@@ -349,7 +355,13 @@ mod tests {
             ..leader_snapshot()
         };
 
-        let response = describe_quorum(&request(&[RequestedTopic { name: METADATA_TOPIC, partitions: &[0] }]), &snapshot);
+        let response = describe_quorum(
+            &request(&[RequestedTopic {
+                name: METADATA_TOPIC,
+                partitions: &[0],
+            }]),
+            &snapshot,
+        );
 
         check!(
             response.topics[0].partitions[0].observers
@@ -367,8 +379,13 @@ mod tests {
         };
 
         check!(
-            describe_quorum(&request(&[RequestedTopic { name: METADATA_TOPIC, partitions: &[0] }]), &follower)
-                == not_leader_or_follower_response()
+            describe_quorum(
+                &request(&[RequestedTopic {
+                    name: METADATA_TOPIC,
+                    partitions: &[0]
+                }]),
+                &follower
+            ) == not_leader_or_follower_response()
         );
     }
 
@@ -390,7 +407,13 @@ mod tests {
             ..leader_snapshot()
         };
 
-        let response = describe_quorum(&request(&[RequestedTopic { name: METADATA_TOPIC, partitions: &[0] }]), &snapshot);
+        let response = describe_quorum(
+            &request(&[RequestedTopic {
+                name: METADATA_TOPIC,
+                partitions: &[0],
+            }]),
+            &snapshot,
+        );
         let partition = &response.topics[0].partitions[0];
         let unmapped = partition
             .current_voters
@@ -416,12 +439,45 @@ mod tests {
             topics: RequestedTopics<'static>,
         }
         let rows = [
-Row { label: "another topic", topics: &[RequestedTopic { name: "other", partitions: &[0] }] },
-Row { label: "partition 1", topics: &[RequestedTopic { name: METADATA_TOPIC, partitions: &[1] }] },
-Row { label: "two partitions", topics: &[RequestedTopic { name: METADATA_TOPIC, partitions: &[0, 1] }] },
-Row { label: "two topics", topics: &[RequestedTopic { name: METADATA_TOPIC, partitions: &[0] }, RequestedTopic { name: "other", partitions: &[0] }] },
-Row { label: "no topic", topics: &[] },
-];
+            Row {
+                label: "another topic",
+                topics: &[RequestedTopic {
+                    name: "other",
+                    partitions: &[0],
+                }],
+            },
+            Row {
+                label: "partition 1",
+                topics: &[RequestedTopic {
+                    name: METADATA_TOPIC,
+                    partitions: &[1],
+                }],
+            },
+            Row {
+                label: "two partitions",
+                topics: &[RequestedTopic {
+                    name: METADATA_TOPIC,
+                    partitions: &[0, 1],
+                }],
+            },
+            Row {
+                label: "two topics",
+                topics: &[
+                    RequestedTopic {
+                        name: METADATA_TOPIC,
+                        partitions: &[0],
+                    },
+                    RequestedTopic {
+                        name: "other",
+                        partitions: &[0],
+                    },
+                ],
+            },
+            Row {
+                label: "no topic",
+                topics: &[],
+            },
+        ];
         // The oracle remains separate from production response construction.
         let expected_partition = |partition_index| PartitionData {
             partition_index,

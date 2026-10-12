@@ -379,10 +379,7 @@ impl Engine {
                 partition: 0,
             });
         }
-        let RequestedLeader {
-            id: leader,
-            epoch,
-        } = request
+        let RequestedLeader { id: leader, epoch } = request
             .leader()
             .expect("one metadata partition validated above");
         if let Some(error) = self.voter_only_request_error(leader, epoch) {
@@ -399,10 +396,7 @@ impl Engine {
         };
         let leader = NodeId(leader);
         self.remember_request_leader_endpoints(leader, request.endpoints());
-        Ok(EpochRequestLeader {
-            id: leader,
-            epoch,
-        })
+        Ok(EpochRequestLeader { id: leader, epoch })
     }
 
     /// Answers a `BeginQuorumEpoch` request. `None` means the body did not

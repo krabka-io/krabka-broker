@@ -89,7 +89,10 @@ fn a_cleaning_moves_the_log_start_up_to_the_newest_snapshot_once_a_limit_lets_it
         ("no limit", None, None, false),
     ];
     for (what, max_retention_size, max_retention, cleans) in cases {
-        let EngineInDir { mut engine, dir: _dir } = engine(one_batch_segments(max_retention_size, max_retention));
+        let EngineInDir {
+            mut engine,
+            dir: _dir,
+        } = engine(one_batch_segments(max_retention_size, max_retention));
         commit_topic(&mut engine, "first", 1);
         engine.write_snapshot_and_clean().expect("first snapshot");
         let first = engine.log.hwm().0;
@@ -133,7 +136,10 @@ fn a_cleaning_moves_the_log_start_up_to_the_newest_snapshot_once_a_limit_lets_it
 /// snapshot and the one before it.
 #[test]
 fn a_later_cleaning_deletes_the_snapshot_an_earlier_one_kept() {
-    let EngineInDir { mut engine, dir: _dir } = engine(one_batch_segments(Some(bytes(0)), None));
+    let EngineInDir {
+        mut engine,
+        dir: _dir,
+    } = engine(one_batch_segments(Some(bytes(0)), None));
     let mut ids = Vec::new();
     for (name, id) in [("first", 1), ("second", 2), ("third", 3)] {
         commit_topic(&mut engine, name, id);
@@ -154,7 +160,10 @@ fn a_later_cleaning_deletes_the_snapshot_an_earlier_one_kept() {
 /// past the high watermark, whatever the limits say.
 #[test]
 fn a_cleaning_never_moves_the_log_start_past_the_high_watermark() {
-    let EngineInDir { mut engine, dir: _dir } = engine(one_batch_segments(Some(bytes(0)), None));
+    let EngineInDir {
+        mut engine,
+        dir: _dir,
+    } = engine(one_batch_segments(Some(bytes(0)), None));
     commit_topic(&mut engine, "first", 1);
     engine.write_snapshot_and_clean().expect("first snapshot");
     // A snapshot file whose boundary nothing committed yet.
@@ -173,7 +182,10 @@ fn a_cleaning_never_moves_the_log_start_past_the_high_watermark() {
 /// the metadata image as it was.
 #[test]
 fn a_leader_appends_kip835_no_ops_that_change_nothing() {
-    let EngineInDir { mut engine, dir: _dir } = engine(one_batch_segments(None, None));
+    let EngineInDir {
+        mut engine,
+        dir: _dir,
+    } = engine(one_batch_segments(None, None));
     commit_topic(&mut engine, "topic", 1);
     let image = engine.image.clone();
     let end = engine.log.log_end_offset();
@@ -210,11 +222,27 @@ fn only_an_empty_no_op_record_is_a_kip835_no_op() {
         want: bool,
     }
     let cases = [
-Case { what: "an empty no-op", value: &noop_record_value().expect("encode"), want: true },
-Case { what: "a carried krabka record", value: &carried[0], want: false },
-Case { what: "a topic record", value: &topic[0], want: false },
-Case { what: "garbage", value: b"\xff\xff", want: false },
-];
+        Case {
+            what: "an empty no-op",
+            value: &noop_record_value().expect("encode"),
+            want: true,
+        },
+        Case {
+            what: "a carried krabka record",
+            value: &carried[0],
+            want: false,
+        },
+        Case {
+            what: "a topic record",
+            value: &topic[0],
+            want: false,
+        },
+        Case {
+            what: "garbage",
+            value: b"\xff\xff",
+            want: false,
+        },
+    ];
     for Case { what, value, want } in cases {
         check!(is_kip835_noop(value) == want, "{what}");
     }

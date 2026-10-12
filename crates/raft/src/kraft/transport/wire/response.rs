@@ -128,16 +128,18 @@ impl FetchAnswer {
                 .leader
                 .node_endpoint()
                 .filter(|_| version >= 17)
-                .map(|NodeEndpointEntry {
-                    node_id,
-                    host,
-                    port,
-                }| fetch_resp::NodeEndpoint {
-                    node_id,
-                    host,
-                    port: i32::from(port),
-                    ..Default::default()
-                })
+                .map(
+                    |NodeEndpointEntry {
+                         node_id,
+                         host,
+                         port,
+                     }| fetch_resp::NodeEndpoint {
+                        node_id,
+                        host,
+                        port: i32::from(port),
+                        ..Default::default()
+                    },
+                )
                 .into_iter()
                 .collect(),
             ..Default::default()
@@ -234,16 +236,18 @@ pub fn encode_vote_response(
             }],
             node_endpoints: leader
                 .node_endpoint()
-                .map(|NodeEndpointEntry {
-                    node_id,
-                    host,
-                    port,
-                }| vote_resp::NodeEndpoint {
-                    node_id,
-                    host,
-                    port,
-                    ..Default::default()
-                })
+                .map(
+                    |NodeEndpointEntry {
+                         node_id,
+                         host,
+                         port,
+                     }| vote_resp::NodeEndpoint {
+                        node_id,
+                        host,
+                        port,
+                        ..Default::default()
+                    },
+                )
                 .into_iter()
                 .collect(),
             ..Default::default()
@@ -407,16 +411,18 @@ pub fn encode_fetch_snapshot_answer(
         }],
         node_endpoints: leader
             .node_endpoint()
-            .map(|NodeEndpointEntry {
-                node_id,
-                host,
-                port,
-            }| fs_resp::NodeEndpoint {
-                node_id,
-                host,
-                port,
-                ..Default::default()
-            })
+            .map(
+                |NodeEndpointEntry {
+                     node_id,
+                     host,
+                     port,
+                 }| fs_resp::NodeEndpoint {
+                    node_id,
+                    host,
+                    port,
+                    ..Default::default()
+                },
+            )
             .into_iter()
             .collect(),
         ..Default::default()

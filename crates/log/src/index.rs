@@ -131,8 +131,10 @@ mod time;
 pub(crate) use self::{offset::OFFSET_ENTRY_SIZE, time::TIME_ENTRY_SIZE};
 pub use self::{
     offset::{OffsetIndex, OffsetIndexEntry},
-    time::{TimeIndex, TimeIndexEntry},
+    time::TimeIndex,
 };
+#[cfg(test)]
+pub(crate) use self::time::TimeIndexEntry;
 
 /// An index file opened for read and write, with the bytes it holds.
 struct OpenedFile {

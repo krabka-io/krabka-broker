@@ -119,7 +119,7 @@ impl Log {
             }
             self.refresh_lso()
         })();
-        self.complete_append_state(result, batches[0].1)?;
-        Ok(batches.iter().map(|&(_, base)| base).collect())
+        self.complete_append_state(result, batches[0].base)?;
+        Ok(batches.iter().map(|placed| placed.base).collect())
     }
 }

@@ -212,7 +212,7 @@ impl StampIndex {
     /// # Errors
     /// Returns an error when appending to or syncing the file fails.
     pub fn append(&mut self, entry: StampEntry) -> Result<(), LogError> {
-        let (bases, lasts) = Self::coordinates(&self.entries);
+        let StampCoordinates { bases, lasts } = Self::coordinates(&self.entries);
         if let Some(position) = Self::exact_range_index(&bases, &lasts, entry) {
             if self.entries[position] == entry {
                 return Ok(());
@@ -264,7 +264,7 @@ impl StampIndex {
     }
 
     fn entry_position(&self, entry: StampEntry) -> Option<usize> {
-        let (bases, lasts) = Self::coordinates(&self.entries);
+        let StampCoordinates { bases, lasts } = Self::coordinates(&self.entries);
         Self::exact_range_index(&bases, &lasts, entry)
     }
 

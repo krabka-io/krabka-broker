@@ -409,13 +409,28 @@ mod tests {
         }
         let buf: Vec<u8> = (0u8..=255).collect();
         let cases = [
-// In-range read.
-Case { case: "in-range read", position: 10, max: 5, want: &buf[10..15] },
-// Position past EOF → empty.
-Case { case: "position past EOF", position: 1000, max: 5, want: &[] },
-// Length clamps to buffer end.
-Case { case: "length clamped to end", position: 250, max: 100, want: &buf[250..] },
-];
+            // In-range read.
+            Case {
+                case: "in-range read",
+                position: 10,
+                max: 5,
+                want: &buf[10..15],
+            },
+            // Position past EOF → empty.
+            Case {
+                case: "position past EOF",
+                position: 1000,
+                max: 5,
+                want: &[],
+            },
+            // Length clamps to buffer end.
+            Case {
+                case: "length clamped to end",
+                position: 250,
+                max: 100,
+                want: &buf[250..],
+            },
+        ];
         for Case {
             case,
             position,
@@ -423,7 +438,10 @@ Case { case: "length clamped to end", position: 250, max: 100, want: &buf[250..]
             want,
         } in cases
         {
-            assert2::assert!(SnapshotReader::byte_range(&buf, position, max) == want, "{case}");
+            assert2::assert!(
+                SnapshotReader::byte_range(&buf, position, max) == want,
+                "{case}"
+            );
         }
     }
 }

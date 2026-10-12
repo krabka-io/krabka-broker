@@ -9,7 +9,7 @@ use std::{
 use krabka_ids::Offset;
 use krabka_units::{Time, prelude::TimeExt as _};
 
-use super::Log;
+use super::{Log, PendingDelete, RollJitter};
 use crate::{error::LogError, retention};
 
 impl Log {

@@ -17,8 +17,8 @@ use crate::{
         KraftController,
         controller::test_support::{
             ControllerSetup, EngineInDir, EngineSetup, await_leader, build, build_engine_only,
-            commit_pending,
-            one_offset_batch, submit_change_with_timeout, topic_record, topic_record_named,
+            commit_pending, one_offset_batch, submit_change_with_timeout, topic_record,
+            topic_record_named,
         },
         event::Event,
         types::NodeId,
@@ -1006,7 +1006,10 @@ fn elected_three_voter_engine() -> EngineInDir {
 /// `TOPIC_ALREADY_EXISTS`, and no second `TopicRecord` goes into the log.
 #[tokio::test]
 async fn second_create_of_uncommitted_topic_is_refused_before_append() {
-    let EngineInDir { mut engine, dir: _dir } = elected_three_voter_engine();
+    let EngineInDir {
+        mut engine,
+        dir: _dir,
+    } = elected_three_voter_engine();
 
     let mut first_rx =
         super::test_support::submit_on_engine(&mut engine, &topic_record_named("first", 1));
@@ -1053,7 +1056,10 @@ async fn second_create_of_uncommitted_topic_is_refused_before_append() {
 /// record commits, the name exists, and only one `TopicRecord` is in the log.
 #[tokio::test]
 async fn create_of_a_name_left_uncommitted_by_an_earlier_epoch_is_refused() {
-    let EngineInDir { mut engine, dir: _dir } = elected_three_voter_engine();
+    let EngineInDir {
+        mut engine,
+        dir: _dir,
+    } = elected_three_voter_engine();
 
     let mut first_rx =
         super::test_support::submit_on_engine(&mut engine, &topic_record_named("first", 1));
@@ -1208,7 +1214,10 @@ fn a_record_that_would_not_replay_is_refused_and_not_appended() {
     use krabka_metadata::MetadataRecord;
 
     let (mut engine, _dir) = super::test_support::single_voter_leader_engine();
-    let ReportedDirectory { stale, directory: _directory } = partition_with_reported_directory(&mut engine);
+    let ReportedDirectory {
+        stale,
+        directory: _directory,
+    } = partition_with_reported_directory(&mut engine);
     let log_end = engine.log.log_end_offset();
     let before = engine.image.partition("dirs", 0).cloned();
 

@@ -120,9 +120,7 @@ pub struct ListenerAddress<'a> {
 /// A listener set is usable when every entry is named, hosted and on a real
 /// port, no name repeats, and there is at least one.
 #[must_use]
-pub fn valid_wire_listeners<'a>(
-    listeners: impl IntoIterator<Item = ListenerAddress<'a>>,
-) -> bool {
+pub fn valid_wire_listeners<'a>(listeners: impl IntoIterator<Item = ListenerAddress<'a>>) -> bool {
     let mut names = std::collections::BTreeSet::new();
     let mut count = 0usize;
     for ListenerAddress { name, host, port } in listeners {
@@ -169,12 +167,10 @@ pub fn add_voter_refusal(
         || {
             request.voter_id >= 0
                 && request.voter_directory_id != WireUuid::ZERO
-                && valid_wire_listeners(request.listeners.iter().map(|listener| {
-                    ListenerAddress {
-                        name: listener.name.as_str(),
-                        host: listener.host.as_str(),
-                        port: listener.port,
-                    }
+                && valid_wire_listeners(request.listeners.iter().map(|listener| ListenerAddress {
+                    name: listener.name.as_str(),
+                    host: listener.host.as_str(),
+                    port: listener.port,
                 }))
         },
         "Add voter request didn't include a valid voter",
@@ -279,12 +275,10 @@ pub fn update_voter_refusal(
         || request.voter_directory_id == WireUuid::ZERO
         || feature.min_supported_version < 0
         || feature.max_supported_version < feature.min_supported_version
-        || !valid_wire_listeners(request.listeners.iter().map(|listener| {
-            ListenerAddress {
-                name: listener.name.as_str(),
-                host: listener.host.as_str(),
-                port: listener.port,
-            }
+        || !valid_wire_listeners(request.listeners.iter().map(|listener| ListenerAddress {
+            name: listener.name.as_str(),
+            host: listener.host.as_str(),
+            port: listener.port,
         }))
         || !carries_leader_listener(
             quorum,
@@ -682,17 +676,68 @@ mod tests {
             expected: Option<i16>,
         }
         let rows = vec![
-Row { label: "foreign cluster id", request: request(|r| r.cluster_id = Some("cluster-b".into())), is_leader: true, expected: Some(INCONSISTENT_CLUSTER_ID) },
-Row { label: "an epoch below the local one", request: request(|r| r.current_leader_epoch = 6), is_leader: true, expected: Some(FENCED_LEADER_EPOCH) },
-Row { label: "an epoch above the local one", request: request(|r| r.current_leader_epoch = 8), is_leader: true, expected: Some(UNKNOWN_LEADER_EPOCH) },
-Row { label: "a follower", request: request(|_| {}), is_leader: false, expected: Some(NOT_LEADER_OR_FOLLOWER) },
-Row { label: "zero directory id", request: request(|r| r.voter_directory_id = WireUuid::ZERO), is_leader: true, expected: Some(INVALID_REQUEST) },
-Row { label: "a negative kraft.version", request: request(|r| r.k_raft_version_feature.min_supported_version = -1), is_leader: true, expected: Some(INVALID_REQUEST) },
-Row { label: "an inverted kraft.version range", request: request(|r| r.k_raft_version_feature.min_supported_version = 2), is_leader: true, expected: Some(INVALID_REQUEST) },
-Row { label: "no controller listener", request: request(|r| r.listeners[0].name = "PLAINTEXT".into()), is_leader: true, expected: Some(INVALID_REQUEST) },
-Row { label: "a valid update", request: request(|_| {}), is_leader: true, expected: None },
-];
-        for Row { label, request, is_leader, expected } in rows {
+            Row {
+                label: "foreign cluster id",
+                request: request(|r| r.cluster_id = Some("cluster-b".into())),
+                is_leader: true,
+                expected: Some(INCONSISTENT_CLUSTER_ID),
+            },
+            Row {
+                label: "an epoch below the local one",
+                request: request(|r| r.current_leader_epoch = 6),
+                is_leader: true,
+                expected: Some(FENCED_LEADER_EPOCH),
+            },
+            Row {
+                label: "an epoch above the local one",
+                request: request(|r| r.current_leader_epoch = 8),
+                is_leader: true,
+                expected: Some(UNKNOWN_LEADER_EPOCH),
+            },
+            Row {
+                label: "a follower",
+                request: request(|_| {}),
+                is_leader: false,
+                expected: Some(NOT_LEADER_OR_FOLLOWER),
+            },
+            Row {
+                label: "zero directory id",
+                request: request(|r| r.voter_directory_id = WireUuid::ZERO),
+                is_leader: true,
+                expected: Some(INVALID_REQUEST),
+            },
+            Row {
+                label: "a negative kraft.version",
+                request: request(|r| r.k_raft_version_feature.min_supported_version = -1),
+                is_leader: true,
+                expected: Some(INVALID_REQUEST),
+            },
+            Row {
+                label: "an inverted kraft.version range",
+                request: request(|r| r.k_raft_version_feature.min_supported_version = 2),
+                is_leader: true,
+                expected: Some(INVALID_REQUEST),
+            },
+            Row {
+                label: "no controller listener",
+                request: request(|r| r.listeners[0].name = "PLAINTEXT".into()),
+                is_leader: true,
+                expected: Some(INVALID_REQUEST),
+            },
+            Row {
+                label: "a valid update",
+                request: request(|_| {}),
+                is_leader: true,
+                expected: None,
+            },
+        ];
+        for Row {
+            label,
+            request,
+            is_leader,
+            expected,
+        } in rows
+        {
             check!(
                 update_voter_refusal(&request, CLUSTER, &quorum(is_leader)) == expected,
                 "{label}"
@@ -740,40 +785,73 @@ Row { label: "a valid update", request: request(|_| {}), is_leader: true, expect
             expected: Refusal,
         }
         let rows = vec![
-Row { label: "committed", outcome: Ok(ReconfigOutcome::Committed), expected: (0, None) },
-Row { label: "not the leader", outcome: Ok(ReconfigOutcome::NotLeader {
+            Row {
+                label: "committed",
+                outcome: Ok(ReconfigOutcome::Committed),
+                expected: (0, None),
+            },
+            Row {
+                label: "not the leader",
+                outcome: Ok(ReconfigOutcome::NotLeader {
                     leader: Some(NodeId(2)),
-                }), expected: (NOT_LEADER_OR_FOLLOWER, None) },
-Row { label: "a lagging candidate", outcome: Err(RaftError::VoterNotCaughtUp {
+                }),
+                expected: (NOT_LEADER_OR_FOLLOWER, None),
+            },
+            Row {
+                label: "a lagging candidate",
+                outcome: Err(RaftError::VoterNotCaughtUp {
                     id: NodeId(3),
                     lag: 10,
-                }), expected: (
+                }),
+                expected: (
                     REQUEST_TIMED_OUT,
                     Some(format!(
                         "Aborted add voter operation for {key} since it is lagging behind"
                     )),
-                ) },
-Row { label: "a pending change", outcome: Err(RaftError::ReconfigInProgress), expected: (
+                ),
+            },
+            Row {
+                label: "a pending change",
+                outcome: Err(RaftError::ReconfigInProgress),
+                expected: (
                     REQUEST_TIMED_OUT,
                     Some(
                         "Request timed out waiting for leader to handle previous voter change \
                          request"
                             .into(),
                     ),
-                ) },
-Row { label: "a duplicate voter", outcome: Err(RaftError::DuplicateVoter(NodeId(3))), expected: (
+                ),
+            },
+            Row {
+                label: "a duplicate voter",
+                outcome: Err(RaftError::DuplicateVoter(NodeId(3))),
+                expected: (
                     DUPLICATE_VOTER,
                     Some(format!(
                         "The voter id for {key} is already part of the set of voters"
                     )),
-                ) },
-Row { label: "an unknown voter", outcome: Err(RaftError::VoterNotFound(NodeId(3))), expected: (
+                ),
+            },
+            Row {
+                label: "an unknown voter",
+                outcome: Err(RaftError::VoterNotFound(NodeId(3))),
+                expected: (
                     VOTER_NOT_FOUND,
                     Some(format!("Cannot remove voter {key} from the set of voters")),
-                ) },
-Row { label: "a rejected change", outcome: Err(RaftError::ReconfigRejected("empty voter set".into())), expected: (INVALID_REQUEST, Some("empty voter set".into())) },
-];
-        for Row { label, outcome: result, expected } in rows {
+                ),
+            },
+            Row {
+                label: "a rejected change",
+                outcome: Err(RaftError::ReconfigRejected("empty voter set".into())),
+                expected: (INVALID_REQUEST, Some("empty voter set".into())),
+            },
+        ];
+        for Row {
+            label,
+            outcome: result,
+            expected,
+        } in rows
+        {
             check!(
                 reconfiguration_refusal(result, VoterOperation::Add, 3, DIRECTORY) == expected,
                 "{label}"

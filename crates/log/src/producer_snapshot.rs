@@ -24,7 +24,7 @@ type SnapshotState = HashMap<ProducerId, ProducerSnapshotEntry>;
 
 /// A producer snapshot reloaded from disk: the offset of the file it came from
 /// and the state it held.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct LoadedSnapshot {
     pub(crate) offset: Offset,
     pub(crate) state: SnapshotState,
@@ -706,7 +706,11 @@ mod tests {
             let reloaded = reload(dir.path(), range(log_start, log_end)).unwrap();
 
             assert2::check!(
-                reloaded == loaded.map(|offset| (Offset(offset), sample())),
+                reloaded
+                    == loaded.map(|offset| LoadedSnapshot {
+                        offset: Offset(offset),
+                        state: sample()
+                    }),
                 "({log_start}, {log_end}]"
             );
             assert2::check!(offsets(dir.path()) == left, "({log_start}, {log_end}]");
@@ -724,7 +728,10 @@ mod tests {
             if corrupt_count == 4 {
                 assert2::assert!(loaded == None);
             } else {
-                let (offset, entries) = loaded.unwrap();
+                let LoadedSnapshot {
+                    offset,
+                    state: entries,
+                } = loaded.unwrap();
                 assert2::assert!(offset == Offset(105 - corrupt_count));
                 assert2::assert!(entries == sample());
                 assert2::assert!(path(dir.path(), offset).exists());
@@ -746,7 +753,10 @@ mod tests {
         bytes[24..32].copy_from_slice(&103_i64.to_be_bytes());
         fs::write(&future_state, with_crc(bytes)).unwrap();
 
-        let (offset, entries) = reload(dir.path(), range(0, 103)).unwrap().unwrap();
+        let LoadedSnapshot {
+            offset,
+            state: entries,
+        } = reload(dir.path(), range(0, 103)).unwrap().unwrap();
         assert2::assert!(offset == Offset(102));
         assert2::assert!(entries == sample());
         assert2::assert!(previous.exists());

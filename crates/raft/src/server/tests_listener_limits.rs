@@ -79,7 +79,10 @@ async fn an_oversize_request_frame_closes_the_connection() {
         max_request_size: krabka_units::prelude::bytes(64),
         ..ListenerLimits::default()
     };
-    let DuplexConnection { mut client, connection } = duplex_connection(engine, limits);
+    let DuplexConnection {
+        mut client,
+        connection,
+    } = duplex_connection(engine, limits);
 
     // A frame at the limit is served.
     client.write_all(&api_versions_request(7)).await.unwrap();
@@ -110,7 +113,10 @@ async fn an_idle_connection_closes_after_the_idle_window() {
         max_idle: Some(window),
         ..ListenerLimits::default()
     };
-    let DuplexConnection { mut client, mut connection } = duplex_connection(engine, limits);
+    let DuplexConnection {
+        mut client,
+        mut connection,
+    } = duplex_connection(engine, limits);
 
     // Two requests 20 s apart keep a 30 s window open for 40 s.
     for correlation_id in [1, 2] {
@@ -139,7 +145,10 @@ async fn a_listener_without_an_idle_window_keeps_a_silent_connection() {
         max_idle: None,
         ..ListenerLimits::default()
     };
-    let DuplexConnection { client: _client, connection } = duplex_connection(engine, limits);
+    let DuplexConnection {
+        client: _client,
+        connection,
+    } = duplex_connection(engine, limits);
 
     // Longer than the ten-minute Kafka default, which `None` replaces.
     tokio::time::sleep(Duration::from_mins(11)).await;

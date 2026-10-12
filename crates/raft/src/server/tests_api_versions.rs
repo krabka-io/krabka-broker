@@ -87,20 +87,9 @@ async fn controller_listener_answers_api_versions_refusals_and_keeps_the_connect
     use crate::UnstableApiVersions::{Disabled, Enabled};
     // With unstable api versions disabled the listener serves Kafka 4.3.1's
     // v0-v4, so v5 is answered the way that release answers it.
-    let strict_rows = api_version_cases(api_version_case(
-        5,
-        request_body(5, "krabka"),
-        0,
-        35,
-        false,
-    ));
-    let trunk_rows = api_version_cases(api_version_case(
-        5,
-        request_body(5, "krabka"),
-        5,
-        0,
-        true,
-    ));
+    let strict_rows =
+        api_version_cases(api_version_case(5, request_body(5, "krabka"), 0, 35, false));
+    let trunk_rows = api_version_cases(api_version_case(5, request_body(5, "krabka"), 5, 0, true));
     for (api_versions, served_max, rows) in [(Disabled, 4, strict_rows), (Enabled, 5, trunk_rows)] {
         let unstable = super::Unstable { api_versions };
         let (engine, _dir) = single_voter_engine();

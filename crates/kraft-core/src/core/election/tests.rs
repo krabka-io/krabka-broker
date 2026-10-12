@@ -2,7 +2,9 @@ use assert2::check;
 
 use super::*;
 use crate::{
-    core::test_support::{FakeLog, MachineAndLog, check_prevote_started, machine, three_voter_machine, voters},
+    core::test_support::{
+        FakeLog, MachineAndLog, check_prevote_started, machine, three_voter_machine, voters,
+    },
     event::{Event, LogEnd},
 };
 

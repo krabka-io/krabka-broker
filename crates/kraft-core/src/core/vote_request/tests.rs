@@ -411,26 +411,29 @@ fn each_state_grants_pre_votes_and_votes_by_its_own_rule() {
     {
         let mut m = build();
         check!(
-            vote_answer(&mut m, epoch, true, true) == VoteAnswer {
- granted: pre_vote_granted,
- epoch: epoch,
- },
+            vote_answer(&mut m, epoch, true, true)
+                == VoteAnswer {
+                    granted: pre_vote_granted,
+                    epoch: epoch,
+                },
             "{label}: pre-vote"
         );
         let mut m = build();
         check!(
-            vote_answer(&mut m, epoch, false, true) == VoteAnswer {
- granted: vote_granted,
- epoch: epoch,
- },
+            vote_answer(&mut m, epoch, false, true)
+                == VoteAnswer {
+                    granted: vote_granted,
+                    epoch: epoch,
+                },
             "{label}: vote"
         );
         let mut m = build();
         check!(
-            vote_answer(&mut m, epoch, true, false) == VoteAnswer {
- granted: false,
- epoch: epoch,
- },
+            vote_answer(&mut m, epoch, true, false)
+                == VoteAnswer {
+                    granted: false,
+                    epoch: epoch,
+                },
             "{label}: pre-vote with a log that is behind"
         );
     }
@@ -459,10 +462,11 @@ fn a_pre_vote_from_a_higher_epoch_steps_down_a_stale_leader_or_follower() {
         let mut m = build();
         let epoch = m.quorum_state().leader_epoch + 3;
         check!(
-            vote_answer(&mut m, epoch, true, true) == VoteAnswer {
- granted: true,
- epoch: epoch,
- },
+            vote_answer(&mut m, epoch, true, true)
+                == VoteAnswer {
+                    granted: true,
+                    epoch: epoch,
+                },
             "{label}: grants at the new epoch"
         );
         check!(
@@ -482,15 +486,19 @@ fn a_pre_vote_from_a_higher_epoch_steps_down_a_stale_leader_or_follower() {
 #[test]
 fn a_vote_is_granted_again_only_to_the_candidate_it_went_to() {
     let mut m = three_voter_machine();
-    check!(vote_answer(&mut m, 1, false, true) == VoteAnswer {
- granted: true,
- epoch: 1,
- });
     check!(
-        vote_answer(&mut m, 1, false, false) == VoteAnswer {
- granted: true,
- epoch: 1,
- },
+        vote_answer(&mut m, 1, false, true)
+            == VoteAnswer {
+                granted: true,
+                epoch: 1,
+            }
+    );
+    check!(
+        vote_answer(&mut m, 1, false, false)
+            == VoteAnswer {
+                granted: true,
+                epoch: 1,
+            },
         "same candidate"
     );
     let actions = receive_vote(&mut m, vote_event(NodeId(3), 1, false, 1, 5));
@@ -546,10 +554,14 @@ fn a_vote_survives_following_the_leader_of_its_epoch() {
     ];
     for Case { label, event } in cases {
         let mut m = three_voter_machine();
-        check!(vote_answer(&mut m, 4, false, true) == VoteAnswer {
- granted: true,
- epoch: 4,
- }, "{label}");
+        check!(
+            vote_answer(&mut m, 4, false, true)
+                == VoteAnswer {
+                    granted: true,
+                    epoch: 4,
+                },
+            "{label}"
+        );
         m.on_event(
             Event::ReceiveBeginQuorumEpoch {
                 leader_id: NodeId(3),
@@ -585,10 +597,13 @@ fn a_vote_survives_following_the_leader_of_its_epoch() {
 #[test]
 fn a_vote_does_not_outlive_its_epoch() {
     let mut m = three_voter_machine();
-    check!(vote_answer(&mut m, 4, false, true) == VoteAnswer {
- granted: true,
- epoch: 4,
- });
+    check!(
+        vote_answer(&mut m, 4, false, true)
+            == VoteAnswer {
+                granted: true,
+                epoch: 4,
+            }
+    );
     m.on_event(
         Event::ReceiveBeginQuorumEpoch {
             leader_id: NodeId(3),
@@ -628,10 +643,14 @@ fn a_prospective_replica_that_followed_a_leader_grants_no_binding_vote_in_that_e
         ) == (true, None, None)
     );
     check!(!grants_vote_to(&mut m, NodeId(2), 4), "binding vote");
-    check!(vote_answer(&mut m, 4, true, true) == VoteAnswer {
- granted: true,
- epoch: 4,
- }, "pre-vote");
+    check!(
+        vote_answer(&mut m, 4, true, true)
+            == VoteAnswer {
+                granted: true,
+                epoch: 4,
+            },
+        "pre-vote"
+    );
 }
 
 /// The belief is not lost when the election timer starts the round again.

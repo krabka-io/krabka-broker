@@ -67,7 +67,11 @@ fn replayed_control_state(log: &KraftLog, initial: VoterSet) -> QuorumState {
 
 #[test]
 fn restart_replays_control_records_only_through_persisted_high_watermark() {
-    let RecoveryVoters { initial, committed, uncommitted } = recovery_voters();
+    let RecoveryVoters {
+        initial,
+        committed,
+        uncommitted,
+    } = recovery_voters();
     let ReopenedLog { dir: _dir, log } = reopened_control_log(|log| {
         let mut batch =
             typed_control_batch(1, &[ControlRecord::Voters(voter_set_to_wire(&committed))])
@@ -88,7 +92,11 @@ fn restart_replays_control_records_only_through_persisted_high_watermark() {
 
 #[test]
 fn control_replay_stops_inside_a_partially_committed_batch() {
-    let RecoveryVoters { initial, committed, uncommitted } = recovery_voters();
+    let RecoveryVoters {
+        initial,
+        committed,
+        uncommitted,
+    } = recovery_voters();
     let ReopenedLog { dir: _dir, log } = reopened_control_log(|log| {
         let mut batch = typed_control_batch(
             1,

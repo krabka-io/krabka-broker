@@ -161,7 +161,8 @@ mod tests {
 
     #[tokio::test]
     async fn metadata_records_serves_committed_topic() {
-        let SeededController { dir: _dir, ctrl } = committed_topic("t", "metadata_records seed").await;
+        let SeededController { dir: _dir, ctrl } =
+            committed_topic("t", "metadata_records seed").await;
 
         let slice = tokio::time::timeout(
             TEST_OP_TIMEOUT.to_std(),
@@ -176,7 +177,8 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_metadata_from_returns_committed_records() {
-        let SeededController { dir: _dir, ctrl } = committed_topic("fetched", "fetch_metadata seed").await;
+        let SeededController { dir: _dir, ctrl } =
+            committed_topic("fetched", "fetch_metadata seed").await;
 
         let addr = ctrl.controller_bound_addr();
         let resp = tokio::time::timeout(

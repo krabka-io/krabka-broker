@@ -56,34 +56,67 @@ fn wire_listeners_must_be_usable_and_uniquely_named() {
         usable: ListenerUsability,
     }
     let cases = vec![
-Row { what: "one usable listener", listeners: vec![listener("CONTROLLER", "host", ListenerPort(9093))], usable: ListenerUsability::Usable },
-Row { what: "two, differently named", listeners: vec![
+        Row {
+            what: "one usable listener",
+            listeners: vec![listener("CONTROLLER", "host", ListenerPort(9093))],
+            usable: ListenerUsability::Usable,
+        },
+        Row {
+            what: "two, differently named",
+            listeners: vec![
                 listener("CONTROLLER", "host", ListenerPort(9093)),
                 listener("PLAINTEXT", "host", ListenerPort(9092)),
-            ], usable: ListenerUsability::Usable },
-Row { what: "none at all", listeners: vec![], usable: ListenerUsability::Unusable },
-Row { what: "a nameless listener", listeners: vec![listener("", "host", ListenerPort(9093))], usable: ListenerUsability::Unusable },
-Row { what: "a hostless listener", listeners: vec![listener("CONTROLLER", "", ListenerPort(9093))], usable: ListenerUsability::Unusable },
-Row { what: "port zero", listeners: vec![listener("CONTROLLER", "host", ListenerPort(0))], usable: ListenerUsability::Unusable },
-Row { what: "a repeated name", listeners: vec![
+            ],
+            usable: ListenerUsability::Usable,
+        },
+        Row {
+            what: "none at all",
+            listeners: vec![],
+            usable: ListenerUsability::Unusable,
+        },
+        Row {
+            what: "a nameless listener",
+            listeners: vec![listener("", "host", ListenerPort(9093))],
+            usable: ListenerUsability::Unusable,
+        },
+        Row {
+            what: "a hostless listener",
+            listeners: vec![listener("CONTROLLER", "", ListenerPort(9093))],
+            usable: ListenerUsability::Unusable,
+        },
+        Row {
+            what: "port zero",
+            listeners: vec![listener("CONTROLLER", "host", ListenerPort(0))],
+            usable: ListenerUsability::Unusable,
+        },
+        Row {
+            what: "a repeated name",
+            listeners: vec![
                 listener("CONTROLLER", "host", ListenerPort(9093)),
                 listener("CONTROLLER", "other", ListenerPort(9094)),
-            ], usable: ListenerUsability::Unusable },
-Row { what: "one good listener followed by a bad one", listeners: vec![
+            ],
+            usable: ListenerUsability::Unusable,
+        },
+        Row {
+            what: "one good listener followed by a bad one",
+            listeners: vec![
                 listener("CONTROLLER", "host", ListenerPort(9093)),
                 listener("", "host", ListenerPort(9094)),
-            ], usable: ListenerUsability::Unusable },
-];
-    for Row { what, listeners, usable } in cases {
-        let actual = if valid_wire_listeners(
-            listeners
-                .iter()
-                .map(|listener| ListenerAddress {
-                    name: listener.name,
-                    host: listener.host,
-                    port: listener.port.0,
-                }),
-        ) {
+            ],
+            usable: ListenerUsability::Unusable,
+        },
+    ];
+    for Row {
+        what,
+        listeners,
+        usable,
+    } in cases
+    {
+        let actual = if valid_wire_listeners(listeners.iter().map(|listener| ListenerAddress {
+            name: listener.name,
+            host: listener.host,
+            port: listener.port.0,
+        })) {
             ListenerUsability::Usable
         } else {
             ListenerUsability::Unusable
@@ -152,19 +185,44 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
         expected: RemoveRaftVoterResponse,
     }
     let cases = vec![
-Case { what: "another cluster's id", request_cluster_id: Some("00000000-0000-0000-0000-0000000000ff".to_owned()), voter_id: 2, voter_directory_id: real_directory, expected: RemoveRaftVoterResponse {
+        Case {
+            what: "another cluster's id",
+            request_cluster_id: Some("00000000-0000-0000-0000-0000000000ff".to_owned()),
+            voter_id: 2,
+            voter_directory_id: real_directory,
+            expected: RemoveRaftVoterResponse {
                 error_code: 104,
                 error_message: Some(format!(
                     "The given id \"00000000-0000-0000-0000-0000000000ff\" doesn't match the \
                      cluster id \"{cluster_id}\""
                 )),
                 ..Default::default()
-            } },
-Case { what: "a negative voter id", request_cluster_id: Some(cluster_id.clone()), voter_id: -1, voter_directory_id: real_directory, expected: invalid_voter.clone() },
-Case { what: "a zero directory id", request_cluster_id: Some(cluster_id.clone()), voter_id: 2, voter_directory_id: krabka_protocol::primitives::uuid::Uuid::ZERO, expected: invalid_voter },
-];
+            },
+        },
+        Case {
+            what: "a negative voter id",
+            request_cluster_id: Some(cluster_id.clone()),
+            voter_id: -1,
+            voter_directory_id: real_directory,
+            expected: invalid_voter.clone(),
+        },
+        Case {
+            what: "a zero directory id",
+            request_cluster_id: Some(cluster_id.clone()),
+            voter_id: 2,
+            voter_directory_id: krabka_protocol::primitives::uuid::Uuid::ZERO,
+            expected: invalid_voter,
+        },
+    ];
 
-    for Case { what, request_cluster_id, voter_id, voter_directory_id, expected } in cases {
+    for Case {
+        what,
+        request_cluster_id,
+        voter_id,
+        voter_directory_id,
+        expected,
+    } in cases
+    {
         let request = RemoveRaftVoterRequest {
             cluster_id: request_cluster_id,
             voter_id,
@@ -401,13 +459,44 @@ async fn updating_a_voter_needs_the_cluster_the_epoch_and_a_coherent_range() {
         want: i16,
     }
     let cases = vec![
-Case { what: "another cluster's id", request_cluster_id: Some("00000000-0000-0000-0000-0000000000ff".to_owned()), current_leader_epoch: epoch, k_raft_version_feature: range(0, 1), want: INCONSISTENT_CLUSTER_ID },
-Case { what: "an epoch ahead of the quorum's", request_cluster_id: Some(cluster_id.clone()), current_leader_epoch: epoch + 1, k_raft_version_feature: range(0, 1), want: UNKNOWN_LEADER_EPOCH },
-Case { what: "an epoch the quorum has left behind", request_cluster_id: Some(cluster_id.clone()), current_leader_epoch: epoch - 1, k_raft_version_feature: range(0, 1), want: FENCED_LEADER_EPOCH },
-Case { what: "an inverted kraft.version range", request_cluster_id: Some(cluster_id.clone()), current_leader_epoch: epoch, k_raft_version_feature: range(2, 1), want: INVALID_REQUEST },
-];
+        Case {
+            what: "another cluster's id",
+            request_cluster_id: Some("00000000-0000-0000-0000-0000000000ff".to_owned()),
+            current_leader_epoch: epoch,
+            k_raft_version_feature: range(0, 1),
+            want: INCONSISTENT_CLUSTER_ID,
+        },
+        Case {
+            what: "an epoch ahead of the quorum's",
+            request_cluster_id: Some(cluster_id.clone()),
+            current_leader_epoch: epoch + 1,
+            k_raft_version_feature: range(0, 1),
+            want: UNKNOWN_LEADER_EPOCH,
+        },
+        Case {
+            what: "an epoch the quorum has left behind",
+            request_cluster_id: Some(cluster_id.clone()),
+            current_leader_epoch: epoch - 1,
+            k_raft_version_feature: range(0, 1),
+            want: FENCED_LEADER_EPOCH,
+        },
+        Case {
+            what: "an inverted kraft.version range",
+            request_cluster_id: Some(cluster_id.clone()),
+            current_leader_epoch: epoch,
+            k_raft_version_feature: range(2, 1),
+            want: INVALID_REQUEST,
+        },
+    ];
 
-    for Case { what, request_cluster_id, current_leader_epoch, k_raft_version_feature, want } in cases {
+    for Case {
+        what,
+        request_cluster_id,
+        current_leader_epoch,
+        k_raft_version_feature,
+        want,
+    } in cases
+    {
         let request = update(
             request_cluster_id,
             current_leader_epoch,

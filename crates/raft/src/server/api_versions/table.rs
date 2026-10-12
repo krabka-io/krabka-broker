@@ -245,7 +245,10 @@ mod tests {
             decodes_whole: DecodesWhole,
         }
         let cases = [
-Case { name: "vote", api_key: api_key::VOTE, request: PeerRequest::Vote {
+            Case {
+                name: "vote",
+                api_key: api_key::VOTE,
+                request: PeerRequest::Vote {
                     cluster_id: None,
                     voter_id: NodeId(1),
                     voter_directory_id: uuid::Uuid::nil(),
@@ -255,22 +258,37 @@ Case { name: "vote", api_key: api_key::VOTE, request: PeerRequest::Vote {
                     last_epoch: 2,
                     last_offset: 9,
                     pre_vote: true,
-                }, decodes_whole: decodes_whole::<VoteRequest> },
-Case { name: "begin quorum epoch", api_key: api_key::BEGIN_QUORUM_EPOCH, request: PeerRequest::BeginQuorumEpoch {
+                },
+                decodes_whole: decodes_whole::<VoteRequest>,
+            },
+            Case {
+                name: "begin quorum epoch",
+                api_key: api_key::BEGIN_QUORUM_EPOCH,
+                request: PeerRequest::BeginQuorumEpoch {
                     cluster_id: None,
                     voter_id: NodeId(2),
                     voter_directory_id: uuid::Uuid::nil(),
                     leader_endpoints: Vec::new(),
                     leader_id: NodeId(1),
                     leader_epoch: 4,
-                }, decodes_whole: decodes_whole::<BeginQuorumEpochRequest> },
-Case { name: "end quorum epoch", api_key: api_key::END_QUORUM_EPOCH, request: PeerRequest::EndQuorumEpoch {
+                },
+                decodes_whole: decodes_whole::<BeginQuorumEpochRequest>,
+            },
+            Case {
+                name: "end quorum epoch",
+                api_key: api_key::END_QUORUM_EPOCH,
+                request: PeerRequest::EndQuorumEpoch {
                     cluster_id: None,
                     leader_id: NodeId(1),
                     leader_epoch: 4,
                     preferred_candidates: Vec::new(),
-                }, decodes_whole: decodes_whole::<EndQuorumEpochRequest> },
-Case { name: "fetch", api_key: api_key::FETCH, request: PeerRequest::Fetch {
+                },
+                decodes_whole: decodes_whole::<EndQuorumEpochRequest>,
+            },
+            Case {
+                name: "fetch",
+                api_key: api_key::FETCH,
+                request: PeerRequest::Fetch {
                     cluster_id: None,
                     max_wait_ms: 0,
                     high_watermark: -1,
@@ -279,18 +297,31 @@ Case { name: "fetch", api_key: api_key::FETCH, request: PeerRequest::Fetch {
                     fetch_epoch: 1,
                     fetch_offset: 5,
                     replica_directory_id: uuid::Uuid::nil(),
-                }, decodes_whole: decodes_whole::<FetchRequest> },
-Case { name: "fetch snapshot", api_key: api_key::FETCH_SNAPSHOT, request: PeerRequest::FetchSnapshot {
+                },
+                decodes_whole: decodes_whole::<FetchRequest>,
+            },
+            Case {
+                name: "fetch snapshot",
+                api_key: api_key::FETCH_SNAPSHOT,
+                request: PeerRequest::FetchSnapshot {
                     cluster_id: None,
                     from: NodeId(2),
                     current_leader_epoch: 1,
                     snapshot_id: (10, 1),
                     position: 0,
                     max_bytes: 32,
-                }, decodes_whole: decodes_whole::<FetchSnapshotRequest> },
-];
+                },
+                decodes_whole: decodes_whole::<FetchSnapshotRequest>,
+            },
+        ];
 
-        for Case { name: case, api_key: key, request, decodes_whole: decodes } in cases {
+        for Case {
+            name: case,
+            api_key: key,
+            request,
+            decodes_whole: decodes,
+        } in cases
+        {
             let advertised = CONTROLLER_LISTENER_APIS
                 .iter()
                 .find(|api| api.api_key == key)

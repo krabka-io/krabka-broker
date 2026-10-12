@@ -211,21 +211,57 @@ fn a_controller_stops_on_a_committed_record_it_cannot_decode() {
         want: Want,
     }
     let cases = [
-Case { case: "unknown apiKey", value: patched_topic_value(1, 99), want: Want::Stop },
-Case { case: "value version above the highest supported", value: patched_topic_value(2, 99), want: Want::Stop },
-// `krabka-metadata` checks the KIP-631 frame version from the
-// revision that versions the private records on. Before it, the
-// decoder reads the bytes and replay applies them.
-Case { case: "frame version other than 1", value: patched_topic_value(0, 2), want: Want::AsTheDecoderSays },
-Case { case: "undecodable krabka-private record", value: undecodable_private_value(), want: Want::Stop },
-Case { case: "unknown topic id", value: unknown_topic_removal_value(), want: Want::Skip },
-Case { case: "validate failure", value: unknown_topic_config_value(), want: Want::Skip },
-Case { case: "invalid reference: unknown partition of a known topic", value: unknown_partition_change_value(), want: Want::Skip },
-Case { case: "invalid value: unknown fenced value", value: unknown_fenced_change_value(), want: Want::StopWith(unknown_fenced_error()) },
-];
+        Case {
+            case: "unknown apiKey",
+            value: patched_topic_value(1, 99),
+            want: Want::Stop,
+        },
+        Case {
+            case: "value version above the highest supported",
+            value: patched_topic_value(2, 99),
+            want: Want::Stop,
+        },
+        // `krabka-metadata` checks the KIP-631 frame version from the
+        // revision that versions the private records on. Before it, the
+        // decoder reads the bytes and replay applies them.
+        Case {
+            case: "frame version other than 1",
+            value: patched_topic_value(0, 2),
+            want: Want::AsTheDecoderSays,
+        },
+        Case {
+            case: "undecodable krabka-private record",
+            value: undecodable_private_value(),
+            want: Want::Stop,
+        },
+        Case {
+            case: "unknown topic id",
+            value: unknown_topic_removal_value(),
+            want: Want::Skip,
+        },
+        Case {
+            case: "validate failure",
+            value: unknown_topic_config_value(),
+            want: Want::Skip,
+        },
+        Case {
+            case: "invalid reference: unknown partition of a known topic",
+            value: unknown_partition_change_value(),
+            want: Want::Skip,
+        },
+        Case {
+            case: "invalid value: unknown fenced value",
+            value: unknown_fenced_change_value(),
+            want: Want::StopWith(unknown_fenced_error()),
+        },
+    ];
 
     for Case { case, value, want } in cases {
-        let ElectedReplayEngine { mut engine, dir: _dir, epoch } = elected_replay_engine();
+        let ElectedReplayEngine {
+            mut engine,
+            dir: _dir,
+            epoch,
+        } = elected_replay_engine();
         let known = engine.log.log_end_offset().0;
         engine
             .log
@@ -287,7 +323,11 @@ Case { case: "invalid value: unknown fenced value", value: unknown_fenced_change
 /// A controller that has stopped on a record applies nothing after it.
 #[test]
 fn a_stopped_controller_applies_no_later_record() {
-    let ElectedReplayEngine { mut engine, dir: _dir, epoch } = elected_replay_engine();
+    let ElectedReplayEngine {
+        mut engine,
+        dir: _dir,
+        epoch,
+    } = elected_replay_engine();
     let bad_offset = engine.log.log_end_offset().0;
     engine
         .log

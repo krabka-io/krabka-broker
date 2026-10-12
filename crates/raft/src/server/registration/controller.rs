@@ -163,21 +163,54 @@ mod tests {
             accepted: bool,
         }
         let cases = vec![
-Case { what: "no features at all", features: vec![], accepted: true },
-Case { what: "one ordinary range", features: vec![feature("kraft.version", 0, 1)], accepted: true },
-Case { what: "a range that is a single point", features: vec![feature("metadata.version", 7, 7)], accepted: true },
-Case { what: "several ordinary ranges", features: vec![
+            Case {
+                what: "no features at all",
+                features: vec![],
+                accepted: true,
+            },
+            Case {
+                what: "one ordinary range",
+                features: vec![feature("kraft.version", 0, 1)],
+                accepted: true,
+            },
+            Case {
+                what: "a range that is a single point",
+                features: vec![feature("metadata.version", 7, 7)],
+                accepted: true,
+            },
+            Case {
+                what: "several ordinary ranges",
+                features: vec![
                     feature("kraft.version", 0, 1),
                     feature("group.version", 0, 1),
-                ], accepted: true },
-Case { what: "a nameless feature", features: vec![feature("", 0, 1)], accepted: false },
-Case { what: "an inverted range", features: vec![feature("kraft.version", 2, 1)], accepted: false },
-Case { what: "one good range and one inverted", features: vec![
+                ],
+                accepted: true,
+            },
+            Case {
+                what: "a nameless feature",
+                features: vec![feature("", 0, 1)],
+                accepted: false,
+            },
+            Case {
+                what: "an inverted range",
+                features: vec![feature("kraft.version", 2, 1)],
+                accepted: false,
+            },
+            Case {
+                what: "one good range and one inverted",
+                features: vec![
                     feature("kraft.version", 0, 1),
                     feature("group.version", 5, 4),
-                ], accepted: false },
-];
-        for Case { what, features, accepted } in cases {
+                ],
+                accepted: false,
+            },
+        ];
+        for Case {
+            what,
+            features,
+            accepted,
+        } in cases
+        {
             let request = request_with(features);
             let got = decode_controller_features(&request);
             check!(got.is_ok() == accepted, "{what}: {got:?}");

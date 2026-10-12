@@ -978,17 +978,42 @@ mod tests {
             want: Result<Offset, PersistedFormatError>,
         }
         let cases = [
-Case { case: "current version", contents: HIGH_WATERMARK_V0_FIXTURE, want: Ok(Offset(3)) },
-Case { case: "0.x layout", contents: b"3", want: Err(PersistedFormatError::MissingVersion) },
-Case { case: "future version", contents: b"7\n3\n", want: Err(PersistedFormatError::UnsupportedVersion {
+            Case {
+                case: "current version",
+                contents: HIGH_WATERMARK_V0_FIXTURE,
+                want: Ok(Offset(3)),
+            },
+            Case {
+                case: "0.x layout",
+                contents: b"3",
+                want: Err(PersistedFormatError::MissingVersion),
+            },
+            Case {
+                case: "future version",
+                contents: b"7\n3\n",
+                want: Err(PersistedFormatError::UnsupportedVersion {
                     found: 7,
                     min: 0,
                     max: 0,
-                }) },
-Case { case: "empty after a crash", contents: b"", want: Ok(Offset(0)) },
-Case { case: "not utf-8", contents: b"0\n\xff\n", want: Ok(Offset(0)) },
-];
-        for Case { case, contents, want } in cases {
+                }),
+            },
+            Case {
+                case: "empty after a crash",
+                contents: b"",
+                want: Ok(Offset(0)),
+            },
+            Case {
+                case: "not utf-8",
+                contents: b"0\n\xff\n",
+                want: Ok(Offset(0)),
+            },
+        ];
+        for Case {
+            case,
+            contents,
+            want,
+        } in cases
+        {
             let LogInDir { log, dir } = log_with_hwm_three();
             drop(log);
             let path = dir.path().join(HIGH_WATERMARK_FILE);

@@ -202,55 +202,139 @@ async fn vote_runs_kafka_request_checks() {
         expected: VoteResponse,
     }
     let rows = vec![
-Row { label: "foreign cluster id", request: vote_request(|r| r.cluster_id = Some(foreign_cluster_id())), expected: top_level(104) },
-Row { label: "cluster id that does not parse", request: vote_request(|r| r.cluster_id = Some("not-a-cluster".into())), expected: top_level(104) },
-Row { label: "another topic", request: vote_request(|r| r.topics[0].topic_name = "other".into()), expected: top_level(42) },
-Row { label: "partition 1", request: vote_request(|r| vote_partition(r).partition_index = 1), expected: top_level(42) },
-Row { label: "two partitions", request: vote_request(|r| {
+        Row {
+            label: "foreign cluster id",
+            request: vote_request(|r| r.cluster_id = Some(foreign_cluster_id())),
+            expected: top_level(104),
+        },
+        Row {
+            label: "cluster id that does not parse",
+            request: vote_request(|r| r.cluster_id = Some("not-a-cluster".into())),
+            expected: top_level(104),
+        },
+        Row {
+            label: "another topic",
+            request: vote_request(|r| r.topics[0].topic_name = "other".into()),
+            expected: top_level(42),
+        },
+        Row {
+            label: "partition 1",
+            request: vote_request(|r| vote_partition(r).partition_index = 1),
+            expected: top_level(42),
+        },
+        Row {
+            label: "two partitions",
+            request: vote_request(|r| {
                 let second = r.topics[0].partitions[0].clone();
                 r.topics[0].partitions.push(second);
-            }), expected: top_level(42) },
-Row { label: "two topics", request: vote_request(|r| {
+            }),
+            expected: top_level(42),
+        },
+        Row {
+            label: "two topics",
+            request: vote_request(|r| {
                 let second = r.topics[0].clone();
                 r.topics.push(second);
-            }), expected: top_level(42) },
-Row { label: "negative last offset", request: vote_request(|r| vote_partition(r).last_offset = -1), expected: vote_answer(42) },
-Row { label: "negative last epoch", request: vote_request(|r| vote_partition(r).last_offset_epoch = -1), expected: vote_answer(42) },
-Row { label: "standard vote whose last epoch is the replica epoch", request: vote_request(|r| vote_partition(r).last_offset_epoch = 6), expected: vote_answer(42) },
-Row { label: "pre-vote whose last epoch is above the replica epoch", request: vote_request(|r| {
+            }),
+            expected: top_level(42),
+        },
+        Row {
+            label: "negative last offset",
+            request: vote_request(|r| vote_partition(r).last_offset = -1),
+            expected: vote_answer(42),
+        },
+        Row {
+            label: "negative last epoch",
+            request: vote_request(|r| vote_partition(r).last_offset_epoch = -1),
+            expected: vote_answer(42),
+        },
+        Row {
+            label: "standard vote whose last epoch is the replica epoch",
+            request: vote_request(|r| vote_partition(r).last_offset_epoch = 6),
+            expected: vote_answer(42),
+        },
+        Row {
+            label: "pre-vote whose last epoch is above the replica epoch",
+            request: vote_request(|r| {
                 vote_partition(r).pre_vote = true;
                 vote_partition(r).last_offset_epoch = 7;
-            }), expected: vote_answer(42) },
-Row { label: "replica epoch below the local epoch", request: vote_request(|r| {
+            }),
+            expected: vote_answer(42),
+        },
+        Row {
+            label: "replica epoch below the local epoch",
+            request: vote_request(|r| {
                 vote_partition(r).replica_epoch = 4;
                 vote_partition(r).pre_vote = true;
-            }), expected: vote_answer(74) },
-Row { label: "negative replica id", request: vote_request(|r| vote_partition(r).replica_id = -1), expected: vote_answer(42) },
-Row { label: "voter key names another replica, from a higher epoch", request: vote_request(|r| r.voter_id = 2), expected: vote_answer_after_stepping_down_to_epoch_6(125) },
-Row { label: "voter key names replica 0 which is not local, from a higher epoch", request: vote_request(|r| r.voter_id = 0), expected: vote_answer_after_stepping_down_to_epoch_6(125) },
-Row { label: "voter key names another replica, at the local epoch", request: vote_request(|r| {
+            }),
+            expected: vote_answer(74),
+        },
+        Row {
+            label: "negative replica id",
+            request: vote_request(|r| vote_partition(r).replica_id = -1),
+            expected: vote_answer(42),
+        },
+        Row {
+            label: "voter key names another replica, from a higher epoch",
+            request: vote_request(|r| r.voter_id = 2),
+            expected: vote_answer_after_stepping_down_to_epoch_6(125),
+        },
+        Row {
+            label: "voter key names replica 0 which is not local, from a higher epoch",
+            request: vote_request(|r| r.voter_id = 0),
+            expected: vote_answer_after_stepping_down_to_epoch_6(125),
+        },
+        Row {
+            label: "voter key names another replica, at the local epoch",
+            request: vote_request(|r| {
                 r.voter_id = 2;
                 vote_partition(r).pre_vote = true;
                 vote_partition(r).replica_epoch = 5;
-            }), expected: vote_answer(125) },
-Row { label: "pre-vote from node 0 is valid", request: vote_request(|r| {
+            }),
+            expected: vote_answer(125),
+        },
+        Row {
+            label: "pre-vote from node 0 is valid",
+            request: vote_request(|r| {
                 vote_partition(r).replica_id = 0;
                 vote_partition(r).pre_vote = true;
                 vote_partition(r).replica_epoch = 5;
-            }), expected: vote_answer(0) },
-Row { label: "pre-vote to a follower that has not fetched from its leader", request: vote_request(|r| {
+            }),
+            expected: vote_answer(0),
+        },
+        Row {
+            label: "pre-vote to a follower that has not fetched from its leader",
+            request: vote_request(|r| {
                 vote_partition(r).pre_vote = true;
                 vote_partition(r).replica_epoch = 5;
-            }), expected: vote_answer_granted() },
-Row { label: "pre-vote with no voter key", request: vote_request(|r| {
+            }),
+            expected: vote_answer_granted(),
+        },
+        Row {
+            label: "pre-vote with no voter key",
+            request: vote_request(|r| {
                 r.voter_id = -1;
                 vote_partition(r).pre_vote = true;
                 vote_partition(r).replica_epoch = 5;
-            }), expected: vote_answer_granted() },
-Row { label: "standard vote at the local epoch while a leader is known", request: vote_request(|r| vote_partition(r).replica_epoch = 5), expected: vote_answer(0) },
-];
-    for Row { label, request, expected } in rows {
-        let EngineInDir { mut engine, dir: _dir } = follower_of_2_in_epoch_5();
+            }),
+            expected: vote_answer_granted(),
+        },
+        Row {
+            label: "standard vote at the local epoch while a leader is known",
+            request: vote_request(|r| vote_partition(r).replica_epoch = 5),
+            expected: vote_answer(0),
+        },
+    ];
+    for Row {
+        label,
+        request,
+        expected,
+    } in rows
+    {
+        let EngineInDir {
+            mut engine,
+            dir: _dir,
+        } = follower_of_2_in_epoch_5();
         let body = deliver(&mut engine, vote, encode(&request, VOTE_VERSION)).expect("an answer");
         let response = VoteResponse::decode(&mut &body[..], VOTE_VERSION).expect("decode");
         check!(response == expected, "{label}");
@@ -289,7 +373,10 @@ async fn vote_grant_names_the_new_epoch_and_no_leader() {
 /// one.
 #[tokio::test]
 async fn vote_refuses_a_voter_key_with_another_directory_id() {
-    let EngineInDir { mut engine, dir: _dir } = engine_with_local_directory();
+    let EngineInDir {
+        mut engine,
+        dir: _dir,
+    } = engine_with_local_directory();
 
     for (label, directory_id, want_error) in [
         ("another directory", Uuid::from_u128(12), 125),
@@ -312,7 +399,10 @@ async fn vote_refuses_a_voter_key_with_another_directory_id() {
 
 #[tokio::test]
 async fn a_vote_body_that_does_not_decode_gets_no_answer() {
-    let EngineInDir { mut engine, dir: _dir } = follower_of_2_in_epoch_5();
+    let EngineInDir {
+        mut engine,
+        dir: _dir,
+    } = follower_of_2_in_epoch_5();
     let body = encode(&vote_request(|_| {}), VOTE_VERSION);
     check!(deliver(&mut engine, vote, body.slice(..body.len() - 1)).is_none());
 }
@@ -371,19 +461,55 @@ async fn begin_quorum_epoch_runs_kafka_request_checks() {
         expected: BeginQuorumEpochResponse,
     }
     let rows = vec![
-Row { label: "foreign cluster id", request: begin_request(|r| r.cluster_id = Some(foreign_cluster_id())), expected: top_level(104) },
-Row { label: "another topic", request: begin_request(|r| r.topics[0].topic_name = "other".into()), expected: top_level(42) },
-Row { label: "two partitions", request: begin_request(|r| {
+        Row {
+            label: "foreign cluster id",
+            request: begin_request(|r| r.cluster_id = Some(foreign_cluster_id())),
+            expected: top_level(104),
+        },
+        Row {
+            label: "another topic",
+            request: begin_request(|r| r.topics[0].topic_name = "other".into()),
+            expected: top_level(42),
+        },
+        Row {
+            label: "two partitions",
+            request: begin_request(|r| {
                 let dup_part = r.topics[0].partitions[0].clone();
                 r.topics[0].partitions.push(dup_part);
-            }), expected: top_level(42) },
-Row { label: "leader epoch below the local epoch", request: begin_request(|r| r.topics[0].partitions[0].leader_epoch = 4), expected: begin_answer(74, 2, 5) },
-Row { label: "negative leader id", request: begin_request(|r| r.topics[0].partitions[0].leader_id = -1), expected: begin_answer(42, 2, 5) },
-Row { label: "voter key names another replica, after the transition", request: begin_request(|r| r.voter_id = 2), expected: begin_answer(125, 3, 6) },
-Row { label: "a new leader", request: begin_request(|_| {}), expected: begin_answer(0, 3, 6) },
-];
-    for Row { label, request, expected } in rows {
-        let EngineInDir { mut engine, dir: _dir } = follower_of_2_in_epoch_5();
+            }),
+            expected: top_level(42),
+        },
+        Row {
+            label: "leader epoch below the local epoch",
+            request: begin_request(|r| r.topics[0].partitions[0].leader_epoch = 4),
+            expected: begin_answer(74, 2, 5),
+        },
+        Row {
+            label: "negative leader id",
+            request: begin_request(|r| r.topics[0].partitions[0].leader_id = -1),
+            expected: begin_answer(42, 2, 5),
+        },
+        Row {
+            label: "voter key names another replica, after the transition",
+            request: begin_request(|r| r.voter_id = 2),
+            expected: begin_answer(125, 3, 6),
+        },
+        Row {
+            label: "a new leader",
+            request: begin_request(|_| {}),
+            expected: begin_answer(0, 3, 6),
+        },
+    ];
+    for Row {
+        label,
+        request,
+        expected,
+    } in rows
+    {
+        let EngineInDir {
+            mut engine,
+            dir: _dir,
+        } = follower_of_2_in_epoch_5();
         let body =
             deliver(&mut engine, begin, encode(&request, QUORUM_EPOCH_VERSION)).expect("an answer");
         let response =
@@ -394,7 +520,10 @@ Row { label: "a new leader", request: begin_request(|_| {}), expected: begin_ans
 
 #[tokio::test]
 async fn a_begin_quorum_epoch_body_that_does_not_decode_gets_no_answer() {
-    let EngineInDir { mut engine, dir: _dir } = follower_of_2_in_epoch_5();
+    let EngineInDir {
+        mut engine,
+        dir: _dir,
+    } = follower_of_2_in_epoch_5();
     check!(deliver(&mut engine, begin, bytes::Bytes::from_static(&[0xff])).is_none());
 }
 
@@ -462,17 +591,72 @@ async fn end_quorum_epoch_runs_kafka_request_checks() {
         role: &'static str,
     }
     let rows = vec![
-Row { label: "foreign cluster id", request: end_request(|r| r.cluster_id = Some(foreign_cluster_id())), expected: top_level(104), role: "Follower" },
-Row { label: "partition 1", request: end_request(|r| r.topics[0].partitions[0].partition_index = 1), expected: top_level(42), role: "Follower" },
-Row { label: "leader epoch below the local epoch", request: end_request(|r| r.topics[0].partitions[0].leader_epoch = 4), expected: answer(74, 2), role: "Follower" },
-Row { label: "negative leader id", request: end_request(|r| r.topics[0].partitions[0].leader_id = -1), expected: answer(42, 2), role: "Follower" },
-Row { label: "first preferred candidate elects at once", request: end_request(|r| r.topics[0].partitions[0].preferred_candidates = candidates(&[1, 3])), expected: answer(0, -1), role: "Prospective" },
-Row { label: "no preferred candidates elects at once", request: end_request(|_| {}), expected: answer(0, -1), role: "Prospective" },
-Row { label: "second preferred candidate waits", request: end_request(|r| r.topics[0].partitions[0].preferred_candidates = candidates(&[3, 1])), expected: answer(0, -1), role: "Unattached" },
-Row { label: "a replica the list does not name waits", request: end_request(|r| r.topics[0].partitions[0].preferred_candidates = candidates(&[3])), expected: answer(0, -1), role: "Unattached" },
-];
-    for Row { label, request, expected, role } in rows {
-        let EngineInDir { mut engine, dir: _dir } = follower_of_2_in_epoch_5();
+        Row {
+            label: "foreign cluster id",
+            request: end_request(|r| r.cluster_id = Some(foreign_cluster_id())),
+            expected: top_level(104),
+            role: "Follower",
+        },
+        Row {
+            label: "partition 1",
+            request: end_request(|r| r.topics[0].partitions[0].partition_index = 1),
+            expected: top_level(42),
+            role: "Follower",
+        },
+        Row {
+            label: "leader epoch below the local epoch",
+            request: end_request(|r| r.topics[0].partitions[0].leader_epoch = 4),
+            expected: answer(74, 2),
+            role: "Follower",
+        },
+        Row {
+            label: "negative leader id",
+            request: end_request(|r| r.topics[0].partitions[0].leader_id = -1),
+            expected: answer(42, 2),
+            role: "Follower",
+        },
+        Row {
+            label: "first preferred candidate elects at once",
+            request: end_request(|r| {
+                r.topics[0].partitions[0].preferred_candidates = candidates(&[1, 3])
+            }),
+            expected: answer(0, -1),
+            role: "Prospective",
+        },
+        Row {
+            label: "no preferred candidates elects at once",
+            request: end_request(|_| {}),
+            expected: answer(0, -1),
+            role: "Prospective",
+        },
+        Row {
+            label: "second preferred candidate waits",
+            request: end_request(|r| {
+                r.topics[0].partitions[0].preferred_candidates = candidates(&[3, 1])
+            }),
+            expected: answer(0, -1),
+            role: "Unattached",
+        },
+        Row {
+            label: "a replica the list does not name waits",
+            request: end_request(|r| {
+                r.topics[0].partitions[0].preferred_candidates = candidates(&[3])
+            }),
+            expected: answer(0, -1),
+            role: "Unattached",
+        },
+    ];
+    for Row {
+        label,
+        request,
+        expected,
+        role,
+    } in rows
+    {
+        let EngineInDir {
+            mut engine,
+            dir: _dir,
+        } = follower_of_2_in_epoch_5();
         let body =
             deliver(&mut engine, end, encode(&request, QUORUM_EPOCH_VERSION)).expect("an answer");
         let response =
@@ -627,21 +811,32 @@ async fn fetch_snapshot_runs_kafka_request_checks() {
         expected: FetchSnapshotResponse,
     }
     let rows = vec![
-Row { label: "foreign cluster id", request: fetch_snapshot_request(|r, _| r.cluster_id = Some(foreign_cluster_id())), expected: top_level(104) },
-Row { label: "two partitions", request: fetch_snapshot_request(|r, p| {
+        Row {
+            label: "foreign cluster id",
+            request: fetch_snapshot_request(|r, _| r.cluster_id = Some(foreign_cluster_id())),
+            expected: top_level(104),
+        },
+        Row {
+            label: "two partitions",
+            request: fetch_snapshot_request(|r, p| {
                 r.topics = vec![fs_req::TopicSnapshot {
                     name: METADATA_TOPIC.into(),
                     partitions: vec![p.clone(), p.clone()],
                     ..Default::default()
                 }];
-            }), expected: top_level(42) },
-Row { label: "another topic", request: fetch_snapshot_request(|r, p| {
+            }),
+            expected: top_level(42),
+        },
+        Row {
+            label: "another topic",
+            request: fetch_snapshot_request(|r, p| {
                 r.topics = vec![fs_req::TopicSnapshot {
                     name: "other".into(),
                     partitions: vec![p.clone()],
                     ..Default::default()
                 }];
-            }), expected: fetch_snapshot_answer(
+            }),
+            expected: fetch_snapshot_answer(
                 AnsweredPartition {
                     topic: "other",
                     index: 0,
@@ -649,8 +844,12 @@ Row { label: "another topic", request: fetch_snapshot_request(|r, p| {
                 3,
                 None,
                 None,
-            ) },
-Row { label: "partition 1", request: fetch_snapshot_request(|_, p| p.partition = 1), expected: fetch_snapshot_answer(
+            ),
+        },
+        Row {
+            label: "partition 1",
+            request: fetch_snapshot_request(|_, p| p.partition = 1),
+            expected: fetch_snapshot_answer(
                 AnsweredPartition {
                     topic: METADATA_TOPIC,
                     index: 1,
@@ -658,29 +857,80 @@ Row { label: "partition 1", request: fetch_snapshot_request(|_, p| p.partition =
                 3,
                 None,
                 None,
-            ) },
-Row { label: "leader epoch below the local epoch", request: fetch_snapshot_request(|_, p| p.current_leader_epoch = 0), expected: fetch_snapshot_answer(metadata, 74, leader, None) },
-Row { label: "leader epoch above the local epoch", request: fetch_snapshot_request(|_, p| p.current_leader_epoch = 2), expected: fetch_snapshot_answer(metadata, 75, leader, None) },
-Row { label: "unknown snapshot id", request: fetch_snapshot_request(|_, p| p.snapshot_id.end_offset = 11), expected: fetch_snapshot_answer(metadata, 98, leader, None) },
-Row { label: "bootstrap snapshot id", request: fetch_snapshot_request(|_, p| {
+            ),
+        },
+        Row {
+            label: "leader epoch below the local epoch",
+            request: fetch_snapshot_request(|_, p| p.current_leader_epoch = 0),
+            expected: fetch_snapshot_answer(metadata, 74, leader, None),
+        },
+        Row {
+            label: "leader epoch above the local epoch",
+            request: fetch_snapshot_request(|_, p| p.current_leader_epoch = 2),
+            expected: fetch_snapshot_answer(metadata, 75, leader, None),
+        },
+        Row {
+            label: "unknown snapshot id",
+            request: fetch_snapshot_request(|_, p| p.snapshot_id.end_offset = 11),
+            expected: fetch_snapshot_answer(metadata, 98, leader, None),
+        },
+        Row {
+            label: "bootstrap snapshot id",
+            request: fetch_snapshot_request(|_, p| {
                 p.snapshot_id.end_offset = 0;
                 p.snapshot_id.epoch = 0;
-            }), expected: fetch_snapshot_answer(metadata, 98, leader, None) },
-Row { label: "negative position", request: fetch_snapshot_request(|_, p| p.position = -1), expected: fetch_snapshot_answer(metadata, 99, leader, None) },
-Row { label: "position at the size", request: fetch_snapshot_request(|_, p| p.position = 10), expected: fetch_snapshot_answer(metadata, 99, leader, None) },
-Row { label: "last byte", request: fetch_snapshot_request(|_, p| p.position = 9), expected: fetch_snapshot_answer(metadata, 0, leader, Some(AnsweredChunk {
+            }),
+            expected: fetch_snapshot_answer(metadata, 98, leader, None),
+        },
+        Row {
+            label: "negative position",
+            request: fetch_snapshot_request(|_, p| p.position = -1),
+            expected: fetch_snapshot_answer(metadata, 99, leader, None),
+        },
+        Row {
+            label: "position at the size",
+            request: fetch_snapshot_request(|_, p| p.position = 10),
+            expected: fetch_snapshot_answer(metadata, 99, leader, None),
+        },
+        Row {
+            label: "last byte",
+            request: fetch_snapshot_request(|_, p| p.position = 9),
+            expected: fetch_snapshot_answer(
+                metadata,
+                0,
+                leader,
+                Some(AnsweredChunk {
                     size: 10,
                     position: 9,
                     bytes: b"9",
-                })) },
-Row { label: "first chunk", request: fetch_snapshot_request(|_, _| {}), expected: fetch_snapshot_answer(metadata, 0, leader, Some(AnsweredChunk {
+                }),
+            ),
+        },
+        Row {
+            label: "first chunk",
+            request: fetch_snapshot_request(|_, _| {}),
+            expected: fetch_snapshot_answer(
+                metadata,
+                0,
+                leader,
+                Some(AnsweredChunk {
                     size: 10,
                     position: 0,
                     bytes: b"0123",
-                })) },
-];
-    for Row { label, request, expected } in rows {
-        let EngineInDir { mut engine, dir: _dir } = single_voter_leader_with_checkpoints();
+                }),
+            ),
+        },
+    ];
+    for Row {
+        label,
+        request,
+        expected,
+    } in rows
+    {
+        let EngineInDir {
+            mut engine,
+            dir: _dir,
+        } = single_voter_leader_with_checkpoints();
         let body = deliver(
             &mut engine,
             fetch_snapshot,
@@ -694,7 +944,10 @@ Row { label: "first chunk", request: fetch_snapshot_request(|_, _| {}), expected
 /// A follower refuses `FetchSnapshot` at its own epoch and names the leader.
 #[tokio::test]
 async fn fetch_snapshot_to_a_follower_names_the_leader() {
-    let EngineInDir { mut engine, dir: _dir } = follower_of_2_in_epoch_5();
+    let EngineInDir {
+        mut engine,
+        dir: _dir,
+    } = follower_of_2_in_epoch_5();
     let request = fetch_snapshot_request(|_, p| p.current_leader_epoch = 5);
 
     let body = deliver(
@@ -744,7 +997,10 @@ async fn a_leader_from_the_adjacent_voter_set_keeps_its_endpoint() {
 
 #[tokio::test]
 async fn end_quorum_epoch_matches_candidate_directory_id() {
-    let EngineInDir { mut engine, dir: _dir } = engine_with_local_directory();
+    let EngineInDir {
+        mut engine,
+        dir: _dir,
+    } = engine_with_local_directory();
     engine.on_event(Event::ReceiveBeginQuorumEpoch {
         leader_id: NodeId(2),
         leader_epoch: 5,

@@ -1052,16 +1052,37 @@ mod tests {
             expected: Vec<&'static str>,
         }
         let cases = [
-Case { case: "new topic", records: vec![topic("new", 2)], expected: vec!["new"] },
-Case { case: "existing topic", records: vec![topic("existing", 1)], expected: vec![] },
-Case { case: "name repeated in one batch", records: vec![topic("new", 2), topic("new", 3), topic("other", 4)], expected: vec!["new", "other"] },
-Case { case: "no topic records", records: vec![MetadataRecord::V1DeleteTopic(
+            Case {
+                case: "new topic",
+                records: vec![topic("new", 2)],
+                expected: vec!["new"],
+            },
+            Case {
+                case: "existing topic",
+                records: vec![topic("existing", 1)],
+                expected: vec![],
+            },
+            Case {
+                case: "name repeated in one batch",
+                records: vec![topic("new", 2), topic("new", 3), topic("other", 4)],
+                expected: vec!["new", "other"],
+            },
+            Case {
+                case: "no topic records",
+                records: vec![MetadataRecord::V1DeleteTopic(
                     krabka_metadata::DeleteTopicRecord {
                         name: "existing".into(),
                     },
-                )], expected: vec![] },
-];
-        for Case { case, records, expected } in cases {
+                )],
+                expected: vec![],
+            },
+        ];
+        for Case {
+            case,
+            records,
+            expected,
+        } in cases
+        {
             assert2::check!(
                 created_topic_names(&image, &records) == expected,
                 "case: {case}"

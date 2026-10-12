@@ -352,19 +352,49 @@ mod tests {
         let mut cases: Vec<Case> = Vec::new();
         for version in -1..=vote_request::MAX_VERSION {
             let body = encoded(&vote, version.max(0));
-            cases.push(Case { name: "Vote", key: api_key::VOTE, version, body, decodes: decodes_whole::<VoteResponse> });
+            cases.push(Case {
+                name: "Vote",
+                key: api_key::VOTE,
+                version,
+                body,
+                decodes: decodes_whole::<VoteResponse>,
+            });
         }
         for version in -1..=begin_quorum_epoch_request::MAX_VERSION {
-            cases.push(Case { name: "BeginQuorumEpoch", key: api_key::BEGIN_QUORUM_EPOCH, version, body: encoded(&begin, version.max(0)), decodes: decodes_whole::<BeginQuorumEpochResponse> });
+            cases.push(Case {
+                name: "BeginQuorumEpoch",
+                key: api_key::BEGIN_QUORUM_EPOCH,
+                version,
+                body: encoded(&begin, version.max(0)),
+                decodes: decodes_whole::<BeginQuorumEpochResponse>,
+            });
         }
         for version in -1..=end_quorum_epoch_request::MAX_VERSION {
-            cases.push(Case { name: "EndQuorumEpoch", key: api_key::END_QUORUM_EPOCH, version, body: encoded(&end, version.max(0)), decodes: decodes_whole::<EndQuorumEpochResponse> });
+            cases.push(Case {
+                name: "EndQuorumEpoch",
+                key: api_key::END_QUORUM_EPOCH,
+                version,
+                body: encoded(&end, version.max(0)),
+                decodes: decodes_whole::<EndQuorumEpochResponse>,
+            });
         }
         for version in -1..=fetch_snapshot_request::MAX_VERSION {
-            cases.push(Case { name: "FetchSnapshot", key: api_key::FETCH_SNAPSHOT, version, body: encoded(&snapshot, version.max(0)), decodes: decodes_whole::<FetchSnapshotResponse> });
+            cases.push(Case {
+                name: "FetchSnapshot",
+                key: api_key::FETCH_SNAPSHOT,
+                version,
+                body: encoded(&snapshot, version.max(0)),
+                decodes: decodes_whole::<FetchSnapshotResponse>,
+            });
         }
         for version in fetch_request::MIN_VERSION - 1..=fetch_request::MAX_VERSION {
-            cases.push(Case { name: "Fetch", key: api_key::FETCH, version, body: encoded(&fetch, version.max(fetch_request::MIN_VERSION)), decodes: decodes_whole::<FetchResponse> });
+            cases.push(Case {
+                name: "Fetch",
+                key: api_key::FETCH,
+                version,
+                body: encoded(&fetch, version.max(fetch_request::MIN_VERSION)),
+                decodes: decodes_whole::<FetchResponse>,
+            });
         }
 
         for Case {

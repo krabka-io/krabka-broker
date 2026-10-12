@@ -77,10 +77,16 @@ fn recorded_sender(address: std::net::SocketAddr) -> RecordedSender {
 async fn answer_fetch_connection(listener: &tokio::net::TcpListener, answer: &[u8]) {
     let (mut stream, _) = listener.accept().await.unwrap();
     let api_versions = read_frame(&mut stream).await;
-    let RequestHeader { correlation_id: correlation, .. } = parse_request_header(&api_versions);
+    let RequestHeader {
+        correlation_id: correlation,
+        ..
+    } = parse_request_header(&api_versions);
     write_response_frame(&mut stream, correlation, false, &api_versions_response_v0()).await;
     let request = read_frame(&mut stream).await;
-    let RequestHeader { correlation_id: correlation, .. } = parse_request_header(&request);
+    let RequestHeader {
+        correlation_id: correlation,
+        ..
+    } = parse_request_header(&request);
     write_response_frame(&mut stream, correlation, true, answer).await;
 }
 
@@ -240,14 +246,57 @@ async fn probe_reports_kraft_support_only_within_the_advertised_range() {
         supported: bool,
     }
     let cases = [
-Case { what: "the version at the bottom of the range", feature: KRAFT, min: 1, max: 3, finalized: 1, supported: true },
-Case { what: "the version inside the range", feature: KRAFT, min: 1, max: 3, finalized: 2, supported: true },
-Case { what: "the version at the top of the range", feature: KRAFT, min: 1, max: 3, finalized: 3, supported: true },
-Case { what: "a version above the range", feature: KRAFT, min: 1, max: 3, finalized: 4, supported: false },
-Case { what: "some other feature entirely", feature: "metadata.version", min: 1, max: 3, finalized: 2, supported: false },
-];
+        Case {
+            what: "the version at the bottom of the range",
+            feature: KRAFT,
+            min: 1,
+            max: 3,
+            finalized: 1,
+            supported: true,
+        },
+        Case {
+            what: "the version inside the range",
+            feature: KRAFT,
+            min: 1,
+            max: 3,
+            finalized: 2,
+            supported: true,
+        },
+        Case {
+            what: "the version at the top of the range",
+            feature: KRAFT,
+            min: 1,
+            max: 3,
+            finalized: 3,
+            supported: true,
+        },
+        Case {
+            what: "a version above the range",
+            feature: KRAFT,
+            min: 1,
+            max: 3,
+            finalized: 4,
+            supported: false,
+        },
+        Case {
+            what: "some other feature entirely",
+            feature: "metadata.version",
+            min: 1,
+            max: 3,
+            finalized: 2,
+            supported: false,
+        },
+    ];
 
-    for Case { what, feature, min, max, finalized, supported } in cases {
+    for Case {
+        what,
+        feature,
+        min,
+        max,
+        finalized,
+        supported,
+    } in cases
+    {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let body = response_with_feature(feature, min, max);
@@ -256,11 +305,20 @@ Case { what: "some other feature entirely", feature: "metadata.version", min: 1,
             let (mut stream, _) = listener.accept().await.unwrap();
             // The dialer's own handshake first, then the probe's request.
             let handshake = read_frame(&mut stream).await;
-            let RequestHeader { correlation_id: corr, .. } = parse_request_header(&handshake);
+            let RequestHeader {
+                correlation_id: corr,
+                ..
+            } = parse_request_header(&handshake);
             write_response_frame(&mut stream, corr, false, &api_versions_response_v0()).await;
 
             let probe = read_frame(&mut stream).await;
-            let RequestHeader { api_key: key, version, correlation_id: corr, client_id, body: probe_body } = parse_request_header(&probe);
+            let RequestHeader {
+                api_key: key,
+                version,
+                correlation_id: corr,
+                client_id,
+                body: probe_body,
+            } = parse_request_header(&probe);
             assert2::assert!(key == ApiKey(18));
             assert2::assert!(client_id == "krabka-voter-probe");
             let mut cur = probe_body;
@@ -270,7 +328,10 @@ Case { what: "some other feature entirely", feature: "metadata.version", min: 1,
             write_response_frame(&mut stream, corr, false, &body).await;
         });
 
-        let RecordedSender { sender, options: recorded_options } = recorded_sender(addr);
+        let RecordedSender {
+            sender,
+            options: recorded_options,
+        } = recorded_sender(addr);
         let got = PeerSender::probe_kraft_version(&sender, &addr.to_string(), finalized)
             .await
             .expect("probe");
@@ -301,12 +362,24 @@ async fn real_peer_sender_sends_expected_api_version_client_id_and_body() {
         let (mut stream, _) = listener.accept().await.unwrap();
 
         let api_versions = read_frame(&mut stream).await;
-        let RequestHeader { api_key: key, version: _version, correlation_id: corr, client_id, body: _body } = parse_request_header(&api_versions);
+        let RequestHeader {
+            api_key: key,
+            version: _version,
+            correlation_id: corr,
+            client_id,
+            body: _body,
+        } = parse_request_header(&api_versions);
         assert2::assert!((key, client_id.as_str()) == (ApiKey(18), "raft-client"));
         write_response_frame(&mut stream, corr, false, &api_versions_response_v0()).await;
 
         let request = read_frame(&mut stream).await;
-        let RequestHeader { api_key: key, version, correlation_id: corr, client_id, body } = parse_request_header(&request);
+        let RequestHeader {
+            api_key: key,
+            version,
+            correlation_id: corr,
+            client_id,
+            body,
+        } = parse_request_header(&request);
         observed_tx
             .send((key, version, client_id, bytes::Bytes::copy_from_slice(body)))
             .await
@@ -314,7 +387,10 @@ async fn real_peer_sender_sends_expected_api_version_client_id_and_body() {
         write_response_frame(&mut stream, corr, true, b"raft-response").await;
     });
 
-    let RecordedSender { sender, options: recorded_options } = recorded_sender(addr);
+    let RecordedSender {
+        sender,
+        options: recorded_options,
+    } = recorded_sender(addr);
     assert2::assert!(sender.dispatch_queue_capacity.get() == 7);
     assert2::assert!(sender.frame_max.size() == krabka_units::kibibytes(32));
     let response = sender
