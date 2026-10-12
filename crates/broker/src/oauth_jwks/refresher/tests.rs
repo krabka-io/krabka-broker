@@ -38,52 +38,52 @@ async fn send_signal_until(
     await_until(description, condition).await;
 }
 
-#[tokio::test]
-async fn refresher_populates_handle_then_stops_on_shutdown() {
-    let (addr, srv_shutdown) = serve_jwks(JWKS_BODY).await;
-    let handle = JwksHandle::default();
-    assert!(handle.load().is_empty());
-    let shutdown = CancellationToken::new();
-    let refresher = test_refresher()
-        .handle(handle.clone())
-        .shutdown(shutdown.clone())
-        .endpoint(format!("http://{addr}/jwks"))
-        .timer(Arc::new(StdTimer::new()))
-        .call();
-    let task = tokio::spawn(refresher.run());
-
-    // Poll until the immediate first fetch lands.
-    check_first_fetch_and_stop(
-        "first JWKS fetch populates handle",
-        &handle,
-        &shutdown,
-        task,
-        &srv_shutdown,
-    )
-    .await;
+#[derive(Clone, Copy)]
+enum SuccessfulJwksTransport {
+    Http,
+    TrustedHttps,
 }
 
-#[tokio::test]
-async fn refresher_fetches_jwks_over_https_with_custom_trust() {
-    let (addr, srv_shutdown, ca_path) = serve_jwks_https(JWKS_BODY).await;
+#[yare::parameterized(
+    http = { SuccessfulJwksTransport::Http },
+    trusted_https = { SuccessfulJwksTransport::TrustedHttps },
+)]
+#[test_macro(tokio::test)]
+async fn refresher_populates_handle_over_supported_transports(transport: SuccessfulJwksTransport) {
+    let (endpoint, srv_shutdown, tls_trust) = match transport {
+        SuccessfulJwksTransport::Http => {
+            let (addr, srv_shutdown) = serve_jwks(JWKS_BODY).await;
+            (format!("http://{addr}/jwks"), srv_shutdown, None)
+        }
+        SuccessfulJwksTransport::TrustedHttps => {
+            let (addr, srv_shutdown, ca_path) = serve_jwks_https(JWKS_BODY).await;
+            (
+                format!("https://127.0.0.1:{}/jwks", addr.port()),
+                srv_shutdown,
+                Some(ca_path),
+            )
+        }
+    };
     let handle = JwksHandle::default();
+    assert2::assert!(handle.load().is_empty());
     let shutdown = CancellationToken::new();
     let refresher = test_refresher()
         .handle(handle.clone())
         .shutdown(shutdown.clone())
-        .endpoint(format!("https://127.0.0.1:{}/jwks", addr.port()))
-        .maybe_tls_trust(Some(ca_path))
-        .timer(dormant_timer())
+        .endpoint(endpoint)
+        .maybe_tls_trust(tls_trust)
+        .timer(match transport {
+            SuccessfulJwksTransport::Http => Arc::new(StdTimer::new()),
+            SuccessfulJwksTransport::TrustedHttps => dormant_timer(),
+        })
         .call();
     let task = tokio::spawn(refresher.run());
-    check_first_fetch_and_stop(
-        "first HTTPS JWKS fetch populates handle",
-        &handle,
-        &shutdown,
-        task,
-        &srv_shutdown,
-    )
-    .await;
+
+    let label = match transport {
+        SuccessfulJwksTransport::Http => "first JWKS fetch populates handle",
+        SuccessfulJwksTransport::TrustedHttps => "first HTTPS JWKS fetch populates handle",
+    };
+    check_first_fetch_and_stop(label, &handle, &shutdown, task, &srv_shutdown).await;
 }
 
 #[tokio::test]
