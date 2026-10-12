@@ -343,7 +343,7 @@ pub(crate) fn classic_group_refusal(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::{collections::HashSet, net::SocketAddr};
 
     use assert2::{assert, check};
     use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
@@ -355,20 +355,28 @@ mod tests {
         test_support::{allow_acl, peer},
     };
 
+    fn test_context<'a>(
+        principal: &'a krabka_security::Principal,
+        peer: &'a SocketAddr,
+        client_id: &'a str,
+    ) -> RequestContext<'a> {
+        RequestContext::new(
+            principal,
+            peer,
+            client_id,
+            "connection-a",
+            false,
+            "PLAINTEXT",
+        )
+    }
+
     #[test]
     fn acl_denied_reports_simple_acl_denial() {
         let authorizer = SimpleAclAuthorizer::new(HashSet::new());
         let image = MetadataImage::new(uuid::Uuid::nil());
         let principal = principal();
         let peer = peer();
-        let ctx = RequestContext::new(
-            &principal,
-            &peer,
-            "client-a",
-            "connection-a",
-            false,
-            "PLAINTEXT",
-        );
+        let ctx = test_context(&principal, &peer, "client-a");
 
         assert!(acl_denied(
             &authorizer,
@@ -388,14 +396,7 @@ mod tests {
         let image = MetadataImage::new(uuid::Uuid::nil());
         let principal = principal();
         let peer = peer();
-        let ctx = RequestContext::new(
-            &principal,
-            &peer,
-            "krabka-guard",
-            "connection-a",
-            false,
-            "PLAINTEXT",
-        );
+        let ctx = test_context(&principal, &peer, "krabka-guard");
 
         for (label, super_users, denied) in [
             ("an empty acl store denies by default", Vec::new(), true),
