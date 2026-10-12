@@ -416,14 +416,13 @@ async fn refresher_passes_ignore_key_use_through_to_jwks_parser() {
     srv_shutdown.cancel();
 }
 
-#[tokio::test]
-async fn refresher_stops_without_fetching_when_the_first_deadline_is_refused() {
-    check_first_deadline_failure(TimerFailure::Registration).await;
-}
-
-#[tokio::test]
-async fn refresher_stops_when_the_first_deadline_is_armed_but_never_completes() {
-    check_first_deadline_failure(TimerFailure::Completion).await;
+#[yare::parameterized(
+    registration_refused = { TimerFailure::Registration },
+    completion_failed = { TimerFailure::Completion },
+)]
+#[test_macro(tokio::test)]
+async fn refresher_stops_without_fetching_when_first_deadline_fails(failure: TimerFailure) {
+    check_first_deadline_failure(failure).await;
 }
 
 fn dead_timer_refresher(
