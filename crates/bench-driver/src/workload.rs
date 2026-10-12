@@ -595,7 +595,6 @@ fn build_samples(
 /// Without this the JSON looks like an ordinary run and the reader has to
 /// guess whether the schedule ran at all.
 /// Spawn one producer task per `scenario.producers`.
-///
 fn spawn_producers(
     tasks: &mut JoinSet<ProducerOut>,
     scenario: &Scenario,

@@ -11,8 +11,7 @@ use krabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicRecord};
 use uuid::Uuid;
 
 use crate::{
-    barrier::marker::BarrierMarker,
-    barrier::state::TargetPartition,
+    barrier::{marker::BarrierMarker, state::TargetPartition},
     log_dir::partition_dir,
     partition_registry::PartitionRegistry,
     test_support::{FakeMetadataSource, StandalonePartitionSetup, spawn_standalone_partition},

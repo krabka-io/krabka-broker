@@ -7,13 +7,12 @@
 //! installed at all. Once those hold, it hands the group's topics to `rows`.
 
 use krabka_metadata::AclOperation;
+#[cfg(test)]
+use krabka_protocol::owned::describe_share_group_offsets_request::DescribeShareGroupOffsetsRequestTopic;
 use krabka_protocol::owned::{
     describe_share_group_offsets_request::DescribeShareGroupOffsetsRequestGroup,
     describe_share_group_offsets_response::DescribeShareGroupOffsetsResponseGroup,
 };
-
-#[cfg(test)]
-use krabka_protocol::owned::describe_share_group_offsets_request::DescribeShareGroupOffsetsRequestTopic;
 
 use super::{
     end_offsets::NetworkLatestOffsets,

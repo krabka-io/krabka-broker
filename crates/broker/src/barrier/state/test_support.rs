@@ -12,7 +12,6 @@ use crate::barrier::persistence::{
     CutStatus, CutValue, GroupValue, InjectionStartValue, PartitionOffset, TopicOffsets,
     TopicTarget,
 };
-
 pub(super) use crate::barrier::test_support::at;
 
 pub(super) fn target(topic: &str, count: i32) -> TopicTarget {

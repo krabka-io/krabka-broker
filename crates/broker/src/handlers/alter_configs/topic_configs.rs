@@ -18,14 +18,13 @@
 use krabka_metadata::{MetadataRecord, TopicConfigRecord};
 use krabka_protocol::owned::alter_configs_request::AlterConfigsResource;
 
+#[cfg(test)]
+use crate::handlers::test_support::topic_config_record_with_default_policy;
 use crate::{
     api_catalog::UnstableApiVersions,
     codes, config_keys,
     topic_policy::{TopicPolicy, check},
 };
-
-#[cfg(test)]
-use crate::handlers::test_support::topic_config_record_with_default_policy;
 
 /// Build the authoritative `V1TopicConfig` record for a topic resource. The
 /// request carries the *complete* set of non-default values, so the map this

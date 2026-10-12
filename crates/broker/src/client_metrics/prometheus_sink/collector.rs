@@ -97,8 +97,7 @@ impl ClientMetricsCollector {
 mod tests {
     use std::time::Duration;
 
-    use super::super::test_support::data_point;
-    use super::*;
+    use super::{super::test_support::data_point, *};
 
     #[test]
     fn delta_points_accumulate_per_series() {

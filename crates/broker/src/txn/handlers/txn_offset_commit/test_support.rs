@@ -5,10 +5,12 @@
 use std::collections::HashSet;
 
 use krabka_ids::ProducerId;
-use krabka_protocol::owned::txn_offset_commit_request::{
-    TxnOffsetCommitRequest, TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic,
+use krabka_protocol::{
+    owned::txn_offset_commit_request::{
+        TxnOffsetCommitRequest, TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic,
+    },
+    primitives::uuid::Uuid as WireUuid,
 };
-use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 
 #[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
 pub(super) struct ProducerEpoch(pub i16);

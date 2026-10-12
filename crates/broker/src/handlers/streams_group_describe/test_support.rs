@@ -33,9 +33,9 @@ use crate::{
             persistence::{StoredSubtopology, StoredTopicInfo, StreamsGroupTopologyValue},
         },
     },
-    handlers::test_support::metadata_topic_record,
     handlers::{
-        streams_group_heartbeat::handle as heartbeat_handle, test_support::single_replica_partition,
+        streams_group_heartbeat::handle as heartbeat_handle,
+        test_support::{metadata_topic_record, single_replica_partition},
     },
     test_support::{
         controller_peer_allowed, dispatch_wire, peer, principal, request_context,

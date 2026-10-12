@@ -56,7 +56,6 @@ pub(crate) fn resolve_schema_validation(
 
 #[cfg(test)]
 mod tests {
-    use crate::config_keys::test_support::topic_config_record;
     use assert2::{assert, check};
     use krabka_log::LogConfig;
 
@@ -67,6 +66,7 @@ mod tests {
         },
         *,
     };
+    use crate::config_keys::test_support::topic_config_record;
 
     /// A metadata image whose topic `t` carries exactly `overrides`.
     fn image_with_topic_config(overrides: &[(&str, &str)]) -> krabka_metadata::MetadataImage {

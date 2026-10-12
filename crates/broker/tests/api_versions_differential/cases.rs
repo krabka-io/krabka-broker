@@ -2,14 +2,15 @@
 
 use std::{collections::BTreeSet, path::PathBuf};
 
+use assert2::assert;
+use krabka_protocol::owned::api_versions_response::ApiVersion;
+
 use crate::{
     divergence::DivergenceReport,
     oracle::{ORACLE_IMAGE, OracleBroker, krabka_api_versions, start_krabka},
     parse::{advertised, parse_single_broker},
     support::{JvmListeners, api_versions::supported_client_apis, manifest_dir},
 };
-use assert2::assert;
-use krabka_protocol::owned::api_versions_response::ApiVersion;
 
 /// Where the checked-in report lives.
 fn expectation_path() -> PathBuf {

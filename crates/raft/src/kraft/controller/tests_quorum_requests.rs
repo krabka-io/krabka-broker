@@ -19,12 +19,14 @@ use krabka_protocol::{
 };
 
 use super::*;
-use crate::kraft::{
-    controller::test_support::{EngineSetup, build_engine_only, voter_set},
-    transport::wire::{FETCH_SNAPSHOT_VERSION, QUORUM_EPOCH_VERSION, VOTE_VERSION},
-    types::{QuorumState, SimInstant},
+use crate::{
+    kraft::{
+        controller::test_support::{EngineSetup, build_engine_only, voter_set},
+        transport::wire::{FETCH_SNAPSHOT_VERSION, QUORUM_EPOCH_VERSION, VOTE_VERSION},
+        types::{QuorumState, SimInstant},
+    },
+    test_support::encode,
 };
-use crate::test_support::encode;
 
 const METADATA_TOPIC: &str = "__cluster_metadata";
 

@@ -97,8 +97,7 @@ fn sanitize(metric: &str) -> String {
 mod tests {
     use std::time::Duration;
 
-    use super::super::test_support::data_point;
-    use super::*;
+    use super::{super::test_support::data_point, *};
     use crate::client_metrics::prometheus_sink::{DataPoint, PointValue};
 
     fn encode_collector(collector: impl Collector + 'static) -> String {

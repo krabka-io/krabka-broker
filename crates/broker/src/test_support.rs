@@ -23,8 +23,6 @@
 
 pub(crate) mod paused_audit;
 
-use crate::config::BreakGlassConfig;
-
 use std::{
     collections::BTreeSet,
     io,
@@ -35,6 +33,8 @@ use std::{
     },
     time::Duration,
 };
+
+use crate::config::BreakGlassConfig;
 
 /// A break-glass test config that requires approval from the two named users.
 #[cfg(test)]

@@ -481,10 +481,12 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::coordinator::unified::test_support::assert_group_epoch_exhaustion;
     use crate::coordinator::{
         test_support::sorted_epoch_pairs,
-        unified::consumer_state::test_support::{Topics, member, subscribed_member},
+        unified::{
+            consumer_state::test_support::{Topics, member, subscribed_member},
+            test_support::assert_group_epoch_exhaustion,
+        },
     };
 
     #[test]

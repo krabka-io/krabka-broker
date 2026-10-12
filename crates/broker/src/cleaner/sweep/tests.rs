@@ -18,8 +18,7 @@ use crate::{
     },
     log_dir_status::LogDirRegistry,
     metrics::{CleanerFailureLabel, CleanerFailureReason},
-    partition::Partition,
-    partition::test_support::update_log_config,
+    partition::{Partition, test_support::update_log_config},
     test_support::{append_partition_batch, topic_thaw_record},
 };
 

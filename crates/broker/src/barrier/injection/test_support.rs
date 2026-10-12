@@ -9,12 +9,11 @@ use std::sync::Arc;
 use krabka_metadata::MetadataRecord;
 use krabka_units::millis;
 
+pub(super) use crate::barrier::test_support::{at, marker};
 use crate::{
     barrier::{config::BarrierConfig, test_support},
     metadata_source::MetadataSource,
 };
-
-pub(super) use crate::barrier::test_support::{at, marker};
 
 pub(super) fn fast_config() -> BarrierConfig {
     BarrierConfig {

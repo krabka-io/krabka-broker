@@ -2,7 +2,7 @@
 //! satisfies so that the real-log binary compiles the trait without also
 //! carrying the fake's implementation in the same file.
 
-use krabka_raft::kraft::simulation_support::{append_epochs, replicate_epochs, truncate_epochs};
+use krabka_kraft_core::simulation_support::{append_epochs, replicate_epochs, truncate_epochs};
 use krabka_raft::kraft::types::Epoch;
 
 use super::node_log::SimNodeLog;
