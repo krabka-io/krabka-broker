@@ -27,7 +27,7 @@ model_types! {
 
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
-#[logic]
+#[logic(open(crate))]
 pub fn jwks_cache_facts_admissible_at(facts: JwksCacheFacts, now_ms: i64) -> bool {
     pearlite! {
         facts.generation_before@ % 2 == 0

@@ -247,7 +247,7 @@ fn remote_retention_facts(
     finished: &[(i64, i64, u64, bool)],
     deleted_below: Option<i64>,
 ) -> Vec<RemoteRetentionSegment> {
-    let mut facts = Vec::new();
+    let mut facts: Vec<RemoteRetentionSegment> = Vec::new();
     let mut i = 0usize;
     #[invariant(i@ <= finished@.len() && facts@.len() == i@)]
     #[invariant(forall<j: Int> 0 <= j && j < i@ ==> facts@[j].blocked == false
