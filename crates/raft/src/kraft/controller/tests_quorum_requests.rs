@@ -119,25 +119,38 @@ fn vote_partition(request: &mut VoteRequest) -> &mut vote_req::PartitionData {
 
 /// A response that names the metadata partition and node 2 at epoch 5.
 fn vote_answer(error_code: i16) -> VoteResponse {
+    vote_answer_with_leader(error_code, 2, 5, vec![vote_answer_node()])
+}
+
+fn vote_answer_node() -> vote_resp::NodeEndpoint {
+    vote_resp::NodeEndpoint {
+        node_id: 2,
+        host: "127.0.0.1".into(),
+        port: 9_093,
+        ..Default::default()
+    }
+}
+
+fn vote_answer_with_leader(
+    error_code: i16,
+    leader_id: i32,
+    leader_epoch: i32,
+    node_endpoints: Vec<vote_resp::NodeEndpoint>,
+) -> VoteResponse {
     VoteResponse {
         topics: vec![vote_resp::TopicData {
             topic_name: METADATA_TOPIC.into(),
             partitions: vec![vote_resp::PartitionData {
                 partition_index: 0,
                 error_code,
-                leader_id: 2,
-                leader_epoch: 5,
+                leader_id,
+                leader_epoch,
                 vote_granted: false,
                 ..Default::default()
             }],
             ..Default::default()
         }],
-        node_endpoints: vec![vote_resp::NodeEndpoint {
-            node_id: 2,
-            host: "127.0.0.1".into(),
-            port: 9_093,
-            ..Default::default()
-        }],
+        node_endpoints,
         ..Default::default()
     }
 }
@@ -152,21 +165,7 @@ fn vote_answer_granted() -> VoteResponse {
 /// The refusal of a request from epoch 6: the follower has stepped down to that
 /// epoch before it looked at the request's voter key, so it names no leader.
 fn vote_answer_after_stepping_down_to_epoch_6(error_code: i16) -> VoteResponse {
-    VoteResponse {
-        topics: vec![vote_resp::TopicData {
-            topic_name: METADATA_TOPIC.into(),
-            partitions: vec![vote_resp::PartitionData {
-                partition_index: 0,
-                error_code,
-                leader_id: -1,
-                leader_epoch: 6,
-                vote_granted: false,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    }
+    vote_answer_with_leader(error_code, -1, 6, Vec::new())
 }
 
 fn engine_with_local_directory() -> (Engine, tempfile::TempDir) {

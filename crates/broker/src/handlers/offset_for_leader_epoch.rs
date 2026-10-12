@@ -338,17 +338,7 @@ mod tests {
     /// so the schema defaults put `-1` in both `leader_epoch` and
     /// `end_offset`.
     fn unknown_topic_row(topic: &str) -> OffsetForLeaderTopicResult {
-        OffsetForLeaderTopicResult {
-            topic: topic.into(),
-            partitions: vec![EpochEndOffset {
-                partition: 0,
-                leader_epoch: -1,
-                end_offset: -1,
-                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }
+        error_topic_row(topic, codes::UNKNOWN_TOPIC_OR_PARTITION)
     }
 
     /// The row a `Describe`-denied topic gets: only the partition index and
@@ -356,13 +346,17 @@ mod tests {
     /// default puts `-1` in both `leader_epoch` and `end_offset` rather than
     /// echoing the request.
     fn denied_row(topic: &str) -> OffsetForLeaderTopicResult {
+        error_topic_row(topic, codes::TOPIC_AUTHORIZATION_FAILED)
+    }
+
+    fn error_topic_row(topic: &str, error_code: i16) -> OffsetForLeaderTopicResult {
         OffsetForLeaderTopicResult {
             topic: topic.into(),
             partitions: vec![EpochEndOffset {
                 partition: 0,
                 leader_epoch: -1,
                 end_offset: -1,
-                error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+                error_code,
                 ..Default::default()
             }],
             ..Default::default()
