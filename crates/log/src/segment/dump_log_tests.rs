@@ -23,7 +23,7 @@ use crate::{
     index::{OffsetIndexEntry, TimeIndexEntry},
     name,
     segment::test_support::{
-        ONE_RECORD_BATCH, RecordCount, RecordTimestamp, SampleBatchSetup, test_segment,
+        TempSegment, ONE_RECORD_BATCH, RecordCount, RecordTimestamp, SampleBatchSetup, test_segment,
     },
 };
 
@@ -260,7 +260,7 @@ fn write_all_verbatim(segment: &mut Segment, interval: ByteSize) {
 fn the_append_paths_write_the_indexes_kafka_dump_log_verifies() {
     let expected_time_entries = vec![time_entry(102, 2), time_entry(201, 5), time_entry(300, 7)];
     for (label, verbatim) in [("encoding append", false), ("verbatim append", true)] {
-        let (dir, mut segment) = test_segment();
+        let TempSegment { dir, mut segment } = test_segment();
         if verbatim {
             write_all_verbatim(&mut segment, DENSE_INDEX);
         } else {
@@ -287,7 +287,7 @@ fn the_append_paths_write_the_indexes_kafka_dump_log_verifies() {
 /// add up to the interval, and what it takes still verifies.
 #[test]
 fn a_sparse_index_still_verifies() {
-    let (dir, mut segment) = test_segment();
+    let TempSegment { dir, mut segment } = test_segment();
     write_all_encoded(&mut segment, bytes(200));
 
     let entries = offset_entries(dir.path(), 0).len();
@@ -382,7 +382,7 @@ fn the_index_takes_an_entry_only_once_more_than_the_interval_was_written() {
 /// segment keeps is the one of the batches that survived.
 #[test]
 fn appends_after_a_truncation_keep_the_indexes_verifying() {
-    let (dir, mut segment) = test_segment();
+    let TempSegment { dir, mut segment } = test_segment();
     write_all_encoded(&mut segment, DENSE_INDEX);
 
     // Keep the batches ending at 2, 3 and 5.
@@ -422,7 +422,7 @@ fn appends_after_a_truncation_keep_the_indexes_verifying() {
 /// record in the middle of that batch.
 #[test]
 fn a_timestamp_search_finds_the_record_inside_the_batch_that_set_the_maximum() {
-    let (_dir, mut segment) = test_segment();
+    let TempSegment { dir: _dir, mut segment } = test_segment();
     write_all_encoded(&mut segment, DENSE_INDEX);
 
     // Batch (4, 2 records, 200): records at offsets 4 and 5 with timestamps

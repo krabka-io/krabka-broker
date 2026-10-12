@@ -12,6 +12,21 @@ use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
 use super::Log;
 use crate::{error::LogError, name, retention, segment::Segment};
 
+/// The scan window and the record limit of a log's configuration.
+struct TimestampScanSettings {
+    scan_window: ByteSize,
+    limit: Option<ByteSize>,
+}
+
+/// The segment that holds the partition's largest timestamp so far, with that
+/// timestamp and the offset of its record.
+#[derive(Clone, Copy)]
+struct BestSegment<'a> {
+    timestamp: i64,
+    offset: Offset,
+    segment: &'a Segment,
+}
+
 impl Log {
     /// Legacy `ListOffsets` v0 segment boundaries at or before `timestamp`,
     /// newest first and capped by `max_num_offsets`.
@@ -132,14 +147,17 @@ impl Log {
         target_ts: i64,
         minimum: Offset,
     ) -> Result<Option<(Offset, i64)>, LogError> {
-        let (scan_window, limit) = self.timestamp_scan_settings();
+        let TimestampScanSettings { scan_window, limit } = self.timestamp_scan_settings();
         self.scan_offset_for_timestamp(target_ts, scan_window, limit, minimum)
     }
 
     /// The scan window and the record limit of the log's current configuration.
-    fn timestamp_scan_settings(&self) -> (ByteSize, Option<ByteSize>) {
+    fn timestamp_scan_settings(&self) -> TimestampScanSettings {
         let config = self.config.read().unwrap();
-        (config.timestamp_scan_window, config.max_decompressed_record)
+        TimestampScanSettings {
+            scan_window: config.timestamp_scan_window,
+            limit: config.max_decompressed_record,
+        }
     }
 
     fn scan_offset_for_timestamp(
@@ -200,7 +218,7 @@ impl Log {
     ///
     /// Panics when another thread poisoned the log configuration lock.
     pub fn max_timestamp_offset_and_ts(&self) -> Result<Option<(Offset, i64)>, LogError> {
-        let (scan_window, limit) = self.timestamp_scan_settings();
+        let TimestampScanSettings { scan_window, limit } = self.timestamp_scan_settings();
         self.scan_max_timestamp(scan_window, limit)
     }
 
@@ -209,7 +227,7 @@ impl Log {
         scan_window: ByteSize,
         limit: Option<ByteSize>,
     ) -> Result<Option<(Offset, i64)>, LogError> {
-        let mut best: Option<(i64, Offset, &Segment)> = None; // (timestamp, offset, segment)
+        let mut best: Option<BestSegment<'_>> = None;
         let candidates = self.segments.iter().chain(self.active.as_ref());
         for seg in candidates {
             // Every segment is measured without the limit: Kafka picks the
@@ -217,17 +235,23 @@ impl Log {
             // the winner's batch.
             if let Some((offset, ts)) =
                 seg.offset_of_max_timestamp_with_window(scan_window, None)?
-                && best.is_none_or(|(best_ts, _, _)| ts > best_ts)
+                && best.is_none_or(|best| ts > best.timestamp)
             {
-                best = Some((ts, offset, seg));
+                best = Some(BestSegment {
+                    timestamp: ts,
+                    offset,
+                    segment: seg,
+                });
             }
         }
-        if let Some((_, _, winner)) = best
+        if let Some(BestSegment {
+            segment: winner, ..
+        }) = best
             && limit.is_some()
         {
             winner.offset_of_max_timestamp_with_window(scan_window, limit)?;
         }
-        Ok(best.map(|(ts, offset, _)| (offset, ts)))
+        Ok(best.map(|best| (best.offset, best.timestamp)))
     }
 }
 

@@ -429,11 +429,11 @@ mod tests {
         use krabka_units::prelude::bytes;
 
         use crate::{
-            segment::test_support::{DENSE_INDEX, recording_advice, test_batch_at, test_segment},
+            segment::test_support::{TempSegment, DENSE_INDEX, recording_advice, test_batch_at, test_segment},
             test_support::AdviceCall,
         };
 
-        let (_dir, mut seg) = test_segment();
+        let TempSegment { dir: _dir, segment: mut seg } = test_segment();
         let mut positions = Vec::new();
         for off in 0..20i64 {
             positions.push(seg.log_size);

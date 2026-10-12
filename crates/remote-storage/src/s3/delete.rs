@@ -49,7 +49,8 @@ mod tests {
     use super::{ObjectOps, RemoteStorageError, S3RemoteStorage, WormError};
     use crate::{
         s3::test_support::{
-            SeededCopySetup, StampedMetadataSetup, counting_rsm, memory_worm_archive, rsm,
+            CountingRsm, SeededCopySetup, StampedMetadataSetup, WormArchive, counting_rsm,
+            memory_worm_archive, rsm,
             sample_data, sample_metadata, seeded_blocking, stamped_metadata,
         },
         storage_manager::{IndexType, RemoteStorageManager},
@@ -69,7 +70,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn delete_issues_one_request_per_current_key() {
-        let (store, counter) = counting_rsm();
+        let CountingRsm { store, counter } = counting_rsm();
         let md = sample_metadata(uuid::Uuid::from_u128(14));
         seeded_blocking(
             store,
@@ -152,7 +153,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn worm_delete_is_refused() {
-        let (_keys, store) = memory_worm_archive();
+        let WormArchive { keys: _keys, store } = memory_worm_archive();
         let md = stamped_metadata(StampedMetadataSetup {
             segment_id: uuid::Uuid::from_u128(55),
             ..Default::default()

@@ -9,7 +9,7 @@ use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
 use crate::{
     DelegationTokenMutation, NodeId, SubmitChangeResult,
     error::RaftError,
-    kraft::{Epoch, KraftController, ReplicaKey},
+    kraft::{KraftController, QuorumStateSnapshot, ReplicaKey},
     wire::{
         KrabkaMetadataFetchRequest, KrabkaMetadataFetchResponse, KrabkaSubmitChangeRequest,
         KrabkaSubmitChangeResponse, SUBMIT_CHANGE_UNCOMMITTED_TAIL,
@@ -155,13 +155,22 @@ pub(super) async fn dispatch_delegation_token_mutation(
 
 /// Serve a committed `__cluster_metadata` slice to a broker-only observer (1004)
 /// from the engine's `KraftLog`.
-fn quorum_metadata_leader(quorum: Option<(Option<NodeId>, Epoch)>) -> (i64, i32) {
-    let leader_hint: i64 = quorum
-        .and_then(|(leader_id, _)| leader_id)
+fn quorum_metadata_leader(quorum: Option<&QuorumStateSnapshot>) -> MetadataLeader {
+    let hint: i64 = quorum
+        .and_then(|quorum| quorum.leader_id)
         .and_then(|l| i64::try_from(l.0).ok())
         .unwrap_or(LEADER_HINT_UNKNOWN);
-    let leader_epoch = quorum.map_or(-1, |(_, epoch)| i32::try_from(epoch).unwrap_or(i32::MAX));
-    (leader_hint, leader_epoch)
+    let epoch = quorum.map_or(-1, |quorum| {
+        i32::try_from(quorum.leader_epoch).unwrap_or(i32::MAX)
+    });
+    MetadataLeader { hint, epoch }
+}
+
+/// The leader a `MetadataFetch` response names: its id, or `-1` while unknown,
+/// and the epoch, or `-1` when the quorum state is unavailable.
+struct MetadataLeader {
+    hint: i64,
+    epoch: i32,
 }
 
 pub(super) async fn dispatch_metadata_fetch(
@@ -184,8 +193,10 @@ pub(super) async fn dispatch_metadata_fetch(
         .metadata_fetch(fetch_offset, max_size, replica)
         .await?;
     let quorum = engine.quorum_state().await.ok();
-    let (leader_hint, leader_epoch) =
-        quorum_metadata_leader(quorum.as_ref().map(|qs| (qs.leader_id, qs.leader_epoch)));
+    let MetadataLeader {
+        hint: leader_hint,
+        epoch: leader_epoch,
+    } = quorum_metadata_leader(quorum.as_ref());
 
     let resp = KrabkaMetadataFetchResponse {
         error_code: 0,

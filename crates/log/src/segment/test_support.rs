@@ -137,14 +137,22 @@ pub(super) fn sample_batch(setup: SampleBatchSetup) -> RecordBatch {
     b
 }
 
-pub(super) fn test_segment() -> (tempfile::TempDir, Segment) {
+/// A segment and the temporary directory that holds its files. Dropping the
+/// value deletes the directory.
+#[derive(Debug)]
+pub(super) struct TempSegment {
+    pub(super) dir: tempfile::TempDir,
+    pub(super) segment: Segment,
+}
+
+pub(super) fn test_segment() -> TempSegment {
     segment_at(Offset(0))
 }
 
-pub(super) fn segment_at(base: Offset) -> (tempfile::TempDir, Segment) {
+pub(super) fn segment_at(base: Offset) -> TempSegment {
     let dir = tempdir().unwrap();
-    let seg = Segment::create(dir.path(), base).unwrap();
-    (dir, seg)
+    let segment = Segment::create(dir.path(), base).unwrap();
+    TempSegment { dir, segment }
 }
 
 pub(super) fn test_batch_at(off: Offset) -> RecordBatch {
@@ -169,10 +177,10 @@ pub(super) fn seeded_segment(dir: &std::path::Path, setup: SeededSegmentSetup<'_
     segment
 }
 
-pub(super) fn seeded_fixture(setup: SeededSegmentSetup<'_>) -> (tempfile::TempDir, Segment) {
+pub(super) fn seeded_fixture(setup: SeededSegmentSetup<'_>) -> TempSegment {
     let dir = tempdir().unwrap();
     let segment = seeded_segment(dir.path(), setup);
-    (dir, segment)
+    TempSegment { dir, segment }
 }
 
 pub(super) fn three_single_record_batches() -> Vec<RecordBatch> {
@@ -184,14 +192,14 @@ pub(super) fn three_single_record_batches() -> Vec<RecordBatch> {
 }
 
 /// An ordinary dense-index segment holding the first two records.
-pub(super) fn two_record_fixture() -> (tempfile::TempDir, Segment) {
+pub(super) fn two_record_fixture() -> TempSegment {
     seeded_fixture(SeededSegmentSetup {
         batches: &[TWO_RECORD_BATCH],
         ..Default::default()
     })
 }
 
-pub(super) fn indexed_segment() -> (tempfile::TempDir, Segment) {
+pub(super) fn indexed_segment() -> TempSegment {
     let dir = tempdir().unwrap();
     let segment = seeded_segment(
         dir.path(),
@@ -201,7 +209,7 @@ pub(super) fn indexed_segment() -> (tempfile::TempDir, Segment) {
             ..Default::default()
         },
     );
-    (dir, segment)
+    TempSegment { dir, segment }
 }
 
 pub(super) fn sample_batches(batches: &[SampleBatchSetup]) -> Vec<RecordBatch> {

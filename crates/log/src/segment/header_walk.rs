@@ -124,7 +124,7 @@ mod tests {
     use crate::{
         config::DEFAULT_INDEX_INTERVAL,
         segment::test_support::{
-            DENSE_INDEX, FIRST_HEADER_WALK_BATCH, RecordCount, RecordTimestamp,
+            TempSegment, DENSE_INDEX, FIRST_HEADER_WALK_BATCH, RecordCount, RecordTimestamp,
             SECOND_HEADER_WALK_BATCH, SampleBatchSetup, SeededSegmentSetup, sample_batch,
             seeded_fixture,
         },
@@ -132,7 +132,7 @@ mod tests {
 
     #[test]
     fn position_for_and_walk_batch_headers_semantics() {
-        let (_dir, mut seg) = seeded_fixture(SeededSegmentSetup {
+        let TempSegment { dir: _dir, segment: mut seg } = seeded_fixture(SeededSegmentSetup {
             offset: Offset(10),
             batches: &[FIRST_HEADER_WALK_BATCH],
             ..Default::default()
@@ -198,7 +198,7 @@ mod tests {
     /// it, so a small byte budget is not spent stepping over the indexed one.
     #[test]
     fn a_read_past_an_indexed_batch_starts_at_the_batch_after_it() {
-        let (_dir, mut seg) = seeded_fixture(SeededSegmentSetup {
+        let TempSegment { dir: _dir, segment: mut seg } = seeded_fixture(SeededSegmentSetup {
             offset: Offset(10),
             batches: &[FIRST_HEADER_WALK_BATCH, SECOND_HEADER_WALK_BATCH],
             ..Default::default()

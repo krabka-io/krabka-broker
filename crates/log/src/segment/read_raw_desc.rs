@@ -161,7 +161,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        segment::test_support::{DENSE_INDEX, recording_advice, test_batch_at, test_segment},
+        segment::test_support::{TempSegment, DENSE_INDEX, recording_advice, test_batch_at, test_segment},
         test_support::AdviceCall,
     };
 
@@ -189,7 +189,7 @@ mod tests {
             ),
         ];
         for (payload_sizes, mut expected_reads) in cases {
-            let (_dir, mut seg) = test_segment();
+            let TempSegment { dir: _dir, segment: mut seg } = test_segment();
             let mut batch_len = 0;
             for (off, size) in payload_sizes.iter().enumerate() {
                 let mut batch = test_batch_at(Offset(i64::try_from(off).unwrap()));
@@ -236,7 +236,7 @@ mod tests {
     /// limit clamp, and the one-batch-over-budget anti-stall rule.
     #[test]
     fn read_raw_desc_region_equals_read_raw_bytes() {
-        let (dir, mut seg) = test_segment();
+        let TempSegment { dir, segment: mut seg } = test_segment();
         for off in 0..5i64 {
             seg.append(&test_batch_at(Offset(off)), DENSE_INDEX)
                 .unwrap();
@@ -284,7 +284,7 @@ mod tests {
     /// the partial batch.
     #[test]
     fn read_raw_desc_matches_read_raw_when_budget_clips_run() {
-        let (dir, mut seg) = test_segment();
+        let TempSegment { dir, segment: mut seg } = test_segment();
         // Several batches; a mid-size budget will include some but not all.
         for off in 0..6i64 {
             seg.append(&test_batch_at(Offset(off)), DENSE_INDEX)
@@ -307,7 +307,7 @@ mod tests {
     /// taking one disk read per batch on a cold segment.
     #[test]
     fn read_raw_desc_advises_its_region_and_the_next_window_in_one_hint() {
-        let (_dir, mut seg) = test_segment();
+        let TempSegment { dir: _dir, segment: mut seg } = test_segment();
         for off in 0..20i64 {
             seg.append(&test_batch_at(Offset(off)), DENSE_INDEX)
                 .unwrap();

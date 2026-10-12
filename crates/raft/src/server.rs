@@ -52,7 +52,7 @@ use self::{
     },
     dispatch::{dispatch_with_router, is_native_raft_api},
     framing::{
-        is_eof, read_one_request, write_response, write_response_frame,
+        RequestFrame, is_eof, read_one_request, write_response, write_response_frame,
         write_response_no_tagged_fields,
     },
     kip853::{
@@ -298,7 +298,14 @@ where
                     );
                     return Ok(());
                 };
-                let (api_key_n, api_version, correlation_id, client_id, body, response_flexible) = match res {
+                let RequestFrame {
+                    api_key: api_key_n,
+                    api_version,
+                    correlation_id,
+                    client_id,
+                    body,
+                    flexible: response_flexible,
+                } = match res {
                     Ok(v) => v,
                     Err(e) => {
                         // Treat peer EOF as a clean shutdown of this conn.

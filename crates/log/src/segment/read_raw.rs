@@ -192,7 +192,7 @@ mod tests {
 
     use super::*;
     use crate::segment::test_support::{
-        DENSE_INDEX, NO_LIMIT, RecordCount, RecordTimestamp, SECOND_TWO_RECORD_BATCH,
+        TempSegment, DENSE_INDEX, NO_LIMIT, RecordCount, RecordTimestamp, SECOND_TWO_RECORD_BATCH,
         SampleBatchSetup, SeededSegmentSetup, THIRD_TWO_RECORD_BATCH, THREE_RECORD_BATCH,
         TWO_RECORD_BATCH, sample_batch, seeded_fixture, test_batch_at, test_segment,
         two_record_fixture,
@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn a_fetch_past_the_segment_or_at_the_limit_reads_nothing() {
-        let (_dir, seg) = seeded_fixture(SeededSegmentSetup {
+        let TempSegment { dir: _dir, segment: seg } = seeded_fixture(SeededSegmentSetup {
             batches: &[
                 THREE_RECORD_BATCH, // offsets 0..=2
             ],
@@ -245,7 +245,7 @@ mod tests {
     /// out of the middle of a record.
     #[test]
     fn a_fetch_mid_segment_steps_over_the_batches_before_it() {
-        let (_dir, mut seg) = test_segment();
+        let TempSegment { dir: _dir, segment: mut seg } = test_segment();
         // A sparse index, so only the first batch gets an entry and the lookup
         // lands at the segment head. The walk then has to step over the two
         // batches before the one asked for -- with a dense index it would jump
@@ -282,7 +282,7 @@ mod tests {
     /// reading from anywhere else returns a different batch, or nothing.
     #[test]
     fn a_batch_too_large_for_the_first_read_is_fetched_from_its_own_position() {
-        let (_dir, mut seg) = test_segment();
+        let TempSegment { dir: _dir, segment: mut seg } = test_segment();
         append_two_record_batches(&mut seg, BatchCount(4));
 
         // A one-byte budget makes the first read header-sized, so the batch
@@ -299,7 +299,7 @@ mod tests {
 
     #[test]
     fn batch_too_large_with_nonzero_start_pos_and_pos() {
-        let (_dir, mut seg) = two_record_fixture();
+        let TempSegment { dir: _dir, segment: mut seg } = two_record_fixture();
         let p1 = seg.log_size;
         seg.append(&sample_batch(SECOND_TWO_RECORD_BATCH), DENSE_INDEX)
             .unwrap();
@@ -328,7 +328,7 @@ mod tests {
     /// small budget returns fewer batches than an unlimited one.
     #[test]
     fn the_byte_budget_bounds_how_much_a_fetch_returns() {
-        let (_dir, mut seg) = test_segment();
+        let TempSegment { dir: _dir, segment: mut seg } = test_segment();
         append_two_record_batches(&mut seg, BatchCount(6));
 
         let everything = seg.read_raw(Offset(0), Offset(99), NO_LIMIT).unwrap();
@@ -359,7 +359,7 @@ mod tests {
     // becomes 105.
     #[test]
     fn read_raw_uses_relative_offset_for_index_lookup() {
-        let (_dir, seg) = super::super::test_support::indexed_segment();
+        let TempSegment { dir: _dir, segment: seg } = super::super::test_support::indexed_segment();
 
         let r = seg.read_raw(Offset(103), Offset(1000), NO_LIMIT).unwrap();
         assert2::assert!(!r.is_empty());
@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn read_raw_is_byte_exact_and_multi_batch() {
-        let (dir, mut seg) = test_segment();
+        let TempSegment { dir, segment: mut seg } = test_segment();
         let mut wire = bytes::BytesMut::new();
         for off in 0..3i64 {
             let b = test_batch_at(Offset(off));
@@ -385,7 +385,7 @@ mod tests {
 
     #[test]
     fn read_raw_clamps_at_limit_offset() {
-        let (dir, mut seg) = test_segment();
+        let TempSegment { dir, segment: mut seg } = test_segment();
         let mut expected = bytes::BytesMut::new();
         for off in 0..3i64 {
             let batch = test_batch_at(Offset(off));
@@ -403,7 +403,7 @@ mod tests {
 
     #[test]
     fn read_raw_returns_at_least_one_batch_over_budget() {
-        let (dir, mut seg) = test_segment();
+        let TempSegment { dir, segment: mut seg } = test_segment();
         let batch = test_batch_at(Offset(0));
         let mut expected = bytes::BytesMut::new();
         batch.encode(&mut expected).unwrap();
