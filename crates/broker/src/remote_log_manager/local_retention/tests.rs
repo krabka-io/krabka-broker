@@ -467,9 +467,9 @@ fn remote_covered_through_walks_an_unbroken_prefix() {
         CoverCase {
             label: "abutting segments join, in any listed order",
             finished: &[
-                OffsetRange::new(20, 29),
-                OffsetRange::new(0, 9),
-                OffsetRange::new(10, 19),
+                OffsetRange { start: 20, end: 29 },
+                OffsetRange { start: 0, end: 9 },
+                OffsetRange { start: 10, end: 19 },
             ],
             local_start: 0,
             expected: Some(29),

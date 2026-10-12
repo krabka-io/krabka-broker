@@ -1087,7 +1087,7 @@ mod request_budget {
     use assert2::{assert, check};
     use futures_util::{SinkExt as _, StreamExt as _};
 
-    use super::{KafkaCodec, RequestFrameSetup, active_closes, request_frame};
+    use super::{KafkaCodec, RequestFrameSetup, active_closes, close, request_frame};
     use crate::{BrokerHandle, broker::Broker, network::dispatch::test_support::plaintext_loop};
 
     /// One connection served by the loop, and the client end already framed.

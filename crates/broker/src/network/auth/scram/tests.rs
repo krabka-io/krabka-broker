@@ -23,7 +23,7 @@ use pbkdf2::{
     sha2::{Digest, Sha256, Sha512},
 };
 
-use super::{ClientFirst, decode_sasl_name};
+use super::{ClientFirst, ScramExtension, decode_sasl_name};
 use crate::{
     network::auth::{
         ConnectionAuth, handle_authenticate_scram, state::SaslExchange,
