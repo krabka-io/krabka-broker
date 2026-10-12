@@ -3622,6 +3622,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "yare",
 ]
 
 [[package]]
@@ -3793,6 +3794,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "wincode",
+ "yare",
  "zerocopy",
 ]
 

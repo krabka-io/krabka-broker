@@ -192,14 +192,15 @@ async fn forgotten_topics_drop_partitions_from_subscription() {
 #[tokio::test]
 async fn unknown_session_id_returns_not_found() {
     let p = support::start().await;
+    let setup = FetchSessionSetup::incremental(FetchSessionId(999_999));
     let r = p
         .client
         .send(
             build_fetch_session_request()
                 .limits(FetchLimits::immediate())
-                .id(FetchSessionSetup::incremental(FetchSessionId(999_999)).id)
-                .epoch(FetchSessionSetup::incremental(FetchSessionId(999_999)).epoch)
-                .forgotten(FetchSessionSetup::incremental(FetchSessionId(999_999)).forgotten)
+                .id(setup.id)
+                .epoch(setup.epoch)
+                .forgotten(setup.forgotten)
                 .call(),
         )
         .await
@@ -213,24 +214,18 @@ async fn unknown_session_id_returns_not_found() {
 /// A stale epoch on a valid session gives `INVALID_FETCH_SESSION_EPOCH`.
 #[tokio::test]
 async fn stale_session_epoch_returns_invalid_epoch() {
-    let (p, _tid, r1) = Box::pin(topic_session(1, 0)).await;
-    let sid = r1.session_id;
-    assert!(sid > 0);
+    let (p, _tid, sid) = opened_topic_session().await;
 
     // Broker expects epoch=1; send 99.
+    let setup = FetchSessionSetup::at_epoch(FetchSessionId(sid), FetchSessionEpoch(99));
     let r2 = p
         .client
         .send(
             build_fetch_session_request()
                 .limits(default_fetch_limits())
-                .id(FetchSessionSetup::at_epoch(FetchSessionId(sid), FetchSessionEpoch(99)).id)
-                .epoch(
-                    FetchSessionSetup::at_epoch(FetchSessionId(sid), FetchSessionEpoch(99)).epoch,
-                )
-                .forgotten(
-                    FetchSessionSetup::at_epoch(FetchSessionId(sid), FetchSessionEpoch(99))
-                        .forgotten,
-                )
+                .id(setup.id)
+                .epoch(setup.epoch)
+                .forgotten(setup.forgotten)
                 .call(),
         )
         .await
@@ -245,12 +240,11 @@ async fn stale_session_epoch_returns_invalid_epoch() {
 /// entry. A later request with the same id is `NOT_FOUND`.
 #[tokio::test]
 async fn close_session_drops_cache_entry() {
-    let (p, tid, r1) = Box::pin(topic_session(1, 0)).await;
-    let sid = r1.session_id;
-    assert!(sid > 0);
+    let (p, tid, sid) = opened_topic_session().await;
 
     // Close: session_id=sid, session_epoch=-1. Broker serves the request
     // sessionless-style (session_id=0 in response) and removes the entry.
+    let setup = FetchSessionSetup::at_epoch(FetchSessionId(sid), FetchSessionEpoch(-1));
     let r2 = p
         .client
         .send(
@@ -259,14 +253,9 @@ async fn close_session_drops_cache_entry() {
                     vec![fetch_topic("t", tid, vec![fetch_partition(0, 0)])],
                     default_fetch_limits(),
                 ))
-                .id(FetchSessionSetup::at_epoch(FetchSessionId(sid), FetchSessionEpoch(-1)).id)
-                .epoch(
-                    FetchSessionSetup::at_epoch(FetchSessionId(sid), FetchSessionEpoch(-1)).epoch,
-                )
-                .forgotten(
-                    FetchSessionSetup::at_epoch(FetchSessionId(sid), FetchSessionEpoch(-1))
-                        .forgotten,
-                )
+                .id(setup.id)
+                .epoch(setup.epoch)
+                .forgotten(setup.forgotten)
                 .call(),
         )
         .await
@@ -387,4 +376,11 @@ async fn topic_session(
     let tid = topic_id_for(&p.client, "t").await;
     let response = open_session(&p.client, tid, partitions, max_wait_ms).await;
     (p, tid, response)
+}
+
+async fn opened_topic_session() -> (support::InProcess, WireUuid, i32) {
+    let (process, topic_id, response) = Box::pin(topic_session(1, 0)).await;
+    let session_id = response.session_id;
+    assert!(session_id > 0);
+    (process, topic_id, session_id)
 }

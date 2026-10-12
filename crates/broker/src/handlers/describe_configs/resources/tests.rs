@@ -52,6 +52,19 @@ fn seed_metrics_subscription(image: &mut MetadataImage) {
     ));
 }
 
+fn group_config_image(config_key: &str, value: &str) -> MetadataImage {
+    let mut image = MetadataImage::new(Uuid::nil());
+    image.apply(&MetadataRecord::V1GroupConfig(
+        krabka_metadata::GroupConfigRecord {
+            group_id: "g".into(),
+            configs: maplit::btreemap! {
+                config_key.to_owned() => value.to_owned(),
+            },
+        },
+    ));
+    image
+}
+
 /// A request that asks for everything, the way `kafka-configs --describe
 /// --all` does.
 pub(super) const EVERYTHING: EntryOptions = EntryOptions {
@@ -2386,15 +2399,7 @@ fn a_group_and_a_named_broker_report_the_values_the_coordinators_run_with() {
     let mut config = BrokerConfig::default();
     file.apply_to(&mut config).expect("apply runtime config");
     let settings = static_settings(&config);
-    let mut image = MetadataImage::new(Uuid::nil());
-    image.apply(&MetadataRecord::V1GroupConfig(
-        krabka_metadata::GroupConfigRecord {
-            group_id: "g".into(),
-            configs: maplit::btreemap! {
-                "share.record.lock.duration.ms".to_owned() => "20000".to_owned(),
-            },
-        },
-    ));
+    let image = group_config_image("share.record.lock.duration.ms", "20000");
     let described = |resource_type, name: &str| {
         describe_at(
             settings_for((resource_type, name), &settings),
@@ -2495,15 +2500,7 @@ fn a_group_and_a_named_broker_report_the_values_the_coordinators_run_with() {
 /// group key's own name for a key with no broker synonym.
 #[test]
 fn a_group_reports_every_kafka_group_key_with_its_broker_synonym() {
-    let mut image = MetadataImage::new(Uuid::nil());
-    image.apply(&MetadataRecord::V1GroupConfig(
-        krabka_metadata::GroupConfigRecord {
-            group_id: "g".into(),
-            configs: maplit::btreemap! {
-                "streams.session.timeout.ms".to_owned() => "60000".to_owned(),
-            },
-        },
-    ));
+    let image = group_config_image("streams.session.timeout.ms", "60000");
     let result = describe(&image, RESOURCE_TYPE_GROUP, "g", None, EVERYTHING);
     let names: Vec<&str> = result
         .configs

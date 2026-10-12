@@ -265,7 +265,7 @@ mod tests {
         coordinator::unified::{
             ShareGroupSeed,
             share::{
-                actor::ShareGroupActorMessage,
+                actor::{ShareGroupActorHandle, ShareGroupActorMessage},
                 persistence::{ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo},
             },
         },
@@ -275,6 +275,23 @@ mod tests {
         },
         test_support::{DenyAll, ShareApiSupport, start_share_broker, test_ctx},
     };
+
+    async fn seed_initialized_topics(
+        actor: &ShareGroupActorHandle,
+        initialized: Vec<TopicPartitionsInfo>,
+    ) {
+        actor
+            .tx
+            .send(ShareGroupActorMessage::Seed(ShareGroupSeed {
+                state_partition_metadata: ShareGroupStatePartitionMetadataValue {
+                    initialized,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }))
+            .await
+            .expect("seed share actor");
+    }
 
     /// Denies `Read` on the named topics and allows everything else, so group
     /// `Delete` and topic creation still succeed and only the per-topic gate
@@ -464,22 +481,15 @@ mod tests {
         coordinator.mark_share("share-empty");
         let _share = coordinator.get_or_create_share("share-empty");
         coordinator.mark_share("share-held");
-        coordinator
-            .get_or_create_share("share-held")
-            .tx
-            .send(ShareGroupActorMessage::Seed(ShareGroupSeed {
-                state_partition_metadata: ShareGroupStatePartitionMetadataValue {
-                    initialized: vec![TopicPartitionsInfo {
-                        topic_id: elsewhere_id,
-                        topic_name: "elsewhere".into(),
-                        partitions: vec![0],
-                    }],
-                    ..Default::default()
-                },
-                ..Default::default()
-            }))
-            .await
-            .expect("seed share-held");
+        seed_initialized_topics(
+            &coordinator.get_or_create_share("share-held"),
+            vec![TopicPartitionsInfo {
+                topic_id: elsewhere_id,
+                topic_name: "elsewhere".into(),
+                partitions: vec![0],
+            }],
+        )
+        .await;
         let top_level = |error_code, message: &str| DeleteShareGroupOffsetsResponse {
             error_code,
             error_message: Some(message.into()),
@@ -581,29 +591,22 @@ mod tests {
             .expect("seed kept state");
 
         let actor = broker.group_coordinator.get_or_create_share("g-delete");
-        actor
-            .tx
-            .send(ShareGroupActorMessage::Seed(ShareGroupSeed {
-                state_partition_metadata: ShareGroupStatePartitionMetadataValue {
-                    initializing: Vec::new(),
-                    initialized: vec![
-                        TopicPartitionsInfo {
-                            topic_id: deleted_id,
-                            topic_name: "deleted".into(),
-                            partitions: vec![0],
-                        },
-                        TopicPartitionsInfo {
-                            topic_id: kept_id,
-                            topic_name: "kept".into(),
-                            partitions: vec![0],
-                        },
-                    ],
-                    ..Default::default()
+        seed_initialized_topics(
+            &actor,
+            vec![
+                TopicPartitionsInfo {
+                    topic_id: deleted_id,
+                    topic_name: "deleted".into(),
+                    partitions: vec![0],
                 },
-                ..Default::default()
-            }))
-            .await
-            .expect("seed share actor");
+                TopicPartitionsInfo {
+                    topic_id: kept_id,
+                    topic_name: "kept".into(),
+                    partitions: vec![0],
+                },
+            ],
+        )
+        .await;
 
         // The first delete removes the state, and
         // `completeDeleteShareGroupOffsets` takes the topic out of the
@@ -700,29 +703,22 @@ mod tests {
                 .expect("seed deny-topic state");
 
             let actor = broker.group_coordinator.get_or_create_share("g-authz");
-            actor
-                .tx
-                .send(ShareGroupActorMessage::Seed(ShareGroupSeed {
-                    state_partition_metadata: ShareGroupStatePartitionMetadataValue {
-                        initializing: Vec::new(),
-                        initialized: vec![
-                            TopicPartitionsInfo {
-                                topic_id: allow_id,
-                                topic_name: "allow-topic".into(),
-                                partitions: vec![0],
-                            },
-                            TopicPartitionsInfo {
-                                topic_id: deny_id,
-                                topic_name: "deny-topic".into(),
-                                partitions: vec![0],
-                            },
-                        ],
-                        ..Default::default()
+            seed_initialized_topics(
+                &actor,
+                vec![
+                    TopicPartitionsInfo {
+                        topic_id: allow_id,
+                        topic_name: "allow-topic".into(),
+                        partitions: vec![0],
                     },
-                    ..Default::default()
-                }))
-                .await
-                .expect("seed share actor");
+                    TopicPartitionsInfo {
+                        topic_id: deny_id,
+                        topic_name: "deny-topic".into(),
+                        partitions: vec![0],
+                    },
+                ],
+            )
+            .await;
 
             let response = handle(
                 &broker,

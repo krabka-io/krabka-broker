@@ -4,7 +4,7 @@
 
 use assert2::check;
 use krabka_protocol::{
-    Decode, Encode,
+    Decode,
     owned::{
         begin_quorum_epoch_request::{self as bqe_req, BeginQuorumEpochRequest},
         begin_quorum_epoch_response::{self as bqe_resp, BeginQuorumEpochResponse},
@@ -24,6 +24,7 @@ use crate::kraft::{
     transport::wire::{FETCH_SNAPSHOT_VERSION, QUORUM_EPOCH_VERSION, VOTE_VERSION},
     types::{QuorumState, SimInstant},
 };
+use crate::test_support::encode;
 
 const METADATA_TOPIC: &str = "__cluster_metadata";
 
@@ -74,12 +75,6 @@ fn fetch_snapshot(req: bytes::Bytes, reply: oneshot::Sender<bytes::Bytes>) -> In
         version: FETCH_SNAPSHOT_VERSION,
         reply,
     }
-}
-
-fn encode<M: Encode>(message: &M, version: i16) -> bytes::Bytes {
-    let mut body = bytes::BytesMut::new();
-    message.encode(&mut body, version).expect("encode");
-    body.freeze()
 }
 
 /// Node 1 of voters 1, 2 and 3, following node 2 in epoch 5.

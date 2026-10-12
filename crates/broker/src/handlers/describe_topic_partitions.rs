@@ -538,6 +538,15 @@ mod tests {
         }
     }
 
+    fn one_partition_request(topics: &[&str]) -> DescribeTopicPartitionsRequest {
+        let setup = DescribeTopicsSetup::one_partition(topics);
+        request()
+            .topics(setup.topics)
+            .response_partition_limit(setup.response_partition_limit)
+            .maybe_cursor(setup.cursor)
+            .call()
+    }
+
     #[bon::builder]
     fn request(
         #[builder(default = vec ! ["a" . to_owned ()])] topics: Vec<String>,
@@ -641,13 +650,7 @@ mod tests {
         // Budget of 1: "a" fills it, "b" is truncated with no row (the
         // partition-budget-at-topic-boundary rule), "c" is denied. Without
         // the fix, "c" would vanish instead of appearing after "b".
-        let req = request()
-            .topics(DescribeTopicsSetup::one_partition(&["a", "b", "c"]).topics)
-            .response_partition_limit(
-                DescribeTopicsSetup::one_partition(&["a", "b", "c"]).response_partition_limit,
-            )
-            .maybe_cursor(DescribeTopicsSetup::one_partition(&["a", "b", "c"]).cursor)
-            .call();
+        let req = one_partition_request(&["a", "b", "c"]);
 
         let resp = describe(&broker, req, &ctx).await;
 
@@ -782,52 +785,46 @@ mod tests {
     /// list, and its partition index must not be negative. Either failure
     /// answers `INVALID_REQUEST` for the whole request: one row per
     /// requested topic, in request order, none of them paginated.
-    #[tokio::test]
-    async fn invalid_cursor_fails_the_whole_request() {
-        let cases: [(&str, Option<RequestCursor>); 2] = [
-            (
-                "cursor topic absent from a non-empty topic list",
-                Some(RequestCursor {
-                    topic_name: "missing".into(),
-                    partition_index: 0,
-                    ..Default::default()
-                }),
-            ),
-            (
-                "negative cursor partition index",
-                Some(RequestCursor {
-                    topic_name: "a".into(),
-                    partition_index: -1,
-                    ..Default::default()
-                }),
-            ),
-        ];
+    #[yare::parameterized(
+        cursor_topic_is_not_requested = {
+            Some(RequestCursor {
+                topic_name: "missing".into(),
+                partition_index: 0,
+                ..Default::default()
+            })
+        },
+        cursor_partition_is_negative = {
+            Some(RequestCursor {
+                topic_name: "a".into(),
+                partition_index: -1,
+                ..Default::default()
+            })
+        },
+    )]
+    #[test_macro(tokio::test)]
+    async fn invalid_cursor_fails_the_whole_request(cursor: Option<RequestCursor>) {
+        seeded_topics_fixture!(
+            (broker_handle, _dir, broker, ctx),
+            Arc::new(crate::authorizer::AllowAllAuthorizer),
+            [TopicSetup {
+                topic: "a",
+                ..TopicSetup::single_replica()
+            }]
+        );
+        let req = request().maybe_cursor(cursor).call();
 
-        for (name, cursor) in cases {
-            seeded_topics_fixture!(
-                (broker_handle, _dir, broker, ctx),
-                Arc::new(crate::authorizer::AllowAllAuthorizer),
-                [TopicSetup {
-                    topic: "a",
-                    ..TopicSetup::single_replica()
-                }]
-            );
-            let req = request().maybe_cursor(cursor).call();
+        let resp = describe(&broker, req, &ctx).await;
 
-            let resp = describe(&broker, req, &ctx).await;
+        assert2::assert!(
+            resp == DescribeTopicPartitionsResponse {
+                throttle_time_ms: 0,
+                topics: vec![error_topic("a", codes::INVALID_REQUEST)],
+                next_cursor: None,
+                ..Default::default()
+            }
+        );
 
-            assert!(
-                resp == DescribeTopicPartitionsResponse {
-                    throttle_time_ms: 0,
-                    topics: vec![error_topic("a", codes::INVALID_REQUEST)],
-                    next_cursor: None,
-                    ..Default::default()
-                },
-                "case: {name}"
-            );
-
-            broker_handle.shutdown().await;
-        }
+        broker_handle.shutdown().await;
     }
 
     /// `response_partition_limit = 0` floors to 1 partition, not 0 --
@@ -873,58 +870,56 @@ mod tests {
     /// would, so a cursor can legitimately name a topic the image doesn't
     /// hold without krabka resolving it to an `UNKNOWN_TOPIC_OR_PARTITION`
     /// row.
-    #[tokio::test]
-    async fn budget_exhausted_at_topic_boundary_emits_no_row_for_the_next_topic() {
-        for next_topic_exists in [true, false] {
-            let (broker_handle, _dir) = start_broker(Arc::new(AllowAllAuthorizer)).await;
+    #[yare::parameterized(
+        next_topic_exists = { true },
+        next_topic_is_missing = { false },
+    )]
+    #[test_macro(tokio::test)]
+    async fn budget_exhausted_at_topic_boundary_emits_no_row_for_the_next_topic(
+        next_topic_exists: bool,
+    ) {
+        let (broker_handle, _dir) = start_broker(Arc::new(AllowAllAuthorizer)).await;
+        seed_topic(
+            &broker_handle,
+            TopicSetup {
+                topic: "a",
+                ..TopicSetup::single_replica()
+            },
+        )
+        .await;
+        if next_topic_exists {
             seed_topic(
                 &broker_handle,
                 TopicSetup {
-                    topic: "a",
+                    topic: "b",
+                    topic_id: uuid::Uuid::from_u128(2),
                     ..TopicSetup::single_replica()
                 },
             )
             .await;
-            if next_topic_exists {
-                seed_topic(
-                    &broker_handle,
-                    TopicSetup {
-                        topic: "b",
-                        topic_id: uuid::Uuid::from_u128(2),
-                        ..TopicSetup::single_replica()
-                    },
-                )
-                .await;
-            }
-            let broker = broker_handle.broker_arc_for_test();
-            test_ctx!(ctx, "admin");
-            let req = request()
-                .topics(DescribeTopicsSetup::one_partition(&["a", "b"]).topics)
-                .response_partition_limit(
-                    DescribeTopicsSetup::one_partition(&["a", "b"]).response_partition_limit,
-                )
-                .maybe_cursor(DescribeTopicsSetup::one_partition(&["a", "b"]).cursor)
-                .call();
-
-            let resp = describe(&broker, req, &ctx).await;
-
-            let names = response_topic_names(&resp);
-            assert!(
-                names == vec!["a"],
-                "next_topic_exists = {next_topic_exists}"
-            );
-            assert!(
-                resp.next_cursor
-                    == Some(ResponseCursor {
-                        topic_name: "b".into(),
-                        partition_index: 0,
-                        ..Default::default()
-                    }),
-                "next_topic_exists = {next_topic_exists}"
-            );
-
-            broker_handle.shutdown().await;
         }
+        let broker = broker_handle.broker_arc_for_test();
+        test_ctx!(ctx, "admin");
+        let req = one_partition_request(&["a", "b"]);
+
+        let resp = describe(&broker, req, &ctx).await;
+
+        let names = response_topic_names(&resp);
+        assert2::assert!(
+            names == vec!["a"],
+            "next_topic_exists = {next_topic_exists}"
+        );
+        assert2::assert!(
+            resp.next_cursor
+                == Some(ResponseCursor {
+                    topic_name: "b".into(),
+                    partition_index: 0,
+                    ..Default::default()
+                }),
+            "next_topic_exists = {next_topic_exists}"
+        );
+
+        broker_handle.shutdown().await;
     }
 
     /// A missing named topic's row answers `is_internal` (by name, since the

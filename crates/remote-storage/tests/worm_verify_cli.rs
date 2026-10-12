@@ -343,15 +343,30 @@ fn a_same_length_body_edit_needs_deep_to_be_seen() {
     check!(deep.stderr.contains("hashes to"));
 }
 
-#[test]
-fn an_unsigned_archive_is_an_incomplete_attestation() {
-    let fixture = Fixture::build().signing(ManifestSigning::Unsigned).call();
+#[yare::parameterized(
+    unsigned_archive = {
+        ManifestSigning::Unsigned,
+        SigningKey::Original,
+        "2 manifest(s) unsigned"
+    },
+    untrusted_rotated_key = {
+        ManifestSigning::Signed,
+        SigningKey::RotatedAfterFirstSegment,
+        "1 signed by an untrusted key"
+    },
+)]
+fn incomplete_attestation_is_reported(
+    signing: ManifestSigning,
+    key: SigningKey,
+    expected_detail: &str,
+) {
+    let fixture = Fixture::build().signing(signing).key(key).call();
 
     let result = run(&fixture.base_args());
 
     check!(result.code == Some(1), "stdout: {}", result.stdout);
     check!(result.stderr.contains("INCOMPLETE ATTESTATION"));
-    check!(result.stderr.contains("2 manifest(s) unsigned"));
+    check!(result.stderr.contains(expected_detail));
 }
 
 #[test]
@@ -509,21 +524,6 @@ fn both_key_pairs_verify_an_archive_that_spans_a_rotation() {
             .stdout
             .contains("chain continuous, all signatures valid")
     );
-}
-
-#[test]
-fn one_key_pair_leaves_the_rotated_half_untrusted() {
-    let fixture = Fixture::rotated();
-
-    let result = run(&fixture.base_args());
-
-    check!(result.code == Some(1), "stdout: {}", result.stdout);
-    check!(
-        result.stderr.contains("INCOMPLETE ATTESTATION"),
-        "stderr: {}",
-        result.stderr
-    );
-    check!(result.stderr.contains("1 signed by an untrusted key"));
 }
 
 #[test]

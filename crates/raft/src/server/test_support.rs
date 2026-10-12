@@ -119,9 +119,7 @@ pub(super) fn topic_record(name: &str) -> krabka_metadata::MetadataRecord {
 
 /// Encodes `message` at `version`.
 pub(super) fn encoded(message: &impl krabka_protocol::Encode, version: i16) -> bytes::Bytes {
-    let mut body = bytes::BytesMut::new();
-    message.encode(&mut body, version).expect("encode");
-    body.freeze()
+    crate::test_support::encode(message, version)
 }
 
 /// Decodes a `T` at `version` from the front of `bytes`.

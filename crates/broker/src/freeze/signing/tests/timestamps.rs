@@ -5,46 +5,43 @@
 //! a newer stamp than the entry it replaces. Together they are what stops an
 //! old signed thaw from being replayed.
 
-use assert2::check;
 use krabka_metadata::TopicFreezeRecord;
 use krabka_units::{Time, convert::TimeExt as _, minutes, secs};
 
 use super::{ALICE, CLUSTER_ID, NOW_MS, check_against, record, signed, trust};
 use crate::freeze::signing::{FreezeSignatureCheck, verify_freeze_signature};
 
-#[test]
-fn a_timestamp_on_the_edge_of_the_skew_window_is_accepted() {
+#[yare::parameterized(
+    exactly_past_edge = { NOW_MS - 300_000, true },
+    exactly_future_edge = { NOW_MS + 300_000, true },
+    one_millisecond_past_edge = { NOW_MS - 300_001, false },
+    one_millisecond_after_edge = { NOW_MS + 300_001, false },
+    same_moment = { NOW_MS, true },
+)]
+fn timestamp_skew_boundary_is_checked(set_at_ms: i64, expected: bool) {
     let trust = trust();
     let window = minutes(5);
-
-    for (label, set_at_ms, expected) in [
-        ("exactly the window in the past", NOW_MS - 300_000, true),
-        ("exactly the window in the future", NOW_MS + 300_000, true),
-        ("one millisecond past the window", NOW_MS - 300_001, false),
-        ("one millisecond after the window", NOW_MS + 300_001, false),
-        ("the same moment", NOW_MS, true),
-    ] {
-        let record = signed(
-            &trust.alice,
-            CLUSTER_ID,
-            &TopicFreezeRecord {
-                set_at_ms,
-                ..record()
-            },
-        );
-        let check = FreezeSignatureCheck {
-            max_skew: window,
-            ..check_against(&trust, ALICE)
-        };
-        check!(
-            verify_freeze_signature(&check, &record).is_ok() == expected,
-            "{label}"
-        );
-    }
+    let signed_record = signed(
+        &trust.alice,
+        CLUSTER_ID,
+        &TopicFreezeRecord {
+            set_at_ms,
+            ..record()
+        },
+    );
+    let check = FreezeSignatureCheck {
+        max_skew: window,
+        ..check_against(&trust, ALICE)
+    };
+    assert2::check!(verify_freeze_signature(&check, &signed_record).is_ok() == expected);
 }
 
-#[test]
-fn the_skew_window_takes_the_configured_width() {
+#[yare::parameterized(
+    wider_than_offset = { minutes(1), true },
+    narrower_than_offset = { secs(10), false },
+    zero_width = { secs(0), false },
+)]
+fn skew_window_uses_configured_width(max_skew: Time, expected: bool) {
     let trust = trust();
     let record = signed(
         &trust.alice,
@@ -55,20 +52,11 @@ fn the_skew_window_takes_the_configured_width() {
         },
     );
 
-    for (label, max_skew, expected) in [
-        ("a window wider than the offset", minutes(1), true),
-        ("a window narrower than the offset", secs(10), false),
-        ("a window of zero", secs(0), false),
-    ] {
-        let check = FreezeSignatureCheck {
-            max_skew,
-            ..check_against(&trust, ALICE)
-        };
-        check!(
-            verify_freeze_signature(&check, &record).is_ok() == expected,
-            "{label}"
-        );
-    }
+    let check = FreezeSignatureCheck {
+        max_skew,
+        ..check_against(&trust, ALICE)
+    };
+    assert2::check!(verify_freeze_signature(&check, &record).is_ok() == expected);
 }
 
 #[test]

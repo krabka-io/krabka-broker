@@ -1209,6 +1209,12 @@ mod tests {
         log.append(&mut batch).expect("append").0.0
     }
 
+    fn append_epochs(log: &mut Log, epochs: &[i32]) {
+        for &epoch in epochs {
+            append_at_epoch(log, epoch);
+        }
+    }
+
     fn epoch_checks_partition(dir: &std::path::Path) -> Arc<Partition> {
         spawn_standalone_partition()
             .log_dir(dir)
@@ -1264,10 +1270,7 @@ mod tests {
         let with_history = epoch_checks_partition(history_dir.path());
         {
             let mut log = with_history.log.lock().expect("log mutex poisoned");
-            append_at_epoch(&mut log, 0);
-            append_at_epoch(&mut log, 0);
-            append_at_epoch(&mut log, 1);
-            append_at_epoch(&mut log, 1);
+            append_epochs(&mut log, &[0, 0, 1, 1]);
         }
         // Every record is committed: a diverging row reports this live HW.
         with_history.replica_state.lock().await.hw = super::Offset(4);
@@ -1279,10 +1282,7 @@ mod tests {
         let with_gap = epoch_checks_partition(gap_dir.path());
         {
             let mut log = with_gap.log.lock().expect("log mutex poisoned");
-            append_at_epoch(&mut log, 0);
-            append_at_epoch(&mut log, 0);
-            append_at_epoch(&mut log, 3);
-            append_at_epoch(&mut log, 3);
+            append_epochs(&mut log, &[0, 0, 3, 3]);
         }
         // Every record is committed: a diverging row reports this live HW.
         with_gap.replica_state.lock().await.hw = super::Offset(4);
@@ -1295,12 +1295,7 @@ mod tests {
         let trimmed = epoch_checks_partition(trimmed_dir.path());
         {
             let mut log = trimmed.log.lock().expect("log mutex poisoned");
-            append_at_epoch(&mut log, 0);
-            append_at_epoch(&mut log, 0);
-            append_at_epoch(&mut log, 1);
-            append_at_epoch(&mut log, 1);
-            append_at_epoch(&mut log, 2);
-            append_at_epoch(&mut log, 2);
+            append_epochs(&mut log, &[0, 0, 1, 1, 2, 2]);
             log.set_log_start_offset(super::Offset(5))
                 .expect("move log start");
         }

@@ -381,6 +381,15 @@ mod tests {
             /// The leader and ISR of the record the tick submits, if any.
             expected: Option<(u64, &'static [u64])>,
         }
+        fn leader_removed_setup(isr: &[u64]) -> ReassignmentSetup<'static> {
+            ReassignmentSetup {
+                replicas: vec![NodeId(3), NodeId(4), NodeId(1), NodeId(2)],
+                isr: isr.iter().copied().map(NodeId).collect(),
+                adding: vec![NodeId(4)],
+                removing: vec![NodeId(1), NodeId(2)],
+                ..Default::default()
+            }
+        }
         let cases = [
             Case {
                 name: "broker 2 is a target replica outside the ISR",
@@ -401,24 +410,12 @@ mod tests {
             },
             Case {
                 name: "the leader is removed and broker 3 is not in the ISR",
-                assignment: ReassignmentSetup {
-                    replicas: vec![NodeId(3), NodeId(4), NodeId(1), NodeId(2)],
-                    isr: vec![NodeId(1), NodeId(2), NodeId(4)],
-                    adding: vec![NodeId(4)],
-                    removing: vec![NodeId(1), NodeId(2)],
-                    ..Default::default()
-                },
+                assignment: leader_removed_setup(&[1, 2, 4]),
                 expected: None,
             },
             Case {
                 name: "the leader is removed and every target replica is in the ISR",
-                assignment: ReassignmentSetup {
-                    replicas: vec![NodeId(3), NodeId(4), NodeId(1), NodeId(2)],
-                    isr: vec![NodeId(1), NodeId(3), NodeId(4)],
-                    adding: vec![NodeId(4)],
-                    removing: vec![NodeId(1), NodeId(2)],
-                    ..Default::default()
-                },
+                assignment: leader_removed_setup(&[1, 3, 4]),
                 // The handoff goes first; completion follows on the next tick.
                 expected: Some((3, &[1, 3, 4])),
             },
@@ -730,21 +727,10 @@ mod tests {
     async fn target_includes_only_replicas_minus_removing() {
         // adding=[4,5], removing=[1,2], replicas=[1,2,3,4,5].
         // target = [3,4,5]. isr ⊇ adding required; isr=[1,2,3,4,5].
+        let all_nodes = (1..=5).map(krabka_ids::NodeId).collect::<Vec<_>>();
         let img = img()
-            .replicas(vec![
-                krabka_ids::NodeId(1),
-                krabka_ids::NodeId(2),
-                krabka_ids::NodeId(3),
-                krabka_ids::NodeId(4),
-                krabka_ids::NodeId(5),
-            ])
-            .isr(vec![
-                krabka_ids::NodeId(1),
-                krabka_ids::NodeId(2),
-                krabka_ids::NodeId(3),
-                krabka_ids::NodeId(4),
-                krabka_ids::NodeId(5),
-            ])
+            .replicas(all_nodes.clone())
+            .isr(all_nodes)
             .adding(vec![krabka_ids::NodeId(4), krabka_ids::NodeId(5)])
             .removing(vec![krabka_ids::NodeId(1), krabka_ids::NodeId(2)])
             .leader(3)
