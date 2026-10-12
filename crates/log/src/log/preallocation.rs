@@ -19,7 +19,7 @@ use krabka_units::prelude::{ByteSize, ByteSizeExt as _, mebibytes};
 use super::{
     Log,
     test_support::{
-        TempLog, NO_LIMIT, append_samples, assert_log_end_offset, configured_test_log, sample_batch,
+        NO_LIMIT, TempLog, append_samples, assert_log_end_offset, configured_test_log, sample_batch,
     },
 };
 use crate::{

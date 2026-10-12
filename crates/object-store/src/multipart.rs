@@ -322,7 +322,11 @@ mod tests {
     async fn rejects_truncated_page_without_markers() {
         let body = "<ListMultipartUploadsResult><IsTruncated>true</IsTruncated></ListMultipartUploadsResult>";
         check_listing_error(
-            vec![HttpPage::new("GET /bucket?uploads= HTTP/1.1", "200 OK", body)],
+            vec![HttpPage::new(
+                "GET /bucket?uploads= HTTP/1.1",
+                "200 OK",
+                body,
+            )],
             "no continuation marker",
         )
         .await;

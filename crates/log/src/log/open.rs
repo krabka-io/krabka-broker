@@ -19,8 +19,8 @@ use tracing::instrument;
 use super::{
     Log,
     control::{
-        ControlBatchKind, batch_control_marker_coordinator_epoch, control_batch_kind,
-        TransactionMarkerFlags, transaction_marker_flags,
+        ControlBatchKind, TransactionMarkerFlags, batch_control_marker_coordinator_epoch,
+        control_batch_kind, transaction_marker_flags,
     },
 };
 use crate::{
@@ -403,9 +403,9 @@ impl Log {
         self.update_owned_producer_entry(batch)?;
         if batch.attributes.is_control_batch() {
             let TransactionMarkerFlags {
-            is_abort,
-            is_commit,
-        } = transaction_marker_flags(batch)?;
+                is_abort,
+                is_commit,
+            } = transaction_marker_flags(batch)?;
             if krabka_verified::transaction_marker_closes(
                 is_abort,
                 is_commit,
@@ -519,9 +519,9 @@ impl Log {
             entry.producer_epoch = batch.producer_epoch;
             entry.timestamp = batch.max_timestamp;
             let TransactionMarkerFlags {
-            is_abort,
-            is_commit,
-        } = transaction_marker_flags(batch)?;
+                is_abort,
+                is_commit,
+            } = transaction_marker_flags(batch)?;
             if is_abort || is_commit {
                 entry.current_txn_first_offset = None;
             }

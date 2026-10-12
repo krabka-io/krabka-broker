@@ -244,10 +244,10 @@ fn a_disk_full_producer_snapshot_fails_the_roll_and_the_log_reopens_without_it()
             ..tiny_segments()
         };
         let DurableLog {
-                dir,
-                mut log,
-                durable,
-            } = durable_sample_log(&config);
+            dir,
+            mut log,
+            durable,
+        } = durable_sample_log(&config);
 
         log.test_set_io(DiskFull::new(IoTarget::ProducerSnapshot, prefix));
         let error = log
@@ -322,10 +322,7 @@ struct CompactableLog {
 fn a_disk_full_compaction_swap_leaves_the_pre_compaction_log_intact() {
     for FailureShape { label, prefix } in PREFIXES {
         let dir = tempdir().unwrap();
-        let CompactableLog {
-            config,
-            mut log,
-        } = compactable_log(dir.path());
+        let CompactableLog { config, mut log } = compactable_log(dir.path());
         let before = log.log_end_offset();
 
         log.test_set_io(DiskFull::new(IoTarget::CompactionSwap, prefix));
@@ -364,10 +361,7 @@ fn a_disk_full_compaction_swap_leaves_the_pre_compaction_log_intact() {
 #[test]
 fn a_failed_compaction_directory_fsync_is_reported_and_the_reopened_log_is_whole() {
     let dir = tempdir().unwrap();
-    let CompactableLog {
-            config,
-            mut log,
-        } = compactable_log(dir.path());
+    let CompactableLog { config, mut log } = compactable_log(dir.path());
     let before = log.log_end_offset();
 
     log.test_set_io(Arc::new(DirSyncFull));

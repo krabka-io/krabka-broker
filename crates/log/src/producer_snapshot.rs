@@ -737,7 +737,10 @@ mod tests {
 
     #[test]
     fn future_entry_state_is_removed_and_previous_snapshot_is_loaded() {
-        let TempPath { dir, path: previous } = sample_file();
+        let TempPath {
+            dir,
+            path: previous,
+        } = sample_file();
         let future_state = write(&FileIo, dir.path(), Offset(103), &sample()).unwrap();
         let mut bytes = fs::read(&future_state).unwrap();
         bytes[24..32].copy_from_slice(&103_i64.to_be_bytes());
@@ -908,7 +911,10 @@ mod tests {
     #[test]
     fn existing_snapshot_does_not_prepare_state_but_still_syncs_the_directory() {
         use std::sync::atomic::Ordering::SeqCst;
-        let TempPath { dir, path: destination } = sample_file();
+        let TempPath {
+            dir,
+            path: destination,
+        } = sample_file();
         let io = DirectoryDebt::default();
         let result = write_if_missing(&io, dir.path(), Offset(102), || {
             panic!("an existing snapshot must not encode or sort producer state")
@@ -921,7 +927,10 @@ mod tests {
 
     #[test]
     fn snapshot_read_io_failure_is_not_treated_as_corruption() {
-        let TempPath { dir, path: previous } = sample_file();
+        let TempPath {
+            dir,
+            path: previous,
+        } = sample_file();
         let unreadable = path(dir.path(), Offset(103));
         fs::create_dir(&unreadable).unwrap();
         let corrupt = write(&FileIo, dir.path(), Offset(104), &sample()).unwrap();

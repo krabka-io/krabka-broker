@@ -280,8 +280,12 @@ pub fn verbatim_from(producer: &RecordBatch, leader_epoch: LeaderEpoch) -> Encod
 
 /// A transactional (non-control) batch for the given pid/epoch containing `values`.
 pub fn append_transaction(log: &mut Log, producer_id: i64, producer_epoch: i16, values: &[&str]) {
-    log.append(&mut transactional_batch(producer_id, producer_epoch, values))
-        .unwrap();
+    log.append(&mut transactional_batch(
+        producer_id,
+        producer_epoch,
+        values,
+    ))
+    .unwrap();
 }
 
 pub fn transactional_batch(pid: i64, epoch: i16, values: &[&str]) -> RecordBatch {
@@ -488,7 +492,11 @@ pub fn keyed_batch(base: i64, items: &[KeyedRecord<'_>]) -> RecordBatch {
             ..Default::default()
         })
         .collect();
-    let last_delta = items.iter().map(|item| item.offset_delta).max().unwrap_or(0);
+    let last_delta = items
+        .iter()
+        .map(|item| item.offset_delta)
+        .max()
+        .unwrap_or(0);
     RecordBatch {
         base_offset: base,
         last_offset_delta: last_delta,
@@ -562,7 +570,9 @@ pub(crate) fn append_path(log: &mut Log, path: AppendPath, mut batch: RecordBatc
         }
         AppendPath::Verbatim if !batch.attributes.is_control_batch() => {
             batch.base_offset = log_end.0;
-            let EncodedVerbatim { batch: verbatim, .. } = verbatim_from(&batch, LeaderEpoch(0));
+            let EncodedVerbatim {
+                batch: verbatim, ..
+            } = verbatim_from(&batch, LeaderEpoch(0));
             log.append_verbatim_at(&verbatim, log_end).unwrap();
         }
         AppendPath::Follower | AppendPath::Verbatim => log.append_at(&mut batch, log_end).unwrap(),

@@ -179,10 +179,7 @@ mod tests {
         {
             let mut b: &[u8] = input;
             let got = take_u32(&mut b);
-            check!(
-                (got, b.len()) == (want, want_left),
-                "take_u32({input:x?})"
-            );
+            check!((got, b.len()) == (want, want_left), "take_u32({input:x?})");
         }
     }
 }

@@ -18,11 +18,11 @@ use crate::{
     AuditEventClass, FileEd25519Signer, NodeId,
     chain::ChainState,
     event::{AuditEvent, LifecycleKind},
-    test_support::TempSpool,
     ocsf::ProductInfo,
     sink::{AuditError, AuditRecord, AuditSink, MemorySink},
     spool::Spool,
     stats::AuditStats,
+    test_support::TempSpool,
 };
 
 pub fn product() -> ProductInfo {

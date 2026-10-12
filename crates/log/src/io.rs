@@ -460,7 +460,11 @@ mod tests {
 
     #[test]
     fn write_atomic_replaces_the_target_and_consumes_the_staging_file() {
-        let ExistingState { dir: _dir, path, tmp } = existing_state(b"old contents");
+        let ExistingState {
+            dir: _dir,
+            path,
+            tmp,
+        } = existing_state(b"old contents");
 
         for contents in [b"new".as_slice(), b"newer"] {
             write_file_atomic(&tmp, &path, contents).unwrap();
@@ -471,7 +475,11 @@ mod tests {
 
     #[test]
     fn write_atomic_leaves_the_target_alone_when_the_staged_write_fails() {
-        let ExistingState { dir: _dir, path, tmp } = existing_state(b"old");
+        let ExistingState {
+            dir: _dir,
+            path,
+            tmp,
+        } = existing_state(b"old");
 
         let io = Scripted::new(vec![Err(std::io::Error::from(
             std::io::ErrorKind::StorageFull,

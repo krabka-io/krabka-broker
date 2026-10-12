@@ -147,9 +147,7 @@ fn spawn_writer<T: Send + 'static>(
     SpawnedWriter { writer, received }
 }
 
-fn partition_with_executor(
-    executor: impl FnOnce() -> Arc<super::executor::Executor>,
-) -> TempLog {
+fn partition_with_executor(executor: impl FnOnce() -> Arc<super::executor::Executor>) -> TempLog {
     let directory = tempdir().unwrap();
     let mut log = first_append(directory.path(), false);
     log.rollover_flusher.executor = Some(executor());
@@ -256,7 +254,8 @@ fn stamped_appends_wait_for_earlier_rollovers_in_both_append_paths() {
             received: rx,
         } = spawn_writer(log, move |log| {
             if verbatim {
-                let EncodedVerbatim { batch, .. } = verbatim_from(&sample_batch(1), krabka_ids::LeaderEpoch(1));
+                let EncodedVerbatim { batch, .. } =
+                    verbatim_from(&sample_batch(1), krabka_ids::LeaderEpoch(1));
                 log.append_verbatim(&batch).unwrap();
             } else {
                 log.append(&mut sample_batch(1)).unwrap();
@@ -433,8 +432,14 @@ fn many_partitions_share_a_fixed_worker_pool() {
 fn snapshot_byte_backpressure_is_shared_between_partitions_and_admits_oversized_jobs_exclusively() {
     for budget in [producer_snapshot::allocation_size(1).unwrap(), 1] {
         let executor = super::executor::Executor::new(2, 256, budget).unwrap();
-        let TempLog { dir: _first_dir, log: mut first } = partition_with_executor(|| executor.clone());
-        let TempLog { dir: second_dir, log: mut second } = partition_with_executor(|| executor);
+        let TempLog {
+            dir: _first_dir,
+            log: mut first,
+        } = partition_with_executor(|| executor.clone());
+        let TempLog {
+            dir: second_dir,
+            log: mut second,
+        } = partition_with_executor(|| executor);
         let Gate { io: gate, started } = install_gate(&mut first, false);
         first.append(&mut sample_batch(1)).unwrap();
         let began = await_progress(&started);
@@ -518,7 +523,10 @@ fn synchronous_rollovers_do_not_clone_flush_handles_and_clone_failure_does_not_s
 #[test]
 fn a_busy_partition_yields_between_flushes_without_reordering_its_boundaries() {
     let executor = super::executor::Executor::new(1, 256, 64 * 1024 * 1024).unwrap();
-    let TempLog { dir: first_dir, log: mut first } = partition_with_executor(|| executor.clone());
+    let TempLog {
+        dir: first_dir,
+        log: mut first,
+    } = partition_with_executor(|| executor.clone());
     let Gate {
         io: first_gate,
         started: first_started,
@@ -526,7 +534,10 @@ fn a_busy_partition_yields_between_flushes_without_reordering_its_boundaries() {
     first.append(&mut sample_batch(1)).unwrap();
     let first_began = await_progress(&first_started);
     first.append(&mut sample_batch(1)).unwrap();
-    let TempLog { dir: _second_dir, log: mut second } = partition_with_executor(|| executor);
+    let TempLog {
+        dir: _second_dir,
+        log: mut second,
+    } = partition_with_executor(|| executor);
     let Gate {
         io: second_gate,
         started: second_started,

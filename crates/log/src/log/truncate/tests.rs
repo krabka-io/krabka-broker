@@ -11,8 +11,9 @@ use crate::{
     config::LogConfig,
     leader_epoch_checkpoint::EpochEntry,
     log::test_support::{
-        TempLog, append_samples, ExpectedStamp, check_stamps, rolling_test_log, sample_batch, sample_batch_with_epoch,
-        stamped_rolling_log, stamped_test_log, test_batch_at, test_log, tiny_segments,
+        ExpectedStamp, TempLog, append_samples, check_stamps, rolling_test_log, sample_batch,
+        sample_batch_with_epoch, stamped_rolling_log, stamped_test_log, test_batch_at, test_log,
+        tiny_segments,
     },
     producer_snapshot::ProducerSnapshotEntry,
     stamp_index::{StampEntry, StampIndex},
@@ -307,7 +308,23 @@ fn truncate_preserves_stamp_indexes_before_promoted_segment() {
 
     log.truncate_to(Offset(2)).unwrap();
 
-    check_stamps(&log, &[ExpectedStamp { offset: 0, stamp: Some(10) }, ExpectedStamp { offset: 1, stamp: Some(11) }, ExpectedStamp { offset: 2, stamp: None }]);
+    check_stamps(
+        &log,
+        &[
+            ExpectedStamp {
+                offset: 0,
+                stamp: Some(10),
+            },
+            ExpectedStamp {
+                offset: 1,
+                stamp: Some(11),
+            },
+            ExpectedStamp {
+                offset: 2,
+                stamp: None,
+            },
+        ],
+    );
 }
 
 #[test]
@@ -316,7 +333,23 @@ fn trim_removes_only_evicted_segment_stamp_indexes() {
 
     log.trim_to_offset(Offset(1)).unwrap();
 
-    check_stamps(&log, &[ExpectedStamp { offset: 0, stamp: None }, ExpectedStamp { offset: 1, stamp: Some(11) }, ExpectedStamp { offset: 2, stamp: Some(12) }]);
+    check_stamps(
+        &log,
+        &[
+            ExpectedStamp {
+                offset: 0,
+                stamp: None,
+            },
+            ExpectedStamp {
+                offset: 1,
+                stamp: Some(11),
+            },
+            ExpectedStamp {
+                offset: 2,
+                stamp: Some(12),
+            },
+        ],
+    );
 }
 
 #[test]

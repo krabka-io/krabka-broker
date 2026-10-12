@@ -275,7 +275,8 @@ mod tests {
         );
 
         // Any other error is returned rather than retried.
-        let Scripted { read, .. } = scripted(vec![Ok(1), Err(Error::from(ErrorKind::PermissionDenied))]);
+        let Scripted { read, .. } =
+            scripted(vec![Ok(1), Err(Error::from(ErrorKind::PermissionDenied))]);
         let mut buf = [0u8; 4];
         check!(
             read_full_with(read, 0, &mut buf).is_err(),
@@ -387,7 +388,14 @@ mod tests {
                 max,
                 Some(span(0, 4 * max)),
             ),
-            ("a small cap", 100, 1_000, 10_000, 300, Some(span(100, 1_300))),
+            (
+                "a small cap",
+                100,
+                1_000,
+                10_000,
+                300,
+                Some(span(100, 1_300)),
+            ),
             (
                 "a zero cap hints only the window",
                 100,
@@ -429,11 +437,16 @@ mod tests {
         use krabka_units::prelude::bytes;
 
         use crate::{
-            segment::test_support::{TempSegment, DENSE_INDEX, recording_advice, test_batch_at, test_segment},
+            segment::test_support::{
+                DENSE_INDEX, TempSegment, recording_advice, test_batch_at, test_segment,
+            },
             test_support::AdviceCall,
         };
 
-        let TempSegment { dir: _dir, segment: mut seg } = test_segment();
+        let TempSegment {
+            dir: _dir,
+            segment: mut seg,
+        } = test_segment();
         let mut positions = Vec::new();
         for off in 0..20i64 {
             positions.push(seg.log_size);

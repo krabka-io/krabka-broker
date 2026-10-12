@@ -880,21 +880,77 @@ mod tests {
             len: usize,
             range: Option<std::ops::Range<usize>>,
         }
-let cases = [
-            Case { pos: 1000, len: 60, range: Some(0..60) },
-            Case { pos: 1000, len: 10, range: Some(0..10) },
-            Case { pos: 1005, len: 10, range: Some(5..15) },
-            Case { pos: 1009, len: 30, range: Some(9..39) },
-            Case { pos: 1030, len: 30, range: Some(30..60) },
-            Case { pos: 1059, len: 1, range: Some(59..60) },
-            Case { pos: 1060, len: 0, range: Some(60..60) },
-            Case { pos: 1000, len: 0, range: Some(0..0) },
-            Case { pos: 999, len: 1, range: None },
-            Case { pos: 999, len: 0, range: None },
-            Case { pos: 1050, len: 11, range: None },
-            Case { pos: 1061, len: 0, range: None },
-            Case { pos: 2000, len: 5, range: None },
-            Case { pos: u64::MAX, len: 1, range: None },
+        let cases = [
+            Case {
+                pos: 1000,
+                len: 60,
+                range: Some(0..60),
+            },
+            Case {
+                pos: 1000,
+                len: 10,
+                range: Some(0..10),
+            },
+            Case {
+                pos: 1005,
+                len: 10,
+                range: Some(5..15),
+            },
+            Case {
+                pos: 1009,
+                len: 30,
+                range: Some(9..39),
+            },
+            Case {
+                pos: 1030,
+                len: 30,
+                range: Some(30..60),
+            },
+            Case {
+                pos: 1059,
+                len: 1,
+                range: Some(59..60),
+            },
+            Case {
+                pos: 1060,
+                len: 0,
+                range: Some(60..60),
+            },
+            Case {
+                pos: 1000,
+                len: 0,
+                range: Some(0..0),
+            },
+            Case {
+                pos: 999,
+                len: 1,
+                range: None,
+            },
+            Case {
+                pos: 999,
+                len: 0,
+                range: None,
+            },
+            Case {
+                pos: 1050,
+                len: 11,
+                range: None,
+            },
+            Case {
+                pos: 1061,
+                len: 0,
+                range: None,
+            },
+            Case {
+                pos: 2000,
+                len: 5,
+                range: None,
+            },
+            Case {
+                pos: u64::MAX,
+                len: 1,
+                range: None,
+            },
         ];
         for Case { pos, len, range } in cases {
             check!(
@@ -934,10 +990,7 @@ let cases = [
     #[test]
     fn tail_cache_group_push_matches_single_pushes_and_detaches_survivors() {
         for cap in [1000, 60, 59, 50, 30, 29, 0] {
-            let ThreeChunks {
-                cache: single,
-                all,
-            } = three_chunks(cap);
+            let ThreeChunks { cache: single, all } = three_chunks(cap);
             let group = Bytes::from(all.clone());
             let mut grouped = TailCache::new(cap, 1000);
             grouped.push_group(&group, &[10, 30, 60]);
@@ -984,10 +1037,7 @@ let cases = [
             (900, 900, 900),
         ];
         for (end, start, new_end) in cases {
-            let ThreeChunks {
-                mut cache,
-                all,
-            } = three_chunks(1 << 20);
+            let ThreeChunks { mut cache, all } = three_chunks(1 << 20);
             cache.truncate(end);
             check!(
                 (cache.start(), cache.end()) == (start, new_end),

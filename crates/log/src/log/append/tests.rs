@@ -12,11 +12,11 @@ use crate::{
     io::{FileIo, LogIo},
     leader_epoch_checkpoint::EpochEntry,
     log::test_support::{
-        TempLog, abort_marker, append_transaction, assert_empty_append_state, assert_only_active,
-        check_append_time_lookup, configured_test_log, gzip_value, install_stamps,
-        log_append_time_log, rolling_test_log, sample_batch, sample_batch_with_epoch, sample_log,
-        stamped_test_log, test_batch_at, test_log, tiny_segments, transactional_batch,
-        EncodedVerbatim, verbatim_from, write_with_budget,
+        EncodedVerbatim, TempLog, abort_marker, append_transaction, assert_empty_append_state,
+        assert_only_active, check_append_time_lookup, configured_test_log, gzip_value,
+        install_stamps, log_append_time_log, rolling_test_log, sample_batch,
+        sample_batch_with_epoch, sample_log, stamped_test_log, test_batch_at, test_log,
+        tiny_segments, transactional_batch, verbatim_from, write_with_budget,
     },
     name::log_path,
     retention::now_ms,
@@ -196,9 +196,21 @@ fn every_appended_batch_is_assigned_its_leader_epoch() {
         start_offset: Offset(start_offset),
     };
     let rows = [
-        EpochRow { name: "unknown epochs record nothing and a repeat is a no-op", offered: &[-1, 5, 5, 6, -1], expected: vec![entry(5, 1), entry(6, 3)] },
-        EpochRow { name: "an older epoch truncates the entries it does not follow", offered: &[1, 3, 2], expected: vec![entry(1, 0), entry(2, 2)] },
-        EpochRow { name: "an epoch older than every entry replaces them all", offered: &[4, 6, 3], expected: vec![entry(3, 2)] },
+        EpochRow {
+            name: "unknown epochs record nothing and a repeat is a no-op",
+            offered: &[-1, 5, 5, 6, -1],
+            expected: vec![entry(5, 1), entry(6, 3)],
+        },
+        EpochRow {
+            name: "an older epoch truncates the entries it does not follow",
+            offered: &[1, 3, 2],
+            expected: vec![entry(1, 0), entry(2, 2)],
+        },
+        EpochRow {
+            name: "an epoch older than every entry replaces them all",
+            offered: &[4, 6, 3],
+            expected: vec![entry(3, 2)],
+        },
     ];
 
     for EpochRow {
@@ -209,25 +221,39 @@ fn every_appended_batch_is_assigned_its_leader_epoch() {
     {
         let at = |i: usize| Offset(i64::try_from(i).unwrap());
         let paths: [AppendRoute<'_>; 4] = [
-            AppendRoute { path: "append", append: Box::new(|log, _, epoch| {
+            AppendRoute {
+                path: "append",
+                append: Box::new(|log, _, epoch| {
                     let mut batch = sample_batch(1);
                     batch.partition_leader_epoch = epoch;
                     log.append(&mut batch).expect("append");
-                }) },
-            AppendRoute { path: "append_at", append: Box::new(|log, i, epoch| {
+                }),
+            },
+            AppendRoute {
+                path: "append_at",
+                append: Box::new(|log, i, epoch| {
                     let mut batch = sample_batch(1);
                     batch.partition_leader_epoch = epoch;
                     log.append_at(&mut batch, at(i)).expect("append_at");
-                }) },
-            AppendRoute { path: "append_verbatim", append: Box::new(|log, _, epoch| {
-                    let EncodedVerbatim { batch: vb, .. } = verbatim_from(&test_batch_at(0), LeaderEpoch(epoch));
+                }),
+            },
+            AppendRoute {
+                path: "append_verbatim",
+                append: Box::new(|log, _, epoch| {
+                    let EncodedVerbatim { batch: vb, .. } =
+                        verbatim_from(&test_batch_at(0), LeaderEpoch(epoch));
                     log.append_verbatim(&vb).expect("append_verbatim");
-                }) },
-            AppendRoute { path: "append_verbatim_at", append: Box::new(|log, i, epoch| {
-                    let EncodedVerbatim { batch: vb, .. } = verbatim_from(&test_batch_at(0), LeaderEpoch(epoch));
+                }),
+            },
+            AppendRoute {
+                path: "append_verbatim_at",
+                append: Box::new(|log, i, epoch| {
+                    let EncodedVerbatim { batch: vb, .. } =
+                        verbatim_from(&test_batch_at(0), LeaderEpoch(epoch));
                     log.append_verbatim_at(&vb, at(i))
                         .expect("append_verbatim_at");
-                }) },
+                }),
+            },
         ];
         for AppendRoute { path, append } in &paths {
             let TempLog { dir: _dir, mut log } = test_log();
@@ -345,14 +371,20 @@ fn sidecar_failure_rolls_back_bytes_frontiers_and_allows_retry() {
 
 #[test]
 fn segment_bytes_are_synced_before_durable_sidecars() {
-    let TempLog { dir: _dir, log: mut stamped_log } = stamped_test_log(100, 1);
+    let TempLog {
+        dir: _dir,
+        log: mut stamped_log,
+    } = stamped_test_log(100, 1);
     let stamp_syncs = std::sync::Arc::new(CountSync(std::sync::atomic::AtomicUsize::new(0)));
     stamped_log.test_set_io(stamp_syncs.clone());
 
     stamped_log.append(&mut sample_batch(1)).unwrap();
     assert!(stamp_syncs.0.load(std::sync::atomic::Ordering::Relaxed) == 1);
 
-    let TempLog { dir: _dir, log: mut transaction_log } = test_log();
+    let TempLog {
+        dir: _dir,
+        log: mut transaction_log,
+    } = test_log();
     let txn_syncs = std::sync::Arc::new(CountSync(std::sync::atomic::AtomicUsize::new(0)));
     transaction_log.test_set_io(txn_syncs.clone());
     append_transaction(&mut transaction_log, 7, 0, &["value"]);
@@ -511,14 +543,38 @@ fn segment_ms_rolls_against_the_incoming_batch_timestamp() {
     }
 
     let cases = [
-        RollCase { segment_ms: 10_000, first_ts: 0, incoming_ts: 10_001, expect_roll: true, label: "gap exceeds segment.ms" },
-        RollCase { segment_ms: 10_000, first_ts: 0, incoming_ts: 10_000, expect_roll: false, label: "gap equal to segment.ms does not roll" },
-        RollCase { segment_ms: 10_000, first_ts: 0, incoming_ts: 5_000, expect_roll: false, label: "within segment.ms" },
+        RollCase {
+            segment_ms: 10_000,
+            first_ts: 0,
+            incoming_ts: 10_001,
+            expect_roll: true,
+            label: "gap exceeds segment.ms",
+        },
+        RollCase {
+            segment_ms: 10_000,
+            first_ts: 0,
+            incoming_ts: 10_000,
+            expect_roll: false,
+            label: "gap equal to segment.ms does not roll",
+        },
+        RollCase {
+            segment_ms: 10_000,
+            first_ts: 0,
+            incoming_ts: 5_000,
+            expect_roll: false,
+            label: "within segment.ms",
+        },
         // A backfill batch with an old timestamp: the gap is measured from
         // the batch's own stamp, not from when it arrived, so a producer
         // backfilling old records rolls on krabka exactly when it would on
         // Kafka and not otherwise.
-        RollCase { segment_ms: 10_000, first_ts: 100_000, incoming_ts: 80_000, expect_roll: false, label: "backfill batch narrows the gap" },
+        RollCase {
+            segment_ms: 10_000,
+            first_ts: 100_000,
+            incoming_ts: 80_000,
+            expect_roll: false,
+            label: "backfill batch narrows the gap",
+        },
     ];
     for RollCase {
         segment_ms,
@@ -586,11 +642,36 @@ fn a_full_offset_or_time_index_rolls_the_segment() {
     }
 
     let cases = [
-        IndexRollCase { label: "a time index too small for an entry rolls every batch", segment_index_size: bytes(12), rising: true, expected: (0..10).collect() },
-        IndexRollCase { label: "two time-index slots fill after one entry", segment_index_size: bytes(24), rising: true, expected: vec![0, 2, 4, 6, 8] },
-        IndexRollCase { label: "three time-index slots fill after two entries", segment_index_size: bytes(36), rising: true, expected: vec![0, 3, 6, 9] },
-        IndexRollCase { label: "a flat clock leaves the four offset-index slots to fill", segment_index_size: bytes(36), rising: false, expected: vec![0, 5] },
-        IndexRollCase { label: "Kafka's default holds every entry", segment_index_size: mebibytes(10), rising: true, expected: vec![0] },
+        IndexRollCase {
+            label: "a time index too small for an entry rolls every batch",
+            segment_index_size: bytes(12),
+            rising: true,
+            expected: (0..10).collect(),
+        },
+        IndexRollCase {
+            label: "two time-index slots fill after one entry",
+            segment_index_size: bytes(24),
+            rising: true,
+            expected: vec![0, 2, 4, 6, 8],
+        },
+        IndexRollCase {
+            label: "three time-index slots fill after two entries",
+            segment_index_size: bytes(36),
+            rising: true,
+            expected: vec![0, 3, 6, 9],
+        },
+        IndexRollCase {
+            label: "a flat clock leaves the four offset-index slots to fill",
+            segment_index_size: bytes(36),
+            rising: false,
+            expected: vec![0, 5],
+        },
+        IndexRollCase {
+            label: "Kafka's default holds every entry",
+            segment_index_size: mebibytes(10),
+            rising: true,
+            expected: vec![0],
+        },
     ];
     for IndexRollCase {
         label,
@@ -804,11 +885,31 @@ fn a_monotonic_scheduled_log_refuses_a_batch_that_precedes_its_schedule() {
     }
 
     const CASES: [RefusalCase; 5] = [
-        RefusalCase { delivery_ms: 2_001, refused: false, label: "after the largest delivery time held" },
-        RefusalCase { delivery_ms: 2_000, refused: false, label: "equal to it, which does not run backwards" },
-        RefusalCase { delivery_ms: 1_999, refused: true, label: "one millisecond before it" },
-        RefusalCase { delivery_ms: 1_500, refused: true, label: "between the two batches already scheduled" },
-        RefusalCase { delivery_ms: 0, refused: true, label: "behind the whole schedule" },
+        RefusalCase {
+            delivery_ms: 2_001,
+            refused: false,
+            label: "after the largest delivery time held",
+        },
+        RefusalCase {
+            delivery_ms: 2_000,
+            refused: false,
+            label: "equal to it, which does not run backwards",
+        },
+        RefusalCase {
+            delivery_ms: 1_999,
+            refused: true,
+            label: "one millisecond before it",
+        },
+        RefusalCase {
+            delivery_ms: 1_500,
+            refused: true,
+            label: "between the two batches already scheduled",
+        },
+        RefusalCase {
+            delivery_ms: 0,
+            refused: true,
+            label: "behind the whole schedule",
+        },
     ];
 
     for RefusalCase {

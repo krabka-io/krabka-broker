@@ -77,9 +77,10 @@ mod tests {
 
     use super::*;
     use crate::segment::test_support::{
-        TempSegment, FIRST_LARGE_TIMESTAMP_BATCH, NO_LIMIT, ONE_RECORD_BATCH, RecordCount, RecordTimestamp,
+        FIRST_LARGE_TIMESTAMP_BATCH, NO_LIMIT, ONE_RECORD_BATCH, RecordCount, RecordTimestamp,
         SECOND_LARGE_TIMESTAMP_BATCH, SECOND_SINGLE_RECORD_BATCH, SampleBatchSetup,
-        SeededSegmentSetup, THIRD_SINGLE_RECORD_BATCH, sample_batch, seeded_fixture, test_segment,
+        SeededSegmentSetup, THIRD_SINGLE_RECORD_BATCH, TempSegment, sample_batch, seeded_fixture,
+        test_segment,
     };
 
     // `Segment::read` maps the absolute fetch offset to a relative index key
@@ -90,7 +91,10 @@ mod tests {
     // batch, skipping the offset-103 batch.
     #[test]
     fn read_uses_relative_offset_for_index_lookup() {
-        let TempSegment { dir: _dir, segment: seg } = super::super::test_support::indexed_segment();
+        let TempSegment {
+            dir: _dir,
+            segment: seg,
+        } = super::super::test_support::indexed_segment();
         let read = seg.read(Offset(103), NO_LIMIT).unwrap();
         assert2::assert!(seg.last_offset() == Offset(105));
         assert2::assert!(
@@ -109,7 +113,10 @@ mod tests {
     /// read stops after one batch.
     #[test]
     fn read_consumed_bytes_gates_max_bytes_budget() {
-        let TempSegment { dir: _dir, segment: seg } = seeded_fixture(SeededSegmentSetup {
+        let TempSegment {
+            dir: _dir,
+            segment: seg,
+        } = seeded_fixture(SeededSegmentSetup {
             batches: &[
                 ONE_RECORD_BATCH,
                 SECOND_SINGLE_RECORD_BATCH,
@@ -127,7 +134,10 @@ mod tests {
 
     #[test]
     fn read_at_higher_offset_skips_earlier_batches() {
-        let TempSegment { dir: _dir, segment: mut seg } = test_segment();
+        let TempSegment {
+            dir: _dir,
+            segment: mut seg,
+        } = test_segment();
         seg.append(&sample_batch(FIRST_LARGE_TIMESTAMP_BATCH), kibibytes(4))
             .unwrap();
         seg.append(&sample_batch(SECOND_LARGE_TIMESTAMP_BATCH), kibibytes(4))
@@ -143,7 +153,10 @@ mod tests {
 
     #[test]
     fn read_past_last_offset_returns_empty() {
-        let TempSegment { dir: _dir, segment: mut seg } = test_segment();
+        let TempSegment {
+            dir: _dir,
+            segment: mut seg,
+        } = test_segment();
         seg.append(
             &sample_batch(SampleBatchSetup {
                 records: RecordCount(2),

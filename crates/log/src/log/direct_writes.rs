@@ -24,8 +24,8 @@ use krabka_units::prelude::{ByteSize, ByteSizeExt as _, bytes, mebibytes};
 use super::{
     Log,
     test_support::{
-        TempLog, NO_LIMIT, append_samples, assert_log_end_offset, configured_test_log, sample_batch,
-        verbatim_from,
+        NO_LIMIT, TempLog, append_samples, assert_log_end_offset, configured_test_log,
+        sample_batch, verbatim_from,
     },
 };
 use crate::{
@@ -309,7 +309,14 @@ fn a_real_direct_log_round_trips_across_a_roll_and_a_restart() {
     for records in [1, 300, 2, 17, 900, 5] {
         append_samples(&mut log, 1, records);
     }
-    let expected = [span(0, 0), span(1, 299), span(301, 1), span(303, 16), span(320, 899), span(1220, 4)];
+    let expected = [
+        span(0, 0),
+        span(1, 299),
+        span(301, 1),
+        span(303, 16),
+        span(320, 899),
+        span(1220, 4),
+    ];
     assert2::assert!(batches(&log) == expected);
 
     assert2::assert!(log.roll().unwrap());
@@ -343,8 +350,14 @@ fn a_direct_group_matches_individual_appends_with_one_write() {
     for cache in [bytes(1), mebibytes(1)] {
         let grouped_disk = Arc::new(AlignedDisk::default());
         let individual_disk = Arc::new(AlignedDisk::default());
-        let TempLog { dir, log: mut grouped } = direct_log(&grouped_disk, cache);
-        let TempLog { dir: individual_dir, log: mut individual } = direct_log(&individual_disk, cache);
+        let TempLog {
+            dir,
+            log: mut grouped,
+        } = direct_log(&grouped_disk, cache);
+        let TempLog {
+            dir: individual_dir,
+            log: mut individual,
+        } = direct_log(&individual_disk, cache);
         append_samples(&mut grouped, 1, 7);
         append_samples(&mut individual, 1, 7);
         let batches = producer_batches();

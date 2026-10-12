@@ -39,9 +39,8 @@ impl Spool {
     /// Returns an error if the spool file cannot be opened or read.
     pub fn resume_point(&self) -> Result<Option<(u64, [u8; 32])>, AuditError> {
         let records = self.read_all()?;
-        resume_from_records(&records).map(|resume| {
-            resume.map(|ChainPosition { next_seq, head }| (next_seq.0, head))
-        })
+        resume_from_records(&records)
+            .map(|resume| resume.map(|ChainPosition { next_seq, head }| (next_seq.0, head)))
     }
 }
 

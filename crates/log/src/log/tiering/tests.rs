@@ -10,8 +10,8 @@ use super::*;
 use crate::{
     config::LogConfig,
     log::test_support::{
-        TempLog, append_samples, check_contiguous_exports, ExpectedStamp, check_stamps, rolled_log, sample_batch,
-        sample_batch_with_epoch, sample_log, stamped_rolling_log, test_log,
+        ExpectedStamp, TempLog, append_samples, check_contiguous_exports, check_stamps, rolled_log,
+        sample_batch, sample_batch_with_epoch, sample_log, stamped_rolling_log, test_log,
     },
     stamp_index::OffsetRange,
     test_support::{log_file_count, segmented_log},
@@ -66,7 +66,23 @@ fn tiered_local_delete_removes_only_deleted_segment_stamp_indexes() {
     check!(!log.sealed_txn_indexes.contains_key(&Offset(0)));
     check!(log.sealed_txn_indexes.contains_key(&Offset(1)));
 
-    check_stamps(&log, &[ExpectedStamp { offset: 0, stamp: None }, ExpectedStamp { offset: 1, stamp: Some(11) }, ExpectedStamp { offset: 2, stamp: Some(12) }]);
+    check_stamps(
+        &log,
+        &[
+            ExpectedStamp {
+                offset: 0,
+                stamp: None,
+            },
+            ExpectedStamp {
+                offset: 1,
+                stamp: Some(11),
+            },
+            ExpectedStamp {
+                offset: 2,
+                stamp: Some(12),
+            },
+        ],
+    );
 }
 
 #[test]
@@ -508,12 +524,10 @@ fn roll_and_describe(log: &mut Log) -> AfterRoll {
                 last: export.last_offset,
             })
             .collect(),
-        active: log
-            .active_segment_export()
-            .map(|active| ActiveBase {
-                base_offset: active.base_offset,
-                size: active.size,
-            }),
+        active: log.active_segment_export().map(|active| ActiveBase {
+            base_offset: active.base_offset,
+            size: active.size,
+        }),
         log_end: log.log_end_offset(),
     }
 }

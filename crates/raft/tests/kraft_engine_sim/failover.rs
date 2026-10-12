@@ -11,15 +11,31 @@ use crate::{
     sim_net::SimNet,
 };
 
+/// An elected cluster: the data directories that must outlive it, the leader
+/// and the epoch it leads.
+struct ElectedCluster {
+    dirs: Vec<tempfile::TempDir>,
+    leader: fixture::NodeId,
+    epoch: u32,
+}
+
+/// The nodes left after a leader is killed, and the leader and epoch they
+/// elect.
+struct SurvivingLeader {
+    survivors: Vec<fixture::NodeId>,
+    leader: fixture::NodeId,
+    epoch: u32,
+}
+
 /// Start the failover fixture and retain its directories through the scenario.
 async fn elected_cluster(
     net: &SimNet,
     setup: SimClusterSetup<'_>,
-) -> (Vec<tempfile::TempDir>, fixture::NodeId, u32) {
+) -> ElectedCluster {
     let ids = setup.ids;
     let dirs = start_engines(net, setup);
     let (leader, epoch) = await_single_leader(net, ids, fixture::Duration::from_secs(10)).await;
-    (dirs, leader, epoch)
+    ElectedCluster { dirs, leader, epoch }
 }
 
 /// Polls `ctrl`'s quorum-state snapshot until `f` accepts it, or panics.
@@ -32,7 +48,7 @@ async fn await_surviving_leader(
     ids: &[fixture::NodeId],
     former: fixture::NodeId,
     former_epoch: u32,
-) -> (Vec<fixture::NodeId>, fixture::NodeId, u32) {
+) -> SurvivingLeader {
     let survivors = ids
         .iter()
         .copied()
@@ -41,7 +57,7 @@ async fn await_surviving_leader(
     let (leader, epoch) =
         await_single_leader(net, &survivors, fixture::Duration::from_secs(15)).await;
     assert2::assert!((leader != former, epoch > former_epoch) == (true, true));
-    (survivors, leader, epoch)
+    SurvivingLeader { survivors, leader, epoch }
 }
 
 async fn await_quorum_state<F>(
@@ -73,7 +89,7 @@ async fn leader_failure_reelects() {
     let (net, ids) = three_voter_network();
     let cid = uuid::Uuid::from_u128(300);
 
-    let (_dirs, leader, epoch1) = elected_cluster(
+    let ElectedCluster { dirs: _dirs, leader, epoch: epoch1 } = elected_cluster(
         &net,
         SimClusterSetup {
             ids: &ids,
@@ -89,7 +105,7 @@ async fn leader_failure_reelects() {
     net.remove(leader);
 
     // The two survivors must elect a NEW single leader at a higher epoch.
-    let (survivors, new_leader, _epoch2) = await_surviving_leader(&net, &ids, leader, epoch1).await;
+    let SurvivingLeader { survivors, leader: new_leader, epoch: _epoch2 } = await_surviving_leader(&net, &ids, leader, epoch1).await;
 
     // A submit to the new leader commits across the two survivors.
     tokio::time::timeout(
@@ -170,7 +186,7 @@ async fn repeated_leader_restart_reelects() {
 async fn isolated_leader_resigns_and_rejoins_after_heal() {
     let (net, ids) = three_voter_network();
     let cid = uuid::Uuid::from_u128(302);
-    let (_dirs, leader, epoch1) = elected_cluster(
+    let ElectedCluster { dirs: _dirs, leader, epoch: epoch1 } = elected_cluster(
         &net,
         SimClusterSetup {
             ids: &ids,
@@ -191,7 +207,7 @@ async fn isolated_leader_resigns_and_rejoins_after_heal() {
     .await;
 
     // The majority side elects its own leader at a higher epoch and commits.
-    let (_survivors, new_leader, epoch2) = await_surviving_leader(&net, &ids, leader, epoch1).await;
+    let SurvivingLeader { survivors: _survivors, leader: new_leader, epoch: epoch2 } = await_surviving_leader(&net, &ids, leader, epoch1).await;
     tokio::time::timeout(
         fixture::Duration::from_secs(10),
         net.get(new_leader)

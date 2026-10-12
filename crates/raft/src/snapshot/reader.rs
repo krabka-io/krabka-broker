@@ -401,18 +401,29 @@ mod tests {
 
     #[test]
     fn byte_range_returns_expected_slice() {
-        type TestCase1<'a> = (&'a str, usize, usize, &'a [u8]);
+        struct Case<'a> {
+            case: &'a str,
+            position: usize,
+            max: usize,
+            want: &'a [u8],
+        }
         let buf: Vec<u8> = (0u8..=255).collect();
-        let cases: [TestCase1<'_>; 3] = [
-            // In-range read.
-            ("in-range read", 10, 5, &buf[10..15]),
-            // Position past EOF → empty.
-            ("position past EOF", 1000, 5, &[]),
-            // Length clamps to buffer end.
-            ("length clamped to end", 250, 100, &buf[250..]),
-        ];
-        for (_case, position, max, want) in cases {
-            assert2::assert!(SnapshotReader::byte_range(&buf, position, max) == want);
+        let cases = [
+// In-range read.
+Case { case: "in-range read", position: 10, max: 5, want: &buf[10..15] },
+// Position past EOF → empty.
+Case { case: "position past EOF", position: 1000, max: 5, want: &[] },
+// Length clamps to buffer end.
+Case { case: "length clamped to end", position: 250, max: 100, want: &buf[250..] },
+];
+        for Case {
+            case,
+            position,
+            max,
+            want,
+        } in cases
+        {
+            assert2::assert!(SnapshotReader::byte_range(&buf, position, max) == want, "{case}");
         }
     }
 }

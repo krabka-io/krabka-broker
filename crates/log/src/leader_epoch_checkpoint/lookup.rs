@@ -100,20 +100,29 @@ mod tests {
 
     #[test]
     fn end_offset_for_current_epoch_returns_log_end_offset() {
-        let TempCheckpoint { dir: _d, checkpoint: c } = checkpoint(&[entry(0, 0), entry(1, 50)]);
+        let TempCheckpoint {
+            dir: _d,
+            checkpoint: c,
+        } = checkpoint(&[entry(0, 0), entry(1, 50)]);
         assert2::assert!(c.end_offset_for_epoch(LeaderEpoch(1), Offset(100)) == 100);
     }
 
     #[test]
     fn end_offset_for_older_epoch_returns_next_start() {
-        let TempCheckpoint { dir: _d, checkpoint: c } = checkpoint(&[entry(0, 0), entry(1, 50), entry(2, 100)]);
+        let TempCheckpoint {
+            dir: _d,
+            checkpoint: c,
+        } = checkpoint(&[entry(0, 0), entry(1, 50), entry(2, 100)]);
         assert2::assert!(c.end_offset_for_epoch(LeaderEpoch(0), Offset(200)) == Offset(50));
         assert2::assert!(c.end_offset_for_epoch(LeaderEpoch(1), Offset(200)) == Offset(100));
     }
 
     #[test]
     fn end_offset_for_unknown_epoch_returns_undefined() {
-        let TempCheckpoint { dir: _d, checkpoint: c } = checkpoint(&[entry(0, 0)]);
+        let TempCheckpoint {
+            dir: _d,
+            checkpoint: c,
+        } = checkpoint(&[entry(0, 0)]);
         assert2::assert!(c.end_offset_for_epoch(LeaderEpoch(7), Offset(200)) == -1);
     }
 
@@ -131,13 +140,19 @@ mod tests {
     #[test]
     fn epoch_for_offset_before_first_entry_returns_none() {
         // Epoch 0 starts at offset 10 (first entry does not start at 0).
-        let TempCheckpoint { dir: _d, checkpoint: c } = checkpoint(&[entry(0, 10), entry(1, 50)]);
+        let TempCheckpoint {
+            dir: _d,
+            checkpoint: c,
+        } = checkpoint(&[entry(0, 10), entry(1, 50)]);
         assert2::assert!(c.epoch_for_offset(Offset(9)) == None);
     }
 
     #[test]
     fn epoch_for_offset_within_epoch_range() {
-        let TempCheckpoint { dir: _d, checkpoint: c } = checkpoint(&[entry(0, 0), entry(1, 50), entry(2, 100)]);
+        let TempCheckpoint {
+            dir: _d,
+            checkpoint: c,
+        } = checkpoint(&[entry(0, 0), entry(1, 50), entry(2, 100)]);
         for (offset, want, why) in [
             // Offsets 0–49 belong to epoch 0.
             (0, Some(LeaderEpoch(0)), "start of epoch 0"),
@@ -157,14 +172,20 @@ mod tests {
 
     #[test]
     fn epoch_for_offset_at_epoch_boundary() {
-        let TempCheckpoint { dir: _d, checkpoint: c } = checkpoint(&[entry(0, 0), entry(1, 50)]);
+        let TempCheckpoint {
+            dir: _d,
+            checkpoint: c,
+        } = checkpoint(&[entry(0, 0), entry(1, 50)]);
         // Offset exactly at epoch 1's start_offset → belongs to epoch 1.
         assert2::assert!(c.epoch_for_offset(Offset(50)) == Some(LeaderEpoch(1)));
     }
 
     #[test]
     fn epoch_for_offset_past_last_entry() {
-        let TempCheckpoint { dir: _d, checkpoint: c } = checkpoint(&[entry(0, 0), entry(1, 50)]);
+        let TempCheckpoint {
+            dir: _d,
+            checkpoint: c,
+        } = checkpoint(&[entry(0, 0), entry(1, 50)]);
         // Any offset >= 50 that extends beyond the last known epoch → epoch 1
         // (the current / latest epoch owns all subsequent offsets).
         for (_name, offset) in [("past last entry", 100), ("far past last entry", 999)] {
@@ -174,7 +195,10 @@ mod tests {
 
     #[test]
     fn epoch_for_offset_single_entry_at_zero() {
-        let TempCheckpoint { dir: _d, checkpoint: c } = checkpoint(&[entry(0, 0)]);
+        let TempCheckpoint {
+            dir: _d,
+            checkpoint: c,
+        } = checkpoint(&[entry(0, 0)]);
         assert2::assert!(c.epoch_for_offset(Offset(0)) == Some(LeaderEpoch(0)));
         assert2::assert!(c.epoch_for_offset(Offset(1000)) == Some(LeaderEpoch(0)));
     }
@@ -238,7 +262,10 @@ mod tests {
                 (LeaderEpoch(1), Offset(30)),
             ),
         ] {
-            let TempCheckpoint { dir: _d, checkpoint: c } = checkpoint(recorded);
+            let TempCheckpoint {
+                dir: _d,
+                checkpoint: c,
+            } = checkpoint(recorded);
             check!(
                 c.epoch_and_offset_for(LeaderEpoch(requested), Offset(log_end)) == expected,
                 "{name}"

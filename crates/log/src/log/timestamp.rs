@@ -265,7 +265,8 @@ mod tests {
     use crate::{
         config::LogConfig,
         log::test_support::{
-            TempLog, configured_test_log, gzip_value, rolled_sample_log, test_log, tiny_segments, ts_batch,
+            TempLog, configured_test_log, gzip_value, rolled_sample_log, test_log, tiny_segments,
+            ts_batch,
         },
         segment::Segment,
     };

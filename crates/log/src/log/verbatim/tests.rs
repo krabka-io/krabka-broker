@@ -10,8 +10,8 @@ use super::*;
 use crate::{
     leader_epoch_checkpoint::EpochEntry,
     log::test_support::{
-        TempLog, check_append_time_lookup, install_stamps, log_append_time_log, sample_batch,
-        stamped_test_log, test_batch_at, test_log, EncodedVerbatim, verbatim_from,
+        EncodedVerbatim, TempLog, check_append_time_lookup, install_stamps, log_append_time_log,
+        sample_batch, stamped_test_log, test_batch_at, test_log, verbatim_from,
     },
 };
 
@@ -190,8 +190,14 @@ fn append_verbatim_matches_owned_append_bytes() {
     // The verbatim path and the owned path must write byte-identical
     // .log bytes for the same logical batch — proving passthrough does
     // not perturb the stored representation.
-    let TempLog { dir: dir_owned, log: mut log_owned } = test_log();
-    let TempLog { dir: dir_verb, log: mut log_verb } = test_log();
+    let TempLog {
+        dir: dir_owned,
+        log: mut log_owned,
+    } = test_log();
+    let TempLog {
+        dir: dir_verb,
+        log: mut log_verb,
+    } = test_log();
 
     let mut producer = test_batch_at(0);
     producer.base_offset = 12345; // overwritten by both paths

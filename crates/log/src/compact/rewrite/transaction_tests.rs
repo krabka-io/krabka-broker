@@ -69,19 +69,28 @@ fn an_aborted_transactions_records_are_dropped_and_the_committed_value_survives(
     let dir = tempfile::tempdir().unwrap();
     let committed = transactional_record(TransactionalRecordSetup {
         offset: Offset(5),
-        payload: KeyValue { key: b"k", value: b"committed" },
+        payload: KeyValue {
+            key: b"k",
+            value: b"committed",
+        },
         ..Default::default()
     });
     let commit_marker = control_batch(6, 1000, 1 /* COMMIT */);
     let aborted_k = transactional_record(TransactionalRecordSetup {
         offset: Offset(10),
         producer: ProducerId(2000),
-        payload: KeyValue { key: b"k", value: b"aborted" },
+        payload: KeyValue {
+            key: b"k",
+            value: b"aborted",
+        },
     });
     let aborted_j = transactional_record(TransactionalRecordSetup {
         offset: Offset(11),
         producer: ProducerId(2000),
-        payload: KeyValue { key: b"j", value: b"aborted" },
+        payload: KeyValue {
+            key: b"j",
+            value: b"aborted",
+        },
     });
     let abort_marker = control_batch(12, 2000, 0 /* ABORT */);
     let seg = write_sealed_batches(
@@ -131,7 +140,10 @@ fn an_aborted_transaction_spanning_two_groups_keeps_its_marker_and_index_entry()
     let dir = tempfile::tempdir().unwrap();
     let aborted = transactional_record(TransactionalRecordSetup {
         producer: ProducerId(2000),
-        payload: KeyValue { key: b"k", value: b"aborted" },
+        payload: KeyValue {
+            key: b"k",
+            value: b"aborted",
+        },
         ..Default::default()
     });
     let abort_marker = control_batch(1, 2000, 0 /* ABORT */);
@@ -174,19 +186,54 @@ fn a_marker_ages_out_once_its_own_transactions_data_is_gone() {
             "no horizon yet: stamp now + delete.retention.ms",
             None,
             100,
-            vec![BatchHorizon { base_offset: 0, delete_horizon_ms: Some(150) }, BatchHorizon { base_offset: 1, delete_horizon_ms: None }, BatchHorizon { base_offset: 2, delete_horizon_ms: None }],
+            vec![
+                BatchHorizon {
+                    base_offset: 0,
+                    delete_horizon_ms: Some(150),
+                },
+                BatchHorizon {
+                    base_offset: 1,
+                    delete_horizon_ms: None,
+                },
+                BatchHorizon {
+                    base_offset: 2,
+                    delete_horizon_ms: None,
+                },
+            ],
         ),
         (
             "horizon not reached: keep as it is",
             Some(500),
             100,
-            vec![BatchHorizon { base_offset: 0, delete_horizon_ms: Some(500) }, BatchHorizon { base_offset: 1, delete_horizon_ms: None }, BatchHorizon { base_offset: 2, delete_horizon_ms: None }],
+            vec![
+                BatchHorizon {
+                    base_offset: 0,
+                    delete_horizon_ms: Some(500),
+                },
+                BatchHorizon {
+                    base_offset: 1,
+                    delete_horizon_ms: None,
+                },
+                BatchHorizon {
+                    base_offset: 2,
+                    delete_horizon_ms: None,
+                },
+            ],
         ),
         (
             "horizon reached: drop the marker, keep the live data and its marker",
             Some(100),
             200,
-            vec![BatchHorizon { base_offset: 1, delete_horizon_ms: None }, BatchHorizon { base_offset: 2, delete_horizon_ms: None }],
+            vec![
+                BatchHorizon {
+                    base_offset: 1,
+                    delete_horizon_ms: None,
+                },
+                BatchHorizon {
+                    base_offset: 2,
+                    delete_horizon_ms: None,
+                },
+            ],
         ),
     ] {
         let dir = tempfile::tempdir().unwrap();
@@ -197,7 +244,10 @@ fn a_marker_ages_out_once_its_own_transactions_data_is_gone() {
         }
         let live = transactional_record(TransactionalRecordSetup {
             offset: Offset(1),
-            payload: KeyValue { key: b"k1", value: b"v2" },
+            payload: KeyValue {
+                key: b"k1",
+                value: b"v2",
+            },
             ..Default::default()
         });
         let live_marker = control_batch(2, 1000, 1 /* COMMIT */);
@@ -224,7 +274,10 @@ fn a_marker_ages_out_once_its_own_transactions_data_is_gone() {
 fn a_marker_is_stamped_the_pass_after_its_data_is_removed() {
     let dir = tempfile::tempdir().unwrap();
     let superseded = transactional_record(TransactionalRecordSetup {
-        payload: KeyValue { key: b"k", value: b"old" },
+        payload: KeyValue {
+            key: b"k",
+            value: b"old",
+        },
         ..Default::default()
     });
     let marker = control_batch(1, 1000, 1 /* COMMIT */);

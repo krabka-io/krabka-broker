@@ -539,8 +539,11 @@ mod tests {
 
     #[test]
     fn stamp_append_round_trips_through_disk() {
-        let IndexFixture { dir: _dir, path, index: _idx } =
-            index_with(&[stamp_entry(5, 7, 1_000), stamp_entry(10, 12, 2_000)]);
+        let IndexFixture {
+            dir: _dir,
+            path,
+            index: _idx,
+        } = index_with(&[stamp_entry(5, 7, 1_000), stamp_entry(10, 12, 2_000)]);
 
         let idx2 = StampIndex::open(path).unwrap();
         assert2::assert!(
@@ -597,7 +600,11 @@ mod tests {
 
     #[test]
     fn out_of_order_append_stays_canonical_across_reopen() {
-        let IndexFixture { dir: _dir, path, index: mut idx } = index_with(&[]);
+        let IndexFixture {
+            dir: _dir,
+            path,
+            index: mut idx,
+        } = index_with(&[]);
         let first = stamp_entry(0, 2, 100);
         let second = stamp_entry(10, 12, 200);
         idx.append(second).unwrap();
@@ -639,7 +646,11 @@ mod tests {
 
     #[test]
     fn stamp_for_offset_finds_covering_range() {
-        let IndexFixture { dir: _dir, path: _path, index: idx } = index_with(&[stamp_entry(0, 4, 100), stamp_entry(10, 14, 200)]);
+        let IndexFixture {
+            dir: _dir,
+            path: _path,
+            index: idx,
+        } = index_with(&[stamp_entry(0, 4, 100), stamp_entry(10, 14, 200)]);
 
         // Inclusive endpoints and interior offsets resolve to their range.
         for (offset, expected) in [
@@ -657,7 +668,11 @@ mod tests {
 
     #[test]
     fn append_rejects_overlapping_ranges_but_accepts_exact_retry() {
-        let IndexFixture { dir: _dir, path: _path, index: mut idx } = index_with(&[]);
+        let IndexFixture {
+            dir: _dir,
+            path: _path,
+            index: mut idx,
+        } = index_with(&[]);
         let entry = stamp_entry(5, 7, 100);
         idx.append(entry).unwrap();
         idx.append(entry).unwrap();
@@ -672,7 +687,11 @@ mod tests {
 
     #[test]
     fn upsert_replaces_only_an_exact_range() {
-        let IndexFixture { dir: _dir, path, index: mut idx } = index_with(&[stamp_entry(5, 7, 100)]);
+        let IndexFixture {
+            dir: _dir,
+            path,
+            index: mut idx,
+        } = index_with(&[stamp_entry(5, 7, 100)]);
 
         idx.upsert(stamp_entry(5, 7, 200)).unwrap();
         assert2::assert!(idx.stamp_for_offset(Offset(6)) == Some(200));
@@ -686,7 +705,11 @@ mod tests {
 
     #[test]
     fn truncate_from_removes_tail_entries_on_disk() {
-        let IndexFixture { dir: _dir, path, index: mut idx } = index_with(&[
+        let IndexFixture {
+            dir: _dir,
+            path,
+            index: mut idx,
+        } = index_with(&[
             stamp_entry(0, 2, 100),
             stamp_entry(3, 6, 103),
             stamp_entry(10, 12, 110),
@@ -698,7 +721,11 @@ mod tests {
 
     #[test]
     fn remove_ranges_requires_both_exact_boundaries() {
-        let IndexFixture { dir: _dir, path, index: mut idx } = index_with(&[stamp_entry(0, 1, 10), stamp_entry(2, 3, 20)]);
+        let IndexFixture {
+            dir: _dir,
+            path,
+            index: mut idx,
+        } = index_with(&[stamp_entry(0, 1, 10), stamp_entry(2, 3, 20)]);
 
         idx.remove_ranges(&[
             OffsetRange {
@@ -710,19 +737,24 @@ mod tests {
                 last: Offset(3),
             },
         ])
-            .unwrap();
+        .unwrap();
         assert2::assert!(idx.entries().len() == 2);
         idx.remove_ranges(&[OffsetRange {
             first: Offset(2),
             last: Offset(3),
-        }]).unwrap();
+        }])
+        .unwrap();
 
         assert2::assert!(StampIndex::open(path).unwrap().entries() == [stamp_entry(0, 1, 10)]);
     }
 
     #[test]
     fn append_rejects_overlapping_single_offset_range_as_corrupt() {
-        let IndexFixture { dir: _dir, path: _path, index: mut idx } = index_with(&[stamp_entry(0, 5, 10)]);
+        let IndexFixture {
+            dir: _dir,
+            path: _path,
+            index: mut idx,
+        } = index_with(&[stamp_entry(0, 5, 10)]);
 
         // Overlapping single-offset range (last_offset == base_offset)
         let err = idx.append(stamp_entry(2, 2, 20)).unwrap_err();
@@ -747,7 +779,11 @@ mod tests {
             }
         }
         let called = Arc::new(AtomicBool::new(false));
-        let IndexFixture { dir: _dir, path: _path, index: mut idx } = index_with(&[]);
+        let IndexFixture {
+            dir: _dir,
+            path: _path,
+            index: mut idx,
+        } = index_with(&[]);
         idx.set_io(Arc::new(SpyIo(called.clone())));
         idx.append(stamp_entry(0, 0, 1)).unwrap();
         assert2::assert!(called.load(Ordering::SeqCst));

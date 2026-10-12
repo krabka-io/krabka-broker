@@ -11,9 +11,9 @@ use crate::{
     ProducerBatchMetadata,
     io::FileIo,
     log::test_support::{
-        TempLog, NO_LIMIT, append_samples, append_transaction, check_contiguous_exports, commit_marker,
-        install_stamps, rolling_test_log, sample_batch, sample_batch_with_epoch, test_log,
-        tiny_segments, TransactionFields, transaction_fields, transactional_batch,
+        NO_LIMIT, TempLog, TransactionFields, append_samples, append_transaction,
+        check_contiguous_exports, commit_marker, install_stamps, rolling_test_log, sample_batch,
+        sample_batch_with_epoch, test_log, tiny_segments, transaction_fields, transactional_batch,
     },
     log_start_offset_checkpoint::write,
     name::producer_snapshot_path,
@@ -182,10 +182,13 @@ fn snapshot_recovery_preserves_open_and_completed_transaction_fields() {
     check!(completed.last_sequence == 11);
     check!(completed.current_txn_first_offset == None);
     check!(completed.coordinator_epoch == 17);
-    check!(transaction_fields(&reopened, ProducerId(77)) == TransactionFields {
- coordinator_epoch: 17,
- first_offset: None,
- });
+    check!(
+        transaction_fields(&reopened, ProducerId(77))
+            == TransactionFields {
+                coordinator_epoch: 17,
+                first_offset: None,
+            }
+    );
 }
 
 #[test]
@@ -405,10 +408,13 @@ fn reopen_rebuilds_pending_transactions_and_lso() {
     check!(reopened.stamp_for_offset(Offset(0)) == Some(30));
     check!(reopened.stamp_for_offset(Offset(1)) == Some(30));
     check!(reopened.stamp_for_offset(Offset(2)) == None);
-    assert2::assert!(transaction_fields(&reopened, ProducerId(1000)) == TransactionFields {
- coordinator_epoch: 17,
- first_offset: None,
- });
+    assert2::assert!(
+        transaction_fields(&reopened, ProducerId(1000))
+            == TransactionFields {
+                coordinator_epoch: 17,
+                first_offset: None,
+            }
+    );
     assert2::assert!(
         reopened
             .pending_transaction_start(ProducerId(1000))
@@ -418,18 +424,22 @@ fn reopen_rebuilds_pending_transactions_and_lso() {
     assert2::assert!(reopened.last_stable_offset(log_end) == log_end);
 
     append_transaction(&mut reopened, 1000, 4, &["next"]);
-    assert2::assert!(transaction_fields(&reopened, ProducerId(1000)) == TransactionFields {
- coordinator_epoch: 17,
- first_offset: Some(Offset(3)),
- });
+    assert2::assert!(
+        transaction_fields(&reopened, ProducerId(1000))
+            == TransactionFields {
+                coordinator_epoch: 17,
+                first_offset: Some(Offset(3)),
+            }
+    );
     drop(reopened);
 
     let recovered_again = open_log(dir.path());
     assert2::assert!(
-        transaction_fields(&recovered_again, ProducerId(1000)) == TransactionFields {
- coordinator_epoch: 17,
- first_offset: Some(Offset(3)),
- }
+        transaction_fields(&recovered_again, ProducerId(1000))
+            == TransactionFields {
+                coordinator_epoch: 17,
+                first_offset: Some(Offset(3)),
+            }
     );
 }
 

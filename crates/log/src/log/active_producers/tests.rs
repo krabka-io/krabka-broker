@@ -5,7 +5,7 @@ use super::*;
 use crate::{
     TransactionalBatch,
     log::test_support::{
-        TempLog, AppendPath as Path, append_path as append, control_key, control_value, test_log,
+        AppendPath as Path, TempLog, append_path as append, control_key, control_value, test_log,
     },
     test_support::open_log,
 };
@@ -251,14 +251,24 @@ fn check_append_paths<T: std::fmt::Debug + PartialEq>(
 #[test]
 fn active_producers_report_the_producer_state_of_every_append_path() {
     let cases = vec![
-        ActiveProducersCase { name: "a batch without a producer id", batches: producer_history(ProducerHistory::MissingId), want: vec![] },
-        ActiveProducersCase { name: "idempotent batches", batches: producer_history(ProducerHistory::Idempotent), want: vec![active(ActiveProducerSetup {
+        ActiveProducersCase {
+            name: "a batch without a producer id",
+            batches: producer_history(ProducerHistory::MissingId),
+            want: vec![],
+        },
+        ActiveProducersCase {
+            name: "idempotent batches",
+            batches: producer_history(ProducerHistory::Idempotent),
+            want: vec![active(ActiveProducerSetup {
                 producer_epoch: BatchProducerEpoch(2),
                 last_sequence: BatchSequence(4),
                 last_timestamp: BatchTimestamp(2_000),
                 ..Default::default()
-            })] },
-        ActiveProducersCase { name: "an open transaction", batches: vec![
+            })],
+        },
+        ActiveProducersCase {
+            name: "an open transaction",
+            batches: vec![
                 data(ProducerBatchSetup {
                     producer: BatchProducer::from_wire((8, 0)),
                     records: BatchRecordCount(2),
@@ -272,38 +282,54 @@ fn active_producers_report_the_producer_state_of_every_append_path() {
                     transaction: BatchTransactionMode::Transactional,
                     ..Default::default()
                 }),
-            ], want: vec![active(ActiveProducerSetup {
+            ],
+            want: vec![active(ActiveProducerSetup {
                 producer_id: ProducerId(8),
                 last_sequence: BatchSequence(2),
                 last_timestamp: BatchTimestamp(1_500),
                 current_txn_start_offset: Some(Offset(0)),
                 ..Default::default()
-            })] },
-        ActiveProducersCase { name: "a commit at the same epoch (transaction version 1)", batches: producer_history(ProducerHistory::Committed), want: vec![active(ActiveProducerSetup {
+            })],
+        },
+        ActiveProducersCase {
+            name: "a commit at the same epoch (transaction version 1)",
+            batches: producer_history(ProducerHistory::Committed),
+            want: vec![active(ActiveProducerSetup {
                 producer_id: ProducerId(9),
                 producer_epoch: BatchProducerEpoch(1),
                 last_sequence: BatchSequence(1),
                 last_timestamp: BatchTimestamp(3_000),
                 coordinator_epoch: MarkerCoordinatorEpoch(5),
                 ..Default::default()
-            })] },
-        ActiveProducersCase { name: "an abort at a bumped epoch (transaction version 2)", batches: producer_history(ProducerHistory::Aborted), want: vec![active(ActiveProducerSetup {
+            })],
+        },
+        ActiveProducersCase {
+            name: "an abort at a bumped epoch (transaction version 2)",
+            batches: producer_history(ProducerHistory::Aborted),
+            want: vec![active(ActiveProducerSetup {
                 producer_id: ProducerId(10),
                 producer_epoch: BatchProducerEpoch(2),
                 last_sequence: BatchSequence(-1),
                 last_timestamp: BatchTimestamp(4_000),
                 coordinator_epoch: MarkerCoordinatorEpoch(6),
                 ..Default::default()
-            })] },
-        ActiveProducersCase { name: "a marker without a data batch", batches: producer_history(ProducerHistory::MarkerOnly), want: vec![active(ActiveProducerSetup {
+            })],
+        },
+        ActiveProducersCase {
+            name: "a marker without a data batch",
+            batches: producer_history(ProducerHistory::MarkerOnly),
+            want: vec![active(ActiveProducerSetup {
                 producer_id: ProducerId(11),
                 producer_epoch: BatchProducerEpoch(3),
                 last_sequence: BatchSequence(-1),
                 last_timestamp: BatchTimestamp(5_000),
                 coordinator_epoch: MarkerCoordinatorEpoch(7),
                 ..Default::default()
-            })] },
-        ActiveProducersCase { name: "a transaction after a commit", batches: vec![
+            })],
+        },
+        ActiveProducersCase {
+            name: "a transaction after a commit",
+            batches: vec![
                 data(ProducerBatchSetup {
                     producer: BatchProducer::from_wire((12, 0)),
                     transaction: BatchTransactionMode::Transactional,
@@ -322,15 +348,20 @@ fn active_producers_report_the_producer_state_of_every_append_path() {
                     transaction: BatchTransactionMode::Transactional,
                     ..Default::default()
                 }),
-            ], want: vec![active(ActiveProducerSetup {
+            ],
+            want: vec![active(ActiveProducerSetup {
                 producer_id: ProducerId(12),
                 last_sequence: BatchSequence(1),
                 last_timestamp: BatchTimestamp(3_000),
                 coordinator_epoch: MarkerCoordinatorEpoch(2),
                 current_txn_start_offset: Some(Offset(2)),
                 ..Default::default()
-            })] },
-        ActiveProducersCase { name: "several producers, in producer id order", batches: producer_history(ProducerHistory::SeveralProducers), want: vec![
+            })],
+        },
+        ActiveProducersCase {
+            name: "several producers, in producer id order",
+            batches: producer_history(ProducerHistory::SeveralProducers),
+            want: vec![
                 active(ActiveProducerSetup {
                     producer_id: ProducerId(20),
                     last_timestamp: BatchTimestamp(2_000),
@@ -347,7 +378,8 @@ fn active_producers_report_the_producer_state_of_every_append_path() {
                     producer_id: ProducerId(30),
                     ..Default::default()
                 }),
-            ] },
+            ],
+        },
     ];
     for ActiveProducersCase {
         name,
@@ -376,16 +408,40 @@ fn last_records_of_active_producers_follow_every_append_path() {
         )
     };
     let cases = vec![
-        LastRecordsCase { name: "a batch without a producer id", batches: producer_history(ProducerHistory::MissingId), want: HashMap::new() },
-        LastRecordsCase { name: "idempotent batches", batches: producer_history(ProducerHistory::Idempotent), want: HashMap::from([last(7, Some(4), 2)]) },
-        LastRecordsCase { name: "a commit at the same epoch (transaction version 1)", batches: producer_history(ProducerHistory::Committed), want: HashMap::from([last(9, Some(1), 1)]) },
-        LastRecordsCase { name: "an abort at a bumped epoch (transaction version 2)", batches: producer_history(ProducerHistory::Aborted), want: HashMap::from([last(10, None, 2)]) },
-        LastRecordsCase { name: "a marker without a data batch", batches: producer_history(ProducerHistory::MarkerOnly), want: HashMap::from([last(11, None, 3)]) },
-        LastRecordsCase { name: "several producers", batches: producer_history(ProducerHistory::SeveralProducers), want: HashMap::from([
+        LastRecordsCase {
+            name: "a batch without a producer id",
+            batches: producer_history(ProducerHistory::MissingId),
+            want: HashMap::new(),
+        },
+        LastRecordsCase {
+            name: "idempotent batches",
+            batches: producer_history(ProducerHistory::Idempotent),
+            want: HashMap::from([last(7, Some(4), 2)]),
+        },
+        LastRecordsCase {
+            name: "a commit at the same epoch (transaction version 1)",
+            batches: producer_history(ProducerHistory::Committed),
+            want: HashMap::from([last(9, Some(1), 1)]),
+        },
+        LastRecordsCase {
+            name: "an abort at a bumped epoch (transaction version 2)",
+            batches: producer_history(ProducerHistory::Aborted),
+            want: HashMap::from([last(10, None, 2)]),
+        },
+        LastRecordsCase {
+            name: "a marker without a data batch",
+            batches: producer_history(ProducerHistory::MarkerOnly),
+            want: HashMap::from([last(11, None, 3)]),
+        },
+        LastRecordsCase {
+            name: "several producers",
+            batches: producer_history(ProducerHistory::SeveralProducers),
+            want: HashMap::from([
                 last(20, Some(1), 0),
                 last(25, Some(2), 4),
                 last(30, Some(0), 0),
-            ]) },
+            ]),
+        },
     ];
     for LastRecordsCase {
         name,

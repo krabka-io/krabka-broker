@@ -164,45 +164,81 @@ mod tests {
 
         let mutations: Vec<Mutation> = vec![
             mutation("format_version", |b| b.format_version += 1),
-            mutation("segment.topic", |b| b.segment.topic = "payments".to_string()),
-            mutation("segment.topic_id", |b| b.segment.topic_id = Uuid::from_u128(0x12)),
+            mutation("segment.topic", |b| {
+                b.segment.topic = "payments".to_string()
+            }),
+            mutation("segment.topic_id", |b| {
+                b.segment.topic_id = Uuid::from_u128(0x12)
+            }),
             mutation("segment.partition", |b| b.segment.partition = 4),
-            mutation("segment.segment_id", |b| b.segment.segment_id = Uuid::from_u128(0x23)),
+            mutation("segment.segment_id", |b| {
+                b.segment.segment_id = Uuid::from_u128(0x23)
+            }),
             mutation("segment.start_offset", |b| b.segment.start_offset = 101),
             mutation("segment.end_offset", |b| b.segment.end_offset = 200),
-            mutation("segment.max_timestamp_ms", |b| b.segment.max_timestamp_ms += 1),
+            mutation("segment.max_timestamp_ms", |b| {
+                b.segment.max_timestamp_ms += 1
+            }),
             mutation("segment.broker_id", |b| b.segment.broker_id = 8),
-            mutation("segment.event_timestamp_ms", |b| b.segment.event_timestamp_ms += 1),
-            mutation("segment.segment_size_bytes", |b| b.segment.segment_size_bytes += 1),
+            mutation("segment.event_timestamp_ms", |b| {
+                b.segment.event_timestamp_ms += 1
+            }),
+            mutation("segment.segment_size_bytes", |b| {
+                b.segment.segment_size_bytes += 1
+            }),
             mutation("segment.leader_epochs value", |b| {
-                    b.segment.leader_epochs.insert(1, 151);
-                }),
+                b.segment.leader_epochs.insert(1, 151);
+            }),
             mutation("segment.leader_epochs extra entry", |b| {
-                    b.segment.leader_epochs.insert(2, 180);
-                }),
+                b.segment.leader_epochs.insert(2, 180);
+            }),
             mutation("segment.leader_epochs removed entry", |b| {
-                    b.segment.leader_epochs.remove(&1);
-                }),
-            mutation("segment.txn_index_empty", |b| b.segment.txn_index_empty = true),
-            mutation("objects[0].suffix", |b| b.objects[0].suffix = ".timeindex".to_string()),
-            mutation("objects[0].key", |b| b.objects[0].key = "archive/elsewhere.log".to_string()),
+                b.segment.leader_epochs.remove(&1);
+            }),
+            mutation("segment.txn_index_empty", |b| {
+                b.segment.txn_index_empty = true
+            }),
+            mutation("objects[0].suffix", |b| {
+                b.objects[0].suffix = ".timeindex".to_string()
+            }),
+            mutation("objects[0].key", |b| {
+                b.objects[0].key = "archive/elsewhere.log".to_string()
+            }),
             mutation("objects[0].size_bytes", |b| b.objects[0].size_bytes += 1),
-            mutation("objects[0].sha256", |b| b.objects[0].sha256 = Sha256Digest::of(b"other body")),
-            mutation("objects[0].e_tag changed", |b| b.objects[0].e_tag = Some("\"other\"".to_string())),
+            mutation("objects[0].sha256", |b| {
+                b.objects[0].sha256 = Sha256Digest::of(b"other body")
+            }),
+            mutation("objects[0].e_tag changed", |b| {
+                b.objects[0].e_tag = Some("\"other\"".to_string())
+            }),
             mutation("objects[0].e_tag cleared", |b| b.objects[0].e_tag = None),
-            mutation("objects[1].e_tag set", |b| b.objects[1].e_tag = Some("\"new\"".to_string())),
-            mutation("objects[0].version_id changed", |b| b.objects[0].version_id = Some("other".to_string())),
-            mutation("objects[0].version_id cleared", |b| b.objects[0].version_id = None),
-            mutation("objects[1].version_id set", |b| b.objects[1].version_id = Some("new".to_string())),
-            mutation("objects[0].create_precondition", |b| b.objects[0].create_precondition = true),
+            mutation("objects[1].e_tag set", |b| {
+                b.objects[1].e_tag = Some("\"new\"".to_string())
+            }),
+            mutation("objects[0].version_id changed", |b| {
+                b.objects[0].version_id = Some("other".to_string())
+            }),
+            mutation("objects[0].version_id cleared", |b| {
+                b.objects[0].version_id = None
+            }),
+            mutation("objects[1].version_id set", |b| {
+                b.objects[1].version_id = Some("new".to_string())
+            }),
+            mutation("objects[0].create_precondition", |b| {
+                b.objects[0].create_precondition = true
+            }),
             mutation("objects order", |b| b.objects.swap(0, 1)),
             mutation("objects count grows", |b| b.objects.push(bare_object())),
             mutation("objects count shrinks", |b| {
-                    b.objects.pop();
-                }),
-            mutation("chain.epoch_id", |b| b.chain.epoch_id = EpochId(Uuid::from_u128(0x98))),
+                b.objects.pop();
+            }),
+            mutation("chain.epoch_id", |b| {
+                b.chain.epoch_id = EpochId(Uuid::from_u128(0x98))
+            }),
             mutation("chain.seq", |b| b.chain.seq = ManifestSeq(5)),
-            mutation("chain.prev_head", |b| b.chain.prev_head = ChainHead([8u8; 32])),
+            mutation("chain.prev_head", |b| {
+                b.chain.prev_head = ChainHead([8u8; 32])
+            }),
         ];
 
         for Mutation { name, mutate } in mutations {

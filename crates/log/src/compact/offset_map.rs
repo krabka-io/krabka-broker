@@ -172,19 +172,28 @@ mod tests {
             &[
                 transactional_record(TransactionalRecordSetup {
                     offset: Offset(5),
-                    payload: KeyValue { key: b"k", value: b"committed" },
+                    payload: KeyValue {
+                        key: b"k",
+                        value: b"committed",
+                    },
                     ..Default::default()
                 }),
                 control_batch(6, 1000, 1 /* COMMIT */),
                 transactional_record(TransactionalRecordSetup {
                     offset: Offset(10),
                     producer: ProducerId(2000),
-                    payload: KeyValue { key: b"k", value: b"aborted" },
+                    payload: KeyValue {
+                        key: b"k",
+                        value: b"aborted",
+                    },
                 }),
                 transactional_record(TransactionalRecordSetup {
                     offset: Offset(11),
                     producer: ProducerId(2000),
-                    payload: KeyValue { key: b"only-aborted", value: b"v" },
+                    payload: KeyValue {
+                        key: b"only-aborted",
+                        value: b"v",
+                    },
                 }),
                 control_batch(12, 2000, 0 /* ABORT */),
             ],

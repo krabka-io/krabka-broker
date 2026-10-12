@@ -316,7 +316,10 @@ mod tests {
     use krabka_units::millis;
 
     use super::*;
-    use crate::{LogConfig, log::test_support::{TempLog, configured_test_log}};
+    use crate::{
+        LogConfig,
+        log::test_support::{TempLog, configured_test_log},
+    };
 
     #[test]
     fn larger_uncertainty_is_prospective_for_the_released_prefix() {

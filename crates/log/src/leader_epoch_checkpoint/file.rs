@@ -161,7 +161,10 @@ mod tests {
 
     #[test]
     fn round_trip_byte_compat_format() {
-        let TempCheckpoint { dir: _d, checkpoint: c } = checkpoint(&[entry(0, 0), entry(1, 50), entry(2, 100)]);
+        let TempCheckpoint {
+            dir: _d,
+            checkpoint: c,
+        } = checkpoint(&[entry(0, 0), entry(1, 50), entry(2, 100)]);
         let s = std::fs::read_to_string(&c.path).unwrap();
         assert2::assert!(s == GOLDEN);
     }

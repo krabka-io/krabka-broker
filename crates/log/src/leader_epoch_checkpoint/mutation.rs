@@ -213,14 +213,20 @@ mod tests {
 
     #[test]
     fn append_idempotent_for_same_epoch() {
-        let TempCheckpoint { dir: _d, checkpoint: mut c } = checkpoint(&[entry(0, 0)]);
+        let TempCheckpoint {
+            dir: _d,
+            checkpoint: mut c,
+        } = checkpoint(&[entry(0, 0)]);
         c.append(LeaderEpoch(0), Offset(999)).unwrap(); // ignored; epoch 0 already recorded
         assert2::assert!(c.entries() == &[entry(0, 0)]);
     }
 
     #[test]
     fn append_rejects_novel_out_of_order_entries_without_mutating() {
-        let TempCheckpoint { dir: _d, checkpoint: mut c } = checkpoint(&[entry(0, 0), entry(5, 100)]);
+        let TempCheckpoint {
+            dir: _d,
+            checkpoint: mut c,
+        } = checkpoint(&[entry(0, 0), entry(5, 100)]);
         let before = std::fs::read(&c.path).unwrap();
 
         for (epoch, offset) in [(2, 150), (6, 100)] {
@@ -234,7 +240,10 @@ mod tests {
 
     #[test]
     fn append_after_truncation_restores_a_strict_history() {
-        let TempCheckpoint { dir: _d, checkpoint: mut c } = checkpoint(&[entry(0, 0), entry(5, 100)]);
+        let TempCheckpoint {
+            dir: _d,
+            checkpoint: mut c,
+        } = checkpoint(&[entry(0, 0), entry(5, 100)]);
         c.truncate_from_end(Offset(100)).unwrap();
         c.append(LeaderEpoch(2), Offset(50)).unwrap();
         c.append(LeaderEpoch(4), Offset(80)).unwrap();
@@ -287,7 +296,10 @@ mod tests {
                 vec![entry(1, 0), entry(2, 7)],
             ),
         ] {
-            let TempCheckpoint { dir: _d, checkpoint: mut c } = checkpoint(recorded);
+            let TempCheckpoint {
+                dir: _d,
+                checkpoint: mut c,
+            } = checkpoint(recorded);
             c.assign(LeaderEpoch(epoch), Offset(start)).unwrap();
             check_persisted(&c, &expected, name);
         }
@@ -295,7 +307,10 @@ mod tests {
 
     #[test]
     fn assign_rejects_negative_entries_without_mutating() {
-        let TempCheckpoint { dir: _d, checkpoint: mut c } = checkpoint(&[entry(1, 0)]);
+        let TempCheckpoint {
+            dir: _d,
+            checkpoint: mut c,
+        } = checkpoint(&[entry(1, 0)]);
         for (epoch, start) in [(-1, 5), (2, -1)] {
             let error = c.assign(LeaderEpoch(epoch), Offset(start)).unwrap_err();
             assert2::assert!(matches!(error, LogError::InvalidArgument(_)));
@@ -305,7 +320,10 @@ mod tests {
 
     #[test]
     fn truncate_from_end_removes_entries_at_or_after_end_offset() {
-        let TempCheckpoint { dir: _d, checkpoint: mut c } = checkpoint(&[entry(1, 0), entry(7, 4)]);
+        let TempCheckpoint {
+            dir: _d,
+            checkpoint: mut c,
+        } = checkpoint(&[entry(1, 0), entry(7, 4)]);
         c.truncate_from_end(Offset(4)).unwrap();
         assert2::assert!(c.latest_epoch() == Some(LeaderEpoch(1)));
         assert2::assert!(c.end_offset_for_epoch(LeaderEpoch(7), Offset(4)) == Offset(-1));
@@ -354,7 +372,10 @@ mod tests {
                 vec![entry(2, 17)],
             ),
         ] {
-            let TempCheckpoint { dir: _d, checkpoint: mut c } = checkpoint(&recorded);
+            let TempCheckpoint {
+                dir: _d,
+                checkpoint: mut c,
+            } = checkpoint(&recorded);
             c.truncate_from_start(Offset(start)).unwrap();
             check_persisted(&c, &expected, name);
         }
@@ -362,7 +383,10 @@ mod tests {
 
     #[test]
     fn clear_removes_all_entries_and_persists_empty() {
-        let TempCheckpoint { dir: _d, checkpoint: mut c } = checkpoint(&[entry(1, 0), entry(2, 50)]);
+        let TempCheckpoint {
+            dir: _d,
+            checkpoint: mut c,
+        } = checkpoint(&[entry(1, 0), entry(2, 50)]);
         c.clear().unwrap();
         assert2::assert!(c.entries() == &[][..]);
         assert2::assert!(c.latest_epoch() == None);

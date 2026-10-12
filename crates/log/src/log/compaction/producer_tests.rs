@@ -89,17 +89,47 @@ fn compaction_keeps_the_last_record_of_each_producer_in_the_log() {
         expired: bool,
         want: Vec<Kept>,
     }
-let cases = vec![
-        ProducerCase { name: "the last batch of an idempotent producer", batches: &superseded, expired: false, want: header_and_whole(&superseded, 1, 2..5) },
-        ProducerCase { name: "an expired idempotent producer", batches: &superseded, expired: true, want: whole_batches(&superseded, 2..5) },
-        ProducerCase { name: "the last batch at the new epoch of a producer", batches: &new_epoch, expired: false, want: header_and_whole(&new_epoch, 1, 2..5) },
+    let cases = vec![
+        ProducerCase {
+            name: "the last batch of an idempotent producer",
+            batches: &superseded,
+            expired: false,
+            want: header_and_whole(&superseded, 1, 2..5),
+        },
+        ProducerCase {
+            name: "an expired idempotent producer",
+            batches: &superseded,
+            expired: true,
+            want: whole_batches(&superseded, 2..5),
+        },
+        ProducerCase {
+            name: "the last batch at the new epoch of a producer",
+            batches: &new_epoch,
+            expired: false,
+            want: header_and_whole(&new_epoch, 1, 2..5),
+        },
         // The data batch is the last record of the producer, so every pass
         // meets a batch of the transaction and the marker stays.
-        ProducerCase { name: "a commit marker at the epoch of the transaction", batches: &same_epoch_commit, expired: false, want: header_and_whole(&same_epoch_commit, 0, 1..4) },
+        ProducerCase {
+            name: "a commit marker at the epoch of the transaction",
+            batches: &same_epoch_commit,
+            expired: false,
+            want: header_and_whole(&same_epoch_commit, 0, 1..4),
+        },
         // The marker is the last record of the producer: it holds the epoch
         // that fences the producer.
-        ProducerCase { name: "a commit marker at the next epoch", batches: &next_epoch_commit, expired: false, want: header_and_whole(&next_epoch_commit, 1, 2..4) },
-        ProducerCase { name: "a commit marker of an expired producer", batches: &next_epoch_commit, expired: true, want: whole_batches(&next_epoch_commit, 2..4) },
+        ProducerCase {
+            name: "a commit marker at the next epoch",
+            batches: &next_epoch_commit,
+            expired: false,
+            want: header_and_whole(&next_epoch_commit, 1, 2..4),
+        },
+        ProducerCase {
+            name: "a commit marker of an expired producer",
+            batches: &next_epoch_commit,
+            expired: true,
+            want: whole_batches(&next_epoch_commit, 2..4),
+        },
     ];
     for ProducerCase {
         name,

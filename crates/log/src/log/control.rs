@@ -254,10 +254,10 @@ mod tests {
         log::{
             Log,
             test_support::{
-                TempLog, BarrierEpoch, BarrierMarkerSetup, HostileBarrierSetup, PartitionState,
-                ProducerEpoch, abort_marker, barrier_marker, barrier_marker_from_producer,
+                BarrierEpoch, BarrierMarkerSetup, HostileBarrierSetup, KeyedRecord, PartitionState,
+                ProducerEpoch, TempLog, abort_marker, barrier_marker, barrier_marker_from_producer,
                 commit_marker, compact_test_log, compaction_ctx, control_key, control_value,
-                install_stamps, KeyedRecord, keyed_batch, partition_state, sample_batch, stamped_test_log,
+                install_stamps, keyed_batch, partition_state, sample_batch, stamped_test_log,
                 test_log, transactional_batch,
             },
         },
@@ -339,36 +339,84 @@ mod tests {
     #[test]
     fn a_control_key_parses_as_kafka_parses_it() {
         let cases: [ParseCase<i16>; 12] = [
-            ParseCase { name: "ABORT", bytes: Some(&[0, 0, 0, 0]), expected: Parsed::Value(0) },
-            ParseCase { name: "COMMIT", bytes: Some(&[0, 0, 0, 1]), expected: Parsed::Value(1) },
-            ParseCase { name: "barrier", bytes: Some(&[0, 0, 0x03, 0xe8]), expected: Parsed::Value(1000) },
-            ParseCase { name: "a longer key", bytes: Some(&[0, 0, 0, 1, 9, 9]), expected: Parsed::Value(1) },
-            ParseCase { name: "a later version", bytes: Some(&[0, 1, 0, 1]), expected: Parsed::Value(1) },
-            ParseCase { name: "the largest version", bytes: Some(&[0x7f, 0xff, 0, 1]), expected: Parsed::Value(1) },
-            ParseCase { name: "minus one", bytes: Some(&[0xff, 0xff, 0, 1]), expected: Parsed::BadVersion {
+            ParseCase {
+                name: "ABORT",
+                bytes: Some(&[0, 0, 0, 0]),
+                expected: Parsed::Value(0),
+            },
+            ParseCase {
+                name: "COMMIT",
+                bytes: Some(&[0, 0, 0, 1]),
+                expected: Parsed::Value(1),
+            },
+            ParseCase {
+                name: "barrier",
+                bytes: Some(&[0, 0, 0x03, 0xe8]),
+                expected: Parsed::Value(1000),
+            },
+            ParseCase {
+                name: "a longer key",
+                bytes: Some(&[0, 0, 0, 1, 9, 9]),
+                expected: Parsed::Value(1),
+            },
+            ParseCase {
+                name: "a later version",
+                bytes: Some(&[0, 1, 0, 1]),
+                expected: Parsed::Value(1),
+            },
+            ParseCase {
+                name: "the largest version",
+                bytes: Some(&[0x7f, 0xff, 0, 1]),
+                expected: Parsed::Value(1),
+            },
+            ParseCase {
+                name: "minus one",
+                bytes: Some(&[0xff, 0xff, 0, 1]),
+                expected: Parsed::BadVersion {
                     record: "control record",
                     version: -1,
-                } },
-            ParseCase { name: "the smallest version", bytes: Some(&[0x80, 0x00, 0, 1]), expected: Parsed::BadVersion {
+                },
+            },
+            ParseCase {
+                name: "the smallest version",
+                bytes: Some(&[0x80, 0x00, 0, 1]),
+                expected: Parsed::BadVersion {
                     record: "control record",
                     version: i16::MIN,
-                } },
-            ParseCase { name: "no key", bytes: None, expected: Parsed::TooShort {
+                },
+            },
+            ParseCase {
+                name: "no key",
+                bytes: None,
+                expected: Parsed::TooShort {
                     record: KEY,
                     found: 0,
-                } },
-            ParseCase { name: "one byte", bytes: Some(&[0]), expected: Parsed::TooShort {
+                },
+            },
+            ParseCase {
+                name: "one byte",
+                bytes: Some(&[0]),
+                expected: Parsed::TooShort {
                     record: KEY,
                     found: 1,
-                } },
-            ParseCase { name: "two bytes", bytes: Some(&[0, 0]), expected: Parsed::TooShort {
+                },
+            },
+            ParseCase {
+                name: "two bytes",
+                bytes: Some(&[0, 0]),
+                expected: Parsed::TooShort {
                     record: KEY,
                     found: 2,
-                } },
-            ParseCase { name: "three bytes", bytes: Some(&[0, 0, 0]), expected: Parsed::TooShort {
+                },
+            },
+            ParseCase {
+                name: "three bytes",
+                bytes: Some(&[0, 0, 0]),
+                expected: Parsed::TooShort {
                     record: KEY,
                     found: 3,
-                } },
+                },
+            },
         ];
         for ParseCase {
             name,
@@ -389,34 +437,74 @@ mod tests {
     #[test]
     fn an_end_marker_value_parses_as_kafka_parses_it() {
         let cases: [ParseCase<i32>; 10] = [
-            ParseCase { name: "current", bytes: Some(&[0, 0, 0, 0, 0, 7]), expected: Parsed::Value(7) },
-            ParseCase { name: "a longer value", bytes: Some(&[0, 0, 0, 0, 0, 7, 9]), expected: Parsed::Value(7) },
-            ParseCase { name: "a later version", bytes: Some(&[0, 1, 0, 0, 0, 7, 9]), expected: Parsed::Value(7) },
-            ParseCase { name: "the largest version", bytes: Some(&[0x7f, 0xff, 0, 0, 0, 7]), expected: Parsed::Value(7) },
-            ParseCase { name: "minus one", bytes: Some(&[0xff, 0xff, 0, 0, 0, 7]), expected: Parsed::BadVersion {
+            ParseCase {
+                name: "current",
+                bytes: Some(&[0, 0, 0, 0, 0, 7]),
+                expected: Parsed::Value(7),
+            },
+            ParseCase {
+                name: "a longer value",
+                bytes: Some(&[0, 0, 0, 0, 0, 7, 9]),
+                expected: Parsed::Value(7),
+            },
+            ParseCase {
+                name: "a later version",
+                bytes: Some(&[0, 1, 0, 0, 0, 7, 9]),
+                expected: Parsed::Value(7),
+            },
+            ParseCase {
+                name: "the largest version",
+                bytes: Some(&[0x7f, 0xff, 0, 0, 0, 7]),
+                expected: Parsed::Value(7),
+            },
+            ParseCase {
+                name: "minus one",
+                bytes: Some(&[0xff, 0xff, 0, 0, 0, 7]),
+                expected: Parsed::BadVersion {
                     record: "end transaction marker",
                     version: -1,
-                } },
-            ParseCase { name: "the smallest version", bytes: Some(&[0x80, 0x00, 0, 0, 0, 7]), expected: Parsed::BadVersion {
+                },
+            },
+            ParseCase {
+                name: "the smallest version",
+                bytes: Some(&[0x80, 0x00, 0, 0, 0, 7]),
+                expected: Parsed::BadVersion {
                     record: "end transaction marker",
                     version: i16::MIN,
-                } },
-            ParseCase { name: "no value", bytes: None, expected: Parsed::TooShort {
+                },
+            },
+            ParseCase {
+                name: "no value",
+                bytes: None,
+                expected: Parsed::TooShort {
                     record: VALUE,
                     found: 0,
-                } },
-            ParseCase { name: "version only", bytes: Some(&[0, 0]), expected: Parsed::TooShort {
+                },
+            },
+            ParseCase {
+                name: "version only",
+                bytes: Some(&[0, 0]),
+                expected: Parsed::TooShort {
                     record: VALUE,
                     found: 2,
-                } },
-            ParseCase { name: "four bytes", bytes: Some(&[0, 0, 0, 0]), expected: Parsed::TooShort {
+                },
+            },
+            ParseCase {
+                name: "four bytes",
+                bytes: Some(&[0, 0, 0, 0]),
+                expected: Parsed::TooShort {
                     record: VALUE,
                     found: 4,
-                } },
-            ParseCase { name: "five bytes", bytes: Some(&[0, 0, 0, 0, 0]), expected: Parsed::TooShort {
+                },
+            },
+            ParseCase {
+                name: "five bytes",
+                bytes: Some(&[0, 0, 0, 0, 0]),
+                expected: Parsed::TooShort {
                     record: VALUE,
                     found: 5,
-                } },
+                },
+            },
         ];
         for ParseCase {
             name,
@@ -452,18 +540,33 @@ mod tests {
                     version: -1,
                 },
             },
-            AppendCase { name: "a short key", key: Some(Bytes::from_static(&[0x00, 0x00, 0x00])), value: Some(control_value(17)), expected: Parsed::TooShort {
+            AppendCase {
+                name: "a short key",
+                key: Some(Bytes::from_static(&[0x00, 0x00, 0x00])),
+                value: Some(control_value(17)),
+                expected: Parsed::TooShort {
                     record: KEY,
                     found: 3,
-                } },
-            AppendCase { name: "a negative value version", key: Some(control_key(COMMIT_CONTROL_TYPE)), value: Some(Bytes::from_static(&[0xff, 0xfe, 0, 0, 0, 17])), expected: Parsed::BadVersion {
+                },
+            },
+            AppendCase {
+                name: "a negative value version",
+                key: Some(control_key(COMMIT_CONTROL_TYPE)),
+                value: Some(Bytes::from_static(&[0xff, 0xfe, 0, 0, 0, 17])),
+                expected: Parsed::BadVersion {
                     record: "end transaction marker",
                     version: -2,
-                } },
-            AppendCase { name: "no value", key: Some(control_key(COMMIT_CONTROL_TYPE)), value: None, expected: Parsed::TooShort {
+                },
+            },
+            AppendCase {
+                name: "no value",
+                key: Some(control_key(COMMIT_CONTROL_TYPE)),
+                value: None,
+                expected: Parsed::TooShort {
                     record: VALUE,
                     found: 0,
-                } },
+                },
+            },
         ];
         for AppendCase {
             name,
@@ -728,19 +831,40 @@ mod tests {
     #[test]
     fn compaction_keeps_barrier_markers_and_never_indexes_their_key() {
         let TempLog { dir: _dir, mut log } = compact_test_log();
-        log.append(&mut keyed_batch(0, &[KeyedRecord { offset_delta: 0, key: b"k1", value: b"v0" }]))
-            .unwrap(); // 0
+        log.append(&mut keyed_batch(
+            0,
+            &[KeyedRecord {
+                offset_delta: 0,
+                key: b"k1",
+                value: b"v0",
+            }],
+        ))
+        .unwrap(); // 0
         log.append(&mut barrier_marker(BarrierMarkerSetup::default()))
             .unwrap(); // 1
-        log.append(&mut keyed_batch(0, &[KeyedRecord { offset_delta: 0, key: b"k1", value: b"v1" }]))
-            .unwrap(); // 2
+        log.append(&mut keyed_batch(
+            0,
+            &[KeyedRecord {
+                offset_delta: 0,
+                key: b"k1",
+                value: b"v1",
+            }],
+        ))
+        .unwrap(); // 2
         log.append(&mut barrier_marker(BarrierMarkerSetup {
             epoch: BarrierEpoch(2),
             ..Default::default()
         }))
         .unwrap(); // 3
-        log.append(&mut keyed_batch(0, &[KeyedRecord { offset_delta: 0, key: b"tail", value: b"t" }]))
-            .unwrap(); // 4, active
+        log.append(&mut keyed_batch(
+            0,
+            &[KeyedRecord {
+                offset_delta: 0,
+                key: b"tail",
+                value: b"t",
+            }],
+        ))
+        .unwrap(); // 4, active
 
         // The dedup map holds the data key only. `should_index_key` keeps the
         // marker key out of it, so no barrier can shadow another.

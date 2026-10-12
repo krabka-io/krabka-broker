@@ -103,10 +103,7 @@ fn a_target_level_covers_the_targets_below_it() {
 #[test]
 fn raising_a_level_enables_a_callsite_the_old_filter_had_disabled() {
     let (controller, _filter) = LogLevelController::new("info");
-    let CapturingDispatch {
-        dispatch,
-        captured,
-    } = capturing_dispatch(&controller);
+    let CapturingDispatch { dispatch, captured } = capturing_dispatch(&controller);
 
     tracing::dispatcher::with_default(&dispatch, || {
         tracing::debug!(target: "raise_target", "before");
@@ -127,10 +124,7 @@ fn raising_a_level_enables_a_callsite_the_old_filter_had_disabled() {
 #[test]
 fn fatal_silences_a_target_and_reads_back_as_fatal() {
     let (controller, _filter) = LogLevelController::new("trace");
-    let CapturingDispatch {
-        dispatch,
-        captured,
-    } = capturing_dispatch(&controller);
+    let CapturingDispatch { dispatch, captured } = capturing_dispatch(&controller);
 
     tracing::dispatcher::with_default(&dispatch, || {
         tracing::error!(target: "silence_target", "before");
@@ -149,10 +143,7 @@ fn fatal_silences_a_target_and_reads_back_as_fatal() {
 #[test]
 fn clearing_a_level_puts_a_target_back_on_the_root() {
     let (controller, _filter) = LogLevelController::new("info,clear_target=debug");
-    let CapturingDispatch {
-        dispatch,
-        captured,
-    } = capturing_dispatch(&controller);
+    let CapturingDispatch { dispatch, captured } = capturing_dispatch(&controller);
 
     tracing::dispatcher::with_default(&dispatch, || {
         tracing::debug!(target: "clear_target", "before");
@@ -187,10 +178,7 @@ fn a_span_directive_survives_a_level_change() {
     // `[span]=level` is not a logger. It is carried verbatim, so a change to
     // an unrelated level must not drop it.
     let (controller, _filter) = LogLevelController::new("off,[carried_span]=debug");
-    let CapturingDispatch {
-        dispatch,
-        captured,
-    } = capturing_dispatch(&controller);
+    let CapturingDispatch { dispatch, captured } = capturing_dispatch(&controller);
 
     check!(controller.contains("[carried_span]=debug") == false);
     check!(controller.loggers().keys().all(|name| !name.contains('[')));
@@ -211,10 +199,7 @@ fn a_span_open_before_a_level_change_keeps_its_directive() {
     // the span opens. A level change must not throw that state away, or the
     // events inside a span that is already open go quiet.
     let (controller, _filter) = LogLevelController::new("off,[open_span]=debug");
-    let CapturingDispatch {
-        dispatch,
-        captured,
-    } = capturing_dispatch(&controller);
+    let CapturingDispatch { dispatch, captured } = capturing_dispatch(&controller);
 
     tracing::dispatcher::with_default(&dispatch, || {
         let span = tracing::info_span!("open_span");
@@ -261,10 +246,7 @@ fn a_numeric_directive_does_not_outrank_a_later_alteration() {
     // `RUST_LOG=info,lower_target=4` is `lower_target` at DEBUG. Lowering it
     // to WARN has to silence its DEBUG events and read back as WARN.
     let (controller, _filter) = LogLevelController::new("info,lower_target=4");
-    let CapturingDispatch {
-        dispatch,
-        captured,
-    } = capturing_dispatch(&controller);
+    let CapturingDispatch { dispatch, captured } = capturing_dispatch(&controller);
 
     tracing::dispatcher::with_default(&dispatch, || {
         tracing::debug!(target: "lower_target", "before");

@@ -96,8 +96,7 @@ mod tests {
     use crate::{
         s3::test_support::{
             CountingRsm, SeededCopySetup, StampedMetadataSetup, WormAccess, counting_rsm, rsm,
-            sample_metadata,
-            seeded_blocking, stamped_metadata, worm_rsm,
+            sample_metadata, seeded_blocking, stamped_metadata, worm_rsm,
         },
         storage_manager::RemoteStorageManager,
         test_support::{TransactionIndex, check_sample_indexes},

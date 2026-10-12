@@ -342,15 +342,15 @@ impl Segment {
         // The time index's newest entry pairs the running maximum with the
         // last offset of the batch that set it, which is where the restored
         // maximum's batch starts too.
-        let (mut max_timestamp, mut max_timestamp_offset) = self
-            .time_index
-            .last_entry()
-            .map_or((i64::MIN, self.base_offset - 1), |entry| {
-                (
-                    entry.timestamp,
-                    self.base_offset + i64::from(entry.relative_offset),
-                )
-            });
+        let (mut max_timestamp, mut max_timestamp_offset) =
+            self.time_index
+                .last_entry()
+                .map_or((i64::MIN, self.base_offset - 1), |entry| {
+                    (
+                        entry.timestamp,
+                        self.base_offset + i64::from(entry.relative_offset),
+                    )
+                });
         let scan_from = self
             .offset_index
             .last_entry()
@@ -380,9 +380,9 @@ mod tests {
 
     use super::*;
     use crate::segment::test_support::{
-        TempSegment, DENSE_INDEX, FIVE_OFFSET_TIMESTAMP_BATCHES, ONE_RECORD_BATCH, RecordCount, RecordTimestamp,
-        SampleBatchSetup, SeededSegmentSetup, sample_batch, seeded_fixture, segment_at,
-        test_segment,
+        DENSE_INDEX, FIVE_OFFSET_TIMESTAMP_BATCHES, ONE_RECORD_BATCH, RecordCount, RecordTimestamp,
+        SampleBatchSetup, SeededSegmentSetup, TempSegment, sample_batch, seeded_fixture,
+        segment_at, test_segment,
     };
 
     #[test]
@@ -391,7 +391,10 @@ mod tests {
 
         for codec in [CompressionType::None, CompressionType::Lz4] {
             for timestamp_type in [TimestampType::CreateTime, TimestampType::LogAppendTime] {
-                let TempSegment { dir, segment: mut seg } = test_segment();
+                let TempSegment {
+                    dir,
+                    segment: mut seg,
+                } = test_segment();
                 assert2::assert!(seg.first_record_timestamp().is_none());
                 let mut batch = sample_batch(SampleBatchSetup {
                     records: RecordCount(2),
@@ -526,14 +529,20 @@ mod tests {
 
     #[test]
     fn malformed_or_stale_time_index_floor_fails_closed() {
-        let TempSegment { dir: _dir, segment: mut stale } = test_segment();
+        let TempSegment {
+            dir: _dir,
+            segment: mut stale,
+        } = test_segment();
         stale
             .append(&sample_batch(ONE_RECORD_BATCH), DENSE_INDEX)
             .unwrap();
         stale.time_index.append(200, u32::MAX).unwrap();
         assert2::assert!(stale.offset_for_timestamp(200).is_none());
 
-        let TempSegment { dir: _dir2, segment: mut overflowing } = segment_at(Offset(i64::MAX));
+        let TempSegment {
+            dir: _dir2,
+            segment: mut overflowing,
+        } = segment_at(Offset(i64::MAX));
         overflowing.last_offset = Offset(i64::MAX);
         overflowing.time_index.append(0, 1).unwrap();
         assert2::assert!(overflowing.offset_for_timestamp(0).is_none());
@@ -541,7 +550,10 @@ mod tests {
 
     #[test]
     fn truncated_log_failure_exhausts_the_retry_window() {
-        let TempSegment { dir: _dir, segment: seg } = seeded_fixture(SeededSegmentSetup {
+        let TempSegment {
+            dir: _dir,
+            segment: seg,
+        } = seeded_fixture(SeededSegmentSetup {
             batches: &[ONE_RECORD_BATCH],
             ..Default::default()
         });
@@ -578,7 +590,10 @@ mod tests {
 
     #[test]
     fn scan_from_floor_finds_match_beyond_first_window() {
-        let TempSegment { dir, segment: mut seg } = test_segment();
+        let TempSegment {
+            dir,
+            segment: mut seg,
+        } = test_segment();
         // Many single-record batches with increasing timestamps. With a
         // tiny scan window each batch lands in its own window, so a match
         // at the tail forces the windowed loop to advance many times.
@@ -625,7 +640,10 @@ mod tests {
         // A full-size window keeps the match in the first read so the
         // cursor-advance path isn't involved.
         const WINDOW: ByteSize = kibibytes(64);
-        let TempSegment { dir, segment: mut seg } = test_segment();
+        let TempSegment {
+            dir,
+            segment: mut seg,
+        } = test_segment();
         // A leading single-record batch at offset 0, then a 3-record batch
         // based at offset 1 (abs offsets 1,2,3; timestamps 200,201,202). The
         // match is the *third* record, whose absolute offset is
@@ -661,7 +679,10 @@ mod tests {
         assert2::assert!(seg.offset_of_max_timestamp() == Some((Offset(4), 201)));
 
         // Empty segment → None.
-        let TempSegment { dir: dir2, segment: empty } = test_segment();
+        let TempSegment {
+            dir: dir2,
+            segment: empty,
+        } = test_segment();
         assert2::assert!(empty.offset_of_max_timestamp() == None);
         drop(dir);
         drop(dir2);
@@ -669,7 +690,10 @@ mod tests {
 
     #[test]
     fn offset_of_max_timestamp_tie_picks_earliest() {
-        let TempSegment { dir, segment: mut seg } = test_segment();
+        let TempSegment {
+            dir,
+            segment: mut seg,
+        } = test_segment();
         // All three records share timestamp 500; earliest offset is 0.
         let mut b = RecordBatch {
             base_offset: 0,
@@ -744,11 +768,14 @@ mod record_limit_tests {
     }
 
     fn segment(batches: &[RecordBatch]) -> TempSegment {
-        let TempSegment { dir, segment: mut seg } = test_segment();
+        let TempSegment {
+            dir,
+            segment: mut seg,
+        } = test_segment();
         for batch in batches {
             seg.append(batch, DENSE_INDEX).unwrap();
         }
-        (dir, seg)
+        TempSegment { dir, segment: seg }
     }
 
     /// What a lookup answers: the record it found, or the size of the record
@@ -802,9 +829,26 @@ mod record_limit_tests {
                 Ok(Some((Offset(1), 1_001))),
             ),
         ] {
-            let TempSegment { dir: _dir, segment: seg } = segment(&[
-                batch(0, &[TimedRecord { timestamp: 1_000, value_len: 10 }], codec),
-                batch(1, &[TimedRecord { timestamp: 1_001, value_len: 1_000 }], codec),
+            let TempSegment {
+                dir: _dir,
+                segment: seg,
+            } = segment(&[
+                batch(
+                    0,
+                    &[TimedRecord {
+                        timestamp: 1_000,
+                        value_len: 10,
+                    }],
+                    codec,
+                ),
+                batch(
+                    1,
+                    &[TimedRecord {
+                        timestamp: 1_001,
+                        value_len: 1_000,
+                    }],
+                    codec,
+                ),
             ]);
             let found = seg.offset_for_timestamp_with_window(target, WINDOW, limit);
             check!(answer(found) == expected, "{name}");
@@ -815,9 +859,25 @@ mod record_limit_tests {
     /// never read, and one before it always is.
     #[test]
     fn a_lookup_stops_reading_a_batch_at_the_record_it_returns() {
-        let TempSegment { dir: _dir, segment: seg } = segment(&[batch(
+        let TempSegment {
+            dir: _dir,
+            segment: seg,
+        } = segment(&[batch(
             0,
-            &[TimedRecord { timestamp: 1_000, value_len: 10 }, TimedRecord { timestamp: 1_001, value_len: 1_000 }, TimedRecord { timestamp: 1_002, value_len: 10 }],
+            &[
+                TimedRecord {
+                    timestamp: 1_000,
+                    value_len: 10,
+                },
+                TimedRecord {
+                    timestamp: 1_001,
+                    value_len: 1_000,
+                },
+                TimedRecord {
+                    timestamp: 1_002,
+                    value_len: 10,
+                },
+            ],
             CompressionType::Gzip,
         )]);
         for (target, expected) in [
@@ -839,9 +899,26 @@ mod record_limit_tests {
     #[test]
     fn a_max_timestamp_lookup_reads_only_the_batch_holding_the_maximum() {
         let gzip = CompressionType::Gzip;
-        let TempSegment { dir: _dir, segment: mut seg } = segment(&[
-            batch(0, &[TimedRecord { timestamp: 1_000, value_len: 1_000 }], gzip),
-            batch(1, &[TimedRecord { timestamp: 1_001, value_len: 10 }], gzip),
+        let TempSegment {
+            dir: _dir,
+            segment: mut seg,
+        } = segment(&[
+            batch(
+                0,
+                &[TimedRecord {
+                    timestamp: 1_000,
+                    value_len: 1_000,
+                }],
+                gzip,
+            ),
+            batch(
+                1,
+                &[TimedRecord {
+                    timestamp: 1_001,
+                    value_len: 10,
+                }],
+                gzip,
+            ),
         ]);
         let lookup =
             |seg: &Segment| answer(seg.offset_of_max_timestamp_with_window(WINDOW, Some(LIMIT)));
@@ -849,8 +926,18 @@ mod record_limit_tests {
         check!(lookup(&seg) == Ok(Some((Offset(1), 1_001))));
 
         // Once the oversized batch holds the maximum, the lookup refuses it.
-        seg.append(&batch(2, &[TimedRecord { timestamp: 1_002, value_len: 1_000 }], gzip), DENSE_INDEX)
-            .unwrap();
+        seg.append(
+            &batch(
+                2,
+                &[TimedRecord {
+                    timestamp: 1_002,
+                    value_len: 1_000,
+                }],
+                gzip,
+            ),
+            DENSE_INDEX,
+        )
+        .unwrap();
         check!(lookup(&seg) == Err(LARGE));
 
         // A segment that never learned its maximum finds it by reading

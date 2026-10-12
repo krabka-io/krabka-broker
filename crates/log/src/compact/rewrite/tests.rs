@@ -62,7 +62,11 @@ pub(super) fn decode_all(bytes: &[u8]) -> Vec<RecordBatch> {
 }
 
 /// Decode the written bytes before checking both independent output frontiers.
-fn read_rewrite(out: &RewriteOutput, new_base_offset: i64, new_last_offset: i64) -> Vec<RecordBatch> {
+fn read_rewrite(
+    out: &RewriteOutput,
+    new_base_offset: i64,
+    new_last_offset: i64,
+) -> Vec<RecordBatch> {
     let batches = decode_all(&fs::read(&out.log_swap).unwrap());
     assert2::assert!(out.new_base_offset == Offset(new_base_offset));
     assert2::assert!(out.new_last_offset == Offset(new_last_offset));
@@ -221,14 +225,20 @@ fn rewrite_both_commit_markers_survive_when_data_survives() {
     // pid 1000: data batch at offset 0 (key k1), commit marker at offset 1.
     // pid 2000: data batch at offset 2 (key k2), commit marker at offset 3.
     let data1 = transactional_record(TransactionalRecordSetup {
-        payload: KeyValue { key: b"k1", value: b"v1" },
+        payload: KeyValue {
+            key: b"k1",
+            value: b"v1",
+        },
         ..Default::default()
     });
     let marker1 = control_batch(1, 1000, 1 /* COMMIT */);
     let data2 = transactional_record(TransactionalRecordSetup {
         offset: Offset(2),
         producer: ProducerId(2000),
-        payload: KeyValue { key: b"k2", value: b"v2" },
+        payload: KeyValue {
+            key: b"k2",
+            value: b"v2",
+        },
     });
     let marker2 = control_batch(3, 2000, 1 /* COMMIT */);
     let expected = vec![
@@ -433,11 +443,7 @@ fn rewrite_retain_empty_extends_last_offset() {
 
 /// A one-record batch at `base` from `producer_id` at `producer_epoch`. A
 /// `None` key makes the record one the cleaner always drops.
-fn one_record_batch(
-    base: i64,
-    producer: ProducerIdAndEpoch,
-    key: Option<&[u8]>,
-) -> RecordBatch {
+fn one_record_batch(base: i64, producer: ProducerIdAndEpoch, key: Option<&[u8]>) -> RecordBatch {
     RecordBatch {
         base_offset: base,
         last_offset_delta: 0,
@@ -462,10 +468,7 @@ fn retain_empty_follows_kafkas_cleaner_rules() {
     marker.base_timestamp = 100;
     marker.attributes = marker.attributes.with_delete_horizon(true);
     let anonymous = ProducerIdAndEpoch { id: -1, epoch: -1 };
-    let producer = ProducerIdAndEpoch {
-        id: 1000,
-        epoch: 7,
-    };
+    let producer = ProducerIdAndEpoch { id: 1000, epoch: 7 };
     let kept = |base| one_record_batch(base, anonymous, Some(b"k"));
     let dropped = |base, producer| one_record_batch(base, producer, None);
     let last = |last_data_offset, producer_epoch| ProducerLastRecord {
@@ -605,16 +608,22 @@ fn a_retained_empty_batch_has_no_compression_horizon_or_base_timestamp() {
 #[test]
 fn only_the_last_group_of_a_round_keeps_an_emptied_last_batch() {
     let dir = tempfile::tempdir().unwrap();
-    let first = write_sealed_batches(dir.path(), &[one_record_batch(
-        0,
-        ProducerIdAndEpoch { id: -1, epoch: -1 },
-        None,
-    )]);
-    let second = write_sealed_batches(dir.path(), &[one_record_batch(
-        1,
-        ProducerIdAndEpoch { id: -1, epoch: -1 },
-        None,
-    )]);
+    let first = write_sealed_batches(
+        dir.path(),
+        &[one_record_batch(
+            0,
+            ProducerIdAndEpoch { id: -1, epoch: -1 },
+            None,
+        )],
+    );
+    let second = write_sealed_batches(
+        dir.path(),
+        &[one_record_batch(
+            1,
+            ProducerIdAndEpoch { id: -1, epoch: -1 },
+            None,
+        )],
+    );
     let map = build_offset_map(&[&first, &second], vec![], None).unwrap();
     let active = HashMap::new();
     let round = CleaningRound {

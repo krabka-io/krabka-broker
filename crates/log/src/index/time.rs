@@ -136,8 +136,11 @@ mod time_tests {
     /// bound and the same file-length obligation.
     #[test]
     fn time_index_truncation_drops_entries_at_the_bound_and_shortens_the_file() {
-        let IndexFixture { dir: _dir, path, index: mut idx } =
-            super::super::index_fixture("00000000000000000000.timeindex", TimeIndex::open);
+        let IndexFixture {
+            dir: _dir,
+            path,
+            index: mut idx,
+        } = super::super::index_fixture("00000000000000000000.timeindex", TimeIndex::open);
         for i in 0..5u32 {
             idx.append(1_000 + i64::from(i), i * 10).unwrap();
         }
@@ -187,7 +190,11 @@ mod time_tests {
                 vec![(100, 5), (101, 9)],
             ),
         ] {
-            let IndexFixture { dir: _dir, path, index: mut idx } = populated_index("0.timeindex", &existing);
+            let IndexFixture {
+                dir: _dir,
+                path,
+                index: mut idx,
+            } = populated_index("0.timeindex", &existing);
             idx.maybe_append(appended.0, appended.1).unwrap();
             check!(idx.entries == want, "case {label}");
             let reopened = TimeIndex::open(&path).unwrap();
@@ -197,7 +204,11 @@ mod time_tests {
 
     #[test]
     fn append_and_choose_scan_start() {
-        let IndexFixture { dir: _dir, path: _path, index: idx } = populated_index(
+        let IndexFixture {
+            dir: _dir,
+            path: _path,
+            index: idx,
+        } = populated_index(
             "00000000000000000000.timeindex",
             &[(1_000_000, 0), (2_000_000, 100), (3_000_000, 200)],
         );
@@ -214,7 +225,8 @@ mod time_tests {
 
     #[test]
     fn persists_across_reopen() {
-        let TempPath { dir: _dir, path } = written_index("00000000000000000000.timeindex", &[(1, 0), (2, 50)]);
+        let TempPath { dir: _dir, path } =
+            written_index("00000000000000000000.timeindex", &[(1, 0), (2, 50)]);
         let idx = TimeIndex::open(&path).unwrap();
         assert2::assert!(idx.entry_count() == 2);
     }

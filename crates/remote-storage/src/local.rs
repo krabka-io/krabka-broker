@@ -12,8 +12,7 @@ use crate::{
     metadata::RemoteLogSegmentMetadata,
     storage_manager::{
         ArtifactBody, IndexType, RemoteStorageManager, SegmentArtifact, partition_dir_name,
-        remote_operation,
-        segment_file_name, segment_suffixes,
+        remote_operation, segment_file_name, segment_suffixes,
     },
 };
 

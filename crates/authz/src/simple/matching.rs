@@ -440,10 +440,7 @@ mod tests {
     }
 
     /// Check the same literal host ACL across peer addresses, with a caller-selected metadata version.
-    fn check_host_cases(
-        image: impl Fn() -> krabka_metadata::MetadataImage,
-        cases: &[HostCase],
-    ) {
+    fn check_host_cases(image: impl Fn() -> krabka_metadata::MetadataImage, cases: &[HostCase]) {
         let principal = alice();
         let auth = SimpleAclAuthorizer::new(no_super());
         for HostCase {

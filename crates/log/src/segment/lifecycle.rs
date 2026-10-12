@@ -326,9 +326,9 @@ mod tests {
 
     use super::*;
     use crate::segment::test_support::{
-        TempSegment, DENSE_INDEX, NO_LIMIT, RecordCount, RecordTimestamp, SECOND_THREE_RECORD_BATCH,
-        SampleBatchSetup, SeededSegmentSetup, THREE_RECORD_BATCH, sample_batch, seeded_fixture,
-        segment_at, test_segment, two_record_fixture,
+        DENSE_INDEX, NO_LIMIT, RecordCount, RecordTimestamp, SECOND_THREE_RECORD_BATCH,
+        SampleBatchSetup, SeededSegmentSetup, THREE_RECORD_BATCH, TempSegment, sample_batch,
+        seeded_fixture, segment_at, test_segment, two_record_fixture,
     };
 
     /// Truncating to a relative offset keeps every batch that ends before it,
@@ -393,7 +393,10 @@ mod tests {
     /// Sealing is what `is_sealed` reports.
     #[test]
     fn is_sealed_follows_seal() {
-        let TempSegment { dir: _dir, segment: mut seg } = two_record_fixture();
+        let TempSegment {
+            dir: _dir,
+            segment: mut seg,
+        } = two_record_fixture();
         check!(!seg.is_sealed(), "a fresh segment is open");
         seg.seal().unwrap();
         check!(seg.is_sealed(), "a sealed segment reports it");
@@ -430,7 +433,10 @@ mod tests {
             ),
         ];
         for (label, batches, expected) in cases {
-            let TempSegment { dir: _dir, segment: mut seg } = test_segment();
+            let TempSegment {
+                dir: _dir,
+                segment: mut seg,
+            } = test_segment();
             for (base, timestamp, interval) in batches {
                 seg.append(
                     &sample_batch(SampleBatchSetup {
@@ -465,7 +471,10 @@ mod tests {
     /// returns batch B.
     #[test]
     fn truncate_to_relative_uses_batch_last_offset() {
-        let TempSegment { dir: _dir, segment: mut seg } = seeded_fixture(SeededSegmentSetup {
+        let TempSegment {
+            dir: _dir,
+            segment: mut seg,
+        } = seeded_fixture(SeededSegmentSetup {
             batches: &[
                 THREE_RECORD_BATCH,        // offsets 0..=2
                 SECOND_THREE_RECORD_BATCH, // offsets 3..=5
@@ -489,7 +498,10 @@ mod tests {
 
     #[test]
     fn truncate_to_relative_rejects_an_absolute_offset_overflow() {
-        let TempSegment { dir: _dir, segment: mut seg } = segment_at(Offset(i64::MAX));
+        let TempSegment {
+            dir: _dir,
+            segment: mut seg,
+        } = segment_at(Offset(i64::MAX));
 
         let error = seg
             .truncate_to_relative(1)
@@ -499,7 +511,10 @@ mod tests {
 
     #[test]
     fn flush_succeeds() {
-        let TempSegment { dir: _dir, segment: mut seg } = test_segment();
+        let TempSegment {
+            dir: _dir,
+            segment: mut seg,
+        } = test_segment();
         seg.append(
             &sample_batch(SampleBatchSetup {
                 timestamp: RecordTimestamp(42),

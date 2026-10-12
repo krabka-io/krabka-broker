@@ -551,8 +551,8 @@ mod tests {
         CleanupPolicy,
         config::{DeliveryPolicy, LogConfig},
         log::test_support::{
-            TempLog, append_keyed_samples, compact_test_log, compacting_segments, compaction_ctx,
-            KeyedRecord, keyed_batch, set_segment_size, tiny_segments,
+            KeyedRecord, TempLog, append_keyed_samples, compact_test_log, compacting_segments,
+            compaction_ctx, keyed_batch, set_segment_size, tiny_segments,
         },
         name,
         test_support::KeyValue,
@@ -708,7 +708,14 @@ mod tests {
         let mut log = Log::open(dir, cfg).unwrap();
         for i in 0..batches {
             let value = format!("v{i}");
-            let mut batch = keyed_batch(i, &[KeyedRecord { offset_delta: 0, key: b"key", value: value.as_bytes() }]);
+            let mut batch = keyed_batch(
+                i,
+                &[KeyedRecord {
+                    offset_delta: 0,
+                    key: b"key",
+                    value: value.as_bytes(),
+                }],
+            );
             batch.base_timestamp = i * 1_000;
             batch.max_timestamp = i * 1_000;
             log.append(&mut batch).unwrap();
@@ -759,17 +766,37 @@ mod tests {
             segment_bytes: u32,
             expected: &'static [usize],
         }
-let cases = [
-            GroupCase { sizes: &[], segment_bytes: 100, expected: &[] },
-            GroupCase { sizes: &[10], segment_bytes: 100, expected: &[1] },
+        let cases = [
+            GroupCase {
+                sizes: &[],
+                segment_bytes: 100,
+                expected: &[],
+            },
+            GroupCase {
+                sizes: &[10],
+                segment_bytes: 100,
+                expected: &[1],
+            },
             // Every size fits in one group together.
-            GroupCase { sizes: &[10, 10, 10], segment_bytes: 100, expected: &[3] },
+            GroupCase {
+                sizes: &[10, 10, 10],
+                segment_bytes: 100,
+                expected: &[3],
+            },
             // Nothing combines: each already at or over the limit.
-            GroupCase { sizes: &[60, 60, 60], segment_bytes: 50, expected: &[1, 1, 1] },
+            GroupCase {
+                sizes: &[60, 60, 60],
+                segment_bytes: 50,
+                expected: &[1, 1, 1],
+            },
             // A mix: the first two combine, the third starts a new group
             // with the fourth, and the fifth (alone, over the limit) gets
             // its own group.
-            GroupCase { sizes: &[30, 30, 30, 30, 200], segment_bytes: 70, expected: &[2, 2, 1] },
+            GroupCase {
+                sizes: &[30, 30, 30, 30, 200],
+                segment_bytes: 70,
+                expected: &[2, 2, 1],
+            },
         ];
         for GroupCase {
             sizes,
@@ -840,8 +867,29 @@ let cases = [
         let mut log = Log::open(dir.path(), cfg).unwrap();
         // The first segment holds two records under one key, written at
         // timestamp 0. A second batch seals it.
-        let mut first = keyed_batch(0, &[KeyedRecord { offset_delta: 0, key: b"key", value: b"old" }, KeyedRecord { offset_delta: 1, key: b"key", value: b"new" }]);
-        let mut second = keyed_batch(0, &[KeyedRecord { offset_delta: 0, key: b"other", value: b"v" }]);
+        let mut first = keyed_batch(
+            0,
+            &[
+                KeyedRecord {
+                    offset_delta: 0,
+                    key: b"key",
+                    value: b"old",
+                },
+                KeyedRecord {
+                    offset_delta: 1,
+                    key: b"key",
+                    value: b"new",
+                },
+            ],
+        );
+        let mut second = keyed_batch(
+            0,
+            &[KeyedRecord {
+                offset_delta: 0,
+                key: b"other",
+                value: b"v",
+            }],
+        );
         second.base_timestamp = 1_000;
         second.max_timestamp = 1_000;
         log.append(&mut first).unwrap();
@@ -987,7 +1035,14 @@ let cases = [
         let mut log = Log::open(dir.path(), cfg.clone()).unwrap();
         for i in 0..3 {
             let value = format!("v{i}");
-            let mut batch = keyed_batch(i, &[KeyedRecord { offset_delta: 0, key: b"key", value: value.as_bytes() }]);
+            let mut batch = keyed_batch(
+                i,
+                &[KeyedRecord {
+                    offset_delta: 0,
+                    key: b"key",
+                    value: value.as_bytes(),
+                }],
+            );
             log.append(&mut batch).unwrap();
         }
         assert2::check!(!log.compaction_due(std::time::SystemTime::now(), UNBOUNDED_HW));
@@ -1005,7 +1060,14 @@ let cases = [
         let TempLog { dir, mut log } = compact_test_log();
         for i in 0..3 {
             let value = format!("v{i}");
-            let mut batch = keyed_batch(0, &[KeyedRecord { offset_delta: 0, key: b"key", value: value.as_bytes() }]);
+            let mut batch = keyed_batch(
+                0,
+                &[KeyedRecord {
+                    offset_delta: 0,
+                    key: b"key",
+                    value: value.as_bytes(),
+                }],
+            );
             log.append(&mut batch).unwrap();
         }
         assert2::assert!(!log.segments.is_empty());
@@ -1049,7 +1111,14 @@ let cases = [
 
     #[test]
     fn compact_rejects_crc_corrupt_suffix_without_replacing_originals() {
-        let batch = keyed_batch(0, &[KeyedRecord { offset_delta: 0, key: b"corrupt", value: b"suffix" }]);
+        let batch = keyed_batch(
+            0,
+            &[KeyedRecord {
+                offset_delta: 0,
+                key: b"corrupt",
+                value: b"suffix",
+            }],
+        );
         let mut encoded = BytesMut::with_capacity(batch.encoded_len());
         batch.encode(&mut encoded).unwrap();
         // The stored CRC occupies bytes 17..21. Changing it preserves framing
@@ -1071,7 +1140,14 @@ let cases = [
             (b"k1", b"new"),
             (b"tail", b"t"),
         ] {
-            let mut batch = keyed_batch(0, &[KeyedRecord { offset_delta: 0, key: key, value: value }]);
+            let mut batch = keyed_batch(
+                0,
+                &[KeyedRecord {
+                    offset_delta: 0,
+                    key: key,
+                    value: value,
+                }],
+            );
             batch.attributes = batch.attributes.with_compression(codec);
             log.append(&mut batch).unwrap();
         }
@@ -1080,8 +1156,15 @@ let cases = [
     fn append_versions(log: &mut Log) {
         for i in 0..3 {
             let value = format!("v{i}");
-            log.append(&mut keyed_batch(0, &[KeyedRecord { offset_delta: 0, key: b"k1", value: value.as_bytes() }]))
-                .unwrap();
+            log.append(&mut keyed_batch(
+                0,
+                &[KeyedRecord {
+                    offset_delta: 0,
+                    key: b"k1",
+                    value: value.as_bytes(),
+                }],
+            ))
+            .unwrap();
         }
     }
 
@@ -1101,8 +1184,15 @@ let cases = [
         };
         let mut log = Log::open(dir, cfg).unwrap();
         append_versions(&mut log);
-        log.append(&mut keyed_batch(0, &[KeyedRecord { offset_delta: 0, key: active.key, value: active.value }]))
-            .unwrap();
+        log.append(&mut keyed_batch(
+            0,
+            &[KeyedRecord {
+                offset_delta: 0,
+                key: active.key,
+                value: active.value,
+            }],
+        ))
+        .unwrap();
         log
     }
 
@@ -1225,7 +1315,14 @@ let cases = [
             ..Default::default()
         };
         let mut log = Log::open(dir.path(), cfg).unwrap();
-        let mut b = keyed_batch(0, &[KeyedRecord { offset_delta: 0, key: b"k1", value: b"v1" }]);
+        let mut b = keyed_batch(
+            0,
+            &[KeyedRecord {
+                offset_delta: 0,
+                key: b"k1",
+                value: b"v1",
+            }],
+        );
         log.append(&mut b).unwrap();
         // Only the active segment exists; sealed list is empty.
         log.compact(&compaction_ctx()).unwrap();
@@ -1274,7 +1371,14 @@ let cases = [
         // Three sealed segments, each one record under "k1" (v0, v1, v2).
         append_versions(&mut log);
         // A final append lands in a fresh active segment (untouched by compact).
-        let mut tail = keyed_batch(0, &[KeyedRecord { offset_delta: 0, key: b"tail", value: b"t" }]);
+        let mut tail = keyed_batch(
+            0,
+            &[KeyedRecord {
+                offset_delta: 0,
+                key: b"tail",
+                value: b"t",
+            }],
+        );
         log.append(&mut tail).unwrap();
 
         // Sanity: before compaction there are >= 2 sealed segments holding the

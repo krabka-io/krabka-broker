@@ -332,7 +332,11 @@ mod tests {
     /// to join once the check has run.
     async fn serve_bucket_policy(body: &'static str) -> HttpServer {
         serve_http_pages(
-            vec![HttpPage::new("GET /storage/v1/b/bucket?fields=", "200 OK", body)],
+            vec![HttpPage::new(
+                "GET /storage/v1/b/bucket?fields=",
+                "200 OK",
+                body,
+            )],
             false,
         )
         .await

@@ -14,8 +14,8 @@ use uuid::Uuid;
 use crate::{
     log::{InProcessMetadataEventLog, MetadataEventLog},
     manager::test_support::{
-        HwmFlakyLog, SeededManager, on_blocking, seeded_manager, start_manager, start_manager_all, tp,
-        wait_finished_metadata, wait_ready,
+        HwmFlakyLog, SeededManager, on_blocking, seeded_manager, start_manager, start_manager_all,
+        tp, wait_finished_metadata, wait_ready,
     },
     partitioning::metadata_partition_for,
 };

@@ -134,8 +134,8 @@ mod tests {
     use crate::{
         log::{InProcessMetadataEventLog, MetadataEventLog},
         manager::test_support::{
-            finish, on_blocking, seed, snapshot_test_dir, start_manager_in, start_seeded_manager_in,
-            started, tp, wait_ready,
+            finish, on_blocking, seed, snapshot_test_dir, start_manager_in,
+            start_seeded_manager_in, started, tp, wait_ready,
         },
         partitioning::metadata_partition_for,
         serde::MetadataEvent,

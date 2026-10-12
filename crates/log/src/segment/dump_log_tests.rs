@@ -23,7 +23,7 @@ use crate::{
     index::{OffsetIndexEntry, TimeIndexEntry},
     name,
     segment::test_support::{
-        TempSegment, ONE_RECORD_BATCH, RecordCount, RecordTimestamp, SampleBatchSetup, test_segment,
+        ONE_RECORD_BATCH, RecordCount, RecordTimestamp, SampleBatchSetup, TempSegment, test_segment,
     },
 };
 
@@ -96,10 +96,11 @@ fn dump_log_problems(dir: &Path, base: i64) -> Vec<String> {
         let entry_offset = base + i64::from(relative);
         match batches.iter().find(|found| found.position == position) {
             None => problems.push(format!("no batch starts at position {position}")),
-            Some(BatchAtPosition { batch, .. }) if last_offset(batch) != entry_offset => problems.push(format!(
-                "offset entry {entry_offset} at position {position}: the batch ends at {}",
-                last_offset(batch)
-            )),
+            Some(BatchAtPosition { batch, .. }) if last_offset(batch) != entry_offset => problems
+                .push(format!(
+                    "offset entry {entry_offset} at position {position}: the batch ends at {}",
+                    last_offset(batch)
+                )),
             Some(_) => {}
         }
     }
@@ -115,10 +116,11 @@ fn dump_log_problems(dir: &Path, base: i64) -> Vec<String> {
             .find(|found| last_offset(&found.batch) >= entry_offset)
         {
             None => problems.push(format!("time entry offset {entry_offset} is past the log")),
-            Some(BatchAtPosition { batch, .. }) if last_offset(batch) != entry_offset => problems.push(format!(
-                "shallow offset {entry_offset} not found, the next batch ends at {}",
-                last_offset(batch)
-            )),
+            Some(BatchAtPosition { batch, .. }) if last_offset(batch) != entry_offset => problems
+                .push(format!(
+                    "shallow offset {entry_offset} not found, the next batch ends at {}",
+                    last_offset(batch)
+                )),
             Some(BatchAtPosition { batch, .. }) => {
                 let newest = batch
                     .records
@@ -333,10 +335,26 @@ fn the_index_takes_an_entry_only_once_more_than_the_interval_was_written() {
         expected: Vec<u32>,
     }
     let cases = [
-        IntervalCase { label: "an interval of one batch skips a batch exactly that far", interval: size, expected: vec![2, 4] },
-        IntervalCase { label: "an interval a byte short of a batch indexes the next batch", interval: size - 1, expected: vec![1, 2, 3, 4] },
-        IntervalCase { label: "an interval past every batch indexes nothing", interval: 10 * size, expected: vec![] },
-        IntervalCase { label: "a zero interval indexes every batch but the first", interval: 0, expected: vec![1, 2, 3, 4] },
+        IntervalCase {
+            label: "an interval of one batch skips a batch exactly that far",
+            interval: size,
+            expected: vec![2, 4],
+        },
+        IntervalCase {
+            label: "an interval a byte short of a batch indexes the next batch",
+            interval: size - 1,
+            expected: vec![1, 2, 3, 4],
+        },
+        IntervalCase {
+            label: "an interval past every batch indexes nothing",
+            interval: 10 * size,
+            expected: vec![],
+        },
+        IntervalCase {
+            label: "a zero interval indexes every batch but the first",
+            interval: 0,
+            expected: vec![1, 2, 3, 4],
+        },
     ];
     for IntervalCase {
         label,
@@ -413,7 +431,10 @@ fn appends_after_a_truncation_keep_the_indexes_verifying() {
             DENSE_INDEX,
         )
         .unwrap();
-    assert2::assert!(time_entries(dir.path(), 0) == vec![time_entry(102, 2), time_entry(201, 5), time_entry(401, 9)]);
+    assert2::assert!(
+        time_entries(dir.path(), 0)
+            == vec![time_entry(102, 2), time_entry(201, 5), time_entry(401, 9)]
+    );
     assert2::assert!(dump_log_problems(dir.path(), 0) == Vec::<String>::new());
 }
 
@@ -422,7 +443,10 @@ fn appends_after_a_truncation_keep_the_indexes_verifying() {
 /// record in the middle of that batch.
 #[test]
 fn a_timestamp_search_finds_the_record_inside_the_batch_that_set_the_maximum() {
-    let TempSegment { dir: _dir, mut segment } = test_segment();
+    let TempSegment {
+        dir: _dir,
+        mut segment,
+    } = test_segment();
     write_all_encoded(&mut segment, DENSE_INDEX);
 
     // Batch (4, 2 records, 200): records at offsets 4 and 5 with timestamps

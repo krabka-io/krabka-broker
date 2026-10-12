@@ -181,7 +181,8 @@ impl Log {
                 paths.pop();
             }
         }
-        self.pending_deletes.retain(|pending| !pending.paths.is_empty());
+        self.pending_deletes
+            .retain(|pending| !pending.paths.is_empty());
         Ok(())
     }
 }

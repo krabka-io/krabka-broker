@@ -2,7 +2,9 @@ use assert2::assert;
 use krabka_ids::Offset;
 
 use super::*;
-use crate::log::test_support::{TempLog, commit_marker, sample_batch, test_log, transactional_batch};
+use crate::log::test_support::{
+    TempLog, commit_marker, sample_batch, test_log, transactional_batch,
+};
 
 const PID: i64 = 1000;
 const CLOCK: (i64, i64) = (1_000, 86_400_000);

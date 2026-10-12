@@ -187,9 +187,9 @@ mod tests {
     use super::*;
     use crate::{
         log::test_support::{
-            TempLog, abort_marker, append_transaction, commit_marker, install_stamps, sample_batch,
-            test_batch_at, test_log, tiny_segments, transaction_entries, TransactionFields, transaction_fields,
-            transactional_batch, EncodedVerbatim, verbatim_from,
+            EncodedVerbatim, TempLog, TransactionFields, abort_marker, append_transaction,
+            commit_marker, install_stamps, sample_batch, test_batch_at, test_log, tiny_segments,
+            transaction_entries, transaction_fields, transactional_batch, verbatim_from,
         },
         name,
         test_support::{AbortedTxnSetup, aborted_txn, open_log},
@@ -236,10 +236,13 @@ mod tests {
 
             let mut marker = commit_marker(-2, 0);
             log.append(&mut marker).unwrap();
-            assert2::assert!(transaction_fields(&log, ProducerId(-2)) == TransactionFields {
- coordinator_epoch: -1,
- first_offset: None,
- });
+            assert2::assert!(
+                transaction_fields(&log, ProducerId(-2))
+                    == TransactionFields {
+                        coordinator_epoch: -1,
+                        first_offset: None,
+                    }
+            );
 
             let mut verbatim = test_batch_at(0);
             verbatim.producer_id = -3;
@@ -255,14 +258,20 @@ mod tests {
 
         let reopened = open_log(dir.path());
         assert2::assert!(reopened.lso() == reopened.log_end_offset());
-        assert2::assert!(transaction_fields(&reopened, ProducerId(-2)) == TransactionFields {
- coordinator_epoch: -1,
- first_offset: None,
- });
-        assert2::assert!(transaction_fields(&reopened, ProducerId(-3)) == TransactionFields {
- coordinator_epoch: -1,
- first_offset: None,
- });
+        assert2::assert!(
+            transaction_fields(&reopened, ProducerId(-2))
+                == TransactionFields {
+                    coordinator_epoch: -1,
+                    first_offset: None,
+                }
+        );
+        assert2::assert!(
+            transaction_fields(&reopened, ProducerId(-3))
+                == TransactionFields {
+                    coordinator_epoch: -1,
+                    first_offset: None,
+                }
+        );
         assert2::assert!(reopened.producer_state_snapshot().is_empty());
     }
 

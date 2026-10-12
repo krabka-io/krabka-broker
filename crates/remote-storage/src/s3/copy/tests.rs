@@ -15,9 +15,8 @@ use crate::{
         S3RemoteStorage,
         test_support::{
             SeededCopySetup, StampedMetadataSetup, WORM_KEY_ID, WormAccess, WormArchive,
-            memory_worm_archive,
-            rsm, sample_data, sample_metadata, seeded_blocking, stamped_metadata, worm_epoch,
-            worm_rsm, write_file,
+            memory_worm_archive, rsm, sample_data, sample_metadata, seeded_blocking,
+            stamped_metadata, worm_epoch, worm_rsm, write_file,
         },
     },
     storage_manager::{IndexType, LogSegmentData, RemoteStorageManager},

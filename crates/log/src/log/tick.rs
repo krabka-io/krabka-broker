@@ -197,8 +197,8 @@ mod tests {
     use crate::{
         config::LogConfig,
         log::test_support::{
-            TempLog, append_samples, install_stamps, rolled_log, rolling_test_log, sample_batch, test_log,
-            tiny_segments,
+            TempLog, append_samples, install_stamps, rolled_log, rolling_test_log, sample_batch,
+            test_log, tiny_segments,
         },
     };
 
@@ -259,19 +259,59 @@ mod tests {
         let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(100);
         let all = vec![Offset(0), Offset(1), Offset(2)];
         let cases = [
-            Case { cleanup_policy: CleanupPolicy::Delete, retention_size: None, log_start: Offset(0), expected: vec![Offset(1), Offset(2)] },
-            Case { cleanup_policy: CleanupPolicy::Compact, retention_size: None, log_start: Offset(0), expected: all.clone() },
-            Case { cleanup_policy: CleanupPolicy::CompactAndDelete, retention_size: None, log_start: Offset(0), expected: vec![Offset(1), Offset(2)] },
+            Case {
+                cleanup_policy: CleanupPolicy::Delete,
+                retention_size: None,
+                log_start: Offset(0),
+                expected: vec![Offset(1), Offset(2)],
+            },
+            Case {
+                cleanup_policy: CleanupPolicy::Compact,
+                retention_size: None,
+                log_start: Offset(0),
+                expected: all.clone(),
+            },
+            Case {
+                cleanup_policy: CleanupPolicy::CompactAndDelete,
+                retention_size: None,
+                log_start: Offset(0),
+                expected: vec![Offset(1), Offset(2)],
+            },
             // Size retention with a budget of nothing deletes every segment,
             // the active one behind a roll, but only under a policy that
             // deletes.
-            Case { cleanup_policy: CleanupPolicy::Delete, retention_size: Some(ByteSize::ZERO), log_start: Offset(0), expected: vec![] },
-            Case { cleanup_policy: CleanupPolicy::Compact, retention_size: Some(ByteSize::ZERO), log_start: Offset(0), expected: all.clone() },
-            Case { cleanup_policy: CleanupPolicy::CompactAndDelete, retention_size: Some(ByteSize::ZERO), log_start: Offset(0), expected: vec![] },
+            Case {
+                cleanup_policy: CleanupPolicy::Delete,
+                retention_size: Some(ByteSize::ZERO),
+                log_start: Offset(0),
+                expected: vec![],
+            },
+            Case {
+                cleanup_policy: CleanupPolicy::Compact,
+                retention_size: Some(ByteSize::ZERO),
+                log_start: Offset(0),
+                expected: all.clone(),
+            },
+            Case {
+                cleanup_policy: CleanupPolicy::CompactAndDelete,
+                retention_size: Some(ByteSize::ZERO),
+                log_start: Offset(0),
+                expected: vec![],
+            },
             // A segment wholly below the log start offset goes under every
             // policy, and a segment the start offset only reaches stays.
-            Case { cleanup_policy: CleanupPolicy::Compact, retention_size: None, log_start: Offset(1), expected: vec![Offset(1), Offset(2)] },
-            Case { cleanup_policy: CleanupPolicy::Compact, retention_size: None, log_start: Offset(2), expected: vec![Offset(2)] },
+            Case {
+                cleanup_policy: CleanupPolicy::Compact,
+                retention_size: None,
+                log_start: Offset(1),
+                expected: vec![Offset(1), Offset(2)],
+            },
+            Case {
+                cleanup_policy: CleanupPolicy::Compact,
+                retention_size: None,
+                log_start: Offset(2),
+                expected: vec![Offset(2)],
+            },
         ];
 
         for Case {
@@ -473,14 +513,42 @@ mod tests {
             debt_halves: Option<u64>,
             expected_sealed: usize,
         }
-let cases = [
-            DebtCase { name: "under budget", debt_halves: None, expected_sealed: 4 },
-            DebtCase { name: "exactly at budget", debt_halves: Some(0), expected_sealed: 4 },
-            DebtCase { name: "half a segment over", debt_halves: Some(1), expected_sealed: 4 },
-            DebtCase { name: "one segment over", debt_halves: Some(2), expected_sealed: 3 },
-            DebtCase { name: "one and a half segments over", debt_halves: Some(3), expected_sealed: 3 },
-            DebtCase { name: "two segments over", debt_halves: Some(4), expected_sealed: 2 },
-            DebtCase { name: "the whole log over, the active segment behind a roll", debt_halves: Some(10), expected_sealed: 0 },
+        let cases = [
+            DebtCase {
+                name: "under budget",
+                debt_halves: None,
+                expected_sealed: 4,
+            },
+            DebtCase {
+                name: "exactly at budget",
+                debt_halves: Some(0),
+                expected_sealed: 4,
+            },
+            DebtCase {
+                name: "half a segment over",
+                debt_halves: Some(1),
+                expected_sealed: 4,
+            },
+            DebtCase {
+                name: "one segment over",
+                debt_halves: Some(2),
+                expected_sealed: 3,
+            },
+            DebtCase {
+                name: "one and a half segments over",
+                debt_halves: Some(3),
+                expected_sealed: 3,
+            },
+            DebtCase {
+                name: "two segments over",
+                debt_halves: Some(4),
+                expected_sealed: 2,
+            },
+            DebtCase {
+                name: "the whole log over, the active segment behind a roll",
+                debt_halves: Some(10),
+                expected_sealed: 0,
+            },
         ];
         for DebtCase {
             name,

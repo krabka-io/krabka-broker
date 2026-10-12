@@ -225,7 +225,11 @@ fn bench_append_handoff(c: &mut Criterion) {
     let mut group = c.benchmark_group("log/append_handoff");
 
     group.bench_function("direct_mutex_verbatim_1rec_100KiB", |b| {
-        let VerbatimFixture { dir: _dir, log, batch } = verbatim_fixture(100 * 1024);
+        let VerbatimFixture {
+            dir: _dir,
+            log,
+            batch,
+        } = verbatim_fixture(100 * 1024);
         b.iter_custom(|iters| {
             let start = Instant::now();
             for _ in 0..iters {
@@ -236,7 +240,12 @@ fn bench_append_handoff(c: &mut Criterion) {
     });
 
     group.bench_function("spawn_blocking_mutex_verbatim_1rec_100KiB", |b| {
-        let AsyncVerbatimFixture { dir: _dir, log, batch, runtime: rt } = async_verbatim_fixture();
+        let AsyncVerbatimFixture {
+            dir: _dir,
+            log,
+            batch,
+            runtime: rt,
+        } = async_verbatim_fixture();
         b.iter_custom(|iters| {
             rt.block_on(async {
                 let t0 = Instant::now();
@@ -255,7 +264,12 @@ fn bench_append_handoff(c: &mut Criterion) {
     });
 
     group.bench_function("block_in_place_mutex_verbatim_1rec_100KiB", |b| {
-        let AsyncVerbatimFixture { dir: _dir, log, batch, runtime: rt } = async_verbatim_fixture();
+        let AsyncVerbatimFixture {
+            dir: _dir,
+            log,
+            batch,
+            runtime: rt,
+        } = async_verbatim_fixture();
         b.iter_custom(|iters| {
             rt.block_on(async {
                 let start = Instant::now();
@@ -357,7 +371,10 @@ fn bench_read(c: &mut Criterion) {
         target_os = "dragonfly",
     ))]
     let (_descriptor_dir, descriptor_log, descriptor_end) = {
-        let TempLog { dir, log: mut descriptor_log } = open_log(LogConfig::default());
+        let TempLog {
+            dir,
+            log: mut descriptor_log,
+        } = open_log(LogConfig::default());
         for _ in 0..1024 {
             let mut batch = make_batch(1, 64);
             descriptor_log.append(&mut batch).unwrap();
@@ -394,7 +411,10 @@ fn bench_read(c: &mut Criterion) {
         target_os = "dragonfly",
     ))]
     let (_large_batch_dir, large_batch_log, large_batch_end) = {
-        let TempLog { dir, log: mut large_batch_log } = open_log(LogConfig::default());
+        let TempLog {
+            dir,
+            log: mut large_batch_log,
+        } = open_log(LogConfig::default());
         let mut batch = make_batch(1, 1024 * 1024);
         large_batch_log.append(&mut batch).unwrap();
         let end = large_batch_log.log_end_offset();

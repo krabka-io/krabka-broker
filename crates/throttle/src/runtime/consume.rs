@@ -380,7 +380,10 @@ mod tests {
     /// whole burst; a second refund cannot push past it.
     #[test]
     fn refund_returns_granted_tokens_up_to_the_burst() {
-        let ManualBucket { bucket: b, clock: _clock } = manual_bucket();
+        let ManualBucket {
+            bucket: b,
+            clock: _clock,
+        } = manual_bucket();
         b.set_byte_rate_with_burst(bytes_per_sec(100), bytes(1000));
         let granted = try_consume_with_timeout(&b, 600);
         b.refund(granted);
@@ -524,7 +527,10 @@ mod tests {
     /// is still throttled, now by `debt / new rate`.
     #[test]
     fn a_rate_change_keeps_the_debt() {
-        let ManualBucket { bucket: b, clock: _clock } = manual_bucket();
+        let ManualBucket {
+            bucket: b,
+            clock: _clock,
+        } = manual_bucket();
         b.set_token_rate_with_burst(1_000, 1_000);
         check!(b.record(3_000) == 2_000 * MICROS_PER_TOKEN);
 
@@ -911,7 +917,10 @@ mod tests {
     /// the new rate's wait.
     #[test]
     fn the_bound_follows_the_current_rate() {
-        let ManualBucket { bucket: b, clock: _clock } = manual_bucket();
+        let ManualBucket {
+            bucket: b,
+            clock: _clock,
+        } = manual_bucket();
         b.set_token_rate_with_burst(1_000, 1_000);
         check!(b.record_bounded(10_000, secs(5)) == 5_000 * MICROS_PER_TOKEN);
 
@@ -994,7 +1003,10 @@ mod tests {
     /// burst, as a whole-token refund is.
     #[test]
     fn refund_micros_returns_a_part_token() {
-        let ManualBucket { bucket: b, clock: _clock } = manual_bucket();
+        let ManualBucket {
+            bucket: b,
+            clock: _clock,
+        } = manual_bucket();
         b.set_byte_rate_with_burst(
             ByteRate::from_bytes_per_sec_f64(0.25),
             ByteSize::from_bytes_f64(0.75),

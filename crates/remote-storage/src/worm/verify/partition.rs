@@ -19,7 +19,7 @@ use super::{
 };
 use crate::worm::{
     error::WormError,
-    manifest::{MANIFEST_SUFFIX, ManifestBody, ObjectEntry},
+    manifest::{MANIFEST_SUFFIX, ManifestBody},
 };
 
 /// Verifies one partition directory, or `None` when the request filters it out.

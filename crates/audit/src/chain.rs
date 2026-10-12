@@ -147,7 +147,12 @@ mod tests {
         let mut c = ChainState::resume(5, head);
         check!((c.next_seq(), c.head()) == (5, head));
         let link = c.extend(b"r5");
-        check!(link == ChainLink { seq: 5, prev_head: head });
+        check!(
+            link == ChainLink {
+                seq: 5,
+                prev_head: head
+            }
+        );
         check!(c.head() == chain_hash(&head, 5, b"r5"));
     }
 

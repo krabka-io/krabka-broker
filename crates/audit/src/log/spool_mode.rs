@@ -140,8 +140,8 @@ mod tests {
             AuditLog, AuditMode,
             test_support::{
                 ClockedParams, FailableSink, REPLAY_EVERY, ROOMY_CAP, SinkStats, await_until,
-                emit_lifecycle, failed_sink_stats, finish_writer, healthy_sink_stats, life,
-                params, params_with_clock, product, record_sequences, spawn_writer, test_signer,
+                emit_lifecycle, failed_sink_stats, finish_writer, healthy_sink_stats, life, params,
+                params_with_clock, product, record_sequences, spawn_writer, test_signer,
             },
         },
         spool::Spool,
@@ -183,10 +183,8 @@ mod tests {
         let SinkStats { sink, stats } = failed_sink_stats();
         let (log, rx) = AuditLog::new(64);
         let spool = Spool::open(directory.path(), cap).unwrap();
-        let ClockedParams {
-            mut params,
-            clock,
-        } = params_with_clock(sink.clone(), spool, stats.clone());
+        let ClockedParams { mut params, clock } =
+            params_with_clock(sink.clone(), spool, stats.clone());
         params.signer = signer;
         params.checkpoint_every_n = checkpoint_every_n.unwrap_or(0);
         FailingSpoolFixture {

@@ -166,8 +166,11 @@ mod tests {
     /// resurrects offsets the log no longer has.
     #[test]
     fn offset_index_truncation_drops_entries_at_the_bound_and_shortens_the_file() {
-        let IndexFixture { dir: _dir, path, index: mut idx } =
-            super::super::index_fixture("00000000000000000000.index", OffsetIndex::open);
+        let IndexFixture {
+            dir: _dir,
+            path,
+            index: mut idx,
+        } = super::super::index_fixture("00000000000000000000.index", OffsetIndex::open);
         for i in 0..5u32 {
             idx.append(i * 10, i * 100).unwrap();
         }
@@ -187,7 +190,11 @@ mod tests {
 
     #[test]
     fn append_and_lookup() {
-        let IndexFixture { dir: _dir, path: _path, index: idx } = reference_index();
+        let IndexFixture {
+            dir: _dir,
+            path: _path,
+            index: idx,
+        } = reference_index();
         for (name, offset, want) in [
             ("floor first", 50, 0),
             ("exact middle", 100, 4096),
@@ -201,8 +208,11 @@ mod tests {
 
     #[test]
     fn empty_index_returns_zero() {
-        let IndexFixture { dir: _dir, path: _path, index: idx } =
-            super::super::index_fixture("00000000000000000000.index", OffsetIndex::open);
+        let IndexFixture {
+            dir: _dir,
+            path: _path,
+            index: idx,
+        } = super::super::index_fixture("00000000000000000000.index", OffsetIndex::open);
         for (_name, offset) in [("zero", 0), ("positive", 1000)] {
             assert2::assert!(idx.lookup(offset) == 0);
         }
@@ -210,7 +220,8 @@ mod tests {
 
     #[test]
     fn persists_across_reopen() {
-        let TempPath { dir: _dir, path } = written_index("00000000000000000000.index", &[(0, 0), (100, 4096)]);
+        let TempPath { dir: _dir, path } =
+            written_index("00000000000000000000.index", &[(0, 0), (100, 4096)]);
         let idx = OffsetIndex::open(&path).unwrap();
         assert2::assert!(idx.entry_count() == 2);
         assert2::assert!(idx.lookup(100) == 4096);
@@ -222,7 +233,8 @@ mod tests {
         // truncates on clean shutdown; an unclean copy carries trailing
         // zero entries. Loading must stop at the real data so the binary
         // search stays monotonic.
-        let TempPath { dir: _dir, path } = written_index("00000000000000000000.index", &[(0, 0), (100, 4096)]);
+        let TempPath { dir: _dir, path } =
+            written_index("00000000000000000000.index", &[(0, 0), (100, 4096)]);
         // Append two zero-filled entries (preallocation padding).
         let mut f = OpenOptions::new().append(true).open(&path).unwrap();
         f.write_all(&[0u8; OFFSET_ENTRY_SIZE * 2]).unwrap();
@@ -238,13 +250,21 @@ mod tests {
     /// the indexed batch ends exactly on its target.
     #[test]
     fn floor_entry_is_the_entry_lookup_lands_on() {
-        let IndexFixture { dir: _dir, path: _path, index: idx } = populated_index("00000000000000000000.index", &[(4, 0), (9, 50)]);
+        let IndexFixture {
+            dir: _dir,
+            path: _path,
+            index: idx,
+        } = populated_index("00000000000000000000.index", &[(4, 0), (9, 50)]);
         for (name, target, want) in [
             ("below the first entry", 3, None),
             ("exact first", 4, Some(OffsetIndexEntry::new(4, 0))),
             ("between entries", 8, Some(OffsetIndexEntry::new(4, 0))),
             ("exact last", 9, Some(OffsetIndexEntry::new(9, 50))),
-            ("past the last entry", 100, Some(OffsetIndexEntry::new(9, 50))),
+            (
+                "past the last entry",
+                100,
+                Some(OffsetIndexEntry::new(9, 50)),
+            ),
         ] {
             check!(idx.floor_entry(target) == want, "case {name}");
             check!(
@@ -256,7 +276,11 @@ mod tests {
 
     #[test]
     fn position_at_or_after_finds_ceiling() {
-        let IndexFixture { dir: _dir, path: _path, index: idx } = reference_index();
+        let IndexFixture {
+            dir: _dir,
+            path: _path,
+            index: idx,
+        } = reference_index();
         for (name, offset, want) in [
             ("exact", 100, Some(4096)),
             ("ceiling", 150, Some(8192)),
@@ -272,7 +296,11 @@ mod tests {
 
     #[test]
     fn truncate_by_position() {
-        let IndexFixture { dir: _dir, path: _path, index: mut idx } = reference_index();
+        let IndexFixture {
+            dir: _dir,
+            path: _path,
+            index: mut idx,
+        } = reference_index();
         idx.truncate_by_position(8192).unwrap();
         assert_entry_metadata(&idx, 2, Some(OffsetIndexEntry::new(100, 4096)));
     }

@@ -69,7 +69,9 @@ pub use self::config::{
     DEFAULT_REPLICATION, KafkaMetadataLogConfig, METADATA_TOPIC, MetadataEventQueueCapacity,
 };
 use self::{
-    consumer::{ConsumerState, KafkaAssignmentHandle, MetadataEventChannel, metadata_event_channel},
+    consumer::{
+        ConsumerState, KafkaAssignmentHandle, MetadataEventChannel, metadata_event_channel,
+    },
     range::{RangeFetcher, RangeReadFailure, RangeTopic, visit_range_pages},
     topic::{TopicInfo, ensure_topic},
 };

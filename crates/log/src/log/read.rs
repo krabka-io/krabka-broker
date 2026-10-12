@@ -330,10 +330,7 @@ impl Log {
             return Ok(RawRead::empty(fetch_offset));
         }
 
-        let RawChunks {
-            cursor,
-            mut chunks,
-        } = self.raw_chunks(
+        let RawChunks { cursor, mut chunks } = self.raw_chunks(
             fetch_offset,
             limit_offset,
             max_size,

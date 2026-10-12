@@ -441,7 +441,11 @@ impl object_store::ObjectStore for CountingStore {
 /// take the single-PUT path and must never take multipart.
 #[tokio::test]
 async fn put_from_path_at_threshold_minus_one_takes_single_put() {
-    let CountingFile { store, client: c, file: f } = counting_file(&[1u8; 7]); // len 7, threshold 8
+    let CountingFile {
+        store,
+        client: c,
+        file: f,
+    } = counting_file(&[1u8; 7]); // len 7, threshold 8
     c.put_from_path(
         &Path::from("b/under"),
         f.path(),
@@ -459,7 +463,11 @@ async fn put_from_path_at_threshold_minus_one_takes_single_put() {
 /// `<=`.
 #[tokio::test]
 async fn put_from_path_at_exact_threshold_takes_multipart() {
-    let CountingFile { store, client: c, file: f } = counting_file(&[2u8; 8]); // len 8 == threshold 8
+    let CountingFile {
+        store,
+        client: c,
+        file: f,
+    } = counting_file(&[2u8; 8]); // len 8 == threshold 8
     c.put_from_path(&Path::from("b/at"), f.path(), 8, 4, PutRequest::default())
         .await
         .unwrap();
@@ -468,7 +476,11 @@ async fn put_from_path_at_exact_threshold_takes_multipart() {
 
 #[tokio::test]
 async fn multipart_create_atomically_reserves_the_key() {
-    let CountingFile { store, client: c, file: f } = counting_file(&[3u8; 8]);
+    let CountingFile {
+        store,
+        client: c,
+        file: f,
+    } = counting_file(&[3u8; 8]);
 
     c.put_from_path(
         &Path::from("worm/segment"),

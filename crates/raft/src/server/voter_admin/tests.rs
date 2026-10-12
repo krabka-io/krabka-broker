@@ -13,8 +13,11 @@ use krabka_protocol::{
 };
 
 use super::*;
-use crate::server::test_support::{
-    activate_dynamic_membership, decoded, single_voter_engine, wait_for_leader,
+use crate::{
+    server::test_support::{
+        activate_dynamic_membership, decoded, single_voter_engine, wait_for_leader,
+    },
+    voter_requests::ListenerAddress,
 };
 
 #[derive(Clone, Copy)]
@@ -141,7 +144,6 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
         error_message: Some("Remove voter request didn't include a valid voter".into()),
         ..Default::default()
     };
-    // (what it is, cluster id sent, voter id, directory id, response)
     struct Case {
         what: &'static str,
         request_cluster_id: Option<String>,
@@ -391,7 +393,6 @@ async fn updating_a_voter_needs_the_cluster_the_epoch_and_a_coherent_range() {
         decoded::<UpdateRaftVoterResponse>(&bytes, version).error_code
     };
 
-    // (what it is, cluster id, epoch offered, version range, code expected)
     struct Case {
         what: &'static str,
         request_cluster_id: Option<String>,
