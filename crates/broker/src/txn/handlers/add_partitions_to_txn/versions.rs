@@ -286,44 +286,38 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    /// #883: a v4+ request that names one transactional id twice is answered
-    /// the way Kafka 4.3.1's `KafkaApis.handleAddPartitionsToTxnRequest`
-    /// answers it. The generated collections keep every entry, so each entry
-    /// gets its own result, run with its own producer epoch and
-    /// `verify_only`. Each adds the partitions of the *last* entry for the id
-    /// (`partitionsByTransaction()` is a map the last entry overwrote), and a
-    /// one-code answer lists the topics of the *first* entry (the one
-    /// `errorResponseForTransaction` finds).
-    #[tokio::test]
-    async fn handle_v4_answers_every_entry_of_a_repeated_transactional_id() {
-        struct Entry {
-            epoch: i16,
-            verify_only: bool,
-            topics: &'static [TopicSpec],
+    struct Entry {
+        epoch: i16,
+        verify_only: bool,
+        topics: &'static [TopicSpec],
+    }
+    fn entry(epoch: i16, verify_only: bool, topics: &'static [TopicSpec]) -> Entry {
+        Entry {
+            epoch,
+            verify_only,
+            topics,
         }
-        fn entry(epoch: i16, verify_only: bool, topics: &'static [TopicSpec]) -> Entry {
-            Entry {
-                epoch,
-                verify_only,
-                topics,
-            }
-        }
-        /// The topic rows one entry answers.
-        type Rows = &'static [TopicRows];
-        struct Case {
-            name: &'static str,
-            entries: [Entry; 2],
-            /// Per entry, the rows it answers.
-            results: [Rows; 2],
-            /// The partitions in the transaction after the request.
-            enlisted: &'static [PartitionSpec],
-        }
-        const EPOCH: i16 = 2;
-        const NONE: i16 = codes::NONE;
-        const FENCED: i16 = codes::PRODUCER_FENCED;
-        const UNKNOWN: i16 = codes::UNKNOWN_TOPIC_OR_PARTITION;
-        const NOT_ATTEMPTED: i16 = codes::OPERATION_NOT_ATTEMPTED;
-        let cases = [
+    }
+    /// The topic rows one entry answers.
+    type Rows = &'static [TopicRows];
+    struct Case {
+        name: &'static str,
+        entries: [Entry; 2],
+        /// Per entry, the rows it answers.
+        results: [Rows; 2],
+        /// The partitions in the transaction after the request.
+        enlisted: &'static [PartitionSpec],
+    }
+    const EPOCH: i16 = 2;
+    const NONE: i16 = codes::NONE;
+    const FENCED: i16 = codes::PRODUCER_FENCED;
+    const UNKNOWN: i16 = codes::UNKNOWN_TOPIC_OR_PARTITION;
+    const NOT_ATTEMPTED: i16 = codes::OPERATION_NOT_ATTEMPTED;
+
+    /// The cases of the repeated transactional id: two entries each, the rows
+    /// each answers, and the partitions enlisted afterwards.
+    fn repeated_id_cases() -> [Case; 4] {
+        [
             Case {
                 name: "both entries add the second entry's partitions",
                 entries: [
@@ -509,7 +503,20 @@ mod tests {
                     partition: 0,
                 }],
             },
-        ];
+        ]
+    }
+
+    /// #883: a v4+ request that names one transactional id twice is answered
+    /// the way Kafka 4.3.1's `KafkaApis.handleAddPartitionsToTxnRequest`
+    /// answers it. The generated collections keep every entry, so each entry
+    /// gets its own result, run with its own producer epoch and
+    /// `verify_only`. Each adds the partitions of the *last* entry for the id
+    /// (`partitionsByTransaction()` is a map the last entry overwrote), and a
+    /// one-code answer lists the topics of the *first* entry (the one
+    /// `errorResponseForTransaction` finds).
+    #[tokio::test]
+    async fn handle_v4_answers_every_entry_of_a_repeated_transactional_id() {
+        let cases = repeated_id_cases();
 
         let CoordinatorBroker {
             handle: broker_handle,

@@ -198,8 +198,9 @@ fn expected(case: &Case, tid: &str) -> AddPartitionsToTxnResponse {
     }
 }
 
-#[tokio::test]
-async fn add_partitions_to_txn_authorizes_by_version_and_fails_the_whole_transaction() {
+/// The table of cases: which principal sends which version, what it expects
+/// back, and which partitions the transaction holds afterwards.
+fn cases() -> [Case; 9] {
     use codes::{
         CLUSTER_AUTHORIZATION_FAILED as CLUSTER_DENIED, NONE,
         OPERATION_NOT_ATTEMPTED as NOT_ATTEMPTED, TOPIC_AUTHORIZATION_FAILED as TOPIC_DENIED,
@@ -235,7 +236,7 @@ async fn add_partitions_to_txn_authorizes_by_version_and_fails_the_whole_transac
         ]),
         enlisted: &[],
     };
-    let cases = [
+    [
         Case {
             name: "v4, client grants, no ClusterAction",
             version: 4,
@@ -397,7 +398,12 @@ async fn add_partitions_to_txn_authorizes_by_version_and_fails_the_whole_transac
                 partition: 0,
             }],
         },
-    ];
+    ]
+}
+
+#[tokio::test]
+async fn add_partitions_to_txn_authorizes_by_version_and_fails_the_whole_transaction() {
+    let cases = cases();
 
     let CoordinatorBroker {
         handle: handle_,
