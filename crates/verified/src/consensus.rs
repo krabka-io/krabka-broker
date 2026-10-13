@@ -113,6 +113,13 @@ pub(crate) fn supporting_nodes_distinct(supporters: Seq<(u64, i64)>) -> bool {
 }
 
 open_logic! {
+/// The majority bound includes the leader's own slot.
+pub(crate) fn valid_hwm_majority(majority: Int, members: Int) -> bool {
+    pearlite! { 1 <= majority && majority <= members + 1 }
+}
+}
+
+open_logic! {
 /// Each reported supporting frontier reaches the limit and names a voter with concrete evidence.
 pub(crate) fn supporting_voter_witnesses(
     supporters: Seq<(u64, i64)>,

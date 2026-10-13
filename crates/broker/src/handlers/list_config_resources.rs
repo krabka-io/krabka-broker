@@ -259,6 +259,21 @@ mod tests {
             .collect()
     }
 
+    fn listed_topics(broker: &Broker, topic: &str) -> Vec<ConfigResource> {
+        let topics = collect_resources(
+            &broker.controller.current_image(),
+            VERSION,
+            &[RESOURCE_TYPE_TOPIC],
+            LISTENER,
+        );
+        assert!(
+            topics
+                .iter()
+                .any(|resource| resource.resource_name == topic)
+        );
+        topics
+    }
+
     /// Kafka's `KafkaApis.handleListConfigResources`: membership decides which
     /// types are listed (a repeated type lists once), the rows follow the
     /// fixed order `GROUP`, `CLIENT_METRICS`, `BROKER_LOGGER`, `BROKER`,
@@ -410,13 +425,7 @@ mod tests {
         };
         let resp = handle(&broker, &req, VERSION, &ctx);
 
-        let topics = collect_resources(
-            &broker.controller.current_image(),
-            VERSION,
-            &[RESOURCE_TYPE_TOPIC],
-            LISTENER,
-        );
-        assert!(topics.iter().any(|r| r.resource_name == "t-a"));
+        let topics = listed_topics(&broker, "t-a");
         let expected = unthrottled_wire!(ListConfigResourcesResponse {
             error_code: codes::NONE,
             config_resources: topics,
@@ -463,13 +472,7 @@ mod tests {
             resource_types: vec![RESOURCE_TYPE_TOPIC],
             ..Default::default()
         };
-        let topics = collect_resources(
-            &broker.controller.current_image(),
-            VERSION,
-            &[RESOURCE_TYPE_TOPIC],
-            LISTENER,
-        );
-        assert!(topics.iter().any(|r| r.resource_name == "orders"));
+        let topics = listed_topics(&broker, "orders");
         let allowed = unthrottled_wire!(ListConfigResourcesResponse {
             error_code: codes::NONE,
             config_resources: topics,

@@ -591,20 +591,18 @@ fn spawn_producers(
     let (stop, first_ack, kill_at) = shared;
     for idx in 0..scenario.producers {
         tasks.spawn(run_producer(ProducerTask {
-            idx,
-            scenario: scenario.clone(),
-            bootstrap: cfg.bootstrap.clone(),
-            topic: cfg.topic.clone(),
-            scenario_id: cfg.scenario_id,
-            stop: Arc::clone(stop),
+            setup: TaskSetup::new(
+                idx,
+                scenario,
+                cfg,
+                security,
+                grid,
+                stop,
+                cfg.producer_request_timeout,
+            ),
             first_ack: Arc::clone(first_ack),
             kill_at: Arc::clone(kill_at),
-            security: security.cloned(),
-            grid,
-            request_timeout: cfg.producer_request_timeout,
             final_drain_timeout: cfg.producer_final_drain_timeout,
-            dispatch_queue_capacity: cfg.client_dispatch_queue_capacity,
-            frame_max: cfg.client_frame_max,
         }));
     }
 }
@@ -620,20 +618,18 @@ fn spawn_consumers(
 ) {
     for idx in 0..scenario.consumers {
         tasks.spawn(run_consumer(ConsumerTask {
-            idx,
-            scenario: scenario.clone(),
-            bootstrap: cfg.bootstrap.clone(),
-            topic: cfg.topic.clone(),
-            scenario_id: cfg.scenario_id,
-            stop: Arc::clone(stop),
-            security: security.cloned(),
-            grid,
-            request_timeout: cfg.consumer_request_timeout,
+            setup: TaskSetup::new(
+                idx,
+                scenario,
+                cfg,
+                security,
+                grid,
+                stop,
+                cfg.consumer_request_timeout,
+            ),
             build_retry_policy: cfg.consumer_build_retry_policy,
             poll_timeout: cfg.consumer_poll_timeout,
             poll_error_backoff: cfg.consumer_poll_error_backoff,
-            dispatch_queue_capacity: cfg.client_dispatch_queue_capacity,
-            frame_max: cfg.client_frame_max,
         }));
     }
 }
@@ -894,24 +890,54 @@ fn empty_output(
 
 // ── Producer task ───────────────────────────────────────────────────────────
 
-struct ProducerTask {
+struct TaskSetup {
     idx: usize,
     scenario: Scenario,
     bootstrap: String,
     topic: String,
     scenario_id: u64,
     stop: Arc<AtomicU8>,
+    security: Option<ClientSecurity>,
+    grid: Grid,
+    request_timeout: Time,
+    dispatch_queue_capacity: ConnectionDispatchQueueCapacity,
+    frame_max: ClientFrameMax,
+}
+
+impl TaskSetup {
+    fn new(
+        idx: usize,
+        scenario: &Scenario,
+        cfg: &DriverConfig,
+        security: Option<&ClientSecurity>,
+        grid: Grid,
+        stop: &Arc<AtomicU8>,
+        request_timeout: Time,
+    ) -> Self {
+        Self {
+            idx,
+            scenario: scenario.clone(),
+            bootstrap: cfg.bootstrap.clone(),
+            topic: cfg.topic.clone(),
+            scenario_id: cfg.scenario_id,
+            stop: Arc::clone(stop),
+            security: security.cloned(),
+            grid,
+            request_timeout,
+            dispatch_queue_capacity: cfg.client_dispatch_queue_capacity,
+            frame_max: cfg.client_frame_max,
+        }
+    }
+}
+
+struct ProducerTask {
+    setup: TaskSetup,
     first_ack: Arc<AtomicU64>,
     /// Epoch millisecond at which the failover task deleted the broker pod, or
     /// zero while no delete has succeeded. This is the only thing that says a
     /// kill happened. A producer error says the send failed and nothing more.
     kill_at: Arc<AtomicU64>,
-    security: Option<ClientSecurity>,
-    grid: Grid,
-    request_timeout: Time,
     final_drain_timeout: Time,
-    dispatch_queue_capacity: ConnectionDispatchQueueCapacity,
-    frame_max: ClientFrameMax,
 }
 
 struct TaskMeasurements {
@@ -936,20 +962,23 @@ impl TaskMeasurements {
 
 async fn run_producer(task: ProducerTask) -> ProducerOut {
     let ProducerTask {
-        idx,
-        scenario,
-        bootstrap,
-        topic,
-        scenario_id,
-        stop,
+        setup:
+            TaskSetup {
+                idx,
+                scenario,
+                bootstrap,
+                topic,
+                scenario_id,
+                stop,
+                security,
+                grid,
+                request_timeout,
+                dispatch_queue_capacity,
+                frame_max,
+            },
         first_ack,
         kill_at,
-        security,
-        grid,
-        request_timeout,
         final_drain_timeout,
-        dispatch_queue_capacity,
-        frame_max,
     } = task;
     // Idempotence forces acks=All; turn it off whenever the scenario
     // requested something weaker.
@@ -1166,38 +1195,31 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
 // ── Consumer task ───────────────────────────────────────────────────────────
 
 struct ConsumerTask {
-    idx: usize,
-    scenario: Scenario,
-    bootstrap: String,
-    topic: String,
-    scenario_id: u64,
-    stop: Arc<AtomicU8>,
-    security: Option<ClientSecurity>,
-    grid: Grid,
-    request_timeout: Time,
+    setup: TaskSetup,
     build_retry_policy: ConsumerBuildRetryPolicy,
     poll_timeout: Time,
     poll_error_backoff: Time,
-    dispatch_queue_capacity: ConnectionDispatchQueueCapacity,
-    frame_max: ClientFrameMax,
 }
 
 async fn run_consumer(task: ConsumerTask) -> ConsumerOut {
     let ConsumerTask {
-        idx,
-        scenario,
-        bootstrap,
-        topic,
-        scenario_id,
-        stop,
-        security,
-        grid,
-        request_timeout,
+        setup:
+            TaskSetup {
+                idx,
+                scenario,
+                bootstrap,
+                topic,
+                scenario_id,
+                stop,
+                security,
+                grid,
+                request_timeout,
+                dispatch_queue_capacity,
+                frame_max,
+            },
         build_retry_policy,
         poll_timeout,
         poll_error_backoff,
-        dispatch_queue_capacity,
-        frame_max,
     } = task;
     let group_id = format!("krabka-bench-{}", scenario.name);
     let mut consumer = match build_consumer_with_retry(
@@ -1536,20 +1558,22 @@ mod tests {
             let stop = Arc::new(AtomicU8::new(STATE_MEASURING));
             let first_ack = Arc::new(AtomicU64::new(0));
             let producer = tokio::spawn(run_producer(ProducerTask {
-                idx: 0,
-                grid: Grid::new(Instant::now(), 0, &scenario, DEFAULT_SAMPLE_INTERVAL),
-                scenario,
-                bootstrap: broker.addr.to_string(),
-                topic: "t".into(),
-                scenario_id: 0,
-                stop: Arc::clone(&stop),
+                setup: TaskSetup {
+                    idx: 0,
+                    grid: Grid::new(Instant::now(), 0, &scenario, DEFAULT_SAMPLE_INTERVAL),
+                    scenario,
+                    bootstrap: broker.addr.to_string(),
+                    topic: "t".into(),
+                    scenario_id: 0,
+                    stop: Arc::clone(&stop),
+                    security: None,
+                    request_timeout: secs(1),
+                    dispatch_queue_capacity: ConnectionDispatchQueueCapacity::default(),
+                    frame_max: ClientFrameMax::default(),
+                },
                 first_ack: Arc::clone(&first_ack),
                 kill_at: Arc::new(AtomicU64::new(0)),
-                security: None,
-                request_timeout: secs(1),
                 final_drain_timeout: secs(1),
-                dispatch_queue_capacity: ConnectionDispatchQueueCapacity::default(),
-                frame_max: ClientFrameMax::default(),
             }));
             tokio::time::timeout(secs(10).to_std(), started)
                 .await
