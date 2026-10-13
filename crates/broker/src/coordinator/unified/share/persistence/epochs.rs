@@ -21,10 +21,7 @@
 //! Both records end with the message's tagged-field count.
 
 use {
-    crate::coordinator::unified::persistence::{
-        flex::{epoch_value, value_codec},
-        get_i32, get_i64,
-    },
+    crate::coordinator::unified::persistence::{flex::value_codec, get_i32, get_i64},
     bytes::BufMut,
 };
 
@@ -52,14 +49,14 @@ value_codec! {
     }
 }
 
-epoch_value!(
-    ShareGroupTargetAssignmentMetadataValue("ShareGroupTargetAssignmentMetadataValue") {
-        assignment_epoch,
-        /// Kafka's `AssignmentTimestamp`: the wall-clock time in milliseconds at
-        /// which the assignment calculation finished, or 0 when it is unknown.
-        assignment_timestamp_ms,
-    }
-);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::FlexibleEpochValue)]
+#[epoch_value(record = "ShareGroupTargetAssignmentMetadataValue")]
+pub struct ShareGroupTargetAssignmentMetadataValue {
+    pub assignment_epoch: i32,
+    /// Kafka's `AssignmentTimestamp`: the wall-clock time in milliseconds at
+    /// which the assignment calculation finished, or 0 when it is unknown.
+    pub assignment_timestamp_ms: i64,
+}
 
 #[cfg(test)]
 mod tests {

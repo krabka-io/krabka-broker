@@ -586,6 +586,8 @@ mod tests {
         remove_all = { ForgottenPartitionsCase::RemoveAll },
     )]
     fn forgetting_partitions_updates_the_cached_session(case: ForgottenPartitionsCase) {
+        use assert2::assert;
+
         let cache = FetchSessionCache::new(10);
         let (initial, forgotten, expected_partitions) = match case {
             ForgottenPartitionsCase::RemoveOne => (

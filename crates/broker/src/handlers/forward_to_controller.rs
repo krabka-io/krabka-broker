@@ -183,7 +183,8 @@ where
     LocalFuture: Future<Output = Result<Response, BrokerError>>,
 {
     let body = encode_response(&request, version)?;
-    let refusal = |code, message| encode_response(&refusal(&request, code, message), version);
+    let refusal =
+        |code, message: Option<&str>| encode_response(&refusal(&request, code, message), version);
     match to_active_controller(broker, api_key, &body, version, ctx, refusal).await {
         Some(answer) => decode_request(&answer?, version),
         None => local(request).await,

@@ -331,6 +331,46 @@
 //! ```ignore
 //! krabka_macros::cli_main!(krabka_restore, flavor = "multi_thread");
 //! ```
+//!
+//! # Group timings and epoch values
+//!
+//! `#[derive(GroupTimingConfig)]` adds `for_group` and the test-only
+//! `assigning_at_once` constructor to a membership config. Its named timing
+//! fields and bounds remain visible on the struct. Select the stored keys with
+//! `#[group_timing(session = KEY, heartbeat = KEY, assignment = KEY)]`.
+//! The implementation uses the broker's existing group timing parser and bounds.
+//!
+//! `#[derive(FlexibleEpochValue)]` adds the version-zero epoch codec to a
+//! named struct with an `i32` epoch followed by an `i64` tagged value.
+//! `#[epoch_value(record = "RecordName")]` supplies the decoding error name.
+//! A zero tagged value is omitted on encode and restored on decode.
+//!
+//! # Direct runtime and response tables
+//!
+//! `set_runtime!` applies optional fields in table order. Each group names a
+//! validator. `plain` assigns directly; `duration` validates positive time
+//! and converts it to `Duration`. A mapping selects a different target field,
+//! and `in` supplies the validator's range argument. An absent field retains
+//! the target value. A validation error stops later assignments.
+//!
+//! ```ignore
+//! krabka_macros::set_runtime! {
+//!     runtime => config;
+//!     plain: enabled;
+//!     duration: heartbeat_interval;
+//!     in_range: max_size => group.max_size in 1..=1000;
+//! }
+//! ```
+//!
+//! `response_errors!` implements the caller's error traits for external
+//! protocol types. Its four sections are `response`, `code_response`, `row`
+//! and `resource_row`. Each section contains type paths separated by commas
+//! and ends with a semicolon. A resource row also implements `ErrorRow`, so
+//! each resource type is listed once. The traits remain in the caller's scope.
+//!
+//! `metric_registry_fixture!(metrics, output, guard; expect("encode"))`
+//! renders directly into the named bindings. The caller retains the registry
+//! lock until it drops `guard`. Use `unwrap()` to select that result policy.
 
 use {
     moxy::{
@@ -354,7 +394,9 @@ mod dispatch;
 mod enum_str;
 mod field_defaults;
 mod fixtures;
+mod flexible_epoch_value;
 mod gcs_fields;
+mod group_timing_config;
 mod human_units;
 mod krabka_env;
 mod legacy_fixtures;
@@ -371,6 +413,8 @@ mod projection_identity;
 mod raft_fixtures;
 mod refined_newtype;
 mod remote_metadata_fixtures;
+mod response_encoding;
+mod runtime_assignments;
 mod runtime_overlay;
 mod runtime_policy_fields;
 mod s3_fields;
@@ -466,6 +510,30 @@ pub fn enum_str(item: ItemEnum) -> Result<TokenStream, ParseError> { enum_str::e
 #[moxy::derive(FieldDefaults, attributes(default))]
 pub fn field_defaults(item: ItemStruct) -> Result<TokenStream, ParseError> {
     field_defaults::expand(item)
+}
+
+/// Derive clamped per-group timings and immediate-assignment test defaults.
+#[moxy::derive(GroupTimingConfig, attributes(group_timing))]
+pub fn group_timing_config(item: ItemStruct) -> Result<TokenStream, ParseError> {
+    group_timing_config::expand(item)
+}
+
+/// Derive the version-zero epoch codec with an optional i64 value in tag zero.
+#[moxy::derive(FlexibleEpochValue, attributes(epoch_value))]
+pub fn flexible_epoch_value(item: ItemStruct) -> Result<TokenStream, ParseError> {
+    flexible_epoch_value::expand(item)
+}
+
+/// Implement the shared error traits for external protocol response and row types.
+#[moxy::function]
+pub fn response_errors(tokens: NativeTokenStream) -> Result<TokenStream, ParseError> {
+    response_encoding::expand(&tokens.into())
+}
+
+/// Apply optional runtime fields in table order through their named validators.
+#[moxy::function]
+pub fn set_runtime(tokens: NativeTokenStream) -> Result<TokenStream, ParseError> {
+    runtime_assignments::expand(&tokens.into())
 }
 
 function_macros! {
@@ -750,7 +818,7 @@ function_macros! {
     /// Generate directory-assignment requests with explicit broker and partition identities.
     assignment_dirs_fixture => bound_start_fixture::assignment_dirs;
 
-    /// Generate a registry-rendering macro that retains the caller's lock guard.
+    /// Render a metric registry into caller-named bindings while retaining its lock guard.
     metric_registry_fixture => bound_start_fixture::metric_registry;
 
     /// Generate indexed WORM segment metadata with an explicit segment-id namespace.

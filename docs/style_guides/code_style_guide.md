@@ -281,6 +281,21 @@ Krabka is built on `tokio`, which `[workspace.dependencies]` pins.
 - Structure long-lived work as tasks with an explicit shutdown, not as detached fire-and-forget tasks. The **single-writer-task** pattern is the established shape for serialised writes. One task owns a resource and drains an `mpsc` channel of commands, and callers send messages and await a `oneshot` reply. See the partition writer, and match that pattern for new serialised-mutation components.
 - Spawn blocking or CPU-bound work with `spawn_blocking`, so it does not stall the async worker threads. This covers compression, checksums, and Parquet encode.
 
+## Macro Migration Workflow
+
+Use the [moxy documentation](https://raw.githubusercontent.com/aacebo/moxy/refs/heads/master/README.md) with the version resolved in `Cargo.lock`. The examples on the master branch can differ from that version.
+
+1. Find the macro definitions, their callers, and the tests that check their behavior. Trace each helper macro that an expansion calls. Record field order, default values, error messages, validation order, and binding lifetimes before you change them.
+2. Choose a derive when the repeated implementation belongs to a local struct or enum. Keep the declaration visible to the reader. Use a function macro for external types or statements that need the caller's scope. Use an attribute macro when the change needs to modify an item.
+3. Parse the input once with moxy's AST and typed `FromMeta` attributes. Keep syntax spans for errors. Where the AST cannot parse an expression, retain its tokens and let rustc check it.
+4. Emit the final Rust code in one template. Use `@for`, `@if`, and `@match` to replace recursive helper calls. Use `ToTokens` when a parsed model owns the template. Give hidden local bindings mixed-site spans so they cannot shadow caller bindings.
+5. Migrate every caller and remove the old macro. Check emitted behavior with a compiled consumer test and malformed-input tests. For codecs, compare literal golden bytes and retain the existing decode-error tests.
+6. Run the macro tests, the affected broker tests, Clippy, and the format check. Keep dependency features limited to those the implementation uses.
+
+The group timing configs use `GroupTimingConfig`; flexible epoch records use `FlexibleEpochValue`. Runtime assignments use `set_runtime!`, and external response types use `response_errors!`. The startup and metric fixtures emit direct code. These examples live in `crates/macros/src/` with consumer tests in `crates/macros/tests/`.
+
+For parallel work, give each subagent one macro family and its callers. Keep shared exports with one owner. Review the combined diff for scope, spans, and caller behavior before running the checks.
+
 ## Logging and Observability
 
 - Use the `tracing` macros such as `tracing::debug!`, `error!`, and `instrument` for logs and spans. Do not use `println!` / `eprintln!` in library or server code.

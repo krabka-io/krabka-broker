@@ -18,7 +18,22 @@ crate::coordinator::unified::config::membership_config_type! {
     /// Each `min_*` and `max_*` pair bounds the broker value beside it and the
     /// matching per-group override. The `[runtime]` applier checks Kafka's
     /// ranges and the order within each triple at startup.
-    #[derive(Debug, Clone, PartialEq, krabka_macros::FieldDefaults)]
+    ///
+    /// The membership settings a share group runs with: each `share.*`
+    /// override in the group's stored config over the broker value, clamped to
+    /// the broker's `group.share.min.*` and `group.share.max.*` bounds.
+    ///
+    /// This is Kafka's `GroupMetadataManager.shareGroupSessionTimeoutMs`,
+    /// `shareGroupHeartbeatIntervalMs` and `shareGroupAssignmentIntervalMs`:
+    /// `GroupConfigManager.groupConfig` over `GroupCoordinatorConfig`, with the
+    /// stored config evaluated against the bounds (`GroupConfig.evaluate`). A
+    /// group with no override borrows the broker value.
+    #[derive(Debug, Clone, PartialEq, krabka_macros::FieldDefaults, krabka_macros::GroupTimingConfig)]
+    #[group_timing(
+        session = KEY_SHARE_SESSION_TIMEOUT_MS,
+        heartbeat = KEY_SHARE_HEARTBEAT_INTERVAL_MS,
+        assignment = KEY_SHARE_ASSIGNMENT_INTERVAL_MS,
+    )]
     pub struct ShareGroupConfig;
     prefix {}
     /// Kafka's `group.share.session.timeout.ms`.
@@ -83,21 +98,6 @@ crate::coordinator::unified::config::membership_config_type! {
         /// initialize it again.
         #[default(Duration::from_secs(30))]
         pub initialize_retry_interval: Duration,
-    }
-}
-
-impl ShareGroupConfig {
-    crate::coordinator::unified::config::membership_config_methods! {
-    /// The membership settings a share group runs with: each `share.*`
-    /// override in the group's stored config over the broker value, clamped to
-    /// the broker's `group.share.min.*` and `group.share.max.*` bounds.
-    ///
-    /// This is Kafka's `GroupMetadataManager.shareGroupSessionTimeoutMs`,
-    /// `shareGroupHeartbeatIntervalMs` and `shareGroupAssignmentIntervalMs`:
-    /// `GroupConfigManager.groupConfig` over `GroupCoordinatorConfig`, with the
-    /// stored config evaluated against the bounds (`GroupConfig.evaluate`). A
-    /// group with no override borrows the broker value.
-        KEY_SHARE_SESSION_TIMEOUT_MS, KEY_SHARE_HEARTBEAT_INTERVAL_MS, KEY_SHARE_ASSIGNMENT_INTERVAL_MS
     }
 }
 

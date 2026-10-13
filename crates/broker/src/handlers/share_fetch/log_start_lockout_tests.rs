@@ -400,6 +400,8 @@ enum IsolatedPartitionFailure {
 )]
 #[test_macro(tokio::test)]
 async fn a_partition_failure_does_not_affect_other_partitions(failure: IsolatedPartitionFailure) {
+    use assert2::assert;
+
     let StartedBroker { broker, dir } = start().await;
     let (topic, group) = match failure {
         IsolatedPartitionFailure::CorruptBatch => {
