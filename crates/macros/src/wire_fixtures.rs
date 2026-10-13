@@ -2,7 +2,7 @@
 
 use {
     crate::{
-        fixtures::{function, name, named_items},
+        fixtures::{function, name, named_items, record_batch_records},
         meta::item_body,
     },
     moxy::{
@@ -93,6 +93,8 @@ pub(crate) fn producer_batch(input: TokenStream) -> Result<TokenStream, ParseErr
             ));
         }
     };
+    let record_list =
+        record_batch_records(&moxy::template! { records }, &TokenStream::new(), &value);
     Ok(moxy::template! {
         #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ::derive_more::From, ::derive_more::Into)]
         pub(crate) struct BatchProducerEpoch(pub i16);
@@ -138,9 +140,7 @@ pub(crate) fn producer_batch(input: TokenStream) -> Result<TokenStream, ParseErr
                 attributes: ::krabka_protocol::records::Attributes::default().with_transactional(transaction == BatchTransactionMode::Transactional),
                 last_offset_delta: records - 1, base_timestamp: max_timestamp, max_timestamp,
                 producer_id, producer_epoch, base_sequence,
-                records: (0..records).map(|offset_delta| ::krabka_protocol::records::Record {
-                    offset_delta, value: Some({{ value }}), ..Default::default()
-                }).collect(),
+                {{ record_list }}
                 ..Default::default()
             }
         }
@@ -281,10 +281,17 @@ pub(crate) fn control_marker(tokens: TokenStream) -> Result<TokenStream, ParseEr
 #[cfg(test)]
 mod fixture_tests {
     use {
-        super::{retained_timestamp_bounds, share_produce_parameters},
+        super::{producer_batch, retained_timestamp_bounds, share_produce_parameters},
         assert2::check,
-        moxy::ast::ItemFn,
+        moxy::ast::{File, ItemFn},
     };
+
+    #[test]
+    fn producer_batch_emits_a_parseable_record_batch_builder() {
+        let expanded =
+            producer_batch("make_batch, ::bytes::Bytes::new()".parse().unwrap()).unwrap();
+        let _: File = moxy::parse!({ expanded } as File).unwrap();
+    }
 
     #[yare::parameterized(
         trailing_comma = { "pub async fn fixture(client: &Client, values: Vec<Bytes>,) {}" },
