@@ -16,6 +16,16 @@ fn start_election(ids: &[NodeId]) -> MachineAndLog {
     MachineAndLog { machine: m, log }
 }
 
+/// A three-voter machine that has won its pre-vote and is now a Candidate.
+fn pre_vote_promoted_candidate() -> MachineAndLog {
+    let MachineAndLog {
+        machine: mut m,
+        log,
+    } = start_election(&[NodeId(1), NodeId(2), NodeId(3)]);
+    vote_response(&mut m, &log, VoteResponseSetup::default());
+    MachineAndLog { machine: m, log }
+}
+
 fn five_voter_with_one_grant() -> MachineAndLog {
     let MachineAndLog {
         machine: mut m,
@@ -186,11 +196,7 @@ fn prevote_majority_promotes_to_candidate_and_bumps_epoch() {
 
 #[test]
 fn real_majority_promotes_to_leader_and_appends_leader_change() {
-    let MachineAndLog {
-        machine: mut m,
-        log,
-    } = start_election(&[NodeId(1), NodeId(2), NodeId(3)]);
-    vote_response(&mut m, &log, VoteResponseSetup::default());
+    let MachineAndLog { machine: mut m, log } = pre_vote_promoted_candidate();
     let actions = vote_response(
         &mut m,
         &log,
@@ -253,11 +259,7 @@ fn prospective_counts_grant_with_no_wire_prevote_signal() {
 fn stale_prevote_grant_ignored_after_promotion() {
     // A late pre-vote grant at the old epoch must not be miscounted toward
     // the real election once we have promoted to Candidate at epoch+1.
-    let MachineAndLog {
-        machine: mut m,
-        log,
-    } = start_election(&[NodeId(1), NodeId(2), NodeId(3)]);
-    vote_response(&mut m, &log, VoteResponseSetup::default()); // → Candidate @ epoch 1
+    let MachineAndLog { machine: mut m, log } = pre_vote_promoted_candidate(); // → Candidate @ epoch 1
     assert2::assert!(matches!(m.role(), Role::Candidate { .. }));
     // A duplicate/late pre-vote grant still tagged epoch 0 arrives.
     let actions = vote_response(

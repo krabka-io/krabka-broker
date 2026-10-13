@@ -444,7 +444,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        test_support::{ConfigEntry, attrs, expect_assignment, img_with},
+        test_support::{ConfigEntry, all_metrics_img, attrs, expect_assignment, img_with},
         *,
     };
     use crate::{client_metrics::config::INTERVAL_MS_DEFAULT, test_support::KafkaErrorCode};
@@ -518,19 +518,7 @@ mod tests {
     #[test]
     fn push_checks_follow_kafkas_order_and_timestamps() {
         let m = manager();
-        let img = img_with(
-            "all",
-            &[
-                ConfigEntry {
-                    key: "metrics",
-                    value: "*",
-                },
-                ConfigEntry {
-                    key: "interval.ms",
-                    value: "60000",
-                },
-            ],
-        );
+        let img = all_metrics_img("60000");
         let attrs = attrs();
         let t = Instant::now();
         let right = expect_assignment(m.get_subscription_at(&img, &attrs, t)).subscription_id;
@@ -751,19 +739,7 @@ mod tests {
                 ],
             },
         ];
-        let img = img_with(
-            "all",
-            &[
-                ConfigEntry {
-                    key: "metrics",
-                    value: "*",
-                },
-                ConfigEntry {
-                    key: "interval.ms",
-                    value: "60000",
-                },
-            ],
-        );
+        let img = all_metrics_img("60000");
         let attrs = attrs();
         for Row {
             name,
@@ -809,19 +785,7 @@ mod tests {
     /// reserved ids get `INVALID_REQUEST` (#673).
     #[test]
     fn push_without_an_instance_builds_one() {
-        let img = img_with(
-            "all",
-            &[
-                ConfigEntry {
-                    key: "metrics",
-                    value: "*",
-                },
-                ConfigEntry {
-                    key: "interval.ms",
-                    value: "60000",
-                },
-            ],
-        );
+        let img = all_metrics_img("60000");
         let attrs = attrs();
         let current = subscription_id(
             &compute_subscription(&img, &attrs, INTERVAL_MS_DEFAULT),
@@ -877,32 +841,8 @@ mod tests {
     #[test]
     fn a_subscription_change_rebuilds_the_instance() {
         let m = manager();
-        let before = img_with(
-            "all",
-            &[
-                ConfigEntry {
-                    key: "metrics",
-                    value: "*",
-                },
-                ConfigEntry {
-                    key: "interval.ms",
-                    value: "60000",
-                },
-            ],
-        );
-        let after = img_with(
-            "all",
-            &[
-                ConfigEntry {
-                    key: "metrics",
-                    value: "*",
-                },
-                ConfigEntry {
-                    key: "interval.ms",
-                    value: "30000",
-                },
-            ],
-        );
+        let before = all_metrics_img("60000");
+        let after = all_metrics_img("30000");
         let attrs = attrs();
         let t = Instant::now();
         let secs = |s| t + Duration::from_secs(s);
@@ -970,19 +910,7 @@ mod tests {
     #[test]
     fn get_throttle_follows_kafka() {
         let m = manager();
-        let img = img_with(
-            "all",
-            &[
-                ConfigEntry {
-                    key: "metrics",
-                    value: "*",
-                },
-                ConfigEntry {
-                    key: "interval.ms",
-                    value: "100",
-                },
-            ],
-        );
+        let img = all_metrics_img("100");
         let attrs = attrs();
         let t = Instant::now();
         let ms = |n| t + Duration::from_millis(n);
@@ -1076,19 +1004,7 @@ mod tests {
     #[test]
     fn closing_the_connection_drops_the_instance() {
         let m = manager();
-        let img = img_with(
-            "all",
-            &[
-                ConfigEntry {
-                    key: "metrics",
-                    value: "*",
-                },
-                ConfigEntry {
-                    key: "interval.ms",
-                    value: "60000",
-                },
-            ],
-        );
+        let img = all_metrics_img("60000");
         let t = Instant::now();
         let get = |connection: &str, secs| {
             m.get_subscription_at(&img, &attrs_on(connection), t + Duration::from_secs(secs))
@@ -1132,19 +1048,7 @@ mod tests {
         ];
         for (name, interval, idle, expired) in rows {
             let m = manager();
-            let img = img_with(
-                "all",
-                &[
-                    ConfigEntry {
-                        key: "metrics",
-                        value: "*",
-                    },
-                    ConfigEntry {
-                        key: "interval.ms",
-                        value: interval,
-                    },
-                ],
-            );
+            let img = all_metrics_img(interval);
             let attrs = attrs();
             let id = subscription_id(
                 &compute_subscription(&img, &attrs, INTERVAL_MS_DEFAULT),
@@ -1192,19 +1096,7 @@ mod tests {
     #[test]
     fn an_expired_instances_connection_does_not_own_its_successor() {
         let m = manager();
-        let img = img_with(
-            "all",
-            &[
-                ConfigEntry {
-                    key: "metrics",
-                    value: "*",
-                },
-                ConfigEntry {
-                    key: "interval.ms",
-                    value: "60000",
-                },
-            ],
-        );
+        let img = all_metrics_img("60000");
         let attrs = attrs();
         let id = subscription_id(
             &compute_subscription(&img, &attrs, INTERVAL_MS_DEFAULT),

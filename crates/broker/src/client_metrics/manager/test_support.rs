@@ -23,6 +23,23 @@ pub(super) fn img_with(name: &str, kvs: &[ConfigEntry<'_>]) -> MetadataImage {
     img
 }
 
+/// An image whose `all` subscription matches every metric at `interval_ms`.
+pub(super) fn all_metrics_img(interval_ms: &str) -> MetadataImage {
+    img_with(
+        "all",
+        &[
+            ConfigEntry {
+                key: "metrics",
+                value: "*",
+            },
+            ConfigEntry {
+                key: "interval.ms",
+                value: interval_ms,
+            },
+        ],
+    )
+}
+
 pub(super) fn apply_config(img: &mut MetadataImage, name: &str, kvs: &[ConfigEntry<'_>]) {
     let mut cfgs = BTreeMap::new();
     for ConfigEntry { key, value } in kvs {

@@ -321,6 +321,29 @@ mod tests {
     use super::*;
     use crate::handlers::alter_client_quotas::test_support::{EntityPart, QuotaOp, entry};
 
+    fn part<'a>(entity_type: &'a str, entity_name: Option<&'a str>) -> EntityPart<'a> {
+        EntityPart {
+            entity_type,
+            entity_name,
+        }
+    }
+
+    fn op(key: &'static str, value: f64) -> QuotaOp {
+        QuotaOp {
+            key,
+            value,
+            remove: false,
+        }
+    }
+
+    fn op_remove(key: &'static str, value: f64) -> QuotaOp {
+        QuotaOp {
+            key,
+            value,
+            remove: true,
+        }
+    }
+
     type Entity = Vec<EntityPart<'static>>;
     type Ops = Vec<QuotaOp>;
 
@@ -373,10 +396,7 @@ mod tests {
     /// `producer_byte_rate` 1024.
     fn run(rows: Vec<CaseRow>) {
         let existing: HashMap<EntityKey, BTreeMap<String, f64>> = HashMap::from([(
-            key(&[EntityPart {
-                entity_type: "user",
-                entity_name: Some("carol"),
-            }]),
+            key(&[part("user", Some("carol"))]),
             BTreeMap::from([("producer_byte_rate".to_owned(), 1024.0)]),
         )]);
         for CaseRow {
@@ -396,20 +416,13 @@ mod tests {
 
     /// Rows for setting, unknown keys and removals.
     fn key_rules_set_and_remove_rows() -> Vec<CaseRow> {
-        let alice: Entity = vec![EntityPart {
-            entity_type: "user",
-            entity_name: Some("alice"),
-        }];
+        let alice: Entity = vec![part("user", Some("alice"))];
         vec![
             CaseRow {
                 name: "valid set",
                 entries: vec![EntryCase {
                     entity: alice.clone(),
-                    ops: vec![QuotaOp {
-                        key: "producer_byte_rate",
-                        value: 1024.0,
-                        remove: false,
-                    }],
+                    ops: vec![op("producer_byte_rate", 1024.0)],
                 }],
                 expected: Alteration {
                     results: vec![(key(&alice), Ok(()))],
@@ -420,11 +433,7 @@ mod tests {
                 name: "unknown key, set",
                 entries: vec![EntryCase {
                     entity: alice.clone(),
-                    ops: vec![QuotaOp {
-                        key: "foo",
-                        value: 1.0,
-                        remove: false,
-                    }],
+                    ops: vec![op("foo", 1.0)],
                 }],
                 expected: Alteration {
                     results: vec![(key(&alice), err("Invalid configuration key foo"))],
@@ -435,11 +444,7 @@ mod tests {
                 name: "unknown key, removed, is not validated and writes nothing",
                 entries: vec![EntryCase {
                     entity: alice.clone(),
-                    ops: vec![QuotaOp {
-                        key: "foo",
-                        value: 0.0,
-                        remove: true,
-                    }],
+                    ops: vec![op_remove("foo", 0.0)],
                 }],
                 expected: Alteration {
                     results: vec![(key(&alice), Ok(()))],
@@ -449,54 +454,22 @@ mod tests {
             CaseRow {
                 name: "removal of a set key writes a removal",
                 entries: vec![EntryCase {
-                    entity: vec![EntityPart {
-                        entity_type: "user",
-                        entity_name: Some("carol"),
-                    }],
-                    ops: vec![QuotaOp {
-                        key: "producer_byte_rate",
-                        value: 0.0,
-                        remove: true,
-                    }],
+                    entity: vec![part("user", Some("carol"))],
+                    ops: vec![op_remove("producer_byte_rate", 0.0)],
                 }],
                 expected: Alteration {
-                    results: vec![(
-                        key(&[EntityPart {
-                            entity_type: "user",
-                            entity_name: Some("carol"),
-                        }]),
-                        Ok(()),
-                    )],
-                    records: vec![remove(
-                        &[EntityPart {
-                            entity_type: "user",
-                            entity_name: Some("carol"),
-                        }],
-                        "producer_byte_rate",
-                    )],
+                    results: vec![(key(&[part("user", Some("carol"))]), Ok(()))],
+                    records: vec![remove(&[part("user", Some("carol"))], "producer_byte_rate")],
                 },
             },
             CaseRow {
                 name: "an unchanged value writes nothing",
                 entries: vec![EntryCase {
-                    entity: vec![EntityPart {
-                        entity_type: "user",
-                        entity_name: Some("carol"),
-                    }],
-                    ops: vec![QuotaOp {
-                        key: "producer_byte_rate",
-                        value: 1024.0,
-                        remove: false,
-                    }],
+                    entity: vec![part("user", Some("carol"))],
+                    ops: vec![op("producer_byte_rate", 1024.0)],
                 }],
                 expected: Alteration {
-                    results: vec![(
-                        key(&[EntityPart {
-                            entity_type: "user",
-                            entity_name: Some("carol"),
-                        }]),
-                        Ok(()),
-                    )],
+                    results: vec![(key(&[part("user", Some("carol"))]), Ok(()))],
                     records: vec![],
                 },
             },
@@ -505,24 +478,14 @@ mod tests {
 
     /// Rows for the value and key-scope rules.
     fn key_rules_value_rows() -> Vec<CaseRow> {
-        let alice: Entity = vec![EntityPart {
-            entity_type: "user",
-            entity_name: Some("alice"),
-        }];
-        let ip: Entity = vec![EntityPart {
-            entity_type: "ip",
-            entity_name: Some("10.0.0.1"),
-        }];
+        let alice: Entity = vec![part("user", Some("alice"))];
+        let ip: Entity = vec![part("ip", Some("10.0.0.1"))];
         vec![
             CaseRow {
                 name: "zero",
                 entries: vec![EntryCase {
                     entity: alice.clone(),
-                    ops: vec![QuotaOp {
-                        key: "producer_byte_rate",
-                        value: 0.0,
-                        remove: false,
-                    }],
+                    ops: vec![op("producer_byte_rate", 0.0)],
                 }],
                 expected: Alteration {
                     results: vec![(
@@ -536,11 +499,7 @@ mod tests {
                 name: "negative",
                 entries: vec![EntryCase {
                     entity: alice.clone(),
-                    ops: vec![QuotaOp {
-                        key: "request_percentage",
-                        value: -1.0,
-                        remove: false,
-                    }],
+                    ops: vec![op("request_percentage", -1.0)],
                 }],
                 expected: Alteration {
                     results: vec![(
@@ -554,11 +513,7 @@ mod tests {
                 name: "fractional LONG",
                 entries: vec![EntryCase {
                     entity: alice.clone(),
-                    ops: vec![QuotaOp {
-                        key: "producer_byte_rate",
-                        value: 1024.5,
-                        remove: false,
-                    }],
+                    ops: vec![op("producer_byte_rate", 1024.5)],
                 }],
                 expected: Alteration {
                     results: vec![(
@@ -572,11 +527,7 @@ mod tests {
                 name: "LONG past Long.MAX_VALUE",
                 entries: vec![EntryCase {
                     entity: alice.clone(),
-                    ops: vec![QuotaOp {
-                        key: "consumer_byte_rate",
-                        value: f64::INFINITY,
-                        remove: false,
-                    }],
+                    ops: vec![op("consumer_byte_rate", f64::INFINITY)],
                 }],
                 expected: Alteration {
                     results: vec![(
@@ -590,11 +541,7 @@ mod tests {
                 name: "fractional INT",
                 entries: vec![EntryCase {
                     entity: ip.clone(),
-                    ops: vec![QuotaOp {
-                        key: "connection_creation_rate",
-                        value: 1.5,
-                        remove: false,
-                    }],
+                    ops: vec![op("connection_creation_rate", 1.5)],
                 }],
                 expected: Alteration {
                     results: vec![(
@@ -608,11 +555,7 @@ mod tests {
                 name: "INT past Integer.MAX_VALUE",
                 entries: vec![EntryCase {
                     entity: ip.clone(),
-                    ops: vec![QuotaOp {
-                        key: "connection_creation_rate",
-                        value: 3e9,
-                        remove: false,
-                    }],
+                    ops: vec![op("connection_creation_rate", 3e9)],
                 }],
                 expected: Alteration {
                     results: vec![(
@@ -626,11 +569,7 @@ mod tests {
                 name: "DOUBLE has no upper bound",
                 entries: vec![EntryCase {
                     entity: alice.clone(),
-                    ops: vec![QuotaOp {
-                        key: "request_percentage",
-                        value: 250.0,
-                        remove: false,
-                    }],
+                    ops: vec![op("request_percentage", 250.0)],
                 }],
                 expected: Alteration {
                     results: vec![(key(&alice), Ok(()))],
@@ -641,11 +580,7 @@ mod tests {
                 name: "infinity on a DOUBLE key",
                 entries: vec![EntryCase {
                     entity: alice.clone(),
-                    ops: vec![QuotaOp {
-                        key: "controller_mutation_rate",
-                        value: f64::INFINITY,
-                        remove: false,
-                    }],
+                    ops: vec![op("controller_mutation_rate", f64::INFINITY)],
                 }],
                 expected: Alteration {
                     results: vec![(key(&alice), Ok(()))],
@@ -656,11 +591,7 @@ mod tests {
                 name: "ip key on a user entity",
                 entries: vec![EntryCase {
                     entity: alice.clone(),
-                    ops: vec![QuotaOp {
-                        key: "connection_creation_rate",
-                        value: 1.0,
-                        remove: false,
-                    }],
+                    ops: vec![op("connection_creation_rate", 1.0)],
                 }],
                 expected: Alteration {
                     results: vec![(
@@ -674,11 +605,7 @@ mod tests {
                 name: "user key on an ip entity",
                 entries: vec![EntryCase {
                     entity: ip.clone(),
-                    ops: vec![QuotaOp {
-                        key: "producer_byte_rate",
-                        value: 1.0,
-                        remove: false,
-                    }],
+                    ops: vec![op("producer_byte_rate", 1.0)],
                 }],
                 expected: Alteration {
                     results: vec![(
@@ -697,34 +624,12 @@ mod tests {
             CaseRow {
                 name: "ip combined with user",
                 entries: vec![EntryCase {
-                    entity: vec![
-                        EntityPart {
-                            entity_type: "ip",
-                            entity_name: Some("10.0.0.1"),
-                        },
-                        EntityPart {
-                            entity_type: "user",
-                            entity_name: Some("alice"),
-                        },
-                    ],
-                    ops: vec![QuotaOp {
-                        key: "connection_creation_rate",
-                        value: 1.0,
-                        remove: false,
-                    }],
+                    entity: vec![part("ip", Some("10.0.0.1")), part("user", Some("alice"))],
+                    ops: vec![op("connection_creation_rate", 1.0)],
                 }],
                 expected: Alteration {
                     results: vec![(
-                        key(&[
-                            EntityPart {
-                                entity_type: "ip",
-                                entity_name: Some("10.0.0.1"),
-                            },
-                            EntityPart {
-                                entity_type: "user",
-                                entity_name: Some("alice"),
-                            },
-                        ]),
+                        key(&[part("ip", Some("10.0.0.1")), part("user", Some("alice"))]),
                         err(
                             "Invalid quota entity combination, IP entity shouldnot be combined \
                              with User or ClientId",
@@ -737,59 +642,23 @@ mod tests {
                 name: "IPv6 and a resolvable host name are valid ip names",
                 entries: vec![
                     EntryCase {
-                        entity: vec![EntityPart {
-                            entity_type: "ip",
-                            entity_name: Some("::1"),
-                        }],
-                        ops: vec![QuotaOp {
-                            key: "connection_creation_rate",
-                            value: 5.0,
-                            remove: false,
-                        }],
+                        entity: vec![part("ip", Some("::1"))],
+                        ops: vec![op("connection_creation_rate", 5.0)],
                     },
                     EntryCase {
-                        entity: vec![EntityPart {
-                            entity_type: "ip",
-                            entity_name: Some("localhost"),
-                        }],
-                        ops: vec![QuotaOp {
-                            key: "connection_creation_rate",
-                            value: 6.0,
-                            remove: false,
-                        }],
+                        entity: vec![part("ip", Some("localhost"))],
+                        ops: vec![op("connection_creation_rate", 6.0)],
                     },
                 ],
                 expected: Alteration {
                     results: vec![
-                        (
-                            key(&[EntityPart {
-                                entity_type: "ip",
-                                entity_name: Some("::1"),
-                            }]),
-                            Ok(()),
-                        ),
-                        (
-                            key(&[EntityPart {
-                                entity_type: "ip",
-                                entity_name: Some("localhost"),
-                            }]),
-                            Ok(()),
-                        ),
+                        (key(&[part("ip", Some("::1"))]), Ok(())),
+                        (key(&[part("ip", Some("localhost"))]), Ok(())),
                     ],
                     records: vec![
+                        set(&[part("ip", Some("::1"))], "connection_creation_rate", 5.0),
                         set(
-                            &[EntityPart {
-                                entity_type: "ip",
-                                entity_name: Some("::1"),
-                            }],
-                            "connection_creation_rate",
-                            5.0,
-                        ),
-                        set(
-                            &[EntityPart {
-                                entity_type: "ip",
-                                entity_name: Some("localhost"),
-                            }],
+                            &[part("ip", Some("localhost"))],
                             "connection_creation_rate",
                             6.0,
                         ),
@@ -799,22 +668,12 @@ mod tests {
             CaseRow {
                 name: "unresolvable ip name",
                 entries: vec![EntryCase {
-                    entity: vec![EntityPart {
-                        entity_type: "ip",
-                        entity_name: Some("not-an-ip"),
-                    }],
-                    ops: vec![QuotaOp {
-                        key: "connection_creation_rate",
-                        value: 1.0,
-                        remove: false,
-                    }],
+                    entity: vec![part("ip", Some("not-an-ip"))],
+                    ops: vec![op("connection_creation_rate", 1.0)],
                 }],
                 expected: Alteration {
                     results: vec![(
-                        key(&[EntityPart {
-                            entity_type: "ip",
-                            entity_name: Some("not-an-ip"),
-                        }]),
+                        key(&[part("ip", Some("not-an-ip"))]),
                         err("not-an-ip is not a valid IP or resolvable host."),
                     )],
                     records: vec![],
@@ -823,22 +682,12 @@ mod tests {
             CaseRow {
                 name: "empty user name",
                 entries: vec![EntryCase {
-                    entity: vec![EntityPart {
-                        entity_type: "user",
-                        entity_name: Some(""),
-                    }],
-                    ops: vec![QuotaOp {
-                        key: "producer_byte_rate",
-                        value: 1.0,
-                        remove: false,
-                    }],
+                    entity: vec![part("user", Some(""))],
+                    ops: vec![op("producer_byte_rate", 1.0)],
                 }],
                 expected: Alteration {
                     results: vec![(
-                        key(&[EntityPart {
-                            entity_type: "user",
-                            entity_name: Some(""),
-                        }]),
+                        key(&[part("user", Some(""))]),
                         err("Empty user not supported"),
                     )],
                     records: vec![],
@@ -849,30 +698,17 @@ mod tests {
 
     /// Rows for repeated keys, entities and types.
     fn entity_rules_duplicate_rows() -> Vec<CaseRow> {
-        let alice: Entity = vec![EntityPart {
-            entity_type: "user",
-            entity_name: Some("alice"),
-        }];
+        let alice: Entity = vec![part("user", Some("alice"))];
         vec![
             CaseRow {
                 name: "unknown entity type",
                 entries: vec![EntryCase {
-                    entity: vec![EntityPart {
-                        entity_type: "group",
-                        entity_name: Some("g1"),
-                    }],
-                    ops: vec![QuotaOp {
-                        key: "producer_byte_rate",
-                        value: 1.0,
-                        remove: false,
-                    }],
+                    entity: vec![part("group", Some("g1"))],
+                    ops: vec![op("producer_byte_rate", 1.0)],
                 }],
                 expected: Alteration {
                     results: vec![(
-                        key(&[EntityPart {
-                            entity_type: "group",
-                            entity_name: Some("g1"),
-                        }]),
+                        key(&[part("group", Some("g1"))]),
                         err("Unhandled client quota entity type: group"),
                     )],
                     records: vec![],
@@ -882,11 +718,7 @@ mod tests {
                 name: "empty entity",
                 entries: vec![EntryCase {
                     entity: vec![],
-                    ops: vec![QuotaOp {
-                        key: "producer_byte_rate",
-                        value: 1.0,
-                        remove: false,
-                    }],
+                    ops: vec![op("producer_byte_rate", 1.0)],
                 }],
                 expected: Alteration {
                     results: vec![(vec![], err("Invalid empty client quota entity"))],
@@ -896,41 +728,12 @@ mod tests {
             CaseRow {
                 name: "the same key twice",
                 entries: vec![EntryCase {
-                    entity: vec![
-                        EntityPart {
-                            entity_type: "client-id",
-                            entity_name: None,
-                        },
-                        EntityPart {
-                            entity_type: "user",
-                            entity_name: Some("alice"),
-                        },
-                    ],
-                    ops: vec![
-                        QuotaOp {
-                            key: "producer_byte_rate",
-                            value: 1.0,
-                            remove: false,
-                        },
-                        QuotaOp {
-                            key: "producer_byte_rate",
-                            value: 2.0,
-                            remove: false,
-                        },
-                    ],
+                    entity: vec![part("client-id", None), part("user", Some("alice"))],
+                    ops: vec![op("producer_byte_rate", 1.0), op("producer_byte_rate", 2.0)],
                 }],
                 expected: Alteration {
                     results: vec![(
-                        key(&[
-                            EntityPart {
-                                entity_type: "client-id",
-                                entity_name: None,
-                            },
-                            EntityPart {
-                                entity_type: "user",
-                                entity_name: Some("alice"),
-                            },
-                        ]),
+                        key(&[part("client-id", None), part("user", Some("alice"))]),
                         err(
                             "Ignoring duplicate entity ClientQuotaEntity(entries={client-id=null, \
                              user=alice})",
@@ -944,19 +747,11 @@ mod tests {
                 entries: vec![
                     EntryCase {
                         entity: alice.clone(),
-                        ops: vec![QuotaOp {
-                            key: "producer_byte_rate",
-                            value: 1.0,
-                            remove: false,
-                        }],
+                        ops: vec![op("producer_byte_rate", 1.0)],
                     },
                     EntryCase {
                         entity: alice.clone(),
-                        ops: vec![QuotaOp {
-                            key: "consumer_byte_rate",
-                            value: 2.0,
-                            remove: false,
-                        }],
+                        ops: vec![op("consumer_byte_rate", 2.0)],
                     },
                 ],
                 expected: Alteration {
@@ -970,38 +765,12 @@ mod tests {
             CaseRow {
                 name: "a repeated entity type keeps the last name",
                 entries: vec![EntryCase {
-                    entity: vec![
-                        EntityPart {
-                            entity_type: "user",
-                            entity_name: Some("a"),
-                        },
-                        EntityPart {
-                            entity_type: "user",
-                            entity_name: Some("b"),
-                        },
-                    ],
-                    ops: vec![QuotaOp {
-                        key: "producer_byte_rate",
-                        value: 1.0,
-                        remove: false,
-                    }],
+                    entity: vec![part("user", Some("a")), part("user", Some("b"))],
+                    ops: vec![op("producer_byte_rate", 1.0)],
                 }],
                 expected: Alteration {
-                    results: vec![(
-                        key(&[EntityPart {
-                            entity_type: "user",
-                            entity_name: Some("b"),
-                        }]),
-                        Ok(()),
-                    )],
-                    records: vec![set(
-                        &[EntityPart {
-                            entity_type: "user",
-                            entity_name: Some("b"),
-                        }],
-                        "producer_byte_rate",
-                        1.0,
-                    )],
+                    results: vec![(key(&[part("user", Some("b"))]), Ok(()))],
+                    records: vec![set(&[part("user", Some("b"))], "producer_byte_rate", 1.0)],
                 },
             },
         ]
