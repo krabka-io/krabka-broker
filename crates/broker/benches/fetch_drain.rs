@@ -53,6 +53,29 @@ use criterion::{criterion_group, criterion_main};
     target_os = "dragonfly",
 ))]
 mod sweep {
+    use {
+        assert2::assert,
+        bytes::{BufMut, Bytes, BytesMut},
+        criterion::{Criterion, Throughput},
+        krabka_broker::{
+            fetch_drain::{
+                WriteOp, resolve_records_inline, resolve_records_sendfile, write_fetch_plan,
+            },
+            metrics::{BrokerMetrics, FetchDrainPath, FetchDrainPathLabel},
+        },
+        krabka_protocol::records::{FileRegion, RecordsPayload},
+        std::{
+            io::Write as _,
+            sync::Arc,
+            time::{Duration, Instant},
+        },
+        tokio::{
+            io::AsyncReadExt as _,
+            net::{TcpListener, TcpStream},
+            runtime::Runtime,
+        },
+    };
+
     /// Every response size the sweep covers, and the label each is reported under.
     const SIZES: [ResponseSize; 5] = [
         ResponseSize::new("4KiB", 4 * 1024),
@@ -76,29 +99,6 @@ mod sweep {
             }
         }
     }
-
-    use {
-        assert2::assert,
-        bytes::{BufMut, Bytes, BytesMut},
-        criterion::{Criterion, Throughput},
-        krabka_broker::{
-            fetch_drain::{
-                WriteOp, resolve_records_inline, resolve_records_sendfile, write_fetch_plan,
-            },
-            metrics::{BrokerMetrics, FetchDrainPath, FetchDrainPathLabel},
-        },
-        krabka_protocol::records::{FileRegion, RecordsPayload},
-        std::{
-            io::Write as _,
-            sync::Arc,
-            time::{Duration, Instant},
-        },
-        tokio::{
-            io::AsyncReadExt as _,
-            net::{TcpListener, TcpStream},
-            runtime::Runtime,
-        },
-    };
 
     /// Untimed drains run before the measured ones, over the same socket.
     ///

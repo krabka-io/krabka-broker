@@ -318,10 +318,7 @@ fn submit_or_refuse(
 ) {
     match result {
         Ok(records) => to_submit.extend(records),
-        Err((code, message)) => {
-            out.error_code = code;
-            out.error_message = Some(message);
-        }
+        Err(error) => set_error_response(out, error),
     }
 }
 

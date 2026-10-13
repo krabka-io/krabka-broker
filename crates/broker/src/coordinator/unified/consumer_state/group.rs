@@ -78,9 +78,7 @@ enum LogPresence {
 }
 
 impl GroupState {
-    member_helpers::assignment_delay_method!();
-
-    member_helpers::bump_group_epoch!(self;);
+    member_helpers::shared_group_state_methods!();
 
     member_helpers::expired_members_method!();
 
