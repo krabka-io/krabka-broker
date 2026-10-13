@@ -99,20 +99,6 @@ pub(crate) async fn finish_tasks(
     }
 }
 
-macro_rules! metadata_sweep_loop {
-    ($timer:expr, $cadence:expr, $shutdown:expr, $task:expr, $sweep:tt, $on_shutdown:tt $(,)?) => {
-        krabka_macros::sweep_loop! {
-            timer [$timer];
-            cadence [$cadence];
-            shutdown [$shutdown];
-            task [$task];
-            sweep $sweep;
-            on_shutdown $on_shutdown;
-        }
-    };
-}
-pub(crate) use metadata_sweep_loop;
-
 macro_rules! recover_after_refresh {
     ($this:ident, $(#[$attribute:meta])* $body:block) => {
         $(#[$attribute])*

@@ -20,7 +20,9 @@
 
 use {
     self::sweep::{UncleanablePartitions, tick_all},
-    crate::{metrics::BrokerMetrics, partition_registry::PartitionRegistry, time_util},
+    crate::{
+        metrics::BrokerMetrics, partition_registry::PartitionRegistry, time_util::SweepCadence,
+    },
     krabka_units::convert::TimeExt as _,
     std::{sync::Arc, time::Duration},
     tokio_util::sync::CancellationToken,
@@ -34,7 +36,7 @@ mod test_support;
 mod tests;
 
 /// Tunables for [`run`], shared with the other local log-maintenance sweep.
-pub(crate) type CleanerConfig = time_util::MetadataSweepConfig;
+pub(crate) use crate::time_util::MetadataSweepConfig as CleanerConfig;
 
 /// Spawned task entry point.
 pub(crate) async fn run(
@@ -58,17 +60,17 @@ pub(crate) async fn run(
     let timer = Arc::clone(&cfg.timer);
     // Failed partitions persist across sweeps until compaction succeeds.
     let mut uncleanable = UncleanablePartitions::default();
-    crate::task_util::metadata_sweep_loop!(
-        &*timer,
-        (Duration::ZERO, cfg.interval.to_std()),
-        &shutdown,
-        TASK,
-        {
+    krabka_macros::sweep_loop! {
+        timer [&*timer];
+        cadence [SweepCadence { first: Duration::ZERO, later: cfg.interval.to_std() }];
+        shutdown [&shutdown];
+        task [TASK];
+        sweep {
             let image = cfg.current_image();
             tick_all(&partitions, image.as_deref(), &metrics, &mut uncleanable).await;
-        },
-        {
+        };
+        on_shutdown {
             tracing::debug!("cleaner task shutting down");
-        },
-    );
+        };
+    }
 }

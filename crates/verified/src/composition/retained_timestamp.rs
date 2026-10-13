@@ -1,6 +1,6 @@
 use {
     super::{
-        SparseTimestampWindow, constructed_time_index_preserves_first,
+        ConstructedTimeIndex, SparseTimestampWindow, constructed_time_index_preserves_first,
         indexed_timestamp_scan_finds_first,
     },
     creusot_std::prelude::*,
@@ -27,8 +27,10 @@ pub(super) fn constructed_index_retained_candidate(
     target: i64,
 ) -> Option<usize> {
     let (offsets, timestamps, rows) = window;
-    let (entries, _untrimmed) =
-        constructed_time_index_preserves_first(offsets, timestamps, rows, target);
+    let ConstructedTimeIndex {
+        entries,
+        selected: _untrimmed,
+    } = constructed_time_index_preserves_first(offsets, timestamps, rows, target);
     let mut start = 0usize;
     #[invariant(start@ <= offsets@.len())]
     #[invariant(forall<i: Int> 0 <= i && i < start@ ==> base@ + offsets@[i]@ < minimum@)]
@@ -45,8 +47,8 @@ pub(super) fn constructed_index_retained_candidate(
         ==> retained_offsets@[i] == offsets@[start@ + i]
             && retained_timestamps@[i] == timestamps@[start@ + i]);
     proof_assert!(forall<i: Int, j: Int> 0 <= i && i < entries@.len()
-        && 0 <= j && j < retained_offsets@.len() && retained_offsets@[j]@ < entries@[i].1@
-        ==> retained_timestamps@[j]@ <= entries@[i].0@);
+        && 0 <= j && j < retained_offsets@.len() && retained_offsets@[j]@ < entries@[i].coordinate@
+        ==> retained_timestamps@[j]@ <= entries@[i].key@);
     let selected = indexed_timestamp_scan_finds_first(
         &entries,
         retained_offsets,

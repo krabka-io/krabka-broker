@@ -245,12 +245,12 @@ where
     };
     // Stale-response guard, as on every other recovery path: the metadata
     // image can have chosen another target while the lookups were in flight.
-    return_if_target_stale!(
-        cfg,
-        "replicator: skipping out_of_range recovery from stale target",
-        RowAction::Drop
-    );
-    let _target_guard = lock_local_target!(
+    if replication_target_changed(cfg) {
+        warn!(topic = %cfg.topic, partition = cfg.partition.get(),
+            "replicator: skipping out_of_range recovery from stale target");
+        return RowAction::Drop;
+    }
+    let _target_guard = krabka_macros::replication_target_guard!(
         partition,
         cfg,
         "replicator: skipping out_of_range recovery from stale local target"
@@ -349,12 +349,12 @@ pub(super) async fn handle_offset_moved_to_tiered_storage(cfg: &Config) -> RowAc
     };
     // Stale-response guard, as on every other recovery path: the metadata
     // image can have chosen another target while the lookup was in flight.
-    return_if_target_stale!(
-        cfg,
-        "replicator: skipping tiered-storage restart from stale target",
-        RowAction::Drop
-    );
-    let _target_guard = lock_local_target!(
+    if replication_target_changed(cfg) {
+        warn!(topic = %cfg.topic, partition = cfg.partition.get(),
+            "replicator: skipping tiered-storage restart from stale target");
+        return RowAction::Drop;
+    }
+    let _target_guard = krabka_macros::replication_target_guard!(
         partition,
         cfg,
         "replicator: skipping tiered-storage restart from stale local target"

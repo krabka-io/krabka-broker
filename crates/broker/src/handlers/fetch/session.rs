@@ -454,32 +454,38 @@ mod tests {
         }
     }
 
-    macro_rules! filter_single_topic {
-        (
-            ($cached:ident, $responses:ident, $sent:ident),($name:expr, $id:expr, $watermark:expr),
-            $response_watermark:expr
-        ) => {
-            let $cached: std::collections::HashMap<_, _> =
-                [cached_entry($name, $id, 0, $watermark)]
-                    .into_iter()
-                    .collect();
-            let mut $responses = vec![topic_response("orders", 7, $response_watermark)];
-            let $sent = filter_incremental_response(&mut $responses, &$cached);
-        };
+    #[derive(Debug, PartialEq, Eq)]
+    struct SentPartitionState {
+        key: FetchSessionKey,
+        state: CachedPartitionState,
     }
 
-    /// An unchanged row is not resent with either the v13 id-only key or the
-    /// pre-KIP-516 name-only key.
-    #[yare::parameterized(
-        id_only = { "", 7, 42 },
-        name_only = { "orders", 0, 42 },
-    )]
-    fn unchanged_partition_cached_by_either_key_is_not_resent(
-        name: &'static str,
+    struct FilteredSingleTopic {
+        responses: Vec<FetchableTopicResponse>,
+        sent: Vec<SentPartitionState>,
+    }
+
+    fn filter_single_topic(
+        name: &str,
         id: u8,
         watermark: i64,
-    ) {
-        filter_single_topic!((cached, responses, sent), (name, id, watermark), watermark);
+        response_watermark: i64,
+    ) -> FilteredSingleTopic {
+        let cached = [cached_entry(name, id, 0, watermark)].into_iter().collect();
+        let mut responses = vec![topic_response("orders", 7, response_watermark)];
+        let sent = filter_incremental_response(&mut responses, &cached)
+            .into_iter()
+            .map(|(key, state)| SentPartitionState { key, state })
+            .collect();
+        FilteredSingleTopic { responses, sent }
+    }
+
+    /// A Fetch v13 request names topics by id alone, so the cached key it
+    /// created has no name -- while the response row the broker built carries
+    /// the name it resolved. The unchanged partition still has to drop out.
+    #[test]
+    fn an_unchanged_partition_cached_by_id_alone_is_not_resent() {
+        let FilteredSingleTopic { responses, sent } = filter_single_topic("", 7, 42, 42);
 
         assert2::assert!(responses.is_empty());
         assert2::assert!(sent.is_empty());
@@ -490,18 +496,31 @@ mod tests {
     /// `finalize_incremental` would not find.
     #[test]
     fn a_changed_partition_reports_the_key_the_cache_holds() {
-        filter_single_topic!((cached, responses, sent), ("", 7, 42), 43);
+        let FilteredSingleTopic {
+            responses: _responses,
+            sent,
+        } = filter_single_topic("", 7, 42, 43);
 
         assert!(
-            sent == vec![(
-                FetchSessionKey {
+            sent == vec![SentPartitionState {
+                key: FetchSessionKey {
                     topic_name: String::new(),
                     topic_id: WireUuid([7; 16]),
                     partition: 0,
                 },
-                sent_state(43),
-            )]
+                state: sent_state(43),
+            }]
         );
+    }
+
+    /// A pre-KIP-516 session caches the name and no id, and the response
+    /// carries both. The name half has to match on its own.
+    #[test]
+    fn a_partition_cached_by_name_alone_still_matches() {
+        let FilteredSingleTopic { responses, sent } = filter_single_topic("orders", 0, 42, 42);
+
+        assert!(responses.is_empty());
+        assert!(sent.is_empty());
     }
 
     /// Kafka's `CachedPartition.maybeUpdateResponseData` always includes a

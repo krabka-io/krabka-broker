@@ -57,10 +57,7 @@ const UNREGISTERED_NODE: i32 = 7;
 const REMOTE: WireUuid = WireUuid([0x22; 16]);
 const ORPHAN: WireUuid = WireUuid([0x77; 16]);
 
-async fn start() -> StartedBroker {
-    let (broker, dir) = start_allow_all_no_audit().await;
-    StartedBroker { broker, dir }
-}
+async fn start() -> StartedBroker { start_allow_all_no_audit().await }
 
 async fn create_local_topic(broker: &BrokerHandle) -> WireUuid {
     let client = krabka_client_core::Client::builder()

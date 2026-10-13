@@ -19,8 +19,7 @@
 
 use {
     self::sweep::tick_all,
-    crate::{metrics::BrokerMetrics, partition_registry::PartitionRegistry, time_util},
-    krabka_units::convert::TimeExt as _,
+    crate::{metrics::BrokerMetrics, partition_registry::PartitionRegistry},
     std::sync::Arc,
     tokio_util::sync::CancellationToken,
 };
@@ -33,7 +32,7 @@ mod test_support;
 mod tests;
 
 /// Tunables for [`run`], shared with the other local log-maintenance sweep.
-pub(crate) type LogRetentionConfig = time_util::MetadataSweepConfig;
+pub(crate) use crate::time_util::MetadataSweepConfig as LogRetentionConfig;
 
 /// Spawned task entry point.
 pub(crate) async fn run(
@@ -63,17 +62,17 @@ pub(crate) async fn run(
     // rather than spinning on a timer that cannot be armed.
     const TASK: &str = "log retention";
     let timer = Arc::clone(&cfg.timer);
-    crate::task_util::metadata_sweep_loop!(
-        &*timer,
-        (cfg.interval.to_std(), cfg.interval.to_std()),
-        &shutdown,
-        TASK,
-        {
+    krabka_macros::sweep_loop! {
+        timer [&*timer];
+        cadence [cfg.periodic_cadence()];
+        shutdown [&shutdown];
+        task [TASK];
+        sweep {
             let image = cfg.current_image();
             tick_all(&partitions, image.as_deref(), &metrics).await;
-        },
-        {
+        };
+        on_shutdown {
             tracing::debug!("log retention task shutting down");
-        },
-    );
+        };
+    }
 }

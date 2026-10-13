@@ -368,7 +368,7 @@ mod tests {
                 api_catalog::UnstableApiVersions,
                 remote_log_manager::{
                     ArchiveMode, LocalRetentionBounds, copy_eligible, local_retention_pass,
-                    test_support::{local_backends, tier},
+                    test_support::{Backends, local_backends, tier},
                 },
             },
             krabka_ids::{LeaderEpoch, Offset},
@@ -409,7 +409,7 @@ mod tests {
             .unwrap()
             .topic_id;
         let tp = TopicIdPartition::new(topic_id, TOPIC, 0);
-        let (rsm, rlmm) = local_backends(remote.path());
+        let Backends { rsm, rlmm } = local_backends(remote.path());
         let exports = synced_tierable_segments(&partition);
         assert!(
             copy_eligible(

@@ -74,14 +74,18 @@ crate::handlers::raw_request_handler!(
         // A broker listener forwards the request untouched, and the controller
         // authorizes the principal the `Envelope` names. A node that is itself
         // the active controller has nowhere to forward to and answers in place.
-        forward_if_not_controller!(
+        if let Some(answer) = forward_if_not_controller(
             broker,
             ctx,
             unregister_controller_request::API_KEY,
             req_bytes,
             version,
-            |error_code, message| encode(version, error_code, message)
-        );
+            |error_code, message| encode(version, error_code, message),
+        )
+        .await
+        {
+            return answer;
+        }
         let image = broker.controller.current_image();
         if cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
             return encode(
