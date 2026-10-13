@@ -70,6 +70,19 @@ fn member(id: &str, topics: &[Uuid], current: Partitions<'_>) -> MemberSubscript
     }
 }
 
+fn uneven_two_topic_members(primary: Uuid, secondary: Uuid) -> Vec<MemberSubscription> {
+    vec![
+        member("A", &[primary, secondary], &[
+            owns(primary, &[0, 2]),
+            owns(secondary, &[0]),
+        ]),
+        member("B", &[primary, secondary], &[
+            owns(primary, &[1]),
+            owns(secondary, &[1, 2]),
+        ]),
+    ]
+}
+
 fn group(subscription_type: SubscriptionType, members: Vec<MemberSubscription>) -> GroupSpec {
     GroupSpec {
         members,
@@ -240,20 +253,13 @@ fn homogeneous_rows_early() -> Vec<Scenario<'static>> {
 
 fn homogeneous_rows_late() -> Vec<Scenario<'static>> {
     let (first, second) = (tid(1), tid(2));
+    let mut growing_members = uneven_two_topic_members(first, second);
+    growing_members.push(member("C", &[first, second], &[]));
     vec![
         Scenario {
             // Kafka's HashSet visits topic2 before topic1.
             name: "testReassignmentWhenPartitionsAreAddedForTwoMembersTwoTopics",
-            group: group(HOMOGENEOUS, vec![
-                member("A", &[second, first], &[
-                    owns(second, &[0, 2]),
-                    owns(first, &[0]),
-                ]),
-                member("B", &[second, first], &[
-                    owns(second, &[1]),
-                    owns(first, &[1, 2]),
-                ]),
-            ]),
+            group: group(HOMOGENEOUS, uneven_two_topic_members(second, first)),
             topics: metadata(&[sized(second, 6), sized(first, 5)]),
             expected: assignment(&[
                 expects("A", &[owns(second, &[0, 2]), owns(first, &[0, 3, 4])]),
@@ -262,17 +268,7 @@ fn homogeneous_rows_late() -> Vec<Scenario<'static>> {
         },
         Scenario {
             name: "testReassignmentWhenOneMemberAddedAfterInitialAssignmentWithTwoMembersTwoTopics",
-            group: group(HOMOGENEOUS, vec![
-                member("A", &[first, second], &[
-                    owns(first, &[0, 2]),
-                    owns(second, &[0]),
-                ]),
-                member("B", &[first, second], &[
-                    owns(first, &[1]),
-                    owns(second, &[1, 2]),
-                ]),
-                member("C", &[first, second], &[]),
-            ]),
+            group: group(HOMOGENEOUS, growing_members),
             topics: metadata(&[sized(first, 3), sized(second, 3)]),
             expected: assignment(&[
                 expects("A", &[owns(first, &[0, 2])]),

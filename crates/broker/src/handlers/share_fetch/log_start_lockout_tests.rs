@@ -27,7 +27,7 @@ use {
                 OffsetRun, RecordCount, StartedBroker,
                 create_topic as create_topic_from_test_support,
                 produce_records as produce_records_from_test_support, share_fetch_partition_rows,
-                share_fetch_topics, share_fetch_wire, share_topic_uuid,
+                share_fetch_topics, share_fetch_wire, share_topic_uuid, start_allow_all_no_audit,
             },
         },
         test_support::{initialize_share_state, peer, principal, start_broker_no_audit_with},
@@ -71,8 +71,7 @@ fn acquired_run(partition_index: i32, first_offset: i64, last_offset: i64) -> Pa
 const DELETE_RECORDS_VERSION: i16 = 2;
 
 async fn start() -> StartedBroker {
-    let (broker, dir) =
-        start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(AllowAllAuthorizer)).await;
+    let (broker, dir) = start_allow_all_no_audit().await;
     StartedBroker { broker, dir }
 }
 

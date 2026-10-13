@@ -2537,6 +2537,13 @@ async fn assignment_waits_for_the_initial_delay_and_the_interval() {
         steps: Vec<DelayStep>,
     }
 
+    let initial_assignment = || DelayStep {
+        member_id: "m1",
+        member_epoch: 0,
+        advance_ms: 0,
+        want_epoch: 2,
+        want_delay: None,
+    };
     let rows: [DelayRow; 3] = [
         // Three members join within one second: one assignment, after
         // the delay, for the group epoch of the third join.
@@ -2588,13 +2595,7 @@ async fn assignment_waits_for_the_initial_delay_and_the_interval() {
             delay_ms: 0,
             interval_ms: 1_000,
             steps: vec![
-                DelayStep {
-                    member_id: "m1",
-                    member_epoch: 0,
-                    advance_ms: 0,
-                    want_epoch: 2,
-                    want_delay: None,
-                },
+                initial_assignment(),
                 DelayStep {
                     member_id: "m2",
                     member_epoch: 0,
@@ -2615,22 +2616,13 @@ async fn assignment_waits_for_the_initial_delay_and_the_interval() {
             name: "no delay assigns at once",
             delay_ms: 0,
             interval_ms: 0,
-            steps: vec![
-                DelayStep {
-                    member_id: "m1",
-                    member_epoch: 0,
-                    advance_ms: 0,
-                    want_epoch: 2,
-                    want_delay: None,
-                },
-                DelayStep {
-                    member_id: "m2",
-                    member_epoch: 0,
-                    advance_ms: 200,
-                    want_epoch: 3,
-                    want_delay: None,
-                },
-            ],
+            steps: vec![initial_assignment(), DelayStep {
+                member_id: "m2",
+                member_epoch: 0,
+                advance_ms: 200,
+                want_epoch: 3,
+                want_delay: None,
+            }],
         },
     ];
 

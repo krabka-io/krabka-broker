@@ -10,16 +10,16 @@
 
 use {
     crate::{
-        authorizer::AllowAllAuthorizer,
         broker::BrokerHandle,
         codes,
         handlers::test_support::{
             StartedBroker, configured_topic_request, replicated_partition, share_fetch_wire,
+            start_allow_all_no_audit,
         },
         share_partition::session::FetchPartitions,
         test_support::{
             decode_response, encode_request, initialize_share_state, peer, principal,
-            request_context, start_broker_no_audit_with, try_dispatch_context,
+            request_context, try_dispatch_context,
         },
     },
     assert2::assert,
@@ -45,7 +45,6 @@ use {
         primitives::uuid::Uuid as WireUuid,
         records::RecordsPayload,
     },
-    std::sync::Arc,
 };
 
 const GROUP: &str = "endpoints-group";
@@ -59,8 +58,7 @@ const REMOTE: WireUuid = WireUuid([0x22; 16]);
 const ORPHAN: WireUuid = WireUuid([0x77; 16]);
 
 async fn start() -> StartedBroker {
-    let (broker, dir) =
-        start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(AllowAllAuthorizer)).await;
+    let (broker, dir) = start_allow_all_no_audit().await;
     StartedBroker { broker, dir }
 }
 

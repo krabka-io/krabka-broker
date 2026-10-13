@@ -151,6 +151,24 @@ struct Row {
     standby: &'static [MemberTasks],
 }
 
+#[bon::builder]
+fn two_member_standby_row(
+    name: &'static str,
+    #[builder(default = "p2")] second_process: &'static str,
+    #[builder(default = &[member_tasks!("A", &[1]), member_tasks!("B", &[0])])]
+    standby: &'static [MemberTasks],
+) -> Row {
+    Row {
+        name,
+        members: vec![m("A", "p1"), m("B", second_process)],
+        partitions: 2,
+        stateful: true,
+        standby_replicas: 1,
+        active: &[member_tasks!("A", &[0]), member_tasks!("B", &[1])],
+        standby,
+    }
+}
+
 /// Rows about active placement.
 fn active_rows() -> Vec<Row> {
     vec![
@@ -434,16 +452,10 @@ fn standby_rows_cold_start() -> Vec<Row> {
             ],
             standby: &[],
         },
-        Row {
-            // The issue's first case: the sticky assignor places standbys.
-            name: "empty group, stateful, one standby",
-            members: vec![m("A", "p1"), m("B", "p2")],
-            partitions: 2,
-            stateful: true,
-            standby_replicas: 1,
-            active: &[member_tasks!("A", &[0]), member_tasks!("B", &[1])],
-            standby: &[member_tasks!("A", &[1]), member_tasks!("B", &[0])],
-        },
+        // The issue's first case: the sticky assignor places standbys.
+        two_member_standby_row()
+            .name("empty group, stateful, one standby")
+            .call(),
         Row {
             // The owner of task 0 left; m2 held its standby and takes it.
             name: "orphan active goes to its previous standby",
@@ -465,17 +477,12 @@ fn standby_rows_cold_start() -> Vec<Row> {
             active: &[member_tasks!("m2", &[0, 1]), member_tasks!("m3", &[2])],
             standby: &[member_tasks!("m2", &[2]), member_tasks!("m3", &[0, 1])],
         },
-        Row {
-            // Two members of one process: a standby never shares a process
-            // with its active copy, so no standby can be placed.
-            name: "one process gets no standby",
-            members: vec![m("A", "p1"), m("B", "p1")],
-            partitions: 2,
-            stateful: true,
-            standby_replicas: 1,
-            active: &[member_tasks!("A", &[0]), member_tasks!("B", &[1])],
-            standby: &[],
-        },
+        // A standby cannot share a process with its active copy.
+        two_member_standby_row()
+            .name("one process gets no standby")
+            .second_process("p1")
+            .standby(&[])
+            .call(),
     ]
 }
 
