@@ -1,7 +1,7 @@
 //! The asymmetric read/write conversions of a locally owned share-state batch.
 
 use {
-    crate::meta::{Tokens, plain_path},
+    crate::meta::{Tokens, first_missing_named_field, plain_path},
     moxy::{
         ast::{ItemStruct, ParseError},
         token::TokenStream,
@@ -22,21 +22,13 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let fields = named_fields(&item, "WireStateBatch")?;
     if !item.generics.params.is_empty()
         || fields.len() != 4
-        || [
+        || first_missing_named_field(fields, &[
             "first_offset",
             "last_offset",
             "delivery_state",
             "delivery_count",
-        ]
-        .iter()
-        .any(|name| {
-            !fields.iter().any(|field| {
-                field
-                    .ident
-                    .as_ref()
-                    .is_some_and(|ident| ident.text() == *name)
-            })
-        })
+        ])
+        .is_some()
     {
         return Err(ParseError::new(
             item.ident.span(),

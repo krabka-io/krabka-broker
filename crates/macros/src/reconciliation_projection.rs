@@ -1,7 +1,7 @@
 //! Methods for explicitly declared reconciliation projections and action enums.
 
 use {
-    crate::meta::{field_ident, impl_block, named_fields},
+    crate::meta::{field_ident, first_missing_named_field, impl_block, named_fields},
     moxy::{
         ast::{
             Attributed, Field, GenericArgument, ItemEnum, ItemStruct, ParseError, PathArguments,
@@ -32,18 +32,11 @@ fn extra_fields(item: &ItemStruct, common: &[&str]) -> Result<Vec<Field>, ParseE
         ));
     }
     let fields = named_fields(item, "reconciliation projection")?;
-    for name in common {
-        if !fields.iter().any(|field| {
-            field
-                .ident
-                .as_ref()
-                .is_some_and(|ident| ident.text() == *name)
-        }) {
-            return Err(ParseError::new(
-                item.ident.span(),
-                format!("missing reconciliation field `{name}`"),
-            ));
-        }
+    if let Some(name) = first_missing_named_field(fields, common) {
+        return Err(ParseError::new(
+            item.ident.span(),
+            format!("missing reconciliation field `{name}`"),
+        ));
     }
     let mut extra = Vec::new();
     for field in fields {
