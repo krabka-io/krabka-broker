@@ -206,8 +206,8 @@ pub struct PlainAuthenticationSetup<'a> {
 
 #[bon::builder]
 pub fn plain_authentication_setup<'a>(
-    #[builder(default = "\"krabka-broker-test\"")] client_id: &'a str,
-    #[builder(default = "\"alice\"")] user: &'a str,
+    #[builder(default = "krabka-broker-test")] client_id: &'a str,
+    #[builder(default = "alice")] user: &'a str,
     #[builder(default = crate::support::sasl::alice_password().into_bytes())] password: Vec<u8>,
 ) -> PlainAuthenticationSetup<'a> {
     PlainAuthenticationSetup {

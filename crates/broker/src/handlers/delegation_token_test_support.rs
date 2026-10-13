@@ -63,11 +63,17 @@ macro_rules! seeded_token_fixture {
         let $hmac = crate::handlers::delegation_token_test_support::hmac_for(&$token_id);
         let $seeded_at = crate::time_util::now_ms();
         let $maximum = $seeded_at + seed_setup.maximum_delta.0;
+        let mutation_defaults =
+            crate::handlers::delegation_token_test_support::TokenSetup::for_mutation();
         crate::handlers::delegation_token_test_support::seed_token()
             .controller($controller)
             .token_id(&$token_id)
+            .owner(mutation_defaults.owner)
+            .maybe_requester(mutation_defaults.requester)
+            .issued_at(mutation_defaults.issued_at)
             .expires_at($seeded_at + seed_setup.expiry_delta.0)
             .max_expires_at($maximum)
+            .renewers(mutation_defaults.renewers)
             .call()
             .await;
     };

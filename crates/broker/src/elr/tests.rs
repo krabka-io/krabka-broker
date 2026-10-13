@@ -374,7 +374,7 @@ async fn assert_returning_broker_withdrawal(min_isr: &str, initial_check: Initia
             .isr(ExpectedElrSetup::two_member_isr().isr)
             .eligible(ExpectedElrSetup::two_member_isr().eligible)
             .last_known(ExpectedElrSetup::two_member_isr().last_known)
-            .offline(ExpectedElrSetup::two_member_isr().offline)
+            .offline(&[ReportedBrokerId(2), ReportedBrokerId(3)])
             .call(),
     )
     .await;

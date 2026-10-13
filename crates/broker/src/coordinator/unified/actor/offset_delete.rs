@@ -213,7 +213,7 @@ mod tests {
                 "preparing group without a protocol type is not empty",
                 classic()
                     .state(ClassicGroupState::PreparingRebalance)
-                    .maybe_protocol_type(None)
+                    .protocol_type(None)
                     .metadata(&[Bytes::new()])
                     .call(),
                 Err(codes::NON_EMPTY_GROUP),
