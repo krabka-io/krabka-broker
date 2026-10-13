@@ -14,6 +14,24 @@ fn started_metadata(
     start: &TokenStream,
     end: &TokenStream,
     timestamp: &TokenStream,
+) -> TokenStream {
+    started_metadata_with_values(
+        root,
+        id,
+        start,
+        end,
+        timestamp,
+        &moxy::template! { 100 },
+        &moxy::template! { 2048 },
+    )
+}
+
+fn started_metadata_with_values(
+    root: &TokenStream,
+    id: &TokenStream,
+    start: &TokenStream,
+    end: &TokenStream,
+    timestamp: &TokenStream,
     event_timestamp: &TokenStream,
     size: &TokenStream,
 ) -> TokenStream {
@@ -38,8 +56,6 @@ pub(crate) fn remote_started_segment(input: TokenStream) -> Result<TokenStream, 
         &moxy::template! { start },
         &moxy::template! { end },
         &moxy::template! { timestamp },
-        &moxy::template! { 100 },
-        &moxy::template! { 2048 },
     );
     Ok(moxy::template! {
         pub(crate) fn {{ name }}(
@@ -70,8 +86,6 @@ pub(crate) fn segment(input: TokenStream) -> Result<TokenStream, ParseError> {
         &moxy::template! { start },
         &moxy::template! { end },
         &timestamp,
-        &moxy::template! { 100 },
-        &moxy::template! { 2048 },
     );
     Ok(moxy::template! {
         pub(crate) fn {{ started }}(id: u128, start: i64, end: i64) -> {{ root }}::RemoteLogSegmentMetadata {
@@ -95,7 +109,7 @@ pub(crate) fn worm_segment(input: TokenStream) -> Result<TokenStream, ParseError
     let [name, root, id_base, topic, partition, span]: [TokenStream; 6] =
         arguments(input, 6)?.try_into().expect("six arguments");
     let name = fixture_name(name)?;
-    let metadata = started_metadata(
+    let metadata = started_metadata_with_values(
         &root,
         &moxy::template! {
             {{ root }}::RemoteLogSegmentId::new(

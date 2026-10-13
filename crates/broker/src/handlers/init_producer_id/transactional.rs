@@ -1166,10 +1166,8 @@ mod tests {
         const TID: &str = "tid-rotated";
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let SeededCoordinator {
-            coordinator,
-            partition: _part,
-        } = coordinator_with_completed_transaction(dir.path(), TID).await;
+        let SeededCoordinator { coordinator, .. } =
+            coordinator_with_completed_transaction(dir.path(), TID).await;
         {
             let handle = coordinator.get(TID).expect("the seeded entry");
             let mut entry = handle.lock().await;
@@ -1215,10 +1213,8 @@ mod tests {
         const TID: &str = "tid-overlapping-init";
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let SeededCoordinator {
-            coordinator,
-            partition: _part,
-        } = coordinator_with_completed_transaction(dir.path(), TID).await;
+        let SeededCoordinator { coordinator, .. } =
+            coordinator_with_completed_transaction(dir.path(), TID).await;
 
         // Both calls park on the entry lock while the test holds it.
         let handle = coordinator.get(TID).expect("the seeded entry");
@@ -1258,10 +1254,8 @@ mod tests {
         const TID: &str = "tid-fresh-race";
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let SeededCoordinator {
-            coordinator,
-            partition: _part,
-        } = coordinator_with_completed_transaction(dir.path(), "tid-seeded").await;
+        let SeededCoordinator { coordinator, .. } =
+            coordinator_with_completed_transaction(dir.path(), "tid-seeded").await;
         check!(coordinator.get(TID).is_none());
 
         let write_lock = coordinator.lock_state_partition_for(TID).await;
@@ -1324,10 +1318,8 @@ mod tests {
         // (transaction version, whether the fence is recorded as failed)
         for (txnv, failed_fence) in [(TxnVersion::Flexible, true), (TxnVersion::Verified, false)] {
             let dir = tempfile::tempdir().expect("tempdir");
-            let SeededCoordinator {
-                coordinator,
-                partition: _part,
-            } = coordinator_with_completed_transaction(dir.path(), TID).await;
+            let SeededCoordinator { coordinator, .. } =
+                coordinator_with_completed_transaction(dir.path(), TID).await;
 
             // An ongoing transaction over a partition this broker does not
             // host yet: the abort marker cannot be delivered, so the fan-out
@@ -1559,10 +1551,8 @@ mod tests {
         const TID: &str = "tid-stale-token-across-fence";
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let SeededCoordinator {
-            coordinator,
-            partition: _part,
-        } = coordinator_with_completed_transaction(dir.path(), TID).await;
+        let SeededCoordinator { coordinator, .. } =
+            coordinator_with_completed_transaction(dir.path(), TID).await;
 
         // The seeded entry starts at epoch 3. Bump it once (3 -> 4) so the
         // legitimate 4 -> 5 bump below has a live epoch to name.

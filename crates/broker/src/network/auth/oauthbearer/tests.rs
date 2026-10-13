@@ -83,77 +83,27 @@ async fn reauthenticate(
     Reauthenticated { auth, response }
 }
 
-#[tokio::test]
-async fn signed_validator_fails_closed_for_stale_or_changing_jwks_cache() {
-    let SignedCacheFixture {
-        now_ms,
-        request,
-        validator,
-        generation,
-        last_successful,
-    } = signed_cache_fixture(1);
-
-    let changing = validate_bearer(
-        &request.auth_bytes,
-        &validator,
-        Some(JwksCache {
-            generation: &generation,
-            last_successful_fetch_ms: &last_successful,
-        }),
-        || now_ms,
-    )
-    .await;
-    assert!(changing == Err("JWKS cache is stale or changing"));
-
-    generation.store(2, Ordering::Release);
-    last_successful.store(0, Ordering::Release);
-    let never_fetched = validate_bearer(
-        &request.auth_bytes,
-        &validator,
-        Some(JwksCache {
-            generation: &generation,
-            last_successful_fetch_ms: &last_successful,
-        }),
-        || now_ms,
-    )
-    .await;
-    assert!(never_fetched == Err("JWKS cache is stale or changing"));
-
-    last_successful.store(now_ms - 1_001, Ordering::Release);
-    let stale = validate_bearer(
-        &request.auth_bytes,
-        &validator,
-        Some(JwksCache {
-            generation: &generation,
-            last_successful_fetch_ms: &last_successful,
-        }),
-        || now_ms,
-    )
-    .await;
-    assert!(stale == Err("JWKS cache is stale or changing"));
+#[yare::parameterized(
+    changing = { 1, 1_000_000 },
+    never_fetched = { 2, 0 },
+    stale = { 2, -1 },
+)]
+#[test_macro(tokio::test)]
+async fn signed_validator_fails_closed_for_stale_or_changing_jwks_cache(
+    generation: u64,
+    last_successful_fetch_ms: i64,
+) {
+    let fixture = signed_cache_fixture(generation);
+    fixture
+        .last_successful
+        .store(last_successful_fetch_ms, Ordering::Release);
+    assert!(fixture.validate().await == Err("JWKS cache is stale or changing"));
 }
 
 #[tokio::test]
 async fn signed_validator_uses_a_fresh_stable_jwks_cache() {
-    let SignedCacheFixture {
-        now_ms,
-        request,
-        validator,
-        generation,
-        last_successful,
-    } = signed_cache_fixture(2);
-
-    let result = validate_bearer(
-        &request.auth_bytes,
-        &validator,
-        Some(JwksCache {
-            generation: &generation,
-            last_successful_fetch_ms: &last_successful,
-        }),
-        || now_ms,
-    )
-    .await;
-
+    let fixture = signed_cache_fixture(2);
+    let result = fixture.validate().await;
     assert!(result == Err("token validation failed"));
 }
 
@@ -429,6 +379,21 @@ struct SignedCacheFixture {
     validator: krabka_security::OAuthBearerValidator,
     generation: AtomicU64,
     last_successful: AtomicI64,
+}
+
+impl SignedCacheFixture {
+    async fn validate(&self) -> Result<ValidatedBearer, &'static str> {
+        validate_bearer(
+            &self.request.auth_bytes,
+            &self.validator,
+            Some(JwksCache {
+                generation: &self.generation,
+                last_successful_fetch_ms: &self.last_successful,
+            }),
+            || self.now_ms,
+        )
+        .await
+    }
 }
 
 fn signed_cache_fixture(generation: u64) -> SignedCacheFixture {
