@@ -26,7 +26,9 @@ use crate::{
         RequestContext,
         acl_wire::CLUSTER_RESOURCE_NAME,
         create_topics::handle as create_topics_handle,
-        test_support::{AclSetup, CreateTopicSetup, acl, cluster_acl},
+        test_support::{
+            AclSetup, CreateTopicSetup, acl, cluster_acl, configured_topic_request_from,
+        },
     },
     metrics::AuthorizationDeniedLabel,
     test_support::{
@@ -312,7 +314,7 @@ async fn invalid_topic_rows_answer_invalid_request_and_delete_nothing() {
 /// exist before it authorizes their deletion.
 async fn seed_topic(broker: &Broker, ctx: &RequestContext<'_>, setup: CreateTopicSetup<'_>) {
     let name = setup.topic;
-    let req = crate::handlers::test_support::configured_topic_request_from(setup);
+    let req = configured_topic_request_from(setup);
     let resp = create_topics_handle(broker, req, CREATE_VERSION, ctx)
         .await
         .expect("handle CreateTopics");

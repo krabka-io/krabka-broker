@@ -34,7 +34,7 @@ use crate::{
     codes,
     coordinator::unified::{GroupType, share::actor::ShareGroupActorMessage},
     error::BrokerError,
-    handlers::ErrorResponse as _,
+    handlers::{ErrorResponse as _, test_support::configured_topic_request_from},
     task_util::{AskError, ask},
 };
 
@@ -383,7 +383,7 @@ mod tests {
         let broker = broker_handle.broker_arc_for_test();
         let topic_name = setup.topic;
         let version = create_topics_response::MAX_VERSION;
-        let request = crate::handlers::test_support::configured_topic_request_from(setup);
+        let request = configured_topic_request_from(setup);
         let response = create_topics_handle(&broker, request, version, ctx)
             .await
             .expect("create topic");
