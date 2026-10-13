@@ -312,11 +312,8 @@ fn has_tombstone(records: &[OffsetsRecord], key: &Key) -> bool {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn empty_group_loses_its_offsets_after_the_retention() {
-    let StartedBroker {
-        handle: broker_handle,
-        dir: _dir,
-    } = start().await;
-    let broker = broker_handle.broker_arc_for_test();
+    let started = start().await;
+    let broker = started.handle.broker_arc_for_test();
     seed_group_with_member(&broker);
     commit_offset(&broker, 42, -1).await;
     assert!(fetched_offset(&broker).await == 42);
@@ -457,11 +454,8 @@ async fn a_streams_group_offset_home_is_not_swept() {
 /// ever named is not swept at all.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_broker_with_no_groups_sweeps_nothing() {
-    let StartedBroker {
-        handle: broker_handle,
-        dir: _dir,
-    } = start().await;
-    let broker = broker_handle.broker_arc_for_test();
+    let started = start().await;
+    let broker = started.handle.broker_arc_for_test();
 
     let now_ms = now_ms() + RETENTION_MS + 1;
     let swept = sweep_at(&broker, now_ms).await;
@@ -481,11 +475,8 @@ async fn a_broker_with_no_groups_sweeps_nothing() {
 /// its actor sit in `__consumer_offsets` and `ListGroups` forever.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_empty_group_that_holds_no_offsets_is_reaped() {
-    let StartedBroker {
-        handle: broker_handle,
-        dir: _dir,
-    } = start().await;
-    let broker = broker_handle.broker_arc_for_test();
+    let started = start().await;
+    let broker = started.handle.broker_arc_for_test();
     let _ = broker
         .group_coordinator
         .get_or_create_group(GROUP, GroupKindTag::Classic);
@@ -555,11 +546,8 @@ async fn a_group_whose_last_offset_was_deleted_is_reaped_next_pass() {
 /// already serving on.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_replacement_actor_keeps_its_type_and_seed_when_the_reaped_one_is_forgotten() {
-    let StartedBroker {
-        handle: broker_handle,
-        dir: _dir,
-    } = start().await;
-    let broker = broker_handle.broker_arc_for_test();
+    let started = start().await;
+    let broker = started.handle.broker_arc_for_test();
     let coordinator = &broker.group_coordinator;
 
     // The handle the sweep reaped, now stale.
@@ -592,11 +580,8 @@ async fn a_replacement_actor_keeps_its_type_and_seed_when_the_reaped_one_is_forg
 /// reap it at all.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_simple_group_expires_from_its_commit_not_from_the_restart() {
-    let StartedBroker {
-        handle: broker_handle,
-        dir: _dir,
-    } = start().await;
-    let broker = broker_handle.broker_arc_for_test();
+    let started = start().await;
+    let broker = started.handle.broker_arc_for_test();
     let restarted_at = now_ms();
     seed_replayed_group()
         .broker(&broker)
@@ -616,11 +601,8 @@ async fn a_simple_group_expires_from_its_commit_not_from_the_restart() {
 /// group itself has been empty that long.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_joined_group_expires_from_the_moment_it_emptied() {
-    let StartedBroker {
-        handle: broker_handle,
-        dir: _dir,
-    } = start().await;
-    let broker = broker_handle.broker_arc_for_test();
+    let started = start().await;
+    let broker = started.handle.broker_arc_for_test();
     let emptied_at = now_ms();
     seed_replayed_group()
         .broker(&broker)
@@ -658,11 +640,8 @@ async fn an_acknowledged_commit_is_never_reaped_by_a_concurrent_sweep() {
     const ROUNDS: usize = 16;
     const NEW_OFFSET: i64 = 99;
 
-    let StartedBroker {
-        handle: broker_handle,
-        dir: _dir,
-    } = start().await;
-    let broker = broker_handle.broker_arc_for_test();
+    let started = start().await;
+    let broker = started.handle.broker_arc_for_test();
 
     for round in 0..ROUNDS {
         let group = format!("racer-{round}");
