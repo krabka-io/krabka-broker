@@ -247,59 +247,19 @@ mod tests {
         );
     }
 
-    #[test]
-    fn read_implies_describe_on_topic() {
-        let img = acl_image([topic_acl().call()]);
-        check_topic_access(
-            &img,
-            "foo",
-            AclOperation::Describe,
-            AuthorizationResult::Allow,
-        );
-    }
-
-    #[test]
-    fn write_implies_describe_on_topic() {
-        let img = acl_image([topic_acl().op(AclOperation::Write).call()]);
-        check_topic_access(
-            &img,
-            "foo",
-            AclOperation::Describe,
-            AuthorizationResult::Allow,
-        );
-    }
-
-    #[test]
-    fn delete_implies_describe() {
-        let img = acl_image([topic_acl().op(AclOperation::Delete).call()]);
-        check_topic_access(
-            &img,
-            "foo",
-            AclOperation::Describe,
-            AuthorizationResult::Allow,
-        );
-    }
-
-    #[test]
-    fn alter_implies_describe() {
-        let img = acl_image([topic_acl().op(AclOperation::Alter).call()]);
-        check_topic_access(
-            &img,
-            "foo",
-            AclOperation::Describe,
-            AuthorizationResult::Allow,
-        );
-    }
-
-    #[test]
-    fn alter_configs_implies_describe_configs() {
-        let img = acl_image([topic_acl().op(AclOperation::AlterConfigs).call()]);
-        check_topic_access(
-            &img,
-            "foo",
-            AclOperation::DescribeConfigs,
-            AuthorizationResult::Allow,
-        );
+    #[yare::parameterized(
+        read = { AclOperation::Read, AclOperation::Describe },
+        write = { AclOperation::Write, AclOperation::Describe },
+        delete = { AclOperation::Delete, AclOperation::Describe },
+        alter = { AclOperation::Alter, AclOperation::Describe },
+        alter_configs = { AclOperation::AlterConfigs, AclOperation::DescribeConfigs },
+    )]
+    fn operation_implies_describe_on_topic(
+        granted_operation: AclOperation,
+        described_operation: AclOperation,
+    ) {
+        let img = acl_image([topic_acl().op(granted_operation).call()]);
+        check_topic_access(&img, "foo", described_operation, AuthorizationResult::Allow);
     }
 
     #[test]
