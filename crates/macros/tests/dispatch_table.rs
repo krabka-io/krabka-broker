@@ -18,6 +18,12 @@ use {
 // These adapters share tracing callsites. Serialize calls while capture tests install scoped subscribers.
 static ADAPTER_TESTS: Mutex<()> = Mutex::new(());
 
+fn registered_dispatch_table() -> DispatchRegistry {
+    let mut registry = DispatchRegistry::default();
+    register_dispatch_table(&mut registry);
+    registry
+}
+
 type ApiVersion = i16;
 type CorrelationId = i32;
 type Bytes = Vec<u8>;
@@ -546,8 +552,7 @@ fn observe(registry: &DispatchRegistry, api: ApiKey) -> Option<Observed> {
 #[test]
 fn every_section_registers_an_adapter_that_reaches_its_handler() {
     let _serial = ADAPTER_TESTS.lock().expect("adapter test lock");
-    let mut registry = DispatchRegistry::default();
-    register_dispatch_table(&mut registry);
+    let registry = registered_dispatch_table();
 
     let ok = |reply: &str| Ok(reply.to_owned());
     let cases = [
@@ -636,8 +641,7 @@ fn every_section_registers_an_adapter_that_reaches_its_handler() {
 }
 
 fn check_typed_adapter_error(body: &[u8], error: &BrokerError) {
-    let mut registry = DispatchRegistry::default();
-    register_dispatch_table(&mut registry);
+    let registry = registered_dispatch_table();
 
     for api in [
         ApiKey::ListGroups,
@@ -650,17 +654,19 @@ fn check_typed_adapter_error(body: &[u8], error: &BrokerError) {
     }
 }
 
-#[test]
-fn a_typed_adapter_maps_a_decode_failure_to_a_broker_error() {
+#[yare::parameterized(
+    decode = { &[0xff][..], BrokerError::Decode },
+    encode = { &b"nope"[..], BrokerError::Encode },
+)]
+fn typed_adapters_map_failures_to_broker_errors(body: &[u8], error: BrokerError) {
     let _serial = ADAPTER_TESTS.lock().expect("adapter test lock");
-    check_typed_adapter_error(&[0xff], &BrokerError::Decode);
+    check_typed_adapter_error(body, &error);
 }
 
 #[test]
 fn only_a_typed_group_adapter_decodes_through_decode_group_request() {
     let _serial = ADAPTER_TESTS.lock().expect("adapter test lock");
-    let mut registry = DispatchRegistry::default();
-    register_dispatch_table(&mut registry);
+    let registry = registered_dispatch_table();
 
     let long = b"longer-than-eight";
     let replies =
@@ -672,12 +678,6 @@ fn only_a_typed_group_adapter_decodes_through_decode_group_request() {
                 Err(BrokerError::RecordString),
             ]
     );
-}
-
-#[test]
-fn a_typed_adapter_returns_the_encoders_error() {
-    let _serial = ADAPTER_TESTS.lock().expect("adapter test lock");
-    check_typed_adapter_error(b"nope", &BrokerError::Encode);
 }
 
 #[test]
@@ -764,8 +764,7 @@ fn trace(registry: &DispatchRegistry, api: ApiKey, body: &[u8]) -> Vec<Traced> {
 #[test]
 fn a_generated_adapter_runs_its_handler_in_a_handle_span_and_records_its_error() {
     let _serial = ADAPTER_TESTS.lock().expect("adapter test lock");
-    let mut registry = DispatchRegistry::default();
-    register_dispatch_table(&mut registry);
+    let registry = registered_dispatch_table();
 
     let span = |name, api: &str, req_bytes: Option<usize>| {
         let mut fields = BTreeMap::from([("api", api.to_owned()), ("version", "5".to_owned())]);
@@ -870,8 +869,7 @@ fn a_generated_adapter_runs_its_handler_in_a_handle_span_and_records_its_error()
 #[test]
 fn an_own_span_or_hand_written_adapter_opens_no_span_and_records_no_error() {
     let _serial = ADAPTER_TESTS.lock().expect("adapter test lock");
-    let mut registry = DispatchRegistry::default();
-    register_dispatch_table(&mut registry);
+    let registry = registered_dispatch_table();
 
     for api in [ApiKey::UpdateFeatures, ApiKey::CreateDelegationToken] {
         let traced = [b"body".as_slice(), b""].map(|body| trace(&registry, api, body));
