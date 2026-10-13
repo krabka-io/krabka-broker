@@ -2,11 +2,17 @@
 
 use moxy::{
     ast::{
-        Attributes, Field, FnParam, ItemStruct, List, Parse, ParseError, Parser, Path,
+        Attributes, Cursor, Field, FnParam, ItemStruct, List, Parse, ParseError, Parser, Path,
         PathArguments, Pattern, Signature, Token, Type, Visibility,
     },
     token::{Group, Ident, LitStr, Span, Spanner, TokenStream, TokenTree},
 };
+
+pub(crate) fn parse_skip<T: Parse>(cursor: Cursor<'_>) -> Option<Cursor<'_>> {
+    let parser = Parser::from_cursor(cursor);
+    T::parse(&parser).ok()?;
+    Some(parser.cursor())
+}
 
 #[cfg(test)]
 pub(crate) fn assert_rejected_structs(
@@ -26,6 +32,17 @@ pub(crate) fn is_plain_sync(signature: &Signature) -> bool {
         && signature.safety.is_none()
         && signature.abi.is_none()
         && signature.generics.params.is_empty()
+}
+
+pub(crate) fn first_missing_named_field<'a>(
+    fields: &List<Field, Token![,]>,
+    required: &[&'a str],
+) -> Option<&'a str> {
+    required.iter().copied().find(|required| {
+        !fields
+            .iter()
+            .any(|field| field.ident.as_ref().is_some_and(|name| name == *required))
+    })
 }
 
 pub(crate) fn parameter_ident<'a>(

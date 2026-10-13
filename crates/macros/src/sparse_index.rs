@@ -1,7 +1,7 @@
 //! Sparse-index construction and file operations, with shared open instrumentation.
 
 use {
-    crate::meta::{compact, impl_block, item_body, named_fields},
+    crate::meta::{compact, first_missing_named_field, impl_block, item_body, named_fields},
     moxy::{
         ast::{Attributed, FnParam, FromMeta, ItemFn, ItemStruct, Meta, ParseError},
         token::{LitStr, Spanner, TokenStream, TokenTree},
@@ -53,16 +53,11 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
             )
         })?;
     let fields = named_fields(&item, "SparseIndex")?;
-    for required in ["file", "io", "entries"] {
-        if !fields
-            .iter()
-            .any(|field| field.ident.as_ref().is_some_and(|name| name == required))
-        {
-            return Err(ParseError::new(
-                item.ident.span(),
-                format!("`SparseIndex` needs a `{required}` field"),
-            ));
-        }
+    if let Some(required) = first_missing_named_field(fields, &["file", "io", "entries"]) {
+        return Err(ParseError::new(
+            item.ident.span(),
+            format!("`SparseIndex` needs a `{required}` field"),
+        ));
     }
     let (raw, invariant, target, documentation) = match options.kind {
         Kind::Offset => (

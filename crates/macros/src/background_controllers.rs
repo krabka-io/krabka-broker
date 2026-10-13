@@ -1,7 +1,7 @@
 //! The controller adapter's fixed background-task implementations.
 
 use {
-    crate::meta::{impl_block, named_fields},
+    crate::meta::{first_missing_named_field, impl_block, named_fields},
     moxy::{
         ast::{ItemStruct, ParseError},
         token::{Spanner, TokenStream},
@@ -10,16 +10,11 @@ use {
 
 pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let fields = named_fields(&item, "BackgroundControllers")?;
-    for required in ["handle", "node_id"] {
-        if !fields
-            .iter()
-            .any(|field| field.ident.as_ref().is_some_and(|name| name == required))
-        {
-            return Err(ParseError::new(
-                item.span(),
-                format!("BackgroundControllers needs a `{required}` field"),
-            ));
-        }
+    if let Some(required) = first_missing_named_field(fields, &["handle", "node_id"]) {
+        return Err(ParseError::new(
+            item.span(),
+            format!("BackgroundControllers needs a `{required}` field"),
+        ));
     }
     let common = moxy::template! {
         fn current_image(&self) -> ::std::sync::Arc<krabka_metadata::MetadataImage> {

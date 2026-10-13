@@ -16,11 +16,7 @@ struct ForwardingEntry {
 impl Parse for ForwardingEntry {
     fn peek(cursor: Cursor<'_>) -> bool { LitInt::peek(cursor) }
 
-    fn skip(cursor: Cursor<'_>) -> Option<Cursor<'_>> {
-        let parser = Parser::from_cursor(cursor);
-        Self::parse(&parser).ok()?;
-        Some(parser.cursor())
-    }
+    fn skip(cursor: Cursor<'_>) -> Option<Cursor<'_>> { crate::meta::parse_skip::<Self>(cursor) }
 
     fn parse(parser: &Parser) -> Result<Self, ParseError> {
         let key = LitInt::parse(parser)?;
