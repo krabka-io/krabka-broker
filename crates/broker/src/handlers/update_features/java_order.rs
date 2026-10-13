@@ -50,9 +50,7 @@ pub(super) fn hash_map_order<'a>(keys: impl IntoIterator<Item = &'a str>) -> Vec
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-
-    use super::*;
+    use {super::*, assert2::assert};
 
     #[test]
     fn java_string_hash_matches_the_jvm() {

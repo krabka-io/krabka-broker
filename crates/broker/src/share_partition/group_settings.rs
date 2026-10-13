@@ -9,13 +9,13 @@
 //! An override that does not parse falls back to the default; the config
 //! RPCs validate a value before they store it.
 
-use std::time::Duration;
-
-use krabka_metadata::MetadataImage;
-
-use crate::{
-    coordinator::unified::{config::clamp_to_range, share::config::ShareGroupConfig},
-    features::share_dlq_supported,
+use {
+    crate::{
+        coordinator::unified::{config::clamp_to_range, share::config::ShareGroupConfig},
+        features::share_dlq_supported,
+    },
+    krabka_metadata::MetadataImage,
+    std::time::Duration,
 };
 
 /// Kafka's `GroupConfig.SHARE_RECORD_LOCK_DURATION_MS_CONFIG`.
@@ -125,13 +125,14 @@ impl GroupShareSettings {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use krabka_metadata::{GroupConfigRecord, MetadataRecord};
-
-    use super::*;
-    use crate::{
-        coordinator::test_support::{ConfigEntry, config_map, entry},
-        features::SHARE_VERSION,
+    use {
+        super::*,
+        crate::{
+            coordinator::test_support::{ConfigEntry, config_map, entry},
+            features::SHARE_VERSION,
+        },
+        assert2::assert,
+        krabka_metadata::{GroupConfigRecord, MetadataRecord},
     };
 
     /// The config overrides of a group, and the settings they resolve to.

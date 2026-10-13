@@ -1,11 +1,12 @@
 //! The one fixture the checkpoint tests share: a temporary directory holding an
 //! as-yet unwritten `leader-epoch-checkpoint` path.
 
-use krabka_ids::{LeaderEpoch, Offset};
-use tempfile::TempDir;
-
-use super::{EpochEntry, LeaderEpochCheckpoint};
-use crate::test_support::TempPath;
+use {
+    super::{EpochEntry, LeaderEpochCheckpoint},
+    crate::test_support::TempPath,
+    krabka_ids::{LeaderEpoch, Offset},
+    tempfile::TempDir,
+};
 
 /// A checkpoint and the temporary directory that holds its file.
 pub(super) struct TempCheckpoint {

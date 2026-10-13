@@ -9,21 +9,21 @@
 //! principal, as Kafka does: `AuthorizableRequestContext` of the heartbeat that
 //! triggered the refresh decides which of the matching topics the group keeps.
 
-use std::{
-    collections::{BTreeSet, HashMap, HashSet},
-    fmt,
-    net::SocketAddr,
-    sync::Arc,
-};
-
-use krabka_metadata::{AclOperation, MetadataImage};
-use krabka_security::Principal;
-
 pub use super::consumer_state::ResolvedRegularExpression;
-use crate::{
-    authorizer::{AuthorizationResult, Authorizer, authorize_topics_logged},
-    re2j::compile_full_match,
-    time_util::now_ms,
+use {
+    crate::{
+        authorizer::{AuthorizationResult, Authorizer, authorize_topics_logged},
+        re2j::compile_full_match,
+        time_util::now_ms,
+    },
+    krabka_metadata::{AclOperation, MetadataImage},
+    krabka_security::Principal,
+    std::{
+        collections::{BTreeSet, HashMap, HashSet},
+        fmt,
+        net::SocketAddr,
+        sync::Arc,
+    },
 };
 
 /// Resolves regular expressions to topics. See the module documentation.
@@ -140,14 +140,11 @@ impl TopicRegexResolver for ImageTopicRegexResolver {
             .into_iter()
             .map(|(pattern, mut topics)| {
                 topics.retain(|topic| !denied.contains(topic));
-                (
-                    pattern.clone(),
-                    ResolvedRegularExpression {
-                        topics,
-                        version: self.version,
-                        timestamp_ms,
-                    },
-                )
+                (pattern.clone(), ResolvedRegularExpression {
+                    topics,
+                    version: self.version,
+                    timestamp_ms,
+                })
             })
             .collect()
     }
@@ -165,14 +162,11 @@ impl TopicRegexResolver for NoTopicRegexResolver {
         regexes
             .iter()
             .map(|pattern| {
-                (
-                    pattern.clone(),
-                    ResolvedRegularExpression {
-                        topics: BTreeSet::new(),
-                        version: 0,
-                        timestamp_ms: 0,
-                    },
-                )
+                (pattern.clone(), ResolvedRegularExpression {
+                    topics: BTreeSet::new(),
+                    version: 0,
+                    timestamp_ms: 0,
+                })
             })
             .collect()
     }
@@ -223,9 +217,7 @@ impl FixedRegexResolver {
     }
 
     /// How many times the resolver was asked.
-    pub(crate) fn calls(&self) -> usize {
-        self.calls.load(std::sync::atomic::Ordering::SeqCst)
-    }
+    pub(crate) fn calls(&self) -> usize { self.calls.load(std::sync::atomic::Ordering::SeqCst) }
 }
 
 #[cfg(test)]
@@ -235,14 +227,11 @@ impl TopicRegexResolver for FixedRegexResolver {
         regexes
             .iter()
             .map(|regex| {
-                (
-                    regex.clone(),
-                    ResolvedRegularExpression {
-                        topics: self.topics.get(regex).cloned().unwrap_or_default(),
-                        version: 100,
-                        timestamp_ms: self.timestamp_ms,
-                    },
-                )
+                (regex.clone(), ResolvedRegularExpression {
+                    topics: self.topics.get(regex).cloned().unwrap_or_default(),
+                    version: 100,
+                    timestamp_ms: self.timestamp_ms,
+                })
             })
             .collect()
     }
@@ -250,16 +239,16 @@ impl TopicRegexResolver for FixedRegexResolver {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use assert2::assert;
-    use krabka_metadata::{MetadataRecord, TopicRecord};
-
-    use super::*;
-    use crate::{
-        authorizer::{AllowAllAuthorizer, SimpleAclAuthorizer},
-        test_support::{AllowAclSetup, allow_acl, peer, sasl_principal},
-        time_util::now_ms,
+    use {
+        super::*,
+        crate::{
+            authorizer::{AllowAllAuthorizer, SimpleAclAuthorizer},
+            test_support::{AllowAclSetup, allow_acl, peer, sasl_principal},
+            time_util::now_ms,
+        },
+        assert2::assert,
+        krabka_metadata::{MetadataRecord, TopicRecord},
+        std::sync::atomic::{AtomicUsize, Ordering},
     };
 
     fn image_with_topics(names: &[&str]) -> MetadataImage {
@@ -275,9 +264,7 @@ mod tests {
         image
     }
 
-    fn alice() -> Principal {
-        sasl_principal("alice")
-    }
+    fn alice() -> Principal { sasl_principal("alice") }
 
     fn describe_acl(topic: &str) -> MetadataRecord {
         MetadataRecord::V1AccessControlEntry(allow_acl(AllowAclSetup {
@@ -383,10 +370,10 @@ mod tests {
             got == HashMap::from([
                 ("orders-.*".to_owned(), vec!["orders-eu".to_owned()]),
                 ("shipments".to_owned(), vec!["shipments".to_owned()]),
-                (
-                    ".*".to_owned(),
-                    vec!["orders-eu".to_owned(), "shipments".to_owned()]
-                ),
+                (".*".to_owned(), vec![
+                    "orders-eu".to_owned(),
+                    "shipments".to_owned()
+                ]),
             ])
         );
     }

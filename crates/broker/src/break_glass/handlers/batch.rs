@@ -7,19 +7,19 @@
 //! only in the action they spend and the wording of their audit events, so
 //! [`GatedBatch`] takes those as data.
 
-use std::collections::HashSet;
-
-use krabka_audit::{AuditError, PrivilegedPhase};
-use krabka_metadata::{BreakGlassAction, MetadataRecord};
-use uuid::Uuid;
-
-use crate::{
-    break_glass::{
-        gate::consumed_proposal_id,
-        handlers::audit::{GatedTransition, audit_transition, require_transition},
+use {
+    crate::{
+        break_glass::{
+            gate::consumed_proposal_id,
+            handlers::audit::{GatedTransition, audit_transition, require_transition},
+        },
+        broker::Broker,
+        handlers::RequestContext,
     },
-    broker::Broker,
-    handlers::RequestContext,
+    krabka_audit::{AuditError, PrivilegedPhase},
+    krabka_metadata::{BreakGlassAction, MetadataRecord},
+    std::collections::HashSet,
+    uuid::Uuid,
 };
 
 /// What one gated request accumulates across its partitions.
@@ -158,9 +158,7 @@ impl GatedBatch {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-
-    use super::*;
+    use {super::*, assert2::assert};
 
     #[test]
     fn an_append_that_did_not_commit_is_audited_as_a_refusal() {
@@ -171,20 +169,14 @@ mod tests {
         );
 
         for (failure, expected) in [
-            (
-                None,
-                AppendOutcome {
-                    phase: PrivilegedPhase::Applied,
-                    reason: "committed in the append",
-                },
-            ),
-            (
-                Some("submit failed: not the controller"),
-                AppendOutcome {
-                    phase: PrivilegedPhase::Refused,
-                    reason: "submit failed: not the controller",
-                },
-            ),
+            (None, AppendOutcome {
+                phase: PrivilegedPhase::Applied,
+                reason: "committed in the append",
+            }),
+            (Some("submit failed: not the controller"), AppendOutcome {
+                phase: PrivilegedPhase::Refused,
+                reason: "submit failed: not the controller",
+            }),
         ] {
             assert!(batch.outcome(failure) == expected, "{failure:?}");
         }

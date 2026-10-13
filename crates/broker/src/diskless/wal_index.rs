@@ -1,15 +1,16 @@
 //! Diskless WAL offset-to-object index records and in-memory projection.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-
 pub(crate) use krabka_remote_storage::diskless::{
     WalDeleteFloorKey, WalDeleteFloorRecord, WalFlushRecord, WalIndexEntry, WalIndexKey,
 };
-use krabka_verified::diskless::{
-    DisklessRetentionPolicy, diskless_logical_range, diskless_retention_prefix,
-    diskless_span_extension,
+use {
+    krabka_verified::diskless::{
+        DisklessRetentionPolicy, diskless_logical_range, diskless_retention_prefix,
+        diskless_span_extension,
+    },
+    std::collections::{BTreeMap, HashMap, HashSet},
+    uuid::Uuid,
 };
-use uuid::Uuid;
 
 /// A partition, named by its topic id and partition index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -100,19 +101,14 @@ impl WalIndexCache {
         self.by_topic_partition
             .entry(PartitionKey::new(entry.topic_id, entry.partition))
             .or_default()
-            .insert(
-                entry.first_offset,
-                IndexedRange {
-                    object_key: record.object_key.clone(),
-                    entry: entry.clone(),
-                },
-            );
+            .insert(entry.first_offset, IndexedRange {
+                object_key: record.object_key.clone(),
+                entry: entry.clone(),
+            });
     }
 
     /// Remove one compacted range after its Kafka tombstone is committed.
-    pub(crate) fn remove(&mut self, key: WalIndexKey) {
-        self.remove_projected(key);
-    }
+    pub(crate) fn remove(&mut self, key: WalIndexKey) { self.remove_projected(key); }
 
     fn remove_projected(&mut self, key: WalIndexKey) {
         let partition = PartitionKey::new(key.topic_id, key.partition);
@@ -373,11 +369,7 @@ impl WalIndexCache {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use serde::Serialize;
-    use uuid::Uuid;
-
-    use super::*;
+    use {super::*, assert2::assert, serde::Serialize, uuid::Uuid};
 
     /// A record in the pre-1.0 layout carries its version inside the
     /// wincode body, after `object_key`. The 1.x reader takes the body's

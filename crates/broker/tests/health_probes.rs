@@ -16,18 +16,18 @@
 
 mod support;
 
-use std::{net::SocketAddr, time::Duration};
-
-use assert2::{assert, check};
-use krabka_broker::{
-    Broker, BrokerConfig,
-    config::DEFAULT_READINESS_MAX_METADATA_LAG,
-    health::{HealthState, router},
+use {
+    crate::support::client::http_get,
+    assert2::{assert, check},
+    krabka_broker::{
+        Broker, BrokerConfig,
+        config::DEFAULT_READINESS_MAX_METADATA_LAG,
+        health::{HealthState, router},
+    },
+    krabka_security::ListenerProtocol,
+    std::{net::SocketAddr, time::Duration},
+    tokio::net::TcpListener,
 };
-use krabka_security::ListenerProtocol;
-use tokio::net::TcpListener;
-
-use crate::support::client::http_get;
 
 /// The status line and body of one HTTP response.
 struct ProbeResponse {

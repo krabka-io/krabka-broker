@@ -3,31 +3,32 @@
 //! serve loop over a real socket. [`throttle_mute`] holds the KIP-219 tests,
 //! which drive the same loop against a seeded client quota.
 
-use assert2::{assert, check};
-use bytes::{BufMut, BytesMut};
-use futures_util::StreamExt;
-use tokio::net::TcpStream;
-
-use super::{test_support::DEFAULT_MAX_FRAME_BYTES, *};
-use crate::{
-    api_catalog::{
-        INTER_BROKER_ONLY_APIS, LegacyRequestVersions, UnstableApiVersions, dispatched_apis,
+use {
+    super::{test_support::DEFAULT_MAX_FRAME_BYTES, *},
+    crate::{
+        api_catalog::{
+            INTER_BROKER_ONLY_APIS, LegacyRequestVersions, UnstableApiVersions, dispatched_apis,
+        },
+        authorizer::AuthorizationResult,
+        codes,
+        config::BrokerConfig,
+        handlers::registry::build_registry,
+        metrics::{
+            ApiKeyLabel, BrokerMetrics, ConnectionCloseReason, ConnectionCloseReasonLabel,
+            SaslMechanismLabel, UNKNOWN_LABEL,
+        },
+        network::{
+            dispatch::test_support::{ServeLoop, plaintext_loop, serve_loop},
+            request::peek_api_key,
+            response_header_len,
+            test_support::RequestFrameSetup,
+        },
+        test_support::start_broker_with,
     },
-    authorizer::AuthorizationResult,
-    codes,
-    config::BrokerConfig,
-    handlers::registry::build_registry,
-    metrics::{
-        ApiKeyLabel, BrokerMetrics, ConnectionCloseReason, ConnectionCloseReasonLabel,
-        SaslMechanismLabel, UNKNOWN_LABEL,
-    },
-    network::{
-        dispatch::test_support::{ServeLoop, plaintext_loop, serve_loop},
-        request::peek_api_key,
-        response_header_len,
-        test_support::RequestFrameSetup,
-    },
-    test_support::start_broker_with,
+    assert2::{assert, check},
+    bytes::{BufMut, BytesMut},
+    futures_util::StreamExt,
+    tokio::net::TcpStream,
 };
 
 mod throttle_mute;
@@ -79,16 +80,17 @@ fn raft_voter_rpcs_peek_and_flex_routing() {
 /// connection close on the unsupported path.
 #[tokio::test]
 async fn raft_voter_registry_routes_to_real_handlers() {
-    use krabka_protocol::{
-        Decode, Encode,
-        owned::{
-            add_raft_voter_request as add_req, add_raft_voter_response as add_resp,
-            remove_raft_voter_request as rem_req, remove_raft_voter_response as rem_resp,
-            update_raft_voter_request as upd_req, update_raft_voter_response as upd_resp,
+    use {
+        crate::{network::codec::KafkaCodec, test_support::DenyAll},
+        krabka_protocol::{
+            Decode, Encode,
+            owned::{
+                add_raft_voter_request as add_req, add_raft_voter_response as add_resp,
+                remove_raft_voter_request as rem_req, remove_raft_voter_response as rem_resp,
+                update_raft_voter_request as upd_req, update_raft_voter_response as upd_resp,
+            },
         },
     };
-
-    use crate::{network::codec::KafkaCodec, test_support::DenyAll};
 
     // Send a flexible (v2-header) request frame carrying `body` for
     // `api_key`/`version` and return the response body with its 5-byte
@@ -412,13 +414,10 @@ async fn assert_gated_version(case: GatedVersion) {
     let (_dir, mut cfg) = broker_config();
     cfg.features.unstable_api_versions = unstable;
     cfg.features.legacy_request_versions = legacy;
-    let DrivenFrames { outcomes, metrics } = drive_one_frame_per_connection(
-        cfg,
-        &[FrameRequest {
-            api_key,
-            version: frame_version,
-        }],
-    )
+    let DrivenFrames { outcomes, metrics } = drive_one_frame_per_connection(cfg, &[FrameRequest {
+        api_key,
+        version: frame_version,
+    }])
     .await;
     let label = format!("{name} v{frame_version} {unstable:?} {legacy:?}");
     check!(outcomes == vec![Outcome::Closed], "{label}");
@@ -622,13 +621,10 @@ async fn api_versions_v5_is_unsupported_unless_unstable_api_versions_are_enabled
     use krabka_protocol::owned::api_versions_response::{ApiVersion, ApiVersionsResponse};
 
     let (_dir, cfg) = broker_config();
-    let DrivenFrames { outcomes, .. } = drive_one_frame_per_connection(
-        cfg,
-        &[FrameRequest {
-            api_key: API_VERSIONS_KEY,
-            version: 5,
-        }],
-    )
+    let DrivenFrames { outcomes, .. } = drive_one_frame_per_connection(cfg, &[FrameRequest {
+        api_key: API_VERSIONS_KEY,
+        version: 5,
+    }])
     .await;
     check!(
         outcomes
@@ -681,9 +677,7 @@ struct CloseCount {
 }
 
 /// A [`CloseCount`] of `reason`.
-const fn close(reason: &'static str, count: u64) -> CloseCount {
-    CloseCount { reason, count }
-}
+const fn close(reason: &'static str, count: u64) -> CloseCount { CloseCount { reason, count } }
 
 /// Every `connection_closes` series, in the enum's own order, so a test can
 /// compare the whole family rather than one label of it.
@@ -728,11 +722,9 @@ fn no_closes() -> Vec<CloseCount> {
 #[tokio::test]
 async fn a_frame_that_is_not_a_request_closes_the_connection_as_a_decode_error() {
     // One byte: enough to be a frame, not enough to peek an api_key out of.
-    let metrics = serve_frames(
-        krabka_security::ListenerProtocol::Plaintext,
-        None,
-        vec![bytes::Bytes::from_static(&[0x00])],
-    )
+    let metrics = serve_frames(krabka_security::ListenerProtocol::Plaintext, None, vec![
+        bytes::Bytes::from_static(&[0x00]),
+    ])
     .await;
 
     assert!(
@@ -1090,11 +1082,12 @@ async fn a_sasl_frame_on_a_non_sasl_listener_keeps_the_principal() {
 /// which is what the loop is generic over: the sendfile sink a `Fetch`
 /// response writes through is a socket, and an in-memory pipe is not one.
 mod request_budget {
-    use assert2::{assert, check};
-    use futures_util::{SinkExt as _, StreamExt as _};
-
-    use super::{KafkaCodec, RequestFrameSetup, active_closes, close, request_frame};
-    use crate::{BrokerHandle, broker::Broker, network::dispatch::test_support::plaintext_loop};
+    use {
+        super::{KafkaCodec, RequestFrameSetup, active_closes, close, request_frame},
+        crate::{BrokerHandle, broker::Broker, network::dispatch::test_support::plaintext_loop},
+        assert2::{assert, check},
+        futures_util::{SinkExt as _, StreamExt as _},
+    };
 
     /// One connection served by the loop, and the client end already framed.
     struct Served {
@@ -1298,19 +1291,20 @@ mod request_budget {
 /// DEBUG, and its `RequestChannel` logs each request at DEBUG on
 /// `kafka.request.logger`. A failure keeps its WARN.
 mod log_levels {
-    use assert2::assert;
-    use futures_util::{SinkExt as _, StreamExt as _};
-    use tracing::{Instrument as _, Level};
-
-    use super::{DEFAULT_MAX_FRAME_BYTES, RequestFrameSetup, request_frame};
-    use crate::{
-        broker::Broker,
-        network::{
-            codec,
-            dispatch::test_support::{ServeLoop, serve_loop},
-            test_support::broker_config,
+    use {
+        super::{DEFAULT_MAX_FRAME_BYTES, RequestFrameSetup, request_frame},
+        crate::{
+            broker::Broker,
+            network::{
+                codec,
+                dispatch::test_support::{ServeLoop, serve_loop},
+                test_support::broker_config,
+            },
+            test_support::LogCapture,
         },
-        test_support::LogCapture,
+        assert2::assert,
+        futures_util::{SinkExt as _, StreamExt as _},
+        tracing::{Instrument as _, Level},
     };
 
     // What the client end of the one connection does.
@@ -1414,33 +1408,24 @@ mod log_levels {
         let opened = || logged(Level::DEBUG, "connection opened");
         let closed = || logged(Level::DEBUG, "connection closed");
         let cases = [
-            (
-                Peer::OneRequest,
-                vec![
-                    opened(),
-                    logged(Level::DEBUG, "dispatching request"),
-                    closed(),
-                ],
-            ),
-            (
-                Peer::NotARequest,
-                vec![
-                    opened(),
-                    logged(Level::WARN, "frame too small to peek api_key, closing"),
-                    closed(),
-                ],
-            ),
-            (
-                Peer::Idle,
-                vec![
-                    opened(),
-                    logged(
-                        Level::DEBUG,
-                        "connection idle past connections.max.idle.ms, closing",
-                    ),
-                    closed(),
-                ],
-            ),
+            (Peer::OneRequest, vec![
+                opened(),
+                logged(Level::DEBUG, "dispatching request"),
+                closed(),
+            ]),
+            (Peer::NotARequest, vec![
+                opened(),
+                logged(Level::WARN, "frame too small to peek api_key, closing"),
+                closed(),
+            ]),
+            (Peer::Idle, vec![
+                opened(),
+                logged(
+                    Level::DEBUG,
+                    "connection idle past connections.max.idle.ms, closing",
+                ),
+                closed(),
+            ]),
         ];
         let mut logged_rows = Vec::new();
         let mut expected_rows = Vec::new();
@@ -1456,19 +1441,20 @@ mod log_levels {
 /// enforces it on the receive side, and `Processor.sendResponse` writes a
 /// response of any size.
 mod request_limit {
-    use assert2::assert;
-    use futures_util::{SinkExt as _, StreamExt as _};
-    use krabka_protocol::{
-        Encode as _,
-        owned::describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
-    };
-
-    use super::{RequestFrameSetup, request_frame};
-    use crate::{
-        broker::Broker,
-        network::{
-            dispatch::test_support::plaintext_loop,
-            test_support::{FrameCorrelationId, broker_config},
+    use {
+        super::{RequestFrameSetup, request_frame},
+        crate::{
+            broker::Broker,
+            network::{
+                dispatch::test_support::plaintext_loop,
+                test_support::{FrameCorrelationId, broker_config},
+            },
+        },
+        assert2::assert,
+        futures_util::{SinkExt as _, StreamExt as _},
+        krabka_protocol::{
+            Encode as _,
+            owned::describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
         },
     };
 

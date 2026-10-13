@@ -11,46 +11,47 @@
 //! hold. Partition 5 of `a` stands in for a partition the image does not hold
 //! even though its topic exists.
 
-use std::{collections::HashSet, sync::Arc};
-
-use assert2::check;
-use krabka_ids::PartitionIndex;
-use krabka_protocol::owned::{
-    txn_offset_commit_request::{
-        self, TxnOffsetCommitRequest, TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic,
-    },
-    txn_offset_commit_response::TxnOffsetCommitResponse,
-};
-
-use super::{super::add_partitions_to_txn::test_support::seed_topic, test_support::RowKey};
-use crate::{
-    api_catalog::UnstableApiVersions,
-    broker::{Broker, BrokerHandle},
-    codes,
-    coordinator::{
-        bootstrap::OFFSETS_TOPIC,
-        partitioner::partition_for_group,
-        persistence::OffsetCommitValue,
-        unified::{
-            GroupSeed,
-            actor::GroupActorMessage,
-            persistence_next_gen::{
-                AssignedTopicPartitions, CurrentMemberAssignmentValue, CurrentTopicPartitions,
-                MemberAssignmentState, MemberMetadataValue, TargetAssignmentMemberValue,
+use {
+    super::{super::add_partitions_to_txn::test_support::seed_topic, test_support::RowKey},
+    crate::{
+        api_catalog::UnstableApiVersions,
+        broker::{Broker, BrokerHandle},
+        codes,
+        coordinator::{
+            bootstrap::OFFSETS_TOPIC,
+            partitioner::partition_for_group,
+            persistence::OffsetCommitValue,
+            unified::{
+                GroupSeed,
+                actor::GroupActorMessage,
+                persistence_next_gen::{
+                    AssignedTopicPartitions, CurrentMemberAssignmentValue, CurrentTopicPartitions,
+                    MemberAssignmentState, MemberMetadataValue, TargetAssignmentMemberValue,
+                },
             },
         },
+        handlers::RequestContext,
+        test_support::{
+            ControllerPeerAllowed, GrantsInPrincipalName, configure_single_partition_transactions,
+            decode_response, dispatch_context, encode_request, peer, principal, request_context,
+            start_broker_no_audit_with, start_transaction_grant_broker,
+        },
+        txn::{
+            state::{TopicPartition, TxnEntry, TxnState},
+            util::now_millis,
+            version::resolve_txn_version,
+        },
     },
-    handlers::RequestContext,
-    test_support::{
-        ControllerPeerAllowed, GrantsInPrincipalName, configure_single_partition_transactions,
-        decode_response, dispatch_context, encode_request, peer, principal, request_context,
-        start_broker_no_audit_with, start_transaction_grant_broker,
+    assert2::check,
+    krabka_ids::PartitionIndex,
+    krabka_protocol::owned::{
+        txn_offset_commit_request::{
+            self, TxnOffsetCommitRequest, TxnOffsetCommitRequestPartition,
+            TxnOffsetCommitRequestTopic,
+        },
+        txn_offset_commit_response::TxnOffsetCommitResponse,
     },
-    txn::{
-        state::{TopicPartition, TxnEntry, TxnState},
-        util::now_millis,
-        version::resolve_txn_version,
-    },
+    std::{collections::HashSet, sync::Arc},
 };
 
 const READ_ON_STAR: &str = "TransactionalId:Write+Group:Read+Topic:Read";
@@ -67,9 +68,7 @@ macro_rules! read_context {
 
 /// Adds topic `a` with one partition, led by this broker, to the metadata
 /// image.
-pub(super) async fn seed_topic_a(broker: &Broker) {
-    seed_topic(broker, "a", 1).await;
-}
+pub(super) async fn seed_topic_a(broker: &Broker) { seed_topic(broker, "a", 1).await; }
 
 /// Starts a broker that grants what the principal name says, waits until its
 /// group and transaction coordinators serve, and seeds topic `a`.
@@ -139,15 +138,12 @@ async fn open_commit_request(
     broker: &Broker,
     setup: super::test_support::TxnCommitSetup<'_>,
 ) -> TxnOffsetCommitRequest {
-    seed_transaction(
-        broker,
-        TransactionSeedSetup {
-            transactional_id: &setup.transactional_id,
-            producer: setup.producer,
-            group_id: Some(setup.group_id),
-            ..Default::default()
-        },
-    )
+    seed_transaction(broker, TransactionSeedSetup {
+        transactional_id: &setup.transactional_id,
+        producer: setup.producer,
+        group_id: Some(setup.group_id),
+        ..Default::default()
+    })
     .await;
     super::test_support::request_for(setup)
 }
@@ -333,15 +329,12 @@ async fn txn_offset_commit_runs_the_existence_check_after_the_topic_read_gate() 
             42 + i64::try_from(case_index).expect("small"),
         ));
         let transactional_id = format!("tid-{case_index}");
-        let request = open_commit_request(
-            &broker,
-            super::test_support::TxnCommitSetup {
-                transactional_id,
-                group_id: &group_id,
-                producer,
-                topics: case.topics.clone(),
-            },
-        )
+        let request = open_commit_request(&broker, super::test_support::TxnCommitSetup {
+            transactional_id,
+            group_id: &group_id,
+            producer,
+            topics: case.topics.clone(),
+        })
         .await;
         let response = commit_response(&broker, &request, version, &ctx).await;
 
@@ -394,14 +387,11 @@ async fn unknown_rows_survive_a_group_fencing_failure() {
     let group_id = "group-fencing";
     let user = principal(READ_ON_STAR);
     let ctx = request_context(&user, &address, "txn-offset-commit-fencing");
-    seed_transaction(
-        &broker,
-        TransactionSeedSetup {
-            transactional_id: "tid-fencing",
-            group_id: Some(group_id),
-            ..Default::default()
-        },
-    )
+    seed_transaction(&broker, TransactionSeedSetup {
+        transactional_id: "tid-fencing",
+        group_id: Some(group_id),
+        ..Default::default()
+    })
     .await;
     let request = TxnOffsetCommitRequest {
         member_id: "never-registered-member".to_string(),
@@ -501,13 +491,9 @@ fn req_topic(topic: TopicRef, partitions: &'static [i32]) -> RequestTopic {
     RequestTopic { topic, partitions }
 }
 
-fn rc(partition: i32, code: i16) -> RowCode {
-    RowCode { partition, code }
-}
+fn rc(partition: i32, code: i16) -> RowCode { RowCode { partition, code } }
 
-fn exp(topic: TopicRef, rows: Vec<RowCode>) -> ExpectedTopic {
-    ExpectedTopic { topic, rows }
-}
+fn exp(topic: TopicRef, rows: Vec<RowCode>) -> ExpectedTopic { ExpectedTopic { topic, rows } }
 
 fn logged_key(topic: &'static str, partition: i32) -> RowKey<'static> {
     RowKey { topic, partition }
@@ -585,40 +571,40 @@ async fn v6_resolves_topic_ids_before_the_read_gate_and_the_existence_check() {
             name: "v6_unknown_id_is_unknown_topic_id",
             version: 6,
             topics: vec![req_topic(TopicRef::Id(dead), &[0])],
-            expected: vec![exp(
-                TopicRef::Id(dead),
-                vec![rc(0, codes::UNKNOWN_TOPIC_ID)],
-            )],
+            expected: vec![exp(TopicRef::Id(dead), vec![rc(
+                0,
+                codes::UNKNOWN_TOPIC_ID,
+            )])],
             logged: vec![],
         },
         V6Case {
             name: "v6_zero_id_is_unknown_topic_id",
             version: 6,
             topics: vec![req_topic(TopicRef::Id(uuid::Uuid::nil()), &[0])],
-            expected: vec![exp(
-                TopicRef::Id(uuid::Uuid::nil()),
-                vec![rc(0, codes::UNKNOWN_TOPIC_ID)],
-            )],
+            expected: vec![exp(TopicRef::Id(uuid::Uuid::nil()), vec![rc(
+                0,
+                codes::UNKNOWN_TOPIC_ID,
+            )])],
             logged: vec![],
         },
         V6Case {
             name: "v6_known_id_missing_partition_is_unknown_topic_or_partition",
             version: 6,
             topics: vec![req_topic(TopicRef::IdOf("a"), &[5])],
-            expected: vec![exp(
-                TopicRef::IdOf("a"),
-                vec![rc(5, codes::UNKNOWN_TOPIC_OR_PARTITION)],
-            )],
+            expected: vec![exp(TopicRef::IdOf("a"), vec![rc(
+                5,
+                codes::UNKNOWN_TOPIC_OR_PARTITION,
+            )])],
             logged: vec![],
         },
         V6Case {
             name: "v6_read_is_authorized_by_the_resolved_name",
             version: 6,
             topics: vec![req_topic(TopicRef::IdOf("b"), &[0])],
-            expected: vec![exp(
-                TopicRef::IdOf("b"),
-                vec![rc(0, codes::TOPIC_AUTHORIZATION_FAILED)],
-            )],
+            expected: vec![exp(TopicRef::IdOf("b"), vec![rc(
+                0,
+                codes::TOPIC_AUTHORIZATION_FAILED,
+            )])],
             logged: vec![],
         },
         V6Case {
@@ -630,14 +616,14 @@ async fn v6_resolves_topic_ids_before_the_read_gate_and_the_existence_check() {
                 req_topic(TopicRef::Id(dead), &[0]),
             ],
             expected: vec![
-                exp(
-                    TopicRef::IdOf("a"),
-                    vec![rc(5, codes::UNKNOWN_TOPIC_OR_PARTITION), rc(0, codes::NONE)],
-                ),
-                exp(
-                    TopicRef::IdOf("b"),
-                    vec![rc(0, codes::TOPIC_AUTHORIZATION_FAILED)],
-                ),
+                exp(TopicRef::IdOf("a"), vec![
+                    rc(5, codes::UNKNOWN_TOPIC_OR_PARTITION),
+                    rc(0, codes::NONE),
+                ]),
+                exp(TopicRef::IdOf("b"), vec![rc(
+                    0,
+                    codes::TOPIC_AUTHORIZATION_FAILED,
+                )]),
                 exp(TopicRef::Id(dead), vec![rc(0, codes::UNKNOWN_TOPIC_ID)]),
             ],
             logged: vec![logged_key("a", 0)],
@@ -659,30 +645,27 @@ async fn v6_resolves_topic_ids_before_the_read_gate_and_the_existence_check() {
         ));
         let request = TxnOffsetCommitRequest {
             generation_id_or_member_epoch: -1,
-            ..open_commit_request(
-                &broker,
-                super::test_support::TxnCommitSetup {
-                    transactional_id,
-                    group_id: &group_id,
-                    producer,
-                    topics: case
-                        .topics
-                        .iter()
-                        .map(
-                            |&RequestTopic {
-                                 topic: topic_ref,
-                                 partitions,
-                             }| {
-                                let (name, topic_id) = request_key(topic_ref);
-                                TxnOffsetCommitRequestTopic {
-                                    topic_id,
-                                    ..topic(&name, partitions)
-                                }
-                            },
-                        )
-                        .collect(),
-                },
-            )
+            ..open_commit_request(&broker, super::test_support::TxnCommitSetup {
+                transactional_id,
+                group_id: &group_id,
+                producer,
+                topics: case
+                    .topics
+                    .iter()
+                    .map(
+                        |&RequestTopic {
+                             topic: topic_ref,
+                             partitions,
+                         }| {
+                            let (name, topic_id) = request_key(topic_ref);
+                            TxnOffsetCommitRequestTopic {
+                                topic_id,
+                                ..topic(&name, partitions)
+                            }
+                        },
+                    )
+                    .collect(),
+            })
             .await
         };
         let response = commit_response(&broker, &request, case.version, &ctx).await;
@@ -776,17 +759,14 @@ async fn v6_answers_group_id_not_found_where_older_versions_answer_illegal_gener
         let request = TxnOffsetCommitRequest {
             member_id: "member".into(),
             generation_id_or_member_epoch: 3,
-            ..open_commit_request(
-                &broker,
-                super::test_support::TxnCommitSetup {
-                    transactional_id,
-                    group_id: &group_id,
-                    producer,
-                    topics: vec![topic_a_by_id(krabka_protocol::primitives::uuid::Uuid(
-                        a_id.into_bytes(),
-                    ))],
-                },
-            )
+            ..open_commit_request(&broker, super::test_support::TxnCommitSetup {
+                transactional_id,
+                group_id: &group_id,
+                producer,
+                topics: vec![topic_a_by_id(krabka_protocol::primitives::uuid::Uuid(
+                    a_id.into_bytes(),
+                ))],
+            })
             .await
         };
         let response = commit_response(&broker, &request, version, &ctx).await;
@@ -810,45 +790,36 @@ fn kip_1251_seed(topic_id: krabka_protocol::primitives::uuid::Uuid) -> GroupSeed
         group_epoch: 7,
         target_epoch: 7,
         assignment_timestamp_ms: 0,
-        members: [(
-            "m".to_string(),
-            MemberMetadataValue {
-                instance_id: None,
-                rack_id: None,
-                client_id: "client".into(),
-                client_host: "/127.0.0.1".into(),
-                subscribed_topic_names: vec!["a".into()],
-                subscribed_topic_regex: None,
-                server_assignor: None,
-                rebalance_timeout_ms: 60_000,
-                classic: None,
-            },
-        )]
+        members: [("m".to_string(), MemberMetadataValue {
+            instance_id: None,
+            rack_id: None,
+            client_id: "client".into(),
+            client_host: "/127.0.0.1".into(),
+            subscribed_topic_names: vec!["a".into()],
+            subscribed_topic_regex: None,
+            server_assignor: None,
+            rebalance_timeout_ms: 60_000,
+            classic: None,
+        })]
         .into(),
-        target_per_member: [(
-            "m".to_string(),
-            TargetAssignmentMemberValue {
-                topic_partitions: vec![AssignedTopicPartitions {
-                    topic_id,
-                    partitions: vec![0],
-                }],
-            },
-        )]
+        target_per_member: [("m".to_string(), TargetAssignmentMemberValue {
+            topic_partitions: vec![AssignedTopicPartitions {
+                topic_id,
+                partitions: vec![0],
+            }],
+        })]
         .into(),
-        current_per_member: [(
-            "m".to_string(),
-            CurrentMemberAssignmentValue {
-                member_epoch: 7,
-                previous_member_epoch: 6,
-                state: MemberAssignmentState::Stable,
-                assigned_partitions: vec![CurrentTopicPartitions {
-                    topic_id,
-                    partitions: vec![0],
-                    assignment_epochs: Some(vec![5]),
-                }],
-                partitions_pending_revocation: vec![],
-            },
-        )]
+        current_per_member: [("m".to_string(), CurrentMemberAssignmentValue {
+            member_epoch: 7,
+            previous_member_epoch: 6,
+            state: MemberAssignmentState::Stable,
+            assigned_partitions: vec![CurrentTopicPartitions {
+                topic_id,
+                partitions: vec![0],
+                assignment_epochs: Some(vec![5]),
+            }],
+            partitions_pending_revocation: vec![],
+        })]
         .into(),
         ..GroupSeed::default()
     }
@@ -897,15 +868,12 @@ async fn an_older_member_epoch_commits_a_partition_assigned_before_it() {
         let request = TxnOffsetCommitRequest {
             member_id: "m".into(),
             generation_id_or_member_epoch: epoch,
-            ..open_commit_request(
-                &broker,
-                super::test_support::TxnCommitSetup {
-                    transactional_id,
-                    group_id: &group_id,
-                    producer,
-                    topics: vec![topic_a_by_id(a_id)],
-                },
-            )
+            ..open_commit_request(&broker, super::test_support::TxnCommitSetup {
+                transactional_id,
+                group_id: &group_id,
+                producer,
+                topics: vec![topic_a_by_id(a_id)],
+            })
             .await
         };
         let response = commit_response(&broker, &request, version, &ctx).await;
@@ -1057,18 +1025,15 @@ async fn txn_offset_commit_verifies_the_producer_with_the_transaction_coordinato
             holds_offsets,
         }) = case.held
         {
-            seed_transaction(
-                &broker,
-                TransactionSeedSetup {
-                    transactional_id: &transactional_id,
-                    producer: super::test_support::TxnCommitProducer {
-                        id: krabka_ids::ProducerId(producer_id),
-                        epoch: super::test_support::ProducerEpoch(epoch),
-                    },
-                    state,
-                    group_id: holds_offsets.then_some(group_id.as_str()),
+            seed_transaction(&broker, TransactionSeedSetup {
+                transactional_id: &transactional_id,
+                producer: super::test_support::TxnCommitProducer {
+                    id: krabka_ids::ProducerId(producer_id),
+                    epoch: super::test_support::ProducerEpoch(epoch),
                 },
-            )
+                state,
+                group_id: holds_offsets.then_some(group_id.as_str()),
+            })
             .await;
         }
         let request = TxnOffsetCommitRequest {
@@ -1120,17 +1085,14 @@ async fn a_v5_commit_adds_the_offsets_partition_on_a_transaction_version_1_clust
     read_context!(address, user, ctx; "txn-offset-commit-tv1");
 
     let group_id = "group-tv1";
-    seed_transaction(
-        &broker,
-        TransactionSeedSetup {
-            transactional_id: "tid-tv1",
-            producer: super::test_support::TxnCommitProducer {
-                id: krabka_ids::ProducerId(700),
-                epoch: super::test_support::ProducerEpoch(5),
-            },
-            ..Default::default()
+    seed_transaction(&broker, TransactionSeedSetup {
+        transactional_id: "tid-tv1",
+        producer: super::test_support::TxnCommitProducer {
+            id: krabka_ids::ProducerId(700),
+            epoch: super::test_support::ProducerEpoch(5),
         },
-    )
+        ..Default::default()
+    })
     .await;
     let response = commit_topic_a_without_membership(
         &broker,
@@ -1191,18 +1153,15 @@ async fn a_v5_commit_records_the_topic_id_only_under_unstable_api_versions() {
         read_context!(address, user, ctx; "txn-offset-commit-topic-id");
 
         let group_id = "group-topic-id";
-        seed_transaction(
-            &broker,
-            TransactionSeedSetup {
-                transactional_id: "tid-topic-id",
-                producer: super::test_support::TxnCommitProducer {
-                    id: krabka_ids::ProducerId(800),
-                    ..Default::default()
-                },
-                group_id: Some(group_id),
+        seed_transaction(&broker, TransactionSeedSetup {
+            transactional_id: "tid-topic-id",
+            producer: super::test_support::TxnCommitProducer {
+                id: krabka_ids::ProducerId(800),
                 ..Default::default()
             },
-        )
+            group_id: Some(group_id),
+            ..Default::default()
+        })
         .await;
         let response = commit_topic_a_without_membership(
             &broker,

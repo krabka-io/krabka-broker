@@ -99,9 +99,7 @@ struct Rfc2253Keyword {
 }
 
 impl Rfc2253Keyword {
-    const fn new(oid: &'static str, keyword: &'static str) -> Self {
-        Self { oid, keyword }
-    }
+    const fn new(oid: &'static str, keyword: &'static str) -> Self { Self { oid, keyword } }
 }
 
 /// The text of a value Java's `AVA.isDerString` accepts, decoded with the

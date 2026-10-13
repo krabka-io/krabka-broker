@@ -35,13 +35,14 @@ pub(super) fn build_topic_error_response(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use bytes::Bytes;
-
-    use super::*;
-    use crate::{
-        codes::UNKNOWN_TOPIC_ID,
-        handlers::produce::framing::{FramedPartition, PartitionPayload},
+    use {
+        super::*,
+        crate::{
+            codes::UNKNOWN_TOPIC_ID,
+            handlers::produce::framing::{FramedPartition, PartitionPayload},
+        },
+        assert2::assert,
+        bytes::Bytes,
     };
 
     #[test]

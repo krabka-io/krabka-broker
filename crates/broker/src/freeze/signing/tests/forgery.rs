@@ -6,19 +6,20 @@
 //! field the table forgets still cannot be edited without breaking the
 //! signature.
 
-use assert2::{assert, check};
-use krabka_metadata::TopicFreezeRecord;
-use krabka_units::{convert::TimeExt as _, minutes};
-
-use super::{
-    ALICE, ALICE_KEY, BOB, BOB_KEY, CLUSTER_ID, NOW_MS, OTHER_CLUSTER_ID, check_against, record,
-    signed, trust,
-};
-use crate::{
-    codes,
-    freeze::signing::{
-        FreezeSignatureCheck, WireRefusal, freeze_signing_bytes, verify_freeze_signature,
+use {
+    super::{
+        ALICE, ALICE_KEY, BOB, BOB_KEY, CLUSTER_ID, NOW_MS, OTHER_CLUSTER_ID, check_against,
+        record, signed, trust,
     },
+    crate::{
+        codes,
+        freeze::signing::{
+            FreezeSignatureCheck, WireRefusal, freeze_signing_bytes, verify_freeze_signature,
+        },
+    },
+    assert2::{assert, check},
+    krabka_metadata::TopicFreezeRecord,
+    krabka_units::{convert::TimeExt as _, minutes},
 };
 
 /// The attack table. Every row is refused, every row answers 1009, and no
@@ -63,14 +64,10 @@ fn every_forged_or_replayed_record_is_refused_with_one_code() {
         },
         Case {
             label: "an author that the signing key does not speak for",
-            record: signed(
-                &trust.alice,
-                CLUSTER_ID,
-                &TopicFreezeRecord {
-                    set_by: BOB.to_owned(),
-                    ..good.clone()
-                },
-            ),
+            record: signed(&trust.alice, CLUSTER_ID, &TopicFreezeRecord {
+                set_by: BOB.to_owned(),
+                ..good.clone()
+            }),
             check: check_against(&trust, BOB),
         },
         Case {
@@ -89,26 +86,18 @@ fn every_forged_or_replayed_record_is_refused_with_one_code() {
         },
         Case {
             label: "a timestamp older than the skew window",
-            record: signed(
-                &trust.alice,
-                CLUSTER_ID,
-                &TopicFreezeRecord {
-                    set_at_ms: NOW_MS - minutes(5).millis_i64() - 1,
-                    ..good.clone()
-                },
-            ),
+            record: signed(&trust.alice, CLUSTER_ID, &TopicFreezeRecord {
+                set_at_ms: NOW_MS - minutes(5).millis_i64() - 1,
+                ..good.clone()
+            }),
             check: check_against(&trust, ALICE),
         },
         Case {
             label: "a timestamp newer than the skew window",
-            record: signed(
-                &trust.alice,
-                CLUSTER_ID,
-                &TopicFreezeRecord {
-                    set_at_ms: NOW_MS + minutes(5).millis_i64() + 1,
-                    ..good.clone()
-                },
-            ),
+            record: signed(&trust.alice, CLUSTER_ID, &TopicFreezeRecord {
+                set_at_ms: NOW_MS + minutes(5).millis_i64() + 1,
+                ..good.clone()
+            }),
             check: check_against(&trust, ALICE),
         },
         Case {
@@ -121,14 +110,10 @@ fn every_forged_or_replayed_record_is_refused_with_one_code() {
         },
         Case {
             label: "a timestamp older than the entry it replaces",
-            record: signed(
-                &trust.alice,
-                CLUSTER_ID,
-                &TopicFreezeRecord {
-                    set_at_ms: NOW_MS - 1,
-                    ..good.clone()
-                },
-            ),
+            record: signed(&trust.alice, CLUSTER_ID, &TopicFreezeRecord {
+                set_at_ms: NOW_MS - 1,
+                ..good.clone()
+            }),
             check: FreezeSignatureCheck {
                 replaces: Some(&replaced),
                 ..check_against(&trust, ALICE)

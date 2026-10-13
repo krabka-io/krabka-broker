@@ -6,13 +6,14 @@
 //! rules, as Kafka's `validateOffsetCommit` does with its `isTransactional`
 //! flag, and [`CommitFence`] says which rule a `ValidateCommit` runs.
 
-use krabka_protocol::primitives::uuid::Uuid;
-
-use super::{ErrorCode, GroupActorHandle, GroupActorMessage};
-use crate::{
-    codes,
-    coordinator::unified::{classic_ops, group::CoordinatorGroup},
-    task_util::ask,
+use {
+    super::{ErrorCode, GroupActorHandle, GroupActorMessage},
+    crate::{
+        codes,
+        coordinator::unified::{classic_ops, group::CoordinatorGroup},
+        task_util::ask,
+    },
+    krabka_protocol::primitives::uuid::Uuid,
 };
 
 /// The request whose rule a `ValidateCommit` runs.
@@ -117,19 +118,20 @@ pub(crate) async fn validate_commit(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use krabka_log::Offset;
-
-    use super::*;
-    use crate::coordinator::unified::{
-        actor::{
-            GroupKindTag,
-            test_support::{
-                BidirectionalClassicSetup, bidirectional_coordinator, join_native_consumer,
-                make_coordinator, rpc, seeded_bidirectional_coordinator, spawn_and_downgrade,
+    use {
+        super::*,
+        crate::coordinator::unified::{
+            actor::{
+                GroupKindTag,
+                test_support::{
+                    BidirectionalClassicSetup, bidirectional_coordinator, join_native_consumer,
+                    make_coordinator, rpc, seeded_bidirectional_coordinator, spawn_and_downgrade,
+                },
             },
+            classic_state::OffsetEntry,
         },
-        classic_state::OffsetEntry,
+        assert2::assert,
+        krabka_log::Offset,
     };
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -141,17 +143,14 @@ mod tests {
 
         // UpdateCommitted then FetchOffsets round-trips on the kind-agnostic Group.
         let rx = rpc::begin(&handle, |tx| GroupActorMessage::UpdateCommitted {
-            entries: vec![(
-                ("t".to_string(), 0),
-                OffsetEntry {
-                    offset: Offset(42),
-                    leader_epoch: 1,
-                    metadata: String::new(),
-                    commit_timestamp_ms: 0,
-                    expire_timestamp_ms: None,
-                    topic_id: None,
-                },
-            )],
+            entries: vec![(("t".to_string(), 0), OffsetEntry {
+                offset: Offset(42),
+                leader_epoch: 1,
+                metadata: String::new(),
+                commit_timestamp_ms: 0,
+                expire_timestamp_ms: None,
+                topic_id: None,
+            })],
             reply: tx,
         })
         .await;
@@ -326,32 +325,24 @@ mod tests {
         assert!(second.error_code == codes::NONE);
         // `a` still owns both partitions and is told to revoke one; then it
         // reports that it did.
-        let revoke = rpc::consumer_heartbeat_owning(
-            &handle,
-            &a,
-            first_epoch,
-            &[rpc::OwnedPartitions {
+        let revoke =
+            rpc::consumer_heartbeat_owning(&handle, &a, first_epoch, &[rpc::OwnedPartitions {
                 topic_id: TOPIC,
                 partitions: &[0, 1],
-            }],
-        )
-        .await;
+            }])
+            .await;
         let kept: Vec<i32> = revoke
             .assignment
             .iter()
             .flat_map(|assignment| &assignment.topic_partitions)
             .flat_map(|tp| tp.partitions.iter().copied())
             .collect();
-        let owned = rpc::consumer_heartbeat_owning(
-            &handle,
-            &a,
-            first_epoch,
-            &[rpc::OwnedPartitions {
+        let owned =
+            rpc::consumer_heartbeat_owning(&handle, &a, first_epoch, &[rpc::OwnedPartitions {
                 topic_id: TOPIC,
                 partitions: &kept,
-            }],
-        )
-        .await;
+            }])
+            .await;
         assert!(owned.error_code == codes::NONE);
         let current_epoch = owned.member_epoch;
         assert!(current_epoch > first_epoch);

@@ -41,16 +41,16 @@
 //! onto an exit code, so an embedding tool keeps the structured error. See
 //! [`EXIT_OK`] for the codes.
 
-use std::{ffi::OsString, path::Path};
-
-use clap::Parser;
-use krabka_remote_storage::{
-    AuthenticatedArchive, Sha256Digest, TrustedManifestKeys, VerifyRequest, authenticate_archive,
-    diskless::CAPTURE_HEAD_NAME,
+use {
+    self::diskless::CaptureAuthentication,
+    clap::Parser,
+    krabka_remote_storage::{
+        AuthenticatedArchive, Sha256Digest, TrustedManifestKeys, VerifyRequest,
+        authenticate_archive, diskless::CAPTURE_HEAD_NAME,
+    },
+    krabka_remote_storage_topic::Snapshot,
+    std::{ffi::OsString, path::Path},
 };
-use krabka_remote_storage_topic::Snapshot;
-
-use self::diskless::CaptureAuthentication;
 
 mod args;
 mod backend;
@@ -583,15 +583,10 @@ fn ensure_empty_log_dir(log_dir: &Path) -> Result<(), RestoreError> {
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
-    use clap::CommandFactory as _;
-
-    use super::*;
+    use {super::*, assert2::check, clap::CommandFactory as _};
 
     #[test]
-    fn the_command_line_is_internally_consistent() {
-        Cli::command().debug_assert();
-    }
+    fn the_command_line_is_internally_consistent() { Cli::command().debug_assert(); }
 
     #[test]
     fn an_absent_target_is_acceptable() {

@@ -8,11 +8,11 @@
 //! `ControllerConfig` rather than settings an operator writes down, which is
 //! why they sit apart from the configuration itself.
 
-use std::{future::Future, net::SocketAddr, pin::Pin};
-
-use bytes::Bytes;
-
-use crate::error::RaftError;
+use {
+    crate::error::RaftError,
+    bytes::Bytes,
+    std::{future::Future, net::SocketAddr, pin::Pin},
+};
 
 /// Optional router for KIP-595 traffic addressed to non-metadata quorum shards.
 pub type ShardRouteFuture<'a> =
@@ -235,9 +235,7 @@ pub trait ControllerAdminRouter: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-
-    use super::*;
+    use {super::*, assert2::assert};
 
     /// A registry feature with a chosen name and range.
     struct Listed {
@@ -247,17 +245,11 @@ mod tests {
     }
 
     impl krabka_metadata::Feature for Listed {
-        fn name(&self) -> &'static str {
-            self.name
-        }
+        fn name(&self) -> &'static str { self.name }
 
-        fn supported_range(&self) -> (i16, i16) {
-            (self.min, self.max)
-        }
+        fn supported_range(&self) -> (i16, i16) { (self.min, self.max) }
 
-        fn default_level(&self, _bootstrap_mv: i16) -> i16 {
-            self.min
-        }
+        fn default_level(&self, _bootstrap_mv: i16) -> i16 { self.min }
     }
 
     /// The range each node advertises: Kafka 4.3.1's by default, and the
@@ -265,8 +257,10 @@ mod tests {
     /// `share.version` 2 is trunk's `SV_2` (KIP-1191).
     #[test]
     fn a_default_node_advertises_the_latest_production_ranges() {
-        use UnstableFeatureVersions::{Disabled, Enabled};
-        use krabka_metadata::metadata_version::{METADATA_VERSION_FEATURE, SHARE_VERSION_FEATURE};
+        use {
+            UnstableFeatureVersions::{Disabled, Enabled},
+            krabka_metadata::metadata_version::{METADATA_VERSION_FEATURE, SHARE_VERSION_FEATURE},
+        };
 
         // (feature, registry range, unstable, expected range)
         let rows = [
@@ -309,10 +303,11 @@ mod tests {
     /// capability.
     #[test]
     fn registration_advertises_every_feature_with_krabka_version() {
-        use std::collections::BTreeMap;
-
-        use UnstableFeatureVersions::{Disabled, Enabled};
-        use krabka_metadata::metadata_version::{METADATA_VERSION_MAX, METADATA_VERSION_MIN};
+        use {
+            UnstableFeatureVersions::{Disabled, Enabled},
+            krabka_metadata::metadata_version::{METADATA_VERSION_MAX, METADATA_VERSION_MIN},
+            std::collections::BTreeMap,
+        };
 
         let expected = |metadata_max: i16, share_max: i16| {
             BTreeMap::from(

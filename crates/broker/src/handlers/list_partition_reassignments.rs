@@ -1,17 +1,19 @@
 //! `ListPartitionReassignments` (`api_key` 46, KIP-455).
 
-use krabka_metadata::PartitionRecord;
-use krabka_protocol::owned::{
-    list_partition_reassignments_request::ListPartitionReassignmentsRequest,
-    list_partition_reassignments_response::{
-        ListPartitionReassignmentsResponse, OngoingPartitionReassignment, OngoingTopicReassignment,
+use {
+    crate::{
+        broker::Broker,
+        codes::{CLUSTER_AUTHORIZATION_FAILED, NONE},
+        handlers::{RequestContext, cluster_describe_denied, metadata::wire_id},
     },
-};
-
-use crate::{
-    broker::Broker,
-    codes::{CLUSTER_AUTHORIZATION_FAILED, NONE},
-    handlers::{RequestContext, cluster_describe_denied, metadata::wire_id},
+    krabka_metadata::PartitionRecord,
+    krabka_protocol::owned::{
+        list_partition_reassignments_request::ListPartitionReassignmentsRequest,
+        list_partition_reassignments_response::{
+            ListPartitionReassignmentsResponse, OngoingPartitionReassignment,
+            OngoingTopicReassignment,
+        },
+    },
 };
 
 pub(crate) fn handle(
@@ -123,15 +125,15 @@ fn wire_node_ids(nodes: &[krabka_metadata::NodeId]) -> Vec<i32> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use assert2::assert;
-    use krabka_metadata::{MetadataRecord, NodeId, TopicRecord};
-    use krabka_protocol::owned::list_partition_reassignments_request::ListPartitionReassignmentsTopics;
-    use uuid::Uuid;
-
-    use super::*;
-    use crate::{authorizer::AllowAllAuthorizer, test_support::DenyAll};
+    use {
+        super::*,
+        crate::{authorizer::AllowAllAuthorizer, test_support::DenyAll},
+        assert2::assert,
+        krabka_metadata::{MetadataRecord, NodeId, TopicRecord},
+        krabka_protocol::owned::list_partition_reassignments_request::ListPartitionReassignmentsTopics,
+        std::sync::Arc,
+        uuid::Uuid,
+    };
 
     const VERSION: i16 = krabka_protocol::owned::list_partition_reassignments_response::MAX_VERSION;
 

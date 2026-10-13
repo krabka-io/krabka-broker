@@ -5,14 +5,15 @@
 //! `kafka-storage format` on `apache/kafka:4.3.1`; `docs/format-divergences.md`
 //! lists the places krabka differs on purpose.
 
-use std::{
-    collections::BTreeSet,
-    path::{Path, PathBuf},
-    process::{Command, Output},
+use {
+    krabka_format::{ClusterId, DirectoryId, FAIL_AFTER_ENV, META_PROPERTIES, MetaProperties},
+    krabka_metadata::MetadataRecord,
+    std::{
+        collections::BTreeSet,
+        path::{Path, PathBuf},
+        process::{Command, Output},
+    },
 };
-
-use krabka_format::{ClusterId, DirectoryId, FAIL_AFTER_ENV, META_PROPERTIES, MetaProperties};
-use krabka_metadata::MetadataRecord;
 
 /// The node id of every run, as `--node-id` takes it and as
 /// `meta.properties` records it.
@@ -48,9 +49,7 @@ fn stderr(output: &Output) -> String {
     String::from_utf8(output.stderr.clone()).expect("utf-8 stderr")
 }
 
-fn path_str(path: &Path) -> &str {
-    path.to_str().expect("utf-8 path")
-}
+fn path_str(path: &Path) -> &str { path.to_str().expect("utf-8 path") }
 
 /// The ids in a directory's `meta.properties`, as written.
 fn written_ids(dir: &Path) -> MetaProperties {
@@ -60,9 +59,7 @@ fn written_ids(dir: &Path) -> MetaProperties {
 }
 
 /// Kafka's form of a directory's cluster id.
-fn written_cluster_id(dir: &Path) -> String {
-    written_ids(dir).cluster_id.to_string()
-}
+fn written_cluster_id(dir: &Path) -> String { written_ids(dir).cluster_id.to_string() }
 
 /// Kafka's form of a directory's own id.
 fn written_directory_id(dir: &Path) -> String {

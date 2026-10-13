@@ -3,20 +3,20 @@
 //! short-lived connection, and classifies the response. The scan loop decides
 //! what to propose. This module only reaches the controller.
 
-use std::sync::Arc;
-
-use krabka_protocol::owned::{
-    alter_partition_request::AlterPartitionRequest,
-    alter_partition_response::AlterPartitionResponse,
-};
-use tracing::{debug, warn};
-
-use super::request_builder::{IsrChange, build_alter_partition_request};
-use crate::{
-    codes::NOT_CONTROLLER,
-    controller_endpoint::{ControllerDialer, LeaderEndpoint, current_leader_endpoint},
-    host_port::HostPort,
-    metadata_source::MetadataSource,
+use {
+    super::request_builder::{IsrChange, build_alter_partition_request},
+    crate::{
+        codes::NOT_CONTROLLER,
+        controller_endpoint::{ControllerDialer, LeaderEndpoint, current_leader_endpoint},
+        host_port::HostPort,
+        metadata_source::MetadataSource,
+    },
+    krabka_protocol::owned::{
+        alter_partition_request::AlterPartitionRequest,
+        alter_partition_response::AlterPartitionResponse,
+    },
+    std::sync::Arc,
+    tracing::{debug, warn},
 };
 
 /// Who sends an ISR proposal, and how it reaches the active controller.

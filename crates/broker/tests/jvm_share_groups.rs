@@ -30,10 +30,12 @@
 
 mod support;
 
-use assert2::assert;
-use krabka_broker::BrokerHandle;
-use krabka_client_core::Client;
-use krabka_protocol::records::{Record, RecordBatch};
+use {
+    assert2::assert,
+    krabka_broker::BrokerHandle,
+    krabka_client_core::Client,
+    krabka_protocol::records::{Record, RecordBatch},
+};
 
 /// Port that the broker binds on the host, and that the container reaches
 /// through `host.docker.internal`.
@@ -45,9 +47,7 @@ use krabka_protocol::records::{Record, RecordBatch};
 /// time. A port per process lets them overlap.
 ///
 /// `&'static str`, so these read as the constants they replaced.
-fn bootstrap_addr() -> &'static str {
-    &support::jvm_listeners().advertised
-}
+fn bootstrap_addr() -> &'static str { &support::jvm_listeners().advertised }
 
 /// Official Apache Kafka image. It ships KIP-932 share groups, which are GA in
 /// 4.x, and the `kafka-console-share-consumer.sh` and `kafka-share-groups.sh`
@@ -60,11 +60,10 @@ const CONFIGS: &str = "/opt/kafka/bin/kafka-configs.sh";
 const SHARE_STATE_TOPIC: &str = "__share_group_state";
 const SHARE_STATE_PARTITIONS: i32 = 50;
 
-use support::share::coordinator_key as share_coordinator_key;
-
-use crate::support::{share::ShareProduceSetup, topics::CreateTopicSetup};
-
-use support::{StartedBroker, start_host_broker};
+use {
+    crate::support::{share::ShareProduceSetup, topics::CreateTopicSetup},
+    support::{StartedBroker, share::coordinator_key as share_coordinator_key, start_host_broker},
+};
 async fn connect() -> Client {
     support::client::connect_owned(
         support::jvm_client_addr(),
@@ -77,14 +76,10 @@ async fn connect() -> Client {
 /// Creates `topic` with 1 partition and waits until this broker leads
 /// partition 0.
 async fn create_topic(broker: &BrokerHandle, client: &Client, topic: &str) -> uuid::Uuid {
-    support::client::create_led_topic(
-        broker,
-        client,
-        CreateTopicSetup {
-            topic,
-            ..Default::default()
-        },
-    )
+    support::client::create_led_topic(broker, client, CreateTopicSetup {
+        topic,
+        ..Default::default()
+    })
     .await;
     support::share::topic_id(broker, topic)
 }
@@ -161,9 +156,7 @@ async fn produce_at(
 /// Runs a docker container against the host broker and returns its output. The
 /// share consumer exits with a non-zero status on an idle timeout, even after
 /// it consumed records, so callers check stdout and not the exit status.
-fn docker_run(args: &[&str]) -> std::process::Output {
-    support::jvm_docker_run(KAFKA_IMAGE, args)
-}
+fn docker_run(args: &[&str]) -> std::process::Output { support::jvm_docker_run(KAFKA_IMAGE, args) }
 
 fn run_share_consumer(
     bootstrap: &str,

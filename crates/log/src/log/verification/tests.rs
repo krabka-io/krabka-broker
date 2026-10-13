@@ -1,9 +1,10 @@
-use assert2::assert;
-use krabka_ids::Offset;
-
-use super::*;
-use crate::log::test_support::{
-    TempLog, commit_marker, sample_batch, test_log, transactional_batch,
+use {
+    super::*,
+    crate::log::test_support::{
+        TempLog, commit_marker, sample_batch, test_log, transactional_batch,
+    },
+    assert2::assert,
+    krabka_ids::Offset,
 };
 
 const PID: i64 = 1000;

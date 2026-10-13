@@ -1,25 +1,25 @@
-use std::{
-    sync::Arc,
-    time::{Duration, SystemTime},
-};
-
-use assert2::{assert, check};
-use krabka_compression::CompressionType;
-use krabka_ids::{LeaderEpoch, Offset};
-use krabka_units::{Time, millis};
-
-use super::*;
-use crate::{
-    Log, LogConfig, SegmentAllocation,
-    io::{FileIo, IoTarget, LogIo, file_io},
-    log::{
-        sync::sync_observer,
-        test_support::{
-            EncodedVerbatim, NO_LIMIT, TempLog, configured_test_log, sample_batch, test_log,
-            tiny_segments, verbatim_from,
+use {
+    super::*,
+    crate::{
+        Log, LogConfig, SegmentAllocation,
+        io::{FileIo, IoTarget, LogIo, file_io},
+        log::{
+            sync::sync_observer,
+            test_support::{
+                EncodedVerbatim, NO_LIMIT, TempLog, configured_test_log, sample_batch, test_log,
+                tiny_segments, verbatim_from,
+            },
         },
+        name,
     },
-    name,
+    assert2::{assert, check},
+    krabka_compression::CompressionType,
+    krabka_ids::{LeaderEpoch, Offset},
+    krabka_units::{Time, millis},
+    std::{
+        sync::Arc,
+        time::{Duration, SystemTime},
+    },
 };
 
 #[test]
@@ -208,14 +208,11 @@ fn compaction_keeps_retired_files_until_the_deadline() {
     use crate::log::test_support::{KeyedRecord, compacting_segments, compaction_ctx, keyed_batch};
     let TempLog { dir: _dir, mut log } = configured_test_log(compacting_segments());
     for value in [b"old", b"new", b"end"] {
-        log.append(&mut keyed_batch(
-            0,
-            &[KeyedRecord {
-                offset_delta: 0,
-                key: b"key",
-                value,
-            }],
-        ))
+        log.append(&mut keyed_batch(0, &[KeyedRecord {
+            offset_delta: 0,
+            key: b"key",
+            value,
+        }]))
         .unwrap();
     }
     log.compact(&compaction_ctx()).unwrap();

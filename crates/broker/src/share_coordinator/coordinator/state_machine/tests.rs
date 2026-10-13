@@ -1,21 +1,22 @@
 //! Unit tests for the share-state machine: Kafka's validation and fencing
 //! order, and the records each operation appends.
 
-use assert2::{assert, check};
-use tempfile::tempdir;
-
-use super::*;
-use crate::{
-    coordinator::unified::persistence::MAX_STRING_BYTES,
-    share_coordinator::{
-        bootstrap::TOPIC as SHARE_STATE_TOPIC,
-        config::ShareCoordinatorConfig,
-        coordinator::test_support::{
-            ConfiguredCoordinator, CoordinatorWithRegistry, Logged, NOW_MS, StateSeedSetup, batch,
-            configured_coordinator, coordinator, image_with_topic, initialize_led_group, lead_all,
-            logged_records, share_write,
+use {
+    super::*,
+    crate::{
+        coordinator::unified::persistence::MAX_STRING_BYTES,
+        share_coordinator::{
+            bootstrap::TOPIC as SHARE_STATE_TOPIC,
+            config::ShareCoordinatorConfig,
+            coordinator::test_support::{
+                ConfiguredCoordinator, CoordinatorWithRegistry, Logged, NOW_MS, StateSeedSetup,
+                batch, configured_coordinator, coordinator, image_with_topic, initialize_led_group,
+                lead_all, logged_records, share_write,
+            },
         },
     },
+    assert2::{assert, check},
+    tempfile::tempdir,
 };
 
 const TOPIC: uuid::Uuid = uuid::Uuid::from_bytes([5; 16]);
@@ -145,13 +146,10 @@ async fn concurrent_first_initializes_preserve_epoch_fencing_and_replay() {
                 coord,
                 registry,
                 clock: _clock,
-            } = configured_coordinator(
-                dir.path(),
-                ShareCoordinatorConfig {
-                    state_topic_num_partitions: 1,
-                    ..rules(trunk)
-                },
-            );
+            } = configured_coordinator(dir.path(), ShareCoordinatorConfig {
+                state_topic_num_partitions: 1,
+                ..rules(trunk)
+            });
             lead_all(&coord).await;
             let image = image_with_topic(TOPIC, 1);
             let partition = registry
@@ -976,11 +974,10 @@ async fn writes_append_updates_then_one_snapshot_at_the_threshold() {
     } = configured_coordinator(dir.path(), config);
     let image = initialize_led_group(&coord, StateSeedSetup::default()).await;
     let writes = [
-        (
-            0,
-            1,
-            vec![batch(Offset(0)..=Offset(9)), batch(Offset(5)..=Offset(14))],
-        ),
+        (0, 1, vec![
+            batch(Offset(0)..=Offset(9)),
+            batch(Offset(5)..=Offset(14)),
+        ]),
         (10, 2, vec![batch(Offset(0)..=Offset(19))]),
         (12, 3, vec![batch(Offset(20)..=Offset(29))]),
         (12, 3, vec![batch(Offset(30)..=Offset(39))]),

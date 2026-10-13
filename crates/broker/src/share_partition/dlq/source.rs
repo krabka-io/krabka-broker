@@ -8,20 +8,20 @@
 //! topic, is not copied, and its dead-letter record has headers alone; the
 //! write is never held back for it.
 
-use std::{collections::BTreeMap, sync::Arc};
-
-use bytes::Buf as _;
-use krabka_compression::RecordDecompressionPolicy;
-use krabka_log::Offset;
-use krabka_protocol::records::RecordBatch;
-use krabka_remote_storage::TopicIdPartition;
-use krabka_units::{ByteSize, convert::ByteSizeExt as _, mebibytes};
-
-use super::record::SourceRecord;
-use crate::{
-    blocking::spawn_blocking, diskless::read::DisklessReadHandle, metrics::BrokerMetrics,
-    partition::Partition, remote_reader::RemoteReader,
-    share_partition::source::diskless_logical_start,
+use {
+    super::record::SourceRecord,
+    crate::{
+        blocking::spawn_blocking, diskless::read::DisklessReadHandle, metrics::BrokerMetrics,
+        partition::Partition, remote_reader::RemoteReader,
+        share_partition::source::diskless_logical_start,
+    },
+    bytes::Buf as _,
+    krabka_compression::RecordDecompressionPolicy,
+    krabka_log::Offset,
+    krabka_protocol::records::RecordBatch,
+    krabka_remote_storage::TopicIdPartition,
+    krabka_units::{ByteSize, convert::ByteSizeExt as _, mebibytes},
+    std::{collections::BTreeMap, sync::Arc},
 };
 
 /// The most bytes of one log read. Most dead-letter ranges are one record, so
@@ -99,13 +99,10 @@ impl Collector {
                 self.deferred = true;
                 return;
             }
-            self.records.insert(
-                offset,
-                SourceRecord {
-                    key: record.key.clone(),
-                    value: record.value.clone(),
-                },
-            );
+            self.records.insert(offset, SourceRecord {
+                key: record.key.clone(),
+                value: record.value.clone(),
+            });
             self.collected += size;
             self.last_resolved = offset;
         }
@@ -251,13 +248,14 @@ pub(super) async fn fetch(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use bytes::Bytes;
-
-    use super::*;
-    use crate::{
-        partition_registry::PartitionRegistry,
-        share_partition::manager::test_support::{DataPartitionSetup, open_data_partition},
+    use {
+        super::*,
+        crate::{
+            partition_registry::PartitionRegistry,
+            share_partition::manager::test_support::{DataPartitionSetup, open_data_partition},
+        },
+        assert2::assert,
+        bytes::Bytes,
     };
 
     #[tokio::test]
@@ -323,21 +321,16 @@ mod tests {
         value: &'static [u8],
     }
 
-    fn at(offset: i64, value: &'static [u8]) -> ValueAt {
-        ValueAt { offset, value }
-    }
+    fn at(offset: i64, value: &'static [u8]) -> ValueAt { ValueAt { offset, value } }
 
     fn records(pairs: &[ValueAt]) -> BTreeMap<i64, SourceRecord> {
         pairs
             .iter()
             .map(|pair| {
-                (
-                    pair.offset,
-                    SourceRecord {
-                        key: None,
-                        value: Some(Bytes::from_static(pair.value)),
-                    },
-                )
+                (pair.offset, SourceRecord {
+                    key: None,
+                    value: Some(Bytes::from_static(pair.value)),
+                })
             })
             .collect()
     }
@@ -352,28 +345,24 @@ mod tests {
     async fn partition() -> TestPartition {
         let dir = tempfile::tempdir().expect("temp dir");
         let registry = PartitionRegistry::new();
-        open_data_partition(
-            &registry,
-            dir.path(),
-            DataPartitionSetup {
-                batches: vec![
-                    crate::share_partition::manager::test_support::TimedValues {
-                        timestamp: crate::test_support::UnixMillis(1_000),
-                        values: &[b"a", b"b"],
-                    },
-                    crate::share_partition::manager::test_support::TimedValues {
-                        timestamp: crate::test_support::UnixMillis(2_000),
-                        values: &[b"c", b"d"],
-                    },
-                    crate::share_partition::manager::test_support::TimedValues {
-                        timestamp: crate::test_support::UnixMillis(3_000),
-                        values: &[b"e"],
-                    },
-                ],
-                high_watermark: Offset(5),
-                ..Default::default()
-            },
-        )
+        open_data_partition(&registry, dir.path(), DataPartitionSetup {
+            batches: vec![
+                crate::share_partition::manager::test_support::TimedValues {
+                    timestamp: crate::test_support::UnixMillis(1_000),
+                    values: &[b"a", b"b"],
+                },
+                crate::share_partition::manager::test_support::TimedValues {
+                    timestamp: crate::test_support::UnixMillis(2_000),
+                    values: &[b"c", b"d"],
+                },
+                crate::share_partition::manager::test_support::TimedValues {
+                    timestamp: crate::test_support::UnixMillis(3_000),
+                    values: &[b"e"],
+                },
+            ],
+            high_watermark: Offset(5),
+            ..Default::default()
+        })
         .await;
         let part = registry
             .get("t", krabka_ids::PartitionIndex(0))

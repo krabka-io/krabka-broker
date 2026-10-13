@@ -24,17 +24,17 @@
 //! Where Kafka iterates a `HashMap` or a `HashSet`, this port iterates in name
 //! order, so that a message that names one of several topics is deterministic.
 
-use std::collections::{BTreeMap, BTreeSet};
-
-use krabka_metadata::MetadataImage;
-
-use super::{metadata_hash::required_topics, status};
-use crate::{
-    codes,
-    coordinator::unified::streams::{
-        persistence::{StoredSubtopology, StoredTopicInfo, StreamsGroupTopologyValue},
-        state::TopologyStatus,
+use {
+    super::{metadata_hash::required_topics, status},
+    crate::{
+        codes,
+        coordinator::unified::streams::{
+            persistence::{StoredSubtopology, StoredTopicInfo, StreamsGroupTopologyValue},
+            state::TopologyStatus,
+        },
     },
+    krabka_metadata::MetadataImage,
+    std::collections::{BTreeMap, BTreeSet},
 };
 
 /// Kafka's `ConfiguredInternalTopic`: a repartition or changelog topic with
@@ -76,9 +76,7 @@ pub struct ConfiguredTopology {
 impl ConfiguredTopology {
     /// Kafka's `isReady`: no status keeps the group from an assignment.
     #[must_use]
-    pub fn is_ready(&self) -> bool {
-        self.status.is_none()
-    }
+    pub fn is_ready(&self) -> bool { self.status.is_none() }
 
     /// The number of tasks of each configured subtopology, by id. Empty when
     /// the subtopologies were not sized.
@@ -139,9 +137,7 @@ enum Stop {
 }
 
 impl From<ConfigureTopicsError> for Stop {
-    fn from(error: ConfigureTopicsError) -> Self {
-        Self::Error(error)
-    }
+    fn from(error: ConfigureTopicsError) -> Self { Self::Error(error) }
 }
 
 /// Kafka's `InternalTopicManager.configureTopics`.
@@ -684,12 +680,13 @@ fn java_map_string(map: &BTreeMap<String, i32>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
-
-    use super::*;
-    use crate::coordinator::unified::streams::{
-        persistence::StoredCopartitionGroup,
-        topology::test_support::{image_with, sub},
+    use {
+        super::*,
+        crate::coordinator::unified::streams::{
+            persistence::StoredCopartitionGroup,
+            topology::test_support::{image_with, sub},
+        },
+        assert2::check,
     };
 
     /// A row: its label, the topology and image to configure, and the whole
@@ -775,26 +772,20 @@ mod tests {
         let expected = ConfiguredTopology {
             topology_epoch: 1,
             subtopologies: Some(BTreeMap::from([
-                (
-                    "0".to_string(),
-                    ConfiguredSubtopology {
-                        number_of_tasks: 6,
-                        source_topics: names(&["orders"]),
-                        repartition_source_topics: BTreeMap::new(),
-                        repartition_sink_topics: names(&["rp"]),
-                        state_changelog_topics: BTreeMap::new(),
-                    },
-                ),
-                (
-                    "1".to_string(),
-                    ConfiguredSubtopology {
-                        number_of_tasks: 3,
-                        source_topics: names(&["customers"]),
-                        repartition_source_topics: by_name([internal("rp", 3)]),
-                        repartition_sink_topics: BTreeSet::new(),
-                        state_changelog_topics: by_name([internal("store-changelog", 3)]),
-                    },
-                ),
+                ("0".to_string(), ConfiguredSubtopology {
+                    number_of_tasks: 6,
+                    source_topics: names(&["orders"]),
+                    repartition_source_topics: BTreeMap::new(),
+                    repartition_sink_topics: names(&["rp"]),
+                    state_changelog_topics: BTreeMap::new(),
+                }),
+                ("1".to_string(), ConfiguredSubtopology {
+                    number_of_tasks: 3,
+                    source_topics: names(&["customers"]),
+                    repartition_source_topics: by_name([internal("rp", 3)]),
+                    repartition_sink_topics: BTreeSet::new(),
+                    state_changelog_topics: by_name([internal("store-changelog", 3)]),
+                }),
             ])),
             internal_topics_to_create: by_name([internal("rp", 3), internal("store-changelog", 3)]),
             status: Some(TopologyStatus {
@@ -822,26 +813,20 @@ mod tests {
         let expected = ConfiguredTopology {
             topology_epoch: 1,
             subtopologies: Some(BTreeMap::from([
-                (
-                    "0".to_string(),
-                    ConfiguredSubtopology {
-                        number_of_tasks: 4,
-                        source_topics: names(&["in"]),
-                        repartition_source_topics: BTreeMap::new(),
-                        repartition_sink_topics: names(&["rp"]),
-                        state_changelog_topics: BTreeMap::new(),
-                    },
-                ),
-                (
-                    "1".to_string(),
-                    ConfiguredSubtopology {
-                        number_of_tasks: 8,
-                        source_topics: names(&["other"]),
-                        repartition_source_topics: by_name([internal("rp", 4)]),
-                        repartition_sink_topics: BTreeSet::new(),
-                        state_changelog_topics: BTreeMap::new(),
-                    },
-                ),
+                ("0".to_string(), ConfiguredSubtopology {
+                    number_of_tasks: 4,
+                    source_topics: names(&["in"]),
+                    repartition_source_topics: BTreeMap::new(),
+                    repartition_sink_topics: names(&["rp"]),
+                    state_changelog_topics: BTreeMap::new(),
+                }),
+                ("1".to_string(), ConfiguredSubtopology {
+                    number_of_tasks: 8,
+                    source_topics: names(&["other"]),
+                    repartition_source_topics: by_name([internal("rp", 4)]),
+                    repartition_sink_topics: BTreeSet::new(),
+                    state_changelog_topics: BTreeMap::new(),
+                }),
             ])),
             internal_topics_to_create: BTreeMap::new(),
             status: None,

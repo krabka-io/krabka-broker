@@ -8,25 +8,26 @@
 //! `LISTENER_NOT_FOUND`. The tests compare the responses as a client decodes
 //! them.
 
-use assert2::assert;
-use krabka_metadata::{
-    BrokerEndpoint, BrokerRegistrationRecord, LeaderEpoch, MetadataRecord, NodeId, PartitionRecord,
-    TopicRecord,
-};
-use krabka_protocol::owned::{
-    metadata_request::{MetadataRequest, MetadataRequestTopic},
-    metadata_response::{MetadataResponse, MetadataResponseBroker},
-};
-
-use crate::{
-    broker::BrokerHandle,
-    codes,
-    handlers::{
-        RequestContext, describe_topic_partitions::handle as describe_topic_partitions_handle,
+use {
+    crate::{
+        broker::BrokerHandle,
+        codes,
+        handlers::{
+            RequestContext, describe_topic_partitions::handle as describe_topic_partitions_handle,
+        },
+        test_support::{
+            broker_registration, dispatch_wire, fence_remote_broker, peer, principal,
+            start_broker_no_audit, topic_partitions_request,
+        },
     },
-    test_support::{
-        broker_registration, dispatch_wire, fence_remote_broker, peer, principal,
-        start_broker_no_audit, topic_partitions_request,
+    assert2::assert,
+    krabka_metadata::{
+        BrokerEndpoint, BrokerRegistrationRecord, LeaderEpoch, MetadataRecord, NodeId,
+        PartitionRecord, TopicRecord,
+    },
+    krabka_protocol::owned::{
+        metadata_request::{MetadataRequest, MetadataRequestTopic},
+        metadata_response::{MetadataResponse, MetadataResponseBroker},
     },
 };
 
@@ -105,49 +106,33 @@ async fn cluster() -> Cluster {
     broker
         .controller
         .submit_change(vec![
-            registration(
-                2,
-                None,
-                &[
-                    ListenerAddress {
-                        name: "PLAINTEXT",
-                        host: "b2-plain",
-                        port: 9092,
-                    },
-                    ListenerAddress {
-                        name: "EXTERNAL",
-                        host: "b2-ext",
-                        port: 19092,
-                    },
-                ],
-            ),
-            registration(
-                3,
-                None,
-                &[ListenerAddress {
+            registration(2, None, &[
+                ListenerAddress {
                     name: "PLAINTEXT",
-                    host: "b3-plain",
+                    host: "b2-plain",
                     port: 9092,
-                }],
-            ),
-            registration(
-                4,
-                None,
-                &[ListenerAddress {
+                },
+                ListenerAddress {
                     name: "EXTERNAL",
-                    host: "b4-ext",
+                    host: "b2-ext",
                     port: 19092,
-                }],
-            ),
-            registration(
-                5,
-                Some("rack-5"),
-                &[ListenerAddress {
-                    name: "PLAINTEXT",
-                    host: "b5-plain",
-                    port: 9092,
-                }],
-            ),
+                },
+            ]),
+            registration(3, None, &[ListenerAddress {
+                name: "PLAINTEXT",
+                host: "b3-plain",
+                port: 9092,
+            }]),
+            registration(4, None, &[ListenerAddress {
+                name: "EXTERNAL",
+                host: "b4-ext",
+                port: 19092,
+            }]),
+            registration(5, Some("rack-5"), &[ListenerAddress {
+                name: "PLAINTEXT",
+                host: "b5-plain",
+                port: 9092,
+            }]),
             registration(6, None, &[]),
             MetadataRecord::V1Topic(TopicRecord {
                 name: TOPIC.into(),

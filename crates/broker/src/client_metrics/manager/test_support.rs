@@ -3,12 +3,12 @@
 //! client-metrics subscription, a stock `ClientAttributes` value, and the
 //! unwrapper for a successful `SubscriptionDecision`.
 
-use std::collections::BTreeMap;
-
-use krabka_metadata::{ClientMetricsConfigRecord, MetadataImage, MetadataRecord};
-use uuid::Uuid;
-
-use super::{ClientAttributes, SubscriptionAssignment, SubscriptionDecision};
+use {
+    super::{ClientAttributes, SubscriptionAssignment, SubscriptionDecision},
+    krabka_metadata::{ClientMetricsConfigRecord, MetadataImage, MetadataRecord},
+    std::collections::BTreeMap,
+    uuid::Uuid,
+};
 
 /// One key and value of a client metrics config.
 #[derive(Clone, Copy)]
@@ -25,19 +25,16 @@ pub(super) fn img_with(name: &str, kvs: &[ConfigEntry<'_>]) -> MetadataImage {
 
 /// An image whose `all` subscription matches every metric at `interval_ms`.
 pub(super) fn all_metrics_img(interval_ms: &str) -> MetadataImage {
-    img_with(
-        "all",
-        &[
-            ConfigEntry {
-                key: "metrics",
-                value: "*",
-            },
-            ConfigEntry {
-                key: "interval.ms",
-                value: interval_ms,
-            },
-        ],
-    )
+    img_with("all", &[
+        ConfigEntry {
+            key: "metrics",
+            value: "*",
+        },
+        ConfigEntry {
+            key: "interval.ms",
+            value: interval_ms,
+        },
+    ])
 }
 
 pub(super) fn apply_config(img: &mut MetadataImage, name: &str, kvs: &[ConfigEntry<'_>]) {

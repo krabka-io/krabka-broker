@@ -254,9 +254,10 @@ impl SslPrincipalMapper {
 
 #[cfg(test)]
 mod tests {
-    use assert2::{assert, check};
-
-    use super::*;
+    use {
+        super::*,
+        assert2::{assert, check},
+    };
 
     /// Rules, a distinguished name and the principal the rules map it to.
     struct MappingCase<'a> {

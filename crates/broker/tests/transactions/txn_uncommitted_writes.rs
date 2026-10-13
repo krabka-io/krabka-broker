@@ -13,49 +13,50 @@
 //! handler appends each marker with `acks=-1`, and the coordinator records the
 //! transaction complete only after every marker is committed.
 
-use std::{
-    net::SocketAddr,
-    time::{Duration, Instant},
-};
-
-use assert2::assert;
-use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerError, BrokerHandle, NodeId};
-use krabka_client_core::{Client, Connection, ConnectionOptions};
-use krabka_protocol::{
-    owned::{
-        add_offsets_to_txn_request::AddOffsetsToTxnRequest,
-        describe_transactions_request::DescribeTransactionsRequest, end_txn_request::EndTxnRequest,
-        end_txn_response::EndTxnResponse, offset_commit_request::OffsetCommitRequest,
-        offset_delete_response::OffsetDeleteResponse,
-        txn_offset_commit_request::TxnOffsetCommitRequest,
+use {
+    crate::{
+        support::{
+            self, ClusterBootstrapSetup, NodeIndex,
+            client::connect_owned,
+            offsets::{
+                offset_commit_partition, offset_commit_topic, offset_delete_partition,
+                offset_delete_request, offset_delete_topic,
+            },
+            relay::Relay,
+            shutdown_cluster,
+            topics::AssignedTopicSetup,
+            transaction_wire::{
+                AssignedTransactionTopicSetup, TransactionProduceSetup, add_partition_request,
+                coordinator_loading, create_assigned_topic, init_producer_request,
+                initialized_identity, partition_added, partition_leader, produce_fixture,
+                read_committed_through, retry_coordinator,
+            },
+            transactions::{
+                EndTransactionSetup, ProducerIdentity, end_transaction_request,
+                txn_offset_partition, txn_offset_topic,
+            },
+        },
+        txn_harness::registered_transaction_cluster,
     },
-    primitives::uuid::Uuid as WireUuid,
-};
-use tempfile::TempDir;
-
-use crate::{
-    support::{
-        self, ClusterBootstrapSetup, NodeIndex,
-        client::connect_owned,
-        offsets::{
-            offset_commit_partition, offset_commit_topic, offset_delete_partition,
-            offset_delete_request, offset_delete_topic,
+    assert2::assert,
+    krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerError, BrokerHandle, NodeId},
+    krabka_client_core::{Client, Connection, ConnectionOptions},
+    krabka_protocol::{
+        owned::{
+            add_offsets_to_txn_request::AddOffsetsToTxnRequest,
+            describe_transactions_request::DescribeTransactionsRequest,
+            end_txn_request::EndTxnRequest, end_txn_response::EndTxnResponse,
+            offset_commit_request::OffsetCommitRequest,
+            offset_delete_response::OffsetDeleteResponse,
+            txn_offset_commit_request::TxnOffsetCommitRequest,
         },
-        relay::Relay,
-        shutdown_cluster,
-        topics::AssignedTopicSetup,
-        transaction_wire::{
-            AssignedTransactionTopicSetup, TransactionProduceSetup, add_partition_request,
-            coordinator_loading, create_assigned_topic, init_producer_request,
-            initialized_identity, partition_added, partition_leader, produce_fixture,
-            read_committed_through, retry_coordinator,
-        },
-        transactions::{
-            EndTransactionSetup, ProducerIdentity, end_transaction_request, txn_offset_partition,
-            txn_offset_topic,
-        },
+        primitives::uuid::Uuid as WireUuid,
     },
-    txn_harness::registered_transaction_cluster,
+    std::{
+        net::SocketAddr,
+        time::{Duration, Instant},
+    },
+    tempfile::TempDir,
 };
 
 const TID: &str = "txn-uncommitted-writes";
@@ -70,20 +71,15 @@ const CONCURRENT_TRANSACTIONS: i16 = 51;
 /// The time a retried request may take to see the cluster settle.
 const SETTLE: Duration = Duration::from_secs(60);
 
-fn retriable(code: i16) -> bool {
-    coordinator_loading(code) || code == CONCURRENT_TRANSACTIONS
-}
+fn retriable(code: i16) -> bool { coordinator_loading(code) || code == CONCURRENT_TRANSACTIONS }
 
 /// One connection to the broker that binds `address`, past any relay, so a
 /// request reaches that broker whatever the cluster's metadata advertises.
 async fn connect(address: SocketAddr) -> Connection {
-    Connection::connect(
-        address,
-        ConnectionOptions {
-            client_id: "txn-uncommitted-writes".to_owned(),
-            ..ConnectionOptions::default()
-        },
-    )
+    Connection::connect(address, ConnectionOptions {
+        client_id: "txn-uncommitted-writes".to_owned(),
+        ..ConnectionOptions::default()
+    })
     .await
     .expect("connect")
 }
@@ -98,13 +94,10 @@ async fn leader_of(handle: &BrokerHandle, topic: &str) -> u64 {
 }
 
 async fn create_topic(client: &Client, topic: AssignedTopicSetup) -> WireUuid {
-    create_assigned_topic(
-        client,
-        AssignedTransactionTopicSetup {
-            topic,
-            ..Default::default()
-        },
-    )
+    create_assigned_topic(client, AssignedTransactionTopicSetup {
+        topic,
+        ..Default::default()
+    })
     .await
 }
 
@@ -153,13 +146,10 @@ async fn produce(
 }
 
 fn end_txn_request(producer: ProducerIdentity) -> EndTxnRequest {
-    end_transaction_request(
-        TID,
-        EndTransactionSetup {
-            producer,
-            ..Default::default()
-        },
-    )
+    end_transaction_request(TID, EndTransactionSetup {
+        producer,
+        ..Default::default()
+    })
 }
 
 /// Commit, and retry while the coordinator answers a retriable error.
@@ -343,13 +333,9 @@ impl RelayedCluster {
     }
 
     /// The real listen address of `node`, past its relay.
-    fn address(&self, node: u64) -> SocketAddr {
-        self.configs[self.index_of(node)].listen_addr
-    }
+    fn address(&self, node: u64) -> SocketAddr { self.configs[self.index_of(node)].listen_addr }
 
-    fn relay(&self, node: u64) -> &Relay {
-        &self.relays[self.index_of(node)]
-    }
+    fn relay(&self, node: u64) -> &Relay { &self.relays[self.index_of(node)] }
 
     fn take(&mut self, node: u64) -> BrokerHandle {
         let index = self.index_of(node);
@@ -584,13 +570,10 @@ async fn a_transaction_completes_only_once_its_markers_are_committed() {
         .expect("another broker");
     let topic_id = create_topic(
         &admin,
-        AssignedTopicSetup::on_replicas(
-            TOPIC,
-            vec![
-                krabka_metadata::NodeId(coordinator),
-                krabka_metadata::NodeId(follower),
-            ],
-        ),
+        AssignedTopicSetup::on_replicas(TOPIC, vec![
+            krabka_metadata::NodeId(coordinator),
+            krabka_metadata::NodeId(follower),
+        ]),
     )
     .await;
     admin.close();
@@ -716,11 +699,9 @@ async fn group_coordinator_writes_are_answered_only_once_committed() {
         .send(OffsetCommitRequest {
             group_id: GROUP.into(),
             generation_id_or_member_epoch: -1,
-            topics: vec![offset_commit_topic(
-                TOPIC,
-                topic_id,
-                vec![offset_commit_partition(0, 5, None)],
-            )],
+            topics: vec![offset_commit_topic(TOPIC, topic_id, vec![
+                offset_commit_partition(0, 5, None),
+            ])],
             ..Default::default()
         })
         .await
@@ -759,14 +740,9 @@ async fn group_coordinator_writes_are_answered_only_once_committed() {
             producer_epoch: producer.epoch.0,
             generation_id_or_member_epoch: -1,
             member_id: String::new(),
-            topics: vec![txn_offset_topic(
-                TOPIC,
-                topic_id,
-                vec![txn_offset_partition(
-                    krabka_ids::PartitionIndex(0),
-                    krabka_ids::Offset(7),
-                )],
-            )],
+            topics: vec![txn_offset_topic(TOPIC, topic_id, vec![
+                txn_offset_partition(krabka_ids::PartitionIndex(0), krabka_ids::Offset(7)),
+            ])],
             ..Default::default()
         })
         .await
@@ -790,10 +766,10 @@ async fn group_coordinator_writes_are_answered_only_once_committed() {
     );
 
     let deleted = to_group
-        .send(offset_delete_request(
-            GROUP,
-            vec![offset_delete_topic(TOPIC, vec![offset_delete_partition(0)])],
-        ))
+        .send(offset_delete_request(GROUP, vec![offset_delete_topic(
+            TOPIC,
+            vec![offset_delete_partition(0)],
+        )]))
         .await
         .expect("OffsetDelete");
     assert!(

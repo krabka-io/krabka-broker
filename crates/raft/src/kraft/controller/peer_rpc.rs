@@ -2,16 +2,17 @@
 //! posts the decoded response back to the loop, which is what keeps the engine
 //! from ever awaiting a peer inline.
 
-use std::sync::Arc;
-
-use super::{
-    Engine, engine_loop::response_to_event, replication::fetch_epoch_for_request,
-    timing::election_timeout_ms,
-};
-use crate::kraft::{
-    snapshot_fetch::SnapshotId,
-    transport::{Command, api_key, wire},
-    types::{Epoch, LogView, NodeId},
+use {
+    super::{
+        Engine, engine_loop::response_to_event, replication::fetch_epoch_for_request,
+        timing::election_timeout_ms,
+    },
+    crate::kraft::{
+        snapshot_fetch::SnapshotId,
+        transport::{Command, api_key, wire},
+        types::{Epoch, LogView, NodeId},
+    },
+    std::sync::Arc,
 };
 
 /// Kafka's `KafkaRaftClient.MAX_FETCH_WAIT_MS`: how long a leader may hold a

@@ -8,21 +8,22 @@
 //! name that does not resolve goes to the authorization gate and then to the
 //! partition gate.
 
-use std::sync::Arc;
-
-use super::*;
-use crate::{
-    authorizer::{AllowAllAuthorizer, Authorizer},
-    broker::BrokerHandle,
-    codes,
-    handlers::test_support::{
-        CaseOutcomes, ClientTopicSetup, StartedBroker, WireTopic, check_cases,
-        check_denied_topic_cases, create_topic as create_topic_from_test_support,
+use {
+    super::*,
+    crate::{
+        authorizer::{AllowAllAuthorizer, Authorizer},
+        broker::BrokerHandle,
+        codes,
+        handlers::test_support::{
+            CaseOutcomes, ClientTopicSetup, StartedBroker, WireTopic, check_cases,
+            check_denied_topic_cases, create_topic as create_topic_from_test_support,
+        },
+        test_support::{
+            DenyAll, decode_response, encode_request, peer, principal,
+            start_broker_with_authorizer_no_audit,
+        },
     },
-    test_support::{
-        DenyAll, decode_response, encode_request, peer, principal,
-        start_broker_with_authorizer_no_audit,
-    },
+    std::sync::Arc,
 };
 
 /// An id that no topic in these tests has.
@@ -84,14 +85,11 @@ fn appended_partition(version: i16) -> PartitionProduceResponse {
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) {
-    create_topic_from_test_support(
-        broker,
-        ClientTopicSetup {
-            client_id: "produce-resolution-test",
-            name,
-            ..Default::default()
-        },
-    )
+    create_topic_from_test_support(broker, ClientTopicSetup {
+        client_id: "produce-resolution-test",
+        name,
+        ..Default::default()
+    })
     .await;
 }
 

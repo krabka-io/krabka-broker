@@ -7,11 +7,11 @@
 //! series have to be bucketed by sanitized name before any of them is
 //! encoded, and that grouping is this module's whole reason to exist.
 
-use std::{collections::HashMap, time::Instant};
-
-use prometheus_client::{collector::Collector, encoding::DescriptorEncoder};
-
-use super::collector::{ClientMetricsCollector, StoredPoint};
+use {
+    super::collector::{ClientMetricsCollector, StoredPoint},
+    prometheus_client::{collector::Collector, encoding::DescriptorEncoder},
+    std::{collections::HashMap, time::Instant},
+};
 
 /// A live series of one metric name: the client that reported it, and its
 /// latest point.
@@ -111,10 +111,11 @@ fn sanitize(metric: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use super::*;
-    use crate::client_metrics::prometheus_sink::{DataPoint, PointValue};
+    use {
+        super::*,
+        crate::client_metrics::prometheus_sink::{DataPoint, PointValue},
+        std::time::Duration,
+    };
 
     fn encode_collector(collector: impl Collector + 'static) -> String {
         use prometheus_client::registry::Registry;

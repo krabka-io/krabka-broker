@@ -11,17 +11,17 @@
 //! snapshot. A corrupt or truncated file decodes to an error and never to a
 //! panic, and the caller then falls back to a full replay.
 
-use std::{collections::BTreeMap, path::Path};
-
-use assert2::assert;
-use bytes::{BufMut, BytesMut};
-use krabka_remote_storage::{PartitionDump, RlmmCacheDump};
-use krabka_units::prelude::{ByteSize, ByteSizeExt as _, bytes as byte_size};
-use tracing::instrument;
-
-use crate::{
-    error::{CodecError, SnapshotError},
-    serde::{MetadataEvent, Reader, read_uvarint, write_uvarint},
+use {
+    crate::{
+        error::{CodecError, SnapshotError},
+        serde::{MetadataEvent, Reader, read_uvarint, write_uvarint},
+    },
+    assert2::assert,
+    bytes::{BufMut, BytesMut},
+    krabka_remote_storage::{PartitionDump, RlmmCacheDump},
+    krabka_units::prelude::{ByteSize, ByteSizeExt as _, bytes as byte_size},
+    std::{collections::BTreeMap, path::Path},
+    tracing::instrument,
 };
 
 /// Format version at the head of every snapshot file.
@@ -295,11 +295,12 @@ fn read_u16(r: &mut Reader<'_>) -> Result<u16, CodecError> {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use krabka_remote_storage::RemotePartitionDeleteState;
-
-    use super::*;
-    use crate::manager::test_support::{started, tp};
+    use {
+        super::*,
+        crate::manager::test_support::{started, tp},
+        assert2::assert,
+        krabka_remote_storage::RemotePartitionDeleteState,
+    };
 
     fn sample_snapshot() -> Snapshot {
         let dump = RlmmCacheDump {

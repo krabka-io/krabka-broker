@@ -6,16 +6,18 @@
 //! tombstone, and failing the load are
 //! [`replay_policy`](super::replay_policy)'s.
 
-use super::{
-    group_coordinator::GroupCoordinator,
-    replay_policy::{
-        GroupLookup, LEAVE_GROUP_MEMBER_EPOCH, ModernGroupType, group_tombstone, persisted_group,
-        target_metadata, target_metadata_tombstone,
+use {
+    super::{
+        group_coordinator::GroupCoordinator,
+        replay_policy::{
+            GroupLookup, LEAVE_GROUP_MEMBER_EPOCH, ModernGroupType, group_tombstone,
+            persisted_group, target_metadata, target_metadata_tombstone,
+        },
+        seeds::StreamsGroupSeed,
+        streams,
     },
-    seeds::StreamsGroupSeed,
-    streams,
+    crate::error::BrokerError,
 };
-use crate::error::BrokerError;
 
 /// The fields of a member that Kafka's replay creates from a current
 /// assignment record alone. Kafka's `getOrCreateUninitializedMember` leaves
@@ -341,22 +343,23 @@ impl GroupCoordinator {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
-    use super::*;
-    use crate::coordinator::unified::{
-        persistence_next_gen::GroupMetadataValue,
-        streams::persistence::{
-            LastAssignmentConfig, StreamsGroupCurrentMemberAssignmentValue, StreamsGroupKey,
-            StreamsGroupMetadataValue, StreamsGroupTargetAssignmentMemberValue,
-            StreamsGroupTargetAssignmentMetadataValue, StreamsGroupTopologyValue,
-            StreamsMemberWireState,
+    use {
+        super::*,
+        crate::coordinator::unified::{
+            persistence_next_gen::GroupMetadataValue,
+            streams::persistence::{
+                LastAssignmentConfig, StreamsGroupCurrentMemberAssignmentValue, StreamsGroupKey,
+                StreamsGroupMetadataValue, StreamsGroupTargetAssignmentMemberValue,
+                StreamsGroupTargetAssignmentMetadataValue, StreamsGroupTopologyValue,
+                StreamsMemberWireState,
+            },
+            test_support::{
+                AssignmentDeletionProtocol, AssignmentDeletionSetup, ReplayCase, ReplayFixtures,
+                check_replay_cases, deletion_replay_cases, group_deletion_with_member_case,
+                replay_fixtures, replay_tombstone_constructor, streams_member,
+            },
         },
-        test_support::{
-            AssignmentDeletionProtocol, AssignmentDeletionSetup, ReplayCase, ReplayFixtures,
-            check_replay_cases, deletion_replay_cases, group_deletion_with_member_case,
-            replay_fixtures, replay_tombstone_constructor, streams_member,
-        },
+        std::collections::BTreeMap,
     };
 
     /// One record of the replayed log.
@@ -421,16 +424,15 @@ mod tests {
 
     fn replay(coord: &GroupCoordinator, record: &Record) -> Result<(), BrokerError> {
         match record.clone() {
-            Record::Group(epoch, configs) => coord.replay_streams_group_metadata(
-                "g",
-                StreamsGroupMetadataValue {
+            Record::Group(epoch, configs) => {
+                coord.replay_streams_group_metadata("g", StreamsGroupMetadataValue {
                     epoch,
                     metadata_hash: 44,
                     validated_topology_epoch: 31,
                     last_assignment_configs: configs,
                     description: streams::persistence::DescriptionEpochs::default(),
-                },
-            ),
+                })
+            }
             Record::Member(member) => {
                 coord.replay_streams_member_metadata("g", member, streams_member(member))
             }
@@ -448,13 +450,10 @@ mod tests {
             Record::Current(member, epoch) => {
                 coord.replay_streams_current_member_assignment("g", member, current(epoch))
             }
-            Record::ConsumerGroup => coord.replay_group_metadata(
-                "g",
-                GroupMetadataValue {
-                    epoch: 1,
-                    metadata_hash: 0,
-                },
-            ),
+            Record::ConsumerGroup => coord.replay_group_metadata("g", GroupMetadataValue {
+                epoch: 1,
+                metadata_hash: 0,
+            }),
             Record::Tombstone(key) => coord.replay_streams_tombstone(&key),
         }
     }

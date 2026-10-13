@@ -6,9 +6,22 @@
 //! definition.
 
 macro_rules! run_writer {
-    ($topic:expr, $partition:expr, $log:expr, $log_dir:expr, $rx:expr,
-     $append:expr, $replica:expr, $hw:expr, $delivery:expr,
-     $status:expr, $producer:expr, $wal:expr; $cap:expr, $sequencer:expr $(,)?) => {
+    (
+        $topic:expr,
+        $partition:expr,
+        $log:expr,
+        $log_dir:expr,
+        $rx:expr,
+        $append:expr,
+        $replica:expr,
+        $hw:expr,
+        $delivery:expr,
+        $status:expr,
+        $producer:expr,
+        $wal:expr;
+        $cap:expr,
+        $sequencer:expr $(,)?
+    ) => {
         run_with_sequencer(
             ($topic, $partition),
             ($log, $log_dir),
@@ -19,9 +32,20 @@ macro_rules! run_writer {
             $sequencer,
         )
     };
-    ($topic:expr, $partition:expr, $log:expr, $log_dir:expr, $rx:expr,
-     $append:expr, $replica:expr, $hw:expr, $delivery:expr,
-     $status:expr, $producer:expr, $wal:expr $(,)?) => {
+    (
+        $topic:expr,
+        $partition:expr,
+        $log:expr,
+        $log_dir:expr,
+        $rx:expr,
+        $append:expr,
+        $replica:expr,
+        $hw:expr,
+        $delivery:expr,
+        $status:expr,
+        $producer:expr,
+        $wal:expr $(,)?
+    ) => {
         run(
             ($topic, $partition),
             ($log, $log_dir),
@@ -30,8 +54,19 @@ macro_rules! run_writer {
             ($status, $producer, $wal),
         )
     };
-    ($topic:expr, $partition:expr, $log:expr, $log_dir:expr, $rx:expr,
-     $append:expr, $replica:expr, $hw:expr, $status:expr, $producer:expr, $wal:expr $(,)?) => {
+    (
+        $topic:expr,
+        $partition:expr,
+        $log:expr,
+        $log_dir:expr,
+        $rx:expr,
+        $append:expr,
+        $replica:expr,
+        $hw:expr,
+        $status:expr,
+        $producer:expr,
+        $wal:expr $(,)?
+    ) => {
         run_writer!(
             $topic,
             $partition,

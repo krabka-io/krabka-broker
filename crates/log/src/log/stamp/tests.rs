@@ -2,18 +2,19 @@
 //! stamps, what a commit marker stamps later, and the guarantee that an
 //! unstamped partition writes identical bytes.
 
-use assert2::check;
-use krabka_units::prelude::mebibytes;
-use tempfile::tempdir;
-
-use super::*;
-use crate::{
-    log::test_support::{
-        ExpectedStamp, TempLog, abort_marker, append_transaction, check_stamps, commit_marker,
-        install_stamps, rolling_test_log, sample_batch, stamp_entries, stamped_test_log,
-        test_log, transactional_batch,
+use {
+    super::*,
+    crate::{
+        log::test_support::{
+            ExpectedStamp, TempLog, abort_marker, append_transaction, check_stamps, commit_marker,
+            install_stamps, rolling_test_log, sample_batch, stamp_entries, stamped_test_log,
+            test_log, transactional_batch,
+        },
+        test_support::{open_log, stamp_entry},
     },
-    test_support::{open_log, stamp_entry},
+    assert2::check,
+    krabka_units::prelude::mebibytes,
+    tempfile::tempdir,
 };
 
 // ---- .stampindex append-path wiring tests ----
@@ -34,35 +35,32 @@ fn stampindex_records_appended_batches_and_resolves_offsets() {
     log.append(&mut sample_batch(3)).unwrap(); // offsets 3..=5, stamp 1020
 
     // Query surface resolves every covered offset to its batch's stamp.
-    check_stamps(
-        &log,
-        &[
-            ExpectedStamp {
-                offset: 0,
-                stamp: Some(1_000),
-            },
-            ExpectedStamp {
-                offset: 1,
-                stamp: Some(1_000),
-            },
-            ExpectedStamp {
-                offset: 2,
-                stamp: Some(1_010),
-            },
-            ExpectedStamp {
-                offset: 3,
-                stamp: Some(1_020),
-            },
-            ExpectedStamp {
-                offset: 5,
-                stamp: Some(1_020),
-            },
-            ExpectedStamp {
-                offset: 6,
-                stamp: None,
-            },
-        ],
-    );
+    check_stamps(&log, &[
+        ExpectedStamp {
+            offset: 0,
+            stamp: Some(1_000),
+        },
+        ExpectedStamp {
+            offset: 1,
+            stamp: Some(1_000),
+        },
+        ExpectedStamp {
+            offset: 2,
+            stamp: Some(1_010),
+        },
+        ExpectedStamp {
+            offset: 3,
+            stamp: Some(1_020),
+        },
+        ExpectedStamp {
+            offset: 5,
+            stamp: Some(1_020),
+        },
+        ExpectedStamp {
+            offset: 6,
+            stamp: None,
+        },
+    ]);
 
     // The durable on-disk sidecar holds exactly one entry per data batch.
     assert2::assert!(
@@ -84,19 +82,16 @@ fn no_stamp_source_stamps_nothing() {
     log.append(&mut sample_batch(2)).unwrap();
     log.append(&mut sample_batch(3)).unwrap();
 
-    check_stamps(
-        &log,
-        &[
-            ExpectedStamp {
-                offset: 0,
-                stamp: None,
-            },
-            ExpectedStamp {
-                offset: 4,
-                stamp: None,
-            },
-        ],
-    );
+    check_stamps(&log, &[
+        ExpectedStamp {
+            offset: 0,
+            stamp: None,
+        },
+        ExpectedStamp {
+            offset: 4,
+            stamp: None,
+        },
+    ]);
     assert2::assert!(!dir.path().join("00000000000000000000.stampindex").exists());
 }
 
@@ -108,52 +103,40 @@ fn control_markers_are_not_stamped() {
 
     // Transactional data at offsets 0..=1, then its commit marker at 2.
     append_transaction(&mut log, 1000, 0, &["a", "b"]);
-    check_stamps(
-        &log,
-        &[
-            ExpectedStamp {
-                offset: 0,
-                stamp: None,
-            },
-            ExpectedStamp {
-                offset: 1,
-                stamp: None,
-            },
-        ],
-    );
+    check_stamps(&log, &[
+        ExpectedStamp {
+            offset: 0,
+            stamp: None,
+        },
+        ExpectedStamp {
+            offset: 1,
+            stamp: None,
+        },
+    ]);
     log.append(&mut commit_marker(1000, 0)).unwrap();
     // A following non-txn data batch at offset 3.
     log.append(&mut sample_batch(1)).unwrap();
 
-    check_stamps(
-        &log,
-        &[
-            ExpectedStamp {
-                offset: 0,
-                stamp: Some(1),
-            }, // txn data
-            ExpectedStamp {
-                offset: 1,
-                stamp: Some(1),
-            },
-            ExpectedStamp {
-                offset: 2,
-                stamp: None,
-            }, // commit marker: unstamped
-            ExpectedStamp {
-                offset: 3,
-                stamp: Some(2),
-            }, // next data batch
-        ],
-    );
+    check_stamps(&log, &[
+        ExpectedStamp {
+            offset: 0,
+            stamp: Some(1),
+        }, // txn data
+        ExpectedStamp {
+            offset: 1,
+            stamp: Some(1),
+        },
+        ExpectedStamp {
+            offset: 2,
+            stamp: None,
+        }, // commit marker: unstamped
+        ExpectedStamp {
+            offset: 3,
+            stamp: Some(2),
+        }, // next data batch
+    ]);
 
-    assert2::assert!(
-        stamp_entries(dir.path(), 0)
-            == [
-                stamp_entry(0, 1, 1),
-                stamp_entry(3, 3, 2),
-            ]
-    );
+    assert2::assert!(stamp_entries(dir.path(), 0) == [stamp_entry(0, 1, 1), stamp_entry(3, 3, 2),]);
 }
 
 #[test]
@@ -165,50 +148,44 @@ fn commit_stamps_only_matching_interleaved_transaction_ranges() {
     append_transaction(&mut log, 1000, 0, &["d"]); // offset 3
 
     log.append(&mut commit_marker(2000, 0)).unwrap(); // offset 4
-    check_stamps(
-        &log,
-        &[
-            ExpectedStamp {
-                offset: 0,
-                stamp: None,
-            },
-            ExpectedStamp {
-                offset: 1,
-                stamp: Some(10),
-            },
-            ExpectedStamp {
-                offset: 2,
-                stamp: Some(10),
-            },
-            ExpectedStamp {
-                offset: 3,
-                stamp: None,
-            },
-        ],
-    );
+    check_stamps(&log, &[
+        ExpectedStamp {
+            offset: 0,
+            stamp: None,
+        },
+        ExpectedStamp {
+            offset: 1,
+            stamp: Some(10),
+        },
+        ExpectedStamp {
+            offset: 2,
+            stamp: Some(10),
+        },
+        ExpectedStamp {
+            offset: 3,
+            stamp: None,
+        },
+    ]);
 
     log.append(&mut commit_marker(1000, 0)).unwrap(); // offset 5
-    check_stamps(
-        &log,
-        &[
-            ExpectedStamp {
-                offset: 0,
-                stamp: Some(20),
-            },
-            ExpectedStamp {
-                offset: 3,
-                stamp: Some(20),
-            },
-            ExpectedStamp {
-                offset: 4,
-                stamp: None,
-            },
-            ExpectedStamp {
-                offset: 5,
-                stamp: None,
-            },
-        ],
-    );
+    check_stamps(&log, &[
+        ExpectedStamp {
+            offset: 0,
+            stamp: Some(20),
+        },
+        ExpectedStamp {
+            offset: 3,
+            stamp: Some(20),
+        },
+        ExpectedStamp {
+            offset: 4,
+            stamp: None,
+        },
+        ExpectedStamp {
+            offset: 5,
+            stamp: None,
+        },
+    ]);
 }
 
 #[test]
@@ -219,27 +196,24 @@ fn abort_leaves_transactional_data_unstamped() {
     log.append(&mut abort_marker(1000, 0)).unwrap();
     log.append(&mut sample_batch(1)).unwrap();
 
-    check_stamps(
-        &log,
-        &[
-            ExpectedStamp {
-                offset: 0,
-                stamp: None,
-            },
-            ExpectedStamp {
-                offset: 1,
-                stamp: None,
-            },
-            ExpectedStamp {
-                offset: 2,
-                stamp: None,
-            },
-            ExpectedStamp {
-                offset: 3,
-                stamp: Some(7),
-            },
-        ],
-    );
+    check_stamps(&log, &[
+        ExpectedStamp {
+            offset: 0,
+            stamp: None,
+        },
+        ExpectedStamp {
+            offset: 1,
+            stamp: None,
+        },
+        ExpectedStamp {
+            offset: 2,
+            stamp: None,
+        },
+        ExpectedStamp {
+            offset: 3,
+            stamp: Some(7),
+        },
+    ]);
 }
 
 #[test]
@@ -267,27 +241,24 @@ fn supplied_commit_stamp_is_recorded_and_observed() {
         .unwrap();
     log.append(&mut sample_batch(1)).unwrap();
 
-    check_stamps(
-        &log,
-        &[
-            ExpectedStamp {
-                offset: 0,
-                stamp: Some(100),
-            },
-            ExpectedStamp {
-                offset: 1,
-                stamp: Some(100),
-            },
-            ExpectedStamp {
-                offset: 2,
-                stamp: None,
-            },
-            ExpectedStamp {
-                offset: 3,
-                stamp: Some(101),
-            },
-        ],
-    );
+    check_stamps(&log, &[
+        ExpectedStamp {
+            offset: 0,
+            stamp: Some(100),
+        },
+        ExpectedStamp {
+            offset: 1,
+            stamp: Some(100),
+        },
+        ExpectedStamp {
+            offset: 2,
+            stamp: None,
+        },
+        ExpectedStamp {
+            offset: 3,
+            stamp: Some(101),
+        },
+    ]);
 }
 
 #[test]
@@ -320,23 +291,20 @@ fn replicated_commit_uses_supplied_stamp() {
         .unwrap();
     log.append(&mut sample_batch(1)).unwrap();
 
-    check_stamps(
-        &log,
-        &[
-            ExpectedStamp {
-                offset: 0,
-                stamp: Some(40),
-            },
-            ExpectedStamp {
-                offset: 1,
-                stamp: None,
-            },
-            ExpectedStamp {
-                offset: 2,
-                stamp: Some(41),
-            },
-        ],
-    );
+    check_stamps(&log, &[
+        ExpectedStamp {
+            offset: 0,
+            stamp: Some(40),
+        },
+        ExpectedStamp {
+            offset: 1,
+            stamp: None,
+        },
+        ExpectedStamp {
+            offset: 2,
+            stamp: Some(41),
+        },
+    ]);
 }
 
 #[test]
@@ -352,19 +320,16 @@ fn installing_source_observes_durable_stamp_horizon() {
     install_stamps(&mut reopened, 1, 1);
     reopened.append(&mut sample_batch(1)).unwrap();
 
-    check_stamps(
-        &reopened,
-        &[
-            ExpectedStamp {
-                offset: 0,
-                stamp: Some(100),
-            },
-            ExpectedStamp {
-                offset: 1,
-                stamp: Some(101),
-            },
-        ],
-    );
+    check_stamps(&reopened, &[
+        ExpectedStamp {
+            offset: 0,
+            stamp: Some(100),
+        },
+        ExpectedStamp {
+            offset: 1,
+            stamp: Some(101),
+        },
+    ]);
 }
 
 #[test]
@@ -396,31 +361,22 @@ fn transaction_commit_stamps_data_in_sealed_segments() {
     append_transaction(&mut log, 1000, 0, &["b"]); // segment 1
     log.append(&mut commit_marker(1000, 0)).unwrap(); // segment 2
 
-    check_stamps(
-        &log,
-        &[
-            ExpectedStamp {
-                offset: 0,
-                stamp: Some(50),
-            },
-            ExpectedStamp {
-                offset: 1,
-                stamp: Some(50),
-            },
-            ExpectedStamp {
-                offset: 2,
-                stamp: None,
-            },
-        ],
-    );
-    assert2::assert!(
-        stamp_entries(dir.path(), 0)
-            == [stamp_entry(0, 0, 50)]
-    );
-    assert2::assert!(
-        stamp_entries(dir.path(), 1)
-            == [stamp_entry(1, 1, 50)]
-    );
+    check_stamps(&log, &[
+        ExpectedStamp {
+            offset: 0,
+            stamp: Some(50),
+        },
+        ExpectedStamp {
+            offset: 1,
+            stamp: Some(50),
+        },
+        ExpectedStamp {
+            offset: 2,
+            stamp: None,
+        },
+    ]);
+    assert2::assert!(stamp_entries(dir.path(), 0) == [stamp_entry(0, 0, 50)]);
+    assert2::assert!(stamp_entries(dir.path(), 1) == [stamp_entry(1, 1, 50)]);
 }
 
 /// Wire-exactness invariance. This test appends an identical mixed

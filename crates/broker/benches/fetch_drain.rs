@@ -77,29 +77,29 @@ impl ResponseSize {
     target_os = "dragonfly",
 ))]
 mod sweep {
-    use std::{
-        io::Write as _,
-        sync::Arc,
-        time::{Duration, Instant},
-    };
-
-    use assert2::assert;
-    use bytes::{BufMut, Bytes, BytesMut};
-    use criterion::{Criterion, Throughput};
-    use krabka_broker::{
-        fetch_drain::{
-            WriteOp, resolve_records_inline, resolve_records_sendfile, write_fetch_plan,
+    use {
+        super::{ResponseSize, SIZES},
+        assert2::assert,
+        bytes::{BufMut, Bytes, BytesMut},
+        criterion::{Criterion, Throughput},
+        krabka_broker::{
+            fetch_drain::{
+                WriteOp, resolve_records_inline, resolve_records_sendfile, write_fetch_plan,
+            },
+            metrics::{BrokerMetrics, FetchDrainPath, FetchDrainPathLabel},
         },
-        metrics::{BrokerMetrics, FetchDrainPath, FetchDrainPathLabel},
+        krabka_protocol::records::{FileRegion, RecordsPayload},
+        std::{
+            io::Write as _,
+            sync::Arc,
+            time::{Duration, Instant},
+        },
+        tokio::{
+            io::AsyncReadExt as _,
+            net::{TcpListener, TcpStream},
+            runtime::Runtime,
+        },
     };
-    use krabka_protocol::records::{FileRegion, RecordsPayload};
-    use tokio::{
-        io::AsyncReadExt as _,
-        net::{TcpListener, TcpStream},
-        runtime::Runtime,
-    };
-
-    use super::{ResponseSize, SIZES};
 
     /// Untimed drains run before the measured ones, over the same socket.
     ///
@@ -334,7 +334,7 @@ mod sweep {
             let cost = |case| {
                 (0..RUNS)
                     .map(|_| {
-                        timed_drains(&response, case, u64::from(SAMPLES)).as_secs_f64() * 1e9
+                        timed_drains(&response, case, u64::from(SAMPLES)).as_secs_f64() * 1.0e9
                             / f64::from(SAMPLES)
                     })
                     .fold(f64::INFINITY, f64::min)

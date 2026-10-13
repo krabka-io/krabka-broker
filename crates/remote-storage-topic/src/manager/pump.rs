@@ -6,17 +6,17 @@
 //! applies an event to the cache before it advances the applied offset, which
 //! is the ordering the snapshot capture relies on.
 
-use std::sync::Arc;
-
-use futures_util::StreamExt;
-use krabka_remote_storage::{
-    InmemoryRemoteLogMetadataManager, RemoteLogMetadataManager, RemoteStorageError,
+use {
+    super::mutations::{MutationKey, MutationWaiters},
+    crate::{log::MetadataEventStream, serde::MetadataEvent},
+    futures_util::StreamExt,
+    krabka_remote_storage::{
+        InmemoryRemoteLogMetadataManager, RemoteLogMetadataManager, RemoteStorageError,
+    },
+    std::sync::Arc,
+    tokio_util::sync::CancellationToken,
+    tracing::warn,
 };
-use tokio_util::sync::CancellationToken;
-use tracing::warn;
-
-use super::mutations::{MutationKey, MutationWaiters};
-use crate::{log::MetadataEventStream, serde::MetadataEvent};
 
 pub async fn pump_loop(
     mut stream: MetadataEventStream,
@@ -76,16 +76,17 @@ pub async fn pump_loop(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use krabka_ids::LeaderEpoch;
-    use uuid::Uuid;
-
-    use super::*;
-    use crate::{
-        log::{InProcessMetadataEventLog, MetadataEventLog},
-        manager::test_support::{
-            finish, on_blocking, seed, seed_finished, start_manager_all, started, tp,
+    use {
+        super::*,
+        crate::{
+            log::{InProcessMetadataEventLog, MetadataEventLog},
+            manager::test_support::{
+                finish, on_blocking, seed, seed_finished, start_manager_all, started, tp,
+            },
         },
+        assert2::assert,
+        krabka_ids::LeaderEpoch,
+        uuid::Uuid,
     };
 
     #[tokio::test(flavor = "multi_thread")]
@@ -129,10 +130,11 @@ mod tests {
         let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
         {
             let m = start_manager_all(log.clone()).await;
-            seed_finished(
-                &m,
-                &[seed(10, 0, 99), seed(11, 100, 199), seed(12, 200, 299)],
-            )
+            seed_finished(&m, &[
+                seed(10, 0, 99),
+                seed(11, 100, 199),
+                seed(12, 200, 299),
+            ])
             .await;
             m.shutdown();
         }

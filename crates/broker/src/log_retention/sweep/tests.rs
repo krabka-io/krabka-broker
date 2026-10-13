@@ -3,19 +3,22 @@
 //! this broker leads the partition, that a KFC-9 write freeze stops it, and
 //! that a deletion the filesystem refuses takes the log directory offline.
 
-use assert2::check;
-use krabka_ids::PartitionIndex;
-use krabka_metadata::{MetadataRecord, NodeId, PatternType};
-use uuid::Uuid;
-
-use super::*;
-use crate::{
-    log_dir_status::LogDirRegistry,
-    log_retention::test_support::{
-        block_segment_deletion, expired_partition, log_size, segment_files,
+use {
+    super::*,
+    crate::{
+        log_dir_status::LogDirRegistry,
+        log_retention::test_support::{
+            block_segment_deletion, expired_partition, log_size, segment_files,
+        },
+        metrics::{CleanerFailureLabel, CleanerFailureReason},
+        test_support::{
+            CommittedPartitionSetup, FreezeSetup, topic_freeze_record, topic_thaw_record,
+        },
     },
-    metrics::{CleanerFailureLabel, CleanerFailureReason},
-    test_support::{CommittedPartitionSetup, FreezeSetup, topic_freeze_record, topic_thaw_record},
+    assert2::check,
+    krabka_ids::PartitionIndex,
+    krabka_metadata::{MetadataRecord, NodeId, PatternType},
+    uuid::Uuid,
 };
 
 /// A partition the sweep is about to trim, with the segment files it had
@@ -61,13 +64,10 @@ fn image_with_freeze(scope: &str) -> MetadataImage {
 async fn a_sweep_deletes_expired_segments_and_the_log_size_follows() {
     let dir = tempfile::tempdir().expect("log root");
     let registry = PartitionRegistry::new();
-    let partition = expired_partition(
-        &dir,
-        CommittedPartitionSetup {
-            leader: NodeId(7),
-            ..Default::default()
-        },
-    )
+    let partition = expired_partition(&dir, CommittedPartitionSetup {
+        leader: NodeId(7),
+        ..Default::default()
+    })
     .await;
     registry.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
     let before_files = segment_files(&dir, "orders");
@@ -112,14 +112,11 @@ async fn a_sweep_trims_a_follower_replica_as_well_as_a_led_one() {
     let cases = [("led", NodeId(7)), ("followed", NodeId(8))];
     let mut observed: Vec<Observed<'_>> = Vec::new();
     for (topic, leader) in cases {
-        let partition = expired_partition(
-            &dir,
-            CommittedPartitionSetup {
-                topic,
-                leader,
-                ..Default::default()
-            },
-        )
+        let partition = expired_partition(&dir, CommittedPartitionSetup {
+            topic,
+            leader,
+            ..Default::default()
+        })
         .await;
         let before = segment_files(&dir, topic);
         registry.insert(topic.into(), PartitionIndex(0), Arc::clone(&partition));
@@ -159,14 +156,11 @@ async fn a_sweep_trims_a_follower_replica_as_well_as_a_led_one() {
 async fn a_frozen_topic_is_not_trimmed_until_it_thaws() {
     let dir = tempfile::tempdir().expect("log root");
     let registry = PartitionRegistry::new();
-    let partition = expired_partition(
-        &dir,
-        CommittedPartitionSetup {
-            topic: "frozen",
-            leader: NodeId(7),
-            ..Default::default()
-        },
-    )
+    let partition = expired_partition(&dir, CommittedPartitionSetup {
+        topic: "frozen",
+        leader: NodeId(7),
+        ..Default::default()
+    })
     .await;
     registry.insert("frozen".into(), PartitionIndex(0), Arc::clone(&partition));
     let before = segment_files(&dir, "frozen");
@@ -206,14 +200,11 @@ async fn a_failed_deletion_is_counted_and_takes_the_log_dir_offline() {
     let dir = tempfile::tempdir().expect("log root");
     let status = LogDirRegistry::probe(&[dir.path().to_path_buf()]);
     let registry = PartitionRegistry::new();
-    let partition = expired_partition(
-        &dir,
-        CommittedPartitionSetup {
-            leader: NodeId(7),
-            registry: status.clone(),
-            ..Default::default()
-        },
-    )
+    let partition = expired_partition(&dir, CommittedPartitionSetup {
+        leader: NodeId(7),
+        registry: status.clone(),
+        ..Default::default()
+    })
     .await;
     {
         // This fault blocks the immediate-deletion tombstone path. Delayed

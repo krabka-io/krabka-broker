@@ -14,18 +14,19 @@
 //! runtime is refused. See
 //! [`crate::config_keys::validate_diskless_unchanged`].
 
-use krabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord};
-use krabka_protocol::owned::incremental_alter_configs_request::AlterConfigsResource;
-
-use super::{OP_APPEND, OP_DELETE, OP_SET};
-use crate::{
-    api_catalog::UnstableApiVersions,
-    codes,
-    config_keys::{
-        self,
-        registry::{self, ConfigScope, ConfigType},
+use {
+    super::{OP_APPEND, OP_DELETE, OP_SET},
+    crate::{
+        api_catalog::UnstableApiVersions,
+        codes,
+        config_keys::{
+            self,
+            registry::{self, ConfigScope, ConfigType},
+        },
+        topic_policy::{TopicPolicy, check as check_topic_policy},
     },
-    topic_policy::{TopicPolicy, check as check_topic_policy},
+    krabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord},
+    krabka_protocol::owned::incremental_alter_configs_request::AlterConfigsResource,
 };
 
 /// Kafka's `ConfigurationControlManager` APPEND and SUBTRACT: a `LIST` key's
@@ -156,16 +157,18 @@ pub(super) fn topic_config_record(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{
-        handlers::{
-            incremental_alter_configs::test_support::{
-                AlterableConfig, StoredOverride, assert, check, image_with_topic_config,
-                make_del_cfg, make_set_cfg, make_topic_resource, overrides_map,
+    use {
+        super::*,
+        crate::{
+            handlers::{
+                incremental_alter_configs::test_support::{
+                    AlterableConfig, StoredOverride, assert, check, image_with_topic_config,
+                    make_del_cfg, make_set_cfg, make_topic_resource, overrides_map,
+                },
+                test_support::check_config_result,
             },
-            test_support::check_config_result,
+            throttle::LEADER_THROTTLED_REPLICAS_KEY,
         },
-        throttle::LEADER_THROTTLED_REPLICAS_KEY,
     };
 
     /// The record builder under the empty policy, which is the state of a
@@ -196,10 +199,10 @@ mod tests {
 
     #[test]
     fn controller_managed_topic_configs_are_rejected_whatever_the_operation() {
-        let img = image_with_topic_config(
-            "orders",
-            &[StoredOverride::new(config_keys::RETENTION_MS, "60000")],
-        );
+        let img = image_with_topic_config("orders", &[StoredOverride::new(
+            config_keys::RETENTION_MS,
+            "60000",
+        )]);
 
         for key in config_keys::CONTROLLER_MANAGED_TOPIC_CONFIGS {
             for (label, config) in [
@@ -208,24 +211,18 @@ mod tests {
                     "a DELETE of the key, which asks to clear the freeze",
                     make_del_cfg(key),
                 ),
-                (
-                    "an APPEND of the key",
-                    AlterableConfig {
-                        name: key.into(),
-                        config_operation: 2,
-                        value: Some("true".into()),
-                        ..Default::default()
-                    },
-                ),
-                (
-                    "a SUBTRACT of the key",
-                    AlterableConfig {
-                        name: key.into(),
-                        config_operation: 3,
-                        value: Some("true".into()),
-                        ..Default::default()
-                    },
-                ),
+                ("an APPEND of the key", AlterableConfig {
+                    name: key.into(),
+                    config_operation: 2,
+                    value: Some("true".into()),
+                    ..Default::default()
+                }),
+                ("a SUBTRACT of the key", AlterableConfig {
+                    name: key.into(),
+                    config_operation: 3,
+                    value: Some("true".into()),
+                    ..Default::default()
+                }),
             ] {
                 let error = topic_config_record(&make_topic_resource("orders", vec![config]), &img)
                     .expect_err("controller-managed key must be rejected");
@@ -242,16 +239,16 @@ mod tests {
 
     #[test]
     fn an_ordinary_topic_config_still_merges_onto_the_existing_map() {
-        let img = image_with_topic_config(
-            "orders",
-            &[StoredOverride::new(config_keys::RETENTION_MS, "60000")],
-        );
+        let img = image_with_topic_config("orders", &[StoredOverride::new(
+            config_keys::RETENTION_MS,
+            "60000",
+        )]);
 
         let record = topic_config_record(
-            &make_topic_resource(
-                "orders",
-                vec![make_set_cfg(config_keys::SEGMENT_BYTES, "1048576")],
-            ),
+            &make_topic_resource("orders", vec![make_set_cfg(
+                config_keys::SEGMENT_BYTES,
+                "1048576",
+            )]),
             &img,
         )
         .expect("an ordinary topic config is valid");
@@ -269,16 +266,16 @@ mod tests {
     fn compaction_op_conflicts_with_scheduled_delivery_already_on_the_topic() {
         // The ops alone are legal. Only the merge with the topic's existing
         // config shows the conflict.
-        let img = image_with_topic_config(
-            "orders",
-            &[StoredOverride::new(config_keys::DELIVERY_MODE, "scheduled")],
-        );
+        let img = image_with_topic_config("orders", &[StoredOverride::new(
+            config_keys::DELIVERY_MODE,
+            "scheduled",
+        )]);
 
         let (code, message) = topic_config_record(
-            &make_topic_resource(
-                "orders",
-                vec![make_set_cfg(config_keys::CLEANUP_POLICY, "compact")],
-            ),
+            &make_topic_resource("orders", vec![make_set_cfg(
+                config_keys::CLEANUP_POLICY,
+                "compact",
+            )]),
             &img,
         )
         .expect_err("compaction merged onto a scheduled topic must be rejected");
@@ -296,16 +293,16 @@ mod tests {
 
     #[test]
     fn scheduled_delivery_op_conflicts_with_compaction_already_on_the_topic() {
-        let img = image_with_topic_config(
-            "orders",
-            &[StoredOverride::new(config_keys::CLEANUP_POLICY, "compact")],
-        );
+        let img = image_with_topic_config("orders", &[StoredOverride::new(
+            config_keys::CLEANUP_POLICY,
+            "compact",
+        )]);
 
         let (code, _) = topic_config_record(
-            &make_topic_resource(
-                "orders",
-                vec![make_set_cfg(config_keys::DELIVERY_MODE, "scheduled")],
-            ),
+            &make_topic_resource("orders", vec![make_set_cfg(
+                config_keys::DELIVERY_MODE,
+                "scheduled",
+            )]),
             &img,
         )
         .expect_err("scheduling a compacted topic must be rejected");
@@ -315,19 +312,16 @@ mod tests {
 
     #[test]
     fn deleting_the_delivery_mode_clears_the_conflict_in_the_same_request() {
-        let img = image_with_topic_config(
-            "orders",
-            &[StoredOverride::new(config_keys::DELIVERY_MODE, "scheduled")],
-        );
+        let img = image_with_topic_config("orders", &[StoredOverride::new(
+            config_keys::DELIVERY_MODE,
+            "scheduled",
+        )]);
 
         let record = topic_config_record(
-            &make_topic_resource(
-                "orders",
-                vec![
-                    make_del_cfg(config_keys::DELIVERY_MODE),
-                    make_set_cfg(config_keys::CLEANUP_POLICY, "compact"),
-                ],
-            ),
+            &make_topic_resource("orders", vec![
+                make_del_cfg(config_keys::DELIVERY_MODE),
+                make_set_cfg(config_keys::CLEANUP_POLICY, "compact"),
+            ]),
             &img,
         )
         .expect("removing the schedule leaves a plain compacted topic");
@@ -400,16 +394,16 @@ mod tests {
 
     #[test]
     fn tiered_storage_cannot_be_turned_on_for_a_diskless_topic() {
-        let img = image_with_topic_config(
-            "orders",
-            &[StoredOverride::new(config_keys::DISKLESS, "true")],
-        );
+        let img = image_with_topic_config("orders", &[StoredOverride::new(
+            config_keys::DISKLESS,
+            "true",
+        )]);
 
         let (code, message) = topic_config_record(
-            &make_topic_resource(
-                "orders",
-                vec![make_set_cfg("remote.storage.enable", "true")],
-            ),
+            &make_topic_resource("orders", vec![make_set_cfg(
+                "remote.storage.enable",
+                "true",
+            )]),
             &img,
         )
         .expect_err("two object-store data paths on one topic must be rejected");
@@ -421,20 +415,17 @@ mod tests {
 
     #[test]
     fn scheduled_delivery_keys_merge_onto_an_existing_topic_config() {
-        let img = image_with_topic_config(
-            "retries",
-            &[StoredOverride::new(config_keys::RETENTION_MS, "60000")],
-        );
+        let img = image_with_topic_config("retries", &[StoredOverride::new(
+            config_keys::RETENTION_MS,
+            "60000",
+        )]);
 
         let record = topic_config_record(
-            &make_topic_resource(
-                "retries",
-                vec![
-                    make_set_cfg(config_keys::DELIVERY_MODE, "scheduled"),
-                    make_set_cfg(config_keys::DELIVERY_MAX_DELAY_MS, "3600000"),
-                    make_set_cfg(config_keys::DELIVERY_SCHEDULE_MONOTONIC, "true"),
-                ],
-            ),
+            &make_topic_resource("retries", vec![
+                make_set_cfg(config_keys::DELIVERY_MODE, "scheduled"),
+                make_set_cfg(config_keys::DELIVERY_MAX_DELAY_MS, "3600000"),
+                make_set_cfg(config_keys::DELIVERY_SCHEDULE_MONOTONIC, "true"),
+            ]),
             &img,
         )
         .expect("valid scheduled delivery ops");
@@ -452,20 +443,20 @@ mod tests {
 
     #[test]
     fn a_merged_map_that_breaks_the_policy_is_a_policy_violation() {
-        let img = image_with_topic_config(
-            "orders",
-            &[StoredOverride::new(config_keys::MIN_INSYNC_REPLICAS, "2")],
-        );
+        let img = image_with_topic_config("orders", &[StoredOverride::new(
+            config_keys::MIN_INSYNC_REPLICAS,
+            "2",
+        )]);
         let policy = TopicPolicy {
             min_insync_replicas: Some(2),
             ..TopicPolicy::default()
         };
 
         let (code, message) = super::topic_config_record(
-            &make_topic_resource(
-                "orders",
-                vec![make_set_cfg(config_keys::MIN_INSYNC_REPLICAS, "1")],
-            ),
+            &make_topic_resource("orders", vec![make_set_cfg(
+                config_keys::MIN_INSYNC_REPLICAS,
+                "1",
+            )]),
             &img,
             &policy,
             true,
@@ -482,20 +473,20 @@ mod tests {
 
     #[test]
     fn a_merged_map_that_satisfies_the_policy_still_commits() {
-        let img = image_with_topic_config(
-            "orders",
-            &[StoredOverride::new(config_keys::MIN_INSYNC_REPLICAS, "1")],
-        );
+        let img = image_with_topic_config("orders", &[StoredOverride::new(
+            config_keys::MIN_INSYNC_REPLICAS,
+            "1",
+        )]);
         let policy = TopicPolicy {
             min_insync_replicas: Some(2),
             ..TopicPolicy::default()
         };
 
         let record = super::topic_config_record(
-            &make_topic_resource(
-                "orders",
-                vec![make_set_cfg(config_keys::MIN_INSYNC_REPLICAS, "2")],
-            ),
+            &make_topic_resource("orders", vec![make_set_cfg(
+                config_keys::MIN_INSYNC_REPLICAS,
+                "2",
+            )]),
             &img,
             &policy,
             true,

@@ -5,12 +5,13 @@
 //! are used from more than one of the sibling test modules, so they live here
 //! rather than being repeated in each.
 
-use krabka_metadata::AclEntry;
-use krabka_protocol::owned::create_acls_request::{AclCreation, CreateAclsRequest};
-
-use super::validate::AclRefusal;
 pub(super) use crate::handlers::acl_test_support::{
     OPERATION_READ, OPERATION_WRITE, PATTERN_TYPE_LITERAL, PERMISSION_ALLOW, RESOURCE_TYPE_TOPIC,
+};
+use {
+    super::validate::AclRefusal,
+    krabka_metadata::AclEntry,
+    krabka_protocol::owned::create_acls_request::{AclCreation, CreateAclsRequest},
 };
 pub(super) const VERSION: i16 = 3;
 
@@ -41,12 +42,9 @@ pub(super) use crate::handlers::acl_test_support::all_acls;
 /// Validates `c` with CIDR ACL hosts supported, which is what every test not
 /// about the CIDR gate wants.
 pub(super) fn validate(c: &AclCreation) -> Result<AclEntry, AclRefusal> {
-    super::validate::validate(
-        c,
-        super::validate::HostCheck::Trunk {
-            cidr_hosts_supported: true,
-        },
-    )
+    super::validate::validate(c, super::validate::HostCheck::Trunk {
+        cidr_hosts_supported: true,
+    })
 }
 
 pub(super) use crate::handlers::acl_test_support::configured_authorizer;

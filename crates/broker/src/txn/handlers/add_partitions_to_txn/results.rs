@@ -8,22 +8,22 @@
 //! [`topic_refusal`](super::write_freeze::topic_refusal) overriding it, and
 //! the KIP-890 verify-only shape whose code is per partition.
 
-use std::collections::{HashMap, HashSet};
-
-use krabka_ids::PartitionIndex;
-use krabka_protocol::owned::common::{
-    add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
-    add_partitions_to_txn_response::{
-        add_partitions_to_txn_partition_result::AddPartitionsToTxnPartitionResult,
-        add_partitions_to_txn_topic_result::AddPartitionsToTxnTopicResult,
+use {
+    super::write_freeze::topic_refusal,
+    crate::txn::{
+        coordinator::produce_verification::{HeldTransaction, verification_code},
+        state::{TopicPartition, TxnEntry},
+        util::ProducerIdentity,
     },
-};
-
-use super::write_freeze::topic_refusal;
-use crate::txn::{
-    coordinator::produce_verification::{HeldTransaction, verification_code},
-    state::{TopicPartition, TxnEntry},
-    util::ProducerIdentity,
+    krabka_ids::PartitionIndex,
+    krabka_protocol::owned::common::{
+        add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
+        add_partitions_to_txn_response::{
+            add_partitions_to_txn_partition_result::AddPartitionsToTxnPartitionResult,
+            add_partitions_to_txn_topic_result::AddPartitionsToTxnTopicResult,
+        },
+    },
+    std::collections::{HashMap, HashSet},
 };
 
 /// Collapses a requested topic list to one row per topic and one row per
@@ -115,14 +115,10 @@ pub(super) fn verify_partitions(
             let refusal = topic_refusal(&t.name, denied, frozen);
             topic_result(t, |p| {
                 refusal.unwrap_or_else(|| {
-                    verify_partition_code(
-                        entry,
-                        requested,
-                        &TopicPartition {
-                            topic: t.name.clone(),
-                            partition: PartitionIndex(p),
-                        },
-                    )
+                    verify_partition_code(entry, requested, &TopicPartition {
+                        topic: t.name.clone(),
+                        partition: PartitionIndex(p),
+                    })
                 })
             })
         })
@@ -179,15 +175,18 @@ fn topic_result(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-
-    use super::*;
-    use crate::{
-        codes,
-        txn::{
-            handlers::add_partitions_to_txn::test_support::{PartitionCode, topic, topic_result},
-            state::TxnEntry,
+    use {
+        super::*,
+        crate::{
+            codes,
+            txn::{
+                handlers::add_partitions_to_txn::test_support::{
+                    PartitionCode, topic, topic_result,
+                },
+                state::TxnEntry,
+            },
         },
+        assert2::assert,
     };
 
     #[test]
@@ -231,33 +230,24 @@ mod tests {
         );
 
         let expected = vec![
-            topic_result(
-                "alpha",
-                &[
-                    PartitionCode {
-                        partition: 1,
-                        code: codes::NONE,
-                    },
-                    PartitionCode {
-                        partition: 2,
-                        code: codes::TRANSACTION_ABORTABLE,
-                    },
-                ],
-            ),
-            topic_result(
-                "denied",
-                &[PartitionCode {
-                    partition: 3,
-                    code: codes::TOPIC_AUTHORIZATION_FAILED,
-                }],
-            ),
-            topic_result(
-                "frozen",
-                &[PartitionCode {
-                    partition: 4,
-                    code: codes::POLICY_VIOLATION,
-                }],
-            ),
+            topic_result("alpha", &[
+                PartitionCode {
+                    partition: 1,
+                    code: codes::NONE,
+                },
+                PartitionCode {
+                    partition: 2,
+                    code: codes::TRANSACTION_ABORTABLE,
+                },
+            ]),
+            topic_result("denied", &[PartitionCode {
+                partition: 3,
+                code: codes::TOPIC_AUTHORIZATION_FAILED,
+            }]),
+            topic_result("frozen", &[PartitionCode {
+                partition: 4,
+                code: codes::POLICY_VIOLATION,
+            }]),
         ];
         assert!(rows == expected);
     }
@@ -275,33 +265,24 @@ mod tests {
         let rows = per_topic_with_refusals(&topics, &denied, &frozen, codes::NOT_COORDINATOR);
 
         let expected = vec![
-            topic_result(
-                "alpha",
-                &[
-                    PartitionCode {
-                        partition: 1,
-                        code: codes::NOT_COORDINATOR,
-                    },
-                    PartitionCode {
-                        partition: 2,
-                        code: codes::NOT_COORDINATOR,
-                    },
-                ],
-            ),
-            topic_result(
-                "denied",
-                &[PartitionCode {
-                    partition: 5,
-                    code: codes::TOPIC_AUTHORIZATION_FAILED,
-                }],
-            ),
-            topic_result(
-                "frozen",
-                &[PartitionCode {
-                    partition: 6,
-                    code: codes::POLICY_VIOLATION,
-                }],
-            ),
+            topic_result("alpha", &[
+                PartitionCode {
+                    partition: 1,
+                    code: codes::NOT_COORDINATOR,
+                },
+                PartitionCode {
+                    partition: 2,
+                    code: codes::NOT_COORDINATOR,
+                },
+            ]),
+            topic_result("denied", &[PartitionCode {
+                partition: 5,
+                code: codes::TOPIC_AUTHORIZATION_FAILED,
+            }]),
+            topic_result("frozen", &[PartitionCode {
+                partition: 6,
+                code: codes::POLICY_VIOLATION,
+            }]),
         ];
         assert!(rows == expected);
     }
@@ -312,19 +293,16 @@ mod tests {
 
         let rows = topic_error(&topics, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED);
 
-        let expected = vec![topic_result(
-            "alpha",
-            &[
-                PartitionCode {
-                    partition: 4,
-                    code: codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
-                },
-                PartitionCode {
-                    partition: 5,
-                    code: codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
-                },
-            ],
-        )];
+        let expected = vec![topic_result("alpha", &[
+            PartitionCode {
+                partition: 4,
+                code: codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
+            },
+            PartitionCode {
+                partition: 5,
+                code: codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
+            },
+        ])];
         assert!(rows == expected);
     }
 

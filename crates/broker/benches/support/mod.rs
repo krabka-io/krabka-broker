@@ -29,9 +29,7 @@ impl<T> BoundedResource<T> {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn get_mut(&mut self) -> &mut T {
-        &mut self.value
-    }
+    pub(crate) fn get_mut(&mut self) -> &mut T { &mut self.value }
 }
 
 /// One batch shape a benchmark sweeps: its report label, record count and

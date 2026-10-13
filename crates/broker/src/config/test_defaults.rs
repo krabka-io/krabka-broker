@@ -2,17 +2,18 @@
 //! production defaults, retimed so an in-process fixture starts, fails over
 //! and shuts down quickly.
 
-use std::{net::SocketAddr, path::PathBuf};
-
-use krabka_raft::NodeId;
-use krabka_units::{Time, convert::TimeExt, millis, secs};
-
-use crate::{
-    config::{BrokerConfig, RlmmKind, feature_flags::test_feature_flags},
-    coordinator::unified::{
-        config::NextGenConfig, share::config::ShareGroupConfig, streams::config::StreamsGroupConfig,
+use {
+    crate::{
+        config::{BrokerConfig, RlmmKind, feature_flags::test_feature_flags},
+        coordinator::unified::{
+            config::NextGenConfig, share::config::ShareGroupConfig,
+            streams::config::StreamsGroupConfig,
+        },
+        share_coordinator::config::ShareCoordinatorConfig,
     },
-    share_coordinator::config::ShareCoordinatorConfig,
+    krabka_raft::NodeId,
+    krabka_units::{Time, convert::TimeExt, millis, secs},
+    std::{net::SocketAddr, path::PathBuf},
 };
 
 impl BrokerConfig {
@@ -146,11 +147,12 @@ impl BrokerConfig {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use krabka_raft::BootstrapMode;
-    use krabka_units::{convert::ByteSizeExt, mebibytes};
-
-    use super::*;
+    use {
+        super::*,
+        assert2::assert,
+        krabka_raft::BootstrapMode,
+        krabka_units::{convert::ByteSizeExt, mebibytes},
+    };
 
     fn additional_policy_snapshot(config: BrokerConfig) -> [String; 24] {
         [
@@ -289,50 +291,38 @@ mod tests {
     #[test]
     fn with_internal_topics_for_caps_at_kafka_defaults() {
         let cases = [
-            (
-                1,
-                InternalTopicSizes {
-                    offsets_replication_factor: 1,
-                    transaction_replication_factor: 1,
-                    transaction_min_isr: 1,
-                    barrier_replication_factor: 1,
-                    share_state_replication_factor: 1,
-                    share_state_min_isr: 1,
-                },
-            ),
-            (
-                2,
-                InternalTopicSizes {
-                    offsets_replication_factor: 2,
-                    transaction_replication_factor: 2,
-                    transaction_min_isr: 1,
-                    barrier_replication_factor: 2,
-                    share_state_replication_factor: 2,
-                    share_state_min_isr: 1,
-                },
-            ),
-            (
-                3,
-                InternalTopicSizes {
-                    offsets_replication_factor: 3,
-                    transaction_replication_factor: 3,
-                    transaction_min_isr: 2,
-                    barrier_replication_factor: 3,
-                    share_state_replication_factor: 3,
-                    share_state_min_isr: 2,
-                },
-            ),
-            (
-                5,
-                InternalTopicSizes {
-                    offsets_replication_factor: 3,
-                    transaction_replication_factor: 3,
-                    transaction_min_isr: 2,
-                    barrier_replication_factor: 3,
-                    share_state_replication_factor: 3,
-                    share_state_min_isr: 2,
-                },
-            ),
+            (1, InternalTopicSizes {
+                offsets_replication_factor: 1,
+                transaction_replication_factor: 1,
+                transaction_min_isr: 1,
+                barrier_replication_factor: 1,
+                share_state_replication_factor: 1,
+                share_state_min_isr: 1,
+            }),
+            (2, InternalTopicSizes {
+                offsets_replication_factor: 2,
+                transaction_replication_factor: 2,
+                transaction_min_isr: 1,
+                barrier_replication_factor: 2,
+                share_state_replication_factor: 2,
+                share_state_min_isr: 1,
+            }),
+            (3, InternalTopicSizes {
+                offsets_replication_factor: 3,
+                transaction_replication_factor: 3,
+                transaction_min_isr: 2,
+                barrier_replication_factor: 3,
+                share_state_replication_factor: 3,
+                share_state_min_isr: 2,
+            }),
+            (5, InternalTopicSizes {
+                offsets_replication_factor: 3,
+                transaction_replication_factor: 3,
+                transaction_min_isr: 2,
+                barrier_replication_factor: 3,
+                share_state_replication_factor: 3,
+                share_state_min_isr: 2,
+            }),
         ];
         for (brokers, expected) in cases {
             let config =

@@ -30,13 +30,15 @@
 //! Wire format: v1 flexible with tagged fields, and v2 flexible with
 //! `transaction_version`.
 
-use futures_util::future::BoxFuture;
-use krabka_ids::PartitionIndex;
-use krabka_protocol::owned::{
-    write_txn_markers_request::WriteTxnMarkersRequest,
-    write_txn_markers_response::{
-        WritableTxnMarkerPartitionResult, WritableTxnMarkerResult, WritableTxnMarkerTopicResult,
-        WriteTxnMarkersResponse,
+use {
+    futures_util::future::BoxFuture,
+    krabka_ids::PartitionIndex,
+    krabka_protocol::owned::{
+        write_txn_markers_request::WriteTxnMarkersRequest,
+        write_txn_markers_response::{
+            WritableTxnMarkerPartitionResult, WritableTxnMarkerResult,
+            WritableTxnMarkerTopicResult, WriteTxnMarkersResponse,
+        },
     },
 };
 
@@ -297,26 +299,27 @@ impl MarkerResults {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use krabka_protocol::{
-        UnknownTaggedFields,
-        owned::write_txn_markers_request::{WritableTxnMarker, WritableTxnMarkerTopic},
-    };
-
-    use super::*;
-    use crate::{
-        coordinator::{
-            bootstrap::OFFSETS_TOPIC,
-            partitioner::partition_for_group,
-            persistence::OffsetCommitValue,
-            unified::actor::{
-                GroupActorHandle, GroupActorMessage, GroupKindTag, test_support::rpc,
+    use {
+        super::*,
+        crate::{
+            coordinator::{
+                bootstrap::OFFSETS_TOPIC,
+                partitioner::partition_for_group,
+                persistence::OffsetCommitValue,
+                unified::actor::{
+                    GroupActorHandle, GroupActorMessage, GroupKindTag, test_support::rpc,
+                },
             },
+            replica_state::LeaderPolicy,
+            test_support::{StandalonePartitionSetup, peer, principal, request_context},
+            time_util::now_ms,
+            txn::handlers::write_txn_markers::test_support::{open_partition, start_broker},
         },
-        replica_state::LeaderPolicy,
-        test_support::{StandalonePartitionSetup, peer, principal, request_context},
-        time_util::now_ms,
-        txn::handlers::write_txn_markers::test_support::{open_partition, start_broker},
+        assert2::assert,
+        krabka_protocol::{
+            UnknownTaggedFields,
+            owned::write_txn_markers_request::{WritableTxnMarker, WritableTxnMarkerTopic},
+        },
     };
 
     fn check_orders_marker(response: &WriteTxnMarkersResponse, expected_code: i16, label: &str) {
@@ -485,14 +488,10 @@ mod tests {
             let part = match hosting {
                 Hosting::NotHosted => None,
                 Hosting::Led | Hosting::Followed | Hosting::LedInOfflineLogDir => {
-                    let part = open_partition(
-                        &broker,
-                        &log_dir,
-                        StandalonePartitionSetup {
-                            partition: krabka_ids::PartitionIndex(1),
-                            ..Default::default()
-                        },
-                    );
+                    let part = open_partition(&broker, &log_dir, StandalonePartitionSetup {
+                        partition: krabka_ids::PartitionIndex(1),
+                        ..Default::default()
+                    });
                     let leader = if matches!(hosting, Hosting::Followed) {
                         node_id + 1
                     } else {
@@ -506,13 +505,10 @@ mod tests {
                 }
             };
 
-            let bytes = handle_allowed(
-                &broker,
-                WriteTxnMarkersRequest {
-                    markers: vec![marker(91, "orders", vec![1])],
-                    ..Default::default()
-                },
-            )
+            let bytes = handle_allowed(&broker, WriteTxnMarkersRequest {
+                markers: vec![marker(91, "orders", vec![1])],
+                ..Default::default()
+            })
             .await
             .expect("handle");
 
@@ -630,29 +626,22 @@ mod tests {
         let broker = broker_handle.broker_arc_for_test();
         let node_id = broker.config.node_id.0;
         for partition in [1, 2] {
-            open_partition(
-                &broker,
-                dir.path(),
-                StandalonePartitionSetup {
-                    partition: krabka_ids::PartitionIndex(partition),
-                    ..Default::default()
-                },
-            )
+            open_partition(&broker, dir.path(), StandalonePartitionSetup {
+                partition: krabka_ids::PartitionIndex(partition),
+                ..Default::default()
+            })
             .install_replication_target(None, node_id, 3)
             .await;
         }
 
-        let bytes = handle_allowed(
-            &broker,
-            WriteTxnMarkersRequest {
-                markers: vec![
-                    marker(91, "orders", vec![1]),
-                    marker(92, "orders", vec![1]),
-                    marker(91, "orders", vec![2]),
-                ],
-                ..Default::default()
-            },
-        )
+        let bytes = handle_allowed(&broker, WriteTxnMarkersRequest {
+            markers: vec![
+                marker(91, "orders", vec![1]),
+                marker(92, "orders", vec![1]),
+                marker(91, "orders", vec![2]),
+            ],
+            ..Default::default()
+        })
         .await
         .expect("handle");
 
@@ -660,11 +649,10 @@ mod tests {
             bytes
                 == WriteTxnMarkersResponse {
                     markers: vec![
-                        result(
-                            91,
-                            "orders",
-                            &[answer(1, codes::NONE), answer(2, codes::NONE)]
-                        ),
+                        result(91, "orders", &[
+                            answer(1, codes::NONE),
+                            answer(2, codes::NONE)
+                        ]),
                         result(92, "orders", &[answer(1, codes::NONE)]),
                     ],
                     unknown_tagged_fields: UnknownTaggedFields::default(),
@@ -752,13 +740,10 @@ mod tests {
 
         // The actor takes the transaction's pending marks and then exits,
         // leaving a closed handle behind in the registry.
-        let handle = mark_pending_offsets(
-            &broker,
-            PendingOffsetsSetup {
-                group_id,
-                ..Default::default()
-            },
-        )
+        let handle = mark_pending_offsets(&broker, PendingOffsetsSetup {
+            group_id,
+            ..Default::default()
+        })
         .await;
         rpc::shutdown(&handle).await;
         for _ in 0..1000 {
@@ -801,8 +786,10 @@ mod tests {
     /// rediscover them.
     #[tokio::test]
     async fn a_commit_marker_resolves_every_group_in_the_transaction() {
-        use krabka_log::Offset;
-        use krabka_protocol::records::{Attributes, Record, RecordBatch};
+        use {
+            krabka_log::Offset,
+            krabka_protocol::records::{Attributes, Record, RecordBatch},
+        };
 
         let (broker_handle, _dir) = start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
@@ -850,14 +837,11 @@ mod tests {
         // Both groups hold the transaction's pending marks, the way
         // `TxnOffsetCommit` leaves them.
         for (group_id, topic, partition) in [(first, "orders", 2), (second, "payments", 5)] {
-            mark_pending_offsets(
-                &broker,
-                PendingOffsetsSetup {
-                    group_id,
-                    topic,
-                    partition: krabka_ids::PartitionIndex(partition),
-                },
-            )
+            mark_pending_offsets(&broker, PendingOffsetsSetup {
+                group_id,
+                topic,
+                partition: krabka_ids::PartitionIndex(partition),
+            })
             .await;
         }
 

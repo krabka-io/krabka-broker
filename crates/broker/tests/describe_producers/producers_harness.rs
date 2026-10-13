@@ -5,18 +5,19 @@
 //! Both batch builders live here because the transactional one is the
 //! idempotent one with the transactional attribute bit set.
 
-use assert2::assert;
-use krabka_protocol::records::{Attributes, RecordBatch};
-
-use crate::support::{
-    self,
-    discovery::coordinator_lookup_request,
-    records::ProducerValuesSetup,
-    transactions::{
-        InitProducerSetup, ProducerIdentity, claim_idempotent_producer, new_producer_request,
-    },
-};
 pub(crate) use crate::support::{client::create_topic_named as create_topic, topic_id_for};
+use {
+    crate::support::{
+        self,
+        discovery::coordinator_lookup_request,
+        records::ProducerValuesSetup,
+        transactions::{
+            InitProducerSetup, ProducerIdentity, claim_idempotent_producer, new_producer_request,
+        },
+    },
+    assert2::assert,
+    krabka_protocol::records::{Attributes, RecordBatch},
+};
 
 pub(crate) async fn init_producer(p: &support::InProcess) -> (i64, i16) {
     // A null transactional id is an idempotent producer; an empty one is invalid.
@@ -30,11 +31,9 @@ pub(crate) async fn init_transactional_producer(
 ) -> ProducerIdentity {
     let coordinator = p
         .client
-        .send(coordinator_lookup_request(
-            transactional_id,
-            1,
-            vec![transactional_id.into()],
-        ))
+        .send(coordinator_lookup_request(transactional_id, 1, vec![
+            transactional_id.into(),
+        ]))
         .await
         .expect("transactional FindCoordinator");
     assert!(

@@ -1,11 +1,12 @@
-use assert2::check;
-
-use super::*;
-use crate::{
-    core::test_support::{
-        FakeLog, MachineAndLog, check_prevote_started, machine, three_voter_machine, voters,
+use {
+    super::*,
+    crate::{
+        core::test_support::{
+            FakeLog, MachineAndLog, check_prevote_started, machine, three_voter_machine, voters,
+        },
+        event::{Event, LogEnd},
     },
-    event::{Event, LogEnd},
+    assert2::check,
 };
 
 /// An election at time 2000 with a fresh, up-to-date epoch-1 log.
@@ -142,16 +143,12 @@ fn only_a_rejection_from_a_higher_epoch_steps_us_down() {
             "{what}: setup should vote"
         );
 
-        vote_response(
-            &mut m,
-            &log,
-            VoteResponseSetup {
-                epoch,
-                decision,
-                now: SimInstant(0),
-                ..Default::default()
-            },
-        );
+        vote_response(&mut m, &log, VoteResponseSetup {
+            epoch,
+            decision,
+            now: SimInstant(0),
+            ..Default::default()
+        });
         let kept = if m.quorum_state().voted_key.is_some() {
             VoteRetention::Kept
         } else {
@@ -185,27 +182,23 @@ fn prevote_majority_promotes_to_candidate_and_bumps_epoch() {
             m.quorum_state().voted_key.map(|k| k.id),
         ) == (true, 1, Some(NodeId(1)))
     );
-    assert2::assert!(actions.iter().any(|a| matches!(
-        a,
-        Action::SendVoteRequest {
-            pre_vote: false,
-            epoch: 1
-        }
-    )));
+    assert2::assert!(actions.iter().any(|a| matches!(a, Action::SendVoteRequest {
+        pre_vote: false,
+        epoch: 1
+    })));
 }
 
 #[test]
 fn real_majority_promotes_to_leader_and_appends_leader_change() {
-    let MachineAndLog { machine: mut m, log } = pre_vote_promoted_candidate();
-    let actions = vote_response(
-        &mut m,
-        &log,
-        VoteResponseSetup {
-            epoch: VoteEpoch(1),
-            now: SimInstant(2002),
-            ..Default::default()
-        },
-    );
+    let MachineAndLog {
+        machine: mut m,
+        log,
+    } = pre_vote_promoted_candidate();
+    let actions = vote_response(&mut m, &log, VoteResponseSetup {
+        epoch: VoteEpoch(1),
+        now: SimInstant(2002),
+        ..Default::default()
+    });
     check!(
         (
             m.role().is_leader(),
@@ -246,31 +239,27 @@ fn prospective_counts_grant_with_no_wire_prevote_signal() {
     // Pre-vote majority (self + 2) → promote to Candidate and bump the epoch.
     assert2::assert!(matches!(m.role(), Role::Candidate { .. }));
     check!(m.quorum_state().leader_epoch == 1);
-    assert2::assert!(actions.iter().any(|a| matches!(
-        a,
-        Action::SendVoteRequest {
-            pre_vote: false,
-            epoch: 1
-        }
-    )));
+    assert2::assert!(actions.iter().any(|a| matches!(a, Action::SendVoteRequest {
+        pre_vote: false,
+        epoch: 1
+    })));
 }
 
 #[test]
 fn stale_prevote_grant_ignored_after_promotion() {
     // A late pre-vote grant at the old epoch must not be miscounted toward
     // the real election once we have promoted to Candidate at epoch+1.
-    let MachineAndLog { machine: mut m, log } = pre_vote_promoted_candidate(); // → Candidate @ epoch 1
+    let MachineAndLog {
+        machine: mut m,
+        log,
+    } = pre_vote_promoted_candidate(); // → Candidate @ epoch 1
     assert2::assert!(matches!(m.role(), Role::Candidate { .. }));
     // A duplicate/late pre-vote grant still tagged epoch 0 arrives.
-    let actions = vote_response(
-        &mut m,
-        &log,
-        VoteResponseSetup {
-            from: NodeId(3),
-            now: SimInstant(2002),
-            ..Default::default()
-        },
-    );
+    let actions = vote_response(&mut m, &log, VoteResponseSetup {
+        from: NodeId(3),
+        now: SimInstant(2002),
+        ..Default::default()
+    });
     // Epoch guard (0 != 1) drops it: we stay Candidate, do NOT become leader.
     check!(
         (
@@ -297,14 +286,10 @@ fn late_grant_from_removed_voter_does_not_count() {
     assert2::assert!(matches!(m.role(), Role::Prospective { .. }));
 
     m.apply_voter_set(voters(&[NodeId(1), NodeId(4), NodeId(5)]), SimInstant(2002));
-    let actions = vote_response(
-        &mut m,
-        &log,
-        VoteResponseSetup {
-            now: SimInstant(2003),
-            ..Default::default()
-        },
-    );
+    let actions = vote_response(&mut m, &log, VoteResponseSetup {
+        now: SimInstant(2003),
+        ..Default::default()
+    });
     check!(
         (
             matches!(m.role(), Role::Prospective { .. }),
@@ -312,15 +297,11 @@ fn late_grant_from_removed_voter_does_not_count() {
         ) == (true, true)
     );
 
-    vote_response(
-        &mut m,
-        &log,
-        VoteResponseSetup {
-            from: NodeId(4),
-            now: SimInstant(2004),
-            ..Default::default()
-        },
-    );
+    vote_response(&mut m, &log, VoteResponseSetup {
+        from: NodeId(4),
+        now: SimInstant(2004),
+        ..Default::default()
+    });
     assert2::assert!(matches!(m.role(), Role::Candidate { .. }));
 }
 
@@ -332,27 +313,24 @@ fn removed_voter_response_retallies_retained_grants() {
     } = five_voter_with_one_grant();
 
     m.apply_voter_set(voters(&[NodeId(1), NodeId(2), NodeId(4)]), SimInstant(2002));
-    let actions = vote_response(
-        &mut m,
-        &log,
-        VoteResponseSetup {
-            from: NodeId(3),
-            now: SimInstant(2003),
-            ..Default::default()
-        },
-    );
+    let actions = vote_response(&mut m, &log, VoteResponseSetup {
+        from: NodeId(3),
+        now: SimInstant(2003),
+        ..Default::default()
+    });
 
     check!(
         matches!(m.role(), Role::Candidate { .. }),
         "retained grants form a majority after the voter-set shrink"
     );
-    assert2::assert!(actions.iter().any(|action| matches!(
-        action,
-        Action::SendVoteRequest {
-            epoch: 1,
-            pre_vote: false
-        }
-    )));
+    assert2::assert!(
+        actions
+            .iter()
+            .any(|action| matches!(action, Action::SendVoteRequest {
+                epoch: 1,
+                pre_vote: false
+            }))
+    );
 }
 
 #[test]
@@ -361,14 +339,10 @@ fn prospective_ignores_grant_from_different_epoch() {
         machine: mut m,
         log,
     } = prospective_three_voter();
-    let actions = vote_response(
-        &mut m,
-        &log,
-        VoteResponseSetup {
-            epoch: VoteEpoch(5),
-            ..Default::default()
-        },
-    );
+    let actions = vote_response(&mut m, &log, VoteResponseSetup {
+        epoch: VoteEpoch(5),
+        ..Default::default()
+    });
     assert2::assert!(matches!(m.role(), Role::Prospective { .. }));
     assert2::assert!(actions.is_empty());
 }

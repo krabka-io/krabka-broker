@@ -8,16 +8,17 @@
 //! same key when one exists, and at the end when none does. When the handler
 //! refused no row, the coordinator's rows are the whole response, unchanged.
 
-use std::collections::HashMap;
-
-use krabka_protocol::{
-    owned::{
-        offset_commit_request::OffsetCommitRequestTopic,
-        offset_commit_response::{
-            OffsetCommitResponse, OffsetCommitResponsePartition, OffsetCommitResponseTopic,
+use {
+    krabka_protocol::{
+        owned::{
+            offset_commit_request::OffsetCommitRequestTopic,
+            offset_commit_response::{
+                OffsetCommitResponse, OffsetCommitResponsePartition, OffsetCommitResponseTopic,
+            },
         },
+        primitives::uuid::Uuid as WireUuid,
     },
-    primitives::uuid::Uuid as WireUuid,
+    std::collections::HashMap,
 };
 
 /// The key of one response topic row.
@@ -139,11 +140,10 @@ impl ResponseBuilder {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use krabka_protocol::owned::offset_commit_request::OffsetCommitRequestPartition;
-
-    use super::*;
-    use crate::codes;
+    use {
+        super::*, crate::codes, assert2::assert,
+        krabka_protocol::owned::offset_commit_request::OffsetCommitRequestPartition,
+    };
 
     const ID_A: WireUuid = WireUuid([0x0a; 16]);
     const ID_B: WireUuid = WireUuid([0x0b; 16]);
@@ -223,40 +223,24 @@ mod tests {
                 use_topic_ids: true,
                 refused: Vec::new(),
                 committed: vec![
-                    response_topic(
-                        "",
-                        ID_A,
-                        &[PartitionCode {
-                            partition_index: 0,
-                            error_code: codes::NONE,
-                        }],
-                    ),
-                    response_topic(
-                        "",
-                        ID_A,
-                        &[PartitionCode {
-                            partition_index: 1,
-                            error_code: codes::NONE,
-                        }],
-                    ),
+                    response_topic("", ID_A, &[PartitionCode {
+                        partition_index: 0,
+                        error_code: codes::NONE,
+                    }]),
+                    response_topic("", ID_A, &[PartitionCode {
+                        partition_index: 1,
+                        error_code: codes::NONE,
+                    }]),
                 ],
                 expected: vec![
-                    response_topic(
-                        "",
-                        ID_A,
-                        &[PartitionCode {
-                            partition_index: 0,
-                            error_code: codes::NONE,
-                        }],
-                    ),
-                    response_topic(
-                        "",
-                        ID_A,
-                        &[PartitionCode {
-                            partition_index: 1,
-                            error_code: codes::NONE,
-                        }],
-                    ),
+                    response_topic("", ID_A, &[PartitionCode {
+                        partition_index: 0,
+                        error_code: codes::NONE,
+                    }]),
+                    response_topic("", ID_A, &[PartitionCode {
+                        partition_index: 1,
+                        error_code: codes::NONE,
+                    }]),
                 ],
             },
             Case {
@@ -276,45 +260,29 @@ mod tests {
                         error_code: codes::UNKNOWN_TOPIC_ID,
                     },
                 ],
-                committed: vec![response_topic(
-                    "a",
-                    ID_A,
-                    &[PartitionCode {
-                        partition_index: 0,
-                        error_code: codes::NONE,
-                    }],
-                )],
+                committed: vec![response_topic("a", ID_A, &[PartitionCode {
+                    partition_index: 0,
+                    error_code: codes::NONE,
+                }])],
                 expected: vec![
-                    response_topic(
-                        "",
-                        WireUuid::ZERO,
-                        &[
-                            PartitionCode {
-                                partition_index: 0,
-                                error_code: codes::UNKNOWN_TOPIC_ID,
-                            },
-                            PartitionCode {
-                                partition_index: 1,
-                                error_code: codes::UNKNOWN_TOPIC_ID,
-                            },
-                        ],
-                    ),
-                    response_topic(
-                        "",
-                        ID_B,
-                        &[PartitionCode {
+                    response_topic("", WireUuid::ZERO, &[
+                        PartitionCode {
                             partition_index: 0,
                             error_code: codes::UNKNOWN_TOPIC_ID,
-                        }],
-                    ),
-                    response_topic(
-                        "a",
-                        ID_A,
-                        &[PartitionCode {
-                            partition_index: 0,
-                            error_code: codes::NONE,
-                        }],
-                    ),
+                        },
+                        PartitionCode {
+                            partition_index: 1,
+                            error_code: codes::UNKNOWN_TOPIC_ID,
+                        },
+                    ]),
+                    response_topic("", ID_B, &[PartitionCode {
+                        partition_index: 0,
+                        error_code: codes::UNKNOWN_TOPIC_ID,
+                    }]),
+                    response_topic("a", ID_A, &[PartitionCode {
+                        partition_index: 0,
+                        error_code: codes::NONE,
+                    }]),
                 ],
             },
             Case {
@@ -325,46 +293,30 @@ mod tests {
                     error_code: codes::TOPIC_AUTHORIZATION_FAILED,
                 }],
                 committed: vec![
-                    response_topic(
-                        "b",
-                        WireUuid::ZERO,
-                        &[PartitionCode {
-                            partition_index: 0,
-                            error_code: codes::NONE,
-                        }],
-                    ),
-                    response_topic(
-                        "a",
-                        WireUuid::ZERO,
-                        &[PartitionCode {
-                            partition_index: 1,
-                            error_code: codes::NONE,
-                        }],
-                    ),
+                    response_topic("b", WireUuid::ZERO, &[PartitionCode {
+                        partition_index: 0,
+                        error_code: codes::NONE,
+                    }]),
+                    response_topic("a", WireUuid::ZERO, &[PartitionCode {
+                        partition_index: 1,
+                        error_code: codes::NONE,
+                    }]),
                 ],
                 expected: vec![
-                    response_topic(
-                        "a",
-                        WireUuid::ZERO,
-                        &[
-                            PartitionCode {
-                                partition_index: 0,
-                                error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                            },
-                            PartitionCode {
-                                partition_index: 1,
-                                error_code: codes::NONE,
-                            },
-                        ],
-                    ),
-                    response_topic(
-                        "b",
-                        WireUuid::ZERO,
-                        &[PartitionCode {
+                    response_topic("a", WireUuid::ZERO, &[
+                        PartitionCode {
                             partition_index: 0,
+                            error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+                        },
+                        PartitionCode {
+                            partition_index: 1,
                             error_code: codes::NONE,
-                        }],
-                    ),
+                        },
+                    ]),
+                    response_topic("b", WireUuid::ZERO, &[PartitionCode {
+                        partition_index: 0,
+                        error_code: codes::NONE,
+                    }]),
                 ],
             },
         ];
@@ -378,14 +330,11 @@ mod tests {
             }
             builder.merge(case.committed);
             actual.push((case.label, builder.build()));
-            expected.push((
-                case.label,
-                OffsetCommitResponse {
-                    topics: case.expected,
-                    throttle_time_ms: 0,
-                    ..Default::default()
-                },
-            ));
+            expected.push((case.label, OffsetCommitResponse {
+                topics: case.expected,
+                throttle_time_ms: 0,
+                ..Default::default()
+            }));
         }
         assert!(actual == expected);
     }

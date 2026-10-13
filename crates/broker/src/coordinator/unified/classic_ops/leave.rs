@@ -7,15 +7,15 @@
 //! does through `maybePrepareRebalanceOrCompleteJoin`. It returns the
 //! per-member responses in request order.
 
-use std::time::{Duration, Instant};
-
-use krabka_protocol::owned::{
-    leave_group_request::LeaveGroupRequest, leave_group_response::MemberResponse,
-};
-
-use crate::{
-    codes,
-    coordinator::unified::classic_state::{ClassicGroup as ClassicState, GroupState},
+use {
+    crate::{
+        codes,
+        coordinator::unified::classic_state::{ClassicGroup as ClassicState, GroupState},
+    },
+    krabka_protocol::owned::{
+        leave_group_request::LeaveGroupRequest, leave_group_response::MemberResponse,
+    },
+    std::time::{Duration, Instant},
 };
 
 struct MemberIdentityIn {
@@ -109,12 +109,13 @@ pub(crate) fn handle_leave(
 
 #[cfg(test)]
 mod tests {
-    use assert2::{assert, check};
-    use krabka_protocol::owned::leave_group_request::MemberIdentity;
-
-    use super::*;
-    use crate::coordinator::unified::classic_ops::test_support::{
-        handle_join, join_req, stable_two_member_group,
+    use {
+        super::*,
+        crate::coordinator::unified::classic_ops::test_support::{
+            handle_join, join_req, stable_two_member_group,
+        },
+        assert2::{assert, check},
+        krabka_protocol::owned::leave_group_request::MemberIdentity,
     };
 
     /// (state before, state after) when one of two members leaves at v2.

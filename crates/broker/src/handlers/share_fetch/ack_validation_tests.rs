@@ -10,36 +10,36 @@
 //! `Read` check and the metadata check on its own, so a row can carry a fetch
 //! error and a different acknowledge error.
 
-use std::sync::Arc;
-
-use assert2::assert;
-use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::{
-    owned::{
-        share_acknowledge_response::ShareAcknowledgeResponse,
-        share_fetch_request::{
-            AcknowledgementBatch as FetchAcknowledgeBatch, FetchPartition, FetchTopic,
-            ShareFetchRequest,
+use {
+    crate::{
+        authorizer::AuthorizationResult,
+        broker::BrokerHandle,
+        codes,
+        handlers::test_support::{
+            AcknowledgementMode, AcknowledgementPartitionSetup, AcknowledgementSetup,
+            ClientTopicSetup, OffsetRun, ProduceRecordsSetup, ShareSessionEpoch, ShareWireSetup,
+            StartedBroker, WireAckBatch, WirePartitionAcknowledgements,
+            acknowledge_batches_request, acquired_share_records,
+            create_topic as create_topic_from_test_support, initialize_earliest_share,
+            produce_records, share_acknowledge_wire, share_fetch_wire, share_record_states,
         },
-        share_fetch_response::ShareFetchResponse,
+        share_partition::state::RecordState::{self, Acquired},
+        test_support::start_broker_no_audit_with,
     },
-    primitives::uuid::Uuid as WireUuid,
-};
-
-use crate::{
-    authorizer::AuthorizationResult,
-    broker::BrokerHandle,
-    codes,
-    handlers::test_support::{
-        AcknowledgementMode, AcknowledgementPartitionSetup, AcknowledgementSetup, ClientTopicSetup,
-        OffsetRun, ProduceRecordsSetup, ShareSessionEpoch, ShareWireSetup, StartedBroker,
-        WireAckBatch, WirePartitionAcknowledgements, acknowledge_batches_request,
-        acquired_share_records, create_topic as create_topic_from_test_support,
-        initialize_earliest_share, produce_records, share_acknowledge_wire, share_fetch_wire,
-        share_record_states,
+    assert2::assert,
+    krabka_metadata::{AclOperation, ResourceType},
+    krabka_protocol::{
+        owned::{
+            share_acknowledge_response::ShareAcknowledgeResponse,
+            share_fetch_request::{
+                AcknowledgementBatch as FetchAcknowledgeBatch, FetchPartition, FetchTopic,
+                ShareFetchRequest,
+            },
+            share_fetch_response::ShareFetchResponse,
+        },
+        primitives::uuid::Uuid as WireUuid,
     },
-    share_partition::state::RecordState::{self, Acquired},
-    test_support::start_broker_no_audit_with,
+    std::sync::Arc,
 };
 
 const TOPIC: &str = "ack-order";
@@ -88,26 +88,20 @@ async fn start() -> StartedBroker {
 }
 
 async fn create_topic(broker: &BrokerHandle) -> WireUuid {
-    create_topic_from_test_support(
-        broker,
-        ClientTopicSetup {
-            client_id: "ack-order-test",
-            name: TOPIC,
-            ..Default::default()
-        },
-    )
+    create_topic_from_test_support(broker, ClientTopicSetup {
+        client_id: "ack-order-test",
+        name: TOPIC,
+        ..Default::default()
+    })
     .await
 }
 
 /// Appends one batch of three records to partition 0.
 async fn produce(broker: &BrokerHandle) {
-    produce_records(
-        broker,
-        ProduceRecordsSetup {
-            topic: TOPIC,
-            ..Default::default()
-        },
-    )
+    produce_records(broker, ProduceRecordsSetup {
+        topic: TOPIC,
+        ..Default::default()
+    })
     .await;
 }
 
@@ -115,15 +109,12 @@ async fn produce(broker: &BrokerHandle) {
 /// 0 to 2 at epoch 0.
 async fn acquire_all(broker: &BrokerHandle, group: &str, topic_id: WireUuid) {
     initialize_earliest_share(broker, group, topic_id, 0..1).await;
-    let response = share_fetch(
-        broker,
-        ValidationFetchSetup {
-            group,
-            epoch: ShareSessionEpoch(0),
-            topic_id,
-            ..Default::default()
-        },
-    )
+    let response = share_fetch(broker, ValidationFetchSetup {
+        group,
+        epoch: ShareSessionEpoch(0),
+        topic_id,
+        ..Default::default()
+    })
     .await;
     let acquired: Vec<_> = acquired_share_records(&response.responses[0].partitions[0]);
     assert!(acquired == vec![OffsetRun::new(0, 2)], "{response:?}");
@@ -170,14 +161,10 @@ async fn share_fetch(broker: &BrokerHandle, setup: ValidationFetchSetup<'_>) -> 
         }],
         ..Default::default()
     };
-    share_fetch_wire(
-        broker,
-        &request,
-        ShareWireSetup {
-            version: krabka_ids::ApiVersion(VERSION),
-            user: setup.user,
-        },
-    )
+    share_fetch_wire(broker, &request, ShareWireSetup {
+        version: krabka_ids::ApiVersion(VERSION),
+        user: setup.user,
+    })
     .await
 }
 
@@ -201,14 +188,10 @@ async fn share_acknowledge(
         partition: setup.partition,
         ..Default::default()
     });
-    share_acknowledge_wire(
-        broker,
-        &request,
-        ShareWireSetup {
-            version: krabka_ids::ApiVersion(VERSION),
-            user: setup.user,
-        },
-    )
+    share_acknowledge_wire(broker, &request, ShareWireSetup {
+        version: krabka_ids::ApiVersion(VERSION),
+        user: setup.user,
+    })
     .await
 }
 
@@ -296,61 +279,43 @@ fn cases() -> Vec<Case> {
             acknowledge: codes::INVALID_REQUEST,
             states: HELD,
         },
-        invalid(
-            "first offset past last",
-            &[WireAckBatch {
-                first: 2,
-                last: 0,
+        invalid("first offset past last", &[WireAckBatch {
+            first: 2,
+            last: 0,
+            types: &[ACCEPT],
+        }]),
+        invalid("overlapping batches", &[
+            WireAckBatch {
+                first: 0,
+                last: 1,
                 types: &[ACCEPT],
-            }],
-        ),
-        invalid(
-            "overlapping batches",
-            &[
-                WireAckBatch {
-                    first: 0,
-                    last: 1,
-                    types: &[ACCEPT],
-                },
-                WireAckBatch {
-                    first: 0,
-                    last: 2,
-                    types: &[ACCEPT],
-                },
-            ],
-        ),
-        invalid(
-            "no acknowledge type",
-            &[WireAckBatch {
+            },
+            WireAckBatch {
                 first: 0,
                 last: 2,
-                types: &[],
-            }],
-        ),
-        invalid(
-            "type count not the range",
-            &[WireAckBatch {
-                first: 0,
-                last: 2,
-                types: &[ACCEPT, ACCEPT],
-            }],
-        ),
-        invalid(
-            "type out of range",
-            &[WireAckBatch {
-                first: 0,
-                last: 2,
-                types: &[5],
-            }],
-        ),
-        invalid(
-            "renew without IsRenewAck",
-            &[WireAckBatch {
-                first: 0,
-                last: 2,
-                types: &[RENEW],
-            }],
-        ),
+                types: &[ACCEPT],
+            },
+        ]),
+        invalid("no acknowledge type", &[WireAckBatch {
+            first: 0,
+            last: 2,
+            types: &[],
+        }]),
+        invalid("type count not the range", &[WireAckBatch {
+            first: 0,
+            last: 2,
+            types: &[ACCEPT, ACCEPT],
+        }]),
+        invalid("type out of range", &[WireAckBatch {
+            first: 0,
+            last: 2,
+            types: &[5],
+        }]),
+        invalid("renew without IsRenewAck", &[WireAckBatch {
+            first: 0,
+            last: 2,
+            types: &[RENEW],
+        }]),
         Case {
             name: "partition the metadata does not hold",
             user: READER,
@@ -381,23 +346,20 @@ async fn acknowledge_checks_run_in_kafka_order() {
     for (index, case) in cases().into_iter().enumerate() {
         let group = format!("fetch-{index}");
         acquire_all(&broker, &group, topic_id).await;
-        let response = share_fetch(
-            &broker,
-            ValidationFetchSetup {
-                user: case.user,
-                group: &group,
-                topic_id,
-                rows: [WirePartitionAcknowledgements {
-                    index: case.partition,
-                    batches: case.batches,
-                }]
-                .iter()
-                .copied()
-                .map(AcknowledgementPartitionSetup::from_wire)
-                .collect(),
-                ..Default::default()
-            },
-        )
+        let response = share_fetch(&broker, ValidationFetchSetup {
+            user: case.user,
+            group: &group,
+            topic_id,
+            rows: [WirePartitionAcknowledgements {
+                index: case.partition,
+                batches: case.batches,
+            }]
+            .iter()
+            .copied()
+            .map(AcknowledgementPartitionSetup::from_wire)
+            .collect(),
+            ..Default::default()
+        })
         .await;
         let row = &response.responses[0].partitions[0];
         actual.push((
@@ -423,20 +385,15 @@ async fn acknowledge_checks_run_in_kafka_order() {
 
         let group = format!("acknowledge-{index}");
         acquire_all(&broker, &group, topic_id).await;
-        let response = share_acknowledge(
-            &broker,
-            ValidationAcknowledgeSetup {
-                user: case.user,
-                group: &group,
-                topic_id,
-                partition: AcknowledgementPartitionSetup::from_wire(
-                    WirePartitionAcknowledgements {
-                        index: case.partition,
-                        batches: case.batches,
-                    },
-                ),
-            },
-        )
+        let response = share_acknowledge(&broker, ValidationAcknowledgeSetup {
+            user: case.user,
+            group: &group,
+            topic_id,
+            partition: AcknowledgementPartitionSetup::from_wire(WirePartitionAcknowledgements {
+                index: case.partition,
+                batches: case.batches,
+            }),
+        })
         .await;
         let row = &response.responses[0].partitions[0];
         actual.push((
@@ -465,15 +422,12 @@ async fn a_denied_row_without_acknowledgements_has_no_acknowledge_error() {
     produce(&broker).await;
     acquire_all(&broker, "no-acks", topic_id).await;
 
-    let response = share_fetch(
-        &broker,
-        ValidationFetchSetup {
-            user: DENIED,
-            group: "no-acks",
-            topic_id,
-            ..Default::default()
-        },
-    )
+    let response = share_fetch(&broker, ValidationFetchSetup {
+        user: DENIED,
+        group: "no-acks",
+        topic_id,
+        ..Default::default()
+    })
     .await;
     let row = &response.responses[0].partitions[0];
 

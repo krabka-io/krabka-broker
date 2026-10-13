@@ -7,17 +7,18 @@
 //! residue that must replay as classic and the stray next-gen write that
 //! resurrects the group as a consumer.
 
-use assert2::assert;
-
-use super::{
-    replay::finalize,
-    test_support::{
-        LogRecord, ReplayedCoordinator, bare_coordinator, classic_group_record,
-        consumer_group_records, replay_classic_residue, replay_stream,
+use {
+    super::{
+        replay::finalize,
+        test_support::{
+            LogRecord, ReplayedCoordinator, bare_coordinator, classic_group_record,
+            consumer_group_records, replay_classic_residue, replay_stream,
+        },
     },
-};
-use crate::coordinator::{
-    persistence::GroupMetadataValue, unified::actor::test_support::rpc::describe,
+    crate::coordinator::{
+        persistence::GroupMetadataValue, unified::actor::test_support::rpc::describe,
+    },
+    assert2::assert,
 };
 
 /// PROBLEM A, the downgrade trap: a group that started classic, then was

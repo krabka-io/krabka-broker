@@ -1,41 +1,39 @@
 //! Unit tests for local-retention eviction: the deletion walk, the roll of a
 //! breached active segment, and the pass that applies both to a real log.
 
-use assert2::{assert, check};
-use krabka_ids::PartitionIndex;
-use krabka_log::Log;
-use krabka_units::{bytes, millis};
-
-use super::*;
-use crate::{
-    api_catalog::UnstableApiVersions,
-    partition::Partition,
-    remote_log_manager::{
-        ArchiveMode,
-        local_retention::finished_segment_ranges,
-        test_support::{
-            self as fixtures, ArchivedRetention, Backends, PartitionSnapshot, RetentionPolicy,
-            SealedRange, TempDirs, archived_backends, batch, copy_exports, leading_partition_over,
-            local_backends, partition_log_fixture, partition_snapshot,
-            rolled_tiered_partition_with_config, sealed_ranges, synth_export, three_exports, tier,
-            tp,
+use {
+    super::*,
+    crate::{
+        api_catalog::UnstableApiVersions,
+        partition::Partition,
+        remote_log_manager::{
+            ArchiveMode,
+            local_retention::finished_segment_ranges,
+            test_support::{
+                self as fixtures, ArchivedRetention, Backends, PartitionSnapshot, RetentionPolicy,
+                SealedRange, TempDirs, archived_backends, batch, copy_exports,
+                leading_partition_over, local_backends, partition_log_fixture, partition_snapshot,
+                rolled_tiered_partition_with_config, sealed_ranges, synth_export, three_exports,
+                tier, tp,
+            },
         },
+        test_support::UnixMillis,
+        time_util::now_ms,
     },
-    test_support::UnixMillis,
-    time_util::now_ms,
+    assert2::{assert, check},
+    krabka_ids::PartitionIndex,
+    krabka_log::Log,
+    krabka_units::{bytes, millis},
 };
 
 /// A rolled, tiered partition whose sealed segments expire after one millisecond.
 fn short_retention_partition(log_dir: &std::path::Path) -> std::sync::Arc<Partition> {
-    rolled_tiered_partition_with_config(
-        log_dir,
-        LogConfig {
-            segment_size: bytes(256),
-            remote_storage_enable: true,
-            local_retention: Some(millis(1)),
-            ..LogConfig::default()
-        },
-    )
+    rolled_tiered_partition_with_config(log_dir, LogConfig {
+        segment_size: bytes(256),
+        remote_storage_enable: true,
+        local_retention: Some(millis(1)),
+        ..LogConfig::default()
+    })
 }
 
 // The newest timestamp and the size of an active segment.
@@ -439,10 +437,10 @@ fn remote_covered_through_walks_an_unbroken_prefix() {
     let cases = [
         CoverCase {
             label: "obsolete disconnected prefix cannot suppress the local anchor",
-            finished: &[
-                OffsetRange { start: 0, end: 9 },
-                OffsetRange { start: 20, end: 29 },
-            ],
+            finished: &[OffsetRange { start: 0, end: 9 }, OffsetRange {
+                start: 20,
+                end: 29,
+            }],
             local_start: 20,
             expected: Some(29),
         },
@@ -476,10 +474,10 @@ fn remote_covered_through_walks_an_unbroken_prefix() {
         },
         CoverCase {
             label: "a gap stops the walk, and a later segment cannot bridge it",
-            finished: &[
-                OffsetRange { start: 0, end: 9 },
-                OffsetRange { start: 20, end: 29 },
-            ],
+            finished: &[OffsetRange { start: 0, end: 9 }, OffsetRange {
+                start: 20,
+                end: 29,
+            }],
             local_start: 0,
             expected: Some(9),
         },
@@ -491,10 +489,10 @@ fn remote_covered_through_walks_an_unbroken_prefix() {
         },
         CoverCase {
             label: "remote retention dropped the head, but the local log moved too",
-            finished: &[
-                OffsetRange { start: 10, end: 19 },
-                OffsetRange { start: 20, end: 29 },
-            ],
+            finished: &[OffsetRange { start: 10, end: 19 }, OffsetRange {
+                start: 20,
+                end: 29,
+            }],
             local_start: 10,
             expected: Some(29),
         },
@@ -617,15 +615,12 @@ async fn local_retention_drive_deletes_copied_segments() {
         local: log_dir,
         remote: remote_dir,
     } = fixtures::temporary_dirs();
-    let mut log = Log::open(
-        log_dir.path(),
-        LogConfig {
-            segment_size: bytes(256),
-            remote_storage_enable: true,
-            local_retention: Some(millis(1)),
-            ..LogConfig::default()
-        },
-    )
+    let mut log = Log::open(log_dir.path(), LogConfig {
+        segment_size: bytes(256),
+        remote_storage_enable: true,
+        local_retention: Some(millis(1)),
+        ..LogConfig::default()
+    })
     .unwrap();
     fixtures::append_fixture_batches(&mut log, 12);
     log.sync().expect("flush sealed segments before archiving");
@@ -711,17 +706,12 @@ async fn local_retention_still_evicts_under_a_write_once_archive() {
     // Archiving a segment is exactly what makes its local copy droppable.
     // A write-once remote tier does not change that: local retention
     // deletes local files and never touches the archive.
-    let removed = fixtures::local_retention_at(
-        &partition,
-        &exports,
-        &log_config,
-        &rlmm,
-        RetentionPolicy {
+    let removed =
+        fixtures::local_retention_at(&partition, &exports, &log_config, &rlmm, RetentionPolicy {
             unstable: UnstableApiVersions::Disabled,
             now_ms: now_ms() + 1_000_000,
-        },
-    )
-    .await;
+        })
+        .await;
 
     evicted_local_segments!(check, removed, exports, &partition);
 }
@@ -756,21 +746,16 @@ async fn future_stamped_segments_leave_the_disk_only_under_trunks_rule() {
             false,
         ),
     ] {
-        partition_log_fixture!(
-            log_dir,
-            remote_dir,
-            log,
-            LogConfig {
-                segment_size: bytes(256),
-                remote_storage_enable: true,
-                local_retention: Some(millis(1)),
-                remote_tier: krabka_log::RemoteTierFlags {
-                    copy_disable,
-                    ..krabka_log::RemoteTierFlags::DEFAULT
-                },
-                ..LogConfig::default()
-            }
-        );
+        partition_log_fixture!(log_dir, remote_dir, log, LogConfig {
+            segment_size: bytes(256),
+            remote_storage_enable: true,
+            local_retention: Some(millis(1)),
+            remote_tier: krabka_log::RemoteTierFlags {
+                copy_disable,
+                ..krabka_log::RemoteTierFlags::DEFAULT
+            },
+            ..LogConfig::default()
+        });
         // Every record claims a timestamp a million seconds ahead.
         let future = now_ms() + 1_000_000_000;
         for _ in 0..12 {
@@ -818,16 +803,12 @@ async fn scheduled_local_retention_keeps_the_pending_prefix_until_its_clock_boun
             record
         })
         .collect();
-    let partition = partition_with_batches(
-        &log_dir,
-        &clock,
-        DeliveryPartitionSetup {
-            topic: "orders",
-            config: config.clone(),
-            leader: krabka_ids::NodeId(1),
-            batches,
-        },
-    );
+    let partition = partition_with_batches(&log_dir, &clock, DeliveryPartitionSetup {
+        topic: "orders",
+        config: config.clone(),
+        leader: krabka_ids::NodeId(1),
+        batches,
+    });
     // Reopen after constructing the partition so neither the fixture's initial
     // publication nor a cached timestamp can authorize the eviction.
     {
@@ -905,17 +886,12 @@ async fn pass_over(
 // idle.
 #[tokio::test]
 async fn a_breached_active_segment_rolls_then_tiers_then_leaves_the_disk() {
-    partition_log_fixture!(
-        log_dir,
-        remote_dir,
-        log,
-        LogConfig {
-            remote_storage_enable: true,
-            local_retention: Some(millis(1)),
-            retention: None,
-            ..LogConfig::default()
-        }
-    );
+    partition_log_fixture!(log_dir, remote_dir, log, LogConfig {
+        remote_storage_enable: true,
+        local_retention: Some(millis(1)),
+        retention: None,
+        ..LogConfig::default()
+    });
     for _ in 0..3 {
         log.append(&mut batch(2)).unwrap();
     }
@@ -979,16 +955,13 @@ async fn the_roll_waits_for_the_high_watermark_and_for_the_walk_to_reach_it() {
             local: log_dir,
             remote: remote_dir,
         } = fixtures::temporary_dirs();
-        let partition = rolled_tiered_partition_with_config(
-            log_dir.path(),
-            LogConfig {
-                segment_size: bytes(256),
-                remote_storage_enable: true,
-                local_retention: Some(millis(1)),
-                retention: None,
-                ..LogConfig::default()
-            },
-        );
+        let partition = rolled_tiered_partition_with_config(log_dir.path(), LogConfig {
+            segment_size: bytes(256),
+            remote_storage_enable: true,
+            local_retention: Some(millis(1)),
+            retention: None,
+            ..LogConfig::default()
+        });
         let PartitionSnapshot {
             exports,
             config: log_config,

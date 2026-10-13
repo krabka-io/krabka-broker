@@ -1,14 +1,15 @@
 //! KIP-73 throttled replication: the value types and the parser.
 
+pub use krabka_throttle::{MICROS_PER_TOKEN, ThrottleState, TokenBucket};
 use std::collections::BTreeSet;
 
-pub use krabka_throttle::{MICROS_PER_TOKEN, ThrottleState, TokenBucket};
-
 mod refresh;
-use krabka_metadata::{MetadataImage, NodeId};
-use krabka_units::{Time, secs};
 pub(crate) use refresh::apply_image;
 pub use refresh::run;
+use {
+    krabka_metadata::{MetadataImage, NodeId},
+    krabka_units::{Time, secs},
+};
 
 /// How long a throttled-replication quota remembers what it measured: Kafka's
 /// `replication.quota.window.num` (11) times
@@ -170,9 +171,7 @@ pub const ALTER_LOG_DIRS_THROTTLED_RATE_KEY: &str =
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-
-    use super::*;
+    use {super::*, assert2::assert};
 
     fn replica(partition: i32, broker: u64) -> ThrottledReplica {
         ThrottledReplica {
@@ -195,10 +194,11 @@ mod tests {
     fn pairs_parse_in_order() {
         for (input, want) in [
             ("0:1", vec![replica(0, 1)]),
-            (
-                "0:1,0:2,1:3",
-                vec![replica(0, 1), replica(0, 2), replica(1, 3)],
-            ),
+            ("0:1,0:2,1:3", vec![
+                replica(0, 1),
+                replica(0, 2),
+                replica(1, 3),
+            ]),
         ] {
             assert!(
                 ThrottledReplicas::parse(input) == Ok(ThrottledReplicas::List(want)),

@@ -7,9 +7,10 @@
 //! check it without a socket. The one thing they read from the system is the
 //! host name that a controller bound to a wildcard address advertises.
 
-use krabka_protocol::owned::add_raft_voter_request::{AddRaftVoterRequest, Listener};
-
-use crate::host_port::{HostPort, advertised_host, local_host_name, parse_host_port};
+use {
+    crate::host_port::{HostPort, advertised_host, local_host_name, parse_host_port},
+    krabka_protocol::owned::add_raft_voter_request::{AddRaftVoterRequest, Listener},
+};
 
 /// The `CONTROLLER` listener of a controller bound to `bound`: the bound
 /// address, or this machine's host name for a wildcard bind, as
@@ -128,11 +129,12 @@ pub(super) fn build_add_raft_voter_request(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use bytes::BytesMut;
-    use krabka_protocol::{Decode, Encode, owned::add_raft_voter_request};
-
-    use super::*;
+    use {
+        super::*,
+        assert2::assert,
+        bytes::BytesMut,
+        krabka_protocol::{Decode, Encode, owned::add_raft_voter_request},
+    };
 
     #[test]
     fn controller_listener_uses_bound_controller_endpoint() {
@@ -240,21 +242,18 @@ mod tests {
                 voter_nodes: voters
                     .iter()
                     .map(|Voter { id, endpoints }| {
-                        (
-                            krabka_raft::NodeId(*id),
-                            krabka_raft::Node {
-                                directory_id: uuid::Uuid::from_u128(u128::from(*id)),
-                                endpoints: endpoints
-                                    .iter()
-                                    .map(|Endpoint { name, port }| krabka_metadata::VoterEndpoint {
-                                        name: (*name).to_owned(),
-                                        host: "127.0.0.1".to_owned(),
-                                        port: *port,
-                                    })
-                                    .collect(),
-                                kraft_version: krabka_metadata::KRaftVersionRange::default(),
-                            },
-                        )
+                        (krabka_raft::NodeId(*id), krabka_raft::Node {
+                            directory_id: uuid::Uuid::from_u128(u128::from(*id)),
+                            endpoints: endpoints
+                                .iter()
+                                .map(|Endpoint { name, port }| krabka_metadata::VoterEndpoint {
+                                    name: (*name).to_owned(),
+                                    host: "127.0.0.1".to_owned(),
+                                    port: *port,
+                                })
+                                .collect(),
+                            kraft_version: krabka_metadata::KRaftVersionRange::default(),
+                        })
                     })
                     .collect(),
                 ..Default::default()
@@ -296,16 +295,13 @@ mod tests {
             ),
             (
                 "the leader has no CONTROLLER endpoint",
-                quorum(
-                    Some(1),
-                    &[Voter {
-                        id: 1,
-                        endpoints: &[Endpoint {
-                            name: "REPLICATION",
-                            port: 9101,
-                        }],
+                quorum(Some(1), &[Voter {
+                    id: 1,
+                    endpoints: &[Endpoint {
+                        name: "REPLICATION",
+                        port: 9101,
                     }],
-                ),
+                }]),
                 0,
                 ("127.0.0.1:9101", false),
             ),

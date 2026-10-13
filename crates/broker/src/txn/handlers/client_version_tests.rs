@@ -10,32 +10,32 @@
 //! next transaction at the epoch it holds, which is what it needs: an `EndTxn`
 //! v4 response cannot carry a bumped epoch.
 
-use std::sync::Arc;
-
-use assert2::check;
-use krabka_protocol::owned::{
-    add_partitions_to_txn_request::{
-        self, AddPartitionsToTxnRequest, AddPartitionsToTxnTransaction,
-    },
-    add_partitions_to_txn_response::AddPartitionsToTxnResponse,
-    common::add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
-    end_txn_request::{self, EndTxnRequest},
-    end_txn_response::EndTxnResponse,
-};
-
-use crate::{
-    authorizer::AllowAllAuthorizer,
-    broker::Broker,
-    codes,
-    test_support::{
-        decode_response, dispatch_context, encode_request, peer, principal, request_context,
-    },
-    txn::{
-        handlers::add_partitions_to_txn::test_support::{
-            CoordinatorBroker, seed_transaction, start_coordinator,
+use {
+    crate::{
+        authorizer::AllowAllAuthorizer,
+        broker::Broker,
+        codes,
+        test_support::{
+            decode_response, dispatch_context, encode_request, peer, principal, request_context,
         },
-        state::TxnState,
+        txn::{
+            handlers::add_partitions_to_txn::test_support::{
+                CoordinatorBroker, seed_transaction, start_coordinator,
+            },
+            state::TxnState,
+        },
     },
+    assert2::check,
+    krabka_protocol::owned::{
+        add_partitions_to_txn_request::{
+            self, AddPartitionsToTxnRequest, AddPartitionsToTxnTransaction,
+        },
+        add_partitions_to_txn_response::AddPartitionsToTxnResponse,
+        common::add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
+        end_txn_request::{self, EndTxnRequest},
+        end_txn_response::EndTxnResponse,
+    },
+    std::sync::Arc,
 };
 
 const TID: &str = "tid-client-version";

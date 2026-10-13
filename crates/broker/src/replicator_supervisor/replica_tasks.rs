@@ -8,17 +8,17 @@
 //! reassignment or a leadership change on one partition does not disturb the
 //! thousands sharing its connection.
 
-use std::{collections::BTreeMap, sync::Arc};
-
-use krabka_ids::PartitionIndex;
-use krabka_metadata::MetadataImage;
-use tracing::warn;
-
-use super::{
-    FetcherKey, FetcherTask, LeaderEndpoint, ReplicatorSupervisor, TopicPartition,
-    desired_follower_set, resolve_leader_endpoint,
+use {
+    super::{
+        FetcherKey, FetcherTask, LeaderEndpoint, ReplicatorSupervisor, TopicPartition,
+        desired_follower_set, resolve_leader_endpoint,
+    },
+    crate::replicator::{self, FollowedKey},
+    krabka_ids::PartitionIndex,
+    krabka_metadata::MetadataImage,
+    std::{collections::BTreeMap, sync::Arc},
+    tracing::warn,
 };
-use crate::replicator::{self, FollowedKey};
 
 /// One leader's worth of desired follower state.
 struct DesiredFetcher {
@@ -75,15 +75,12 @@ impl ReplicatorSupervisor {
                 connection: self.connection_config(),
                 followed: Arc::clone(&followed),
             }));
-            self.tasks.insert(
-                key,
-                FetcherTask {
-                    shutdown: token,
-                    handle,
-                    followed,
-                    endpoint: wanted.endpoint,
-                },
-            );
+            self.tasks.insert(key, FetcherTask {
+                shutdown: token,
+                handle,
+                followed,
+                endpoint: wanted.endpoint,
+            });
         }
     }
 
@@ -235,20 +232,22 @@ impl ReplicatorSupervisor {
 
 #[cfg(test)]
 mod tests {
-    use assert2::{assert, check};
-    use krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord};
-    use krabka_raft::NodeId;
-    use krabka_units::{bytes, millis};
-    use tokio_util::sync::CancellationToken;
-    use uuid::Uuid;
-
-    use super::*;
-    use crate::{
-        replicator_supervisor::test_support::{
-            SupervisorPartitionSetup, SupervisorTopicSetup, await_until, broker_record, image_with,
-            partition_record, reconciled_supervisor, supervisor_fixture, topic_record,
+    use {
+        super::*,
+        crate::{
+            replicator_supervisor::test_support::{
+                SupervisorPartitionSetup, SupervisorTopicSetup, await_until, broker_record,
+                image_with, partition_record, reconciled_supervisor, supervisor_fixture,
+                topic_record,
+            },
+            test_support::PartitionCount,
         },
-        test_support::PartitionCount,
+        assert2::{assert, check},
+        krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord},
+        krabka_raft::NodeId,
+        krabka_units::{bytes, millis},
+        tokio_util::sync::CancellationToken,
+        uuid::Uuid,
     };
 
     /// The `(topic, partition)` keys one fetcher follows, in key order.
@@ -337,13 +336,10 @@ mod tests {
 
         check!(supervisor.tasks.len() == 1);
         check!(
-            followed_keys(
-                &supervisor,
-                FetcherKey {
-                    leader: NodeId(1),
-                    fetcher_id: 0
-                }
-            ) == vec![
+            followed_keys(&supervisor, FetcherKey {
+                leader: NodeId(1),
+                fetcher_id: 0
+            }) == vec![
                 ("t".to_string(), 0),
                 ("t".to_string(), 1),
                 ("t".to_string(), 2)
@@ -361,13 +357,10 @@ mod tests {
     async fn a_replica_on_an_offline_log_directory_is_not_followed() {
         let img = followed_image(1, &[0], 8);
         let (supervisor, _partitions, _reporter, dir) = reconciled_supervisor(&img).await;
-        let followed_while_online = followed_keys(
-            &supervisor,
-            FetcherKey {
-                leader: NodeId(1),
-                fetcher_id: 0,
-            },
-        );
+        let followed_while_online = followed_keys(&supervisor, FetcherKey {
+            leader: NodeId(1),
+            fetcher_id: 0,
+        });
 
         supervisor
             .log_dir_status
@@ -407,22 +400,16 @@ mod tests {
 
         check!(supervisor.tasks.len() == 2);
         check!(
-            followed_keys(
-                &supervisor,
-                FetcherKey {
-                    leader: NodeId(1),
-                    fetcher_id: 0
-                }
-            ) == vec![("t".to_string(), 0)]
+            followed_keys(&supervisor, FetcherKey {
+                leader: NodeId(1),
+                fetcher_id: 0
+            }) == vec![("t".to_string(), 0)]
         );
         check!(
-            followed_keys(
-                &supervisor,
-                FetcherKey {
-                    leader: NodeId(3),
-                    fetcher_id: 0
-                }
-            ) == vec![("t".to_string(), 1)]
+            followed_keys(&supervisor, FetcherKey {
+                leader: NodeId(3),
+                fetcher_id: 0
+            }) == vec![("t".to_string(), 1)]
         );
         for task in &supervisor.tasks {
             task.shutdown.cancel();
@@ -499,13 +486,10 @@ mod tests {
         supervisor.reconcile(&one).await;
 
         check!(
-            followed_keys(
-                &supervisor,
-                FetcherKey {
-                    leader: NodeId(1),
-                    fetcher_id: 0
-                }
-            ) == vec![("t".to_string(), 0)]
+            followed_keys(&supervisor, FetcherKey {
+                leader: NodeId(1),
+                fetcher_id: 0
+            }) == vec![("t".to_string(), 0)]
         );
         check!(!token.is_cancelled());
         token.cancel();
@@ -521,13 +505,10 @@ mod tests {
                 leader: NodeId(1),
                 fetcher_id: 0,
             },
-            running_fetcher(
-                token.clone(),
-                LeaderEndpoint {
-                    host: "127.0.0.1".into(),
-                    port: 9092,
-                },
-            ),
+            running_fetcher(token.clone(), LeaderEndpoint {
+                host: "127.0.0.1".into(),
+                port: 9092,
+            }),
         );
 
         supervisor.reconcile(&img).await;
@@ -548,13 +529,10 @@ mod tests {
                 leader: NodeId(1),
                 fetcher_id: 0,
             },
-            running_fetcher(
-                stale.clone(),
-                LeaderEndpoint {
-                    host: "moved.example".into(),
-                    port: 1234,
-                },
-            ),
+            running_fetcher(stale.clone(), LeaderEndpoint {
+                host: "moved.example".into(),
+                port: 1234,
+            }),
         );
 
         supervisor.reconcile(&img).await;

@@ -5,12 +5,13 @@
 //! directory that survives a restart, an audit signing key, a deny-all
 //! authorizer, or nothing beyond the `for_tests` defaults.
 
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
-use krabka_client_core::Client;
-use tempfile::TempDir;
-
-use crate::support::client::{
-    BrokerClientSetup, BrokerWithClient, connect_owned, start_broker_client,
+use {
+    crate::support::client::{
+        BrokerClientSetup, BrokerWithClient, connect_owned, start_broker_client,
+    },
+    krabka_broker::{Broker, BrokerConfig, BrokerHandle},
+    krabka_client_core::Client,
+    tempfile::TempDir,
 };
 
 pub struct InProcess {
@@ -19,9 +20,7 @@ pub struct InProcess {
     pub _tempdir: TempDir,
 }
 
-pub async fn start() -> InProcess {
-    start_configured(|_| {}).await
-}
+pub async fn start() -> InProcess { start_configured(|_| {}).await }
 
 /// A bare broker with its directory bound before its handle at the call site.
 ///
@@ -121,9 +120,7 @@ pub fn start_with_audit_key(
 /// defaults enable audit. The broker denies the anonymous client every admin
 /// operation, which produces `AuthorizationDenied` audit events.
 pub async fn start_with_deny_all_authz() -> InProcess {
-    use std::collections::HashSet;
-
-    use krabka_broker::authorizer::SimpleAclAuthorizer;
+    use {krabka_broker::authorizer::SimpleAclAuthorizer, std::collections::HashSet};
 
     let tempdir = tempfile::tempdir().expect("tempdir");
     let mut config = heartbeat_config(tempdir.path());
@@ -134,13 +131,10 @@ pub async fn start_with_deny_all_authz() -> InProcess {
     config.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(HashSet::new()));
     // The broker's own heartbeat is denied too, so it stays fenced: it never
     // becomes alive in the liveness registry, and nothing here needs it to.
-    let BrokerWithClient { broker, client } = start_broker_client(
-        config,
-        BrokerClientSetup {
-            client_id: "krabka-broker-test-deny",
-            ..Default::default()
-        },
-    )
+    let BrokerWithClient { broker, client } = start_broker_client(config, BrokerClientSetup {
+        client_id: "krabka-broker-test-deny",
+        ..Default::default()
+    })
     .await;
     InProcess {
         broker,

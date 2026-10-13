@@ -7,13 +7,14 @@
 //! clock and uncertainty bound, which may differ from a previously released
 //! in-memory prefix.
 
-use krabka_ids::Offset;
-use krabka_units::prelude::TimeExt as _;
-
-use super::Log;
-use crate::{
-    config::DeliveryPolicy,
-    delivery::{self, DeliveryAdvance},
+use {
+    super::Log,
+    crate::{
+        config::DeliveryPolicy,
+        delivery::{self, DeliveryAdvance},
+    },
+    krabka_ids::Offset,
+    krabka_units::prelude::TimeExt as _,
 };
 
 /// Whether a topic schedules delivery, and its clock bound in milliseconds.
@@ -311,14 +312,15 @@ impl Log {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use krabka_protocol::records::{Record, RecordBatch};
-    use krabka_units::millis;
-
-    use super::*;
-    use crate::{
-        LogConfig,
-        log::test_support::{TempLog, configured_test_log},
+    use {
+        super::*,
+        crate::{
+            LogConfig,
+            log::test_support::{TempLog, configured_test_log},
+        },
+        assert2::assert,
+        krabka_protocol::records::{Record, RecordBatch},
+        krabka_units::millis,
     };
 
     #[test]

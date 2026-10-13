@@ -3,25 +3,25 @@
 //! through `FetchSnapshot` rather than through log replication, and keeps that
 //! transfer alive when the node serving it rolls to a newer checkpoint.
 
-use std::{
-    collections::{BTreeSet, HashMap},
-    time::Duration,
-};
-
-use krabka_protocol::{
-    Decode, owned::fetch_snapshot_response::FetchSnapshotResponse, records::RecordBatch,
-};
-use krabka_raft::kraft::{
-    NodeId, PeerSender,
-    transport::{api_key, wire},
-};
-
-use crate::{
-    harness::{
-        STAGGERED_TIMEOUTS, SimEngineSetup, SnapshotRecordCount, await_single_leader, await_until,
-        build_engine, shutdown_nodes, three_voter_network, topic_record,
+use {
+    crate::{
+        harness::{
+            STAGGERED_TIMEOUTS, SimEngineSetup, SnapshotRecordCount, await_single_leader,
+            await_until, build_engine, shutdown_nodes, three_voter_network, topic_record,
+        },
+        sim_net::SimNet,
     },
-    sim_net::SimNet,
+    krabka_protocol::{
+        Decode, owned::fetch_snapshot_response::FetchSnapshotResponse, records::RecordBatch,
+    },
+    krabka_raft::kraft::{
+        NodeId, PeerSender,
+        transport::{api_key, wire},
+    },
+    std::{
+        collections::{BTreeSet, HashMap},
+        time::Duration,
+    },
 };
 
 fn start_snapshot_pair(
@@ -34,16 +34,13 @@ fn start_snapshot_pair(
         .into_iter()
         .map(|id| {
             let idx = usize::try_from(id.0 - 1).unwrap();
-            let (ctrl, dir) = build_engine(
-                net,
-                SimEngineSetup {
-                    me: id,
-                    ids: voters,
-                    cluster_id: cid,
-                    election_timeout: STAGGERED_TIMEOUTS[idx],
-                    snapshot_interval_records: SnapshotRecordCount(interval),
-                },
-            );
+            let (ctrl, dir) = build_engine(net, SimEngineSetup {
+                me: id,
+                ids: voters,
+                cluster_id: cid,
+                election_timeout: STAGGERED_TIMEOUTS[idx],
+                snapshot_interval_records: SnapshotRecordCount(interval),
+            });
             net.register(id, ctrl);
             (id, dir)
         })
@@ -190,16 +187,13 @@ async fn lagging_follower_catches_up_via_snapshot() {
     // Now bring the lagging node 3 up on a FRESH empty tempdir: its LEO is 0,
     // far below the leader's pruned log_start, so it can ONLY catch up by
     // fetching the snapshot.
-    let (lag_ctrl, lag_dir) = build_engine(
-        &net,
-        SimEngineSetup {
-            me: NodeId(3),
-            ids: &ids,
-            cluster_id: cid,
-            election_timeout: STAGGERED_TIMEOUTS[2],
-            snapshot_interval_records: SnapshotRecordCount(interval),
-        },
-    );
+    let (lag_ctrl, lag_dir) = build_engine(&net, SimEngineSetup {
+        me: NodeId(3),
+        ids: &ids,
+        cluster_id: cid,
+        election_timeout: STAGGERED_TIMEOUTS[2],
+        snapshot_interval_records: SnapshotRecordCount(interval),
+    });
     net.register(NodeId(3), lag_ctrl);
     dirs.insert(NodeId(3), lag_dir);
 
@@ -234,7 +228,7 @@ async fn lagging_follower_catches_up_via_snapshot() {
 async fn follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_leader() {
     let cid = uuid::Uuid::from_u128(501);
     let interval = 5u64;
-    let (net, ids, pair) = elected_pair_on_new_network(cid, interval).await;
+    let (net, _ids, pair) = elected_pair_on_new_network(cid, interval).await;
     let ElectedSnapshotPair {
         dirs,
         leader,
@@ -355,7 +349,7 @@ async fn follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_lea
 async fn a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpoint() {
     let cid = uuid::Uuid::from_u128(502);
     let interval = 5u64;
-    let (net, ids, pair) = elected_pair_on_new_network(cid, interval).await;
+    let (net, _ids, pair) = elected_pair_on_new_network(cid, interval).await;
     let ElectedSnapshotPair {
         dirs,
         leader,

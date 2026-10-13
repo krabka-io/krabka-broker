@@ -17,29 +17,29 @@
 //! authorisation (Cluster.Alter). This handler runs only after the principal
 //! has been authorized.
 
-use std::{collections::BTreeMap, path::PathBuf};
-
-use bytes::Bytes;
-use futures_util::future::BoxFuture;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        alter_replica_log_dirs_request::AlterReplicaLogDirsRequest,
-        alter_replica_log_dirs_response::{
-            AlterReplicaLogDirPartitionResult, AlterReplicaLogDirTopicResult,
-            AlterReplicaLogDirsResponse,
-        },
-    },
-};
-
 #[cfg(test)]
 use crate::producer_state::ProducerState;
-use crate::{
-    broker::Broker,
-    codes,
-    error::BrokerError,
-    future_log::{self, MoveError},
-    handlers::encode_response,
+use {
+    crate::{
+        broker::Broker,
+        codes,
+        error::BrokerError,
+        future_log::{self, MoveError},
+        handlers::encode_response,
+    },
+    bytes::Bytes,
+    futures_util::future::BoxFuture,
+    krabka_protocol::{
+        Decode,
+        owned::{
+            alter_replica_log_dirs_request::AlterReplicaLogDirsRequest,
+            alter_replica_log_dirs_response::{
+                AlterReplicaLogDirPartitionResult, AlterReplicaLogDirTopicResult,
+                AlterReplicaLogDirsResponse,
+            },
+        },
+    },
+    std::{collections::BTreeMap, path::PathBuf},
 };
 
 /// A partition addressed by topic name and index, ordered by topic and then index.
@@ -175,13 +175,14 @@ pub(crate) fn handle(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use krabka_protocol::owned::alter_replica_log_dirs_request::{
-        AlterReplicaLogDir, AlterReplicaLogDirTopic,
+    use {
+        super::*,
+        crate::{broker::spawn_partition, log_dir::partition_dir},
+        assert2::assert,
+        krabka_protocol::owned::alter_replica_log_dirs_request::{
+            AlterReplicaLogDir, AlterReplicaLogDirTopic,
+        },
     };
-
-    use super::*;
-    use crate::{broker::spawn_partition, log_dir::partition_dir};
 
     crate::test_support::codec_helpers!(AlterReplicaLogDirsRequest, AlterReplicaLogDirsResponse);
 

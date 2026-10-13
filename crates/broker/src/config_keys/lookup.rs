@@ -33,15 +33,10 @@ pub(super) fn topic_node_or_cluster_default<'a>(
     topic: &str,
     key: &str,
 ) -> Option<&'a str> {
-    topic_node_or_cluster_synonym(
-        image,
-        node,
-        topic,
-        ConfigSynonym {
-            topic_key: key,
-            broker_key: key,
-        },
-    )
+    topic_node_or_cluster_synonym(image, node, topic, ConfigSynonym {
+        topic_key: key,
+        broker_key: key,
+    })
 }
 
 /// A topic key and the broker key that carries its broker-wide default.

@@ -36,11 +36,11 @@
 
 #![allow(dead_code)]
 
-use std::time::{Duration, Instant};
-
-use assert2::assert;
-
-use crate::support::{discovery::topic_metadata_request, topics::metadata_topic};
+use {
+    crate::support::{discovery::topic_metadata_request, topics::metadata_topic},
+    assert2::assert,
+    std::time::{Duration, Instant},
+};
 
 pub mod acl;
 pub mod admin;
@@ -114,17 +114,17 @@ pub use self::{
         start_reusing_addrs, two_controller_followers, wait_for_all_brokers_registered,
     },
     containers::{
-        StartedBroker, start_host_broker, ContainerInput, JvmAdminSetup, JvmBrokerSetup, JvmDockerSetup, JvmListeners,
-        JvmSingleBrokerSetup, JvmStaticVoterSetup, bridge_gateway, combined_output, docker,
-        docker_exec, docker_logs, docker_output, docker_run_blocking, docker_tool_command,
+        ContainerInput, JvmAdminSetup, JvmBrokerSetup, JvmDockerSetup, JvmListeners,
+        JvmSingleBrokerSetup, JvmStaticVoterSetup, StartedBroker, bridge_gateway, combined_output,
+        docker, docker_exec, docker_logs, docker_output, docker_run_blocking, docker_tool_command,
         fixture_cache_dir, format_jvm_voter, free_port, init_jvm_tracing, jvm_acks_all_producer,
         jvm_admin_args, jvm_admin_config, jvm_bootstrap_servers, jvm_broker_config,
         jvm_client_addr, jvm_client_ports, jvm_docker_command, jvm_docker_run, jvm_finalized_level,
         jvm_listeners, jvm_output_lines, jvm_parse_offset, jvm_single_broker_config,
         jvm_spawn_piped, jvm_static_voter_config, jvm_stdin_output, jvm_tool_output,
         kafka_single_node_env_args, manifest_dir, print_log_tail, remove_container,
-        remove_container_with_volumes, save_jvm_logs, start_jvm_bound, start_jvm_cluster,
-        start_jvm_single, unique_container_name,
+        remove_container_with_volumes, save_jvm_logs, start_host_broker, start_jvm_bound,
+        start_jvm_cluster, start_jvm_single, unique_container_name,
     },
     coordinator::{KEY_TYPE_GROUP, KEY_TYPE_SHARE, KEY_TYPE_TRANSACTION, find_coordinator},
     operator_keys::{
@@ -145,9 +145,7 @@ pub use self::{
 /// Lazily-initialized tracing subscriber so `RUST_LOG=...` works in
 /// integration tests. It is safe to call this many times, because `try_init`
 /// is a no-op after the first success.
-pub fn init_tracing() {
-    init_tracing_with("warn");
-}
+pub fn init_tracing() { init_tracing_with("warn"); }
 
 /// Initialize the same subscriber with the caller's original fallback filter.
 pub fn init_tracing_with(default_filter: &str) {

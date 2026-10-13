@@ -79,25 +79,19 @@ async fn audit_chain_continues_across_restart() {
         let AuditedBoot {
             broker,
             client: _client,
-        } = boot_with_audited_topic(
-            dir.path(),
-            CreateTopicSetup {
-                topic: "r1",
-                ..Default::default()
-            },
-        )
+        } = boot_with_audited_topic(dir.path(), CreateTopicSetup {
+            topic: "r1",
+            ..Default::default()
+        })
         .await;
         broker.shutdown().await;
     }
 
     // Second boot on the SAME data dir: more events.
-    let AuditedBoot { broker, client } = boot_with_audited_topic(
-        dir.path(),
-        CreateTopicSetup {
-            topic: "r2",
-            ..Default::default()
-        },
-    )
+    let AuditedBoot { broker, client } = boot_with_audited_topic(dir.path(), CreateTopicSetup {
+        topic: "r2",
+        ..Default::default()
+    })
     .await;
 
     // Consume the audit topic and assert seqs are a contiguous, duplicate-free

@@ -2,33 +2,33 @@
 //! has already elected a leader, the two `GroupCoordinator` flavours the tests
 //! drive, and the classic record builder they replay.
 
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
-
-use assert2::assert;
-use bytes::Bytes;
-use krabka_raft::ControllerHandle;
-
-use crate::{
-    coordinator::{
-        GroupCoordinator,
-        persistence::{GroupMetadataValue, parse_key},
-        test_support::{
-            OffsetRecordSetup, coordinator_with_config, default_coordinator, offset_record,
+use {
+    crate::{
+        coordinator::{
+            GroupCoordinator,
+            persistence::{GroupMetadataValue, parse_key},
+            test_support::{
+                OffsetRecordSetup, coordinator_with_config, default_coordinator, offset_record,
+            },
+            unified::{
+                ImageMetadataProvider,
+                actor::test_support::empty_metadata,
+                config::NextGenConfig,
+                offsets_log::{OffsetsLog, ProductionOffsetsLog, fake::InMemoryOffsetsLog},
+                persistence_next_gen::ClassicMemberMetadata,
+            },
         },
-        unified::{
-            ImageMetadataProvider,
-            actor::test_support::empty_metadata,
-            config::NextGenConfig,
-            offsets_log::{OffsetsLog, ProductionOffsetsLog, fake::InMemoryOffsetsLog},
-            persistence_next_gen::ClassicMemberMetadata,
-        },
+        error::BrokerError,
+        metadata_source::MetadataSource,
+        partition_registry::PartitionRegistry,
     },
-    error::BrokerError,
-    metadata_source::MetadataSource,
-    partition_registry::PartitionRegistry,
+    assert2::assert,
+    bytes::Bytes,
+    krabka_raft::ControllerHandle,
+    std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    },
 };
 
 /// One record of a replayed log: its key, and its value or `None` for a
@@ -49,9 +49,7 @@ impl LogRecord {
     }
 
     /// A tombstone for `key`.
-    pub(super) fn tombstone(key: Bytes) -> Self {
-        Self { key, value: None }
-    }
+    pub(super) fn tombstone(key: Bytes) -> Self { Self { key, value: None } }
 }
 
 /// A coordinator and what a replay of a log into it returned.

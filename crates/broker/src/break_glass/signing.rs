@@ -45,11 +45,12 @@
 //! attacker present a captured signature for a purpose the signer never agreed
 //! to.
 
-use krabka_metadata::BreakGlassProposalRecord;
-
-use crate::{
-    break_glass::action_to_wire,
-    signing_domains::{BREAK_GLASS_DOMAIN, put_len_prefixed},
+use {
+    crate::{
+        break_glass::action_to_wire,
+        signing_domains::{BREAK_GLASS_DOMAIN, put_len_prefixed},
+    },
+    krabka_metadata::BreakGlassProposalRecord,
 };
 
 /// Build the canonical bytes that an approval of `proposal` signs.
@@ -77,12 +78,13 @@ pub(crate) fn approval_signing_bytes(proposal: &BreakGlassProposalRecord) -> Vec
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
-    use krabka_metadata::{BreakGlassAction, BreakGlassApproval};
-    use uuid::Uuid;
-
-    use super::*;
-    use crate::break_glass::ALL_ACTIONS;
+    use {
+        super::*,
+        crate::break_glass::ALL_ACTIONS,
+        assert2::check,
+        krabka_metadata::{BreakGlassAction, BreakGlassApproval},
+        uuid::Uuid,
+    };
 
     krabka_macros::break_glass_golden_id!(PROPOSAL_ID);
 
@@ -210,39 +212,27 @@ mod tests {
     fn the_mutable_fields_stay_outside_the_signed_bytes() {
         let baseline = approval_signing_bytes(&proposal());
         let cases = [
-            (
-                "one approval collected",
-                BreakGlassProposalRecord {
-                    approvals: vec![BreakGlassApproval {
-                        principal: "User:bob".to_owned(),
-                        approved_at_ms: 1_770_000_060_000,
-                        key_id: "bob-yubi".to_owned(),
-                        signature: vec![7; 64],
-                    }],
-                    ..proposal()
-                },
-            ),
-            (
-                "the approval spent",
-                BreakGlassProposalRecord {
-                    consumed_at_ms: 1_770_000_090_000,
-                    ..proposal()
-                },
-            ),
-            (
-                "the proposal withdrawn",
-                BreakGlassProposalRecord {
-                    withdrawn: true,
-                    ..proposal()
-                },
-            ),
-            (
-                "another reason",
-                BreakGlassProposalRecord {
-                    reason: "a different reason".to_owned(),
-                    ..proposal()
-                },
-            ),
+            ("one approval collected", BreakGlassProposalRecord {
+                approvals: vec![BreakGlassApproval {
+                    principal: "User:bob".to_owned(),
+                    approved_at_ms: 1_770_000_060_000,
+                    key_id: "bob-yubi".to_owned(),
+                    signature: vec![7; 64],
+                }],
+                ..proposal()
+            }),
+            ("the approval spent", BreakGlassProposalRecord {
+                consumed_at_ms: 1_770_000_090_000,
+                ..proposal()
+            }),
+            ("the proposal withdrawn", BreakGlassProposalRecord {
+                withdrawn: true,
+                ..proposal()
+            }),
+            ("another reason", BreakGlassProposalRecord {
+                reason: "a different reason".to_owned(),
+                ..proposal()
+            }),
         ];
         for (label, changed) in cases {
             check!(approval_signing_bytes(&changed) == baseline, "case {label}");

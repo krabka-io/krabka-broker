@@ -6,11 +6,12 @@
 //! has to produce exactly one row per request creation. Keeping the row
 //! constructors together makes that invariant easy to see.
 
-use krabka_protocol::owned::create_acls_response::{AclCreationResult, CreateAclsResponse};
-use krabka_raft::RaftError;
-
-use super::ValidCreation;
-use crate::{codes, handlers::submit_failure_code};
+use {
+    super::ValidCreation,
+    crate::{codes, handlers::submit_failure_code},
+    krabka_protocol::owned::create_acls_response::{AclCreationResult, CreateAclsResponse},
+    krabka_raft::RaftError,
+};
 
 /// The row for a creation the controller committed.
 ///
@@ -70,11 +71,12 @@ pub(super) fn apply_submit_error(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use krabka_metadata::MetadataRecord;
-
-    use super::*;
-    use crate::handlers::create_acls::test_support::{OPERATION_READ, creation, validate};
+    use {
+        super::*,
+        crate::handlers::create_acls::test_support::{OPERATION_READ, creation, validate},
+        assert2::assert,
+        krabka_metadata::MetadataRecord,
+    };
 
     #[test]
     fn submit_error_maps_controller_failures_and_leaves_rejected_rows() {

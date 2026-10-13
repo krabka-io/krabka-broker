@@ -2,32 +2,32 @@
 //! a response, the replies a follower and a leaderless node serve, and the
 //! requests the engine emits while replicating or transferring a snapshot.
 
-use std::time::Duration as StdDuration;
-
-use assert2::assert;
-
-use super::*;
-use crate::{
-    error::RaftError,
-    kraft::{
-        controller::{
-            offsets::metadata_fetch_offset_below_log_start,
-            records::{decode_batches, encode_batches},
-            replication::{
-                FetchBatchDisposition, classify_fetch_batch, fetch_epoch_for_request,
-                should_serve_fetch_records, should_start_snapshot_fetch,
-                snapshot_fetch_response_invalid,
+use {
+    super::*,
+    crate::{
+        error::RaftError,
+        kraft::{
+            controller::{
+                offsets::metadata_fetch_offset_below_log_start,
+                records::{decode_batches, encode_batches},
+                replication::{
+                    FetchBatchDisposition, classify_fetch_batch, fetch_epoch_for_request,
+                    should_serve_fetch_records, should_start_snapshot_fetch,
+                    snapshot_fetch_response_invalid,
+                },
+                test_support::{
+                    CapturedPeerSend, EngineInDir, EngineSetup, build_engine_only,
+                    elect_single_voter_engine, one_offset_batch, record_peer_sends, recv_peer_send,
+                    recv_peer_send_with_api, submit_change_with_timeout, topic_record,
+                },
             },
-            test_support::{
-                CapturedPeerSend, EngineInDir, EngineSetup, build_engine_only,
-                elect_single_voter_engine, one_offset_batch, record_peer_sends, recv_peer_send,
-                recv_peer_send_with_api, submit_change_with_timeout, topic_record,
-            },
+            event::SuccessorRank,
+            transport::{PeerSender, wire::FETCH_VERSION},
+            types::LogOffsetMetadata,
         },
-        event::SuccessorRank,
-        transport::{PeerSender, wire::FETCH_VERSION},
-        types::LogOffsetMetadata,
     },
+    assert2::assert,
+    std::time::Duration as StdDuration,
 };
 
 #[test]
@@ -724,14 +724,10 @@ async fn send_fetch_uses_snapshot_epoch_only_until_log_extends_past_boundary() {
     .encode();
     let mut sends = record_peer_sends(&mut engine, fetch_response.clone());
 
-    check_sent_fetch(
-        &mut engine,
-        &mut sends,
-        SentFetch {
-            fetch_epoch: 7,
-            fetch_offset: 10,
-        },
-    )
+    check_sent_fetch(&mut engine, &mut sends, SentFetch {
+        fetch_epoch: 7,
+        fetch_offset: 10,
+    })
     .await;
 
     let mut batch = one_offset_batch(10, 9, b"after-snapshot");
@@ -739,14 +735,10 @@ async fn send_fetch_uses_snapshot_epoch_only_until_log_extends_past_boundary() {
         .log
         .append_at(&mut batch, Offset(10))
         .expect("append after snapshot");
-    check_sent_fetch(
-        &mut engine,
-        &mut sends,
-        SentFetch {
-            fetch_epoch: 9,
-            fetch_offset: 11,
-        },
-    )
+    check_sent_fetch(&mut engine, &mut sends, SentFetch {
+        fetch_epoch: 9,
+        fetch_offset: 11,
+    })
     .await;
 }
 
@@ -862,13 +854,10 @@ async fn leaderless_observer_discovers_the_leader_through_a_follower_redirect() 
     });
     let transport = Arc::new(EndpointRecorder::default());
     observer.peers = transport.clone();
-    assert2::assert!(matches!(
-        observer.core.role(),
-        Role::Observer {
-            leader_id: None,
-            ..
-        }
-    ));
+    assert2::assert!(matches!(observer.core.role(), Role::Observer {
+        leader_id: None,
+        ..
+    }));
     let epoch = observer.core.quorum_state().leader_epoch;
     let leader_endpoint = wire::QuorumLeader {
         leader_id: Some(NodeId(2)),
@@ -887,13 +876,10 @@ async fn leaderless_observer_discovers_the_leader_through_a_follower_redirect() 
     })
     .encode();
     observer.on_fetch_response(NodeId(1), &redirect);
-    assert2::assert!(matches!(
-        observer.core.role(),
-        Role::Observer {
-            leader_id: Some(NodeId(2)),
-            ..
-        }
-    ));
+    assert2::assert!(matches!(observer.core.role(), Role::Observer {
+        leader_id: Some(NodeId(2)),
+        ..
+    }));
     assert2::assert!(
         *transport.endpoints.lock().expect("endpoint lock")
             == vec![LearnedEndpoint {

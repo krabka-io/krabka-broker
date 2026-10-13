@@ -6,11 +6,12 @@
 //! writers become observable. The tests that pin one parser or one resolution
 //! rule live beside that code in the sibling modules.
 
-use assert2::check;
-
-use super::*;
-use crate::{
-    Cli, format::output::ZERO_CHECKPOINT_NAME, meta_properties::META_PROPERTIES, run_from_args,
+use {
+    super::*,
+    crate::{
+        Cli, format::output::ZERO_CHECKPOINT_NAME, meta_properties::META_PROPERTIES, run_from_args,
+    },
+    assert2::check,
 };
 
 /// What a run leaves in one directory.
@@ -377,9 +378,7 @@ async fn an_explicit_quorum_is_checked_for_duplicates_and_for_this_node() {
 }
 
 /// `--initial-controllers` takes one comma-separated value.
-fn joined(a: &str, b: &str) -> String {
-    format!("{a},{b}")
-}
+fn joined(a: &str, b: &str) -> String { format!("{a},{b}") }
 
 /// `--directory-id` is only checked against the quorum entry when it was
 /// given, and only rejected when the two disagree.
@@ -412,16 +411,12 @@ async fn an_explicit_directory_id_must_match_this_node_s_quorum_entry() {
     } in cases
     {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let FormatRun { code, .. } = format_into(
-            tmp.path(),
-            NODE_ID,
-            &[
-                "--initial-controllers",
-                CONTROLLER,
-                "--directory-id",
-                directory_id,
-            ],
-        )
+        let FormatRun { code, .. } = format_into(tmp.path(), NODE_ID, &[
+            "--initial-controllers",
+            CONTROLLER,
+            "--directory-id",
+            directory_id,
+        ])
         .await;
         check!(code == *want, "{what}: exit {code}, want {want}");
     }
@@ -783,14 +778,11 @@ fn the_metadata_log_directory_leads_the_directory_set() {
     } in cases
     {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let plan = plan_of(argv_under(
-            tmp.path(),
-            FormatArgvSetup {
-                metadata: *metadata,
-                log_dirs,
-                extra,
-            },
-        ))
+        let plan = plan_of(argv_under(tmp.path(), FormatArgvSetup {
+            metadata: *metadata,
+            log_dirs,
+            extra,
+        }))
         .unwrap_or_else(|Failure { code, message }| panic!("{what}: exit {code}: {message}"));
 
         let got: Vec<DirectoryWant<PathBuf, DirectoryKind>> = plan
@@ -846,14 +838,11 @@ fn the_directory_id_belongs_to_the_metadata_log_directory() {
     ];
     for Case { what, extra, kind } in cases {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let plan = plan_of(argv_under(
-            tmp.path(),
-            FormatArgvSetup {
-                metadata: Some("m"),
-                extra: &extra,
-                ..Default::default()
-            },
-        ))
+        let plan = plan_of(argv_under(tmp.path(), FormatArgvSetup {
+            metadata: Some("m"),
+            extra: &extra,
+            ..Default::default()
+        }))
         .unwrap_or_else(|Failure { code, message }| panic!("{what}: exit {code}: {message}"));
 
         let [metadata, data] = plan.targets.as_slice() else {
@@ -997,14 +986,11 @@ async fn only_the_metadata_log_directory_gets_the_bootstrap_files() {
     } in cases
     {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let code = run_from_args(argv_under(
-            tmp.path(),
-            FormatArgvSetup {
-                metadata: *metadata,
-                log_dirs,
-                extra,
-            },
-        ))
+        let code = run_from_args(argv_under(tmp.path(), FormatArgvSetup {
+            metadata: *metadata,
+            log_dirs,
+            extra,
+        }))
         .await;
         check!(code == EXIT_OK, "{what}");
 
@@ -1112,14 +1098,11 @@ fn an_unreadable_metadata_log_directory_is_named() {
         std::fs::create_dir_all(&broken).expect("mkdir");
         std::fs::write(broken.join(META_PROPERTIES), UNREADABLE).expect("write");
 
-        let got = plan_of(argv_under(
-            tmp.path(),
-            FormatArgvSetup {
-                metadata,
-                log_dirs,
-                ..Default::default()
-            },
-        ))
+        let got = plan_of(argv_under(tmp.path(), FormatArgvSetup {
+            metadata,
+            log_dirs,
+            ..Default::default()
+        }))
         .map(|plan| PlannedDirs {
             targets: plan
                 .targets

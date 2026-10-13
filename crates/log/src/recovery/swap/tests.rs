@@ -1,17 +1,17 @@
 //! Open-time swap recovery, one directory state per interrupted step.
 
-use std::path::Path;
-
-use assert2::check;
-use bytes::BytesMut;
-use krabka_protocol::records::{Record, RecordBatch};
-use tempfile::tempdir;
-
-use super::{cleaned_path, swap_orphan_recover, swap_path};
-use crate::{
-    error::LogError,
-    name,
-    test_support::{BatchSpan, Files, directory_files, span},
+use {
+    super::{cleaned_path, swap_orphan_recover, swap_path},
+    crate::{
+        error::LogError,
+        name,
+        test_support::{BatchSpan, Files, directory_files, span},
+    },
+    assert2::check,
+    bytes::BytesMut,
+    krabka_protocol::records::{Record, RecordBatch},
+    std::path::Path,
+    tempfile::tempdir,
 };
 
 /// The encoded bytes of one batch per span.
@@ -39,9 +39,7 @@ fn batches(spans: &[BatchSpan]) -> Vec<u8> {
     wire.to_vec()
 }
 
-fn file(base: i64, ext: &str) -> String {
-    format!("{}.{ext}", name::format_base_offset(base))
-}
+fn file(base: i64, ext: &str) -> String { format!("{}.{ext}", name::format_base_offset(base)) }
 
 /// Write `files` into `dir`.
 fn populate(dir: &Path, files: &Files) {
@@ -80,9 +78,7 @@ fn originals() -> Files {
 }
 
 /// The survivor of compacting 0 and 10: gapped batches ending at offset 19.
-fn survivor_log() -> Vec<u8> {
-    batches(&[span(3, 0), span(12, 7)])
-}
+fn survivor_log() -> Vec<u8> { batches(&[span(3, 0), span(12, 7)]) }
 
 /// The directory once the swap of 0 and 10 has finished: the survivor at 0,
 /// and the untouched segment at 20.

@@ -5,9 +5,10 @@
 //! archive-wide roll-up an auditor grades. The assembly helpers here turn the
 //! walk's accumulated state into those values.
 
-use std::collections::BTreeMap;
-
-use crate::worm::manifest::{ChainHead, EpochId, ManifestBody, ManifestSeq, ObjectEntry};
+use {
+    crate::worm::manifest::{ChainHead, EpochId, ManifestBody, ManifestSeq, ObjectEntry},
+    std::collections::BTreeMap,
+};
 
 const PROTECTION_SAMPLE_LIMIT: usize = 10;
 
@@ -230,16 +231,16 @@ pub(super) fn offset_gaps(segments: &mut [SegmentSpan]) -> Vec<OffsetGap> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use assert2::check;
-
-    use super::*;
-    use crate::worm::{
-        archiver::WormArchiver,
-        chain::WormChainRecord,
-        manifest::{ChainStamp, manifest_head},
-        verify::test_support::{Archive, SEGMENT_SPAN, put_raw},
+    use {
+        super::*,
+        crate::worm::{
+            archiver::WormArchiver,
+            chain::WormChainRecord,
+            manifest::{ChainStamp, manifest_head},
+            verify::test_support::{Archive, SEGMENT_SPAN, put_raw},
+        },
+        assert2::check,
+        std::sync::Arc,
     };
 
     #[test]

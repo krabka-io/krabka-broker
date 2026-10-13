@@ -2,23 +2,25 @@
 //! spread, the fenced and shutting-down brokers, and the validation of an
 //! explicit assignment list.
 
-use assert2::assert;
-use krabka_metadata::MetadataRecord;
-use krabka_protocol::owned::create_topics_request::{CreatableReplicaAssignment, CreatableTopic};
-use krabka_raft::NodeId;
-
-use super::{
-    InitialLeadership, PlacementRng, automatic_leaderships, automatic_placement_exclusions, codes,
-    inactive_brokers, manual_leaderships, manual_replicas, placement_failure_message,
-    resolve_assignments, site_broker_views,
-};
-use crate::{
-    config_keys::{
-        BROKER_WITNESS, STRETCH_PREFERRED_LEADER_SITE, WITNESS_TRUE, resolve_preferred_leader_site,
+use {
+    super::{
+        InitialLeadership, PlacementRng, automatic_leaderships, automatic_placement_exclusions,
+        codes, inactive_brokers, manual_leaderships, manual_replicas, placement_failure_message,
+        resolve_assignments, site_broker_views,
     },
-    handlers::test_support::sorted_replica_sites,
-    heartbeat::fencing::fenced_node_ids,
-    test_support::broker_registration,
+    crate::{
+        config_keys::{
+            BROKER_WITNESS, STRETCH_PREFERRED_LEADER_SITE, WITNESS_TRUE,
+            resolve_preferred_leader_site,
+        },
+        handlers::test_support::sorted_replica_sites,
+        heartbeat::fencing::fenced_node_ids,
+        test_support::broker_registration,
+    },
+    assert2::assert,
+    krabka_metadata::MetadataRecord,
+    krabka_protocol::owned::create_topics_request::{CreatableReplicaAssignment, CreatableTopic},
+    krabka_raft::NodeId,
 };
 
 /// The seeds that a test runs the placement with.
@@ -279,118 +281,86 @@ fn invalid_manual_assignments_answer_kafkas_codes_and_messages() {
     }
     let cases = [
         (
-            topic(
-                -1,
-                2,
-                &[ReplicaList {
-                    partition_index: 0,
-                    broker_ids: &[1, 2],
-                }],
-            ),
+            topic(-1, 2, &[ReplicaList {
+                partition_index: 0,
+                broker_ids: &[1, 2],
+            }]),
             codes::INVALID_REQUEST,
             "A manual partition assignment was specified, but replication factor was not set to \
              -1.",
         ),
         (
-            topic(
-                1,
-                -1,
-                &[ReplicaList {
-                    partition_index: 0,
-                    broker_ids: &[1, 2],
-                }],
-            ),
+            topic(1, -1, &[ReplicaList {
+                partition_index: 0,
+                broker_ids: &[1, 2],
+            }]),
             codes::INVALID_REQUEST,
             "A manual partition assignment was specified, but numPartitions was not set to -1.",
         ),
         (
-            topic(
-                -1,
-                -1,
-                &[
-                    ReplicaList {
-                        partition_index: 0,
-                        broker_ids: &[1, 2],
-                    },
-                    ReplicaList {
-                        partition_index: 0,
-                        broker_ids: &[2, 1],
-                    },
-                ],
-            ),
+            topic(-1, -1, &[
+                ReplicaList {
+                    partition_index: 0,
+                    broker_ids: &[1, 2],
+                },
+                ReplicaList {
+                    partition_index: 0,
+                    broker_ids: &[2, 1],
+                },
+            ]),
             codes::INVALID_REPLICA_ASSIGNMENT,
             "Found multiple manual partition assignments for partition 0",
         ),
         (
-            topic(
-                -1,
-                -1,
-                &[ReplicaList {
-                    partition_index: 0,
-                    broker_ids: &[],
-                }],
-            ),
+            topic(-1, -1, &[ReplicaList {
+                partition_index: 0,
+                broker_ids: &[],
+            }]),
             codes::INVALID_REPLICA_ASSIGNMENT,
             "The manual partition assignment includes an empty replica list.",
         ),
         (
-            topic(
-                -1,
-                -1,
-                &[ReplicaList {
-                    partition_index: 0,
-                    broker_ids: &[9, 1, 7],
-                }],
-            ),
+            topic(-1, -1, &[ReplicaList {
+                partition_index: 0,
+                broker_ids: &[9, 1, 7],
+            }]),
             codes::INVALID_REPLICA_ASSIGNMENT,
             "The manual partition assignment includes broker 7, but no such broker is registered.",
         ),
         (
-            topic(
-                -1,
-                -1,
-                &[ReplicaList {
-                    partition_index: 0,
-                    broker_ids: &[2, 1, 2],
-                }],
-            ),
+            topic(-1, -1, &[ReplicaList {
+                partition_index: 0,
+                broker_ids: &[2, 1, 2],
+            }]),
             codes::INVALID_REPLICA_ASSIGNMENT,
             "The manual partition assignment includes the broker 2 more than once.",
         ),
         (
-            topic(
-                -1,
-                -1,
-                &[
-                    ReplicaList {
-                        partition_index: 0,
-                        broker_ids: &[1, 2],
-                    },
-                    ReplicaList {
-                        partition_index: 1,
-                        broker_ids: &[1],
-                    },
-                ],
-            ),
+            topic(-1, -1, &[
+                ReplicaList {
+                    partition_index: 0,
+                    broker_ids: &[1, 2],
+                },
+                ReplicaList {
+                    partition_index: 1,
+                    broker_ids: &[1],
+                },
+            ]),
             codes::INVALID_REPLICA_ASSIGNMENT,
             "The manual partition assignment includes a partition with 1 replica(s), but this is \
              not consistent with previous partitions, which have 2 replica(s).",
         ),
         (
-            topic(
-                -1,
-                -1,
-                &[
-                    ReplicaList {
-                        partition_index: 0,
-                        broker_ids: &[1],
-                    },
-                    ReplicaList {
-                        partition_index: 2,
-                        broker_ids: &[2],
-                    },
-                ],
-            ),
+            topic(-1, -1, &[
+                ReplicaList {
+                    partition_index: 0,
+                    broker_ids: &[1],
+                },
+                ReplicaList {
+                    partition_index: 2,
+                    broker_ids: &[2],
+                },
+            ]),
             codes::INVALID_REPLICA_ASSIGNMENT,
             "partitions should be a consecutive 0-based integer sequence",
         ),
@@ -1041,16 +1011,15 @@ fn fully_cordoned_brokers_are_not_automatic_placement_candidates() {
         image.apply(&MetadataRecord::V1BrokerRegistration(registration));
     }
     let cases = [
-        (
-            "no broker in controlled shutdown",
-            None,
-            vec![NodeId(2), NodeId(3), NodeId(4)],
-        ),
-        (
-            "broker 4 in controlled shutdown",
-            Some(4),
-            vec![NodeId(2), NodeId(3)],
-        ),
+        ("no broker in controlled shutdown", None, vec![
+            NodeId(2),
+            NodeId(3),
+            NodeId(4),
+        ]),
+        ("broker 4 in controlled shutdown", Some(4), vec![
+            NodeId(2),
+            NodeId(3),
+        ]),
     ];
     for (label, shutting_down, want) in cases {
         let mut image = image.clone();

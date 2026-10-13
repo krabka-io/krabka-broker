@@ -1,10 +1,11 @@
 //! RFC 2253 rendering checked against the strings Java's
 //! `X500Principal.getName()` gives for the same DER.
 
-use assert2::check;
-use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
-
-use super::{name_rfc2253, subject_dn_rfc2253};
+use {
+    super::{name_rfc2253, subject_dn_rfc2253},
+    assert2::check,
+    rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair},
+};
 
 const CN: &[u8] = &[0x55, 0x04, 0x03];
 const C: &[u8] = &[0x55, 0x04, 0x06];
@@ -105,18 +106,17 @@ fn renders_names_as_x500_principal_get_name() {
         },
         NameCase {
             case: "multi-valued RDN joins with plus in encoding order",
-            rdns: &[
-                &[attr(O, UTF8, b"krabka")],
-                &[attr(CN, UTF8, b"alice"), attr(UID, UTF8, b"42")],
-            ],
+            rdns: &[&[attr(O, UTF8, b"krabka")], &[
+                attr(CN, UTF8, b"alice"),
+                attr(UID, UTF8, b"42"),
+            ]],
             expected: "CN=alice+UID=42,O=krabka",
         },
         NameCase {
             case: "emailAddress has no RFC 2253 keyword",
-            rdns: &[
-                &[attr(EMAIL_ADDRESS, IA5, b"a@b")],
-                &[attr(CN, UTF8, b"alice")],
-            ],
+            rdns: &[&[attr(EMAIL_ADDRESS, IA5, b"a@b")], &[attr(
+                CN, UTF8, b"alice",
+            )]],
             expected: "CN=alice,1.2.840.113549.1.9.1=#1603614062",
         },
         NameCase {

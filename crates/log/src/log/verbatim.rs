@@ -12,16 +12,17 @@
 //! `LogValidator` rewrites. The producer's records are still stored as they
 //! arrived.
 
-use bytes::{Bytes, BytesMut};
-use krabka_ids::{LeaderEpoch, Offset, ProducerId};
-use krabka_protocol::records::{
-    Attributes, CRC_COVERAGE_START, HEADER_LEN, RecordBatch, RecordBatchHeader, TimestampType,
+use {
+    super::{Log, append::AppendRoll, open::DataProducerAppend},
+    crate::{error::LogError, stamp_index::OffsetRange},
+    bytes::{Bytes, BytesMut},
+    krabka_ids::{LeaderEpoch, Offset, ProducerId},
+    krabka_protocol::records::{
+        Attributes, CRC_COVERAGE_START, HEADER_LEN, RecordBatch, RecordBatchHeader, TimestampType,
+    },
+    krabka_units::prelude::{ByteSize, ByteSizeExt as _},
+    tracing::instrument,
 };
-use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
-use tracing::instrument;
-
-use super::{Log, append::AppendRoll, open::DataProducerAppend};
-use crate::{error::LogError, stamp_index::OffsetRange};
 
 /// Byte range of the `crc` field in the v2 batch header: the four bytes that
 /// sit immediately before the region the CRC covers.

@@ -12,14 +12,14 @@
 //! The group coordinator's `__consumer_offsets` writes and the transaction
 //! markers both wait here. Each caller says what its term is.
 
-use std::{sync::Arc, time::Instant};
-
-use krabka_log::Offset;
-use krabka_metadata::MetadataImage;
-use tokio::sync::watch;
-
-use super::Partition;
-use crate::metadata_source::wait_for_image_change;
+use {
+    super::Partition,
+    crate::metadata_source::wait_for_image_change,
+    krabka_log::Offset,
+    krabka_metadata::MetadataImage,
+    std::{sync::Arc, time::Instant},
+    tokio::sync::watch,
+};
 
 /// Why an append did not commit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,20 +91,20 @@ impl Partition {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::atomic::Ordering,
-        time::{Duration, Instant},
-    };
-
-    use assert2::assert;
-    use krabka_log::Offset;
-
-    use super::Uncommitted;
-    use crate::{
-        coordinator::test_support::LeaderMove,
-        partition::{
-            Partition,
-            test_support::{CommitFixtureLeader, CommitPartitionSetup, commit_partition},
+    use {
+        super::Uncommitted,
+        crate::{
+            coordinator::test_support::LeaderMove,
+            partition::{
+                Partition,
+                test_support::{CommitFixtureLeader, CommitPartitionSetup, commit_partition},
+            },
+        },
+        assert2::assert,
+        krabka_log::Offset,
+        std::{
+            sync::atomic::Ordering,
+            time::{Duration, Instant},
         },
     };
 

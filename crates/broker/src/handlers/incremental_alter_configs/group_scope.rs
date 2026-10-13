@@ -4,22 +4,23 @@
 //! `GroupConfig.validate` against the broker's group bounds,
 //! and stages a `V1GroupConfig` record with that map.
 
-use krabka_metadata::{GroupConfigRecord, MetadataImage, MetadataRecord};
-use krabka_protocol::owned::{
-    incremental_alter_configs_request::AlterConfigsResource,
-    incremental_alter_configs_response::AlterConfigsResourceResponse,
-};
-
-use super::{
-    OP_DELETE, OP_SET,
-    topic_scope::{merge_list_op, not_a_list},
-};
-use crate::{
-    api_catalog::UnstableApiVersions,
-    codes,
-    config_keys::{
-        group::{GroupBounds, kafka_group_key, validate_group_configs},
-        registry::ConfigType,
+use {
+    super::{
+        OP_DELETE, OP_SET,
+        topic_scope::{merge_list_op, not_a_list},
+    },
+    crate::{
+        api_catalog::UnstableApiVersions,
+        codes,
+        config_keys::{
+            group::{GroupBounds, kafka_group_key, validate_group_configs},
+            registry::ConfigType,
+        },
+    },
+    krabka_metadata::{GroupConfigRecord, MetadataImage, MetadataRecord},
+    krabka_protocol::owned::{
+        incremental_alter_configs_request::AlterConfigsResource,
+        incremental_alter_configs_response::AlterConfigsResourceResponse,
     },
 };
 
@@ -90,18 +91,19 @@ pub(super) fn handle_group_scoped(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig;
-
-    use super::*;
-    use crate::{
-        coordinator::unified::streams::config::{
-            KEY_NUM_STANDBY_REPLICAS, KEY_SESSION_TIMEOUT_MS, KEY_SHARE_AUTO_OFFSET_RESET,
+    use {
+        super::*,
+        crate::{
+            coordinator::unified::streams::config::{
+                KEY_NUM_STANDBY_REPLICAS, KEY_SESSION_TIMEOUT_MS, KEY_SHARE_AUTO_OFFSET_RESET,
+            },
+            handlers::incremental_alter_configs::{
+                RESOURCE_TYPE_GROUP,
+                test_support::{Handled, make_scoped_resource, make_set_cfg},
+            },
         },
-        handlers::incremental_alter_configs::{
-            RESOURCE_TYPE_GROUP,
-            test_support::{Handled, make_scoped_resource, make_set_cfg},
-        },
+        assert2::assert,
+        krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig,
     };
 
     fn drive(resource: &AlterConfigsResource, unstable: UnstableApiVersions) -> Handled {
@@ -167,11 +169,11 @@ mod tests {
 
     #[test]
     fn group_config_set_validates_and_stages_authoritative_map() {
-        let resource = make_scoped_resource(
-            RESOURCE_TYPE_GROUP,
-            "streams-app",
-            vec![make_set_cfg(KEY_NUM_STANDBY_REPLICAS, "1")],
-        );
+        let resource =
+            make_scoped_resource(RESOURCE_TYPE_GROUP, "streams-app", vec![make_set_cfg(
+                KEY_NUM_STANDBY_REPLICAS,
+                "1",
+            )]);
         let Handled {
             response: out,
             records,
@@ -198,11 +200,11 @@ mod tests {
             ("by_duration:", codes::INVALID_CONFIG),
             ("none", codes::INVALID_CONFIG),
         ] {
-            let resource = make_scoped_resource(
-                RESOURCE_TYPE_GROUP,
-                "share-workers",
-                vec![make_set_cfg(KEY_SHARE_AUTO_OFFSET_RESET, value)],
-            );
+            let resource =
+                make_scoped_resource(RESOURCE_TYPE_GROUP, "share-workers", vec![make_set_cfg(
+                    KEY_SHARE_AUTO_OFFSET_RESET,
+                    value,
+                )]);
             let Handled {
                 response: out,
                 records,
@@ -229,11 +231,11 @@ mod tests {
 
     #[test]
     fn group_config_rejects_values_outside_broker_bounds() {
-        let resource = make_scoped_resource(
-            RESOURCE_TYPE_GROUP,
-            "streams-app",
-            vec![make_set_cfg(KEY_SESSION_TIMEOUT_MS, "1000")],
-        );
+        let resource =
+            make_scoped_resource(RESOURCE_TYPE_GROUP, "streams-app", vec![make_set_cfg(
+                KEY_SESSION_TIMEOUT_MS,
+                "1000",
+            )]);
         let Handled {
             response: out,
             records,

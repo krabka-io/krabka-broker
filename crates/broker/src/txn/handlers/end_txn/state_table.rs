@@ -16,15 +16,16 @@
 //! `ITS` = `INVALID_TXN_STATE`, `NONE` = no error and no write, and
 //! `EB` = no error and an epoch bump.
 
-use krabka_log::ProducerId;
-
-use super::producer_identity::client_producer_identity;
-use crate::{
-    codes,
-    txn::{
-        state::{TxnEntry, TxnState},
-        util::ProducerIdentity,
+use {
+    super::producer_identity::client_producer_identity,
+    crate::{
+        codes,
+        txn::{
+            state::{TxnEntry, TxnState},
+            util::ProducerIdentity,
+        },
     },
+    krabka_log::ProducerId,
 };
 
 /// Which table `EndTxn` consults: the transaction version of the client, and

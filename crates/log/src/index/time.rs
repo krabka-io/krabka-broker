@@ -3,14 +3,14 @@
 //! `TimeIndex.maybeAppend` keeps them, and the offset is the last offset of the
 //! batch that set the timestamp.
 
-use std::{fs::File, path::Path};
-
-use tracing::instrument;
-use zerocopy::{BigEndian, IntoBytes, byteorder::I64};
-
-use crate::{
-    error::LogError,
-    io::{IoTarget, LogIo},
+use {
+    crate::{
+        error::LogError,
+        io::{IoTarget, LogIo},
+    },
+    std::{fs::File, path::Path},
+    tracing::instrument,
+    zerocopy::{BigEndian, IntoBytes, byteorder::I64},
 };
 
 /// 12 bytes per entry: timestamp as i64 BE and `relative_offset` as u32 BE.
@@ -123,14 +123,14 @@ impl TimeIndex {
 
 #[cfg(test)]
 mod time_tests {
-    use std::{fs::OpenOptions, io::Write};
-
-    use assert2::check;
-
-    use super::*;
-    use crate::{
-        index::{IndexFixture, IndexSeed},
-        test_support::TempPath,
+    use {
+        super::*,
+        crate::{
+            index::{IndexFixture, IndexSeed},
+            test_support::TempPath,
+        },
+        assert2::check,
+        std::{fs::OpenOptions, io::Write},
     };
 
     seed_index_fixture!(TimeIndex, i64);
@@ -186,18 +186,13 @@ mod time_tests {
                 (100, 9),
                 vec![(100, 5)],
             ),
-            (
-                "older timestamp",
-                vec![seed(100, 5)],
-                (99, 9),
-                vec![(100, 5)],
-            ),
-            (
-                "newer timestamp",
-                vec![seed(100, 5)],
+            ("older timestamp", vec![seed(100, 5)], (99, 9), vec![(
+                100, 5,
+            )]),
+            ("newer timestamp", vec![seed(100, 5)], (101, 9), vec![
+                (100, 5),
                 (101, 9),
-                vec![(100, 5), (101, 9)],
-            ),
+            ]),
         ] {
             let IndexFixture {
                 dir: _dir,
@@ -217,23 +212,20 @@ mod time_tests {
             dir: _dir,
             path: _path,
             index: idx,
-        } = populated_index(
-            "00000000000000000000.timeindex",
-            &[
-                IndexSeed {
-                    key: 1_000_000,
-                    coordinate: 0,
-                },
-                IndexSeed {
-                    key: 2_000_000,
-                    coordinate: 100,
-                },
-                IndexSeed {
-                    key: 3_000_000,
-                    coordinate: 200,
-                },
-            ],
-        );
+        } = populated_index("00000000000000000000.timeindex", &[
+            IndexSeed {
+                key: 1_000_000,
+                coordinate: 0,
+            },
+            IndexSeed {
+                key: 2_000_000,
+                coordinate: 100,
+            },
+            IndexSeed {
+                key: 3_000_000,
+                coordinate: 200,
+            },
+        ]);
         for (name, ts, want) in [
             ("before first", 0, 0),
             ("floor first", 1_500_000, 0),
@@ -247,38 +239,32 @@ mod time_tests {
 
     #[test]
     fn persists_across_reopen() {
-        let TempPath { dir: _dir, path } = written_index(
-            "00000000000000000000.timeindex",
-            &[
-                IndexSeed {
-                    key: 1,
-                    coordinate: 0,
-                },
-                IndexSeed {
-                    key: 2,
-                    coordinate: 50,
-                },
-            ],
-        );
+        let TempPath { dir: _dir, path } = written_index("00000000000000000000.timeindex", &[
+            IndexSeed {
+                key: 1,
+                coordinate: 0,
+            },
+            IndexSeed {
+                key: 2,
+                coordinate: 50,
+            },
+        ]);
         let idx = TimeIndex::open(&path).unwrap();
         assert2::assert!(idx.entry_count() == 2);
     }
 
     #[test]
     fn ignores_trailing_zero_padding() {
-        let TempPath { dir: _dir, path } = written_index(
-            "00000000000000000000.timeindex",
-            &[
-                IndexSeed {
-                    key: 1_000,
-                    coordinate: 0,
-                },
-                IndexSeed {
-                    key: 2_000,
-                    coordinate: 100,
-                },
-            ],
-        );
+        let TempPath { dir: _dir, path } = written_index("00000000000000000000.timeindex", &[
+            IndexSeed {
+                key: 1_000,
+                coordinate: 0,
+            },
+            IndexSeed {
+                key: 2_000,
+                coordinate: 100,
+            },
+        ]);
         let mut f = OpenOptions::new().append(true).open(&path).unwrap();
         f.write_all(&[0u8; TIME_ENTRY_SIZE * 2]).unwrap();
         f.sync_data().unwrap();

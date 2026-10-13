@@ -98,14 +98,11 @@ async fn leader_failure_reelects() {
         dirs: _dirs,
         leader,
         epoch: epoch1,
-    } = elected_cluster(
-        &net,
-        SimClusterSetup {
-            ids: &ids,
-            cluster_id: cid,
-            ..Default::default()
-        },
-    )
+    } = elected_cluster(&net, SimClusterSetup {
+        ids: &ids,
+        cluster_id: cid,
+        ..Default::default()
+    })
     .await;
 
     // Kill the leader: shut it down and remove it from the registry so peers see
@@ -203,14 +200,11 @@ async fn isolated_leader_resigns_and_rejoins_after_heal() {
         dirs: _dirs,
         leader,
         epoch: epoch1,
-    } = elected_cluster(
-        &net,
-        SimClusterSetup {
-            ids: &ids,
-            cluster_id: cid,
-            ..Default::default()
-        },
-    )
+    } = elected_cluster(&net, SimClusterSetup {
+        ids: &ids,
+        cluster_id: cid,
+        ..Default::default()
+    })
     .await;
     let isolated = net.get(leader).expect("leader is registered");
     net.partition(leader);

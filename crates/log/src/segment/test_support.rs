@@ -1,14 +1,15 @@
 //! Fixture builders and budget constants that the segment modules' unit tests
 //! share.
 
-use bytes::Bytes;
-use krabka_ids::Offset;
-use krabka_protocol::records::RecordBatch;
-use krabka_units::prelude::{ByteSize, ByteSizeExt, gibibytes};
-use tempfile::tempdir;
-
-use super::Segment;
-use crate::test_support::{RecordedAdvice, numbered_record, single_record_batch};
+use {
+    super::Segment,
+    crate::test_support::{RecordedAdvice, numbered_record, single_record_batch},
+    bytes::Bytes,
+    krabka_ids::Offset,
+    krabka_protocol::records::RecordBatch,
+    krabka_units::prelude::{ByteSize, ByteSizeExt, gibibytes},
+    tempfile::tempdir,
+};
 
 /// Index every batch but the first. Every later batch is more than `0` bytes
 /// past the last entry, and the first is `0` bytes past the segment start,
@@ -145,9 +146,7 @@ pub(super) struct TempSegment {
     pub(super) segment: Segment,
 }
 
-pub(super) fn test_segment() -> TempSegment {
-    segment_at(Offset(0))
-}
+pub(super) fn test_segment() -> TempSegment { segment_at(Offset(0)) }
 
 pub(super) fn segment_at(base: Offset) -> TempSegment {
     let dir = tempdir().unwrap();
@@ -201,14 +200,11 @@ pub(super) fn two_record_fixture() -> TempSegment {
 
 pub(super) fn indexed_segment() -> TempSegment {
     let dir = tempdir().unwrap();
-    let segment = seeded_segment(
-        dir.path(),
-        SeededSegmentSetup {
-            offset: Offset(100),
-            batches: INDEXED_READ_BATCHES,
-            ..Default::default()
-        },
-    );
+    let segment = seeded_segment(dir.path(), SeededSegmentSetup {
+        offset: Offset(100),
+        batches: INDEXED_READ_BATCHES,
+        ..Default::default()
+    });
     TempSegment { dir, segment }
 }
 

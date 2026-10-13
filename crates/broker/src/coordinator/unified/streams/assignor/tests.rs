@@ -5,11 +5,7 @@
 //! expects the one that this port's tie-break on the process id and the member
 //! id gives, and the comment says which of Kafka's results that is.
 
-use std::collections::HashMap;
-
-use assert2::assert;
-
-use super::*;
+use {super::*, assert2::assert, std::collections::HashMap};
 
 /// The partitions of one subtopology that a member holds in a role.
 struct TaskPartitions {
@@ -148,14 +144,10 @@ fn active_rows() -> Vec<Row> {
             // A current owner keeps only its quota; the rest move at once.
             name: "sticky within quota",
             members: vec![
-                m_active(
-                    "A",
-                    "p1",
-                    &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[0, 1, 2, 3],
-                    }],
-                ),
+                m_active("A", "p1", &[TaskPartitions {
+                    subtopology: "s",
+                    partitions: &[0, 1, 2, 3],
+                }]),
                 m("B", "p2"),
             ],
             partitions: 4,
@@ -220,22 +212,14 @@ fn active_rows() -> Vec<Row> {
         Row {
             name: "shouldAssignTasksToClientWithPreviousWarmupTasks",
             members: vec![
-                m_active(
-                    "member1",
-                    "process1",
-                    &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[0, 1, 2],
-                    }],
-                ),
-                m_active(
-                    "member2",
-                    "process2",
-                    &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[3, 4, 5],
-                    }],
-                ),
+                m_active("member1", "process1", &[TaskPartitions {
+                    subtopology: "s",
+                    partitions: &[0, 1, 2],
+                }]),
+                m_active("member2", "process2", &[TaskPartitions {
+                    subtopology: "s",
+                    partitions: &[3, 4, 5],
+                }]),
                 M {
                     active: &[TaskPartitions {
                         subtopology: "s",
@@ -247,14 +231,10 @@ fn active_rows() -> Vec<Row> {
                     }],
                     ..m("member3", "process3")
                 },
-                m_active(
-                    "member4",
-                    "process4",
-                    &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[9],
-                    }],
-                ),
+                m_active("member4", "process4", &[TaskPartitions {
+                    subtopology: "s",
+                    partitions: &[9],
+                }]),
             ],
             partitions: 12,
             stateful: true,
@@ -288,22 +268,14 @@ fn active_rows_stateful() -> Vec<Row> {
         Row {
             name: "shouldAssignStandbyTaskToClientWithPreviousWarmupTaskOverLessLoadedClient",
             members: vec![
-                m_active(
-                    "member1",
-                    "process1",
-                    &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[0],
-                    }],
-                ),
-                m_active(
-                    "member2",
-                    "process2",
-                    &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[1],
-                    }],
-                ),
+                m_active("member1", "process1", &[TaskPartitions {
+                    subtopology: "s",
+                    partitions: &[0],
+                }]),
+                m_active("member2", "process2", &[TaskPartitions {
+                    subtopology: "s",
+                    partitions: &[1],
+                }]),
                 M {
                     active: &[TaskPartitions {
                         subtopology: "s",
@@ -352,22 +324,14 @@ fn active_rows_stateful() -> Vec<Row> {
         Row {
             name: "shouldPreferMoreCaughtUpCandidateRegardlessOfPrevStandbyOrPrevWarmupRole",
             members: vec![
-                m_active(
-                    "member1",
-                    "process1",
-                    &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[0],
-                    }],
-                ),
-                m_active(
-                    "member2",
-                    "process2",
-                    &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[1],
-                    }],
-                ),
+                m_active("member1", "process1", &[TaskPartitions {
+                    subtopology: "s",
+                    partitions: &[0],
+                }]),
+                m_active("member2", "process2", &[TaskPartitions {
+                    subtopology: "s",
+                    partitions: &[1],
+                }]),
                 M {
                     standby: &[TaskPartitions {
                         subtopology: "s",
@@ -469,14 +433,10 @@ fn standby_rows() -> Vec<Row> {
                     }],
                     ..m("member2", "process2")
                 },
-                m_active(
-                    "member3",
-                    "process3",
-                    &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[1],
-                    }],
-                ),
+                m_active("member3", "process3", &[TaskPartitions {
+                    subtopology: "s",
+                    partitions: &[1],
+                }]),
                 m("member4", "process4"),
             ],
             partitions: 3,
@@ -514,14 +474,10 @@ fn standby_rows() -> Vec<Row> {
         Row {
             name: "shouldRankCurrentOwnersAheadOfReportedTaskOffsetsAndMostCaughtUpFirst",
             members: vec![
-                m_active(
-                    "member1",
-                    "process1",
-                    &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[0],
-                    }],
-                ),
+                m_active("member1", "process1", &[TaskPartitions {
+                    subtopology: "s",
+                    partitions: &[0],
+                }]),
                 M {
                     standby: &[TaskPartitions {
                         subtopology: "s",
@@ -855,20 +811,16 @@ fn range_assigns_each_member_a_task_of_every_subtopology() {
     // Kafka's `shouldRangeAssignTasksWhenScalingUp`: member2 is new, and each
     // member ends with one active and one standby task of each subtopology.
     let members = [
-        member(&m_active(
-            "member1",
-            "process1",
-            &[
-                TaskPartitions {
-                    subtopology: "s1",
-                    partitions: &[0, 1],
-                },
-                TaskPartitions {
-                    subtopology: "s2",
-                    partitions: &[0, 1],
-                },
-            ],
-        )),
+        member(&m_active("member1", "process1", &[
+            TaskPartitions {
+                subtopology: "s1",
+                partitions: &[0, 1],
+            },
+            TaskPartitions {
+                subtopology: "s2",
+                partitions: &[0, 1],
+            },
+        ])),
         member(&m("member2", "process2")),
     ];
     let input = AssignorInput {

@@ -8,15 +8,16 @@
 //! `TxnOffsetCommitRequest.getErrorResponse`, one code on every row of the
 //! request in request order.
 
-use krabka_ids::PartitionIndex;
-use krabka_protocol::owned::{
-    txn_offset_commit_request::{TxnOffsetCommitRequest, TxnOffsetCommitRequestTopic},
-    txn_offset_commit_response::{
-        TxnOffsetCommitResponse, TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic,
+use {
+    crate::{codes, txn::state::TopicPartition},
+    krabka_ids::PartitionIndex,
+    krabka_protocol::owned::{
+        txn_offset_commit_request::{TxnOffsetCommitRequest, TxnOffsetCommitRequestTopic},
+        txn_offset_commit_response::{
+            TxnOffsetCommitResponse, TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic,
+        },
     },
 };
-
-use crate::{codes, txn::state::TopicPartition};
 
 /// The response to a request whose topic sweep is done: the sweep's rows
 /// first, then `code` on every row that survived it.
@@ -176,18 +177,18 @@ pub(super) fn error_response(req: &TxnOffsetCommitRequest, code: i16) -> TxnOffs
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
-    use assert2::assert;
-    use krabka_protocol::{
-        owned::txn_offset_commit_request::TxnOffsetCommitRequestPartition,
-        primitives::uuid::Uuid as WireUuid,
-    };
-
-    use super::*;
-    use crate::{
-        handlers::encode_response, test_support::decode_response,
-        txn::handlers::txn_offset_commit::test_support::request,
+    use {
+        super::*,
+        crate::{
+            handlers::encode_response, test_support::decode_response,
+            txn::handlers::txn_offset_commit::test_support::request,
+        },
+        assert2::assert,
+        krabka_protocol::{
+            owned::txn_offset_commit_request::TxnOffsetCommitRequestPartition,
+            primitives::uuid::Uuid as WireUuid,
+        },
+        std::collections::HashSet,
     };
 
     fn request_topic(name: &str, id: u128, partitions: &[i32]) -> TxnOffsetCommitRequestTopic {
@@ -212,9 +213,7 @@ mod tests {
         code: i16,
     }
 
-    fn rc(partition: i32, code: i16) -> PartitionCode {
-        PartitionCode { partition, code }
-    }
+    fn rc(partition: i32, code: i16) -> PartitionCode { PartitionCode { partition, code } }
 
     fn response_topic(
         name: &str,
@@ -261,14 +260,10 @@ mod tests {
                 code: codes::INVALID_TXN_STATE,
                 denied: &[],
                 unknown: &[],
-                expected: vec![response_topic(
-                    "orders",
-                    0,
-                    &[
-                        rc(2, codes::INVALID_TXN_STATE),
-                        rc(3, codes::INVALID_TXN_STATE),
-                    ],
-                )],
+                expected: vec![response_topic("orders", 0, &[
+                    rc(2, codes::INVALID_TXN_STATE),
+                    rc(3, codes::INVALID_TXN_STATE),
+                ])],
             },
             Case {
                 name: "a denied topic is 29 on every row",
@@ -277,14 +272,10 @@ mod tests {
                 code: codes::NONE,
                 denied: &["orders"],
                 unknown: &[],
-                expected: vec![response_topic(
-                    "orders",
-                    0,
-                    &[
-                        rc(2, codes::TOPIC_AUTHORIZATION_FAILED),
-                        rc(3, codes::TOPIC_AUTHORIZATION_FAILED),
-                    ],
-                )],
+                expected: vec![response_topic("orders", 0, &[
+                    rc(2, codes::TOPIC_AUTHORIZATION_FAILED),
+                    rc(3, codes::TOPIC_AUTHORIZATION_FAILED),
+                ])],
             },
             Case {
                 name: "an unknown partition leads its own topic",
@@ -296,11 +287,10 @@ mod tests {
                     topic: "orders",
                     partition: 3,
                 }],
-                expected: vec![response_topic(
-                    "orders",
-                    0,
-                    &[rc(3, codes::UNKNOWN_TOPIC_OR_PARTITION), rc(2, codes::NONE)],
-                )],
+                expected: vec![response_topic("orders", 0, &[
+                    rc(3, codes::UNKNOWN_TOPIC_OR_PARTITION),
+                    rc(2, codes::NONE),
+                ])],
             },
             Case {
                 name: "failed topics lead the committed ones",
@@ -338,11 +328,10 @@ mod tests {
                 }],
                 expected: vec![
                     response_topic("", 7, &[rc(0, codes::UNKNOWN_TOPIC_ID)]),
-                    response_topic(
-                        "a",
-                        1,
-                        &[rc(5, codes::UNKNOWN_TOPIC_OR_PARTITION), rc(0, codes::NONE)],
-                    ),
+                    response_topic("a", 1, &[
+                        rc(5, codes::UNKNOWN_TOPIC_OR_PARTITION),
+                        rc(0, codes::NONE),
+                    ]),
                     response_topic("", 8, &[rc(1, codes::UNKNOWN_TOPIC_ID)]),
                 ],
             },
@@ -356,11 +345,10 @@ mod tests {
                     topic: "",
                     partition: 0,
                 }],
-                expected: vec![response_topic(
-                    "",
-                    7,
-                    &[rc(0, codes::UNKNOWN_TOPIC_OR_PARTITION)],
-                )],
+                expected: vec![response_topic("", 7, &[rc(
+                    0,
+                    codes::UNKNOWN_TOPIC_OR_PARTITION,
+                )])],
             },
         ];
         for case in cases {

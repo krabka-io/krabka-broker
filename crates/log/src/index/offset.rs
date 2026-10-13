@@ -3,14 +3,14 @@
 //! `LogSegment.append`, the offset is the **last** offset of the batch that
 //! starts at the position, not its base offset.
 
-use std::{fs::File, path::Path};
-
-use tracing::instrument;
-use zerocopy::{BigEndian, IntoBytes, byteorder::U32};
-
-use crate::{
-    error::LogError,
-    io::{IoTarget, LogIo},
+use {
+    crate::{
+        error::LogError,
+        io::{IoTarget, LogIo},
+    },
+    std::{fs::File, path::Path},
+    tracing::instrument,
+    zerocopy::{BigEndian, IntoBytes, byteorder::U32},
 };
 
 /// 8 bytes per entry.
@@ -136,36 +136,33 @@ impl OffsetIndex {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::OpenOptions, io::Write};
-
-    use assert2::check;
-
-    use super::*;
-    use crate::{
-        index::{IndexFixture, IndexSeed},
-        test_support::TempPath,
+    use {
+        super::*,
+        crate::{
+            index::{IndexFixture, IndexSeed},
+            test_support::TempPath,
+        },
+        assert2::check,
+        std::{fs::OpenOptions, io::Write},
     };
 
     seed_index_fixture!(OffsetIndex, u32);
 
     fn reference_index() -> IndexFixture<OffsetIndex> {
-        populated_index(
-            "00000000000000000000.index",
-            &[
-                IndexSeed {
-                    key: 0,
-                    coordinate: 0,
-                },
-                IndexSeed {
-                    key: 100,
-                    coordinate: 4096,
-                },
-                IndexSeed {
-                    key: 200,
-                    coordinate: 8192,
-                },
-            ],
-        )
+        populated_index("00000000000000000000.index", &[
+            IndexSeed {
+                key: 0,
+                coordinate: 0,
+            },
+            IndexSeed {
+                key: 100,
+                coordinate: 4096,
+            },
+            IndexSeed {
+                key: 200,
+                coordinate: 8192,
+            },
+        ])
     }
 
     fn assert_entry_metadata(index: &OffsetIndex, count: usize, last: Option<OffsetIndexEntry>) {
@@ -236,19 +233,16 @@ mod tests {
 
     #[test]
     fn persists_across_reopen() {
-        let TempPath { dir: _dir, path } = written_index(
-            "00000000000000000000.index",
-            &[
-                IndexSeed {
-                    key: 0,
-                    coordinate: 0,
-                },
-                IndexSeed {
-                    key: 100,
-                    coordinate: 4096,
-                },
-            ],
-        );
+        let TempPath { dir: _dir, path } = written_index("00000000000000000000.index", &[
+            IndexSeed {
+                key: 0,
+                coordinate: 0,
+            },
+            IndexSeed {
+                key: 100,
+                coordinate: 4096,
+            },
+        ]);
         let idx = OffsetIndex::open(&path).unwrap();
         assert2::assert!(idx.entry_count() == 2);
         assert2::assert!(idx.lookup(100) == 4096);
@@ -260,19 +254,16 @@ mod tests {
         // truncates on clean shutdown; an unclean copy carries trailing
         // zero entries. Loading must stop at the real data so the binary
         // search stays monotonic.
-        let TempPath { dir: _dir, path } = written_index(
-            "00000000000000000000.index",
-            &[
-                IndexSeed {
-                    key: 0,
-                    coordinate: 0,
-                },
-                IndexSeed {
-                    key: 100,
-                    coordinate: 4096,
-                },
-            ],
-        );
+        let TempPath { dir: _dir, path } = written_index("00000000000000000000.index", &[
+            IndexSeed {
+                key: 0,
+                coordinate: 0,
+            },
+            IndexSeed {
+                key: 100,
+                coordinate: 4096,
+            },
+        ]);
         // Append two zero-filled entries (preallocation padding).
         let mut f = OpenOptions::new().append(true).open(&path).unwrap();
         f.write_all(&[0u8; OFFSET_ENTRY_SIZE * 2]).unwrap();
@@ -292,19 +283,16 @@ mod tests {
             dir: _dir,
             path: _path,
             index: idx,
-        } = populated_index(
-            "00000000000000000000.index",
-            &[
-                IndexSeed {
-                    key: 4,
-                    coordinate: 0,
-                },
-                IndexSeed {
-                    key: 9,
-                    coordinate: 50,
-                },
-            ],
-        );
+        } = populated_index("00000000000000000000.index", &[
+            IndexSeed {
+                key: 4,
+                coordinate: 0,
+            },
+            IndexSeed {
+                key: 9,
+                coordinate: 50,
+            },
+        ]);
         for (name, target, want) in [
             ("below the first entry", 3, None),
             ("exact first", 4, Some(OffsetIndexEntry::new(4, 0))),

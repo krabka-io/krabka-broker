@@ -1,27 +1,27 @@
 //! Diskless WAL object-store flusher.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+use {
+    super::{index_log::DisklessIndexLog, wal_index::WalFlushRecord},
+    crate::{
+        error::BrokerError, metrics::BrokerMetrics, partition::Partition,
+        partition_registry::PartitionRegistry, time_util::now_ms,
     },
-    time::{Duration, Instant},
-};
-
-use futures_util::TryStreamExt as _;
-use krabka_log::Offset;
-use krabka_metadata::{MetadataImage, NodeId};
-use krabka_units::convert::{ByteSizeExt, TimeExt};
-use krabka_verified::diskless::DisklessRetentionPolicy;
-use object_store::{ObjectStore, ObjectStoreExt as _};
-use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
-
-use super::{index_log::DisklessIndexLog, wal_index::WalFlushRecord};
-use crate::{
-    error::BrokerError, metrics::BrokerMetrics, partition::Partition,
-    partition_registry::PartitionRegistry, time_util::now_ms,
+    futures_util::TryStreamExt as _,
+    krabka_log::Offset,
+    krabka_metadata::{MetadataImage, NodeId},
+    krabka_units::convert::{ByteSizeExt, TimeExt},
+    krabka_verified::diskless::DisklessRetentionPolicy,
+    object_store::{ObjectStore, ObjectStoreExt as _},
+    std::{
+        collections::{HashMap, HashSet},
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::{Duration, Instant},
+    },
+    tokio_util::sync::CancellationToken,
+    uuid::Uuid,
 };
 
 mod config;
@@ -270,16 +270,12 @@ async fn expire_retention_breached_ranges(
             // the log start says only how much of the WAL has reached the
             // bucket, never what an operator asked to delete.
             let log_start_offset = cache.delete_floor(partition.topic_id, index);
-            cache.retention_expired_keys(
-                partition.topic_id,
-                index,
-                DisklessRetentionPolicy {
-                    retention_ms,
-                    retention_bytes,
-                    log_start_offset,
-                    now_ms,
-                },
-            )
+            cache.retention_expired_keys(partition.topic_id, index, DisklessRetentionPolicy {
+                retention_ms,
+                retention_bytes,
+                log_start_offset,
+                now_ms,
+            })
         };
         if keys.is_empty() {
             continue;
@@ -393,28 +389,28 @@ async fn flushable_partitions(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use assert2::assert;
-    use krabka_metadata::{MetadataRecord, TopicRecord};
-    use krabka_remote_storage_topic::MetadataEventLog;
-    use krabka_units::ByteSize;
-    use object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path};
-    use tempfile::tempdir;
-
-    use super::{
-        test_support::{flush_record, orders_partition, test_index_log, test_partition},
-        *,
-    };
-    use crate::{
-        diskless::{
-            flusher::test_support::FlusherPartitionSetup,
-            index_log::test_support::{PacedReplayLog, ReplayPace, WalFlushSetup},
-            wal_index::WalIndexCache,
+    use {
+        super::{
+            test_support::{flush_record, orders_partition, test_index_log, test_partition},
+            *,
         },
-        test_support::{
-            FreezeSetup, StorageMode, UnixMillis, single_partition_topic, topic_freeze_record,
+        crate::{
+            diskless::{
+                flusher::test_support::FlusherPartitionSetup,
+                index_log::test_support::{PacedReplayLog, ReplayPace, WalFlushSetup},
+                wal_index::WalIndexCache,
+            },
+            test_support::{
+                FreezeSetup, StorageMode, UnixMillis, single_partition_topic, topic_freeze_record,
+            },
         },
+        assert2::assert,
+        krabka_metadata::{MetadataRecord, TopicRecord},
+        krabka_remote_storage_topic::MetadataEventLog,
+        krabka_units::ByteSize,
+        object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path},
+        std::time::Duration,
+        tempfile::tempdir,
     };
 
     // Keep field evaluation order, including metrics and readiness allocation.
@@ -574,13 +570,10 @@ mod tests {
             partitions.insert(
                 "orders".into(),
                 krabka_ids::PartitionIndex(partition),
-                test_partition(
-                    root,
-                    FlusherPartitionSetup {
-                        partition: krabka_ids::PartitionIndex(partition),
-                        ..Default::default()
-                    },
-                ),
+                test_partition(root, FlusherPartitionSetup {
+                    partition: krabka_ids::PartitionIndex(partition),
+                    ..Default::default()
+                }),
             );
         }
         let OrdersImage { topic_id, image } = orders_image(2);
@@ -1002,24 +995,20 @@ mod tests {
             store,
             handle,
             image,
-        } = seeded_retention_flusher(
-            dir.path(),
-            topic_id,
-            &[
-                RetentionRange {
-                    object_key: "diskless-wal/7/deleted.ckwl",
-                    first_offset: 0,
-                    last_offset: 2,
-                    max_timestamp_ms: 1_000,
-                },
-                RetentionRange {
-                    object_key: "diskless-wal/7/kept.ckwl",
-                    first_offset: 3,
-                    last_offset: 5,
-                    max_timestamp_ms: 1_000,
-                },
-            ],
-        )
+        } = seeded_retention_flusher(dir.path(), topic_id, &[
+            RetentionRange {
+                object_key: "diskless-wal/7/deleted.ckwl",
+                first_offset: 0,
+                last_offset: 2,
+                max_timestamp_ms: 1_000,
+            },
+            RetentionRange {
+                object_key: "diskless-wal/7/kept.ckwl",
+                first_offset: 3,
+                last_offset: 5,
+                max_timestamp_ms: 1_000,
+            },
+        ])
         .await;
         // The local log start is the flusher's trim frontier and says nothing
         // about a delete, so the floor the handler recorded is what the
@@ -1339,22 +1328,16 @@ mod tests {
     async fn worker_flushes_only_led_diskless_partitions_and_stops() {
         let dir = tempdir().unwrap();
         let led = orders_partition(dir.path());
-        let follower = test_partition(
-            dir.path(),
-            FlusherPartitionSetup {
-                partition: krabka_ids::PartitionIndex(1),
-                leader: NodeId(2),
-                ..Default::default()
-            },
-        );
-        let local = test_partition(
-            dir.path(),
-            FlusherPartitionSetup {
-                partition: krabka_ids::PartitionIndex(2),
-                storage: StorageMode::Local,
-                ..Default::default()
-            },
-        );
+        let follower = test_partition(dir.path(), FlusherPartitionSetup {
+            partition: krabka_ids::PartitionIndex(1),
+            leader: NodeId(2),
+            ..Default::default()
+        });
+        let local = test_partition(dir.path(), FlusherPartitionSetup {
+            partition: krabka_ids::PartitionIndex(2),
+            storage: StorageMode::Local,
+            ..Default::default()
+        });
         let partitions = Arc::new(PartitionRegistry::new());
         partitions.insert("orders".into(), krabka_ids::PartitionIndex(0), led);
         partitions.insert("orders".into(), krabka_ids::PartitionIndex(1), follower);

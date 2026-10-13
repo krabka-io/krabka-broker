@@ -6,17 +6,17 @@
 //! request-shaping boilerplate is collected here and the tests keep only the
 //! resource rows they care about.
 
-use std::net::SocketAddr;
-
-use krabka_protocol::owned::{
-    describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
-    describe_configs_response::DescribeConfigsResult,
-};
-
-use super::test_support::*;
-use crate::support::configs::{
-    ConfigOperation, IncrementalConfigsSetup, incremental_config, incremental_request,
-    incremental_resource,
+use {
+    super::test_support::*,
+    crate::support::configs::{
+        ConfigOperation, IncrementalConfigsSetup, incremental_config, incremental_request,
+        incremental_resource,
+    },
+    krabka_protocol::owned::{
+        describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
+        describe_configs_response::DescribeConfigsResult,
+    },
+    std::net::SocketAddr,
 };
 
 pub type ConfigOperations = Vec<(String, Option<String>, i8)>;
@@ -32,14 +32,11 @@ pub async fn drive_incremental_alter_configs(
     pass: &str,
     resources: ConfigResources,
 ) -> i16 {
-    let mut stream = kafka_wire::sasl_plain_authenticate(
-        addr,
-        &PlainAuthenticationSetup {
-            client_id: CLIENT_ID,
-            user,
-            password: (pass.as_bytes()).to_vec(),
-        },
-    )
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, &PlainAuthenticationSetup {
+        client_id: CLIENT_ID,
+        user,
+        password: (pass.as_bytes()).to_vec(),
+    })
     .await
     .expect("SASL authenticate for IncrementalAlterConfigs");
     incremental_alter_configs_on(&mut stream, resources).await
@@ -75,14 +72,11 @@ pub async fn drive_describe_configs(
         ..Default::default()
     };
 
-    let mut stream = kafka_wire::sasl_plain_authenticate(
-        addr,
-        &PlainAuthenticationSetup {
-            client_id: CLIENT_ID,
-            user,
-            password: (pass.as_bytes()).to_vec(),
-        },
-    )
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, &PlainAuthenticationSetup {
+        client_id: CLIENT_ID,
+        user,
+        password: (pass.as_bytes()).to_vec(),
+    })
     .await
     .expect("SASL authenticate for DescribeConfigs");
     let mut body = BytesMut::new();
@@ -135,19 +129,16 @@ async fn incremental_alter_configs_on(stream: &mut TcpStream, resources: ConfigR
         ..Default::default()
     });
 
-    let resp: IncrementalAlterConfigsResponse = kafka_wire::exchange(
-        stream,
-        &req,
-        WireExchangeSetup {
+    let resp: IncrementalAlterConfigsResponse =
+        kafka_wire::exchange(stream, &req, WireExchangeSetup {
             api_key: WireApiKey(44),
             version: WireApiVersion(VERSION),
             client_id: CLIENT_ID,
             header: RequestHeaderEncoding::Flexible,
             ..Default::default()
-        },
-    )
-    .await
-    .expect("IncrementalAlterConfigs round-trip");
+        })
+        .await
+        .expect("IncrementalAlterConfigs round-trip");
 
     resp.responses.first().map_or(0, |r| r.error_code)
 }

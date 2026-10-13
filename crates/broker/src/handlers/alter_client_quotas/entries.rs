@@ -6,12 +6,12 @@
 //! messages. The quota keys and the entity types are the vocabulary of that
 //! validation, so they live here beside the checks that use them.
 
-use std::collections::{BTreeMap, HashMap};
-
-use krabka_metadata::{ClientQuotaRecord, EntityKey, MetadataRecord, QuotaEntity};
-use krabka_protocol::owned::alter_client_quotas_request::EntryData;
-
-use crate::codes::INVALID_REQUEST;
+use {
+    crate::codes::INVALID_REQUEST,
+    krabka_metadata::{ClientQuotaRecord, EntityKey, MetadataRecord, QuotaEntity},
+    krabka_protocol::owned::alter_client_quotas_request::EntryData,
+    std::collections::{BTreeMap, HashMap},
+};
 
 /// Quota key: produce-side bandwidth cap in bytes/sec (KIP-13).
 const PRODUCER_BYTE_RATE_KEY: &str = "producer_byte_rate";
@@ -129,9 +129,7 @@ fn describe_entity(entity: &[(String, Option<String>)]) -> String {
     format!("ClientQuotaEntity(entries={{{entries}}})")
 }
 
-fn invalid(message: String) -> EntityError {
-    (INVALID_REQUEST, message)
-}
+fn invalid(message: String) -> EntityError { (INVALID_REQUEST, message) }
 
 /// Validates every entry and builds the records they write, as Kafka's
 /// `ClientQuotaControlManager.alterClientQuotas` does.
@@ -305,7 +303,7 @@ fn validate_quota_key_value(keys: &[QuotaKey], key: &str, value: f64) -> Result<
             "Proposed value for {key} is too large for a LONG."
         ))),
         QuotaValueType::Int | QuotaValueType::Long => {
-            if (value % 1.0).abs() > 1e-6 {
+            if (value % 1.0).abs() > 1.0e-6 {
                 Err(invalid(format!("{key} cannot be a fractional value.")))
             } else {
                 Ok(())
@@ -316,11 +314,12 @@ fn validate_quota_key_value(keys: &[QuotaKey], key: &str, value: f64) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
-
-    use super::*;
-    use crate::handlers::alter_client_quotas::test_support::{
-        EntityPart, QuotaOp, entry, op, op_remove, part,
+    use {
+        super::*,
+        crate::handlers::alter_client_quotas::test_support::{
+            EntityPart, QuotaOp, entry, op, op_remove, part,
+        },
+        assert2::check,
     };
 
     type Entity = Vec<EntityPart<'static>>;
@@ -354,9 +353,7 @@ mod tests {
         record(&key(entity), quota, None)
     }
 
-    fn err(message: &str) -> Result<(), EntityError> {
-        Err((INVALID_REQUEST, message.to_owned()))
-    }
+    fn err(message: &str) -> Result<(), EntityError> { Err((INVALID_REQUEST, message.to_owned())) }
 
     /// Resolves IP literals and the name `localhost`, as the handler's
     /// resolver would.
@@ -534,7 +531,7 @@ mod tests {
                 name: "INT past Integer.MAX_VALUE",
                 entries: vec![EntryCase {
                     entity: ip.clone(),
-                    ops: vec![op("connection_creation_rate", 3e9)],
+                    ops: vec![op("connection_creation_rate", 3.0e9)],
                 }],
                 expected: Alteration {
                     results: vec![(

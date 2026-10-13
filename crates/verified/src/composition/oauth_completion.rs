@@ -1,15 +1,16 @@
-use creusot_std::prelude::*;
-
 #[cfg(creusot)]
 use crate::oauth::{
     OAuthAuthenticationKind, OAuthPrincipalMatch, OAuthSessionCap, oauth_session_admissible_at,
 };
-use crate::{
-    jwks::{JwksCacheDecision, JwksCacheFacts, jwks_cache_admission},
-    oauth::{
-        OAuthSessionDecision, OAuthSessionFacts, oauth_session_admission,
-        oauth_validation_admission,
+use {
+    crate::{
+        jwks::{JwksCacheDecision, JwksCacheFacts, jwks_cache_admission},
+        oauth::{
+            OAuthSessionDecision, OAuthSessionFacts, oauth_session_admission,
+            oauth_validation_admission,
+        },
     },
+    creusot_std::prelude::*,
 };
 
 // cargo-mutants: #[cfg(creusot)] specification, absent from runtime tests.

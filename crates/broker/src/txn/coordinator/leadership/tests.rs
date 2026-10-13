@@ -1,10 +1,11 @@
-use assert2::assert;
-use uuid::Uuid;
-
-use super::*;
-use crate::{
-    codes::{COORDINATOR_LOAD_IN_PROGRESS, NOT_COORDINATOR},
-    txn::coordinator::test_support::{StateImageSetup, state_image},
+use {
+    super::*,
+    crate::{
+        codes::{COORDINATOR_LOAD_IN_PROGRESS, NOT_COORDINATOR},
+        txn::coordinator::test_support::{StateImageSetup, state_image},
+    },
+    assert2::assert,
+    uuid::Uuid,
 };
 
 const THIS_BROKER: NodeId = NodeId(1);
@@ -13,9 +14,7 @@ const P0: PartitionIndex = PartitionIndex(0);
 
 /// An image with no `__transaction_state` topic, as the image before the
 /// topic was created is.
-fn image_without_topic() -> MetadataImage {
-    MetadataImage::new(Uuid::nil())
-}
+fn image_without_topic() -> MetadataImage { MetadataImage::new(Uuid::nil()) }
 
 fn image(topic_id: Uuid, leader: NodeId, leader_epoch: LeaderEpoch) -> MetadataImage {
     state_image(StateImageSetup {
@@ -161,13 +160,10 @@ fn an_election_loads_and_a_resignation_unloads() {
         Step {
             name: "this broker is elected at epoch 0",
             image: image(Uuid::from_u128(1), THIS_BROKER, LeaderEpoch(0)),
-            changes: changes(
-                &[],
-                &[LoadSpec {
-                    partition: PartitionIndex(0),
-                    generation: LoadGeneration(1),
-                }],
-            ),
+            changes: changes(&[], &[LoadSpec {
+                partition: PartitionIndex(0),
+                generation: LoadGeneration(1),
+            }]),
             after: Some(leadership(
                 Uuid::from_u128(1),
                 LeaderEpoch(0),
@@ -206,13 +202,10 @@ fn an_election_loads_and_a_resignation_unloads() {
         Step {
             name: "this broker is elected again at epoch 2",
             image: image(Uuid::from_u128(1), THIS_BROKER, LeaderEpoch(2)),
-            changes: changes(
-                &[],
-                &[LoadSpec {
-                    partition: PartitionIndex(0),
-                    generation: LoadGeneration(2),
-                }],
-            ),
+            changes: changes(&[], &[LoadSpec {
+                partition: PartitionIndex(0),
+                generation: LoadGeneration(2),
+            }]),
             after: Some(leadership(
                 Uuid::from_u128(1),
                 LeaderEpoch(2),
@@ -226,13 +219,10 @@ fn an_election_loads_and_a_resignation_unloads() {
         Step {
             name: "a new term during a load drops the load and starts another",
             image: image(Uuid::from_u128(1), THIS_BROKER, LeaderEpoch(3)),
-            changes: changes(
-                &[PartitionIndex(0)],
-                &[LoadSpec {
-                    partition: PartitionIndex(0),
-                    generation: LoadGeneration(3),
-                }],
-            ),
+            changes: changes(&[PartitionIndex(0)], &[LoadSpec {
+                partition: PartitionIndex(0),
+                generation: LoadGeneration(3),
+            }]),
             after: Some(leadership(
                 Uuid::from_u128(1),
                 LeaderEpoch(3),
@@ -260,13 +250,10 @@ fn an_election_loads_and_a_resignation_unloads() {
         Step {
             name: "the next election loads again",
             image: image(Uuid::from_u128(1), THIS_BROKER, LeaderEpoch(4)),
-            changes: changes(
-                &[PartitionIndex(0)],
-                &[LoadSpec {
-                    partition: PartitionIndex(0),
-                    generation: LoadGeneration(4),
-                }],
-            ),
+            changes: changes(&[PartitionIndex(0)], &[LoadSpec {
+                partition: PartitionIndex(0),
+                generation: LoadGeneration(4),
+            }]),
             after: Some(leadership(
                 Uuid::from_u128(1),
                 LeaderEpoch(4),
@@ -305,13 +292,10 @@ fn an_election_loads_and_a_resignation_unloads() {
         Step {
             name: "the topic is created a third time and this broker leads it at epoch 0",
             image: image(Uuid::from_u128(3), THIS_BROKER, LeaderEpoch(0)),
-            changes: changes(
-                &[],
-                &[LoadSpec {
-                    partition: PartitionIndex(0),
-                    generation: LoadGeneration(5),
-                }],
-            ),
+            changes: changes(&[], &[LoadSpec {
+                partition: PartitionIndex(0),
+                generation: LoadGeneration(5),
+            }]),
             after: Some(leadership(
                 Uuid::from_u128(3),
                 LeaderEpoch(0),
@@ -333,13 +317,10 @@ fn an_election_before_the_log_opens_loads_once_it_opens() {
         Step {
             name: "the log opened",
             image: image(Uuid::from_u128(1), THIS_BROKER, LeaderEpoch(0)),
-            changes: changes(
-                &[],
-                &[LoadSpec {
-                    partition: PartitionIndex(0),
-                    generation: LoadGeneration(2),
-                }],
-            ),
+            changes: changes(&[], &[LoadSpec {
+                partition: PartitionIndex(0),
+                generation: LoadGeneration(2),
+            }]),
             after: Some(leadership(
                 Uuid::from_u128(1),
                 LeaderEpoch(0),

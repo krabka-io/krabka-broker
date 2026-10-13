@@ -1,11 +1,12 @@
 //! `cli_main!`: see the crate documentation.
 
-use moxy::{
-    ast::ParseError,
-    token::{TokenStream, TokenTree},
+use {
+    crate::meta::required_tokens,
+    moxy::{
+        ast::ParseError,
+        token::{TokenStream, TokenTree},
+    },
 };
-
-use crate::meta::required_tokens;
 
 /// The two halves of the `cli_main!` input.
 struct Split<'a> {
@@ -61,11 +62,12 @@ pub(crate) fn expand(tokens: TokenStream) -> Result<TokenStream, ParseError> {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use moxy::token::TokenStream;
-
-    use super::{Split, expand, split};
-    use crate::meta::compact;
+    use {
+        super::{Split, expand, split},
+        crate::meta::compact,
+        assert2::assert,
+        moxy::token::TokenStream,
+    };
 
     /// Both sides of a split, printed without whitespace.
     #[derive(Debug, PartialEq)]

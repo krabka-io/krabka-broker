@@ -4,25 +4,25 @@
 //! cluster, and it builds a coordinator over them. Every test module under
 //! this coordinator needs that setup, so it lives in one file.
 
-use std::sync::Arc;
-
-use krabka_metadata::{MetadataRecord, NodeId};
-use krabka_units::{Time, millis};
-use tempfile::{TempDir, tempdir};
-
-use super::BarrierCoordinator;
-use crate::{
-    barrier::{
-        STATE_TOPIC,
-        config::BarrierConfig,
-        metrics::BrokerBarrierMetrics,
-        state::GroupSpec,
-        test_support::{metadata_source, open_partition, topic_records},
+use {
+    super::BarrierCoordinator,
+    crate::{
+        barrier::{
+            STATE_TOPIC,
+            config::BarrierConfig,
+            metrics::BrokerBarrierMetrics,
+            state::GroupSpec,
+            test_support::{metadata_source, open_partition, topic_records},
+        },
+        metadata_source::MetadataSource,
+        metrics::BrokerMetrics,
+        partition_registry::PartitionRegistry,
+        test_support::{FakeMetadataSource, StandalonePartitionSetup},
     },
-    metadata_source::MetadataSource,
-    metrics::BrokerMetrics,
-    partition_registry::PartitionRegistry,
-    test_support::{FakeMetadataSource, StandalonePartitionSetup},
+    krabka_metadata::{MetadataRecord, NodeId},
+    krabka_units::{Time, millis},
+    std::sync::Arc,
+    tempfile::{TempDir, tempdir},
 };
 
 pub(crate) const GROUP: &str = "orders-cut";
@@ -102,27 +102,19 @@ impl Fixture {
         let dir = tempdir().expect("tempdir");
         let registry = Arc::new(PartitionRegistry::new());
         for p in 0..4 {
-            open_partition(
-                &registry,
-                dir.path(),
-                StandalonePartitionSetup {
-                    topic: STATE_TOPIC,
-                    partition: krabka_ids::PartitionIndex(p),
-                    ..Default::default()
-                },
-            );
+            open_partition(&registry, dir.path(), StandalonePartitionSetup {
+                topic: STATE_TOPIC,
+                partition: krabka_ids::PartitionIndex(p),
+                ..Default::default()
+            });
         }
         for DataTopic { name, partitions } in data {
             for p in 0..*partitions {
-                open_partition(
-                    &registry,
-                    dir.path(),
-                    StandalonePartitionSetup {
-                        topic: name,
-                        partition: krabka_ids::PartitionIndex(p),
-                        ..Default::default()
-                    },
-                );
+                open_partition(&registry, dir.path(), StandalonePartitionSetup {
+                    topic: name,
+                    partition: krabka_ids::PartitionIndex(p),
+                    ..Default::default()
+                });
             }
         }
         Self {

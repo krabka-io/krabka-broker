@@ -65,9 +65,7 @@
 //!   and the angstrom sign: `(?iu)(s)\1` matches `sſ` in Java, and not in
 //!   `fancy_regex`. They agree on the other letters.
 
-use std::fmt::Write as _;
-
-use super::Scope;
+use {super::Scope, std::fmt::Write as _};
 
 /// A value read from the chars of a pattern, and the number of chars it takes.
 #[derive(Debug, PartialEq, Eq)]
@@ -504,9 +502,7 @@ pub(super) fn property_class(
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
-
-    use super::*;
+    use {super::*, assert2::check};
 
     fn escape(text: &str, in_class: bool) -> Consumed<Escape> {
         let chars: Vec<char> = text.chars().collect();

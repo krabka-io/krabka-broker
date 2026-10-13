@@ -4,25 +4,25 @@
 //! It pins the response shape a controller leader returns for a registered,
 //! caught-up broker.
 
-use std::sync::Arc;
-
-use assert2::{assert, check};
-use krabka_protocol::{
-    owned::broker_heartbeat_response::BrokerHeartbeatResponse,
-    primitives::uuid::Uuid as ProtocolUuid,
-};
-
-use super::*;
-use crate::{
-    BrokerHandle,
-    broker::Broker,
-    codes,
-    features::METADATA_VERSION,
-    handlers::test_support::{ReplicatedPartitionSetup, replicated_partition},
-    test_support::{
-        broker_registration, finalize_elr_version_on, peer, principal,
-        start_broker_with_authorizer as start_broker, test_ctx,
+use {
+    super::*,
+    crate::{
+        BrokerHandle,
+        broker::Broker,
+        codes,
+        features::METADATA_VERSION,
+        handlers::test_support::{ReplicatedPartitionSetup, replicated_partition},
+        test_support::{
+            broker_registration, finalize_elr_version_on, peer, principal,
+            start_broker_with_authorizer as start_broker, test_ctx,
+        },
     },
+    assert2::{assert, check},
+    krabka_protocol::{
+        owned::broker_heartbeat_response::BrokerHeartbeatResponse,
+        primitives::uuid::Uuid as ProtocolUuid,
+    },
+    std::sync::Arc,
 };
 
 fn request(
@@ -258,9 +258,7 @@ impl Cluster {
         }
     }
 
-    fn applied(&self) -> i64 {
-        self.broker.controller.current_metadata_offset()
-    }
+    fn applied(&self) -> i64 { self.broker.controller.current_metadata_offset() }
 
     /// The fence and controlled-shutdown flags of `node`'s registration, and
     /// whether it still holds the epoch it registered at.
@@ -296,14 +294,11 @@ async fn a_controlled_shutdown_drains_the_isrs_and_waits_for_active_brokers() {
     // `BrokerRegistrationChangeRecord`s move its fence and its controlled
     // shutdown, at the epoch it registered at.
     let mut registrations = vec![("registered", cluster.registration(2, epoch_2))];
-    let mut expected_registrations = vec![(
-        "registered",
-        RegistrationState {
-            fenced: true,
-            in_controlled_shutdown: false,
-            holds_epoch: true,
-        },
-    )];
+    let mut expected_registrations = vec![("registered", RegistrationState {
+        fenced: true,
+        in_controlled_shutdown: false,
+        holds_epoch: true,
+    })];
 
     let stale = Answer {
         error_code: codes::STALE_BROKER_EPOCH,
@@ -346,14 +341,11 @@ async fn a_controlled_shutdown_drains_the_isrs_and_waits_for_active_brokers() {
             .await,
     ));
     registrations.push(("unfenced", cluster.registration(2, epoch_2)));
-    expected_registrations.push((
-        "unfenced",
-        RegistrationState {
-            fenced: false,
-            in_controlled_shutdown: false,
-            holds_epoch: true,
-        },
-    ));
+    expected_registrations.push(("unfenced", RegistrationState {
+        fenced: false,
+        in_controlled_shutdown: false,
+        holds_epoch: true,
+    }));
 
     expected.push(("broker 2 asks to shut down", answer(false, false)));
     answers.push((
@@ -361,14 +353,11 @@ async fn a_controlled_shutdown_drains_the_isrs_and_waits_for_active_brokers() {
         cluster.heartbeat(2, epoch_2, cluster.applied(), true).await,
     ));
     registrations.push(("in controlled shutdown", cluster.registration(2, epoch_2)));
-    expected_registrations.push((
-        "in controlled shutdown",
-        RegistrationState {
-            fenced: false,
-            in_controlled_shutdown: true,
-            holds_epoch: true,
-        },
-    ));
+    expected_registrations.push(("in controlled shutdown", RegistrationState {
+        fenced: false,
+        in_controlled_shutdown: true,
+        holds_epoch: true,
+    }));
     let drained = cluster.applied();
     let PartitionLeadership {
         leader: leader_0,
@@ -418,14 +407,11 @@ async fn a_controlled_shutdown_drains_the_isrs_and_waits_for_active_brokers() {
         cluster.heartbeat(2, epoch_2, cluster.applied(), true).await,
     ));
     registrations.push(("shut down", cluster.registration(2, epoch_2)));
-    expected_registrations.push((
-        "shut down",
-        RegistrationState {
-            fenced: true,
-            in_controlled_shutdown: true,
-            holds_epoch: true,
-        },
-    ));
+    expected_registrations.push(("shut down", RegistrationState {
+        fenced: true,
+        in_controlled_shutdown: true,
+        holds_epoch: true,
+    }));
 
     check!(answers == expected);
     check!(registrations == expected_registrations);
@@ -712,9 +698,12 @@ fn a_heartbeat_stores_its_cordoned_dirs_from_4_3_iv0() {
 /// holds it. Every change names the broker's registered epoch.
 #[test]
 fn each_transition_writes_kafkas_registration_change() {
-    use BrokerControlState::{ControlledShutdown, Fenced, ShutdownNow, Unfenced};
-    use krabka_metadata::{
-        BrokerRegistrationChangeRecord, FencingChange, MetadataImage, MetadataRecord, TopicRecord,
+    use {
+        BrokerControlState::{ControlledShutdown, Fenced, ShutdownNow, Unfenced},
+        krabka_metadata::{
+            BrokerRegistrationChangeRecord, FencingChange, MetadataImage, MetadataRecord,
+            TopicRecord,
+        },
     };
 
     let registered = |fenced: bool, in_controlled_shutdown: bool| {

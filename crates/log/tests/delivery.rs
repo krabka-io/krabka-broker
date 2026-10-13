@@ -1,12 +1,13 @@
 //! Deliver-at-time visibility: what a scheduled topic lets a reader see.
 
-use std::time::{Duration, SystemTime};
-
-use assert2::check;
-use krabka_ids::Offset;
-use krabka_log::{DeliveryAdvance, DeliveryPolicy, Log, LogConfig};
-use krabka_units::prelude::{ByteSize, ByteSizeExt as _, bytes, gibibytes, millis};
-use tempfile::tempdir;
+use {
+    assert2::check,
+    krabka_ids::Offset,
+    krabka_log::{DeliveryAdvance, DeliveryPolicy, Log, LogConfig},
+    krabka_units::prelude::{ByteSize, ByteSizeExt as _, bytes, gibibytes, millis},
+    std::time::{Duration, SystemTime},
+    tempfile::tempdir,
+};
 
 /// The default clock-confidence bound, in milliseconds.
 const BOUND_MS: i64 = 250;
@@ -80,10 +81,9 @@ fn an_unscheduled_topic_makes_every_durable_record_visible() {
 /// is a fetch limit, and a limit is a prefix.
 #[test]
 fn the_watermark_stops_at_the_first_batch_that_is_not_due_yet() {
-    let TempLog { dir: _dir, mut log } = log_of(
-        scheduled_config(ONE_SEGMENT),
-        &[PAST_MS, PAST_MS, FUTURE_MS, PAST_MS],
-    );
+    let TempLog { dir: _dir, mut log } = log_of(scheduled_config(ONE_SEGMENT), &[
+        PAST_MS, PAST_MS, FUTURE_MS, PAST_MS,
+    ]);
 
     let advance = log.advance_delivery_watermark(NOW_MS);
 
@@ -156,10 +156,9 @@ fn the_configured_bound_decides_the_deadline() {
 /// has already been served.
 #[test]
 fn the_watermark_never_moves_backwards() {
-    let TempLog { dir: _dir, mut log } = log_of(
-        scheduled_config(ONE_BATCH_PER_SEGMENT),
-        &[PAST_MS, FUTURE_MS],
-    );
+    let TempLog { dir: _dir, mut log } = log_of(scheduled_config(ONE_BATCH_PER_SEGMENT), &[
+        PAST_MS, FUTURE_MS,
+    ]);
 
     let released = log.advance_delivery_watermark(FUTURE_MS + BOUND_MS);
     check!(released.watermark == Offset(4));
@@ -175,10 +174,9 @@ fn the_watermark_never_moves_backwards() {
 /// watermark.
 #[test]
 fn the_walk_crosses_segments() {
-    let TempLog { dir: _dir, mut log } = log_of(
-        scheduled_config(ONE_BATCH_PER_SEGMENT),
-        &[PAST_MS, PAST_MS, FUTURE_MS, PAST_MS],
-    );
+    let TempLog { dir: _dir, mut log } = log_of(scheduled_config(ONE_BATCH_PER_SEGMENT), &[
+        PAST_MS, PAST_MS, FUTURE_MS, PAST_MS,
+    ]);
 
     check!(log.advance_delivery_watermark(NOW_MS).watermark == Offset(4));
     check!(
@@ -254,10 +252,9 @@ fn a_log_opened_without_validation_still_holds_an_undue_batch() {
 #[test]
 fn pending_ranges_cover_whole_batches_and_merge_when_adjacent() {
     // offsets 0-1 due, 2-3 and 4-5 waiting (adjacent), 6-7 due, 8-9 waiting.
-    let TempLog { dir: _dir, log } = log_of(
-        scheduled_config(ONE_SEGMENT),
-        &[PAST_MS, FUTURE_MS, FUTURE_MS, PAST_MS, FUTURE_MS],
-    );
+    let TempLog { dir: _dir, log } = log_of(scheduled_config(ONE_SEGMENT), &[
+        PAST_MS, FUTURE_MS, FUTURE_MS, PAST_MS, FUTURE_MS,
+    ]);
 
     let ranges = log.pending_activation_ranges(Offset(0), Offset(9), NOW_MS);
 
@@ -278,10 +275,9 @@ fn a_window_that_splits_a_batch_reports_the_whole_batch() {
 
 #[test]
 fn pending_ranges_span_segments_and_stay_inside_the_log() {
-    let TempLog { dir: _dir, log } = log_of(
-        scheduled_config(ONE_BATCH_PER_SEGMENT),
-        &[FUTURE_MS, FUTURE_MS, PAST_MS],
-    );
+    let TempLog { dir: _dir, log } = log_of(scheduled_config(ONE_BATCH_PER_SEGMENT), &[
+        FUTURE_MS, FUTURE_MS, PAST_MS,
+    ]);
 
     // A window wider than the log clamps to what the log holds.
     check!(
@@ -362,10 +358,9 @@ fn size_retention_on_an_unscheduled_topic_is_untouched_by_the_guard() {
 /// that no record asks for any more.
 #[test]
 fn a_truncation_drops_the_deadline_it_invalidates() {
-    let TempLog { dir: _dir, mut log } = log_of(
-        scheduled_config(ONE_BATCH_PER_SEGMENT),
-        &[PAST_MS, FUTURE_MS, PAST_MS],
-    );
+    let TempLog { dir: _dir, mut log } = log_of(scheduled_config(ONE_BATCH_PER_SEGMENT), &[
+        PAST_MS, FUTURE_MS, PAST_MS,
+    ]);
 
     check!(
         log.advance_delivery_watermark(NOW_MS)
@@ -396,10 +391,9 @@ fn a_truncation_drops_the_deadline_it_invalidates() {
 /// time.
 #[test]
 fn a_batch_appended_over_a_truncated_tail_is_still_held_until_it_is_due() {
-    let TempLog { dir: _dir, mut log } = log_of(
-        scheduled_config(ONE_BATCH_PER_SEGMENT),
-        &[PAST_MS, PAST_MS, PAST_MS],
-    );
+    let TempLog { dir: _dir, mut log } = log_of(scheduled_config(ONE_BATCH_PER_SEGMENT), &[
+        PAST_MS, PAST_MS, PAST_MS,
+    ]);
 
     // Everything is due, so the watermark reaches the log end.
     check!(

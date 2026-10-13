@@ -7,14 +7,14 @@
 //! whether the exclude ranges swallow the whole keep window of a partition.
 //! `fully_covers` is the interval arithmetic behind that proof.
 
-use std::collections::HashMap;
-
-use krabka_ids::Offset;
-
-use super::{ExcludedOffsets, Predicates};
-use crate::{
-    args::{PartitionRef, RestoreArgs},
-    error::RestoreError,
+use {
+    super::{ExcludedOffsets, Predicates},
+    crate::{
+        args::{PartitionRef, RestoreArgs},
+        error::RestoreError,
+    },
+    krabka_ids::Offset,
+    std::collections::HashMap,
 };
 
 impl Predicates {
@@ -108,10 +108,7 @@ fn fully_covers(ranges: &[ExcludedOffsets], last_offset: Offset) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
-
-    use super::*;
-    use crate::bound::test_support::args_from;
+    use {super::*, crate::bound::test_support::args_from, assert2::check};
 
     #[test]
     fn exclude_offset_fully_covering_the_to_offset_window_is_rejected() {

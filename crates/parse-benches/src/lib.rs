@@ -5,19 +5,20 @@
 //! `krabka-io` organization, this crate can be migrated there as a common
 //! benchmark utility for `krabka-broker`, `krabka-protocol`, and `krabka-client-rs`.
 
-use std::{
-    collections::BTreeMap,
-    fs::{self, File},
-    io::{BufRead, BufReader, Write},
-    path::{Path, PathBuf},
-    sync::LazyLock,
-    time::SystemTime,
+use {
+    clap::Parser,
+    regex::Regex,
+    serde::{Deserialize, Serialize},
+    std::{
+        collections::BTreeMap,
+        fs::{self, File},
+        io::{BufRead, BufReader, Write},
+        path::{Path, PathBuf},
+        sync::LazyLock,
+        time::SystemTime,
+    },
+    thiserror::Error,
 };
-
-use clap::Parser;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
 static BENCHER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -220,16 +221,13 @@ pub fn compare_summaries(
             .collect();
         let mut values = reference_values.iter().chain(&candidate_values);
         if values.clone().all(|value| *value == 0.0) {
-            benchmarks.insert(
-                name.clone(),
-                BenchmarkComparison {
-                    reference_median_ns: 0.0,
-                    candidate_median_ns: 0.0,
-                    ratio: 1.0,
-                    tolerance: minimum_tolerance,
-                    passed: true,
-                },
-            );
+            benchmarks.insert(name.clone(), BenchmarkComparison {
+                reference_median_ns: 0.0,
+                candidate_median_ns: 0.0,
+                ratio: 1.0,
+                tolerance: minimum_tolerance,
+                passed: true,
+            });
             continue;
         }
         if values.any(|value| !value.is_finite() || *value <= 0.0) {
@@ -242,16 +240,13 @@ pub fn compare_summaries(
                 .max(relative_mad(&candidate_values, candidate_median_ns)),
         );
         let ratio = candidate_median_ns / reference_median_ns;
-        benchmarks.insert(
-            name.clone(),
-            BenchmarkComparison {
-                reference_median_ns,
-                candidate_median_ns,
-                ratio,
-                tolerance,
-                passed: ratio <= 1.0 + tolerance,
-            },
-        );
+        benchmarks.insert(name.clone(), BenchmarkComparison {
+            reference_median_ns,
+            candidate_median_ns,
+            ratio,
+            tolerance,
+            passed: ratio <= 1.0 + tolerance,
+        });
     }
     let passed = benchmarks.values().all(|benchmark| benchmark.passed);
     Ok(BenchmarkVerdict {

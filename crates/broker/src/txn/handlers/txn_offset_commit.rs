@@ -62,11 +62,13 @@
 //! the producer's verification with the transaction coordinator (KIP-890, see
 //! [`verification`]), then the KIP-447 fencing checks.
 
-use krabka_ids::PartitionIndex;
-use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::owned::{
-    txn_offset_commit_request::TxnOffsetCommitRequest,
-    txn_offset_commit_response::TxnOffsetCommitResponse,
+use {
+    krabka_ids::PartitionIndex,
+    krabka_metadata::{AclOperation, ResourceType},
+    krabka_protocol::owned::{
+        txn_offset_commit_request::TxnOffsetCommitRequest,
+        txn_offset_commit_response::TxnOffsetCommitResponse,
+    },
 };
 
 mod batch;
@@ -81,31 +83,34 @@ mod ordering_tests;
 #[cfg(test)]
 mod test_support;
 
-use self::{
-    batch::{
-        AppendChecks, AppendedTxnOffsets, LocalOffsets, RowSweep, TxnBatchWrite, append_txn_batch,
-    },
-    existence::unknown_partitions,
-    response::{build_response, error_response},
-};
-use crate::{
-    api_catalog::UnstableApiVersions,
-    authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
-    broker::Broker,
-    codes,
-    coordinator::{
-        partitioner::{GroupRoutingError, local_partition_for_group},
-        unified::{
-            actor::{
-                CommitFence, CommitRequest, GroupActorHandle, GroupActorMessage, GroupKindTag,
-                TxnOffsetReservation, validate_commit,
-            },
-            streams::actor::validate_streams_group_commit,
+use {
+    self::{
+        batch::{
+            AppendChecks, AppendedTxnOffsets, LocalOffsets, RowSweep, TxnBatchWrite,
+            append_txn_batch,
         },
+        existence::unknown_partitions,
+        response::{build_response, error_response},
     },
-    error::BrokerError,
-    handlers::{RequestContext, group_partition_loading},
-    txn::{state::TopicPartition, util::now_millis, version::resolve_txn_version},
+    crate::{
+        api_catalog::UnstableApiVersions,
+        authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
+        broker::Broker,
+        codes,
+        coordinator::{
+            partitioner::{GroupRoutingError, local_partition_for_group},
+            unified::{
+                actor::{
+                    CommitFence, CommitRequest, GroupActorHandle, GroupActorMessage, GroupKindTag,
+                    TxnOffsetReservation, validate_commit,
+                },
+                streams::actor::validate_streams_group_commit,
+            },
+        },
+        error::BrokerError,
+        handlers::{RequestContext, group_partition_loading},
+        txn::{state::TopicPartition, util::now_millis, version::resolve_txn_version},
+    },
 };
 
 pub(crate) async fn handle(
@@ -282,19 +287,16 @@ pub(crate) async fn handle(
             )
             .await
         } else {
-            validate_commit(
-                &handle,
-                CommitRequest {
-                    member_id: req.member_id.clone(),
-                    group_instance_id: req.group_instance_id.clone(),
-                    generation_or_epoch: req.generation_id_or_member_epoch,
-                    fence: CommitFence::Transactional,
-                    partitions: reserved
-                        .iter()
-                        .map(|key| (topic_id_of(&req, &key.topic), key.partition.get()))
-                        .collect(),
-                },
-            )
+            validate_commit(&handle, CommitRequest {
+                member_id: req.member_id.clone(),
+                group_instance_id: req.group_instance_id.clone(),
+                generation_or_epoch: req.generation_id_or_member_epoch,
+                fence: CommitFence::Transactional,
+                partitions: reserved
+                    .iter()
+                    .map(|key| (topic_id_of(&req, &key.topic), key.partition.get()))
+                    .collect(),
+            })
             .await
         };
         if let Some(code) = code {
@@ -585,13 +587,10 @@ async fn mark_offsets_pending(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
-    use assert2::check;
-    use tokio::sync::oneshot;
-
-    use super::*;
-    use crate::coordinator::unified::test_support::make_coord;
+    use {
+        super::*, crate::coordinator::unified::test_support::make_coord, assert2::check,
+        std::collections::HashSet, tokio::sync::oneshot,
+    };
 
     /// `validateTransactionalOffsetCommit` passes a `StaleMemberEpochException`
     /// through at v6 and turns it into `ILLEGAL_GENERATION` below; every other

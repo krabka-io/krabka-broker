@@ -5,21 +5,21 @@
 //! them turns on the group record, and none of them runs the injection
 //! protocol, so they sit in their own file.
 
-use std::time::Instant;
-
-use krabka_units::{Time, convert::TimeExt as _};
-
-use super::{
-    AppendRecord, BarrierCoordinator, NamedGroup, validate_group_name, validate_spec_limits,
-};
-use crate::{
-    barrier::{
-        STATE_TOPIC,
-        error::BarrierError,
-        persistence::{CutValue, GroupValue, RecordKey, encode_group},
-        state::{GroupEntry, GroupSpec, schedule_next},
+use {
+    super::{
+        AppendRecord, BarrierCoordinator, NamedGroup, validate_group_name, validate_spec_limits,
     },
-    time_util::now_ms,
+    crate::{
+        barrier::{
+            STATE_TOPIC,
+            error::BarrierError,
+            persistence::{CutValue, GroupValue, RecordKey, encode_group},
+            state::{GroupEntry, GroupSpec, schedule_next},
+        },
+        time_util::now_ms,
+    },
+    krabka_units::{Time, convert::TimeExt as _},
+    std::time::Instant,
 };
 
 /// How long `create_group` waits for the state topic's partition to take a
@@ -196,13 +196,10 @@ impl BarrierCoordinator {
             retained_cuts: spec.retained_cuts,
             last_epoch: entry.last_epoch(),
         };
-        self.append_records(
-            group,
-            vec![AppendRecord {
-                key: RecordKey::group(group),
-                value: Some(encode_group(&definition)?.into()),
-            }],
-        )
+        self.append_records(group, vec![AppendRecord {
+            key: RecordKey::group(group),
+            value: Some(encode_group(&definition)?.into()),
+        }])
         .await?;
 
         entry.definition = definition.clone();
@@ -319,17 +316,18 @@ impl BarrierCoordinator {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use krabka_metadata::NodeId;
-
-    use super::*;
-    use crate::{
-        barrier::{
-            coordinator::test_support::{Fixture, GROUP, GroupSpecSetup, spec},
-            test_support::topic_records,
+    use {
+        super::*,
+        crate::{
+            barrier::{
+                coordinator::test_support::{Fixture, GROUP, GroupSpecSetup, spec},
+                test_support::topic_records,
+            },
+            coordinator::unified::persistence::MAX_STRING_BYTES,
+            metadata_source::MetadataSource,
         },
-        coordinator::unified::persistence::MAX_STRING_BYTES,
-        metadata_source::MetadataSource,
+        assert2::assert,
+        krabka_metadata::NodeId,
     };
 
     #[tokio::test]

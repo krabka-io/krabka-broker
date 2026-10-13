@@ -3,11 +3,12 @@
 //! smallest push interval across them, and the stable subscription id derived
 //! from that result.
 
-use krabka_metadata::MetadataImage;
-use uuid::Uuid;
-
-use super::{ClientAttributes, ComputedSubscription};
-use crate::client_metrics::config::{self, ALL_METRICS};
+use {
+    super::{ClientAttributes, ComputedSubscription},
+    crate::client_metrics::config::{self, ALL_METRICS},
+    krabka_metadata::MetadataImage,
+    uuid::Uuid,
+};
 
 /// Kafka's `ClientMetricsManager.createClientInstance`: the push interval
 /// starts at `default_interval_ms` (Kafka's
@@ -106,13 +107,14 @@ fn uuid_hashcode(id: Uuid) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use assert2::{assert, check};
-    use krabka_metadata::{ClientMetricsConfigRecord, MetadataImage, MetadataRecord};
-    use uuid::Uuid;
-
-    use super::*;
-    use crate::client_metrics::manager::test_support::{
-        ConfigEntry, apply_config, attrs, img_with,
+    use {
+        super::*,
+        crate::client_metrics::manager::test_support::{
+            ConfigEntry, apply_config, attrs, img_with,
+        },
+        assert2::{assert, check},
+        krabka_metadata::{ClientMetricsConfigRecord, MetadataImage, MetadataRecord},
+        uuid::Uuid,
     };
 
     /// The subscription of a broker that keeps Kafka's default interval.
@@ -132,47 +134,38 @@ mod tests {
             ("no subscription", MetadataImage::new(Uuid::nil()), 600_000),
             (
                 "a subscription without interval.ms",
-                img_with(
-                    "all",
-                    &[ConfigEntry {
-                        key: "metrics",
-                        value: "*",
-                    }],
-                ),
+                img_with("all", &[ConfigEntry {
+                    key: "metrics",
+                    value: "*",
+                }]),
                 600_000,
             ),
             (
                 "a subscription below the default",
-                img_with(
-                    "all",
-                    &[
-                        ConfigEntry {
-                            key: "metrics",
-                            value: "*",
-                        },
-                        ConfigEntry {
-                            key: "interval.ms",
-                            value: "60000",
-                        },
-                    ],
-                ),
+                img_with("all", &[
+                    ConfigEntry {
+                        key: "metrics",
+                        value: "*",
+                    },
+                    ConfigEntry {
+                        key: "interval.ms",
+                        value: "60000",
+                    },
+                ]),
                 60_000,
             ),
             (
                 "a subscription above the default",
-                img_with(
-                    "all",
-                    &[
-                        ConfigEntry {
-                            key: "metrics",
-                            value: "*",
-                        },
-                        ConfigEntry {
-                            key: "interval.ms",
-                            value: "3600000",
-                        },
-                    ],
-                ),
+                img_with("all", &[
+                    ConfigEntry {
+                        key: "metrics",
+                        value: "*",
+                    },
+                    ConfigEntry {
+                        key: "interval.ms",
+                        value: "3600000",
+                    },
+                ]),
                 600_000,
             ),
         ];
@@ -194,19 +187,16 @@ mod tests {
 
     #[test]
     fn match_all_empty_match_applies() {
-        let img = img_with(
-            "all",
-            &[
-                ConfigEntry {
-                    key: "metrics",
-                    value: "*",
-                },
-                ConfigEntry {
-                    key: "interval.ms",
-                    value: "60000",
-                },
-            ],
-        );
+        let img = img_with("all", &[
+            ConfigEntry {
+                key: "metrics",
+                value: "*",
+            },
+            ConfigEntry {
+                key: "interval.ms",
+                value: "60000",
+            },
+        ]);
         let m = compute_subscription(&img, &attrs());
         check!(m.metrics == vec!["*".to_string()]);
         check!(m.push_interval_ms == 60_000);
@@ -214,35 +204,29 @@ mod tests {
 
     #[test]
     fn selector_filters_clients() {
-        let img = img_with(
-            "java-only",
-            &[
-                ConfigEntry {
-                    key: "metrics",
-                    value: "a.",
-                },
-                ConfigEntry {
-                    key: "match",
-                    value: "client_software_name=apache-kafka-java",
-                },
-            ],
-        );
+        let img = img_with("java-only", &[
+            ConfigEntry {
+                key: "metrics",
+                value: "a.",
+            },
+            ConfigEntry {
+                key: "match",
+                value: "client_software_name=apache-kafka-java",
+            },
+        ]);
         let m = compute_subscription(&img, &attrs());
         check!(m.metrics == vec!["a.".to_string()]);
 
-        let img2 = img_with(
-            "py-only",
-            &[
-                ConfigEntry {
-                    key: "metrics",
-                    value: "a.",
-                },
-                ConfigEntry {
-                    key: "match",
-                    value: "client_software_name=kafka-python",
-                },
-            ],
-        );
+        let img2 = img_with("py-only", &[
+            ConfigEntry {
+                key: "metrics",
+                value: "a.",
+            },
+            ConfigEntry {
+                key: "match",
+                value: "client_software_name=kafka-python",
+            },
+        ]);
         let m2 = compute_subscription(&img2, &attrs());
         assert!(
             m2.metrics.is_empty(),
@@ -252,33 +236,26 @@ mod tests {
 
     #[test]
     fn min_interval_and_metric_union_across_subs() {
-        let mut img = img_with(
-            "s1",
-            &[
-                ConfigEntry {
-                    key: "metrics",
-                    value: "a.",
-                },
-                ConfigEntry {
-                    key: "interval.ms",
-                    value: "60000",
-                },
-            ],
-        );
-        apply_config(
-            &mut img,
-            "s2",
-            &[
-                ConfigEntry {
-                    key: "metrics",
-                    value: "b.",
-                },
-                ConfigEntry {
-                    key: "interval.ms",
-                    value: "30000",
-                },
-            ],
-        );
+        let mut img = img_with("s1", &[
+            ConfigEntry {
+                key: "metrics",
+                value: "a.",
+            },
+            ConfigEntry {
+                key: "interval.ms",
+                value: "60000",
+            },
+        ]);
+        apply_config(&mut img, "s2", &[
+            ConfigEntry {
+                key: "metrics",
+                value: "b.",
+            },
+            ConfigEntry {
+                key: "interval.ms",
+                value: "30000",
+            },
+        ]);
         let m = compute_subscription(&img, &attrs());
         let mut got = m.metrics.clone();
         got.sort();
@@ -293,50 +270,37 @@ mod tests {
         // `apache/kafka:4.3.1` builds the same set by adding each matching
         // subscription's metrics, and an empty one adds none. The registry
         // row documents the key that way.
-        let img = img_with(
-            "empty",
-            &[
-                ConfigEntry {
-                    key: "metrics",
-                    value: "",
-                },
-                ConfigEntry {
-                    key: "interval.ms",
-                    value: "60000",
-                },
-            ],
-        );
+        let img = img_with("empty", &[
+            ConfigEntry {
+                key: "metrics",
+                value: "",
+            },
+            ConfigEntry {
+                key: "interval.ms",
+                value: "60000",
+            },
+        ]);
         let m = compute_subscription(&img, &attrs());
         assert!(m.metrics.is_empty());
 
-        let unset = img_with(
-            "unset",
-            &[ConfigEntry {
-                key: "interval.ms",
-                value: "60000",
-            }],
-        );
+        let unset = img_with("unset", &[ConfigEntry {
+            key: "interval.ms",
+            value: "60000",
+        }]);
         let m2 = compute_subscription(&unset, &attrs());
         assert!(m2.metrics.is_empty());
     }
 
     #[test]
     fn star_collapses_union() {
-        let mut img = img_with(
-            "s1",
-            &[ConfigEntry {
-                key: "metrics",
-                value: "a.",
-            }],
-        );
-        apply_config(
-            &mut img,
-            "s2",
-            &[ConfigEntry {
-                key: "metrics",
-                value: "*",
-            }],
-        );
+        let mut img = img_with("s1", &[ConfigEntry {
+            key: "metrics",
+            value: "a.",
+        }]);
+        apply_config(&mut img, "s2", &[ConfigEntry {
+            key: "metrics",
+            value: "*",
+        }]);
         let m = compute_subscription(&img, &attrs());
         check!(m.metrics == vec!["*".to_string()]);
     }

@@ -1,8 +1,9 @@
-use assert2::{assert, check};
-use base64::Engine as _;
-
-use super::*;
-use crate::{kraft::transport::api_key::END_QUORUM_EPOCH, network::negotiation::convert_request};
+use {
+    super::*,
+    crate::{kraft::transport::api_key::END_QUORUM_EPOCH, network::negotiation::convert_request},
+    assert2::{assert, check},
+    base64::Engine as _,
+};
 
 fn raw_vote_request() -> VoteRequest {
     VoteRequest {
@@ -23,9 +24,7 @@ fn raw_vote_request() -> VoteRequest {
     }
 }
 
-fn raw_vote_body(request: &VoteRequest) -> Bytes {
-    encode_body(request, VOTE_VERSION)
-}
+fn raw_vote_body(request: &VoteRequest) -> Bytes { encode_body(request, VOTE_VERSION) }
 
 /// The directory ids of the two replicas in a Vote.
 #[derive(Clone, Copy)]
@@ -48,10 +47,10 @@ fn candidate_vote(cluster_id: Option<uuid::Uuid>, directories: VoteDirectories) 
     }
 }
 
-fn preferred_candidate(id: i32) -> PreferredCandidate {
+fn preferred_candidate(id: u64) -> PreferredCandidate {
     PreferredCandidate {
         id: NodeId(id),
-        directory_id: uuid::Uuid::from_u128(id.try_into().unwrap()),
+        directory_id: uuid::Uuid::from_u128(u128::from(id)),
     }
 }
 
@@ -82,13 +81,10 @@ fn begin_request() -> PeerRequest {
 #[test]
 fn vote_request_round_trips() {
     let cluster_id = uuid::Uuid::from_u128(1);
-    let req = candidate_vote(
-        Some(cluster_id),
-        VoteDirectories {
-            voter: uuid::Uuid::from_u128(2),
-            candidate: uuid::Uuid::from_u128(3),
-        },
-    );
+    let req = candidate_vote(Some(cluster_id), VoteDirectories {
+        voter: uuid::Uuid::from_u128(2),
+        candidate: uuid::Uuid::from_u128(3),
+    });
     let encoded = req.encode();
     assert2::assert!(decode_vote(&encoded) == Some(req));
 
@@ -202,13 +198,10 @@ fn vote_decode_rejects_trailing_bytes() {
 
 #[test]
 fn generic_request_decode_accepts_vote_request() {
-    let req = candidate_vote(
-        None,
-        VoteDirectories {
-            voter: uuid::Uuid::nil(),
-            candidate: uuid::Uuid::nil(),
-        },
-    );
+    let req = candidate_vote(None, VoteDirectories {
+        voter: uuid::Uuid::nil(),
+        candidate: uuid::Uuid::nil(),
+    });
     assert2::assert!(PeerRequest::decode(&req.encode()) == Some(req));
 }
 
@@ -216,13 +209,10 @@ fn generic_request_decode_accepts_vote_request() {
 fn encoded_vote_request_carries_target_voter_and_empty_cluster_id() {
     use krabka_protocol::Decode;
 
-    let req = candidate_vote(
-        None,
-        VoteDirectories {
-            voter: uuid::Uuid::nil(),
-            candidate: uuid::Uuid::nil(),
-        },
-    );
+    let req = candidate_vote(None, VoteDirectories {
+        voter: uuid::Uuid::nil(),
+        candidate: uuid::Uuid::nil(),
+    });
     let mut cur = &req.encode()[..];
     let raw = VoteRequest::decode(&mut cur, VOTE_VERSION).expect("decode vote request");
     let partition = &raw.topics[0].partitions[0];
@@ -243,10 +233,7 @@ fn encoded_vote_request_carries_target_voter_and_empty_cluster_id() {
 fn begin_end_round_trip() {
     let begin = begin_request();
     assert2::assert!(decode_begin(&begin.encode()) == Some(begin));
-    let end = end_request(vec![
-        preferred_candidate(3),
-        preferred_candidate(2),
-    ]);
+    let end = end_request(vec![preferred_candidate(3), preferred_candidate(2)]);
     assert2::assert!(decode_end(&end.encode()) == Some(end));
 }
 

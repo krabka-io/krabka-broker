@@ -7,10 +7,11 @@
 //! plaintext listener or, where a case needs two distinct principals, over
 //! `SASL_PLAINTEXT`.
 
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
-use krabka_client_core::Client;
-
-use crate::support::client::connect_owned;
+use {
+    crate::support::client::connect_owned,
+    krabka_broker::{Broker, BrokerConfig, BrokerHandle},
+    krabka_client_core::Client,
+};
 
 /// One operator key pair on disk, in the forms a test and a broker need.
 ///
@@ -133,13 +134,10 @@ pub async fn start_with_operator_keys(
 /// [`start_with_operator_keys`] with the single-key, single-approver shape the
 /// freeze cases want.
 pub async fn start_with_operator_key(dir: &std::path::Path, key: &OperatorKey) -> OperatorBroker {
-    start_with_operator_keys(
-        dir,
-        OperatorKeysSetup {
-            keys: &[key],
-            approvers: &[ANONYMOUS],
-        },
-    )
+    start_with_operator_keys(dir, OperatorKeysSetup {
+        keys: &[key],
+        approvers: &[ANONYMOUS],
+    })
     .await
 }
 

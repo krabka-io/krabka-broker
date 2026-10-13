@@ -1,15 +1,18 @@
 //! Publish actual cache updates, then bind the validation snapshot to OAuth.
 
-use creusot_std::prelude::*;
-
 #[cfg(creusot)]
 use crate::oauth::{OAuthAuthenticationKind, OAuthExpiryPresence, OAuthSessionCap};
-use crate::{
-    jwks::{JwksCacheDecision, JwksCacheFacts, jwks_cache_admission, jwks_publication_generations},
-    oauth::{
-        OAuthSessionDecision, OAuthSessionFacts, oauth_session_admission,
-        oauth_validation_admission,
+use {
+    crate::{
+        jwks::{
+            JwksCacheDecision, JwksCacheFacts, jwks_cache_admission, jwks_publication_generations,
+        },
+        oauth::{
+            OAuthSessionDecision, OAuthSessionFacts, oauth_session_admission,
+            oauth_validation_admission,
+        },
     },
+    creusot_std::prelude::*,
 };
 
 // cargo-mutants: #[cfg(creusot)] specification, absent from runtime tests.

@@ -37,25 +37,28 @@
 
 mod support;
 
-use std::{io, net::SocketAddr, path::Path, time::Duration};
-
-use assert2::assert;
-use bytes::{Buf, BufMut, BytesMut};
-use krabka_broker::{
-    Broker, BrokerConfig, BrokerHandle,
-    metrics::{ConnectionCloseReason, ConnectionCloseReasonLabel},
-};
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse},
-};
-use krabka_security::{ClientAuthMode, ListenerProtocol, TlsConfig};
-use krabka_units::Time;
-use support::listeners::loopback_listener;
-use tempfile::TempDir;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
+use {
+    assert2::assert,
+    bytes::{Buf, BufMut, BytesMut},
+    krabka_broker::{
+        Broker, BrokerConfig, BrokerHandle,
+        metrics::{ConnectionCloseReason, ConnectionCloseReasonLabel},
+    },
+    krabka_protocol::{
+        Decode, Encode,
+        owned::{
+            api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
+        },
+    },
+    krabka_security::{ClientAuthMode, ListenerProtocol, TlsConfig},
+    krabka_units::Time,
+    std::{io, net::SocketAddr, path::Path, time::Duration},
+    support::listeners::loopback_listener,
+    tempfile::TempDir,
+    tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpStream,
+    },
 };
 
 /// The dev server certificate scenario 4's TLS listener presents. Nothing

@@ -6,15 +6,16 @@
 //! Copies still in progress stay invisible, so a partially copied segment
 //! never widens the range a client sees.
 
-use krabka_remote_storage::{
-    LogOffset, RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageError,
-    TopicIdPartition,
+use {
+    super::{RemoteReader, TieredOffset},
+    krabka_remote_storage::{
+        LogOffset, RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageError,
+        TopicIdPartition,
+    },
+    krabka_verified::{
+        tiered_earliest_finished_index, tiered_latest_finished_index, tiered_owning_epoch_index,
+    },
 };
-use krabka_verified::{
-    tiered_earliest_finished_index, tiered_latest_finished_index, tiered_owning_epoch_index,
-};
-
-use super::{RemoteReader, TieredOffset};
 
 impl RemoteReader {
     /// Returns the lowest `start_offset` across the finished segments for
@@ -103,20 +104,20 @@ fn tiered_segment_inputs(listed: &[RemoteLogSegmentMetadata]) -> SegmentInputs {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use assert2::assert;
-    use krabka_ids::LeaderEpoch;
-    use krabka_remote_storage::{RemoteLogMetadataManager, RemoteLogSegmentMetadataUpdate};
-    use uuid::Uuid;
-
-    use super::*;
-    use crate::{
-        remote_log_manager::test_support::local_backends,
-        remote_reader::test_support::{
-            ReaderWithDir, not_ready_reader, reader_with_metadata as assigned_reader_with_metadata,
-            tp,
+    use {
+        super::*,
+        crate::{
+            remote_log_manager::test_support::local_backends,
+            remote_reader::test_support::{
+                ReaderWithDir, not_ready_reader,
+                reader_with_metadata as assigned_reader_with_metadata, tp,
+            },
         },
+        assert2::assert,
+        krabka_ids::LeaderEpoch,
+        krabka_remote_storage::{RemoteLogMetadataManager, RemoteLogSegmentMetadataUpdate},
+        std::sync::Arc,
+        uuid::Uuid,
     };
 
     fn reader_with_metadata() -> ReaderWithDir {
@@ -128,9 +129,7 @@ mod tests {
         }
     }
 
-    use std::collections::BTreeMap;
-
-    use krabka_ids::Offset;
+    use {krabka_ids::Offset, std::collections::BTreeMap};
 
     #[derive(Clone, Copy, Default)]
     enum SegmentPublication {
@@ -200,44 +199,32 @@ mod tests {
             reader,
             dir: _remote_dir,
         } = reader_with_metadata();
-        add_segment(
-            &reader,
-            TieredSegmentSetup {
-                start: Offset(-10),
-                end: Offset(-1),
-                epochs: maplit::btreemap! {LeaderEpoch(0) => Offset(-10)},
-                ..Default::default()
+        add_segment(&reader, TieredSegmentSetup {
+            start: Offset(-10),
+            end: Offset(-1),
+            epochs: maplit::btreemap! {LeaderEpoch(0) => Offset(-10)},
+            ..Default::default()
+        });
+        add_segment(&reader, TieredSegmentSetup {
+            start: Offset(20),
+            end: Offset(39),
+            epochs: maplit::btreemap! {
+                LeaderEpoch(0) => Offset(20),
+                LeaderEpoch(2) => Offset(30),
+                LeaderEpoch(4) => Offset(35),
             },
-        );
-        add_segment(
-            &reader,
-            TieredSegmentSetup {
-                start: Offset(20),
-                end: Offset(39),
-                epochs: maplit::btreemap! {
-                    LeaderEpoch(0) => Offset(20),
-                    LeaderEpoch(2) => Offset(30),
-                    LeaderEpoch(4) => Offset(35),
-                },
-                ..Default::default()
-            },
-        );
-        add_segment(
-            &reader,
-            TieredSegmentSetup {
-                end: Offset(19),
-                ..Default::default()
-            },
-        );
-        add_segment(
-            &reader,
-            TieredSegmentSetup {
-                start: Offset(40),
-                end: Offset(99),
-                epochs: maplit::btreemap! {LeaderEpoch(8) => Offset(40)},
-                publication: SegmentPublication::Started,
-            },
-        );
+            ..Default::default()
+        });
+        add_segment(&reader, TieredSegmentSetup {
+            end: Offset(19),
+            ..Default::default()
+        });
+        add_segment(&reader, TieredSegmentSetup {
+            start: Offset(40),
+            end: Offset(99),
+            epochs: maplit::btreemap! {LeaderEpoch(8) => Offset(40)},
+            publication: SegmentPublication::Started,
+        });
 
         assert!(reader.earliest_offset(&tp()).await.unwrap() == Some(0));
         let expected = Some(TieredOffset {
@@ -258,15 +245,12 @@ mod tests {
             dir: _remote_dir,
         } = reader_with_metadata();
         add_segment(&reader, TieredSegmentSetup::default());
-        add_segment(
-            &reader,
-            TieredSegmentSetup {
-                start: Offset(10),
-                end: Offset(19),
-                epochs: maplit::btreemap! {LeaderEpoch(7) => Offset(20)},
-                ..Default::default()
-            },
-        );
+        add_segment(&reader, TieredSegmentSetup {
+            start: Offset(10),
+            end: Offset(19),
+            epochs: maplit::btreemap! {LeaderEpoch(7) => Offset(20)},
+            ..Default::default()
+        });
         assert!(reader.latest_tiered_offset(&tp()).await.unwrap() == None);
     }
 
@@ -276,15 +260,12 @@ mod tests {
             reader,
             dir: _remote_dir,
         } = reader_with_metadata();
-        add_segment(
-            &reader,
-            TieredSegmentSetup {
-                start: Offset(i64::MAX),
-                end: Offset(i64::MAX),
-                epochs: maplit::btreemap! {LeaderEpoch(i32::MAX) => Offset(i64::MAX)},
-                ..Default::default()
-            },
-        );
+        add_segment(&reader, TieredSegmentSetup {
+            start: Offset(i64::MAX),
+            end: Offset(i64::MAX),
+            epochs: maplit::btreemap! {LeaderEpoch(i32::MAX) => Offset(i64::MAX)},
+            ..Default::default()
+        });
         assert!(reader.earliest_offset(&tp()).await.unwrap() == Some(i64::MAX));
         assert!(
             reader.latest_tiered_offset(&tp()).await.unwrap()

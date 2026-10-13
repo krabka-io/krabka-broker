@@ -7,14 +7,14 @@
 //! revoke, and which it may claim, so that the broker never advertises one
 //! partition to two members at once.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
-
-use krabka_protocol::primitives::uuid::Uuid;
-
-use super::{group::GroupState, member::MemberState};
-use crate::coordinator::unified::{
-    actor::MetadataProvider, assignor::TopicIdPartition, member_helpers::new_target_assignment,
-    persistence_next_gen::MemberAssignmentState,
+use {
+    super::{group::GroupState, member::MemberState},
+    crate::coordinator::unified::{
+        actor::MetadataProvider, assignor::TopicIdPartition, member_helpers::new_target_assignment,
+        persistence_next_gen::MemberAssignmentState,
+    },
+    krabka_protocol::primitives::uuid::Uuid,
+    std::collections::{BTreeSet, HashMap, HashSet},
 };
 
 /// The partitions each topic holds, by topic id.
@@ -459,16 +459,17 @@ fn owns_any(owned: Option<&Partitions>, pending: &Partitions) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
-    use krabka_ids::PartitionIndex;
-
-    use super::*;
-    use crate::coordinator::unified::{
-        consumer_state::{
-            ResolvedRegularExpression,
-            test_support::{NamedTopic, Topics, member, subscribed_member},
+    use {
+        super::*,
+        crate::coordinator::unified::{
+            consumer_state::{
+                ResolvedRegularExpression,
+                test_support::{NamedTopic, Topics, member, subscribed_member},
+            },
+            test_support::{MemberEpoch, MemberEpochs},
         },
-        test_support::{MemberEpoch, MemberEpochs},
+        assert2::check,
+        krabka_ids::PartitionIndex,
     };
 
     #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -504,9 +505,7 @@ mod tests {
         resolved: Option<&'static [&'static str]>,
     }
 
-    fn topics() -> Topics {
-        Topics(vec![NamedTopic { name: "t", id: T }])
-    }
+    fn topics() -> Topics { Topics(vec![NamedTopic { name: "t", id: T }]) }
 
     fn parts(partitions: &[PartitionIndex]) -> Partitions {
         if partitions.is_empty() {
@@ -1244,10 +1243,10 @@ mod tests {
     /// rebuilt.
     #[test]
     fn the_subscription_filters_the_reconciliation() {
-        let metadata = Topics(vec![
-            NamedTopic { name: "t", id: T },
-            NamedTopic { name: "u", id: U },
-        ]);
+        let metadata = Topics(vec![NamedTopic { name: "t", id: T }, NamedTopic {
+            name: "u",
+            id: U,
+        }]);
         for r in subscription_rows().into_iter().chain(departed_topic_rows()) {
             let mut g = GroupState::new("g");
             g.group_epoch = TARGET_EPOCH;
@@ -1265,14 +1264,11 @@ mod tests {
             {
                 a.subscribed_topic_regex = Some(regex.to_owned());
                 if let Some(topics) = resolved {
-                    g.set_resolved_regex(
-                        regex.to_owned(),
-                        ResolvedRegularExpression {
-                            topics: topics.iter().map(|topic| (*topic).to_owned()).collect(),
-                            version: 1,
-                            timestamp_ms: 0,
-                        },
-                    );
+                    g.set_resolved_regex(regex.to_owned(), ResolvedRegularExpression {
+                        topics: topics.iter().map(|topic| (*topic).to_owned()).collect(),
+                        version: 1,
+                        timestamp_ms: 0,
+                    });
                 }
             }
             g.members.insert("a".into(), a);

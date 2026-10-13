@@ -5,9 +5,7 @@
 //! record, so every caller that must tell a transaction end marker from a
 //! barrier marker reads it through this module.
 
-use krabka_protocol::records::RecordBatch;
-
-use crate::error::LogError;
+use {crate::error::LogError, krabka_protocol::records::RecordBatch};
 
 /// Control-record type of a krabka barrier marker.
 ///
@@ -241,29 +239,31 @@ pub fn check_control_record_versions(batch: &RecordBatch) -> Result<(), LogError
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
-    use bytes::Bytes;
-    use krabka_ids::{Offset, ProducerId};
-    use krabka_protocol::records::Record;
-    use krabka_units::prelude::mebibytes;
-    use tempfile::tempdir;
-
-    use super::*;
-    use crate::{
-        compact::build_offset_map,
-        log::{
-            Log,
-            test_support::{
-                BarrierEpoch, BarrierMarkerSetup, HostileBarrierSetup, KeyedRecord, PartitionState,
-                ProducerEpoch, ProducerTransaction, TempLog, TransactionFields, abort_marker,
-                barrier_marker, barrier_marker_from_producer, commit_marker, compact_test_log,
-                compaction_ctx, control_key, control_value, install_stamps, keyed_batch,
-                partition_state, sample_batch, stamped_test_log, test_log, transactional_batch,
+    use {
+        super::*,
+        crate::{
+            compact::build_offset_map,
+            log::{
+                Log,
+                test_support::{
+                    BarrierEpoch, BarrierMarkerSetup, HostileBarrierSetup, KeyedRecord,
+                    PartitionState, ProducerEpoch, ProducerTransaction, TempLog, TransactionFields,
+                    abort_marker, barrier_marker, barrier_marker_from_producer, commit_marker,
+                    compact_test_log, compaction_ctx, control_key, control_value, install_stamps,
+                    keyed_batch, partition_state, sample_batch, stamped_test_log, test_log,
+                    transactional_batch,
+                },
             },
+            producer_snapshot::ProducerSnapshotEntry,
+            segment::Segment,
+            test_support::open_log,
         },
-        producer_snapshot::ProducerSnapshotEntry,
-        segment::Segment,
-        test_support::open_log,
+        assert2::check,
+        bytes::Bytes,
+        krabka_ids::{Offset, ProducerId},
+        krabka_protocol::records::Record,
+        krabka_units::prelude::mebibytes,
+        tempfile::tempdir,
     };
 
     /// What one parse came to, with a refusal reduced to the fields that say
@@ -682,12 +682,12 @@ mod tests {
             current_txn_first_offset: None,
         };
         for (name, mut marker, want_aborted, want_stamps) in [
-            (
-                "commit",
-                commit_marker(1000, 2),
-                Vec::new(),
-                vec![Some(40), Some(40), None, None],
-            ),
+            ("commit", commit_marker(1000, 2), Vec::new(), vec![
+                Some(40),
+                Some(40),
+                None,
+                None,
+            ]),
             (
                 "abort",
                 abort_marker(1000, 2),
@@ -837,39 +837,30 @@ mod tests {
     #[test]
     fn compaction_keeps_barrier_markers_and_never_indexes_their_key() {
         let TempLog { dir: _dir, mut log } = compact_test_log();
-        log.append(&mut keyed_batch(
-            0,
-            &[KeyedRecord {
-                offset_delta: 0,
-                key: b"k1",
-                value: b"v0",
-            }],
-        ))
+        log.append(&mut keyed_batch(0, &[KeyedRecord {
+            offset_delta: 0,
+            key: b"k1",
+            value: b"v0",
+        }]))
         .unwrap(); // 0
         log.append(&mut barrier_marker(BarrierMarkerSetup::default()))
             .unwrap(); // 1
-        log.append(&mut keyed_batch(
-            0,
-            &[KeyedRecord {
-                offset_delta: 0,
-                key: b"k1",
-                value: b"v1",
-            }],
-        ))
+        log.append(&mut keyed_batch(0, &[KeyedRecord {
+            offset_delta: 0,
+            key: b"k1",
+            value: b"v1",
+        }]))
         .unwrap(); // 2
         log.append(&mut barrier_marker(BarrierMarkerSetup {
             epoch: BarrierEpoch(2),
             ..Default::default()
         }))
         .unwrap(); // 3
-        log.append(&mut keyed_batch(
-            0,
-            &[KeyedRecord {
-                offset_delta: 0,
-                key: b"tail",
-                value: b"t",
-            }],
-        ))
+        log.append(&mut keyed_batch(0, &[KeyedRecord {
+            offset_delta: 0,
+            key: b"tail",
+            value: b"t",
+        }]))
         .unwrap(); // 4, active
 
         // The dedup map holds the data key only. `should_index_key` keeps the

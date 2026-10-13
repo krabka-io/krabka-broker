@@ -8,27 +8,27 @@
 //! and `kafka-reassign-partitions` moving a replica into a cordoned directory
 //! fails with `InvalidReplicaAssignmentException` (39).
 
-use std::{
-    net::SocketAddr,
-    path::Path,
-    time::{Duration, Instant},
-};
-
-use assert2::{assert, check};
-use krabka_protocol::{
-    UnknownTaggedFields,
-    owned::alter_replica_log_dirs_response::{
-        AlterReplicaLogDirPartitionResult, AlterReplicaLogDirTopicResult,
-        AlterReplicaLogDirsResponse,
+use {
+    crate::{
+        harness::start_two_dir_broker,
+        two_dir_topic::{Setup, start},
+        wire::{
+            CLIENT_ID, ConfigAlterOutcome, alter_replica_log_dirs, describe_log_dirs_at,
+            set_broker_config,
+        },
     },
-};
-
-use crate::{
-    harness::start_two_dir_broker,
-    two_dir_topic::{Setup, start},
-    wire::{
-        CLIENT_ID, ConfigAlterOutcome, alter_replica_log_dirs, describe_log_dirs_at,
-        set_broker_config,
+    assert2::{assert, check},
+    krabka_protocol::{
+        UnknownTaggedFields,
+        owned::alter_replica_log_dirs_response::{
+            AlterReplicaLogDirPartitionResult, AlterReplicaLogDirTopicResult,
+            AlterReplicaLogDirsResponse,
+        },
+    },
+    std::{
+        net::SocketAddr,
+        path::Path,
+        time::{Duration, Instant},
     },
 };
 
@@ -84,9 +84,7 @@ async fn wait_for_flags(addr: SocketAddr, want: &[DirFlag]) {
     }
 }
 
-fn canonical(dir: &Path) -> std::path::PathBuf {
-    std::fs::canonicalize(dir).unwrap()
-}
+fn canonical(dir: &Path) -> std::path::PathBuf { std::fs::canonicalize(dir).unwrap() }
 
 fn move_result(topic: &str, error_code: i16) -> AlterReplicaLogDirsResponse {
     AlterReplicaLogDirsResponse {
@@ -123,25 +121,19 @@ async fn a_cordoned_dir_is_flagged_and_refuses_replica_moves() {
     // what a `cordoned.log.dirs` entry must match.
     let configured = extra.path().display().to_string();
 
-    wait_for_flags(
-        addr,
-        &[
-            DirFlag::new(first.clone(), false),
-            DirFlag::new(second.clone(), false),
-        ],
-    )
+    wait_for_flags(addr, &[
+        DirFlag::new(first.clone(), false),
+        DirFlag::new(second.clone(), false),
+    ])
     .await;
     assert!(
         set_broker_config(addr, 1, "cordoned.log.dirs", &configured).await
             == ConfigAlterOutcome::accepted()
     );
-    wait_for_flags(
-        addr,
-        &[
-            DirFlag::new(first.clone(), false),
-            DirFlag::new(second.clone(), true),
-        ],
-    )
+    wait_for_flags(addr, &[
+        DirFlag::new(first.clone(), false),
+        DirFlag::new(second.clone(), true),
+    ])
     .await;
 
     let v4 = cordoned_flags(addr, 4).await;
@@ -158,10 +150,10 @@ async fn a_cordoned_dir_is_flagged_and_refuses_replica_moves() {
     assert!(
         set_broker_config(addr, 1, "cordoned.log.dirs", "").await == ConfigAlterOutcome::accepted()
     );
-    wait_for_flags(
-        addr,
-        &[DirFlag::new(first, false), DirFlag::new(second, false)],
-    )
+    wait_for_flags(addr, &[
+        DirFlag::new(first, false),
+        DirFlag::new(second, false),
+    ])
     .await;
     let accepted = alter_replica_log_dirs(addr, Path::new(&extra_str), "t", vec![0]).await;
     check!(accepted == move_result("t", 0));

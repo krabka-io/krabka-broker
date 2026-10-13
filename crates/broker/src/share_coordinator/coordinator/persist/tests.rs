@@ -3,23 +3,23 @@
 //! term of the coordinator, and an answer waits until the high watermark
 //! covers the records under the same term.
 
-use std::{sync::Arc, time::Duration};
-
-use assert2::{assert, check};
-use krabka_ids::PartitionIndex;
-use krabka_log::Offset;
-use tempfile::tempdir;
-
-use super::*;
-use crate::{
-    coordinator::test_support::LeaderMove,
-    share_coordinator::{
-        config::ShareCoordinatorConfig,
-        coordinator::test_support::{
-            ConfiguredCoordinator, configured_coordinator, image_with_topic,
+use {
+    super::*,
+    crate::{
+        coordinator::test_support::LeaderMove,
+        share_coordinator::{
+            config::ShareCoordinatorConfig,
+            coordinator::test_support::{
+                ConfiguredCoordinator, configured_coordinator, image_with_topic,
+            },
+            persistence::KEY_SHARE_SNAPSHOT,
         },
-        persistence::KEY_SHARE_SNAPSHOT,
     },
+    assert2::{assert, check},
+    krabka_ids::PartitionIndex,
+    krabka_log::Offset,
+    std::{sync::Arc, time::Duration},
+    tempfile::tempdir,
 };
 
 /// Kafka's `handleOperationException` codes for each append failure,

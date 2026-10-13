@@ -2,21 +2,21 @@
 //! that bootstrap replay produces. Both directions of that round trip live
 //! together so a change to one stays matched by the other.
 
-use std::collections::{HashMap, HashSet};
-
-use krabka_protocol::primitives::uuid::Uuid;
-
-use super::records::{
-    current_assignment_value, member_metadata_value, state_partition_metadata_from,
-    target_assignment_value,
-};
-use crate::coordinator::unified::{
-    ShareGroupSeed,
-    assignor::TopicIdPartition,
-    share::{
-        persistence::TopicPartitionsInfo,
-        state::{ShareGroupState, ShareMemberState},
+use {
+    super::records::{
+        current_assignment_value, member_metadata_value, state_partition_metadata_from,
+        target_assignment_value,
     },
+    crate::coordinator::unified::{
+        ShareGroupSeed,
+        assignor::TopicIdPartition,
+        share::{
+            persistence::TopicPartitionsInfo,
+            state::{ShareGroupState, ShareMemberState},
+        },
+    },
+    krabka_protocol::primitives::uuid::Uuid,
+    std::collections::{HashMap, HashSet},
 };
 
 pub(super) fn apply_seed(state: &mut ShareGroupState, seed: ShareGroupSeed) {
@@ -83,13 +83,10 @@ fn restore_named_partitions(
         let tid = Uuid(*topic.topic_id.as_bytes());
         state.topic_names.insert(tid, topic.topic_name.clone());
         for p in &topic.partitions {
-            restore(
-                state,
-                TopicIdPartition {
-                    topic_id: tid,
-                    partition: *p,
-                },
-            );
+            restore(state, TopicIdPartition {
+                topic_id: tid,
+                partition: *p,
+            });
         }
     }
 }
@@ -122,12 +119,13 @@ pub(super) fn snapshot_seed(state: &ShareGroupState) -> ShareGroupSeed {
 
 #[cfg(test)]
 mod tests {
-    use assert2::{assert, check};
-
-    use super::*;
-    use crate::coordinator::unified::share::{
-        persistence::{ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo},
-        state::share_partition,
+    use {
+        super::*,
+        crate::coordinator::unified::share::{
+            persistence::{ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo},
+            state::share_partition,
+        },
+        assert2::{assert, check},
     };
 
     #[test]
@@ -194,21 +192,18 @@ mod tests {
         // Initialized set, so its name is not carried either.
         let id = Uuid([7; 16]);
         let mut restored = ShareGroupState::new("g");
-        apply_seed(
-            &mut restored,
-            ShareGroupSeed {
-                state_partition_metadata: ShareGroupStatePartitionMetadataValue {
-                    initializing: Vec::new(),
-                    initialized: vec![TopicPartitionsInfo {
-                        topic_id: uuid::Uuid::from_bytes([7; 16]),
-                        topic_name: "orders".to_owned(),
-                        partitions: Vec::new(),
-                    }],
-                    deleting: Vec::new(),
-                },
-                ..Default::default()
+        apply_seed(&mut restored, ShareGroupSeed {
+            state_partition_metadata: ShareGroupStatePartitionMetadataValue {
+                initializing: Vec::new(),
+                initialized: vec![TopicPartitionsInfo {
+                    topic_id: uuid::Uuid::from_bytes([7; 16]),
+                    topic_name: "orders".to_owned(),
+                    partitions: Vec::new(),
+                }],
+                deleting: Vec::new(),
             },
-        );
+            ..Default::default()
+        });
 
         check!(restored.topic_names.is_empty());
         check!(!restored.initialized.iter().any(|tp| tp.topic_id == id));

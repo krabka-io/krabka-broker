@@ -54,9 +54,7 @@ pub(crate) const DESCRIBE_BREAK_GLASS_API_KEY: ApiKeyCode = 1019;
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-
-    use super::*;
+    use {super::*, assert2::assert};
 
     /// A krabka-private api key, the name a failure reports, and the key it
     /// must have.

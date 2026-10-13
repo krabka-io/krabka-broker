@@ -11,12 +11,12 @@
 //! future replica that was offline when the current one truncated and grew back,
 //! for example across a broker restart: the mark is only in memory.
 
-use std::sync::Mutex;
-
-use krabka_ids::LeaderEpoch;
-use krabka_log::{LeaderEpochCheckpoint, Log, Offset};
-
-use crate::error::BrokerError;
+use {
+    crate::error::BrokerError,
+    krabka_ids::LeaderEpoch,
+    krabka_log::{LeaderEpochCheckpoint, Log, Offset},
+    std::sync::Mutex,
+};
 
 /// Cut the future log to `offset`, or to nothing when `offset` lies below its
 /// log start, as the current log did.
@@ -158,14 +158,15 @@ pub(super) fn truncate_to_current_epochs(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use bytes::Bytes;
-    use krabka_log::LogConfig;
-    use krabka_protocol::records::{Record, RecordBatch};
-    use tempfile::tempdir;
-
-    use super::*;
-    use crate::log_dir;
+    use {
+        super::*,
+        crate::log_dir,
+        assert2::assert,
+        bytes::Bytes,
+        krabka_log::LogConfig,
+        krabka_protocol::records::{Record, RecordBatch},
+        tempfile::tempdir,
+    };
 
     const NO_ANSWER: EpochEnd = EpochEnd {
         epoch: LeaderEpoch(-1),
@@ -213,13 +214,10 @@ mod tests {
         let CheckpointInDir {
             dir: _dir,
             checkpoint: future,
-        } = checkpoint(&[
-            EpochStart { epoch: 1, start: 0 },
-            EpochStart {
-                epoch: 3,
-                start: 10,
-            },
-        ]);
+        } = checkpoint(&[EpochStart { epoch: 1, start: 0 }, EpochStart {
+            epoch: 3,
+            start: 10,
+        }]);
         let epoch_end = |epoch, end| EpochEnd { epoch, end };
         let cases = [
             Case {
@@ -291,9 +289,7 @@ mod tests {
         Mutex::new(log)
     }
 
-    fn leo(log: &Mutex<Log>) -> Offset {
-        log.lock().unwrap().log_end_offset()
-    }
+    fn leo(log: &Mutex<Log>) -> Offset { log.lock().unwrap().log_end_offset() }
 
     #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
     struct TruncationLogsSetup<'a> {
@@ -310,9 +306,7 @@ mod tests {
     }
 
     impl TruncationLogsFixture {
-        fn truncate(&self) {
-            truncate_to_current_epochs(&self.current, &self.future).unwrap();
-        }
+        fn truncate(&self) { truncate_to_current_epochs(&self.current, &self.future).unwrap(); }
     }
 
     fn truncation_logs(setup: TruncationLogsSetup<'_>) -> TruncationLogsFixture {

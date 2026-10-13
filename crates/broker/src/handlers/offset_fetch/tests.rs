@@ -5,35 +5,35 @@
 //! top-level field that has to reach two different response shapes: the
 //! pre-KIP-516 `topics[]` of v0–v7 and the `groups[]` of v8 and above.
 
-use std::sync::Arc;
-
-use assert2::assert;
-use krabka_log::Offset;
-use krabka_protocol::{
-    owned::{
-        offset_fetch_request::{OffsetFetchRequestGroup, OffsetFetchRequestTopics},
-        offset_fetch_response::{
-            OffsetFetchResponse, OffsetFetchResponseGroup, OffsetFetchResponsePartition,
-            OffsetFetchResponsePartitions, OffsetFetchResponseTopic, OffsetFetchResponseTopics,
+use {
+    super::*,
+    crate::{
+        authorizer::{AllowAllAuthorizer, Authorizer},
+        broker::{Broker, BrokerHandle},
+        codes,
+        coordinator::unified::{
+            actor::{GroupActorMessage, GroupKindTag},
+            classic_state::OffsetEntry,
+            regex_resolver::no_topic_regex_resolver,
         },
+        handlers::test_support::CreateTopicSetup,
+        test_support::{dispatch_wire, peer, principal, start_group_broker_no_audit},
+        time_util::now_ms,
     },
-    primitives::uuid::Uuid as WireUuid,
-};
-use tokio::sync::oneshot;
-
-use super::*;
-use crate::{
-    authorizer::{AllowAllAuthorizer, Authorizer},
-    broker::{Broker, BrokerHandle},
-    codes,
-    coordinator::unified::{
-        actor::{GroupActorMessage, GroupKindTag},
-        classic_state::OffsetEntry,
-        regex_resolver::no_topic_regex_resolver,
+    assert2::assert,
+    krabka_log::Offset,
+    krabka_protocol::{
+        owned::{
+            offset_fetch_request::{OffsetFetchRequestGroup, OffsetFetchRequestTopics},
+            offset_fetch_response::{
+                OffsetFetchResponse, OffsetFetchResponseGroup, OffsetFetchResponsePartition,
+                OffsetFetchResponsePartitions, OffsetFetchResponseTopic, OffsetFetchResponseTopics,
+            },
+        },
+        primitives::uuid::Uuid as WireUuid,
     },
-    handlers::test_support::CreateTopicSetup,
-    test_support::{dispatch_wire, peer, principal, start_group_broker_no_audit},
-    time_util::now_ms,
+    std::sync::Arc,
+    tokio::sync::oneshot,
 };
 
 // Seed a committed offset for (group, topic, partition) directly on the
@@ -69,17 +69,14 @@ async fn seed_committed_offset(broker: &Broker, setup: CommittedOffsetSetup<'_>)
         .get_or_create_group(group, GroupKindTag::Classic);
     let (tx, rx) = oneshot::channel();
     h.tx.send(GroupActorMessage::UpdateCommitted {
-        entries: vec![(
-            (topic.to_string(), partition.0),
-            OffsetEntry {
-                offset,
-                leader_epoch: 5,
-                metadata: String::new(),
-                commit_timestamp_ms: crate::time_util::now_ms(),
-                expire_timestamp_ms: None,
-                topic_id: None,
-            },
-        )],
+        entries: vec![((topic.to_string(), partition.0), OffsetEntry {
+            offset,
+            leader_epoch: 5,
+            metadata: String::new(),
+            commit_timestamp_ms: crate::time_util::now_ms(),
+            expire_timestamp_ms: None,
+            topic_id: None,
+        })],
         reply: tx,
     })
     .await
@@ -395,13 +392,10 @@ async fn a_mark_for_records_below_an_applied_marker_does_not_strand_the_partitio
 
     // The abort marker for the records at TXN_RECORDS_AT lands first and
     // publishes nothing; the commit's own mark arrives after it.
-    resolve_pending_txn_offsets(
-        &broker,
-        ResolvedTxnOffsetsSetup {
-            producer: krabka_ids::ProducerId(PRODUCER_ID),
-            ..Default::default()
-        },
-    )
+    resolve_pending_txn_offsets(&broker, ResolvedTxnOffsetsSetup {
+        producer: krabka_ids::ProducerId(PRODUCER_ID),
+        ..Default::default()
+    })
     .await;
     seed_default_pending_txn_offsets(&broker).await;
 
@@ -420,14 +414,11 @@ async fn a_mark_for_records_below_an_applied_marker_does_not_strand_the_partitio
 
     // The producer's next transaction writes above that marker, and is
     // reported unstable as usual.
-    seed_pending_txn_offsets(
-        &broker,
-        PendingTxnOffsetsSetup {
-            producer: krabka_ids::ProducerId(PRODUCER_ID),
-            written_at: Offset(TXN_MARKER_AT + 1),
-            ..Default::default()
-        },
-    )
+    seed_pending_txn_offsets(&broker, PendingTxnOffsetsSetup {
+        producer: krabka_ids::ProducerId(PRODUCER_ID),
+        written_at: Offset(TXN_MARKER_AT + 1),
+        ..Default::default()
+    })
     .await;
     let next_transaction = fetch(&broker, VERSION, &request).await;
     assert!(
@@ -472,22 +463,16 @@ async fn seed_topic_reference_group(broker_handle: &BrokerHandle) -> WireUuid {
         .wait_until_partition_present(KNOWN_NAME, 0)
         .await;
     let broker = broker_handle.broker_arc_for_test();
-    seed_committed_offset(
-        &broker,
-        CommittedOffsetSetup {
-            topic: KNOWN_NAME,
-            ..Default::default()
-        },
-    )
+    seed_committed_offset(&broker, CommittedOffsetSetup {
+        topic: KNOWN_NAME,
+        ..Default::default()
+    })
     .await;
-    seed_committed_offset(
-        &broker,
-        CommittedOffsetSetup {
-            topic: "",
-            offset: Offset(7),
-            ..Default::default()
-        },
-    )
+    seed_committed_offset(&broker, CommittedOffsetSetup {
+        topic: "",
+        offset: Offset(7),
+        ..Default::default()
+    })
     .await;
     let image = broker_handle.controller_image_for_test();
     let topic = image.topic(KNOWN_NAME).expect("known topic in the image");
@@ -638,14 +623,11 @@ async fn topic_reference_broker(authorizer: Arc<dyn Authorizer>) -> TopicReferen
 }
 
 async fn seed_unresolved_name_offset(broker: &Broker) {
-    seed_committed_offset(
-        broker,
-        CommittedOffsetSetup {
-            topic: UNKNOWN_NAME,
-            offset: Offset(9),
-            ..Default::default()
-        },
-    )
+    seed_committed_offset(broker, CommittedOffsetSetup {
+        topic: UNKNOWN_NAME,
+        offset: Offset(9),
+        ..Default::default()
+    })
     .await;
 }
 
@@ -938,53 +920,50 @@ async fn topics_are_authorized_with_describe_and_fetch_all_hides_refused_topics(
     let broker = broker_handle.broker_arc_for_test();
     seed_unresolved_name_offset(&broker).await;
     let both: &[&str] = &[UNKNOWN_NAME, KNOWN_NAME];
-    run_response_table(
-        &broker,
-        vec![
-            ResponseCase {
-                case: "v7 explicit list",
-                version: 7,
-                request: legacy_request(Some(both)),
-                response: legacy_response(vec![
-                    LegacyTopic {
-                        name: KNOWN_NAME,
-                        partition: legacy_seeded_row(),
-                    },
-                    LegacyTopic {
-                        name: UNKNOWN_NAME,
-                        partition: legacy_refused_row(),
-                    },
-                ]),
-            },
-            ResponseCase {
-                case: "v7 fetch-all",
-                version: 7,
-                request: legacy_request(None),
-                response: legacy_response(vec![LegacyTopic {
+    run_response_table(&broker, vec![
+        ResponseCase {
+            case: "v7 explicit list",
+            version: 7,
+            request: legacy_request(Some(both)),
+            response: legacy_response(vec![
+                LegacyTopic {
                     name: KNOWN_NAME,
                     partition: legacy_seeded_row(),
-                }]),
-            },
-            ResponseCase {
-                case: "v9 explicit list",
-                version: 9,
-                request: named_groups_request(Some(both)),
-                response: groups_response(vec![
-                    named_topic(KNOWN_NAME, seeded_row()),
-                    named_topic(
-                        UNKNOWN_NAME,
-                        no_offset_row(codes::TOPIC_AUTHORIZATION_FAILED),
-                    ),
-                ]),
-            },
-            ResponseCase {
-                case: "v9 fetch-all",
-                version: 9,
-                request: named_groups_request(None),
-                response: groups_response(vec![named_topic(KNOWN_NAME, seeded_row())]),
-            },
-        ],
-    )
+                },
+                LegacyTopic {
+                    name: UNKNOWN_NAME,
+                    partition: legacy_refused_row(),
+                },
+            ]),
+        },
+        ResponseCase {
+            case: "v7 fetch-all",
+            version: 7,
+            request: legacy_request(None),
+            response: legacy_response(vec![LegacyTopic {
+                name: KNOWN_NAME,
+                partition: legacy_seeded_row(),
+            }]),
+        },
+        ResponseCase {
+            case: "v9 explicit list",
+            version: 9,
+            request: named_groups_request(Some(both)),
+            response: groups_response(vec![
+                named_topic(KNOWN_NAME, seeded_row()),
+                named_topic(
+                    UNKNOWN_NAME,
+                    no_offset_row(codes::TOPIC_AUTHORIZATION_FAILED),
+                ),
+            ]),
+        },
+        ResponseCase {
+            case: "v9 fetch-all",
+            version: 9,
+            request: named_groups_request(None),
+            response: groups_response(vec![named_topic(KNOWN_NAME, seeded_row())]),
+        },
+    ])
     .await;
     broker_handle.shutdown().await;
 }
@@ -1005,31 +984,28 @@ async fn fetch_all_leaves_out_topics_without_an_id_at_v10() {
         committed_offset,
         ..seeded_row()
     };
-    run_response_table(
-        &broker,
-        vec![
-            ResponseCase {
-                case: "v9 fetch-all",
-                version: 9,
-                request: named_groups_request(None),
-                response: groups_response(vec![
-                    named_topic("", offset_row(7)),
-                    named_topic(UNKNOWN_NAME, offset_row(9)),
-                    named_topic(KNOWN_NAME, seeded_row()),
-                ]),
-            },
-            ResponseCase {
-                case: "v10 fetch-all",
-                version: 10,
-                request: named_groups_request(None),
-                response: groups_response(vec![OffsetFetchResponseTopics {
-                    topic_id: known_id,
-                    partitions: vec![seeded_row()],
-                    ..Default::default()
-                }]),
-            },
-        ],
-    )
+    run_response_table(&broker, vec![
+        ResponseCase {
+            case: "v9 fetch-all",
+            version: 9,
+            request: named_groups_request(None),
+            response: groups_response(vec![
+                named_topic("", offset_row(7)),
+                named_topic(UNKNOWN_NAME, offset_row(9)),
+                named_topic(KNOWN_NAME, seeded_row()),
+            ]),
+        },
+        ResponseCase {
+            case: "v10 fetch-all",
+            version: 10,
+            request: named_groups_request(None),
+            response: groups_response(vec![OffsetFetchResponseTopics {
+                topic_id: known_id,
+                partitions: vec![seeded_row()],
+                ..Default::default()
+            }]),
+        },
+    ])
     .await;
     broker_handle.shutdown().await;
 }
@@ -1226,14 +1202,11 @@ async fn require_stable<R>(
     const PRODUCER_ID: i64 = 91;
     broker_fixture!((broker_handle, _dir, broker), group_allow_all);
     seed_committed_offset(&broker, CommittedOffsetSetup::default()).await;
-    seed_committed_offset(
-        &broker,
-        CommittedOffsetSetup {
-            partition: krabka_ids::PartitionIndex(1),
-            offset: Offset(11),
-            ..Default::default()
-        },
-    )
+    seed_committed_offset(&broker, CommittedOffsetSetup {
+        partition: krabka_ids::PartitionIndex(1),
+        offset: Offset(11),
+        ..Default::default()
+    })
     .await;
     seed_default_pending_txn_offsets(&broker).await;
     let stable_row = |partition_index, offset| row(partition_index, offset, 5, codes::NONE);
@@ -1247,18 +1220,15 @@ async fn require_stable<R>(
                 stable_row(1, 11)
             ])
     );
-    resolve_pending_txn_offsets(
-        &broker,
-        ResolvedTxnOffsetsSetup {
-            producer: krabka_ids::ProducerId(PRODUCER_ID),
-            committed: TxnOffsetCommits(vec![CommittedTxnOffset {
-                topic: "orders".to_string(),
-                partition: 0,
-                entry: committed_entry(77),
-            }]),
-            ..Default::default()
-        },
-    )
+    resolve_pending_txn_offsets(&broker, ResolvedTxnOffsetsSetup {
+        producer: krabka_ids::ProducerId(PRODUCER_ID),
+        committed: TxnOffsetCommits(vec![CommittedTxnOffset {
+            topic: "orders".to_string(),
+            partition: 0,
+            entry: committed_entry(77),
+        }]),
+        ..Default::default()
+    })
     .await;
     let resolved = fetch(&broker, version, &request(true)).await;
     assert!(resolved == expect(vec![stable_row(0, 77), stable_row(1, 11)]));

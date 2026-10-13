@@ -2,43 +2,44 @@
 //! the layer it came from, the synonym chain beneath it, and the typed
 //! metadata the JVM `AdminClient` reads.
 
-use assert2::{assert, check};
-use krabka_metadata::{
-    BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage, MetadataRecord,
-    TopicConfigRecord,
-};
-use krabka_protocol::owned::describe_configs_response::{
-    DescribeConfigsResourceResult, DescribeConfigsResult, DescribeConfigsSynonym,
-};
-use uuid::Uuid;
-
-use super::{
+use {
     super::{
-        entry::EntryOptions,
-        wire::{
-            CONFIG_SOURCE_DEFAULT, CONFIG_SOURCE_DYNAMIC_BROKER,
-            CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER, CONFIG_SOURCE_DYNAMIC_GROUP,
-            CONFIG_SOURCE_DYNAMIC_TOPIC, CONFIG_SOURCE_STATIC_BROKER,
+        super::{
+            entry::EntryOptions,
+            wire::{
+                CONFIG_SOURCE_DEFAULT, CONFIG_SOURCE_DYNAMIC_BROKER,
+                CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER, CONFIG_SOURCE_DYNAMIC_GROUP,
+                CONFIG_SOURCE_DYNAMIC_TOPIC, CONFIG_SOURCE_STATIC_BROKER,
+            },
         },
+        *,
     },
-    *,
-};
-use crate::{
-    api_catalog::UnstableApiVersions,
-    client_metrics::config::{KEY_INTERVAL_MS, KEY_MATCH, KEY_METRICS},
-    codes::{INVALID_REQUEST, INVALID_TOPIC_EXCEPTION, UNKNOWN_TOPIC_OR_PARTITION},
-    config::BrokerConfig,
-    config_keys::{
-        KAFKA_TRUNK_TOPIC_KEYS,
-        broker_dynamic::TOPIC_DEFAULT_SYNONYMS,
-        group::KAFKA_GROUP_KEYS,
-        kafka_broker::{KAFKA_BROKER_CONFIGS, lookup},
-        registry::ConfigType,
+    crate::{
+        api_catalog::UnstableApiVersions,
+        client_metrics::config::{KEY_INTERVAL_MS, KEY_MATCH, KEY_METRICS},
+        codes::{INVALID_REQUEST, INVALID_TOPIC_EXCEPTION, UNKNOWN_TOPIC_OR_PARTITION},
+        config::BrokerConfig,
+        config_keys::{
+            KAFKA_TRUNK_TOPIC_KEYS,
+            broker_dynamic::TOPIC_DEFAULT_SYNONYMS,
+            group::KAFKA_GROUP_KEYS,
+            kafka_broker::{KAFKA_BROKER_CONFIGS, lookup},
+            registry::ConfigType,
+        },
+        coordinator::unified::streams::config::StreamsGroupConfig,
+        file_config::FileConfig,
+        handlers::describe_configs::test_support::{TopicConfigSetup, set_topic_config},
+        throttle::{FOLLOWER_THROTTLED_RATE_KEY, LEADER_THROTTLED_RATE_KEY},
     },
-    coordinator::unified::streams::config::StreamsGroupConfig,
-    file_config::FileConfig,
-    handlers::describe_configs::test_support::{TopicConfigSetup, set_topic_config},
-    throttle::{FOLLOWER_THROTTLED_RATE_KEY, LEADER_THROTTLED_RATE_KEY},
+    assert2::{assert, check},
+    krabka_metadata::{
+        BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage, MetadataRecord,
+        TopicConfigRecord,
+    },
+    krabka_protocol::owned::describe_configs_response::{
+        DescribeConfigsResourceResult, DescribeConfigsResult, DescribeConfigsSynonym,
+    },
+    uuid::Uuid,
 };
 
 fn seed_metrics_subscription(image: &mut MetadataImage) {
@@ -69,9 +70,7 @@ const SERVING_NODE: krabka_metadata::NodeId = krabka_metadata::NodeId(1);
 
 /// A process that named none of the four static broker keys, which is what
 /// every case but the ones that tune one runs as.
-fn untuned() -> StaticBrokerConfigs<'static> {
-    super::static_broker::kafka_default_static_broker()
-}
+fn untuned() -> StaticBrokerConfigs<'static> { super::static_broker::kafka_default_static_broker() }
 
 /// The node a request reaches: a broker resource is served by the node it
 /// names, because the JVM `AdminClient` routes it there and the broker
@@ -378,13 +377,10 @@ fn image_with_broker_config(
 /// for `retention.ms` over `log.retention.ms`.
 #[test]
 fn a_topic_reports_its_override_above_the_cluster_default_with_the_whole_chain() {
-    let mut image = image_with_broker_config(
-        DEFAULT_BROKER_CONFIG_NODE_ID,
-        &[ConfigPair {
-            name: config_keys::UNCLEAN_LEADER_ELECTION_ENABLE,
-            value: "true",
-        }],
-    );
+    let mut image = image_with_broker_config(DEFAULT_BROKER_CONFIG_NODE_ID, &[ConfigPair {
+        name: config_keys::UNCLEAN_LEADER_ELECTION_ENABLE,
+        value: "true",
+    }]);
     set_topic_config(&mut image, TopicConfigSetup::default());
 
     let result = describe_topic(
@@ -477,21 +473,15 @@ fn a_topic_override_stays_at_the_head_of_the_chain_above_the_cluster_default() {
     // key, the cluster default drops to a synonym and the source says
     // DYNAMIC_TOPIC_CONFIG. An operator reads the override and the value it
     // displaced in one response.
-    let mut image = image_with_broker_config(
-        DEFAULT_BROKER_CONFIG_NODE_ID,
-        &[ConfigPair {
-            name: config_keys::UNCLEAN_LEADER_ELECTION_ENABLE,
-            value: "true",
-        }],
-    );
-    set_topic_config(
-        &mut image,
-        TopicConfigSetup {
-            key: config_keys::UNCLEAN_LEADER_ELECTION_ENABLE,
-            value: "false",
-            ..Default::default()
-        },
-    );
+    let mut image = image_with_broker_config(DEFAULT_BROKER_CONFIG_NODE_ID, &[ConfigPair {
+        name: config_keys::UNCLEAN_LEADER_ELECTION_ENABLE,
+        value: "true",
+    }]);
+    set_topic_config(&mut image, TopicConfigSetup {
+        key: config_keys::UNCLEAN_LEADER_ELECTION_ENABLE,
+        value: "false",
+        ..Default::default()
+    });
 
     let result = describe_topic(
         &image,
@@ -656,13 +646,10 @@ fn the_fixed_data_path_key_is_read_only_and_typed() {
 
 #[test]
 fn a_broker_reports_its_per_node_override_above_the_cluster_default() {
-    let mut image = image_with_broker_config(
-        krabka_metadata::NodeId(2),
-        &[ConfigPair {
-            name: LEADER_THROTTLED_RATE_KEY,
-            value: "1024",
-        }],
-    );
+    let mut image = image_with_broker_config(krabka_metadata::NodeId(2), &[ConfigPair {
+        name: LEADER_THROTTLED_RATE_KEY,
+        value: "1024",
+    }]);
     image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
         node_id: DEFAULT_BROKER_CONFIG_NODE_ID,
         config_name: LEADER_THROTTLED_RATE_KEY.to_owned(),
@@ -733,13 +720,10 @@ fn the_cluster_default_resource_reports_the_defaults_and_no_node_id() {
     // An empty resource name is Kafka's cluster-wide default broker
     // resource. It holds no per-node layer, and no node runs it, so the
     // static `node.id` entry a numeric name carries has no place in it.
-    let image = image_with_broker_config(
-        DEFAULT_BROKER_CONFIG_NODE_ID,
-        &[ConfigPair {
-            name: LEADER_THROTTLED_RATE_KEY,
-            value: "1024",
-        }],
-    );
+    let image = image_with_broker_config(DEFAULT_BROKER_CONFIG_NODE_ID, &[ConfigPair {
+        name: LEADER_THROTTLED_RATE_KEY,
+        value: "1024",
+    }]);
 
     let result = describe(&image, RESOURCE_TYPE_BROKER, "", None, EVERYTHING);
 
@@ -885,23 +869,16 @@ fn a_broker_that_overrides_nothing_still_reports_its_static_configuration() {
 /// resource.
 #[test]
 fn the_static_expiry_keys_belong_to_a_named_broker_alone() {
-    let image = image_with_broker_config(
-        DEFAULT_BROKER_CONFIG_NODE_ID,
-        &[ConfigPair {
-            name: LEADER_THROTTLED_RATE_KEY,
-            value: "1024",
-        }],
-    );
+    let image = image_with_broker_config(DEFAULT_BROKER_CONFIG_NODE_ID, &[ConfigPair {
+        name: LEADER_THROTTLED_RATE_KEY,
+        value: "1024",
+    }]);
 
     for (label, resource_name, expected) in [
-        (
-            "a named node reports both static expiry keys",
-            "1",
-            vec![
-                config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
-                config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
-            ],
-        ),
+        ("a named node reports both static expiry keys", "1", vec![
+            config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+            config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
+        ]),
         (
             "the cluster-default resource reports neither",
             "",
@@ -926,19 +903,16 @@ fn the_static_expiry_keys_belong_to_a_named_broker_alone() {
 
 #[test]
 fn the_key_filter_decides_what_a_broker_resource_reports() {
-    let image = image_with_broker_config(
-        krabka_metadata::NodeId(2),
-        &[
-            ConfigPair {
-                name: LEADER_THROTTLED_RATE_KEY,
-                value: "1024",
-            },
-            ConfigPair {
-                name: FOLLOWER_THROTTLED_RATE_KEY,
-                value: "512",
-            },
-        ],
-    );
+    let image = image_with_broker_config(krabka_metadata::NodeId(2), &[
+        ConfigPair {
+            name: LEADER_THROTTLED_RATE_KEY,
+            value: "1024",
+        },
+        ConfigPair {
+            name: FOLLOWER_THROTTLED_RATE_KEY,
+            value: "512",
+        },
+    ]);
 
     for (label, filter, expected) in [
         (
@@ -992,13 +966,10 @@ fn an_empty_key_filter_asks_for_everything_the_way_a_null_filter_does() {
     // in `ConfigHelperUtils.toDescribeConfigsResult`, so an empty list asks for
     // every key rather than for none. One closure carries the filter into every
     // resource type, so every type it reaches is checked here.
-    let mut image = image_with_broker_config(
-        krabka_metadata::NodeId(2),
-        &[ConfigPair {
-            name: LEADER_THROTTLED_RATE_KEY,
-            value: "1024",
-        }],
-    );
+    let mut image = image_with_broker_config(krabka_metadata::NodeId(2), &[ConfigPair {
+        name: LEADER_THROTTLED_RATE_KEY,
+        value: "1024",
+    }]);
     set_topic_config(&mut image, TopicConfigSetup::default());
     seed_metrics_subscription(&mut image);
     image.apply(&MetadataRecord::V1GroupConfig(
@@ -1043,13 +1014,10 @@ fn every_key_an_alter_can_store_on_a_broker_comes_back_with_its_value() {
         if row.read_only {
             continue;
         }
-        let image = image_with_broker_config(
-            krabka_metadata::NodeId(1),
-            &[ConfigPair {
-                name: row.name,
-                value: "1",
-            }],
-        );
+        let image = image_with_broker_config(krabka_metadata::NodeId(1), &[ConfigPair {
+            name: row.name,
+            value: "1",
+        }]);
         let result = describe(
             &image,
             RESOURCE_TYPE_BROKER,
@@ -1071,13 +1039,10 @@ fn a_controller_managed_broker_key_is_read_only_wherever_it_is_reported() {
     // the alter paths refuse the key by the second, and `kafka-configs` must
     // say so by the first.
     for key in config_keys::CONTROLLER_MANAGED_BROKER_CONFIGS {
-        let image = image_with_broker_config(
-            krabka_metadata::NodeId(1),
-            &[ConfigPair {
-                name: key,
-                value: "true",
-            }],
-        );
+        let image = image_with_broker_config(krabka_metadata::NodeId(1), &[ConfigPair {
+            name: key,
+            value: "true",
+        }]);
         let result = describe(
             &image,
             RESOURCE_TYPE_BROKER,
@@ -1103,13 +1068,10 @@ fn a_controller_managed_broker_key_is_read_only_wherever_it_is_reported() {
 /// static configuration as another broker's.
 #[test]
 fn a_broker_resource_that_names_another_node_is_refused() {
-    let image = image_with_broker_config(
-        krabka_metadata::NodeId(2),
-        &[ConfigPair {
-            name: LEADER_THROTTLED_RATE_KEY,
-            value: "1024",
-        }],
-    );
+    let image = image_with_broker_config(krabka_metadata::NodeId(2), &[ConfigPair {
+        name: LEADER_THROTTLED_RATE_KEY,
+        value: "1024",
+    }]);
 
     let result = describe_at(
         ServingConfig {
@@ -1141,13 +1103,10 @@ fn a_broker_resource_that_names_another_node_is_refused() {
 /// refuses it.
 #[test]
 fn the_cluster_default_broker_resource_is_served_by_any_node() {
-    let image = image_with_broker_config(
-        DEFAULT_BROKER_CONFIG_NODE_ID,
-        &[ConfigPair {
-            name: LEADER_THROTTLED_RATE_KEY,
-            value: "1024",
-        }],
-    );
+    let image = image_with_broker_config(DEFAULT_BROKER_CONFIG_NODE_ID, &[ConfigPair {
+        name: LEADER_THROTTLED_RATE_KEY,
+        value: "1024",
+    }]);
 
     let result = describe_at(
         ServingConfig {
@@ -1672,17 +1631,14 @@ fn a_knob_set_to_its_own_default_still_reports_the_static_source() {
             offsets_retention: Some(krabka_units::minutes(10_080)),
             offsets_retention_check_interval: None,
             ..untuned()
-        }) == vec![entry(
-            CONFIG_SOURCE_STATIC_BROKER,
-            vec![
-                synonym(
-                    config_keys::OFFSETS_RETENTION_MINUTES,
-                    "10080",
-                    CONFIG_SOURCE_STATIC_BROKER
-                ),
-                default_synonym,
-            ]
-        )],
+        }) == vec![entry(CONFIG_SOURCE_STATIC_BROKER, vec![
+            synonym(
+                config_keys::OFFSETS_RETENTION_MINUTES,
+                "10080",
+                CONFIG_SOURCE_STATIC_BROKER
+            ),
+            default_synonym,
+        ])],
         "a broker whose properties name the key at that same value"
     );
 }
@@ -1943,13 +1899,10 @@ fn a_topic_key_reports_its_broker_synonyms_under_the_broker_names() {
 /// topic-default broker key it runs with.
 #[test]
 fn a_broker_reports_its_topic_default_keys_typed() {
-    let image = image_with_broker_config(
-        DEFAULT_BROKER_CONFIG_NODE_ID,
-        &[ConfigPair {
-            name: "min.insync.replicas",
-            value: "2",
-        }],
-    );
+    let image = image_with_broker_config(DEFAULT_BROKER_CONFIG_NODE_ID, &[ConfigPair {
+        name: "min.insync.replicas",
+        value: "2",
+    }]);
     let cluster = describe(&image, RESOURCE_TYPE_BROKER, "", None, EVERYTHING);
     let entry = entry_named(&cluster, "min.insync.replicas");
     check!(
@@ -2074,13 +2027,10 @@ fn a_stored_kafka_config_key_comes_back_typed_and_disclosed() {
     } in cases
     {
         for (resource_name, node) in [("", DEFAULT_BROKER_CONFIG_NODE_ID), ("1", SERVING_NODE)] {
-            let image = image_with_broker_config(
-                node,
-                &[ConfigPair {
-                    name,
-                    value: stored,
-                }],
-            );
+            let image = image_with_broker_config(node, &[ConfigPair {
+                name,
+                value: stored,
+            }]);
             let result = describe(
                 &image,
                 RESOURCE_TYPE_BROKER,
@@ -2176,15 +2126,9 @@ fn a_named_broker_reports_the_static_values_it_holds() {
             entry.value.as_deref(),
             entry.config_source,
             entry.synonyms.clone(),
-        ) == (
-            Some("/data/a,/data/b"),
-            CONFIG_SOURCE_STATIC_BROKER,
-            vec![synonym(
-                "log.dirs",
-                "/data/a,/data/b",
-                CONFIG_SOURCE_STATIC_BROKER
-            )]
-        )
+        ) == (Some("/data/a,/data/b"), CONFIG_SOURCE_STATIC_BROKER, vec![
+            synonym("log.dirs", "/data/a,/data/b", CONFIG_SOURCE_STATIC_BROKER)
+        ])
     );
     let entry = entry_named(&result, "message.max.bytes");
     check!(
@@ -2192,14 +2136,10 @@ fn a_named_broker_reports_the_static_values_it_holds() {
             entry.value.as_deref(),
             entry.config_source,
             entry.synonyms.clone(),
-        ) == (
-            Some("2097152"),
-            CONFIG_SOURCE_STATIC_BROKER,
-            vec![
-                synonym("message.max.bytes", "2097152", CONFIG_SOURCE_STATIC_BROKER),
-                synonym("message.max.bytes", "1048588", CONFIG_SOURCE_DEFAULT),
-            ]
-        )
+        ) == (Some("2097152"), CONFIG_SOURCE_STATIC_BROKER, vec![
+            synonym("message.max.bytes", "2097152", CONFIG_SOURCE_STATIC_BROKER),
+            synonym("message.max.bytes", "1048588", CONFIG_SOURCE_DEFAULT),
+        ])
     );
     let entry = entry_named(&result, "broker.rack");
     check!(
@@ -2476,34 +2416,26 @@ fn a_topic_reports_the_computing_nodes_own_min_insync_replicas() {
     for (node, want) in [
         (
             krabka_metadata::NodeId(1),
-            expected(
-                "2",
-                CONFIG_SOURCE_DYNAMIC_BROKER,
-                vec![
-                    synonym("min.insync.replicas", "2", CONFIG_SOURCE_DYNAMIC_BROKER),
-                    synonym(
-                        "min.insync.replicas",
-                        "3",
-                        CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
-                    ),
-                    synonym("min.insync.replicas", "1", CONFIG_SOURCE_DEFAULT),
-                ],
-            ),
+            expected("2", CONFIG_SOURCE_DYNAMIC_BROKER, vec![
+                synonym("min.insync.replicas", "2", CONFIG_SOURCE_DYNAMIC_BROKER),
+                synonym(
+                    "min.insync.replicas",
+                    "3",
+                    CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
+                ),
+                synonym("min.insync.replicas", "1", CONFIG_SOURCE_DEFAULT),
+            ]),
         ),
         (
             krabka_metadata::NodeId(2),
-            expected(
-                "3",
-                CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
-                vec![
-                    synonym(
-                        "min.insync.replicas",
-                        "3",
-                        CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
-                    ),
-                    synonym("min.insync.replicas", "1", CONFIG_SOURCE_DEFAULT),
-                ],
-            ),
+            expected("3", CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER, vec![
+                synonym(
+                    "min.insync.replicas",
+                    "3",
+                    CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
+                ),
+                synonym("min.insync.replicas", "1", CONFIG_SOURCE_DEFAULT),
+            ]),
         ),
     ] {
         let described = describe_at(

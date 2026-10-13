@@ -1,11 +1,12 @@
 //! Common policy fields of the TOML and command-line runtime configurations.
 
-use moxy::{
-    ast::{Field, List, ParseError, Parser, Token},
-    token::{LitStr, Span, ToTokenStream, TokenStream, TokenTree},
+use {
+    crate::meta::{mode, named_body},
+    moxy::{
+        ast::{Field, List, ParseError, Parser, Token},
+        token::{LitStr, Span, ToTokenStream, TokenStream, TokenTree},
+    },
 };
-
-use crate::meta::{mode, named_body};
 
 pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     let mode = mode(meta, ["toml", "cli", "node_cli"])?;
@@ -411,11 +412,8 @@ fn controller_fields(
         #[doc = {{ controller_fetch_miss_limit_doc }}]
         pub controller_fetch_miss_limit: Option<u32>,
     };
-    insert_fields(
-        item,
-        [FieldGroup {
-            before: "metadata_raft_command_queue_capacity",
-            fields,
-        }],
-    )
+    insert_fields(item, [FieldGroup {
+        before: "metadata_raft_command_queue_capacity",
+        fields,
+    }])
 }

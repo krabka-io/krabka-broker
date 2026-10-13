@@ -1,23 +1,21 @@
-use std::collections::{HashMap, HashSet};
-
-use assert2::assert;
-use krabka_protocol::primitives::uuid::Uuid;
-use krabka_verified::uniform_assignor::{SubscriberLoad, select_least_loaded};
-use proptest::prelude::*;
-
-use super::{Balancer, UniformAssignor};
-use crate::coordinator::unified::assignor::{
-    Assignment, Assignor, GroupSpec, MemberSubscription, SubscriptionType, TopicIdPartition,
-    TopicMetadata,
+use {
+    super::{Balancer, UniformAssignor},
+    crate::coordinator::unified::assignor::{
+        Assignment, Assignor, GroupSpec, MemberSubscription, SubscriptionType, TopicIdPartition,
+        TopicMetadata,
+    },
+    assert2::assert,
+    krabka_protocol::primitives::uuid::Uuid,
+    krabka_verified::uniform_assignor::{SubscriberLoad, select_least_loaded},
+    proptest::prelude::*,
+    std::collections::{HashMap, HashSet},
 };
 
 const HOMOGENEOUS: SubscriptionType = SubscriptionType::Homogeneous;
 const HETEROGENEOUS: SubscriptionType = SubscriptionType::Heterogeneous;
 
 /// A topic ID whose rank in Kafka's `Uuid` order is `rank`.
-fn tid(rank: u8) -> Uuid {
-    Uuid([rank; 16])
-}
+fn tid(rank: u8) -> Uuid { Uuid([rank; 16]) }
 
 /// The partitions of one topic that a member holds.
 struct TopicPartitions<'a> {
@@ -43,9 +41,7 @@ struct TopicCount {
     partitions: i32,
 }
 
-fn sized(topic: Uuid, partitions: i32) -> TopicCount {
-    TopicCount { topic, partitions }
-}
+fn sized(topic: Uuid, partitions: i32) -> TopicCount { TopicCount { topic, partitions } }
 
 /// A group together with the topic metadata it is assigned against.
 #[derive(Debug)]
@@ -193,13 +189,10 @@ fn homogeneous_rows_early() -> Vec<Scenario<'static>> {
         Scenario {
             // Kafka's HashSet visits topic3 before topic1.
             name: "testFirstAssignmentTwoMembersTwoTopicsNoMemberRacks",
-            group: group(
-                HOMOGENEOUS,
-                vec![
-                    member("A", &[second, first], &[]),
-                    member("B", &[second, first], &[]),
-                ],
-            ),
+            group: group(HOMOGENEOUS, vec![
+                member("A", &[second, first], &[]),
+                member("B", &[second, first], &[]),
+            ]),
             topics: metadata(&[sized(second, 3), sized(first, 2)]),
             expected: assignment(&[
                 MemberPartitions {
@@ -214,14 +207,11 @@ fn homogeneous_rows_early() -> Vec<Scenario<'static>> {
         },
         Scenario {
             name: "testFirstAssignmentNumMembersGreaterThanTotalNumPartitions",
-            group: group(
-                HOMOGENEOUS,
-                vec![
-                    member("A", &[first], &[]),
-                    member("B", &[first], &[]),
-                    member("C", &[first], &[]),
-                ],
-            ),
+            group: group(HOMOGENEOUS, vec![
+                member("A", &[first], &[]),
+                member("B", &[first], &[]),
+                member("C", &[first], &[]),
+            ]),
             topics: metadata(&[sized(first, 2)]),
             expected: assignment(&[
                 MemberPartitions {
@@ -240,21 +230,16 @@ fn homogeneous_rows_early() -> Vec<Scenario<'static>> {
         },
         Scenario {
             name: "testReassignmentForTwoMembersTwoTopicsGivenUnbalancedPrevAssignment",
-            group: group(
-                HOMOGENEOUS,
-                vec![
-                    member(
-                        "A",
-                        &[first, second],
-                        &[owns(first, &[0, 1]), owns(second, &[0, 1])],
-                    ),
-                    member(
-                        "B",
-                        &[first, second],
-                        &[owns(first, &[2]), owns(second, &[2])],
-                    ),
-                ],
-            ),
+            group: group(HOMOGENEOUS, vec![
+                member("A", &[first, second], &[
+                    owns(first, &[0, 1]),
+                    owns(second, &[0, 1]),
+                ]),
+                member("B", &[first, second], &[
+                    owns(first, &[2]),
+                    owns(second, &[2]),
+                ]),
+            ]),
             topics: metadata(&[sized(first, 3), sized(second, 3)]),
             expected: assignment(&[
                 MemberPartitions {
@@ -276,21 +261,16 @@ fn homogeneous_rows_late() -> Vec<Scenario<'static>> {
         Scenario {
             // Kafka's HashSet visits topic2 before topic1.
             name: "testReassignmentWhenPartitionsAreAddedForTwoMembersTwoTopics",
-            group: group(
-                HOMOGENEOUS,
-                vec![
-                    member(
-                        "A",
-                        &[second, first],
-                        &[owns(second, &[0, 2]), owns(first, &[0])],
-                    ),
-                    member(
-                        "B",
-                        &[second, first],
-                        &[owns(second, &[1]), owns(first, &[1, 2])],
-                    ),
-                ],
-            ),
+            group: group(HOMOGENEOUS, vec![
+                member("A", &[second, first], &[
+                    owns(second, &[0, 2]),
+                    owns(first, &[0]),
+                ]),
+                member("B", &[second, first], &[
+                    owns(second, &[1]),
+                    owns(first, &[1, 2]),
+                ]),
+            ]),
             topics: metadata(&[sized(second, 6), sized(first, 5)]),
             expected: assignment(&[
                 MemberPartitions {
@@ -305,22 +285,17 @@ fn homogeneous_rows_late() -> Vec<Scenario<'static>> {
         },
         Scenario {
             name: "testReassignmentWhenOneMemberAddedAfterInitialAssignmentWithTwoMembersTwoTopics",
-            group: group(
-                HOMOGENEOUS,
-                vec![
-                    member(
-                        "A",
-                        &[first, second],
-                        &[owns(first, &[0, 2]), owns(second, &[0])],
-                    ),
-                    member(
-                        "B",
-                        &[first, second],
-                        &[owns(first, &[1]), owns(second, &[1, 2])],
-                    ),
-                    member("C", &[first, second], &[]),
-                ],
-            ),
+            group: group(HOMOGENEOUS, vec![
+                member("A", &[first, second], &[
+                    owns(first, &[0, 2]),
+                    owns(second, &[0]),
+                ]),
+                member("B", &[first, second], &[
+                    owns(first, &[1]),
+                    owns(second, &[1, 2]),
+                ]),
+                member("C", &[first, second], &[]),
+            ]),
             topics: metadata(&[sized(first, 3), sized(second, 3)]),
             expected: assignment(&[
                 MemberPartitions {
@@ -340,21 +315,16 @@ fn homogeneous_rows_late() -> Vec<Scenario<'static>> {
         Scenario {
             // Kafka's HashSet visits topic2 before topic1.
             name: "testReassignmentWhenOneMemberRemovedAfterInitialAssignmentWithThreeMembersTwoTopics",
-            group: group(
-                HOMOGENEOUS,
-                vec![
-                    member(
-                        "A",
-                        &[second, first],
-                        &[owns(second, &[0]), owns(first, &[0])],
-                    ),
-                    member(
-                        "B",
-                        &[second, first],
-                        &[owns(second, &[1]), owns(first, &[1])],
-                    ),
-                ],
-            ),
+            group: group(HOMOGENEOUS, vec![
+                member("A", &[second, first], &[
+                    owns(second, &[0]),
+                    owns(first, &[0]),
+                ]),
+                member("B", &[second, first], &[
+                    owns(second, &[1]),
+                    owns(first, &[1]),
+                ]),
+            ]),
             topics: metadata(&[sized(second, 3), sized(first, 3)]),
             expected: assignment(&[
                 MemberPartitions {
@@ -369,13 +339,10 @@ fn homogeneous_rows_late() -> Vec<Scenario<'static>> {
         },
         Scenario {
             name: "testReassignmentWhenOneSubscriptionRemovedAfterInitialAssignmentWithTwoMembersTwoTopics",
-            group: group(
-                HOMOGENEOUS,
-                vec![
-                    member("A", &[second], &[owns(first, &[0]), owns(second, &[0])]),
-                    member("B", &[second], &[owns(first, &[1]), owns(second, &[1])]),
-                ],
-            ),
+            group: group(HOMOGENEOUS, vec![
+                member("A", &[second], &[owns(first, &[0]), owns(second, &[0])]),
+                member("B", &[second], &[owns(first, &[1]), owns(second, &[1])]),
+            ]),
             topics: metadata(&[sized(first, 2), sized(second, 2)]),
             expected: assignment(&[
                 MemberPartitions {
@@ -405,10 +372,10 @@ fn heterogeneous_rows_early() -> Vec<Scenario<'static>> {
     vec![
         Scenario {
             name: "testTwoMembersNoTopicSubscription",
-            group: group(
-                HETEROGENEOUS,
-                vec![member("A", &[], &[]), member("B", &[], &[])],
-            ),
+            group: group(HETEROGENEOUS, vec![
+                member("A", &[], &[]),
+                member("B", &[], &[]),
+            ]),
             topics: metadata(&[sized(t1, 3)]),
             expected: empty_two_member_assignment(),
         },
@@ -416,19 +383,19 @@ fn heterogeneous_rows_early() -> Vec<Scenario<'static>> {
             // Kafka throws PartitionAssignorException; missing topics are
             // skipped here.
             name: "testTwoMembersSubscribedToNonexistentTopics",
-            group: group(
-                HETEROGENEOUS,
-                vec![member("A", &[t3], &[]), member("B", &[t2], &[])],
-            ),
+            group: group(HETEROGENEOUS, vec![
+                member("A", &[t3], &[]),
+                member("B", &[t2], &[]),
+            ]),
             topics: metadata(&[sized(t1, 3)]),
             expected: empty_two_member_assignment(),
         },
         Scenario {
             name: "testFirstAssignmentTwoMembersTwoTopics",
-            group: group(
-                HETEROGENEOUS,
-                vec![member("A", &[t1, t3], &[]), member("B", &[t3], &[])],
-            ),
+            group: group(HETEROGENEOUS, vec![
+                member("A", &[t1, t3], &[]),
+                member("B", &[t3], &[]),
+            ]),
             topics: metadata(&[sized(t1, 3), sized(t3, 6)]),
             expected: assignment(&[
                 MemberPartitions {
@@ -443,14 +410,11 @@ fn heterogeneous_rows_early() -> Vec<Scenario<'static>> {
         },
         Scenario {
             name: "testFirstAssignmentNumMembersGreaterThanTotalNumPartitions",
-            group: group(
-                HETEROGENEOUS,
-                vec![
-                    member("A", &[t3], &[]),
-                    member("B", &[t3], &[]),
-                    member("C", &[t1], &[]),
-                ],
-            ),
+            group: group(HETEROGENEOUS, vec![
+                member("A", &[t3], &[]),
+                member("B", &[t3], &[]),
+                member("C", &[t1], &[]),
+            ]),
             topics: metadata(&[sized(t1, 2), sized(t3, 1)]),
             expected: assignment(&[
                 MemberPartitions {
@@ -469,22 +433,15 @@ fn heterogeneous_rows_early() -> Vec<Scenario<'static>> {
         },
         Scenario {
             name: "testReassignmentForTwoMembersThreeTopicsGivenUnbalancedPrevAssignment",
-            group: group(
-                HETEROGENEOUS,
-                vec![
-                    member("A", &[t1], &[owns(t1, &[0, 1, 2])]),
-                    member("B", &[t1, t2], &[owns(t1, &[3]), owns(t2, &[0])]),
-                    member(
-                        "C",
-                        &[t1, t2, t3],
-                        &[
-                            owns(t1, &[4, 5]),
-                            owns(t2, &[1, 2, 3]),
-                            owns(t3, &[0, 1, 2, 3]),
-                        ],
-                    ),
-                ],
-            ),
+            group: group(HETEROGENEOUS, vec![
+                member("A", &[t1], &[owns(t1, &[0, 1, 2])]),
+                member("B", &[t1, t2], &[owns(t1, &[3]), owns(t2, &[0])]),
+                member("C", &[t1, t2, t3], &[
+                    owns(t1, &[4, 5]),
+                    owns(t2, &[1, 2, 3]),
+                    owns(t3, &[0, 1, 2, 3]),
+                ]),
+            ]),
             topics: metadata(&[sized(t1, 6), sized(t2, 4), sized(t3, 4)]),
             expected: assignment(&[
                 MemberPartitions {
@@ -509,21 +466,16 @@ fn heterogeneous_rows_late() -> Vec<Scenario<'static>> {
     vec![
         Scenario {
             name: "testReassignmentWhenPartitionsAreAddedForTwoMembers",
-            group: group(
-                HETEROGENEOUS,
-                vec![
-                    member(
-                        "A",
-                        &[t1, t3],
-                        &[owns(t1, &[0, 1, 2, 3]), owns(t3, &[0, 1])],
-                    ),
-                    member(
-                        "B",
-                        &[t1, t2, t3, t4],
-                        &[owns(t2, &[0, 1, 2]), owns(t4, &[0, 1, 2])],
-                    ),
-                ],
-            ),
+            group: group(HETEROGENEOUS, vec![
+                member("A", &[t1, t3], &[
+                    owns(t1, &[0, 1, 2, 3]),
+                    owns(t3, &[0, 1]),
+                ]),
+                member("B", &[t1, t2, t3, t4], &[
+                    owns(t2, &[0, 1, 2]),
+                    owns(t4, &[0, 1, 2]),
+                ]),
+            ]),
             topics: metadata(&[sized(t1, 6), sized(t2, 5), sized(t3, 3), sized(t4, 3)]),
             expected: assignment(&[
                 MemberPartitions {
@@ -538,14 +490,11 @@ fn heterogeneous_rows_late() -> Vec<Scenario<'static>> {
         },
         Scenario {
             name: "testReassignmentWhenOneMemberAddedAndPartitionsAddedTwoMembersTwoTopics",
-            group: group(
-                HETEROGENEOUS,
-                vec![
-                    member("A", &[t1], &[owns(t1, &[0, 2]), owns(t2, &[0])]),
-                    member("B", &[t1, t2], &[owns(t1, &[1]), owns(t2, &[1, 2])]),
-                    member("C", &[t1, t2], &[]),
-                ],
-            ),
+            group: group(HETEROGENEOUS, vec![
+                member("A", &[t1], &[owns(t1, &[0, 2]), owns(t2, &[0])]),
+                member("B", &[t1, t2], &[owns(t1, &[1]), owns(t2, &[1, 2])]),
+                member("C", &[t1, t2], &[]),
+            ]),
             topics: metadata(&[sized(t1, 6), sized(t2, 7)]),
             expected: assignment(&[
                 MemberPartitions {
@@ -564,13 +513,10 @@ fn heterogeneous_rows_late() -> Vec<Scenario<'static>> {
         },
         Scenario {
             name: "testReassignmentWhenOneMemberRemovedAfterInitialAssignmentWithThreeMembersThreeTopics",
-            group: group(
-                HETEROGENEOUS,
-                vec![
-                    member("A", &[t1, t3], &[owns(t1, &[0, 1, 2]), owns(t3, &[0, 1])]),
-                    member("B", &[t2], &[owns(t2, &[3, 4, 5, 6])]),
-                ],
-            ),
+            group: group(HETEROGENEOUS, vec![
+                member("A", &[t1, t3], &[owns(t1, &[0, 1, 2]), owns(t3, &[0, 1])]),
+                member("B", &[t2], &[owns(t2, &[3, 4, 5, 6])]),
+            ]),
             topics: metadata(&[sized(t1, 3), sized(t2, 8), sized(t3, 3)]),
             expected: assignment(&[
                 MemberPartitions {
@@ -585,13 +531,10 @@ fn heterogeneous_rows_late() -> Vec<Scenario<'static>> {
         },
         Scenario {
             name: "testReassignmentWhenOneSubscriptionRemovedAfterInitialAssignmentWithTwoMembersTwoTopics",
-            group: group(
-                HETEROGENEOUS,
-                vec![
-                    member("A", &[t1], &[owns(t1, &[0, 2]), owns(t2, &[1, 3])]),
-                    member("B", &[t1, t2], &[owns(t1, &[1]), owns(t2, &[0, 2, 4])]),
-                ],
-            ),
+            group: group(HETEROGENEOUS, vec![
+                member("A", &[t1], &[owns(t1, &[0, 2]), owns(t2, &[1, 3])]),
+                member("B", &[t1, t2], &[owns(t1, &[1]), owns(t2, &[0, 2, 4])]),
+            ]),
             topics: metadata(&[sized(t1, 3), sized(t2, 5)]),
             expected: assignment(&[
                 MemberPartitions {
@@ -606,17 +549,14 @@ fn heterogeneous_rows_late() -> Vec<Scenario<'static>> {
         },
         Scenario {
             name: "testReassignmentWhenTopicPartitionsRunOutAndMembersHaveNoPartitions",
-            group: group(
-                HETEROGENEOUS,
-                vec![
-                    member(
-                        "A",
-                        &[t1, t2, t3],
-                        &[owns(t1, &[0, 1]), owns(t2, &[0, 1]), owns(t3, &[0, 1])],
-                    ),
-                    member("B", &[t1, t2, t3], &[]),
-                ],
-            ),
+            group: group(HETEROGENEOUS, vec![
+                member("A", &[t1, t2, t3], &[
+                    owns(t1, &[0, 1]),
+                    owns(t2, &[0, 1]),
+                    owns(t3, &[0, 1]),
+                ]),
+                member("B", &[t1, t2, t3], &[]),
+            ]),
             topics: metadata(&[sized(t1, 2), sized(t2, 2), sized(t3, 2)]),
             expected: assignment(&[
                 MemberPartitions {
@@ -631,10 +571,10 @@ fn heterogeneous_rows_late() -> Vec<Scenario<'static>> {
         },
         Scenario {
             name: "testFirstAssignmentWithTwoMembersIncludingOneWithoutSubscriptions",
-            group: group(
-                HETEROGENEOUS,
-                vec![member("A", &[t1], &[]), member("B", &[], &[])],
-            ),
+            group: group(HETEROGENEOUS, vec![
+                member("A", &[t1], &[]),
+                member("B", &[], &[]),
+            ]),
             topics: metadata(&[sized(t1, 3)]),
             expected: assignment(&[
                 MemberPartitions {

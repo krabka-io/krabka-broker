@@ -7,27 +7,27 @@
 //! broker, and each key's value check -- are shared with `AlterConfigs` and
 //! live in [`crate::config_keys::broker_dynamic`].
 
-use std::collections::BTreeMap;
-
-use krabka_metadata::{BrokerConfigRecord, MetadataRecord};
-use krabka_protocol::owned::{
-    incremental_alter_configs_request::AlterConfigsResource,
-    incremental_alter_configs_response::AlterConfigsResourceResponse,
-};
-
-use super::{OP_APPEND, OP_DELETE, OP_SET, OP_SUBTRACT};
-use crate::{
-    api_catalog::UnstableApiVersions,
-    codes,
-    config_keys::{
-        self,
-        broker_dynamic::{
-            BrokerConfigContext, BrokerKeyKind, CLUSTER_DEFAULT_ONLY, broker_key_kind,
-            cordoned_log_dirs_disabled_error, cordoned_log_dirs_error, elr_min_isr_error,
-            validate_dynamic_broker_configs,
+use {
+    super::{OP_APPEND, OP_DELETE, OP_SET, OP_SUBTRACT},
+    crate::{
+        api_catalog::UnstableApiVersions,
+        codes,
+        config_keys::{
+            self,
+            broker_dynamic::{
+                BrokerConfigContext, BrokerKeyKind, CLUSTER_DEFAULT_ONLY, broker_key_kind,
+                cordoned_log_dirs_disabled_error, cordoned_log_dirs_error, elr_min_isr_error,
+                validate_dynamic_broker_configs,
+            },
         },
+        cordoned_log_dirs::CORDONED_LOG_DIRS,
     },
-    cordoned_log_dirs::CORDONED_LOG_DIRS,
+    krabka_metadata::{BrokerConfigRecord, MetadataRecord},
+    krabka_protocol::owned::{
+        incremental_alter_configs_request::AlterConfigsResource,
+        incremental_alter_configs_response::AlterConfigsResourceResponse,
+    },
+    std::collections::BTreeMap,
 };
 
 /// The default a `LIST` broker key starts from when the resource does not
@@ -222,22 +222,23 @@ pub(super) fn handle_broker_scoped(
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
-    use krabka_metadata::{MetadataImage, NodeId};
-    use krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig;
-
-    use super::*;
-    use crate::{
-        cordoned_log_dirs::CORDONED_LOG_DIRS,
-        features::{ELR_VERSION, METADATA_VERSION},
-        handlers::{
-            incremental_alter_configs::test_support::{
-                make_del_cfg, make_image_with_broker, make_resource, make_set_cfg,
+    use {
+        super::*,
+        crate::{
+            cordoned_log_dirs::CORDONED_LOG_DIRS,
+            features::{ELR_VERSION, METADATA_VERSION},
+            handlers::{
+                incremental_alter_configs::test_support::{
+                    make_del_cfg, make_image_with_broker, make_resource, make_set_cfg,
+                },
+                test_support::{BrokerConfigMutationSetup, broker_config_context},
             },
-            test_support::{BrokerConfigMutationSetup, broker_config_context},
+            test_support::broker_registration,
+            throttle::LEADER_THROTTLED_RATE_KEY,
         },
-        test_support::broker_registration,
-        throttle::LEADER_THROTTLED_RATE_KEY,
+        assert2::check,
+        krabka_metadata::{MetadataImage, NodeId},
+        krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig,
     };
 
     const SERVING: NodeId = NodeId(1);
@@ -612,27 +613,21 @@ mod tests {
             },
             Case {
                 name: "1",
-                image: at_level(
-                    30,
-                    &[StoredConfig {
-                        node: SERVING,
-                        key: KEY,
-                        value: "/tmp/d1",
-                    }],
-                ),
+                image: at_level(30, &[StoredConfig {
+                    node: SERVING,
+                    key: KEY,
+                    value: "/tmp/d1",
+                }]),
                 configs: vec![op(KEY, OP_APPEND, "/tmp/d2")],
                 want: Ok(vec![record(SERVING, KEY, Some("/tmp/d1,/tmp/d2"))]),
             },
             Case {
                 name: "1",
-                image: at_level(
-                    30,
-                    &[StoredConfig {
-                        node: SERVING,
-                        key: KEY,
-                        value: "/tmp/d1,/tmp/d2",
-                    }],
-                ),
+                image: at_level(30, &[StoredConfig {
+                    node: SERVING,
+                    key: KEY,
+                    value: "/tmp/d1,/tmp/d2",
+                }]),
                 configs: vec![op(KEY, OP_SUBTRACT, "/tmp/d1")],
                 want: Ok(vec![record(SERVING, KEY, Some("/tmp/d2"))]),
             },
@@ -688,12 +683,9 @@ mod tests {
                 want: Err(disabled),
             },
         ];
-        check_broker_record_cases(
-            cases,
-            BrokerConfigMutationSetup {
-                log_dirs: &log_dirs,
-                ..Default::default()
-            },
-        );
+        check_broker_record_cases(cases, BrokerConfigMutationSetup {
+            log_dirs: &log_dirs,
+            ..Default::default()
+        });
     }
 }

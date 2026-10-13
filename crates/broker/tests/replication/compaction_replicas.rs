@@ -14,30 +14,30 @@
 //! producer on each follower. A new leader then had no batch that held the
 //! sequence of the producer.
 
-use std::net::SocketAddr;
-
-use assert2::assert;
-use bytes::Bytes;
-use krabka_broker::{BrokerHandle, codes};
-use krabka_client_core::{Connection, ConnectionOptions};
-use krabka_ids::ProducerId;
-use krabka_protocol::{
-    owned::create_topics_request::CreatableTopicConfig,
-    primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch},
-};
-
-use crate::{
-    cluster_lock,
-    support::{
-        self,
-        client::connect_with_context,
-        produce::{SinglePartitionProduceSetup, send_batch},
-        records::batch_from_records,
-        registered_cluster, shutdown_cluster,
-        topics::CreateTopicRequestSetup,
-        transactions::{ProducerEpoch, ProducerIdentity},
+use {
+    crate::{
+        cluster_lock,
+        support::{
+            self,
+            client::connect_with_context,
+            produce::{SinglePartitionProduceSetup, send_batch},
+            records::batch_from_records,
+            registered_cluster, shutdown_cluster,
+            topics::CreateTopicRequestSetup,
+            transactions::{ProducerEpoch, ProducerIdentity},
+        },
     },
+    assert2::assert,
+    bytes::Bytes,
+    krabka_broker::{BrokerHandle, codes},
+    krabka_client_core::{Connection, ConnectionOptions},
+    krabka_ids::ProducerId,
+    krabka_protocol::{
+        owned::create_topics_request::CreatableTopicConfig,
+        primitives::uuid::Uuid as WireUuid,
+        records::{Record, RecordBatch},
+    },
+    std::net::SocketAddr,
 };
 
 const TOPIC: &str = "compaction-replicas";
@@ -61,9 +61,7 @@ struct KeyValue {
 }
 
 impl KeyValue {
-    const fn new(key: &'static str, value: &'static str) -> Self {
-        Self { key, value }
-    }
+    const fn new(key: &'static str, value: &'static str) -> Self { Self { key, value } }
 }
 
 /// A producer identity and the sequence its batch starts at.
@@ -108,13 +106,10 @@ use crate::support::records::now_ms;
 /// One connection to the broker that binds `address`, so that a request
 /// reaches that broker and no other.
 async fn connect(address: SocketAddr) -> Connection {
-    Connection::connect(
-        address,
-        ConnectionOptions {
-            client_id: "compaction-replicas".to_owned(),
-            ..ConnectionOptions::default()
-        },
-    )
+    Connection::connect(address, ConnectionOptions {
+        client_id: "compaction-replicas".to_owned(),
+        ..ConnectionOptions::default()
+    })
     .await
     .expect("connect")
 }
@@ -147,15 +142,11 @@ fn record(
 /// Send `batch` to the leader with `acks=-1`, and return the error code of
 /// the partition row.
 async fn produce(leader: &Connection, topic_id: WireUuid, batch: RecordBatch) -> i16 {
-    let response = send_batch(
-        &leader,
-        batch,
-        SinglePartitionProduceSetup {
-            topic: (TOPIC).into(),
-            topic_id,
-            ..SinglePartitionProduceSetup::replicated_with_thirty_second_timeout()
-        },
-    )
+    let response = send_batch(&leader, batch, SinglePartitionProduceSetup {
+        topic: (TOPIC).into(),
+        topic_id,
+        ..SinglePartitionProduceSetup::replicated_with_thirty_second_timeout()
+    })
     .await;
     response.responses[0].partition_responses[0].error_code
 }

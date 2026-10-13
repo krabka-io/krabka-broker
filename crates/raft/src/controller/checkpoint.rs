@@ -5,15 +5,17 @@
 //! disk here rather than through the engine, so it is kept apart from the rest
 //! of the handle.
 
-use super::ControllerHandle;
-use crate::{
-    error::RaftError,
-    kraft::{
-        controller::checkpoint::{latest_checkpoint_id, load_checkpoint_by_id},
-        snapshot_fetch::SnapshotId,
-        transport::Inbound,
+use {
+    super::ControllerHandle,
+    crate::{
+        error::RaftError,
+        kraft::{
+            controller::checkpoint::{latest_checkpoint_id, load_checkpoint_by_id},
+            snapshot_fetch::SnapshotId,
+            transport::Inbound,
+        },
+        snapshot::SnapshotReader,
     },
-    snapshot::SnapshotReader,
 };
 
 /// A contiguous byte window of the latest metadata `.checkpoint`, returned by
@@ -118,10 +120,11 @@ pub(super) fn load_latest_checkpoint(dir: &std::path::Path) -> Option<(SnapshotI
 
 #[cfg(test)]
 mod tests {
-    use tempfile::TempDir;
-
-    use super::*;
-    use crate::{controller::test_support::joining_controller, metadata_partition_dir};
+    use {
+        super::*,
+        crate::{controller::test_support::joining_controller, metadata_partition_dir},
+        tempfile::TempDir,
+    };
 
     #[test]
     fn load_latest_checkpoint_picks_highest_offset_then_epoch() {

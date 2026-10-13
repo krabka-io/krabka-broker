@@ -98,9 +98,7 @@ fn simple_lower(code: u32) -> u32 {
 }
 
 /// The value that Java compares under `(?iu)`.
-fn key(code: u32) -> u32 {
-    simple_lower(simple_upper(code))
-}
+fn key(code: u32) -> u32 { simple_lower(simple_upper(code)) }
 
 /// Every code point that the mapping changes, or that `key` sends to another
 /// one, in order.
@@ -175,9 +173,7 @@ fn points(codes: impl IntoIterator<Item = u32>) -> Ranges {
 }
 
 /// Whether Java's mapping gives `code` a case.
-pub(super) fn is_cased(code: u32) -> bool {
-    cased().binary_search(&code).is_ok()
-}
+pub(super) fn is_cased(code: u32) -> bool { cased().binary_search(&code).is_ok() }
 
 /// What `code`, a member of a class, matches under `(?iu)`, or `None` for a
 /// code point that has no case, which matches only itself.
@@ -331,9 +327,7 @@ pub(super) fn push_class(out: &mut String, ranges: &[CodeRange]) {
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
-
-    use super::*;
+    use {super::*, assert2::check};
 
     /// The ranges as `lo-hi,lo-hi` in hex, a point as `lo` alone, which is how
     /// the tests below give what JDK 17 matches.

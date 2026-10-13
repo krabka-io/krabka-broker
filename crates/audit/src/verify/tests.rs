@@ -1,20 +1,21 @@
 //! Unit tests for the offline verifier, driven end to end through
 //! [`verify_partition_dir`] over partitions built on disk.
 
-use assert2::check;
-use bytes::Bytes;
-use krabka_log::{Log, LogConfig};
-use krabka_protocol::records::{Record, RecordBatch, RecordHeader};
-
-use super::*;
-use crate::{
-    FileEd25519Signer,
-    chain::{ChainLink, ChainState, GENESIS_HEAD},
-    checkpoint::Checkpoint,
-    event::AuditEventClass,
-    ids::EpochMs,
-    sink::AuditRecord,
-    test_support::{TestSigner, shared_signer as signer},
+use {
+    super::*,
+    crate::{
+        FileEd25519Signer,
+        chain::{ChainLink, ChainState, GENESIS_HEAD},
+        checkpoint::Checkpoint,
+        event::AuditEventClass,
+        ids::EpochMs,
+        sink::AuditRecord,
+        test_support::{TestSigner, shared_signer as signer},
+    },
+    assert2::check,
+    bytes::Bytes,
+    krabka_log::{Log, LogConfig},
+    krabka_protocol::records::{Record, RecordBatch, RecordHeader},
 };
 
 fn audit_record_to_batch(rec: &AuditRecord, base_offset: i64) -> RecordBatch {
@@ -389,15 +390,12 @@ fn unanchored_tail_records_are_counted() {
 
     let trusted = TrustedKeys::single("k1".into(), pubkey);
     let report = verify_partition_dir(tmp.path(), &trusted).unwrap();
-    check_summary(
-        &report,
-        VerifySummary {
-            ok: true,
-            checkpoints: 1,
-            records: 5,
-            unanchored_records: 2,
-        },
-    );
+    check_summary(&report, VerifySummary {
+        ok: true,
+        checkpoints: 1,
+        records: 5,
+        unanchored_records: 2,
+    });
 }
 
 /// Chain-only partition with no signing key and no checkpoints. All records
@@ -416,15 +414,12 @@ fn chain_only_partition_all_records_unanchored() {
 
     // No trusted key needed — no checkpoints present
     let report = untrusted_report(tmp.path());
-    check_summary(
-        &report,
-        VerifySummary {
-            ok: true,
-            checkpoints: 0,
-            records: 3,
-            unanchored_records: 3,
-        },
-    );
+    check_summary(&report, VerifySummary {
+        ok: true,
+        checkpoints: 0,
+        records: 3,
+        unanchored_records: 3,
+    });
 }
 
 // ── Fix 2 tests: direct tamper-detection (chain-inconsistent fixtures) ────

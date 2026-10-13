@@ -6,16 +6,18 @@
 //! here and a commit or abort marker closes the transaction through the
 //! other.
 
-use krabka_ids::{Offset, ProducerId};
-use krabka_protocol::records::RecordBatch;
-
-use super::{
-    Log,
-    control::{
-        TransactionMarkerFlags, batch_control_marker_coordinator_epoch, transaction_marker_flags,
+use {
+    super::{
+        Log,
+        control::{
+            TransactionMarkerFlags, batch_control_marker_coordinator_epoch,
+            transaction_marker_flags,
+        },
     },
+    crate::{error::LogError, stamp_index::OffsetRange, txn_index::AbortedTxn},
+    krabka_ids::{Offset, ProducerId},
+    krabka_protocol::records::RecordBatch,
 };
-use crate::{error::LogError, stamp_index::OffsetRange, txn_index::AbortedTxn};
 
 impl Log {
     /// Recompute the first unstable offset from every open transaction and
@@ -180,19 +182,21 @@ impl Log {
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
-    use krabka_ids::LeaderEpoch;
-    use tempfile::tempdir;
-
-    use super::*;
-    use crate::{
-        log::test_support::{
-            EncodedVerbatim, TempLog, TransactionFields, abort_marker, append_transaction,
-            commit_marker, install_stamps, sample_batch, test_batch_at, test_log, tiny_segments,
-            transaction_entries, transaction_fields, transactional_batch, verbatim_from,
+    use {
+        super::*,
+        crate::{
+            log::test_support::{
+                EncodedVerbatim, TempLog, TransactionFields, abort_marker, append_transaction,
+                commit_marker, install_stamps, sample_batch, test_batch_at, test_log,
+                tiny_segments, transaction_entries, transaction_fields, transactional_batch,
+                verbatim_from,
+            },
+            name,
+            test_support::{AbortedTxnSetup, aborted_txn, open_log},
         },
-        name,
-        test_support::{AbortedTxnSetup, aborted_txn, open_log},
+        bytes::Bytes,
+        krabka_ids::LeaderEpoch,
+        tempfile::tempdir,
     };
 
     // ---- transactional LSO / txnindex tests ----
@@ -504,11 +508,9 @@ mod tests {
             let TempLog { dir: _dir, mut log } = test_log();
             log.append(&mut sample_batch(10)).unwrap(); // offsets 0 to 9
             if case.transaction {
-                log.append(&mut transactional_batch(
-                    1000,
-                    0,
-                    &["a", "b", "c", "d", "e"],
-                ))
+                log.append(&mut transactional_batch(1000, 0, &[
+                    "a", "b", "c", "d", "e",
+                ]))
                 .unwrap(); // offsets 10 to 14
                 log.append(&mut commit_marker(1000, 0)).unwrap(); // offset 15
             } else {

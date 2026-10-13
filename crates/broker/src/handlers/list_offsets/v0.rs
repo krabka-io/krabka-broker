@@ -1,22 +1,23 @@
 //! The legacy `ListOffsets` v0 wire shape and segment-boundary lookup.
 
-use bytes::{Bytes, BytesMut};
-use krabka_protocol::primitives::{
-    array::{get_array_len, put_array_len},
-    fixed::{get_i32, get_i64, put_i16, put_i32, put_i64},
-    string_bytes::{get_string_owned, put_string},
-};
-
-use super::{
-    DescribeSplit, IndexedTopic, PartitionRow, TopicPartitions,
-    bound::{fetch_bound, last_fetchable_offset},
-    leadership::resolve_for_broker,
-    remote::concurrently,
-    resolve::{LatestContext, LatestSnapshot, TopicPartitionName, resolve_latest},
-};
-use crate::{
-    broker::Broker, codes, config_keys::resolve_remote_list_offsets_timeout, error::BrokerError,
-    handlers::RequestContext,
+use {
+    super::{
+        DescribeSplit, IndexedTopic, PartitionRow, TopicPartitions,
+        bound::{fetch_bound, last_fetchable_offset},
+        leadership::resolve_for_broker,
+        remote::concurrently,
+        resolve::{LatestContext, LatestSnapshot, TopicPartitionName, resolve_latest},
+    },
+    crate::{
+        broker::Broker, codes, config_keys::resolve_remote_list_offsets_timeout,
+        error::BrokerError, handlers::RequestContext,
+    },
+    bytes::{Bytes, BytesMut},
+    krabka_protocol::primitives::{
+        array::{get_array_len, put_array_len},
+        fixed::{get_i32, get_i64, put_i16, put_i32, put_i64},
+        string_bytes::{get_string_owned, put_string},
+    },
 };
 
 const LATEST_TIMESTAMP: i64 = -1;
@@ -267,22 +268,22 @@ pub(super) async fn latest_offsets_for_test(broker: &Broker, topic: &str) -> Lat
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
-
-    use assert2::assert;
-    use krabka_protocol::primitives::{
-        array::{get_array_len, put_array_len},
-        fixed::{get_i16, get_i32, get_i64, put_i32, put_i64},
-        string_bytes::{get_string_owned, put_string},
-    };
-    use krabka_units::prelude::bytes;
-
-    use super::*;
-    use crate::{
-        authorizer::AllowAllAuthorizer,
-        broker::BrokerHandle,
-        handlers::list_offsets::test_support::{client_for, create_topic, test_context},
-        test_support::{peer, principal, start_broker_with_authorizer_no_audit},
+    use {
+        super::*,
+        crate::{
+            authorizer::AllowAllAuthorizer,
+            broker::BrokerHandle,
+            handlers::list_offsets::test_support::{client_for, create_topic, test_context},
+            test_support::{peer, principal, start_broker_with_authorizer_no_audit},
+        },
+        assert2::assert,
+        krabka_protocol::primitives::{
+            array::{get_array_len, put_array_len},
+            fixed::{get_i16, get_i32, get_i64, put_i32, put_i64},
+            string_bytes::{get_string_owned, put_string},
+        },
+        krabka_units::prelude::bytes,
+        std::{sync::Arc, time::Duration},
     };
 
     macro_rules! topic_header {
@@ -299,17 +300,13 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker_with_authorizer_no_audit(Arc::new(AllowAllAuthorizer)).await;
         let client = client_for(&broker_handle).await;
-        create_topic(
-            &client,
-            TOPIC,
-            vec![
-                krabka_protocol::owned::create_topics_request::CreatableTopicConfig {
-                    name: "internal.segment.bytes".into(),
-                    value: Some("1".into()),
-                    ..Default::default()
-                },
-            ],
-        )
+        create_topic(&client, TOPIC, vec![
+            krabka_protocol::owned::create_topics_request::CreatableTopicConfig {
+                name: "internal.segment.bytes".into(),
+                value: Some("1".into()),
+                ..Default::default()
+            },
+        ])
         .await;
         broker_handle.wait_until_partition_present(TOPIC, 0).await;
         tokio::time::timeout(Duration::from_secs(5), async {

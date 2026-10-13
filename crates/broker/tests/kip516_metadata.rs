@@ -4,11 +4,12 @@
 //! carries a nullable name and a topic id on each request row. Kafka's
 //! `KafkaApis.handleTopicMetadataRequest` describes the requested ids when any
 //! row has a non-zero id, and ignores the names.
-use assert2::assert;
-
-use crate::support::{
-    discovery::topic_metadata_request,
-    topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request, metadata_topic},
+use {
+    crate::support::{
+        discovery::topic_metadata_request,
+        topics::{ConfiguredTopicSetup, creatable_topic, create_topic_request, metadata_topic},
+    },
+    assert2::assert,
 };
 mod support;
 
@@ -50,13 +51,10 @@ async fn metadata_unknown_topic_id_returns_unknown_topic_id() {
     let p = support::start().await;
     let bogus = WireUuid(uuid::Uuid::from_u128(0xfeed_face).into_bytes());
 
-    let rows = topic_rows(
-        &p.client,
-        &[TopicRef {
-            name: None,
-            topic_id: bogus,
-        }],
-    )
+    let rows = topic_rows(&p.client, &[TopicRef {
+        name: None,
+        topic_id: bogus,
+    }])
     .await;
 
     assert!(
@@ -83,24 +81,18 @@ async fn metadata_name_and_id_of_different_topics_describes_the_id() {
             .await
             .expect("create topic");
     }
-    let by_name = topic_rows(
-        &p.client,
-        &[TopicRef {
-            name: Some("m_b"),
-            topic_id: WireUuid::ZERO,
-        }],
-    )
+    let by_name = topic_rows(&p.client, &[TopicRef {
+        name: Some("m_b"),
+        topic_id: WireUuid::ZERO,
+    }])
     .await;
     let id_b = by_name[0].topic_id;
 
     // The row names "m_a" but carries m_b's id. Kafka uses the id.
-    let by_id = topic_rows(
-        &p.client,
-        &[TopicRef {
-            name: Some("m_a"),
-            topic_id: id_b,
-        }],
-    )
+    let by_id = topic_rows(&p.client, &[TopicRef {
+        name: Some("m_a"),
+        topic_id: id_b,
+    }])
     .await;
 
     assert!(by_id == by_name);

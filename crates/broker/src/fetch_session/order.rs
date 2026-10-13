@@ -28,12 +28,13 @@
 //! order, and a test drives the order with a
 //! [`qubit_clock::ManualMonotonicClock`] instead of a sleep.
 
-use std::{
-    collections::{BTreeSet, HashMap},
-    time::Duration,
+use {
+    super::epoch::FetchSessionId,
+    std::{
+        collections::{BTreeSet, HashMap},
+        time::Duration,
+    },
 };
-
-use super::epoch::FetchSessionId;
 
 /// Kafka's `KafkaBroker.MIN_INCREMENTAL_FETCH_SESSION_EVICTION_MS`: how long a
 /// session has to sit unused, or how old a session has to be, before a newcomer
@@ -116,15 +117,12 @@ impl SessionOrder {
         size: usize,
         now: Duration,
     ) {
-        self.index(
-            id,
-            Entry {
-                privileged,
-                created: now,
-                last_used: now,
-                size,
-            },
-        );
+        self.index(id, Entry {
+            privileged,
+            created: now,
+            last_used: now,
+            size,
+        });
     }
 
     /// Records a use of session `id` at `now`, when it holds `size`
@@ -143,9 +141,7 @@ impl SessionOrder {
 
     /// Drops `id` from the index. Called for both an eviction and a
     /// client-requested close.
-    pub(super) fn remove(&mut self, id: FetchSessionId) {
-        self.unindex(id);
-    }
+    pub(super) fn remove(&mut self, id: FetchSessionId) { self.unindex(id); }
 
     /// The session that a newcomer of this privilege and size may displace at
     /// `now`, or `None` when it may displace nothing and the allocation has to
@@ -210,9 +206,10 @@ impl SessionOrder {
 
 #[cfg(test)]
 mod tests {
-    use assert2::{assert, check};
-
-    use super::*;
+    use {
+        super::*,
+        assert2::{assert, check},
+    };
 
     const SECOND: Duration = Duration::from_secs(1);
 

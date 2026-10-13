@@ -7,18 +7,18 @@
 
 mod support;
 
-use std::time::Duration;
-
-use assert2::assert;
-use bytes::Bytes;
-use krabka_client_core::Client;
-use krabka_protocol::owned::{
-    join_group_request::JoinGroupRequest, join_group_response::JoinGroupResponse,
-};
-
-use crate::support::{
-    classic::{ClassicJoinSetup, ClassicTimeouts, classic_join_request, join_protocol},
-    client::connect_owned,
+use {
+    crate::support::{
+        classic::{ClassicJoinSetup, ClassicTimeouts, classic_join_request, join_protocol},
+        client::connect_owned,
+    },
+    assert2::assert,
+    bytes::Bytes,
+    krabka_client_core::Client,
+    krabka_protocol::owned::{
+        join_group_request::JoinGroupRequest, join_group_response::JoinGroupResponse,
+    },
+    std::time::Duration,
 };
 
 // Kafka error codes consumed by these tests.
@@ -63,9 +63,7 @@ struct ProposedProtocol<'a> {
 }
 
 impl<'a> ProposedProtocol<'a> {
-    const fn new(name: &'a str, metadata: &'a [u8]) -> Self {
-        Self { name, metadata }
-    }
+    const fn new(name: &'a str, metadata: &'a [u8]) -> Self { Self { name, metadata } }
 }
 
 fn join_group_request(setup: ProtocolJoinSetup<'_>) -> JoinGroupRequest {
@@ -171,24 +169,20 @@ async fn empty_intersection_returns_inconsistent_group_protocol() {
     let (handle, bootstrap, _tempdir) = start_broker().await;
     let group_id = "cg-empty-intersection";
 
-    let [resp_a, resp_b] = race_consumer_joins(
-        &bootstrap,
-        group_id,
-        [
-            RacingMember {
-                client_id: "member-a",
-                protocols: RANGE_ONLY,
-                timeout_context: "member A second JoinGroup timed out",
-                join_context: "member A task panic",
-            },
-            RacingMember {
-                client_id: "member-b",
-                protocols: COOPERATIVE_ONLY,
-                timeout_context: "member B second JoinGroup timed out",
-                join_context: "member B task panic",
-            },
-        ],
-    )
+    let [resp_a, resp_b] = race_consumer_joins(&bootstrap, group_id, [
+        RacingMember {
+            client_id: "member-a",
+            protocols: RANGE_ONLY,
+            timeout_context: "member A second JoinGroup timed out",
+            join_context: "member A task panic",
+        },
+        RacingMember {
+            client_id: "member-b",
+            protocols: COOPERATIVE_ONLY,
+            timeout_context: "member B second JoinGroup timed out",
+            join_context: "member B task panic",
+        },
+    ])
     .await;
     handle.shutdown().await;
 
@@ -209,30 +203,26 @@ async fn vote_picks_cooperative_when_majority() {
     let (handle, bootstrap, _tempdir) = start_broker().await;
     let group_id = "cg-vote-cooperative";
 
-    let [resp_a, resp_b, resp_c] = race_consumer_joins(
-        &bootstrap,
-        group_id,
-        [
-            RacingMember {
-                client_id: "member-a",
-                protocols: COOPERATIVE_FIRST,
-                timeout_context: "member A second JoinGroup timed out",
-                join_context: "member A task panic",
-            },
-            RacingMember {
-                client_id: "member-b",
-                protocols: COOPERATIVE_FIRST,
-                timeout_context: "member B second JoinGroup timed out",
-                join_context: "member B task panic",
-            },
-            RacingMember {
-                client_id: "member-c",
-                protocols: RANGE_FIRST,
-                timeout_context: "member C second JoinGroup timed out",
-                join_context: "member C task panic",
-            },
-        ],
-    )
+    let [resp_a, resp_b, resp_c] = race_consumer_joins(&bootstrap, group_id, [
+        RacingMember {
+            client_id: "member-a",
+            protocols: COOPERATIVE_FIRST,
+            timeout_context: "member A second JoinGroup timed out",
+            join_context: "member A task panic",
+        },
+        RacingMember {
+            client_id: "member-b",
+            protocols: COOPERATIVE_FIRST,
+            timeout_context: "member B second JoinGroup timed out",
+            join_context: "member B task panic",
+        },
+        RacingMember {
+            client_id: "member-c",
+            protocols: RANGE_FIRST,
+            timeout_context: "member C second JoinGroup timed out",
+            join_context: "member C task panic",
+        },
+    ])
     .await;
     handle.shutdown().await;
 
@@ -257,24 +247,20 @@ async fn vote_ties_broken_lexicographically() {
     let group_id = "cg-tie";
 
     // One TCP connection per racing member.
-    let [resp_a, resp_b] = race_consumer_joins(
-        &bootstrap,
-        group_id,
-        [
-            RacingMember {
-                client_id: "member-a",
-                protocols: RANGE_FIRST,
-                timeout_context: "member A second JoinGroup timed out",
-                join_context: "member A task panic",
-            },
-            RacingMember {
-                client_id: "member-b",
-                protocols: COOPERATIVE_FIRST,
-                timeout_context: "member B second JoinGroup timed out",
-                join_context: "member B task panic",
-            },
-        ],
-    )
+    let [resp_a, resp_b] = race_consumer_joins(&bootstrap, group_id, [
+        RacingMember {
+            client_id: "member-a",
+            protocols: RANGE_FIRST,
+            timeout_context: "member A second JoinGroup timed out",
+            join_context: "member A task panic",
+        },
+        RacingMember {
+            client_id: "member-b",
+            protocols: COOPERATIVE_FIRST,
+            timeout_context: "member B second JoinGroup timed out",
+            join_context: "member B task panic",
+        },
+    ])
     .await;
     handle.shutdown().await;
 
@@ -297,12 +283,9 @@ async fn vote_ties_broken_lexicographically() {
 async fn single_member_picks_its_first_protocol() {
     let (handle, bootstrap, _tempdir) = start_broker().await;
     let client = connect_client(&bootstrap, "single-member").await;
-    let resp = full_join(
-        &client,
-        "cg-single",
-        "consumer",
-        &[ProposedProtocol::new("range", b"")],
-    )
+    let resp = full_join(&client, "cg-single", "consumer", &[ProposedProtocol::new(
+        "range", b"",
+    )])
     .await;
     handle.shutdown().await;
 
@@ -329,12 +312,9 @@ async fn protocol_type_mismatch_rejected() {
 
     // Member A: full two-step, completes the rebalance. After this the
     // group has `protocol_type = Some("consumer")` and is Stable.
-    let resp_a = full_join(
-        &client_a,
-        group_id,
-        "consumer",
-        &[ProposedProtocol::new("range", b"")],
-    )
+    let resp_a = full_join(&client_a, group_id, "consumer", &[ProposedProtocol::new(
+        "range", b"",
+    )])
     .await;
     assert!(
         resp_a.error_code == ERR_NONE,

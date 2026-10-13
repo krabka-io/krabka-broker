@@ -25,21 +25,24 @@ mod topic_admin;
 /// broker reads when it looks the mutation quota up.
 const CLIENT_ID: &str = "krabka-mutation-quota-test";
 
-use assert2::{assert, check};
-use krabka_metadata::AclOperation;
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Integration tests
 // ─────────────────────────────────────────────────────────────────────────────
-use crate::support::client::metric_value;
-use crate::{
-    cluster::start_single_broker_sasl_plaintext_with_users,
-    kafka_wire::{
-        PlainAuthenticationSetup,
-        quotas::{QuotaEntity, QuotaValue, UserQuotaSetup, alter_user_quota},
+use {
+    crate::{
+        cluster::start_single_broker_sasl_plaintext_with_users,
+        kafka_wire::{
+            PlainAuthenticationSetup,
+            quotas::{QuotaEntity, QuotaValue, UserQuotaSetup, alter_user_quota},
+        },
+        support::{
+            acl::{ClusterAclSetup, TopicAclSetup, cluster_acl_record, topic_acl_record},
+            client::metric_value,
+        },
+        topic_admin::{TopicMutationResult, drive_create_topics_sasl, drive_delete_topics_sasl},
     },
-    support::acl::{ClusterAclSetup, TopicAclSetup, cluster_acl_record, topic_acl_record},
-    topic_admin::{TopicMutationResult, drive_create_topics_sasl, drive_delete_topics_sasl},
+    assert2::{assert, check},
+    krabka_metadata::AclOperation,
 };
 
 /// Wait until the `controller_mutation_rate` quota is visible in the broker's
@@ -56,15 +59,12 @@ async fn wait_for_mutation_quota_in_image(handle: &krabka_broker::BrokerHandle) 
 
 /// Install Alice's shared mutation quota and return its complete wire response.
 async fn set_controller_mutation_quota(addr: std::net::SocketAddr) -> Vec<(QuotaEntity, i16)> {
-    alter_user_quota(
-        addr,
-        UserQuotaSetup {
-            authentication: PlainAuthenticationSetup::admin(CLIENT_ID),
-            key: "controller_mutation_rate",
-            value: QuotaValue(2.0),
-            ..Default::default()
-        },
-    )
+    alter_user_quota(addr, UserQuotaSetup {
+        authentication: PlainAuthenticationSetup::admin(CLIENT_ID),
+        key: "controller_mutation_rate",
+        value: QuotaValue(2.0),
+        ..Default::default()
+    })
     .await
 }
 
@@ -73,10 +73,10 @@ async fn set_controller_mutation_quota(addr: std::net::SocketAddr) -> Vec<(Quota
 /// remains.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn controller_mutation_rate_throttles_create_topics() {
-    let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users(
-        "admin",
-        &[("admin", "admin-secret"), ("alice", "alice-secret")],
-    )
+    let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users("admin", &[
+        ("admin", "admin-secret"),
+        ("alice", "alice-secret"),
+    ])
     .await;
 
     // Seed an ACL granting alice Cluster Create — this also disables the
@@ -149,10 +149,10 @@ async fn unthrottled_create_topics_unaffected() {
 /// alice. Alice deletes. Assert `throttle_time_ms` > 0.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn controller_mutation_rate_throttles_delete_topics() {
-    let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users(
-        "admin",
-        &[("admin", "admin-secret"), ("alice", "alice-secret")],
-    )
+    let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users("admin", &[
+        ("admin", "admin-secret"),
+        ("alice", "alice-secret"),
+    ])
     .await;
 
     // Seed a dummy ACL to disable the compat shim (allow-all when no ACLs present).

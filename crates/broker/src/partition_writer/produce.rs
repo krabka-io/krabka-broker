@@ -5,23 +5,23 @@
 //! mutation and the only one that has to reconcile a diskless offset
 //! assignment with the durable watermark, so it gets its own module.
 
-use std::sync::{Arc, Mutex};
-
-use krabka_log::Log;
-use krabka_raft::RaftError;
-use tokio::sync::{Notify, mpsc};
-
-use super::{
-    WriterPartition,
-    append::{run_produce_append_batch, run_produce_append_batch_at},
-    storage::{StorageStatus, flag_storage_failure, storage_failure_error},
-};
-use crate::{
-    error::BrokerError,
-    partition::{ProduceData, ProduceJob, WriterMessage},
-    producer_state::ProducerState,
-    replica_state::ReplicaState,
-    wal::{OffsetSequencer, SharedWal},
+use {
+    super::{
+        WriterPartition,
+        append::{run_produce_append_batch, run_produce_append_batch_at},
+        storage::{StorageStatus, flag_storage_failure, storage_failure_error},
+    },
+    crate::{
+        error::BrokerError,
+        partition::{ProduceData, ProduceJob, WriterMessage},
+        producer_state::ProducerState,
+        replica_state::ReplicaState,
+        wal::{OffsetSequencer, SharedWal},
+    },
+    krabka_log::Log,
+    krabka_raft::RaftError,
+    std::sync::{Arc, Mutex},
+    tokio::sync::{Notify, mpsc},
 };
 
 /// The first queued produce job and the most jobs one group may drain.

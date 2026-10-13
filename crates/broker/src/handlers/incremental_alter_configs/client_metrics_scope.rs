@@ -3,14 +3,15 @@
 //! subscription's current override map and stages a `V1ClientMetricsConfig`
 //! record with the merged map.
 
-use krabka_metadata::{ClientMetricsConfigRecord, MetadataImage, MetadataRecord};
-use krabka_protocol::owned::{
-    incremental_alter_configs_request::AlterConfigsResource,
-    incremental_alter_configs_response::AlterConfigsResourceResponse,
+use {
+    super::{OP_APPEND, OP_DELETE, OP_SET, OP_SUBTRACT},
+    crate::{client_metrics::config::validate, codes},
+    krabka_metadata::{ClientMetricsConfigRecord, MetadataImage, MetadataRecord},
+    krabka_protocol::owned::{
+        incremental_alter_configs_request::AlterConfigsResource,
+        incremental_alter_configs_response::AlterConfigsResourceResponse,
+    },
 };
-
-use super::{OP_APPEND, OP_DELETE, OP_SET, OP_SUBTRACT};
-use crate::{client_metrics::config::validate, codes};
 
 /// Merge per-key ops into a client-metrics subscription's override map and
 /// stage a `V1ClientMetricsConfig` record, as Kafka's
@@ -77,12 +78,13 @@ pub(super) fn handle_client_metrics_scoped(
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
-    use krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig;
-
-    use super::*;
-    use crate::handlers::incremental_alter_configs::{
-        RESOURCE_TYPE_CLIENT_METRICS, test_support::Handled,
+    use {
+        super::*,
+        crate::handlers::incremental_alter_configs::{
+            RESOURCE_TYPE_CLIENT_METRICS, test_support::Handled,
+        },
+        assert2::check,
+        krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig,
     };
 
     /// One alteration: key, operation and value.
@@ -269,14 +271,11 @@ mod tests {
             let Handled {
                 response,
                 records: to_submit,
-            } = run(
-                "sub-a",
-                &[Op {
-                    key,
-                    operation: op,
-                    value,
-                }],
-            );
+            } = run("sub-a", &[Op {
+                key,
+                operation: op,
+                value,
+            }]);
             check!(response == expected, "{key} op {op} = {value:?}");
             check!(to_submit.is_empty(), "{key} op {op} = {value:?}");
         }
@@ -371,14 +370,11 @@ mod tests {
         let Handled {
             response,
             records: to_submit,
-        } = run(
-            "",
-            &[Op {
-                key: "interval.ms",
-                operation: OP_SET,
-                value: Some("60000"),
-            }],
-        );
+        } = run("", &[Op {
+            key: "interval.ms",
+            operation: OP_SET,
+            value: Some("60000"),
+        }]);
         check!(response == refused(codes::INVALID_REQUEST, "Subscription name can't be empty"));
         check!(to_submit.is_empty());
     }

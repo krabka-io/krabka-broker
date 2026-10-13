@@ -7,30 +7,31 @@
 //! client messages the way Kafka's `ScramSaslClient` does, extensions and
 //! authorization id included.
 
-use assert2::{assert, check};
-use base64::{Engine, engine::general_purpose::STANDARD as B64};
-use krabka_metadata::{DelegationTokenRecord, MetadataRecord, ScramCredentialRecord};
-use krabka_protocol::owned::{
-    sasl_authenticate_request::SaslAuthenticateRequest,
-    sasl_authenticate_response::SaslAuthenticateResponse,
-};
-use krabka_security::{
-    AuthMethod, KafkaPrincipal, Principal, SaslMechanism, SecretBytes, compute_token_hmac,
-    scram::hash_scram_password_with_salt,
-};
-use pbkdf2::{
-    hmac::{Hmac, KeyInit, Mac},
-    sha2::{Digest, Sha256, Sha512},
-};
-
-use super::{ClientFirst, ScramExtension, decode_sasl_name};
-use crate::{
-    network::auth::{
-        ConnectionAuth, handle_authenticate_scram, state::SaslExchange,
-        test_support::assert_failed_authenticate_response,
+use {
+    super::{ClientFirst, ScramExtension, decode_sasl_name},
+    crate::{
+        network::auth::{
+            ConnectionAuth, handle_authenticate_scram, state::SaslExchange,
+            test_support::assert_failed_authenticate_response,
+        },
+        test_support::FakeMetadataSource,
+        time_util::now_ms,
     },
-    test_support::FakeMetadataSource,
-    time_util::now_ms,
+    assert2::{assert, check},
+    base64::{Engine, engine::general_purpose::STANDARD as B64},
+    krabka_metadata::{DelegationTokenRecord, MetadataRecord, ScramCredentialRecord},
+    krabka_protocol::owned::{
+        sasl_authenticate_request::SaslAuthenticateRequest,
+        sasl_authenticate_response::SaslAuthenticateResponse,
+    },
+    krabka_security::{
+        AuthMethod, KafkaPrincipal, Principal, SaslMechanism, SecretBytes, compute_token_hmac,
+        scram::hash_scram_password_with_salt,
+    },
+    pbkdf2::{
+        hmac::{Hmac, KeyInit, Mac},
+        sha2::{Digest, Sha256, Sha512},
+    },
 };
 
 krabka_macros::scram_client_proof_fixture!(scram_client_proof);
@@ -40,9 +41,7 @@ const USER_PASSWORD: &str = "user-password";
 const TOKEN_SECRET_KEY: &[u8] = b"token-secret-key";
 const TOKEN_OWNER: &str = "owner";
 
-fn token_secret() -> SecretBytes {
-    SecretBytes::new(TOKEN_SECRET_KEY.to_vec())
-}
+fn token_secret() -> SecretBytes { SecretBytes::new(TOKEN_SECRET_KEY.to_vec()) }
 
 /// A client and the client-first message it wrote.
 struct FirstMessage {
@@ -168,9 +167,7 @@ fn token_password_under(secret_key: &[u8], token_id: &str) -> Vec<u8> {
         .into_bytes()
 }
 
-fn token_password(token_id: &str) -> Vec<u8> {
-    token_password_under(TOKEN_SECRET_KEY, token_id)
-}
+fn token_password(token_id: &str) -> Vec<u8> { token_password_under(TOKEN_SECRET_KEY, token_id) }
 
 fn authenticate(
     source: &FakeMetadataSource,
@@ -619,20 +616,16 @@ fn client_first_parses_as_kafka_does() {
         },
         ParseCase {
             message: "n,,n=tok,r=abc,tokenauth=true,other=x",
-            expected: parsed(
-                None,
-                "tok",
-                vec![
-                    ScramExtension {
-                        key: "tokenauth",
-                        value: "true",
-                    },
-                    ScramExtension {
-                        key: "other",
-                        value: "x",
-                    },
-                ],
-            ),
+            expected: parsed(None, "tok", vec![
+                ScramExtension {
+                    key: "tokenauth",
+                    value: "true",
+                },
+                ScramExtension {
+                    key: "other",
+                    value: "x",
+                },
+            ]),
         },
         ParseCase {
             message: "n,,n=a=2Cb=3Dc,r=abc",

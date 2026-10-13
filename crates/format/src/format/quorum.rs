@@ -7,16 +7,16 @@
 //! `id@host:port:directory-id` parse the explicit form needs, live here rather
 //! than in the run that writes their result to the checkpoint.
 
-use std::collections::BTreeSet;
-
-use krabka_metadata::{
-    FeatureLevelRecord, KRaftVersionRange, Voter, VoterEndpoint, VoterSet,
-    metadata_version::KRAFT_VERSION_FEATURE,
+use {
+    super::args::FormatArgs,
+    crate::ids::DirectoryId,
+    krabka_metadata::{
+        FeatureLevelRecord, KRaftVersionRange, Voter, VoterEndpoint, VoterSet,
+        metadata_version::KRAFT_VERSION_FEATURE,
+    },
+    std::collections::BTreeSet,
+    uuid::Uuid,
 };
-use uuid::Uuid;
-
-use super::args::FormatArgs;
-use crate::ids::DirectoryId;
 
 /// Resolve the KIP-853 format mode and validate its kraft.version selection.
 ///
@@ -164,8 +164,7 @@ pub(super) fn build_initial_voters(
 #[cfg(test)]
 mod tests {
 
-    use super::*;
-    use crate::Cli;
+    use {super::*, crate::Cli};
 
     #[test]
     fn parses_initial_controller_spec() {

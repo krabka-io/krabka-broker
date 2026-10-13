@@ -6,22 +6,23 @@
 //! partition count and replication factor shape the topic that is created and
 //! the partition a key is routed to.
 
-use assert2::{assert, check};
-use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse;
-
-use super::*;
-use crate::{
-    authorizer::AuthorizationResult,
-    broker::{Broker, BrokerHandle},
-    coordinator::bootstrap::OFFSETS_TOPIC,
-    handlers::test_support::single_replica_partition,
-    share_coordinator::bootstrap::TOPIC,
-    test_support::{
-        DenyAll, KafkaErrorCode, broker_registration, dispatch_wire, peer, principal,
-        start_broker_no_audit, start_broker_no_audit_with,
+use {
+    super::*,
+    crate::{
+        authorizer::AuthorizationResult,
+        broker::{Broker, BrokerHandle},
+        coordinator::bootstrap::OFFSETS_TOPIC,
+        handlers::test_support::single_replica_partition,
+        share_coordinator::bootstrap::TOPIC,
+        test_support::{
+            DenyAll, KafkaErrorCode, broker_registration, dispatch_wire, peer, principal,
+            start_broker_no_audit, start_broker_no_audit_with,
+        },
+        txn::bootstrap::TOPIC as TXN_TOPIC,
     },
-    txn::bootstrap::TOPIC as TXN_TOPIC,
+    assert2::{assert, check},
+    krabka_metadata::{AclOperation, ResourceType},
+    krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse,
 };
 
 #[derive(Clone, Copy, Default)]
@@ -515,10 +516,10 @@ fn resolve_image() -> krabka_metadata::MetadataImage {
     }));
     for (node, endpoints) in [
         (1, vec![endpoint("EXTERNAL", "one")]),
-        (
-            2,
-            vec![endpoint("INTERNAL", "two-in"), endpoint("EXTERNAL", "two")],
-        ),
+        (2, vec![
+            endpoint("INTERNAL", "two-in"),
+            endpoint("EXTERNAL", "two"),
+        ]),
         (3, vec![endpoint("INTERNAL", "three-in")]),
     ] {
         image.apply(&MetadataRecord::V1BrokerRegistration(

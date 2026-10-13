@@ -2,23 +2,24 @@
 //! with: the advertised API table, the supported and finalized feature ranges,
 //! and the request checks of Kafka's `ControllerApis.handleApiVersionsRequest`.
 
-use bytes::{Bytes, BytesMut};
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{
-        api_versions_request::{self, ApiVersionsRequest},
-        api_versions_response::{ApiVersion as ApiVersionEntry, ApiVersionsResponse},
-    },
-};
-
-use self::table::CONTROLLER_LISTENER_APIS;
 pub use self::{
     client_software::is_valid_client_info,
     features::{finalized_feature_keys, supported_feature_key, supported_feature_keys},
 };
-use crate::{
-    ControllerAdminRouter, ControllerApiVersion, UnstableApiVersions, UnstableFeatureVersions,
-    error::RaftError, kafka_4_3_1_max, kraft::KraftController,
+use {
+    self::table::CONTROLLER_LISTENER_APIS,
+    crate::{
+        ControllerAdminRouter, ControllerApiVersion, UnstableApiVersions, UnstableFeatureVersions,
+        error::RaftError, kafka_4_3_1_max, kraft::KraftController,
+    },
+    bytes::{Bytes, BytesMut},
+    krabka_protocol::{
+        Decode, Encode,
+        owned::{
+            api_versions_request::{self, ApiVersionsRequest},
+            api_versions_response::{ApiVersion as ApiVersionEntry, ApiVersionsResponse},
+        },
+    },
 };
 
 mod client_software;
@@ -265,14 +266,15 @@ pub(super) fn api_versions_response_body(req_version: i16, view: ApiVersionsView
 
 #[cfg(test)]
 mod tests {
-    use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
-    use krabka_protocol::Decode;
-    use uuid::Uuid;
-
-    use super::*;
-    use crate::{
-        ControllerAdminRequest, ControllerAdminRouteFuture, ControllerAdminRouter,
-        ControllerApiVersion, LATEST_PRODUCTION_METADATA_VERSION, test_support::feature_image,
+    use {
+        super::*,
+        crate::{
+            ControllerAdminRequest, ControllerAdminRouteFuture, ControllerAdminRouter,
+            ControllerApiVersion, LATEST_PRODUCTION_METADATA_VERSION, test_support::feature_image,
+        },
+        krabka_metadata::{FeatureLevelRecord, MetadataRecord},
+        krabka_protocol::Decode,
+        uuid::Uuid,
     };
 
     /// The view a listener with no Admin router and the default unstable
@@ -360,13 +362,10 @@ mod tests {
         }
 
         let image = krabka_metadata::MetadataImage::new(Uuid::nil());
-        let body = super::api_versions_response_body(
-            4,
-            ApiVersionsView {
-                admin_router: Some(&HeartbeatRouter),
-                ..view(&image, -1)
-            },
-        );
+        let body = super::api_versions_response_body(4, ApiVersionsView {
+            admin_router: Some(&HeartbeatRouter),
+            ..view(&image, -1)
+        });
         let resp = ApiVersionsResponse::decode(&mut &body[..], 4).expect("decode body");
 
         let heartbeat = resp
@@ -685,9 +684,11 @@ mod tests {
     /// epoch is the metadata offset the view carries.
     #[test]
     fn feature_fields_match_kafka_on_the_controller_listener() {
-        use krabka_metadata::metadata_version::METADATA_VERSION_MIN;
-        use krabka_protocol::owned::api_versions_response::{
-            FinalizedFeatureKey, SupportedFeatureKey,
+        use {
+            krabka_metadata::metadata_version::METADATA_VERSION_MIN,
+            krabka_protocol::owned::api_versions_response::{
+                FinalizedFeatureKey, SupportedFeatureKey,
+            },
         };
 
         struct Row<'a> {

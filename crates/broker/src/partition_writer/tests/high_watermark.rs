@@ -2,13 +2,14 @@
 //! append, including the replication factors that must leave it where it
 //! was.
 
-use assert2::assert;
-use tempfile::tempdir;
-
-use super::*;
-use crate::{
-    partition_writer::test_support::{ObservedWriter, observed_writer, sample_batch},
-    test_support::{EmptyPayloadBatchSetup, RecordCount},
+use {
+    super::*,
+    crate::{
+        partition_writer::test_support::{ObservedWriter, observed_writer, sample_batch},
+        test_support::{EmptyPayloadBatchSetup, RecordCount},
+    },
+    assert2::assert,
+    tempfile::tempdir,
 };
 
 /// A running writer, its sender, and the directory that backs its log.
@@ -22,15 +23,10 @@ async fn fixture(isr: &[u64]) -> Fixture {
     let dir = tempdir().expect("tempdir");
     let log = open_default_log(dir.path());
     let (tx, rx) = mpsc::channel(1);
-    let observed = observed_writer(
-        dir.path(),
-        log,
-        rx,
-        WriterOptions {
-            replica_state: replica_with_isr(isr).await,
-            ..Default::default()
-        },
-    );
+    let observed = observed_writer(dir.path(), log, rx, WriterOptions {
+        replica_state: replica_with_isr(isr).await,
+        ..Default::default()
+    });
     Fixture {
         _dir: dir,
         tx,

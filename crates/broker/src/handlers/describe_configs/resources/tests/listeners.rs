@@ -3,16 +3,17 @@
 //! `listener.security.protocol.map`, `controller.listener.names` and
 //! `inter.broker.listener.name`.
 
-use krabka_security::ListenerProtocol::{self, Plaintext, SaslPlaintext, SaslSsl, Ssl};
-
-use super::*;
-use crate::{
-    SslPrincipalMapper,
-    config::{
-        BrokerConfig, ListenerSpec,
-        NodeRole::{self, Broker, Controller},
+use {
+    super::*,
+    crate::{
+        SslPrincipalMapper,
+        config::{
+            BrokerConfig, ListenerSpec,
+            NodeRole::{self, Broker, Controller},
+        },
+        file_config::FileConfig,
     },
-    file_config::FileConfig,
+    krabka_security::ListenerProtocol::{self, Plaintext, SaslPlaintext, SaslSsl, Ssl},
 };
 
 /// The five keys, in the name order that `describe_one` reports them in.

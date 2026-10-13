@@ -3,17 +3,17 @@
 //! the epoch bump of a fence, and the target assignment that a group whose
 //! epoch is ahead of its target computes.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
-
-use krabka_protocol::primitives::uuid::Uuid;
-
-use super::assignor::{
-    Assignor, GroupSpec, MemberSubscription, SubscriptionShape, TopicIdPartition, TopicMetadata,
-    subscription_type,
-};
-use crate::coordinator::unified::{
-    consumer_state::{GroupState, MemberState},
-    topic_hash,
+use {
+    super::assignor::{
+        Assignor, GroupSpec, MemberSubscription, SubscriptionShape, TopicIdPartition,
+        TopicMetadata, subscription_type,
+    },
+    crate::coordinator::unified::{
+        consumer_state::{GroupState, MemberState},
+        topic_hash,
+    },
+    krabka_protocol::primitives::uuid::Uuid,
+    std::collections::{BTreeSet, HashMap, HashSet},
 };
 
 #[derive(Debug, Clone, Default)]
@@ -262,16 +262,15 @@ fn membership_topic_ids(group: &GroupState, input: &ReconcileInput) -> HashSet<U
 
 #[cfg(test)]
 mod tests {
-    use assert2::{assert, check};
-
-    use super::{super::assignor::UniformAssignor, *};
-    use crate::coordinator::unified::consumer_state::{
-        MemberState, ResolvedRegularExpression, test_support::subscribed_member,
+    use {
+        super::{super::assignor::UniformAssignor, *},
+        crate::coordinator::unified::consumer_state::{
+            MemberState, ResolvedRegularExpression, test_support::subscribed_member,
+        },
+        assert2::{assert, check},
     };
 
-    fn fresh_member(id: &str, topic: &str) -> MemberState {
-        subscribed_member(id, &[topic])
-    }
+    fn fresh_member(id: &str, topic: &str) -> MemberState { subscribed_member(id, &[topic]) }
 
     /// A snapshot that holds one topic, and the id of that topic.
     struct SingleTopic {
@@ -399,14 +398,11 @@ mod tests {
     /// Records that `regex` resolved to `topics` in `group`, as a heartbeat
     /// that resolved it does.
     fn resolve(group: &mut GroupState, regex: &str, topics: &[&str]) {
-        group.set_resolved_regex(
-            regex.to_owned(),
-            ResolvedRegularExpression {
-                topics: topics.iter().map(|topic| (*topic).to_owned()).collect(),
-                version: 1,
-                timestamp_ms: 1,
-            },
-        );
+        group.set_resolved_regex(regex.to_owned(), ResolvedRegularExpression {
+            topics: topics.iter().map(|topic| (*topic).to_owned()).collect(),
+            version: 1,
+            timestamp_ms: 1,
+        });
     }
 
     /// The topics that `member_id` is assigned, by name.
@@ -621,14 +617,11 @@ mod tests {
         vec![
             (
                 "nothing changes",
-                snapshot(
-                    base,
-                    &[RackEntry {
-                        id: 1,
-                        partition: 0,
-                        rack: "rack-a",
-                    }],
-                ),
+                snapshot(base, &[RackEntry {
+                    id: 1,
+                    partition: 0,
+                    rack: "rack-a",
+                }]),
                 false,
             ),
             (
@@ -745,14 +738,11 @@ mod tests {
             ),
             (
                 "a partition of a subscribed topic moves to another rack",
-                snapshot(
-                    base,
-                    &[RackEntry {
-                        id: 1,
-                        partition: 0,
-                        rack: "rack-b",
-                    }],
-                ),
+                snapshot(base, &[RackEntry {
+                    id: 1,
+                    partition: 0,
+                    rack: "rack-b",
+                }]),
                 true,
             ),
             (
@@ -790,14 +780,11 @@ mod tests {
         resolve(&mut g, "^pay.*", &["payments"]);
         let before = metadata_hash(
             &g,
-            &snapshot(
-                BASE,
-                &[RackEntry {
-                    id: 1,
-                    partition: 0,
-                    rack: "rack-a",
-                }],
-            ),
+            &snapshot(BASE, &[RackEntry {
+                id: 1,
+                partition: 0,
+                rack: "rack-a",
+            }]),
         );
         let rows = hash_rows();
         let mut found = Vec::new();

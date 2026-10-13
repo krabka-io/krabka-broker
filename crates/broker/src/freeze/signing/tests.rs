@@ -5,18 +5,18 @@
 //! configured key made. Every fixture builds an unsigned record first and signs
 //! it afterwards, which is the order an operator's own command follows.
 
-use std::path::PathBuf;
-
-use krabka_metadata::{PatternType, TopicFreezeRecord};
-use krabka_units::minutes;
-use ring::signature::Ed25519KeyPair;
-use tempfile::TempDir;
-use uuid::Uuid;
-
-use super::{FreezeSignatureCheck, freeze_signing_bytes};
-use crate::{
-    operator_keys::{OperatorKeyEntry, OperatorKeys},
-    test_support::{OperatorKeyFileSetup, ed25519_public_key_file},
+use {
+    super::{FreezeSignatureCheck, freeze_signing_bytes},
+    crate::{
+        operator_keys::{OperatorKeyEntry, OperatorKeys},
+        test_support::{OperatorKeyFileSetup, ed25519_public_key_file},
+    },
+    krabka_metadata::{PatternType, TopicFreezeRecord},
+    krabka_units::minutes,
+    ring::signature::Ed25519KeyPair,
+    std::path::PathBuf,
+    tempfile::TempDir,
+    uuid::Uuid,
 };
 
 mod accepted;
@@ -49,13 +49,10 @@ struct FreshKey {
 }
 
 fn fresh_key(dir: &TempDir, name: &str) -> FreshKey {
-    let (pair, path) = ed25519_public_key_file(
-        dir.path(),
-        OperatorKeyFileSetup {
-            name,
-            ..Default::default()
-        },
-    );
+    let (pair, path) = ed25519_public_key_file(dir.path(), OperatorKeyFileSetup {
+        name,
+        ..Default::default()
+    });
     FreshKey { pair, path }
 }
 

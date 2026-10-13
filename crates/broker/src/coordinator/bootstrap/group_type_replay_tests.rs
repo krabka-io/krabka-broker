@@ -8,18 +8,19 @@
 //! puts a classic group in place of whatever held the id, and its tombstone
 //! removes the group of any type.
 
-use assert2::check;
-
-use super::test_support::{LogRecord, ReplayedCoordinator, classic_group_record, replay_log};
-use crate::{
-    coordinator::{
-        persistence::{GroupMetadataValue as ClassicGroupMetadataValue, OffsetCommitValue},
-        unified::{
-            persistence_next_gen::{GroupMetadataValue, NextGenKey, encode_key},
-            share::persistence::{ShareGroupKey, ShareGroupMetadataValue, encode_share_key},
+use {
+    super::test_support::{LogRecord, ReplayedCoordinator, classic_group_record, replay_log},
+    crate::{
+        coordinator::{
+            persistence::{GroupMetadataValue as ClassicGroupMetadataValue, OffsetCommitValue},
+            unified::{
+                persistence_next_gen::{GroupMetadataValue, NextGenKey, encode_key},
+                share::persistence::{ShareGroupKey, ShareGroupMetadataValue, encode_share_key},
+            },
         },
+        error::BrokerError,
     },
-    error::BrokerError,
+    assert2::check,
 };
 
 /// What the replay holds under group id `g`.

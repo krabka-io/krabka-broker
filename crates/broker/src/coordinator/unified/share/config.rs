@@ -1,7 +1,5 @@
 //! KIP-932 share-group membership configuration.
-use std::time::Duration;
-
-use crate::coordinator::unified::config::DEFAULT_ASSIGNMENT_INTERVAL;
+use {crate::coordinator::unified::config::DEFAULT_ASSIGNMENT_INTERVAL, std::time::Duration};
 
 /// Kafka's `GroupConfig.SHARE_SESSION_TIMEOUT_MS_CONFIG`.
 const KEY_SHARE_SESSION_TIMEOUT_MS: &str = "share.session.timeout.ms";
@@ -105,14 +103,14 @@ impl ShareGroupConfig {
 
 #[cfg(test)]
 mod tests {
-    use std::{borrow::Cow, collections::BTreeMap};
-
-    use assert2::assert;
-
-    use super::*;
-    use crate::coordinator::{
-        test_support::{ConfigEntry, config_map, entry},
-        unified::config::MAX_ASSIGNMENT_INTERVAL,
+    use {
+        super::*,
+        crate::coordinator::{
+            test_support::{ConfigEntry, config_map, entry},
+            unified::config::MAX_ASSIGNMENT_INTERVAL,
+        },
+        assert2::assert,
+        std::{borrow::Cow, collections::BTreeMap},
     };
 
     /// The defaults of the share keys of Kafka 4.3.1's

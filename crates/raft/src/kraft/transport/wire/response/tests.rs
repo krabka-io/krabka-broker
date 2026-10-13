@@ -1,6 +1,7 @@
-use assert2::{assert, check};
-
-use super::*;
+use {
+    super::*,
+    assert2::{assert, check},
+};
 
 /// Kafka's `NOT_LEADER_OR_FOLLOWER`.
 const NOT_LEADER_OR_FOLLOWER: i16 = 6;
@@ -154,30 +155,21 @@ fn fetch_response_round_trips() {
     );
     for (case, answer) in [
         ("served", served.clone()),
-        (
-            "records",
-            FetchAnswer {
-                records: Bytes::from_static(b"\x01\x02\x03"),
-                ..served.clone()
-            },
-        ),
-        (
-            "diverged",
-            FetchAnswer {
-                diverging: Some(LogOffsetMetadata {
-                    offset: 5,
-                    epoch: 1,
-                }),
-                ..served.clone()
-            },
-        ),
-        (
-            "snapshot",
-            FetchAnswer {
-                snapshot_id: Some((42, 3)),
-                ..served.clone()
-            },
-        ),
+        ("records", FetchAnswer {
+            records: Bytes::from_static(b"\x01\x02\x03"),
+            ..served.clone()
+        }),
+        ("diverged", FetchAnswer {
+            diverging: Some(LogOffsetMetadata {
+                offset: 5,
+                epoch: 1,
+            }),
+            ..served.clone()
+        }),
+        ("snapshot", FetchAnswer {
+            snapshot_id: Some((42, 3)),
+            ..served.clone()
+        }),
         (
             "leader without an endpoint",
             fetch_answer(0, leader(Some(2), 5, None)),
@@ -245,15 +237,12 @@ fn a_refused_fetch_is_kafkas_empty_fetch_response() {
                 5,
                 Some(leader_endpoint("controller-2", 9093)),
             )),
-            kafka(
-                2,
-                vec![fetch_resp::NodeEndpoint {
-                    node_id: 2,
-                    host: "controller-2".into(),
-                    port: 9093,
-                    ..Default::default()
-                }],
-            ),
+            kafka(2, vec![fetch_resp::NodeEndpoint {
+                node_id: 2,
+                host: "controller-2".into(),
+                port: 9093,
+                ..Default::default()
+            }]),
         ),
         // `singletonFetchResponse` adds no entry without a leader id.
         (

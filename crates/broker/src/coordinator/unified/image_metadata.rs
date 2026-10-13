@@ -5,10 +5,11 @@
 //! It is the one place where cluster metadata crosses into the coordinator, so
 //! it sits apart from the coordinator state it feeds.
 
-use std::sync::Arc;
-
-use super::{actor::MetadataProvider, assignor::TopicIdPartition, reconciler};
-use crate::metadata_source::MetadataSource;
+use {
+    super::{actor::MetadataProvider, assignor::TopicIdPartition, reconciler},
+    crate::metadata_source::MetadataSource,
+    std::sync::Arc,
+};
 
 /// `MetadataProvider` backed by `krabka_raft::ControllerHandle::current_image()`.
 #[derive(derive_more::Debug)]
@@ -69,12 +70,13 @@ impl MetadataProvider for ImageMetadataProvider {
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
-
-    use super::*;
-    use crate::{
-        coordinator::unified::test_support::{fixed_source, real_uuid},
-        test_support::{InSyncPartitionSetup, broker_registration, in_sync_partition},
+    use {
+        super::*,
+        crate::{
+            coordinator::unified::test_support::{fixed_source, real_uuid},
+            test_support::{InSyncPartitionSetup, broker_registration, in_sync_partition},
+        },
+        assert2::check,
     };
 
     #[test]
@@ -155,9 +157,10 @@ mod tests {
     /// replicas on one rack included.
     #[test]
     fn the_snapshot_hashes_a_topic_as_the_image_does() {
-        use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord, NodeId};
-
-        use crate::coordinator::unified::topic_hash::image_topic_hash;
+        use {
+            crate::coordinator::unified::topic_hash::image_topic_hash,
+            krabka_metadata::{BrokerRegistrationRecord, MetadataRecord, NodeId},
+        };
 
         let mut image = krabka_metadata::MetadataImage::new(real_uuid(9));
         image.apply(&MetadataRecord::V1Topic(krabka_metadata::TopicRecord {

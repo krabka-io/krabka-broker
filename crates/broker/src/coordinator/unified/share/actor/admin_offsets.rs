@@ -1,23 +1,23 @@
 //! Serialized administrative mutations of an empty share group's offsets.
 
-use std::collections::HashMap;
-
-use krabka_log::Offset;
-use krabka_protocol::primitives::uuid::Uuid;
-
-use super::{
-    PendingShareRecords, chrono_now_ms, flush_pending, share_state::TopicImage,
-    state_partition_metadata_from,
-};
-use crate::{
-    codes,
-    coordinator::unified::{
-        GroupCoordinator,
-        assignor::TopicIdPartition,
-        share::state::{IdentifiedTopic, ShareGroupState},
+use {
+    super::{
+        PendingShareRecords, chrono_now_ms, flush_pending, share_state::TopicImage,
+        state_partition_metadata_from,
     },
-    error::BrokerError,
-    share_coordinator::persister_client::SharePersister,
+    crate::{
+        codes,
+        coordinator::unified::{
+            GroupCoordinator,
+            assignor::TopicIdPartition,
+            share::state::{IdentifiedTopic, ShareGroupState},
+        },
+        error::BrokerError,
+        share_coordinator::persister_client::SharePersister,
+    },
+    krabka_log::Offset,
+    krabka_protocol::primitives::uuid::Uuid,
+    std::collections::HashMap,
 };
 
 /// One partition of an `AlterShareGroupOffsets` request whose topic and
@@ -327,21 +327,15 @@ pub(crate) async fn delete_offsets(
             }
         }
         if error_code == codes::NONE {
-            deleted.push((
-                topic_name,
-                DeleteTopicOutcome::Deleted {
-                    topic_id,
-                    partitions,
-                },
-            ));
+            deleted.push((topic_name, DeleteTopicOutcome::Deleted {
+                topic_id,
+                partitions,
+            }));
         } else {
-            failed.push((
-                topic_name,
-                DeleteTopicOutcome::Failed {
-                    topic_id,
-                    error_code,
-                },
-            ));
+            failed.push((topic_name, DeleteTopicOutcome::Failed {
+                topic_id,
+                error_code,
+            }));
         }
     }
 
@@ -370,33 +364,33 @@ pub(crate) async fn delete_offsets(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
-    use assert2::check;
-
-    use super::{DeleteTopicOutcome, ResetPartition, delete_offsets, reset_offsets};
-    use crate::{
-        codes,
-        coordinator::unified::{
-            share::{
-                actor::{
-                    records::PendingShareRecords,
-                    test_support::{
-                        TopicMetadataSetup, make_coordinator, metadata_with_topic,
-                        unavailable_persister_coordinator,
+    use {
+        super::{DeleteTopicOutcome, ResetPartition, delete_offsets, reset_offsets},
+        crate::{
+            codes,
+            coordinator::unified::{
+                share::{
+                    actor::{
+                        records::PendingShareRecords,
+                        test_support::{
+                            TopicMetadataSetup, make_coordinator, metadata_with_topic,
+                            unavailable_persister_coordinator,
+                        },
                     },
+                    persistence::{
+                        DeletingTopic, ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo,
+                    },
+                    state::{ShareGroupState, ShareMemberState, share_partition},
                 },
-                persistence::{
-                    DeletingTopic, ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo,
+                test_support::{
+                    AppendedRecords as Appended, appended_offsets_records as appended,
+                    fixed_source, make_share_persister,
                 },
-                state::{ShareGroupState, ShareMemberState, share_partition},
             },
-            test_support::{
-                AppendedRecords as Appended, appended_offsets_records as appended, fixed_source,
-                make_share_persister,
-            },
+            test_support::PartitionCount,
         },
-        test_support::PartitionCount,
+        assert2::check,
+        std::collections::HashSet,
     };
 
     /// The records of one `ShareGroupStatePartitionMetadata` write of `g`.
@@ -469,16 +463,12 @@ mod tests {
         state.group_epoch = 4;
         state.deleting.insert(topic_id, "t".to_owned());
 
-        let results = reset_offsets(
-            &mut state,
-            &coordinator,
-            vec![ResetPartition {
-                topic_id: topic_uuid,
-                topic_name: "t".to_owned(),
-                partition: 1,
-                start_offset: 42,
-            }],
-        )
+        let results = reset_offsets(&mut state, &coordinator, vec![ResetPartition {
+            topic_id: topic_uuid,
+            topic_name: "t".to_owned(),
+            partition: 1,
+            start_offset: 42,
+        }])
         .await;
 
         check!(results == Ok(vec![codes::COORDINATOR_NOT_AVAILABLE]));
@@ -513,11 +503,10 @@ mod tests {
         )));
         let mut state = ShareGroupState::new("g");
 
-        let outcomes = delete_offsets(
-            &mut state,
-            &coordinator,
-            vec!["t".to_owned(), "missing".to_owned()],
-        )
+        let outcomes = delete_offsets(&mut state, &coordinator, vec![
+            "t".to_owned(),
+            "missing".to_owned(),
+        ])
         .await;
 
         check!(outcomes == Ok(Vec::new()));
@@ -543,13 +532,10 @@ mod tests {
         let request = || vec!["missing".to_owned(), "t".to_owned()];
         let expected_outcomes = vec![
             ("missing".to_owned(), DeleteTopicOutcome::UnknownTopic),
-            (
-                "t".to_owned(),
-                DeleteTopicOutcome::Failed {
-                    topic_id: topic_uuid,
-                    error_code: codes::COORDINATOR_NOT_AVAILABLE,
-                },
-            ),
+            ("t".to_owned(), DeleteTopicOutcome::Failed {
+                topic_id: topic_uuid,
+                error_code: codes::COORDINATOR_NOT_AVAILABLE,
+            }),
         ];
         let deleting = metadata_record(ShareGroupStatePartitionMetadataValue {
             initializing: vec![TopicPartitionsInfo {

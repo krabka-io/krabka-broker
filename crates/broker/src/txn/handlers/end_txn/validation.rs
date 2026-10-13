@@ -3,18 +3,20 @@
 //! the coordinator entry holds. The outcome is either an entry to finalise, the
 //! already-complete answer for an idempotent retry, or a Kafka error code.
 
-use krabka_log::ProducerId;
-use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
-use krabka_protocol::owned::end_txn_request::EndTxnRequest;
-
-use super::state_table::{EndTxnDecision, TableRules, end_txn_decision};
-use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
-    codes,
-    handlers::RequestContext,
-    txn::{
-        coordinator::TxnCoordinator, state::TxnEntry, util::ProducerIdentity, version::TxnVersion,
+use {
+    super::state_table::{EndTxnDecision, TableRules, end_txn_decision},
+    crate::{
+        authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
+        codes,
+        handlers::RequestContext,
+        txn::{
+            coordinator::TxnCoordinator, state::TxnEntry, util::ProducerIdentity,
+            version::TxnVersion,
+        },
     },
+    krabka_log::ProducerId,
+    krabka_metadata::{AclOperation, MetadataImage, ResourceType},
+    krabka_protocol::owned::end_txn_request::EndTxnRequest,
 };
 
 pub(super) enum EndTxnValidation {

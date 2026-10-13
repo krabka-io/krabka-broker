@@ -1,21 +1,21 @@
 //! The broker's startup sequence, from the parsed command line through to a
 //! controlled shutdown.
 
-use std::future::Future;
-
-use clap::Parser;
-use krabka_broker::{
-    Broker, BrokerConfig, BrokerError, BrokerHandle,
-    file_config::FileConfig,
-    telemetry::{OtlpProtocol, TelemetryGuard},
-};
-use krabka_units::{Time, convert::TimeExt as _};
-
-use crate::{
-    bootstrap::detect_bootstrap_mode,
-    cli::Args,
-    config::{parse_optional_listen_addr, parse_roles_arg},
-    signals::wait_for_termination_signal,
+use {
+    crate::{
+        bootstrap::detect_bootstrap_mode,
+        cli::Args,
+        config::{parse_optional_listen_addr, parse_roles_arg},
+        signals::wait_for_termination_signal,
+    },
+    clap::Parser,
+    krabka_broker::{
+        Broker, BrokerConfig, BrokerError, BrokerHandle,
+        file_config::FileConfig,
+        telemetry::{OtlpProtocol, TelemetryGuard},
+    },
+    krabka_units::{Time, convert::TimeExt as _},
+    std::future::Future,
 };
 
 /// Where the broker's own client metrics go, when OTLP is on: the endpoint and
@@ -426,13 +426,10 @@ fn fault_after_shutdown(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use assert2::assert;
-    use tempfile::tempdir;
-
-    use super::*;
-    use crate::test_support::env_guard;
+    use {
+        super::*, crate::test_support::env_guard, assert2::assert, std::time::Duration,
+        tempfile::tempdir,
+    };
 
     // Kafka 4.3 supports `metadata.version` up to 30, and 33 (`4.4-IV2`) is one
     // of trunk's unstable levels.
@@ -612,14 +609,10 @@ mod tests {
         )
         .expect("flags parse");
         let file = args.load_config_file()?;
-        broker_config(
-            &mut args,
-            file,
-            ClientMetricsOtlp {
-                endpoint: None,
-                protocol: OtlpProtocol::Grpc,
-            },
-        )
+        broker_config(&mut args, file, ClientMetricsOtlp {
+            endpoint: None,
+            protocol: OtlpProtocol::Grpc,
+        })
         .map(|assembled| assembled.config)
         .map_err(|error| error.to_string())
     }
@@ -644,11 +637,10 @@ mod tests {
                 config.broker_id,
                 config.node_id,
                 config.controller_quorum_voters
-            ) == (
-                2,
-                krabka_broker::NodeId(2),
-                vec![(krabka_broker::NodeId(1), "controller-1:9592".to_owned())]
-            )
+            ) == (2, krabka_broker::NodeId(2), vec![(
+                krabka_broker::NodeId(1),
+                "controller-1:9592".to_owned()
+            )])
         );
     }
 
@@ -664,11 +656,10 @@ mod tests {
                 config.broker_id,
                 config.node_id,
                 config.controller_quorum_voters
-            ) == (
-                42,
+            ) == (42, krabka_broker::NodeId(42), vec![(
                 krabka_broker::NodeId(42),
-                vec![(krabka_broker::NodeId(42), "0.0.0.0:9093".to_owned())]
-            )
+                "0.0.0.0:9093".to_owned()
+            )])
         );
     }
 

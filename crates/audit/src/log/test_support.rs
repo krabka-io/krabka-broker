@@ -5,24 +5,24 @@
 //! clock, the failure-injecting sink, and the polling helper that replaces a
 //! real-time sleep in a test.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering::SeqCst},
-};
-
-use krabka_units::prelude::{ByteSize, Time, hours, mebibytes, millis};
-use qubit_clock::{ManualMonotonicClock, MonotonicClock as _, Timer};
-
-use super::{AuditLog, AuditReceiver, AuditWriter, AuditWriterParams};
-use crate::{
-    AuditEventClass, FileEd25519Signer, NodeId,
-    chain::ChainState,
-    event::{AuditEvent, LifecycleKind},
-    ocsf::ProductInfo,
-    sink::{AuditError, AuditRecord, AuditSink, MemorySink},
-    spool::Spool,
-    stats::AuditStats,
-    test_support::TempSpool,
+use {
+    super::{AuditLog, AuditReceiver, AuditWriter, AuditWriterParams},
+    crate::{
+        AuditEventClass, FileEd25519Signer, NodeId,
+        chain::ChainState,
+        event::{AuditEvent, LifecycleKind},
+        ocsf::ProductInfo,
+        sink::{AuditError, AuditRecord, AuditSink, MemorySink},
+        spool::Spool,
+        stats::AuditStats,
+        test_support::TempSpool,
+    },
+    krabka_units::prelude::{ByteSize, Time, hours, mebibytes, millis},
+    qubit_clock::{ManualMonotonicClock, MonotonicClock as _, Timer},
+    std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering::SeqCst},
+    },
 };
 
 pub fn product() -> ProductInfo {
@@ -135,13 +135,9 @@ pub struct FailableSink {
 }
 
 impl FailableSink {
-    pub fn set_fail(&self, v: bool) {
-        self.fail.store(v, SeqCst);
-    }
+    pub fn set_fail(&self, v: bool) { self.fail.store(v, SeqCst); }
 
-    pub fn set_indeterminate(&self, value: bool) {
-        self.indeterminate.store(value, SeqCst);
-    }
+    pub fn set_indeterminate(&self, value: bool) { self.indeterminate.store(value, SeqCst); }
 
     pub fn set_indeterminate_after(&self, successful_writes: i64) {
         self.indeterminate_after.store(successful_writes, SeqCst);
@@ -157,9 +153,7 @@ impl FailableSink {
         self.fail.store(false, SeqCst);
     }
 
-    pub fn durable_requests(&self) -> u64 {
-        self.durable_requests.load(SeqCst)
-    }
+    pub fn durable_requests(&self) -> u64 { self.durable_requests.load(SeqCst) }
 }
 
 #[async_trait::async_trait]
@@ -270,9 +264,7 @@ pub fn quiet_params(
 /// The checkpoint and replay tickers it drives only fire when the manual
 /// clock behind them moves, and the caller keeps no handle on that clock, so
 /// tests that do not exercise the tickers stay quiet and deterministic.
-pub fn dormant_timer() -> Arc<dyn Timer> {
-    ManualMonotonicClock::new_shared().new_timer()
-}
+pub fn dormant_timer() -> Arc<dyn Timer> { ManualMonotonicClock::new_shared().new_timer() }
 
 /// Writer params with the clock their timer was made from.
 pub struct ClockedParams {

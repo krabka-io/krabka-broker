@@ -1,12 +1,12 @@
 //! Shared audit event and signing fixtures.
 
-use std::sync::Arc;
-
-use ring::signature::{Ed25519KeyPair, KeyPair};
-
-use crate::{
-    AuditEndpoint, AuditEvent, AuditOutcome, AuditPrincipal, AuditResource, FileEd25519Signer,
-    PrivilegedPhase, Spool,
+use {
+    crate::{
+        AuditEndpoint, AuditEvent, AuditOutcome, AuditPrincipal, AuditResource, FileEd25519Signer,
+        PrivilegedPhase, Spool,
+    },
+    ring::signature::{Ed25519KeyPair, KeyPair},
+    std::sync::Arc,
 };
 
 /// A spool and the temporary directory that backs it.
@@ -32,9 +32,7 @@ pub(crate) fn signer_with_key_id(key_id: &str) -> TestSigner<FileEd25519Signer> 
     }
 }
 
-pub(crate) fn signer() -> TestSigner<FileEd25519Signer> {
-    signer_with_key_id("k1")
-}
+pub(crate) fn signer() -> TestSigner<FileEd25519Signer> { signer_with_key_id("k1") }
 
 pub(crate) fn shared_signer() -> TestSigner<Arc<FileEd25519Signer>> {
     let TestSigner { signer, public_key } = signer();

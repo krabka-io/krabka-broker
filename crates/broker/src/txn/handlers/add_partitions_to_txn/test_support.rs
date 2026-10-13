@@ -2,26 +2,26 @@
 //! entry, and the fully pinned response row that a whole-value comparison
 //! checks the handler's output against.
 
-use std::collections::HashSet;
-
-use krabka_ids::PartitionIndex;
-use krabka_protocol::owned::common::{
-    add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
-    add_partitions_to_txn_response::{
-        add_partitions_to_txn_partition_result::AddPartitionsToTxnPartitionResult,
-        add_partitions_to_txn_topic_result::AddPartitionsToTxnTopicResult,
+use {
+    crate::{
+        authorizer::Authorizer,
+        broker::{Broker, BrokerHandle},
+        coordinator::test_support::single_replica_partition,
+        test_support::{configure_single_partition_transactions, start_broker_no_audit_with},
+        txn::{
+            state::{TopicPartition, TxnEntry},
+            version::resolve_txn_version,
+        },
     },
-};
-
-use crate::{
-    authorizer::Authorizer,
-    broker::{Broker, BrokerHandle},
-    coordinator::test_support::single_replica_partition,
-    test_support::{configure_single_partition_transactions, start_broker_no_audit_with},
-    txn::{
-        state::{TopicPartition, TxnEntry},
-        version::resolve_txn_version,
+    krabka_ids::PartitionIndex,
+    krabka_protocol::owned::common::{
+        add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
+        add_partitions_to_txn_response::{
+            add_partitions_to_txn_partition_result::AddPartitionsToTxnPartitionResult,
+            add_partitions_to_txn_topic_result::AddPartitionsToTxnTopicResult,
+        },
     },
+    std::collections::HashSet,
 };
 
 /// One partition row of a response, in a static test table.

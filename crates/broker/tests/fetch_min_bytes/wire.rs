@@ -5,28 +5,28 @@
 //! Both halves send it with the same client code, so the only difference
 //! between them is which broker is on the other end.
 
-use std::time::{Duration, Instant};
-
-use assert2::assert;
-use krabka_client_core::Client;
-use krabka_protocol::{
-    primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordsPayload},
-};
-
-use crate::support::{
-    client::connect_owned,
-    discovery::named_topic_metadata,
-    fetch::{
-        FetchByteLimit, FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup,
-        single_partition_fetch,
+use {
+    crate::support::{
+        client::connect_owned,
+        discovery::named_topic_metadata,
+        fetch::{
+            FetchByteLimit, FetchLimits, RequestWaitMillis, SinglePartitionFetchSetup,
+            single_partition_fetch,
+        },
+        produce::{ProduceTimeoutMillis, SinglePartitionProduceSetup, send_batch},
+        records::batch_from_records,
+        topics::{
+            ConfiguredTopicSetup, CreateTopicRequestSetup, CreateTopicsTimeoutMillis,
+            creatable_topic, create_topic_request_with_setup,
+        },
     },
-    produce::{ProduceTimeoutMillis, SinglePartitionProduceSetup, send_batch},
-    records::batch_from_records,
-    topics::{
-        ConfiguredTopicSetup, CreateTopicRequestSetup, CreateTopicsTimeoutMillis, creatable_topic,
-        create_topic_request_with_setup,
+    assert2::assert,
+    krabka_client_core::Client,
+    krabka_protocol::{
+        primitives::uuid::Uuid as WireUuid,
+        records::{Record, RecordsPayload},
     },
+    std::time::{Duration, Instant},
 };
 
 /// The floor the fetch asks for. 64 KiB is orders of magnitude above the one
@@ -202,12 +202,9 @@ pub(crate) async fn min_bytes_exchange(bootstrap: &str, topic: &str) -> (Duratio
     appended.await.expect("the mid-fetch append");
 
     let partition = &fetched.responses[0].partitions[0];
-    (
-        held,
-        FetchFacts {
-            error_code: partition.error_code,
-            high_watermark: partition.high_watermark,
-            base_offsets: base_offsets(partition.records.as_ref()),
-        },
-    )
+    (held, FetchFacts {
+        error_code: partition.error_code,
+        high_watermark: partition.high_watermark,
+        base_offsets: base_offsets(partition.records.as_ref()),
+    })
 }

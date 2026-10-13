@@ -1,11 +1,11 @@
-use std::{io::Write, sync::Arc};
-
-use assert2::{assert, check};
-use object_store::{GetRange, path::Path};
-use sha2::Sha256;
-
-use super::*;
-use crate::ops::PutMode;
+use {
+    super::*,
+    crate::ops::PutMode,
+    assert2::{assert, check},
+    object_store::{GetRange, path::Path},
+    sha2::Sha256,
+    std::{io::Write, sync::Arc},
+};
 
 fn client() -> ObjectStoreClient {
     ObjectStoreClient::new(Arc::new(object_store::memory::InMemory::new()))
@@ -202,14 +202,10 @@ async fn put_with_digest_returns_payload_sha256() {
     let payload = bytes::Bytes::from_static(b"hello");
 
     let got = c
-        .put(
-            &Path::from("a/b"),
-            payload.clone(),
-            PutRequest {
-                digest: true,
-                ..Default::default()
-            },
-        )
+        .put(&Path::from("a/b"), payload.clone(), PutRequest {
+            digest: true,
+            ..Default::default()
+        })
         .await
         .unwrap();
 
@@ -284,16 +280,10 @@ async fn put_from_path_digests_the_whole_file_on_both_paths() {
         f.write_all(&payload).unwrap();
 
         let got = c
-            .put_from_path(
-                &Path::from("seg/x"),
-                f.path(),
-                8,
-                4,
-                PutRequest {
-                    digest: true,
-                    ..Default::default()
-                },
-            )
+            .put_from_path(&Path::from("seg/x"), f.path(), 8, 4, PutRequest {
+                digest: true,
+                ..Default::default()
+            })
             .await
             .unwrap();
 
@@ -482,16 +472,10 @@ async fn multipart_create_atomically_reserves_the_key() {
         file: f,
     } = counting_file(&[3u8; 8]);
 
-    c.put_from_path(
-        &Path::from("worm/segment"),
-        f.path(),
-        8,
-        4,
-        PutRequest {
-            mode: PutMode::Create,
-            digest: true,
-        },
-    )
+    c.put_from_path(&Path::from("worm/segment"), f.path(), 8, 4, PutRequest {
+        mode: PutMode::Create,
+        digest: true,
+    })
     .await
     .unwrap();
 

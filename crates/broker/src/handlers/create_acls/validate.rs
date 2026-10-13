@@ -18,16 +18,17 @@
 //! `AccessControlEntry` constructor throw, which fails every creation
 //! ([`has_filter_only_element`]).
 
-use krabka_authz::cidr::Cidr;
-use krabka_metadata::AclEntry;
-use krabka_protocol::owned::create_acls_request::AclCreation;
-
-use crate::{
-    codes,
-    handlers::acl_wire::{
-        CLUSTER_RESOURCE_NAME, operation_concrete, pattern_type_concrete, permission_concrete,
-        resource_type_concrete,
+use {
+    crate::{
+        codes,
+        handlers::acl_wire::{
+            CLUSTER_RESOURCE_NAME, operation_concrete, pattern_type_concrete, permission_concrete,
+            resource_type_concrete,
+        },
     },
+    krabka_authz::cidr::Cidr,
+    krabka_metadata::AclEntry,
+    krabka_protocol::owned::create_acls_request::AclCreation,
 };
 
 /// The message `CreateAcls` answers with when a host containing `/` is
@@ -251,15 +252,16 @@ fn validate_host(host: &str, cidr_hosts_supported: bool) -> Result<(), AclRefusa
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use krabka_metadata::{AclEntry, AclOperation, PatternType, PermissionType, ResourceType};
-    use krabka_protocol::owned::create_acls_request::AclCreation;
-
-    use super::{AclRefusal, HostCheck, has_filter_only_element, has_unknown_element};
-    use crate::{
-        codes::{self, INVALID_REQUEST, UNSUPPORTED_VERSION},
-        handlers::create_acls::test_support::{OPERATION_READ, creation, validate},
-        test_support::{AllowAclSetup, allow_acl},
+    use {
+        super::{AclRefusal, HostCheck, has_filter_only_element, has_unknown_element},
+        crate::{
+            codes::{self, INVALID_REQUEST, UNSUPPORTED_VERSION},
+            handlers::create_acls::test_support::{OPERATION_READ, creation, validate},
+            test_support::{AllowAclSetup, allow_acl},
+        },
+        assert2::assert,
+        krabka_metadata::{AclEntry, AclOperation, PatternType, PermissionType, ResourceType},
+        krabka_protocol::owned::create_acls_request::AclCreation,
     };
 
     #[test]
@@ -584,12 +586,9 @@ mod tests {
         {
             let mut c = creation("topic-a", "User:alice", OPERATION_READ);
             c.host = (*host).into();
-            let got = super::validate(
-                &c,
-                HostCheck::Trunk {
-                    cidr_hosts_supported: *cidr_hosts_supported,
-                },
-            )
+            let got = super::validate(&c, HostCheck::Trunk {
+                cidr_hosts_supported: *cidr_hosts_supported,
+            })
             .err();
             let expected = expected_err.as_ref().map(|refusal| AclRefusal {
                 code: refusal.code,

@@ -8,18 +8,18 @@
 //! when this broker leads the partition, and so does krabka, so the lag is
 //! the same number whichever broker the admin client reaches.
 
-use std::{collections::HashMap, time::Duration};
-
-use futures_util::future::join_all;
-use krabka_metadata::{MetadataImage, NodeId};
-use krabka_protocol::owned::{
-    list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
-    list_offsets_response::ListOffsetsResponse,
-};
-
-use crate::{
-    broker::{Broker, registered_listener_endpoint},
-    codes,
+use {
+    crate::{
+        broker::{Broker, registered_listener_endpoint},
+        codes,
+    },
+    futures_util::future::join_all,
+    krabka_metadata::{MetadataImage, NodeId},
+    krabka_protocol::owned::{
+        list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
+        list_offsets_response::ListOffsetsResponse,
+    },
+    std::{collections::HashMap, time::Duration},
 };
 
 /// A partition by topic name, as `ListOffsets` names it.
@@ -307,14 +307,15 @@ pub(super) const UNKNOWN_SERVER_ERROR_MESSAGE: &str =
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use krabka_metadata::{MetadataRecord, TopicRecord};
-    use krabka_protocol::owned::list_offsets_response::{
-        ListOffsetsPartitionResponse, ListOffsetsTopicResponse,
+    use {
+        super::*,
+        crate::handlers::test_support::single_replica_partition,
+        assert2::assert,
+        krabka_metadata::{MetadataRecord, TopicRecord},
+        krabka_protocol::owned::list_offsets_response::{
+            ListOffsetsPartitionResponse, ListOffsetsTopicResponse,
+        },
     };
-
-    use super::*;
-    use crate::handlers::test_support::single_replica_partition;
 
     fn tp(topic: &str, partition: i32) -> TopicPartition {
         TopicPartition {
@@ -424,27 +425,18 @@ mod tests {
     #[test]
     fn an_unknown_code_reads_as_unknown_server_error() {
         let rows = [
-            (
-                codes::REQUEST_TIMED_OUT,
-                ErrorAnswer {
-                    code: codes::REQUEST_TIMED_OUT,
-                    message: "The request timed out.",
-                },
-            ),
-            (
-                codes::NETWORK_EXCEPTION,
-                ErrorAnswer {
-                    code: codes::NETWORK_EXCEPTION,
-                    message: "The server disconnected before a response was received.",
-                },
-            ),
-            (
-                i16::MAX,
-                ErrorAnswer {
-                    code: codes::UNKNOWN_SERVER_ERROR,
-                    message: UNKNOWN_SERVER_ERROR_MESSAGE,
-                },
-            ),
+            (codes::REQUEST_TIMED_OUT, ErrorAnswer {
+                code: codes::REQUEST_TIMED_OUT,
+                message: "The request timed out.",
+            }),
+            (codes::NETWORK_EXCEPTION, ErrorAnswer {
+                code: codes::NETWORK_EXCEPTION,
+                message: "The server disconnected before a response was received.",
+            }),
+            (i16::MAX, ErrorAnswer {
+                code: codes::UNKNOWN_SERVER_ERROR,
+                message: UNKNOWN_SERVER_ERROR_MESSAGE,
+            }),
         ];
         for (code, expected) in rows {
             assert!(lookup_error(code) == expected, "{code}");
