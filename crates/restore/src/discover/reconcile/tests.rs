@@ -10,8 +10,8 @@ use {
         discover::{
             ArchiveInventory, PartitionInventory, inventory,
             test_support::{
-                PartitionKey, SegmentSetup, args_from, single_segment_archive, snapshot_segment,
-                write_full_segment, write_snapshot, write_topic_segment,
+                PartitionKey, SegmentSetup, args_from, inventory_error, single_segment_archive,
+                snapshot_segment, write_full_segment, write_snapshot, write_topic_segment,
             },
         },
     },
@@ -329,8 +329,7 @@ async fn a_missing_snapshot_file_is_reported_as_io_not_found() {
         "--rlmm-snapshot",
         &missing.display().to_string(),
     ]);
-    let store = open_archive(&args).expect("store");
-    let err = inventory(&store, &args).await.unwrap_err();
+    let err = inventory_error(&args).await;
     check!(matches!(
         err,
         RestoreError::Io(io_error) if io_error.kind() == std::io::ErrorKind::NotFound

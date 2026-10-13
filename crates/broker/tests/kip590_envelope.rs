@@ -114,6 +114,18 @@ fn request_frame(setup: RequestFrameSetup<'_>) -> Bytes {
     out.freeze()
 }
 
+fn embedded_request_frame(api_key: i16, api_version: i16, body: &[u8]) -> Bytes {
+    request_frame(RequestFrameSetup {
+        api_key: krabka_ids::ApiKey(api_key),
+        api_version: krabka_ids::ApiVersion(api_version),
+        correlation_id: FrameCorrelationId(EMBEDDED_CORRELATION_ID),
+        client_id: Some("adminclient-1".as_bytes()),
+        tagged: Some(&[0]),
+        body,
+    })
+    .slice(4..)
+}
+
 fn encode<T: Encode>(message: &T, version: i16) -> Bytes {
     let mut buf = BytesMut::new();
     message.encode(&mut buf, version).expect("encode");
@@ -764,21 +776,15 @@ async fn an_embedded_trunk_api_key_is_refused_unless_unstable_api_versions_are_e
         })
         .await;
         let version = unregister_controller_request::MAX_VERSION;
-        let request_data = request_frame(RequestFrameSetup {
-            api_key: krabka_ids::ApiKey(unregister_controller_request::API_KEY),
-            api_version: krabka_ids::ApiVersion(version),
-            correlation_id: FrameCorrelationId(EMBEDDED_CORRELATION_ID),
-            client_id: Some("adminclient-1".as_bytes()),
-            tagged: Some(&[0]),
-            body: &encode(
-                &UnregisterControllerRequest {
-                    controller_id: 9,
-                    ..Default::default()
-                },
-                version,
-            ),
-        })
-        .slice(4..);
+        let body = encode(
+            &UnregisterControllerRequest {
+                controller_id: 9,
+                ..Default::default()
+            },
+            version,
+        );
+        let request_data =
+            embedded_request_frame(unregister_controller_request::API_KEY, version, &body);
 
         let response = send_envelope(
             broker.controller_addr(),
@@ -822,15 +828,7 @@ fn embedded_create_delegation_token() -> Bytes {
         },
         version,
     );
-    request_frame(RequestFrameSetup {
-        api_key: krabka_ids::ApiKey(create_delegation_token_request::API_KEY),
-        api_version: krabka_ids::ApiVersion(version),
-        correlation_id: FrameCorrelationId(EMBEDDED_CORRELATION_ID),
-        client_id: Some("adminclient-1".as_bytes()),
-        tagged: Some(&[0]),
-        body: &body,
-    })
-    .slice(4..)
+    embedded_request_frame(create_delegation_token_request::API_KEY, version, &body)
 }
 
 /// Decode the embedded `CreateDelegationTokenResponse` out of a served

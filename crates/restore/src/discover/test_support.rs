@@ -46,6 +46,11 @@ pub(super) fn args_from(archive_dir: &std::path::Path, extra: &[&str]) -> Restor
     Cli::parse_from(argv).args
 }
 
+pub(super) async fn inventory_error(args: &RestoreArgs) -> crate::RestoreError {
+    let store = crate::backend::open_archive(args).expect("store");
+    super::inventory(&store, args).await.unwrap_err()
+}
+
 /// The directory-naming identity of one partition, factored out of
 /// [`write_artifact`]'s arguments so the helper stays under Clippy's
 /// argument-count limit.

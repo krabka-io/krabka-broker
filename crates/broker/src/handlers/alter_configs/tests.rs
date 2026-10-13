@@ -24,7 +24,9 @@ use {
                 image_with_client_metrics_config, image_with_group_config, image_with_topic_config,
                 topic_resource,
             },
-            test_support::{assert_dispatch_response, ordered_rows},
+            test_support::{
+                assert_dispatch_response, duplicate_config_resource_response, ordered_rows,
+            },
         },
         test_support::{
             DenyAll, context_helper, start_broker_with_authorizer as start_broker, test_ctx,
@@ -46,12 +48,7 @@ context_helper!(client_id = "admin-client");
 #[tokio::test]
 async fn dispatch_preserves_mixed_resource_order_and_duplicates() {
     broker_fixture!((handle, _dir, broker), allow_all, context(ctx, "admin"));
-    let duplicate_topic = tagged_wire!(AlterConfigsResourceResponse {
-        resource_type: RESOURCE_TYPE_TOPIC,
-        resource_name: "duplicate".into(),
-        error_code: codes::INVALID_REQUEST,
-        error_message: Some("Each resource must appear at most once.".into())
-    });
+    let duplicate_topic = duplicate_config_resource_response(RESOURCE_TYPE_TOPIC, "duplicate");
     let rows = [
         (
             broker_resource("2", &[]),

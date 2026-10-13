@@ -6,7 +6,7 @@
 use {
     super::{
         test_support::{
-            FULL_SEGMENT_SUFFIXES, PartitionKey, args_from, expected_full_segment,
+            FULL_SEGMENT_SUFFIXES, PartitionKey, args_from, expected_full_segment, inventory_error,
             single_segment_archive, write_artifact, write_full_segment, write_topic_segment,
         },
         *,
@@ -360,8 +360,7 @@ async fn a_scan_past_the_sample_limit_keeps_the_sample_and_the_exact_total() {
 async fn an_archive_with_nothing_in_it_is_an_empty_archive_error() {
     let archive = tempfile::tempdir().expect("temp dir");
     let args = args_from(archive.path(), &[]);
-    let store = open_archive(&args).expect("store");
-    let err = inventory(&store, &args).await.unwrap_err();
+    let err = inventory_error(&args).await;
     check!(matches!(err, RestoreError::EmptyArchive { prefix } if prefix.is_empty()));
 }
 
@@ -370,7 +369,6 @@ async fn a_topic_filter_that_selects_nothing_is_also_an_empty_archive_error() {
     let (archive, _topic_id, _) = single_segment_archive(Offset(0));
 
     let args = args_from(archive.path(), &["--topic", "bogus"]);
-    let store = open_archive(&args).expect("store");
-    let err = inventory(&store, &args).await.unwrap_err();
+    let err = inventory_error(&args).await;
     check!(matches!(err, RestoreError::EmptyArchive { .. }));
 }

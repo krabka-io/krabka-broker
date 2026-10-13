@@ -50,6 +50,19 @@ fn input_topic_source(partitions: u32) -> Arc<FakeMetadataSource> {
     )
 }
 
+fn coordinator_with_source(
+    source: Arc<FakeMetadataSource>,
+    max_size: Option<usize>,
+) -> Arc<crate::coordinator::unified::GroupCoordinator> {
+    let mut config = undelayed();
+    if let Some(max_size) = max_size {
+        config.max_size = max_size;
+    }
+    let coordinator = coordinator_with_log(config, Arc::new(InMemoryOffsetsLog::default()));
+    coordinator.set_metadata_source(source);
+    coordinator
+}
+
 #[test]
 fn persisted_group_config_overrides_actor_defaults() {
     let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
@@ -1203,8 +1216,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
 
     for row in rows {
         let source = input_topic_source(1);
-        let (coord, _log) = make_coordinator();
-        coord.set_metadata_source(source);
+        let coord = coordinator_with_source(source, None);
         let handle = coord.get_or_create_streams("g");
         let mut epochs: HashMap<&str, i32> = HashMap::new();
         let mut last = None;
@@ -1405,14 +1417,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
                 .image(image_of(None, &[("in", 1, partitions)]))
                 .build(),
         );
-        let coord = coordinator_with_log(
-            StreamsGroupConfig {
-                max_size,
-                ..undelayed()
-            },
-            Arc::new(InMemoryOffsetsLog::default()),
-        );
-        coord.set_metadata_source(source);
+        let coord = coordinator_with_source(source, Some(max_size));
         let handle = coord.get_or_create_streams("g");
         let mut epochs: HashMap<&str, i32> = HashMap::new();
         let mut last = None;

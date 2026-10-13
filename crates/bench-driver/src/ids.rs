@@ -16,56 +16,49 @@ use {
     serde::{Deserialize, Serialize},
 };
 
-/// A number of Kafka messages (produced, consumed, or dropped).
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Default,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Display,
-    From,
-    Into,
-    Serialize,
-    Deserialize,
-    PrimitiveCmp,
-)]
-#[serde(transparent)]
-pub struct MessageCount(pub u64);
+macro_rules! numeric_value {
+    ($(#[$doc:meta])* $name:ident($inner:ty) $(, $extra_derive:ident)?) => {
+        $(#[$doc])*
+        #[derive(
+            Debug,
+            Clone,
+            Copy,
+            $( $extra_derive, )?
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Hash,
+            Display,
+            From,
+            Into,
+            Serialize,
+            Deserialize,
+            PrimitiveCmp,
+        )]
+        #[serde(transparent)]
+        pub struct $name(pub $inner);
+    };
+}
 
-/// Milliseconds **into a run**. This is a time-series sample offset relative to
-/// the start of the measurement window or the wallclock window. It is ordered,
-/// so it can key the per-offset averaging maps. Do not confuse it with
-/// [`WallclockMs`], which is an absolute unix-epoch timestamp.
-///
-/// This stays an integer and does not become a [`Time`], because it is a
-/// *coordinate* on the fixed sampling grid. The cross-run averaging in
-/// [`crate::aggregate`] keys `BTreeMap`s by it, which a `f64`-backed quantity
-/// cannot do. [`Self::as_time`] and [`Self::since`] are the seams that turn a
-/// pair of coordinates into the extent between them.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Default,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Display,
-    From,
-    Into,
-    Serialize,
-    Deserialize,
-    PrimitiveCmp,
-)]
-#[serde(transparent)]
-pub struct TimeOffsetMs(pub u64);
+numeric_value! {
+    /// A number of Kafka messages (produced, consumed, or dropped).
+    MessageCount(u64), Default
+}
+
+numeric_value! {
+    /// Milliseconds **into a run**. This is a time-series sample offset relative to
+    /// the start of the measurement window or the wallclock window. It is ordered,
+    /// so it can key the per-offset averaging maps. Do not confuse it with
+    /// [`WallclockMs`], which is an absolute unix-epoch timestamp.
+    ///
+    /// This stays an integer and does not become a [`Time`], because it is a
+    /// *coordinate* on the fixed sampling grid. The cross-run averaging in
+    /// [`crate::aggregate`] keys `BTreeMap`s by it, which a `f64`-backed quantity
+    /// cannot do. [`Self::as_time`] and [`Self::since`] are the seams that turn a
+    /// pair of coordinates into the extent between them.
+    TimeOffsetMs(u64), Default
+}
 
 impl TimeOffsetMs {
     /// This offset as the time extent from the window start.
@@ -80,28 +73,13 @@ impl TimeOffsetMs {
     }
 }
 
-/// An **absolute** wallclock timestamp in unix-epoch milliseconds. It is an
-/// `i64` to match `chrono::Utc::now().timestamp_millis()`. It is distinct from
-/// the run-relative [`TimeOffsetMs`], so no one can swap the paired start and
-/// end fields on `RunOutput`.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Display,
-    From,
-    Into,
-    Serialize,
-    Deserialize,
-    PrimitiveCmp,
-)]
-#[serde(transparent)]
-pub struct WallclockMs(pub i64);
+numeric_value! {
+    /// An **absolute** wallclock timestamp in unix-epoch milliseconds. It is an
+    /// `i64` to match `chrono::Utc::now().timestamp_millis()`. It is distinct from
+    /// the run-relative [`TimeOffsetMs`], so no one can swap the paired start and
+    /// end fields on `RunOutput`.
+    WallclockMs(i64)
+}
 
 #[cfg(test)]
 mod tests {

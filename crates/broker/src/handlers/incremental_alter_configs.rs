@@ -460,7 +460,9 @@ mod tests {
                 incremental_alter_configs::test_support::{
                     AlterableConfig, check, make_scoped_resource,
                 },
-                test_support::{assert_dispatch_response, ordered_rows},
+                test_support::{
+                    assert_dispatch_response, duplicate_config_resource_response, ordered_rows,
+                },
             },
             test_support::{
                 context_helper, start_broker_with_authorizer as start_broker, test_ctx,
@@ -476,18 +478,8 @@ mod tests {
     async fn dispatch_preserves_mixed_resource_order_and_duplicates() {
         broker_fixture!((handle, _dir, broker), allow_all, context(ctx, "admin"));
         let resource = |kind, name| make_scoped_resource(kind, name, vec![]);
-        let duplicate_topic = tagged_wire!(AlterConfigsResourceResponse {
-            resource_type: RESOURCE_TYPE_TOPIC,
-            resource_name: "duplicate".into(),
-            error_code: codes::INVALID_REQUEST,
-            error_message: Some("Each resource must appear at most once.".into())
-        });
-        let duplicate_logger = tagged_wire!(AlterConfigsResourceResponse {
-            resource_type: RESOURCE_TYPE_BROKER_LOGGER,
-            resource_name: "2".into(),
-            error_code: codes::INVALID_REQUEST,
-            error_message: Some("Each resource must appear at most once.".into())
-        });
+        let duplicate_topic = duplicate_config_resource_response(RESOURCE_TYPE_TOPIC, "duplicate");
+        let duplicate_logger = duplicate_config_resource_response(RESOURCE_TYPE_BROKER_LOGGER, "2");
         let rows = [
             (
                 resource(RESOURCE_TYPE_BROKER_LOGGER, "1"),
