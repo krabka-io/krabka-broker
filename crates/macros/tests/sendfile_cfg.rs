@@ -1,8 +1,6 @@
 //! Per-item gating preserves trait declarations, methods, imports, exports and bodies.
 
 #[krabka_macros::sendfile_cfg]
-use assert2::assert;
-#[krabka_macros::sendfile_cfg]
 use std::os::fd::AsFd as _;
 
 trait Sink {
@@ -58,8 +56,8 @@ fn portable_items_remain_available() {
 fn supported_platforms_keep_methods_imports_and_exports() {
     let file = std::fs::File::open(std::env::current_exe().unwrap()).unwrap();
     let _fd = file.as_fd();
-    assert!(file_value(&file) == 5);
-    assert!(Stream.writable_value(0) == 0);
+    assert2::assert!(file_value(&file) == 5);
+    assert2::assert!(Stream.writable_value(0) == 0);
 }
 
 #[cfg(not(any(
