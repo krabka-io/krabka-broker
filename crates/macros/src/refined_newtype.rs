@@ -78,22 +78,26 @@ struct Quantity {
 impl Quantity {
     /// The quantity that `name` names.
     fn named(name: &Tokens) -> Result<Self, ParseError> {
-        let (to_raw, from_raw, raw, parse, unit) = match name.0.to_string().as_str() {
+        let (to_raw, from_raw, raw, parse, unit) = match name.tokens.to_string().as_str() {
             "ByteSize" => ("bytes_i64", "from_bytes_i64", "i64", "byte_size", "bytes"),
             "Time" => ("millis_i64", "from_millis", "i64", "time", "milliseconds"),
             "Frequency" => ("per_sec_u64", "from_per_sec_u64", "u64", "frequency", "Hz"),
             _ => {
                 return Err(ParseError::new(
-                    name.0.span(),
+                    name.tokens.span(),
                     "`quantity` is `ByteSize`, `Time` or `Frequency`",
                 ));
             }
         };
-        let ident = |text: &str| Ident::new(text).with_span(name.0.span()).to_token_stream();
-        let ext = ident(&format!("{}Ext", name.0));
+        let ident = |text: &str| {
+            Ident::new(text)
+                .with_span(name.tokens.span())
+                .to_token_stream()
+        };
+        let ext = ident(&format!("{}Ext", name.tokens));
         let parse = ident(parse);
         Ok(Self {
-            ty: moxy::template! { ::krabka_units::{{ name.0 }} },
+            ty: moxy::template! { ::krabka_units::{{ name.tokens }} },
             ext: moxy::template! { ::krabka_units::convert::{{ ext }} },
             to_raw: ident(to_raw),
             from_raw: ident(from_raw),
@@ -151,7 +155,7 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let rule = args.rule.0;
     let getter = args
         .getter
-        .map_or_else(|| moxy::template! { into_value }, |getter| getter.0);
+        .map_or_else(|| moxy::template! { into_value }, |getter| getter.tokens);
     let span = ident.span();
     let default_expect = LitStr::new(&format!("the default {ident} satisfies its rule"), span);
     let error = if string_error {
@@ -192,7 +196,7 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     };
     let parse_fn = args.parse_fn.map(|name| {
         let doc = LitStr::new(&parse_fn_doc(&ident.to_string()), span);
-        (name.0, doc)
+        (name.tokens, doc)
     });
 
     // `new` takes the field's type, or the quantity, which has to be a whole
@@ -241,10 +245,10 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     );
     let quantity_getter = args
         .quantity_getter
-        .map(|name| name.0)
+        .map(|name| name.tokens)
         .zip(quantity.as_ref().map(|quantity| quantity.ty.clone()));
 
-    let default_value = args.default_value.map(|tokens| tokens.0);
+    let default_value = args.default_value.map(|tokens| tokens.tokens);
     let from_str = args.from_str;
     let display = match (&as_quantity, args.display) {
         (_, false) => None,
