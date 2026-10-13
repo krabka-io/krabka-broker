@@ -104,16 +104,13 @@ pub(crate) async fn validate_commit(
     handle: &GroupActorHandle,
     commit: CommitRequest,
 ) -> Option<ErrorCode> {
-    match ask(&handle.tx, |reply| GroupActorMessage::ValidateCommit {
-        commit,
-        reply,
-    })
-    .await
-    {
-        Ok(Ok(())) => None,
-        Ok(Err(code)) => Some(code),
-        Err(_) => Some(codes::UNKNOWN_SERVER_ERROR),
-    }
+    super::super::commit_validation_reply(
+        ask(&handle.tx, |reply| GroupActorMessage::ValidateCommit {
+            commit,
+            reply,
+        })
+        .await,
+    )
 }
 
 #[cfg(test)]

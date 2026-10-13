@@ -265,11 +265,7 @@ async fn send_validate_commit(
     {
         return Some(codes::UNKNOWN_SERVER_ERROR);
     }
-    match rx.await {
-        Ok(Ok(())) => None,
-        Ok(Err(code)) => Some(code),
-        Err(_) => Some(codes::UNKNOWN_SERVER_ERROR),
-    }
+    crate::coordinator::unified::commit_validation_reply(rx.await)
 }
 
 /// The first `OffsetCommit` version that a member of the streams protocol may

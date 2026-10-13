@@ -697,6 +697,12 @@ mod tests {
     fn a_cancel_reverts_like_kafka() {
         let unclean_message = "Unable to revert partition assignment for foo:0 because it would \
                                require an unclean leader election.";
+        let isr_from_adding_replica = || ReassignmentSetup {
+            isr: vec![NodeId(3)],
+            adding: vec![NodeId(3)],
+            leader: NodeId(3),
+            ..Default::default()
+        };
         let cases: [CancelCase<'_>; 6] = [
             (
                 "a leader in the adding set moves to the reverted ISR",
@@ -734,23 +740,13 @@ mod tests {
             ),
             (
                 "an ISR of adding replicas needs unclean election",
-                ReassignmentSetup {
-                    isr: vec![NodeId(3)],
-                    adding: vec![NodeId(3)],
-                    leader: NodeId(3),
-                    ..Default::default()
-                },
+                isr_from_adding_replica(),
                 UncleanElection::Forbidden,
                 Err((INVALID_REPLICA_ASSIGNMENT, unclean_message.into())),
             ),
             (
                 "an ISR of adding replicas reverts uncleanly when the topic allows it",
-                ReassignmentSetup {
-                    isr: vec![NodeId(3)],
-                    adding: vec![NodeId(3)],
-                    leader: NodeId(3),
-                    ..Default::default()
-                },
+                isr_from_adding_replica(),
                 UncleanElection::Allowed,
                 Ok(Some(
                     record()
