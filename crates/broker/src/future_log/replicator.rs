@@ -365,6 +365,15 @@ mod tests {
         }
     }
 
+    /// `partition_with_copied_future_log` over fresh primary and target
+    /// directories, which the caller keeps alive.
+    fn copied_future_in_tempdirs() -> (tempfile::TempDir, tempfile::TempDir, CopiedFuture) {
+        let primary = tempdir().unwrap();
+        let target = tempdir().unwrap();
+        let copied = partition_with_copied_future_log(primary.path(), target.path());
+        (primary, target, copied)
+    }
+
     /// A partition, a future log that is a full copy of it, and where that log
     /// lives.
     struct CopiedFuture {
@@ -382,13 +391,12 @@ mod tests {
     }
 
     async fn truncated_copied_future() -> TruncatedFutureFixture {
-        let primary = tempdir().unwrap();
-        let target = tempdir().unwrap();
+        let (primary, target, copied) = copied_future_in_tempdirs();
         let CopiedFuture {
             part,
             future_log,
             future_path,
-        } = partition_with_copied_future_log(primary.path(), target.path());
+        } = copied;
         part.truncate_to(Offset(3)).await.unwrap();
         TruncatedFutureFixture {
             future_path,
@@ -479,13 +487,12 @@ mod tests {
     /// refuses a swap until it has.
     #[tokio::test]
     async fn a_swap_waits_for_the_cut_the_writer_has_not_reported() {
-        let primary = tempdir().unwrap();
-        let target = tempdir().unwrap();
+        let (_primary, target, copied) = copied_future_in_tempdirs();
         let CopiedFuture {
             part,
             future_log,
             future_path,
-        } = partition_with_copied_future_log(primary.path(), target.path());
+        } = copied;
         assert!(part.take_future_truncation().await.unwrap() == None);
         part.truncate_to(Offset(4)).await.unwrap();
         part.truncate_to(Offset(2)).await.unwrap();

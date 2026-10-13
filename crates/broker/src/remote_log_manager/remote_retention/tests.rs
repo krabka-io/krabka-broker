@@ -541,16 +541,7 @@ async fn remote_retention_pass_noop_when_nothing_qualifies() {
     // is independent of wall-clock. `rolled_log` builds batches with
     // default base_timestamp=0, so picking now=1 keeps every segment
     // inside the year-long retention window.
-    let outcome = empty_retention_pass(
-        &cfg,
-        floors(NO_FLOOR, None),
-        1,
-        ArchiveMode::Mutable,
-        &rsm,
-        &rlmm,
-    )
-    .await;
-    assert!(outcome == RemoteRetentionOutcome::default());
+    assert_pass_is_a_noop(&cfg, 1, &rsm, &rlmm).await;
     assert!(rlmm.list_remote_log_segments(&tp()).unwrap().len() == exports.len());
 }
 
@@ -568,16 +559,7 @@ async fn remote_retention_pass_no_settings_and_an_unmoved_floor_evict_nothing() 
         retention_size: None,
         ..LogConfig::default()
     };
-    let outcome = empty_retention_pass(
-        &cfg,
-        floors(NO_FLOOR, None),
-        now_ms(),
-        ArchiveMode::Mutable,
-        &rsm,
-        &rlmm,
-    )
-    .await;
-    assert!(outcome == RemoteRetentionOutcome::default());
+    assert_pass_is_a_noop(&cfg, now_ms(), &rsm, &rlmm).await;
     assert!(rlmm.list_remote_log_segments(&tp()).unwrap().len() == 3);
 }
 
@@ -1000,6 +982,25 @@ async fn a_retention_pass_records_its_delete_requests_errors_and_lag() {
             .get()
             == 1
     );
+}
+
+/// A mutable-tier pass with no floors moves nothing.
+async fn assert_pass_is_a_noop(
+    config: &LogConfig,
+    now_ms: i64,
+    rsm: &Arc<dyn RemoteStorageManager>,
+    rlmm: &Arc<dyn RemoteLogMetadataManager>,
+) {
+    let outcome = empty_retention_pass(
+        config,
+        floors(NO_FLOOR, None),
+        now_ms,
+        ArchiveMode::Mutable,
+        rsm,
+        rlmm,
+    )
+    .await;
+    assert!(outcome == RemoteRetentionOutcome::default());
 }
 
 async fn empty_retention_pass(

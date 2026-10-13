@@ -1117,6 +1117,26 @@ mod tests {
 
         use crate::api_catalog::UnstableApiVersions::{Disabled, Enabled};
 
+        /// A row whose empty version-0 frame for `api_key` is refused as an
+        /// unsupported version.
+        fn unsupported_version(
+            label: &'static str,
+            api_key: i16,
+            unstable: crate::api_catalog::UnstableApiVersions,
+        ) -> Case {
+            Case {
+                label,
+                frame: request_frame(EmbeddedFrameSetup {
+                    api_key: krabka_ids::ApiKey(api_key),
+                    api_version: krabka_ids::ApiVersion(0),
+                    body: b"",
+                    ..Default::default()
+                }),
+                unstable,
+                want: Err(EnvelopeError::UnsupportedVersion),
+            }
+        }
+
         let create_topics =
             body_of::<krabka_protocol::owned::create_topics_request::CreateTopicsRequest>(7);
         let unregister_controller = body_of::<
@@ -1163,50 +1183,18 @@ mod tests {
                 unstable: Disabled,
                 want: Err(EnvelopeError::InvalidRequest),
             },
-            Case {
-                label: "the removed LeaderAndIsr has no valid version",
-                frame: request_frame(EmbeddedFrameSetup {
-                    api_key: krabka_ids::ApiKey(4),
-                    api_version: krabka_ids::ApiVersion(0),
-                    body: b"",
-                    ..Default::default()
-                }),
-                unstable: Disabled,
-                want: Err(EnvelopeError::UnsupportedVersion),
-            },
-            Case {
-                label: "the removed ControlledShutdown has no valid version",
-                frame: request_frame(EmbeddedFrameSetup {
-                    api_key: krabka_ids::ApiKey(7),
-                    api_version: krabka_ids::ApiVersion(0),
-                    body: b"",
-                    ..Default::default()
-                }),
-                unstable: Enabled,
-                want: Err(EnvelopeError::UnsupportedVersion),
-            },
-            Case {
-                label: "an api key past the release's last is unknown",
-                frame: request_frame(EmbeddedFrameSetup {
-                    api_key: krabka_ids::ApiKey(93),
-                    api_version: krabka_ids::ApiVersion(0),
-                    body: b"",
-                    ..Default::default()
-                }),
-                unstable: Disabled,
-                want: Err(EnvelopeError::UnsupportedVersion),
-            },
-            Case {
-                label: "a negative api key is unknown",
-                frame: request_frame(EmbeddedFrameSetup {
-                    api_key: krabka_ids::ApiKey(-1),
-                    api_version: krabka_ids::ApiVersion(0),
-                    body: b"",
-                    ..Default::default()
-                }),
-                unstable: Enabled,
-                want: Err(EnvelopeError::UnsupportedVersion),
-            },
+            unsupported_version("the removed LeaderAndIsr has no valid version", 4, Disabled),
+            unsupported_version(
+                "the removed ControlledShutdown has no valid version",
+                7,
+                Enabled,
+            ),
+            unsupported_version(
+                "an api key past the release's last is unknown",
+                93,
+                Disabled,
+            ),
+            unsupported_version("a negative api key is unknown", -1, Enabled),
             Case {
                 label: "trunk's UnregisterController is unknown to 4.3.1",
                 frame: request_frame(EmbeddedFrameSetup {

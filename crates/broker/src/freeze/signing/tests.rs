@@ -115,6 +115,14 @@ fn signed(
     }
 }
 
+// `good` re-timestamped to `set_at_ms` and signed by `pair` for the test cluster.
+fn signed_at(pair: &Ed25519KeyPair, set_at_ms: i64, good: &TopicFreezeRecord) -> TopicFreezeRecord {
+    signed(pair, CLUSTER_ID, &TopicFreezeRecord {
+        set_at_ms,
+        ..good.clone()
+    })
+}
+
 fn check_against<'a>(trust: &'a Trust, principal: &'a str) -> FreezeSignatureCheck<'a> {
     FreezeSignatureCheck {
         keys: &trust.keys,

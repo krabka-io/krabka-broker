@@ -7,7 +7,8 @@
 
 use {
     super::{
-        ALICE, BOB, CLUSTER_ID, NOW_MS, OTHER_CLUSTER_ID, check_against, record, signed, trust,
+        ALICE, BOB, CLUSTER_ID, NOW_MS, OTHER_CLUSTER_ID, check_against, record, signed, signed_at,
+        trust,
     },
     crate::{
         codes,
@@ -63,10 +64,7 @@ fn each_refusal_names_its_own_check_under_one_code() {
         },
         Case {
             label: "a timestamp outside the skew window",
-            record: signed(&trust.alice, CLUSTER_ID, &TopicFreezeRecord {
-                set_at_ms: NOW_MS + minutes(5).millis_i64() + 1,
-                ..good.clone()
-            }),
+            record: signed_at(&trust.alice, NOW_MS + minutes(5).millis_i64() + 1, &good),
             check: check_against(&trust, ALICE),
             expected: SignatureRefusal::TimestampOutsideSkewWindow,
         },
