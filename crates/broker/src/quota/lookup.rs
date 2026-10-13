@@ -554,6 +554,15 @@ mod tests {
             client_id: &'static str,
             expected: Option<MatchedQuota>,
         }
+        fn alice_without_client(label: &'static str, configured: Vec<Level>) -> Row {
+            Row {
+                label,
+                configured,
+                principal: "alice",
+                client_id: "",
+                expected: Some(MatchedQuota::new(user_key("alice"), 64.0)),
+            }
+        }
         let levels = alice_app_levels();
         let cases: Vec<Row> = vec![
             Row {
@@ -584,20 +593,14 @@ mod tests {
                 client_id: "",
                 expected: None,
             },
-            Row {
-                label: "the user quota applies without a client id",
-                configured: vec![levels.alice.clone(), levels.default_client.clone()],
-                principal: "alice",
-                client_id: "",
-                expected: Some(MatchedQuota::new(user_key("alice"), 64.0)),
-            },
-            Row {
-                label: "the default user quota applies without a client id",
-                configured: vec![levels.default_user.clone(), levels.default_client.clone()],
-                principal: "alice",
-                client_id: "",
-                expected: Some(MatchedQuota::new(user_key("alice"), 64.0)),
-            },
+            alice_without_client("the user quota applies without a client id", vec![
+                levels.alice.clone(),
+                levels.default_client.clone(),
+            ]),
+            alice_without_client("the default user quota applies without a client id", vec![
+                levels.default_user.clone(),
+                levels.default_client.clone(),
+            ]),
             Row {
                 label: "the client quota applies without a principal",
                 configured: vec![levels.app.clone(), levels.alice.clone()],

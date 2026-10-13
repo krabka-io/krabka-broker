@@ -579,12 +579,10 @@ mod unclean_restart {
         EligibleNode { config, dir, epoch }
     }
 
-    /// The defect this closes: a broker that crashed -- no clean-shutdown
-    /// proof left behind -- comes back on the same log dir with the same
-    /// incarnation id, and must no longer be eligible to be elected. Its log
-    /// may be shorter than the records its ELR membership asserts it holds.
-    #[tokio::test]
-    async fn a_crashed_broker_loses_its_elr_membership_on_restart() {
+    /// Restart keeps a broker eligible only when its graceful stop left proof.
+    #[yare::parameterized(crash = { false }, graceful = { true })]
+    #[test_macro(tokio::test)]
+    async fn broker_restart_updates_elr_from_shutdown_proof(graceful: bool) {
         let StartedBroker {
             broker: handle,
             dir: _dir,
@@ -592,17 +590,19 @@ mod unclean_restart {
         let broker = handle.broker_arc_for_test();
         let EligibleNode {
             mut config,
-            dir: _victim_dir,
-            epoch: _epoch,
+            dir: victim_dir,
+            epoch,
         } = cluster_with_node_two_eligible(&broker).await;
 
-        // A crash writes nothing, so the restart can prove nothing.
+        if graceful {
+            write(victim_dir.path(), epoch);
+        }
         boot(&broker, &mut config).await;
 
-        assert!(
+        assert2::assert!(
             published_elr(&broker)
                 == PartitionElr {
-                    eligible_leader_replicas: vec![3],
+                    eligible_leader_replicas: if graceful { vec![2, 3] } else { vec![3] },
                     last_known_elr: vec![],
                 }
         );
@@ -610,10 +610,7 @@ mod unclean_restart {
         handle.shutdown().await;
     }
 
-    /// The other end of the round trip: a graceful stop leaves behind exactly
-    /// the epoch the cluster holds, which is what its own next start spends.
-    /// The two tests above hand that value over by writing it themselves; this
-    /// one says the broker really does write it on the way down.
+    /// A broker writes the epoch its next start spends on the way down.
     #[tokio::test]
     async fn a_graceful_stop_leaves_the_proof_its_own_restart_spends() {
         let (handle, dir, broker) = started_controller_broker().await;
@@ -630,36 +627,5 @@ mod unclean_restart {
 
         assert!(crate::clean_shutdown::take(&log_dir) == epoch);
         drop(dir);
-    }
-
-    /// The companion, without which the fix could pass by withdrawing
-    /// everyone: a broker that stopped gracefully offers back the epoch the
-    /// cluster still holds for it, and keeps its membership.
-    #[tokio::test]
-    async fn a_gracefully_stopped_broker_keeps_its_elr_membership_on_restart() {
-        let StartedBroker {
-            broker: handle,
-            dir: _dir,
-        } = start_broker_with_authorizer(Arc::new(AllowAllAuthorizer)).await;
-        let broker = handle.broker_arc_for_test();
-        let EligibleNode {
-            mut config,
-            dir: victim_dir,
-            epoch,
-        } = cluster_with_node_two_eligible(&broker).await;
-
-        // The graceful stop leaves its proof; the restart spends it.
-        write(victim_dir.path(), epoch);
-        boot(&broker, &mut config).await;
-
-        assert!(
-            published_elr(&broker)
-                == PartitionElr {
-                    eligible_leader_replicas: vec![2, 3],
-                    last_known_elr: vec![],
-                }
-        );
-
-        handle.shutdown().await;
     }
 }

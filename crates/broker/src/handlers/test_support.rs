@@ -11,12 +11,12 @@ macro_rules! empty_share_offsets_response {
 }
 
 macro_rules! anonymous_request_identity {
-    ($principal:ident, $peer:ident, $ctx:ident) => {
+    ($principal:ident, $peer:ident, $ctx:ident, $client:expr $(, $connection:expr)? $(,)?) => {
         krabka_macros::request_test_identity! {
             bind($principal, $peer, $ctx);
             user ["ANONYMOUS"];
-            client ["client-a"];
-            connection ["connection-a"];
+            client [$client];
+            $(connection [$connection];)?
         };
     };
 }

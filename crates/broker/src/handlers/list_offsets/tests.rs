@@ -43,7 +43,13 @@ fn topic_describe_denied_yields_topic_authorization_failed_rows() {
     };
 
     let EmptyAclImage { authorizer, image } = empty_acl_image();
-    crate::handlers::test_support::anonymous_request_identity!(principal, peer, ctx);
+    crate::handlers::test_support::anonymous_request_identity!(
+        principal,
+        peer,
+        ctx,
+        "client-a",
+        "connection-a",
+    );
     assert!(crate::handlers::acl_denied(
         &authorizer,
         &image,

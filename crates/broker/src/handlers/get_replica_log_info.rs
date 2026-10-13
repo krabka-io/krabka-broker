@@ -250,7 +250,13 @@ mod tests {
     #[test]
     fn cluster_action_denied_yields_cluster_authorization_failed() {
         let EmptyAclImage { authorizer, image } = empty_acl_image();
-        crate::handlers::test_support::anonymous_request_identity!(principal, peer, ctx);
+        crate::handlers::test_support::anonymous_request_identity!(
+            principal,
+            peer,
+            ctx,
+            "client-a",
+            "connection-a",
+        );
 
         assert!(cluster_action_denied(&authorizer, &image, &ctx));
 
