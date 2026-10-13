@@ -1,20 +1,19 @@
 //! Unit tests for the topic and partition map plumbing and for the
 //! produce-path dedup, commit, truncate, and snapshot behaviour of
 //! `ProducerState`.
-use assert2::{assert, check};
-
-use super::*;
-use crate::{
-    producer_state::test_support::{commit_fixture, opened_log, producer_batch},
-    test_support::default_records_batch,
+use {
+    super::*,
+    crate::{
+        producer_state::test_support::{commit_fixture, opened_log, producer_batch},
+        test_support::default_records_batch,
+    },
+    assert2::{assert, check},
 };
 
 async fn mirror_marker(state: &ProducerState) {
     state
-        .mirror_log_entries(
-            "t",
-            PartitionIndex(0),
-            vec![krabka_log::ProducerSnapshotEntry {
+        .mirror_log_entries("t", PartitionIndex(0), vec![
+            krabka_log::ProducerSnapshotEntry {
                 producer_id: krabka_log::ProducerId(1000),
                 producer_epoch: 4,
                 last_sequence: -1,
@@ -23,8 +22,8 @@ async fn mirror_marker(state: &ProducerState) {
                 timestamp: -1,
                 coordinator_epoch: 0,
                 current_txn_first_offset: None,
-            }],
-        )
+            },
+        ])
         .await;
 }
 
@@ -304,19 +303,16 @@ async fn snapshot_reports_committed_entries() {
         .call()
         .await;
     let snap = s.snapshot("t", PartitionIndex(3)).await;
-    let expected = vec![(
-        1000,
-        ProducerEntry {
-            epoch: 0,
-            last_sequence: 4,
-            last_offset: 11,
-            base_offset: 7,
-            last_timestamp: 1,
-            entry_timestamp: 1,
-            current_txn_first_offset: None,
-            earlier: crate::producer_state::NO_EARLIER_BATCHES,
-        },
-    )];
+    let expected = vec![(1000, ProducerEntry {
+        epoch: 0,
+        last_sequence: 4,
+        last_offset: 11,
+        base_offset: 7,
+        last_timestamp: 1,
+        entry_timestamp: 1,
+        current_txn_first_offset: None,
+        earlier: crate::producer_state::NO_EARLIER_BATCHES,
+    })];
     assert!(snap == expected);
     // Untouched partition / topic report empty without panicking.
     for (topic, partition) in [("t", PartitionIndex(0)), ("other", PartitionIndex(3))] {
@@ -510,10 +506,10 @@ async fn replay_chooses_first_retained_alias_after_sequence_wrap() {
     log.sync().unwrap();
     assert!(krabka_log::name::producer_snapshot_path(dir.path(), 1).exists());
     drop(log);
-    remove_snapshots(
-        dir.path(),
-        [i64::from(i32::MAX) + 1, i64::from(i32::MAX) + 2],
-    );
+    remove_snapshots(dir.path(), [
+        i64::from(i32::MAX) + 1,
+        i64::from(i32::MAX) + 2,
+    ]);
     let log = krabka_log::Log::open(dir.path(), config).unwrap();
     assert!(log.recovered_producers()[0].earlier.len() == 2);
     let state = ProducerState::new();

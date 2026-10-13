@@ -55,9 +55,7 @@ pub fn creatable_topic(
 pub struct CreateTopicsTimeoutMillis(pub i32);
 
 impl Default for CreateTopicsTimeoutMillis {
-    fn default() -> Self {
-        Self(5_000)
-    }
+    fn default() -> Self { Self(5_000) }
 }
 
 #[derive(Clone, Copy, Default)]

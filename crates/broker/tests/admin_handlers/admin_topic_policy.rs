@@ -7,20 +7,23 @@
 //! requests; the JVM tools turn error 44 plus the message into the
 //! `PolicyViolationException` they print.
 
-use assert2::{assert, check};
-use krabka_broker::topic_policy::TopicPolicy;
-use krabka_protocol::owned::{
-    create_topics_request::CreateTopicsRequest,
-    incremental_alter_configs_request::IncrementalAlterConfigsRequest,
-};
-
-use crate::{
-    RESOURCE_TYPE_TOPIC,
-    admin_harness::{build_client, create_topic_helper},
-    support::{
-        configs::{ConfigOperation, incremental_config, incremental_request, incremental_resource},
-        start_n_node_with,
-        topics::{creatable_topic, create_topic_request},
+use {
+    crate::{
+        RESOURCE_TYPE_TOPIC,
+        admin_harness::{build_client, create_topic_helper},
+        support::{
+            configs::{
+                ConfigOperation, incremental_config, incremental_request, incremental_resource,
+            },
+            start_n_node_with,
+            topics::{creatable_topic, create_topic_request},
+        },
+    },
+    assert2::{assert, check},
+    krabka_broker::topic_policy::TopicPolicy,
+    krabka_protocol::owned::{
+        create_topics_request::CreateTopicsRequest,
+        incremental_alter_configs_request::IncrementalAlterConfigsRequest,
     },
 };
 

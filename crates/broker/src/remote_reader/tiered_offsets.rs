@@ -6,15 +6,16 @@
 //! Copies still in progress stay invisible, so a partially copied segment
 //! never widens the range a client sees.
 
-use krabka_remote_storage::{
-    LogOffset, RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageError,
-    TopicIdPartition,
+use {
+    super::{RemoteReader, TieredOffset},
+    krabka_remote_storage::{
+        LogOffset, RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageError,
+        TopicIdPartition,
+    },
+    krabka_verified::{
+        tiered_earliest_finished_index, tiered_latest_finished_index, tiered_owning_epoch_index,
+    },
 };
-use krabka_verified::{
-    tiered_earliest_finished_index, tiered_latest_finished_index, tiered_owning_epoch_index,
-};
-
-use super::{RemoteReader, TieredOffset};
 
 impl RemoteReader {
     /// Returns the lowest `start_offset` across the finished segments for
@@ -83,19 +84,19 @@ fn tiered_segment_inputs(listed: &[RemoteLogSegmentMetadata]) -> (Vec<i64>, Vec<
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use assert2::assert;
-    use krabka_ids::LeaderEpoch;
-    use krabka_remote_storage::{RemoteLogMetadataManager, RemoteLogSegmentMetadataUpdate};
-    use uuid::Uuid;
-
-    use super::*;
-    use crate::{
-        remote_log_manager::test_support::local_backends,
-        remote_reader::test_support::{
-            not_ready_reader, reader_with_metadata as assigned_reader_with_metadata, tp,
+    use {
+        super::*,
+        crate::{
+            remote_log_manager::test_support::local_backends,
+            remote_reader::test_support::{
+                not_ready_reader, reader_with_metadata as assigned_reader_with_metadata, tp,
+            },
         },
+        assert2::assert,
+        krabka_ids::LeaderEpoch,
+        krabka_remote_storage::{RemoteLogMetadataManager, RemoteLogSegmentMetadataUpdate},
+        std::sync::Arc,
+        uuid::Uuid,
     };
 
     fn reader_with_metadata() -> (RemoteReader, tempfile::TempDir) {
@@ -104,9 +105,7 @@ mod tests {
         (RemoteReader::new(rsm, rlmm), remote_dir)
     }
 
-    use std::collections::BTreeMap;
-
-    use krabka_ids::Offset;
+    use {krabka_ids::Offset, std::collections::BTreeMap};
 
     #[derive(Clone, Copy, Default)]
     enum SegmentPublication {

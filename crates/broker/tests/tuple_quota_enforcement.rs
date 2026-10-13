@@ -39,15 +39,16 @@ mod tuple_quota_drivers;
 /// quota lookup.
 const CLIENT_ID: &str = "krabka-tuple-quota-test";
 
-use assert2::assert;
-
-use crate::{
-    kafka_wire::{PlainAuthenticationSetup, quotas::QuotaAlterSetup},
-    tuple_quota_cluster::{
-        create_topic_as_admin, seed_alice_write_acl, seed_compat_shim_disable_acl,
-        start_single_broker_sasl_plaintext_with_users,
+use {
+    crate::{
+        kafka_wire::{PlainAuthenticationSetup, quotas::QuotaAlterSetup},
+        tuple_quota_cluster::{
+            create_topic_as_admin, seed_alice_write_acl, seed_compat_shim_disable_acl,
+            start_single_broker_sasl_plaintext_with_users,
+        },
+        tuple_quota_drivers::{await_authorized_produce, drive_alter_client_quotas_sasl},
     },
-    tuple_quota_drivers::{await_authorized_produce, drive_alter_client_quotas_sasl},
+    assert2::assert,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -72,13 +73,10 @@ use crate::{
 async fn tuple_quota_throttles_only_matching_client_id() {
     let admin_password = uuid::Uuid::new_v4().to_string();
     let alice_password = uuid::Uuid::new_v4().to_string();
-    let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users(
-        "admin",
-        &[
-            ("admin", admin_password.as_str()),
-            ("alice", alice_password.as_str()),
-        ],
-    )
+    let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users("admin", &[
+        ("admin", admin_password.as_str()),
+        ("alice", alice_password.as_str()),
+    ])
     .await;
 
     // Seed ACL entries so the authorizer engages (compat shim disabled) and

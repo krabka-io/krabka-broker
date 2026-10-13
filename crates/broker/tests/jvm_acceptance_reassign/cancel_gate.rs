@@ -46,18 +46,19 @@
 //! rules are the in-process suites' work; what a container can say is what the
 //! JVM tool printed and what it exited with.
 
-use assert2::{assert, check};
-use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle};
-
-use crate::{
-    cluster::offline_for_partition,
-    jvm_acceptance::{
-        break_glass::{approve as approve_proposal, propose},
-        broker0_advertised, plain_client_properties, start_three_broker_sasl_plaintext_jvm_cluster,
-        wait_three_brokers_registered,
+use {
+    crate::{
+        cluster::offline_for_partition,
+        jvm_acceptance::{
+            break_glass::{approve as approve_proposal, propose},
+            broker0_advertised, plain_client_properties,
+            start_three_broker_sasl_plaintext_jvm_cluster, wait_three_brokers_registered,
+        },
+        oracle::{AssignedTopicCommandSetup, CliRun, Side, ToolFile},
+        tool_output::{Assignment, TopicPartition, parse_cancelled, reassignment_json},
     },
-    oracle::{AssignedTopicCommandSetup, CliRun, Side, ToolFile},
-    tool_output::{Assignment, TopicPartition, parse_cancelled, reassignment_json},
+    assert2::{assert, check},
+    krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle},
 };
 
 /// The super-user the tools authenticate as.

@@ -3,8 +3,10 @@
 //! than a literal, so they are gathered in one file away from the transition
 //! logic they constrain.
 
-use krabka_raft::kraft::types::{Epoch, NodeId};
-use krabka_units::prelude::{Time, TimeExt as _};
+use {
+    krabka_raft::kraft::types::{Epoch, NodeId},
+    krabka_units::prelude::{Time, TimeExt as _},
+};
 
 pub struct ConsensusModel {
     pub voter_ids: Vec<NodeId>,
@@ -60,9 +62,7 @@ impl ConsensusModel {
     /// Election and log-matching focus. There are NO client appends, so the
     /// space stays the small, fast one from the scaffolding task. This exercises
     /// leader election and log replication safety across N voters.
-    pub fn elections(voter_ids: &[NodeId]) -> Self {
-        bounded_model().voter_ids(voter_ids).call()
-    }
+    pub fn elections(voter_ids: &[NodeId]) -> Self { bounded_model().voter_ids(voter_ids).call() }
 
     /// Linearizability focus. Client appends are ENABLED, but the bounds are
     /// tight, because the linearizability tester keeps the history in the

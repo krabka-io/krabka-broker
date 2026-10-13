@@ -3,21 +3,22 @@
 //! offset-aware strategies that defer to the recovery manager, and the
 //! witness role the scan reads out of the metadata image.
 
-use assert2::assert;
-use krabka_metadata::LeaderEpoch;
-
-use super::*;
-use crate::{
-    config_keys::{
-        ELIGIBLE_LEADER_REPLICAS, MIN_INSYNC_REPLICAS, UNCLEAN_LEADER_ELECTION_ENABLE,
-        UNCLEAN_RECOVERY_STRATEGY,
+use {
+    super::*,
+    crate::{
+        config_keys::{
+            ELIGIBLE_LEADER_REPLICAS, MIN_INSYNC_REPLICAS, UNCLEAN_LEADER_ELECTION_ENABLE,
+            UNCLEAN_RECOVERY_STRATEGY,
+        },
+        leader_election::test_support::{
+            ElrFinalization, elected_partition, expected_clean_election, expected_partition,
+            failover, failover_with_alive, img_with_partition, liveness_with_alive,
+            mark_witnesses_in_image, one_partition_change, set_cluster_default, set_topic_configs,
+        },
+        metrics::BrokerMetrics,
     },
-    leader_election::test_support::{
-        ElrFinalization, elected_partition, expected_clean_election, expected_partition, failover,
-        failover_with_alive, img_with_partition, liveness_with_alive, mark_witnesses_in_image,
-        one_partition_change, set_cluster_default, set_topic_configs,
-    },
-    metrics::BrokerMetrics,
+    assert2::assert,
+    krabka_metadata::LeaderEpoch,
 };
 
 fn unclean_single_isr_image() -> krabka_metadata::MetadataImage {
@@ -39,11 +40,10 @@ async fn assert_failover_clean_election(img: &MetadataImage, expected_leader: No
     let plan = failover_with_alive(img, NodeId(1), &[2u64, 3]).await;
     assert!(plan.recoveries.is_empty());
     let pr = one_partition_change(&plan.changes);
-    assert_clean_election_record(
-        pr,
-        expected_leader,
-        &[krabka_raft::NodeId(2), krabka_raft::NodeId(3)],
-    );
+    assert_clean_election_record(pr, expected_leader, &[
+        krabka_raft::NodeId(2),
+        krabka_raft::NodeId(3),
+    ]);
 }
 
 fn assert_clean_election_record(

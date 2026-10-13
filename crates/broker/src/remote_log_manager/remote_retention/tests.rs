@@ -1,27 +1,27 @@
 //! Unit tests for the remote-retention eviction set and its delete pass.
 
-use std::sync::Arc;
-
-use assert2::{assert, check};
-use krabka_ids::LeaderEpoch;
-use krabka_remote_storage::{
-    CustomMetadata, LogSegmentData, RemoteLogMetadataManager, RemoteLogSegmentId,
-    RemoteLogSegmentMetadataUpdate, RemoteStorageError, RemoteStorageManager,
-};
-use krabka_units::{bytes, hours, millis};
-use uuid::Uuid;
-
-use super::*;
-use crate::{
-    metrics::BrokerMetrics,
-    remote_log_manager::{
-        test_support as fixtures,
-        test_support::{
-            FakeWormArchive, archived_backends, copy_exports, local_backends, missing_remote_reads,
-            seed_finished_segments, synth_export, tier, tp,
+use {
+    super::*,
+    crate::{
+        metrics::BrokerMetrics,
+        remote_log_manager::{
+            test_support as fixtures,
+            test_support::{
+                FakeWormArchive, archived_backends, copy_exports, local_backends,
+                missing_remote_reads, seed_finished_segments, synth_export, tier, tp,
+            },
         },
+        time_util::now_ms,
     },
-    time_util::now_ms,
+    assert2::{assert, check},
+    krabka_ids::LeaderEpoch,
+    krabka_remote_storage::{
+        CustomMetadata, LogSegmentData, RemoteLogMetadataManager, RemoteLogSegmentId,
+        RemoteLogSegmentMetadataUpdate, RemoteStorageError, RemoteStorageManager,
+    },
+    krabka_units::{bytes, hours, millis},
+    std::sync::Arc,
+    uuid::Uuid,
 };
 
 /// A partition whose `DeleteRecords` floor has never moved: offset 0, so no
@@ -54,6 +54,8 @@ struct RefusesDeleteRsm {
 }
 
 impl RemoteStorageManager for RefusesDeleteRsm {
+    missing_remote_reads!();
+
     fn copy_log_segment_data(
         &self,
         _metadata: &RemoteLogSegmentMetadata,
@@ -61,7 +63,7 @@ impl RemoteStorageManager for RefusesDeleteRsm {
     ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
         Ok(None)
     }
-    missing_remote_reads!();
+
     fn delete_log_segment_data(
         &self,
         metadata: &RemoteLogSegmentMetadata,

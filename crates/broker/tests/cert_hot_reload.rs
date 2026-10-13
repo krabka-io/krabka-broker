@@ -14,14 +14,14 @@
 
 mod support;
 
-use std::{io, path::PathBuf, sync::Arc};
-
-use assert2::assert;
-use krabka_broker::Broker;
-
-use crate::support::tls::{
-    CertificateDer, ClientAuthMode, ClientConfig, PemObject as _, PinnedCertVerifier, ServerName,
-    TcpStream, TlsConfig, TlsConnector, fixture_signature_schemes, ssl_config,
+use {
+    crate::support::tls::{
+        CertificateDer, ClientAuthMode, ClientConfig, PemObject as _, PinnedCertVerifier,
+        ServerName, TcpStream, TlsConfig, TlsConnector, fixture_signature_schemes, ssl_config,
+    },
+    assert2::assert,
+    krabka_broker::Broker,
+    std::{io, path::PathBuf, sync::Arc},
 };
 
 const DEV_CERT_A: &str = include_str!("fixtures/security/dev_cert.pem");
@@ -178,15 +178,12 @@ fn cert_fixture() -> (
     let cert_path = write(pem_dir.path(), "cert.pem", DEV_CERT_A);
     let key_path = write(pem_dir.path(), "key.pem", DEV_KEY_A);
 
-    let cfg = ssl_config(
-        log_dir.path().to_path_buf(),
-        TlsConfig {
-            cert_chain_path: cert_path.clone(),
-            private_key_path: key_path.clone(),
-            trust_roots_path: None,
-            client_ca_path: None,
-            client_auth: ClientAuthMode::Disabled,
-        },
-    );
+    let cfg = ssl_config(log_dir.path().to_path_buf(), TlsConfig {
+        cert_chain_path: cert_path.clone(),
+        private_key_path: key_path.clone(),
+        trust_roots_path: None,
+        client_ca_path: None,
+        client_auth: ClientAuthMode::Disabled,
+    });
     (log_dir, pem_dir, cert_path, key_path, cfg)
 }

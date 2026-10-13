@@ -6,22 +6,23 @@
 //! over SASL because the two-person rule needs three distinct principals, and
 //! every connection on a plaintext listener is the same anonymous one.
 
-use assert2::{assert, check};
-use krabka_broker::codes;
-use krabka_client_core::Client;
-use krabka_protocol::{
-    krabka::{
-        break_glass::{ApproveBreakGlassRequest, ProposeBreakGlassRequest},
-        freeze::PATTERN_TYPE_LITERAL,
+use {
+    crate::{
+        control_plane::{cluster_id, freeze_scope, set_freeze, wait_for_registry_len},
+        signing::{SignedFreeze, signed_request},
+        support::{self, OperatorKeysSetup},
+        wire::{CONTROL, accepted, create_topic, now_ms, refused},
     },
-    primitives::uuid::Uuid as WireUuid,
-};
-
-use crate::{
-    control_plane::{cluster_id, freeze_scope, set_freeze, wait_for_registry_len},
-    signing::{SignedFreeze, signed_request},
-    support::{self, OperatorKeysSetup},
-    wire::{CONTROL, accepted, create_topic, now_ms, refused},
+    assert2::{assert, check},
+    krabka_broker::codes,
+    krabka_client_core::Client,
+    krabka_protocol::{
+        krabka::{
+            break_glass::{ApproveBreakGlassRequest, ProposeBreakGlassRequest},
+            freeze::PATTERN_TYPE_LITERAL,
+        },
+        primitives::uuid::Uuid as WireUuid,
+    },
 };
 
 /// The `ThawTopicFreeze` break-glass action, on the wire.

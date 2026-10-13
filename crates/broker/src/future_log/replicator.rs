@@ -5,29 +5,29 @@
 //! directories with `WriterMessage::SwapFutureLog` and acts on the outcome it
 //! acknowledges.
 
-use std::{
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
-
-use dashmap::DashMap;
-use krabka_ids::PartitionIndex;
-use krabka_log::{Log, Offset};
-use krabka_units::convert::TimeExt as _;
-use tokio::sync::oneshot;
-use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
-
-use super::{
-    FutureLogState, MovePolicy,
-    catch_up::catch_up,
-    truncation::{cut_future_log, truncate_to_current_epochs},
-};
 #[cfg(test)]
 use crate::test_support::PartitionRecordsSetup;
-use crate::{
-    partition::{Partition, SwapOutcome, WriterMessage},
-    partition_registry::PartitionRegistry,
+use {
+    super::{
+        FutureLogState, MovePolicy,
+        catch_up::catch_up,
+        truncation::{cut_future_log, truncate_to_current_epochs},
+    },
+    crate::{
+        partition::{Partition, SwapOutcome, WriterMessage},
+        partition_registry::PartitionRegistry,
+    },
+    dashmap::DashMap,
+    krabka_ids::PartitionIndex,
+    krabka_log::{Log, Offset},
+    krabka_units::convert::TimeExt as _,
+    std::{
+        path::PathBuf,
+        sync::{Arc, Mutex},
+    },
+    tokio::sync::oneshot,
+    tokio_util::sync::CancellationToken,
+    tracing::{debug, warn},
 };
 
 /// Replicator task body. It copies batches from `part.log` to `future_log`
@@ -196,23 +196,23 @@ pub(super) async fn replicator_loop(task: ReplicatorTask) {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::atomic::AtomicU64, time::Duration};
-
-    use assert2::assert;
-    use krabka_log::LogConfig;
-    use krabka_units::mebibytes;
-    use tempfile::tempdir;
-
-    use super::*;
-    use crate::{
-        future_log::{
-            canonicalize_or_self, resume_move,
-            test_support::{
-                TestStampSource, append_epoch_batch, append_records, append_value_batch,
-                fixture_partition, open_future_log, registered_source_fixture, test_policy,
+    use {
+        super::*,
+        crate::{
+            future_log::{
+                canonicalize_or_self, resume_move,
+                test_support::{
+                    TestStampSource, append_epoch_batch, append_records, append_value_batch,
+                    fixture_partition, open_future_log, registered_source_fixture, test_policy,
+                },
             },
+            log_dir,
         },
-        log_dir,
+        assert2::assert,
+        krabka_log::LogConfig,
+        krabka_units::mebibytes,
+        std::{sync::atomic::AtomicU64, time::Duration},
+        tempfile::tempdir,
     };
 
     async fn resume_and_wait(

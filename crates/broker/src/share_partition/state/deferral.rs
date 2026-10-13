@@ -8,9 +8,10 @@
 //! reading rather than owned by the machine, which is why nothing here marks
 //! the state dirty and why it persists as `Available`.
 
-use krabka_log::Offset;
-
-use super::{AcquisitionState, InFlightBatch, RecordState};
+use {
+    super::{AcquisitionState, InFlightBatch, RecordState},
+    krabka_log::Offset,
+};
 
 impl AcquisitionState {
     /// Holds back an offset range whose KFC-1 delivery time has not arrived,
@@ -75,17 +76,17 @@ impl AcquisitionState {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use assert2::check;
-
-    use super::*;
-    use crate::{
-        share_coordinator::coordinator::test_support::{DeliveryAttemptCount, state_batch},
-        share_partition::state::{
-            AckType, AcquiredRange,
-            test_support::{LOCK, t0},
+    use {
+        super::*,
+        crate::{
+            share_coordinator::coordinator::test_support::{DeliveryAttemptCount, state_batch},
+            share_partition::state::{
+                AckType, AcquiredRange,
+                test_support::{LOCK, t0},
+            },
         },
+        assert2::check,
+        std::time::Duration,
     };
 
     #[test]

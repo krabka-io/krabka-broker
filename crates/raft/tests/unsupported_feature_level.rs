@@ -6,17 +6,18 @@
 //! was finalized at an unstable `metadata.version`. The tests finalize
 //! `4.4-IV2` (level 33), which is unstable in Kafka 4.3.
 
-use std::time::{Duration, Instant};
-
-use assert2::{assert, check};
-use krabka_metadata::{FeatureLevelRecord, MetadataRecord, NodeId};
-use krabka_raft::{
-    BootstrapMode, Controller, ControllerConfig, ControllerHandle, RaftError,
-    UnstableFeatureVersions,
+use {
+    assert2::{assert, check},
+    krabka_metadata::{FeatureLevelRecord, MetadataRecord, NodeId},
+    krabka_raft::{
+        BootstrapMode, Controller, ControllerConfig, ControllerHandle, RaftError,
+        UnstableFeatureVersions,
+    },
+    krabka_units::prelude::{Time, millis},
+    std::time::{Duration, Instant},
+    tempfile::TempDir,
+    uuid::Uuid,
 };
-use krabka_units::prelude::{Time, millis};
-use tempfile::TempDir;
-use uuid::Uuid;
 
 /// Single-voter elections are instant, and a short timeout keeps each boot well
 /// inside the 30-second leader deadline.

@@ -3,18 +3,19 @@
 //! payload, and a fetch whose acquired window is fragmented must carry every
 //! acquired offset and nothing from the gap between them.
 
-use std::time::Duration;
-
-use assert2::assert;
-use krabka_client_core::Client;
-
-use crate::{
-    harness::{ConsumptionFixture, bootstrap_share_state, consumption_fixture, produce_n},
-    share_rpc::{acquire_three_and_acknowledge, acquired_count, share_fetch},
-    support::share::{
-        ShareAck, ShareSessionEpoch, ShareSessionSetup, acknowledge_success, join_consume_member,
-        permitted_topic_fixture, produce_values, record_values, refetch_while_empty,
+use {
+    crate::{
+        harness::{ConsumptionFixture, bootstrap_share_state, consumption_fixture, produce_n},
+        share_rpc::{acquire_three_and_acknowledge, acquired_count, share_fetch},
+        support::share::{
+            ShareAck, ShareSessionEpoch, ShareSessionSetup, acknowledge_success,
+            join_consume_member, permitted_topic_fixture, produce_values, record_values,
+            refetch_while_empty,
+        },
     },
+    assert2::assert,
+    krabka_client_core::Client,
+    std::time::Duration,
 };
 
 async fn acknowledge_prefix_release(

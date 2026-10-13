@@ -2,41 +2,41 @@
 //! rather than through their return values: what an operator scrapes is the
 //! contract.
 
-use std::{path::Path, sync::Arc, time::Instant};
-
-use assert2::{assert, check};
-use krabka_ids::LeaderEpoch;
-use krabka_log::Offset;
-use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
-use krabka_protocol::{
-    owned::{
-        fetch_response::{FetchableTopicResponse, PartitionData},
-        list_offsets_response::{ListOffsetsPartitionResponse, ListOffsetsTopicResponse},
-    },
-    records::RecordBatch,
-};
-
-use super::*;
-use crate::{
-    coordinator::{
-        bootstrap::OFFSETS_TOPIC,
-        unified::{
-            ImageMetadataProvider,
-            actor::{GroupActorHandle, GroupKindTag},
-            classic_state::OffsetEntry,
-            config::NextGenConfig,
-            offsets_log::fake::InMemoryOffsetsLog,
-            share::config::ShareGroupConfig,
-            streams::config::StreamsGroupConfig,
+use {
+    super::*,
+    crate::{
+        coordinator::{
+            bootstrap::OFFSETS_TOPIC,
+            unified::{
+                ImageMetadataProvider,
+                actor::{GroupActorHandle, GroupKindTag},
+                classic_state::OffsetEntry,
+                config::NextGenConfig,
+                offsets_log::fake::InMemoryOffsetsLog,
+                share::config::ShareGroupConfig,
+                streams::config::StreamsGroupConfig,
+            },
+        },
+        handlers::test_support::replicated_partition,
+        metrics::PartitionLabel,
+        partition::Partition,
+        test_support::{
+            FakeMetadataSource, open_partition, repeated_records_batch, single_partition_topic,
+            started_controller_broker,
         },
     },
-    handlers::test_support::replicated_partition,
-    metrics::PartitionLabel,
-    partition::Partition,
-    test_support::{
-        FakeMetadataSource, open_partition, repeated_records_batch, single_partition_topic,
-        started_controller_broker,
+    assert2::{assert, check},
+    krabka_ids::LeaderEpoch,
+    krabka_log::Offset,
+    krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord},
+    krabka_protocol::{
+        owned::{
+            fetch_response::{FetchableTopicResponse, PartitionData},
+            list_offsets_response::{ListOffsetsPartitionResponse, ListOffsetsTopicResponse},
+        },
+        records::RecordBatch,
     },
+    std::{path::Path, sync::Arc, time::Instant},
 };
 
 const TOPIC: &str = "orders";
@@ -401,17 +401,14 @@ async fn commit_offset(handle: &GroupActorHandle, offset: i64) {
     handle
         .tx
         .send(GroupActorMessage::UpdateCommitted {
-            entries: vec![(
-                (TOPIC.to_string(), 0),
-                OffsetEntry {
-                    offset: Offset(offset),
-                    leader_epoch: 1,
-                    metadata: String::new(),
-                    commit_timestamp_ms: 1_700_000_000_000,
-                    expire_timestamp_ms: None,
-                    topic_id: None,
-                },
-            )],
+            entries: vec![((TOPIC.to_string(), 0), OffsetEntry {
+                offset: Offset(offset),
+                leader_epoch: 1,
+                metadata: String::new(),
+                commit_timestamp_ms: 1_700_000_000_000,
+                expire_timestamp_ms: None,
+                topic_id: None,
+            })],
             reply,
         })
         .await
@@ -739,11 +736,10 @@ async fn remote_watermark_probe_resolves_a_valid_fetch_boundary() {
         BrokerMetrics::new(),
     );
     let watermarks = probe
-        .probe_high_watermarks(
-            &broker.controller.current_image(),
-            LEADER,
-            &[(TOPIC.into(), 0)],
-        )
+        .probe_high_watermarks(&broker.controller.current_image(), LEADER, &[(
+            TOPIC.into(),
+            0,
+        )])
         .await
         .expect("real leader probe");
     assert!(watermarks == HashMap::from([((TOPIC.to_string(), 0), 5)]));

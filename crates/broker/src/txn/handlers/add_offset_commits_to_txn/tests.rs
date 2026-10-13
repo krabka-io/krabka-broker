@@ -1,11 +1,11 @@
-use std::{path::Path, sync::Arc};
-
-use assert2::{assert, check};
-
-use super::*;
-use crate::{
-    partition::Partition, partition_registry::PartitionRegistry,
-    producer_id_manager::ProducerIdManager, test_support::open_partition, txn::bootstrap,
+use {
+    super::*,
+    crate::{
+        partition::Partition, partition_registry::PartitionRegistry,
+        producer_id_manager::ProducerIdManager, test_support::open_partition, txn::bootstrap,
+    },
+    assert2::{assert, check},
+    std::{path::Path, sync::Arc},
 };
 
 const TID: &str = "tid-offsets";

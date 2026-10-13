@@ -6,24 +6,25 @@
 //! `throttle_time_ms` and the first per-topic error code — so a test can tell a
 //! quota rejection apart from an authorization failure.
 
-use std::net::SocketAddr;
-
-use bytes::BytesMut;
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{
-        create_topics_response::CreateTopicsResponse, delete_topics_request::DeleteTopicsRequest,
-        delete_topics_response::DeleteTopicsResponse,
+use {
+    crate::{
+        CLIENT_ID,
+        kafka_wire::{self, PlainAuthenticationSetup},
+        support::{
+            topics::{creatable_topic, create_topic_request_with_setup},
+            wire::HeaderEncoding,
+        },
     },
-};
-
-use crate::{
-    CLIENT_ID,
-    kafka_wire::{self, PlainAuthenticationSetup},
-    support::{
-        topics::{creatable_topic, create_topic_request_with_setup},
-        wire::HeaderEncoding,
+    bytes::BytesMut,
+    krabka_protocol::{
+        Decode, Encode,
+        owned::{
+            create_topics_response::CreateTopicsResponse,
+            delete_topics_request::DeleteTopicsRequest,
+            delete_topics_response::DeleteTopicsResponse,
+        },
     },
+    std::net::SocketAddr,
 };
 
 /// Drive `CreateTopics` (`api_key=19`) over a SASL/PLAIN connection.
@@ -47,14 +48,11 @@ pub(crate) async fn drive_create_topics_sasl(
         .timeout(30_000)
         .call();
 
-    let mut stream = kafka_wire::sasl_plain_authenticate(
-        addr,
-        &PlainAuthenticationSetup {
-            client_id: CLIENT_ID,
-            user,
-            password: (pass.as_bytes()).to_vec(),
-        },
-    )
+    let mut stream = kafka_wire::sasl_plain_authenticate(addr, &PlainAuthenticationSetup {
+        client_id: CLIENT_ID,
+        user,
+        password: (pass.as_bytes()).to_vec(),
+    })
     .await
     .expect("SASL authenticate for CreateTopics");
     let mut body = BytesMut::new();

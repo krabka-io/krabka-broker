@@ -6,11 +6,12 @@
 //! reads back the proposal that list spends. The freeze check that answers
 //! ahead of this gate stays in the module root.
 
-use krabka_metadata::DeleteTopicRecord;
-
 pub(super) use crate::break_glass::gate::consumed_proposal_id;
-use crate::break_glass::gate::{
-    self, BreakGlassAction, BreakGlassConfig, BreakGlassDenial, MetadataImage, MetadataRecord,
+use {
+    crate::break_glass::gate::{
+        self, BreakGlassAction, BreakGlassConfig, BreakGlassDenial, MetadataImage, MetadataRecord,
+    },
+    krabka_metadata::DeleteTopicRecord,
 };
 
 /// The records one topic deletion appends.
@@ -48,12 +49,13 @@ pub(super) fn delete_topic_records(
 
 #[cfg(test)]
 mod tests {
-    use assert2::{assert, check};
-
-    use super::*;
-    use crate::{
-        break_glass::gate::tests::{approved_proposal, image_of},
-        handlers::delete_topics::test_support::{DOOMED, gated_config},
+    use {
+        super::*,
+        crate::{
+            break_glass::gate::tests::{approved_proposal, image_of},
+            handlers::delete_topics::test_support::{DOOMED, gated_config},
+        },
+        assert2::{assert, check},
     };
 
     const NOW_MS: i64 = 60_000;

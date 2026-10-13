@@ -19,24 +19,24 @@
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
-
-use assert2::assert;
-use bytes::Bytes;
-use krabka_broker::{
-    BootstrapMode, BrokerConfig, BrokerHandle, config::NodeRole, file_config::FileConfig,
-    log_dir_id::LogDirIds,
-};
-use krabka_client_producer::{Acks, Producer, ProducerRecord};
-use tempfile::TempDir;
-
-use crate::support::{
-    NodeIndex, RoleNodeSetup, client::create_topic_for_broker, producer::producer_record,
-    topics::configured_topic_request,
+use {
+    crate::support::{
+        NodeIndex, RoleNodeSetup, client::create_topic_for_broker, producer::producer_record,
+        topics::configured_topic_request,
+    },
+    assert2::assert,
+    bytes::Bytes,
+    krabka_broker::{
+        BootstrapMode, BrokerConfig, BrokerHandle, config::NodeRole, file_config::FileConfig,
+        log_dir_id::LogDirIds,
+    },
+    krabka_client_producer::{Acks, Producer, ProducerRecord},
+    std::{
+        collections::BTreeMap,
+        path::{Path, PathBuf},
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    },
+    tempfile::TempDir,
 };
 
 mod support;
@@ -113,14 +113,11 @@ async fn start_cluster() -> Cluster {
     for index in 1..NODES {
         let primary = TempDir::new().unwrap();
         let extra = TempDir::new().unwrap();
-        let mut cfg = topology.config(
-            primary.path(),
-            RoleNodeSetup {
-                index: NodeIndex(index),
-                mode: BootstrapMode::Join,
-                ..Default::default()
-            },
-        );
+        let mut cfg = topology.config(primary.path(), RoleNodeSetup {
+            index: NodeIndex(index),
+            mode: BootstrapMode::Join,
+            ..Default::default()
+        });
         cfg.extra_log_dirs = vec![extra.path().to_path_buf()];
         cfg.replica_lag_time_max = krabka_units::minutes(10);
         apply_server_properties(&mut cfg);
@@ -232,13 +229,9 @@ struct ReadOnlyTree;
 
 #[cfg(not(unix))]
 impl ReadOnlyTree {
-    fn new(_root: &Path) -> Self {
-        Self
-    }
+    fn new(_root: &Path) -> Self { Self }
 
-    fn refuses_writes(&self) -> bool {
-        false
-    }
+    fn refuses_writes(&self) -> bool { false }
 }
 
 /// Produces one record to partition 0 of [`TOPIC`] with the timestamp

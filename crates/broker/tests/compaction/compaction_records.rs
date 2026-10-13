@@ -6,23 +6,24 @@
 //! `Fetch` calls. Its result feeds `assert_latest_records_survive`, which is
 //! the actual claim of this suite, so the two live together.
 
-use std::net::SocketAddr;
-
-use assert2::assert;
-use krabka_protocol::{
-    owned::{fetch_request::FetchRequest, fetch_response::FetchResponse},
-    primitives::uuid::Uuid,
-};
-use tokio::net::TcpStream;
-
-use crate::{
-    CLIENT_ID, kafka_wire,
-    support::{
-        fetch::{
-            FetchByteLimit, FetchLimits, RequestWaitMillis, fetch_partition, single_partition_fetch,
+use {
+    crate::{
+        CLIENT_ID, kafka_wire,
+        support::{
+            fetch::{
+                FetchByteLimit, FetchLimits, RequestWaitMillis, fetch_partition,
+                single_partition_fetch,
+            },
+            wire::HeaderEncoding as RequestHeaderEncoding,
         },
-        wire::HeaderEncoding as RequestHeaderEncoding,
     },
+    assert2::assert,
+    krabka_protocol::{
+        owned::{fetch_request::FetchRequest, fetch_response::FetchResponse},
+        primitives::uuid::Uuid,
+    },
+    std::net::SocketAddr,
+    tokio::net::TcpStream,
 };
 
 /// A flattened record: key and value as plain byte vecs.

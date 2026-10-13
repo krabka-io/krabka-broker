@@ -4,21 +4,21 @@
 //! a renew-ack extends the deadline so the sweep leaves the record acquired.
 //! The last test is the un-renewed control for the renew case.
 
-use std::time::{Duration, Instant};
-
-use assert2::assert;
-
-use crate::{
-    NONE,
-    harness::initialize_consumption,
-    share_rpc::{
-        acquired_count, fetch_empty, fetch_redelivered, fetch_until_acquired, share_fetch,
-        share_renew,
+use {
+    crate::{
+        NONE,
+        harness::initialize_consumption,
+        share_rpc::{
+            acquired_count, fetch_empty, fetch_redelivered, fetch_until_acquired, share_fetch,
+            share_renew,
+        },
+        support::share::{
+            ConsumptionSetup, ShareBrokerFixture, ShareFetchSetup, ShareRecordCount,
+            ShareSessionEpoch, ShareSessionSetup, permitted_topic_fixture,
+        },
     },
-    support::share::{
-        ConsumptionSetup, ShareBrokerFixture, ShareFetchSetup, ShareRecordCount, ShareSessionEpoch,
-        ShareSessionSetup, permitted_topic_fixture,
-    },
+    assert2::assert,
+    std::time::{Duration, Instant},
 };
 
 /// The background sweep reverts an acquired-but-unacknowledged lock that
@@ -159,14 +159,10 @@ async fn lock_fixture(
             .call(),
     )
     .await;
-    let (member, _) = initialize_consumption(
-        &broker,
-        &client,
-        ConsumptionSetup {
-            topic_id: tid,
-            count: ShareRecordCount(1),
-        },
-    )
+    let (member, _) = initialize_consumption(&broker, &client, ConsumptionSetup {
+        topic_id: tid,
+        count: ShareRecordCount(1),
+    })
     .await;
 
     (permit, broker, client, dir, tid, member)

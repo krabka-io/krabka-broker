@@ -8,28 +8,28 @@
 //! transaction through the broker that is elected next, and reads the records
 //! with `read_committed`.
 
-use std::time::{Duration, Instant};
-
-use assert2::assert;
-use krabka_broker::{BrokerConfig, BrokerHandle, NodeId};
-use krabka_client_core::Client;
-use krabka_protocol::owned::end_txn_response::EndTxnResponse;
-use tempfile::TempDir;
-
-use crate::{
-    support::{
-        client::connect_owned,
-        discovery::{coordinator_lookup_request, topic_metadata_request},
-        shutdown_cluster,
-        topics::{AssignedTopicSetup, metadata_topic},
-        transaction_wire::{
-            add_partition_request, coordinator_loading, create_assigned_topic,
-            init_producer_request, initialized_identity, partition_added, partition_leader,
-            produce_fixture, read_committed_through, retry_coordinator,
+use {
+    crate::{
+        support::{
+            client::connect_owned,
+            discovery::{coordinator_lookup_request, topic_metadata_request},
+            shutdown_cluster,
+            topics::{AssignedTopicSetup, metadata_topic},
+            transaction_wire::{
+                add_partition_request, coordinator_loading, create_assigned_topic,
+                init_producer_request, initialized_identity, partition_added, partition_leader,
+                produce_fixture, read_committed_through, retry_coordinator,
+            },
+            transactions::{ProducerIdentity, end_transaction_request},
         },
-        transactions::{ProducerIdentity, end_transaction_request},
+        txn_harness::registered_transaction_cluster,
     },
-    txn_harness::registered_transaction_cluster,
+    assert2::assert,
+    krabka_broker::{BrokerConfig, BrokerHandle, NodeId},
+    krabka_client_core::Client,
+    krabka_protocol::owned::end_txn_response::EndTxnResponse,
+    std::time::{Duration, Instant},
+    tempfile::TempDir,
 };
 
 const TID: &str = "txn-coordinator-failover";
@@ -43,9 +43,7 @@ const SETTLE: Duration = Duration::from_secs(60);
 
 type Cluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
 
-fn retriable(code: i16) -> bool {
-    coordinator_loading(code)
-}
+fn retriable(code: i16) -> bool { coordinator_loading(code) }
 
 async fn client(address: &str) -> Client {
     connect_owned(address, "txn-coordinator-failover", "client").await

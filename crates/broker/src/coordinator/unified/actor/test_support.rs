@@ -2,19 +2,20 @@
 //! provider, coordinator builders, classic-group seeders, and the offsets-log
 //! readers that several actor submodules assert against.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
-
-use assert2::assert;
-use bytes::Bytes;
-use krabka_protocol::{
-    owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest, primitives::uuid::Uuid,
-};
-
-use crate::coordinator::unified::{
-    ClientIdentity, classic_state::Member, config::ConsumerGroupMigrationPolicy,
-    consumer_state::MemberState, offsets_log::fake::ClassicMetadataRecord,
-    persistence::GroupMetadataValue, share::config::ShareGroupConfig,
-    streams::config::StreamsGroupConfig, test_support::MemberEpoch,
+use {
+    crate::coordinator::unified::{
+        ClientIdentity, classic_state::Member, config::ConsumerGroupMigrationPolicy,
+        consumer_state::MemberState, offsets_log::fake::ClassicMetadataRecord,
+        persistence::GroupMetadataValue, share::config::ShareGroupConfig,
+        streams::config::StreamsGroupConfig, test_support::MemberEpoch,
+    },
+    assert2::assert,
+    bytes::Bytes,
+    krabka_protocol::{
+        owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
+        primitives::uuid::Uuid,
+    },
+    std::{collections::HashMap, sync::Arc, time::Duration},
 };
 
 pub(crate) mod rpc;
@@ -31,16 +32,18 @@ pub(super) fn consumer_native_join_request(member_id: &str) -> ConsumerGroupHear
     }
 }
 
-use super::{GroupActorHandle, MetadataProvider};
-use crate::{
-    codes,
-    coordinator::unified::{
-        GroupCoordinator,
-        config::NextGenConfig,
-        consumer_state::GroupState,
-        group::{CoordinatorGroup, GroupKind},
-        offsets_log::fake::InMemoryOffsetsLog,
-        reconciler::ReconcileInput,
+use {
+    super::{GroupActorHandle, MetadataProvider},
+    crate::{
+        codes,
+        coordinator::unified::{
+            GroupCoordinator,
+            config::NextGenConfig,
+            consumer_state::GroupState,
+            group::{CoordinatorGroup, GroupKind},
+            offsets_log::fake::InMemoryOffsetsLog,
+            reconciler::ReconcileInput,
+        },
     },
 };
 
@@ -49,9 +52,7 @@ pub(super) struct StaticMetadata {
     pub(super) input: ReconcileInput,
 }
 impl MetadataProvider for StaticMetadata {
-    fn snapshot(&self) -> ReconcileInput {
-        self.input.clone()
-    }
+    fn snapshot(&self) -> ReconcileInput { self.input.clone() }
 }
 
 /// A reconciler image containing one named topic with the supplied wire id.
@@ -315,14 +316,10 @@ pub(super) fn make_coordinator_with_topic_policy(
     partitions: i32,
     policy: ConsumerGroupMigrationPolicy,
 ) -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
-    make_coordinator_with_topic_config(
-        topic,
-        partitions,
-        NextGenConfig {
-            migration_policy: policy,
-            ..NextGenConfig::assigning_at_once()
-        },
-    )
+    make_coordinator_with_topic_config(topic, partitions, NextGenConfig {
+        migration_policy: policy,
+        ..NextGenConfig::assigning_at_once()
+    })
 }
 
 /// As [`make_coordinator_with_topic`], but with an explicit consumer-group
@@ -349,15 +346,15 @@ pub(super) fn make_coordinator_with_topic_config(
 /// A real classic consumer client's `JoinGroup` protocol metadata: a
 /// `ConsumerProtocolSubscription` with the leading version-negotiation
 /// prefix.
-pub(crate) fn subscription_blob(topics: &[&str]) -> Bytes {
-    subscription_blob_at(0, topics)
-}
+pub(crate) fn subscription_blob(topics: &[&str]) -> Bytes { subscription_blob_at(0, topics) }
 
 /// Classic subscription metadata with its negotiated version prefix and body.
 pub(crate) fn subscription_blob_at(version: i16, topics: &[&str]) -> Bytes {
-    use bytes::{BufMut, BytesMut};
-    use krabka_protocol::{
-        Encode, owned::consumer_protocol_subscription::ConsumerProtocolSubscription,
+    use {
+        bytes::{BufMut, BytesMut},
+        krabka_protocol::{
+            Encode, owned::consumer_protocol_subscription::ConsumerProtocolSubscription,
+        },
     };
     let sub = ConsumerProtocolSubscription {
         topics: topics.iter().map(|s| (*s).to_string()).collect(),
@@ -374,9 +371,11 @@ pub(crate) fn subscription_blob_at(version: i16, topics: &[&str]) -> Bytes {
 pub(super) fn decode_assignment(
     blob: &Bytes,
 ) -> krabka_protocol::owned::consumer_protocol_assignment::ConsumerProtocolAssignment {
-    use bytes::Buf;
-    use krabka_protocol::{
-        Decode, owned::consumer_protocol_assignment::ConsumerProtocolAssignment,
+    use {
+        bytes::Buf,
+        krabka_protocol::{
+            Decode, owned::consumer_protocol_assignment::ConsumerProtocolAssignment,
+        },
     };
     let mut cur = &blob[..];
     let version = cur.get_i16();
@@ -423,15 +422,12 @@ pub(super) async fn upgrade_with_transient_native(handle: &Arc<GroupActorHandle>
     // under test — otherwise it would claim a share of the partitions.
     let native_id = resp.member_id.expect("native member id");
     assert!(
-        rpc::consumer_request(
-            handle,
-            ConsumerGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: native_id,
-                member_epoch: -1,
-                ..Default::default()
-            }
-        )
+        rpc::consumer_request(handle, ConsumerGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id: native_id,
+            member_epoch: -1,
+            ..Default::default()
+        })
         .await
         .error_code
             == codes::NONE

@@ -14,18 +14,18 @@
 //! absent one. An id row the principal may not delete carries the topic name
 //! only when the principal may describe the topic.
 
-use std::collections::HashSet;
-
-use krabka_metadata::AclOperation;
-use krabka_protocol::{
-    owned::delete_topics_response::DeletableTopicResult, primitives::uuid::Uuid as WireUuid,
-};
-
-use super::{request::TopicNameRequest, wire::delete_topic_result};
-use crate::{
-    broker::Broker,
-    codes,
-    handlers::{RequestContext, allowed_topics, cluster_shortcut_denied},
+use {
+    super::{request::TopicNameRequest, wire::delete_topic_result},
+    crate::{
+        broker::Broker,
+        codes,
+        handlers::{RequestContext, allowed_topics, cluster_shortcut_denied},
+    },
+    krabka_metadata::AclOperation,
+    krabka_protocol::{
+        owned::delete_topics_response::DeletableTopicResult, primitives::uuid::Uuid as WireUuid,
+    },
+    std::collections::HashSet,
 };
 
 /// The topics of one request that the principal may describe and may delete.

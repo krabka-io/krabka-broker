@@ -4,12 +4,12 @@
 //! The uniform-timeout case is the regression guard for the split-vote
 //! livelock, which the staggered topologies cannot reach.
 
-use std::time::Duration;
-
-use krabka_raft::kraft::NodeId;
-use krabka_units::prelude::millis;
-
-use crate::harness::{await_single_leader, build_engine, start_engines, three_voter_network};
+use {
+    crate::harness::{await_single_leader, build_engine, start_engines, three_voter_network},
+    krabka_raft::kraft::NodeId,
+    krabka_units::prelude::millis,
+    std::time::Duration,
+};
 
 /// 1. Three engines elect exactly one leader and agree on the epoch.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

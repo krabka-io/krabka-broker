@@ -16,9 +16,10 @@
 //! `SharePartition.initiateDLQAndArchive` does: a record that cannot be
 //! dead-lettered must not hold the SPSO for ever.
 
-use krabka_log::Offset;
-
-use super::{AcquisitionState, InFlightBatch, RecordState};
+use {
+    super::{AcquisitionState, InFlightBatch, RecordState},
+    krabka_log::Offset,
+};
 
 /// Why a record goes to the dead-letter queue: Kafka's
 /// `ShareGroupDLQManager.CLIENT_REJECT` and `DELIVERY_COUNT_EXCEEDED`.
@@ -101,14 +102,11 @@ impl AcquisitionState {
     /// The runs of the window, and the sink that archives them, borrowed
     /// apart so a loop over the runs can archive.
     pub(super) fn runs_and_sink(&mut self) -> (&mut [InFlightBatch], ArchiveSink<'_>) {
-        (
-            &mut self.batches,
-            ArchiveSink {
-                dlq_enabled: self.dlq_enabled,
-                delivery_complete_count: &mut self.delivery_complete_count,
-                pending_dlq: &mut self.pending_dlq,
-            },
-        )
+        (&mut self.batches, ArchiveSink {
+            dlq_enabled: self.dlq_enabled,
+            delivery_complete_count: &mut self.delivery_complete_count,
+            pending_dlq: &mut self.pending_dlq,
+        })
     }
 
     /// Sets whether the group has a dead-letter queue: Kafka's
@@ -119,16 +117,12 @@ impl AcquisitionState {
     /// The setting is read afresh on each operation, so the owner sets it
     /// after it takes the state and before it applies anything. It does not
     /// touch a run that is `Archiving` already.
-    pub fn set_dlq_enabled(&mut self, enabled: bool) {
-        self.dlq_enabled = enabled;
-    }
+    pub fn set_dlq_enabled(&mut self, enabled: bool) { self.dlq_enabled = enabled; }
 
     /// Hands out the `Archiving` runs whose dead-letter write has not
     /// started, and forgets them. The caller writes each run to the queue and
     /// then calls [`Self::finish_archiving`].
-    pub fn take_pending_dlq(&mut self) -> Vec<DlqRange> {
-        std::mem::take(&mut self.pending_dlq)
-    }
+    pub fn take_pending_dlq(&mut self) -> Vec<DlqRange> { std::mem::take(&mut self.pending_dlq) }
 
     /// The second phase: moves every `Archiving` record in `[first, last]` to
     /// `Archived`, counts it as terminal, marks the state dirty and advances
@@ -152,17 +146,18 @@ impl AcquisitionState {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-
-    use super::*;
-    use crate::{
-        share_coordinator::coordinator::test_support::{
-            DeliveryAttemptCount, FixtureDeliveryState, state_batch as batch,
+    use {
+        super::*,
+        crate::{
+            share_coordinator::coordinator::test_support::{
+                DeliveryAttemptCount, FixtureDeliveryState, state_batch as batch,
+            },
+            share_partition::state::{
+                AckType, AcquiredRange,
+                test_support::{DeadLetterQueue, LOCK, acquire_window, dlq_range as range, t0},
+            },
         },
-        share_partition::state::{
-            AckType, AcquiredRange,
-            test_support::{DeadLetterQueue, LOCK, acquire_window, dlq_range as range, t0},
-        },
+        assert2::assert,
     };
 
     fn state_with_dlq(end: Offset) -> AcquisitionState {
@@ -336,14 +331,11 @@ mod tests {
         assert!(
             (partial, s.dirty)
                 == (
-                    (
-                        Offset(0),
-                        vec![
-                            (0, RecordState::Archiving),
-                            (1, RecordState::Archived),
-                            (2, RecordState::Archiving),
-                        ],
-                    ),
+                    (Offset(0), vec![
+                        (0, RecordState::Archiving),
+                        (1, RecordState::Archived),
+                        (2, RecordState::Archiving),
+                    ],),
                     false,
                 )
         );
@@ -380,16 +372,12 @@ mod tests {
 
         assert!(
             (pending, spso, after)
-                == (
-                    vec![range().last(1).call()],
-                    Offset(2),
-                    vec![
-                        batch()
-                            .bounds(Offset(2)..=Offset(2))
-                            .delivery(FixtureDeliveryState::Available)
-                            .call()
-                    ],
-                )
+                == (vec![range().last(1).call()], Offset(2), vec![
+                    batch()
+                        .bounds(Offset(2)..=Offset(2))
+                        .delivery(FixtureDeliveryState::Available)
+                        .call()
+                ],)
         );
     }
 
@@ -399,16 +387,11 @@ mod tests {
     #[test]
     fn an_archiving_run_holds_the_spso() {
         let mut s = AcquisitionState::new(Offset(0));
-        s.load_from(
-            Offset(0),
-            1,
-            1,
-            &[batch()
-                .bounds(Offset(0)..=Offset(0))
-                .delivery(FixtureDeliveryState::Archiving)
-                .attempts(DeliveryAttemptCount(5))
-                .call()],
-        );
+        s.load_from(Offset(0), 1, 1, &[batch()
+            .bounds(Offset(0)..=Offset(0))
+            .delivery(FixtureDeliveryState::Archiving)
+            .attempts(DeliveryAttemptCount(5))
+            .call()]);
 
         assert!((s.start_offset, s.delivery_complete_count()) == (Offset(0), 0));
     }

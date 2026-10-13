@@ -2,17 +2,18 @@
 //! a custom trust bundle, the on-demand signal and its rate limit, the two
 //! shared timestamps a validator reads, and the shutdown a dead ticker forces.
 
-use assert2::{assert, check};
-use krabka_units::{millis, minutes};
-use qubit_clock::{ManualMonotonicClock, MonotonicClock as _, StdTimer};
-
-use super::*;
-use crate::{
-    oauth_jwks::test_support::{
-        JWKS_BODY, await_until, dormant_timer, make_signal_refresher, serve_jwks,
-        serve_jwks_counting, serve_jwks_https, test_refresher,
+use {
+    super::*,
+    crate::{
+        oauth_jwks::test_support::{
+            JWKS_BODY, await_until, dormant_timer, make_signal_refresher, serve_jwks,
+            serve_jwks_counting, serve_jwks_https, test_refresher,
+        },
+        test_support::{BrokenTimer, TimerFailure},
     },
-    test_support::{BrokenTimer, TimerFailure},
+    assert2::{assert, check},
+    krabka_units::{millis, minutes},
+    qubit_clock::{ManualMonotonicClock, MonotonicClock as _, StdTimer},
 };
 
 async fn check_first_fetch_and_stop(

@@ -9,24 +9,24 @@
 //! sentinel offset `-1`. That matches the JVM behaviour for a replica that the
 //! broker is not a member of.
 
-use std::sync::atomic::Ordering;
-
-use bytes::Bytes;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        get_replica_log_info_request::GetReplicaLogInfoRequest,
-        get_replica_log_info_response::{
-            GetReplicaLogInfoResponse, PartitionLogInfo, TopicPartitionLogInfo,
-        },
+use {
+    crate::{
+        codes,
+        error::BrokerError,
+        handlers::{cluster_action_denied, encode_response},
     },
-    primitives::uuid::Uuid as WireUuid,
-};
-
-use crate::{
-    codes,
-    error::BrokerError,
-    handlers::{cluster_action_denied, encode_response},
+    bytes::Bytes,
+    krabka_protocol::{
+        Decode,
+        owned::{
+            get_replica_log_info_request::GetReplicaLogInfoRequest,
+            get_replica_log_info_response::{
+                GetReplicaLogInfoResponse, PartitionLogInfo, TopicPartitionLogInfo,
+            },
+        },
+        primitives::uuid::Uuid as WireUuid,
+    },
+    std::sync::atomic::Ordering,
 };
 
 wire_handler! {
@@ -133,12 +133,13 @@ fn unanswered(partition: i32, error_code: i16, error_message: &str) -> Partition
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-
-    use super::*;
-    use crate::{
-        log_dir::partition_dir,
-        test_support::{encode_request, peer, spawn_standalone_partition},
+    use {
+        super::*,
+        crate::{
+            log_dir::partition_dir,
+            test_support::{encode_request, peer, spawn_standalone_partition},
+        },
+        assert2::assert,
     };
 
     /// A locally hosted partition answers with its cached
@@ -147,15 +148,15 @@ mod tests {
     /// set it to the default 0.
     #[tokio::test]
     async fn hosted_partition_reports_current_leader_epoch() {
-        use std::sync::{Arc, atomic::Ordering};
-
-        use krabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicRecord};
-        use krabka_protocol::owned::{
-            get_replica_log_info_request::{self, GetReplicaLogInfoRequest, TopicPartitions},
-            get_replica_log_info_response::GetReplicaLogInfoResponse,
+        use {
+            crate::test_support::{peer, principal},
+            krabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicRecord},
+            krabka_protocol::owned::{
+                get_replica_log_info_request::{self, GetReplicaLogInfoRequest, TopicPartitions},
+                get_replica_log_info_response::GetReplicaLogInfoResponse,
+            },
+            std::sync::{Arc, atomic::Ordering},
         };
-
-        use crate::test_support::{peer, principal};
 
         let topic_uuid = uuid::Uuid::from_u128(0xABCD);
         broker_fixture!(

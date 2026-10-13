@@ -4,21 +4,22 @@
 //! Release re-delivers the same offsets at a higher `delivery_count`. Reject
 //! archives them, so the start offset moves past the poison record.
 
-use assert2::{assert, check};
-
-use crate::{
-    harness::{
-        ConsumptionFixture, broker_config, broker_test_permit, consumption_fixture,
-        initialize_consumption, join, produce_n,
+use {
+    crate::{
+        harness::{
+            ConsumptionFixture, broker_config, broker_test_permit, consumption_fixture,
+            initialize_consumption, join, produce_n,
+        },
+        share_rpc::{
+            AcquiredRecordCount, acquired_count, fetch_count, fetch_empty, fetch_until_acquired,
+            share_fetch,
+        },
+        support::share::{
+            ConsumptionSetup, RetryEpochs, ShareAck, ShareSessionEpoch, ShareSessionSetup,
+            acknowledge_success, refetch_while_empty, rejoin_group, start_topic,
+        },
     },
-    share_rpc::{
-        AcquiredRecordCount, acquired_count, fetch_count, fetch_empty, fetch_until_acquired,
-        share_fetch,
-    },
-    support::share::{
-        ConsumptionSetup, RetryEpochs, ShareAck, ShareSessionEpoch, ShareSessionSetup,
-        acknowledge_success, refetch_while_empty, rejoin_group, start_topic,
-    },
+    assert2::{assert, check},
 };
 
 /// Acquire 3 records, Accept them all, and observe the SPSO advance. The test
@@ -37,14 +38,10 @@ async fn consume_accept_restart() {
             .call()
             .await;
         tid = topic;
-        let (member, _) = initialize_consumption(
-            &broker,
-            &client,
-            ConsumptionSetup {
-                topic_id: tid,
-                ..Default::default()
-            },
-        )
+        let (member, _) = initialize_consumption(&broker, &client, ConsumptionSetup {
+            topic_id: tid,
+            ..Default::default()
+        })
         .await;
         let session = ShareSessionSetup::joined(&member, tid);
 

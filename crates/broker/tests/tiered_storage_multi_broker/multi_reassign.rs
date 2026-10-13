@@ -21,31 +21,31 @@
 //! for any copy to complete; making it the leader keeps it running and keeps
 //! brokers 2 and 3 free to be the replica this test adds.
 
-use std::{
-    path::Path,
-    time::{Duration, Instant},
-};
-
-use assert2::{assert, check};
-use krabka_broker::{BrokerHandle, metrics::PartitionLabel};
-use krabka_client_core::Client;
-use krabka_protocol::{
-    owned::alter_partition_reassignments_request::{
-        AlterPartitionReassignmentsRequest, ReassignablePartition, ReassignableTopic,
+use {
+    crate::{
+        multi_client::topic_id_for,
+        multi_cluster::{ready_admin, start_three_tiered_brokers_with_segment_sizes},
+        multi_workload::local_segment_bases,
+        support::{
+            client::connect_owned,
+            storage::{local_log_segment_metadata, topic_remote_log_files},
+            topics::AssignedTopicSetup,
+        },
+        topic_fixture::{create_assigned_topic, produce_records as produce_tiered_records},
     },
-    primitives::uuid::Uuid as WireUuid,
-};
-
-use crate::{
-    multi_client::topic_id_for,
-    multi_cluster::{ready_admin, start_three_tiered_brokers_with_segment_sizes},
-    multi_workload::local_segment_bases,
-    support::{
-        client::connect_owned,
-        storage::{local_log_segment_metadata, topic_remote_log_files},
-        topics::AssignedTopicSetup,
+    assert2::{assert, check},
+    krabka_broker::{BrokerHandle, metrics::PartitionLabel},
+    krabka_client_core::Client,
+    krabka_protocol::{
+        owned::alter_partition_reassignments_request::{
+            AlterPartitionReassignmentsRequest, ReassignablePartition, ReassignableTopic,
+        },
+        primitives::uuid::Uuid as WireUuid,
     },
-    topic_fixture::{create_assigned_topic, produce_records as produce_tiered_records},
+    std::{
+        path::Path,
+        time::{Duration, Instant},
+    },
 };
 
 /// The topic this suite produces into.

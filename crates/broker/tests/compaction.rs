@@ -13,13 +13,14 @@
 
 mod support;
 
-use krabka_broker::metrics::PartitionLabel;
-
-use crate::{
-    compaction_cluster::start_broker_with_fast_cleaner,
-    compaction_records::{assert_latest_records_survive, fetch_all},
-    compaction_rpc::{create_topic_with_configs, get_topic_id, produce_record},
-    support::topics::CreateTopicSetup,
+use {
+    crate::{
+        compaction_cluster::start_broker_with_fast_cleaner,
+        compaction_records::{assert_latest_records_survive, fetch_all},
+        compaction_rpc::{create_topic_with_configs, get_topic_id, produce_record},
+        support::topics::CreateTopicSetup,
+    },
+    krabka_broker::metrics::PartitionLabel,
 };
 
 mod kafka_wire;
@@ -55,17 +56,14 @@ async fn compaction_dedupes_via_native_client() {
     let (handle, _dir, addr) = start_broker_with_fast_cleaner().await;
 
     // Create the compacted topic.
-    create_topic_with_configs(
-        addr,
-        CreateTopicSetup {
-            topic: "compacted",
-            configs: &[
-                ("cleanup.policy", "compact"),
-                ("internal.segment.bytes", "256"),
-            ],
-            ..Default::default()
-        },
-    )
+    create_topic_with_configs(addr, CreateTopicSetup {
+        topic: "compacted",
+        configs: &[
+            ("cleanup.policy", "compact"),
+            ("internal.segment.bytes", "256"),
+        ],
+        ..Default::default()
+    })
     .await;
 
     // Wait for the partition to appear in the broker's registry.

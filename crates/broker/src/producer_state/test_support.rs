@@ -1,7 +1,6 @@
 //! Defaulted inputs for non-transactional producer-state commits.
 
-use super::ProducerState;
-use crate::test_support::UnixMillis;
+use {super::ProducerState, crate::test_support::UnixMillis};
 
 #[derive(derive_more::From, derive_more::Into, Debug, Clone, Copy, Default)]
 pub(super) struct ProducerEpoch(pub i16);
@@ -10,9 +9,7 @@ pub(super) struct ProducerSequence(pub i32);
 #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 pub(super) struct SequenceDelta(pub i32);
 impl Default for SequenceDelta {
-    fn default() -> Self {
-        Self(4)
-    }
+    fn default() -> Self { Self(4) }
 }
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]

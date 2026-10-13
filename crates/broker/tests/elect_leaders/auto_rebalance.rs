@@ -6,16 +6,16 @@
 //! `support::start_n_node`, because the rebalance settings have to be applied
 //! to each `BrokerConfig` before the broker starts.
 
-use std::net::SocketAddr;
-
-use krabka_broker::Broker;
-use tokio::net::TcpSocket;
-
-use crate::{
-    cluster_lock,
-    support::{self, controller_voters, topics::AssignedTopicSetup},
-    wait::{wait_isr_contains, wait_partition_exists, wait_partition_leader},
-    wire::create_topic_plaintext,
+use {
+    crate::{
+        cluster_lock,
+        support::{self, controller_voters, topics::AssignedTopicSetup},
+        wait::{wait_isr_contains, wait_partition_exists, wait_partition_leader},
+        wire::create_topic_plaintext,
+    },
+    krabka_broker::Broker,
+    std::net::SocketAddr,
+    tokio::net::TcpSocket,
 };
 
 /// A 3-broker PLAINTEXT cluster with automatic leader rebalance on.
@@ -118,13 +118,10 @@ async fn auto_rebalance_restores_preferred_leader() {
     // ── Phase 2: create rf=2 topic via PLAINTEXT wire. ────────────────────
     // With 3 registered brokers sorted [1, 2, 3] and rf=2, the round-robin
     // assignment for partition 0 is replicas=[1, 2]. Broker 1 is preferred.
-    create_topic_plaintext(
-        addr,
-        AssignedTopicSetup {
-            name: (topic).into(),
-            replicas: vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
-        },
-    )
+    create_topic_plaintext(addr, AssignedTopicSetup {
+        name: (topic).into(),
+        replicas: vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
+    })
     .await;
 
     wait_partition_exists(&h0, topic, 0).await;

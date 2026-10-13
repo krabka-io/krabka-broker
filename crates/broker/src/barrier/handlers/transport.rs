@@ -29,29 +29,29 @@
 //! leave the target out of the returned placements. The fan-out keeps that
 //! target pending and retries it until the injection deadline runs out.
 
-use std::{collections::BTreeMap, sync::Arc};
-
-use async_trait::async_trait;
-use krabka_ids::{NodeId, PartitionIndex};
-use krabka_log::Offset;
-use krabka_metadata::{BrokerRegistrationRecord, MetadataImage};
-use krabka_protocol::krabka::barrier::{
-    WritableBarrierPartition, WritableBarrierTopic, WriteBarrierMarkersRequest,
-    WriteBarrierMarkersResponse,
-};
-use krabka_security::ListenerProtocol;
-use tracing::warn;
-
-use crate::{
-    barrier::{
-        injection::{MarkerPlacement, RemoteMarkerWriter},
-        marker::BarrierMarker,
-        state::TargetPartition,
+use {
+    crate::{
+        barrier::{
+            injection::{MarkerPlacement, RemoteMarkerWriter},
+            marker::BarrierMarker,
+            state::TargetPartition,
+        },
+        codes,
+        error::BrokerError,
+        metadata_source::MetadataSource,
+        network::client::InterBrokerClient,
     },
-    codes,
-    error::BrokerError,
-    metadata_source::MetadataSource,
-    network::client::InterBrokerClient,
+    async_trait::async_trait,
+    krabka_ids::{NodeId, PartitionIndex},
+    krabka_log::Offset,
+    krabka_metadata::{BrokerRegistrationRecord, MetadataImage},
+    krabka_protocol::krabka::barrier::{
+        WritableBarrierPartition, WritableBarrierTopic, WriteBarrierMarkersRequest,
+        WriteBarrierMarkersResponse,
+    },
+    krabka_security::ListenerProtocol,
+    std::{collections::BTreeMap, sync::Arc},
+    tracing::warn,
 };
 
 /// A [`RemoteMarkerWriter`] over the inter-broker listener.
@@ -229,23 +229,24 @@ fn placements(response: &WriteBarrierMarkersResponse) -> Vec<MarkerPlacement> {
 #[cfg(test)]
 mod tests {
 
-    use assert2::check;
-    use krabka_log::Offset;
-    use krabka_metadata::{BrokerEndpoint, BrokerRegistrationRecord, MetadataImage};
-    use krabka_protocol::krabka::barrier::{
-        WritableBarrierPartition, WritableBarrierTopic, WriteBarrierMarkersRequest,
-        WriteBarrierMarkersResponse, WrittenBarrierPartition, WrittenBarrierTopic,
-    };
-    use krabka_security::ListenerProtocol;
-
-    use super::{build_request, endpoint_of, placements};
-    use crate::{
-        barrier::{
-            injection::MarkerPlacement,
-            test_support::{at, marker},
+    use {
+        super::{build_request, endpoint_of, placements},
+        crate::{
+            barrier::{
+                injection::MarkerPlacement,
+                test_support::{at, marker},
+            },
+            codes,
+            test_support::broker_registration,
         },
-        codes,
-        test_support::broker_registration,
+        assert2::check,
+        krabka_log::Offset,
+        krabka_metadata::{BrokerEndpoint, BrokerRegistrationRecord, MetadataImage},
+        krabka_protocol::krabka::barrier::{
+            WritableBarrierPartition, WritableBarrierTopic, WriteBarrierMarkersRequest,
+            WriteBarrierMarkersResponse, WrittenBarrierPartition, WrittenBarrierTopic,
+        },
+        krabka_security::ListenerProtocol,
     };
 
     fn registration(endpoints: Vec<BrokerEndpoint>) -> BrokerRegistrationRecord {

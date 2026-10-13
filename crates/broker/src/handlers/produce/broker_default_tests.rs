@@ -9,23 +9,23 @@
 //! produce validates against it. A topic that overrides the key keeps its own
 //! value.
 
-use std::sync::Arc;
-
-use assert2::assert;
-use bytes::Bytes;
-use krabka_compression::CompressionType;
-use krabka_metadata::{BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataRecord};
-use krabka_protocol::records::{Attributes, Record, RecordBatch, RecordsPayload};
-
-use crate::{
-    api_catalog::UnstableApiVersions,
-    authorizer::AllowAllAuthorizer,
-    broker::BrokerHandle,
-    codes,
-    handlers::test_support::{
-        create_topic as create_topic_from_test_support, produce_partition_request, produce_wire,
+use {
+    crate::{
+        api_catalog::UnstableApiVersions,
+        authorizer::AllowAllAuthorizer,
+        broker::BrokerHandle,
+        codes,
+        handlers::test_support::{
+            create_topic as create_topic_from_test_support, produce_partition_request, produce_wire,
+        },
+        test_support::{start_broker_no_audit_with, start_broker_with_authorizer_no_audit},
     },
-    test_support::{start_broker_no_audit_with, start_broker_with_authorizer_no_audit},
+    assert2::assert,
+    bytes::Bytes,
+    krabka_compression::CompressionType,
+    krabka_metadata::{BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataRecord},
+    krabka_protocol::records::{Attributes, Record, RecordBatch, RecordsPayload},
+    std::sync::Arc,
 };
 
 /// The `Produce` version these tests speak.

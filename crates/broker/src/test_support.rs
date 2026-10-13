@@ -23,18 +23,19 @@
 
 pub(crate) mod paused_audit;
 
-use std::{
-    collections::BTreeSet,
-    io,
-    net::SocketAddr,
-    sync::{
-        Arc, Mutex,
-        atomic::{self, AtomicUsize, Ordering},
+use {
+    crate::config::BreakGlassConfig,
+    std::{
+        collections::BTreeSet,
+        io,
+        net::SocketAddr,
+        sync::{
+            Arc, Mutex,
+            atomic::{self, AtomicUsize, Ordering},
+        },
+        time::Duration,
     },
-    time::Duration,
 };
-
-use crate::config::BreakGlassConfig;
 
 /// A break-glass test config that requires approval from the two named users.
 #[cfg(test)]
@@ -45,76 +46,77 @@ pub(crate) fn gated_break_glass_config() -> BreakGlassConfig {
     }
 }
 
-use bytes::{Bytes, BytesMut};
-use krabka_metadata::{
-    BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage, MetadataRecord,
-    PartitionRecord, TopicConfigRecord, TopicRecord,
-};
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{
-        alter_partition_request::{
-            AlterPartitionRequest, PartitionData as AlterPartitionPartition,
-            TopicData as AlterPartitionTopic,
+use {
+    crate::{
+        api_catalog::UnstableApiVersions,
+        authorizer::{
+            AclSource, AllowAllAuthorizer, AuthorizationRequest, AuthorizationResult, Authorizer,
         },
-        alter_partition_response::AlterPartitionResponse,
+        bootstrap::encode_bootstrap_records,
+        broker::{Broker, BrokerHandle, spawn_partition},
+        codes::{
+            COORDINATOR_NOT_AVAILABLE, KAFKA_STORAGE_ERROR, MESSAGE_TOO_LARGE, NONE,
+            NOT_COORDINATOR, NOT_ENOUGH_REPLICAS, NOT_LEADER_OR_FOLLOWER, RECORD_LIST_TOO_LARGE,
+            REQUEST_TIMED_OUT, UNKNOWN_SERVER_ERROR,
+        },
+        config::BrokerConfig,
+        config_keys::{BROKER_WITNESS, MIN_INSYNC_REPLICAS, WITNESS_TRUE},
+        controller_endpoint::ControllerDialer,
+        elr::state::PartitionElr,
+        error::BrokerError,
+        features::ELR_VERSION,
+        handlers::{
+            DispatchKind, RequestContext, acl_wire::CLUSTER_RESOURCE_NAME, alter_partition::handle,
+            describe_configs::effective_topic_configs, encode_response,
+        },
+        heartbeat::{
+            controller_state::{ControllerLivenessState, LivenessTransition, TestClock},
+            fencing::{RegistrationChange, registration_change},
+        },
+        log_dir::partition_dir,
+        log_dir_status::LogDirRegistry,
+        metadata_source::MetadataSource,
+        network::client::InterBrokerClient,
+        partition::Partition,
+        partition_registry::PartitionRegistry,
+        producer_state::ProducerState,
+        share_coordinator::coordinator::UNINITIALIZED_START_OFFSET,
+        txn::{bootstrap::TOPIC, coordinator::leadership::LoadStatus},
     },
-    primitives::uuid::Uuid as WireUuid,
-    records::{Attributes, Record, RecordBatch},
-};
-use krabka_raft::{
-    AddVoter, Node, NodeId, QuorumState, RaftError, ReconfigOutcome, RemoveVoter, SnapshotRange,
-    SubmitChangeResult, UpdateVoter,
-};
-use krabka_security::{AuthMethod, Principal};
-use qubit_clock::{
-    MonotonicClock, MonotonicInstant, StdMonotonicClock, TimeError, Timer, TimerFuture,
-    TimerUnavailableError,
-};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
-use tokio::sync::watch;
-use tokio_rustls::TlsAcceptor;
-use tracing_subscriber::{
-    Layer,
-    layer::{Context, SubscriberExt as _},
-    registry::LookupSpan,
-};
-
-use crate::{
-    api_catalog::UnstableApiVersions,
-    authorizer::{
-        AclSource, AllowAllAuthorizer, AuthorizationRequest, AuthorizationResult, Authorizer,
+    bytes::{Bytes, BytesMut},
+    krabka_metadata::{
+        BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage, MetadataRecord,
+        PartitionRecord, TopicConfigRecord, TopicRecord,
     },
-    bootstrap::encode_bootstrap_records,
-    broker::{Broker, BrokerHandle, spawn_partition},
-    codes::{
-        COORDINATOR_NOT_AVAILABLE, KAFKA_STORAGE_ERROR, MESSAGE_TOO_LARGE, NONE, NOT_COORDINATOR,
-        NOT_ENOUGH_REPLICAS, NOT_LEADER_OR_FOLLOWER, RECORD_LIST_TOO_LARGE, REQUEST_TIMED_OUT,
-        UNKNOWN_SERVER_ERROR,
+    krabka_protocol::{
+        Decode, Encode,
+        owned::{
+            alter_partition_request::{
+                AlterPartitionRequest, PartitionData as AlterPartitionPartition,
+                TopicData as AlterPartitionTopic,
+            },
+            alter_partition_response::AlterPartitionResponse,
+        },
+        primitives::uuid::Uuid as WireUuid,
+        records::{Attributes, Record, RecordBatch},
     },
-    config::BrokerConfig,
-    config_keys::{BROKER_WITNESS, MIN_INSYNC_REPLICAS, WITNESS_TRUE},
-    controller_endpoint::ControllerDialer,
-    elr::state::PartitionElr,
-    error::BrokerError,
-    features::ELR_VERSION,
-    handlers::{
-        DispatchKind, RequestContext, acl_wire::CLUSTER_RESOURCE_NAME, alter_partition::handle,
-        describe_configs::effective_topic_configs, encode_response,
+    krabka_raft::{
+        AddVoter, Node, NodeId, QuorumState, RaftError, ReconfigOutcome, RemoveVoter,
+        SnapshotRange, SubmitChangeResult, UpdateVoter,
     },
-    heartbeat::{
-        controller_state::{ControllerLivenessState, LivenessTransition, TestClock},
-        fencing::{RegistrationChange, registration_change},
+    krabka_security::{AuthMethod, Principal},
+    qubit_clock::{
+        MonotonicClock, MonotonicInstant, StdMonotonicClock, TimeError, Timer, TimerFuture,
+        TimerUnavailableError,
     },
-    log_dir::partition_dir,
-    log_dir_status::LogDirRegistry,
-    metadata_source::MetadataSource,
-    network::client::InterBrokerClient,
-    partition::Partition,
-    partition_registry::PartitionRegistry,
-    producer_state::ProducerState,
-    share_coordinator::coordinator::UNINITIALIZED_START_OFFSET,
-    txn::{bootstrap::TOPIC, coordinator::leadership::LoadStatus},
+    rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject},
+    tokio::sync::watch,
+    tokio_rustls::TlsAcceptor,
+    tracing_subscriber::{
+        Layer,
+        layer::{Context, SubscriberExt as _},
+        registry::LookupSpan,
+    },
 };
 
 /// The localhost ECDSA pair used by reload and socket-drain tests.
@@ -325,18 +327,14 @@ pub(crate) enum FreezeState {
 pub(crate) struct PartitionCount(pub i32);
 
 impl Default for PartitionCount {
-    fn default() -> Self {
-        Self(1)
-    }
+    fn default() -> Self { Self(1) }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::From, derive_more::Into)]
 pub(crate) struct ReplicationFactor(pub i16);
 
 impl Default for ReplicationFactor {
-    fn default() -> Self {
-        Self(3)
-    }
+    fn default() -> Self { Self(3) }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, derive_more::From, derive_more::Into)]
@@ -488,9 +486,7 @@ pub(crate) fn static_records_batch(
 pub(crate) struct RecordCount(pub i32);
 
 impl Default for RecordCount {
-    fn default() -> Self {
-        Self(1)
-    }
+    fn default() -> Self { Self(1) }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -1075,13 +1071,9 @@ pub(crate) struct ControllerPeerAllowed<A>(pub(crate) A);
 // Wrappers customize individual authorization while forwarding metadata and scans.
 macro_rules! delegate_authorizer_metadata {
     () => {
-        fn is_configured(&self) -> bool {
-            self.0.is_configured()
-        }
+        fn is_configured(&self) -> bool { self.0.is_configured() }
 
-        fn decision_ttl(&self) -> Option<std::time::Duration> {
-            self.0.decision_ttl()
-        }
+        fn decision_ttl(&self) -> Option<std::time::Duration> { self.0.decision_ttl() }
 
         fn authorize_by_resource_type(
             &self,
@@ -1098,6 +1090,8 @@ macro_rules! delegate_authorizer_metadata {
 }
 
 impl<A: Authorizer> Authorizer for ControllerPeerAllowed<A> {
+    delegate_authorizer_metadata!();
+
     fn authorize(
         &self,
         source: &dyn AclSource,
@@ -1116,8 +1110,6 @@ impl<A: Authorizer> Authorizer for ControllerPeerAllowed<A> {
             self.0.authorize(source, request)
         }
     }
-
-    delegate_authorizer_metadata!();
 }
 
 /// An authorizer that a fixture holds as a trait object, so that it can go
@@ -1126,6 +1118,8 @@ impl<A: Authorizer> Authorizer for ControllerPeerAllowed<A> {
 struct SharedAuthorizer(std::sync::Arc<dyn Authorizer>);
 
 impl Authorizer for SharedAuthorizer {
+    delegate_authorizer_metadata!();
+
     fn authorize(
         &self,
         source: &dyn AclSource,
@@ -1133,8 +1127,6 @@ impl Authorizer for SharedAuthorizer {
     ) -> AuthorizationResult {
         self.0.authorize(source, request)
     }
-
-    delegate_authorizer_metadata!();
 }
 
 /// Wraps `authorizer` in [`ControllerPeerAllowed`].
@@ -1293,9 +1285,7 @@ pub(crate) fn sasl_principal(name: &str) -> Principal {
 
 /// The loopback peer address (`127.0.0.1:9092`) that handler tests attribute
 /// requests to.
-pub(crate) fn peer() -> SocketAddr {
-    "127.0.0.1:9092".parse().unwrap()
-}
+pub(crate) fn peer() -> SocketAddr { "127.0.0.1:9092".parse().unwrap() }
 
 /// Make this broker the leader of each `__transaction_state` partition in
 /// `partitions`, as the controller does when it creates the topic, and wait
@@ -2119,9 +2109,7 @@ impl FakeMetadataSource {
 
     /// Publish a controller-leader change. Every `watch_leader` receiver
     /// observes it, and `quorum_state` reports it as `current_leader`.
-    pub(crate) fn set_leader(&self, leader: Option<NodeId>) {
-        self.leader_tx.send_replace(leader);
-    }
+    pub(crate) fn set_leader(&self, leader: Option<NodeId>) { self.leader_tx.send_replace(leader); }
 
     /// Publish a fatal controller fault, as a controller does before it stops
     /// itself. Every `watch_fatal` receiver observes it. A fake that never
@@ -2135,9 +2123,7 @@ impl FakeMetadataSource {
     /// and wants a push with no receiver to fail rather than pass silently:
     /// `send` errors when nothing is watching, where
     /// [`FakeMetadataSource::set_leader`] would not.
-    pub(crate) fn leader_tx(&self) -> &watch::Sender<Option<NodeId>> {
-        &self.leader_tx
-    }
+    pub(crate) fn leader_tx(&self) -> &watch::Sender<Option<NodeId>> { &self.leader_tx }
 
     /// Every batch handed to `submit_change`, in call order, one entry per
     /// call. A test that asks what the code under test appended reads this
@@ -2151,9 +2137,7 @@ impl FakeMetadataSource {
 
     /// [`FakeMetadataSource::submitted`] flattened, for a test that cares
     /// which records arrived but not how they were batched.
-    pub(crate) fn submitted_records(&self) -> Vec<MetadataRecord> {
-        self.submitted().concat()
-    }
+    pub(crate) fn submitted_records(&self) -> Vec<MetadataRecord> { self.submitted().concat() }
 
     /// How many times `current_image` was called.
     pub(crate) fn current_image_calls(&self) -> usize {
@@ -2191,6 +2175,7 @@ impl FakeMetadataSourceBuilder {
         self.before_guarded_submit = Some(Box::new(change));
         self
     }
+
     /// Serve `image` as the current metadata.
     pub(crate) fn image(mut self, image: impl Into<Arc<MetadataImage>>) -> Self {
         self.image = image.into();
@@ -2286,9 +2271,7 @@ impl FakeMetadataSourceBuilder {
 
 /// Every reconfiguration path rejects with this. The fake has no raft log to
 /// reconfigure, and reconfiguration is covered against the real controller.
-fn unsupported() -> RaftError {
-    RaftError::Unsupported("fake metadata source")
-}
+fn unsupported() -> RaftError { RaftError::Unsupported("fake metadata source") }
 
 #[async_trait::async_trait]
 impl MetadataSource for FakeMetadataSource {
@@ -2298,17 +2281,11 @@ impl MetadataSource for FakeMetadataSource {
         self.image_tx.borrow().clone()
     }
 
-    fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> {
-        self.image_tx.subscribe()
-    }
+    fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> { self.image_tx.subscribe() }
 
-    fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> {
-        self.leader_tx.subscribe()
-    }
+    fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> { self.leader_tx.subscribe() }
 
-    fn watch_fatal(&self) -> watch::Receiver<Option<String>> {
-        self.fatal_tx.subscribe()
-    }
+    fn watch_fatal(&self) -> watch::Receiver<Option<String>> { self.fatal_tx.subscribe() }
 
     /// A quorum that has committed nothing and knows no voters. Its leader
     /// comes from the fake's leader channel, so `watch_leader` and
@@ -2330,9 +2307,7 @@ impl MetadataSource for FakeMetadataSource {
     }
 
     /// No fake has voted in a controller election.
-    fn voted_directory_id(&self) -> Option<uuid::Uuid> {
-        None
-    }
+    fn voted_directory_id(&self) -> Option<uuid::Uuid> { None }
 
     async fn submit_change(
         &self,
@@ -2395,9 +2370,7 @@ impl MetadataSource for FakeMetadataSource {
         SnapshotRange::NoSnapshot
     }
 
-    async fn trigger_snapshot(&self) -> Result<(), RaftError> {
-        Err(unsupported())
-    }
+    async fn trigger_snapshot(&self) -> Result<(), RaftError> { Err(unsupported()) }
 
     async fn add_voter(&self, _req: AddVoter) -> Result<ReconfigOutcome, RaftError> {
         Err(unsupported())
@@ -2465,9 +2438,7 @@ pub(crate) struct BrokenTimer {
 
 impl BrokenTimer {
     /// A timer that fails every deadline, including the start-up one.
-    pub(crate) fn dead(failure: TimerFailure) -> Arc<Self> {
-        Self::dead_after(0, failure)
-    }
+    pub(crate) fn dead(failure: TimerFailure) -> Arc<Self> { Self::dead_after(0, failure) }
 
     /// A timer that honours `healthy` deadlines — each completing at once, so
     /// the loop takes that many ticks — and fails every deadline after them.
@@ -2490,15 +2461,11 @@ impl BrokenTimer {
     ///
     /// A loop that stopped asked for exactly one more than it was given; a
     /// loop that re-armed through the failure keeps climbing.
-    pub(crate) fn registrations(&self) -> usize {
-        self.registrations.load(Ordering::Relaxed)
-    }
+    pub(crate) fn registrations(&self) -> usize { self.registrations.load(Ordering::Relaxed) }
 }
 
 impl Timer for BrokenTimer {
-    fn clock(&self) -> &dyn MonotonicClock {
-        &self.clock
-    }
+    fn clock(&self) -> &dyn MonotonicClock { &self.clock }
 
     fn at(&self, _deadline: MonotonicInstant) -> Result<TimerFuture, TimeError> {
         let nth = self.registrations.fetch_add(1, Ordering::Relaxed);
@@ -2547,9 +2514,7 @@ impl LogCapture {
 
     // The span whose events the capture records. Create it while the
     // capture's dispatcher is the default one.
-    pub(crate) fn span() -> tracing::Span {
-        tracing::info_span!("log_capture")
-    }
+    pub(crate) fn span() -> tracing::Span { tracing::info_span!("log_capture") }
 
     // The events recorded so far, oldest first.
     pub(crate) fn events(&self) -> Vec<LoggedEvent> {
@@ -2598,25 +2563,25 @@ impl tracing::field::Visit for MessageField {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
-    use assert2::assert;
-    use krabka_metadata::{
-        AclOperation, KRaftVersionRange, MetadataImage, MetadataRecord, ResourceType, Voter,
-    };
-    use krabka_raft::{
-        AddVoter, Node, NodeId, QuorumState, RaftError, RemoveVoter, SnapshotRange,
-        SubmitChangeResult, UpdateVoter,
-    };
-
-    use super::FakeMetadataSource;
-    use crate::{
-        authorizer::{
-            AclSource, AllowAllAuthorizer, AuthorizationRequest,
-            AuthorizationResult::{self, Allow, Deny},
-            Authorizer,
+    use {
+        super::FakeMetadataSource,
+        crate::{
+            authorizer::{
+                AclSource, AllowAllAuthorizer, AuthorizationRequest,
+                AuthorizationResult::{self, Allow, Deny},
+                Authorizer,
+            },
+            metadata_source::MetadataSource,
         },
-        metadata_source::MetadataSource,
+        assert2::assert,
+        krabka_metadata::{
+            AclOperation, KRaftVersionRange, MetadataImage, MetadataRecord, ResourceType, Voter,
+        },
+        krabka_raft::{
+            AddVoter, Node, NodeId, QuorumState, RaftError, RemoveVoter, SnapshotRange,
+            SubmitChangeResult, UpdateVoter,
+        },
+        std::collections::BTreeSet,
     };
 
     /// An authorizer with a decision cache of its own and a real
@@ -3297,8 +3262,7 @@ pub(crate) async fn park_manual_timer(clock: &Arc<qubit_clock::ManualMonotonicCl
         .unwrap()
 }
 
-use krabka_metadata::NodeId as InSyncReplicaId;
-use uuid::Uuid as ReplicaDirectory;
+use {krabka_metadata::NodeId as InSyncReplicaId, uuid::Uuid as ReplicaDirectory};
 
 #[derive(krabka_macros::FieldDefaults)]
 pub(crate) struct InSyncPartitionSetup<'a> {

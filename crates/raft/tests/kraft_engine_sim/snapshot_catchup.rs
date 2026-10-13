@@ -3,25 +3,25 @@
 //! through `FetchSnapshot` rather than through log replication, and keeps that
 //! transfer alive when the node serving it rolls to a newer checkpoint.
 
-use std::{
-    collections::{BTreeSet, HashMap},
-    time::Duration,
-};
-
-use krabka_protocol::{
-    Decode, owned::fetch_snapshot_response::FetchSnapshotResponse, records::RecordBatch,
-};
-use krabka_raft::kraft::{
-    NodeId, PeerSender,
-    transport::{api_key, wire},
-};
-
-use crate::{
-    harness::{
-        STAGGERED_TIMEOUTS, await_single_leader, await_until, build_engine, shutdown_nodes,
-        three_voter_network, topic_record,
+use {
+    crate::{
+        harness::{
+            STAGGERED_TIMEOUTS, await_single_leader, await_until, build_engine, shutdown_nodes,
+            three_voter_network, topic_record,
+        },
+        sim_net::SimNet,
     },
-    sim_net::SimNet,
+    krabka_protocol::{
+        Decode, owned::fetch_snapshot_response::FetchSnapshotResponse, records::RecordBatch,
+    },
+    krabka_raft::kraft::{
+        NodeId, PeerSender,
+        transport::{api_key, wire},
+    },
+    std::{
+        collections::{BTreeSet, HashMap},
+        time::Duration,
+    },
 };
 
 fn start_snapshot_pair(

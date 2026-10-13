@@ -5,19 +5,19 @@
 //! body. The zero-copy descriptor form of the same walk is the sibling
 //! `read_raw_desc` module.
 
-use std::ops::Range;
-
-use bytes::Bytes;
-use krabka_ids::Offset;
-use krabka_protocol::records::{HEADER_LEN, RecordBatchHeader};
-use krabka_units::prelude::{ByteSize, ByteSizeExt};
-use tracing::instrument;
-use zerocopy::FromBytes;
-
-use super::{RawSegmentRead, Segment};
-use crate::{
-    config::{DEFAULT_READ_AHEAD_MAX, DEFAULT_READ_BUFFER_CAP},
-    error::LogError,
+use {
+    super::{RawSegmentRead, Segment},
+    crate::{
+        config::{DEFAULT_READ_AHEAD_MAX, DEFAULT_READ_BUFFER_CAP},
+        error::LogError,
+    },
+    bytes::Bytes,
+    krabka_ids::Offset,
+    krabka_protocol::records::{HEADER_LEN, RecordBatchHeader},
+    krabka_units::prelude::{ByteSize, ByteSizeExt},
+    std::ops::Range,
+    tracing::instrument,
+    zerocopy::FromBytes,
 };
 
 /// Header fields used to choose a verbatim range without decoding records.
@@ -187,10 +187,11 @@ impl Segment {
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
-    use krabka_units::prelude::{bytes, mebibytes};
-
-    use super::*;
+    use {
+        super::*,
+        assert2::check,
+        krabka_units::prelude::{bytes, mebibytes},
+    };
 
     fn assert_read_offsets(read: &RawSegmentRead, start: i64, last: i64) {
         check!(

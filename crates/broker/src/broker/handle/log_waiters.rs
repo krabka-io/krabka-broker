@@ -3,11 +3,11 @@
 //! Each waits on the partition's own notify rather than sleeping, so they are
 //! kept together with the offset accessors they pair with.
 
-use std::sync::atomic::Ordering;
-
-use krabka_ids::PartitionIndex;
-
-use crate::broker::{BrokerHandle, TEST_AWAITER_TIMEOUT};
+use {
+    crate::broker::{BrokerHandle, TEST_AWAITER_TIMEOUT},
+    krabka_ids::PartitionIndex,
+    std::sync::atomic::Ordering,
+};
 
 #[cfg(any(test, feature = "test-helpers"))]
 #[derive(Clone, Copy)]
@@ -226,14 +226,14 @@ impl BrokerHandle {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use assert2::check;
-    use krabka_units::{kibibytes, mebibytes, secs};
-
-    use super::*;
-    use crate::{
-        broker::test_support::local_partition_with_records, test_support::start_broker_with,
+    use {
+        super::*,
+        crate::{
+            broker::test_support::local_partition_with_records, test_support::start_broker_with,
+        },
+        assert2::check,
+        krabka_units::{kibibytes, mebibytes, secs},
+        std::sync::Arc,
     };
 
     #[tokio::test]

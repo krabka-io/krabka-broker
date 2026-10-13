@@ -11,34 +11,35 @@
 //! Each case stops or fails the marker fan-out with the broker's test gate,
 //! so the durable state is `Prepare*` at a known point.
 
-use std::time::Duration;
-
-use assert2::assert;
-use krabka_broker::{BootstrapMode, Broker, BrokerHandle, MarkerFanoutMode};
-use krabka_client_core::Client;
-use krabka_protocol::owned::{
-    end_txn_request::EndTxnRequest, end_txn_response::EndTxnResponse,
-    init_producer_id_response::InitProducerIdResponse, produce_request::ProduceRequest,
-};
-use tempfile::TempDir;
-
-use crate::{
-    support::{
-        produce::{SinglePartitionProduceSetup, batch_request},
-        topics::TopicPartitionCount,
-        transaction_wire::{
-            add_partition_request, coordinator_loading, initialize_producer, partition_added,
-            read_committed_through as read_wire_committed_through, records_batch,
-            retry_coordinator, settled_produce,
+use {
+    crate::{
+        support::{
+            produce::{SinglePartitionProduceSetup, batch_request},
+            topics::TopicPartitionCount,
+            transaction_wire::{
+                add_partition_request, coordinator_loading, initialize_producer, partition_added,
+                read_committed_through as read_wire_committed_through, records_batch,
+                retry_coordinator, settled_produce,
+            },
+            transactions::{
+                ProducerIdentity, TransactionOutcome, end_transaction_request,
+                init_producer_request,
+            },
         },
-        transactions::{
-            ProducerIdentity, TransactionOutcome, end_transaction_request, init_producer_request,
+        txnver_harness::{
+            admin_client, config, create_topic, downgrade_transaction_version, find_coordinator,
+            topic_id,
         },
     },
-    txnver_harness::{
-        admin_client, config, create_topic, downgrade_transaction_version, find_coordinator,
-        topic_id,
+    assert2::assert,
+    krabka_broker::{BootstrapMode, Broker, BrokerHandle, MarkerFanoutMode},
+    krabka_client_core::Client,
+    krabka_protocol::owned::{
+        end_txn_request::EndTxnRequest, end_txn_response::EndTxnResponse,
+        init_producer_id_response::InitProducerIdResponse, produce_request::ProduceRequest,
     },
+    std::time::Duration,
+    tempfile::TempDir,
 };
 
 const CONCURRENT_TRANSACTIONS: i16 = 51;
@@ -53,9 +54,7 @@ struct Identity {
     epoch: i16,
 }
 
-fn coordinator_is_loading(code: i16) -> bool {
-    coordinator_loading(code)
-}
+fn coordinator_is_loading(code: i16) -> bool { coordinator_loading(code) }
 
 async fn init_producer_id(
     client: &Client,
@@ -112,14 +111,11 @@ async fn produce(
     );
     let request = ProduceRequest {
         transactional_id: transaction.map(|(transactional_id, _)| transactional_id.to_owned()),
-        ..batch_request(
-            batch,
-            SinglePartitionProduceSetup {
-                topic: (topic).into(),
-                topic_id: topic_id(client, topic).await,
-                ..SinglePartitionProduceSetup::replicated()
-            },
-        )
+        ..batch_request(batch, SinglePartitionProduceSetup {
+            topic: (topic).into(),
+            topic_id: topic_id(client, topic).await,
+            ..SinglePartitionProduceSetup::replicated()
+        })
     };
     let response = settled_produce(client, request, SETTLE).await;
     let code = response.responses[0].partition_responses[0].error_code;
@@ -202,12 +198,9 @@ async fn open_transaction(
     }
     let producer = init_producer(client, transactional_id).await;
     add_partition(client, transactional_id, producer, topic).await;
-    produce(
-        client,
-        topic,
-        Some((transactional_id, producer)),
-        &["a", "b", "c"],
-    )
+    produce(client, topic, Some((transactional_id, producer)), &[
+        "a", "b", "c",
+    ])
     .await;
     producer
 }

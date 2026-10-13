@@ -22,38 +22,38 @@
 
 pub mod quotas;
 
-use std::{io, net::SocketAddr};
-
-use assert2::assert;
-use bytes::{Buf, Bytes, BytesMut};
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{
-        api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
-        elect_leaders_request::ElectLeadersRequest, elect_leaders_response::ElectLeadersResponse,
-        produce_request::ProduceRequest, produce_response::ProduceResponse,
-        sasl_authenticate_request::SaslAuthenticateRequest,
-        sasl_authenticate_response::SaslAuthenticateResponse,
-        sasl_handshake_request::SaslHandshakeRequest,
-        sasl_handshake_response::SaslHandshakeResponse,
-    },
-    records::{Record, RecordBatch},
-};
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    net::TcpStream,
-};
 #[allow(unused_imports)]
 pub use topics::creatable_topic as topic;
-
-use crate::support::{
-    admin::{ElectionSetup, election_partition_errors, election_request},
-    produce::{ProduceTimeoutMillis, SinglePartitionProduceSetup, batch_request},
-    topics::{
-        self, AssignedTopicSetup, ConfiguredTopicSetup, CreateTopicSetup, assigned_topic,
-        configured_topic_request,
+use {
+    crate::support::{
+        admin::{ElectionSetup, election_partition_errors, election_request},
+        produce::{ProduceTimeoutMillis, SinglePartitionProduceSetup, batch_request},
+        topics::{
+            self, AssignedTopicSetup, ConfiguredTopicSetup, CreateTopicSetup, assigned_topic,
+            configured_topic_request,
+        },
+        wire::{self as frames, ApiRequestSetup},
     },
-    wire::{self as frames, ApiRequestSetup},
+    assert2::assert,
+    bytes::{Buf, Bytes, BytesMut},
+    krabka_protocol::{
+        Decode, Encode,
+        owned::{
+            api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
+            elect_leaders_request::ElectLeadersRequest,
+            elect_leaders_response::ElectLeadersResponse, produce_request::ProduceRequest,
+            produce_response::ProduceResponse, sasl_authenticate_request::SaslAuthenticateRequest,
+            sasl_authenticate_response::SaslAuthenticateResponse,
+            sasl_handshake_request::SaslHandshakeRequest,
+            sasl_handshake_response::SaslHandshakeResponse,
+        },
+        records::{Record, RecordBatch},
+    },
+    std::{io, net::SocketAddr},
+    tokio::{
+        io::{AsyncRead, AsyncWrite},
+        net::TcpStream,
+    },
 };
 
 macro_rules! configured_topic_request {
@@ -304,18 +304,14 @@ pub async fn drive_produce_as_plain(
     req: ProduceRequest,
     authentication: &PlainAuthenticationSetup<'_>,
 ) -> Result<ProduceResponse, io::Error> {
-    request_as_plain(
-        addr,
-        &req,
-        &PlainRequestSetup {
-            authentication: authentication.clone(),
-            api: ApiRequestSetup {
-                api_key: krabka_ids::ApiKey(0),
-                version: krabka_ids::ApiVersion(11),
-            },
-            operation: "Produce",
+    request_as_plain(addr, &req, &PlainRequestSetup {
+        authentication: authentication.clone(),
+        api: ApiRequestSetup {
+            api_key: krabka_ids::ApiKey(0),
+            version: krabka_ids::ApiVersion(11),
         },
-    )
+        operation: "Produce",
+    })
     .await
 }
 
@@ -333,18 +329,14 @@ pub async fn create_topic_as_super_user(
     let name = setup.topic.name.clone();
     let request = topics::create_topic_request(configured_topic_request!(setup.topic));
     let response: krabka_protocol::owned::create_topics_response::CreateTopicsResponse =
-        request_as_plain(
-            addr,
-            &request,
-            &PlainRequestSetup {
-                authentication: PlainAuthenticationSetup::admin(setup.client_id),
-                api: ApiRequestSetup {
-                    api_key: krabka_ids::ApiKey(19),
-                    version: krabka_ids::ApiVersion(7),
-                },
-                operation: "CreateTopics",
+        request_as_plain(addr, &request, &PlainRequestSetup {
+            authentication: PlainAuthenticationSetup::admin(setup.client_id),
+            api: ApiRequestSetup {
+                api_key: krabka_ids::ApiKey(19),
+                version: krabka_ids::ApiVersion(7),
             },
-        )
+            operation: "CreateTopics",
+        })
         .await
         .expect("CreateTopics as super-user must round-trip");
     assert!(response.topics.len() == 1, "one topic in response");
@@ -830,17 +822,13 @@ pub async fn sasl_plain_reauthenticate_on(
 #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 pub struct ProduceValueBytes(pub usize);
 impl Default for ProduceValueBytes {
-    fn default() -> Self {
-        Self(1024)
-    }
+    fn default() -> Self { Self(1024) }
 }
 
 #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 pub struct ProduceRecordCount(pub usize);
 impl Default for ProduceRecordCount {
-    fn default() -> Self {
-        Self(1)
-    }
+    fn default() -> Self { Self(1) }
 }
 
 #[derive(Clone, krabka_macros::FieldDefaults)]

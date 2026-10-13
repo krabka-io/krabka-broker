@@ -6,16 +6,17 @@
 //! needs only the single-broker fixture. The follower that acts on the answer
 //! is covered in `epoch_diverge_follower`.
 
-use assert2::{assert, check};
-use krabka_protocol::owned::fetch_request::{FetchPartition, FetchRequest, ReplicaState};
-
-use crate::{
-    epoch_harness::{boot_single, create_topic, record, topic_id_for},
-    support::{
-        client::connect_client,
-        fetch::{FetchLimits, RequestWaitMillis, fetch_partition, single_partition_fetch},
-        produce::{SinglePartitionProduceSetup, batch_request},
+use {
+    crate::{
+        epoch_harness::{boot_single, create_topic, record, topic_id_for},
+        support::{
+            client::connect_client,
+            fetch::{FetchLimits, RequestWaitMillis, fetch_partition, single_partition_fetch},
+            produce::{SinglePartitionProduceSetup, batch_request},
+        },
     },
+    assert2::{assert, check},
+    krabka_protocol::owned::fetch_request::{FetchPartition, FetchRequest, ReplicaState},
 };
 
 /// KIP-320 leader side. A Fetch from an assigned follower that
@@ -50,14 +51,11 @@ async fn diverging_epoch_returned_on_stale_last_fetched_epoch() {
         let client = &client;
         async move {
             client
-                .send(batch_request(
-                    record(value),
-                    SinglePartitionProduceSetup {
-                        topic: ("diverge").into(),
-                        topic_id,
-                        ..Default::default()
-                    },
-                ))
+                .send(batch_request(record(value), SinglePartitionProduceSetup {
+                    topic: ("diverge").into(),
+                    topic_id,
+                    ..Default::default()
+                }))
                 .await
                 .expect("produce");
         }

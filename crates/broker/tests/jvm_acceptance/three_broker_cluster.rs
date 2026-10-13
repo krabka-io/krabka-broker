@@ -4,13 +4,14 @@
 //! `kafka-reassign-partitions` tools move a leader off a live node, so the
 //! suites that drive those tools boot the cluster here.
 
-use krabka_broker::{
-    Broker, BrokerConfig,
-    config::{InterBrokerCredentials, ListenerSpec},
+use {
+    crate::support::{JvmListeners, controller_voters, init_jvm_tracing, jvm_broker_config},
+    krabka_broker::{
+        Broker, BrokerConfig,
+        config::{InterBrokerCredentials, ListenerSpec},
+    },
+    krabka_security::{ListenerProtocol, SaslMechanism},
 };
-use krabka_security::{ListenerProtocol, SaslMechanism};
-
-use crate::support::{JvmListeners, controller_voters, init_jvm_tracing, jvm_broker_config};
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 pub(crate) struct SaslClusterSetup<'a> {

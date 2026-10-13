@@ -21,35 +21,39 @@
 //! `InitProducerId → AddOffsetsToTxn → TxnOffsetCommit → EndTxn`, then reads
 //! back with `OffsetFetch`.
 
-use std::time::{Duration, Instant};
-
-use assert2::assert;
-
-use crate::support::{
-    offsets::{offset_commit_topic, offset_fetch_group, offset_fetch_request, offset_fetch_topic},
-    topics::{creatable_topic, create_topic_request},
-    transactions::{
-        EndTransactionSetup, ProducerIdentity, TransactionOutcome, end_transaction_request,
-        init_producer_request, txn_offset_partition, txn_offset_topic,
+use {
+    crate::support::{
+        offsets::{
+            offset_commit_topic, offset_fetch_group, offset_fetch_request, offset_fetch_topic,
+        },
+        topics::{creatable_topic, create_topic_request},
+        transactions::{
+            EndTransactionSetup, ProducerIdentity, TransactionOutcome, end_transaction_request,
+            init_producer_request, txn_offset_partition, txn_offset_topic,
+        },
     },
+    assert2::assert,
+    std::time::{Duration, Instant},
 };
 
 mod support;
 
-use krabka_protocol::{
-    owned::{
-        add_offsets_to_txn_request::AddOffsetsToTxnRequest,
-        offset_commit_request::{OffsetCommitRequest, OffsetCommitRequestPartition},
-        offset_fetch_request::{OffsetFetchRequest, OffsetFetchRequestTopic},
-        offset_fetch_response::{
-            OffsetFetchResponse, OffsetFetchResponseGroup, OffsetFetchResponsePartitions,
-            OffsetFetchResponseTopics,
+use {
+    krabka_protocol::{
+        owned::{
+            add_offsets_to_txn_request::AddOffsetsToTxnRequest,
+            offset_commit_request::{OffsetCommitRequest, OffsetCommitRequestPartition},
+            offset_fetch_request::{OffsetFetchRequest, OffsetFetchRequestTopic},
+            offset_fetch_response::{
+                OffsetFetchResponse, OffsetFetchResponseGroup, OffsetFetchResponsePartitions,
+                OffsetFetchResponseTopics,
+            },
+            txn_offset_commit_request::TxnOffsetCommitRequest,
         },
-        txn_offset_commit_request::TxnOffsetCommitRequest,
+        primitives::uuid::Uuid as WireUuid,
     },
-    primitives::uuid::Uuid as WireUuid,
+    support::topic_id_for,
 };
-use support::topic_id_for;
 
 /// `NOT_COORDINATOR`. The broker elects the `__transaction_state` partition
 /// leader lazily on first access, so an early `InitProducerId` can race ahead
@@ -188,14 +192,9 @@ async fn begin_and_commit_offsets(
             producer_epoch: epoch,
             generation_id_or_member_epoch: -1,
             member_id: String::new(),
-            topics: vec![txn_offset_topic(
-                TOPIC,
-                topic_id,
-                vec![txn_offset_partition(
-                    krabka_ids::PartitionIndex(0),
-                    krabka_ids::Offset(offset),
-                )],
-            )],
+            topics: vec![txn_offset_topic(TOPIC, topic_id, vec![
+                txn_offset_partition(krabka_ids::PartitionIndex(0), krabka_ids::Offset(offset)),
+            ])],
             ..Default::default()
         })
         .await
@@ -230,14 +229,10 @@ async fn txn_offset_commit_visible_via_offset_fetch_after_commit_marker() {
     );
 
     // EndTxn(commit) writes the COMMIT marker → materializes the buffer.
-    finish_transaction(
-        &p.client,
-        tid,
-        EndTransactionSetup {
-            producer: ProducerIdentity::from_wire((pid, epoch)),
-            ..Default::default()
-        },
-    )
+    finish_transaction(&p.client, tid, EndTransactionSetup {
+        producer: ProducerIdentity::from_wire((pid, epoch)),
+        ..Default::default()
+    })
     .await;
 
     // Post-commit: the offset is now visible via OffsetFetch.
@@ -263,14 +258,10 @@ async fn txn_offset_commit_dropped_on_abort_marker() {
     let (pid, epoch) = begin_and_commit_offsets(&p.client, tid, group, 5).await;
 
     // EndTxn(abort): the buffer is dropped without applying.
-    finish_transaction(
-        &p.client,
-        tid,
-        EndTransactionSetup {
-            producer: ProducerIdentity::from_wire((pid, epoch)),
-            outcome: TransactionOutcome::Abort,
-        },
-    )
+    finish_transaction(&p.client, tid, EndTransactionSetup {
+        producer: ProducerIdentity::from_wire((pid, epoch)),
+        outcome: TransactionOutcome::Abort,
+    })
     .await;
 
     // Still absent: an aborted transactional offset is never committed.
@@ -431,14 +422,10 @@ async fn require_stable_offset_fetch_tracks_transaction_outcome(
     let relaxed = fetch_at_v10(&p.client, &group, topic_id, OffsetStability::AllowPending).await;
     assert2::assert!(relaxed == v10_response(&group, topic_id, stable_row(krabka_ids::Offset(3))));
 
-    finish_transaction(
-        &p.client,
-        &tid,
-        EndTransactionSetup {
-            producer: ProducerIdentity::from_wire((pid, epoch)),
-            outcome,
-        },
-    )
+    finish_transaction(&p.client, &tid, EndTransactionSetup {
+        producer: ProducerIdentity::from_wire((pid, epoch)),
+        outcome,
+    })
     .await;
 
     let settled = fetch_at_v10(&p.client, &group, topic_id, OffsetStability::RequireStable).await;

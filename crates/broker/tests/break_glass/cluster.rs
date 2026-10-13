@@ -6,20 +6,20 @@
 //! a quorum instead, and a `PLAINTEXT` listener is enough there because those
 //! two write their approvals into the metadata log rather than over the wire.
 
-use std::time::Duration;
-
-use assert2::assert;
-use krabka_broker::{
-    Broker, BrokerConfig, BrokerHandle, NodeId, config::BackgroundUncleanRecovery,
-    operator_keys::OperatorKeys,
-};
-use krabka_client_core::Client;
-use krabka_security::{ListenerProtocol, SaslMechanism};
-use tempfile::TempDir;
-
-use crate::{
-    principals::{APPROVERS, USERS, principal},
-    support::{self, OperatorKeysSetup, client::connect_owned},
+use {
+    crate::{
+        principals::{APPROVERS, USERS, principal},
+        support::{self, OperatorKeysSetup, client::connect_owned},
+    },
+    assert2::assert,
+    krabka_broker::{
+        Broker, BrokerConfig, BrokerHandle, NodeId, config::BackgroundUncleanRecovery,
+        operator_keys::OperatorKeys,
+    },
+    krabka_client_core::Client,
+    krabka_security::{ListenerProtocol, SaslMechanism},
+    std::time::Duration,
+    tempfile::TempDir,
 };
 
 /// A live broker behind SASL, the operator keys it trusts, and the directory

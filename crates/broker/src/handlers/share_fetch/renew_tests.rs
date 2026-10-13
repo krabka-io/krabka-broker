@@ -9,30 +9,32 @@
 //! `MaxBytes`, `MinBytes`, `MaxRecords` or `MaxWaitMs` is not 0 with a
 //! top-level `INVALID_REQUEST`, and runs no fetch for a valid one.
 
-use std::sync::Arc;
-
-use assert2::assert;
-use krabka_metadata::{GroupConfigRecord, MetadataRecord};
-use krabka_protocol::{
-    owned::{
-        share_acknowledge_response::ShareAcknowledgeResponse,
-        share_fetch_request::{AcknowledgementBatch as FetchAcknowledgeBatch, ShareFetchRequest},
-        share_fetch_response::ShareFetchResponse,
+use {
+    crate::{
+        broker::BrokerHandle,
+        codes,
+        handlers::test_support::{
+            AcknowledgementBatchSetup, AcknowledgementMode, AcknowledgementPartitionSetup,
+            AcknowledgementSetup, RecordCount, ShareSessionEpoch, acknowledge_batches_request,
+            acquired_share_records, create_topic as create_topic_from_test_support,
+            produce_records, share_acknowledge_wire, share_fetch_wire,
+        },
+        share_partition::state::RecordState::{self, Acknowledged, Acquired, Available},
+        test_support::{KafkaErrorCode, initialize_share_state},
     },
-    primitives::uuid::Uuid as WireUuid,
-};
-
-use crate::{
-    broker::BrokerHandle,
-    codes,
-    handlers::test_support::{
-        AcknowledgementBatchSetup, AcknowledgementMode, AcknowledgementPartitionSetup,
-        AcknowledgementSetup, RecordCount, ShareSessionEpoch, acknowledge_batches_request,
-        acquired_share_records, create_topic as create_topic_from_test_support, produce_records,
-        share_acknowledge_wire, share_fetch_wire,
+    assert2::assert,
+    krabka_metadata::{GroupConfigRecord, MetadataRecord},
+    krabka_protocol::{
+        owned::{
+            share_acknowledge_response::ShareAcknowledgeResponse,
+            share_fetch_request::{
+                AcknowledgementBatch as FetchAcknowledgeBatch, ShareFetchRequest,
+            },
+            share_fetch_response::ShareFetchResponse,
+        },
+        primitives::uuid::Uuid as WireUuid,
     },
-    share_partition::state::RecordState::{self, Acknowledged, Acquired, Available},
-    test_support::{KafkaErrorCode, initialize_share_state},
+    std::sync::Arc,
 };
 
 /// The request version that carries `IsRenewAck`.
@@ -265,11 +267,9 @@ fn cases() -> Vec<RenewCaseSetup> {
                 max_records: RecordCount(500),
             }),
             batches: ack_batches(MIXED_BATCHES),
-            expected: Outcome::expected(
-                KafkaErrorCode(codes::INVALID_REQUEST),
-                None,
-                [Acquired, Acquired, Acquired],
-            ),
+            expected: Outcome::expected(KafkaErrorCode(codes::INVALID_REQUEST), None, [
+                Acquired, Acquired, Acquired,
+            ]),
             ..Default::default()
         },
         RenewCaseSetup {
@@ -316,21 +316,18 @@ async fn renew_acknowledgements_renew_only_the_renew_offsets() {
 
         let outcome = match case.call {
             Call::ShareAcknowledge => {
-                let response = share_acknowledge(
-                    &broker,
-                    AcknowledgementSetup {
-                        mode: AcknowledgementMode::Renew,
-                        partition: AcknowledgementPartitionSetup {
-                            batches: case.batches.clone(),
-                            ..Default::default()
-                        },
-                        ..AcknowledgementSetup::for_topic_session(
-                            &group,
-                            ShareSessionEpoch(2),
-                            topic_id,
-                        )
+                let response = share_acknowledge(&broker, AcknowledgementSetup {
+                    mode: AcknowledgementMode::Renew,
+                    partition: AcknowledgementPartitionSetup {
+                        batches: case.batches.clone(),
+                        ..Default::default()
                     },
-                )
+                    ..AcknowledgementSetup::for_topic_session(
+                        &group,
+                        ShareSessionEpoch(2),
+                        topic_id,
+                    )
+                })
                 .await;
                 Outcome {
                     error: response.error_code,

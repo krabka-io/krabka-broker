@@ -172,13 +172,9 @@ pub async fn start_jvm_single(
 }
 
 /// Initialize tracing with the suite's default filter.
-pub fn init_jvm_tracing(default_filter: &str) {
-    super::init_tracing_with(default_filter);
-}
+pub fn init_jvm_tracing(default_filter: &str) { super::init_tracing_with(default_filter); }
 
-use krabka_broker::NodeId;
-
-use crate::support::controller_voters;
+use {crate::support::controller_voters, krabka_broker::NodeId};
 
 #[derive(krabka_macros::FieldDefaults)]
 pub struct JvmBrokerSetup {

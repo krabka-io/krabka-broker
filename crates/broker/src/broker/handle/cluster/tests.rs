@@ -1,14 +1,14 @@
-use std::net::SocketAddr;
-
-use assert2::{assert, check};
-use krabka_raft::NodeId;
-use tokio::net::TcpListener;
-
-use super::*;
-use crate::{
-    broker::test_support::{metadata_partition_record, submit_metadata_topic_partition},
-    config::BrokerConfig,
-    test_support::start_broker_with,
+use {
+    super::*,
+    crate::{
+        broker::test_support::{metadata_partition_record, submit_metadata_topic_partition},
+        config::BrokerConfig,
+        test_support::start_broker_with,
+    },
+    assert2::{assert, check},
+    krabka_raft::NodeId,
+    std::net::SocketAddr,
+    tokio::net::TcpListener,
 };
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]

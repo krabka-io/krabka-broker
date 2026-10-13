@@ -1,23 +1,23 @@
-use std::sync::Arc;
-
-use assert2::{assert, check};
-use tempfile::tempdir;
-
-use super::*;
-use crate::{
-    broker::{
-        Broker,
+use {
+    super::*,
+    crate::{
+        broker::{
+            Broker,
+            test_support::{
+                LocalPartitionSetup, local_partition_with_records, metadata_partition_record,
+                submit_metadata_topic_partition,
+            },
+        },
+        config::BrokerConfig,
+        partition::{Partition, WriterMessage},
         test_support::{
-            LocalPartitionSetup, local_partition_with_records, metadata_partition_record,
-            submit_metadata_topic_partition,
+            UNSUPPORTED_LEVEL_FAULT, broker_registration, finalize_unstable_metadata_version,
+            write_bootstrap_records,
         },
     },
-    config::BrokerConfig,
-    partition::{Partition, WriterMessage},
-    test_support::{
-        UNSUPPORTED_LEVEL_FAULT, broker_registration, finalize_unstable_metadata_version,
-        write_bootstrap_records,
-    },
+    assert2::{assert, check},
+    std::sync::Arc,
+    tempfile::tempdir,
 };
 
 async fn assert_listener_stops_accepting(addr: SocketAddr) {
@@ -300,13 +300,10 @@ async fn start_and_shutdown_clean() {
         broker,
         addr,
         partition,
-    } = shutdown_fixture(
-        dir.path(),
-        LocalPartitionSetup {
-            topic: "shutdown",
-            ..Default::default()
-        },
-    )
+    } = shutdown_fixture(dir.path(), LocalPartitionSetup {
+        topic: "shutdown",
+        ..Default::default()
+    })
     .await;
     assert!(addr.port() != 0);
     let stream = tokio::net::TcpStream::connect(addr)
@@ -338,13 +335,10 @@ async fn dropping_handle_stops_idle_connections_and_partition_writers() {
         broker,
         addr,
         partition,
-    } = shutdown_fixture(
-        dir.path(),
-        LocalPartitionSetup {
-            topic: "drop-shutdown",
-            ..Default::default()
-        },
-    )
+    } = shutdown_fixture(dir.path(), LocalPartitionSetup {
+        topic: "drop-shutdown",
+        ..Default::default()
+    })
     .await;
     let stream = tokio::net::TcpStream::connect(addr)
         .await

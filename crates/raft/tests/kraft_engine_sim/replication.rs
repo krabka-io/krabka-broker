@@ -2,12 +2,12 @@
 //! with the leader hint, and once it reaches the leader the record itself
 //! travels to every follower and lands in all three metadata images.
 
-use std::time::Duration;
-
-use krabka_raft::RaftError;
-
-use crate::harness::{
-    await_single_leader, await_until, start_engines, three_voter_network, topic_record,
+use {
+    crate::harness::{
+        await_single_leader, await_until, start_engines, three_voter_network, topic_record,
+    },
+    krabka_raft::RaftError,
+    std::time::Duration,
 };
 
 /// 2. `submit_change` on a follower forwards to the leader, commits through

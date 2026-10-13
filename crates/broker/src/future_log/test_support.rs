@@ -2,35 +2,35 @@
 //! default `MovePolicy`, and builders for a source `Partition` and the record
 //! batches it holds.
 
-use std::{
-    path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+use {
+    super::MovePolicy,
+    crate::{
+        log_dir::future_partition_dir,
+        partition::Partition,
+        partition_registry::PartitionRegistry,
+        test_support::{
+            PartitionRecordsSetup, RecordCount, open_partition, partition_records_batch,
+        },
+        testing::single_value_batch,
+        throttle::TokenBucket,
     },
-};
-
-use bytes::Bytes;
-use krabka_ids::PartitionIndex;
-use krabka_units::{mebibytes, millis};
-
-use super::MovePolicy;
-use crate::{
-    log_dir::future_partition_dir,
-    partition::Partition,
-    partition_registry::PartitionRegistry,
-    test_support::{PartitionRecordsSetup, RecordCount, open_partition, partition_records_batch},
-    testing::single_value_batch,
-    throttle::TokenBucket,
+    bytes::Bytes,
+    krabka_ids::PartitionIndex,
+    krabka_units::{mebibytes, millis},
+    std::{
+        path::{Path, PathBuf},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicU64, Ordering},
+        },
+    },
 };
 
 #[derive(Debug)]
 pub(super) struct TestStampSource(pub(super) AtomicU64);
 
 impl krabka_log::StampSource for TestStampSource {
-    fn next_stamp(&self) -> u64 {
-        self.0.fetch_add(1, Ordering::Relaxed)
-    }
+    fn next_stamp(&self) -> u64 { self.0.fetch_add(1, Ordering::Relaxed) }
 }
 
 pub(super) fn test_policy() -> MovePolicy {
@@ -100,13 +100,10 @@ pub(super) fn source_partition(
             .set_stamp_source(stamp_source)
             .expect("source stamp index");
     }
-    append_records(
-        &part,
-        PartitionRecordsSetup {
-            count: setup.count,
-            ..Default::default()
-        },
-    );
+    append_records(&part, PartitionRecordsSetup {
+        count: setup.count,
+        ..Default::default()
+    });
     part
 }
 
@@ -202,9 +199,7 @@ pub(super) fn plant_future_log(
 pub(super) struct RecordValueBytes(pub usize);
 
 impl Default for RecordValueBytes {
-    fn default() -> Self {
-        Self(20)
-    }
+    fn default() -> Self { Self(20) }
 }
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]

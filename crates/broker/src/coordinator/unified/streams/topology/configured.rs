@@ -24,16 +24,16 @@
 //! Where Kafka iterates a `HashMap` or a `HashSet`, this port iterates in name
 //! order, so that a message that names one of several topics is deterministic.
 
-use std::collections::{BTreeMap, BTreeSet};
-
-use krabka_metadata::MetadataImage;
-
-use super::{metadata_hash::required_topics, status};
-use crate::{
-    codes,
-    coordinator::unified::streams::persistence::{
-        StoredSubtopology, StoredTopicInfo, StreamsGroupTopologyValue,
+use {
+    super::{metadata_hash::required_topics, status},
+    crate::{
+        codes,
+        coordinator::unified::streams::persistence::{
+            StoredSubtopology, StoredTopicInfo, StreamsGroupTopologyValue,
+        },
     },
+    krabka_metadata::MetadataImage,
+    std::collections::{BTreeMap, BTreeSet},
 };
 
 /// Kafka's `ConfiguredInternalTopic`: a repartition or changelog topic with
@@ -75,9 +75,7 @@ pub struct ConfiguredTopology {
 impl ConfiguredTopology {
     /// Kafka's `isReady`: no status keeps the group from an assignment.
     #[must_use]
-    pub fn is_ready(&self) -> bool {
-        self.status.is_none()
-    }
+    pub fn is_ready(&self) -> bool { self.status.is_none() }
 
     /// The number of tasks of each configured subtopology, by id. Empty when
     /// the subtopologies were not sized.
@@ -138,9 +136,7 @@ enum Stop {
 }
 
 impl From<ConfigureTopicsError> for Stop {
-    fn from(error: ConfigureTopicsError) -> Self {
-        Self::Error(error)
-    }
+    fn from(error: ConfigureTopicsError) -> Self { Self::Error(error) }
 }
 
 /// Kafka's `InternalTopicManager.configureTopics`.
@@ -677,12 +673,13 @@ fn java_map_string(map: &BTreeMap<String, i32>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
-
-    use super::*;
-    use crate::coordinator::unified::streams::{
-        persistence::StoredCopartitionGroup,
-        topology::test_support::{image_with, sub},
+    use {
+        super::*,
+        crate::coordinator::unified::streams::{
+            persistence::StoredCopartitionGroup,
+            topology::test_support::{image_with, sub},
+        },
+        assert2::check,
     };
 
     type Row = (
@@ -702,15 +699,12 @@ mod tests {
     }
 
     fn internal(name: &str, partitions: i32) -> (String, ConfiguredInternalTopic) {
-        (
-            name.to_string(),
-            ConfiguredInternalTopic {
-                name: name.into(),
-                partitions,
-                replication_factor: None,
-                configs: BTreeMap::new(),
-            },
-        )
+        (name.to_string(), ConfiguredInternalTopic {
+            name: name.into(),
+            partitions,
+            replication_factor: None,
+            configs: BTreeMap::new(),
+        })
     }
 
     fn names(topics: &[&str]) -> BTreeSet<String> {

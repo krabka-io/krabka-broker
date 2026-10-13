@@ -8,29 +8,29 @@
 //! survives (lines 2163-2165), and merges the coordinator's answer onto the
 //! surviving rows only (line 2185).
 
-use std::sync::Arc;
-
-use assert2::check;
-use krabka_log::ProducerId;
-use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::owned::{
-    txn_offset_commit_request::{self, TxnOffsetCommitRequest, TxnOffsetCommitRequestTopic},
-    txn_offset_commit_response::{
-        TxnOffsetCommitResponse, TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic,
+use {
+    super::integration_tests::{log_holds_key, seed_topic_a, seed_transaction, topic},
+    crate::{
+        authorizer::AuthorizationResult,
+        broker::{Broker, BrokerHandle},
+        codes,
+        coordinator::{bootstrap::OFFSETS_TOPIC, partitioner::partition_for_group},
+        test_support::{
+            configure_single_partition_transactions, decode_response, dispatch_context,
+            encode_request, peer, principal, request_context, start_broker_no_audit_with,
+        },
+        txn::{state::TxnEntry, util::now_millis, version::TxnVersion},
     },
-};
-
-use super::integration_tests::{log_holds_key, seed_topic_a, seed_transaction, topic};
-use crate::{
-    authorizer::AuthorizationResult,
-    broker::{Broker, BrokerHandle},
-    codes,
-    coordinator::{bootstrap::OFFSETS_TOPIC, partitioner::partition_for_group},
-    test_support::{
-        configure_single_partition_transactions, decode_response, dispatch_context, encode_request,
-        peer, principal, request_context, start_broker_no_audit_with,
+    assert2::check,
+    krabka_log::ProducerId,
+    krabka_metadata::{AclOperation, ResourceType},
+    krabka_protocol::owned::{
+        txn_offset_commit_request::{self, TxnOffsetCommitRequest, TxnOffsetCommitRequestTopic},
+        txn_offset_commit_response::{
+            TxnOffsetCommitResponse, TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic,
+        },
     },
-    txn::{state::TxnEntry, util::now_millis, version::TxnVersion},
+    std::sync::Arc,
 };
 
 /// The one topic the principal may not read.

@@ -13,16 +13,17 @@
 //! and `NOT_LEADER_OR_FOLLOWER` for a partition that the reporting broker does
 //! not replicate. A partition with an error contributes no record.
 
-use krabka_metadata::{MetadataImage, MetadataRecord, PartitionDirAssignmentRecord};
-use krabka_protocol::owned::{
-    assign_replicas_to_dirs_request::AssignReplicasToDirsRequest,
-    assign_replicas_to_dirs_response::{
-        AssignReplicasToDirsResponse, DirectoryData as RespDirData, PartitionData as RespPartData,
-        TopicData as RespTopicData,
+use {
+    crate::codes,
+    krabka_metadata::{MetadataImage, MetadataRecord, PartitionDirAssignmentRecord},
+    krabka_protocol::owned::{
+        assign_replicas_to_dirs_request::AssignReplicasToDirsRequest,
+        assign_replicas_to_dirs_response::{
+            AssignReplicasToDirsResponse, DirectoryData as RespDirData,
+            PartitionData as RespPartData, TopicData as RespTopicData,
+        },
     },
 };
-
-use crate::codes;
 
 /// What one request does: the records to commit and the response to send
 /// after they commit.
@@ -154,18 +155,20 @@ fn assignment_change(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use krabka_ids::{NodeId, PartitionIndex};
-    use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
-    use krabka_protocol::{
-        owned::assign_replicas_to_dirs_request::{
-            DirectoryData as ReqDirData, PartitionData as ReqPartData, TopicData as ReqTopicData,
+    use {
+        super::*,
+        crate::test_support::KafkaErrorCode,
+        assert2::assert,
+        krabka_ids::{NodeId, PartitionIndex},
+        krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord},
+        krabka_protocol::{
+            owned::assign_replicas_to_dirs_request::{
+                DirectoryData as ReqDirData, PartitionData as ReqPartData,
+                TopicData as ReqTopicData,
+            },
+            primitives::uuid::Uuid as ProtocolUuid,
         },
-        primitives::uuid::Uuid as ProtocolUuid,
     };
-
-    use super::*;
-    use crate::test_support::KafkaErrorCode;
 
     const DIR: uuid::Uuid = uuid::Uuid::from_u128(0xAA);
 
@@ -386,15 +389,15 @@ mod tests {
                 directories: vec![RespDirData {
                     id: ProtocolUuid(DIR.into_bytes()),
                     topics: vec![
-                        answer(
-                            known,
-                            &[(0, codes::NONE), (99, codes::UNKNOWN_TOPIC_OR_PARTITION)],
-                        ),
+                        answer(known, &[
+                            (0, codes::NONE),
+                            (99, codes::UNKNOWN_TOPIC_OR_PARTITION),
+                        ]),
                         answer(elsewhere, &[(0, codes::NOT_LEADER_OR_FOLLOWER)]),
-                        answer(
-                            unknown,
-                            &[(0, codes::UNKNOWN_TOPIC_ID), (1, codes::UNKNOWN_TOPIC_ID)],
-                        ),
+                        answer(unknown, &[
+                            (0, codes::UNKNOWN_TOPIC_ID),
+                            (1, codes::UNKNOWN_TOPIC_ID),
+                        ]),
                         answer(nil, &[(0, codes::UNKNOWN_TOPIC_ID)]),
                     ],
                     ..Default::default()

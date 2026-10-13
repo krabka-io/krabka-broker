@@ -4,15 +4,15 @@
 //! source over a fixed image are each needed by more than one of the test
 //! modules under this module, so the builders live in one file.
 
-use std::sync::Arc;
-
-use krabka_metadata::MetadataRecord;
-use krabka_units::millis;
-
 pub(super) use crate::barrier::test_support::{at, marker};
-use crate::{
-    barrier::{config::BarrierConfig, test_support},
-    metadata_source::MetadataSource,
+use {
+    crate::{
+        barrier::{config::BarrierConfig, test_support},
+        metadata_source::MetadataSource,
+    },
+    krabka_metadata::MetadataRecord,
+    krabka_units::millis,
+    std::sync::Arc,
 };
 
 pub(super) fn fast_config() -> BarrierConfig {

@@ -4,19 +4,19 @@
 //! The subscription itself is [`watch_image_loop`], shared with
 //! `throttle::refresh`; only the per-image work differs.
 
-use std::{future::Future, net::IpAddr, sync::Arc};
-
-use krabka_metadata::{EntityKey, MetadataImage};
-use krabka_units::convert::ByteRateExt as _;
-use tokio::{
-    sync::{Notify, watch},
-    time::Instant,
+use {
+    super::{IpNames, buckets::QuotaBuckets, ip_names::system_lookup},
+    crate::metadata_source::watch_image_loop,
+    krabka_metadata::{EntityKey, MetadataImage},
+    krabka_units::convert::ByteRateExt as _,
+    std::{future::Future, net::IpAddr, sync::Arc},
+    tokio::{
+        sync::{Notify, watch},
+        time::Instant,
+    },
+    tokio_util::sync::CancellationToken,
+    tracing::debug,
 };
-use tokio_util::sync::CancellationToken;
-use tracing::debug;
-
-use super::{IpNames, buckets::QuotaBuckets, ip_names::system_lookup};
-use crate::metadata_source::watch_image_loop;
 
 pub async fn run(
     images: watch::Receiver<Arc<MetadataImage>>,
@@ -160,18 +160,18 @@ fn configured_rate(
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::atomic::{AtomicUsize, Ordering},
-        time::Duration,
-    };
-
-    use assert2::assert;
-    use krabka_metadata::EntityKey;
-
-    use super::{super::bucket_rate, *};
-    use crate::{
-        quota::test_support::{alice_app1_producer_quota, alice_bucket, app1_producer_quota},
-        throttle::TokenBucket,
+    use {
+        super::{super::bucket_rate, *},
+        crate::{
+            quota::test_support::{alice_app1_producer_quota, alice_bucket, app1_producer_quota},
+            throttle::TokenBucket,
+        },
+        assert2::assert,
+        krabka_metadata::EntityKey,
+        std::{
+            sync::atomic::{AtomicUsize, Ordering},
+            time::Duration,
+        },
     };
 
     crate::quota_record_builder!(
@@ -343,9 +343,7 @@ mod tests {
             (call >= self.failures).then_some(self.address)
         }
 
-        fn calls(&self) -> usize {
-            self.calls.load(Ordering::SeqCst)
-        }
+        fn calls(&self) -> usize { self.calls.load(Ordering::SeqCst) }
     }
 
     /// The refresh task running against `resolver`, with a bucket of the
@@ -393,9 +391,7 @@ mod tests {
             .call()
     }
 
-    fn other_image() -> Arc<MetadataImage> {
-        img_with_quota().value(1.0).call()
-    }
+    fn other_image() -> Arc<MetadataImage> { img_with_quota().value(1.0).call() }
 
     /// A host name whose lookup failed is looked up again when its wait is
     /// over, with no image to prompt it: one lookup at the start, then after

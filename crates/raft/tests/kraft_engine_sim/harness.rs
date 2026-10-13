@@ -6,18 +6,20 @@
 //! waiting for agreement, so both halves of that shape are kept here rather
 //! than repeated per test module.
 
-pub(crate) use std::{collections::HashMap, sync::Arc, time::Duration};
-
-pub(crate) use krabka_raft::{
-    ControllerFetchMissLimit, MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax,
-    kraft::{
-        KraftConfig, KraftController, KraftLog, NodeId, QuorumState,
-        snapshot_fetch::MetadataSnapshotFetchMax,
-    },
+use {
+    crate::sim_net::SimNet,
+    krabka_units::prelude::{Time, millis},
 };
-use krabka_units::prelude::{Time, millis};
-
-use crate::sim_net::SimNet;
+pub(crate) use {
+    krabka_raft::{
+        ControllerFetchMissLimit, MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax,
+        kraft::{
+            KraftConfig, KraftController, KraftLog, NodeId, QuorumState,
+            snapshot_fetch::MetadataSnapshotFetchMax,
+        },
+    },
+    std::{collections::HashMap, sync::Arc, time::Duration},
+};
 
 pub(crate) fn three_voter_network() -> (SimNet, [NodeId; 3]) {
     (SimNet::new(), [NodeId(1), NodeId(2), NodeId(3)])

@@ -6,9 +6,7 @@
 //! the sentinel needs a function of its own rather than the log end offset the
 //! rest of the handler reads.
 
-use krabka_log::DeliveryPolicy;
-
-use crate::partition::Partition;
+use {crate::partition::Partition, krabka_log::DeliveryPolicy};
 
 /// The offset the `LATEST` sentinel reports for one partition, before the
 /// fetchable bound is applied to it.
@@ -86,35 +84,35 @@ pub(super) fn epoch_start_offset(partition: &Partition) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use assert2::{assert, check};
-    use krabka_protocol::owned::{
-        list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
-        list_offsets_response::ListOffsetsPartitionResponse,
-    };
-
-    use super::*;
-    use crate::{
-        broker::{Broker, BrokerHandle},
-        codes,
-        delivery::test_support::{BOUND_MS, NOW_MS, register, scheduled_partition, wall_at},
-        handlers::{
-            RequestContext,
-            list_offsets::{
-                handle,
-                sentinels::{
-                    EARLIEST_LOCAL_TIMESTAMP, EARLIEST_PENDING_UPLOAD_TIMESTAMP,
-                    EARLIEST_TIMESTAMP, LATEST_TIERED_TIMESTAMP, LATEST_TIMESTAMP, MAX_TIMESTAMP,
-                    UNKNOWN_TIMESTAMP,
+    use {
+        super::*,
+        crate::{
+            broker::{Broker, BrokerHandle},
+            codes,
+            delivery::test_support::{BOUND_MS, NOW_MS, register, scheduled_partition, wall_at},
+            handlers::{
+                RequestContext,
+                list_offsets::{
+                    handle,
+                    sentinels::{
+                        EARLIEST_LOCAL_TIMESTAMP, EARLIEST_PENDING_UPLOAD_TIMESTAMP,
+                        EARLIEST_TIMESTAMP, LATEST_TIERED_TIMESTAMP, LATEST_TIMESTAMP,
+                        MAX_TIMESTAMP, UNKNOWN_TIMESTAMP,
+                    },
+                    test_support::{decode_response, encode_request, test_context},
                 },
-                test_support::{decode_response, encode_request, test_context},
+                test_support::replicated_partition,
             },
-            test_support::replicated_partition,
+            test_support::{
+                UnixMillis, start_broker_with_authorizer_no_audit as start_broker, test_ctx,
+            },
         },
-        test_support::{
-            UnixMillis, start_broker_with_authorizer_no_audit as start_broker, test_ctx,
+        assert2::{assert, check},
+        krabka_protocol::owned::{
+            list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
+            list_offsets_response::ListOffsetsPartitionResponse,
         },
+        std::sync::Arc,
     };
 
     // Activation time of a batch that has long since come due.
@@ -311,10 +309,11 @@ mod tests {
         Arc<Partition>,
         krabka_log::LogConfig,
     ) {
-        use krabka_log::LogConfig;
-        use krabka_units::{bytes, millis};
-
-        use crate::delivery::test_support::{batch_at, partition_with_batches};
+        use {
+            crate::delivery::test_support::{batch_at, partition_with_batches},
+            krabka_log::LogConfig,
+            krabka_units::{bytes, millis},
+        };
 
         let timeline = qubit_clock::ManualMonotonicClock::new_shared();
         let clock: Arc<dyn qubit_clock::WallClock> = timeline.new_wall_clock(wall_at(NOW_MS));
@@ -342,16 +341,17 @@ mod tests {
 
     #[tokio::test]
     async fn scheduled_latest_keeps_pending_records_after_local_retention_pressure() {
-        use krabka_ids::{LeaderEpoch, Offset};
-        use krabka_remote_storage::TopicIdPartition;
-        use krabka_units::bytes;
-
-        use crate::{
-            api_catalog::UnstableApiVersions,
-            remote_log_manager::{
-                ArchiveMode, LocalRetentionBounds, copy_eligible, local_retention_pass,
-                test_support::{local_backends, tier},
+        use {
+            crate::{
+                api_catalog::UnstableApiVersions,
+                remote_log_manager::{
+                    ArchiveMode, LocalRetentionBounds, copy_eligible, local_retention_pass,
+                    test_support::{local_backends, tier},
+                },
             },
+            krabka_ids::{LeaderEpoch, Offset},
+            krabka_remote_storage::TopicIdPartition,
+            krabka_units::bytes,
         };
 
         const TOPIC: &str = "scheduled-latest-retention";
@@ -421,13 +421,14 @@ mod tests {
 
     #[tokio::test]
     async fn scheduled_latest_finds_a_pending_archive_after_legacy_eviction_or_a_mode_change() {
-        use krabka_ids::{LeaderEpoch, Offset};
-        use krabka_log::LogConfig;
-        use krabka_remote_storage::TopicIdPartition;
-
-        use crate::{
-            handlers::list_offsets::test_support::remote_topic,
-            remote_log_manager::{ArchiveMode, copy_eligible, test_support::tier},
+        use {
+            crate::{
+                handlers::list_offsets::test_support::remote_topic,
+                remote_log_manager::{ArchiveMode, copy_eligible, test_support::tier},
+            },
+            krabka_ids::{LeaderEpoch, Offset},
+            krabka_log::LogConfig,
+            krabka_remote_storage::TopicIdPartition,
         };
         for initial_policy in [DeliveryPolicy::Scheduled, DeliveryPolicy::Immediate] {
             const TOPIC: &str = "scheduled-latest-archived";

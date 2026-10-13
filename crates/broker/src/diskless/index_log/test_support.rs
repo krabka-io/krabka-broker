@@ -5,20 +5,20 @@
 //! in the window between establishing the subscription and reading the
 //! watermark. They compose: wrap one in the other.
 
-use std::{
-    sync::{Arc, Mutex as StdMutex},
-    time::Duration,
+use {
+    crate::{diskless::wal_index::WalFlushRecord, test_support::UnixMillis},
+    async_trait::async_trait,
+    bytes::Bytes,
+    futures_util::{FutureExt as _, StreamExt as _},
+    krabka_ids::PartitionIndex,
+    krabka_remote_storage_topic::{
+        AssignmentHandle, MetadataEventLog, MetadataEventStream, PartitionStart,
+    },
+    std::{
+        sync::{Arc, Mutex as StdMutex},
+        time::Duration,
+    },
 };
-
-use async_trait::async_trait;
-use bytes::Bytes;
-use futures_util::{FutureExt as _, StreamExt as _};
-use krabka_ids::PartitionIndex;
-use krabka_remote_storage_topic::{
-    AssignmentHandle, MetadataEventLog, MetadataEventStream, PartitionStart,
-};
-
-use crate::{diskless::wal_index::WalFlushRecord, test_support::UnixMillis};
 
 /// How fast the wrapped log's subscription delivers what it replays.
 #[derive(Debug, Clone, Copy)]
@@ -186,9 +186,7 @@ pub(crate) fn flush_record(
     #[builder(into, default = WalFlushSetup::default().max_timestamp)] max_timestamp: UnixMillis,
     #[builder(default = WalFlushSetup::default().byte_len)] byte_len: krabka_units::ByteSize,
 ) -> WalFlushRecord {
-    use krabka_units::convert::ByteSizeExt;
-
-    use crate::diskless::wal_index::WalIndexEntry;
+    use {crate::diskless::wal_index::WalIndexEntry, krabka_units::convert::ByteSizeExt};
 
     let setup = WalFlushSetup {
         topic_id,

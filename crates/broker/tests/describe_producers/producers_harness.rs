@@ -5,26 +5,24 @@
 //! Both batch builders live here because the transactional one is the
 //! idempotent one with the transactional attribute bit set.
 
-use assert2::assert;
-use krabka_protocol::records::{Attributes, RecordBatch};
-
 pub(crate) use crate::support::topic_id_for;
-use crate::support::{
-    self,
-    client::create_topic_named,
-    discovery::coordinator_lookup_request,
-    topics::CreateTopicSetup,
-    transactions::{claim_idempotent_producer, init_producer_request},
+use {
+    crate::support::{
+        self,
+        client::create_topic_named,
+        discovery::coordinator_lookup_request,
+        topics::CreateTopicSetup,
+        transactions::{claim_idempotent_producer, init_producer_request},
+    },
+    assert2::assert,
+    krabka_protocol::records::{Attributes, RecordBatch},
 };
 
 pub(crate) async fn create_topic(client: &krabka_client_core::Client, topic: &str) {
-    create_topic_named(
-        client,
-        CreateTopicSetup {
-            topic,
-            ..Default::default()
-        },
-    )
+    create_topic_named(client, CreateTopicSetup {
+        topic,
+        ..Default::default()
+    })
     .await;
 }
 
@@ -40,11 +38,9 @@ pub(crate) async fn init_transactional_producer(
 ) -> (i64, i16) {
     let coordinator = p
         .client
-        .send(coordinator_lookup_request(
-            transactional_id,
-            1,
-            vec![transactional_id.into()],
-        ))
+        .send(coordinator_lookup_request(transactional_id, 1, vec![
+            transactional_id.into(),
+        ]))
         .await
         .expect("transactional FindCoordinator");
     assert!(

@@ -8,25 +8,26 @@
 //! before it bumps the epoch, so the transitions and the abort-marker fan-out
 //! they depend on stay together.
 
-use std::sync::Arc;
-
-use krabka_protocol::owned::init_producer_id_response::InitProducerIdResponse;
-use krabka_verified::transaction::InitProducerIdIdentityDecision;
-
-use super::identity::{next_init_producer_identity, stage_recovery_identity};
-use crate::{
-    codes,
-    error::BrokerError,
-    txn::{
-        coordinator::{TxnCoordinator, completion::completion_for},
-        handlers::end_txn::{
-            client_producer_identity, completion_producer_identity, prepare_server_abort_identities,
+use {
+    super::identity::{next_init_producer_identity, stage_recovery_identity},
+    crate::{
+        codes,
+        error::BrokerError,
+        txn::{
+            coordinator::{TxnCoordinator, completion::completion_for},
+            handlers::end_txn::{
+                client_producer_identity, completion_producer_identity,
+                prepare_server_abort_identities,
+            },
+            marker::MarkerType,
+            state::{TxnEntry, TxnState},
+            util::now_millis,
+            version::TxnVersion,
         },
-        marker::MarkerType,
-        state::{TxnEntry, TxnState},
-        util::now_millis,
-        version::TxnVersion,
     },
+    krabka_protocol::owned::init_producer_id_response::InitProducerIdResponse,
+    krabka_verified::transaction::InitProducerIdIdentityDecision,
+    std::sync::Arc,
 };
 
 /// Transactional sub-path: allocate or bump-epoch for `tid`.
@@ -455,19 +456,20 @@ async fn dispatch_abort_markers(
 
 #[cfg(test)]
 mod tests {
-    use assert2::{assert, check};
-    use krabka_ids::PartitionIndex;
-    use krabka_log::{Log, LogConfig, ProducerId};
-    use krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord};
-
-    use super::*;
-    use crate::{
-        log_dir::partition_dir,
-        partition::Partition,
-        partition_registry::PartitionRegistry,
-        producer_id_manager::ProducerIdManager,
-        test_support::{open_partition, spawn_standalone_partition},
-        txn::{bootstrap, state::TopicPartition, version::TxnVersion},
+    use {
+        super::*,
+        crate::{
+            log_dir::partition_dir,
+            partition::Partition,
+            partition_registry::PartitionRegistry,
+            producer_id_manager::ProducerIdManager,
+            test_support::{open_partition, spawn_standalone_partition},
+            txn::{bootstrap, state::TopicPartition, version::TxnVersion},
+        },
+        assert2::{assert, check},
+        krabka_ids::PartitionIndex,
+        krabka_log::{Log, LogConfig, ProducerId},
+        krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord},
     };
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -494,9 +496,7 @@ mod tests {
     }
 
     impl Default for InitIdentity {
-        fn default() -> Self {
-            Self::Existing(InitIdentitySetup::default())
-        }
+        fn default() -> Self { Self::Existing(InitIdentitySetup::default()) }
     }
 
     /// `dispatch_abort_markers` appends an abort control-marker batch to each

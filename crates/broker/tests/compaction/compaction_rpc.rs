@@ -6,26 +6,26 @@
 //! the matching response, so the API versions this suite pins are all stated
 //! in one file.
 
-use std::net::SocketAddr;
-
-use assert2::assert;
-use bytes::Bytes;
-use krabka_protocol::{
-    owned::{metadata_response::MetadataResponse, produce_response::ProduceResponse},
-    primitives::uuid::Uuid,
-    records::{Record, RecordBatch},
-};
-use tokio::net::TcpStream;
-
-use crate::{
-    CLIENT_ID, kafka_wire,
-    support::{
-        discovery::named_topic_metadata,
-        produce::{SinglePartitionProduceSetup, batch_request},
-        records::{batch_from_records, value_record},
-        topics::CreateTopicSetup,
-        wire::HeaderEncoding as RequestHeaderEncoding,
+use {
+    crate::{
+        CLIENT_ID, kafka_wire,
+        support::{
+            discovery::named_topic_metadata,
+            produce::{SinglePartitionProduceSetup, batch_request},
+            records::{batch_from_records, value_record},
+            topics::CreateTopicSetup,
+            wire::HeaderEncoding as RequestHeaderEncoding,
+        },
     },
+    assert2::assert,
+    bytes::Bytes,
+    krabka_protocol::{
+        owned::{metadata_response::MetadataResponse, produce_response::ProduceResponse},
+        primitives::uuid::Uuid,
+        records::{Record, RecordBatch},
+    },
+    std::net::SocketAddr,
+    tokio::net::TcpStream,
 };
 
 /// Create a topic with config overrides, on PLAINTEXT and with no SASL.
@@ -97,14 +97,11 @@ pub(crate) async fn produce_record(
         ..batch_from_records(vec![record])
     };
 
-    let req = batch_request(
-        batch,
-        SinglePartitionProduceSetup {
-            topic: topic.to_string(),
-            topic_id,
-            ..Default::default()
-        },
-    );
+    let req = batch_request(batch, SinglePartitionProduceSetup {
+        topic: topic.to_string(),
+        topic_id,
+        ..Default::default()
+    });
 
     let version: i16 = 9; // flexible, pre-KIP-516 (no topic_id required on the wire at v9)
     let mut stream = TcpStream::connect(addr).await.expect("connect");

@@ -2,10 +2,11 @@
 //! satisfies so that the real-log binary compiles the trait without also
 //! carrying the fake's implementation in the same file.
 
-use krabka_kraft_core::simulation_support::{append_epochs, replicate_epochs, truncate_epochs};
-use krabka_raft::kraft::types::Epoch;
-
-use super::node_log::SimNodeLog;
+use {
+    super::node_log::SimNodeLog,
+    krabka_kraft_core::simulation_support::{append_epochs, replicate_epochs, truncate_epochs},
+    krabka_raft::kraft::types::Epoch,
+};
 
 /// A growable in-memory replicated log.
 ///
@@ -26,16 +27,12 @@ impl SimNodeLog for SimLog {
         append_epochs(&mut self.epochs, epoch, count);
     }
 
-    fn truncate_to(&mut self, offset: i64) {
-        truncate_epochs(&mut self.epochs, offset);
-    }
+    fn truncate_to(&mut self, offset: i64) { truncate_epochs(&mut self.epochs, offset); }
 
     fn replicate_from(&mut self, leader: &Self) {
         // Divergent prefixes are truncated before this method runs.
         replicate_epochs(&mut self.epochs, &leader.epochs);
     }
 
-    fn record_count(&self) -> usize {
-        self.epochs.len()
-    }
+    fn record_count(&self) -> usize { self.epochs.len() }
 }

@@ -7,23 +7,24 @@
 //! Rust client because the client always negotiates the highest Fetch version,
 //! and these tests need to pin v0 and v3 exactly.
 
-use assert2::assert;
-use bytes::{Buf, BytesMut};
-use krabka_protocol::{
-    Decode, Encode,
-    kafka_3_6_2::owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-    owned::produce_response::ProduceResponse,
-    records::{RecordBatch, RecordsPayload},
-};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
-
-use crate::support::{
-    produce::encode_batch_request,
-    topics::{creatable_topic, create_topic_request},
-    wire::{HeaderEncoding, request_frame},
+use {
+    crate::support::{
+        produce::encode_batch_request,
+        topics::{creatable_topic, create_topic_request},
+        wire::{HeaderEncoding, request_frame},
+    },
+    assert2::assert,
+    bytes::{Buf, BytesMut},
+    krabka_protocol::{
+        Decode, Encode,
+        kafka_3_6_2::owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic},
+        owned::produce_response::ProduceResponse,
+        records::{RecordBatch, RecordsPayload},
+    },
+    tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpStream,
+    },
 };
 
 /// Verify successful down-conversion and extract the exact legacy bytes.

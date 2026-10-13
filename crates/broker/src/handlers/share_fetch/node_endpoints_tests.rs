@@ -8,41 +8,44 @@
 //! leader that no live broker registration backs keeps its id in the hint and
 //! adds no endpoint.
 
-use std::sync::Arc;
-
-use assert2::assert;
-use bytes::Bytes;
-use krabka_ids::LeaderEpoch;
-use krabka_metadata::{
-    BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord, NodeId, PartitionRecord, TopicRecord,
-};
-use krabka_protocol::{
-    owned::{
-        share_acknowledge_request::{
-            AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch as AcknowledgeBatch,
-            ShareAcknowledgeRequest,
+use {
+    crate::{
+        authorizer::AllowAllAuthorizer,
+        broker::BrokerHandle,
+        codes,
+        handlers::test_support::{
+            configured_topic_request, replicated_partition, share_fetch_wire,
         },
-        share_acknowledge_response::{self, ShareAcknowledgeResponse},
-        share_fetch_request::{FetchPartition, FetchTopic, ShareFetchRequest},
-        share_fetch_response::{
-            self, LeaderIdAndEpoch, NodeEndpoint, PartitionData, ShareFetchResponse,
-            ShareFetchableTopicResponse,
+        share_partition::session::FetchPartitions,
+        test_support::{
+            decode_response, encode_request, initialize_share_state, peer, principal,
+            request_context, start_broker_no_audit_with, try_dispatch_context,
         },
     },
-    primitives::uuid::Uuid as WireUuid,
-    records::RecordsPayload,
-};
-
-use crate::{
-    authorizer::AllowAllAuthorizer,
-    broker::BrokerHandle,
-    codes,
-    handlers::test_support::{configured_topic_request, replicated_partition, share_fetch_wire},
-    share_partition::session::FetchPartitions,
-    test_support::{
-        decode_response, encode_request, initialize_share_state, peer, principal, request_context,
-        start_broker_no_audit_with, try_dispatch_context,
+    assert2::assert,
+    bytes::Bytes,
+    krabka_ids::LeaderEpoch,
+    krabka_metadata::{
+        BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord, NodeId, PartitionRecord,
+        TopicRecord,
     },
+    krabka_protocol::{
+        owned::{
+            share_acknowledge_request::{
+                AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch as AcknowledgeBatch,
+                ShareAcknowledgeRequest,
+            },
+            share_acknowledge_response::{self, ShareAcknowledgeResponse},
+            share_fetch_request::{FetchPartition, FetchTopic, ShareFetchRequest},
+            share_fetch_response::{
+                self, LeaderIdAndEpoch, NodeEndpoint, PartitionData, ShareFetchResponse,
+                ShareFetchableTopicResponse,
+            },
+        },
+        primitives::uuid::Uuid as WireUuid,
+        records::RecordsPayload,
+    },
+    std::sync::Arc,
 };
 
 const GROUP: &str = "endpoints-group";

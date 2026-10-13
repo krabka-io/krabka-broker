@@ -10,34 +10,34 @@
 //! `Read` check and the metadata check on its own, so a row can carry a fetch
 //! error and a different acknowledge error.
 
-use std::sync::Arc;
-
-use assert2::assert;
-use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::{
-    owned::{
-        share_acknowledge_response::ShareAcknowledgeResponse,
-        share_fetch_request::{
-            AcknowledgementBatch as FetchAcknowledgeBatch, FetchPartition, FetchTopic,
-            ShareFetchRequest,
+use {
+    crate::{
+        authorizer::AuthorizationResult,
+        broker::BrokerHandle,
+        codes,
+        handlers::test_support::{
+            AcknowledgementMode, AcknowledgementPartitionSetup, ShareSessionEpoch,
+            acknowledge_batches_request, acquired_share_records,
+            create_topic as create_topic_from_test_support, initialize_earliest_share,
+            produce_records, share_acknowledge_wire, share_fetch_wire, share_record_states,
         },
-        share_fetch_response::ShareFetchResponse,
+        share_partition::state::RecordState::{self, Acquired},
+        test_support::start_broker_with_authorizer_no_audit,
     },
-    primitives::uuid::Uuid as WireUuid,
-};
-
-use crate::{
-    authorizer::AuthorizationResult,
-    broker::BrokerHandle,
-    codes,
-    handlers::test_support::{
-        AcknowledgementMode, AcknowledgementPartitionSetup, ShareSessionEpoch,
-        acknowledge_batches_request, acquired_share_records,
-        create_topic as create_topic_from_test_support, initialize_earliest_share, produce_records,
-        share_acknowledge_wire, share_fetch_wire, share_record_states,
+    assert2::assert,
+    krabka_metadata::{AclOperation, ResourceType},
+    krabka_protocol::{
+        owned::{
+            share_acknowledge_response::ShareAcknowledgeResponse,
+            share_fetch_request::{
+                AcknowledgementBatch as FetchAcknowledgeBatch, FetchPartition, FetchTopic,
+                ShareFetchRequest,
+            },
+            share_fetch_response::ShareFetchResponse,
+        },
+        primitives::uuid::Uuid as WireUuid,
     },
-    share_partition::state::RecordState::{self, Acquired},
-    test_support::start_broker_with_authorizer_no_audit,
+    std::sync::Arc,
 };
 
 const TOPIC: &str = "ack-order";
@@ -276,10 +276,10 @@ fn cases() -> Vec<Case> {
             states: HELD,
         },
         invalid("first offset past last", &[(2, 0, &[ACCEPT])]),
-        invalid(
-            "overlapping batches",
-            &[(0, 1, &[ACCEPT]), (0, 2, &[ACCEPT])],
-        ),
+        invalid("overlapping batches", &[
+            (0, 1, &[ACCEPT]),
+            (0, 2, &[ACCEPT]),
+        ]),
         invalid("no acknowledge type", &[(0, 2, &[])]),
         invalid("type count not the range", &[(0, 2, &[ACCEPT, ACCEPT])]),
         invalid("type out of range", &[(0, 2, &[5])]),

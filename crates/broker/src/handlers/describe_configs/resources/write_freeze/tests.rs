@@ -1,18 +1,19 @@
 //! The `write.freeze` value a topic reports, and where in the response it
 //! sits.
 
-use assert2::check;
-use krabka_metadata::{MetadataImage, MetadataRecord, PatternType, TopicConfigRecord};
-use uuid::Uuid;
-
-use crate::{
-    config_keys,
-    handlers::describe_configs::{
-        resources::tests::{describe_topic, entry_named},
-        test_support::set_topic_config,
-        wire::{CONFIG_SOURCE_DEFAULT, CONFIG_SOURCE_DYNAMIC_TOPIC},
+use {
+    crate::{
+        config_keys,
+        handlers::describe_configs::{
+            resources::tests::{describe_topic, entry_named},
+            test_support::set_topic_config,
+            wire::{CONFIG_SOURCE_DEFAULT, CONFIG_SOURCE_DYNAMIC_TOPIC},
+        },
+        test_support::frozen_topics_image,
     },
-    test_support::frozen_topics_image,
+    assert2::check,
+    krabka_metadata::{MetadataImage, MetadataRecord, PatternType, TopicConfigRecord},
+    uuid::Uuid,
 };
 
 /// A metadata image whose freeze registry holds `entries`, and nothing else. A

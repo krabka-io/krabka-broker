@@ -6,24 +6,24 @@
 //! succeeds only if `TxnCoordinator::recover` decoded the persisted record with
 //! the original producer identity, so the `EndTxn` response is the proof.
 
-use std::time::Duration;
-
-use assert2::assert;
-use krabka_broker::{BootstrapMode, BrokerConfig};
-use krabka_client_core::Client;
-use krabka_protocol::owned::{
-    end_txn_response::EndTxnResponse, find_coordinator_request::FindCoordinatorRequest,
-};
-use tempfile::TempDir;
-
-use crate::{
-    support::{
-        client::start_client,
-        topics::TopicPartitionCount,
-        transaction_wire::{partitions_request, transaction_topic},
-        transactions::{ProducerIdentity, end_transaction_request, init_producer_request},
+use {
+    crate::{
+        support::{
+            client::start_client,
+            topics::TopicPartitionCount,
+            transaction_wire::{partitions_request, transaction_topic},
+            transactions::{ProducerIdentity, end_transaction_request, init_producer_request},
+        },
+        txnver_harness::{NONE, create_topic, downgrade_transaction_version, expected_partitions},
     },
-    txnver_harness::{NONE, create_topic, downgrade_transaction_version, expected_partitions},
+    assert2::assert,
+    krabka_broker::{BootstrapMode, BrokerConfig},
+    krabka_client_core::Client,
+    krabka_protocol::owned::{
+        end_txn_response::EndTxnResponse, find_coordinator_request::FindCoordinatorRequest,
+    },
+    std::time::Duration,
+    tempfile::TempDir,
 };
 
 /// Re-open the broker on the SAME data dir. A populated dir replays the raft

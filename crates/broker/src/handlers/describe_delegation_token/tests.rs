@@ -8,28 +8,28 @@
 //! delegation-token-authenticated caller — the credential-disclosure gate
 //! this suite exists to pin down.
 
-use std::net::SocketAddr;
-
-use assert2::assert;
-use krabka_metadata::{
-    AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
-};
-use krabka_protocol::owned::describe_delegation_token_request::{
-    DescribeDelegationTokenOwner, DescribeDelegationTokenRequest,
-};
-use krabka_raft::ControllerHandle;
-use krabka_security::SecretBytes;
-use tempfile::TempDir;
-
-use super::handle;
-use crate::{
-    authorizer::{AllowAllAuthorizer, Authorizer, SimpleAclAuthorizer},
-    handlers::delegation_token_test_support::{
-        anonymous, authed, kp, seed_token, test_controller, token_authed,
+use {
+    super::handle,
+    crate::{
+        authorizer::{AllowAllAuthorizer, Authorizer, SimpleAclAuthorizer},
+        handlers::delegation_token_test_support::{
+            anonymous, authed, kp, seed_token, test_controller, token_authed,
+        },
+        metadata_source::MetadataSource,
+        network::auth::ConnectionAuth,
+        test_support::allow_acl,
     },
-    metadata_source::MetadataSource,
-    network::auth::ConnectionAuth,
-    test_support::allow_acl,
+    assert2::assert,
+    krabka_metadata::{
+        AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
+    },
+    krabka_protocol::owned::describe_delegation_token_request::{
+        DescribeDelegationTokenOwner, DescribeDelegationTokenRequest,
+    },
+    krabka_raft::ControllerHandle,
+    krabka_security::SecretBytes,
+    std::net::SocketAddr,
+    tempfile::TempDir,
 };
 
 macro_rules! describe_token_response {
@@ -132,9 +132,7 @@ async fn seed_admin_minted_token(controller: &ControllerHandle) {
         .await;
 }
 
-fn peer() -> SocketAddr {
-    "127.0.0.1:0".parse().unwrap()
-}
+fn peer() -> SocketAddr { "127.0.0.1:0".parse().unwrap() }
 
 /// The tests below want the "real ACL" semantics: the ACL extension should
 /// add a token if and only if the caller holds a matching `Describe` ACL on
@@ -437,8 +435,10 @@ async fn describe_acl_on_token_id_grants_exactly_that_token() {
 /// for an unrelated principal suppresses the no-ACL default on that owner.
 #[tokio::test]
 async fn describe_tokens_acl_on_the_owner_grants_all_of_their_tokens() {
-    use AclOperation::{All, CreateTokens, DescribeTokens};
-    use PermissionType::{Allow, Deny};
+    use {
+        AclOperation::{All, CreateTokens, DescribeTokens},
+        PermissionType::{Allow, Deny},
+    };
     type Case = (
         &'static [(AclOperation, PermissionType)],
         &'static str,
@@ -480,18 +480,15 @@ async fn describe_tokens_acl_on_the_owner_grants_all_of_their_tokens() {
         token_deny.permission_type = Deny;
         seed_acl(&controller, token_deny).await;
         for &(operation, permission_type) in operations {
-            seed_acl(
-                &controller,
-                AclEntry {
-                    resource_type: ResourceType::User,
-                    resource_name: "User:alice".into(),
-                    pattern_type: PatternType::Literal,
-                    principal: format!("User:{principal}"),
-                    host: "*".into(),
-                    operation,
-                    permission_type,
-                },
-            )
+            seed_acl(&controller, AclEntry {
+                resource_type: ResourceType::User,
+                resource_name: "User:alice".into(),
+                pattern_type: PatternType::Literal,
+                principal: format!("User:{principal}"),
+                host: "*".into(),
+                operation,
+                permission_type,
+            })
             .await;
         }
         let authorizer = simple_authz().with_allow_everyone_if_no_acl_found(default_allow);

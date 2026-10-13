@@ -5,12 +5,12 @@
 //! gaps behind it. Both answers come from the same header-only walk, which is
 //! why they sit together.
 
-use std::ops::ControlFlow;
-
-use krabka_ids::Offset;
-
-use super::{ActivationScan, Segment};
-use crate::error::LogError;
+use {
+    super::{ActivationScan, Segment},
+    crate::error::LogError,
+    krabka_ids::Offset,
+    std::ops::ControlFlow,
+};
 
 impl Segment {
     /// Walk forward from `from` and find where the active prefix ends.
@@ -135,11 +135,12 @@ impl Segment {
 
 #[cfg(test)]
 mod tests {
-    use tempfile::tempdir;
-
-    use super::*;
-    use crate::segment::test_support::{
-        RecordTimestamp, SampleBatchSetup, seeded_segment, test_segment,
+    use {
+        super::*,
+        crate::segment::test_support::{
+            RecordTimestamp, SampleBatchSetup, seeded_segment, test_segment,
+        },
+        tempfile::tempdir,
     };
 
     fn check_pending_ranges(seg: &Segment, expected: &[(Offset, Offset)]) {

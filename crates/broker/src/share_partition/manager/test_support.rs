@@ -4,26 +4,26 @@
 //! build their manager from here, so every test runs against the same mock
 //! metadata source and the same lock duration.
 
-use std::{path::Path, sync::Arc, time::Duration};
-
-use krabka_ids::PartitionIndex;
-use krabka_log::Offset;
-use krabka_metadata::{MetadataImage, NodeId};
-use krabka_protocol::records::RecordBatch;
-use krabka_security::ListenerProtocol;
-
-use super::SharePartitionLeaderManager;
-use crate::{
-    coordinator::unified::share::config::ShareGroupConfig,
-    metadata_source::MetadataSource,
-    network::client::InterBrokerClient,
-    partition_registry::PartitionRegistry,
-    share_coordinator::{
-        config::ShareCoordinatorConfig, coordinator::ShareCoordinator,
-        persister_client::SharePersister,
+use {
+    super::SharePartitionLeaderManager,
+    crate::{
+        coordinator::unified::share::config::ShareGroupConfig,
+        metadata_source::MetadataSource,
+        network::client::InterBrokerClient,
+        partition_registry::PartitionRegistry,
+        share_coordinator::{
+            config::ShareCoordinatorConfig, coordinator::ShareCoordinator,
+            persister_client::SharePersister,
+        },
+        share_partition::dlq::{DlqSink, test_support::RecordingDlq},
+        test_support::{FakeMetadataSource, UnixMillis, open_partition, static_records_batch},
     },
-    share_partition::dlq::{DlqSink, test_support::RecordingDlq},
-    test_support::{FakeMetadataSource, UnixMillis, open_partition, static_records_batch},
+    krabka_ids::PartitionIndex,
+    krabka_log::Offset,
+    krabka_metadata::{MetadataImage, NodeId},
+    krabka_protocol::records::RecordBatch,
+    krabka_security::ListenerProtocol,
+    std::{path::Path, sync::Arc, time::Duration},
 };
 
 pub(crate) const LOCK: Duration = Duration::from_secs(30);

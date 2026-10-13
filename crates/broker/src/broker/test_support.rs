@@ -4,16 +4,16 @@
 //! submit. They live in one module so no submodule owns a helper its siblings
 //! also need.
 
-use std::sync::Arc;
-
-use assert2::assert;
-use krabka_ids::{LeaderEpoch, NodeId, PartitionIndex};
-
-use crate::{
-    broker::BrokerHandle,
-    log_dir::partition_dir,
-    partition::Partition,
-    test_support::{FakeMetadataSource, single_partition_topic, spawn_standalone_partition},
+use {
+    crate::{
+        broker::BrokerHandle,
+        log_dir::partition_dir,
+        partition::Partition,
+        test_support::{FakeMetadataSource, single_partition_topic, spawn_standalone_partition},
+    },
+    assert2::assert,
+    krabka_ids::{LeaderEpoch, NodeId, PartitionIndex},
+    std::sync::Arc,
 };
 
 /// A metadata source over `image`, with `leader` as the controller leader and

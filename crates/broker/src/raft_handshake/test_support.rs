@@ -3,26 +3,26 @@
 //! `BrokerRaftHandshake` configured for in-process PLAIN, and the encoded
 //! request bodies that the SASL rounds send.
 
-use std::{collections::HashMap, sync::Arc};
-
-use krabka_protocol::{
-    Encode,
-    owned::{
-        api_versions_request::ApiVersionsRequest,
-        sasl_authenticate_request::SaslAuthenticateRequest,
-        sasl_handshake_request::SaslHandshakeRequest,
+use {
+    super::{BrokerRaftHandshake, frame::read_kafka_request},
+    crate::{SslPrincipalMapper, authorizer::AllowAllAuthorizer},
+    krabka_protocol::{
+        Encode,
+        owned::{
+            api_versions_request::ApiVersionsRequest,
+            sasl_authenticate_request::SaslAuthenticateRequest,
+            sasl_handshake_request::SaslHandshakeRequest,
+        },
+    },
+    krabka_raft::RaftHandshakeError,
+    krabka_security::{ListenerProtocol, SaslMechanism},
+    std::{collections::HashMap, sync::Arc},
+    tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        sync::OnceCell,
+        time::{Duration, timeout},
     },
 };
-use krabka_raft::RaftHandshakeError;
-use krabka_security::{ListenerProtocol, SaslMechanism};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    sync::OnceCell,
-    time::{Duration, timeout},
-};
-
-use super::{BrokerRaftHandshake, frame::read_kafka_request};
-use crate::{SslPrincipalMapper, authorizer::AllowAllAuthorizer};
 
 #[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
 pub(super) struct HandshakeApiKey(pub i16);
@@ -39,9 +39,7 @@ pub(super) enum HandshakeHeader {
 }
 
 impl HandshakeHeader {
-    pub(super) fn is_flexible(self) -> bool {
-        self == Self::Flexible
-    }
+    pub(super) fn is_flexible(self) -> bool { self == Self::Flexible }
 }
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
@@ -135,9 +133,7 @@ pub(super) async fn read_response_frame<R: tokio::io::AsyncRead + Unpin>(
     .expect("timely response")
 }
 
-pub(super) fn sasl_test_config() -> BrokerRaftHandshake {
-    handshake_config().call()
-}
+pub(super) fn sasl_test_config() -> BrokerRaftHandshake { handshake_config().call() }
 
 #[derive(krabka_macros::FieldDefaults)]
 pub(super) struct HandshakeSetup {

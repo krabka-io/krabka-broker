@@ -7,15 +7,15 @@
 //! enough, to sit in its own file, with the per-broker config builder it is the
 //! only caller of.
 
-use std::{net::SocketAddr, time::Duration};
-
-use assert2::assert;
-use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerError, BrokerHandle, NodeId};
-use tempfile::TempDir;
-
-use crate::support::{
-    AddressedNodeSetup, addressed_node_config, client::connect_owned, start_n_node,
-    wait_for_all_brokers_registered,
+use {
+    crate::support::{
+        AddressedNodeSetup, addressed_node_config, client::connect_owned, start_n_node,
+        wait_for_all_brokers_registered,
+    },
+    assert2::assert,
+    krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerError, BrokerHandle, NodeId},
+    std::{net::SocketAddr, time::Duration},
+    tempfile::TempDir,
 };
 
 #[derive(derive_more::From, derive_more::Into)]

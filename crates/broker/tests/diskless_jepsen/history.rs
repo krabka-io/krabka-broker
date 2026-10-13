@@ -21,20 +21,20 @@
 //! from the wall clock, because the ordering the checker needs is a happens
 //! before relation, and a counter states it exactly.
 
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
+use {
+    crate::{APPENDERS, RECORDS_PER_APPENDER, TOPIC, support::producer::producer_record},
+    assert2::assert,
+    bytes::Bytes,
+    krabka_client_producer::{Acks, Producer},
+    stateright::semantics::{ConsistencyTester, LinearizabilityTester, SequentialSpec},
+    std::{
+        sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+        },
+        time::Duration,
     },
-    time::Duration,
 };
-
-use assert2::assert;
-use bytes::Bytes;
-use krabka_client_producer::{Acks, Producer};
-use stateright::semantics::{ConsistencyTester, LinearizabilityTester, SequentialSpec};
-
-use crate::{APPENDERS, RECORDS_PER_APPENDER, TOPIC, support::producer::producer_record};
 
 /// One append, identified by the bytes it carries.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

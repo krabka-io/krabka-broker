@@ -3,24 +3,26 @@
 //! header timestamp each checkpoint is stamped with, and the fact that an
 //! ordinary snapshot never reloads the live image.
 
-use assert2::assert;
-
-use super::*;
-use crate::{
-    kraft::controller::{
-        checkpoint::{
-            checkpoint_id_is_newer, latest_checkpoint_id, load_checkpoint_by_id,
-            load_latest_checkpoint, parse_checkpoint_name, retain_latest_checkpoint,
-            retain_recent_checkpoints, write_checkpoint,
+use {
+    super::*,
+    crate::{
+        kraft::controller::{
+            checkpoint::{
+                checkpoint_id_is_newer, latest_checkpoint_id, load_checkpoint_by_id,
+                load_latest_checkpoint, parse_checkpoint_name, retain_latest_checkpoint,
+                retain_recent_checkpoints, write_checkpoint,
+            },
+            records::decode_control_record,
+            test_support::{
+                ControllerOpenSetup, ControllerSetup, EngineSetup, SnapshotRecordCount,
+                await_leader, build, build_engine_only, elect_single_voter_engine,
+                one_offset_batch, open_test_controller_with, submit_change_with_timeout,
+                topic_record, voter_set,
+            },
         },
-        records::decode_control_record,
-        test_support::{
-            ControllerOpenSetup, ControllerSetup, EngineSetup, SnapshotRecordCount, await_leader,
-            build, build_engine_only, elect_single_voter_engine, one_offset_batch,
-            open_test_controller_with, submit_change_with_timeout, topic_record, voter_set,
-        },
+        snapshot::SnapshotWriter,
     },
-    snapshot::SnapshotWriter,
+    assert2::assert,
 };
 
 async fn assert_checkpoint_pruned(ctrl: &KraftController, dir: &std::path::Path) {

@@ -15,27 +15,27 @@ mod kafka_wire;
 
 mod support;
 
-use std::time::Duration;
-
-use assert2::{assert, check};
-use bytes::BytesMut;
-use krabka_broker::{Broker, BrokerConfig, metrics::PartitionLabel};
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{
-        create_topics_response::CreateTopicsResponse,
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-        produce_response::ProduceResponse,
+use {
+    crate::support::{
+        client::{metrics_config, scrape_metrics},
+        fetch::single_partition_fetch,
+        records::{batch_from_records, value_record},
+        topics::{creatable_topic, create_topic_request},
+        wire::HeaderEncoding as RequestHeaderEncoding,
     },
-};
-use tokio::net::TcpStream;
-
-use crate::support::{
-    client::{metrics_config, scrape_metrics},
-    fetch::single_partition_fetch,
-    records::{batch_from_records, value_record},
-    topics::{creatable_topic, create_topic_request},
-    wire::HeaderEncoding as RequestHeaderEncoding,
+    assert2::{assert, check},
+    bytes::BytesMut,
+    krabka_broker::{Broker, BrokerConfig, metrics::PartitionLabel},
+    krabka_protocol::{
+        Decode, Encode,
+        owned::{
+            create_topics_response::CreateTopicsResponse,
+            produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+            produce_response::ProduceResponse,
+        },
+    },
+    std::time::Duration,
+    tokio::net::TcpStream,
 };
 
 const TOPIC: &str = "metrics-it";
@@ -46,9 +46,7 @@ const CREATE_TOPICS_VERSION: i16 = 7;
 /// The client id every request header in this suite carries.
 const CLIENT_ID: &str = "krabka-metrics-test";
 
-async fn create_topic(addr: std::net::SocketAddr) {
-    create_topic_named(addr, TOPIC).await;
-}
+async fn create_topic(addr: std::net::SocketAddr) { create_topic_named(addr, TOPIC).await; }
 
 async fn create_topic_named(addr: std::net::SocketAddr, topic: &str) {
     let req = create_topic_request(creatable_topic().name((topic).into()).call());
@@ -118,9 +116,7 @@ async fn fetch_one(addr: std::net::SocketAddr) {
     assert!(r.error_code == 0, "fetch top-level: {r:?}");
 }
 
-async fn scrape(addr: std::net::SocketAddr) -> String {
-    scrape_metrics(addr).await
-}
+async fn scrape(addr: std::net::SocketAddr) -> String { scrape_metrics(addr).await }
 
 async fn wait_until_absent(addr: std::net::SocketAddr, needle: &str) -> String {
     tokio::time::timeout(Duration::from_secs(5), async {

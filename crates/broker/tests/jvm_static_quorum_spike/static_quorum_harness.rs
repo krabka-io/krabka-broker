@@ -7,11 +7,12 @@
 //! afterwards, so the topology lives here and each spike file holds one
 //! scenario.
 
-use std::{net::SocketAddr, process::Command};
-
-use base64::Engine as _;
-use krabka_broker::BrokerConfig;
-use uuid::Uuid;
+use {
+    base64::Engine as _,
+    krabka_broker::BrokerConfig,
+    std::{net::SocketAddr, process::Command},
+    uuid::Uuid,
+};
 
 pub(crate) const KAFKA_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.0.0";
 
@@ -102,6 +103,7 @@ impl MixedQuorum {
         let (brokers, dirs) = endpoints.start_pair(cluster_id, election_timeout).await;
         (endpoints.ports, brokers, dirs)
     }
+
     pub(crate) async fn allocate() -> Self {
         let (clients, controllers) = bind_and_drop_ports(3).await;
         Self {

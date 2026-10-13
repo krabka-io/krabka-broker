@@ -6,16 +6,16 @@
 //! duplicate id is answered once, and the rows of the groups the principal may
 //! not delete follow the coordinator's rows.
 
-use std::collections::HashSet;
-
-use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::owned::{
-    delete_groups_request::DeleteGroupsRequest,
-    delete_groups_response::{DeletableGroupResult, DeleteGroupsResponse},
-};
-
-use crate::{
-    broker::Broker, codes, coordinator::DeleteGroupError, handlers::group_coordinator_error,
+use {
+    crate::{
+        broker::Broker, codes, coordinator::DeleteGroupError, handlers::group_coordinator_error,
+    },
+    krabka_metadata::{AclOperation, ResourceType},
+    krabka_protocol::owned::{
+        delete_groups_request::DeleteGroupsRequest,
+        delete_groups_response::{DeletableGroupResult, DeleteGroupsResponse},
+    },
+    std::collections::HashSet,
 };
 
 context_handler! {
@@ -89,17 +89,17 @@ async fn delete_one(broker: &Broker, group_id: &str) -> i16 {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use assert2::assert;
-
-    use super::*;
-    use crate::{
-        authorizer::AuthorizationResult,
-        handlers::RequestContext,
-        test_support::{
-            DenyAll, dispatch_context, peer, principal, start_group_broker_no_audit, test_ctx,
+    use {
+        super::*,
+        crate::{
+            authorizer::AuthorizationResult,
+            handlers::RequestContext,
+            test_support::{
+                DenyAll, dispatch_context, peer, principal, start_group_broker_no_audit, test_ctx,
+            },
         },
+        assert2::assert,
+        std::sync::Arc,
     };
 
     const VERSION: i16 = 2;
@@ -148,15 +148,10 @@ mod tests {
         let broker = broker_handle.broker_arc_for_test();
         request_identity!((p, peer), principal("alice"));
         let ctx = test_context(&p, &peer);
-        assert_results(
-            &broker,
-            &ctx,
-            &["group-a", "group-b"],
-            vec![
-                result("group-a", codes::GROUP_AUTHORIZATION_FAILED),
-                result("group-b", codes::GROUP_AUTHORIZATION_FAILED),
-            ],
-        )
+        assert_results(&broker, &ctx, &["group-a", "group-b"], vec![
+            result("group-a", codes::GROUP_AUTHORIZATION_FAILED),
+            result("group-b", codes::GROUP_AUTHORIZATION_FAILED),
+        ])
         .await;
         broker_handle.shutdown().await;
     }
@@ -236,12 +231,10 @@ mod tests {
         broker_fixture!((broker_handle, _dir, broker), group_allow_all);
         request_identity!((p, peer), principal("admin"));
         let ctx = test_context(&p, &peer);
-        assert_results(
-            &broker,
-            &ctx,
-            &["missing"],
-            vec![result("missing", codes::GROUP_ID_NOT_FOUND)],
-        )
+        assert_results(&broker, &ctx, &["missing"], vec![result(
+            "missing",
+            codes::GROUP_ID_NOT_FOUND,
+        )])
         .await;
         broker_handle.shutdown().await;
     }

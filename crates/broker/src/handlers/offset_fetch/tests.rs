@@ -5,34 +5,34 @@
 //! top-level field that has to reach two different response shapes: the
 //! pre-KIP-516 `topics[]` of v0–v7 and the `groups[]` of v8 and above.
 
-use std::sync::Arc;
-
-use assert2::assert;
-use krabka_log::Offset;
-use krabka_protocol::{
-    owned::{
-        offset_fetch_request::{OffsetFetchRequestGroup, OffsetFetchRequestTopics},
-        offset_fetch_response::{
-            OffsetFetchResponse, OffsetFetchResponseGroup, OffsetFetchResponsePartition,
-            OffsetFetchResponsePartitions, OffsetFetchResponseTopic, OffsetFetchResponseTopics,
+use {
+    super::*,
+    crate::{
+        authorizer::{AllowAllAuthorizer, Authorizer},
+        broker::{Broker, BrokerHandle},
+        codes,
+        coordinator::unified::{
+            actor::{GroupActorMessage, GroupKindTag},
+            classic_state::OffsetEntry,
+            regex_resolver::no_topic_regex_resolver,
         },
+        test_support::{dispatch_wire, peer, principal, start_group_broker_no_audit},
+        time_util::now_ms,
     },
-    primitives::uuid::Uuid as WireUuid,
-};
-use tokio::sync::oneshot;
-
-use super::*;
-use crate::{
-    authorizer::{AllowAllAuthorizer, Authorizer},
-    broker::{Broker, BrokerHandle},
-    codes,
-    coordinator::unified::{
-        actor::{GroupActorMessage, GroupKindTag},
-        classic_state::OffsetEntry,
-        regex_resolver::no_topic_regex_resolver,
+    assert2::assert,
+    krabka_log::Offset,
+    krabka_protocol::{
+        owned::{
+            offset_fetch_request::{OffsetFetchRequestGroup, OffsetFetchRequestTopics},
+            offset_fetch_response::{
+                OffsetFetchResponse, OffsetFetchResponseGroup, OffsetFetchResponsePartition,
+                OffsetFetchResponsePartitions, OffsetFetchResponseTopic, OffsetFetchResponseTopics,
+            },
+        },
+        primitives::uuid::Uuid as WireUuid,
     },
-    test_support::{dispatch_wire, peer, principal, start_group_broker_no_audit},
-    time_util::now_ms,
+    std::sync::Arc,
+    tokio::sync::oneshot,
 };
 
 // Seed a committed offset for (group, topic, partition) directly on the
@@ -58,17 +58,14 @@ async fn seed_committed_offset(
         .get_or_create_group(group, GroupKindTag::Classic);
     let (tx, rx) = oneshot::channel();
     h.tx.send(GroupActorMessage::UpdateCommitted {
-        entries: vec![(
-            (topic.to_string(), partition.0),
-            OffsetEntry {
-                offset,
-                leader_epoch: 5,
-                metadata: String::new(),
-                commit_timestamp_ms: crate::time_util::now_ms(),
-                expire_timestamp_ms: None,
-                topic_id: None,
-            },
-        )],
+        entries: vec![((topic.to_string(), partition.0), OffsetEntry {
+            offset,
+            leader_epoch: 5,
+            metadata: String::new(),
+            commit_timestamp_ms: crate::time_util::now_ms(),
+            expire_timestamp_ms: None,
+            topic_id: None,
+        })],
         reply: tx,
     })
     .await
@@ -736,44 +733,41 @@ async fn topics_are_authorized_with_describe_and_fetch_all_hides_refused_topics(
     let broker = broker_handle.broker_arc_for_test();
     seed_unresolved_name_offset(&broker).await;
     let both: &[&str] = &[UNKNOWN_NAME, KNOWN_NAME];
-    run_response_table(
-        &broker,
-        vec![
-            (
-                "v7 explicit list",
-                7,
-                legacy_request(Some(both)),
-                legacy_response(vec![
-                    (KNOWN_NAME, legacy_seeded_row()),
-                    (UNKNOWN_NAME, legacy_refused_row()),
-                ]),
-            ),
-            (
-                "v7 fetch-all",
-                7,
-                legacy_request(None),
-                legacy_response(vec![(KNOWN_NAME, legacy_seeded_row())]),
-            ),
-            (
-                "v9 explicit list",
-                9,
-                named_groups_request(Some(both)),
-                groups_response(vec![
-                    named_topic(KNOWN_NAME, seeded_row()),
-                    named_topic(
-                        UNKNOWN_NAME,
-                        no_offset_row(codes::TOPIC_AUTHORIZATION_FAILED),
-                    ),
-                ]),
-            ),
-            (
-                "v9 fetch-all",
-                9,
-                named_groups_request(None),
-                groups_response(vec![named_topic(KNOWN_NAME, seeded_row())]),
-            ),
-        ],
-    )
+    run_response_table(&broker, vec![
+        (
+            "v7 explicit list",
+            7,
+            legacy_request(Some(both)),
+            legacy_response(vec![
+                (KNOWN_NAME, legacy_seeded_row()),
+                (UNKNOWN_NAME, legacy_refused_row()),
+            ]),
+        ),
+        (
+            "v7 fetch-all",
+            7,
+            legacy_request(None),
+            legacy_response(vec![(KNOWN_NAME, legacy_seeded_row())]),
+        ),
+        (
+            "v9 explicit list",
+            9,
+            named_groups_request(Some(both)),
+            groups_response(vec![
+                named_topic(KNOWN_NAME, seeded_row()),
+                named_topic(
+                    UNKNOWN_NAME,
+                    no_offset_row(codes::TOPIC_AUTHORIZATION_FAILED),
+                ),
+            ]),
+        ),
+        (
+            "v9 fetch-all",
+            9,
+            named_groups_request(None),
+            groups_response(vec![named_topic(KNOWN_NAME, seeded_row())]),
+        ),
+    ])
     .await;
     broker_handle.shutdown().await;
 }
@@ -791,31 +785,28 @@ async fn fetch_all_leaves_out_topics_without_an_id_at_v10() {
         committed_offset,
         ..seeded_row()
     };
-    run_response_table(
-        &broker,
-        vec![
-            (
-                "v9 fetch-all",
-                9,
-                named_groups_request(None),
-                groups_response(vec![
-                    named_topic("", offset_row(7)),
-                    named_topic(UNKNOWN_NAME, offset_row(9)),
-                    named_topic(KNOWN_NAME, seeded_row()),
-                ]),
-            ),
-            (
-                "v10 fetch-all",
-                10,
-                named_groups_request(None),
-                groups_response(vec![OffsetFetchResponseTopics {
-                    topic_id: known_id,
-                    partitions: vec![seeded_row()],
-                    ..Default::default()
-                }]),
-            ),
-        ],
-    )
+    run_response_table(&broker, vec![
+        (
+            "v9 fetch-all",
+            9,
+            named_groups_request(None),
+            groups_response(vec![
+                named_topic("", offset_row(7)),
+                named_topic(UNKNOWN_NAME, offset_row(9)),
+                named_topic(KNOWN_NAME, seeded_row()),
+            ]),
+        ),
+        (
+            "v10 fetch-all",
+            10,
+            named_groups_request(None),
+            groups_response(vec![OffsetFetchResponseTopics {
+                topic_id: known_id,
+                partitions: vec![seeded_row()],
+                ..Default::default()
+            }]),
+        ),
+    ])
     .await;
     broker_handle.shutdown().await;
 }
@@ -1018,20 +1009,17 @@ async fn require_stable(version: i16, shape: RequireStableShape) {
     let relaxed = fetch(&broker, version, &relaxed_request).await;
     assert!(
         relaxed
-            == expected_response(
-                shape,
-                vec![(0, 42, 5, codes::NONE), (1, 11, 5, codes::NONE)]
-            )
+            == expected_response(shape, vec![
+                (0, 42, 5, codes::NONE),
+                (1, 11, 5, codes::NONE)
+            ])
     );
     let strict_request = request(shape, true);
     let strict = fetch(&broker, version, &strict_request).await;
-    let expected_strict = expected_response(
-        shape,
-        vec![
-            (0, -1, -1, codes::UNSTABLE_OFFSET_COMMIT),
-            (1, 11, 5, codes::NONE),
-        ],
-    );
+    let expected_strict = expected_response(shape, vec![
+        (0, -1, -1, codes::UNSTABLE_OFFSET_COMMIT),
+        (1, 11, 5, codes::NONE),
+    ]);
     assert!(strict == expected_strict);
     resolve_pending_txn_offsets()
         .broker(&broker)
@@ -1042,10 +1030,10 @@ async fn require_stable(version: i16, shape: RequireStableShape) {
     let resolved = fetch(&broker, version, &strict_request).await;
     assert!(
         resolved
-            == expected_response(
-                shape,
-                vec![(0, 77, 5, codes::NONE), (1, 11, 5, codes::NONE)]
-            )
+            == expected_response(shape, vec![
+                (0, 77, 5, codes::NONE),
+                (1, 11, 5, codes::NONE)
+            ])
     );
     broker_handle.shutdown().await;
 }

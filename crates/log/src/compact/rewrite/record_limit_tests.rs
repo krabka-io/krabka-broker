@@ -1,26 +1,26 @@
 //! Unit tests for Kafka trunk's `max.decompressed.message.bytes` on the
 //! cleaner's two passes: the offset-map build and the rewrite.
 
-use std::collections::HashMap;
-
-use bytes::Bytes;
-use krabka_compression::CompressionType;
-use krabka_ids::{Offset, ProducerId};
-use krabka_protocol::records::{Attributes, Record, RecordBatch};
-use krabka_units::prelude::{ByteSize, ByteSizeExt as _, bytes};
-
-use super::{
-    CleanedTransactionMetadata, CleaningRound, ProducerLastRecord, RewriteRetention,
-    rewrite_segments,
-};
-use crate::{
-    compact::{
-        build_offset_map,
-        test_support::{RETENTION, control_batch, write_sealed_batches},
+use {
+    super::{
+        CleanedTransactionMetadata, CleaningRound, ProducerLastRecord, RewriteRetention,
+        rewrite_segments,
     },
-    error::LogError,
-    io::FileIo,
-    txn_index::AbortedTxn,
+    crate::{
+        compact::{
+            build_offset_map,
+            test_support::{RETENTION, control_batch, write_sealed_batches},
+        },
+        error::LogError,
+        io::FileIo,
+        txn_index::AbortedTxn,
+    },
+    bytes::Bytes,
+    krabka_compression::CompressionType,
+    krabka_ids::{Offset, ProducerId},
+    krabka_protocol::records::{Attributes, Record, RecordBatch},
+    krabka_units::prelude::{ByteSize, ByteSizeExt as _, bytes},
+    std::collections::HashMap,
 };
 
 const LIMIT: ByteSize = bytes(100);
@@ -196,12 +196,9 @@ fn an_aborted_batch_is_read_only_when_the_pass_keeps_it_empty() {
         // An oversized compressed batch of an aborted transaction, then the
         // abort marker in the next segment (past the pass), which the
         // aborted-transaction list names all the same.
-        let seg = write_sealed_batches(
-            dir.path(),
-            &[keyed_batch()
-                .producer(BatchProducer::Transactional(producer))
-                .call()],
-        );
+        let seg = write_sealed_batches(dir.path(), &[keyed_batch()
+            .producer(BatchProducer::Transactional(producer))
+            .call()]);
         let segments = [&seg];
         let aborted = AbortedTxn {
             start_offset: Offset(0),

@@ -1,11 +1,12 @@
-use assert2::check;
-
-use super::*;
-use crate::{
-    core::test_support::{
-        CellLog, FakeLog, RunsLog, machine, three_voter_machine, voters, win_election,
+use {
+    super::*,
+    crate::{
+        core::test_support::{
+            CellLog, FakeLog, RunsLog, machine, three_voter_machine, voters, win_election,
+        },
+        event::Event,
     },
-    event::Event,
+    assert2::check,
 };
 
 fn three_voter_leader(log: &dyn LogView) -> QuorumStateMachine {
@@ -531,15 +532,12 @@ fn check_quorum_expiry_resigns_the_leader() {
     let actions = m.on_event(Event::CheckQuorumTimeout, &log, SimInstant(3500));
     assert2::assert!(
         actions
-            == expected_quorum_loss(
-                "Resigned",
-                Action::ResetTimer {
-                    kind: TimerKind::Election,
-                    deadline: SimInstant(
-                        3500 + 1000 + crate::core::election_jitter_ms(NodeId(1), 1, 1000)
-                    ),
-                }
-            )
+            == expected_quorum_loss("Resigned", Action::ResetTimer {
+                kind: TimerKind::Election,
+                deadline: SimInstant(
+                    3500 + 1000 + crate::core::election_jitter_ms(NodeId(1), 1, 1000)
+                ),
+            })
     );
     assert2::assert!(
         (
@@ -560,13 +558,10 @@ fn a_resigned_replica_elects_on_its_election_timer() {
     m.on_event(Event::CheckQuorumTimeout, &log, SimInstant(3500));
     let actions = m.on_event(Event::ElectionTimeout, &log, SimInstant(5000));
     assert2::assert!(matches!(m.role(), Role::Prospective { .. }));
-    assert2::assert!(actions.iter().any(|a| matches!(
-        a,
-        Action::SendVoteRequest {
-            epoch: 1,
-            pre_vote: true
-        }
-    )));
+    assert2::assert!(actions.iter().any(|a| matches!(a, Action::SendVoteRequest {
+        epoch: 1,
+        pre_vote: true
+    })));
 }
 
 /// A sole voter has no quorum to lose, so the expiry is inert for it. Nothing
@@ -709,13 +704,10 @@ fn a_removed_leader_resigns_into_observer_discovery() {
     let actions = m.on_event(Event::CheckQuorumTimeout, &log, SimInstant(5000));
     assert2::assert!(
         actions
-            == expected_quorum_loss(
-                "Observer",
-                Action::ResetTimer {
-                    kind: TimerKind::Fetch,
-                    deadline: SimInstant(6000),
-                }
-            )
+            == expected_quorum_loss("Observer", Action::ResetTimer {
+                kind: TimerKind::Fetch,
+                deadline: SimInstant(6000),
+            })
     );
     assert2::assert!(
         (m.role().clone(), m.quorum_state().leader_id)
@@ -874,11 +866,8 @@ fn fetch_caught_up_updates_last_caught_up_and_observer_does_not_reset_check_quor
         &log,
         SimInstant(2300),
     );
-    check!(!actions.iter().any(|a| matches!(
-        a,
-        Action::ResetTimer {
-            kind: TimerKind::CheckQuorum,
-            ..
-        }
-    )));
+    check!(!actions.iter().any(|a| matches!(a, Action::ResetTimer {
+        kind: TimerKind::CheckQuorum,
+        ..
+    })));
 }

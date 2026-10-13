@@ -9,36 +9,36 @@
 //! and a non-transactional batch from a producer with an open transaction
 //! (`ProducerAppendInfo.appendDataBatch`).
 
-use std::time::Duration;
-
-use assert2::assert;
-use krabka_client_core::Client;
-use krabka_ids::ProducerId;
-use krabka_protocol::{
-    owned::{
-        list_offsets_request::ListOffsetsRequest, produce_request::ProduceRequest,
-        produce_response::PartitionProduceResponse,
-    },
-    records::RecordBatch,
-};
-
-use crate::{
-    support::{
-        discovery::coordinator_lookup_request,
-        offsets::{list_offset_partition, single_partition_list_offsets},
-        produce::{SinglePartitionProduceSetup, batch_request},
-        records::{BatchTransaction, ProducerSequence, transaction_probe_batch},
-        topics::TopicPartitionCount,
-        transaction_wire::{
-            initialize_transactional, partition_error, partitions_request, retry_coordinator,
-            transaction_topic,
+use {
+    crate::{
+        support::{
+            discovery::coordinator_lookup_request,
+            offsets::{list_offset_partition, single_partition_list_offsets},
+            produce::{SinglePartitionProduceSetup, batch_request},
+            records::{BatchTransaction, ProducerSequence, transaction_probe_batch},
+            topics::TopicPartitionCount,
+            transaction_wire::{
+                initialize_transactional, partition_error, partitions_request, retry_coordinator,
+                transaction_topic,
+            },
+            transactions::{
+                ProducerEpoch, ProducerEpochOffset, ProducerIdentity, end_transaction_request,
+            },
+            wire::At,
         },
-        transactions::{
-            ProducerEpoch, ProducerEpochOffset, ProducerIdentity, end_transaction_request,
-        },
-        wire::At,
+        txnver_harness::{admin_client, boot_single, create_topic},
     },
-    txnver_harness::{admin_client, boot_single, create_topic},
+    assert2::assert,
+    krabka_client_core::Client,
+    krabka_ids::ProducerId,
+    krabka_protocol::{
+        owned::{
+            list_offsets_request::ListOffsetsRequest, produce_request::ProduceRequest,
+            produce_response::PartitionProduceResponse,
+        },
+        records::RecordBatch,
+    },
+    std::time::Duration,
 };
 
 const NOT_COORDINATOR: i16 = 16;
@@ -127,13 +127,10 @@ async fn produce_at(
 ) -> PartitionProduceResponse {
     let request = ProduceRequest {
         transactional_id: transactional_id.map(str::to_owned),
-        ..batch_request(
-            batch,
-            SinglePartitionProduceSetup {
-                topic: (topic).into(),
-                ..SinglePartitionProduceSetup::replicated()
-            },
-        )
+        ..batch_request(batch, SinglePartitionProduceSetup {
+            topic: (topic).into(),
+            ..SinglePartitionProduceSetup::replicated()
+        })
     };
     let response = match version.0 {
         10 => client.send(At::<_, 10>(request)).await,
@@ -177,11 +174,9 @@ where
 
 async fn init(client: &Client, transactional_id: &'static str) -> Producer {
     let _ = client
-        .send(coordinator_lookup_request(
-            transactional_id,
-            1,
-            vec![transactional_id.into()],
-        ))
+        .send(coordinator_lookup_request(transactional_id, 1, vec![
+            transactional_id.into(),
+        ]))
         .await;
     let response = initialize_transactional(
         client,

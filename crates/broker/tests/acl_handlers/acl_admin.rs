@@ -9,23 +9,24 @@
 //! because that is the simplest model for "a client doing one admin
 //! action"; reuse is unnecessary for these tests.
 
-use std::net::SocketAddr;
-
-use krabka_protocol::owned::{
-    create_acls_request::{AclCreation, CreateAclsRequest},
-    create_acls_response::CreateAclsResponse,
-    delete_acls_request::DeleteAclsRequest,
-    delete_acls_response::DeleteAclsResponse,
-    describe_acls_request::DescribeAclsRequest,
-    describe_acls_response::DescribeAclsResponse,
-};
-
-use crate::{
-    CREATE_ACLS_VERSION, DELETE_ACLS_VERSION, DESCRIBE_ACLS_VERSION, OPERATION_ANY,
-    PATTERN_TYPE_ANY, PATTERN_TYPE_LITERAL, PERMISSION_ALLOW, PERMISSION_ANY, RESOURCE_TYPE_TOPIC,
-    framing::CLIENT_ID,
-    kafka_wire::create_topic_as_super_user,
-    support::topics::{ConfiguredTopicSetup, TopicPartitionCount},
+use {
+    crate::{
+        CREATE_ACLS_VERSION, DELETE_ACLS_VERSION, DESCRIBE_ACLS_VERSION, OPERATION_ANY,
+        PATTERN_TYPE_ANY, PATTERN_TYPE_LITERAL, PERMISSION_ALLOW, PERMISSION_ANY,
+        RESOURCE_TYPE_TOPIC,
+        framing::CLIENT_ID,
+        kafka_wire::create_topic_as_super_user,
+        support::topics::{ConfiguredTopicSetup, TopicPartitionCount},
+    },
+    krabka_protocol::owned::{
+        create_acls_request::{AclCreation, CreateAclsRequest},
+        create_acls_response::CreateAclsResponse,
+        delete_acls_request::DeleteAclsRequest,
+        delete_acls_response::DeleteAclsResponse,
+        describe_acls_request::DescribeAclsRequest,
+        describe_acls_response::DescribeAclsResponse,
+    },
+    std::net::SocketAddr,
 };
 
 /// Shorthand for `Allow <op> on Topic LITERAL <name> for <principal> from *`.

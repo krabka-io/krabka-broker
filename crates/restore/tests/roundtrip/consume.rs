@@ -36,31 +36,31 @@
 //! the archived end offset is what proves the restored high watermark seeded
 //! the next append rather than merely being reported.
 
-use std::sync::Arc;
-
-use assert2::{assert, check};
-use bytes::Bytes;
-use krabka_audit::signing::FileEd25519Signer;
-use krabka_broker::{BrokerConfig, BrokerHandle, testing::list_offsets_request};
-use krabka_client_core::Client;
-use krabka_protocol::{
-    owned::{
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        offset_for_leader_epoch_request::{
-            OffsetForLeaderEpochRequest, OffsetForLeaderPartition, OffsetForLeaderTopic,
-        },
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+use {
+    crate::{
+        args::ControllerListener,
+        fixture::{Fixture, PartitionFixture, build_fixture},
+        restored::restore_for_controller,
     },
-    records::{Attributes, Record, RecordBatch},
-};
-use krabka_restore::RestoreReport;
-use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
-use uuid::Uuid;
-
-use crate::{
-    args::ControllerListener,
-    fixture::{Fixture, PartitionFixture, build_fixture},
-    restored::restore_for_controller,
+    assert2::{assert, check},
+    bytes::Bytes,
+    krabka_audit::signing::FileEd25519Signer,
+    krabka_broker::{BrokerConfig, BrokerHandle, testing::list_offsets_request},
+    krabka_client_core::Client,
+    krabka_protocol::{
+        owned::{
+            fetch_request::{FetchPartition, FetchRequest, FetchTopic},
+            offset_for_leader_epoch_request::{
+                OffsetForLeaderEpochRequest, OffsetForLeaderPartition, OffsetForLeaderTopic,
+            },
+            produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+        },
+        records::{Attributes, Record, RecordBatch},
+    },
+    krabka_restore::RestoreReport,
+    ring::{rand::SystemRandom, signature::Ed25519KeyPair},
+    std::sync::Arc,
+    uuid::Uuid,
 };
 
 /// `ListOffsetsRequest.EARLIEST_TIMESTAMP`.
@@ -91,9 +91,7 @@ struct RestoredCluster {
 
 impl RestoredCluster {
     /// Restore the round-trip fixture and boot a broker on the result.
-    async fn start() -> Self {
-        Self::start_with(build_fixture(), &[]).await
-    }
+    async fn start() -> Self { Self::start_with(build_fixture(), &[]).await }
 
     async fn start_with(fixture: Fixture, extra: &[&str]) -> Self {
         let (target, log_dir, mut controller, report) =

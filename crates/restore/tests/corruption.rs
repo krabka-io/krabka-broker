@@ -20,16 +20,17 @@ mod archive_fixture;
 #[path = "support/args.rs"]
 mod cli_args;
 
-use std::path::Path as StdPath;
-
-use assert2::{assert, check};
-use clap::Parser as _;
-use krabka_ids::Offset;
-use krabka_log::{Log, LogConfig, name};
-use krabka_protocol::records::{CRC_COVERAGE_START, Record, RecordBatch};
-use krabka_remote_storage::{LocalTieredStorage, TopicIdPartition, kafka_uuid};
-use krabka_restore::{Cli, EXIT_BAD_ARGUMENTS, EXIT_INTEGRITY, RestoreArgs, RestoreError, restore};
-use uuid::Uuid;
+use {
+    assert2::{assert, check},
+    clap::Parser as _,
+    krabka_ids::Offset,
+    krabka_log::{Log, LogConfig, name},
+    krabka_protocol::records::{CRC_COVERAGE_START, Record, RecordBatch},
+    krabka_remote_storage::{LocalTieredStorage, TopicIdPartition, kafka_uuid},
+    krabka_restore::{Cli, EXIT_BAD_ARGUMENTS, EXIT_INTEGRITY, RestoreArgs, RestoreError, restore},
+    std::path::Path as StdPath,
+    uuid::Uuid,
+};
 
 /// A `LogConfig` whose `segment_size` is shrunk to a 1-byte equivalent, so a
 /// second `append` always rolls the first batch into its own sealed segment
@@ -143,14 +144,10 @@ fn archive_segment_at(
 /// the pipeline reaches segment verification, plus whatever `extra` flags a
 /// scenario needs.
 fn restore_args(archive_root: &StdPath, log_dir: &StdPath, extra: &[&str]) -> RestoreArgs {
-    let argv = cli_args::restore_argv(
-        archive_root,
-        log_dir,
-        cli_args::RestoreOptions {
-            extra,
-            ..Default::default()
-        },
-    );
+    let argv = cli_args::restore_argv(archive_root, log_dir, cli_args::RestoreOptions {
+        extra,
+        ..Default::default()
+    });
     Cli::try_parse_from(argv).expect("valid command line").args
 }
 
@@ -401,11 +398,9 @@ async fn continue_on_corrupt_preserves_both_sides_of_an_interior_gap() {
             expected.extend(segment.original_batches);
         }
     }
-    let report = restore(&restore_args(
-        archive.path(),
-        &log_dir,
-        &["--continue-on-corrupt"],
-    ))
+    let report = restore(&restore_args(archive.path(), &log_dir, &[
+        "--continue-on-corrupt",
+    ]))
     .await
     .unwrap();
     check!(report.skipped.len() == 1);

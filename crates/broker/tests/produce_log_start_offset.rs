@@ -36,24 +36,25 @@
 //! `logAppendTime` from `BatchMetadata.timestamp`, which is the batch max
 //! timestamp on a `CreateTime` topic.
 
-use assert2::{assert, check};
-use bytes::Bytes;
-use krabka_broker::codes;
-use krabka_client_core::Client;
-use krabka_protocol::{
-    owned::{
-        delete_records_response::DeleteRecordsPartitionResult,
-        produce_response::PartitionProduceResponse,
+use {
+    crate::support::{
+        client::produce_batch,
+        offsets::{delete_records_partition, delete_records_request, delete_records_topic},
+        records::{batch_from_records, value_record},
+        topics::{creatable_topic, create_topic_request},
     },
-    primitives::uuid::Uuid as WireUuid,
-    records::RecordBatch,
-};
-
-use crate::support::{
-    client::produce_batch,
-    offsets::{delete_records_partition, delete_records_request, delete_records_topic},
-    records::{batch_from_records, value_record},
-    topics::{creatable_topic, create_topic_request},
+    assert2::{assert, check},
+    bytes::Bytes,
+    krabka_broker::codes,
+    krabka_client_core::Client,
+    krabka_protocol::{
+        owned::{
+            delete_records_response::DeleteRecordsPartitionResult,
+            produce_response::PartitionProduceResponse,
+        },
+        primitives::uuid::Uuid as WireUuid,
+        records::RecordBatch,
+    },
 };
 
 mod support;
@@ -194,10 +195,9 @@ async fn produce_as(
 async fn trim(client: &Client, topic: &str, offset: i64) -> DeleteRecordsPartitionResult {
     let response = client
         .send(delete_records_request(
-            vec![delete_records_topic(
-                topic.to_owned(),
-                vec![delete_records_partition(0, offset)],
-            )],
+            vec![delete_records_topic(topic.to_owned(), vec![
+                delete_records_partition(0, offset),
+            ])],
             5_000,
         ))
         .await

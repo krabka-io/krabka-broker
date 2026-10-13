@@ -7,15 +7,15 @@
 //! `SASL_PLAINTEXT` flavours of the same two drivers live in `sasl`, next to
 //! the authorization test that is the only user of a SASL listener here.
 
-use std::net::SocketAddr;
-
-use assert2::assert;
-use krabka_protocol::owned::elect_leaders_request::ElectLeadersRequest;
-use tokio::net::TcpStream;
-
-use crate::{
-    kafka_wire,
-    support::{admin::ElectionKind, topics::AssignedTopicSetup},
+use {
+    crate::{
+        kafka_wire,
+        support::{admin::ElectionKind, topics::AssignedTopicSetup},
+    },
+    assert2::assert,
+    krabka_protocol::owned::elect_leaders_request::ElectLeadersRequest,
+    std::net::SocketAddr,
+    tokio::net::TcpStream,
 };
 
 /// The client id every request header in this suite carries.

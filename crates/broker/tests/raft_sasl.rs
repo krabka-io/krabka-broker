@@ -7,16 +7,17 @@
 
 mod support;
 
-use std::{net::SocketAddr, time::Duration};
-
-use assert2::assert;
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use krabka_broker::{
-    BootstrapMode, Broker, BrokerConfig, BrokerHandle, config::InterBrokerCredentials,
+use {
+    assert2::assert,
+    base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD},
+    krabka_broker::{
+        BootstrapMode, Broker, BrokerConfig, BrokerHandle, config::InterBrokerCredentials,
+    },
+    krabka_raft::NodeId,
+    krabka_security::{ListenerProtocol, SaslMechanism},
+    std::{net::SocketAddr, time::Duration},
+    tempfile::TempDir,
 };
-use krabka_raft::NodeId;
-use krabka_security::{ListenerProtocol, SaslMechanism};
-use tempfile::TempDir;
 
 fn oauth_token() -> String {
     format!(
@@ -133,9 +134,7 @@ async fn reserve_ctrl_listeners() -> ([SocketAddr; 2], [tokio::net::TcpListener;
 /// assign an ephemeral port at `Broker::start`, so there's no probe/drop
 /// gap to race on. Convergence here uses the controller listener. No
 /// test dials the data plane, so nothing reads the bound port back.
-fn data_listen_addr() -> SocketAddr {
-    "127.0.0.1:0".parse().unwrap()
-}
+fn data_listen_addr() -> SocketAddr { "127.0.0.1:0".parse().unwrap() }
 
 /// Boot two brokers with the supplied data-plane and controller listener
 /// configurations. This helper uses the deterministic bootstrap-then-join

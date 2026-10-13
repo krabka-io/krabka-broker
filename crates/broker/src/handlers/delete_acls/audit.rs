@@ -5,11 +5,12 @@
 //! after the controller submit, so the selection is a scan over the response
 //! rows rather than over the request. That join is worth its own file.
 
-use krabka_protocol::owned::delete_acls_response::DeleteAclsFilterResult;
-
-use crate::{
-    codes,
-    handlers::{RequestContext, audit_admin_success, audit_resource},
+use {
+    crate::{
+        codes,
+        handlers::{RequestContext, audit_admin_success, audit_resource},
+    },
+    krabka_protocol::owned::delete_acls_response::DeleteAclsFilterResult,
 };
 
 pub(super) fn deleted_acl_resources(
@@ -35,13 +36,14 @@ pub(super) fn audit_deleted_acls(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use krabka_metadata::AclOperation;
-
-    use super::*;
-    use crate::handlers::delete_acls::{
-        response::{filter_result, matching_acl_result},
-        test_support::acl,
+    use {
+        super::*,
+        crate::handlers::delete_acls::{
+            response::{filter_result, matching_acl_result},
+            test_support::acl,
+        },
+        assert2::assert,
+        krabka_metadata::AclOperation,
     };
 
     #[test]

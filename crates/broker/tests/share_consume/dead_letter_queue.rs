@@ -10,41 +10,41 @@
 //! The queue is Kafka trunk's, so each broker here runs with
 //! `unstable.api.versions.enable` and `unstable.feature.versions.enable` on.
 
-use std::time::Duration;
-
-use assert2::{assert, check};
-use bytes::Bytes;
-use krabka_broker::{
-    BrokerConfig, BrokerHandle, RemoteStorageBackend, api_catalog::UnstableApiVersions,
-};
-use krabka_client_core::Client;
-use krabka_protocol::{
-    owned::{
-        create_topics_request::CreateTopicsRequest, list_offsets_request::ListOffsetsRequest,
-        share_acknowledge_request::AcknowledgementBatch,
-        update_features_request::UpdateFeaturesRequest,
-    },
-    records::{Record, RecordBatch, RecordsPayload},
-};
-
-use crate::{
-    NONE, REJECT,
-    harness::{broker_config, broker_test_permit, produce_n, produce_values, topic_id, wire},
-    share_rpc::{acquired_count, fetch_until_acquired, share_fetch},
-    support::{
-        configs::{
-            ConfigOperation, feature_update, incremental_config, incremental_request,
-            incremental_resource,
+use {
+    crate::{
+        NONE, REJECT,
+        harness::{broker_config, broker_test_permit, produce_n, produce_values, topic_id, wire},
+        share_rpc::{acquired_count, fetch_until_acquired, share_fetch},
+        support::{
+            configs::{
+                ConfigOperation, feature_update, incremental_config, incremental_request,
+                incremental_resource,
+            },
+            fetch::{FetchLimits, RequestWaitMillis, single_partition_fetch},
+            offsets::{list_offset_partition, single_partition_list_offsets},
+            share::{
+                ShareAck, ShareFetchSetup, ShareRecordCount, ShareSessionEpoch, ShareSessionSetup,
+                acknowledge_partition, acknowledge_request, acknowledge_success, acknowledge_topic,
+                join_consume_member, start_group_topic,
+            },
+            topics::topic_configs,
         },
-        fetch::{FetchLimits, RequestWaitMillis, single_partition_fetch},
-        offsets::{list_offset_partition, single_partition_list_offsets},
-        share::{
-            ShareAck, ShareFetchSetup, ShareRecordCount, ShareSessionEpoch, ShareSessionSetup,
-            acknowledge_partition, acknowledge_request, acknowledge_success, acknowledge_topic,
-            join_consume_member, start_group_topic,
-        },
-        topics::topic_configs,
     },
+    assert2::{assert, check},
+    bytes::Bytes,
+    krabka_broker::{
+        BrokerConfig, BrokerHandle, RemoteStorageBackend, api_catalog::UnstableApiVersions,
+    },
+    krabka_client_core::Client,
+    krabka_protocol::{
+        owned::{
+            create_topics_request::CreateTopicsRequest, list_offsets_request::ListOffsetsRequest,
+            share_acknowledge_request::AcknowledgementBatch,
+            update_features_request::UpdateFeaturesRequest,
+        },
+        records::{Record, RecordBatch, RecordsPayload},
+    },
+    std::time::Duration,
 };
 
 const GROUP: &str = "g1";
@@ -268,9 +268,8 @@ async fn reject_ranges(
                 .maybe_group_id(Some(Some(GROUP.into())))
                 .maybe_member_id(Some(Some(member.into())))
                 .epoch(setup.epoch)
-                .topics(vec![acknowledge_topic(
-                    wire(setup.topic_id),
-                    vec![acknowledge_partition(
+                .topics(vec![acknowledge_topic(wire(setup.topic_id), vec![
+                    acknowledge_partition(
                         0,
                         setup
                             .ranges
@@ -286,8 +285,8 @@ async fn reject_ranges(
                                 ..Default::default()
                             })
                             .collect(),
-                    )],
-                )])
+                    ),
+                ])])
                 .call(),
         )
         .await
@@ -359,6 +358,7 @@ impl Cluster {
     fn parts(&self) -> (&BrokerHandle, &std::sync::Arc<Client>, &uuid::Uuid, &String) {
         (&self.broker, &self.client, &self.tid, &self.member)
     }
+
     async fn reject_acquired(&self, first: krabka_ids::Offset, last: krabka_ids::Offset) {
         acknowledge_success(
             &self.client,
@@ -447,13 +447,10 @@ async fn join_and_acquire(
     krabka_protocol::owned::share_fetch_response::PartitionData,
 ) {
     let (member, _member_epoch) = join_consume_member(broker, client, tid).await;
-    let row = fetch_until_acquired(
-        client,
-        ShareSessionSetup {
-            group: GROUP,
-            ..ShareSessionSetup::opening(&member, tid)
-        },
-    )
+    let row = fetch_until_acquired(client, ShareSessionSetup {
+        group: GROUP,
+        ..ShareSessionSetup::opening(&member, tid)
+    })
     .await;
     (member, row)
 }
@@ -812,12 +809,10 @@ async fn a_copied_record_too_big_for_the_topic_is_written_with_headers_alone() {
         .hooks(AcquisitionHooks {
             tweak: |_: &mut BrokerConfig| {},
             configure: async |client: &Client, broker: &BrokerHandle| {
-                configure_dead_letters(
-                    client,
-                    broker,
-                    DeadLetterShareVersion::default(),
-                    &[("max.message.bytes", "1100")],
-                )
+                configure_dead_letters(client, broker, DeadLetterShareVersion::default(), &[(
+                    "max.message.bytes",
+                    "1100",
+                )])
                 .await;
             },
             produce: async |client: &Client, tid: uuid::Uuid| {

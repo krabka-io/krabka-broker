@@ -3,20 +3,19 @@
 //! on a directory the registration no longer lists, a registration left with
 //! no online directory at all, and the two "online" sentinels.
 
-use assert2::assert;
-use krabka_metadata::{BrokerEndpoint, MetadataRecord, TopicRecord};
-use uuid::Uuid;
-
-use super::*;
-use crate::test_support::{broker_registration, in_sync_partition};
+use {
+    super::*,
+    crate::test_support::{broker_registration, in_sync_partition},
+    assert2::assert,
+    krabka_metadata::{BrokerEndpoint, MetadataRecord, TopicRecord},
+    uuid::Uuid,
+};
 
 /// The listener that the requests in these tests arrive on, and that every
 /// registration lists unless a test says otherwise.
 const LISTENER: &str = "PLAINTEXT";
 
-fn dir(n: u128) -> Uuid {
-    Uuid::from_u128(n)
-}
+fn dir(n: u128) -> Uuid { Uuid::from_u128(n) }
 
 fn registration(node_id: NodeId, log_dirs: Vec<Uuid>) -> MetadataRecord {
     registration_on(node_id, log_dirs, LISTENER)
@@ -116,9 +115,8 @@ impl<E> Case<E> {
             &self.setup.directories,
         )
     }
-    fn unavailable(&self) -> HashSet<u64> {
-        self.setup.unavailable.iter().map(|id| id.0).collect()
-    }
+
+    fn unavailable(&self) -> HashSet<u64> { self.setup.unavailable.iter().map(|id| id.0).collect() }
 }
 
 /// Keep the projection cases independent while sharing their image/lookup/assertion driver.
@@ -344,11 +342,9 @@ fn electable_is_the_registered_brokers_the_unavailable_set_does_not_name() {
 #[test]
 fn an_unregistered_broker_is_never_electable() {
     let good = dir(0x600d);
-    let img = image(
-        &[(NodeId(1), vec![good])],
-        &[NodeId(1), NodeId(2)],
-        &[good, good],
-    );
+    let img = image(&[(NodeId(1), vec![good])], &[NodeId(1), NodeId(2)], &[
+        good, good,
+    ]);
 
     assert!(electable(&img, &HashSet::new()) == HashSet::from([1]));
 }

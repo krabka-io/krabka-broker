@@ -7,18 +7,18 @@
 //! property of the produce driver: a freshly seeded ACL can still be absent
 //! from the handler's image snapshot when the first request arrives.
 
-use std::{
-    net::SocketAddr,
-    time::{Duration, Instant},
-};
-
-use assert2::assert;
-use krabka_protocol::owned::produce_response::ProduceResponse;
-
 pub use crate::kafka_wire::quotas::drive_alter_client_quotas_sasl;
-use crate::{
-    CLIENT_ID,
-    kafka_wire::{self, PlainAuthenticationSetup, ProduceRecordCount, ZeroFilledRecordsSetup},
+use {
+    crate::{
+        CLIENT_ID,
+        kafka_wire::{self, PlainAuthenticationSetup, ProduceRecordCount, ZeroFilledRecordsSetup},
+    },
+    assert2::assert,
+    krabka_protocol::owned::produce_response::ProduceResponse,
+    std::{
+        net::SocketAddr,
+        time::{Duration, Instant},
+    },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

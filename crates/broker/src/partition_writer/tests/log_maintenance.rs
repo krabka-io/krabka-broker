@@ -1,12 +1,13 @@
 //! Writer-loop tests for the arms that maintain the log rather than write
 //! to it: a config swap and a log-start trim.
 
-use assert2::assert;
-use krabka_log::{LogConfig, Offset};
-use tempfile::tempdir;
-
-use super::*;
-use crate::partition_writer::test_support::{sample_batch, spawn_default_writer};
+use {
+    super::*,
+    crate::partition_writer::test_support::{sample_batch, spawn_default_writer},
+    assert2::assert,
+    krabka_log::{LogConfig, Offset},
+    tempfile::tempdir,
+};
 
 #[tokio::test]
 async fn writer_set_log_config_swaps_config() {

@@ -1,11 +1,12 @@
 //! The flags `#[krabka_env]` gives a clap argument struct, read back from the
 //! command clap builds and from what that command parses.
 
-use std::path::PathBuf;
-
-use assert2::assert;
-use clap::{Args, Command};
-use krabka_units::Time;
+use {
+    assert2::assert,
+    clap::{Args, Command},
+    krabka_units::Time,
+    std::path::PathBuf,
+};
 
 #[krabka_macros::krabka_env]
 #[derive(Debug, Args)]
@@ -21,9 +22,7 @@ struct Flags {
     explicit: Option<u32>,
 }
 
-fn command() -> Command {
-    Flags::augment_args(Command::new("flags"))
-}
+fn command() -> Command { Flags::augment_args(Command::new("flags")) }
 
 fn argument_names_and_help(
     command: &Command,

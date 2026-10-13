@@ -1,8 +1,10 @@
-use super::*;
-use crate::reconfiguration::{
-    CurrentVoterSet, ReconfigurationLeadership, TargetMembership, TargetVoter, VoterChangeKind,
-    VoterChangeRequest, VoterReconfigurationPlan,
-    test_support::{KraftFeatureLevel, VoterCount},
+use {
+    super::*,
+    crate::reconfiguration::{
+        CurrentVoterSet, ReconfigurationLeadership, TargetMembership, TargetVoter, VoterChangeKind,
+        VoterChangeRequest, VoterReconfigurationPlan,
+        test_support::{KraftFeatureLevel, VoterCount},
+    },
 };
 
 type KnownControlCase = (VoterChangeKind, u64, TargetMembership, u16, usize);
@@ -54,9 +56,7 @@ use RequestProperty::{
 };
 
 impl RequestFlags {
-    fn contains(self, property: RequestProperty) -> bool {
-        self.0 & property as u16 != 0
-    }
+    fn contains(self, property: RequestProperty) -> bool { self.0 & property as u16 != 0 }
 }
 
 #[derive(Clone, Copy)]

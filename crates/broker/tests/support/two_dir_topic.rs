@@ -1,16 +1,16 @@
 //! Ready topic fixtures for the three two-directory integration binaries.
-use std::net::SocketAddr;
-
-use krabka_broker::BrokerHandle;
-use tempfile::TempDir;
-
 pub(crate) use crate::support::storage::PartitionReadiness;
-use crate::{
-    kafka_wire::create_configured_topic_plaintext,
-    support::{
-        storage::start_two_dir_broker,
-        topics::{ConfiguredTopicSetup, TopicPartitionCount},
+use {
+    crate::{
+        kafka_wire::create_configured_topic_plaintext,
+        support::{
+            storage::start_two_dir_broker,
+            topics::{ConfiguredTopicSetup, TopicPartitionCount},
+        },
     },
+    krabka_broker::BrokerHandle,
+    std::net::SocketAddr,
+    tempfile::TempDir,
 };
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]

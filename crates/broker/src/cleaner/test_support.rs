@@ -2,20 +2,20 @@
 //! whose log holds compactable duplicates, and the record count that shows
 //! whether a sweep compacted one.
 
-use std::sync::Arc;
-
-use bytes::Bytes;
-use krabka_ids::PartitionIndex;
-use krabka_metadata::NodeId;
-use krabka_protocol::records::{Record, RecordBatch};
-use tempfile::TempDir;
-
-use crate::{
-    log_dir::partition_dir,
-    log_dir_status::LogDirRegistry,
-    partition::Partition,
-    partition_registry::PartitionRegistry,
-    test_support::{block_log_artifact_paths, committed_partition},
+use {
+    crate::{
+        log_dir::partition_dir,
+        log_dir_status::LogDirRegistry,
+        partition::Partition,
+        partition_registry::PartitionRegistry,
+        test_support::{block_log_artifact_paths, committed_partition},
+    },
+    bytes::Bytes,
+    krabka_ids::PartitionIndex,
+    krabka_metadata::NodeId,
+    krabka_protocol::records::{Record, RecordBatch},
+    std::sync::Arc,
+    tempfile::TempDir,
 };
 
 fn keyed_batch(base: i64, key: &[u8], value: &[u8]) -> RecordBatch {

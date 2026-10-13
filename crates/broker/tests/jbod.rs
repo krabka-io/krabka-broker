@@ -16,18 +16,18 @@ mod support;
 #[path = "support/two_dir_topic.rs"]
 mod two_dir_topic;
 
-use std::net::SocketAddr;
-
-use assert2::assert;
-use krabka_protocol::owned::{
-    describe_log_dirs_request::DescribeLogDirsRequest,
-    describe_log_dirs_response::DescribeLogDirsResponse,
-};
-use tokio::net::TcpStream;
-
-use crate::{
-    support::{storage::count_partition_dirs, wire::HeaderEncoding as RequestHeaderEncoding},
-    two_dir_topic::{PartitionReadiness, start},
+use {
+    crate::{
+        support::{storage::count_partition_dirs, wire::HeaderEncoding as RequestHeaderEncoding},
+        two_dir_topic::{PartitionReadiness, start},
+    },
+    assert2::assert,
+    krabka_protocol::owned::{
+        describe_log_dirs_request::DescribeLogDirsRequest,
+        describe_log_dirs_response::DescribeLogDirsResponse,
+    },
+    std::net::SocketAddr,
+    tokio::net::TcpStream,
 };
 
 const CLIENT_ID: &str = "krabka-jbod-test";

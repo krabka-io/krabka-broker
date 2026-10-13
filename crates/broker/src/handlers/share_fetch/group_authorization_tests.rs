@@ -11,37 +11,37 @@
 //! Each table crosses the group grant with the topic grant. One broker serves
 //! every case, and the principal name selects the grants.
 
-use std::sync::Arc;
-
-use assert2::assert;
-use bytes::Bytes;
-use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::{
-    owned::{
-        share_acknowledge_request::{
-            AcknowledgePartition, AcknowledgeTopic, ShareAcknowledgeRequest,
-        },
-        share_acknowledge_response::{
-            self, ShareAcknowledgeResponse, ShareAcknowledgeTopicResponse,
-        },
-        share_fetch_response::{
-            self, PartitionData, ShareFetchResponse, ShareFetchableTopicResponse,
+use {
+    crate::{
+        authorizer::AuthorizationResult,
+        broker::BrokerHandle,
+        codes,
+        handlers::test_support::create_topic as create_topic_from_test_support,
+        share_partition::session::FetchPartitions,
+        test_support::{
+            decode_response, encode_request, peer, principal, request_context,
+            start_broker_no_audit_with, try_dispatch_context,
         },
     },
-    primitives::uuid::Uuid as WireUuid,
-    records::RecordsPayload,
-};
-
-use crate::{
-    authorizer::AuthorizationResult,
-    broker::BrokerHandle,
-    codes,
-    handlers::test_support::create_topic as create_topic_from_test_support,
-    share_partition::session::FetchPartitions,
-    test_support::{
-        decode_response, encode_request, peer, principal, request_context,
-        start_broker_no_audit_with, try_dispatch_context,
+    assert2::assert,
+    bytes::Bytes,
+    krabka_metadata::{AclOperation, ResourceType},
+    krabka_protocol::{
+        owned::{
+            share_acknowledge_request::{
+                AcknowledgePartition, AcknowledgeTopic, ShareAcknowledgeRequest,
+            },
+            share_acknowledge_response::{
+                self, ShareAcknowledgeResponse, ShareAcknowledgeTopicResponse,
+            },
+            share_fetch_response::{
+                self, PartitionData, ShareFetchResponse, ShareFetchableTopicResponse,
+            },
+        },
+        primitives::uuid::Uuid as WireUuid,
+        records::RecordsPayload,
     },
+    std::sync::Arc,
 };
 
 /// The share group that every request names.

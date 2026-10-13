@@ -2,37 +2,39 @@
 //! what the controller answers, and against a scripted controller listener
 //! for the retry and version rules of the "forwarding" channel.
 
-use std::{
-    collections::VecDeque,
-    net::{IpAddr, SocketAddr},
-    sync::{Arc, Mutex},
-};
-
-use assert2::{assert, check};
-use bytes::{Bytes, BytesMut};
-use krabka_client_core::{MockBroker, MockReply};
-use krabka_protocol::{
-    Encode as _, UnknownTaggedFields,
-    owned::{
-        api_versions_request,
-        api_versions_response::{ApiVersion, ApiVersionsResponse},
-        create_topics_request::CreatableTopic,
-        create_topics_response::CreatableTopicResult,
-        envelope_request,
-        envelope_response::EnvelopeResponse,
+use {
+    super::*,
+    crate::{
+        api_catalog::UnstableApiVersions,
+        network::{
+            client::InterBrokerClient, request::parse_request, test_support::raw_request_frame,
+        },
+        test_support::{
+            ControllerPeerAllowed, FakeMetadataSource, GrantsInPrincipalName,
+            described_creation_configs, principal, request_context, start_broker_no_audit,
+            start_broker_with_authorizer_no_audit,
+        },
     },
-    primitives::uuid::Uuid as ProtoUuid,
-};
-use krabka_raft::NodeId;
-
-use super::*;
-use crate::{
-    api_catalog::UnstableApiVersions,
-    network::{client::InterBrokerClient, request::parse_request, test_support::raw_request_frame},
-    test_support::{
-        ControllerPeerAllowed, FakeMetadataSource, GrantsInPrincipalName,
-        described_creation_configs, principal, request_context, start_broker_no_audit,
-        start_broker_with_authorizer_no_audit,
+    assert2::{assert, check},
+    bytes::{Bytes, BytesMut},
+    krabka_client_core::{MockBroker, MockReply},
+    krabka_protocol::{
+        Encode as _, UnknownTaggedFields,
+        owned::{
+            api_versions_request,
+            api_versions_response::{ApiVersion, ApiVersionsResponse},
+            create_topics_request::CreatableTopic,
+            create_topics_response::CreatableTopicResult,
+            envelope_request,
+            envelope_response::EnvelopeResponse,
+        },
+        primitives::uuid::Uuid as ProtoUuid,
+    },
+    krabka_raft::NodeId,
+    std::{
+        collections::VecDeque,
+        net::{IpAddr, SocketAddr},
+        sync::{Arc, Mutex},
     },
 };
 
@@ -304,11 +306,10 @@ async fn a_request_that_reaches_no_controller_times_out() {
             Some(NodeId(1)),
             vec![(NodeId(1), closed.to_string())],
         ),
-        (
-            "a controller that never answers",
-            Some(NodeId(1)),
-            vec![(NodeId(1), silent.addr().to_string())],
-        ),
+        ("a controller that never answers", Some(NodeId(1)), vec![(
+            NodeId(1),
+            silent.addr().to_string(),
+        )]),
     ];
 
     for (case, leader, voters) in cases {
@@ -492,9 +493,7 @@ impl FakeController {
         Self { broker, state }
     }
 
-    fn addr(&self) -> SocketAddr {
-        self.broker.addr
-    }
+    fn addr(&self) -> SocketAddr { self.broker.addr }
 
     fn script(&self, answers: VecDeque<Answer>) {
         self.state

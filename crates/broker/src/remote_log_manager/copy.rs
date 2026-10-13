@@ -1,18 +1,19 @@
 //! The per-partition copy pass: which sealed segments the remote tier still
 //! lacks, and how one tick's copies thread a write-once archive's chain.
 
-use krabka_log::SegmentExport;
-use krabka_remote_storage::{RemoteLogSegmentState, TopicIdPartition};
-use krabka_units::convert::{ByteSizeExt, TimeExt};
-use tracing::{debug, warn};
-
-use super::{
-    RemoteTier,
-    archive::ChainPosition,
-    copy_segment::{CopyOutcome, copy_one},
-    local_retention::remote_covered_through,
+use {
+    super::{
+        RemoteTier,
+        archive::ChainPosition,
+        copy_segment::{CopyOutcome, copy_one},
+        local_retention::remote_covered_through,
+    },
+    crate::config_keys::RemoteCopyLag,
+    krabka_log::SegmentExport,
+    krabka_remote_storage::{RemoteLogSegmentState, TopicIdPartition},
+    krabka_units::convert::{ByteSizeExt, TimeExt},
+    tracing::{debug, warn},
 };
-use crate::config_keys::RemoteCopyLag;
 
 /// KIP-1241's delayed copy: how long a sealed segment may wait before this
 /// pass copies it.
@@ -368,31 +369,33 @@ pub(crate) async fn copy_eligible_delayed(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use assert2::{assert, check};
-    use krabka_ids::{LeaderEpoch, Offset};
-    use krabka_remote_storage::{
-        ChainHead, ChainStamp, CustomMetadata, EpochId, IndexType,
-        InmemoryRemoteLogMetadataManager, LogSegmentData, ManifestSeq, RemoteLogMetadataManager,
-        RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata,
-        RemoteLogSegmentMetadataUpdate, RemoteStorageError, RemoteStorageManager, WormChainRecord,
-    };
-    use krabka_units::bytes;
-    use uuid::Uuid;
-
-    use super::*;
-    use crate::{
-        metrics::BrokerMetrics,
-        remote_log_manager::{
-            ArchiveMode,
-            local_retention::finished_segment_ranges,
-            test_support::{
-                self as fixtures, FakeWormArchive, archived_backends, copy_exports, local_backends,
-                missing_remote_reads, stuck_started_segment, synth_export, three_exports, tier, tp,
+    use {
+        super::*,
+        crate::{
+            metrics::BrokerMetrics,
+            remote_log_manager::{
+                ArchiveMode,
+                local_retention::finished_segment_ranges,
+                test_support::{
+                    self as fixtures, FakeWormArchive, archived_backends, copy_exports,
+                    local_backends, missing_remote_reads, stuck_started_segment, synth_export,
+                    three_exports, tier, tp,
+                },
             },
+            test_support::UnixMillis,
         },
-        test_support::UnixMillis,
+        assert2::{assert, check},
+        krabka_ids::{LeaderEpoch, Offset},
+        krabka_remote_storage::{
+            ChainHead, ChainStamp, CustomMetadata, EpochId, IndexType,
+            InmemoryRemoteLogMetadataManager, LogSegmentData, ManifestSeq,
+            RemoteLogMetadataManager, RemoteLogSegmentDetails, RemoteLogSegmentId,
+            RemoteLogSegmentMetadata, RemoteLogSegmentMetadataUpdate, RemoteStorageError,
+            RemoteStorageManager, WormChainRecord,
+        },
+        krabka_units::bytes,
+        std::sync::Arc,
+        uuid::Uuid,
     };
 
     fn refusing_tier<'a>(
@@ -578,9 +581,10 @@ mod tests {
     /// unlimited.
     #[test]
     fn a_derived_copy_lag_is_the_effective_local_retention() {
-        use krabka_units::{bytes, millis};
-
-        use crate::config_keys::RemoteCopyLag;
+        use {
+            crate::config_keys::RemoteCopyLag,
+            krabka_units::{bytes, millis},
+        };
 
         let derived = RemoteCopyLag { ms: -1, bytes: -1 };
         let config = |retention, local: Option<u32>| krabka_log::LogConfig {
@@ -652,6 +656,8 @@ mod tests {
     struct RefusingRsm;
 
     impl RemoteStorageManager for RefusingRsm {
+        missing_remote_reads!(delete_ok);
+
         fn copy_log_segment_data(
             &self,
             _metadata: &RemoteLogSegmentMetadata,
@@ -661,7 +667,6 @@ mod tests {
                 "the backend refused the copy",
             )))
         }
-        missing_remote_reads!(delete_ok);
     }
 
     /// An RSM whose copy always succeeds, handing back `receipt` verbatim,
@@ -672,6 +677,8 @@ mod tests {
     }
 
     impl RemoteStorageManager for AcceptingRsm {
+        missing_remote_reads!(delete_ok);
+
         fn copy_log_segment_data(
             &self,
             _metadata: &RemoteLogSegmentMetadata,
@@ -679,7 +686,6 @@ mod tests {
         ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
             Ok(self.receipt.clone())
         }
-        missing_remote_reads!(delete_ok);
     }
 
     /// Fresh metadata and a backend that returns the chosen successful-copy receipt.
@@ -773,10 +779,9 @@ mod tests {
         });
         let rlmm = fixtures::in_memory_metadata();
 
-        let copied = copy_exports(
-            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-            vec![synth_export().call()],
-        )
+        let copied = copy_exports(&tier(ArchiveMode::Mutable, &rsm, &rlmm), vec![
+            synth_export().call(),
+        ])
         .await;
 
         check!(copied == 1);
@@ -894,10 +899,9 @@ mod tests {
         let mut genesis = Vec::new();
         for _ in 0..2 {
             let (rsm, rlmm) = fixtures::write_once_backends();
-            let copied = copy_exports(
-                &tier(ArchiveMode::WriteOnce, &rsm, &rlmm),
-                vec![synth_export().call()],
-            )
+            let copied = copy_exports(&tier(ArchiveMode::WriteOnce, &rsm, &rlmm), vec![
+                synth_export().call(),
+            ])
             .await;
             check!(copied == 1);
             genesis.push(chain_records(&rlmm).remove(0));
@@ -1171,20 +1175,17 @@ mod tests {
             .last(299)
             .call();
 
-        let copied = copy_exports(
-            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-            vec![
-                synth_export().bounds(Offset(0)..=Offset(99)).call(),
-                synth_export()
-                    .bounds(Offset(100)..=Offset(199))
-                    .timestamp(200)
-                    .call(),
-                synth_export()
-                    .bounds(Offset(200)..=Offset(299))
-                    .timestamp(300)
-                    .call(),
-            ],
-        )
+        let copied = copy_exports(&tier(ArchiveMode::Mutable, &rsm, &rlmm), vec![
+            synth_export().bounds(Offset(0)..=Offset(99)).call(),
+            synth_export()
+                .bounds(Offset(100)..=Offset(199))
+                .timestamp(200)
+                .call(),
+            synth_export()
+                .bounds(Offset(200)..=Offset(299))
+                .timestamp(300)
+                .call(),
+        ])
         .await;
 
         check_copy_coverage(copied, &rlmm, &[(0, 99), (100, 199), (200, 299)], 299);

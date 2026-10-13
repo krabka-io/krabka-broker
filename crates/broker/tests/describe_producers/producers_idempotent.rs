@@ -2,17 +2,18 @@
 //! producers: nothing on a fresh partition, one fully populated row after a
 //! produce, and one row per producer when several share a partition.
 
-use assert2::{assert, check};
-
-use crate::{
-    producers_harness::{batch, create_topic, init_producer, topic_id_for},
-    support::{
-        self,
-        admin::describe_producers_request,
-        produce::{SinglePartitionProduceSetup, send_batch},
-        records::ProducerValuesSetup,
-        transactions::ProducerEpoch,
+use {
+    crate::{
+        producers_harness::{batch, create_topic, init_producer, topic_id_for},
+        support::{
+            self,
+            admin::describe_producers_request,
+            produce::{SinglePartitionProduceSetup, send_batch},
+            records::ProducerValuesSetup,
+            transactions::ProducerEpoch,
+        },
     },
+    assert2::{assert, check},
 };
 
 #[tokio::test]

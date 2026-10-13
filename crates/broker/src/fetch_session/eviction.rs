@@ -7,17 +7,17 @@
 //! this caller may displace. It refuses the allocation otherwise, and the
 //! caller then falls back to a sessionless response.
 
-use std::{collections::HashMap, sync::atomic::Ordering};
-
-use qubit_clock::MonotonicClock as _;
-
-use super::{
-    cache::{FetchSession, FetchSessionCache},
-    epoch::{
-        FIRST_SESSION_ID, FetchSessionId, INITIAL_EPOCH, INVALID_SESSION_ID, next_epoch,
-        session_id_is_reserved,
+use {
+    super::{
+        cache::{FetchSession, FetchSessionCache},
+        epoch::{
+            FIRST_SESSION_ID, FetchSessionId, INITIAL_EPOCH, INVALID_SESSION_ID, next_epoch,
+            session_id_is_reserved,
+        },
+        state::{CachedPartitionState, FetchSessionKey},
     },
-    state::{CachedPartitionState, FetchSessionKey},
+    qubit_clock::MonotonicClock as _,
+    std::{collections::HashMap, sync::atomic::Ordering},
 };
 
 impl FetchSessionCache {
@@ -111,19 +111,19 @@ impl FetchSessionCache {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use assert2::{assert, check};
-    use krabka_protocol::primitives::uuid::Uuid as WireUuid;
-
-    use super::*;
-    use crate::fetch_session::{
-        SessionDecision,
-        order::MIN_EVICTION,
-        test_support::{
-            NAME_FETCH_VERSION, RequestSessionEpoch, RequestSessionId, SessionPrivilege,
-            SessionRequestSetup, SessionSlotCount, TICK, allocate_session, manual_cache, req,
+    use {
+        super::*,
+        crate::fetch_session::{
+            SessionDecision,
+            order::MIN_EVICTION,
+            test_support::{
+                NAME_FETCH_VERSION, RequestSessionEpoch, RequestSessionId, SessionPrivilege,
+                SessionRequestSetup, SessionSlotCount, TICK, allocate_session, manual_cache, req,
+            },
         },
+        assert2::{assert, check},
+        krabka_protocol::primitives::uuid::Uuid as WireUuid,
+        std::time::Duration,
     };
 
     #[test]

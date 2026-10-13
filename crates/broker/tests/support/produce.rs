@@ -76,14 +76,11 @@ pub fn encoded_batch_request(
     #[builder(into, default)] partition: krabka_ids::PartitionIndex,
     version: i16,
 ) -> bytes::BytesMut {
-    let request = batch_request(
-        batch,
-        SinglePartitionProduceSetup {
-            topic,
-            partition,
-            ..Default::default()
-        },
-    );
+    let request = batch_request(batch, SinglePartitionProduceSetup {
+        topic,
+        partition,
+        ..Default::default()
+    });
     let mut body = bytes::BytesMut::new();
     krabka_protocol::Encode::encode(&request, &mut body, version).expect("encode ProduceRequest");
     body

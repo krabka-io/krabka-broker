@@ -1,20 +1,20 @@
 //! Controller and identity fixtures shared by the KIP-48 token handlers.
 
-use std::{path::PathBuf, sync::Arc, time::Duration};
-
-use assert2::assert;
-use krabka_metadata::{DelegationTokenRecord, MetadataRecord};
-use krabka_raft::{Controller, ControllerConfig, ControllerHandle, NodeId};
-use krabka_security::{AuthMethod, KafkaPrincipal, Principal, SaslMechanism};
-
-use crate::{
-    codes::{
-        DELEGATION_TOKEN_AUTH_DISABLED, DELEGATION_TOKEN_NOT_FOUND,
-        DELEGATION_TOKEN_OWNER_MISMATCH, DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
+use {
+    crate::{
+        codes::{
+            DELEGATION_TOKEN_AUTH_DISABLED, DELEGATION_TOKEN_NOT_FOUND,
+            DELEGATION_TOKEN_OWNER_MISMATCH, DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
+        },
+        network::auth::ConnectionAuth,
+        test_support::{KafkaErrorCode, UnixMillis, principal},
+        time_util::now_ms,
     },
-    network::auth::ConnectionAuth,
-    test_support::{KafkaErrorCode, UnixMillis, principal},
-    time_util::now_ms,
+    assert2::assert,
+    krabka_metadata::{DelegationTokenRecord, MetadataRecord},
+    krabka_raft::{Controller, ControllerConfig, ControllerHandle, NodeId},
+    krabka_security::{AuthMethod, KafkaPrincipal, Principal, SaslMechanism},
+    std::{path::PathBuf, sync::Arc, time::Duration},
 };
 
 /// The controller, directory and HMAC secret used by token wire fixtures.
@@ -53,7 +53,11 @@ pub(super) struct MutationSeedSetup {
 
 /// Seed one mutation case against the same wall-clock reading for both limits.
 macro_rules! seeded_token_fixture {
-    (($token_id:ident, $hmac:ident, $seeded_at:ident, $maximum:ident), $controller:expr, $setup:expr) => {
+    (
+        ($token_id:ident, $hmac:ident, $seeded_at:ident, $maximum:ident),
+        $controller:expr,
+        $setup:expr
+    ) => {
         let seed_setup = $setup;
         let $token_id = format!("tok-{}", seed_setup.index.0);
         let $hmac = crate::handlers::delegation_token_test_support::hmac_for(&$token_id);

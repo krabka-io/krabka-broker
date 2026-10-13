@@ -1,18 +1,19 @@
 //! Tests for the request planner, kept in their own file because they build
 //! whole metadata images and outweigh the module they cover.
 
-use assert2::assert;
-use krabka_metadata::NodeId;
-use krabka_raft::UnstableFeatureVersions;
-
-use super::*;
-use crate::{
-    config_keys::MIN_INSYNC_REPLICAS,
-    features::ELR_VERSION,
-    handlers::update_features::test_support::{
-        elr_update, metadata_update, named_update, validate_only,
+use {
+    super::*,
+    crate::{
+        config_keys::MIN_INSYNC_REPLICAS,
+        features::ELR_VERSION,
+        handlers::update_features::test_support::{
+            elr_update, metadata_update, named_update, validate_only,
+        },
+        test_support::broker_registration,
     },
-    test_support::broker_registration,
+    assert2::assert,
+    krabka_metadata::NodeId,
+    krabka_raft::UnstableFeatureVersions,
 };
 
 /// The local controller at the defaults: `unstable.feature.versions.enable`
@@ -30,9 +31,7 @@ const UNSAFE: i8 = 3;
 struct RegisteredFeatureRanges(std::collections::BTreeMap<String, (i16, i16)>);
 
 impl Default for RegisteredFeatureRanges {
-    fn default() -> Self {
-        Self(krabka_metadata::supported_feature_ranges())
-    }
+    fn default() -> Self { Self(krabka_metadata::supported_feature_ranges()) }
 }
 
 #[derive(krabka_macros::FieldDefaults)]
@@ -194,10 +193,9 @@ fn rows_validate_as_kafkas_update_feature() {
             vec![metadata_update(23, UPGRADE), elr_update(1, UPGRADE)],
             Ok(UpdatePlan {
                 enables_elr: true,
-                ..plan(
-                    vec![feature_record(mv, 23), feature_record(elr, 1)],
-                    &[mv, elr],
-                )
+                ..plan(vec![feature_record(mv, 23), feature_record(elr, 1)], &[
+                    mv, elr,
+                ])
             }),
         ),
         (
@@ -316,10 +314,9 @@ fn metadata_version_downgrades_follow_did_metadata_change() {
                  information.";
     let unsafe_reason = "Unsafe metadata downgrade is not supported in this version.";
     let accepted = |target: i16| {
-        Ok(plan(
-            vec![feature_record("metadata.version", target)],
-            &["metadata.version"],
-        ))
+        Ok(plan(vec![feature_record("metadata.version", target)], &[
+            "metadata.version",
+        ]))
     };
     let cases = [
         (25, 24, SAFE, accepted(24)),
@@ -519,21 +516,15 @@ fn enabling_elr_writes_kafkas_safety_config_records() {
     let cases = [
         (None, node, None, 2, vec![config(cluster, Some("2"))]),
         (Some("3"), node, None, 2, vec![]),
-        (
-            None,
-            node,
-            Some("2"),
-            1,
-            vec![config(cluster, Some("1")), config(node, None)],
-        ),
+        (None, node, Some("2"), 1, vec![
+            config(cluster, Some("1")),
+            config(node, None),
+        ]),
         (Some("3"), node, Some("2"), 1, vec![config(node, None)]),
-        (
-            Some("3"),
+        (Some("3"), unregistered, Some("2"), 1, vec![config(
             unregistered,
-            Some("2"),
-            1,
-            vec![config(unregistered, None)],
-        ),
+            None,
+        )]),
     ];
     for (cluster_value, broker, broker_value, static_value, want) in cases {
         let mut image = elr_image(None, false);

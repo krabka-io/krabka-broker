@@ -5,12 +5,13 @@
 //! produce path and accepts it, which is what shows the rejection is the
 //! topic's configuration rather than a path every topic now takes.
 
-use assert2::check;
-use bytes::Bytes;
-
-use crate::harness::{
-    INVALID_RECORD, KNOWN_ID, OTHER_SUBJECT_ID, UNKNOWN_ID, VALIDATED, batch_with_values, boot,
-    create_topic, framed, mock_topic_fixture, produce, produce_value, registry,
+use {
+    crate::harness::{
+        INVALID_RECORD, KNOWN_ID, OTHER_SUBJECT_ID, UNKNOWN_ID, VALIDATED, batch_with_values, boot,
+        create_topic, framed, mock_topic_fixture, produce, produce_value, registry,
+    },
+    assert2::check,
+    bytes::Bytes,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -23,20 +23,21 @@
 //! no `krabka_only` row: the join is `same` wherever both sides agree and
 //! `range_differs` for the four ranges krabka means to widen.
 
-use std::{
-    process::{Command, Stdio},
-    time::Duration,
-};
-
-use assert2::assert;
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle, config::ListenerSpec};
-use krabka_security::ListenerProtocol;
-
-use crate::{
-    probe::{retry_until, wait_bounded},
-    support::{
-        JvmListeners, controller_voters, docker_logs, init_tracing, jvm_broker_config,
-        jvm_docker_command, kafka_single_node_env_args, remove_container, unique_container_name,
+use {
+    crate::{
+        probe::{retry_until, wait_bounded},
+        support::{
+            JvmListeners, controller_voters, docker_logs, init_tracing, jvm_broker_config,
+            jvm_docker_command, kafka_single_node_env_args, remove_container,
+            unique_container_name,
+        },
+    },
+    assert2::assert,
+    krabka_broker::{Broker, BrokerConfig, BrokerHandle, config::ListenerSpec},
+    krabka_security::ListenerProtocol,
+    std::{
+        process::{Command, Stdio},
+        time::Duration,
     },
 };
 
@@ -236,13 +237,9 @@ impl OracleBroker {
         }
     }
 
-    fn logs(&self) -> String {
-        docker_logs(&self.name)
-    }
+    fn logs(&self) -> String { docker_logs(&self.name) }
 }
 
 impl Drop for OracleBroker {
-    fn drop(&mut self) {
-        remove_container(&self.name);
-    }
+    fn drop(&mut self) { remove_container(&self.name); }
 }

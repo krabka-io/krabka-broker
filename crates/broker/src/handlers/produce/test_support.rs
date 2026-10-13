@@ -2,25 +2,25 @@
 //! modules needs, kept in one place so each of them builds the same image,
 //! `min.insync.replicas` override, and record batch.
 
-use std::{collections::BTreeMap, sync::Arc};
-
-use bytes::{Bytes, BytesMut};
-use krabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord};
-use krabka_protocol::records::{Attributes, Record, RecordBatch, RecordsPayload};
-
-use crate::{
-    api_catalog::UnstableApiVersions,
-    config_keys::MIN_INSYNC_REPLICAS,
-    freeze::resolve::FreezeMutationResolution,
-    handlers::test_support::{replicated_partition, spawn_partition},
-    log_dir_status::LogDirRegistry,
-    metrics::{BrokerMetrics, RequestPhases},
-    partition::Partition,
-    partition_registry::PartitionRegistry,
-    producer_id_manager::ProducerIdManager,
-    producer_state::ProducerState,
-    test_support::{replica_nodes, string_pairs, topic_partition_image},
-    txn::coordinator::TxnCoordinator,
+use {
+    crate::{
+        api_catalog::UnstableApiVersions,
+        config_keys::MIN_INSYNC_REPLICAS,
+        freeze::resolve::FreezeMutationResolution,
+        handlers::test_support::{replicated_partition, spawn_partition},
+        log_dir_status::LogDirRegistry,
+        metrics::{BrokerMetrics, RequestPhases},
+        partition::Partition,
+        partition_registry::PartitionRegistry,
+        producer_id_manager::ProducerIdManager,
+        producer_state::ProducerState,
+        test_support::{replica_nodes, string_pairs, topic_partition_image},
+        txn::coordinator::TxnCoordinator,
+    },
+    bytes::{Bytes, BytesMut},
+    krabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord},
+    krabka_protocol::records::{Attributes, Record, RecordBatch, RecordsPayload},
+    std::{collections::BTreeMap, sync::Arc},
 };
 
 /// The default services of a standalone produce pipeline, shared by tests
@@ -63,14 +63,10 @@ impl PipelineFixture {
         topic: &str,
         image: &MetadataImage,
     ) -> Arc<Partition> {
-        self.partition_with_config(
-            root,
-            image,
-            PipelinePartitionSetup {
-                topic,
-                ..Default::default()
-            },
-        )
+        self.partition_with_config(root, image, PipelinePartitionSetup {
+            topic,
+            ..Default::default()
+        })
         .await
     }
 

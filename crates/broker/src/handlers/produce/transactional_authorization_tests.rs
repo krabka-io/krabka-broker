@@ -11,22 +11,23 @@
 //! whose authorizer grants ACLs by the principal's name, so each case names
 //! exactly the resource-type/operation pairs it holds.
 
-use assert2::assert;
-use krabka_ids::PartitionIndex;
-use krabka_log::{Offset, ProducerId};
-use krabka_protocol::owned::{
-    create_topics_request::{self},
-    init_producer_id_request::InitProducerIdRequest,
-};
-
-use super::{test_support::one_transactional_batch, *};
-use crate::{
-    broker::{Broker, BrokerHandle},
-    codes,
-    handlers::test_support::configured_topic_request,
-    test_support::{
-        KafkaErrorCode, decode_response, dispatch_context, encode_request, peer, principal,
-        repeated_records_batch, start_transaction_grant_broker,
+use {
+    super::{test_support::one_transactional_batch, *},
+    crate::{
+        broker::{Broker, BrokerHandle},
+        codes,
+        handlers::test_support::configured_topic_request,
+        test_support::{
+            KafkaErrorCode, decode_response, dispatch_context, encode_request, peer, principal,
+            repeated_records_batch, start_transaction_grant_broker,
+        },
+    },
+    assert2::assert,
+    krabka_ids::PartitionIndex,
+    krabka_log::{Offset, ProducerId},
+    krabka_protocol::owned::{
+        create_topics_request::{self},
+        init_producer_id_request::InitProducerIdRequest,
     },
 };
 
@@ -130,9 +131,7 @@ async fn open_transaction(broker: &Broker) -> TransactionalBatchSetup {
 }
 
 /// One v2 batch with one record, non-transactional.
-fn plain_batch() -> RecordsPayload {
-    RecordsPayload::V2(vec![repeated_records_batch().call()])
-}
+fn plain_batch() -> RecordsPayload { RecordsPayload::V2(vec![repeated_records_batch().call()]) }
 
 /// One v2 batch with one record, marked transactional (KIP-98) under
 /// `producer_id`/`producer_epoch`.

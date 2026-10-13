@@ -15,24 +15,24 @@
 //!   authorized against the caller's principal. See the suite's module
 //!   comment for why that listener is separate from the client one here.
 
-use std::{
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    time::Duration,
-};
-
-use assert2::assert;
-use krabka_broker::{
-    BootstrapMode, Broker, BrokerConfig, BrokerHandle, KafkaRlmmConfig, NodeId,
-    RemoteStorageBackend, RlmmKind, config::ListenerSpec,
-};
-use krabka_metadata::MetadataRecord;
-use krabka_security::ListenerProtocol;
-use tempfile::TempDir;
-
-use crate::{
-    PASSWORD, TOPIC, VOTERS,
-    support::{self, NodeIndex, client::connect_owned, topics::diskless_topic_request},
+use {
+    crate::{
+        PASSWORD, TOPIC, VOTERS,
+        support::{self, NodeIndex, client::connect_owned, topics::diskless_topic_request},
+    },
+    assert2::assert,
+    krabka_broker::{
+        BootstrapMode, Broker, BrokerConfig, BrokerHandle, KafkaRlmmConfig, NodeId,
+        RemoteStorageBackend, RlmmKind, config::ListenerSpec,
+    },
+    krabka_metadata::MetadataRecord,
+    krabka_security::ListenerProtocol,
+    std::{
+        net::SocketAddr,
+        path::{Path, PathBuf},
+        time::Duration,
+    },
+    tempfile::TempDir,
 };
 
 /// The listener every client in this suite and every JVM container speaks to.
@@ -58,14 +58,10 @@ pub(crate) struct TestNode {
 }
 
 impl TestNode {
-    pub(crate) fn handle(&self) -> &BrokerHandle {
-        self.handle.as_ref().expect("broker is live")
-    }
+    pub(crate) fn handle(&self) -> &BrokerHandle { self.handle.as_ref().expect("broker is live") }
 
     /// What a client on this host bootstraps against.
-    pub(crate) fn client_bootstrap(&self) -> String {
-        format!("127.0.0.1:{}", self.client_port)
-    }
+    pub(crate) fn client_bootstrap(&self) -> String { format!("127.0.0.1:{}", self.client_port) }
 
     /// What a client inside a container bootstraps against. Containers resolve
     /// the name through `--add-host=host.docker.internal:host-gateway`; the
@@ -76,9 +72,7 @@ impl TestNode {
     }
 
     /// This broker's canonical partition log for the suite's one partition.
-    pub(crate) fn partition_dir(&self) -> PathBuf {
-        self.config.log_dir.join(format!("{TOPIC}-0"))
-    }
+    pub(crate) fn partition_dir(&self) -> PathBuf { self.config.log_dir.join(format!("{TOPIC}-0")) }
 }
 
 /// Boot `VOTERS` brokers that can run a diskless quorum between them, all

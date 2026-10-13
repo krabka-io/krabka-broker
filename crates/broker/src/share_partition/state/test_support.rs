@@ -4,11 +4,11 @@
 //! tests`, and they take one clock origin and one lock duration from here, so a
 //! test reads the same timings wherever it sits.
 
-use std::time::{Duration, Instant};
-
-use krabka_log::Offset;
-
-use crate::test_support::RecordCount;
+use {
+    crate::test_support::RecordCount,
+    krabka_log::Offset,
+    std::time::{Duration, Instant},
+};
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum DeadLetterQueue {
@@ -40,9 +40,7 @@ pub(crate) struct DlqRangeSetup {
     pub cause: Option<super::DlqCause>,
 }
 
-pub(super) fn t0() -> Instant {
-    Instant::now()
-}
+pub(super) fn t0() -> Instant { Instant::now() }
 
 pub(super) const LOCK: Duration = Duration::from_secs(30);
 

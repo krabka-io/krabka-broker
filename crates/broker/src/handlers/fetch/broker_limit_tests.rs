@@ -1,14 +1,15 @@
-use assert2::assert;
-use krabka_protocol::{
-    owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-    records::RecordsPayload,
-};
-use krabka_units::bytes;
-
-use crate::{
-    authorizer::AllowAllAuthorizer,
-    fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
-    handlers::test_support::{create_topic, produce_records, start_broker_with},
+use {
+    crate::{
+        authorizer::AllowAllAuthorizer,
+        fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
+        handlers::test_support::{create_topic, produce_records, start_broker_with},
+    },
+    assert2::assert,
+    krabka_protocol::{
+        owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic},
+        records::RecordsPayload,
+    },
+    krabka_units::bytes,
 };
 
 #[tokio::test]

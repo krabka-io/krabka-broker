@@ -3,20 +3,21 @@
 //! segment should produce, and the `--rlmm-snapshot` file the reconciliation
 //! tests hand back to the scan.
 
-use clap::Parser as _;
-use krabka_ids::{LeaderEpoch, Offset, PartitionIndex};
-use krabka_remote_storage::{
-    RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentState,
-    RlmmCacheDump, TopicIdPartition, kafka_uuid,
-};
-use krabka_remote_storage_topic::Snapshot;
-use uuid::Uuid;
-
-use crate::{
-    Cli,
-    args::RestoreArgs,
-    backend::ArchiveStore,
-    discover::{ArchiveObject, SegmentInventory},
+use {
+    crate::{
+        Cli,
+        args::RestoreArgs,
+        backend::ArchiveStore,
+        discover::{ArchiveObject, SegmentInventory},
+    },
+    clap::Parser as _,
+    krabka_ids::{LeaderEpoch, Offset, PartitionIndex},
+    krabka_remote_storage::{
+        RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata,
+        RemoteLogSegmentState, RlmmCacheDump, TopicIdPartition, kafka_uuid,
+    },
+    krabka_remote_storage_topic::Snapshot,
+    uuid::Uuid,
 };
 
 /// transaction index is excluded on purpose: it is optional even for a

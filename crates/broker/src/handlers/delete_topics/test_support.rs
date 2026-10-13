@@ -3,12 +3,11 @@
 //! them, and the KFC-9 break-glass configuration the gate tests and the
 //! end-to-end refusal tests both build a broker from.
 
+pub(super) use crate::test_support::gated_break_glass_config as gated_config;
 use krabka_protocol::{
     owned::delete_topics_request::{DeleteTopicState, DeleteTopicsRequest},
     primitives::uuid::Uuid as WireUuid,
 };
-
-pub(super) use crate::test_support::gated_break_glass_config as gated_config;
 
 /// The topic every KFC-9 test asks the broker to delete.
 pub(super) const DOOMED: &str = "doomed";

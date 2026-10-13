@@ -2,17 +2,20 @@
 //! `election_type=0` moves leadership back to `replicas[0]` once that replica
 //! is alive and in the ISR again.
 
-use assert2::assert;
-
-use crate::{
-    cluster_lock,
-    support::{
-        admin::{ElectionKind, ElectionSetup},
-        registered_cluster, shutdown_cluster,
-        topics::AssignedTopicSetup,
+use {
+    crate::{
+        cluster_lock,
+        support::{
+            admin::{ElectionKind, ElectionSetup},
+            registered_cluster, shutdown_cluster,
+            topics::AssignedTopicSetup,
+        },
+        wait::{wait_isr_contains, wait_partition_exists, wait_partition_leader},
+        wire::{
+            CLIENT_ID, create_topic_plaintext, drive_elect_all_partitions, drive_elect_leaders,
+        },
     },
-    wait::{wait_isr_contains, wait_partition_exists, wait_partition_leader},
-    wire::{CLIENT_ID, create_topic_plaintext, drive_elect_all_partitions, drive_elect_leaders},
+    assert2::assert,
 };
 
 /// A 3-broker PLAINTEXT cluster with an rf=2 topic where `replicas = [1, 2]`.
@@ -37,13 +40,10 @@ async fn preferred_election_via_wire_returns_success() {
 
     // Create a rf=2 topic. With 3 registered brokers the scheduler assigns
     // replicas [1, 2]; broker 1 is the preferred (first) replica.
-    create_topic_plaintext(
-        broker1_addr,
-        AssignedTopicSetup {
-            name: ("foo-preferred").into(),
-            replicas: vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
-        },
-    )
+    create_topic_plaintext(broker1_addr, AssignedTopicSetup {
+        name: ("foo-preferred").into(),
+        replicas: vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
+    })
     .await;
 
     // Wait for all rf brokers to see the partition in their image.
@@ -163,13 +163,10 @@ async fn electing_every_partition_omits_the_ones_already_on_their_preferred_lead
 
     // Nothing has failed over, so every partition is already led by its
     // preferred replica and no election is needed anywhere.
-    create_topic_plaintext(
-        broker1_addr,
-        AssignedTopicSetup {
-            name: ("foo-all-partitions").into(),
-            replicas: vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
-        },
-    )
+    create_topic_plaintext(broker1_addr, AssignedTopicSetup {
+        name: ("foo-all-partitions").into(),
+        replicas: vec![krabka_metadata::NodeId(1), krabka_metadata::NodeId(2)],
+    })
     .await;
     wait_partition_exists(&cluster[0].0, "foo-all-partitions", 0).await;
 

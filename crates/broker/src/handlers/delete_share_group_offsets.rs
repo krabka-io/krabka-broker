@@ -13,27 +13,28 @@
 //! `network::dispatch` intercepts this request inline for the per-group
 //! `Delete` ACL gate, which needs the principal and the peer `SocketAddr`.
 
-use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::{
-    owned::{
-        delete_share_group_offsets_request::DeleteShareGroupOffsetsRequest,
-        delete_share_group_offsets_response::{
-            DeleteShareGroupOffsetsResponse, DeleteShareGroupOffsetsResponseTopic,
+use {
+    crate::{
+        authorizer::{AuthorizationResult, authorize_topics},
+        codes,
+        coordinator::unified::{
+            GroupType,
+            share::actor::{DeleteTopicOutcome, ShareGroupActorMessage},
         },
+        error::BrokerError,
+        handlers::ErrorResponse as _,
+        task_util::{AskError, ask},
     },
-    primitives::uuid::Uuid,
-};
-
-use crate::{
-    authorizer::{AuthorizationResult, authorize_topics},
-    codes,
-    coordinator::unified::{
-        GroupType,
-        share::actor::{DeleteTopicOutcome, ShareGroupActorMessage},
+    krabka_metadata::{AclOperation, ResourceType},
+    krabka_protocol::{
+        owned::{
+            delete_share_group_offsets_request::DeleteShareGroupOffsetsRequest,
+            delete_share_group_offsets_response::{
+                DeleteShareGroupOffsetsResponse, DeleteShareGroupOffsetsResponseTopic,
+            },
+        },
+        primitives::uuid::Uuid,
     },
-    error::BrokerError,
-    handlers::ErrorResponse as _,
-    task_util::{AskError, ask},
 };
 
 /// Kafka's message for `TOPIC_AUTHORIZATION_FAILED`, which
@@ -239,41 +240,42 @@ fn top_level(error_code: i16, message: Option<String>) -> DeleteShareGroupOffset
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, sync::Arc};
-
-    use assert2::assert;
-    use krabka_metadata::{AclOperation, ResourceType};
-    use krabka_protocol::{
-        owned::{
-            create_topics_request::{CreatableTopic, CreateTopicsRequest},
-            create_topics_response,
-            delete_share_group_offsets_request::{
-                DeleteShareGroupOffsetsRequest, DeleteShareGroupOffsetsRequestTopic,
+    use {
+        super::{TOPIC_AUTHORIZATION_FAILED_MESSAGE, handle, top_level},
+        crate::{
+            authorizer::{AuthorizationResult, Authorizer},
+            broker::BrokerHandle,
+            codes,
+            coordinator::unified::{
+                ShareGroupSeed,
+                share::{
+                    actor::{ShareGroupActorHandle, ShareGroupActorMessage},
+                    persistence::{ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo},
+                },
             },
-            delete_share_group_offsets_response::{
-                self, DeleteShareGroupOffsetsResponse, DeleteShareGroupOffsetsResponseTopic,
+            handlers::{RequestContext, create_topics::handle as create_topics_handle},
+            share_coordinator::{
+                handlers::test_support::lead_share_state_partitions,
+                persister_client::SharePersister,
             },
+            test_support::{DenyAll, ShareApiSupport, start_share_broker, test_ctx},
         },
-        primitives::uuid::Uuid,
-    };
-
-    use super::{TOPIC_AUTHORIZATION_FAILED_MESSAGE, handle, top_level};
-    use crate::{
-        authorizer::{AuthorizationResult, Authorizer},
-        broker::BrokerHandle,
-        codes,
-        coordinator::unified::{
-            ShareGroupSeed,
-            share::{
-                actor::{ShareGroupActorHandle, ShareGroupActorMessage},
-                persistence::{ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo},
+        assert2::assert,
+        krabka_metadata::{AclOperation, ResourceType},
+        krabka_protocol::{
+            owned::{
+                create_topics_request::{CreatableTopic, CreateTopicsRequest},
+                create_topics_response,
+                delete_share_group_offsets_request::{
+                    DeleteShareGroupOffsetsRequest, DeleteShareGroupOffsetsRequestTopic,
+                },
+                delete_share_group_offsets_response::{
+                    self, DeleteShareGroupOffsetsResponse, DeleteShareGroupOffsetsResponseTopic,
+                },
             },
+            primitives::uuid::Uuid,
         },
-        handlers::{RequestContext, create_topics::handle as create_topics_handle},
-        share_coordinator::{
-            handlers::test_support::lead_share_state_partitions, persister_client::SharePersister,
-        },
-        test_support::{DenyAll, ShareApiSupport, start_share_broker, test_ctx},
+        std::{collections::HashSet, sync::Arc},
     };
 
     async fn seed_initialized_topics(
@@ -481,14 +483,13 @@ mod tests {
         coordinator.mark_share("share-empty");
         let _share = coordinator.get_or_create_share("share-empty");
         coordinator.mark_share("share-held");
-        seed_initialized_topics(
-            &coordinator.get_or_create_share("share-held"),
-            vec![TopicPartitionsInfo {
+        seed_initialized_topics(&coordinator.get_or_create_share("share-held"), vec![
+            TopicPartitionsInfo {
                 topic_id: elsewhere_id,
                 topic_name: "elsewhere".into(),
                 partitions: vec![0],
-            }],
-        )
+            },
+        ])
         .await;
         let top_level = |error_code, message: &str| DeleteShareGroupOffsetsResponse {
             error_code,
@@ -591,21 +592,18 @@ mod tests {
             .expect("seed kept state");
 
         let actor = broker.group_coordinator.get_or_create_share("g-delete");
-        seed_initialized_topics(
-            &actor,
-            vec![
-                TopicPartitionsInfo {
-                    topic_id: deleted_id,
-                    topic_name: "deleted".into(),
-                    partitions: vec![0],
-                },
-                TopicPartitionsInfo {
-                    topic_id: kept_id,
-                    topic_name: "kept".into(),
-                    partitions: vec![0],
-                },
-            ],
-        )
+        seed_initialized_topics(&actor, vec![
+            TopicPartitionsInfo {
+                topic_id: deleted_id,
+                topic_name: "deleted".into(),
+                partitions: vec![0],
+            },
+            TopicPartitionsInfo {
+                topic_id: kept_id,
+                topic_name: "kept".into(),
+                partitions: vec![0],
+            },
+        ])
         .await;
 
         // The first delete removes the state, and
@@ -666,10 +664,9 @@ mod tests {
         // order, and never routes a denied topic to the coordinator.
         type Case<'a> = (&'a str, &'a [&'a str]);
         let cases: Vec<Case<'_>> = vec![
-            (
-                "one allowed, one denied: denied row comes first",
-                &["deny-topic"],
-            ),
+            ("one allowed, one denied: denied row comes first", &[
+                "deny-topic",
+            ]),
             ("all topics denied", &["allow-topic", "deny-topic"]),
             ("all topics allowed", &[]),
         ];
@@ -703,21 +700,18 @@ mod tests {
                 .expect("seed deny-topic state");
 
             let actor = broker.group_coordinator.get_or_create_share("g-authz");
-            seed_initialized_topics(
-                &actor,
-                vec![
-                    TopicPartitionsInfo {
-                        topic_id: allow_id,
-                        topic_name: "allow-topic".into(),
-                        partitions: vec![0],
-                    },
-                    TopicPartitionsInfo {
-                        topic_id: deny_id,
-                        topic_name: "deny-topic".into(),
-                        partitions: vec![0],
-                    },
-                ],
-            )
+            seed_initialized_topics(&actor, vec![
+                TopicPartitionsInfo {
+                    topic_id: allow_id,
+                    topic_name: "allow-topic".into(),
+                    partitions: vec![0],
+                },
+                TopicPartitionsInfo {
+                    topic_id: deny_id,
+                    topic_name: "deny-topic".into(),
+                    partitions: vec![0],
+                },
+            ])
             .await;
 
             let response = handle(

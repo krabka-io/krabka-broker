@@ -45,21 +45,21 @@
 //!    installed role can lag the other way while a promotion prepares the
 //!    log.
 
-use std::sync::atomic::Ordering;
-
-use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::owned::{
-    offset_for_leader_epoch_request::OffsetForLeaderEpochRequest,
-    offset_for_leader_epoch_response::{
-        EpochEndOffset, OffsetForLeaderEpochResponse, OffsetForLeaderTopicResult,
+use {
+    crate::{
+        broker::Broker,
+        codes,
+        handlers::{RequestContext, acl_denied, cluster_action_denied},
+        partition::Partition,
     },
-};
-
-use crate::{
-    broker::Broker,
-    codes,
-    handlers::{RequestContext, acl_denied, cluster_action_denied},
-    partition::Partition,
+    krabka_metadata::{AclOperation, ResourceType},
+    krabka_protocol::owned::{
+        offset_for_leader_epoch_request::OffsetForLeaderEpochRequest,
+        offset_for_leader_epoch_response::{
+            EpochEndOffset, OffsetForLeaderEpochResponse, OffsetForLeaderTopicResult,
+        },
+    },
+    std::sync::atomic::Ordering,
 };
 
 /// The two-state leader check Kafka's `ReplicaManager.lastOffsetForLeaderEpoch`
@@ -253,29 +253,29 @@ pub(crate) fn handle(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use assert2::assert;
-    use krabka_protocol::owned::{
-        offset_for_leader_epoch_request::{
-            OffsetForLeaderEpochRequest, OffsetForLeaderPartition, OffsetForLeaderTopic,
+    use {
+        super::*,
+        crate::{
+            authorizer::AuthorizationResult,
+            broker::BrokerHandle,
+            handlers::{
+                produce::test_support::image_with_topic, test_support::seed_partition_replicas,
+            },
+            test_support::{
+                append_partition_batch, peer, principal, start_broker_no_audit,
+                start_broker_with_authorizer_no_audit, temporary_partition,
+            },
         },
-        offset_for_leader_epoch_response::{
-            self, EpochEndOffset, OffsetForLeaderEpochResponse, OffsetForLeaderTopicResult,
+        assert2::assert,
+        krabka_protocol::owned::{
+            offset_for_leader_epoch_request::{
+                OffsetForLeaderEpochRequest, OffsetForLeaderPartition, OffsetForLeaderTopic,
+            },
+            offset_for_leader_epoch_response::{
+                self, EpochEndOffset, OffsetForLeaderEpochResponse, OffsetForLeaderTopicResult,
+            },
         },
-    };
-
-    use super::*;
-    use crate::{
-        authorizer::AuthorizationResult,
-        broker::BrokerHandle,
-        handlers::{
-            produce::test_support::image_with_topic, test_support::seed_partition_replicas,
-        },
-        test_support::{
-            append_partition_batch, peer, principal, start_broker_no_audit,
-            start_broker_with_authorizer_no_audit, temporary_partition,
-        },
+        std::sync::Arc,
     };
 
     const VERSION: i16 = offset_for_leader_epoch_response::MAX_VERSION;
@@ -375,26 +375,22 @@ mod tests {
     #[tokio::test]
     async fn cluster_action_fast_path_table() {
         let cases: [(bool, bool, Vec<OffsetForLeaderTopicResult>); 4] = [
-            (
-                true,
-                false,
-                vec![unknown_topic_row("orders"), unknown_topic_row("payments")],
-            ),
-            (
-                false,
-                true,
-                vec![unknown_topic_row("orders"), unknown_topic_row("payments")],
-            ),
-            (
-                false,
-                false,
-                vec![unknown_topic_row("orders"), denied_row("payments")],
-            ),
-            (
-                true,
-                true,
-                vec![unknown_topic_row("orders"), unknown_topic_row("payments")],
-            ),
+            (true, false, vec![
+                unknown_topic_row("orders"),
+                unknown_topic_row("payments"),
+            ]),
+            (false, true, vec![
+                unknown_topic_row("orders"),
+                unknown_topic_row("payments"),
+            ]),
+            (false, false, vec![
+                unknown_topic_row("orders"),
+                denied_row("payments"),
+            ]),
+            (true, true, vec![
+                unknown_topic_row("orders"),
+                unknown_topic_row("payments"),
+            ]),
         ];
 
         for (cluster_action, payments_describe, expected_topics) in cases {
@@ -613,8 +609,10 @@ mod tests {
     /// unasserted" one.
     #[tokio::test]
     async fn kip_320_fence_and_leader_gate_answer_offset_for_leader_epoch_rows() {
-        use krabka_protocol::owned::offset_for_leader_epoch_request;
-        use offset_for_leader_epoch_request::MAX_VERSION as VERSION;
+        use {
+            krabka_protocol::owned::offset_for_leader_epoch_request,
+            offset_for_leader_epoch_request::MAX_VERSION as VERSION,
+        };
 
         let (broker, _dir) = start_broker_no_audit().await;
 

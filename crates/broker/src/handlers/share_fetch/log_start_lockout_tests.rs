@@ -16,33 +16,33 @@
 //! record lock limit that bounds the window, and a partition whose log read
 //! fails beside a healthy one.
 
-use std::sync::Arc;
-
-use assert2::assert;
-use krabka_protocol::{
-    owned::{
-        delete_records_request::{
-            DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic,
+use {
+    crate::{
+        authorizer::AllowAllAuthorizer,
+        broker::BrokerHandle,
+        codes,
+        handlers::{
+            delete_records::handle,
+            test_support::{
+                RecordCount, create_topic as create_topic_from_test_support,
+                produce_records as produce_records_from_test_support, share_fetch_partition_rows,
+                share_fetch_topics, share_fetch_wire,
+            },
         },
-        share_fetch_request::ShareFetchRequest,
-        share_fetch_response::PartitionData,
+        test_support::{initialize_share_state, peer, principal, start_broker_no_audit_with},
     },
-    primitives::uuid::Uuid as WireUuid,
-};
-
-use crate::{
-    authorizer::AllowAllAuthorizer,
-    broker::BrokerHandle,
-    codes,
-    handlers::{
-        delete_records::handle,
-        test_support::{
-            RecordCount, create_topic as create_topic_from_test_support,
-            produce_records as produce_records_from_test_support, share_fetch_partition_rows,
-            share_fetch_topics, share_fetch_wire,
+    assert2::assert,
+    krabka_protocol::{
+        owned::{
+            delete_records_request::{
+                DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic,
+            },
+            share_fetch_request::ShareFetchRequest,
+            share_fetch_response::PartitionData,
         },
+        primitives::uuid::Uuid as WireUuid,
     },
-    test_support::{initialize_share_state, peer, principal, start_broker_no_audit_with},
+    std::sync::Arc,
 };
 
 /// One partition row of a multi-partition `ShareFetch`: its
@@ -110,11 +110,10 @@ async fn delete_records(
     response.topics[0].partitions[0].error_code
 }
 
+use crate::handlers::test_support::ShareSessionEpoch;
 /// Sends a `ShareFetch` naming every partition index of `topic_id` with
 /// `max_records`, and returns each row's `PartitionData` in request order.
 use krabka_ids::PartitionIndex;
-
-use crate::handlers::test_support::ShareSessionEpoch;
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 struct ShareFetchRowsSetup<'a> {
@@ -206,9 +205,7 @@ async fn share_fetch_one(
 
 use crate::handlers::test_support::acquired_share_records as acquired;
 
-fn topic_uuid(topic_id: WireUuid) -> uuid::Uuid {
-    uuid::Uuid::from_bytes(topic_id.0)
-}
+fn topic_uuid(topic_id: WireUuid) -> uuid::Uuid { uuid::Uuid::from_bytes(topic_id.0) }
 
 async fn spso(broker: &BrokerHandle, group: &str, topic_id: WireUuid, partition_index: i32) -> i64 {
     let shared = broker.broker_arc_for_test();

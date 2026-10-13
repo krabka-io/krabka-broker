@@ -1,37 +1,37 @@
 //! Tests for the metadata refresh that a metadata update asks of a consumer
 //! group, through the group actor's mailbox.
 
-use std::sync::Arc;
-
-use assert2::{assert, check};
-use krabka_protocol::owned::{
-    common::consumer_group_heartbeat_response::topic_partitions::TopicPartitions as AssignedTopic,
-    consumer_group_heartbeat_request::{
-        ConsumerGroupHeartbeatRequest, TopicPartitions as OwnedTopic,
-    },
-    consumer_group_heartbeat_response::{Assignment, ConsumerGroupHeartbeatResponse},
-    consumer_protocol_assignment::{ConsumerProtocolAssignment, TopicPartition},
-};
-
-use crate::coordinator::unified::{
-    GroupCoordinator,
-    actor::{
-        GroupActorHandle, GroupActorMessage,
+use {
+    crate::coordinator::unified::{
+        GroupCoordinator,
+        actor::{
+            GroupActorHandle, GroupActorMessage,
+            test_support::{
+                decode_assignment,
+                rpc::{self, consumer_request_as_client as heartbeat},
+                seed_and_upgrade,
+            },
+        },
+        config::{ConsumerGroupMigrationPolicy, NextGenConfig},
+        offsets_log::fake::InMemoryOffsetsLog,
+        reconciler::ReconcileInput,
+        share::config::ShareGroupConfig,
+        streams::config::StreamsGroupConfig,
         test_support::{
-            decode_assignment,
-            rpc::{self, consumer_request_as_client as heartbeat},
-            seed_and_upgrade,
+            SwitchableMetadata, assignment_interval_fixture, consumer_join_request,
+            make_coord_with_metadata, proto_uuid, snapshot_of,
         },
     },
-    config::{ConsumerGroupMigrationPolicy, NextGenConfig},
-    offsets_log::fake::InMemoryOffsetsLog,
-    reconciler::ReconcileInput,
-    share::config::ShareGroupConfig,
-    streams::config::StreamsGroupConfig,
-    test_support::{
-        SwitchableMetadata, assignment_interval_fixture, consumer_join_request,
-        make_coord_with_metadata, proto_uuid, snapshot_of,
+    assert2::{assert, check},
+    krabka_protocol::owned::{
+        common::consumer_group_heartbeat_response::topic_partitions::TopicPartitions as AssignedTopic,
+        consumer_group_heartbeat_request::{
+            ConsumerGroupHeartbeatRequest, TopicPartitions as OwnedTopic,
+        },
+        consumer_group_heartbeat_response::{Assignment, ConsumerGroupHeartbeatResponse},
+        consumer_protocol_assignment::{ConsumerProtocolAssignment, TopicPartition},
     },
+    std::sync::Arc,
 };
 
 async fn metadata_update(handle: &GroupActorHandle, topics: &[&str]) {
@@ -45,9 +45,7 @@ async fn metadata_update(handle: &GroupActorHandle, topics: &[&str]) {
 }
 
 /// The first heartbeat of member `m1`, which subscribes to `orders`.
-fn join() -> ConsumerGroupHeartbeatRequest {
-    consumer_join_request().topics(&["orders"]).call()
-}
+fn join() -> ConsumerGroupHeartbeatRequest { consumer_join_request().topics(&["orders"]).call() }
 
 /// A later heartbeat of `m1`, which sends only what changed, as Kafka's
 /// consumer does: the partitions it owns when it acknowledges them, else

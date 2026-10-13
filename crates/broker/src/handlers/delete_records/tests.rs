@@ -4,41 +4,45 @@
 //! These drive `handle` against a live broker, so they live apart from the
 //! unit tests that each sibling module keeps beside its own helpers.
 
-use std::sync::Arc;
-
-use assert2::{assert, check};
-use krabka_ids::{Offset, PartitionIndex};
-use krabka_protocol::owned::{
-    delete_records_request::{DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic},
-    delete_records_response::{
-        DeleteRecordsPartitionResult, DeleteRecordsResponse, DeleteRecordsTopicResult,
+use {
+    super::*,
+    crate::{
+        authorizer::AllowAllAuthorizer,
+        broker::{Broker, BrokerHandle},
+        codes,
+        config_keys::{
+            CLEANUP_POLICY, DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, parse_cleanup_policy,
+        },
+        coordinator::bootstrap::OFFSETS_TOPIC,
+        delivery::test_support::batch_at as delivery_batch_at,
+        fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
+        freeze::resolve::resolve_topic_freeze,
+        handlers::{
+            RequestContext, create_topics::handle as create_topics_handle,
+            delete_records::test_support::gated_config, fetch::handle as fetch_handle,
+            test_support::configured_topic_request,
+        },
+        heartbeat::fencing::{RegistrationChange, registration_change},
+        partition::Partition,
+        replica_state::ReplicaState,
+        share_coordinator::bootstrap::TOPIC as SHARE_COORDINATOR_TOPIC,
+        test_support::{
+            DenyAll, KafkaErrorCode, append_partition_batch, broker_registration, encode_request,
+            peer, principal, start_broker_no_audit_with,
+        },
+        txn::bootstrap::TOPIC,
     },
-};
-
-use super::*;
-use crate::{
-    authorizer::AllowAllAuthorizer,
-    broker::{Broker, BrokerHandle},
-    codes,
-    config_keys::{CLEANUP_POLICY, DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, parse_cleanup_policy},
-    coordinator::bootstrap::OFFSETS_TOPIC,
-    delivery::test_support::batch_at as delivery_batch_at,
-    fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
-    freeze::resolve::resolve_topic_freeze,
-    handlers::{
-        RequestContext, create_topics::handle as create_topics_handle,
-        delete_records::test_support::gated_config, fetch::handle as fetch_handle,
-        test_support::configured_topic_request,
+    assert2::{assert, check},
+    krabka_ids::{Offset, PartitionIndex},
+    krabka_protocol::owned::{
+        delete_records_request::{
+            DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic,
+        },
+        delete_records_response::{
+            DeleteRecordsPartitionResult, DeleteRecordsResponse, DeleteRecordsTopicResult,
+        },
     },
-    heartbeat::fencing::{RegistrationChange, registration_change},
-    partition::Partition,
-    replica_state::ReplicaState,
-    share_coordinator::bootstrap::TOPIC as SHARE_COORDINATOR_TOPIC,
-    test_support::{
-        DenyAll, KafkaErrorCode, append_partition_batch, broker_registration, encode_request, peer,
-        principal, start_broker_no_audit_with,
-    },
-    txn::bootstrap::TOPIC,
+    std::sync::Arc,
 };
 
 const VERSION: i16 = 2;

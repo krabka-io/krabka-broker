@@ -70,13 +70,14 @@ pub(super) fn future_offset_lag(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-
-    use super::*;
-    use crate::{
-        future_log::FutureLogState,
-        partition::Partition,
-        test_support::{RecordCount, open_partition, repeated_records_batch},
+    use {
+        super::*,
+        crate::{
+            future_log::FutureLogState,
+            partition::Partition,
+            test_support::{RecordCount, open_partition, repeated_records_batch},
+        },
+        assert2::assert,
     };
 
     /// Builds a `Partition` rooted at `<log_dir>/<topic>-<partition>`.

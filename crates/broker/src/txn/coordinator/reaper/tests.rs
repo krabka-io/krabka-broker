@@ -2,16 +2,16 @@
 //! guard helpers, the live `PrepareAbort` retry path, and the three-phase
 //! orchestration loop driven against a mock `ReaperBackend`.
 
-use std::sync::Arc;
-
-use assert2::{assert, check};
-use krabka_ids::PartitionIndex;
-use tokio::sync::Mutex;
-
-use super::*;
-use crate::txn::{
-    coordinator::test_support::{DATA_TOPIC, entry, live_coordinator, test_coordinator},
-    state::TopicPartition,
+use {
+    super::*,
+    crate::txn::{
+        coordinator::test_support::{DATA_TOPIC, entry, live_coordinator, test_coordinator},
+        state::TopicPartition,
+    },
+    assert2::{assert, check},
+    krabka_ids::PartitionIndex,
+    std::sync::Arc,
+    tokio::sync::Mutex,
 };
 
 #[tokio::test]

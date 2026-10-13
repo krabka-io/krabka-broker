@@ -7,16 +7,16 @@
 //! [`broker_config`] builds one node's config for the suites that drive
 //! membership changes themselves.
 
-use std::{
-    net::SocketAddr,
-    time::{Duration, Instant},
+use {
+    super::cluster::start_n_node_with,
+    crate::support::{NodeIndex, controller_voters},
+    krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerError, BrokerHandle, NodeId},
+    std::{
+        net::SocketAddr,
+        time::{Duration, Instant},
+    },
+    tempfile::TempDir,
 };
-
-use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerError, BrokerHandle, NodeId};
-use tempfile::TempDir;
-
-use super::cluster::start_n_node_with;
-use crate::support::{NodeIndex, controller_voters};
 
 /// Shut brokers down in vector order, retaining the original tuple destructuring.
 pub async fn shutdown_cluster(cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)>) {

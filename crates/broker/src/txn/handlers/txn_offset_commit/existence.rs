@@ -14,10 +14,11 @@
 //! `TOPIC_AUTHORIZATION_FAILED` on every row, and Kafka's `filterByAuthorized`
 //! never hands a denied topic to the existence check at all.
 
-use std::collections::HashSet;
-
-use krabka_metadata::MetadataImage;
-use krabka_protocol::owned::txn_offset_commit_request::TxnOffsetCommitRequestTopic;
+use {
+    krabka_metadata::MetadataImage,
+    krabka_protocol::owned::txn_offset_commit_request::TxnOffsetCommitRequestTopic,
+    std::collections::HashSet,
+};
 
 /// The `(topic, partition)` keys of `topics` that fail the existence check:
 /// the topic is not in `image`, or the image has no partition record at that
@@ -47,14 +48,15 @@ pub(super) fn unknown_partitions(
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
-    use krabka_metadata::NodeId;
-    use uuid::Uuid;
-
-    use super::*;
-    use crate::{
-        coordinator::test_support::single_replica_partition,
-        txn::handlers::txn_offset_commit::test_support::request_topic,
+    use {
+        super::*,
+        crate::{
+            coordinator::test_support::single_replica_partition,
+            txn::handlers::txn_offset_commit::test_support::request_topic,
+        },
+        assert2::check,
+        krabka_metadata::NodeId,
+        uuid::Uuid,
     };
 
     fn topic(name: &str, partitions: &[i32]) -> TxnOffsetCommitRequestTopic {

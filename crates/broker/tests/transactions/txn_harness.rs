@@ -10,25 +10,23 @@
 //! The krabka producer does not retry `COORDINATOR_NOT_AVAILABLE` from
 //! `FindCoordinator`, which Kafka's `TransactionManager` does.
 
-use std::time::Duration;
-
-use assert2::assert;
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
-use krabka_client_core::security::{ClientSecurity, SaslCredentials};
-use krabka_client_producer::{Producer, ProducerRecord};
-use krabka_protocol::owned::create_topics_request::CreatableTopicConfig;
-use krabka_security::{ListenerProtocol, SaslMechanism};
-use tempfile::TempDir;
-
-use crate::support::{
-    self, client::connect_client, sasl::sasl_plaintext_mechanisms,
-    transaction_wire::create_topic as create_transaction_topic,
-    transactions::init_producer_request,
+use {
+    crate::support::{
+        self, client::connect_client, sasl::sasl_plaintext_mechanisms,
+        transaction_wire::create_topic as create_transaction_topic,
+        transactions::init_producer_request,
+    },
+    assert2::assert,
+    krabka_broker::{Broker, BrokerConfig, BrokerHandle},
+    krabka_client_core::security::{ClientSecurity, SaslCredentials},
+    krabka_client_producer::{Producer, ProducerRecord},
+    krabka_protocol::owned::create_topics_request::CreatableTopicConfig,
+    krabka_security::{ListenerProtocol, SaslMechanism},
+    std::time::Duration,
+    tempfile::TempDir,
 };
 
-pub async fn boot_single() -> (BrokerHandle, String, TempDir) {
-    boot_single_with(|_| {}).await
-}
+pub async fn boot_single() -> (BrokerHandle, String, TempDir) { boot_single_with(|_| {}).await }
 
 /// [`boot_single`] under Kafka's `unstable.api.versions.enable`, for the
 /// cases that drive Kafka trunk's `TxnOffsetCommit` v6 (KIP-1319).
@@ -62,15 +60,11 @@ pub async fn create_topic(bootstrap: &str, name: &str) {
 }
 
 pub async fn create_topic_with_segment_bytes(bootstrap: &str, name: &str, bytes: u64) {
-    create_topic_with_configs(
-        bootstrap,
-        name,
-        vec![CreatableTopicConfig {
-            name: "internal.segment.bytes".into(),
-            value: Some(bytes.to_string()),
-            ..Default::default()
-        }],
-    )
+    create_topic_with_configs(bootstrap, name, vec![CreatableTopicConfig {
+        name: "internal.segment.bytes".into(),
+        value: Some(bytes.to_string()),
+        ..Default::default()
+    }])
     .await;
 }
 

@@ -40,20 +40,21 @@
 //! producer, and `current_txn_start_offset` is `-1` when the producer has no
 //! open transaction.
 
-use krabka_log::topic_name::validate_topic_name;
-use krabka_metadata::AclOperation;
-use krabka_protocol::owned::{
-    describe_producers_request::{DescribeProducersRequest, TopicRequest},
-    describe_producers_response::{
-        DescribeProducersResponse, PartitionResponse, ProducerState, TopicResponse,
+use {
+    crate::{
+        broker::Broker,
+        codes,
+        error::BrokerError,
+        handlers::{RequestContext, allowed_topics},
     },
-};
-
-use crate::{
-    broker::Broker,
-    codes,
-    error::BrokerError,
-    handlers::{RequestContext, allowed_topics},
+    krabka_log::topic_name::validate_topic_name,
+    krabka_metadata::AclOperation,
+    krabka_protocol::owned::{
+        describe_producers_request::{DescribeProducersRequest, TopicRequest},
+        describe_producers_response::{
+            DescribeProducersResponse, PartitionResponse, ProducerState, TopicResponse,
+        },
+    },
 };
 
 pub(crate) fn handle(
@@ -239,21 +240,21 @@ fn producer_state(producer: krabka_log::ActiveProducer) -> ProducerState {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use assert2::assert;
-    use bytes::Bytes;
-    use krabka_metadata::NodeId;
-    use krabka_protocol::owned::describe_producers_request::TopicRequest;
-
-    use super::*;
-    use crate::{
-        authorizer::{AllowAllAuthorizer, Authorizer},
-        broker::Broker,
-        handlers::RequestContext,
-        partition::Partition,
-        test_support::{DenyAll, KafkaErrorCode, peer, principal},
-        txn::marker::{MarkerType, build_marker_batch},
+    use {
+        super::*,
+        crate::{
+            authorizer::{AllowAllAuthorizer, Authorizer},
+            broker::Broker,
+            handlers::RequestContext,
+            partition::Partition,
+            test_support::{DenyAll, KafkaErrorCode, peer, principal},
+            txn::marker::{MarkerType, build_marker_batch},
+        },
+        assert2::assert,
+        bytes::Bytes,
+        krabka_metadata::NodeId,
+        krabka_protocol::owned::describe_producers_request::TopicRequest,
+        std::sync::Arc,
     };
 
     const VERSION: i16 = 0;
@@ -781,30 +782,26 @@ mod tests {
             topics: vec![
                 topic(
                     "leads",
-                    partition_row(
-                        codes::NONE,
-                        vec![producer_row().producer_id(10).last_sequence(2).call()],
-                    ),
+                    partition_row(codes::NONE, vec![
+                        producer_row().producer_id(10).last_sequence(2).call(),
+                    ]),
                 ),
                 topic(
                     "follows",
-                    partition_row(
-                        codes::NONE,
-                        vec![
-                            producer_row()
-                                .producer_id(20)
-                                .producer_epoch(3)
-                                .last_sequence(1)
-                                .last_timestamp(3_000)
-                                .coordinator_epoch(9)
-                                .call(),
-                            producer_row()
-                                .producer_id(21)
-                                .last_timestamp(4_000)
-                                .current_txn_start_offset(3)
-                                .call(),
-                        ],
-                    ),
+                    partition_row(codes::NONE, vec![
+                        producer_row()
+                            .producer_id(20)
+                            .producer_epoch(3)
+                            .last_sequence(1)
+                            .last_timestamp(3_000)
+                            .coordinator_epoch(9)
+                            .call(),
+                        producer_row()
+                            .producer_id(21)
+                            .last_timestamp(4_000)
+                            .current_txn_start_offset(3)
+                            .call(),
+                    ]),
                 ),
                 topic(
                     "moved",

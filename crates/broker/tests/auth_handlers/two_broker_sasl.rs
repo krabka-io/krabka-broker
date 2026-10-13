@@ -7,24 +7,24 @@
 //! Gated to non-Windows (openraft `debug_assert!` race on the hosted Windows
 //! runner -- the same gate as `tests/replication.rs`).
 
-use std::net::SocketAddr;
-
-use assert2::assert;
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle, config::InterBrokerCredentials};
-use krabka_protocol::{owned::create_topics_request::CreateTopicsRequest, records::RecordBatch};
-use krabka_security::{ListenerProtocol, SaslMechanism};
-use tempfile::TempDir;
-
-use crate::{
-    harness::admin_plain_password,
-    support::{
-        ClusterNodeSetup, NodeIndex, broker_config,
-        client::connect_client,
-        controller_voters, init_tracing_with,
-        produce::{batch_request, replicated_topic_produce_for},
-        records::{batch_from_records, value_record},
-        shutdown_cluster,
+use {
+    crate::{
+        harness::admin_plain_password,
+        support::{
+            ClusterNodeSetup, NodeIndex, broker_config,
+            client::connect_client,
+            controller_voters, init_tracing_with,
+            produce::{batch_request, replicated_topic_produce_for},
+            records::{batch_from_records, value_record},
+            shutdown_cluster,
+        },
     },
+    assert2::assert,
+    krabka_broker::{Broker, BrokerConfig, BrokerHandle, config::InterBrokerCredentials},
+    krabka_protocol::{owned::create_topics_request::CreateTopicsRequest, records::RecordBatch},
+    krabka_security::{ListenerProtocol, SaslMechanism},
+    std::net::SocketAddr,
+    tempfile::TempDir,
 };
 
 /// Reserve `n` ephemeral loopback ports and keep their listeners open.

@@ -53,12 +53,13 @@
 //! convention. The openraft `debug_assert!` races on the hosted Windows
 //! scheduler are unrelated.
 
-use std::{net::SocketAddr, time::Duration};
-
-use assert2::assert;
-use krabka_broker::BrokerHandle;
-use krabka_metadata::{
-    BrokerConfigRecord, MetadataRecord, PartitionElrRecord, PartitionRecord, TopicConfigRecord,
+use {
+    assert2::assert,
+    krabka_broker::BrokerHandle,
+    krabka_metadata::{
+        BrokerConfigRecord, MetadataRecord, PartitionElrRecord, PartitionRecord, TopicConfigRecord,
+    },
+    std::{net::SocketAddr, time::Duration},
 };
 
 mod kafka_wire;

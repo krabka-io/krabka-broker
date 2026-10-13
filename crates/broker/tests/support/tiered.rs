@@ -1,14 +1,15 @@
 //! Ordered tiered-topic configuration shared by the tiered-storage suites.
-use krabka_protocol::owned::create_topics_request::CreatableTopicConfig;
-
-use crate::support::{
-    client::produce_batch,
-    produce::ProduceTimeoutMillis,
-    records::batch_from_records,
-    topics::{
-        AssignedTopicSetup, assigned_topic, creatable_topic, create_topic_request,
-        create_topic_request_with_setup, topic_configs,
+use {
+    crate::support::{
+        client::produce_batch,
+        produce::ProduceTimeoutMillis,
+        records::batch_from_records,
+        topics::{
+            AssignedTopicSetup, assigned_topic, creatable_topic, create_topic_request,
+            create_topic_request_with_setup, topic_configs,
+        },
     },
+    krabka_protocol::owned::create_topics_request::CreatableTopicConfig,
 };
 
 pub fn tiered_configs(segment_bytes: Option<&str>) -> Vec<CreatableTopicConfig> {

@@ -7,14 +7,14 @@
 //! revoke, and which it may claim, so that the broker never advertises one
 //! partition to two members at once.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
-
-use krabka_protocol::primitives::uuid::Uuid;
-
-use super::{group::GroupState, member::MemberState};
-use crate::coordinator::unified::{
-    actor::MetadataProvider, member_helpers::new_target_assignment,
-    persistence_next_gen::MemberAssignmentState,
+use {
+    super::{group::GroupState, member::MemberState},
+    crate::coordinator::unified::{
+        actor::MetadataProvider, member_helpers::new_target_assignment,
+        persistence_next_gen::MemberAssignmentState,
+    },
+    krabka_protocol::primitives::uuid::Uuid,
+    std::collections::{BTreeSet, HashMap, HashSet},
 };
 
 /// The partitions each topic holds, by topic id.
@@ -449,16 +449,17 @@ fn owns_any(owned: Option<&Partitions>, pending: &Partitions) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
-    use krabka_ids::PartitionIndex;
-
-    use super::*;
-    use crate::coordinator::unified::{
-        consumer_state::{
-            ResolvedRegularExpression,
-            test_support::{Topics, member, subscribed_member},
+    use {
+        super::*,
+        crate::coordinator::unified::{
+            consumer_state::{
+                ResolvedRegularExpression,
+                test_support::{Topics, member, subscribed_member},
+            },
+            test_support::{MemberEpoch, MemberEpochs},
         },
-        test_support::{MemberEpoch, MemberEpochs},
+        assert2::check,
+        krabka_ids::PartitionIndex,
     };
 
     #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -471,9 +472,7 @@ mod tests {
     const T: Uuid = Uuid([1; 16]);
     const TARGET_EPOCH: i32 = 6;
 
-    fn topics() -> Topics {
-        Topics(vec![("t", T)])
-    }
+    fn topics() -> Topics { Topics(vec![("t", T)]) }
 
     fn parts(partitions: &[PartitionIndex]) -> Partitions {
         if partitions.is_empty() {
@@ -1154,14 +1153,11 @@ mod tests {
             if let Some((regex, resolved)) = r.regex {
                 a.subscribed_topic_regex = Some(regex.to_owned());
                 if let Some(topics) = resolved {
-                    g.set_resolved_regex(
-                        regex.to_owned(),
-                        ResolvedRegularExpression {
-                            topics: topics.iter().map(|topic| (*topic).to_owned()).collect(),
-                            version: 1,
-                            timestamp_ms: 0,
-                        },
-                    );
+                    g.set_resolved_regex(regex.to_owned(), ResolvedRegularExpression {
+                        topics: topics.iter().map(|topic| (*topic).to_owned()).collect(),
+                        version: 1,
+                        timestamp_ms: 0,
+                    });
                 }
             }
             g.members.insert("a".into(), a);
@@ -1215,15 +1211,12 @@ mod tests {
         let held = g.held_by_others(
             "a",
             &topic_parts(&[
-                (
-                    T,
-                    &[
-                        PartitionIndex(0),
-                        PartitionIndex(2),
-                        PartitionIndex(4),
-                        PartitionIndex(9),
-                    ],
-                ),
+                (T, &[
+                    PartitionIndex(0),
+                    PartitionIndex(2),
+                    PartitionIndex(4),
+                    PartitionIndex(9),
+                ]),
                 (U, &[PartitionIndex(5), PartitionIndex(7)]),
             ]),
         );
@@ -1242,9 +1235,7 @@ mod tests {
             .assigned(&[PartitionIndex(0), PartitionIndex(1), PartitionIndex(2)])
             .call()
     }
-    fn single_partition_input() -> Held {
-        held().assigned(&[PartitionIndex(0)]).call()
-    }
+    fn single_partition_input() -> Held { held().assigned(&[PartitionIndex(0)]).call() }
     fn unreleased_input() -> Held {
         held()
             .epoch(6)
@@ -1252,18 +1243,14 @@ mod tests {
             .assigned(&[PartitionIndex(0)])
             .call()
     }
-    fn current_input() -> Held {
-        held().epoch(6).call()
-    }
+    fn current_input() -> Held { held().epoch(6).call() }
     fn revoking_expected() -> Held {
         held()
             .state(MemberAssignmentState::UnrevokedPartitions)
             .pending(&[PartitionIndex(2)])
             .call()
     }
-    fn settled_expected() -> Held {
-        held().epoch(6).call()
-    }
+    fn settled_expected() -> Held { held().epoch(6).call() }
     fn withheld_expected() -> Held {
         held()
             .epoch(6)
@@ -1299,9 +1286,7 @@ mod tests {
             .assigned(&[(T, &[PartitionIndex(0)])])
             .call()
     }
-    fn stable_6_5_expected() -> Shape {
-        shape().assigned(&[(T, &[PartitionIndex(0)])]).call()
-    }
+    fn stable_6_5_expected() -> Shape { shape().assigned(&[(T, &[PartitionIndex(0)])]).call() }
     fn stable_5_4_input_two_topics() -> Shape {
         shape()
             .epochs(MemberEpochs {

@@ -5,16 +5,17 @@
 //! The two error codes are the two sides of the same comparison, so they are
 //! asserted next to each other.
 
-use assert2::assert;
-use krabka_protocol::owned::fetch_request::{FetchPartition, FetchRequest};
-
-use crate::{
-    epoch_harness::{boot_single, create_topic, record, set_leader_epoch, topic_id_for},
-    support::{
-        client::connect_client,
-        fetch::{FetchLimits, RequestWaitMillis, fetch_partition, single_partition_fetch},
-        produce::{SinglePartitionProduceSetup, batch_request},
+use {
+    crate::{
+        epoch_harness::{boot_single, create_topic, record, set_leader_epoch, topic_id_for},
+        support::{
+            client::connect_client,
+            fetch::{FetchLimits, RequestWaitMillis, fetch_partition, single_partition_fetch},
+            produce::{SinglePartitionProduceSetup, batch_request},
+        },
     },
+    assert2::assert,
+    krabka_protocol::owned::fetch_request::{FetchPartition, FetchRequest},
 };
 
 async fn fetch_with_epoch(
@@ -49,14 +50,11 @@ async fn fenced_leader_epoch_truncates_zombie_writes() {
     let client = connect_client(bootstrap.clone(), None).await;
     let topic_id = topic_id_for(&client, "fence").await;
     client
-        .send(batch_request(
-            record("v0"),
-            SinglePartitionProduceSetup {
-                topic: ("fence").into(),
-                topic_id,
-                ..Default::default()
-            },
-        ))
+        .send(batch_request(record("v0"), SinglePartitionProduceSetup {
+            topic: ("fence").into(),
+            topic_id,
+            ..Default::default()
+        }))
         .await
         .expect("produce");
 

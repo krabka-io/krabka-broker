@@ -5,12 +5,13 @@
 //! a newer stamp than the entry it replaces. Together they are what stops an
 //! old signed thaw from being replayed.
 
-use assert2::check;
-use krabka_metadata::TopicFreezeRecord;
-use krabka_units::{Time, convert::TimeExt as _, minutes, secs};
-
-use super::{ALICE, CLUSTER_ID, NOW_MS, check_against, record, signed, trust};
-use crate::freeze::signing::{FreezeSignatureCheck, verify_freeze_signature};
+use {
+    super::{ALICE, CLUSTER_ID, NOW_MS, check_against, record, signed, trust},
+    crate::freeze::signing::{FreezeSignatureCheck, verify_freeze_signature},
+    assert2::check,
+    krabka_metadata::TopicFreezeRecord,
+    krabka_units::{Time, convert::TimeExt as _, minutes, secs},
+};
 
 #[yare::parameterized(
     exactly_past_edge = { NOW_MS - 300_000, true },
@@ -22,14 +23,10 @@ use crate::freeze::signing::{FreezeSignatureCheck, verify_freeze_signature};
 fn timestamp_skew_boundary_is_checked(set_at_ms: i64, expected: bool) {
     let trust = trust();
     let window = minutes(5);
-    let signed_record = signed(
-        &trust.alice,
-        CLUSTER_ID,
-        &TopicFreezeRecord {
-            set_at_ms,
-            ..record()
-        },
-    );
+    let signed_record = signed(&trust.alice, CLUSTER_ID, &TopicFreezeRecord {
+        set_at_ms,
+        ..record()
+    });
     let check = FreezeSignatureCheck {
         max_skew: window,
         ..check_against(&trust, ALICE)
@@ -44,14 +41,10 @@ fn timestamp_skew_boundary_is_checked(set_at_ms: i64, expected: bool) {
 )]
 fn skew_window_uses_configured_width(max_skew: Time, expected: bool) {
     let trust = trust();
-    let record = signed(
-        &trust.alice,
-        CLUSTER_ID,
-        &TopicFreezeRecord {
-            set_at_ms: NOW_MS - 30_000,
-            ..record()
-        },
-    );
+    let record = signed(&trust.alice, CLUSTER_ID, &TopicFreezeRecord {
+        set_at_ms: NOW_MS - 30_000,
+        ..record()
+    });
 
     let check = FreezeSignatureCheck {
         max_skew,
@@ -83,14 +76,10 @@ fn opposite_machine_extremes_never_wrap_into_the_skew_window() {
         ("past extreme", i64::MAX, i64::MIN),
         ("future extreme", i64::MIN, i64::MAX),
     ] {
-        let record = signed(
-            &trust.alice,
-            CLUSTER_ID,
-            &TopicFreezeRecord {
-                set_at_ms,
-                ..record()
-            },
-        );
+        let record = signed(&trust.alice, CLUSTER_ID, &TopicFreezeRecord {
+            set_at_ms,
+            ..record()
+        });
         let check = FreezeSignatureCheck {
             now_ms,
             max_skew: Time::from_millis(i64::MAX),

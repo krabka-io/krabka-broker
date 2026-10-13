@@ -2,20 +2,20 @@
 //! writes to, and the `acks=all` produce whose partition-level error code is
 //! what most of the claims are asserted on.
 
-use std::time::{Duration, Instant};
-
-use krabka_broker::codes;
-use krabka_client_core::Client;
-use krabka_protocol::primitives::uuid::Uuid as WireUuid;
-
-use crate::{
-    N_RECORDS, NODE_A, NODE_B, NODE_C, TOPIC, WITNESS,
-    support::{
-        client::{connect_owned, create_replicated_topic, value_batch},
-        produce::{ProduceTimeoutMillis, SinglePartitionProduceSetup, batch_request},
+use {
+    crate::{
+        N_RECORDS, NODE_A, NODE_B, NODE_C, TOPIC, WITNESS,
+        support::{
+            client::{connect_owned, create_replicated_topic, value_batch},
+            produce::{ProduceTimeoutMillis, SinglePartitionProduceSetup, batch_request},
+        },
+        view::wait_for_leader_and_isr,
+        within,
     },
-    view::wait_for_leader_and_isr,
-    within,
+    krabka_broker::codes,
+    krabka_client_core::Client,
+    krabka_protocol::primitives::uuid::Uuid as WireUuid,
+    std::time::{Duration, Instant},
 };
 
 pub async fn client_at(addr: &str) -> Client {
@@ -72,12 +72,9 @@ pub async fn initialize_topic(addr: &str, handles: [&krabka_broker::BrokerHandle
         )
         .await;
     }
-    wait_for_leader_and_isr(
-        handles[0],
-        "the initial three-replica ISR",
-        1,
-        &[1, 2, WITNESS],
-    )
+    wait_for_leader_and_isr(handles[0], "the initial three-replica ISR", 1, &[
+        1, 2, WITNESS,
+    ])
     .await;
     topic_id
 }

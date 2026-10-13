@@ -2,23 +2,23 @@
 //! three-record batch to seed a log with, and a spawned `Partition` backed by
 //! that log on disk.
 
-use std::{
-    path::Path,
-    sync::{Arc, atomic::Ordering},
-};
-
-use krabka_log::{Log, LogConfig};
-use krabka_metadata::NodeId;
-use krabka_protocol::records::RecordBatch;
-
-use crate::{
-    broker::spawn_partition,
-    diskless::index_log::DisklessIndexLog,
-    log_dir_status::LogDirRegistry,
-    partition::Partition,
-    producer_state::ProducerState,
-    test_support::{StorageMode, repeated_records_batch},
-    time_util::now_ms,
+use {
+    crate::{
+        broker::spawn_partition,
+        diskless::index_log::DisklessIndexLog,
+        log_dir_status::LogDirRegistry,
+        partition::Partition,
+        producer_state::ProducerState,
+        test_support::{StorageMode, repeated_records_batch},
+        time_util::now_ms,
+    },
+    krabka_log::{Log, LogConfig},
+    krabka_metadata::NodeId,
+    krabka_protocol::records::RecordBatch,
+    std::{
+        path::Path,
+        sync::{Arc, atomic::Ordering},
+    },
 };
 
 /// A batch of `count` records, stamped with the wall clock the way a real
@@ -35,9 +35,7 @@ fn batch(count: i32) -> RecordBatch {
     }
 }
 
-pub(super) fn orders_partition(root: &Path) -> Arc<Partition> {
-    test_partition().root(root).call()
-}
+pub(super) fn orders_partition(root: &Path) -> Arc<Partition> { test_partition().root(root).call() }
 
 #[derive(Clone, Copy)]
 pub(super) struct FlusherPartitionSetup<'a> {

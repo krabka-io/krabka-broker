@@ -11,12 +11,13 @@
 //! restarts and catches up is therefore the test: it rejoins the ISR only when
 //! the `AlterPartition` of the leader reaches the controller.
 
-use assert2::assert;
-use krabka_broker::{BootstrapMode, BrokerConfig, BrokerHandle, config::NodeRole};
-use tempfile::TempDir;
-
-use crate::support::{
-    NodeIndex, RoleNodeSetup, client::create_topic_for_broker, topics::configured_topic_request,
+use {
+    crate::support::{
+        NodeIndex, RoleNodeSetup, client::create_topic_for_broker, topics::configured_topic_request,
+    },
+    assert2::assert,
+    krabka_broker::{BootstrapMode, BrokerConfig, BrokerHandle, config::NodeRole},
+    tempfile::TempDir,
 };
 
 mod support;
@@ -52,13 +53,10 @@ async fn start_role_separated() -> RoleSeparated {
     let mut dirs = Vec::with_capacity(NODES);
 
     let ctrl_dir = TempDir::new().unwrap();
-    let ctrl_cfg = topology.config(
-        ctrl_dir.path(),
-        RoleNodeSetup {
-            role: NodeRole::Controller,
-            ..Default::default()
-        },
-    );
+    let ctrl_cfg = topology.config(ctrl_dir.path(), RoleNodeSetup {
+        role: NodeRole::Controller,
+        ..Default::default()
+    });
     let controller = support::start_held_node(
         ctrl_cfg,
         &mut ctrl_listeners,
@@ -73,14 +71,11 @@ async fn start_role_separated() -> RoleSeparated {
     let mut broker_configs = Vec::with_capacity(NODES - 1);
     for index in 1..NODES {
         let dir = TempDir::new().unwrap();
-        let cfg = topology.config(
-            dir.path(),
-            RoleNodeSetup {
-                index: NodeIndex(index),
-                mode: BootstrapMode::Join,
-                ..Default::default()
-            },
-        );
+        let cfg = topology.config(dir.path(), RoleNodeSetup {
+            index: NodeIndex(index),
+            mode: BootstrapMode::Join,
+            ..Default::default()
+        });
         broker_configs.push(cfg.clone());
         brokers.push(
             support::start_held_node(

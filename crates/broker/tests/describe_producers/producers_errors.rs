@@ -5,14 +5,15 @@
 //! `UNKNOWN_TOPIC_OR_PARTITION`, while a partition the broker knows about but
 //! does not host reports `NOT_LEADER_OR_FOLLOWER`.
 
-use assert2::{assert, check};
-
-use crate::{
-    producers_harness::create_topic,
-    support::{
-        self, admin::describe_producers_request, client::connect_with_context, registered_cluster,
-        shutdown_cluster,
+use {
+    crate::{
+        producers_harness::create_topic,
+        support::{
+            self, admin::describe_producers_request, client::connect_with_context,
+            registered_cluster, shutdown_cluster,
+        },
     },
+    assert2::{assert, check},
 };
 
 #[tokio::test]

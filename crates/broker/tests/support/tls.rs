@@ -43,6 +43,8 @@ macro_rules! accept_pinned_signature {
 }
 
 impl ServerCertVerifier for PinnedCertVerifier {
+    accept_pinned_signature!(verify_tls12_signature, verify_tls13_signature);
+
     fn verify_server_cert(
         &self,
         end_entity: &CertificateDer<'_>,
@@ -58,11 +60,7 @@ impl ServerCertVerifier for PinnedCertVerifier {
         }
     }
 
-    accept_pinned_signature!(verify_tls12_signature, verify_tls13_signature);
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.schemes.clone()
-    }
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> { self.schemes.clone() }
 }
 
 pub fn fixture_signature_schemes() -> Vec<SignatureScheme> {

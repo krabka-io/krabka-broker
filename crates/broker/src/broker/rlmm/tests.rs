@@ -1,14 +1,15 @@
-use assert2::{assert, check};
-use krabka_units::{mebibytes, millis, minutes, secs};
-use tempfile::tempdir;
-
-use super::*;
-use crate::{
-    config::{KafkaRlmmConfig, RemoteStorageBackend},
-    diskless::index_log::DISKLESS_WAL_INDEX_TOPIC,
-    handlers::test_support::replicated_partition,
-    metrics::BrokerMetrics,
-    test_support::replica_nodes,
+use {
+    super::*,
+    crate::{
+        config::{KafkaRlmmConfig, RemoteStorageBackend},
+        diskless::index_log::DISKLESS_WAL_INDEX_TOPIC,
+        handlers::test_support::replicated_partition,
+        metrics::BrokerMetrics,
+        test_support::replica_nodes,
+    },
+    assert2::{assert, check},
+    krabka_units::{mebibytes, millis, minutes, secs},
+    tempfile::tempdir,
 };
 
 #[bon::builder]
@@ -125,10 +126,10 @@ async fn rlmm_reconciler_applies_initial_and_changed_assignments() {
 
 #[test]
 fn needed_metadata_partitions_covers_led_and_followed() {
-    use krabka_metadata::MetadataRecord;
-    use krabka_remote_storage::TopicIdPartition;
-    use krabka_remote_storage_topic::metadata_partition_for;
-    use uuid::Uuid;
+    use {
+        krabka_metadata::MetadataRecord, krabka_remote_storage::TopicIdPartition,
+        krabka_remote_storage_topic::metadata_partition_for, uuid::Uuid,
+    };
 
     let topic_id = Uuid::from_u128(0xABCD);
     let mut image = topic_image()
@@ -166,11 +167,13 @@ fn needed_metadata_partitions_covers_led_and_followed() {
 
 #[tokio::test]
 async fn topic_assignment_uses_discovered_count_after_config_changes() {
-    use krabka_metadata::MetadataRecord;
-    use krabka_remote_storage_topic::{
-        InProcessMetadataEventLog, TopicBasedRemoteLogMetadataManager,
+    use {
+        krabka_metadata::MetadataRecord,
+        krabka_remote_storage_topic::{
+            InProcessMetadataEventLog, TopicBasedRemoteLogMetadataManager,
+        },
+        uuid::Uuid,
     };
-    use uuid::Uuid;
 
     let topic_id = Uuid::from_u128(0xABCD);
     let node = krabka_audit::NodeId(7);

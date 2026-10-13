@@ -3,18 +3,18 @@
 //! that opens a real partition with a live writer. Both the fan-out tests and
 //! the coordinator tests need them.
 
-use std::path::Path;
-
-use krabka_ids::PartitionIndex;
-use krabka_log::{Log, LogConfig};
-use krabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicRecord};
-use uuid::Uuid;
-
-use crate::{
-    barrier::{marker::BarrierMarker, state::TargetPartition},
-    log_dir::partition_dir,
-    partition_registry::PartitionRegistry,
-    test_support::{FakeMetadataSource, StandalonePartitionSetup, spawn_standalone_partition},
+use {
+    crate::{
+        barrier::{marker::BarrierMarker, state::TargetPartition},
+        log_dir::partition_dir,
+        partition_registry::PartitionRegistry,
+        test_support::{FakeMetadataSource, StandalonePartitionSetup, spawn_standalone_partition},
+    },
+    krabka_ids::PartitionIndex,
+    krabka_log::{Log, LogConfig},
+    krabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicRecord},
+    std::path::Path,
+    uuid::Uuid,
 };
 
 /// A target partition in the barrier tests.
@@ -114,8 +114,7 @@ pub(crate) fn check_control_marker(
 
 #[cfg(test)]
 mod tests {
-    use super::metadata_source;
-    use crate::metadata_source::MetadataSource;
+    use {super::metadata_source, crate::metadata_source::MetadataSource};
 
     #[tokio::test]
     #[should_panic(expected = "the barrier tests submit no metadata change")]

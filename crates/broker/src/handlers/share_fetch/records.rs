@@ -9,32 +9,32 @@
 //! hold control batches or aborted transactional data, and which offsets
 //! KFC-1 scheduled delivery has not released yet.
 
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{Duration, Instant},
-};
-
-use bytes::{Bytes, BytesMut};
-use krabka_log::{LogError, Offset, RawRead};
-use krabka_protocol::{
-    owned::share_fetch_response::{AcquiredRecords, PartitionData},
-    records::{Attributes, HEADER_LEN, RecordBatchHeader, RecordsPayload},
-};
-use krabka_units::{ByteSize, convert::ByteSizeExt as _};
-use zerocopy::FromBytes as _;
-
-use super::tiered::TieredSource;
-use crate::{
-    blocking::spawn_blocking,
-    diskless::read::DisklessReadHandle,
-    error::BrokerError,
-    partition::Partition,
-    remote_reader::RemoteReader,
-    share_partition::{
-        source::diskless_logical_start,
-        state::{AcquireShape, AcquiredRange, AcquisitionState},
+use {
+    super::tiered::TieredSource,
+    crate::{
+        blocking::spawn_blocking,
+        diskless::read::DisklessReadHandle,
+        error::BrokerError,
+        partition::Partition,
+        remote_reader::RemoteReader,
+        share_partition::{
+            source::diskless_logical_start,
+            state::{AcquireShape, AcquiredRange, AcquisitionState},
+        },
     },
+    bytes::{Bytes, BytesMut},
+    krabka_log::{LogError, Offset, RawRead},
+    krabka_protocol::{
+        owned::share_fetch_response::{AcquiredRecords, PartitionData},
+        records::{Attributes, HEADER_LEN, RecordBatchHeader, RecordsPayload},
+    },
+    krabka_units::{ByteSize, convert::ByteSizeExt as _},
+    std::{
+        collections::HashMap,
+        sync::Arc,
+        time::{Duration, Instant},
+    },
+    zerocopy::FromBytes as _,
 };
 
 /// What one acquire step may take from a share partition.
@@ -614,14 +614,15 @@ async fn scan_log<T: Send + 'static>(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use krabka_log::DeliveryPolicy;
-    use qubit_clock::{FixedWallClock, WallClock};
-
-    use super::*;
-    use crate::{
-        delivery::test_support::{NOW_MS, scheduled_partition, wall_at},
-        test_support::UnixMillis,
+    use {
+        super::*,
+        crate::{
+            delivery::test_support::{NOW_MS, scheduled_partition, wall_at},
+            test_support::UnixMillis,
+        },
+        assert2::assert,
+        krabka_log::DeliveryPolicy,
+        qubit_clock::{FixedWallClock, WallClock},
     };
 
     #[tokio::test]

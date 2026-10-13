@@ -31,6 +31,7 @@ impl ConfigOperation {
             _ => Self::Invalid(ConfigOperationCode(code)),
         }
     }
+
     pub const fn wire_code(self) -> i8 {
         match self {
             Self::Set => 0,
@@ -197,15 +198,9 @@ pub async fn alter_topic_config(
     let response = client
         .send(
             incremental_request()
-                .resources(vec![incremental_resource(
-                    2,
-                    topic.to_owned(),
-                    vec![incremental_config(
-                        name.to_owned(),
-                        value.map(ToOwned::to_owned),
-                        operation,
-                    )],
-                )])
+                .resources(vec![incremental_resource(2, topic.to_owned(), vec![
+                    incremental_config(name.to_owned(), value.map(ToOwned::to_owned), operation),
+                ])])
                 .call(),
         )
         .await
@@ -293,21 +288,17 @@ pub fn client_metrics_subscription(
         interval,
     };
     incremental_request()
-        .resources(vec![incremental_resource(
-            16,
-            setup.name,
-            vec![
-                incremental_config(
-                    "metrics",
-                    Some(setup.metrics.to_owned()),
-                    ConfigOperation::Set,
-                ),
-                incremental_config(
-                    "interval.ms",
-                    Some(setup.interval.to_owned()),
-                    ConfigOperation::Set,
-                ),
-            ],
-        )])
+        .resources(vec![incremental_resource(16, setup.name, vec![
+            incremental_config(
+                "metrics",
+                Some(setup.metrics.to_owned()),
+                ConfigOperation::Set,
+            ),
+            incremental_config(
+                "interval.ms",
+                Some(setup.interval.to_owned()),
+                ConfigOperation::Set,
+            ),
+        ])])
         .call()
 }

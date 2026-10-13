@@ -15,29 +15,31 @@
 //! The broker under test is node 1. Each case creates its own topic, with
 //! replicas 1 and 2, led by node 1 or by node 2.
 
-use std::sync::Arc;
-
-use assert2::assert;
-use bytes::Bytes;
-use krabka_ids::{ApiVersion, LeaderEpoch};
-use krabka_log::Offset;
-use krabka_metadata::NodeId;
-use krabka_protocol::{
-    owned::{
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        fetch_response::{FetchResponse, FetchableTopicResponse, LeaderIdAndEpoch, PartitionData},
+use {
+    super::test_support::FetchReplicaId,
+    crate::{
+        broker::BrokerHandle,
+        codes,
+        fetch_session::INVALID_SESSION_ID,
+        handlers::test_support::{default_records_batch, seed_partition_replicas},
+        partition::Partition,
+        test_support::{KafkaErrorCode, append_partition_batch, start_broker_no_audit_with},
     },
-    records::RecordsPayload,
-};
-
-use super::test_support::FetchReplicaId;
-use crate::{
-    broker::BrokerHandle,
-    codes,
-    fetch_session::INVALID_SESSION_ID,
-    handlers::test_support::{default_records_batch, seed_partition_replicas},
-    partition::Partition,
-    test_support::{KafkaErrorCode, append_partition_batch, start_broker_no_audit_with},
+    assert2::assert,
+    bytes::Bytes,
+    krabka_ids::{ApiVersion, LeaderEpoch},
+    krabka_log::Offset,
+    krabka_metadata::NodeId,
+    krabka_protocol::{
+        owned::{
+            fetch_request::{FetchPartition, FetchRequest, FetchTopic},
+            fetch_response::{
+                FetchResponse, FetchableTopicResponse, LeaderIdAndEpoch, PartitionData,
+            },
+        },
+        records::RecordsPayload,
+    },
+    std::sync::Arc,
 };
 
 /// The node id of the broker under test.

@@ -2,11 +2,12 @@
 //! it places, the cut it publishes, and the group lock that holds a second
 //! caller off.
 
-use assert2::{assert, check};
-use krabka_ids::PartitionIndex;
-use krabka_units::millis;
-
-use super::*;
+use {
+    super::*,
+    assert2::{assert, check},
+    krabka_ids::PartitionIndex,
+    krabka_units::millis,
+};
 
 macro_rules! inject_at_epoch_one {
     ($coordinator:expr, $status:expr) => {{

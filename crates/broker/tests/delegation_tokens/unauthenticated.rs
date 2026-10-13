@@ -9,24 +9,24 @@
 //! hole. `BrokerConfig::validate` rejects that value outright, and this file
 //! pins the wire behavior that justifies the rejection.
 
-use std::{net::SocketAddr, sync::Arc};
-
-use assert2::check;
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle, SslPrincipalMapper, config::ListenerSpec};
-use krabka_protocol::owned::create_delegation_token_request::CreateDelegationTokenRequest;
-use krabka_security::ListenerProtocol;
-use tempfile::TempDir;
-
-use crate::{
-    DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
-    rpc::send_create_delegation_token,
-    support::{
-        sasl::delegation_token_defaults,
-        tls::{
-            CertificateDer, ClientAuthMode, ClientConfig, PemObject as _, PinnedCertVerifier,
-            ServerName, TcpStream, TlsConfig, TlsConnector,
+use {
+    crate::{
+        DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
+        rpc::send_create_delegation_token,
+        support::{
+            sasl::delegation_token_defaults,
+            tls::{
+                CertificateDer, ClientAuthMode, ClientConfig, PemObject as _, PinnedCertVerifier,
+                ServerName, TcpStream, TlsConfig, TlsConnector,
+            },
         },
     },
+    assert2::check,
+    krabka_broker::{Broker, BrokerConfig, BrokerHandle, SslPrincipalMapper, config::ListenerSpec},
+    krabka_protocol::owned::create_delegation_token_request::CreateDelegationTokenRequest,
+    krabka_security::ListenerProtocol,
+    std::{net::SocketAddr, sync::Arc},
+    tempfile::TempDir,
 };
 
 const DEV_CERT: &str = include_str!("../fixtures/security/dev_cert.pem");

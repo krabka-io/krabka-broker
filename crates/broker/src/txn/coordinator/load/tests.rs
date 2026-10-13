@@ -1,23 +1,23 @@
 //! A leadership change moves `__transaction_state-0` between two coordinators
 //! that share one partition log, as replication would.
 
-use std::path::Path;
-
-use assert2::{assert, check};
-
-use super::*;
-use crate::{
-    partition::Partition,
-    partition_registry::PartitionRegistry,
-    producer_id_manager::ProducerIdManager,
-    test_support::{PartitionCount, open_partition},
-    txn::{
-        coordinator::test_support::test_prelude::*,
-        log_record::{encode_key, encode_value},
-        partitioner::partition_for_tid,
-        state::{TopicPartition, TxnEntry, TxnState},
-        version::TxnVersion,
+use {
+    super::*,
+    crate::{
+        partition::Partition,
+        partition_registry::PartitionRegistry,
+        producer_id_manager::ProducerIdManager,
+        test_support::{PartitionCount, open_partition},
+        txn::{
+            coordinator::test_support::test_prelude::*,
+            log_record::{encode_key, encode_value},
+            partitioner::partition_for_tid,
+            state::{TopicPartition, TxnEntry, TxnState},
+            version::TxnVersion,
+        },
     },
+    assert2::{assert, check},
+    std::path::Path,
 };
 
 const TID: &str = "tid-moved";

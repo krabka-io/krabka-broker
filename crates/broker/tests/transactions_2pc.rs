@@ -18,21 +18,21 @@
 
 mod support;
 
-use std::time::Duration;
-
-use assert2::assert;
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
-use krabka_client_producer::Producer;
-use krabka_protocol::owned::{
-    describe_transactions_request::DescribeTransactionsRequest,
-    init_producer_id_request::{self, InitProducerIdRequest},
-    update_features_request::UpdateFeaturesRequest,
-};
-use tempfile::TempDir;
-
-use crate::support::{
-    client::connect_client, configs::feature_update, discovery::api_versions_request_for,
-    transactions::init_producer_request, wire::At,
+use {
+    crate::support::{
+        client::connect_client, configs::feature_update, discovery::api_versions_request_for,
+        transactions::init_producer_request, wire::At,
+    },
+    assert2::assert,
+    krabka_broker::{Broker, BrokerConfig, BrokerHandle},
+    krabka_client_producer::Producer,
+    krabka_protocol::owned::{
+        describe_transactions_request::DescribeTransactionsRequest,
+        init_producer_id_request::{self, InitProducerIdRequest},
+        update_features_request::UpdateFeaturesRequest,
+    },
+    std::time::Duration,
+    tempfile::TempDir,
 };
 
 #[derive(Clone, Copy, Default)]

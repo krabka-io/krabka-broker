@@ -6,12 +6,13 @@
 //! broker-only node to start creates the topic on itself, and its audit writer
 //! then records the broker start in that partition.
 
-use assert2::assert;
-use krabka_broker::{BootstrapMode, Broker, config::NodeRole, coordinator::AUDIT_TOPIC};
-use krabka_raft::NodeId;
-use tempfile::TempDir;
-
-use crate::support::controller_voters;
+use {
+    crate::support::controller_voters,
+    assert2::assert,
+    krabka_broker::{BootstrapMode, Broker, config::NodeRole, coordinator::AUDIT_TOPIC},
+    krabka_raft::NodeId,
+    tempfile::TempDir,
+};
 
 mod support;
 

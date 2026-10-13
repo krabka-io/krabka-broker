@@ -5,12 +5,13 @@
 //! flattens the decoded response into plain tuples that a test can compare
 //! directly.
 
-use std::net::SocketAddr;
-
-use tokio::net::TcpStream;
-
-use crate::{
-    kafka_wire, plaintext_wire::CLIENT_ID, support::wire::HeaderEncoding as RequestHeaderEncoding,
+use {
+    crate::{
+        kafka_wire, plaintext_wire::CLIENT_ID,
+        support::wire::HeaderEncoding as RequestHeaderEncoding,
+    },
+    std::net::SocketAddr,
+    tokio::net::TcpStream,
 };
 
 /// Drives `AlterPartitionReassignments` over a fresh PLAINTEXT connection. It

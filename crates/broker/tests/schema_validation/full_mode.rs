@@ -6,11 +6,12 @@
 //! to be admitted under `id` and rejected under `full` for either half to mean
 //! anything.
 
-use assert2::check;
-
-use crate::harness::{
-    INVALID_RECORD, KNOWN_ID, VALIDATED, create_topic, framed, mock_topic_fixture, order_avro_body,
-    produce_value,
+use {
+    crate::harness::{
+        INVALID_RECORD, KNOWN_ID, VALIDATED, create_topic, framed, mock_topic_fixture,
+        order_avro_body, produce_value,
+    },
+    assert2::check,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

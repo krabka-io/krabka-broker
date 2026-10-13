@@ -3,18 +3,19 @@
 //! codec cannot attribute ends up, and which archives are empty enough to be an
 //! error.
 
-use assert2::check;
-use krabka_ids::{Offset, PartitionIndex};
-use krabka_remote_storage::kafka_uuid;
-
-use super::{
-    test_support::{
-        FULL_SEGMENT_SUFFIXES, PartitionKey, args_from, expected_full_segment,
-        single_segment_archive, write_artifact, write_full_segment, write_topic_segment,
+use {
+    super::{
+        test_support::{
+            FULL_SEGMENT_SUFFIXES, PartitionKey, args_from, expected_full_segment,
+            single_segment_archive, write_artifact, write_full_segment, write_topic_segment,
+        },
+        *,
     },
-    *,
+    crate::{backend::open_archive, discover::test_support::SegmentSetup},
+    assert2::check,
+    krabka_ids::{Offset, PartitionIndex},
+    krabka_remote_storage::kafka_uuid,
 };
-use crate::{backend::open_archive, discover::test_support::SegmentSetup};
 
 async fn scan_archive(root: &std::path::Path) -> ArchiveInventory {
     let args = args_from(root, &[]);

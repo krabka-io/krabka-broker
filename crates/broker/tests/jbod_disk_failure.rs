@@ -19,30 +19,30 @@ mod support;
 #[path = "support/two_dir_topic.rs"]
 mod two_dir_topic;
 
-use std::net::SocketAddr;
-
-use assert2::{assert, check};
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
-use krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        assign_replicas_to_dirs_response::AssignReplicasToDirsResponse,
-        broker_heartbeat_request::BrokerHeartbeatRequest,
-        broker_heartbeat_response::BrokerHeartbeatResponse, produce_response::ProduceResponse,
+use {
+    crate::{
+        support::{
+            produce::encode_batch_request,
+            records::{batch_from_records, value_record},
+            topics::TopicPartitionCount,
+            wire::ApiRequestSetup,
+        },
+        two_dir_topic::{Setup, create_and_wait, start},
     },
-    primitives::uuid::Uuid as ProtocolUuid,
-};
-use tokio::net::TcpStream;
-
-use crate::{
-    support::{
-        produce::encode_batch_request,
-        records::{batch_from_records, value_record},
-        topics::TopicPartitionCount,
-        wire::ApiRequestSetup,
+    assert2::{assert, check},
+    krabka_broker::{Broker, BrokerConfig, BrokerHandle},
+    krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion},
+    krabka_protocol::{
+        Decode,
+        owned::{
+            assign_replicas_to_dirs_response::AssignReplicasToDirsResponse,
+            broker_heartbeat_request::BrokerHeartbeatRequest,
+            broker_heartbeat_response::BrokerHeartbeatResponse, produce_response::ProduceResponse,
+        },
+        primitives::uuid::Uuid as ProtocolUuid,
     },
-    two_dir_topic::{Setup, create_and_wait, start},
+    std::net::SocketAddr,
+    tokio::net::TcpStream,
 };
 
 krabka_macros::assignment_dirs_fixture!(assignment_dirs_request);
@@ -231,16 +231,12 @@ async fn assign_replicas_to_dirs_reports_and_echoes() {
     // Use a single-dir broker so the broker IS the controller leader.
     let (_primary, handle, addr) = single_directory_broker().await;
 
-    create_and_wait(
-        &handle,
-        addr,
-        Setup {
-            client_id: CLIENT_ID,
-            topic: TOPIC,
-            partitions: TopicPartitionCount(N),
-            ..Default::default()
-        },
-    )
+    create_and_wait(&handle, addr, Setup {
+        client_id: CLIENT_ID,
+        topic: TOPIC,
+        partitions: TopicPartitionCount(N),
+        ..Default::default()
+    })
     .await;
 
     // Look up the topic UUID from the controller image so we can reference

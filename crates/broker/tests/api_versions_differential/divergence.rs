@@ -8,10 +8,11 @@
 //! rather than passing unnoticed. `aspect generate-kip-matrix` reads the same
 //! file for the version columns of `docs/KIP_MATRIX.md`.
 
-use std::path::Path;
-
-use krabka_protocol::owned::api_versions_response::ApiVersion;
-use serde::{Deserialize, Serialize};
+use {
+    krabka_protocol::owned::api_versions_response::ApiVersion,
+    serde::{Deserialize, Serialize},
+    std::path::Path,
+};
 
 /// An inclusive advertised version range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -278,9 +279,7 @@ impl DivergenceReport {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-
-    use super::*;
+    use {super::*, assert2::assert};
 
     fn api(api_key: i16, min_version: i16, max_version: i16) -> ApiVersion {
         ApiVersion {
@@ -291,9 +290,7 @@ mod tests {
         }
     }
 
-    fn range(min: i16, max: i16) -> VersionRange {
-        VersionRange { min, max }
-    }
+    fn range(min: i16, max: i16) -> VersionRange { VersionRange { min, max } }
 
     /// Intent tables of the shape the recorded ones once had, so the join's
     /// labelling is exercised whatever the recorded tables hold.

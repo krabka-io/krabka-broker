@@ -1,17 +1,20 @@
 //! Native admin request and cluster fixtures.
 
-use krabka_client_admin::CreateTopicSpec;
-use krabka_ids::PartitionIndex as ElectionPartitionIndex;
-use krabka_protocol::owned::elect_leaders_request::{ElectLeadersRequest, TopicPartitions};
-
-use crate::support::standalone_broker;
+use {
+    crate::support::standalone_broker,
+    krabka_client_admin::CreateTopicSpec,
+    krabka_ids::PartitionIndex as ElectionPartitionIndex,
+    krabka_protocol::owned::elect_leaders_request::{ElectLeadersRequest, TopicPartitions},
+};
 
 #[bon::builder]
 pub fn unregister_controller_answers(
     controller_id: i32,
 ) -> Vec<krabka_protocol::owned::unregister_controller_response::UnregisterControllerResponse> {
-    use krabka_broker::codes::CONTROLLER_ID_NOT_REGISTERED;
-    use krabka_protocol::owned::unregister_controller_response::UnregisterControllerResponse;
+    use {
+        krabka_broker::codes::CONTROLLER_ID_NOT_REGISTERED,
+        krabka_protocol::owned::unregister_controller_response::UnregisterControllerResponse,
+    };
 
     vec![
         UnregisterControllerResponse {

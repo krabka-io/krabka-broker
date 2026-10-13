@@ -6,11 +6,12 @@
 //! which this crate's dev-dependency on `krabka-raft` turns on for the test
 //! build alone.
 
-use std::collections::BTreeSet;
-
-use assert2::{assert, check};
-use krabka_raft::scenarios::{NodeRole, ScenarioTrace, TraceAction, TraceStep, scenarios};
-use support::api_versions::supported_client_apis;
+use {
+    assert2::{assert, check},
+    krabka_raft::scenarios::{NodeRole, ScenarioTrace, TraceAction, TraceStep, scenarios},
+    std::collections::BTreeSet,
+    support::api_versions::supported_client_apis,
+};
 
 mod support;
 

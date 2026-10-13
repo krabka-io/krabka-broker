@@ -4,17 +4,17 @@
 //! offset or revocation machinery. Share-group assignment is non-exclusive,
 //! so members carry no assignment-ack state beyond a member epoch.
 
-use std::{
-    collections::{HashMap, HashSet},
-    time::Instant,
-};
-
-use krabka_protocol::primitives::uuid::Uuid;
-
-use super::super::INITIAL_GROUP_EPOCH;
-use crate::{
-    codes::{FENCED_MEMBER_EPOCH, UNKNOWN_MEMBER_ID},
-    coordinator::unified::{actor::MetadataProvider, member_helpers::new_target_assignment},
+use {
+    super::super::INITIAL_GROUP_EPOCH,
+    crate::{
+        codes::{FENCED_MEMBER_EPOCH, UNKNOWN_MEMBER_ID},
+        coordinator::unified::{actor::MetadataProvider, member_helpers::new_target_assignment},
+    },
+    krabka_protocol::primitives::uuid::Uuid,
+    std::{
+        collections::{HashMap, HashSet},
+        time::Instant,
+    },
 };
 
 /// One member of a share group.
@@ -120,6 +120,15 @@ pub struct ShareGroupState {
 }
 
 impl ShareGroupState {
+    crate::coordinator::unified::member_helpers::assignment_delay_method!();
+
+    crate::coordinator::unified::member_helpers::bump_group_epoch!(self;);
+
+    crate::coordinator::unified::member_helpers::evict_expired! {
+        /// Remove members whose `last_seen` is older than `session_timeout`, and
+        /// return the evicted member ids.
+    }
+
     pub fn new(group_id: impl Into<String>) -> Self {
         Self {
             group_id: group_id.into(),
@@ -137,8 +146,6 @@ impl ShareGroupState {
             assignment_timestamp_ms: 0,
         }
     }
-
-    crate::coordinator::unified::member_helpers::assignment_delay_method!();
 
     /// Records that the persister initialized `tp`, as Kafka's
     /// `initializeShareGroupState` moves it from initializing to initialized.
@@ -361,8 +368,6 @@ impl ShareGroupState {
         topic_names.retain(|topic_id, _| live.contains(topic_id));
     }
 
-    crate::coordinator::unified::member_helpers::bump_group_epoch!(self;);
-
     pub fn add_or_update_member(&mut self, m: ShareMemberState) {
         self.members.insert(m.member_id.clone(), m);
     }
@@ -412,11 +417,6 @@ impl ShareGroupState {
             now,
             session_timeout,
         )
-    }
-
-    crate::coordinator::unified::member_helpers::evict_expired! {
-        /// Remove members whose `last_seen` is older than `session_timeout`, and
-        /// return the evicted member ids.
     }
 
     /// Install a freshly computed target assignment stamped with the current
@@ -487,12 +487,12 @@ impl ShareGroupState {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
-
-    use assert2::assert;
-
-    use super::*;
-    use crate::coordinator::unified::test_support::assert_group_epoch_exhaustion;
+    use {
+        super::*,
+        crate::coordinator::unified::test_support::assert_group_epoch_exhaustion,
+        assert2::assert,
+        std::time::{Duration, Instant},
+    };
 
     #[test]
     fn add_member_bumps_nothing() {

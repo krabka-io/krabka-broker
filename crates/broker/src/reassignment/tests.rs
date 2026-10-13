@@ -5,23 +5,23 @@
 //! The tests for the per-partition decision live beside that decision in
 //! [`super::policy`].
 
-use std::{
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+use {
+    super::*,
+    crate::reassignment::test_support::{first_partition, img, liveness},
+    assert2::assert,
+    async_trait::async_trait,
+    krabka_metadata::{MetadataImage, MetadataRecord},
+    krabka_raft::NodeId,
+    std::{
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
     },
-    time::Duration,
+    tokio::sync::watch,
+    tokio_util::sync::CancellationToken,
 };
-
-use assert2::assert;
-use async_trait::async_trait;
-use krabka_metadata::{MetadataImage, MetadataRecord};
-use krabka_raft::NodeId;
-use tokio::sync::watch;
-use tokio_util::sync::CancellationToken;
-
-use super::*;
-use crate::reassignment::test_support::{first_partition, img, liveness};
 
 struct MockReassignmentController {
     is_leader: AtomicBool,
@@ -65,9 +65,7 @@ impl MockReassignmentController {
 
 #[async_trait]
 impl ReassignmentController for MockReassignmentController {
-    fn is_leader(&self) -> bool {
-        self.is_leader.load(Ordering::SeqCst)
-    }
+    fn is_leader(&self) -> bool { self.is_leader.load(Ordering::SeqCst) }
 
     fn current_image(&self) -> Arc<MetadataImage> {
         self.current
@@ -76,9 +74,7 @@ impl ReassignmentController for MockReassignmentController {
             .clone()
     }
 
-    fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> {
-        self.image_tx.subscribe()
-    }
+    fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> { self.image_tx.subscribe() }
 
     async fn submit_change(&self, records: Vec<MetadataRecord>) -> Result<(), String> {
         self.submitted

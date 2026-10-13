@@ -6,15 +6,17 @@
 //! One test sets the broker-scoped rate, the other the topic-scoped replica
 //! list.
 
-use assert2::assert;
-
-use crate::{
-    CLIENT_ID,
-    cluster::{
-        create_topic_as_admin, start_single_broker_sasl_plaintext_with_users, wait_partition_exists,
+use {
+    crate::{
+        CLIENT_ID,
+        cluster::{
+            create_topic_as_admin, start_single_broker_sasl_plaintext_with_users,
+            wait_partition_exists,
+        },
+        configs::drive_incremental_alter_configs,
+        support::topics::configured_topic_setup,
     },
-    configs::drive_incremental_alter_configs,
-    support::topics::configured_topic_setup,
+    assert2::assert,
 };
 
 /// Test 1: `IncrementalAlterConfigs` with `resource_type=Broker` sets the
@@ -27,20 +29,15 @@ async fn broker_scoped_alter_persists_in_image() {
 
     let node_id = handle.node_id();
 
-    let err = drive_incremental_alter_configs(
-        addr,
-        "admin",
-        "admin-secret",
+    let err = drive_incremental_alter_configs(addr, "admin", "admin-secret", vec![(
+        4, // resource_type = Broker
+        node_id.to_string(),
         vec![(
-            4, // resource_type = Broker
-            node_id.to_string(),
-            vec![(
-                "leader.replication.throttled.rate".into(),
-                Some("2048".into()),
-                0, // OP_SET
-            )],
+            "leader.replication.throttled.rate".into(),
+            Some("2048".into()),
+            0, // OP_SET
         )],
-    )
+    )])
     .await;
     assert!(err == 0, "alter should succeed; got error_code={err}");
 
@@ -72,20 +69,15 @@ async fn topic_throttle_config_propagates() {
         .await;
     wait_partition_exists(&handle, "foo", 0).await;
 
-    let err = drive_incremental_alter_configs(
-        addr,
-        "admin",
-        "admin-secret",
+    let err = drive_incremental_alter_configs(addr, "admin", "admin-secret", vec![(
+        2, // resource_type = Topic
+        "foo".into(),
         vec![(
-            2, // resource_type = Topic
-            "foo".into(),
-            vec![(
-                "leader.replication.throttled.replicas".into(),
-                Some("0:1,0:2".into()),
-                0, // OP_SET
-            )],
+            "leader.replication.throttled.replicas".into(),
+            Some("0:1,0:2".into()),
+            0, // OP_SET
         )],
-    )
+    )])
     .await;
     assert!(err == 0, "topic alter should succeed; got error_code={err}");
 

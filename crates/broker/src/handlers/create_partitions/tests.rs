@@ -2,28 +2,28 @@
 //! running broker: the authorization gate, the per-topic error rows, the
 //! `validate_only` dry run, a successful grow, and the KIP-599 mutation quota.
 
-use std::sync::Arc;
-
-use assert2::{assert, check};
-use krabka_protocol::owned::create_partitions_response::CreatePartitionsResponse;
-use krabka_units::convert::TimeExt as _;
-
-use super::*;
-use crate::{
-    authorizer::AllowAllAuthorizer,
-    broker::{Broker, BrokerHandle},
-    handlers::{
-        RequestContext,
-        create_partitions::test_support::{
-            PartitionMutation, VERSION, assn, expected_response, expected_result, request,
-            seed_controller_quota, seed_topic, topic_req,
+use {
+    super::*,
+    crate::{
+        authorizer::AllowAllAuthorizer,
+        broker::{Broker, BrokerHandle},
+        handlers::{
+            RequestContext,
+            create_partitions::test_support::{
+                PartitionMutation, VERSION, assn, expected_response, expected_result, request,
+                seed_controller_quota, seed_topic, topic_req,
+            },
+            test_support::{replica_availability, replica_nodes_from_partitions},
         },
-        test_support::{replica_availability, replica_nodes_from_partitions},
+        test_support::{
+            DenyAll, begin_controlled_shutdown, fence_remote_broker, make_witness, peer, principal,
+            seed_remote_broker,
+        },
     },
-    test_support::{
-        DenyAll, begin_controlled_shutdown, fence_remote_broker, make_witness, peer, principal,
-        seed_remote_broker,
-    },
+    assert2::{assert, check},
+    krabka_protocol::owned::create_partitions_response::CreatePartitionsResponse,
+    krabka_units::convert::TimeExt as _,
+    std::sync::Arc,
 };
 
 crate::test_support::context_helper!(client_id = "admin-client");
@@ -413,30 +413,18 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
     use crate::handlers::test_support::ManualAssignmentRow as Row;
     let n = krabka_raft::NodeId;
     let rows: [Row; 6] = [
-        (
-            &[],
-            &[],
-            &[&[2, 3]],
-            codes::NONE,
-            None,
-            vec![(n(2), vec![n(2), n(3)])],
-        ),
-        (
-            &[2],
-            &[],
-            &[&[2, 3]],
-            codes::NONE,
-            None,
-            vec![(n(3), vec![n(3)])],
-        ),
-        (
-            &[2],
-            &[],
-            &[&[4, 2], &[2, 3]],
-            codes::NONE,
-            None,
-            vec![(n(4), vec![n(4)]), (n(3), vec![n(3)])],
-        ),
+        (&[], &[], &[&[2, 3]], codes::NONE, None, vec![(n(2), vec![
+            n(2),
+            n(3),
+        ])]),
+        (&[2], &[], &[&[2, 3]], codes::NONE, None, vec![(
+            n(3),
+            vec![n(3)],
+        )]),
+        (&[2], &[], &[&[4, 2], &[2, 3]], codes::NONE, None, vec![
+            (n(4), vec![n(4)]),
+            (n(3), vec![n(3)]),
+        ]),
         (
             &[2, 3],
             &[],
@@ -459,14 +447,10 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
             ),
             vec![],
         ),
-        (
-            &[],
-            &[3],
-            &[&[3, 4]],
-            codes::NONE,
-            None,
-            vec![(n(4), vec![n(3), n(4)])],
-        ),
+        (&[], &[3], &[&[3, 4]], codes::NONE, None, vec![(
+            n(4),
+            vec![n(3), n(4)],
+        )]),
     ];
 
     for (fenced, witnesses, lists, error_code, error_message, partitions) in rows {

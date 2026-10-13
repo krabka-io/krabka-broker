@@ -4,23 +4,24 @@
 //! broker stores is one it verified against the trusted key set under the
 //! approving principal.
 
-use assert2::{assert, check};
-use krabka_metadata::BreakGlassProposalRecord;
-use ring::signature::Ed25519KeyPair;
-use tempfile::TempDir;
-
-use super::{attempt, pending};
-use crate::{
-    break_glass::{
-        config::BreakGlassPolicy,
-        gate::tests::config,
-        handlers::approve::{Attempt, decide},
-        signing::approval_signing_bytes,
+use {
+    super::{attempt, pending},
+    crate::{
+        break_glass::{
+            config::BreakGlassPolicy,
+            gate::tests::config,
+            handlers::approve::{Attempt, decide},
+            signing::approval_signing_bytes,
+        },
+        codes,
+        config::BreakGlassConfig,
+        operator_keys::{OperatorKeyEntry, OperatorKeys},
+        test_support::ed25519_public_key_file,
     },
-    codes,
-    config::BreakGlassConfig,
-    operator_keys::{OperatorKeyEntry, OperatorKeys},
-    test_support::ed25519_public_key_file,
+    assert2::{assert, check},
+    krabka_metadata::BreakGlassProposalRecord,
+    ring::signature::Ed25519KeyPair,
+    tempfile::TempDir,
 };
 
 // An operator key bound to `principal`, plus the signer for it.
@@ -34,14 +35,11 @@ fn operator_key(
         .name(&format!("{key_id}.pub"))
         .context("write key file")
         .call();
-    (
-        pair,
-        OperatorKeyEntry {
-            key_id: key_id.to_owned(),
-            principal: principal.to_owned(),
-            public_key_path: path,
-        },
-    )
+    (pair, OperatorKeyEntry {
+        key_id: key_id.to_owned(),
+        principal: principal.to_owned(),
+        public_key_path: path,
+    })
 }
 
 #[test]
@@ -121,16 +119,11 @@ fn a_signature_verifies_against_the_bound_principal_and_the_signed_bytes() {
         ),
     ];
     for (label, principal, key_id, signature, expected) in cases {
-        let outcome = decide(
-            policy,
-            &keys,
-            &stored,
-            &Attempt {
-                key_id,
-                signature: &signature,
-                ..attempt(principal)
-            },
-        );
+        let outcome = decide(policy, &keys, &stored, &Attempt {
+            key_id,
+            signature: &signature,
+            ..attempt(principal)
+        });
         match expected {
             None => {
                 assert!(let Ok(updated) = outcome, "case {label}");
@@ -155,26 +148,16 @@ fn a_signature_on_an_action_that_needs_none_is_still_verified() {
     let stored = pending();
     let signature = bob.sign(&approval_signing_bytes(&stored)).as_ref().to_vec();
 
-    let accepted = decide(
-        policy,
-        &keys,
-        &stored,
-        &Attempt {
-            key_id: "bob-yubi",
-            signature: &signature,
-            ..attempt("User:bob")
-        },
-    );
-    let refused = decide(
-        policy,
-        &keys,
-        &stored,
-        &Attempt {
-            key_id: "bob-yubi",
-            signature: &[0; 64],
-            ..attempt("User:bob")
-        },
-    );
+    let accepted = decide(policy, &keys, &stored, &Attempt {
+        key_id: "bob-yubi",
+        signature: &signature,
+        ..attempt("User:bob")
+    });
+    let refused = decide(policy, &keys, &stored, &Attempt {
+        key_id: "bob-yubi",
+        signature: &[0; 64],
+        ..attempt("User:bob")
+    });
 
     check!(accepted.is_ok());
     assert!(let Err(refusal) = refused);

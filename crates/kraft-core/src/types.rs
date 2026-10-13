@@ -2,8 +2,7 @@
 //! Pure, sans-IO: no clock, no wire, no log bytes.
 
 pub use krabka_voters::NodeId;
-use krabka_voters::VoterSet;
-use uuid::Uuid;
+use {krabka_voters::VoterSet, uuid::Uuid};
 
 #[derive(derive_more::From, derive_more::Into)]
 /// A simulated or logical instant in milliseconds.
@@ -15,9 +14,7 @@ pub struct SimInstant(pub u64);
 
 impl SimInstant {
     #[must_use]
-    pub fn saturating_add_ms(self, ms: u64) -> Self {
-        Self(self.0.saturating_add(ms))
-    }
+    pub fn saturating_add_ms(self, ms: u64) -> Self { Self(self.0.saturating_add(ms)) }
 }
 
 /// Consensus epoch, always non-negative; the wire leader epoch is
@@ -143,17 +140,12 @@ impl QuorumState {
 
     /// Majority size for the current voter set: `floor(n/2) + 1`.
     #[must_use]
-    pub fn majority(&self) -> usize {
-        krabka_verified::consensus::majority_size(self.voters.len())
-    }
+    pub fn majority(&self) -> usize { krabka_verified::consensus::majority_size(self.voters.len()) }
 }
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-
-    use super::*;
-    use crate::simulation_support::voter_set as test_voter_set;
+    use {super::*, crate::simulation_support::voter_set as test_voter_set, assert2::assert};
 
     /// `floor(n/2) + 1` over the voter-set sizes a cluster actually runs at.
     ///

@@ -18,29 +18,29 @@
 //! in its image and out of the log left the brokers without a
 //! `metadata.version`, and each broker then wrote its own copy.
 
-use std::{net::SocketAddr, path::PathBuf, time::Duration};
-
-use assert2::{assert, check};
-use futures_util::future::join_all;
-use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle, NodeId, config::NodeRole};
-use krabka_metadata::{
-    BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage, MetadataRecord,
-    metadata_version::ELR_VERSION_FEATURE,
-};
-use krabka_protocol::owned::{
-    describe_configs_request::DescribeConfigsRequest,
-    describe_configs_response::{
-        DescribeConfigsResourceResult, DescribeConfigsResult, DescribeConfigsSynonym,
+use {
+    crate::support::{
+        addressed_node_config,
+        client::{connect_owned, metadata_fetch},
+        configs::describe_resource,
+        records::metadata_batches,
     },
-};
-use tempfile::TempDir;
-use tokio::net::TcpListener;
-
-use crate::support::{
-    addressed_node_config,
-    client::{connect_owned, metadata_fetch},
-    configs::describe_resource,
-    records::metadata_batches,
+    assert2::{assert, check},
+    futures_util::future::join_all,
+    krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle, NodeId, config::NodeRole},
+    krabka_metadata::{
+        BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage, MetadataRecord,
+        metadata_version::ELR_VERSION_FEATURE,
+    },
+    krabka_protocol::owned::{
+        describe_configs_request::DescribeConfigsRequest,
+        describe_configs_response::{
+            DescribeConfigsResourceResult, DescribeConfigsResult, DescribeConfigsSynonym,
+        },
+    },
+    std::{net::SocketAddr, path::PathBuf, time::Duration},
+    tempfile::TempDir,
+    tokio::net::TcpListener,
 };
 
 mod support;
@@ -517,11 +517,9 @@ async fn run_case(case: Case) {
     let committed = committed_batches(leader.controller_addr()).await;
     check!(
         seeding(&committed)
-            == (
-                true,
-                Some(Batch::Metadata(activation.clone())),
-                vec![activation]
-            ),
+            == (true, Some(Batch::Metadata(activation.clone())), vec![
+                activation
+            ]),
         "{what}: {committed:#?}"
     );
     // The wait fails the test when a node's image does not take the feature

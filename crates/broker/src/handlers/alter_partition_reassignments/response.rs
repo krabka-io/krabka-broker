@@ -70,12 +70,13 @@ pub(super) fn whole_request_error(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-
-    use super::*;
-    use crate::{
-        codes::{CLUSTER_AUTHORIZATION_FAILED, UNKNOWN_TOPIC_OR_PARTITION},
-        handlers::alter_partition_reassignments::test_support::request,
+    use {
+        super::*,
+        crate::{
+            codes::{CLUSTER_AUTHORIZATION_FAILED, UNKNOWN_TOPIC_OR_PARTITION},
+            handlers::alter_partition_reassignments::test_support::request,
+        },
+        assert2::assert,
     };
 
     #[test]

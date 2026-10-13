@@ -6,24 +6,24 @@
 //! seeds one throw-away ACL so the compatibility shim, which allows everything
 //! while `image.acls` is empty, is out of the way.
 
-use std::time::Duration;
-
-use assert2::assert;
-use krabka_broker::Broker;
-use krabka_security::SaslMechanism;
-
-use crate::{
-    kafka_wire::PlainAuthenticationSetup,
-    sasl::{create_topic_sasl_plain, drive_elect_leaders_sasl_plain},
-    support::{
-        acl::{topic_acl_record, use_simple_acl_authorizer},
-        admin::ElectionSetup,
-        retry::{all_cluster_authorization_failed, retry_until},
-        sasl::sasl_temp_config,
-        topics::ConfiguredTopicSetup,
+use {
+    crate::{
+        kafka_wire::PlainAuthenticationSetup,
+        sasl::{create_topic_sasl_plain, drive_elect_leaders_sasl_plain},
+        support::{
+            acl::{topic_acl_record, use_simple_acl_authorizer},
+            admin::ElectionSetup,
+            retry::{all_cluster_authorization_failed, retry_until},
+            sasl::sasl_temp_config,
+            topics::ConfiguredTopicSetup,
+        },
+        wait::wait_partition_exists,
+        wire::CLIENT_ID,
     },
-    wait::wait_partition_exists,
-    wire::CLIENT_ID,
+    assert2::assert,
+    krabka_broker::Broker,
+    krabka_security::SaslMechanism,
+    std::time::Duration,
 };
 
 /// Single-broker SASL/PLAIN cluster.

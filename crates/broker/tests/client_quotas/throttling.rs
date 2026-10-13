@@ -5,39 +5,39 @@
 //! `throttle_time_ms` (KIP-219 throttle-then-respond) instead of silently
 //! stalling the connection.
 
-use std::time::{Duration, Instant};
-
-use assert2::assert;
-use bytes::BytesMut;
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{
-        add_offsets_to_txn_response::AddOffsetsToTxnResponse,
-        api_versions_response::ApiVersionsResponse,
+use {
+    super::{
+        CLIENT_ID,
+        cluster::{
+            create_topic_as_admin, seed_alice_write_acl, seed_compat_shim_disable_acl,
+            start_single_broker_sasl_plaintext_with_users, wait_partition_exists,
+        },
+        data_plane::{drive_add_offsets_to_txn, drive_fetch_sasl, drive_produce_sasl},
+        quota_admin::drive_alter_client_quotas_sasl,
     },
-};
-use tokio::net::TcpStream;
-
-use super::{
-    CLIENT_ID,
-    cluster::{
-        create_topic_as_admin, seed_alice_write_acl, seed_compat_shim_disable_acl,
-        start_single_broker_sasl_plaintext_with_users, wait_partition_exists,
+    crate::{
+        cluster::wait_alice_quota,
+        kafka_wire::{
+            self, PlainAuthenticationSetup, ProduceRecordCount, ProduceValueBytes,
+            ResponseHeaderSelection as WireResponseHeaderSelection, ZeroFilledRecordsSetup,
+            quotas::{QuotaAlterSetup, QuotaValue, alter_user_quota},
+        },
+        support::{
+            acl::seed_topic_acl, discovery::api_versions_request_for, topics::ConfiguredTopicSetup,
+            wire::HeaderEncoding as RequestHeaderEncoding,
+        },
     },
-    data_plane::{drive_add_offsets_to_txn, drive_fetch_sasl, drive_produce_sasl},
-    quota_admin::drive_alter_client_quotas_sasl,
-};
-use crate::{
-    cluster::wait_alice_quota,
-    kafka_wire::{
-        self, PlainAuthenticationSetup, ProduceRecordCount, ProduceValueBytes,
-        ResponseHeaderSelection as WireResponseHeaderSelection, ZeroFilledRecordsSetup,
-        quotas::{QuotaAlterSetup, QuotaValue, alter_user_quota},
+    assert2::assert,
+    bytes::BytesMut,
+    krabka_protocol::{
+        Decode, Encode,
+        owned::{
+            add_offsets_to_txn_response::AddOffsetsToTxnResponse,
+            api_versions_response::ApiVersionsResponse,
+        },
     },
-    support::{
-        acl::seed_topic_acl, discovery::api_versions_request_for, topics::ConfiguredTopicSetup,
-        wire::HeaderEncoding as RequestHeaderEncoding,
-    },
+    std::time::{Duration, Instant},
+    tokio::net::TcpStream,
 };
 
 /// `ApiVersions` is `api_key` 18.
@@ -116,14 +116,11 @@ async fn request_percentage_throttles_produce() {
 
     // Alice produces a single small record. Retry past TOPIC_AUTHORIZATION_FAILED
     // (29) while the alice Write ACL propagates to the handler's image snapshot.
-    let resp = produce_when_acl_applied(
-        addr,
-        ZeroFilledRecordsSetup {
-            topic: ("throttle-request").to_string(),
-            value_bytes: ProduceValueBytes(16),
-            ..Default::default()
-        },
-    )
+    let resp = produce_when_acl_applied(addr, ZeroFilledRecordsSetup {
+        topic: ("throttle-request").to_string(),
+        value_bytes: ProduceValueBytes(16),
+        ..Default::default()
+    })
     .await;
 
     check_successful_produce(&resp);
@@ -187,7 +184,7 @@ async fn producer_byte_rate_throttle_moves_the_throttle_metrics() {
     )
     .await;
     assert!(
-        request_quota < 1e-9,
+        request_quota < 1.0e-9,
         "no request_percentage quota is set, so it must be credited with \
          nothing; got {request_quota}"
     );
@@ -353,14 +350,11 @@ async fn user_client_tuple_overrides_user_specific() {
 
     // Alice produces 8 KB with `krabka-quota-test`. The 128-byte tuple quota
     // throttles it; the 8192-byte user-only quota would fit in the burst window.
-    let resp = produce_when_acl_applied(
-        addr,
-        ZeroFilledRecordsSetup {
-            topic: ("precedence-topic").to_string(),
-            count: ProduceRecordCount(8),
-            ..Default::default()
-        },
-    )
+    let resp = produce_when_acl_applied(addr, ZeroFilledRecordsSetup {
+        topic: ("precedence-topic").to_string(),
+        count: ProduceRecordCount(8),
+        ..Default::default()
+    })
     .await;
 
     check_successful_produce(&resp);
@@ -436,14 +430,11 @@ const API_VERSIONS_VERSION: i16 = 3;
 
 /// Open the fixture's Alice session without charging a second handshake.
 async fn alice_quota_connection(addr: std::net::SocketAddr, context: &str) -> TcpStream {
-    kafka_wire::sasl_plain_authenticate(
-        addr,
-        &PlainAuthenticationSetup {
-            client_id: CLIENT_ID,
-            password: b"alice-secret".to_vec(),
-            ..Default::default()
-        },
-    )
+    kafka_wire::sasl_plain_authenticate(addr, &PlainAuthenticationSetup {
+        client_id: CLIENT_ID,
+        password: b"alice-secret".to_vec(),
+        ..Default::default()
+    })
     .await
     .expect(context)
 }
@@ -547,15 +538,11 @@ async fn produce_when_acl_applied(
 ) -> krabka_protocol::owned::produce_response::ProduceResponse {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        let r = drive_produce_sasl(
-            addr,
-            records.clone(),
-            &PlainAuthenticationSetup {
-                client_id: CLIENT_ID,
-                password: (b"alice-secret").to_vec(),
-                ..Default::default()
-            },
-        )
+        let r = drive_produce_sasl(addr, records.clone(), &PlainAuthenticationSetup {
+            client_id: CLIENT_ID,
+            password: (b"alice-secret").to_vec(),
+            ..Default::default()
+        })
         .await;
         let code = r
             .responses
@@ -578,10 +565,10 @@ async fn quota_fixture() -> (
     tempfile::TempDir,
     std::net::SocketAddr,
 ) {
-    start_single_broker_sasl_plaintext_with_users(
-        "admin",
-        &[("admin", "admin-secret"), ("alice", "alice-secret")],
-    )
+    start_single_broker_sasl_plaintext_with_users("admin", &[
+        ("admin", "admin-secret"),
+        ("alice", "alice-secret"),
+    ])
     .await
 }
 
@@ -636,14 +623,11 @@ async fn throttled_producer_fixture(
         .value(QuotaSettingSetup::low_producer().value)
         .call()
         .await;
-    let response = produce_when_acl_applied(
-        addr,
-        ZeroFilledRecordsSetup {
-            topic: topic.to_string(),
-            count: ProduceRecordCount(8),
-            ..Default::default()
-        },
-    )
+    let response = produce_when_acl_applied(addr, ZeroFilledRecordsSetup {
+        topic: topic.to_string(),
+        count: ProduceRecordCount(8),
+        ..Default::default()
+    })
     .await;
     (handle, directory, response)
 }
@@ -662,6 +646,7 @@ impl QuotaSettingSetup<'_> {
             ..Default::default()
         }
     }
+
     fn request_time() -> Self {
         Self {
             key: "request_percentage",

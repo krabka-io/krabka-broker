@@ -1,8 +1,10 @@
 //! ACL fixtures whose commit/application settling behavior matches quota suites.
 
-use krabka_broker::BrokerHandle;
-use krabka_metadata::{
-    AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
+use {
+    krabka_broker::BrokerHandle,
+    krabka_metadata::{
+        AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
+    },
 };
 
 /// Install the simple authorizer using exactly the broker's current super-user set.

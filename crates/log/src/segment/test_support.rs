@@ -1,14 +1,15 @@
 //! Fixture builders and budget constants that the segment modules' unit tests
 //! share.
 
-use bytes::Bytes;
-use krabka_ids::Offset;
-use krabka_protocol::records::RecordBatch;
-use krabka_units::prelude::{ByteSize, ByteSizeExt, gibibytes};
-use tempfile::tempdir;
-
-use super::Segment;
-use crate::test_support::{RecordedAdvice, numbered_record, single_record_batch};
+use {
+    super::Segment,
+    crate::test_support::{RecordedAdvice, numbered_record, single_record_batch},
+    bytes::Bytes,
+    krabka_ids::Offset,
+    krabka_protocol::records::RecordBatch,
+    krabka_units::prelude::{ByteSize, ByteSizeExt, gibibytes},
+    tempfile::tempdir,
+};
 
 /// Index every batch but the first. Every later batch is more than `0` bytes
 /// past the last entry, and the first is `0` bytes past the segment start,
@@ -147,9 +148,7 @@ pub(super) fn sample_batch(
     b
 }
 
-pub(super) fn test_segment() -> (tempfile::TempDir, Segment) {
-    segment_at(Offset(0))
-}
+pub(super) fn test_segment() -> (tempfile::TempDir, Segment) { segment_at(Offset(0)) }
 
 pub(super) fn segment_at(base: Offset) -> (tempfile::TempDir, Segment) {
     let dir = tempdir().unwrap();

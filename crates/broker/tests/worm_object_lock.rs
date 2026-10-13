@@ -12,15 +12,15 @@
 mod jvm_acceptance;
 mod support;
 
-use std::process::Command;
-
-use assert2::{assert, check};
-use jvm_acceptance::*;
-use krabka_audit::signing::FileEd25519Signer;
-use krabka_log::LogConfig;
-use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
-
-use crate::support::{controller_voters, init_tracing_with};
+use {
+    crate::support::{controller_voters, init_tracing_with},
+    assert2::{assert, check},
+    jvm_acceptance::*,
+    krabka_audit::signing::FileEd25519Signer,
+    krabka_log::LogConfig,
+    ring::{rand::SystemRandom, signature::Ed25519KeyPair},
+    std::process::Command,
+};
 
 /// Object-Lock bucket for this suite. It is not [`MINIO_BUCKET`]: that bucket
 /// is the ordinary mutable tier, and a locked bucket behaves differently enough

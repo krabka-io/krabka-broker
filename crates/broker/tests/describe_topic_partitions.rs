@@ -12,11 +12,12 @@
 //!     `next_cursor` round-trip
 //!   * Stable sort order on fetch-all (alphabetical)
 
-use assert2::{assert, check};
-
-use crate::support::{
-    acl::TOPIC_FULL_MASK,
-    topics::{TopicPartitionCount, configured_topic_request},
+use {
+    crate::support::{
+        acl::TOPIC_FULL_MASK,
+        topics::{TopicPartitionCount, configured_topic_request},
+    },
+    assert2::{assert, check},
 };
 mod support;
 

@@ -1,21 +1,21 @@
 //! Tests for the epoch-cache-truncation axis of the remote-retention pass
 //! (#1200).
 
-use std::sync::Arc;
-
-use assert2::assert;
-use krabka_ids::{LeaderEpoch, Offset};
-use krabka_log::LogConfig;
-use krabka_remote_storage::{
-    RemoteLogMetadataManager, RemoteLogSegmentId, RemoteLogSegmentMetadata,
-    RemoteLogSegmentMetadataUpdate, RemoteLogSegmentState,
-};
-use uuid::Uuid;
-
-use super::*;
-use crate::remote_log_manager::{
-    now_ms,
-    test_support::{local_backends, tier, tp},
+use {
+    super::*,
+    crate::remote_log_manager::{
+        now_ms,
+        test_support::{local_backends, tier, tp},
+    },
+    assert2::assert,
+    krabka_ids::{LeaderEpoch, Offset},
+    krabka_log::LogConfig,
+    krabka_remote_storage::{
+        RemoteLogMetadataManager, RemoteLogSegmentId, RemoteLogSegmentMetadata,
+        RemoteLogSegmentMetadataUpdate, RemoteLogSegmentState,
+    },
+    std::sync::Arc,
+    uuid::Uuid,
 };
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]

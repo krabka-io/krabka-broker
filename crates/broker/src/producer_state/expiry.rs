@@ -5,15 +5,15 @@
 //! not grow without bound. The log cleaner does not read this tracker: it reads
 //! the producer state of the partition log, which a follower also updates
 //! (`krabka_log::Log::compact`).
-use std::sync::Arc;
-
-use krabka_ids::PartitionIndex;
-use krabka_units::{Time, convert::TimeExt as _};
-use tokio::sync::Mutex;
-
-use super::{PartitionMap, PartitionProducerState, ProducerState};
 #[cfg(test)]
 use crate::producer_state::test_support::commit_fixture;
+use {
+    super::{PartitionMap, PartitionProducerState, ProducerState},
+    krabka_ids::PartitionIndex,
+    krabka_units::{Time, convert::TimeExt as _},
+    std::sync::Arc,
+    tokio::sync::Mutex,
+};
 
 impl ProducerState {
     /// Evict idempotent-producer entries that are expired at `now_ms`.
@@ -73,12 +73,10 @@ impl ProducerState {
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
-    use krabka_log::ProducerId;
-    use krabka_units::millis;
-
-    use super::*;
-    use crate::producer_state::Decision;
+    use {
+        super::*, crate::producer_state::Decision, assert2::check, krabka_log::ProducerId,
+        krabka_units::millis,
+    };
 
     /// How a row's producer reaches the sweep.
     #[derive(Clone, Copy, Debug)]
@@ -140,10 +138,8 @@ mod tests {
             )
             .await;
             if matches!(history, History::ClosedTransaction) {
-                s.mirror_log_entries(
-                    "t",
-                    PartitionIndex(0),
-                    vec![krabka_log::ProducerSnapshotEntry {
+                s.mirror_log_entries("t", PartitionIndex(0), vec![
+                    krabka_log::ProducerSnapshotEntry {
                         producer_id: ProducerId(7),
                         producer_epoch: 0,
                         last_sequence: 0,
@@ -152,8 +148,8 @@ mod tests {
                         timestamp: T0,
                         coordinator_epoch: 0,
                         current_txn_first_offset: None,
-                    }],
-                )
+                    },
+                ])
                 .await;
             }
             let survivors: Vec<i64> = if evicted == 0 { vec![7] } else { vec![] };

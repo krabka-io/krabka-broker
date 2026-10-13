@@ -8,23 +8,23 @@
 //! Kafka has no broker isolation key, so each test sets the group override,
 //! and a group without one reads `read_uncommitted`.
 
-use std::{collections::BTreeSet, time::Duration};
-
-use assert2::assert;
-use krabka_broker::BrokerHandle;
-use krabka_client_producer::Producer;
-use krabka_metadata::{GroupConfigRecord, MetadataRecord};
-
-use crate::{
-    harness::{bootstrap_share_state, produce_n},
-    share_rpc::{acquired_count, fetch_empty, share_fetch},
-    support::{
-        producer::{producer_record, transactional_producer},
-        share::{
-            ShareBrokerFixture, ShareFetchSetup, ShareSessionEpoch, join_consume_member,
-            permitted_topic_fixture, record_values,
+use {
+    crate::{
+        harness::{bootstrap_share_state, produce_n},
+        share_rpc::{acquired_count, fetch_empty, share_fetch},
+        support::{
+            producer::{producer_record, transactional_producer},
+            share::{
+                ShareBrokerFixture, ShareFetchSetup, ShareSessionEpoch, join_consume_member,
+                permitted_topic_fixture, record_values,
+            },
         },
     },
+    assert2::assert,
+    krabka_broker::BrokerHandle,
+    krabka_client_producer::Producer,
+    krabka_metadata::{GroupConfigRecord, MetadataRecord},
+    std::{collections::BTreeSet, time::Duration},
 };
 
 /// Kafka's `GroupConfig.SHARE_ISOLATION_LEVEL_CONFIG` values.
