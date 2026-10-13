@@ -2071,21 +2071,8 @@ struct CheckOrderCase {
 /// [`rows_follow_kafkas_check_order_and_messages`].
 fn check_order_cases() -> Vec<CheckOrderCase> {
     const EXISTS: &str = "Topic 't' already exists.";
-    // Kafka 4.3.1's text. Trunk rewords it, and krabka serves that only with
-    // `unstable.api.versions.enable`: see `too_many_partitions_message_follows_the_unstable_flag`.
-    const TOO_MANY: &str = "Excessively large number of partitions per request.";
     let duplicate = |name| error_row(name, codes::INVALID_REQUEST, "Duplicate topic name.");
     let exists = || Some(error_row("t", codes::TOPIC_ALREADY_EXISTS, EXISTS));
-    let manual_rf_2 = CreatableTopic {
-        assignments: vec![
-            krabka_protocol::owned::create_topics_request::CreatableReplicaAssignment {
-                partition_index: 0,
-                broker_ids: vec![1],
-                ..Default::default()
-            },
-        ],
-        ..topic("m", -1, 2)
-    };
     vec![
         CheckOrderCase {
             label: "a name twice creates nothing",
@@ -2175,6 +2162,26 @@ fn check_order_cases() -> Vec<CheckOrderCase> {
             }],
             exist: &["t"],
         },
+    ]
+}
+
+/// The null-config, manual-assignment and partition-limit rows of
+/// [`check_order_cases`].
+fn check_order_limit_cases() -> Vec<CheckOrderCase> {
+    // Kafka 4.3.1's text. Trunk rewords it, and krabka serves that only with
+    // `unstable.api.versions.enable`: see `too_many_partitions_message_follows_the_unstable_flag`.
+    const TOO_MANY: &str = "Excessively large number of partitions per request.";
+    let manual_rf_2 = CreatableTopic {
+        assignments: vec![
+            krabka_protocol::owned::create_topics_request::CreatableReplicaAssignment {
+                partition_index: 0,
+                broker_ids: vec![1],
+                ..Default::default()
+            },
+        ],
+        ..topic("m", -1, 2)
+    };
+    vec![
         CheckOrderCase {
             label: "a null config",
             topics: vec![topic_with_nullable_configs(
@@ -2290,7 +2297,8 @@ fn check_order_cases() -> Vec<CheckOrderCase> {
 /// for more than 10000 partitions answers `POLICY_VIOLATION` on every row.
 #[tokio::test]
 async fn rows_follow_kafkas_check_order_and_messages() {
-    let cases = check_order_cases();
+    let mut cases = check_order_cases();
+    cases.extend(check_order_limit_cases());
 
     let mut actual = Vec::with_capacity(cases.len());
     let mut expected = Vec::with_capacity(cases.len());

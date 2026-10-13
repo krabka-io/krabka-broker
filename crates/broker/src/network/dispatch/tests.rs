@@ -10,7 +10,9 @@ use tokio::net::TcpStream;
 
 use super::{test_support::DEFAULT_MAX_FRAME_BYTES, *};
 use crate::{
-    api_catalog::{INTER_BROKER_ONLY_APIS, UnstableApiVersions, dispatched_apis},
+    api_catalog::{
+        INTER_BROKER_ONLY_APIS, LegacyRequestVersions, UnstableApiVersions, dispatched_apis,
+    },
     authorizer::AuthorizationResult,
     codes,
     config::BrokerConfig,
@@ -387,6 +389,53 @@ async fn unsupported_versions_close_the_connection_except_api_versions() {
     check!(metrics.api_requests.get_or_create(&unknown).get() == 1);
 }
 
+/// A frame, the gates in force and whether the broker refuses it.
+#[derive(Clone, Copy)]
+struct GatedVersion {
+    api_key: i16,
+    name: &'static str,
+    frame_version: i16,
+    unstable: UnstableApiVersions,
+    legacy: LegacyRequestVersions,
+    refused: bool,
+}
+
+async fn assert_gated_version(case: GatedVersion) {
+    let GatedVersion {
+        api_key,
+        name,
+        frame_version,
+        unstable,
+        legacy,
+        refused,
+    } = case;
+    let (_dir, mut cfg) = broker_config();
+    cfg.features.unstable_api_versions = unstable;
+    cfg.features.legacy_request_versions = legacy;
+    let DrivenFrames { outcomes, metrics } = drive_one_frame_per_connection(
+        cfg,
+        &[FrameRequest {
+            api_key,
+            version: frame_version,
+        }],
+    )
+    .await;
+    let label = format!("{name} v{frame_version} {unstable:?} {legacy:?}");
+    check!(outcomes == vec![Outcome::Closed], "{label}");
+    let metric = ApiKeyLabel {
+        api_key: name.into(),
+    };
+    check!(
+        (metrics
+            .unsupported_api_requests
+            .get_or_create(&metric)
+            .get()
+            == 1)
+            == refused,
+        "{label}"
+    );
+}
+
 /// #646, #784: under Kafka's `unstable.api.versions.enable` and krabka's
 /// `legacy_request_versions_enable`, both off by default, the broker closes a
 /// connection that sends a version or an api key Kafka 4.3.1 does not serve,
@@ -401,56 +450,9 @@ async fn unsupported_versions_close_the_connection_except_api_versions() {
 #[tokio::test]
 async fn a_gated_version_is_refused_unless_its_switch_is_on() {
     use crate::api_catalog::{
-        LegacyRequestVersions::{self, Disabled as NoLegacy, Enabled as Legacy},
-        UnstableApiVersions::{self, Disabled as Strict, Enabled as Trunk},
+        LegacyRequestVersions::{Disabled as NoLegacy, Enabled as Legacy},
+        UnstableApiVersions::{Disabled as Strict, Enabled as Trunk},
     };
-
-    /// A frame, the gates in force and whether the broker refuses it.
-    #[derive(Clone, Copy)]
-    struct GatedVersion {
-        api_key: i16,
-        name: &'static str,
-        frame_version: i16,
-        unstable: UnstableApiVersions,
-        legacy: LegacyRequestVersions,
-        refused: bool,
-    }
-
-    async fn assert_gated_version(case: GatedVersion) {
-        let GatedVersion {
-            api_key,
-            name,
-            frame_version,
-            unstable,
-            legacy,
-            refused,
-        } = case;
-        let (_dir, mut cfg) = broker_config();
-        cfg.features.unstable_api_versions = unstable;
-        cfg.features.legacy_request_versions = legacy;
-        let DrivenFrames { outcomes, metrics } = drive_one_frame_per_connection(
-            cfg,
-            &[FrameRequest {
-                api_key,
-                version: frame_version,
-            }],
-        )
-        .await;
-        let label = format!("{name} v{frame_version} {unstable:?} {legacy:?}");
-        check!(outcomes == vec![Outcome::Closed], "{label}");
-        let metric = ApiKeyLabel {
-            api_key: name.into(),
-        };
-        check!(
-            (metrics
-                .unsupported_api_requests
-                .get_or_create(&metric)
-                .get()
-                == 1)
-                == refused,
-            "{label}"
-        );
-    }
 
     let cases: &[GatedVersion] = &[
         GatedVersion {

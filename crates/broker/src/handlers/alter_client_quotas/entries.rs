@@ -693,7 +693,7 @@ mod tests {
 
     /// Rows for the entity types and names.
     fn entity_rules_name_rows() -> Vec<CaseRow> {
-                vec![
+        vec![
             CaseRow {
                 name: "ip combined with user",
                 entries: vec![EntryCase {

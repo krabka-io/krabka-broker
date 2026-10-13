@@ -16,7 +16,7 @@ use opentelemetry_proto::tonic::{
     common::v1::{AnyValue, KeyValue, any_value::Value},
 };
 use prometheus_client::metrics::counter::Counter;
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, error::TrySendError};
 
 const FORWARD_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -163,7 +163,14 @@ impl OtlpForwarder {
             })
         {
             self.dropped.inc();
-            tracing::warn!(%error, "client-metrics OTLP forward queue unavailable; dropping");
+            let reason = error.to_string();
+            let (TrySendError::Full(export) | TrySendError::Closed(export)) = error;
+            tracing::warn!(
+                error = %reason,
+                client_instance_id = %export.client_instance_id,
+                resource_metrics = export.metrics.resource_metrics.len(),
+                "client-metrics OTLP forward queue unavailable; dropping"
+            );
         }
     }
 

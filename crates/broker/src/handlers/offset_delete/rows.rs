@@ -216,7 +216,7 @@ mod tests {
     /// The `build_rows` case table. Topics: `t1` (4 partitions), `t2` (8
     /// partitions), `denied` (Read denied, 4 partitions), `ghost` (not in the
     /// metadata).
-    fn cases() -> [Case<'static>; 8] {
+    fn cases() -> Vec<Case<'static>> {
         let none = named(&[]);
         [
             Case {
@@ -307,6 +307,16 @@ mod tests {
                 }],
                 want_removed: vec![],
             },
+        ]
+        .into_iter()
+        .chain(more_cases())
+        .collect()
+    }
+
+    /// The remaining `build_rows` cases, see [`cases`].
+    fn more_cases() -> [Case<'static>; 5] {
+        let none = named(&[]);
+        [
             Case {
                 name: "#734: existence is checked before the subscription",
                 request: &[RequestTopic {
