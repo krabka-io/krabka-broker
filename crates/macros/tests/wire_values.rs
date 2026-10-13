@@ -23,13 +23,15 @@ struct Response {
 }
 
 mod model {
+    use crate::UnknownTaggedFields;
+
     pub(crate) struct Empty {
-        pub(crate) unknown_tagged_fields: crate::UnknownTaggedFields,
+        pub(crate) unknown_tagged_fields: UnknownTaggedFields,
     }
 
     pub(crate) struct Generic<T> {
         pub(crate) value: T,
-        pub(crate) unknown_tagged_fields: crate::UnknownTaggedFields,
+        pub(crate) unknown_tagged_fields: UnknownTaggedFields,
     }
 }
 
@@ -79,6 +81,34 @@ fn arbitrary_expressions_keep_qualified_calls_closures_and_macro_tokens() {
     assert!(actual.version == 4);
     assert!(actual.error_code == -1);
     assert!(actual.values == vec![2, 4]);
+}
+
+#[test]
+fn multiline_if_else_blocks_retain_their_original_delimiter_locations() {
+    for enabled in [false, true] {
+        let response = krabka_macros::unthrottled_wire!(Response {
+            records: vec![krabka_macros::tagged_wire!(Record {
+                version: if enabled {
+                    [1, 1, 1, 1].into_iter().sum()
+                } else {
+                    [0_i16].into_iter().sum()
+                },
+                error_code: 0,
+                values: pair(
+                    if enabled {
+                        [1, 2].into_iter().map(|value| value + 1).collect()
+                    } else {
+                        Vec::new()
+                    },
+                    (),
+                )
+                .0,
+            })],
+        });
+        let record = &response.records[0];
+        assert!(record.version == if enabled { 4 } else { 0 });
+        assert!(record.values == if enabled { vec![2, 3] } else { Vec::new() });
+    }
 }
 
 #[test]

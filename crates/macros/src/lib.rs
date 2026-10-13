@@ -586,14 +586,14 @@ pub fn broker_config(tokens: NativeTokenStream) -> Result<TokenStream, ParseErro
 
 /// Construct an exhaustive wire value with an empty tagged-field set.
 #[moxy::function]
-pub fn tagged_wire(tokens: NativeTokenStream) -> Result<TokenStream, ParseError> {
-    wire_values::expand(&tokens.into(), false)
+pub fn tagged_wire(tokens: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    wire_values::expand_native(tokens, false)
 }
 
 /// Construct an exhaustive response with zero throttle and empty tagged fields.
 #[moxy::function]
-pub fn unthrottled_wire(tokens: NativeTokenStream) -> Result<TokenStream, ParseError> {
-    wire_values::expand(&tokens.into(), true)
+pub fn unthrottled_wire(tokens: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    wire_values::expand_native(tokens, true)
 }
 
 /// Apply optional runtime fields in table order through their named validators.

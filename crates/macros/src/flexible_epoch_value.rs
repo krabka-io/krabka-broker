@@ -70,7 +70,46 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert};
+    use {
+        super::*,
+        assert2::assert,
+        moxy::ast::{GenericParam, ImplItem, ItemImpl},
+    };
+
+    #[test]
+    fn valid_epoch_layouts_emit_complete_codecs_and_preserve_const_generics() {
+        let input = moxy::template! {
+            #[epoch_value(record = "TaggedEpoch")]
+            struct TaggedEpoch<const N: usize = 8> {
+                revision: i32,
+                clock: i64,
+            }
+        };
+        let item: ItemStruct = moxy::parse!({ input }).unwrap();
+        let output = expand(item).expect("valid epoch layout");
+        let codec_impl: ItemImpl = moxy::parse!({ output }).expect("valid complete impl");
+        assert!(codec_impl.trait_ref.is_none());
+        assert!(
+            codec_impl
+                .self_ty
+                .as_path()
+                .unwrap()
+                .path
+                .is_ident("TaggedEpoch")
+        );
+        let Some(GenericParam::Const(parameter)) = codec_impl.generics.params.first() else {
+            panic!("const generic must survive the derive")
+        };
+        assert!(parameter.ident == "N");
+        assert!(parameter.default.is_none());
+        let codecs: Vec<_> = codec_impl
+            .items
+            .iter()
+            .filter_map(ImplItem::as_fn)
+            .map(|method| method.sig.ident.text())
+            .collect();
+        assert!(codecs == ["encode", "decode"]);
+    }
 
     #[test]
     fn refuses_missing_record_names_and_incorrect_field_layouts() {
@@ -81,6 +120,7 @@ mod tests {
             "#[epoch_value(record = \"Record\")] struct Value { epoch: i32 }",
             "#[epoch_value(record = \"Record\")] struct Value { timestamp: i64, epoch: i32 }",
             "#[epoch_value(record = \"Record\")] struct Value { epoch: i32, timestamp: u64 }",
+            "#[epoch_value(record = \"Record\")] struct Value { epoch: &i32, timestamp: i64 }",
         ] {
             let item: ItemStruct = moxy::parse!({ input }).unwrap();
             assert!(expand(item).is_err(), "{input}");

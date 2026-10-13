@@ -64,7 +64,31 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert};
+    use {
+        super::*,
+        assert2::assert,
+        moxy::ast::{ImplItem, ItemImpl},
+    };
+
+    #[test]
+    fn generic_arrays_keep_their_type_parameter_and_codec_methods() {
+        let input = moxy::template! {
+            #[array_value(record = "Assigned", encode = codecs::write, decode = codecs::read)]
+            struct Assigned<T> { items: Vec<T> }
+        };
+        let output = expand(moxy::parse!({ input }).unwrap()).expect("valid array codec");
+        let methods: ItemImpl = moxy::parse!({ output }).expect("complete implementation");
+        assert!(methods.generics.params.len() == 1);
+        assert!(methods.self_ty.as_path().unwrap().path.is_ident("Assigned"));
+        assert!(
+            methods
+                .items
+                .iter()
+                .filter_map(ImplItem::as_fn)
+                .map(|method| method.sig.ident.text())
+                .eq(["encode", "decode"])
+        );
+    }
 
     #[test]
     fn refuses_missing_codecs_or_multiple_fields() {

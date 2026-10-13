@@ -2474,7 +2474,7 @@ mod tests {
                 row.key,
                 row.module
             );
-            for (path, test) in annotation_test_paths(row.tests) {
+            for (path, _) in annotation_test_paths(row.tests) {
                 assert!(
                     root.join(path).is_file(),
                     "{} test {path} is missing",

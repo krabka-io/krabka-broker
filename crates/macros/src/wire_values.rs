@@ -1,11 +1,45 @@
 //! Exhaustive wire constructors with protocol-only fields supplied once.
 
-use moxy::{
-    ast::{Expr, Parse, ParseError, Parser, Token},
-    token::{Spanner, TokenStream, TokenTree},
+use {
+    moxy::{
+        ast::{Expr, Parse, ParseError, Parser, Token},
+        token::{Spanner, TokenStream, TokenTree},
+    },
+    proc_macro::{Group, TokenStream as NativeTokenStream, TokenTree as NativeTokenTree},
 };
 
-pub(crate) fn expand(input: &TokenStream, unthrottled: bool) -> Result<TokenStream, ParseError> {
+pub(crate) fn expand_native(
+    input: NativeTokenStream,
+    unthrottled: bool,
+) -> Result<NativeTokenStream, ParseError> {
+    let parsed = TokenStream::from(input.clone());
+    let needs_comma = validate(&parsed)?;
+    let mut tokens: Vec<_> = input.into_iter().collect();
+    let Some(NativeTokenTree::Group(body)) = tokens.pop() else {
+        return Err(ParseError::new(parsed.span(), "expected a struct body"));
+    };
+    let prefix: NativeTokenStream = moxy::template! {
+        @if unthrottled { throttle_time_ms: 0, }
+    }
+    .into();
+    let suffix: NativeTokenStream = moxy::template! {
+        @if needs_comma { , }
+        unknown_tagged_fields: ::krabka_protocol::UnknownTaggedFields::default(),
+    }
+    .into();
+    // Keep native nested groups: Moxy combines their opening and closing delimiter spans.
+    let fields = prefix
+        .into_iter()
+        .chain(body.stream())
+        .chain(suffix)
+        .collect();
+    let mut replacement = Group::new(body.delimiter(), fields);
+    replacement.set_span(body.span());
+    tokens.push(NativeTokenTree::Group(replacement));
+    Ok(tokens.into_iter().collect())
+}
+
+fn validate(input: &TokenStream) -> Result<bool, ParseError> {
     let mut tokens = input.clone().into_inner();
     let Some(TokenTree::Group(body)) = tokens.last_mut() else {
         return Err(ParseError::new(input.span(), "expected a struct body"));
@@ -18,7 +52,7 @@ pub(crate) fn expand(input: &TokenStream, unthrottled: bool) -> Result<TokenStre
     }
     // Validate only the header; rustc handles closure patterns and other field expressions.
     let fields = std::mem::take(&mut body.tokens);
-    let header = TokenStream::from(tokens.clone());
+    let header = TokenStream::from(tokens);
     let parser = Parser::from_tokens(&header);
     let Expr::Struct(_) = Expr::parse(&parser)? else {
         return Err(parser.error("expected an exhaustive struct literal"));
@@ -38,26 +72,15 @@ pub(crate) fn expand(input: &TokenStream, unthrottled: bool) -> Result<TokenStre
             .is_some_and(TokenTree::is_punct_comma);
     }
 
-    let Some(TokenTree::Group(body)) = tokens.last_mut() else {
-        return Err(parser.error("expected a brace-delimited struct body"));
-    };
-    let needs_comma = fields
+    Ok(fields
         .iter()
         .last()
-        .is_some_and(|last| !last.is_punct_comma());
-    // Preserve expressions and opaque macro fragments instead of rebuilding them from the AST.
-    body.tokens = moxy::template! {
-        @if unthrottled { throttle_time_ms: 0, }
-        {{ fields }}
-        @if needs_comma { , }
-        unknown_tagged_fields: ::krabka_protocol::UnknownTaggedFields::default(),
-    };
-    Ok(tokens.into())
+        .is_some_and(|last| !last.is_punct_comma()))
 }
 
 #[cfg(test)]
 mod tests {
-    use {super::expand, assert2::assert, moxy::ast::Expr};
+    use {super::validate, assert2::assert};
 
     #[test]
     fn rejects_updates_and_non_struct_inputs() {
@@ -68,31 +91,24 @@ mod tests {
             "Response {} extra",
             "42",
         ] {
-            assert!(expand(&input.parse().unwrap(), false).is_err(), "{input}");
+            assert!(validate(&input.parse().unwrap()).is_err(), "{input}");
         }
     }
 
     #[test]
-    fn expansion_has_no_default_fallback_or_constructor_macros() {
-        for unthrottled in [false, true] {
-            let input = "module::Response { version: 2, error_code }"
-                .parse()
-                .unwrap();
-            let output = expand(&input, unthrottled).unwrap();
-            let Expr::Struct(value) = moxy::parse!({ output.clone() } as Expr).unwrap() else {
-                panic!("constructor must emit a struct literal")
-            };
-            assert!(value.body.rest.is_none());
-            assert!(value.body.fields.len() == if unthrottled { 4 } else { 3 });
-            let text = output.to_string();
-            assert!(!text.contains("tagged_wire"));
-            assert!(!text.contains("macro_rules"));
+    fn detects_whether_the_explicit_fields_need_a_separator() {
+        for (input, needs_comma) in [
+            ("module::Response {}", false),
+            ("module::Response { version: 2, error_code }", true),
+            ("module::Response { version: 2, error_code, }", false),
+        ] {
+            assert!(validate(&input.parse().unwrap()).unwrap() == needs_comma);
         }
     }
 
     #[test]
     fn nested_struct_updates_are_field_expressions() {
         let input = "Response { value: Inner { ..other } }".parse().unwrap();
-        assert!(expand(&input, false).is_ok());
+        assert!(validate(&input).is_ok());
     }
 }

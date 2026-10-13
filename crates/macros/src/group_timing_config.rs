@@ -89,7 +89,88 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert};
+    use {
+        super::*,
+        assert2::assert,
+        moxy::ast::{Fields, GenericParam, ImplItem, ItemImpl, WherePredicate},
+    };
+
+    fn complete_config() -> ItemStruct {
+        let input = moxy::template! {
+            #[group_timing(
+                session = keys::SESSION,
+                heartbeat = keys::HEARTBEAT,
+                assignment = keys::ASSIGNMENT,
+            )]
+            struct Config<T> where T: Clone + Default {
+                unrelated: T,
+                max_heartbeat_interval: Duration,
+                assignment_interval: Duration,
+                heartbeat_interval: Duration,
+                min_session_timeout: Duration,
+                session_timeout: Duration,
+                max_session_timeout: Duration,
+                min_heartbeat_interval: Duration,
+            }
+        };
+        moxy::parse!({ input }).unwrap()
+    }
+
+    #[test]
+    fn complete_configs_emit_valid_methods_with_the_original_generic_contract() {
+        let output = expand(complete_config()).expect("complete timing config");
+        let implementation: ItemImpl = moxy::parse!({ output }).expect("valid complete impl");
+        assert!(implementation.trait_ref.is_none());
+        assert!(
+            implementation
+                .self_ty
+                .as_path()
+                .unwrap()
+                .path
+                .is_ident("Config")
+        );
+        assert!(matches!(implementation.generics.params.first(),
+            Some(GenericParam::Type(parameter)) if parameter.ident == "T"));
+        let bounds = implementation.generics.where_clause.as_ref().unwrap();
+        assert!(matches!(bounds.predicates.first(),
+            Some(WherePredicate::Type(predicate))
+                if predicate.bounded_ty.as_path().unwrap().path.is_ident("T")
+                    && predicate.bounds.len() == 2));
+        let methods: Vec<_> = implementation
+            .items
+            .iter()
+            .filter_map(ImplItem::as_fn)
+            .map(|method| method.sig.ident.text())
+            .collect();
+        assert!(methods == ["assigning_at_once", "for_group"]);
+    }
+
+    #[test]
+    fn reports_each_missing_timing_field_instead_of_accepting_a_partial_config() {
+        for missing in [
+            "session_timeout",
+            "heartbeat_interval",
+            "assignment_interval",
+            "min_session_timeout",
+            "max_session_timeout",
+            "min_heartbeat_interval",
+            "max_heartbeat_interval",
+        ] {
+            let mut item = complete_config();
+            let Fields::Named(fields) = &mut item.fields else {
+                panic!("named config fixture")
+            };
+            fields.fields.inner = fields
+                .fields
+                .inner
+                .iter()
+                .filter(|field| field.ident.as_ref().is_none_or(|ident| ident != missing))
+                .cloned()
+                .collect();
+            let error = expand(item).expect_err("missing timing field");
+            assert!(error.to_string().contains(&format!("a `{missing}` field")));
+        }
+    }
 
     #[test]
     fn refuses_missing_keys_and_fields() {
