@@ -776,17 +776,7 @@ pub(crate) enum AcknowledgementMode {
 /// A partition index and its ordered acknowledgement ranges, with independent
 /// lifetimes for the range list and its acknowledgement-type slices.
 /// Wire acknowledgement codes include malformed values in validation cases.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Default,
-    PartialEq,
-    Eq,
-    derive_more::Display,
-    derive_more::From,
-    derive_more::Into,
-)]
+#[krabka_macros::test_scalar]
 pub(crate) struct AcknowledgementCode(pub i8);
 
 #[derive(Clone, Default)]
@@ -1131,17 +1121,7 @@ pub(crate) async fn create_topic(
     )
 }
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Default,
-    PartialEq,
-    Eq,
-    derive_more::Display,
-    derive_more::From,
-    derive_more::Into,
-)]
+#[krabka_macros::test_scalar]
 pub(crate) struct RecordCount(pub i32);
 
 /// Appends one v2 batch of `count` records through the v12 Produce handler.

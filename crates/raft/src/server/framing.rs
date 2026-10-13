@@ -341,31 +341,11 @@ mod tests {
         request
     }
 
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        Default,
-        PartialEq,
-        Eq,
-        derive_more::Display,
-        derive_more::From,
-        derive_more::Into,
-    )]
+    #[krabka_macros::test_scalar]
     struct FrameCorrelationId(i32);
 
     /// Signed wire lengths include the null sentinel and malformed negative cases.
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        Default,
-        PartialEq,
-        Eq,
-        derive_more::Display,
-        derive_more::From,
-        derive_more::Into,
-    )]
+    #[krabka_macros::test_scalar]
     struct ClientIdLength(i16);
 
     #[derive(Clone, Copy, krabka_macros::FieldDefaults)]

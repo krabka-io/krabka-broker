@@ -575,6 +575,12 @@ pub fn scalar_id(meta: TokenStream, item: TokenStream) -> Result<TokenStream, Pa
     newtype_styles::scalar_id(meta, item)
 }
 
+/// Gives a test scalar the shared display, conversion, value, and default traits.
+#[moxy::attribute]
+pub fn test_scalar(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+    newtype_styles::test_scalar(meta, item)
+}
+
 /// Share the lowercase hex display and serde identity of byte newtypes.
 #[moxy::attribute]
 pub fn hex_bytes_identity(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {

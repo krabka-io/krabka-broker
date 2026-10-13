@@ -26,6 +26,15 @@ pub(crate) fn scalar_id(meta: TokenStream, item: TokenStream) -> Result<TokenStr
     })
 }
 
+pub(crate) fn test_scalar(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+    let item = tuple_struct(meta, item)?;
+    Ok(moxy::template! {
+        #[derive(Debug, Clone, Copy, Default, PartialEq, Eq,
+            ::derive_more::Display, ::derive_more::From, ::derive_more::Into)]
+        {{ item }}
+    })
+}
+
 pub(crate) fn hex_bytes_identity(
     meta: TokenStream,
     item: TokenStream,

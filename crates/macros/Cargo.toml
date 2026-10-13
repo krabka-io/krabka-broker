@@ -26,6 +26,7 @@ moxy = { workspace = true }
 assert2 = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true, features = ["env"] }
+derive_more = { workspace = true }
 krabka-units = { workspace = true }
 prometheus-client = { workspace = true }
 refined_type = { workspace = true }

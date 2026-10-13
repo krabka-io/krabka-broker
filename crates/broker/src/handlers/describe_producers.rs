@@ -593,30 +593,10 @@ mod tests {
     /// A data batch of `producer` (`(id, epoch)`) with `records` records from
     /// sequence 0, at `base_offset`, whose max timestamp is `max_timestamp`.
     /// `DescribeProducers` widens the persisted producer epoch to an i32.
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        Default,
-        PartialEq,
-        Eq,
-        derive_more::Display,
-        derive_more::From,
-        derive_more::Into,
-    )]
+    #[krabka_macros::test_scalar]
     struct ReportedProducerEpoch(i32);
 
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        Default,
-        PartialEq,
-        Eq,
-        derive_more::Display,
-        derive_more::From,
-        derive_more::Into,
-    )]
+    #[krabka_macros::test_scalar]
     struct ProducerCoordinatorEpoch(i32);
 
     #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
