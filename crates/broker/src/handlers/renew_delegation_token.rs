@@ -221,6 +221,7 @@ mod tests {
                         },
                     ])
                     .chain(ordinary_ownership_refusals(&live.hmac))
+                    .collect::<Vec<_>>()
             })
             .mutation(async |controller, secret, case| {
                 let resp = handle(

@@ -39,6 +39,22 @@ use {
     std::sync::Arc,
 };
 
+fn expected_resource_response(
+    resource_type: i8,
+    resource_name: &str,
+    error_code: i16,
+    error_message: Option<&str>,
+) -> AlterConfigsResponse {
+    krabka_macros::unthrottled_wire!(AlterConfigsResponse {
+        responses: vec![krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
+            resource_type,
+            resource_name: resource_name.into(),
+            error_code,
+            error_message: error_message.map(str::to_owned),
+        })],
+    })
+}
+
 /// Local preprocessing errors retain their positions among controller results,
 /// including both occurrences of a duplicate resource.
 #[tokio::test]

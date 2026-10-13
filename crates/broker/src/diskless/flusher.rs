@@ -526,7 +526,7 @@ mod tests {
         handle: Arc<Partition>,
         image: MetadataImage,
     }
-    async fn retention_fixture() -> RetentionFixture {
+    async fn retention_fixture(ranges: &[RetentionRange]) -> RetentionFixture {
         let dir = tempdir().unwrap();
         let topic_id = Uuid::from_u128(11);
         let SeededRetention {
@@ -534,7 +534,7 @@ mod tests {
             store,
             handle,
             image,
-        } = seeded_retention_flusher(dir.path(), topic_id, AGED_AND_FRESH_RANGES).await;
+        } = seeded_retention_flusher(dir.path(), topic_id, ranges).await;
         RetentionFixture {
             dir,
             topic_id,
@@ -929,7 +929,7 @@ mod tests {
             store,
             handle,
             image,
-        } = retention_fixture().await;
+        } = retention_fixture(AGED_AND_FRESH_RANGES).await;
         set_retention(&handle, krabka_units::millis(1));
         let partitions = [flush_partition(topic_id, &handle)];
 
@@ -971,7 +971,7 @@ mod tests {
             store,
             handle,
             mut image,
-        } = retention_fixture().await;
+        } = retention_fixture(AGED_AND_FRESH_RANGES).await;
         set_retention(&handle, krabka_units::millis(1));
         image.apply(&MetadataRecord::V1TopicFreeze(
             topic_freeze_record()

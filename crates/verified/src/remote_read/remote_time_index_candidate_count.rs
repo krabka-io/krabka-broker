@@ -97,7 +97,8 @@ pub fn tiered_owning_epoch_index(
     segment_start: i64,
     segment_end: i64,
 ) -> Option<usize> {
-    scan_variables!(best, index);
+    let mut best: Option<usize> = None;
+    let mut index = 0;
     #[invariant(index@ <= starts@.len())]
     #[invariant(owning_epoch_selection(epochs@, starts@, segment_start@, segment_end@, index@, best))]
     #[variant(starts@.len() - index@)]

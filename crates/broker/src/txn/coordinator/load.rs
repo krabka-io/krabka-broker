@@ -39,42 +39,6 @@ pub(crate) struct ScheduledLoads {
 }
 
 impl TxnCoordinator {
-    crate::task_util::recover_after_refresh! {
-        this,
-        /// Loads every `__transaction_state` partition that `image` says this
-        /// broker leads, and waits for the loads. `Broker::start` calls it.
-        ///
-        /// # Errors
-        ///
-        /// Returns [`BrokerError::Txn`] naming the partitions whose load failed.
-        /// Those partitions answer `NOT_COORDINATOR` until the next election.
-        #[tracing::instrument(name = "txn_coordinator_recover", level = "info", skip_all, err)]
-        {
-            let leaders = this.leader_partitions.read().await;
-            let mut failed: Vec<i32> = leaders
-                .iter()
-                .filter(|(_, leadership)| {
-                    leadership
-                        .term
-                        .is_some_and(|term| term.status == LoadStatus::Failed)
-                })
-                .map(|(partition, _)| partition.get())
-                .collect();
-            drop(leaders);
-            info!(
-                tids_loaded = this.state.len(),
-                "TxnCoordinator recovery complete"
-            );
-            if failed.is_empty() {
-                return Ok(());
-            }
-            failed.sort_unstable();
-            Err(BrokerError::Txn(format!(
-                "__transaction_state partitions {failed:?} failed to load"
-            )))
-        }
-    }
-
     /// Applies the `__transaction_state` leadership of `image`, and starts the
     /// loads that it asks for.
     ///
@@ -176,6 +140,10 @@ impl TxnCoordinator {
         if failed.is_empty() {
             return Ok(());
         }
+        failed.sort_unstable();
+        Err(BrokerError::Txn(format!(
+            "__transaction_state partitions {failed:?} failed to load"
+        )))
     }
 
     /// Whether any `__transaction_state` partition of this broker is still

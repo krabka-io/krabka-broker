@@ -249,6 +249,15 @@ mod tests {
         (started, broker)
     }
 
+    macro_rules! admin_request_identity {
+        ($context:ident) => {
+            krabka_macros::request_test_identity! {
+                bind($context);
+                user ["admin"];
+            };
+        };
+    }
+
     /// #704: a principal without cluster `Describe` is never refused the
     /// whole request. Kafka's `handleDescribeCluster` has no `authorize` call
     /// at all; the missing grant only zeroes `cluster_authorized_operations`,
@@ -281,16 +290,8 @@ mod tests {
 
     #[tokio::test]
     async fn broker_endpoint_response_preserves_non_default_fields() {
-        let HandlerStartedBroker {
-            broker: broker_handle,
-            dir: _dir,
-        } = start_broker(Arc::new(AllowAllAuthorizer)).await;
-        seed_broker(&broker_handle).await;
-        let broker = broker_handle.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
-            bind(ctx);
-            user ["admin"];
-        };
+        let (broker_handle, broker) = seeded_broker(Arc::new(AllowAllAuthorizer)).await;
+        admin_request_identity!(ctx);
 
         let resp = handle(&broker, request(false), VERSION, &ctx)
             .await
@@ -475,18 +476,10 @@ mod tests {
 
     #[tokio::test]
     async fn fenced_brokers_require_explicit_opt_in() {
-        let HandlerStartedBroker {
-            broker: broker_handle,
-            dir: _dir,
-        } = start_broker(Arc::new(AllowAllAuthorizer)).await;
-        seed_broker(&broker_handle).await;
-        let broker = broker_handle.broker_arc_for_test();
+        let (broker_handle, broker) = seeded_broker(Arc::new(AllowAllAuthorizer)).await;
         broker.liveness.record_fenced_heartbeat(42).await;
         assert!(broker.liveness.apply_fencing(42, true, true).await);
-        krabka_macros::request_test_identity! {
-            bind(ctx);
-            user ["admin"];
-        };
+        admin_request_identity!(ctx);
 
         let response = handle(&broker, request(false), VERSION, &ctx)
             .await

@@ -579,12 +579,12 @@ mod unclean_restart {
         EligibleNode { config, dir, epoch }
     }
 
-    /// The defect this closes: a broker that crashed -- no clean-shutdown
-    /// proof left behind -- comes back on the same log dir with the same
-    /// incarnation id, and must no longer be eligible to be elected. Its log
-    /// may be shorter than the records its ELR membership asserts it holds.
-    #[tokio::test]
-    async fn a_crashed_broker_loses_its_elr_membership_on_restart() {
+    /// Restart keeps membership only when graceful stop left its proof.
+    /// The crash case closes the defect: the same incarnation id and log dir
+    /// must not retain ELR membership after the log may have shortened.
+    #[yare::parameterized(crash = { false }, graceful = { true })]
+    #[test_macro(tokio::test)]
+    async fn broker_restart_updates_elr_from_shutdown_proof(graceful: bool) {
         let StartedBroker {
             broker: handle,
             dir: _dir,
@@ -629,36 +629,5 @@ mod unclean_restart {
 
         assert!(crate::clean_shutdown::take(&log_dir) == epoch);
         drop(dir);
-    }
-
-    /// The companion, without which the fix could pass by withdrawing
-    /// everyone: a broker that stopped gracefully offers back the epoch the
-    /// cluster still holds for it, and keeps its membership.
-    #[tokio::test]
-    async fn a_gracefully_stopped_broker_keeps_its_elr_membership_on_restart() {
-        let StartedBroker {
-            broker: handle,
-            dir: _dir,
-        } = start_broker_with_authorizer(Arc::new(AllowAllAuthorizer)).await;
-        let broker = handle.broker_arc_for_test();
-        let EligibleNode {
-            mut config,
-            dir: victim_dir,
-            epoch,
-        } = cluster_with_node_two_eligible(&broker).await;
-
-        // The graceful stop leaves its proof; the restart spends it.
-        write(victim_dir.path(), epoch);
-        boot(&broker, &mut config).await;
-
-        assert!(
-            published_elr(&broker)
-                == PartitionElr {
-                    eligible_leader_replicas: vec![2, 3],
-                    last_known_elr: vec![],
-                }
-        );
-
-        handle.shutdown().await;
     }
 }

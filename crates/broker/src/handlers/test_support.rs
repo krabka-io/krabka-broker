@@ -20,7 +20,6 @@ macro_rules! anonymous_request_identity {
         };
     };
 }
-pub(crate) use anonymous_request_identity;
 use {
     crate::{
         api_catalog::UnstableApiVersions,
@@ -488,6 +487,13 @@ pub(crate) fn cluster_acl(operation: krabka_metadata::AclOperation) -> krabka_me
 pub(crate) async fn start_allow_all_no_audit() -> StartedBroker {
     start_broker_no_audit_with(|config| {
         config.authorizer = Arc::new(AllowAllAuthorizer);
+    })
+    .await
+}
+
+pub(crate) async fn start_empty_acl_broker() -> StartedBroker {
+    start_broker_no_audit_with(|config| {
+        config.authorizer = Arc::new(SimpleAclAuthorizer::new(std::collections::HashSet::new()));
     })
     .await
 }

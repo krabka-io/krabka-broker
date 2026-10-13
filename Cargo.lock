@@ -3626,6 +3626,7 @@ dependencies = [
  "assert2",
  "bytes",
  "clap",
+ "derive_more",
  "futures-util",
  "krabka-protocol",
  "krabka-units",

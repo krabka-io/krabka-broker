@@ -70,6 +70,12 @@ fn additions(item: &ItemStruct, role: &str) -> Result<FieldAdditions, ParseError
     })
 }
 
+fn group_derives() -> TokenStream {
+    moxy::template! {
+        #[derive(Clone, PartialEq, Eq, Hash, Debug, krabka_macros::ReconciliationGroup)]
+    }
+}
+
 pub(crate) fn expand(
     metadata: &TokenStream,
     item: NativeTokenStream,

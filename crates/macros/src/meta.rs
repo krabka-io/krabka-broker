@@ -8,6 +8,12 @@ use moxy::{
     token::{Group, Ident, LitStr, Span, Spanner, TokenStream, TokenTree},
 };
 
+pub(crate) fn parse_skip<T: Parse>(cursor: Cursor<'_>) -> Option<Cursor<'_>> {
+    let parser = Parser::from_cursor(cursor);
+    T::parse(&parser).ok()?;
+    Some(parser.cursor())
+}
+
 /// The common broker request-handler signature, with explicit wire schemas.
 pub(crate) fn broker_handler_signature(request: &Path, response: &Path) -> TokenStream {
     moxy::template! {
@@ -52,6 +58,17 @@ fn has_plain_qualifiers(signature: &Signature) -> bool {
         && signature.safety.is_none()
         && signature.abi.is_none()
         && signature.generics.params.is_empty()
+}
+
+pub(crate) fn first_missing_named_field<'a>(
+    fields: &List<Field, Token![,]>,
+    required: &[&'a str],
+) -> Option<&'a str> {
+    required.iter().copied().find(|required| {
+        !fields
+            .iter()
+            .any(|field| field.ident.as_ref().is_some_and(|name| name == *required))
+    })
 }
 
 /// Read a nonempty external-schema table with the caller's domain error.
