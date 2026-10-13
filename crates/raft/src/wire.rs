@@ -155,17 +155,7 @@ pub fn unsupported_version_response(
     }
     let mut out = Vec::new();
     if api_key == API_KEY_METADATA_FETCH {
-        KrabkaMetadataFetchResponse {
-            error_code: PRIVATE_UNSUPPORTED_VERSION,
-            leader_hint: -1,
-            leader_epoch: -1,
-            log_start_offset: -1,
-            high_watermark: -1,
-            quorum_high_watermark: -1,
-            snapshot_id: None,
-            records: Bytes::new(),
-        }
-        .encode_v0(&mut out)?;
+        KrabkaMetadataFetchResponse::unsupported_version().encode_v0(&mut out)?;
     } else {
         KrabkaSubmitChangeResponse {
             error_code: PRIVATE_UNSUPPORTED_VERSION,
@@ -356,6 +346,7 @@ pub struct KrabkaMetadataFetchResponse {
 
 impl KrabkaMetadataFetchResponse {
     /// An unsupported-version refusal in the v0 response shape.
+    #[must_use]
     pub fn unsupported_version() -> Self {
         Self {
             error_code: PRIVATE_UNSUPPORTED_VERSION,
