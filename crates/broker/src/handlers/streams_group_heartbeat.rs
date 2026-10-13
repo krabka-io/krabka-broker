@@ -446,7 +446,6 @@ mod tests {
             dir: _dir,
         } = start_broker_with_grants().await;
         let broker = broker_handle.broker_arc_for_test();
-        set_streams_version(&broker, 1).await;
         let peer = peer();
         // `Group:Read` only: the source topic `in` gets no `Describe`.
         let principal = principal("Group:Read");
@@ -488,7 +487,6 @@ mod tests {
             dir: _dir,
         } = start_broker_with_grants().await;
         let broker = broker_handle.broker_arc_for_test();
-        set_streams_version(&broker, 1).await;
         create_source_topic(&broker, "in").await;
         let peer = peer();
         // `Read` on the group and `Describe` on the topics, but no `Create`
@@ -771,6 +769,7 @@ mod tests {
             cfg.streams_group.enable = true;
         })
         .await;
+        set_streams_version(&broker.broker_arc_for_test(), 1).await;
         StartedBroker { broker, dir }
     }
 

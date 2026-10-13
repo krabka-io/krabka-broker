@@ -205,7 +205,8 @@ mod tests {
         ];
         for (tagged, expected) in cases {
             let (mut client, mut server) = tokio::io::duplex(32);
-            let writer = write_response(&mut server, 0x01020304, Bytes::from_static(&[0xaa, 0xbb]));
+            let writer =
+                write_response(&mut server, 0x0102_0304, Bytes::from_static(&[0xaa, 0xbb]));
             if tagged {
                 writer.call().await
             } else {

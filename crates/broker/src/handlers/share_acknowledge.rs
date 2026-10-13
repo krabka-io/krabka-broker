@@ -18,6 +18,8 @@
 //! `SocketAddr` in its `RequestContext`, for the group `Read` and per-topic
 //! `Read` ACL gates.
 
+#[cfg(test)]
+use crate::share_partition::session::ShareFetchSessionRequest;
 use {
     crate::{
         broker::Broker,
@@ -386,14 +388,15 @@ mod tests {
         shared
             .share_partition_leaders
             .update_fetch_session(
-                ("g1", member),
-                ctx.connection_id,
-                0,
-                FetchPartitions {
-                    requested: &[(id, 0)],
-                    forgotten: &std::collections::HashSet::new(),
-                },
-                false,
+                ShareFetchSessionRequest::builder()
+                    .identity(("g1", member))
+                    .connection_id(ctx.connection_id)
+                    .epoch(0)
+                    .partitions(FetchPartitions {
+                        requested: &[(id, 0)],
+                        forgotten: &std::collections::HashSet::new(),
+                    })
+                    .build(),
             )
             .expect("open share session");
         let mut request = request(topic_id, &[0]);

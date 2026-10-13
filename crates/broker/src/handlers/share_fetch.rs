@@ -31,6 +31,7 @@
 #[cfg(test)]
 use krabka_protocol::owned::share_fetch_request::{AcknowledgementBatch, FetchTopic};
 use {
+    crate::share_partition::session::ShareFetchSessionRequest,
     krabka_protocol::owned::{
         share_fetch_request::{FetchPartition, ShareFetchRequest},
         share_fetch_response::{LeaderIdAndEpoch, ShareFetchResponse},
@@ -207,16 +208,10 @@ context_handler! {
                     .map(move |partition| (topic_id, partition))
             })
             .collect();
-        let session = match mgr.update_fetch_session(
-            (&group, &member),
-            ctx.connection_id,
-            req.share_session_epoch,
-            FetchPartitions {
+        let session = match mgr.update_fetch_session(ShareFetchSessionRequest::builder().identity((&group, &member)).connection_id(ctx.connection_id).epoch(req.share_session_epoch).partitions(FetchPartitions {
                 requested: &requested_order,
                 forgotten: &forgotten,
-            },
-            has_acknowledgements,
-        ) {
+            }).has_acknowledgements(has_acknowledgements).build()) {
             Ok(session) => session,
             Err(codes::SHARE_SESSION_LIMIT_REACHED) => {
                 // Kafka's `createIdleShareFetchTimerTask`: the answer waits out

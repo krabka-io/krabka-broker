@@ -161,8 +161,8 @@ mod tests {
         super::*,
         crate::{
             core::test_support::{
-                FakeLog, MachineAndLog, MachineLogAndActions, check_prevote_started, machine,
-                three_voter_machine, voters,
+                FakeLog, MachineAndLog, MachineLogAndActions, adjacent_voter_machine,
+                check_prevote_started, machine, three_voter_machine, voters,
             },
             event::Event,
         },
@@ -257,8 +257,7 @@ mod tests {
     fn begin_quorum_epoch_from_adjacent_voter_view_is_accepted() {
         // KIP-853: a newly elected leader may be absent from our temporarily
         // stale local voter view. Adopt the higher epoch and fetch its log.
-        let mut m = three_voter_machine();
-        let _ = m.apply_voter_set(voters(&[NodeId(1), NodeId(2), NodeId(99)]), SimInstant(0));
+        let mut m = adjacent_voter_machine();
         let log = FakeLog::new(5, 1);
         let actions = m.on_event(
             Event::ReceiveBeginQuorumEpoch {

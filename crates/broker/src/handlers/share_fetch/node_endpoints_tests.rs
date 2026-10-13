@@ -16,7 +16,7 @@ use {
             StartedBroker, configured_topic_request, replicated_partition, share_fetch_wire,
             start_allow_all_no_audit,
         },
-        share_partition::session::FetchPartitions,
+        share_partition::session::{FetchPartitions, ShareFetchSessionRequest},
         test_support::{
             decode_response, encode_request, initialize_share_state, peer, principal,
             request_context, try_dispatch_context,
@@ -276,14 +276,15 @@ async fn share_acknowledge_on_a_remote_leader_answers_unknown_partition_without_
     shared
         .share_partition_leaders
         .update_fetch_session(
-            (GROUP, "member"),
-            ctx.connection_id,
-            0,
-            FetchPartitions {
-                requested: &[],
-                forgotten: &std::collections::HashSet::new(),
-            },
-            false,
+            ShareFetchSessionRequest::builder()
+                .identity((GROUP, "member"))
+                .connection_id(ctx.connection_id)
+                .epoch(0)
+                .partitions(FetchPartitions {
+                    requested: &[],
+                    forgotten: &std::collections::HashSet::new(),
+                })
+                .build(),
         )
         .expect("open the share session");
     let request = ShareAcknowledgeRequest {

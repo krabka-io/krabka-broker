@@ -2,7 +2,8 @@ use {
     super::*,
     crate::{
         core::test_support::{
-            FakeLog, TEST_ELECTION_TIMEOUT, machine, three_voter_machine, voters,
+            FakeLog, TEST_ELECTION_TIMEOUT, adjacent_voter_machine, machine, three_voter_machine,
+            voters,
         },
         event::{Event, SuccessorRank},
         types::{NodeId, QuorumState},
@@ -697,8 +698,7 @@ fn fenced_when_candidate_epoch_below_current() {
 fn vote_from_adjacent_voter_view_is_granted_when_up_to_date() {
     // KIP-853 permits an up-to-date candidate from an adjacent voter view;
     // only the local latest set determines whether this replica may vote.
-    let mut m = three_voter_machine();
-    let _ = m.apply_voter_set(voters(&[NodeId(1), NodeId(2), NodeId(99)]), SimInstant(0));
+    let mut m = adjacent_voter_machine();
     let actions = receive_vote(&mut m, vote_event(NodeId(99), 1, false, 1, 5));
     assert2::assert!(
         m.quorum_state()
