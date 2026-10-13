@@ -9,6 +9,11 @@ use {
     },
 };
 
+/// Waits until `handle` sees `(topic, partition)` in its image.
+pub async fn wait_partition_exists(handle: &BrokerHandle, topic: &str, partition: i32) {
+    handle.wait_until_partition_present(topic, partition).await;
+}
+
 /// Wait until every listed broker has materialized the partition in its image.
 pub async fn wait_for_partition_on_all<'a>(
     brokers: impl IntoIterator<Item = &'a BrokerHandle>,
