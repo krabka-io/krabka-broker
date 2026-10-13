@@ -1,6 +1,7 @@
 //! One explicit key-to-request table for envelope admission and decoding.
 
 use {
+    crate::meta::parse_skip,
     moxy::{
         ast::{Cursor, List, Parse, ParseError, Parser, Path, Token},
         token::{IntSuffix, LitInt, TokenStream},
@@ -16,7 +17,7 @@ struct ForwardingEntry {
 impl Parse for ForwardingEntry {
     fn peek(cursor: Cursor<'_>) -> bool { LitInt::peek(cursor) }
 
-    fn skip(cursor: Cursor<'_>) -> Option<Cursor<'_>> { crate::meta::parse_skip::<Self>(cursor) }
+    fn skip(cursor: Cursor<'_>) -> Option<Cursor<'_>> { parse_skip::<Self>(cursor) }
 
     fn parse(parser: &Parser) -> Result<Self, ParseError> {
         let key = LitInt::parse(parser)?;
