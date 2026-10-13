@@ -41,6 +41,12 @@ use {
     std::{future::Future, path::Path, sync::Arc},
 };
 
+/// An id that no topic in topic-resolution tests has.
+pub(crate) const UNKNOWN_TOPIC_ID: WireUuid = WireUuid([0x0b; 16]);
+
+/// A second id that no topic in topic-resolution tests has.
+pub(crate) const OTHER_UNKNOWN_TOPIC_ID: WireUuid = WireUuid([0x0c; 16]);
+
 pub(crate) mod transaction_admin_tests {
     #[allow(unused_imports)]
     pub(crate) use assert2::assert;
