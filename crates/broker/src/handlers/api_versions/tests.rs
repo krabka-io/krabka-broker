@@ -122,45 +122,36 @@ fn api_versions_advertises_the_deliberate_ranges() {
         ..Default::default()
     };
     let gates = |unstable, legacy| VersionGates { unstable, legacy };
+    let expected = |api_1_min, api_2_min, api_18_max, api_22_max| {
+        vec![
+            row(0, 0, 13),
+            row(1, api_1_min, 18),
+            row(2, api_2_min, 11),
+            row(18, 0, api_18_max),
+            row(22, 0, api_22_max),
+        ]
+    };
     for (gates, expected) in [
         (
             gates(
                 UnstableApiVersions::Disabled,
                 LegacyRequestVersions::Disabled,
             ),
-            vec![
-                row(0, 0, 13),
-                row(1, 4, 18),
-                row(2, 1, 11),
-                row(18, 0, 4),
-                row(22, 0, 5),
-            ],
+            expected(4, 1, 4, 5),
         ),
         (
             gates(
                 UnstableApiVersions::Enabled,
                 LegacyRequestVersions::Disabled,
             ),
-            vec![
-                row(0, 0, 13),
-                row(1, 4, 18),
-                row(2, 1, 11),
-                row(18, 0, 5),
-                row(22, 0, 6),
-            ],
+            expected(4, 1, 5, 6),
         ),
         (
             gates(
                 UnstableApiVersions::Disabled,
                 LegacyRequestVersions::Enabled,
             ),
-            vec![
-                row(0, 0, 13),
-                row(1, 0, 18),
-                row(2, 0, 11),
-                row(18, 0, 4),
-                row(22, 0, 5),
-            ],
+            expected(0, 0, 4, 5),
         ),
     ] {
         let table = supported_apis(ListenerKind::Client, ClientMetricsReceiver::Absent, gates);
