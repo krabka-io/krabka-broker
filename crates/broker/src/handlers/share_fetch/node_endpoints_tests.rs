@@ -8,6 +8,8 @@
 //! leader that no live broker registration backs keeps its id in the hint and
 //! adds no endpoint.
 
+#[cfg(test)]
+use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     crate::{
         broker::BrokerHandle,
@@ -57,7 +59,11 @@ const UNREGISTERED_NODE: i32 = 7;
 const REMOTE: WireUuid = WireUuid([0x22; 16]);
 const ORPHAN: WireUuid = WireUuid([0x77; 16]);
 
-async fn start() -> StartedBroker { start_allow_all_no_audit().await }
+async fn start() -> StartedBroker {
+    let HandlerStartedBroker { broker, dir } =
+        start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(AllowAllAuthorizer)).await;
+    StartedBroker { broker, dir }
+}
 
 async fn create_local_topic(broker: &BrokerHandle) -> WireUuid {
     let client = krabka_client_core::Client::builder()

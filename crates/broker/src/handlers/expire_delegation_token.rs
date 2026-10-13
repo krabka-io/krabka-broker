@@ -187,7 +187,6 @@ mod tests {
                             ..Default::default()
                         },
                     ])
-                    .collect::<Vec<_>>()
             })
             .mutation(async |controller, secret, case| {
                 let resp = handle(

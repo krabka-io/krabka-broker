@@ -3,7 +3,9 @@
 //! `GroupCoordinator`.
 
 #[cfg(test)]
-use super::group_heartbeat_test_support::{HandlerStartedBroker, LiveBrokerFixture};
+use crate::handlers::test_support::LiveBrokerFixture;
+#[cfg(test)]
+use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     crate::{
         broker::Broker,

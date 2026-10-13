@@ -116,23 +116,6 @@ async fn invalid_config_row(request: AlterConfigsResource) -> AlterConfigsRespon
     assert!(response.responses[0].error_code == codes::INVALID_REQUEST);
     response
 }
-
-fn expected_resource_response(
-    resource_type: i8,
-    resource_name: &str,
-    error_code: i16,
-    error_message: Option<&str>,
-) -> AlterConfigsResponse {
-    krabka_macros::unthrottled_wire!(AlterConfigsResponse {
-        responses: vec![krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
-            error_code,
-            error_message: error_message.map(str::to_owned),
-            resource_type,
-            resource_name: resource_name.to_string(),
-        })],
-    })
-}
-
 #[tokio::test]
 async fn handle_preserves_resource_identity_for_unsupported_type() {
     let resp = Box::pin(drive_one(

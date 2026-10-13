@@ -236,7 +236,7 @@ fn a_group_admin_request_with_a_name_over_32767_bytes_is_refused() {
             topics: vec![AlterShareGroupOffsetsRequestTopic::default()],
             ..Default::default()
         },
-        share_group_offset_fields!(),
+        krabka_macros::string_mutations! { "group id" => required[group_id], "topic name" => required[topics[0].topic_name] },
     );
     check_request(
         delete_share_group_offsets_request::MAX_VERSION,
@@ -244,6 +244,6 @@ fn a_group_admin_request_with_a_name_over_32767_bytes_is_refused() {
             topics: vec![DeleteShareGroupOffsetsRequestTopic::default()],
             ..Default::default()
         },
-        share_group_offset_fields!(),
+        krabka_macros::string_mutations! { "group id" => required[group_id], "topic name" => required[topics[0].topic_name] },
     );
 }

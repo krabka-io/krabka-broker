@@ -564,13 +564,6 @@ pub(crate) async fn start_group_with_controller_peer(
 
 pub(crate) async fn start_broker() -> StartedBroker { start_broker_with(|_| {}).await }
 
-pub(crate) async fn start_empty_acl_broker() -> StartedBroker {
-    start_broker_no_audit_with(|config| {
-        config.authorizer = Arc::new(SimpleAclAuthorizer::new(HashSet::new()));
-    })
-    .await
-}
-
 pub(crate) async fn start_broker_with(configure: impl FnOnce(&mut BrokerConfig)) -> StartedBroker {
     start_test_broker_with(configure).await
 }

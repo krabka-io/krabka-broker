@@ -382,7 +382,11 @@ mod tests {
     #[tokio::test]
     async fn handle_refuses_a_topology_naming_a_prohibited_or_invalid_topic() {
         let version = streams_group_heartbeat_response::MAX_VERSION;
-        ready_alice_broker!(broker_handle, _dir, broker, principal, peer, ctx);
+        krabka_macros::broker_test_setup!(
+            bind(broker_handle, _dir, broker, principal, peer, ctx);
+            boot [join_ready_broker()];
+            user ["alice"];
+        );
 
         // (group id, source topic, the expected error message)
         let rows = [
@@ -534,7 +538,11 @@ mod tests {
         };
 
         let version = streams_group_heartbeat_response::MAX_VERSION;
-        ready_alice_broker!(broker_handle, _dir, broker, principal, peer, ctx);
+        krabka_macros::broker_test_setup!(
+            bind(broker_handle, _dir, broker, principal, peer, ctx);
+            boot [join_ready_broker()];
+            user ["alice"];
+        );
         broker.group_coordinator.mark_share("share");
         let _consumer = broker
             .group_coordinator
@@ -599,7 +607,11 @@ mod tests {
     #[tokio::test]
     async fn handle_refuses_an_invalid_request_and_creates_no_group() {
         let version = streams_group_heartbeat_response::MAX_VERSION;
-        ready_alice_broker!(broker_handle, _dir, broker, principal, peer, ctx);
+        krabka_macros::broker_test_setup!(
+            bind(broker_handle, _dir, broker, principal, peer, ctx);
+            boot [join_ready_broker()];
+            user ["alice"];
+        );
         let req = StreamsGroupHeartbeatRequest {
             member_id: String::new(),
             ..request("invalid-join")
@@ -949,7 +961,11 @@ mod tests {
     #[tokio::test]
     async fn handle_persists_request_client_identity() {
         let version = streams_group_heartbeat_response::MAX_VERSION;
-        ready_alice_broker!(broker_handle, _dir, broker, principal, peer, ctx);
+        krabka_macros::broker_test_setup!(
+            bind(broker_handle, _dir, broker, principal, peer, ctx);
+            boot [join_ready_broker()];
+            user ["alice"];
+        );
 
         let resp = handle(&broker, request("identity-group"), version, &ctx)
             .await

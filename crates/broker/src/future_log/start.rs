@@ -247,15 +247,6 @@ mod tests {
         .await
     }
 
-    fn assert_precreation_preference(partitions: &PartitionRegistry, expected: &Path) {
-        assert!(
-            partitions
-                .preferred_log_dir(uuid::Uuid::from_u128(1), PartitionIndex(0))
-                .as_deref()
-                == Some(expected)
-        );
-    }
-
     /// The log dirs, the partitions and the future logs of a move.
     struct MoveRegistries {
         log_dirs: Vec<PathBuf>,

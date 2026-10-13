@@ -1,12 +1,5 @@
 use {crate::log_index::TimeEntry, creusot_std::prelude::*};
 
-macro_rules! scan_variables {
-    ($best:ident, $index:ident) => {
-        let mut $best: Option<usize> = None;
-        let mut $index = 0usize;
-    };
-}
-
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
@@ -39,7 +32,8 @@ fn select_finished_index(
     finished: &[bool],
     latest: bool,
 ) -> Option<usize> {
-    scan_variables!(best, index);
+    let mut best: Option<usize> = None;
+    let mut index = 0usize;
     #[invariant(index@ <= starts@.len())]
     #[invariant(finished_selection(starts@, ends@, finished@, best, index@, latest))]
     #[variant(starts@.len() - index@)]

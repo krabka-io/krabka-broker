@@ -250,13 +250,12 @@ mod tests {
     #[test]
     fn cluster_action_denied_yields_cluster_authorization_failed() {
         let EmptyAclImage { authorizer, image } = empty_acl_image();
-        crate::handlers::test_support::anonymous_request_identity!(
-            principal,
-            peer,
-            ctx,
-            "client-a",
-            "connection-a",
-        );
+        krabka_macros::request_test_identity! {
+            bind(principal, peer, ctx);
+            user ["ANONYMOUS"];
+            client ["client-a"];
+            connection ["connection-a"];
+        };
 
         assert!(cluster_action_denied(&authorizer, &image, &ctx));
 
