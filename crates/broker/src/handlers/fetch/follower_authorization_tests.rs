@@ -404,31 +404,20 @@ async fn follower_fetch_needs_cluster_action() {
                 topic,
                 ..Default::default()
             };
+            let request_at = |offset| {
+                request()
+                    .version(fetch_setup.version)
+                    .sender(fetch_setup.sender)
+                    .topic(fetch_setup.topic)
+                    .offset(offset)
+                    .call()
+            };
 
-            let from_start = fetch(
-                &broker,
-                case.version,
-                case.caller,
-                &request()
-                    .version(fetch_setup.version)
-                    .sender(fetch_setup.sender)
-                    .topic(fetch_setup.topic)
-                    .offset(fetch_setup.offset)
-                    .call(),
-            )
-            .await;
-            let from_log_end = fetch(
-                &broker,
-                case.version,
-                case.caller,
-                &request()
-                    .version(fetch_setup.version)
-                    .sender(fetch_setup.sender)
-                    .topic(fetch_setup.topic)
-                    .offset(LOG_END)
-                    .call(),
-            )
-            .await;
+            let from_start_request = request_at(fetch_setup.offset);
+            let from_start = fetch(&broker, case.version, case.caller, &from_start_request).await;
+            let from_log_end_request = request_at(krabka_ids::Offset(LOG_END));
+            let from_log_end =
+                fetch(&broker, case.version, case.caller, &from_log_end_request).await;
             actual.push(Outcome {
                 case: label.clone(),
                 from_start,

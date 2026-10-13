@@ -2,7 +2,7 @@
 
 use moxy::{
     ast::{Field, ItemStruct, List, ParseError, Token, Type},
-    token::{Ident, Span, Spanner, TokenStream, TokenTree},
+    token::{Ident, LitStr, Span, Spanner, TokenStream, TokenTree},
 };
 
 /// The named fields of a struct, or an error naming the derive.
@@ -56,15 +56,19 @@ pub(crate) fn compact(tokens: &(impl ToString + ?Sized)) -> String {
 /// The value of a `key = <expression>` argument, as the expression's tokens.
 pub(crate) struct Tokens(pub(crate) TokenStream);
 
+pub(crate) fn expression_tokens(
+    meta: &moxy::ast::Meta,
+    expected: &'static str,
+) -> Result<TokenStream, ParseError> {
+    match &meta.content {
+        moxy::ast::MetaContent::Expr { expr, .. } => Ok(expr.clone()),
+        _ => Err(ParseError::new(meta.span(), expected)),
+    }
+}
+
 impl moxy::ast::FromMeta for Tokens {
     fn from_meta(meta: &moxy::ast::Meta) -> Result<Self, ParseError> {
-        match &meta.content {
-            moxy::ast::MetaContent::Expr { expr, .. } => Ok(Self(expr.clone())),
-            _ => Err(ParseError::new(
-                meta.span(),
-                "expected `key = <expression>`",
-            )),
-        }
+        crate::meta::expression_tokens(meta, "expected `key = <expression>`").map(Self)
     }
 }
 
@@ -144,6 +148,20 @@ pub(crate) fn mode<const N: usize>(
             modes.map(|mode| format!("`{mode}`")).join(", ")
         ),
     ))
+}
+
+/// Select file/runtime documentation and attach it to the generated fields.
+pub(crate) fn mode_docs<const N: usize>(
+    meta: TokenStream,
+    file: [&'static str; N],
+    runtime: [&'static str; N],
+) -> Result<[LitStr; N], ParseError> {
+    let docs = match mode(meta, ["file", "runtime"])? {
+        "file" => file,
+        "runtime" => runtime,
+        _ => unreachable!(),
+    };
+    Ok(docs.map(|doc| LitStr::new(doc, Span::call_site())))
 }
 
 /// Wrap generated members in the declaration's original generics and where clause.

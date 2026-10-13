@@ -159,16 +159,17 @@ mod tests {
         krabka_units::prelude::{bytes, kibibytes},
     };
 
+    fn record_at(offset: i64) -> ParsedRecord {
+        ParsedRecord {
+            offset: Offset(offset),
+            timestamp: Some(10),
+            key: None,
+            value: Some(Bytes::from_static(b"v")),
+        }
+    }
+
     fn v1_wrapper(inner_offsets: &[i64], wrapper_offset: i64) -> BytesMut {
-        let inner: Vec<_> = inner_offsets
-            .iter()
-            .map(|&offset| ParsedRecord {
-                offset: Offset(offset),
-                timestamp: Some(10),
-                key: None,
-                value: Some(Bytes::from_static(b"v")),
-            })
-            .collect();
+        let inner: Vec<_> = inner_offsets.iter().copied().map(record_at).collect();
         let mut flat = BytesMut::new();
         encode_flat_message_set(inner, Magic::V1, &mut flat);
         let wrapper = Message {
@@ -196,15 +197,7 @@ mod tests {
         ] {
             let wire = v1_wrapper(&inner, outer);
             let decoded = decode_bytes(&wire);
-            let expected: Vec<_> = absolute
-                .into_iter()
-                .map(|offset| ParsedRecord {
-                    offset: Offset(offset),
-                    timestamp: Some(10),
-                    key: None,
-                    value: Some(Bytes::from_static(b"v")),
-                })
-                .collect();
+            let expected: Vec<_> = absolute.into_iter().map(record_at).collect();
             assert2::assert!(decoded == expected);
         }
     }

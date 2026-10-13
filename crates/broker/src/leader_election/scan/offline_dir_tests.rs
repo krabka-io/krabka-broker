@@ -99,6 +99,23 @@ async fn scan_offline_dir(
         .plan
 }
 
+async fn failed_replica_change(
+    failed_slot: usize,
+    broker: u64,
+) -> (MetadataRecord, uuid::Uuid, uuid::Uuid) {
+    let OfflineImage { image, bad, good } = offline_image()
+        .isr(&[NodeId(1), NodeId(2), NodeId(3)])
+        .failed_replica(Some(failed_slot))
+        .call();
+    let change = scan_offline_dir(&image, broker, bad, &[1, 2, 3])
+        .await
+        .changes
+        .into_iter()
+        .next()
+        .expect("failed replica produces a partition change");
+    (change, bad, good)
+}
+
 /// What an offline-dir scan produced, and the metrics it counted into.
 struct ScanOutcome {
     plan: FailoverPlan,
@@ -126,16 +143,8 @@ async fn scan_offline_dir_with_metrics(
 
 #[tokio::test]
 async fn offline_dir_elects_alive_isr_member_when_leader_dir_failed() {
-    let OfflineImage {
-        image: img,
-        bad,
-        good,
-    } = offline_image()
-        .isr(&[NodeId(1), NodeId(2), NodeId(3)])
-        .failed_replica(Some(0))
-        .call();
-    let plan = scan_offline_dir(&img, 1, bad, &[1, 2, 3]).await;
-    let MetadataRecord::V1Partition(pr) = &plan.changes[0] else {
+    let (change, bad, good) = failed_replica_change(0, 1).await;
+    let MetadataRecord::V1Partition(pr) = change else {
         panic!()
     };
     let expected = expected_clean_election(
@@ -143,7 +152,7 @@ async fn offline_dir_elects_alive_isr_member_when_leader_dir_failed() {
         &[krabka_raft::NodeId(2), krabka_raft::NodeId(3)],
         vec![bad, good, good],
     );
-    assert!(*pr == expected);
+    assert!(pr == expected);
 }
 
 async fn assert_offline_dir_no_changes(setup: OfflinePartitionSetup<'_>) {
@@ -171,16 +180,8 @@ async fn offline_dir_leaves_healthy_dir_partition_untouched() {
 
 #[tokio::test]
 async fn offline_dir_shrinks_isr_for_non_leader_replica() {
-    let OfflineImage {
-        image: img,
-        bad,
-        good,
-    } = offline_image()
-        .isr(&[NodeId(1), NodeId(2), NodeId(3)])
-        .failed_replica(Some(1))
-        .call();
-    let plan = scan_offline_dir(&img, 2, bad, &[1, 2, 3]).await;
-    let MetadataRecord::V1Partition(pr) = &plan.changes[0] else {
+    let (change, bad, good) = failed_replica_change(1, 2).await;
+    let MetadataRecord::V1Partition(pr) = change else {
         panic!()
     };
     let expected = expected_partition()
@@ -189,7 +190,7 @@ async fn offline_dir_shrinks_isr_for_non_leader_replica() {
         .leader_epoch(5)
         .directories(vec![good, bad, good])
         .call();
-    assert!(*pr == expected);
+    assert!(pr == expected);
 }
 
 #[tokio::test]

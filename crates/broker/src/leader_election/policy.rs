@@ -604,7 +604,7 @@ mod tests {
             strategy,
             unclean_enabled,
         );
-        assert!(decision == super::FailoverDecision::Unavailable);
+        assert2::assert!(decision == super::FailoverDecision::Unavailable);
     }
 
     #[test]

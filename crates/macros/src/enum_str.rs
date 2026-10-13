@@ -2,7 +2,7 @@
 
 use moxy::{
     ast::{Attributed, Fields, ItemEnum, List, ParseError, Parser, Token},
-    token::{LitStr, Spanner, TokenStream},
+    token::{LitStr, TokenStream},
 };
 
 /// The value of a `key` or `key = name` argument: `None` for the bare key,
@@ -13,11 +13,8 @@ impl moxy::ast::FromMeta for FnName {
     fn from_meta(meta: &moxy::ast::Meta) -> Result<Self, ParseError> {
         match &meta.content {
             moxy::ast::MetaContent::Unit => Ok(Self(None)),
-            moxy::ast::MetaContent::Expr { expr, .. } => Ok(Self(Some(expr.clone()))),
-            moxy::ast::MetaContent::List(_) => Err(ParseError::new(
-                meta.span(),
-                "expected `key` or `key = name`",
-            )),
+            _ => crate::meta::expression_tokens(meta, "expected `key` or `key = name`")
+                .map(|expr| Self(Some(expr))),
         }
     }
 }

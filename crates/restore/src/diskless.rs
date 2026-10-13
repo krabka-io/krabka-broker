@@ -5,13 +5,15 @@ use {
         ArchiveInventory, ArchiveStore, PartitionInventory, RestoreArgs, RestoreError,
         args::PartitionRef,
         bound::Predicates,
-        materialize::prepare::{BatchTally, PrepareBatchSetup, PreparedBatch, prepare_batch},
+        materialize::{
+            open_partition_log,
+            prepare::{BatchTally, PrepareBatchSetup, PreparedBatch, prepare_batch},
+        },
         report::{DisklessPartitionReport, DisklessRestoreReport},
         verify::{MAX_LOG_BYTES, fetch_capped},
     },
     bytes::Bytes,
     krabka_ids::Offset,
-    krabka_log::{Log, LogConfig, name},
     krabka_protocol::records::{RecordBatchBorrowed, validate_one_v2_batch},
     krabka_remote_storage::{
         ObjectEntry, TopicIdPartition, TrustedManifestKeys,
@@ -114,12 +116,7 @@ pub(super) fn add_partitions(
         });
     }
     PartitionInventory::sort_by_topic_and_partition(&mut inventory.partitions);
-    for requested in args
-        .to_offset
-        .iter()
-        .map(|bound| &bound.partition)
-        .chain(args.exclude_offset.iter().map(|range| &range.partition))
-    {
+    for requested in crate::args::offset_partitions(args) {
         if !inventory.holds(&requested.topic, requested.partition) {
             return Err(RestoreError::UnknownPartition {
                 topic: requested.topic.clone(),
@@ -177,13 +174,7 @@ pub(super) async fn materialize(
         .iter()
         .filter(|partition| args.selects_topic(&partition.topic))
     {
-        let mut log = None;
-        if !args.dry_run {
-            let dir =
-                name::partition_dir(&args.target.log_dir, &partition.topic, partition.partition);
-            std::fs::create_dir_all(&dir)?;
-            log = Some(Log::open(&dir, LogConfig::default())?);
-        }
+        let mut log = open_partition_log(args, &partition.topic, partition.partition)?;
         let mut object_names = HashSet::new();
         let mut batches = 0u64;
         let mut records = 0u64;

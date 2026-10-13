@@ -1,7 +1,4 @@
-use {
-    super::*,
-    crate::restore::{RestoreContentExclusions, RestoreTimestampType},
-};
+use {super::*, crate::restore::RestoreTimestampType};
 
 proptest! {
     #[test]
@@ -19,8 +16,7 @@ proptest! {
         };
         let records: Vec<_> = rows.into_iter().map(|(offset_delta, (timestamp_delta, exclude))| (
             RestoreRecordDeltas { offset_delta, timestamp_delta },
-            RestoreExclusions { producer: false, offset: false,
-                content: RestoreContentExclusions { key: exclude, header: false } },
+            restore_exclusions(exclude),
         )).collect();
         let expected: Vec<_> = records.iter().enumerate().filter_map(|(i, (record, exclusions))| {
             let offset = base + i64::from(record.offset_delta);
@@ -46,28 +42,20 @@ fn empty_and_trailing_filtered_batches_keep_the_original_sequence_span() {
         base_timestamp: i64::MAX,
         max_timestamp: 100,
     };
-    let exclusions = RestoreExclusions {
-        producer: false,
-        offset: false,
-        content: RestoreContentExclusions {
-            key: false,
-            header: false,
-        },
-    };
     let records = [
         (
             RestoreRecordDeltas {
                 offset_delta: 0,
                 timestamp_delta: i64::MAX,
             },
-            exclusions,
+            restore_exclusions(false),
         ),
         (
             RestoreRecordDeltas {
                 offset_delta: 2,
                 timestamp_delta: i64::MIN,
             },
-            exclusions,
+            restore_exclusions(false),
         ),
     ];
     for bound in [Some(8), Some(9), None] {

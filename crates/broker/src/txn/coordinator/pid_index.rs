@@ -167,7 +167,7 @@ mod tests {
 
     fn rolled_entry() -> TxnEntry { entry().producer(2000).previous(1000).call() }
 
-    fn pid_map(entries: &[(u64, &str)]) -> DashMap<ProducerId, String> {
+    fn pid_map(entries: &[(i64, &str)]) -> DashMap<ProducerId, String> {
         let map = DashMap::new();
         for &(pid, tid) in entries {
             map.insert(ProducerId(pid), tid.into());

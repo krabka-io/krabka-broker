@@ -758,6 +758,14 @@ mod tests {
         krabka_units::prelude::ByteSize,
     };
 
+    fn append_torn_frame(path: &std::path::Path, partial_body: &[u8]) {
+        use std::io::Write;
+
+        let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        file.write_all(&100u32.to_be_bytes()).unwrap();
+        file.write_all(partial_body).unwrap();
+    }
+
     #[test]
     fn append_then_read_round_trips_records_with_headers() {
         let dir = tempfile::tempdir().unwrap();
@@ -910,7 +918,6 @@ mod tests {
 
     #[test]
     fn open_heals_torn_tail_frame() {
-        use std::io::Write;
         let SeededSpool {
             dir,
             record: r0,
@@ -919,14 +926,7 @@ mod tests {
         drop(spool);
 
         // Simulate a crash mid-append: a length prefix claiming 100 bytes, only 3 follow.
-        {
-            let mut f = std::fs::OpenOptions::new()
-                .append(true)
-                .open(dir.path().join("audit.spool"))
-                .unwrap();
-            f.write_all(&100u32.to_be_bytes()).unwrap();
-            f.write_all(b"abc").unwrap();
-        }
+        append_torn_frame(&dir.path().join("audit.spool"), b"abc");
         // Reopen heals the torn tail; the good record survives and appends continue contiguously.
         let mut s = Spool::open(dir.path(), ROOMY_CAP).unwrap();
         assert2::check!((s.count().0, s.read_all().unwrap()) == (1, vec![r0.clone()]));
@@ -940,7 +940,6 @@ mod tests {
     /// cutting good bytes off the end.
     #[test]
     fn open_reports_whether_it_healed_a_torn_tail() {
-        use std::io::Write;
         let SeededSpool { dir, spool, .. } = seeded_spool(b"good");
         drop(spool);
         let spool_file = dir.path().join(SPOOL_FILE);
@@ -953,14 +952,7 @@ mod tests {
         check!(std::fs::metadata(&spool_file).unwrap().len() == intact_len);
 
         // A crash mid-append: a length prefix promising 100 bytes, 3 behind it.
-        {
-            let mut f = std::fs::OpenOptions::new()
-                .append(true)
-                .open(&spool_file)
-                .unwrap();
-            f.write_all(&100u32.to_be_bytes()).unwrap();
-            f.write_all(b"abc").unwrap();
-        }
+        append_torn_frame(&spool_file, b"abc");
         let healed = Spool::open(dir.path(), ROOMY_CAP).unwrap();
         check!(healed.recovered_torn_tail());
         check!(std::fs::metadata(&spool_file).unwrap().len() == intact_len);
@@ -1018,12 +1010,7 @@ mod tests {
 
             // Model a process dying after the next frame's prefix and only a
             // fragment of its body reached the file.
-            let mut file = OpenOptions::new()
-                .append(true)
-                .open(dir.join(SPOOL_FILE))
-                .unwrap();
-            file.write_all(&100u32.to_be_bytes()).unwrap();
-            file.write_all(b"torn").unwrap();
+            append_torn_frame(&dir.join(SPOOL_FILE), b"torn");
             std::process::abort();
         }
 

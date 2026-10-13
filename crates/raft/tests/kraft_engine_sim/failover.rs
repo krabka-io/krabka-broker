@@ -50,6 +50,19 @@ async fn elected_cluster(
     }
 }
 
+async fn elect_three_voter_cluster(
+    net: &SimNet,
+    ids: &[fixture::NodeId],
+    cluster_id: uuid::Uuid,
+) -> ElectedCluster {
+    elected_cluster()
+        .net(net)
+        .ids(ids)
+        .cluster_id(cluster_id)
+        .call()
+        .await
+}
+
 /// Polls `ctrl`'s quorum-state snapshot until `f` accepts it, or panics.
 ///
 /// This is the view `DescribeQuorum`, Metadata and `BrokerHeartbeat` all serve
@@ -109,12 +122,7 @@ async fn leader_failure_reelects() {
         dirs: _dirs,
         leader,
         epoch: epoch1,
-    } = elected_cluster()
-        .net(&net)
-        .ids(&ids)
-        .cluster_id(cid)
-        .call()
-        .await;
+    } = elect_three_voter_cluster(&net, &ids, cid).await;
 
     // Kill the leader: shut it down and remove it from the registry so peers see
     // it as unreachable.
@@ -211,12 +219,7 @@ async fn isolated_leader_resigns_and_rejoins_after_heal() {
         dirs: _dirs,
         leader,
         epoch: epoch1,
-    } = elected_cluster()
-        .net(&net)
-        .ids(&ids)
-        .cluster_id(cid)
-        .call()
-        .await;
+    } = elect_three_voter_cluster(&net, &ids, cid).await;
     let isolated = net.get(leader).expect("leader is registered");
     net.partition(leader);
 

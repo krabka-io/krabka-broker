@@ -224,15 +224,17 @@ impl Grid {
     /// into `[0, n-1]`. Callers check [`Self::sent_in_measurement`] first.
     fn idx_for_send_ns(&self, send_ns: u64) -> usize {
         let elapsed_ms = send_ns.saturating_sub(self.meas_start_ns) / 1_000_000;
-        usize::try_from(elapsed_ms / self.interval_ms)
-            .unwrap_or(usize::MAX)
-            .min(self.n.saturating_sub(1))
+        self.idx_for_elapsed_ms(elapsed_ms)
     }
 
     /// Slice index for an event observed at `now`, clamped into `[0, n-1]`.
     fn idx(&self, now: Instant) -> usize {
         let elapsed_ms =
             saturating_u128_to_u64(now.saturating_duration_since(self.meas_start).as_millis());
+        self.idx_for_elapsed_ms(elapsed_ms)
+    }
+
+    fn idx_for_elapsed_ms(&self, elapsed_ms: u64) -> usize {
         usize::try_from(elapsed_ms / self.interval_ms)
             .unwrap_or(usize::MAX)
             .min(self.n.saturating_sub(1))
@@ -527,11 +529,7 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
     Ok(RunOutput {
         scenario: scenario.clone(),
         stack: cfg.stack,
-        topology: Topology {
-            partitions: scenario.partitions,
-            replication_factor: scenario.replication_factor,
-            broker_count: cfg.broker_count,
-        },
+        topology: output_topology(&scenario, &cfg),
         wallclock_start_unix_ms: WallclockMs(wallclock_start),
         wallclock_end_unix_ms: WallclockMs(wallclock_end),
         throughput: Throughput {
@@ -979,11 +977,7 @@ fn empty_output(
     RunOutput {
         scenario: scenario.clone(),
         stack: cfg.stack,
-        topology: Topology {
-            partitions: scenario.partitions,
-            replication_factor: scenario.replication_factor,
-            broker_count: cfg.broker_count,
-        },
+        topology: output_topology(scenario, cfg),
         wallclock_start_unix_ms: WallclockMs(start),
         wallclock_end_unix_ms: WallclockMs(start),
         throughput: Throughput::default(),
@@ -997,6 +991,14 @@ fn empty_output(
         notes,
         samples: Vec::new(),
         broker_samples: Vec::new(),
+    }
+}
+
+fn output_topology(scenario: &Scenario, cfg: &DriverConfig) -> Topology {
+    Topology {
+        partitions: scenario.partitions,
+        replication_factor: scenario.replication_factor,
+        broker_count: cfg.broker_count,
     }
 }
 
@@ -1039,6 +1041,19 @@ impl TaskSetup {
             dispatch_queue_capacity: cfg.client_dispatch_queue_capacity,
             frame_max: cfg.client_frame_max,
         }
+    }
+}
+
+fn record_final_drain_timeout(
+    idx: usize,
+    unresolved: usize,
+    dropped: &mut u64,
+    error: &mut String,
+) {
+    let unresolved = unresolved as u64;
+    *dropped += unresolved;
+    if error.is_empty() {
+        *error = format!("producer-{idx}-final-drain-timeout:{unresolved}");
     }
 }
 
@@ -1280,11 +1295,7 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
     while !inflight.is_empty() {
         let now = Instant::now();
         if now >= drain_until {
-            let unresolved = inflight.len() as u64;
-            dropped += unresolved;
-            if error.is_empty() {
-                error = format!("producer-{idx}-final-drain-timeout:{unresolved}");
-            }
+            record_final_drain_timeout(idx, inflight.len(), &mut dropped, &mut error);
             break;
         }
         match tokio::time::timeout_at(drain_until, inflight.next()).await {
@@ -1294,11 +1305,7 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
             })) => handle_ack!(res, t0),
             Ok(None) => break,
             Err(_) => {
-                let unresolved = inflight.len() as u64;
-                dropped += unresolved;
-                if error.is_empty() {
-                    error = format!("producer-{idx}-final-drain-timeout:{unresolved}");
-                }
+                record_final_drain_timeout(idx, inflight.len(), &mut dropped, &mut error);
                 break;
             }
         }
@@ -1907,41 +1914,26 @@ mod tests {
         check!(grid.idx_for_send_ns(last_slice) == grid.n - 1);
     }
 
-    /// A failover run whose pod delete failed leaves the shared marker at
-    /// zero. No marker means no measured kill, so the run carries no
-    /// disturbance and the gate treats it as missing evidence.
-    #[test]
-    fn finalize_timing_records_no_disturbance_without_a_kill() {
-        let RunTiming { disturbance, .. } = finalize_timing(
-            true,
+    #[yare::parameterized(
+        no_kill_marker = {
             FailoverStamps {
                 kill_at_ms: 0,
                 recovery_at_ms: 5_000,
                 dropped: 3,
                 latency_spike_max: millis(9),
-            },
-            1_000,
-            0,
-        );
-        check!(disturbance.is_none());
-    }
-
-    /// An ack before the marker is not a recovery. The producer only stamps a
-    /// recovery at or after the marker, so a zero here means no ack followed
-    /// the kill at all.
-    #[test]
-    fn finalize_timing_records_no_disturbance_without_an_ack_after_the_kill() {
-        let RunTiming { disturbance, .. } = finalize_timing(
-            true,
+            }
+        },
+        no_ack_after_kill = {
             FailoverStamps {
                 kill_at_ms: 5_000,
                 recovery_at_ms: 0,
                 dropped: 3,
                 latency_spike_max: millis(9),
-            },
-            1_000,
-            0,
-        );
+            }
+        },
+    )]
+    fn finalize_timing_records_no_disturbance(failover: FailoverStamps) {
+        let RunTiming { disturbance, .. } = finalize_timing(true, failover, 1_000, 0);
         check!(disturbance.is_none());
     }
 

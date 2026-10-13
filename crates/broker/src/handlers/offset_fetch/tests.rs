@@ -472,7 +472,7 @@ fn no_offset_row(error_code: i16) -> OffsetFetchResponsePartitions {
 
 /// The partition row of the seeded offset of the known topic.
 macro_rules! seeded_offset_row {
-    ($response:ty) => {
+    ($response:ident) => {
         $response {
             partition_index: 0,
             committed_offset: 42,

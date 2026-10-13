@@ -315,7 +315,7 @@ macro_rules! request_identity {
 }
 
 macro_rules! group_not_found_response {
-    ($response:ty) => {
+    ($response:ident) => {
         |message: &str| {
             Some($response {
                 error_code: codes::GROUP_ID_NOT_FOUND,

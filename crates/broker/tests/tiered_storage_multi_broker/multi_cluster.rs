@@ -11,8 +11,8 @@
 use {
     crate::support::{self, NodeIndex, controller_voters, node_config},
     krabka_broker::{
-        BootstrapMode, Broker, BrokerConfig, BrokerHandle, KafkaRlmmConfig, RemoteStorageBackend,
-        RlmmKind,
+        BootstrapMode, Broker, BrokerConfig, BrokerHandle, KafkaRlmmConfig, NodeId,
+        RemoteStorageBackend, RlmmKind,
     },
     tempfile::TempDir,
 };
@@ -179,6 +179,21 @@ pub(crate) async fn await_all_rlmm_active(b1: &BrokerHandle, b2: &BrokerHandle, 
         m.tiered_storage_rlmm_topic_backed.get() == 1
     })
     .await;
+}
+
+pub(crate) async fn await_pair_leader(
+    b1: &BrokerHandle,
+    b2: &BrokerHandle,
+    topic: &str,
+    partition: i32,
+) -> (NodeId, NodeId) {
+    let (b1_id, b2_id) = (b1.node_id(), b2.node_id());
+    b1.wait_for_image(|img| {
+        img.partition(topic, partition)
+            .is_some_and(|p| p.leader == b1_id || p.leader == b2_id)
+    })
+    .await;
+    (b1_id, b2_id)
 }
 
 /// Connect the admin only once registration and the topic-backed RLMM are ready.

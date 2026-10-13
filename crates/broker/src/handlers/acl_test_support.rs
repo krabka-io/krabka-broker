@@ -23,15 +23,15 @@ pub(super) const PERMISSION_ANY: i8 = 1;
 pub(super) const PERMISSION_ALLOW: i8 = 3;
 
 macro_rules! acl_request_filter {
-    ($request:ty, $resource_name:expr, $principal:expr, $operation:expr) => {
+    ($request:ident, $resource_name:expr, $principal:expr, $operation:expr) => {
         $request {
-            resource_type_filter: RESOURCE_TYPE_TOPIC,
+            resource_type_filter: $crate::handlers::acl_test_support::RESOURCE_TYPE_TOPIC,
             resource_name_filter: $resource_name.map(Into::into),
-            pattern_type_filter: PATTERN_TYPE_LITERAL,
+            pattern_type_filter: $crate::handlers::acl_test_support::PATTERN_TYPE_LITERAL,
             principal_filter: $principal.map(Into::into),
             host_filter: Some("*".into()),
             operation: $operation,
-            permission_type: PERMISSION_ALLOW,
+            permission_type: $crate::handlers::acl_test_support::PERMISSION_ALLOW,
             ..Default::default()
         }
     };

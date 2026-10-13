@@ -377,12 +377,7 @@ pub async fn inventory(
     // capture is present, `diskless::add_partitions` performs this check after
     // merging its partitions with this inventory.
     if args.archive.diskless_wal_capture.is_none() {
-        for partition in args
-            .to_offset
-            .iter()
-            .map(|bound| &bound.partition)
-            .chain(args.exclude_offset.iter().map(|range| &range.partition))
-        {
+        for partition in crate::args::offset_partitions(args) {
             if !holds_partition(&partitions, &partition.topic, partition.partition) {
                 return Err(RestoreError::UnknownPartition {
                     topic: partition.topic.clone(),

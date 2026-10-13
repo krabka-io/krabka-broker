@@ -72,12 +72,7 @@ impl RestoreArgs {
             bounded.push(&bound.partition);
         }
 
-        for partition in self
-            .to_offset
-            .iter()
-            .map(|bound| &bound.partition)
-            .chain(self.exclude_offset.iter().map(|range| &range.partition))
-        {
+        for partition in super::offset_partitions(self) {
             if !self.selects_topic(&partition.topic) {
                 return Err(RestoreError::InvalidArgument(format!(
                     "a bound names {partition}, which --topic does not select"

@@ -122,7 +122,7 @@ async fn signed_validator_fails_closed_for_stale_or_changing_jwks_cache(
     fixture
         .last_successful
         .store(last_successful_fetch_ms, Ordering::Release);
-    assert!(fixture.validate().await == Err("JWKS cache is stale or changing"));
+    assert2::assert!(fixture.validate().await == Err("JWKS cache is stale or changing"));
 }
 
 #[tokio::test]
