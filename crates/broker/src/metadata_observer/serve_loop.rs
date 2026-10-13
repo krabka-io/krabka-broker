@@ -690,7 +690,6 @@ mod tests {
             TimerFailure::Registration
         },
     )]
-    #[tokio::test]
     fn the_loop_stops_when_it_cannot_wait_for_a_voter(
         targets: Vec<(NodeId, String)>,
         failure: TimerFailure,
