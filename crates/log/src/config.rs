@@ -49,9 +49,15 @@ pub const DEFAULT_READ_BUFFER_CAP: ByteSize = mebibytes(4);
 /// kernel to read ahead.
 pub const DEFAULT_READ_AHEAD_MAX: ByteSize = mebibytes(4);
 
-/// Default for [`LogConfig::tail_cache_size`]: one default
-/// `max.partition.fetch.bytes`.
-pub const DEFAULT_TAIL_CACHE_SIZE: ByteSize = mebibytes(1);
+/// Default for [`LogConfig::tail_cache_size`].
+///
+/// A consumer that falls more than this far behind the producer reads from
+/// the disk, because `O_DIRECT` writes leave nothing in the page cache, and
+/// the disk reads slow it down further. At 1 MiB, one default
+/// `max.partition.fetch.bytes`, a consumer of a single partition taking about
+/// 600 MB/s fell seconds behind (krabka-broker#1370). 32 MiB, about 50 ms of
+/// writes at that rate, kept its end-to-end p99 under 100 ms.
+pub const DEFAULT_TAIL_CACHE_SIZE: ByteSize = mebibytes(32);
 
 /// Default byte window for timestamp scans between sparse index entries.
 pub const DEFAULT_TIMESTAMP_SCAN_WINDOW: ByteSize = kibibytes(64);
@@ -481,7 +487,7 @@ mod tests {
                     segment_index_size: bytes(10 * 1024 * 1024),
                     flush_on_append: false,
                     segment_allocation: SegmentAllocation::OnWrite,
-                    tail_cache_size: mebibytes(1),
+                    tail_cache_size: mebibytes(32),
                     validate_on_open: true,
                     cleanup_policy: CleanupPolicy::Delete,
                     min_compaction_lag: Time::ZERO,
