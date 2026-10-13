@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use assert2::assert;
 use krabka_metadata::{
-    BrokerRegistrationRecord, LeaderEpoch, MetadataImage, MetadataRecord, NodeId, PartitionRecord,
+    BrokerRegistrationRecord, MetadataImage, MetadataRecord, NodeId, PartitionRecord,
 };
 use krabka_protocol::owned::{
     broker_registration_request::{BrokerRegistrationRequest, Listener},

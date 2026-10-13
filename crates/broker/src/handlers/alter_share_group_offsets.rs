@@ -30,8 +30,6 @@ use krabka_protocol::{
     primitives::uuid::Uuid,
 };
 
-#[cfg(test)]
-use crate::handlers::test_support::configured_topic_request_from;
 use crate::{
     codes,
     coordinator::unified::{GroupType, share::actor::ShareGroupActorMessage},
@@ -289,8 +287,9 @@ mod tests {
         codes,
         coordinator::unified::{GroupType, ShareGroupSeed, share::actor::ShareGroupActorMessage},
         handlers::{
-            RequestContext, create_topics::handle as create_topics_handle,
-            test_support::CreateTopicSetup,
+            RequestContext,
+            create_topics::handle as create_topics_handle,
+            test_support::{CreateTopicSetup, configured_topic_request_from},
         },
         share_coordinator::{
             coordinator::message::UNKNOWN_TOPIC_OR_PARTITION,

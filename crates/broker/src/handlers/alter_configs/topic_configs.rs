@@ -18,8 +18,6 @@
 use krabka_metadata::{MetadataRecord, TopicConfigRecord};
 use krabka_protocol::owned::alter_configs_request::AlterConfigsResource;
 
-#[cfg(test)]
-use crate::handlers::test_support::topic_config_record_with_default_policy;
 use crate::{
     api_catalog::UnstableApiVersions,
     codes, config_keys,
@@ -109,7 +107,7 @@ mod tests {
             alter_configs::test_support::{
                 image_with_topic, image_with_topic_config, topic_resource,
             },
-            test_support::check_config_result,
+            test_support::{check_config_result, topic_config_record_with_default_policy},
         },
     };
 

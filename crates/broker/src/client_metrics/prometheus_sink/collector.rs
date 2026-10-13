@@ -110,7 +110,7 @@ mod tests {
                 data_point()
                     .metric("requests".into())
                     .value(PointValue::Counter(counter))
-                    .delta_start(Some(7))
+                    .delta_start(7)
                     .call(),
                 data_point()
                     .metric("latency".into())
@@ -119,7 +119,7 @@ mod tests {
                         sum,
                         buckets,
                     })
-                    .delta_start(Some(7))
+                    .delta_start(7)
                     .call(),
             ]);
         }

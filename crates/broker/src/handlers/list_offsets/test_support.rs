@@ -4,7 +4,7 @@
 use assert2::assert;
 use krabka_protocol::owned::{
     create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
-    list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
+    list_offsets_request::ListOffsetsRequest,
     list_offsets_response::{ListOffsetsPartitionResponse, ListOffsetsResponse},
 };
 

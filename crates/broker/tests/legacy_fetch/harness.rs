@@ -8,9 +8,9 @@
 //! and these tests need to pin v0 and v3 exactly.
 
 use assert2::assert;
-use bytes::Buf;
+use bytes::{Buf, BytesMut};
 use krabka_protocol::{
-    Decode,
+    Decode, Encode,
     kafka_3_6_2::owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic},
     owned::produce_response::ProduceResponse,
     records::{RecordBatch, RecordsPayload},

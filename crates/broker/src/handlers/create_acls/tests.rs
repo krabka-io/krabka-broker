@@ -44,7 +44,7 @@ async fn check_no_acls_created(
     expected: CreateAclsResponse,
 ) {
     assert!(response == expected);
-    assert!(all_acls(broker).is_empty());
+    assert!(all_acls(&broker).is_empty());
     broker.shutdown().await;
 }
 

@@ -172,14 +172,14 @@ mod tests {
 
     fn pending_with_group_metadata() -> PendingStreamsRecords {
         pending_records()
-            .group_metadata(Some(StreamsGroupMetadataValue {
+            .group_metadata(StreamsGroupMetadataValue {
                 epoch: 1,
                 metadata_hash: 0,
                 validated_topology_epoch: -1,
                 last_assignment_configs: None,
                 description: super::super::DescriptionEpochs::default(),
-            }))
-            .topology(Some(StreamsGroupTopologyValue::default()))
+            })
+            .topology(StreamsGroupTopologyValue::default())
             .call()
     }
 
@@ -201,10 +201,10 @@ mod tests {
     // with an `INT16` length. A string of 32767 bytes encodes, and one of
     // 32768 bytes makes the whole batch an error, not a panic in the actor.
     crate::coordinator::unified::persistence::key_string_boundaries!(PendingStreamsRecords, || {
-        pending_with_group_metadata()
-            .member_metadata(vec![("m".into(), None)])
-            .target_per_member(vec![("m".into(), None)])
-            .current_per_member(vec![("m".into(), None)])
-            .call()
+        let mut pending = pending_with_group_metadata();
+        pending.member_metadata = vec![("m".into(), None)];
+        pending.target_per_member = vec![("m".into(), None)];
+        pending.current_per_member = vec![("m".into(), None)];
+        pending
     });
 }
