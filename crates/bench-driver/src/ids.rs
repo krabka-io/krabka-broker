@@ -16,32 +16,26 @@ use {
     serde::{Deserialize, Serialize},
 };
 
-macro_rules! numeric_value {
-    ($name:ident($inner:ty) $(, $extra_derive:ident)?) => {
-        #[derive(
-            Debug,
-            Clone,
-            Copy,
-            $( $extra_derive, )?
-            PartialEq,
-            Eq,
-            PartialOrd,
-            Ord,
-            Hash,
-            Display,
-            From,
-            Into,
-            Serialize,
-            Deserialize,
-            PrimitiveCmp,
-        )]
-        #[serde(transparent)]
-        pub struct $name(pub $inner);
-    };
-}
-
 /// A number of Kafka messages (produced, consumed, or dropped).
-numeric_value!(MessageCount(u64), Default);
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Display,
+    From,
+    Into,
+    Serialize,
+    Deserialize,
+    PrimitiveCmp,
+)]
+#[serde(transparent)]
+pub struct MessageCount(pub u64);
 
 /// Milliseconds **into a run**. This is a time-series sample offset relative to
 /// the start of the measurement window or the wallclock window. It is ordered,
@@ -53,7 +47,25 @@ numeric_value!(MessageCount(u64), Default);
 /// [`crate::aggregate`] keys `BTreeMap`s by it, which a `f64`-backed quantity
 /// cannot do. [`Self::as_time`] and [`Self::since`] are the seams that turn a
 /// pair of coordinates into the extent between them.
-numeric_value!(TimeOffsetMs(u64), Default);
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Display,
+    From,
+    Into,
+    Serialize,
+    Deserialize,
+    PrimitiveCmp,
+)]
+#[serde(transparent)]
+pub struct TimeOffsetMs(pub u64);
 
 impl TimeOffsetMs {
     /// This offset as the time extent from the window start.
@@ -72,7 +84,24 @@ impl TimeOffsetMs {
 /// `i64` to match `chrono::Utc::now().timestamp_millis()`. It is distinct from
 /// the run-relative [`TimeOffsetMs`], so no one can swap the paired start and
 /// end fields on `RunOutput`.
-numeric_value!(WallclockMs(i64));
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Display,
+    From,
+    Into,
+    Serialize,
+    Deserialize,
+    PrimitiveCmp,
+)]
+#[serde(transparent)]
+pub struct WallclockMs(pub i64);
 
 #[cfg(test)]
 mod tests {
