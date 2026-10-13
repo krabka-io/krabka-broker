@@ -104,13 +104,13 @@ fn declaration(input: &TokenStream) -> Result<Setup, ParseError> {
                 ));
             }
         } else if name == "user" && matches!(user, UserPolicy::Absent) && names.len() > 3 {
-            nonempty_bracketed(&token, "user needs a nonempty bracketed name expression")?;
+            nonempty_bracketed(token, "user needs a nonempty bracketed name expression")?;
             user = UserPolicy::Default;
         } else if name == "client"
             && matches!(user, UserPolicy::Default)
             && matches!(names.len(), 4 | 6)
         {
-            nonempty_bracketed(&token, "client needs a nonempty bracketed expression")?;
+            nonempty_bracketed(token, "client needs a nonempty bracketed expression")?;
             user = UserPolicy::Client;
         } else {
             return Err(ParseError::new(
