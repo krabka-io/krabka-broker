@@ -239,6 +239,7 @@ def _holds_contract(fs, package):
     The sweep stops at the first source that does: only the answer matters, and
     the largest crate here holds well over a thousand files.
     """
+
     # These sources implement host-side token generators. Contract tokens in
     # their templates belong to the consuming crate, not to the generator.
     # A generator that uses Creusot itself remains covered by the independent

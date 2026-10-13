@@ -286,7 +286,7 @@ def _crate(name, source, dependency = False, proc_macro = False):
     if dependency:
         manifest += '\n[dependencies]\ncreusot-std = { path = "../../../creusot-std" }\n'
     if proc_macro:
-        manifest += '\n[lib]\nproc-macro = true\n'
+        manifest += "\n[lib]\nproc-macro = true\n"
     return {
         "workspace/crates/%s/Cargo.toml" % name: manifest,
         "workspace/crates/%s/src/lib.rs" % name: source,

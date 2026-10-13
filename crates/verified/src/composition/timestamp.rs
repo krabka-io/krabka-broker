@@ -187,7 +187,7 @@ pub(super) fn validated_remote_and_local_time_starts_agree(
 
 /// A constructed index and the first matching record selected from it.
 #[krabka_macros::model_type(proof(DeepModel), runtime(Debug, PartialEq, Eq))]
-pub(super) struct ConstructedTimeIndex {
+pub struct ConstructedTimeIndex {
     pub(super) entries: Vec<TimeEntry>,
     pub(super) selected: Option<usize>,
 }
