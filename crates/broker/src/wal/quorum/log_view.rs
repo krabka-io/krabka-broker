@@ -3,6 +3,7 @@
 use {
     krabka_kraft_core::{Epoch, LogOffsetMetadata, LogView},
     krabka_log::Log,
+    krabka_raft::kraft::log::latest_epoch_in,
     std::sync::{Arc, Mutex, MutexGuard},
 };
 
@@ -31,9 +32,7 @@ impl ShardLog {
 impl LogView for ShardLog {
     fn end_offset(&self) -> i64 { self.lock().log_end_offset().0 }
 
-    fn last_epoch(&self) -> Epoch {
-        krabka_raft::kraft::log::latest_epoch_in(self.lock().epoch_checkpoint())
-    }
+    fn last_epoch(&self) -> Epoch { latest_epoch_in(self.lock().epoch_checkpoint()) }
 
     fn end_offset_for_epoch(&self, epoch: Epoch) -> LogOffsetMetadata {
         let log = self.lock();

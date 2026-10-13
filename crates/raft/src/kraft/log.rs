@@ -457,6 +457,7 @@ impl LogView for KraftLog {
 }
 
 /// The latest checkpoint epoch as the consensus log view's unsigned epoch.
+#[must_use]
 pub fn latest_epoch_in(checkpoint: &krabka_log::LeaderEpochCheckpoint) -> Epoch {
     let latest = checkpoint.latest_epoch().unwrap_or(LeaderEpoch(0));
     u32::try_from(latest.0).unwrap_or(0)

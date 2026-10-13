@@ -2356,6 +2356,14 @@ mod tests {
             && std::path::Path::new(path).extension() == Some(std::ffi::OsStr::new("rs"))
     }
 
+    fn annotation_test_paths(
+        tests: &'static [&'static str],
+    ) -> impl Iterator<Item = (&'static str, &'static str)> {
+        tests
+            .iter()
+            .map(|test| (test.split_once("::").map_or(*test, |(path, _)| path), *test))
+    }
+
     #[test]
     fn kip_annotation_rows_are_complete() {
         for row in KIP_ANNOTATIONS {
@@ -2366,8 +2374,7 @@ mod tests {
                 row.key,
                 row.module
             );
-            for test in row.tests {
-                let path = test.split_once("::").map_or(*test, |(path, _)| path);
+            for (path, test) in annotation_test_paths(row.tests) {
                 assert!(
                     is_rust_source_path(path),
                     "{} test {test} is not a Rust source path from the repository root",
@@ -2467,8 +2474,7 @@ mod tests {
                 row.key,
                 row.module
             );
-            for test in row.tests {
-                let path = test.split_once("::").map_or(*test, |(path, _)| path);
+            for (path, test) in annotation_test_paths(row.tests) {
                 assert!(
                     root.join(path).is_file(),
                     "{} test {path} is missing",
