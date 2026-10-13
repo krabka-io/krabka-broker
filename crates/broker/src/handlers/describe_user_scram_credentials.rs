@@ -312,14 +312,11 @@ mod tests {
 
     const ALICE_ONLY: [SeededUser<'static>; 1] = [ALICE];
 
-    const ALICE_AND_BOB: [SeededUser<'static>; 2] = [
-        ALICE,
-        SeededUser {
-            user: "bob",
-            mechanism: SaslMechanism::ScramSha512,
-            iterations: 8192,
-        },
-    ];
+    const ALICE_AND_BOB: [SeededUser<'static>; 2] = [ALICE, SeededUser {
+        user: "bob",
+        mechanism: SaslMechanism::ScramSha512,
+        iterations: 8192,
+    }];
 
     fn run_handle_filter(
         users_filter: Option<Vec<String>>,
@@ -371,7 +368,10 @@ mod tests {
     fn duplicate_requested_user_returns_single_duplicate_resource_row() {
         const KAFKA_DUPLICATE_RESOURCE: i16 = 92;
 
-        let resp = run_handle_filter(Some(vec!["alice".into(), "bob".into(), "alice".into()]), &ALICE_AND_BOB);
+        let resp = run_handle_filter(
+            Some(vec!["alice".into(), "bob".into(), "alice".into()]),
+            &ALICE_AND_BOB,
+        );
 
         assert!(
             resp.results.len() == 2,
