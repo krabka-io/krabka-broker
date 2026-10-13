@@ -644,8 +644,8 @@ mod tests {
         voter_addr: &'static str,
     ) {
         let config = configured(&[], toml).expect("the config assembles");
-        assert!(config.validate().is_ok());
-        assert!(
+        assert2::assert!(config.validate().is_ok());
+        assert2::assert!(
             (
                 config.broker_id,
                 config.node_id,

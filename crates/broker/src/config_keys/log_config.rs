@@ -371,6 +371,8 @@ mod tests {
         internal_segment_bytes = { INTERNAL_SEGMENT_BYTES, SizeField::Segment },
     )]
     fn corrupt_size_values_leave_the_base_alone(key: &str, field: SizeField) {
+        use assert2::assert;
+
         let base = LogConfig {
             max_message_size: bytes(4096),
             segment_size: bytes(8192),
@@ -384,7 +386,7 @@ mod tests {
                 SizeField::Message => out.max_message_size == base.max_message_size,
                 SizeField::Segment => out.segment_size == base.segment_size,
             };
-            assert2::assert!(retained, "{key}={corrupt}");
+            assert!(retained, "{key}={corrupt}");
         }
     }
 

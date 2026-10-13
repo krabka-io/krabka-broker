@@ -130,7 +130,7 @@ fn completion_requires_the_prepared_identity_and_state(
     state: i8,
     expected: TransactionCompletionDecision,
 ) {
-    assert!(
+    assert2::assert!(
         transaction_completion_decision(
             TransactionSnapshot {
                 pid: 7,

@@ -46,7 +46,9 @@ const VERSION: i16 = elect_leaders_response::MAX_VERSION;
 
 mod commit_fencing;
 
-crate::test_support::context_helper!(client_id = "kafka-leader-election");
+krabka_macros::wire_codec_helpers! {
+    test_context ["kafka-leader-election"];
+}
 
 /// One two-replica partition of [`TOPIC`], led by broker 1, beside the
 /// proposals the registry holds.

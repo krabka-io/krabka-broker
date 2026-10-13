@@ -20,9 +20,12 @@
 //! per-resource work lives in `resource`, and the record builders it
 //! dispatches to live in `topic_configs` and `broker_configs`.
 
-use krabka_protocol::owned::{
-    alter_configs_request::{self, AlterConfigsRequest, AlterConfigsResource},
-    alter_configs_response::{AlterConfigsResourceResponse, AlterConfigsResponse},
+use {
+    crate::handlers::{ApiVersion, DispatchResult},
+    krabka_protocol::owned::{
+        alter_configs_request::{self, AlterConfigsRequest, AlterConfigsResource},
+        alter_configs_response::{AlterConfigsResourceResponse, AlterConfigsResponse},
+    },
 };
 
 mod broker_configs;
@@ -88,55 +91,62 @@ where
     )
 }
 
-raw_dispatch! {
+krabka_macros::decoded_dispatch! {
     /// Validate broker-local values before sending replacement resources to the controller.
-    mut AlterConfigsRequest, (broker, version, req_bytes, ctx, req), {
-    controller_listener_dispatch!(
-        broker,
-        ctx,
-        req,
-        version,
-        self::handle,
-        self::request_refusal
-    );
-    let duplicates = duplicate_resource_flags(
-        req.resources
-            .iter()
-            .map(|r| (r.resource_type, r.resource_name.as_str())),
-    );
-    let mut indexed_responses = Vec::new();
-    let mut forwarded_indices = Vec::new();
-    req.resources = std::mem::take(&mut req.resources)
-        .into_iter()
-        .zip(duplicates)
-        .enumerate()
-        .filter_map(|(index, (resource, duplicate))| {
-            if let Some(refusal) = preprocess_resource(broker, ctx, &resource, duplicate) {
-                indexed_responses.push((index, refusal));
-                None
-            } else {
-                forwarded_indices.push(index);
-                Some(resource)
-            }
-        })
-        .collect();
-    let mut response = if req.resources.is_empty() {
-        AlterConfigsResponse::default()
-    } else {
-        to_active_controller_or_handle(
+    pub(crate) async fn dispatch(
+        broker: &Broker,
+        version: ApiVersion,
+        req_bytes: &[u8],
+        ctx: &RequestContext<'_>,
+    )
+        [request = AlterConfigsRequest, binding(mut req)] -> DispatchResult
+    {
+        controller_listener_dispatch!(
             broker,
-            req,
-            alter_configs_request::API_KEY,
-            version,
             ctx,
-            request_refusal,
-            |req| handle(broker, req, version, ctx),
-        )
-        .await?
-    };
-    indexed_responses.extend(forwarded_indices.into_iter().zip(response.responses));
-    response.responses = ordered_resource_responses(indexed_responses);
-    encode_response(&response, version)
+            req,
+            version,
+            self::handle,
+            self::request_refusal
+        );
+        let duplicates = duplicate_resource_flags(
+            req.resources
+                .iter()
+                .map(|r| (r.resource_type, r.resource_name.as_str())),
+        );
+        let mut indexed_responses = Vec::new();
+        let mut forwarded_indices = Vec::new();
+        req.resources = std::mem::take(&mut req.resources)
+            .into_iter()
+            .zip(duplicates)
+            .enumerate()
+            .filter_map(|(index, (resource, duplicate))| {
+                if let Some(refusal) = preprocess_resource(broker, ctx, &resource, duplicate) {
+                    indexed_responses.push((index, refusal));
+                    None
+                } else {
+                    forwarded_indices.push(index);
+                    Some(resource)
+                }
+            })
+            .collect();
+        let mut response = if req.resources.is_empty() {
+            AlterConfigsResponse::default()
+        } else {
+            to_active_controller_or_handle(
+                broker,
+                req,
+                alter_configs_request::API_KEY,
+                version,
+                ctx,
+                request_refusal,
+                |req| handle(broker, req, version, ctx),
+            )
+            .await?
+        };
+        indexed_responses.extend(forwarded_indices.into_iter().zip(response.responses));
+        response.responses = ordered_resource_responses(indexed_responses);
+        encode_response(&response, version)
     }
 }
 

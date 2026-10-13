@@ -11,8 +11,8 @@
 use {
     crate::support::{self, NodeIndex, controller_voters, node_config},
     krabka_broker::{
-        BootstrapMode, Broker, BrokerConfig, BrokerHandle, KafkaRlmmConfig, NodeId,
-        RemoteStorageBackend, RlmmKind,
+        BootstrapMode, Broker, BrokerConfig, BrokerHandle, KafkaRlmmConfig, RemoteStorageBackend,
+        RlmmKind,
     },
     tempfile::TempDir,
 };
@@ -186,7 +186,7 @@ pub(crate) async fn await_pair_leader(
     b2: &BrokerHandle,
     topic: &str,
     partition: i32,
-) -> (NodeId, NodeId) {
+) -> (u64, u64) {
     let (b1_id, b2_id) = (b1.node_id(), b2.node_id());
     b1.wait_for_image(|img| {
         img.partition(topic, partition)

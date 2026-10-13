@@ -1056,7 +1056,6 @@ fn record_final_drain_timeout(
         *error = format!("producer-{idx}-final-drain-timeout:{unresolved}");
     }
 }
-
 struct ProducerTask {
     setup: TaskSetup,
     first_ack: Arc<AtomicU64>,
@@ -1700,24 +1699,28 @@ mod tests {
             scenario.linger = millis(20);
             let stop = Arc::new(AtomicU8::new(STATE_MEASURING));
             let first_ack = Arc::new(AtomicU64::new(0));
-            let producer = tokio::spawn(run_producer(ProducerTask {
-                setup: TaskSetup {
-                    idx: 0,
-                    grid: Grid::new(Instant::now(), 0, &scenario, DEFAULT_SAMPLE_INTERVAL),
-                    scenario,
-                    bootstrap: broker.addr.to_string(),
-                    topic: "t".into(),
-                    scenario_id: 0,
-                    stop: Arc::clone(&stop),
-                    security: None,
-                    request_timeout: secs(1),
-                    dispatch_queue_capacity: ConnectionDispatchQueueCapacity::default(),
-                    frame_max: ClientFrameMax::default(),
+            let kill_at = Arc::new(AtomicU64::new(0));
+            let cfg = DriverConfig {
+                bootstrap: broker.addr.to_string(),
+                producer_request_timeout: secs(1),
+                producer_final_drain_timeout: secs(1),
+                ..cfg(1)
+            };
+            let grid = Grid::new(Instant::now(), 0, &scenario, cfg.sample_interval);
+            let mut producers = JoinSet::new();
+            spawn_producers(
+                &mut producers,
+                &scenario,
+                &cfg,
+                None,
+                grid,
+                &SharedHandles {
+                    stop: &stop,
+                    first_ack: &first_ack,
+                    kill_at: &kill_at,
                 },
-                first_ack: Arc::clone(&first_ack),
-                kill_at: Arc::new(AtomicU64::new(0)),
-                final_drain_timeout: secs(1),
-            }));
+            );
+            assert!(producers.len() == scenario.producers);
             tokio::time::timeout(secs(10).to_std(), started)
                 .await
                 .unwrap()
@@ -1737,10 +1740,12 @@ mod tests {
             }
             tokio::time::sleep(millis(200).to_std()).await;
             stop.store(STATE_STOP, Ordering::SeqCst);
-            let output = tokio::time::timeout(secs(10).to_std(), producer)
+            let output = tokio::time::timeout(secs(10).to_std(), producers.join_next())
                 .await
                 .unwrap()
+                .expect("one producer task")
                 .unwrap();
+            assert!(producers.is_empty());
             broker.stop();
 
             assert!(output.interval_msgs.iter().sum::<u64>() == output.msgs);
@@ -1767,6 +1772,46 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn spawned_consumers_report_startup_failure_without_measurements() {
+        let mut scenario = scenario(1);
+        scenario.consumers = 2;
+        let cfg = DriverConfig {
+            bootstrap: String::new(),
+            consumer_build_retry_policy: ConsumerBuildRetryPolicy::new(
+                ConsumerBuildAttempts::new(1).unwrap(),
+                millis(1),
+                millis(1),
+            )
+            .unwrap(),
+            ..cfg(1)
+        };
+        let stop = Arc::new(AtomicU8::new(STATE_MEASURING));
+        let grid = Grid::new(Instant::now(), 0, &scenario, cfg.sample_interval);
+        let mut consumers = JoinSet::new();
+        spawn_consumers(&mut consumers, &scenario, &cfg, None, grid, &stop);
+        assert!(consumers.len() == scenario.consumers);
+        let mut errors = Vec::new();
+        // Empty bootstrap does no DNS or TCP work; paused time advances the
+        // consumer client's internal startup retries to their deadline.
+        while let Some(joined) = tokio::time::timeout(secs(600).to_std(), consumers.join_next())
+            .await
+            .expect("consumer startup retries end")
+        {
+            let output = joined.expect("consumer reports its build error");
+            assert!((output.msgs, output.bytes, output.latency.len()) == (0, 0, 0));
+            assert!(output.interval_msgs.is_empty() && output.interval_hist.is_empty());
+            errors.push(output.error);
+        }
+        errors.sort();
+        for (idx, error) in errors.iter().enumerate() {
+            assert!(error.starts_with(&format!(
+                "consumer-{idx}-build: build consumer failed after 1 attempts:"
+            )));
+        }
+        assert!(errors.len() == scenario.consumers);
     }
 
     #[test]

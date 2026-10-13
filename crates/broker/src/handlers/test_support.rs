@@ -104,7 +104,7 @@ pub(crate) fn duplicate_config_resource_response(
     resource_type: i8,
     resource_name: &str,
 ) -> krabka_protocol::owned::alter_configs_response::AlterConfigsResourceResponse {
-    tagged_wire!(
+    krabka_macros::tagged_wire!(
         krabka_protocol::owned::alter_configs_response::AlterConfigsResourceResponse {
             resource_type,
             resource_name: resource_name.to_owned(),

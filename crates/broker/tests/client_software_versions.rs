@@ -124,9 +124,9 @@ async fn v3_client_info_validation(
     let resp = send_api_versions(kafka_addr, 3, software_name, software_version)
         .await
         .expect("ApiVersions");
-    assert!(resp.error_code == expected_error, "{resp:?}");
+    assert2::assert!(resp.error_code == expected_error, "{resp:?}");
     if let Some(expected) = api_list_nonempty {
-        assert!((!resp.api_keys.is_empty()) == expected, "{resp:?}");
+        assert2::assert!((!resp.api_keys.is_empty()) == expected, "{resp:?}");
     }
 
     handle.shutdown().await;
