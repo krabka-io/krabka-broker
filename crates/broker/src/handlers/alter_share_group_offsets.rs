@@ -30,11 +30,13 @@ use krabka_protocol::{
     primitives::uuid::Uuid,
 };
 
+#[cfg(test)]
+use crate::handlers::test_support::configured_topic_request_from;
 use crate::{
     codes,
     coordinator::unified::{GroupType, share::actor::ShareGroupActorMessage},
     error::BrokerError,
-    handlers::{ErrorResponse as _, test_support::configured_topic_request_from},
+    handlers::ErrorResponse as _,
     task_util::{AskError, ask},
 };
 
