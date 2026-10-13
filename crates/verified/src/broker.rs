@@ -5,7 +5,10 @@
 
 use creusot_std::prelude::*;
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 /// Truncation preserves the floor and clamps each visibility frontier to its end.
 pub(crate) fn clamped_fetch_watermarks(
     original: FetchWatermarks,
@@ -18,9 +21,11 @@ pub(crate) fn clamped_fetch_watermarks(
             && bounded.deliverable@ == original.deliverable@.min(bounded.log_end@)
     }
 }
-}
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 /// Export the committed response watermarks and empty-view flags from one floor.
 pub(crate) fn committed_fetch_response(
     view: FetchVisibility,
@@ -36,7 +41,6 @@ pub(crate) fn committed_fetch_response(
             && view.out_of_range == (floor > log_end)
             && view.empty == (floor <= log_end && floor >= hw@.min(deliverable@))
     }
-}
 }
 
 /// Visibility bounds and response watermarks for one Fetch partition.

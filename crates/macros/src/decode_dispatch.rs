@@ -1,11 +1,11 @@
 //! Decode one request before an ordinary raw dispatch function's native body.
 
 use {
-    crate::meta::{Tokens, edit_native_body},
+    crate::meta::{Tokens, edit_native_body, function_signature},
     moxy::{
         ast::{
-            Attributes, FnParam, FromMeta, Meta, MetaContent, Parse, ParseError, Parser, PatIdent,
-            Path, Pattern, Signature, Visibility,
+            FnParam, FromMeta, Meta, MetaContent, Parse, ParseError, Parser, PatIdent, Path,
+            Pattern,
         },
         token::{Spanner, TokenStream},
     },
@@ -62,17 +62,7 @@ fn prefix(meta: &TokenStream, item: &TokenStream) -> Result<TokenStream, ParseEr
     }
     let binding = args.binding.0;
 
-    let parser = Parser::from_tokens(item);
-    let _: Attributes = Parse::parse(&parser)?;
-    let _: Visibility = Parse::parse(&parser)?;
-    let function = Signature::parse(&parser)?;
-    if !parser
-        .advance()
-        .is_some_and(|token| token.as_group().is_some_and(|group| group.delim.is_brace()))
-        || !parser.is_empty()
-    {
-        return Err(parser.error("expected one dispatch function with a body"));
-    }
+    let function = function_signature(item)?;
     let parameters = &function.params.inner.inputs;
     let supported_entry = match function.ident.text() {
         "dispatch" => function.asyncness.is_some() && parameters.len() == 4,

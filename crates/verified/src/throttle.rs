@@ -58,7 +58,10 @@ pub struct GrantedTokens(pub u64);
 )]
 pub struct NewAvailable(pub u64);
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 /// `min(available + refill, burst)` in unbounded integers.
 ///
 /// This equals the executable `available.saturating_add(refill).min(burst)`
@@ -72,7 +75,6 @@ pub fn capped(available: Int, refill: Int, burst: Int) -> Int {
     } else {
         burst
     }
-}
 }
 
 /// Caps a refill, grants at most the request, and returns the new balance.

@@ -2,7 +2,7 @@
 
 use {
     crate::{
-        meta::{compact, edit_native_body, item_body},
+        meta::{compact, edit_native_body, is_plain_sync, item_body},
         value_framing::decode_method,
     },
     moxy::{
@@ -53,13 +53,7 @@ fn wrappers(meta: &TokenStream, item: &TokenStream) -> Result<TokenStream, Parse
             ));
         };
         let signature = &method.sig;
-        if !method.vis.is_inherited()
-            || signature.asyncness.is_some()
-            || signature.constness.is_some()
-            || signature.safety.is_some()
-            || signature.abi.is_some()
-            || !signature.generics.params.is_empty()
-        {
+        if !method.vis.is_inherited() || !is_plain_sync(signature) {
             return Err(ParseError::new(
                 signature.span(),
                 "field codecs must be private synchronous methods",

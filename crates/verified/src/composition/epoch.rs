@@ -2,13 +2,18 @@ use super::*;
 #[cfg(creusot)]
 use creusot_std::prelude::*;
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 pub fn epoch_window_valid(base: Int, start: Int, end: Int) -> bool {
     pearlite! { 0 <= base && base <= end && 0 <= start && start <= end }
 }
-}
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 pub fn epoch_archive_valid(entries: Seq<EpochEntry>, base: Int, end: Int) -> bool {
     pearlite! {
         (forall<i: Int> 0 <= i && i < entries.len() ==> entries[i].epoch.0@ >= 0
@@ -18,12 +23,13 @@ pub fn epoch_archive_valid(entries: Seq<EpochEntry>, base: Int, end: Int) -> boo
                 && entries[i].start_offset.0@ < entries[j].start_offset.0@)
     }
 }
-}
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 pub fn epoch_input_valid(entries: Seq<EpochEntry>, base: Int, start: Int, end: Int) -> bool {
     pearlite! { epoch_window_valid(base, start, end) && epoch_archive_valid(entries, base, end) }
-}
 }
 
 type EpochTruncation = Result<Option<(i32, FetchWatermarks, FetchVisibility)>, ()>;
@@ -90,7 +96,10 @@ pub(super) fn validated_epochs_bound_truncated_fetch(
     Ok(Some((found.0, bounded, visibility)))
 }
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 /// The validated epoch history resolves this exact bounded cut.
 pub(super) fn resolved_epoch_cut(
     entries: Seq<EpochEntry>,
@@ -102,5 +111,4 @@ pub(super) fn resolved_epoch_cut(
 ) -> bool {
     pearlite! { epoch_input_valid(entries, base, window.log_start@, window.log_end@)
     && kafka_end_offset_for(entries, requested, window.log_end@, found, cut) }
-}
 }

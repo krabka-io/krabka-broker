@@ -68,11 +68,13 @@ pub use remote_bytes::remote_prefix_charge;
 mod remote_floor;
 pub use remote_floor::remote_retention_floor_step;
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 /// Size retention consumes a row only while positive debt funds its entire charged prefix.
 pub fn remote_charge_funded(debt: Int, charged: Int, next_charge: Int) -> bool {
     pearlite! { debt > 0 && charged < debt && next_charge <= debt }
-}
 }
 
 #[cfg(test)]

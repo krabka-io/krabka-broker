@@ -8,17 +8,6 @@
 // the grouping parentheses in Pearlite expressions as redundant Rust syntax.
 #![cfg_attr(creusot, allow(unused_imports, unused_parens))]
 
-/// Declare an open proof model with the crate's mutation-testing policy.
-macro_rules! open_logic {
-    ($item:item) => {
-        // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-        #[cfg(creusot)]
-        #[cfg_attr(test, mutants::skip)]
-        #[logic(open)]
-        $item
-    };
-}
-
 pub mod audit;
 pub mod authz;
 pub mod barrier;

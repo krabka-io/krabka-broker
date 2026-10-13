@@ -15,7 +15,10 @@
 use crate::producer::ProducerDecision;
 use creusot_std::prelude::*;
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 /// A physically retained data row is valid and belongs to the requested producer.
 pub(crate) fn retained_producer_row(end: Int, row: ProducerSnapshotEntryFacts, pid: i64) -> bool {
     pearlite! {
@@ -23,9 +26,11 @@ pub(crate) fn retained_producer_row(end: Int, row: ProducerSnapshotEntryFacts, p
             && row.producer_id == pid
     }
 }
-}
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 /// A retained snapshot row matches both endpoints of the requested sequence.
 pub fn snapshot_sequence_matches(row: ProducerSnapshotEntryFacts, base: Int, delta: Int) -> bool {
     pearlite! {
@@ -33,9 +38,11 @@ pub fn snapshot_sequence_matches(row: ProducerSnapshotEntryFacts, base: Int, del
             && row.last_sequence@ == crate::producer::sequence_modulo_2_31(base + delta)
     }
 }
-}
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 /// The original retained batch span and its exclusive acknowledgement frontier.
 pub(crate) fn recovered_batch_coordinates(
     row: ProducerSnapshotEntryFacts,
@@ -47,9 +54,11 @@ pub(crate) fn recovered_batch_coordinates(
     && frontier == row.last_offset@ + 1
     && 0 <= base && base < frontier && frontier <= end }
 }
-}
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 /// Classification after no retained batch matches the requested sequence.
 pub(crate) fn nonduplicate_snapshot_decision(
     incoming_epoch: Int,
@@ -62,7 +71,6 @@ pub(crate) fn nonduplicate_snapshot_decision(
         if sequence == 0 { ProducerDecision::Append } else { ProducerDecision::OutOfOrder }
     } else if sequence == crate::producer::sequence_modulo_2_31(last_sequence + 1) { ProducerDecision::Append }
     else { ProducerDecision::OutOfOrder } }
-}
 }
 
 /// The offsets one producer-state reload runs against.
@@ -121,11 +129,13 @@ mod replay_start;
 pub use replay_start::snapshot_entry_valid_model;
 pub use replay_start::{producer_snapshot_entry_valid, producer_snapshot_replay_start};
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 /// Producer data rows preserve their strictly increasing physical completion offsets.
 pub(crate) fn producer_offsets_ordered(rows: Seq<ProducerSnapshotEntryFacts>) -> bool {
     pearlite! { forall<i: Int, j: Int> 0 <= i && i < j && j < rows.len() ==> rows[i].last_offset@ < rows[j].last_offset@ }
-}
 }
 
 #[cfg(test)]

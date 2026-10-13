@@ -308,6 +308,8 @@ Model structs and enums use `model_type` to select proof and runtime derives. `s
 
 Function entry points remain typed functions in unit tests, which checks input diagnostics. Compiled consumers check the procedural-macro adapter and emitted behavior.
 
+Extension handlers declare their owned request type under `extension_wire`; the attribute supplies the raw wire parameters, decoding and tracing. WORM admission uses one `worm_object_set!` rule with explicit proof and runtime headers. Ordinary proof functions use Creusot's `logic(open)` attribute directly. Their `cfg(creusot)` and adjacent mutation skip remain visible in source so the mutation checker can read them.
+
 For parallel work, give each subagent one macro family and its callers. Keep shared exports with one owner. Review the combined diff for scope, spans, and caller behavior before running the checks.
 
 ## Logging and Observability

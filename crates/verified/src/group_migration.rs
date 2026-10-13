@@ -25,11 +25,13 @@ pub struct GroupMigrationRecordPlan {
     pub member_count: usize,
 }
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 fn migration_epoch_matches(input: Int, output: Int) -> bool {
     pearlite! { output >= 0 &&
-        ((input >= 0 && output == input) || (input < 0 && output == 0)) }
-}
+    ((input >= 0 && output == input) || (input < 0 && output == 0)) }
 }
 
 /// Admit a classic-to-consumer upgrade exactly when the protocol and every

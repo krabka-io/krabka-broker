@@ -79,41 +79,8 @@ pub struct WormObjectSetFacts {
     pub digests: WormDigestFacts,
 }
 
-macro_rules! worm_rule_body {
-    (model; {$($head:tt)*} {$($body:tt)*}) => { $($head)* { pearlite! { $($body)* } } };
-    (runtime; {$($head:tt)*} {$($body:tt)*}) => { $($head)* { $($body)* } };
-}
-
-macro_rules! worm_object_set_kernel {
-    ($mode:ident; {$($head:tt)*} ($facts:ident);
-        count [$($count:tt)*] listed [$($listed:tt)*]) => {
-        worm_rule_body! { $mode;
-            { $($head)* }
-            {
-                if $($count)* == 0 {
-                    WormObjectSetDecision::Empty
-                } else if !$facts.identity.unique_keys {
-                    WormObjectSetDecision::DuplicateKey
-                } else if !$facts.identity.coordinates_match {
-                    WormObjectSetDecision::CoordinateMismatch
-                } else if !$facts.availability.all_present {
-                    WormObjectSetDecision::MissingObject
-                } else if $($count)* != $($listed)* {
-                    WormObjectSetDecision::CountMismatch
-                } else if !$facts.availability.sizes_match {
-                    WormObjectSetDecision::SizeMismatch
-                } else if $facts.digests.require_digests && !$facts.digests.digests_match {
-                    WormObjectSetDecision::DigestMismatch
-                } else {
-                    WormObjectSetDecision::Admit
-                }
-            }
-        }
-    };
-}
-
-worm_object_set_kernel! {
-    model;
+krabka_macros::worm_object_set! {
+    Model;
 {
     /// The object-set rule, as the first failed check in diagnostic order: an
     /// empty set, a repeated key, a key at the wrong coordinates, an object the
@@ -130,8 +97,8 @@ worm_object_set_kernel! {
     count [facts.object_count@] listed [facts.listed_count@]
 }
 
-worm_object_set_kernel! {
-    runtime;
+krabka_macros::worm_object_set! {
+    Runtime;
 {
     /// Requires a nonempty, one-to-one object set with exact coordinates, sizes,
     /// and, when requested, digests; see `worm_object_set_model`.

@@ -1,9 +1,37 @@
 //! Syntax and attribute helpers shared by the macros.
 
 use moxy::{
-    ast::{Field, ItemStruct, List, ParseError, Token, Type},
+    ast::{
+        Attributes, Field, ItemStruct, List, Parse, ParseError, Parser, Signature, Token, Type,
+        Visibility,
+    },
     token::{Ident, Span, Spanner, TokenStream, TokenTree},
 };
+
+/// A safe, synchronous Rust signature without constness or generic parameters.
+pub(crate) fn is_plain_sync(signature: &Signature) -> bool {
+    signature.asyncness.is_none()
+        && signature.constness.is_none()
+        && signature.safety.is_none()
+        && signature.abi.is_none()
+        && signature.generics.params.is_empty()
+}
+
+/// Parse an ordinary function's header while keeping its operation body opaque.
+pub(crate) fn function_signature(item: &TokenStream) -> Result<Signature, ParseError> {
+    let parser = Parser::from_tokens(item);
+    let _: Attributes = Parse::parse(&parser)?;
+    let _: Visibility = Parse::parse(&parser)?;
+    let signature = Signature::parse(&parser)?;
+    if !parser
+        .advance()
+        .is_some_and(|token| token.as_group().is_some_and(|group| group.delim.is_brace()))
+        || !parser.is_empty()
+    {
+        return Err(parser.error("expected one function with a body"));
+    }
+    Ok(signature)
+}
 
 /// The named fields of a struct, or an error naming the derive.
 pub(crate) fn named_fields<'a>(

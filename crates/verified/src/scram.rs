@@ -46,19 +46,23 @@ pub enum ScramAlterationDecision {
     AcceptSha512,
 }
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 fn alteration_mechanism_admitted(facts: ScramAlterationFacts) -> bool {
     pearlite! { alteration_name_admitted(facts)
     && (facts.mechanism@ == 1 || facts.mechanism@ == 2) }
 }
-}
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 pub fn alteration_name_admitted(facts: ScramAlterationFacts) -> bool {
     pearlite! { facts.prior == ScramPriorState::Unseen
     && facts.authorized
     && !facts.name_empty }
-}
 }
 
 /// Apply KIP-554 validation and conflict rules in their response precedence.

@@ -157,3 +157,186 @@ fn synchronous_handle_preserves_its_correlation_parameter() {
     assert!(handle(&broker, 2, 99, &[], &ctx) == Err("truncated request"));
     assert!(broker.operations.get() == 7);
 }
+
+mod extension_handlers {
+    use super::{ApiVersion, Broker, Decode, DispatchResult, Request, RequestContext};
+
+    struct MarkerRequest(Request);
+
+    impl Decode for MarkerRequest {
+        fn decode(bytes: &[u8], version: ApiVersion) -> Result<Self, &'static str> {
+            Request::decode(bytes, version).map(Self)
+        }
+    }
+
+    pub(super) mod control {
+        use super::{ApiVersion, Broker, DispatchResult, Request, RequestContext};
+
+        #[krabka_macros::extension_wire(
+            name = "handle_extension_control",
+            api = "ExtensionControl",
+            level = "info"
+        )]
+        pub(crate) async fn handle(
+            broker: &Broker,
+            req: Request,
+            version: ApiVersion,
+            ctx: &RequestContext<'_>,
+        ) -> DispatchResult {
+            broker.operations.set(broker.operations.get() + 1);
+            tokio::task::yield_now().await;
+            if ctx.principal == "guest" {
+                Err("control refused")
+            } else {
+                Ok(vec![req.value, ctx.correlation_id])
+            }
+        }
+    }
+
+    pub(super) mod marker {
+        use super::{ApiVersion, Broker, DispatchResult, MarkerRequest, RequestContext};
+
+        #[krabka_macros::extension_wire(
+            name = "handle_extension_marker",
+            api = "ExtensionMarker",
+            level = "debug"
+        )]
+        pub(crate) async fn handle(
+            broker: &Broker,
+            req: MarkerRequest,
+            version: ApiVersion,
+            _ctx: &RequestContext<'_>,
+        ) -> DispatchResult {
+            if req.0.value == 0 {
+                return Err("marker refused");
+            }
+            broker.operations.set(broker.operations.get() + 1);
+            Ok(vec![req.0.value])
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn extension_spans_wrap_decoding_and_native_operations_at_their_original_levels() {
+    use {
+        extension_handlers::{control, marker},
+        std::sync::Mutex,
+        tracing_subscriber::fmt::{format::FmtSpan, writer::MakeWriter as _},
+    };
+
+    static OUTPUT: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::DEBUG)
+        .with_span_events(FmtSpan::NEW)
+        .with_writer(|| OUTPUT.make_writer())
+        .finish();
+    let _tracing = tracing::subscriber::set_default(subscriber);
+    let broker = Broker {
+        operations: Cell::new(0),
+    };
+    let mut ctx = RequestContext {
+        principal: "admin",
+        correlation_id: 42,
+    };
+
+    // Trailing bytes remain ignored and the legacy correlation slot remains unused.
+    assert!(control::handle(&broker, 2, 99, &[7, 88], &ctx).await == Ok(vec![7, 42]));
+    assert!(control::handle(&broker, 2, 99, &[], &ctx).await == Err("truncated request"));
+    assert!(broker.operations.get() == 1);
+    ctx.principal = "guest";
+    assert!(control::handle(&broker, 2, 99, &[7], &ctx).await == Err("control refused"));
+
+    assert!(marker::handle(&broker, 2, 99, &[8, 88], &ctx).await == Ok(vec![8]));
+    assert!(marker::handle(&broker, 2, 99, &[0xff], &ctx).await == Err("invalid request"));
+    assert!(marker::handle(&broker, 2, 99, &[0], &ctx).await == Err("marker refused"));
+    assert!(broker.operations.get() == 3);
+
+    let output = String::from_utf8(OUTPUT.lock().unwrap().clone()).unwrap();
+    let lines: Vec<_> = output.lines().collect();
+    assert!(lines.len() == 10);
+    for (line, level, operation, api) in [
+        (
+            lines[0],
+            "INFO",
+            "handle_extension_control",
+            "ExtensionControl",
+        ),
+        (
+            lines[1],
+            "INFO",
+            "handle_extension_control",
+            "ExtensionControl",
+        ),
+        (
+            lines[2],
+            "ERROR",
+            "handle_extension_control",
+            "ExtensionControl",
+        ),
+        (
+            lines[3],
+            "INFO",
+            "handle_extension_control",
+            "ExtensionControl",
+        ),
+        (
+            lines[4],
+            "ERROR",
+            "handle_extension_control",
+            "ExtensionControl",
+        ),
+        (
+            lines[5],
+            "DEBUG",
+            "handle_extension_marker",
+            "ExtensionMarker",
+        ),
+        (
+            lines[6],
+            "DEBUG",
+            "handle_extension_marker",
+            "ExtensionMarker",
+        ),
+        (
+            lines[7],
+            "ERROR",
+            "handle_extension_marker",
+            "ExtensionMarker",
+        ),
+        (
+            lines[8],
+            "DEBUG",
+            "handle_extension_marker",
+            "ExtensionMarker",
+        ),
+        (
+            lines[9],
+            "ERROR",
+            "handle_extension_marker",
+            "ExtensionMarker",
+        ),
+    ] {
+        assert!(line.contains(level));
+        assert!(line.contains(operation));
+        assert!(line.contains(&format!("api=\"{api}\"")));
+    }
+    for (line, error) in [
+        (lines[2], "truncated request"),
+        (lines[4], "control refused"),
+        (lines[7], "invalid request"),
+        (lines[9], "marker refused"),
+    ] {
+        assert!(line.contains(error));
+    }
+    for skipped in [
+        "principal=",
+        "req_bytes=",
+        "version=",
+        "correlation_id=",
+        "broker=",
+    ] {
+        assert!(!output.contains(skipped));
+    }
+}

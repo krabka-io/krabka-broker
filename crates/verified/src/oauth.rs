@@ -54,7 +54,10 @@ pub enum OAuthSessionDecision {
     },
 }
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 /// Session admissibility at the clock when token validation completes.
 pub(crate) fn oauth_session_admissible_at(facts: OAuthSessionFacts, now: Int) -> bool {
     pearlite! {
@@ -65,7 +68,6 @@ pub(crate) fn oauth_session_admissible_at(facts: OAuthSessionFacts, now: Int) ->
             && (facts.authentication == OAuthAuthenticationKind::Initial
                 || facts.principal == OAuthPrincipalMatch::Matches)
     }
-}
 }
 
 /// Whether a validated token may bind a session: it carries an expiry

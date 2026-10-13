@@ -113,7 +113,10 @@ pub fn snapshot_chunk_admission(
     }
 }
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 /// A chunk continues one fixed identity and declared size at the exact received position.
 fn snapshot_chunk_shape_valid(
     identity_matches: bool,
@@ -127,7 +130,6 @@ fn snapshot_chunk_shape_valid(
     pearlite! { identity_matches && received >= 0 && chunk_len >= 0 && max_size >= 0
     && declared_size >= 0 && declared_size <= max_size && position == received
     && match fixed_size { Some(size) => size@ == declared_size, None => true, } }
-}
 }
 
 #[cfg(test)]

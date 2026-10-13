@@ -15,11 +15,13 @@ pub enum ChainStep {
     Continue(u64),
 }
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 fn chain_rank_precedes(left: (i64, u64, bool), right: (i64, u64, bool), allow_ties: bool) -> bool {
     pearlite! { left.0@ < right.0@ || (left.0@ == right.0@ &&
     if allow_ties { left.1@ <= right.1@ } else { left.1@ < right.1@ }) }
-}
 }
 
 /// Selects the eligible chain receipt with the greatest `(offset, sequence)`

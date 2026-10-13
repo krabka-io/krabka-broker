@@ -186,7 +186,10 @@ pub const fn log_is_up_to_date(
     cand_epoch > my_epoch || (cand_epoch == my_epoch && cand_offset >= my_end)
 }
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 /// This actual high-watermark member reaches the threshold with a majority.
 fn hwm_member_witness(
     end: Int,
@@ -198,5 +201,4 @@ fn hwm_member_witness(
 ) -> bool {
     pearlite! { 0 <= index && index < offsets.len() + 1 && hwm_member_at(end, offsets, index) >= value
     && count_ge(end, offsets, hwm_member_at(end, offsets, index), leader_counts) >= majority }
-}
 }

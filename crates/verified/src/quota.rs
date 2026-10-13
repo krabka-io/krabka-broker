@@ -111,21 +111,25 @@ pub struct UserClientQuotaFacts {
     pub default_client: QuotaCandidatePresence,
 }
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 pub fn exact_user_quota_absent(facts: UserClientQuotaFacts) -> bool {
     pearlite! { facts.exact_pair == QuotaCandidatePresence::Absent
     && facts.exact_user_default_client == QuotaCandidatePresence::Absent
     && facts.exact_user == QuotaCandidatePresence::Absent }
 }
-}
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 fn all_user_quota_absent(facts: UserClientQuotaFacts) -> bool {
     pearlite! { exact_user_quota_absent(facts)
     && facts.default_user_exact_client == QuotaCandidatePresence::Absent
     && facts.default_pair == QuotaCandidatePresence::Absent
     && facts.default_user == QuotaCandidatePresence::Absent }
-}
 }
 
 /// Select Kafka's first present user/client quota candidate.
@@ -218,11 +222,13 @@ pub fn ip_quota_precedence(exact: bool, default: bool) -> IpQuotaPrecedence {
     }
 }
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 /// Spendable credit is bounded by the burst and is absent while debt remains.
 pub(crate) fn balance_within_burst(available: Int, debt: Int, burst: Int) -> bool {
     pearlite! { available <= burst && (available == 0 || debt == 0) }
-}
 }
 
 #[cfg(test)]

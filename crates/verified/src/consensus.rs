@@ -108,21 +108,28 @@ mod watermark;
 use watermark::candidate_has_majority;
 pub use watermark::{majority_watermark, recompute_high_watermark};
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 /// Every concrete supporting report belongs to a different node.
 pub(crate) fn supporting_nodes_distinct(supporters: Seq<(u64, i64)>) -> bool {
     pearlite! { forall<i: Int, j: Int> 0 <= i && i < j && j < supporters.len() ==> supporters[i].0 != supporters[j].0 }
 }
-}
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 /// The majority bound includes the leader's own slot.
 pub(crate) fn valid_hwm_majority(majority: Int, members: Int) -> bool {
     pearlite! { 1 <= majority && majority <= members + 1 }
 }
-}
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 /// Each reported supporting frontier reaches the limit and names a voter with concrete evidence.
 pub(crate) fn supporting_voter_witnesses(
     supporters: Seq<(u64, i64)>,
@@ -133,7 +140,6 @@ pub(crate) fn supporting_voter_witnesses(
     pearlite! { forall<i: Int> 0 <= i && i < supporters.len() ==> supporters[i].1@ >= limit
     && exists<j: Int> 0 <= j && j < voters.len() && supporters[i].0 == voters[j]
         && evidence.get((i, j)) }
-}
 }
 
 #[cfg(test)]

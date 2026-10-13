@@ -397,6 +397,15 @@
 //! request. `decoded_dispatch!` accepts the same explicit function, with
 //! `[request = TYPE, binding(req)]` after its parameters and before its return type.
 //!
+//! `#[extension_wire(name = "SPAN", api = "API", level = "info")]` adapts an
+//! ordinary operation with broker, owned request, version and context parameters.
+//! It emits the raw five-argument entry point and traces both decoding and the
+//! native operation. `"debug"` retains the marker API's tracing level.
+//!
+//! `worm_object_set!` emits one ordered admission rule for its `Model` and
+//! `Runtime` declarations. Function headers and count observations stay native;
+//! proof projections remain inside the caller's Pearlite scope.
+//!
 //! # Direct runtime and response tables
 //!
 //! `set_runtime!` applies optional fields in table order. Each group names a
@@ -468,6 +477,7 @@ mod decode_dispatch;
 mod deterministic_random;
 mod dispatch;
 mod enum_str;
+mod extension_wire;
 mod field_defaults;
 mod fixtures;
 mod flexible_array_value;
@@ -514,6 +524,7 @@ mod value_framing;
 mod voter_admission;
 mod wire_fixtures;
 mod wire_values;
+mod worm_object_set;
 
 /// Derives `unregistered` and `register` for a struct of metric handles. The
 /// crate documentation lists the field attributes.
@@ -672,6 +683,21 @@ pub fn decode_dispatch(
 #[moxy::function]
 pub fn decoded_dispatch(tokens: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     decode_dispatch::expand_function(tokens)
+}
+
+/// Emit the ordered WORM object-set rule around an explicit runtime or proof header.
+#[moxy::function]
+pub fn worm_object_set(tokens: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    worm_object_set::expand(tokens)
+}
+
+/// Adapt an explicitly typed extension operation to its decoded and traced raw entry point.
+#[moxy::attribute]
+pub fn extension_wire(
+    meta: NativeTokenStream,
+    item: NativeTokenStream,
+) -> Result<NativeTokenStream, ParseError> {
+    extension_wire::expand(&meta.into(), item)
 }
 
 /// Add flexible value framing around explicitly ordered private field codecs.

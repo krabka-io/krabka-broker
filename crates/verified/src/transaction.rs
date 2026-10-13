@@ -2,7 +2,10 @@
 
 use creusot_std::prelude::*;
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 /// The stable frontier is the minimum pending start, or the end of an idle log.
 pub(crate) fn first_unstable_frontier(starts: Seq<i64>, log_end: Int, lso: Int) -> bool {
     pearlite! {
@@ -13,7 +16,6 @@ pub(crate) fn first_unstable_frontier(starts: Seq<i64>, log_end: Int, lso: Int) 
                 && (exists<i: Int> 0 <= i && i < starts.len() && lso == starts[i]@)
                 && (forall<i: Int> 0 <= i && i < starts.len() ==> lso <= starts[i]@)))
     }
-}
 }
 
 /// Classification of the actual first control-record key, shared by live
@@ -248,7 +250,10 @@ pub use abort_rows::unique_aborted_transaction_rows;
 mod producer_identity;
 pub use producer_identity::{init_producer_id_identity_decision, transaction_completion_decision};
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 /// Every prefix bounded by the log and live transactions is below this limit.
 pub(crate) fn unstable_fetch_limit_maximal(
     starts: Seq<i64>,
@@ -260,9 +265,11 @@ pub(crate) fn unstable_fetch_limit_maximal(
     pearlite! { forall<v: Int> v <= log_end && v <= high_watermark && v <= deliverable
     && (forall<i: Int> 0 <= i && i < starts.len() ==> v <= starts[i]@) ==> v <= limit }
 }
-}
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 /// Every coherent pending transaction bounds both stability and the consumer fetch prefix.
 pub(crate) fn pending_starts_bound_fetch(
     starts: Seq<i64>,
@@ -273,13 +280,14 @@ pub(crate) fn pending_starts_bound_fetch(
     pearlite! { forall<i: Int> 0 <= i && i < starts.len()
     ==> starts[i]@ <= end && stable <= starts[i]@ && limit <= starts[i]@ }
 }
-}
 
-open_logic! {
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 /// Every remaining transaction starts inside the prefix preceding the marker.
 pub(crate) fn pending_starts_before_marker(starts: Seq<i64>, base: Int) -> bool {
     pearlite! { forall<i: Int> 0 <= i && i < starts.len() ==> 0 <= starts[i]@ && starts[i]@ <= base }
-}
 }
 
 #[cfg(test)]
