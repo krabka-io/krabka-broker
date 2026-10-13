@@ -21,7 +21,10 @@ use {
             test_support::{replicated_partition, single_replica_partition},
         },
         leader_election::{ElectionType, test_support::one_partition_change},
-        test_support::{decode_response, start_broker_no_audit_with, test_ctx},
+        test_support::{
+            decode_response, gated_break_glass_config as gated_config, start_broker_no_audit_with,
+            test_ctx,
+        },
     },
     assert2::{assert, check},
     krabka_metadata::{
@@ -44,13 +47,6 @@ const VERSION: i16 = elect_leaders_response::MAX_VERSION;
 mod commit_fencing;
 
 crate::test_support::context_helper!(client_id = "kafka-leader-election");
-
-fn gated_config() -> BreakGlassConfig {
-    BreakGlassConfig {
-        approvers: ["User:alice", "User:bob"].map(str::to_owned).to_vec(),
-        ..BreakGlassConfig::default()
-    }
-}
 
 /// One two-replica partition of [`TOPIC`], led by broker 1, beside the
 /// proposals the registry holds.

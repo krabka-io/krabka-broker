@@ -19,8 +19,8 @@ use {
         },
         test_support::{
             DenyAll, PartitionCount, PartitionEpoch, broker_registration,
-            decode_response as test_decode_response, encode_request as test_encode_request, peer,
-            principal, request_context,
+            decode_response as test_decode_response, encode_request as test_encode_request,
+            gated_break_glass_config as gated_config, peer, principal, request_context,
             start_broker_with_authorizer_no_audit as start_authorizer_broker,
         },
     },
@@ -138,13 +138,6 @@ async fn handle_unregisters_registered_broker_with_success_shape() {
 const DOOMED: NodeId = NodeId(7);
 /// The epoch of the registration an unregistration of [`DOOMED`] removes.
 const DOOMED_EPOCH: i64 = 42;
-
-fn gated_config() -> BreakGlassConfig {
-    BreakGlassConfig {
-        approvers: ["User:alice", "User:bob"].map(str::to_owned).to_vec(),
-        ..BreakGlassConfig::default()
-    }
-}
 
 const NOW_MS: i64 = 60_000;
 

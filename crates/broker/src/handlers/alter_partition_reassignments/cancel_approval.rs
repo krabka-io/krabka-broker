@@ -177,7 +177,10 @@ mod tests {
             handlers::alter_partition_reassignments::test_support::{
                 img_with, pending_reassignment_image,
             },
-            test_support::{ReassignmentSetup, start_broker_no_audit_with},
+            test_support::{
+                ReassignmentSetup, gated_break_glass_config as gated_config,
+                start_broker_no_audit_with,
+            },
         },
         assert2::{assert, check},
         std::sync::Arc,
@@ -196,13 +199,6 @@ mod tests {
                 })
             );
         };
-    }
-
-    fn gated_config() -> BreakGlassConfig {
-        BreakGlassConfig {
-            approvers: ["User:alice", "User:bob"].map(str::to_owned).to_vec(),
-            ..BreakGlassConfig::default()
-        }
     }
 
     /// A partition mid-reassignment, beside the proposals the registry holds.
