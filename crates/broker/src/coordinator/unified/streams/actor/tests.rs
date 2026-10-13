@@ -31,6 +31,15 @@ use {
     assert2::{assert, check},
 };
 
+fn partition_indices(partitions: Option<Vec<i32>>) -> Option<Vec<krabka_ids::PartitionIndex>> {
+    partitions.map(|partitions| {
+        partitions
+            .into_iter()
+            .map(krabka_ids::PartitionIndex)
+            .collect()
+    })
+}
+
 krabka_macros::single_replica_partition_fixture!(partition_record);
 
 fn epoch_five_member() -> StreamsMemberState {
@@ -770,12 +779,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
         let expected = super::test_support::expected_active_response()
             .epoch(row.epoch)
             .maybe_status(row.status)
-            .maybe_active(row.active.map(|partitions| {
-                partitions
-                    .into_iter()
-                    .map(krabka_ids::PartitionIndex)
-                    .collect()
-            }))
+            .maybe_active(partition_indices(row.active))
             .call();
         check!(resp == expected, "{}", row.name);
     }
@@ -1332,12 +1336,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
                     })
                     .collect(),
             ))
-            .maybe_active(row.active.map(|partitions| {
-                partitions
-                    .into_iter()
-                    .map(krabka_ids::PartitionIndex)
-                    .collect()
-            }))
+            .maybe_active(partition_indices(row.active))
             .call();
         check!(last == Some(expected), "{}", row.name);
     }
