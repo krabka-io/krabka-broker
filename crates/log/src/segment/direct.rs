@@ -191,8 +191,11 @@ struct Queue {
     jobs: VecDeque<Job>,
     /// Writes running now, including a write of the partial last block.
     in_flight: usize,
-    /// Bytes queued or being written.
-    unwritten: usize,
+    /// The end of the last whole-block write queued. The bytes from
+    /// `written` to it are queued, running, or finished out of order behind a
+    /// gap: all of them stay in memory, so all of them count against the
+    /// queue limit until the gap-free written mark passes them.
+    queued_end: u64,
     /// The logical end of every queued append, and its partial last block.
     end: u64,
     tail: Vec<u8>,
@@ -229,6 +232,11 @@ enum Work {
 }
 
 impl Queue {
+    /// Bytes held in memory for writes: see `queued_end`.
+    fn unwritten(&self) -> usize {
+        usize::try_from(self.queued_end.saturating_sub(self.written)).unwrap_or(usize::MAX)
+    }
+
     fn failed(&self) -> std::io::Result<()> {
         match &self.failure {
             Some((kind, message)) => Err(Error::new(*kind, message.clone())),
@@ -311,7 +319,7 @@ impl DirectWriter {
                 queue: Mutex::new(Queue {
                     jobs: VecDeque::new(),
                     in_flight: 0,
-                    unwritten: 0,
+                    queued_end: end,
                     end,
                     tail,
                     tail_writing: false,
@@ -364,8 +372,8 @@ impl DirectWriter {
             if total == 0 {
                 return Ok(());
             }
-            while queue.unwritten > 0
-                && queue.unwritten + whole > self.queue_limit
+            while queue.unwritten() > 0
+                && queue.unwritten() + whole > self.queue_limit
                 && queue.failure.is_none()
             {
                 queue = self.shared.changed.wait(queue).unwrap();
@@ -388,8 +396,21 @@ impl DirectWriter {
         let end = self.end + to_u64(total);
 
         let mut queue = self.shared.queue.lock().unwrap();
+
+        // A write may have failed while the buffer was filled. Its handler
+
+        // dropped the queued jobs, and a job queued now would never run, so
+
+        // the append must not be acknowledged.
+
+        if let Err(error) = queue.failed() {
+            queue.give_back(buf);
+
+            return Err(error);
+        }
+
         if whole > 0 {
-            queue.unwritten += whole;
+            queue.queued_end = at + to_u64(whole);
             queue.jobs.push_back(Job { buf, at });
         } else {
             queue.give_back(buf);
@@ -433,6 +454,7 @@ impl DirectWriter {
         check_tail(self.align, end, &tail)?;
         let mut queue = self.settle();
         queue.written = end;
+        queue.queued_end = end;
         queue.end = end;
         queue.tail.clone_from(&tail);
         queue.finished.clear();
@@ -575,7 +597,6 @@ impl Shared {
         let buf = match work {
             Work::Blocks(job) => {
                 let len = job.buf.as_slice().len();
-                queue.unwritten -= len;
                 if result.is_ok() {
                     queue.finish(job.at, job.at + to_u64(len));
                 }
@@ -595,12 +616,7 @@ impl Shared {
             queue
                 .failure
                 .get_or_insert((error.kind(), error.to_string()));
-            let dropped: usize = queue
-                .jobs
-                .drain(..)
-                .map(|job| job.buf.as_slice().len())
-                .sum();
-            queue.unwritten -= dropped;
+            queue.jobs.clear();
         }
         self.schedule(&mut queue);
         self.changed.notify_all();
@@ -970,18 +986,16 @@ mod tests {
         expected
     }
 
+    /// A writer on a new, empty temporary file that writes through `io`.
+    fn empty_writer(align: DioAlign, io: Arc<dyn LogIo>) -> DirectWriter {
+        DirectWriter::new(tempfile::tempfile().unwrap(), align, 0, Vec::new(), io).unwrap()
+    }
+
     /// A writer on a new temporary file, and the I/O it writes through.
     fn writer(block: usize) -> (DirectWriter, Arc<RecordingIo>) {
         let align = DioAlign { mem: MEM, block };
         let io = RecordingIo::new(align);
-        let writer = DirectWriter::new(
-            tempfile::tempfile().unwrap(),
-            align,
-            0,
-            Vec::new(),
-            Arc::clone(&io) as Arc<dyn LogIo>,
-        )
-        .unwrap();
+        let writer = empty_writer(align, Arc::clone(&io) as Arc<dyn LogIo>);
         (writer, io)
     }
 
@@ -1126,7 +1140,7 @@ mod tests {
         let mut queue = Queue {
             jobs: VecDeque::new(),
             in_flight: 0,
-            unwritten: 0,
+            queued_end: 4096,
             end: 4096,
             tail: Vec::new(),
             tail_writing: false,
@@ -1139,8 +1153,12 @@ mod tests {
         queue.finish(2048, 3072);
         queue.finish(1024, 2048);
         check!(queue.written == 0);
+        // Writes that finished behind the gap stay in memory, so they still
+        // count against the queue limit.
+        check!(queue.unwritten() == 4096);
         queue.finish(0, 1024);
         check!(queue.written == 3072);
+        check!(queue.unwritten() == 1024);
         queue.finish(3072, 4096);
         check!(queue.written == 4096);
         check!(queue.finished.is_empty());
@@ -1173,14 +1191,7 @@ mod tests {
             running: 0.into(),
             most: 0.into(),
         });
-        let mut writer = DirectWriter::new(
-            tempfile::tempfile().unwrap(),
-            align,
-            0,
-            Vec::new(),
-            Arc::clone(&io) as Arc<dyn LogIo>,
-        )
-        .unwrap();
+        let mut writer = empty_writer(align, Arc::clone(&io) as Arc<dyn LogIo>);
         let mut logical = Vec::new();
         for seed in 0..8 {
             let bytes = pattern(seed, 1024);

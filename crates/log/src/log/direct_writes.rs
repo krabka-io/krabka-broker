@@ -237,6 +237,27 @@ fn a_direct_segment_is_never_offered_to_sendfile() {
     assert2::assert!(sealed.regions.is_empty());
 }
 
+#[krabka_macros::sendfile_cfg]
+/// The descriptor walk stops at a segment that wrote through `O_DIRECT`, so
+/// a fetch that starts there falls back to the byte-copy path rather than
+/// sending a later, buffered segment's runs and skipping the direct one's
+/// offsets.
+#[test]
+fn a_descriptor_walk_never_passes_over_a_direct_segment() {
+    let disk = Arc::new(AlignedDisk::default());
+    let TempLog { dir: _dir, mut log } = one_synced_batch(&disk);
+    assert2::assert!(log.roll().unwrap());
+    log.set_config(LogConfig::default());
+    append_samples(&mut log, 1, 3);
+    let end = log.log_end_offset();
+
+    let from_direct = log.read_raw_desc(Offset(0), end, NO_LIMIT).unwrap();
+    assert2::assert!(from_direct.regions.is_empty());
+    let from_buffered = log.read_raw_desc(Offset(3), end, NO_LIMIT).unwrap();
+    assert2::assert!(from_buffered.start_offset == 3);
+    assert2::assert!(from_buffered.regions.len() == 1);
+}
+
 /// A truncate puts the writer back on the block the new end falls in and
 /// forgets the cached bytes past it, so the appends after it land where a
 /// buffered log's would and read back from memory and from disk alike.
@@ -256,15 +277,21 @@ fn a_truncate_rewinds_the_direct_writer_and_its_cache() {
     assert2::assert!(batches(&log) == [span(0, 2), span(3, 4), span(8, 4)]);
 }
 
+/// A direct log holding one batch of three records, synced to the disk.
+fn one_synced_batch(disk: &Arc<AlignedDisk>) -> TempLog {
+    let TempLog { dir, mut log } = direct_log(disk, mebibytes(1));
+    append_samples(&mut log, 1, 3);
+    log.sync().unwrap();
+    TempLog { dir, log }
+}
+
 /// Turning `preallocate` off puts the active segment back on the page cache
 /// before its next append, which cuts the padding: from then on its file is
 /// exactly as long as its batches again.
 #[test]
 fn turning_preallocate_off_goes_back_to_the_page_cache() {
     let disk = Arc::new(AlignedDisk::default());
-    let TempLog { dir, mut log } = direct_log(&disk, mebibytes(1));
-    append_samples(&mut log, 1, 3);
-    log.sync().unwrap();
+    let TempLog { dir, mut log } = one_synced_batch(&disk);
     let direct_writes = disk.writes.lock().unwrap().len();
 
     log.set_config(LogConfig::default());
@@ -283,9 +310,7 @@ fn turning_preallocate_off_goes_back_to_the_page_cache() {
 #[test]
 fn a_failed_direct_write_fails_the_log_from_then_on() {
     let disk = Arc::new(AlignedDisk::default());
-    let TempLog { dir, mut log } = direct_log(&disk, mebibytes(1));
-    append_samples(&mut log, 1, 3);
-    log.sync().unwrap();
+    let TempLog { dir, mut log } = one_synced_batch(&disk);
 
     disk.fail_next.store(true, Ordering::SeqCst);
     append_samples(&mut log, 1, 3);
@@ -534,6 +559,8 @@ fn direct_groups_refuse_invalid_transactional_and_oversized_batches_without_writ
             .is_none()
     );
     append_samples(&mut log, 1, 7);
+    log.sync().unwrap();
+    let writes = disk.writes.lock().unwrap().len();
     let mut short = valid[0].clone();
     short.bytes = bytes::Bytes::from_static(b"short");
     let mut invalid = valid[0].clone();
@@ -555,6 +582,7 @@ fn direct_groups_refuse_invalid_transactional_and_oversized_batches_without_writ
     ] {
         assert2::assert!(log.try_append_verbatim_group(&batches).is_none());
         assert2::assert!(log.log_end_offset() == Offset(7));
-        assert2::assert!(disk.writes.lock().unwrap().len() == 1);
+        log.sync().unwrap();
+        assert2::assert!(disk.writes.lock().unwrap().len() == writes);
     }
 }
