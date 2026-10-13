@@ -401,7 +401,7 @@ fn heterogeneous_builder_matches_kafka_scenarios() {
 }
 
 fn heterogeneous_rows_early() -> Vec<Scenario<'static>> {
-    let (t1, t2, t3, t4) = (tid(1), tid(2), tid(3), tid(4));
+    let (t1, t2, t3) = (tid(1), tid(2), tid(3));
     vec![
         Scenario {
             name: "testTwoMembersNoTopicSubscription",
