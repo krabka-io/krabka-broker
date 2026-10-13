@@ -215,48 +215,6 @@ macro_rules! effective_group_config {
 }
 pub(crate) use effective_group_config;
 
-/// Declare the common session and heartbeat settings while keeping each protocol's fields in order.
-macro_rules! membership_config_type {
-    ($(#[$($meta:tt)*])* pub struct $name:ident;
-        prefix { $($prefix:tt)* }
-        $(#[$($session_doc:tt)*])* session_timeout;
-        $(#[$($heartbeat_doc:tt)*])* heartbeat_interval;
-        before_bounds { $($before:tt)* }
-        bounds {
-            $(#[$($min_session_doc:tt)*])* min_session_timeout;
-            $(#[$($max_session_doc:tt)*])* max_session_timeout;
-            $(#[$($min_heartbeat_doc:tt)*])* min_heartbeat_interval;
-            $(#[$($max_heartbeat_doc:tt)*])* max_heartbeat_interval;
-        }
-        suffix { $($suffix:tt)* }) => {
-        $(#[$($meta)*])*
-        pub struct $name {
-            $($prefix)*
-            $(#[$($session_doc)*])*
-            #[default(std::time::Duration::from_secs(45))]
-            pub session_timeout: std::time::Duration,
-            $(#[$($heartbeat_doc)*])*
-            #[default(std::time::Duration::from_secs(5))]
-            pub heartbeat_interval: std::time::Duration,
-            $($before)*
-            $(#[$($min_session_doc)*])*
-            #[default(std::time::Duration::from_secs(45))]
-            pub min_session_timeout: std::time::Duration,
-            $(#[$($max_session_doc)*])*
-            #[default(std::time::Duration::from_mins(1))]
-            pub max_session_timeout: std::time::Duration,
-            $(#[$($min_heartbeat_doc)*])*
-            #[default(std::time::Duration::from_secs(5))]
-            pub min_heartbeat_interval: std::time::Duration,
-            $(#[$($max_heartbeat_doc)*])*
-            #[default(std::time::Duration::from_secs(15))]
-            pub max_heartbeat_interval: std::time::Duration,
-            $($suffix)*
-        }
-    };
-}
-pub(crate) use membership_config_type;
-
 /// Lower bound on the negotiated session timeout: 45 s, matching Kafka's
 /// `group.consumer.min.session.timeout.ms`.
 pub const DEFAULT_MIN_SESSION_TIMEOUT: Duration = Duration::from_secs(45);

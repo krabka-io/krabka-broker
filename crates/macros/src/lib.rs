@@ -365,12 +365,34 @@
 //! `response_errors!` implements the caller's error traits for external
 //! protocol types. Its four sections are `response`, `code_response`, `row`
 //! and `resource_row`. Each section contains type paths separated by commas
-//! and ends with a semicolon. A resource row also implements `ErrorRow`, so
+//! inside braces. A resource row also implements `ErrorRow`, so
 //! each resource type is listed once. The traits remain in the caller's scope.
 //!
 //! `metric_registry_fixture!(metrics, output, guard; expect("encode"))`
 //! renders directly into the named bindings. The caller retains the registry
 //! lock until it drops `guard`. Use `unwrap()` to select that result policy.
+//!
+//! `broker_config! { pub struct BrokerConfig { ... } }` constructs the broker
+//! config in one expansion. The fields stay in declaration order with their
+//! original tokens, documentation and attributes. It adds `Debug` and `Clone`.
+//!
+//! `#[membership_defaults]` goes before `FieldDefaults` on a membership config.
+//! It assigns the shared defaults to the six named session and heartbeat
+//! fields. An existing default on one of those fields is an input error.
+//!
+//! `#[derive(ShareStateValue)]` writes scalar fields in declaration order,
+//! followed by state batches and the delivery-count tag. The existing batch,
+//! version and tag helpers retain their byte layouts and validation. Supply
+//! method documentation with `#[share_state(encode_doc = "...", decode_doc = "...")]`.
+//!
+//! `#[derive(FlexibleArrayValue)]` wraps one `Vec` field in version-zero
+//! framing. `#[array_value(record = "RecordName", encode = writer, decode = reader)]`
+//! selects the existing array callbacks and decoding error name.
+//!
+//! `tagged_wire!` and `unthrottled_wire!` construct exhaustive struct values.
+//! Both supply an empty tagged-field set; the second supplies zero throttle.
+//! Every remaining field stays required. Struct updates with `..` are refused,
+//! and field expressions retain their original tokens and evaluation order.
 
 use {
     moxy::{
@@ -384,6 +406,7 @@ mod api_names;
 mod async_write_delegate;
 mod auth_fixtures;
 mod bound_start_fixture;
+mod broker_config;
 mod cli_main;
 mod cli_support;
 mod config_table;
@@ -394,12 +417,14 @@ mod dispatch;
 mod enum_str;
 mod field_defaults;
 mod fixtures;
+mod flexible_array_value;
 mod flexible_epoch_value;
 mod gcs_fields;
 mod group_timing_config;
 mod human_units;
 mod krabka_env;
 mod legacy_fixtures;
+mod membership_defaults;
 mod meta;
 mod metrics;
 mod network_fixtures;
@@ -419,11 +444,13 @@ mod runtime_overlay;
 mod runtime_policy_fields;
 mod s3_fields;
 mod sendfile_match;
+mod share_state_value;
 mod throttle_probes;
 mod timer_hooks;
 mod timestamped_batch;
 mod transport_errors;
 mod wire_fixtures;
+mod wire_values;
 
 // Token-to-token fixtures share the same Moxy adapter and error handling.
 macro_rules! function_macros {
@@ -518,16 +545,55 @@ pub fn group_timing_config(item: ItemStruct) -> Result<TokenStream, ParseError> 
     group_timing_config::expand(item)
 }
 
+/// Add the shared timing defaults before `FieldDefaults` derives the config constructor.
+#[moxy::attribute]
+pub fn membership_defaults(
+    meta: TokenStream,
+    item: TokenStream,
+) -> Result<TokenStream, ParseError> {
+    membership_defaults::expand(meta, item)
+}
+
 /// Derive the version-zero epoch codec with an optional i64 value in tag zero.
 #[moxy::derive(FlexibleEpochValue, attributes(epoch_value))]
 pub fn flexible_epoch_value(item: ItemStruct) -> Result<TokenStream, ParseError> {
     flexible_epoch_value::expand(item)
 }
 
+/// Derive the existing share-state value codecs from their ordered fields.
+#[moxy::derive(ShareStateValue, attributes(share_state))]
+pub fn share_state_value(item: ItemStruct) -> Result<TokenStream, ParseError> {
+    share_state_value::expand(item)
+}
+
+/// Derive version-zero framing around one array field's existing leaf codecs.
+#[moxy::derive(FlexibleArrayValue, attributes(array_value))]
+pub fn flexible_array_value(item: ItemStruct) -> Result<TokenStream, ParseError> {
+    flexible_array_value::expand(item)
+}
+
 /// Implement the shared error traits for external protocol response and row types.
 #[moxy::function]
 pub fn response_errors(tokens: NativeTokenStream) -> Result<TokenStream, ParseError> {
     response_encoding::expand(&tokens.into())
+}
+
+/// Generate the flat broker configuration declaration with its shared derives.
+#[moxy::function]
+pub fn broker_config(tokens: NativeTokenStream) -> Result<TokenStream, ParseError> {
+    broker_config::expand(&tokens.into())
+}
+
+/// Construct an exhaustive wire value with an empty tagged-field set.
+#[moxy::function]
+pub fn tagged_wire(tokens: NativeTokenStream) -> Result<TokenStream, ParseError> {
+    wire_values::expand(&tokens.into(), false)
+}
+
+/// Construct an exhaustive response with zero throttle and empty tagged fields.
+#[moxy::function]
+pub fn unthrottled_wire(tokens: NativeTokenStream) -> Result<TokenStream, ParseError> {
+    wire_values::expand(&tokens.into(), true)
 }
 
 /// Apply optional runtime fields in table order through their named validators.

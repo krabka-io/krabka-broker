@@ -378,7 +378,7 @@ mod tests {
     fn top_level_preserves_error_fields() {
         let resp = top_level(codes::UNSUPPORTED_VERSION, None);
 
-        let expected = unthrottled_wire!(DeleteShareGroupOffsetsResponse {
+        let expected = krabka_macros::unthrottled_wire!(DeleteShareGroupOffsetsResponse {
             error_code: codes::UNSUPPORTED_VERSION,
             error_message: Some("The version of API is not supported.".into()),
             responses: Vec::new(),
@@ -424,7 +424,7 @@ mod tests {
                 Arc::new(crate::authorizer::AllowAllAuthorizer),
                 crate::test_support::ShareApiSupport::Disabled,
                 vec!["missing"],
-                unthrottled_wire!(DeleteShareGroupOffsetsResponse {
+                krabka_macros::unthrottled_wire!(DeleteShareGroupOffsetsResponse {
                     error_code: codes::UNSUPPORTED_VERSION,
                     error_message: Some("The version of API is not supported.".into()),
                     responses: Vec::new(),
@@ -435,7 +435,7 @@ mod tests {
                 Arc::new(crate::test_support::ControllerPeerAllowed(DenyAll)),
                 crate::test_support::ShareApiSupport::Enabled,
                 vec!["missing"],
-                unthrottled_wire!(DeleteShareGroupOffsetsResponse {
+                krabka_macros::unthrottled_wire!(DeleteShareGroupOffsetsResponse {
                     error_code: codes::GROUP_AUTHORIZATION_FAILED,
                     error_message: Some("Group authorization failed.".into()),
                     responses: Vec::new(),
@@ -736,7 +736,7 @@ mod tests {
             .expect("handle delete");
 
             let denied_row = |name: &str| {
-                tagged_wire!(DeleteShareGroupOffsetsResponseTopic {
+                krabka_macros::tagged_wire!(DeleteShareGroupOffsetsResponseTopic {
                     topic_name: name.into(),
                     topic_id: Uuid::default(),
                     error_code: codes::TOPIC_AUTHORIZATION_FAILED,
@@ -744,7 +744,7 @@ mod tests {
                 })
             };
             let allowed_row = |name: &str, topic_id: uuid::Uuid| {
-                tagged_wire!(DeleteShareGroupOffsetsResponseTopic {
+                krabka_macros::tagged_wire!(DeleteShareGroupOffsetsResponseTopic {
                     topic_name: name.into(),
                     topic_id: Uuid(*topic_id.as_bytes()),
                     error_code: codes::NONE,
@@ -771,7 +771,7 @@ mod tests {
                 }
             }
 
-            let expected = unthrottled_wire!(DeleteShareGroupOffsetsResponse {
+            let expected = krabka_macros::unthrottled_wire!(DeleteShareGroupOffsetsResponse {
                 error_code: codes::NONE,
                 error_message: None,
                 responses: expected_responses,

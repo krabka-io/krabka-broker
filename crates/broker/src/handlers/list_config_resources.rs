@@ -274,7 +274,7 @@ mod tests {
                      resource_type,
                      name,
                  }| {
-                    tagged_wire!(ConfigResource {
+                    krabka_macros::tagged_wire!(ConfigResource {
                         resource_name: name.to_string(),
                         resource_type,
                     })
@@ -422,7 +422,7 @@ mod tests {
     async fn v1_unsupported_resource_type_fails_the_whole_request() {
         listing_fixture!((broker_handle, _dir, broker, ctx), "t-a");
 
-        let unsupported = unthrottled_wire!(ListConfigResourcesResponse {
+        let unsupported = krabka_macros::unthrottled_wire!(ListConfigResourcesResponse {
             error_code: codes::UNSUPPORTED_VERSION,
             config_resources: vec![],
         });
@@ -466,7 +466,7 @@ mod tests {
         let resp = handle(&broker, &req, VERSION, &ctx);
 
         let topics = listed_topics(&broker, "t-a");
-        let expected = unthrottled_wire!(ListConfigResourcesResponse {
+        let expected = krabka_macros::unthrottled_wire!(ListConfigResourcesResponse {
             error_code: codes::NONE,
             config_resources: topics,
         });
@@ -488,7 +488,7 @@ mod tests {
 
         let resp = handle(&broker, &req, VERSION, &ctx);
 
-        let expected = unthrottled_wire!(ListConfigResourcesResponse {
+        let expected = krabka_macros::unthrottled_wire!(ListConfigResourcesResponse {
             error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
             config_resources: vec![],
         });
@@ -513,11 +513,11 @@ mod tests {
             ..Default::default()
         };
         let topics = listed_topics(&broker, "orders");
-        let allowed = unthrottled_wire!(ListConfigResourcesResponse {
+        let allowed = krabka_macros::unthrottled_wire!(ListConfigResourcesResponse {
             error_code: codes::NONE,
             config_resources: topics,
         });
-        let denied = unthrottled_wire!(ListConfigResourcesResponse {
+        let denied = krabka_macros::unthrottled_wire!(ListConfigResourcesResponse {
             error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
             config_resources: vec![],
         });

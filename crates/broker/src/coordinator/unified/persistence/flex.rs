@@ -99,24 +99,6 @@ macro_rules! value_codec {
 
 pub(crate) use value_codec;
 
-/// Implements a version-0 flexible value with one array-shaped field. The
-/// string literal is Kafka's record name, which the value-version error names.
-macro_rules! array_value_codec {
-    ($name:ident($record:literal), $field:ident, $encode:path, $decode:path) => {
-        $crate::coordinator::unified::persistence::flex::value_codec! {
-            $name($record),
-            encode(&self) -> buf {
-                $encode(buf, &self.$field);
-            }
-            decode(buf) {
-                Ok(Self { $field: $decode(buf)? })
-            }
-        }
-    };
-}
-
-pub(crate) use array_value_codec;
-
 fn protocol(e: ProtocolError) -> BrokerError { BrokerError::Protocol(e) }
 
 // ───────────────────────────────────────────────────────────────── writers ──

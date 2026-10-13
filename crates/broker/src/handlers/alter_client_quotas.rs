@@ -91,7 +91,7 @@ context_handler! {
             );
         }
 
-        Ok(unthrottled_wire!(AlterClientQuotasResponse {
+        Ok(krabka_macros::unthrottled_wire!(AlterClientQuotasResponse {
             entries: entry_results,
         }))
     }

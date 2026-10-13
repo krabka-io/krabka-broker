@@ -28,9 +28,7 @@
 use {
     crate::{
         coordinator::unified::persistence::{
-            flex::{
-                array_value_codec, get_assigned_topics, get_i8, put_assigned_topics, value_codec,
-            },
+            flex::{get_assigned_topics, get_i8, put_assigned_topics, value_codec},
             get_i32,
         },
         error::BrokerError,
@@ -42,17 +40,15 @@ use {
 /// `org.apache.kafka.coordinator.group.modern.MemberState.STABLE`.
 const MEMBER_STATE_STABLE: i8 = 0;
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, krabka_macros::FlexibleArrayValue)]
+#[array_value(
+    record = "ShareGroupTargetAssignmentMemberValue",
+    encode = encode_topic_partitions,
+    decode = decode_topic_partitions,
+)]
 pub struct ShareGroupTargetAssignmentMemberValue {
     pub topic_partitions: Vec<(Uuid, Vec<i32>)>,
 }
-
-array_value_codec!(
-    ShareGroupTargetAssignmentMemberValue("ShareGroupTargetAssignmentMemberValue"),
-    topic_partitions,
-    encode_topic_partitions,
-    decode_topic_partitions
-);
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ShareGroupCurrentMemberAssignmentValue {

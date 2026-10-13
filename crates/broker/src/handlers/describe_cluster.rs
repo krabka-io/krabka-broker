@@ -333,7 +333,7 @@ mod tests {
                 .await
                 .expect("handle");
 
-            let expected = unthrottled_wire!(DescribeClusterResponse {
+            let expected = krabka_macros::unthrottled_wire!(DescribeClusterResponse {
                 error_code: case.error_code,
                 error_message: Some(case.error_message.into()),
                 endpoint_type: 1,
@@ -498,7 +498,7 @@ mod tests {
         }
 
         let broker_row = |node_id: i32, listener: &str, port: i32| {
-            tagged_wire!(DescribeClusterBroker {
+            krabka_macros::tagged_wire!(DescribeClusterBroker {
                 broker_id: node_id,
                 host: format!("{}-{node_id}", listener.to_lowercase()),
                 port,
@@ -598,7 +598,7 @@ mod tests {
             .iter()
             .find(|b| b.broker_id == 42)
             .expect("seeded broker row");
-        let expected_seeded_row = tagged_wire!(DescribeClusterBroker {
+        let expected_seeded_row = krabka_macros::tagged_wire!(DescribeClusterBroker {
             broker_id: 42,
             host: "broker-a".into(),
             port: 29092,

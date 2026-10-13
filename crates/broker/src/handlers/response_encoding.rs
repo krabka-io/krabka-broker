@@ -76,7 +76,7 @@ pub(crate) fn stamp_unset<'a, R: ErrorRow + 'a>(
 }
 
 krabka_macros::response_errors! {
-    response:
+    response {
         krabka_protocol::krabka::barrier::ListBarrierCutsResponse,
         krabka_protocol::owned::add_raft_voter_response::AddRaftVoterResponse,
         krabka_protocol::owned::alter_share_group_offsets_response::AlterShareGroupOffsetsResponse,
@@ -92,8 +92,8 @@ krabka_macros::response_errors! {
         krabka_protocol::owned::share_group_heartbeat_response::ShareGroupHeartbeatResponse,
         krabka_protocol::owned::streams_group_topology_description_update_response::StreamsGroupTopologyDescriptionUpdateResponse,
         krabka_protocol::owned::unregister_broker_response::UnregisterBrokerResponse,
-    ;
-    code_response:
+    }
+    code_response {
         krabka_protocol::owned::add_offsets_to_txn_response::AddOffsetsToTxnResponse,
         krabka_protocol::owned::broker_heartbeat_response::BrokerHeartbeatResponse,
         krabka_protocol::owned::describe_delegation_token_response::DescribeDelegationTokenResponse,
@@ -104,18 +104,18 @@ krabka_macros::response_errors! {
         krabka_protocol::owned::renew_delegation_token_response::RenewDelegationTokenResponse,
         krabka_protocol::owned::sync_group_response::SyncGroupResponse,
         krabka_protocol::owned::update_raft_voter_response::UpdateRaftVoterResponse,
-    ;
-    row:
+    }
+    row {
         krabka_protocol::owned::alter_client_quotas_response::EntryData,
         krabka_protocol::owned::alter_partition_reassignments_response::ReassignablePartitionResponse,
         krabka_protocol::owned::alter_user_scram_credentials_response::AlterUserScramCredentialsResult,
         krabka_protocol::owned::delete_acls_response::DeleteAclsFilterResult,
         krabka_protocol::owned::elect_leaders_response::PartitionResult,
-    ;
-    resource_row:
+    }
+    resource_row {
         krabka_protocol::owned::alter_configs_response::AlterConfigsResourceResponse,
         krabka_protocol::owned::incremental_alter_configs_response::AlterConfigsResourceResponse,
-    ;
+    }
 }
 
 #[cfg(test)]

@@ -294,6 +294,8 @@ Use the [moxy documentation](https://raw.githubusercontent.com/aacebo/moxy/refs/
 
 The group timing configs use `GroupTimingConfig`; flexible epoch records use `FlexibleEpochValue`. Runtime assignments use `set_runtime!`, and external response types use `response_errors!`. The startup and metric fixtures emit direct code. These examples live in `crates/macros/src/` with consumer tests in `crates/macros/tests/`.
 
+The broker config uses one `broker_config!` declaration with all fields in order. Membership configs use ordinary fields and `membership_defaults` before `FieldDefaults`. Share-state and array records use `ShareStateValue` and `FlexibleArrayValue`. The wire constructors emit exhaustive literals directly and retain the original expression tokens.
+
 For parallel work, give each subagent one macro family and its callers. Keep shared exports with one owner. Review the combined diff for scope, spans, and caller behavior before running the checks.
 
 ## Logging and Observability

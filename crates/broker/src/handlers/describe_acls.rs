@@ -291,7 +291,7 @@ mod tests {
             codes::SECURITY_DISABLED,
             Some(NO_AUTHORIZER_MESSAGE.into()),
         );
-        let expected_err = unthrottled_wire!(DescribeAclsResponse {
+        let expected_err = krabka_macros::unthrottled_wire!(DescribeAclsResponse {
             error_code: codes::SECURITY_DISABLED,
             error_message: Some("No Authorizer is configured on the broker".into()),
             resources: Vec::new(),
@@ -299,7 +299,7 @@ mod tests {
         assert!(err == expected_err);
 
         let desc = acl_description(&acl().call());
-        let expected_desc = tagged_wire!(AclDescription {
+        let expected_desc = krabka_macros::tagged_wire!(AclDescription {
             principal: "User:alice".into(),
             host: "*".into(),
             operation: OPERATION_READ,
@@ -313,7 +313,7 @@ mod tests {
             PATTERN_TYPE_LITERAL,
             vec![desc.clone()],
         );
-        let expected_resource = tagged_wire!(DescribeAclsResource {
+        let expected_resource = krabka_macros::tagged_wire!(DescribeAclsResource {
             resource_type: RESOURCE_TYPE_TOPIC,
             resource_name: "orders".into(),
             pattern_type: PATTERN_TYPE_LITERAL,
@@ -322,7 +322,7 @@ mod tests {
         assert!(resource == expected_resource);
 
         let resp = describe_acls_response(vec![resource.clone()]);
-        let expected_resp = unthrottled_wire!(DescribeAclsResponse {
+        let expected_resp = krabka_macros::unthrottled_wire!(DescribeAclsResponse {
             error_code: codes::NONE,
             error_message: Some(String::new()),
             resources: vec![resource],
@@ -350,7 +350,7 @@ mod tests {
 
         let resp = describe_alice_orders(&broker, &ctx);
 
-        let expected = unthrottled_wire!(DescribeAclsResponse {
+        let expected = krabka_macros::unthrottled_wire!(DescribeAclsResponse {
             error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
             error_message: Some("Request DescribeAcls needs DESCRIBE permission.".into()),
             resources: Vec::new(),
@@ -365,7 +365,7 @@ mod tests {
 
         let resp = describe_alice_orders(&broker, &ctx);
 
-        let expected = unthrottled_wire!(DescribeAclsResponse {
+        let expected = krabka_macros::unthrottled_wire!(DescribeAclsResponse {
             error_code: codes::SECURITY_DISABLED,
             error_message: Some("No Authorizer is configured on the broker".into()),
             resources: Vec::new(),
@@ -449,7 +449,7 @@ mod tests {
                 edit: |r| r.operation = 14,
             },
         ];
-        let expected = unthrottled_wire!(DescribeAclsResponse {
+        let expected = krabka_macros::unthrottled_wire!(DescribeAclsResponse {
             error_code: codes::NONE,
             error_message: Some(String::new()),
             resources: Vec::new(),
@@ -643,16 +643,16 @@ mod tests {
             resp.resources
                 .sort_by(|a, b| a.resource_name.cmp(&b.resource_name));
 
-            let expected = unthrottled_wire!(DescribeAclsResponse {
+            let expected = krabka_macros::unthrottled_wire!(DescribeAclsResponse {
                 error_code: codes::NONE,
                 error_message: Some(String::new()),
                 resources: want
                     .iter()
-                    .map(|listed| tagged_wire!(DescribeAclsResource {
+                    .map(|listed| krabka_macros::tagged_wire!(DescribeAclsResource {
                         resource_type: RESOURCE_TYPE_TOPIC,
                         resource_name: listed.resource_name.into(),
                         pattern_type: listed.pattern_type,
-                        acls: vec![tagged_wire!(AclDescription {
+                        acls: vec![krabka_macros::tagged_wire!(AclDescription {
                             principal: "User:alice".into(),
                             host: "*".into(),
                             operation: OPERATION_READ,
@@ -735,14 +735,14 @@ mod tests {
 
         let resp = describe_alice_orders(&broker, &ctx);
 
-        let expected = unthrottled_wire!(DescribeAclsResponse {
+        let expected = krabka_macros::unthrottled_wire!(DescribeAclsResponse {
             error_code: codes::NONE,
             error_message: Some(String::new()),
-            resources: vec![tagged_wire!(DescribeAclsResource {
+            resources: vec![krabka_macros::tagged_wire!(DescribeAclsResource {
                 resource_type: RESOURCE_TYPE_TOPIC,
                 resource_name: "orders".into(),
                 pattern_type: PATTERN_TYPE_LITERAL,
-                acls: vec![tagged_wire!(AclDescription {
+                acls: vec![krabka_macros::tagged_wire!(AclDescription {
                     principal: "User:alice".into(),
                     host: "*".into(),
                     operation: OPERATION_READ,

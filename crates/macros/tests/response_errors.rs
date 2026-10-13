@@ -53,10 +53,18 @@ struct ResourceRow {
 }
 
 krabka_macros::response_errors! {
-    response: Response;
-    code_response: protocol::CodeResponse,;
-    row: Row;
-    resource_row: ResourceRow;
+    response {
+        Response
+    }
+    code_response {
+        protocol::CodeResponse,
+    }
+    row {
+        Row
+    }
+    resource_row {
+        ResourceRow
+    }
 }
 
 #[test]

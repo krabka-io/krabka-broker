@@ -698,7 +698,7 @@ mod tests {
         for (listener, host, port) in cases {
             assert!(
                 project_broker(&rec, listener)
-                    == Some(tagged_wire!(MetadataResponseBroker {
+                    == Some(krabka_macros::tagged_wire!(MetadataResponseBroker {
                         node_id: 7,
                         host: host.to_string(),
                         port,

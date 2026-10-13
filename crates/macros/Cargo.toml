@@ -24,6 +24,7 @@ moxy = { workspace = true }
 
 [dev-dependencies]
 assert2 = { workspace = true }
+bytes = { workspace = true }
 clap = { workspace = true, features = ["env"] }
 krabka-units = { workspace = true }
 prometheus-client = { workspace = true }

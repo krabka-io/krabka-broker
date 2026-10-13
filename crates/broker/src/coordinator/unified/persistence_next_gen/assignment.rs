@@ -29,7 +29,7 @@ use {
     crate::{
         coordinator::unified::persistence::{
             flex::{
-                array_value_codec, get_assigned_topics, get_compact_array, get_i32_array, get_uuid,
+                get_assigned_topics, get_compact_array, get_i32_array, get_uuid,
                 put_assigned_topics, put_compact_array, put_i32_array, put_tagged_fields, put_uuid,
                 read_tagged, value_codec,
             },
@@ -50,17 +50,15 @@ pub struct AssignedTopicPartitions {
     pub partitions: Vec<i32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, krabka_macros::FlexibleArrayValue)]
+#[array_value(
+    record = "ConsumerGroupTargetAssignmentMemberValue",
+    encode = encode_topic_partitions,
+    decode = decode_topic_partitions,
+)]
 pub struct TargetAssignmentMemberValue {
     pub topic_partitions: Vec<AssignedTopicPartitions>,
 }
-
-array_value_codec!(
-    TargetAssignmentMemberValue("ConsumerGroupTargetAssignmentMemberValue"),
-    topic_partitions,
-    encode_topic_partitions,
-    decode_topic_partitions
-);
 
 /// The member's reconciliation state, with Kafka's discriminants from
 /// `org.apache.kafka.coordinator.group.modern.MemberState`: `STABLE` is 0,

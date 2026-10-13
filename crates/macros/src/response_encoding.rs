@@ -1,8 +1,8 @@
 //! Error trait implementations for protocol types declared in another crate.
 
 use moxy::{
-    ast::{Parse, ParseError, Parser, Path, Token},
-    token::{Ident, TokenStream},
+    ast::{List, Parse, ParseError, Parser, Path, Token},
+    token::{Delim, Ident, TokenStream},
 };
 
 pub(crate) fn expand(tokens: &TokenStream) -> Result<TokenStream, ParseError> {
@@ -19,15 +19,13 @@ pub(crate) fn expand(tokens: &TokenStream) -> Result<TokenStream, ParseError> {
                 "expected `response`, `code_response`, `row` or `resource_row`",
             ));
         }
-        <Token![:]>::parse(&parser)?;
-        while !<Token![;]>::peek(parser.cursor()) {
-            entries.push((section.text().to_owned(), Path::parse(&parser)?));
-            if !<Token![,]>::peek(parser.cursor()) {
-                break;
-            }
-            <Token![,]>::parse(&parser)?;
-        }
-        <Token![;]>::parse(&parser)?;
+        let types = parser.parse_group(Delim::Brace)?;
+        let paths = List::<Path, Token![,]>::parse_all(&types)?;
+        entries.extend(
+            paths
+                .iter()
+                .map(|path| (section.text().to_owned(), path.clone())),
+        );
     }
 
     Ok(moxy::template! {
@@ -81,11 +79,11 @@ mod tests {
     #[test]
     fn rejects_unknown_sections_and_malformed_type_lists() {
         for input in [
-            "unknown: Response;",
-            "response Response;",
-            "response: Response Other;",
-            "response: Response,",
-            "row: 42;",
+            "unknown { Response }",
+            "response Response",
+            "response { Response Other }",
+            "response { Response,, }",
+            "row { 42 }",
         ] {
             assert!(expand(&input.parse().expect("tokens")).is_err());
         }
@@ -93,6 +91,6 @@ mod tests {
 
     #[test]
     fn accepts_empty_sections_and_trailing_commas() {
-        assert!(expand(&"response: ; row: SomeRow,;".parse().expect("tokens")).is_ok());
+        assert!(expand(&"response {} row { SomeRow, }".parse().expect("tokens")).is_ok());
     }
 }

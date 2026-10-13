@@ -310,7 +310,7 @@ mod tests {
             .await
             .expect("handle");
 
-        let expected = unthrottled_wire!(ListGroupsResponse {
+        let expected = krabka_macros::unthrottled_wire!(ListGroupsResponse {
             error_code: codes::NONE,
             groups: vec![
                 group("classic-a", "", "Empty", "classic"),

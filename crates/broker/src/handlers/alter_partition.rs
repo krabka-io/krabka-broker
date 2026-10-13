@@ -67,7 +67,7 @@ context_handler! {
 }
 
 fn refusal(error_code: i16) -> AlterPartitionResponse {
-    unthrottled_wire!(AlterPartitionResponse {
+    krabka_macros::unthrottled_wire!(AlterPartitionResponse {
         error_code,
         topics: Vec::new()
     })
@@ -97,7 +97,7 @@ async fn alter_partition_once(
         Some(codes::NOT_CONTROLLER)
     };
     if let Some(error_code) = refusal {
-        return Ok(unthrottled_wire!(AlterPartitionResponse {
+        return Ok(krabka_macros::unthrottled_wire!(AlterPartitionResponse {
             error_code,
             topics: Vec::new(),
         }));
@@ -111,7 +111,7 @@ async fn alter_partition_once(
         .ok()
         .and_then(|id| image.broker_epoch(NodeId(id)));
     if sender_epoch != Some(req.broker_epoch) {
-        return Ok(unthrottled_wire!(AlterPartitionResponse {
+        return Ok(krabka_macros::unthrottled_wire!(AlterPartitionResponse {
             error_code: codes::STALE_BROKER_EPOCH,
             topics: Vec::new(),
         }));
@@ -165,7 +165,7 @@ async fn alter_partition_once(
                 .collect(),
         };
 
-        resp_topics.push(tagged_wire!(RespTopicData {
+        resp_topics.push(krabka_macros::tagged_wire!(RespTopicData {
             topic_id: req_topic.topic_id,
             partitions: resp_partitions,
         }));
@@ -182,7 +182,7 @@ async fn alter_partition_once(
         return Err(e);
     }
 
-    Ok(unthrottled_wire!(AlterPartitionResponse {
+    Ok(krabka_macros::unthrottled_wire!(AlterPartitionResponse {
         error_code: codes::NONE,
         topics: resp_topics,
     }))

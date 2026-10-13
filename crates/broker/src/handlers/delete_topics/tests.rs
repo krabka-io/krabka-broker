@@ -72,7 +72,7 @@ fn row(name: Option<&str>, topic_id: WireUuid, error_code: i16) -> DeletableTopi
 }
 
 fn response(rows: Vec<DeletableTopicResult>) -> DeleteTopicsResponse {
-    unthrottled_wire!(DeleteTopicsResponse { responses: rows })
+    krabka_macros::unthrottled_wire!(DeleteTopicsResponse { responses: rows })
 }
 
 #[tokio::test]
@@ -175,7 +175,7 @@ async fn the_wire_handler_refuses_a_deletion_that_no_proposal_covers() {
         exists,
     } = delete_doomed(gated_config()).await;
 
-    let expected = tagged_wire!(DeletableTopicResult {
+    let expected = krabka_macros::tagged_wire!(DeletableTopicResult {
         name: Some(DOOMED.to_owned()),
         topic_id,
         error_code: codes::POLICY_VIOLATION,
@@ -254,7 +254,7 @@ async fn invalid_topic_rows_answer_invalid_request_and_delete_nothing() {
     request_identity!((p, peer), principal("admin"));
 
     let invalid = |name: Option<&str>, id, message: &str| {
-        tagged_wire!(DeletableTopicResult {
+        krabka_macros::tagged_wire!(DeletableTopicResult {
             name: name.map(str::to_string),
             topic_id: id,
             error_code: codes::INVALID_REQUEST,
@@ -314,7 +314,7 @@ async fn invalid_topic_rows_answer_invalid_request_and_delete_nothing() {
         actual.push((label, resp, still_there));
         expected.push((
             label,
-            unthrottled_wire!(DeleteTopicsResponse { responses }),
+            krabka_macros::unthrottled_wire!(DeleteTopicsResponse { responses }),
             true,
         ));
     }
@@ -477,7 +477,7 @@ async fn handle_authorizes_delete_per_topic_when_cluster_delete_is_denied() {
                 )
             }
         };
-        let expected = unthrottled_wire!(DeleteTopicsResponse {
+        let expected = krabka_macros::unthrottled_wire!(DeleteTopicsResponse {
             responses: vec![expected_row("a"), expected_row("app-x")],
         });
         check!(resp == expected, "case: {label}");
@@ -676,7 +676,9 @@ async fn rows_follow_kafkas_describe_and_delete_decisions() {
         actual.push((case.label, resp, still_there));
         expected.push((
             case.label,
-            sorted(unthrottled_wire!(DeleteTopicsResponse { responses })),
+            sorted(krabka_macros::unthrottled_wire!(DeleteTopicsResponse {
+                responses
+            })),
             !case.deleted,
         ));
         broker_handle.shutdown().await;
@@ -739,7 +741,7 @@ async fn delete_topic_enable_false_refuses_every_row() {
 
         // A deleted topic's v6 row carries its id; a refused row carries the
         // zero id the name row was sent with, and v2 carries no id at all.
-        let row = tagged_wire!(DeletableTopicResult {
+        let row = krabka_macros::tagged_wire!(DeletableTopicResult {
             name: Some(TOPIC.into()),
             topic_id: if error_code == codes::NONE {
                 topic_id
@@ -751,7 +753,7 @@ async fn delete_topic_enable_false_refuses_every_row() {
         });
         expected.push((
             (enabled, version),
-            unthrottled_wire!(DeleteTopicsResponse {
+            krabka_macros::unthrottled_wire!(DeleteTopicsResponse {
                 responses: vec![row],
             }),
             exists,

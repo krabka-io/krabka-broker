@@ -17,24 +17,6 @@ pub type ApiVersion = i16;
 /// Client-chosen request correlation id. The response header echoes it exactly.
 pub type CorrelationId = i32;
 
-/// Construct an exhaustive wire value with an explicitly empty tagged-field set.
-/// Every other field remains required at the call site, including expected responses.
-macro_rules! tagged_wire {
-    ($($ty:ident)::+ { $($field:ident $(: $value:expr)?),* $(,)? }) => {
-        $($ty)::+ {
-            $($field $(: $value)?,)*
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        }
-    };
-}
-
-/// Exhaustive responses that report no throttle delay and no tagged fields.
-macro_rules! unthrottled_wire {
-    ($($ty:ident)::+ { $($field:ident $(: $value:expr)?),* $(,)? }) => {
-        tagged_wire!($($ty)::+ { throttle_time_ms: 0, $($field $(: $value)?,)* })
-    };
-}
-
 /// Define the typed entry point consumed by the dispatch registry. Every
 /// operation supplies its request, response, parameter names and unchanged
 /// body; the broker, negotiated version, caller context and error contract are

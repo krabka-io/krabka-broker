@@ -487,13 +487,13 @@ mod tests {
     async fn dispatch_preserves_mixed_resource_order_and_duplicates() {
         broker_fixture!((handle, _dir, broker), allow_all, context(ctx, "admin"));
         let resource = |kind, name| make_scoped_resource(kind, name, vec![]);
-        let duplicate_topic = tagged_wire!(AlterConfigsResourceResponse {
+        let duplicate_topic = krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
             resource_type: RESOURCE_TYPE_TOPIC,
             resource_name: "duplicate".into(),
             error_code: codes::INVALID_REQUEST,
             error_message: Some("Each resource must appear at most once.".into())
         });
-        let duplicate_logger = tagged_wire!(AlterConfigsResourceResponse {
+        let duplicate_logger = krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
             resource_type: RESOURCE_TYPE_BROKER_LOGGER,
             resource_name: "2".into(),
             error_code: codes::INVALID_REQUEST,
@@ -502,7 +502,7 @@ mod tests {
         let rows = [
             (
                 resource(RESOURCE_TYPE_BROKER_LOGGER, "1"),
-                tagged_wire!(AlterConfigsResourceResponse {
+                krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
                     resource_type: RESOURCE_TYPE_BROKER_LOGGER,
                     resource_name: "1".into(),
                     error_code: codes::NONE,
@@ -511,7 +511,7 @@ mod tests {
             ),
             (
                 resource(RESOURCE_TYPE_BROKER, "2"),
-                tagged_wire!(AlterConfigsResourceResponse {
+                krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
                     resource_type: RESOURCE_TYPE_BROKER,
                     resource_name: "2".into(),
                     error_code: codes::INVALID_REQUEST,
@@ -524,7 +524,7 @@ mod tests {
             ),
             (
                 resource(RESOURCE_TYPE_BROKER, "1"),
-                tagged_wire!(AlterConfigsResourceResponse {
+                krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
                     resource_type: RESOURCE_TYPE_BROKER,
                     resource_name: "1".into(),
                     error_code: codes::NONE,
@@ -533,7 +533,7 @@ mod tests {
             ),
             (
                 resource(RESOURCE_TYPE_TOPIC, "missing"),
-                tagged_wire!(AlterConfigsResourceResponse {
+                krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
                     resource_type: RESOURCE_TYPE_TOPIC,
                     resource_name: "missing".into(),
                     error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,

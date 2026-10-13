@@ -2,43 +2,13 @@
 
 use assert2::assert;
 
-// The consumer fixture supplies the same codec interfaces without broker dependencies.
-mod bytes {
-    pub(crate) type Bytes = Vec<u8>;
-    pub(crate) struct BytesMut(pub(crate) Vec<u8>);
-
-    impl BytesMut {
-        pub(crate) fn new() -> Self { Self(Vec::new()) }
-
-        pub(crate) fn freeze(self) -> Bytes { self.0 }
-    }
-
-    pub(crate) trait BufMut {
-        fn put_i16(&mut self, value: i16);
-        fn put_i32(&mut self, value: i32);
-    }
-
-    impl BufMut for BytesMut {
-        fn put_i16(&mut self, value: i16) { self.0.extend(value.to_be_bytes()); }
-
-        fn put_i32(&mut self, value: i32) { self.0.extend(value.to_be_bytes()); }
-    }
-}
-
-mod error {
-    pub(crate) type BrokerError = &'static str;
-}
+#[path = "support/codec.rs"]
+mod error;
 
 mod coordinator {
     pub(crate) mod unified {
         pub(crate) mod persistence {
-            use crate::error::BrokerError;
-
-            fn take<const N: usize>(buf: &mut &[u8]) -> Result<[u8; N], BrokerError> {
-                let (value, rest) = buf.split_first_chunk::<N>().ok_or("truncated field")?;
-                *buf = rest;
-                Ok(*value)
-            }
+            use crate::error::{BrokerError, take};
 
             pub(crate) fn get_i32(buf: &mut &[u8]) -> Result<i32, BrokerError> {
                 Ok(i32::from_be_bytes(take(buf)?))
@@ -46,8 +16,8 @@ mod coordinator {
 
             pub(crate) mod flex {
                 use {
-                    super::take,
-                    crate::{bytes::BytesMut, error::BrokerError},
+                    crate::error::{BrokerError, take},
+                    bytes::{BufMut, BytesMut},
                 };
 
                 pub(crate) fn get_value_version(
@@ -65,10 +35,10 @@ mod coordinator {
 
                 pub(crate) fn put_tag0_i64(buf: &mut BytesMut, value: i64) {
                     if value == 0 {
-                        buf.0.push(0);
+                        buf.put_u8(0);
                     } else {
-                        buf.0.extend([1, 0, 8]);
-                        buf.0.extend(value.to_be_bytes());
+                        buf.extend_from_slice(&[1, 0, 8]);
+                        buf.put_i64(value);
                     }
                 }
 

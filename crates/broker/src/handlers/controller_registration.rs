@@ -195,7 +195,7 @@ mod tests {
 
         assert2::check!(
             answer
-                == unthrottled_wire!(ControllerRegistrationResponse {
+                == krabka_macros::unthrottled_wire!(ControllerRegistrationResponse {
                     error_code: 0,
                     error_message: Some(String::new()),
                 })

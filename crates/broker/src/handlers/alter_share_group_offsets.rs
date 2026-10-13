@@ -421,7 +421,7 @@ mod tests {
                 crate::test_support::ShareApiSupport::Disabled,
                 "missing",
                 vec![0],
-                unthrottled_wire!(AlterShareGroupOffsetsResponse {
+                krabka_macros::unthrottled_wire!(AlterShareGroupOffsetsResponse {
                     error_code: codes::UNSUPPORTED_VERSION,
                     error_message: None,
                     responses: Vec::new(),
@@ -433,7 +433,7 @@ mod tests {
                 crate::test_support::ShareApiSupport::Enabled,
                 "missing",
                 vec![0],
-                unthrottled_wire!(AlterShareGroupOffsetsResponse {
+                krabka_macros::unthrottled_wire!(AlterShareGroupOffsetsResponse {
                     error_code: codes::GROUP_AUTHORIZATION_FAILED,
                     error_message: None,
                     responses: Vec::new(),
@@ -445,25 +445,35 @@ mod tests {
                 crate::test_support::ShareApiSupport::Enabled,
                 "missing-topic",
                 vec![3, 5],
-                unthrottled_wire!(AlterShareGroupOffsetsResponse {
+                krabka_macros::unthrottled_wire!(AlterShareGroupOffsetsResponse {
                     error_code: codes::NONE,
                     error_message: None,
-                    responses: vec![tagged_wire!(AlterShareGroupOffsetsResponseTopic {
-                        topic_name: "missing-topic".into(),
-                        topic_id: Uuid::default(),
-                        partitions: vec![
-                            tagged_wire!(AlterShareGroupOffsetsResponsePartition {
-                                partition_index: 3,
-                                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                                error_message: Some(UNKNOWN_TOPIC_OR_PARTITION_MESSAGE.into()),
-                            }),
-                            tagged_wire!(AlterShareGroupOffsetsResponsePartition {
-                                partition_index: 5,
-                                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                                error_message: Some(UNKNOWN_TOPIC_OR_PARTITION_MESSAGE.into()),
-                            }),
-                        ],
-                    })],
+                    responses: vec![krabka_macros::tagged_wire!(
+                        AlterShareGroupOffsetsResponseTopic {
+                            topic_name: "missing-topic".into(),
+                            topic_id: Uuid::default(),
+                            partitions: vec![
+                                krabka_macros::tagged_wire!(
+                                    AlterShareGroupOffsetsResponsePartition {
+                                        partition_index: 3,
+                                        error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+                                        error_message: Some(
+                                            UNKNOWN_TOPIC_OR_PARTITION_MESSAGE.into()
+                                        ),
+                                    }
+                                ),
+                                krabka_macros::tagged_wire!(
+                                    AlterShareGroupOffsetsResponsePartition {
+                                        partition_index: 5,
+                                        error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+                                        error_message: Some(
+                                            UNKNOWN_TOPIC_OR_PARTITION_MESSAGE.into()
+                                        ),
+                                    }
+                                ),
+                            ],
+                        }
+                    )],
                 }),
             ),
         ];

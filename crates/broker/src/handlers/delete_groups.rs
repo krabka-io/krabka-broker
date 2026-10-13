@@ -124,7 +124,7 @@ mod tests {
     }
 
     fn result(group_id: &str, error_code: i16) -> DeletableGroupResult {
-        tagged_wire!(DeletableGroupResult {
+        krabka_macros::tagged_wire!(DeletableGroupResult {
             group_id: group_id.to_owned(),
             error_code,
             error_message: None,
@@ -138,7 +138,7 @@ mod tests {
         results: Vec<DeletableGroupResult>,
     ) {
         let response = drive(broker, &request(groups), ctx).await;
-        let expected = unthrottled_wire!(DeleteGroupsResponse { results });
+        let expected = krabka_macros::unthrottled_wire!(DeleteGroupsResponse { results });
         assert!(response == expected);
     }
 
@@ -298,7 +298,7 @@ mod tests {
         }
 
         let denied = |group_id: &str| {
-            tagged_wire!(DeletableGroupResult {
+            krabka_macros::tagged_wire!(DeletableGroupResult {
                 group_id: group_id.to_string(),
                 error_code: codes::GROUP_AUTHORIZATION_FAILED,
                 error_message: None,

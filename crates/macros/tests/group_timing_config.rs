@@ -19,8 +19,11 @@ mod coordinator {
                 min: Duration,
                 max: Duration,
             ) -> Option<Duration> {
-                let millis = overrides?.get(key)?.trim().parse::<i32>().ok()?;
-                Some(Duration::from_millis(u64::try_from(millis).unwrap_or(0)).clamp(min, max))
+                overrides
+                    .and_then(|values| values.get(key))
+                    .and_then(|text| text.trim().parse::<i32>().ok())
+                    .map(|millis| Duration::from_millis(u64::try_from(millis).unwrap_or(0)))
+                    .map(|duration| duration.clamp(min, max))
             }
         }
     }
@@ -30,24 +33,19 @@ const SESSION: &str = "consumer.session.timeout.ms";
 const HEARTBEAT: &str = "consumer.heartbeat.interval.ms";
 const ASSIGNMENT: &str = "consumer.assignment.interval.ms";
 
+#[krabka_macros::membership_defaults]
 #[derive(
     Debug, Clone, PartialEq, krabka_macros::FieldDefaults, krabka_macros::GroupTimingConfig,
 )]
 #[group_timing(session = SESSION, heartbeat = HEARTBEAT, assignment = ASSIGNMENT)]
 struct Config {
-    #[default(Duration::from_secs(45))]
     session_timeout: Duration,
-    #[default(Duration::from_secs(5))]
     heartbeat_interval: Duration,
     #[default(Duration::from_secs(1))]
     assignment_interval: Duration,
-    #[default(Duration::from_secs(45))]
     min_session_timeout: Duration,
-    #[default(Duration::from_secs(60))]
     max_session_timeout: Duration,
-    #[default(Duration::from_secs(5))]
     min_heartbeat_interval: Duration,
-    #[default(Duration::from_secs(15))]
     max_heartbeat_interval: Duration,
     #[default(77)]
     unrelated: u32,

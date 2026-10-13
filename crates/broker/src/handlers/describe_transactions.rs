@@ -209,11 +209,11 @@ mod tests {
         let t = topics_for(&e);
         // Alphabetical topics, ascending partitions.
         let expected = vec![
-            tagged_wire!(TopicData {
+            krabka_macros::tagged_wire!(TopicData {
                 topic: "a".to_string(),
                 partitions: vec![1],
             }),
-            tagged_wire!(TopicData {
+            krabka_macros::tagged_wire!(TopicData {
                 topic: "b".to_string(),
                 partitions: vec![0, 2],
             }),
@@ -374,11 +374,11 @@ mod tests {
             .await
             .expect("seed the transaction");
 
-        let topic_a = tagged_wire!(TopicData {
+        let topic_a = krabka_macros::tagged_wire!(TopicData {
             topic: "a".to_string(),
             partitions: vec![0],
         });
-        let topic_b = tagged_wire!(TopicData {
+        let topic_b = krabka_macros::tagged_wire!(TopicData {
             topic: "b".to_string(),
             partitions: vec![1],
         });

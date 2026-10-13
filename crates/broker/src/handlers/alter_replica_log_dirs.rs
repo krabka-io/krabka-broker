@@ -191,13 +191,15 @@ mod tests {
         partition_index: i32,
         error_code: i16,
     ) -> AlterReplicaLogDirsResponse {
-        unthrottled_wire!(AlterReplicaLogDirsResponse {
-            results: vec![tagged_wire!(AlterReplicaLogDirTopicResult {
+        krabka_macros::unthrottled_wire!(AlterReplicaLogDirsResponse {
+            results: vec![krabka_macros::tagged_wire!(AlterReplicaLogDirTopicResult {
                 topic_name: topic.to_string(),
-                partitions: vec![tagged_wire!(AlterReplicaLogDirPartitionResult {
-                    partition_index,
-                    error_code,
-                })],
+                partitions: vec![krabka_macros::tagged_wire!(
+                    AlterReplicaLogDirPartitionResult {
+                        partition_index,
+                        error_code,
+                    }
+                )],
             })],
         })
     }
@@ -243,13 +245,15 @@ mod tests {
             .expect("handle");
         let resp = decode_response(&bytes, version);
 
-        let expected = unthrottled_wire!(AlterReplicaLogDirsResponse {
-            results: vec![tagged_wire!(AlterReplicaLogDirTopicResult {
+        let expected = krabka_macros::unthrottled_wire!(AlterReplicaLogDirsResponse {
+            results: vec![krabka_macros::tagged_wire!(AlterReplicaLogDirTopicResult {
                 topic_name: "orders".to_string(),
-                partitions: vec![tagged_wire!(AlterReplicaLogDirPartitionResult {
-                    partition_index: 7,
-                    error_code: codes::LOG_DIR_NOT_FOUND,
-                })],
+                partitions: vec![krabka_macros::tagged_wire!(
+                    AlterReplicaLogDirPartitionResult {
+                        partition_index: 7,
+                        error_code: codes::LOG_DIR_NOT_FOUND,
+                    }
+                )],
             })],
         });
         assert!(resp == expected);

@@ -107,7 +107,7 @@ async fn handle_leader_success_preserves_response_shape() {
         .await
         .expect("BrokerHeartbeat handler");
 
-    let expected = unthrottled_wire!(BrokerHeartbeatResponse {
+    let expected = krabka_macros::unthrottled_wire!(BrokerHeartbeatResponse {
         error_code: codes::NONE,
         is_caught_up: true,
         is_fenced: false,

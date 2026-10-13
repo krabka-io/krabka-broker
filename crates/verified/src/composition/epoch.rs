@@ -21,7 +21,7 @@ pub fn epoch_archive_valid(entries: Seq<EpochEntry>, base: Int, end: Int) -> boo
 }
 
 open_logic! {
-pub(super) fn epoch_input_valid(entries: Seq<EpochEntry>, base: Int, start: Int, end: Int) -> bool {
+pub fn epoch_input_valid(entries: Seq<EpochEntry>, base: Int, start: Int, end: Int) -> bool {
     pearlite! { epoch_window_valid(base, start, end) && epoch_archive_valid(entries, base, end) }
 }
 }

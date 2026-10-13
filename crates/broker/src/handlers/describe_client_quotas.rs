@@ -486,7 +486,7 @@ mod tests {
             &ctx,
         );
 
-        let expected = unthrottled_wire!(DescribeClientQuotasResponse {
+        let expected = krabka_macros::unthrottled_wire!(DescribeClientQuotasResponse {
             error_code: CLUSTER_AUTHORIZATION_FAILED,
             error_message: None,
             entries: None,
@@ -508,7 +508,7 @@ mod tests {
         seed_alice_quota(&broker_handle).await;
         let broker = broker_handle.broker_arc_for_test();
         let allowed = allowed_user_quota_response(Some("alice"), 1024.0);
-        let denied = unthrottled_wire!(DescribeClientQuotasResponse {
+        let denied = krabka_macros::unthrottled_wire!(DescribeClientQuotasResponse {
             error_code: CLUSTER_AUTHORIZATION_FAILED,
             error_message: None,
             entries: None,
@@ -609,7 +609,7 @@ mod tests {
         test_ctx!(ctx, "admin");
 
         let error = |code: i16, message: &str| {
-            unthrottled_wire!(DescribeClientQuotasResponse {
+            krabka_macros::unthrottled_wire!(DescribeClientQuotasResponse {
                 error_code: code,
                 error_message: Some(message.into()),
                 entries: None,
@@ -774,7 +774,7 @@ mod tests {
             &ctx,
         );
 
-        let expected = unthrottled_wire!(DescribeClientQuotasResponse {
+        let expected = krabka_macros::unthrottled_wire!(DescribeClientQuotasResponse {
             error_code: 0,
             error_message: Some(String::new()),
             entries: Some(Vec::new()),

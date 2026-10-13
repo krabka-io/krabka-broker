@@ -255,7 +255,7 @@ mod tests {
     /// A `DescribedGroup` carrying only an error: every projection field keeps
     /// its wire default, `authorized_operations` included.
     fn error_row(group_id: &str, error_code: KafkaErrorCode) -> DescribedGroup {
-        tagged_wire!(DescribedGroup {
+        krabka_macros::tagged_wire!(DescribedGroup {
             error_code: error_code.0,
             error_message: None,
             group_id: group_id.to_string(),
@@ -294,7 +294,7 @@ mod tests {
         .await;
 
         assert!(
-            resp == unthrottled_wire!(DescribeGroupsResponse {
+            resp == krabka_macros::unthrottled_wire!(DescribeGroupsResponse {
                 groups: vec![
                     error_row(
                         "group-a",
@@ -416,7 +416,7 @@ mod tests {
             .await;
 
             assert!(
-                resp == unthrottled_wire!(DescribeGroupsResponse {
+                resp == krabka_macros::unthrottled_wire!(DescribeGroupsResponse {
                     groups: vec![expected],
                 }),
                 "v{version} {group}"
@@ -453,7 +453,7 @@ mod tests {
     #[test]
     fn only_a_stable_group_carries_protocol_metadata() {
         let member = |metadata: &'static [u8], assignment: &'static [u8]| {
-            tagged_wire!(DescribedGroupMember {
+            krabka_macros::tagged_wire!(DescribedGroupMember {
                 member_id: "m-1".into(),
                 group_instance_id: Some("instance-1".into()),
                 client_id: "client-1".into(),
@@ -503,8 +503,8 @@ mod tests {
         let resp = drive(&broker, VERSION, &request().call()).await;
 
         assert!(
-            resp == unthrottled_wire!(DescribeGroupsResponse {
-                groups: vec![tagged_wire!(DescribedGroup {
+            resp == krabka_macros::unthrottled_wire!(DescribeGroupsResponse {
+                groups: vec![krabka_macros::tagged_wire!(DescribedGroup {
                     error_code: codes::NONE,
                     error_message: None,
                     group_id: "classic-a".into(),
@@ -654,7 +654,9 @@ mod tests {
             .await;
 
             assert!(
-                resp == unthrottled_wire!(DescribeGroupsResponse { groups: expected }),
+                resp == krabka_macros::unthrottled_wire!(DescribeGroupsResponse {
+                    groups: expected
+                }),
                 "{acls:?}"
             );
             broker_handle.shutdown().await;

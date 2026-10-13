@@ -424,7 +424,7 @@ mod tests {
             }
         };
         (@plain $type:ident $fields:tt) => { $type $fields };
-        (@tagged $type:ident $fields:tt) => { tagged_wire!($type $fields) };
+        (@tagged $type:ident $fields:tt) => { krabka_macros::tagged_wire!($type $fields) };
     }
 
     member_identity_fixture!(view_member -> DescribeMember, plain, {
@@ -446,7 +446,7 @@ mod tests {
     }
 
     fn topic(topic_id: Uuid, topic_name: &str, partitions: &[i32]) -> TopicPartitions {
-        tagged_wire!(TopicPartitions {
+        krabka_macros::tagged_wire!(TopicPartitions {
             topic_id,
             topic_name: topic_name.into(),
             partitions: partitions.to_vec(),
@@ -454,7 +454,7 @@ mod tests {
     }
 
     fn assigned(topics: Vec<TopicPartitions>) -> Assignment {
-        tagged_wire!(Assignment {
+        krabka_macros::tagged_wire!(Assignment {
             topic_partitions: topics,
         })
     }
@@ -466,7 +466,7 @@ mod tests {
     });
 
     fn wire_group(group_state: &str, assignor_name: &str, members: Vec<Member>) -> DescribedGroup {
-        tagged_wire!(DescribedGroup {
+        krabka_macros::tagged_wire!(DescribedGroup {
             error_code: codes::NONE,
             error_message: None,
             group_id: "cg".into(),
@@ -587,7 +587,7 @@ mod tests {
 
         let resp = response(vec![first, second]);
 
-        let expected = unthrottled_wire!(ConsumerGroupDescribeResponse {
+        let expected = krabka_macros::unthrottled_wire!(ConsumerGroupDescribeResponse {
             groups: vec![
                 error_group_row("a", codes::GROUP_ID_NOT_FOUND, None),
                 error_group_row("b", codes::UNSUPPORTED_VERSION, None),
@@ -597,7 +597,7 @@ mod tests {
     }
 
     fn error_group_row(group_id: &str, error_code: i16, message: Option<&str>) -> DescribedGroup {
-        tagged_wire!(DescribedGroup {
+        krabka_macros::tagged_wire!(DescribedGroup {
             error_code,
             error_message: message.map(str::to_string),
             group_id: group_id.to_string(),
@@ -738,7 +738,7 @@ mod tests {
                 .expect("ConsumerGroupDescribe handler");
 
             assert!(
-                resp == unthrottled_wire!(ConsumerGroupDescribeResponse {
+                resp == krabka_macros::unthrottled_wire!(ConsumerGroupDescribeResponse {
                     groups: vec![expected],
                 }),
                 "{group_id:?}"

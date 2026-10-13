@@ -414,7 +414,7 @@ mod tests {
 
         let resp = handle(&broker, req, version, &ctx).await.expect("handle");
 
-        let expected = unthrottled_wire!(ListTransactionsResponse {
+        let expected = krabka_macros::unthrottled_wire!(ListTransactionsResponse {
             error_code: codes::NONE,
             unknown_state_filters: vec!["MysteryState".to_string()],
             transaction_states: vec![],

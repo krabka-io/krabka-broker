@@ -281,7 +281,7 @@ mod tests {
                 let mut cur: &[u8] = &bytes;
                 let got = JoinGroupResponse::decode(&mut cur, version).expect("decode");
                 assert2::check!(
-                    got == unthrottled_wire!(JoinGroupResponse {
+                    got == krabka_macros::unthrottled_wire!(JoinGroupResponse {
                         error_code: codes::GROUP_AUTHORIZATION_FAILED,
                         generation_id: -1,
                         protocol_type: None,

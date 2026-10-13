@@ -205,13 +205,13 @@ mod tests {
             actual.push((report, resp));
             expected.push((
                 report,
-                unthrottled_wire!(AssignReplicasToDirsResponse {
+                krabka_macros::unthrottled_wire!(AssignReplicasToDirsResponse {
                     error_code: codes::NONE,
-                    directories: vec![tagged_wire!(RespDirData {
+                    directories: vec![krabka_macros::tagged_wire!(RespDirData {
                         id: ProtocolUuid(dir_uuid.into_bytes()),
-                        topics: vec![tagged_wire!(RespTopicData {
+                        topics: vec![krabka_macros::tagged_wire!(RespTopicData {
                             topic_id: ProtocolUuid(topic_id.into_bytes()),
-                            partitions: vec![tagged_wire!(RespPartData {
+                            partitions: vec![krabka_macros::tagged_wire!(RespPartData {
                                 partition_index,
                                 error_code,
                             })],

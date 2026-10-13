@@ -147,7 +147,6 @@ mod tests {
         prefixed = { Some("/tier/") },
         bare = { None },
     )]
-    #[test]
     fn keys_are_built_with_an_optional_prefix(prefix: Option<&str>) {
         // `LocalFileSystem` canonicalizes its root, so the archive must exist.
         let archive = tempfile::tempdir().expect("temp dir");

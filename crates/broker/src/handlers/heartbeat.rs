@@ -74,7 +74,7 @@ mod tests {
 
         assert!(
             HeartbeatResponse::error(codes::GROUP_AUTHORIZATION_FAILED)
-                == unthrottled_wire!(HeartbeatResponse {
+                == krabka_macros::unthrottled_wire!(HeartbeatResponse {
                     error_code: codes::GROUP_AUTHORIZATION_FAILED,
                 })
         );

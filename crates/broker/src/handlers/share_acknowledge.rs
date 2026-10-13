@@ -344,7 +344,7 @@ mod tests {
             .await
             .expect("handle");
 
-        let expected = unthrottled_wire!(ShareAcknowledgeResponse {
+        let expected = krabka_macros::unthrottled_wire!(ShareAcknowledgeResponse {
             error_code: codes::UNSUPPORTED_VERSION,
             error_message: None,
             acquisition_lock_timeout_ms: 0,

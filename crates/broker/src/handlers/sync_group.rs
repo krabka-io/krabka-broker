@@ -309,7 +309,7 @@ mod tests {
             .await
             .expect("SyncGroup");
 
-        let expected = unthrottled_wire!(SyncGroupResponse {
+        let expected = krabka_macros::unthrottled_wire!(SyncGroupResponse {
             error_code: codes::GROUP_AUTHORIZATION_FAILED,
             protocol_type: None,
             protocol_name: None,
@@ -343,7 +343,7 @@ mod tests {
             .await
             .expect("SyncGroup");
 
-        let expected = unthrottled_wire!(SyncGroupResponse {
+        let expected = krabka_macros::unthrottled_wire!(SyncGroupResponse {
             error_code: codes::NONE,
             protocol_type: Some(PROTOCOL_TYPE.into()),
             protocol_name: Some(PROTOCOL_NAME.into()),
