@@ -6,29 +6,15 @@
 
 use {
     hex::FromHex as _,
-    serde::{Deserialize, Deserializer, Serialize, Serializer, de},
+    serde::{Deserialize, Deserializer, Serializer, de},
     sha2::{Digest, Sha256},
 };
 
 /// `SHA-256` digest of one archived object's body.
 ///
 /// Serialises as a lowercase hex string.
-#[derive(
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Hash,
-    PartialOrd,
-    Ord,
-    derive_more::Debug,
-    derive_more::Display,
-    Serialize,
-    Deserialize,
-)]
-#[display("{}", hex::encode(_0))]
-#[debug("Sha256Digest({})", hex::encode(_0))]
-#[serde(transparent)]
+#[krabka_macros::hex_bytes_identity]
+#[derive(Copy)]
 pub struct Sha256Digest(
     #[serde(
         serialize_with = "serialize_hex",
@@ -47,21 +33,7 @@ impl Sha256Digest {
 ///
 /// Used for the public key and the signature, neither of which has a fixed
 /// length the type system can pin.
-#[derive(
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    PartialOrd,
-    Ord,
-    derive_more::Debug,
-    derive_more::Display,
-    Serialize,
-    Deserialize,
-)]
-#[display("{}", hex::encode(_0))]
-#[debug("HexBytes({})", hex::encode(_0))]
-#[serde(transparent)]
+#[krabka_macros::hex_bytes_identity]
 pub struct HexBytes(
     #[serde(serialize_with = "serialize_hex", deserialize_with = "deserialize_hex")] pub Vec<u8>,
 );
@@ -93,6 +65,22 @@ where
 #[cfg(test)]
 mod tests {
     use {super::*, crate::worm::manifest::ChainHead, assert2::check};
+
+    #[test]
+    fn byte_identities_keep_their_hex_json_and_display() {
+        let digest = Sha256Digest([0x12; 32]);
+        let encoded = format!("\"{}\"", "12".repeat(32));
+        check!(serde_json::to_string(&digest).unwrap() == encoded);
+        check!(serde_json::from_str::<Sha256Digest>(&encoded).unwrap() == digest);
+        check!(digest.to_string() == "12".repeat(32));
+        check!(format!("{digest:?}") == format!("Sha256Digest({})", "12".repeat(32)));
+
+        let bytes = HexBytes(vec![0, 0xa5, 0xff]);
+        check!(serde_json::to_string(&bytes).unwrap() == "\"00a5ff\"");
+        check!(serde_json::from_str::<HexBytes>("\"00a5ff\"").unwrap() == bytes);
+        check!(bytes.to_string() == "00a5ff");
+        check!(format!("{bytes:?}") == "HexBytes(00a5ff)");
+    }
 
     #[test]
     fn hex_newtypes_reject_bad_input_without_panicking() {

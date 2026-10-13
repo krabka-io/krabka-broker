@@ -157,35 +157,13 @@ where
     })
 }
 
+/// Write the selected response-header version and flush the complete frame.
+#[bon::builder]
 pub(super) async fn write_response<S>(
-    stream: &mut S,
-    correlation_id: CorrelationId,
-    body: Bytes,
-) -> Result<(), RaftError>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
-    write_response_frame(stream, correlation_id, body, true).await
-}
-
-/// Write a response without the leading tagged-fields byte. Used only by the
-/// `ApiVersions` v0 path, which decodes a `ResponseHeader v0`.
-pub(super) async fn write_response_no_tagged_fields<S>(
-    stream: &mut S,
-    correlation_id: CorrelationId,
-    body: Bytes,
-) -> Result<(), RaftError>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
-    write_response_frame(stream, correlation_id, body, false).await
-}
-
-pub(super) async fn write_response_frame<S>(
-    stream: &mut S,
-    correlation_id: CorrelationId,
-    body: Bytes,
-    include_tagged_fields: bool,
+    #[builder(start_fn)] stream: &mut S,
+    #[builder(start_fn)] correlation_id: CorrelationId,
+    #[builder(start_fn)] body: Bytes,
+    #[builder(default = true)] include_tagged_fields: bool,
 ) -> Result<(), RaftError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -219,6 +197,27 @@ mod tests {
     /// `socket.request.max.bytes` for the tests that do not probe it.
     const MAX_REQUEST_BYTES: usize = 100 * 1024 * 1024;
 
+    #[tokio::test]
+    async fn response_headers_match_their_wire_versions() {
+        let cases: [(bool, &[u8]); 2] = [
+            (true, &[0, 0, 0, 7, 1, 2, 3, 4, 0, 0xaa, 0xbb]),
+            (false, &[0, 0, 0, 6, 1, 2, 3, 4, 0xaa, 0xbb]),
+        ];
+        for (tagged, expected) in cases {
+            let (mut client, mut server) = tokio::io::duplex(32);
+            let writer = write_response(&mut server, 0x01020304, Bytes::from_static(&[0xaa, 0xbb]));
+            if tagged {
+                writer.call().await
+            } else {
+                writer.include_tagged_fields(false).call().await
+            }
+            .unwrap();
+            drop(server);
+            let mut actual = Vec::new();
+            client.read_to_end(&mut actual).await.unwrap();
+            check!(actual == expected);
+        }
+    }
     /// A size prefix over `socket.request.max.bytes`, or negative, is refused
     /// before the frame is read, and one at the limit is read. The stream
     /// carries the prefix alone, so a reader that tried to fill the frame

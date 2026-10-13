@@ -126,7 +126,7 @@ impl TopicBasedRemoteLogMetadataManager {
 #[cfg(test)]
 mod tests {
     use {
-        super::*,
+        super::{ResumePlan, TopicBasedRemoteLogMetadataManager},
         crate::{
             log::{InProcessMetadataEventLog, MetadataEventLog},
             manager::test_support::{

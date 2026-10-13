@@ -361,6 +361,7 @@ mod legacy_fixtures;
 mod meta;
 mod metrics;
 mod network_fixtures;
+mod newtype_styles;
 mod object_ops;
 mod object_store_config;
 mod object_store_delegate;
@@ -425,6 +426,18 @@ pub fn register_metrics(item: ItemStruct) -> Result<TokenStream, ParseError> {
 }
 
 // Keep implementations in their own modules and document each adapter below.
+
+/// Give a scalar id transparent JSON, primitive comparisons and integer conversions.
+#[moxy::attribute]
+pub fn scalar_id(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+    newtype_styles::scalar_id(meta, item)
+}
+
+/// Share the lowercase hex display and serde identity of byte newtypes.
+#[moxy::attribute]
+pub fn hex_bytes_identity(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+    newtype_styles::hex_bytes_identity(meta, item)
+}
 
 /// Gives every `Option<Time>`, `Option<ByteSize>` and `Option<Ratio>` field of
 /// a file-config struct its human-unit serde codec and schema marker. The

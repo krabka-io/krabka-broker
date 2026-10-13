@@ -241,7 +241,7 @@ pub(super) fn is_disabled_version(
 /// `api_keys` compact-array of `{api_key(i16), min(i16), max(i16), tagged(0)}`,
 /// `throttle_time_ms(i32)`, response-level `tagged(0)`. Per the documented Kafka
 /// asymmetry, the *response header* stays v0 (no leading tagged-fields byte) —
-/// so this is written via [`super::framing::write_response_no_tagged_fields`].
+/// so this is written via [`super::framing::write_response`].
 pub(super) fn api_versions_response_body(req_version: i16, view: ApiVersionsView<'_>) -> Bytes {
     let resp = ApiVersionsResponse {
         api_keys: advertised_api_keys(view.admin_router, view.unstable),
@@ -256,7 +256,7 @@ pub(super) fn api_versions_response_body(req_version: i16, view: ApiVersionsView
     // JVM dials at v4 (flexible); Krabka's own client at v0 (non-flexible). The
     // codec emits the correct body shape per version: req v<=2 → non-flexible
     // v0-shaped body, req v>=3 → flexible (compact) body. The v0 ApiVersions
-    // response HEADER asymmetry lives in the framing (`write_response_no_tagged_fields`),
+    // response HEADER asymmetry lives in the framing (`write_response` with tagged fields disabled),
     // not here.
     encode_body(
         &resp,
