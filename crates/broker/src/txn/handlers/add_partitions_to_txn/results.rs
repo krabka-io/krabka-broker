@@ -10,10 +10,13 @@
 
 use {
     super::write_freeze::topic_refusal,
-    crate::txn::{
-        coordinator::produce_verification::{HeldTransaction, verification_code},
-        state::{TopicPartition, TxnEntry},
-        util::ProducerIdentity,
+    crate::{
+        handlers::map_partition_rows,
+        txn::{
+            coordinator::produce_verification::{HeldTransaction, verification_code},
+            state::{TopicPartition, TxnEntry},
+            util::ProducerIdentity,
+        },
     },
     krabka_ids::PartitionIndex,
     krabka_protocol::owned::common::{
@@ -158,18 +161,16 @@ fn topic_result(
     topic: &AddPartitionsToTxnTopic,
     code: impl Fn(i32) -> i16,
 ) -> AddPartitionsToTxnTopicResult {
-    let results_by_partition = topic
-        .partitions
-        .iter()
-        .map(|&partition_index| AddPartitionsToTxnPartitionResult {
-            partition_index,
-            partition_error_code: code(partition_index),
-            ..Default::default()
-        })
-        .collect();
     AddPartitionsToTxnTopicResult {
         name: topic.name.clone(),
-        results_by_partition,
+        results_by_partition: map_partition_rows(
+            topic.partitions.iter().copied(),
+            |partition_index| AddPartitionsToTxnPartitionResult {
+                partition_index,
+                partition_error_code: code(partition_index),
+                ..Default::default()
+            },
+        ),
         ..Default::default()
     }
 }

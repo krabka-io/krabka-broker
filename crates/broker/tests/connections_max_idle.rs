@@ -193,7 +193,7 @@ async fn silent_plaintext_connection_is_closed_past_the_idle_window() {
         cfg: idle_cfg,
         log_dir,
     } = config_with_idle_window(krabka_units::secs(60));
-    let fixture = Fixture::start(idle_cfg, log_dir, "PLAINTEXT").await;
+    let fixture = Box::pin(Fixture::start(idle_cfg, log_dir, "PLAINTEXT")).await;
 
     let mut stream = fixture.connect().await;
     assert!(fixture.idle_closes() == 0);
@@ -212,7 +212,7 @@ async fn silent_plaintext_connection_is_closed_past_the_idle_window() {
 #[tokio::test(flavor = "current_thread")]
 async fn a_connection_speaking_each_half_window_is_never_closed() {
     let IdleWindowConfig { cfg, log_dir } = config_with_idle_window(krabka_units::secs(60));
-    let fixture = Fixture::start(cfg, log_dir, "PLAINTEXT").await;
+    let fixture = Box::pin(Fixture::start(cfg, log_dir, "PLAINTEXT")).await;
 
     let mut stream = fixture.connect().await;
     for corr_id in 0..4 {
@@ -238,7 +238,7 @@ async fn a_per_listener_override_expires_its_listener_before_the_broker_wide_win
     let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
     cfg.connections_max_idle_overrides =
         std::iter::once(("EXTERNAL".to_string(), krabka_units::secs(20))).collect();
-    let fixture = Fixture::start(cfg, log_dir, "EXTERNAL").await;
+    let fixture = Box::pin(Fixture::start(cfg, log_dir, "EXTERNAL")).await;
 
     let mut stream = fixture.connect().await;
     advance(Duration::from_secs(21)).await;

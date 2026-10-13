@@ -729,6 +729,19 @@ mod tests {
         }
     }
 
+    /// An expectation that holds epoch 1 with task `1` pending revocation.
+    fn waiting(changed: bool, active: &'static [i32]) -> ExpectedMember {
+        ExpectedMember {
+            changed,
+            state: StreamsMemberAssignmentState::UnrevokedTasks,
+            epoch: 1,
+            active,
+            standby: &[],
+            active_pending: &[1],
+            standby_pending: &[],
+        }
+    }
+
     /// A heartbeat that reports `active` and no standby tasks.
     fn owning(active: &'static [i32]) -> Option<OwnedSetup> {
         Some(OwnedSetup {
@@ -771,16 +784,20 @@ mod tests {
         }
     }
 
+    fn stable_active(active: &'static [i32]) -> Member {
+        Member {
+            active,
+            ..stable("m1", "p1", 1)
+        }
+    }
+
     fn builder_rows() -> Vec<BuilderRow> {
         use StreamsMemberAssignmentState::{Stable, UnrevokedTasks};
 
         vec![
             BuilderRow {
                 name: "a stable member takes the new tasks at the target epoch",
-                m1: Member {
-                    active: &[0],
-                    ..stable("m1", "p1", 1)
-                },
+                m1: stable_active(&[0]),
                 other: None,
                 target_active: &[0, 1],
                 target_standby: &[],
@@ -789,30 +806,16 @@ mod tests {
             },
             BuilderRow {
                 name: "a member keeps its epoch while it owns a revoked task",
-                m1: Member {
-                    active: &[0, 1],
-                    ..stable("m1", "p1", 1)
-                },
+                m1: stable_active(&[0, 1]),
                 other: None,
                 target_active: &[0],
                 target_standby: &[],
                 owned: owning(&[0, 1]),
-                expected: ExpectedMember {
-                    changed: true,
-                    state: UnrevokedTasks,
-                    epoch: 1,
-                    active: &[0],
-                    standby: &[],
-                    active_pending: &[1],
-                    standby_pending: &[],
-                },
+                expected: waiting(true, &[0]),
             },
             BuilderRow {
                 name: "a member that reports no tasks has nothing to revoke",
-                m1: Member {
-                    active: &[0, 1],
-                    ..stable("m1", "p1", 1)
-                },
+                m1: stable_active(&[0, 1]),
                 other: None,
                 target_active: &[0],
                 target_standby: &[],
@@ -835,15 +838,7 @@ mod tests {
                 target_active: &[0],
                 target_standby: &[],
                 owned: owning(&[0, 1]),
-                expected: ExpectedMember {
-                    changed: false,
-                    state: UnrevokedTasks,
-                    epoch: 1,
-                    active: &[0],
-                    standby: &[],
-                    active_pending: &[1],
-                    standby_pending: &[],
-                },
+                expected: waiting(false, &[0]),
             },
             BuilderRow {
                 name: "an unrevoked member without owned tasks waits",
@@ -852,15 +847,7 @@ mod tests {
                 target_active: &[0],
                 target_standby: &[],
                 owned: None,
-                expected: ExpectedMember {
-                    changed: false,
-                    state: UnrevokedTasks,
-                    epoch: 1,
-                    active: &[0],
-                    standby: &[],
-                    active_pending: &[1],
-                    standby_pending: &[],
-                },
+                expected: waiting(false, &[0]),
             },
         ]
     }

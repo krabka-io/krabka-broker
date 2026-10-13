@@ -582,6 +582,15 @@ struct HeartbeatRow {
     >,
 }
 
+/// An image that holds only the topic `in`.
+fn in_image(partitions: i32) -> krabka_metadata::MetadataImage {
+    image_of(None, &[ImageTopic {
+        name: "in",
+        id: 1,
+        partitions,
+    }])
+}
+
 /// A metadata source whose image holds only the topic `in`.
 fn in_topic_source(partitions: i32) -> Arc<FakeMetadataSource> {
     Arc::new(
@@ -607,11 +616,7 @@ fn heartbeat_change_rows() -> Vec<HeartbeatRow> {
             name: "the missing source topic is created",
             initial: image_of(None, &[]),
             storage: TopologyStorage::Stateless,
-            change: HeartbeatChange::Image(Box::new(image_of(None, &[ImageTopic {
-                name: "in",
-                id: 1,
-                partitions: 2,
-            }]))),
+            change: HeartbeatChange::Image(Box::new(in_image(2))),
             owned_active: None,
             epoch: 3,
             active: Some(vec![0, 1]),
@@ -619,17 +624,9 @@ fn heartbeat_change_rows() -> Vec<HeartbeatRow> {
         },
         HeartbeatRow {
             name: "partitions are added to the source topic",
-            initial: image_of(None, &[ImageTopic {
-                name: "in",
-                id: 1,
-                partitions: 1,
-            }]),
+            initial: in_image(1),
             storage: TopologyStorage::Stateless,
-            change: HeartbeatChange::Image(Box::new(image_of(None, &[ImageTopic {
-                name: "in",
-                id: 1,
-                partitions: 2,
-            }]))),
+            change: HeartbeatChange::Image(Box::new(in_image(2))),
             owned_active: Some(vec![0]),
             epoch: 3,
             active: Some(vec![0, 1]),
@@ -637,11 +634,7 @@ fn heartbeat_change_rows() -> Vec<HeartbeatRow> {
         },
         HeartbeatRow {
             name: "the source topic is deleted",
-            initial: image_of(None, &[ImageTopic {
-                name: "in",
-                id: 1,
-                partitions: 2,
-            }]),
+            initial: in_image(2),
             storage: TopologyStorage::Stateless,
             change: HeartbeatChange::Image(Box::new(image_of(None, &[]))),
             owned_active: Some(vec![]),
@@ -655,11 +648,7 @@ fn heartbeat_change_rows() -> Vec<HeartbeatRow> {
         },
         HeartbeatRow {
             name: "the member sends a new rack id",
-            initial: image_of(None, &[ImageTopic {
-                name: "in",
-                id: 1,
-                partitions: 1,
-            }]),
+            initial: in_image(1),
             storage: TopologyStorage::Stateless,
             change: HeartbeatChange::Rack("rack-b"),
             owned_active: Some(vec![0]),
@@ -669,11 +658,7 @@ fn heartbeat_change_rows() -> Vec<HeartbeatRow> {
         },
         HeartbeatRow {
             name: "the member sends a new process id",
-            initial: image_of(None, &[ImageTopic {
-                name: "in",
-                id: 1,
-                partitions: 1,
-            }]),
+            initial: in_image(1),
             storage: TopologyStorage::Stateless,
             change: HeartbeatChange::Process("process-b"),
             owned_active: Some(vec![0]),
@@ -683,11 +668,7 @@ fn heartbeat_change_rows() -> Vec<HeartbeatRow> {
         },
         HeartbeatRow {
             name: "the internal topic is created",
-            initial: image_of(None, &[ImageTopic {
-                name: "in",
-                id: 1,
-                partitions: 1,
-            }]),
+            initial: in_image(1),
             storage: TopologyStorage::StoreChangelog,
             change: HeartbeatChange::Image(Box::new(image_of(None, &[
                 ImageTopic {
@@ -814,11 +795,7 @@ async fn a_new_target_persists_the_target_of_every_member() {
     let m2 = heartbeat(&handle, request("m2", 0)).await;
     check!((m1.member_epoch, m2.member_epoch) == (2, 3));
 
-    source.set_image(image_of(None, &[ImageTopic {
-        name: "in",
-        id: 1,
-        partitions: 4,
-    }]));
+    source.set_image(in_image(4));
     let resp = heartbeat(&handle, request("m1", 2)).await;
     check!(resp.member_epoch == 4);
 
@@ -855,13 +832,7 @@ async fn a_seeded_group_asks_for_its_missing_internal_topics_again() {
         krabka_protocol::owned::common::streams_group_heartbeat_response::status::Status,
     };
 
-    let image = || {
-        image_of(None, &[ImageTopic {
-            name: "in",
-            id: 1,
-            partitions: 1,
-        }])
-    };
+    let image = || in_image(1);
     let (before, _log) = make_coordinator();
     before.set_metadata_source(Arc::new(
         FakeMetadataSource::builder().image(image()).build(),
@@ -940,9 +911,7 @@ async fn a_group_loaded_before_the_metadata_source_connects_assigns_its_tasks() 
         active: Option<Vec<i32>>,
     }
 
-    let source = || {
-        in_topic_source(2)
-    };
+    let source = || in_topic_source(2);
     let request = |member_id: &str, member_epoch, owned: Vec<i32>| StreamsGroupHeartbeatRequest {
         group_id: "g".into(),
         member_id: member_id.into(),
@@ -2467,11 +2436,7 @@ fn endpoint_partitions_follow_the_endpoint_to_partitions_manager_of_each_release
     };
 
     // The topic `in` has two partitions.
-    let image = image_of(None, &[ImageTopic {
-        name: "in",
-        id: 1,
-        partitions: 2,
-    }]);
+    let image = in_image(2);
     let subtopologies = BTreeMap::from([("0".to_string(), ConfiguredSubtopology {
         number_of_tasks: 4,
         source_topics: BTreeSet::from(["in".to_string()]),

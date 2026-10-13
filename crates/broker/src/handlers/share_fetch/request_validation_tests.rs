@@ -223,13 +223,13 @@ async fn group_and_member_ids_are_checked_in_kafka_order() {
 async fn a_member_the_group_does_not_know_still_fetches() {
     let StartedBroker { broker, dir: _dir } = start().await;
     let shared = broker.broker_arc_for_test();
+    let version = share_fetch_response::MAX_VERSION;
+    let _actor = shared.group_coordinator.get_or_create_share(READABLE);
     request_identity!(
         (user, address, ctx),
         principal("share-consumer"),
         client_id = "share-client"
     );
-    let version = share_fetch_response::MAX_VERSION;
-    let _actor = shared.group_coordinator.get_or_create_share(READABLE);
 
     let fetch = ShareFetchRequest {
         group_id: Some(READABLE.into()),

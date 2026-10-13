@@ -37,6 +37,49 @@ struct M {
     offsets: &'static [ReportedOffset],
 }
 
+macro_rules! task {
+    ($subtopology:literal, $partitions:expr) => {
+        TaskPartitions {
+            subtopology: $subtopology,
+            partitions: $partitions,
+        }
+    };
+}
+
+macro_rules! member_tasks {
+    ($member:literal, $partitions:expr) => {
+        MemberTasks {
+            member: $member,
+            partitions: $partitions,
+        }
+    };
+}
+
+macro_rules! reported {
+    ($partition:literal, $sum:literal) => {
+        ReportedOffset {
+            subtopology: "s",
+            partition: $partition,
+            offset_sum: $sum,
+        }
+    };
+}
+
+macro_rules! first_two_active {
+    () => {
+        &[
+            member_tasks!("member1", &[0]),
+            member_tasks!("member2", &[1]),
+        ]
+    };
+}
+
+macro_rules! s_active {
+    ($id:literal, $process:literal, $partitions:expr) => {
+        m_active($id, $process, &[task!("s", $partitions)])
+    };
+}
+
 const fn m(id: &'static str, process: &'static str) -> M {
     M {
         id,
@@ -128,65 +171,32 @@ fn active_rows() -> Vec<Row> {
             partitions: 4,
             stateful: false,
             standby_replicas: 0,
-            active: &[
-                MemberTasks {
-                    member: "A",
-                    partitions: &[0, 2],
-                },
-                MemberTasks {
-                    member: "B",
-                    partitions: &[1, 3],
-                },
-            ],
+            active: &[member_tasks!("A", &[0, 2]), member_tasks!("B", &[1, 3])],
             standby: &[],
         },
         Row {
             // A current owner keeps only its quota; the rest move at once.
             name: "sticky within quota",
-            members: vec![
-                m_active("A", "p1", &[TaskPartitions {
-                    subtopology: "s",
-                    partitions: &[0, 1, 2, 3],
-                }]),
-                m("B", "p2"),
-            ],
+            members: vec![s_active!("A", "p1", &[0, 1, 2, 3]), m("B", "p2")],
             partitions: 4,
             stateful: true,
             standby_replicas: 0,
-            active: &[
-                MemberTasks {
-                    member: "A",
-                    partitions: &[0, 1],
-                },
-                MemberTasks {
-                    member: "B",
-                    partitions: &[2, 3],
-                },
-            ],
+            active: &[member_tasks!("A", &[0, 1]), member_tasks!("B", &[2, 3])],
             standby: &[],
         },
         Row {
             name: "shouldAssignTasksToClientWithPreviousStandbyTasks",
             members: vec![
                 M {
-                    standby: &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[2],
-                    }],
+                    standby: &[task!("s", &[2])],
                     ..m("member1", "process1")
                 },
                 M {
-                    standby: &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[1],
-                    }],
+                    standby: &[task!("s", &[1])],
                     ..m("member2", "process2")
                 },
                 M {
-                    standby: &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[0],
-                    }],
+                    standby: &[task!("s", &[0])],
                     ..m("member3", "process3")
                 },
             ],
@@ -194,68 +204,32 @@ fn active_rows() -> Vec<Row> {
             stateful: false,
             standby_replicas: 0,
             active: &[
-                MemberTasks {
-                    member: "member1",
-                    partitions: &[2],
-                },
-                MemberTasks {
-                    member: "member2",
-                    partitions: &[1],
-                },
-                MemberTasks {
-                    member: "member3",
-                    partitions: &[0],
-                },
+                member_tasks!("member1", &[2]),
+                member_tasks!("member2", &[1]),
+                member_tasks!("member3", &[0]),
             ],
             standby: &[],
         },
         Row {
             name: "shouldAssignTasksToClientWithPreviousWarmupTasks",
             members: vec![
-                m_active("member1", "process1", &[TaskPartitions {
-                    subtopology: "s",
-                    partitions: &[0, 1, 2],
-                }]),
-                m_active("member2", "process2", &[TaskPartitions {
-                    subtopology: "s",
-                    partitions: &[3, 4, 5],
-                }]),
+                s_active!("member1", "process1", &[0, 1, 2]),
+                s_active!("member2", "process2", &[3, 4, 5]),
                 M {
-                    active: &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[6, 7],
-                    }],
-                    warmup: &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[8],
-                    }],
+                    active: &[task!("s", &[6, 7])],
+                    warmup: &[task!("s", &[8])],
                     ..m("member3", "process3")
                 },
-                m_active("member4", "process4", &[TaskPartitions {
-                    subtopology: "s",
-                    partitions: &[9],
-                }]),
+                s_active!("member4", "process4", &[9]),
             ],
             partitions: 12,
             stateful: true,
             standby_replicas: 0,
             active: &[
-                MemberTasks {
-                    member: "member1",
-                    partitions: &[0, 1, 2],
-                },
-                MemberTasks {
-                    member: "member2",
-                    partitions: &[3, 4, 5],
-                },
-                MemberTasks {
-                    member: "member3",
-                    partitions: &[6, 7, 8],
-                },
-                MemberTasks {
-                    member: "member4",
-                    partitions: &[9, 10, 11],
-                },
+                member_tasks!("member1", &[0, 1, 2]),
+                member_tasks!("member2", &[3, 4, 5]),
+                member_tasks!("member3", &[6, 7, 8]),
+                member_tasks!("member4", &[9, 10, 11]),
             ],
             standby: &[],
         },
@@ -268,23 +242,11 @@ fn active_rows_stateful() -> Vec<Row> {
         Row {
             name: "shouldAssignStandbyTaskToClientWithPreviousWarmupTaskOverLessLoadedClient",
             members: vec![
-                m_active("member1", "process1", &[TaskPartitions {
-                    subtopology: "s",
-                    partitions: &[0],
-                }]),
-                m_active("member2", "process2", &[TaskPartitions {
-                    subtopology: "s",
-                    partitions: &[1],
-                }]),
+                s_active!("member1", "process1", &[0]),
+                s_active!("member2", "process2", &[1]),
                 M {
-                    active: &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[2],
-                    }],
-                    warmup: &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[1],
-                    }],
+                    active: &[task!("s", &[2])],
+                    warmup: &[task!("s", &[1])],
                     ..m("member3", "process3")
                 },
                 m("member4", "process4"),
@@ -293,116 +255,49 @@ fn active_rows_stateful() -> Vec<Row> {
             stateful: true,
             standby_replicas: 1,
             active: &[
-                MemberTasks {
-                    member: "member1",
-                    partitions: &[0],
-                },
-                MemberTasks {
-                    member: "member2",
-                    partitions: &[1],
-                },
-                MemberTasks {
-                    member: "member3",
-                    partitions: &[2],
-                },
+                member_tasks!("member1", &[0]),
+                member_tasks!("member2", &[1]),
+                member_tasks!("member3", &[2]),
             ],
             standby: &[
-                MemberTasks {
-                    member: "member2",
-                    partitions: &[0],
-                },
-                MemberTasks {
-                    member: "member3",
-                    partitions: &[1],
-                },
-                MemberTasks {
-                    member: "member4",
-                    partitions: &[2],
-                },
+                member_tasks!("member2", &[0]),
+                member_tasks!("member3", &[1]),
+                member_tasks!("member4", &[2]),
             ],
         },
         Row {
             name: "shouldPreferMoreCaughtUpCandidateRegardlessOfPrevStandbyOrPrevWarmupRole",
             members: vec![
-                m_active("member1", "process1", &[TaskPartitions {
-                    subtopology: "s",
-                    partitions: &[0],
-                }]),
-                m_active("member2", "process2", &[TaskPartitions {
-                    subtopology: "s",
-                    partitions: &[1],
-                }]),
+                s_active!("member1", "process1", &[0]),
+                s_active!("member2", "process2", &[1]),
                 M {
-                    standby: &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[0],
-                    }],
-                    offsets: &[ReportedOffset {
-                        subtopology: "s",
-                        partition: 0,
-                        offset_sum: 100,
-                    }],
+                    standby: &[task!("s", &[0])],
+                    offsets: &[reported!(0, 100)],
                     ..m("member3", "process3")
                 },
                 M {
-                    warmup: &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[0],
-                    }],
-                    offsets: &[ReportedOffset {
-                        subtopology: "s",
-                        partition: 0,
-                        offset_sum: 10,
-                    }],
+                    warmup: &[task!("s", &[0])],
+                    offsets: &[reported!(0, 10)],
                     ..m("member4", "process4")
                 },
                 M {
-                    standby: &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[1],
-                    }],
-                    offsets: &[ReportedOffset {
-                        subtopology: "s",
-                        partition: 1,
-                        offset_sum: 10,
-                    }],
+                    standby: &[task!("s", &[1])],
+                    offsets: &[reported!(1, 10)],
                     ..m("member5", "process5")
                 },
                 M {
-                    warmup: &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[1],
-                    }],
-                    offsets: &[ReportedOffset {
-                        subtopology: "s",
-                        partition: 1,
-                        offset_sum: 100,
-                    }],
+                    warmup: &[task!("s", &[1])],
+                    offsets: &[reported!(1, 100)],
                     ..m("member6", "process6")
                 },
             ],
             partitions: 2,
             stateful: true,
             standby_replicas: 1,
-            active: &[
-                MemberTasks {
-                    member: "member1",
-                    partitions: &[0],
-                },
-                MemberTasks {
-                    member: "member2",
-                    partitions: &[1],
-                },
-            ],
+            active: first_two_active!(),
             standby: &[
-                MemberTasks {
-                    member: "member3",
-                    partitions: &[0],
-                },
-                MemberTasks {
-                    member: "member6",
-                    partitions: &[1],
-                },
+                member_tasks!("member3", &[0]),
+                member_tasks!("member6", &[1]),
             ],
         },
     ]
@@ -416,73 +311,37 @@ fn standby_rows() -> Vec<Row> {
             name: "shouldAssignStandbyToPreviousStandbyThatDoesNotHoldTheActiveTask",
             members: vec![
                 M {
-                    standby: &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[2],
-                    }],
+                    standby: &[task!("s", &[2])],
                     ..m("member1", "process1")
                 },
                 M {
-                    active: &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[0],
-                    }],
-                    standby: &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[2],
-                    }],
+                    active: &[task!("s", &[0])],
+                    standby: &[task!("s", &[2])],
                     ..m("member2", "process2")
                 },
-                m_active("member3", "process3", &[TaskPartitions {
-                    subtopology: "s",
-                    partitions: &[1],
-                }]),
+                s_active!("member3", "process3", &[1]),
                 m("member4", "process4"),
             ],
             partitions: 3,
             stateful: true,
             standby_replicas: 1,
             active: &[
-                MemberTasks {
-                    member: "member1",
-                    partitions: &[2],
-                },
-                MemberTasks {
-                    member: "member2",
-                    partitions: &[0],
-                },
-                MemberTasks {
-                    member: "member3",
-                    partitions: &[1],
-                },
+                member_tasks!("member1", &[2]),
+                member_tasks!("member2", &[0]),
+                member_tasks!("member3", &[1]),
             ],
             standby: &[
-                MemberTasks {
-                    member: "member1",
-                    partitions: &[0],
-                },
-                MemberTasks {
-                    member: "member2",
-                    partitions: &[2],
-                },
-                MemberTasks {
-                    member: "member4",
-                    partitions: &[1],
-                },
+                member_tasks!("member1", &[0]),
+                member_tasks!("member2", &[2]),
+                member_tasks!("member4", &[1]),
             ],
         },
         Row {
             name: "shouldRankCurrentOwnersAheadOfReportedTaskOffsetsAndMostCaughtUpFirst",
             members: vec![
-                m_active("member1", "process1", &[TaskPartitions {
-                    subtopology: "s",
-                    partitions: &[0],
-                }]),
+                s_active!("member1", "process1", &[0]),
                 M {
-                    standby: &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[0, 1],
-                    }],
+                    standby: &[task!("s", &[0, 1])],
                     ..m("member2", "process2")
                 },
                 M {
@@ -497,20 +356,12 @@ fn standby_rows() -> Vec<Row> {
                             partition: 1,
                             offset_sum: 1_000_000,
                         },
-                        ReportedOffset {
-                            subtopology: "s",
-                            partition: 2,
-                            offset_sum: 100,
-                        },
+                        reported!(2, 100),
                     ],
                     ..m("member3", "process3")
                 },
                 M {
-                    offsets: &[ReportedOffset {
-                        subtopology: "s",
-                        partition: 2,
-                        offset_sum: 50,
-                    }],
+                    offsets: &[reported!(2, 50)],
                     ..m("member4", "process4")
                 },
             ],
@@ -518,22 +369,10 @@ fn standby_rows() -> Vec<Row> {
             stateful: true,
             standby_replicas: 0,
             active: &[
-                MemberTasks {
-                    member: "member1",
-                    partitions: &[0],
-                },
-                MemberTasks {
-                    member: "member2",
-                    partitions: &[1],
-                },
-                MemberTasks {
-                    member: "member3",
-                    partitions: &[2],
-                },
-                MemberTasks {
-                    member: "member4",
-                    partitions: &[3],
-                },
+                member_tasks!("member1", &[0]),
+                member_tasks!("member2", &[1]),
+                member_tasks!("member3", &[2]),
+                member_tasks!("member4", &[3]),
             ],
             standby: &[],
         },
@@ -541,44 +380,21 @@ fn standby_rows() -> Vec<Row> {
             name: "shouldAssignStandbysAwayFromProcessHoldingStateOnColdStart",
             members: vec![
                 M {
-                    offsets: &[ReportedOffset {
-                        subtopology: "s",
-                        partition: 0,
-                        offset_sum: 100,
-                    }],
+                    offsets: &[reported!(0, 100)],
                     ..m("member1", "process1")
                 },
                 M {
-                    offsets: &[ReportedOffset {
-                        subtopology: "s",
-                        partition: 1,
-                        offset_sum: 100,
-                    }],
+                    offsets: &[reported!(1, 100)],
                     ..m("member2", "process2")
                 },
             ],
             partitions: 2,
             stateful: true,
             standby_replicas: 1,
-            active: &[
-                MemberTasks {
-                    member: "member1",
-                    partitions: &[0],
-                },
-                MemberTasks {
-                    member: "member2",
-                    partitions: &[1],
-                },
-            ],
+            active: first_two_active!(),
             standby: &[
-                MemberTasks {
-                    member: "member1",
-                    partitions: &[1],
-                },
-                MemberTasks {
-                    member: "member2",
-                    partitions: &[0],
-                },
+                member_tasks!("member1", &[1]),
+                member_tasks!("member2", &[0]),
             ],
         },
     ]
@@ -591,63 +407,19 @@ fn standby_rows_cold_start() -> Vec<Row> {
             name: "shouldAssignTasksToProcessesReportingTaskOffsetsOnColdStartWithMultipleMembersPerProcess",
             members: vec![
                 M {
-                    offsets: &[
-                        ReportedOffset {
-                            subtopology: "s",
-                            partition: 0,
-                            offset_sum: 100,
-                        },
-                        ReportedOffset {
-                            subtopology: "s",
-                            partition: 1,
-                            offset_sum: 100,
-                        },
-                    ],
+                    offsets: &[reported!(0, 100), reported!(1, 100)],
                     ..m("member1_1", "process1")
                 },
                 M {
-                    offsets: &[
-                        ReportedOffset {
-                            subtopology: "s",
-                            partition: 0,
-                            offset_sum: 100,
-                        },
-                        ReportedOffset {
-                            subtopology: "s",
-                            partition: 1,
-                            offset_sum: 100,
-                        },
-                    ],
+                    offsets: &[reported!(0, 100), reported!(1, 100)],
                     ..m("member1_2", "process1")
                 },
                 M {
-                    offsets: &[
-                        ReportedOffset {
-                            subtopology: "s",
-                            partition: 2,
-                            offset_sum: 100,
-                        },
-                        ReportedOffset {
-                            subtopology: "s",
-                            partition: 3,
-                            offset_sum: 100,
-                        },
-                    ],
+                    offsets: &[reported!(2, 100), reported!(3, 100)],
                     ..m("member2_1", "process2")
                 },
                 M {
-                    offsets: &[
-                        ReportedOffset {
-                            subtopology: "s",
-                            partition: 2,
-                            offset_sum: 100,
-                        },
-                        ReportedOffset {
-                            subtopology: "s",
-                            partition: 3,
-                            offset_sum: 100,
-                        },
-                    ],
+                    offsets: &[reported!(2, 100), reported!(3, 100)],
                     ..m("member2_2", "process2")
                 },
             ],
@@ -655,22 +427,10 @@ fn standby_rows_cold_start() -> Vec<Row> {
             stateful: true,
             standby_replicas: 0,
             active: &[
-                MemberTasks {
-                    member: "member1_1",
-                    partitions: &[0],
-                },
-                MemberTasks {
-                    member: "member1_2",
-                    partitions: &[1],
-                },
-                MemberTasks {
-                    member: "member2_1",
-                    partitions: &[2],
-                },
-                MemberTasks {
-                    member: "member2_2",
-                    partitions: &[3],
-                },
+                member_tasks!("member1_1", &[0]),
+                member_tasks!("member1_2", &[1]),
+                member_tasks!("member2_1", &[2]),
+                member_tasks!("member2_2", &[3]),
             ],
             standby: &[],
         },
@@ -681,77 +441,29 @@ fn standby_rows_cold_start() -> Vec<Row> {
             partitions: 2,
             stateful: true,
             standby_replicas: 1,
-            active: &[
-                MemberTasks {
-                    member: "A",
-                    partitions: &[0],
-                },
-                MemberTasks {
-                    member: "B",
-                    partitions: &[1],
-                },
-            ],
-            standby: &[
-                MemberTasks {
-                    member: "A",
-                    partitions: &[1],
-                },
-                MemberTasks {
-                    member: "B",
-                    partitions: &[0],
-                },
-            ],
+            active: &[member_tasks!("A", &[0]), member_tasks!("B", &[1])],
+            standby: &[member_tasks!("A", &[1]), member_tasks!("B", &[0])],
         },
         Row {
             // The owner of task 0 left; m2 held its standby and takes it.
             name: "orphan active goes to its previous standby",
             members: vec![
                 M {
-                    active: &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[1],
-                    }],
-                    standby: &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[0],
-                    }],
+                    active: &[task!("s", &[1])],
+                    standby: &[task!("s", &[0])],
                     ..m("m2", "p2")
                 },
                 M {
-                    active: &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[2],
-                    }],
-                    standby: &[TaskPartitions {
-                        subtopology: "s",
-                        partitions: &[1],
-                    }],
+                    active: &[task!("s", &[2])],
+                    standby: &[task!("s", &[1])],
                     ..m("m3", "p3")
                 },
             ],
             partitions: 3,
             stateful: true,
             standby_replicas: 1,
-            active: &[
-                MemberTasks {
-                    member: "m2",
-                    partitions: &[0, 1],
-                },
-                MemberTasks {
-                    member: "m3",
-                    partitions: &[2],
-                },
-            ],
-            standby: &[
-                MemberTasks {
-                    member: "m2",
-                    partitions: &[2],
-                },
-                MemberTasks {
-                    member: "m3",
-                    partitions: &[0, 1],
-                },
-            ],
+            active: &[member_tasks!("m2", &[0, 1]), member_tasks!("m3", &[2])],
+            standby: &[member_tasks!("m2", &[2]), member_tasks!("m3", &[0, 1])],
         },
         Row {
             // Two members of one process: a standby never shares a process
@@ -761,16 +473,7 @@ fn standby_rows_cold_start() -> Vec<Row> {
             partitions: 2,
             stateful: true,
             standby_replicas: 1,
-            active: &[
-                MemberTasks {
-                    member: "A",
-                    partitions: &[0],
-                },
-                MemberTasks {
-                    member: "B",
-                    partitions: &[1],
-                },
-            ],
+            active: &[member_tasks!("A", &[0]), member_tasks!("B", &[1])],
             standby: &[],
         },
     ]
@@ -812,14 +515,8 @@ fn range_assigns_each_member_a_task_of_every_subtopology() {
     // member ends with one active and one standby task of each subtopology.
     let members = [
         member(&m_active("member1", "process1", &[
-            TaskPartitions {
-                subtopology: "s1",
-                partitions: &[0, 1],
-            },
-            TaskPartitions {
-                subtopology: "s2",
-                partitions: &[0, 1],
-            },
+            task!("s1", &[0, 1]),
+            task!("s2", &[0, 1]),
         ])),
         member(&m("member2", "process2")),
     ];
