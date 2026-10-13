@@ -249,18 +249,25 @@ pub fn to_map(parts: &[i32]) -> HashMap<Uuid, Vec<i32>> {
     }
 }
 
-pub fn owned_map(owned: &[(String, Vec<i32>)]) -> BTreeMap<String, BTreeSet<i32>> {
+fn collect_owned_parts<'a, I, P, C, O>(owned: I) -> O
+where
+    I: Iterator<Item = (&'a String, &'a P)>,
+    P: 'a,
+    &'a P: IntoIterator<Item = &'a i32>,
+    C: FromIterator<i32>,
+    O: FromIterator<(String, C)>,
+{
     owned
-        .iter()
-        .map(|(id, parts)| (id.clone(), parts.iter().copied().collect()))
+        .map(|(id, parts)| (id.clone(), parts.into_iter().copied().collect()))
         .collect()
 }
 
+pub fn owned_map(owned: &[(String, Vec<i32>)]) -> BTreeMap<String, BTreeSet<i32>> {
+    collect_owned_parts(owned.iter().map(|(id, parts)| (id, parts)))
+}
+
 pub fn owned_to_vec(owned: &BTreeMap<String, BTreeSet<i32>>) -> Vec<(String, Vec<i32>)> {
-    owned
-        .iter()
-        .map(|(id, parts)| (id.clone(), parts.iter().copied().collect()))
-        .collect()
+    collect_owned_parts(owned.iter())
 }
 
 pub fn advertised_for(advertised: &[(String, Vec<i32>)], id: &str) -> Vec<i32> {
@@ -343,4 +350,20 @@ fn epoch_ledger_keeps_existing_violations_and_records_only_regressions() {
         assert!(ledger.contains("epoch regression") == regressed);
         assert!(ledger.len() == if regressed { 2 } else { 1 });
     }
+}
+
+#[test]
+fn owned_parts_round_trip_sorted_unique_and_empty_members() {
+    let owned = vec![
+        ("member".to_owned(), vec![2, 1, 2]),
+        ("empty".to_owned(), vec![]),
+    ];
+    let mapped = owned_map(&owned);
+    assert!(
+        owned_to_vec(&mapped)
+            == vec![
+                ("empty".to_owned(), vec![]),
+                ("member".to_owned(), vec![1, 2]),
+            ]
+    );
 }

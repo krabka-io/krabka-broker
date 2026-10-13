@@ -988,32 +988,41 @@ mod tests {
     }
 
     /// A `JoinGroup` for topic `t` as a classic consumer client sends it.
+    fn join_request(
+        member_id: &str,
+        group_instance_id: Option<&str>,
+        protocol_type: &str,
+        protocol_name: &str,
+    ) -> JoinGroupRequest {
+        use krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol;
+
+        JoinGroupRequest {
+            group_id: "g".into(),
+            session_timeout_ms: 45_000,
+            rebalance_timeout_ms: 300_000,
+            member_id: member_id.into(),
+            group_instance_id: group_instance_id.map(Into::into),
+            protocol_type: protocol_type.into(),
+            protocols: vec![JoinGroupRequestProtocol {
+                name: protocol_name.into(),
+                metadata: crate::coordinator::unified::actor::test_support::subscription_blob(&[
+                    "t",
+                ]),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
     async fn join_at(
         handle: &GroupActorHandle,
         member_id: &str,
         group_instance_id: Option<&str>,
         version: i16,
     ) -> JoinResult {
-        use krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol;
-
         send_join_at(
             handle,
-            JoinGroupRequest {
-                group_id: "g".into(),
-                session_timeout_ms: 45_000,
-                rebalance_timeout_ms: 300_000,
-                member_id: member_id.into(),
-                group_instance_id: group_instance_id.map(Into::into),
-                protocol_type: "consumer".into(),
-                protocols: vec![JoinGroupRequestProtocol {
-                    name: "range".into(),
-                    metadata: crate::coordinator::unified::actor::test_support::subscription_blob(
-                        &["t"],
-                    ),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            },
+            join_request(member_id, group_instance_id, "consumer", "range"),
             version,
         )
         .await
@@ -1329,8 +1338,6 @@ mod tests {
     /// type, protocol name) to the error, which carries only the code.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_classic_join_that_the_group_cannot_take_is_refused() {
-        use krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol;
-
         let rows = [
             (
                 "a full group",
@@ -1372,22 +1379,7 @@ mod tests {
 
             let refused = send_join_at(
                 &handle,
-                JoinGroupRequest {
-                    group_id: "g".into(),
-                    session_timeout_ms: 45_000,
-                    rebalance_timeout_ms: 300_000,
-                    member_id: "m-new".into(),
-                    protocol_type: protocol_type.into(),
-                    protocols: vec![JoinGroupRequestProtocol {
-                        name: protocol_name.into(),
-                        metadata:
-                            crate::coordinator::unified::actor::test_support::subscription_blob(&[
-                                "t",
-                            ]),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                },
+                join_request("m-new", None, protocol_type, protocol_name),
                 9,
             )
             .await;
@@ -1526,24 +1518,7 @@ mod tests {
         handle
             .tx
             .send(GroupActorMessage::ClassicJoin {
-                req: JoinGroupRequest {
-                    group_id: "g".into(),
-                    session_timeout_ms: 45_000,
-                    rebalance_timeout_ms: 300_000,
-                    member_id: "m-classic".into(),
-                    protocol_type: "consumer".into(),
-                    protocols: vec![
-                        krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol {
-                            name: "range".into(),
-                            metadata:
-                                crate::coordinator::unified::actor::test_support::subscription_blob(
-                                    &["t"],
-                                ),
-                            ..Default::default()
-                        },
-                    ],
-                    ..Default::default()
-                },
+                req: join_request("m-classic", None, "consumer", "range"),
                 version: 9,
                 client_id: "client-b".into(),
                 client_host: "127.0.0.1".into(),
