@@ -1111,7 +1111,7 @@ mod tests {
         struct Case {
             label: &'static str,
             frame: Bytes,
-            unstable: crate::api_catalog::UnstableApiVersions,
+            unstable: UnstableApiVersions,
             want: Result<(), EnvelopeError>,
         }
 
@@ -1122,7 +1122,7 @@ mod tests {
         fn unsupported_version(
             label: &'static str,
             api_key: i16,
-            unstable: crate::api_catalog::UnstableApiVersions,
+            unstable: UnstableApiVersions,
         ) -> Case {
             Case {
                 label,
