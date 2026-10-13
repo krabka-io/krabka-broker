@@ -136,6 +136,7 @@ fn records_only_the_operation_contract_and_preserves_results() {
     });
     let output = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
     let lines: Vec<_> = output.lines().collect();
+    let target = format!("{}:", module_path!());
     assert!(lines.len() == 6);
     for (line, operation, level) in [
         (lines[0], "copy_log_segment_data", "INFO"),
@@ -148,7 +149,7 @@ fn records_only_the_operation_contract_and_preserves_results() {
         assert!(line.contains(level));
         assert!(line.contains(operation));
         assert!(line.contains("topic_id=topic-id partition=4 segment=segment-id"));
-        assert!(line.contains("remote_operation:"));
+        assert!(line.contains(&target));
     }
     assert!(lines[0].contains("start_offset=10 end_offset=19"));
     assert!(lines[1].contains("start_position=2 end_position=Some(6)"));
