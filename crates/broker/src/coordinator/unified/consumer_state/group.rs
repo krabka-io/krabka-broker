@@ -1069,7 +1069,7 @@ mod tests {
         assert_group_epoch_exhaustion(
             GroupState::new("g"),
             |group| group.group_epoch = i32::MAX,
-            |group| group.bump_epoch(),
+            GroupState::bump_epoch,
             |group| group.group_epoch,
         );
     }

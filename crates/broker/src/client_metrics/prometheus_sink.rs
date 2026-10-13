@@ -13,6 +13,12 @@ mod collector;
 mod point;
 mod render;
 
+pub(crate) use self::{
+    collector::ClientMetricsCollector,
+    point::{DataPoint, PointValue},
+    render::SharedClientMetricsCollector,
+};
+
 #[cfg(test)]
 pub(super) mod test_support {
     use super::{DataPoint, PointValue};
@@ -36,9 +42,3 @@ pub(super) mod test_support {
         }
     }
 }
-
-pub(crate) use self::{
-    collector::ClientMetricsCollector,
-    point::{DataPoint, PointValue},
-    render::SharedClientMetricsCollector,
-};

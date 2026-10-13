@@ -194,13 +194,13 @@ mod tests {
             resolve_delivery_max_delay(&image, "t") == expected_millis.map(millis),
             "delivery.max.delay.ms={value:?}"
         );
-        if check_schedule_default {
+        if let (true, Some(value)) = (check_schedule_default, value) {
             // A corrupt `delivery.schedule.monotonic` is not "true", so the
             // applier leaves the log's default in place.
             assert2::assert!(
                 apply_to_log_config(
                     &maplit::btreemap! {
-                        DELIVERY_SCHEDULE_MONOTONIC.to_owned() => value.unwrap().to_owned()
+                        DELIVERY_SCHEDULE_MONOTONIC.to_owned() => value.to_owned()
                     },
                     &LogConfig::default()
                 ) == LogConfig::default(),

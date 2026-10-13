@@ -1109,8 +1109,6 @@ macro_rules! topic_config_record_with_default_policy {
         )
     };
 }
-pub(crate) use topic_config_record_with_default_policy;
-
 #[bon::builder]
 pub(crate) async fn create_topic(
     broker: &BrokerHandle,

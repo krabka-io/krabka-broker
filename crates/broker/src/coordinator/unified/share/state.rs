@@ -513,7 +513,7 @@ mod tests {
         assert_group_epoch_exhaustion(
             ShareGroupState::new("g"),
             |group| group.group_epoch = i32::MAX,
-            |group| group.bump_epoch(),
+            ShareGroupState::bump_epoch,
             |group| group.group_epoch,
         );
     }

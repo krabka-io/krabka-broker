@@ -362,7 +362,7 @@ mod tests {
         _primary: tempfile::TempDir,
     }
 
-    async fn copied_future() -> TruncatedFutureFixture {
+    fn copied_future() -> TruncatedFutureFixture {
         let primary = tempdir().unwrap();
         let target = tempdir().unwrap();
         let (part, future_log, future_path) =
@@ -377,7 +377,7 @@ mod tests {
     }
 
     async fn truncated_copied_future() -> TruncatedFutureFixture {
-        let fixture = copied_future().await;
+        let fixture = copied_future();
         fixture.part.truncate_to(Offset(3)).await.unwrap();
         fixture
     }
@@ -459,7 +459,7 @@ mod tests {
     /// refuses a swap until it has.
     #[tokio::test]
     async fn a_swap_waits_for_the_cut_the_writer_has_not_reported() {
-        let fixture = copied_future().await;
+        let fixture = copied_future();
         let part = fixture.part;
         let target = fixture.target;
         let future_log = fixture.future_log;

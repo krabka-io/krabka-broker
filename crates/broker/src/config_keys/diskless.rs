@@ -181,16 +181,15 @@ mod tests {
         ScheduledDelivery,
     }
 
+    type DisklessValidCases = Vec<(&'static str, BTreeMap<String, String>)>;
+
     #[yare::parameterized(
         tiered_storage = { DisklessConflict::TieredStorage },
         scheduled_delivery = { DisklessConflict::ScheduledDelivery },
     )]
     fn diskless_excludes_conflicting_topic_features(conflict: DisklessConflict) {
-        let (key, conflicting_value, valid_cases): (
-            &str,
-            &str,
-            Vec<(&str, BTreeMap<String, String>)>,
-        ) = match conflict {
+        let (key, conflicting_value, valid_cases): (&str, &str, DisklessValidCases) = match conflict
+        {
             DisklessConflict::TieredStorage => (REMOTE_STORAGE_ENABLE, "true", vec![
                 (
                     "diskless with tiering explicitly off",

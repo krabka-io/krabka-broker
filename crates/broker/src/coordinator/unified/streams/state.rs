@@ -610,7 +610,7 @@ mod tests {
         assert_group_epoch_exhaustion(
             StreamsGroupState::new("g"),
             |group| group.group_epoch = i32::MAX,
-            |group| group.bump_epoch(),
+            StreamsGroupState::bump_epoch,
             |group| group.group_epoch,
         );
     }
