@@ -589,13 +589,7 @@ mod tests {
         coordinator.mark_streams("streams");
         let _share_actor = coordinator.get_or_create_share("share-actor");
         test_ctx!(ctx, "ANONYMOUS");
-        let not_found = |message: &str| {
-            Some(ConsumerGroupHeartbeatResponse {
-                error_code: codes::GROUP_ID_NOT_FOUND,
-                error_message: Some(message.into()),
-                ..Default::default()
-            })
-        };
+        let not_found = group_not_found_response!(ConsumerGroupHeartbeatResponse);
         // (group id, member epoch, expected response)
         let rows = [
             (

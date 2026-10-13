@@ -314,6 +314,18 @@ macro_rules! request_identity {
     };
 }
 
+macro_rules! group_not_found_response {
+    ($response:ty) => {
+        |message: &str| {
+            Some($response {
+                error_code: codes::GROUP_ID_NOT_FOUND,
+                error_message: Some(message.into()),
+                ..Default::default()
+            })
+        }
+    };
+}
+
 /// Empty ACL metadata and a bound caller for synchronous authorization checks.
 macro_rules! empty_acl_fixture {
     (($authorizer:ident, $image:ident), ($principal:ident, $peer:ident, $context:ident), $identity:expr, client_id = $client_id:expr $(, connection_id = $connection_id:expr)?) => {
