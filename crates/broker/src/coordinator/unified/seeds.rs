@@ -115,46 +115,6 @@ pub struct StreamsGroupSeed {
         std::collections::HashMap<String, StreamsGroupCurrentMemberAssignmentValue>,
 }
 
-/// Snapshot member metadata, current assignments, then the protocol's target map.
-macro_rules! snapshot_member_maps {
-    (
-        $state:ident;
-        $members:ident,
-        $current:ident,
-        $targets:ident;
-        $metadata:path,
-        $assignment:path; |
-        $id:ident,
-        $member:ident |
-        $target:block
-    ) => {
-        let mut $members = ::std::collections::HashMap::new();
-        let mut $targets = ::std::collections::HashMap::new();
-        let mut $current = ::std::collections::HashMap::new();
-        for ($id, $member) in &$state.members {
-            $members.insert($id.clone(), $metadata($member));
-            $current.insert($id.clone(), $assignment($member));
-            $target
-        }
-    };
-}
-pub(super) use snapshot_member_maps;
-
-/// Restore epochs only for members whose metadata survived replay, then apply
-/// the protocol's original assignment fields in the same iteration.
-macro_rules! hydrate_member_epochs {
-    ($state:ident, $seed:ident; $member:ident, $current:ident { $($assignment:tt)* }) => {
-        for (mid, $current) in $seed.current_per_member {
-            if let Some($member) = $state.members.get_mut(&mid) {
-                $member.member_epoch = $current.member_epoch;
-                $member.previous_member_epoch = $current.previous_member_epoch;
-                $($assignment)*
-            }
-        }
-    };
-}
-pub(super) use hydrate_member_epochs;
-
 impl GroupSeed {
     /// The consumer group that Kafka's replay creates for the first record of
     /// a group id: a new `ConsumerGroup`, whose group epoch and assignment

@@ -1775,6 +1775,44 @@ pub fn compression_bytes_fixture(tokens: TokenStream) -> Result<TokenStream, Par
     cross_storage_fixtures::compression_bytes_fixture(tokens)
 }
 
+mod reaper_task;
+mod record_strings;
+mod seed_member_maps;
+mod sweep_loop;
+
+/// Snapshot member metadata and assignments using the protocol's explicit target body.
+#[moxy::function]
+pub fn snapshot_member_maps(tokens: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    seed_member_maps::snapshot(tokens)
+}
+
+/// Restore member epochs before the protocol's explicit assignment body.
+#[moxy::function]
+pub fn hydrate_member_epochs(tokens: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    seed_member_maps::hydrate(tokens)
+}
+
+/// Declare request string traversal in field order, with optional native traversal bodies.
+#[moxy::function]
+pub fn record_strings(tokens: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    record_strings::expand(tokens)
+}
+
+/// Run an explicit sweep body with the selected cadence and shutdown body.
+#[moxy::function]
+pub fn sweep_loop(tokens: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    sweep_loop::expand(tokens)
+}
+
+/// Schedule an ordinary transaction sweep and retain its caller's shutdown event.
+#[moxy::attribute]
+pub fn reaper_task(
+    meta: NativeTokenStream,
+    item: NativeTokenStream,
+) -> Result<NativeTokenStream, ParseError> {
+    reaper_task::expand(meta, item)
+}
+
 mod archive_rows;
 
 /// Generate one annotated archive-validation walk with coherent proof bindings.

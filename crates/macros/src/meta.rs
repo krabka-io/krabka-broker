@@ -49,14 +49,20 @@ pub(crate) fn function_signature(item: &TokenStream) -> Result<Signature, ParseE
     let _: Attributes = Parse::parse(&parser)?;
     let _: Visibility = Parse::parse(&parser)?;
     let signature = Signature::parse(&parser)?;
+    finish_braced_body(&parser, "expected one function with a body")?;
+    Ok(signature)
+}
+
+/// Consume the final native body without parsing its operations.
+pub(crate) fn finish_braced_body(parser: &Parser, message: &str) -> Result<(), ParseError> {
     if !parser
         .advance()
         .is_some_and(|token| token.as_group().is_some_and(|group| group.delim.is_brace()))
         || !parser.is_empty()
     {
-        return Err(parser.error("expected one function with a body"));
+        return Err(parser.error(message));
     }
-    Ok(signature)
+    Ok(())
 }
 
 /// The named fields of a struct, or an error naming the derive.

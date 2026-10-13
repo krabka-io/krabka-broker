@@ -314,6 +314,8 @@ Controller adapters use `BackgroundControllers` for the three background-task tr
 
 Handler fixtures use one `wire_codec_helpers!` declaration with explicit encode, decode, and context roles. A bracketed version pins the codec; otherwise each call supplies its version. `NodeEndpoints` and `WireStateBatch` derive wire conversions from local structs and explicit target types. `ReplayMemberMaps` reads the seed's record types from its fields. ACL functions keep their signatures visible; `named_acl_gates!` emits fixed resource gates directly, and `topic_filter(Allow)` or `topic_filter(Deny)` supplies the shared selection body.
 
+Seed snapshots and hydration use `snapshot_member_maps!` and `hydrate_member_epochs!` with explicit bindings and native protocol operations. Request string traversal uses one `record_strings!` table with required fields, optional fields, and a native extra iterator or offset metadata policy. Timer loops use `sweep_loop!` with named cadence, sweep, and shutdown clauses. Transaction reapers keep ordinary async signatures and sweep bodies under `reaper_task`.
+
 For parallel work, give each subagent one macro family and its callers. Keep shared exports with one owner. Review the combined diff for scope, spans, and caller behavior before running the checks.
 
 ## Logging and Observability
