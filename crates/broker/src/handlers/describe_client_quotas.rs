@@ -1,7 +1,9 @@
 //! `DescribeClientQuotas` (`api_key` 48, KIP-13/124).
 
 #[cfg(test)]
-use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
+use crate::handlers::test_support::{
+    StartedBroker as HandlerStartedBroker, start_empty_acl_broker,
+};
 use {
     super::acl_wire::CLUSTER_RESOURCE_NAME,
     crate::{
@@ -505,7 +507,7 @@ mod tests {
         let HandlerStartedBroker {
             broker: broker_handle,
             dir: _dir,
-        } = crate::handlers::test_support::start_empty_acl_broker().await;
+        } = start_empty_acl_broker().await;
         seed_alice_quota(&broker_handle).await;
         let broker = broker_handle.broker_arc_for_test();
         let allowed = allowed_user_quota_response(Some("alice"), 1024.0);

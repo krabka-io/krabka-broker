@@ -45,7 +45,7 @@ fn append_to_leader(state: &mut ModelState, leader: NodeId, client: ClientId, va
 }
 
 impl ConsensusModel {
-    fn deliver_if_alive(&self, state: &mut ModelState, env: Envelope) {
+    fn deliver_if_alive(&self, state: &mut ModelState, env: &Envelope) {
         if !state.crashed.contains(&env.dst) {
             self.step(state, env.dst, env.event);
         }
@@ -193,7 +193,7 @@ impl Model for ConsensusModel {
                 }
                 // A crashed destination is unreachable: the message is consumed
                 // (removed) but produces no transition.
-                self.deliver_if_alive(&mut state, env);
+                self.deliver_if_alive(&mut state, &env);
             }
             ModelAction::DropMsg(env) => {
                 // Network loss: remove without delivering. No-op if already gone.
@@ -206,7 +206,7 @@ impl Model for ConsensusModel {
                 if !state.network.contains(&env) {
                     return None;
                 }
-                self.deliver_if_alive(&mut state, env);
+                self.deliver_if_alive(&mut state, &env);
             }
             ModelAction::Crash(id) => {
                 if !state.crashed.insert(id) {

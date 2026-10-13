@@ -18,7 +18,7 @@ packages named here: two copies of a list that cannot drift are as good as one.
 load("./repo.axl", "walk_suffix")
 
 # The packages the proofs job proves, and the script that must still name them.
-PROVED_PACKAGES = ["krabka-verified"]
+PROVED_PACKAGES = ["krabka-macros", "krabka-verified"]
 PROVE_SCRIPT = "tools/creusot/prove.sh"
 
 # Depending on this is enough on its own: a crate pulls it in to write specs,

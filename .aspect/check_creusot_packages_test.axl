@@ -17,7 +17,7 @@ load("./testing.axl", "check_eq", "suite", "suite_task", "temp_tree")
 _PROVE_SCRIPT = """#!/bin/bash
 set -euo pipefail
 
-packages=(krabka-verified)
+packages=(krabka-macros krabka-verified)
 
 for package in "${packages[@]}"; do
   cargo creusot --package "${package}"
@@ -152,7 +152,7 @@ def _test_uncovered_is_what_the_proofs_job_does_not_name(_ctx):
     check_eq("nothing covered", uncovered(["b", "a"], []), ["a", "b"])
 
 def _test_prove_packages_reads_the_array(_ctx):
-    check_eq("the script as it stands", prove_packages(_PROVE_SCRIPT), ["krabka-verified"])
+    check_eq("the script as it stands", prove_packages(_PROVE_SCRIPT), ["krabka-macros", "krabka-verified"])
     check_eq("several packages", prove_packages("packages=(a b)\n"), ["a", "b"])
     check_eq("quoted", prove_packages("packages=(\"a\" 'b')\n"), ["a", "b"])
     check_eq("indented, with a comment", prove_packages("  packages=(a) # why\n"), ["a"])
@@ -163,22 +163,22 @@ def _test_prove_packages_cannot_read_what_is_not_there(_ctx):
     check_eq("unclosed", prove_packages("packages=(\n  krabka-verified\n)\n"), None)
 
 def _test_the_script_as_it_stands_has_no_problems(_ctx):
-    check_eq("agreed", script_problems(_PROVE_SCRIPT, ["krabka-verified"]), [])
+    check_eq("agreed", script_problems(_PROVE_SCRIPT, ["krabka-macros", "krabka-verified"]), [])
 
 def _test_a_drifted_array_is_reported(_ctx):
     check_eq(
         "the script proves a package this task does not",
         script_problems(_PROVE_SCRIPT, ["krabka-ids"]),
-        ["tools/creusot/prove.sh proves krabka-verified, but PROVED_PACKAGES holds krabka-ids"],
+        ["tools/creusot/prove.sh proves krabka-macros, krabka-verified, but PROVED_PACKAGES holds krabka-ids"],
     )
     check_eq(
         "the script proves nothing",
-        script_problems(_PROVE_SCRIPT.replace("packages=(krabka-verified)", "packages=()"), ["a"]),
+        script_problems(_PROVE_SCRIPT.replace("packages=(krabka-macros krabka-verified)", "packages=()"), ["a"]),
         ["tools/creusot/prove.sh proves nothing, but PROVED_PACKAGES holds a"],
     )
     check_eq(
         "order does not count as drift",
-        script_problems(_PROVE_SCRIPT.replace("(krabka-verified)", "(b a)"), ["a", "b"]),
+        script_problems(_PROVE_SCRIPT.replace("(krabka-macros krabka-verified)", "(b a)"), ["a", "b"]),
         [],
     )
 
@@ -195,7 +195,7 @@ def _test_a_script_that_no_longer_proves_the_array_is_reported(_ctx):
 def _test_a_missing_array_is_reported(_ctx):
     check_eq(
         "nothing to compare against",
-        script_problems(_PROVE_SCRIPT.replace("packages=(krabka-verified)", ""), ["x"]),
+        script_problems(_PROVE_SCRIPT.replace("packages=(krabka-macros krabka-verified)", ""), ["x"]),
         [
             "tools/creusot/prove.sh holds no single-line `packages=(...)` array " +
             "for this check to read",
