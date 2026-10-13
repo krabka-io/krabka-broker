@@ -277,7 +277,9 @@ mod tests {
         }
     }
 
-    crate::test_support::context_helper!(client_id = "admin-client");
+    krabka_macros::wire_codec_helpers! {
+        test_context ["admin-client"];
+    }
 
     /// Serve `req` over the wire at `version`, so that the fields an older
     /// version drops never reach the handler.

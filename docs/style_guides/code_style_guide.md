@@ -312,6 +312,8 @@ Extension handlers declare their owned request type under `extension_wire`; the 
 
 Controller adapters use `BackgroundControllers` for the three background-task traits. Wire error codes use one `wire_codes!` declaration with release, trunk, and private sections. OTLP exporters use `otlp_exporter!` with complete method signatures. Object-store builders use `connection_policy!` around the builder expression. Catalog rows, static config keys, and topic authorization batches use ordinary Rust functions and constants.
 
+Handler fixtures use one `wire_codec_helpers!` declaration with explicit encode, decode, and context roles. A bracketed version pins the codec; otherwise each call supplies its version. `NodeEndpoints` and `WireStateBatch` derive wire conversions from local structs and explicit target types. `ReplayMemberMaps` reads the seed's record types from its fields. ACL functions keep their signatures visible; `named_acl_gates!` emits fixed resource gates directly, and `topic_filter(Allow)` or `topic_filter(Deny)` supplies the shared selection body.
+
 For parallel work, give each subagent one macro family and its callers. Keep shared exports with one owner. Review the combined diff for scope, spans, and caller behavior before running the checks.
 
 ## Logging and Observability

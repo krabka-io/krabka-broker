@@ -10,7 +10,7 @@ use {
         RESOURCE_TYPE_TOPIC, dispatch,
         test_support::{
             broker_resource, client_metrics_resource, drive_many, drive_one, group_resource,
-            resource,
+            resource, test_context,
         },
     },
     crate::{
@@ -28,9 +28,7 @@ use {
                 assert_dispatch_response, duplicate_config_resource_response, ordered_rows,
             },
         },
-        test_support::{
-            DenyAll, context_helper, start_broker_with_authorizer as start_broker, test_ctx,
-        },
+        test_support::{DenyAll, start_broker_with_authorizer as start_broker, test_ctx},
         throttle::LEADER_THROTTLED_RATE_KEY,
     },
     assert2::{assert, check},
@@ -40,8 +38,6 @@ use {
     },
     std::sync::Arc,
 };
-
-context_helper!(client_id = "admin-client");
 
 /// Local preprocessing errors retain their positions among controller results,
 /// including both occurrences of a duplicate resource.

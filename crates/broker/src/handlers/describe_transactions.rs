@@ -225,7 +225,9 @@ mod tests {
         assert!(t == expected);
     }
 
-    crate::test_support::context_helper!(client_id = "admin-client");
+    krabka_macros::wire_codec_helpers! {
+        test_context ["admin-client"];
+    }
 
     /// Kafka `TransactionCoordinator.handleDescribeTransactions` per requested
     /// id: `INVALID_REQUEST` for an empty id, the coordinator error of the id's

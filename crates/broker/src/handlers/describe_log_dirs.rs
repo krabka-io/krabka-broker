@@ -207,7 +207,9 @@ mod tests {
         std::sync::Arc,
     };
 
-    crate::test_support::context_helper!(client_id = "client-a");
+    krabka_macros::wire_codec_helpers! {
+        test_context ["client-a"];
+    }
 
     /// A principal without `Describe` on the cluster gets a whole-response
     /// `CLUSTER_AUTHORIZATION_FAILED` and no directories.

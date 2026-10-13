@@ -165,7 +165,9 @@ mod tests {
         }
     }
 
-    crate::test_support::context_helper!(client_id = "admin-client");
+    krabka_macros::wire_codec_helpers! {
+        test_context ["admin-client"];
+    }
 
     #[tokio::test]
     async fn handle_denied_groups_preserve_group_ids_and_error_codes() {

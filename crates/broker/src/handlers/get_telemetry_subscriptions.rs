@@ -75,11 +75,11 @@ mod tests {
         krabka_protocol::owned::get_telemetry_subscriptions_response,
     };
 
-    crate::test_support::codec_helpers!(
-        GetTelemetrySubscriptionsRequest,
-        GetTelemetrySubscriptionsResponse,
-        version = get_telemetry_subscriptions_response::MAX_VERSION
-    );
+    krabka_macros::wire_codec_helpers! {
+        encode_request(GetTelemetrySubscriptionsRequest);
+        decode_response(GetTelemetrySubscriptionsResponse);
+        version [get_telemetry_subscriptions_response::MAX_VERSION];
+    }
 
     /// Kafka answers with the client instance id it used: a new one for a
     /// zero request id, the request's id otherwise (#665). An early repeat

@@ -26,7 +26,9 @@ pub(super) type ClusterGate = fn(&dyn Authorizer, &MetadataImage, &RequestContex
 #[cfg(test)]
 macro_rules! test_dispatch {
     ($api:expr, $request:ty, $response:ty) => {
-        crate::test_support::context_helper!(client_id = "admin-client");
+        krabka_macros::wire_codec_helpers! {
+            test_context ["admin-client"];
+        }
         async fn answer(
             broker: &crate::broker::Broker,
             version: i16,

@@ -1,12 +1,9 @@
 //! Decode one request before an ordinary raw dispatch function's native body.
 
 use {
-    crate::meta::{Tokens, edit_native_body, function_signature},
+    crate::meta::{Tokens, edit_native_body, function_signature, parameter_ident},
     moxy::{
-        ast::{
-            FnParam, FromMeta, Meta, MetaContent, Parse, ParseError, Parser, PatIdent, Path,
-            Pattern,
-        },
+        ast::{FromMeta, Meta, MetaContent, Parse, ParseError, Parser, PatIdent, Path},
         token::{Spanner, TokenStream},
     },
     proc_macro::{Delimiter, TokenStream as NativeTokenStream, TokenTree as NativeTokenTree},
@@ -86,20 +83,7 @@ fn prefix(meta: &TokenStream, item: &TokenStream) -> Result<TokenStream, ParseEr
     }
     let names = parameters
         .iter()
-        .map(|parameter| {
-            if let FnParam::Typed(parameter) = parameter
-                && let Pattern::Ident(name) = parameter.pat.as_ref()
-                && name.by_ref.is_none()
-                && name.subpat.is_none()
-            {
-                Ok(&name.ident)
-            } else {
-                Err(ParseError::new(
-                    parameter.span(),
-                    "dispatch parameters need identifier bindings",
-                ))
-            }
-        })
+        .map(|parameter| parameter_ident(parameter, "dispatch parameters need identifier bindings"))
         .collect::<Result<Vec<_>, _>>()?;
     if names.iter().any(|name| name.text() == binding.ident.text()) {
         return Err(ParseError::new(

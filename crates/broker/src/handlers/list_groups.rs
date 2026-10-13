@@ -275,7 +275,9 @@ mod tests {
 
     const VERSION: i16 = krabka_protocol::owned::list_groups_response::MAX_VERSION;
 
-    crate::test_support::context_helper!(client_id = "admin-client");
+    krabka_macros::wire_codec_helpers! {
+        test_context ["admin-client"];
+    }
 
     fn group(group_id: &str, protocol_type: &str, state: &str, group_type: &str) -> ListedGroup {
         listed(

@@ -220,7 +220,9 @@ mod tests {
     const VERSION: krabka_ids::ApiVersion =
         krabka_ids::ApiVersion(krabka_protocol::owned::describe_groups_response::MAX_VERSION);
 
-    crate::test_support::context_helper!(client_id = "admin-client");
+    krabka_macros::wire_codec_helpers! {
+        test_context ["admin-client"];
+    }
 
     #[derive(Clone, Copy, Default)]
     enum OperationsDisclosure {

@@ -45,7 +45,9 @@ fn request(
     }
 }
 
-crate::test_support::context_helper!(client_id = "broker-heartbeat-test");
+krabka_macros::wire_codec_helpers! {
+    test_context ["broker-heartbeat-test"];
+}
 
 /// Every heartbeat is authorized against its own principal, on the
 /// controller listener too, as Kafka's

@@ -184,7 +184,10 @@ mod tests {
         },
     };
 
-    crate::test_support::codec_helpers!(AlterReplicaLogDirsRequest, AlterReplicaLogDirsResponse);
+    krabka_macros::wire_codec_helpers! {
+        encode_request(AlterReplicaLogDirsRequest);
+        decode_response(AlterReplicaLogDirsResponse);
+    }
 
     fn expected_partition_response(
         topic: &str,

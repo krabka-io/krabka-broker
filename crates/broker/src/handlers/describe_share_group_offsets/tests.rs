@@ -63,7 +63,9 @@ fn request(groups: &[RequestGroup<'_>]) -> DescribeShareGroupOffsetsRequest {
     }
 }
 
-crate::test_support::context_helper!(client_id = "admin-client");
+krabka_macros::wire_codec_helpers! {
+    test_context ["admin-client"];
+}
 
 #[tokio::test]
 async fn handle_error_scenarios_preserve_expected_rows() {

@@ -309,7 +309,9 @@ mod tests {
         },
     };
 
-    crate::test_support::context_helper!(client_id = "client-a");
+    krabka_macros::wire_codec_helpers! {
+        test_context ["client-a"];
+    }
 
     fn request(topic_id: ProtoUuid, partitions: &[i32]) -> ShareAcknowledgeRequest {
         ShareAcknowledgeRequest {

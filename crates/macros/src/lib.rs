@@ -496,7 +496,9 @@ mod membership_defaults;
 mod meta;
 mod metrics;
 mod model_type;
+mod named_acl_gates;
 mod network_fixtures;
+mod node_endpoints;
 mod object_ops;
 mod object_store_config;
 mod object_store_delegate;
@@ -509,6 +511,7 @@ mod raft_fixtures;
 mod refined_newtype;
 mod remote_metadata_fixtures;
 mod remote_operation;
+mod replay_member_maps;
 mod response_encoding;
 mod runtime_assignments;
 mod runtime_overlay;
@@ -522,11 +525,14 @@ mod sparse_index;
 mod throttle_probes;
 mod timer_hooks;
 mod timestamped_batch;
+mod topic_filter;
 mod transport_errors;
 mod value_framing;
 mod voter_admission;
+mod wire_codec_helpers;
 mod wire_codes;
 mod wire_fixtures;
+mod wire_state_batch;
 mod wire_values;
 mod worm_object_set;
 
@@ -734,6 +740,51 @@ pub fn wire_codes(tokens: NativeTokenStream) -> Result<TokenStream, ParseError> 
 #[moxy::function]
 pub fn otlp_exporter(tokens: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     otlp_exporters::expand(tokens)
+}
+
+/// Emit fixed ACL gates from `name: Group(operation, parameter)` or
+/// `name: Cluster(operation)` declarations, using the caller's audited ACL helper.
+#[moxy::function]
+pub fn named_acl_gates(tokens: NativeTokenStream) -> Result<TokenStream, ParseError> {
+    named_acl_gates::expand(&tokens.into())
+}
+
+/// Supply `Allow` or `Deny` to the shared topic-selection helper while keeping
+/// the function's five parameter types and names explicit.
+#[moxy::attribute]
+pub fn topic_filter(
+    meta: NativeTokenStream,
+    item: NativeTokenStream,
+) -> Result<NativeTokenStream, ParseError> {
+    topic_filter::expand(meta.into(), item)
+}
+
+/// Emit explicit request/response codec and context helper declarations directly.
+/// For example: `encode_request(Request); decode_response(Response); test_context ["test"];`.
+/// Add `version [EXPR];` to pin the codecs, or omit it to accept a version per call.
+#[moxy::function]
+pub fn wire_codec_helpers(tokens: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    wire_codec_helpers::expand(tokens)
+}
+
+/// Derive endpoint projections into the wire types listed by `node_endpoints(targets(...))`.
+#[moxy::derive(NodeEndpoints, attributes(node_endpoints))]
+pub fn node_endpoints(item: ItemStruct) -> Result<TokenStream, ParseError> {
+    node_endpoints::expand(item)
+}
+
+/// Derive read/write share-state batch conversions with their existing ownership directions.
+/// `#[wire_state_batch(read = ReadBatch, write = WriteBatch)]` selects both target types.
+#[moxy::derive(WireStateBatch, attributes(wire_state_batch))]
+pub fn wire_state_batch(item: ItemStruct) -> Result<TokenStream, ParseError> {
+    wire_state_batch::expand(item)
+}
+
+/// Derive member-map replay methods for the selected consumer, share, or streams protocol.
+/// Select the protocol with `#[replay_member_maps(protocol = "consumer")]`, `"share"`, or `"streams"`.
+#[moxy::derive(ReplayMemberMaps, attributes(replay_member_maps))]
+pub fn replay_member_maps(item: ItemStruct) -> Result<TokenStream, ParseError> {
+    replay_member_maps::expand(item)
 }
 
 /// Add flexible value framing around explicitly ordered private field codecs.

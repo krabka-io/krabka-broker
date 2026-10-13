@@ -711,7 +711,9 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    crate::test_support::context_helper!(client_id = "streams-client");
+    krabka_macros::wire_codec_helpers! {
+        test_context ["streams-client"];
+    }
 
     /// A started streams broker, its directory and a shared reference to it.
     struct ConfiguredBroker {

@@ -478,13 +478,13 @@ mod tests {
                 },
                 test_support::{assert_dispatch_response, ordered_rows},
             },
-            test_support::{
-                context_helper, start_broker_with_authorizer as start_broker, test_ctx,
-            },
+            test_support::{start_broker_with_authorizer as start_broker, test_ctx},
         },
     };
 
-    context_helper!(client_id = "admin-client");
+    krabka_macros::wire_codec_helpers! {
+        test_context ["admin-client"];
+    }
 
     /// The wire response interleaves logger results, local broker refusals and
     /// controller results in the original order, keeping duplicate rows.

@@ -13,9 +13,10 @@ use {
         },
         error::BrokerError,
         handlers::{
-            ApiVersion, ErrorResponse as _, RequestContext, acl_gates::group_protocol_refusal,
-            coordinator_routing::group_actor_error_code, group_coordinator_error,
-            group_version_disabled,
+            ApiVersion, ErrorResponse as _, RequestContext,
+            acl_gates::{group_protocol_refusal, subscribed_names_refusal},
+            coordinator_routing::group_actor_error_code,
+            group_coordinator_error, group_version_disabled,
         },
         task_util::ask,
     },
@@ -73,9 +74,11 @@ pub(crate) async fn handle(
     // `group_coordinator_error` -- Kafka authorizes the request before it
     // ever reaches coordinator routing, so an unauthorized subscription
     // must not be masked by `NOT_COORDINATOR` / `COORDINATOR_NOT_AVAILABLE`.
-    crate::handlers::acl_gates::authorize_subscription!(
-        (broker, &image, ctx), req.subscribed_topic_names.as_deref() => reply
-    );
+    if let Some(error_code) =
+        subscribed_names_refusal(broker, &image, ctx, req.subscribed_topic_names.as_deref())
+    {
+        return Ok(reply(error_code, None));
+    }
 
     // `GroupCoordinatorService.consumerGroupHeartbeat` validates the
     // request before it routes it to a coordinator shard.
@@ -274,7 +277,9 @@ mod tests {
         }
     }
 
-    crate::test_support::context_helper!(client_id = "consumer-group-heartbeat-test");
+    krabka_macros::wire_codec_helpers! {
+        test_context ["consumer-group-heartbeat-test"];
+    }
 
     #[test]
     fn group_version_gate_distinguishes_disabled_and_enabled_images() {

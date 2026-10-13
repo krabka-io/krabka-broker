@@ -25,7 +25,9 @@ use {
     std::sync::Arc,
 };
 
-crate::test_support::context_helper!(client_id = "broker-client");
+krabka_macros::wire_codec_helpers! {
+    test_context ["broker-client"];
+}
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 struct EmptyAlterPartitionSetup {

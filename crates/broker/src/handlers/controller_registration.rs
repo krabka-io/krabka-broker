@@ -149,7 +149,9 @@ mod tests {
         krabka_security::ListenerProtocol,
     };
 
-    crate::test_support::context_helper!(client_id = "controller");
+    krabka_macros::wire_codec_helpers! {
+        test_context ["controller"];
+    }
 
     #[test]
     fn controller_listener_validation_is_strict() {

@@ -106,7 +106,9 @@ pub(super) async fn low_metadata_version(broker: &Broker) {
         .expect("seed low metadata.version");
 }
 
-crate::test_support::context_helper!(pub(super) client_id = "admin-client");
+krabka_macros::wire_codec_helpers! {
+    pub(super) test_context ["admin-client"];
+}
 
 pub(super) async fn start_broker(
     authorizer: Arc<dyn Authorizer>,

@@ -160,7 +160,10 @@ mod tests {
     /// Applies one malformation to an otherwise well-formed request.
     type Mutate = fn(&mut UpdateRaftVoterRequest);
 
-    crate::test_support::codec_helpers!(UpdateRaftVoterRequest, UpdateRaftVoterResponse);
+    krabka_macros::wire_codec_helpers! {
+        encode_request(UpdateRaftVoterRequest);
+        decode_response(UpdateRaftVoterResponse);
+    }
 
     crate::handlers::raft_voter::test_dispatch!(
         82,

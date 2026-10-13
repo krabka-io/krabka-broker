@@ -12,7 +12,8 @@ use {
         error::BrokerError,
         features::share_groups_enabled,
         handlers::{
-            ApiVersion, ErrorResponse as _, RequestContext, acl_gates::group_protocol_refusal,
+            ApiVersion, ErrorResponse as _, RequestContext,
+            acl_gates::{group_protocol_refusal, subscribed_names_refusal},
             group_coordinator_error, group_coordinator_error_response,
             share_fetch::member_id_is_valid,
         },
@@ -74,9 +75,11 @@ pub(crate) async fn handle(
     // `group_coordinator_error` -- Kafka authorizes the request before it
     // ever reaches coordinator routing, so an unauthorized subscription
     // must not be masked by `NOT_COORDINATOR` / `COORDINATOR_NOT_AVAILABLE`.
-    crate::handlers::acl_gates::authorize_subscription!(
-        (broker, &image, ctx), req.subscribed_topic_names.as_deref() => reply
-    );
+    if let Some(error_code) =
+        subscribed_names_refusal(broker, &image, ctx, req.subscribed_topic_names.as_deref())
+    {
+        return Ok(reply(error_code, None));
+    }
 
     // Kafka's `GroupCoordinatorService.throwIfShareGroupHeartbeatRequestIsInvalid`
     // runs before the operation reaches a coordinator shard.
@@ -273,7 +276,9 @@ mod tests {
         assert!(cur.is_empty(), "response decoder consumed all bytes");
     }
 
-    crate::test_support::context_helper!(client_id = "client-a");
+    krabka_macros::wire_codec_helpers! {
+        test_context ["client-a"];
+    }
 
     macro_rules! share_group_view {
         (($actor:ident, $view:ident), $broker:ident, $group:expr) => {

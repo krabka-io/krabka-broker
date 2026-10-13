@@ -2,11 +2,22 @@
 
 use moxy::{
     ast::{
-        Attributes, Field, ItemStruct, List, Parse, ParseError, Parser, Signature, Token, Type,
-        Visibility,
+        Attributes, Field, FnParam, ItemStruct, List, Parse, ParseError, Parser, Pattern,
+        Signature, Token, Type, Visibility,
     },
     token::{Ident, Span, Spanner, TokenStream, TokenTree},
 };
+
+#[cfg(test)]
+pub(crate) fn assert_rejected_structs(
+    cases: &[(&str, &str)],
+    expand: impl Fn(ItemStruct) -> Result<TokenStream, ParseError>,
+) {
+    for &(label, declaration) in cases {
+        let item: ItemStruct = moxy::parse!({ declaration }).expect(label);
+        assert2::assert!(expand(item).is_err(), "{label}");
+    }
+}
 
 /// A safe, synchronous Rust signature without constness or generic parameters.
 pub(crate) fn is_plain_sync(signature: &Signature) -> bool {
@@ -15,6 +26,21 @@ pub(crate) fn is_plain_sync(signature: &Signature) -> bool {
         && signature.safety.is_none()
         && signature.abi.is_none()
         && signature.generics.params.is_empty()
+}
+
+pub(crate) fn parameter_ident<'a>(
+    parameter: &'a FnParam,
+    message: &str,
+) -> Result<&'a Ident, ParseError> {
+    if let FnParam::Typed(parameter) = parameter
+        && let Pattern::Ident(name) = parameter.pat.as_ref()
+        && name.by_ref.is_none()
+        && name.subpat.is_none()
+    {
+        Ok(&name.ident)
+    } else {
+        Err(ParseError::new(parameter.span(), message))
+    }
 }
 
 /// Parse an ordinary function's header while keeping its operation body opaque.

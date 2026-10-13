@@ -325,7 +325,9 @@ mod tests {
         }
     }
 
-    crate::test_support::context_helper!(client_id = "admin-client");
+    krabka_macros::wire_codec_helpers! {
+        test_context ["admin-client"];
+    }
 
     use crate::test_support::{
         describe_configs_acl_cases, grant_cluster_operation,

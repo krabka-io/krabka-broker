@@ -43,7 +43,9 @@ const CREATE_VERSION: i16 = 7;
 
 const VERSION: i16 = 6;
 
-crate::test_support::context_helper!(client_id = "admin-client");
+krabka_macros::wire_codec_helpers! {
+    test_context ["admin-client"];
+}
 
 async fn drive(
     broker: &Broker,
