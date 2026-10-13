@@ -290,7 +290,9 @@ mod tests {
 
     #[test]
     fn two_follower_fsyncs_commit_without_the_leader() {
-        let UnfsyncedEngine { engine, .. } = unfsynced_three_voter_engine(3);
+        let UnfsyncedEngine {
+            dir: _dir, engine, ..
+        } = unfsynced_three_voter_engine(3);
 
         assert!(!engine.record_follower_ack(NodeId(2), Offset(3)));
         assert!(engine.record_follower_ack(NodeId(3), Offset(3)));

@@ -813,7 +813,11 @@ mod tests {
 
     #[tokio::test]
     async fn stale_request_epoch_cannot_truncate_the_follower_log() {
-        let LocalPartitionFixture { cfg, part, .. } = local_partition_fixture();
+        let LocalPartitionFixture {
+            cfg,
+            dir: _dir,
+            part,
+        } = local_partition_fixture();
         part.replicate_batch(one_record_batch(0)).await.unwrap();
         assert!(part.log_end_offset() == Offset(1));
 
@@ -979,7 +983,11 @@ mod tests {
             expected_epochs,
         } in cases
         {
-            let LocalPartitionFixture { cfg, part, .. } = local_partition_fixture();
+            let LocalPartitionFixture {
+                cfg,
+                dir: _dir,
+                part,
+            } = local_partition_fixture();
             for &Run {
                 leader_epoch,
                 count,
@@ -1016,7 +1024,11 @@ mod tests {
 
     #[tokio::test]
     async fn failed_append_leaves_log_retryable() {
-        let LocalPartitionFixture { cfg, part, .. } = local_partition_fixture();
+        let LocalPartitionFixture {
+            cfg,
+            dir: _dir,
+            part,
+        } = local_partition_fixture();
         let respond = |base_offset| {
             fetch_response(TOPIC, WIRE_TOPIC_ID, PartitionData {
                 partition_index: PARTITION,
@@ -1122,7 +1134,11 @@ mod tests {
     #[tokio::test]
     async fn a_batch_past_the_log_end_offset_is_replicated_across_the_hole() {
         for raw in [false, true] {
-            let LocalPartitionFixture { cfg, part, .. } = local_partition_fixture();
+            let LocalPartitionFixture {
+                cfg,
+                dir: _dir,
+                part,
+            } = local_partition_fixture();
 
             // Offsets 1 to 4 were compacted away on the leader.
             for base_offset in [0, 5] {
@@ -1139,7 +1155,11 @@ mod tests {
 
     #[tokio::test]
     async fn raw_compressed_replication_stays_byte_exact() {
-        let LocalPartitionFixture { cfg, part, .. } = local_partition_fixture();
+        let LocalPartitionFixture {
+            cfg,
+            dir: _dir,
+            part,
+        } = local_partition_fixture();
         let mut batch = one_record_batch(0);
         batch.partition_leader_epoch = cfg.leader_epoch.0;
         batch.attributes = batch.attributes.with_compression(CompressionType::Lz4);
