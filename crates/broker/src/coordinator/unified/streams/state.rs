@@ -743,11 +743,11 @@ mod tests {
     }
 
     /// A heartbeat that reports `active` and no standby tasks.
-    fn owning(active: &'static [i32]) -> Option<OwnedSetup> {
-        Some(OwnedSetup {
+    fn owning(active: &'static [i32]) -> OwnedSetup {
+        OwnedSetup {
             active,
             standby: &[],
-        })
+        }
     }
 
     /// One row: the name, `m1`, another member, the target active and standby
@@ -792,7 +792,7 @@ mod tests {
     }
 
     fn builder_rows() -> Vec<BuilderRow> {
-        use StreamsMemberAssignmentState::{Stable, UnrevokedTasks};
+        use StreamsMemberAssignmentState::Stable;
 
         vec![
             BuilderRow {
@@ -801,7 +801,7 @@ mod tests {
                 other: None,
                 target_active: &[0, 1],
                 target_standby: &[],
-                owned: owning(&[0]),
+                owned: Some(owning(&[0])),
                 expected: settled(true, Stable, 2, &[0, 1]),
             },
             BuilderRow {
@@ -810,7 +810,7 @@ mod tests {
                 other: None,
                 target_active: &[0],
                 target_standby: &[],
-                owned: owning(&[0, 1]),
+                owned: Some(owning(&[0, 1])),
                 expected: waiting(true, &[0]),
             },
             BuilderRow {
@@ -819,7 +819,7 @@ mod tests {
                 other: None,
                 target_active: &[0],
                 target_standby: &[],
-                owned: owning(&[]),
+                owned: Some(owning(&[])),
                 expected: settled(true, Stable, 2, &[0]),
             },
             BuilderRow {
@@ -828,7 +828,7 @@ mod tests {
                 other: None,
                 target_active: &[0],
                 target_standby: &[],
-                owned: owning(&[0]),
+                owned: Some(owning(&[0])),
                 expected: settled(true, Stable, 2, &[0]),
             },
             BuilderRow {
@@ -837,7 +837,7 @@ mod tests {
                 other: None,
                 target_active: &[0],
                 target_standby: &[],
-                owned: owning(&[0, 1]),
+                owned: Some(owning(&[0, 1])),
                 expected: waiting(false, &[0]),
             },
             BuilderRow {
@@ -866,7 +866,7 @@ mod tests {
                 }),
                 target_active: &[0, 1],
                 target_standby: &[],
-                owned: owning(&[]),
+                owned: Some(owning(&[])),
                 expected: settled(true, UnreleasedTasks, 2, &[0]),
             },
             BuilderRow {
@@ -878,7 +878,7 @@ mod tests {
                 }),
                 target_active: &[],
                 target_standby: &[0],
-                owned: owning(&[]),
+                owned: Some(owning(&[])),
                 expected: settled(true, UnreleasedTasks, 2, &[]),
             },
             BuilderRow {
@@ -890,7 +890,7 @@ mod tests {
                 }),
                 target_active: &[],
                 target_standby: &[0],
-                owned: owning(&[]),
+                owned: Some(owning(&[])),
                 expected: ExpectedMember {
                     changed: true,
                     state: Stable,

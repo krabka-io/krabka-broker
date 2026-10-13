@@ -698,7 +698,6 @@ fn heartbeat_change_rows() -> Vec<HeartbeatRow> {
 /// compares the whole response.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() {
-    use crate::test_support::FakeMetadataSource;
 
     let rows = heartbeat_change_rows();
 
@@ -776,7 +775,6 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
 async fn a_new_target_persists_the_target_of_every_member() {
     use crate::{
         coordinator::unified::{persistence::Key, streams::persistence::StreamsGroupKey},
-        test_support::FakeMetadataSource,
     };
 
     let source = in_topic_source(2);
@@ -827,7 +825,6 @@ async fn a_seeded_group_asks_for_its_missing_internal_topics_again() {
     use {
         crate::{
             coordinator::unified::streams::topology::{InternalTopicSpec, status},
-            test_support::FakeMetadataSource,
         },
         krabka_protocol::owned::common::streams_group_heartbeat_response::status::Status,
     };
@@ -897,7 +894,6 @@ async fn a_seeded_group_asks_for_its_missing_internal_topics_again() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_group_loaded_before_the_metadata_source_connects_assigns_its_tasks() {
     use {
-        crate::test_support::FakeMetadataSource,
         krabka_protocol::owned::common::streams_group_heartbeat_request::task_ids::TaskIds as OwnedTaskIds,
     };
 
@@ -1013,7 +1009,6 @@ async fn a_join_sizes_the_internal_topics_as_kafka_does() {
     use {
         crate::{
             coordinator::unified::streams::topology::{InternalTopicSpec, status},
-            test_support::FakeMetadataSource,
         },
         krabka_protocol::owned::{
             common::{
@@ -1156,7 +1151,7 @@ async fn a_join_sizes_the_internal_topics_as_kafka_does() {
 async fn the_heartbeat_status_list_follows_kafka() {
     use {
         crate::{
-            coordinator::unified::streams::topology::status, test_support::FakeMetadataSource,
+            coordinator::unified::streams::topology::status,
         },
         krabka_protocol::owned::{
             common::streams_group_heartbeat_response::status::Status,
@@ -1353,7 +1348,6 @@ async fn the_heartbeat_status_list_follows_kafka() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_heartbeat_response_carries_what_kafka_sends() {
     use {
-        crate::test_support::FakeMetadataSource,
         krabka_protocol::owned::{
             common::{
                 streams_group_heartbeat_request::endpoint::Endpoint as RequestEndpoint,
@@ -1543,7 +1537,6 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_member_keeps_its_epoch_until_it_revokes_and_is_fenced_after_its_timeout() {
     use {
-        crate::test_support::FakeMetadataSource,
         krabka_protocol::owned::common::streams_group_heartbeat_request::task_ids::TaskIds as OwnedTaskIds,
     };
 
@@ -1642,7 +1635,6 @@ async fn a_member_keeps_its_epoch_until_it_revokes_and_is_fenced_after_its_timeo
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_topology_update_or_an_invalid_owned_task_is_refused() {
     use {
-        crate::test_support::FakeMetadataSource,
         krabka_protocol::owned::common::streams_group_heartbeat_request::task_ids::TaskIds,
     };
 
@@ -1741,7 +1733,6 @@ async fn a_topology_update_or_an_invalid_owned_task_is_refused() {
 /// trunk's: 4.3.1 refuses an instance id before the group sees the request.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_static_member_follows_kafka_static_membership() {
-    use crate::test_support::FakeMetadataSource;
 
     let config = StreamsGroupConfig {
         max_size: 2,
@@ -2199,7 +2190,7 @@ fn older_epoch_commit_checks_each_tasks_assignment_epoch() {
 async fn a_member_missing_a_rack_aware_tag_gets_missing_client_tags_at_version_1() {
     use {
         crate::{
-            coordinator::unified::streams::topology::status, test_support::FakeMetadataSource,
+            coordinator::unified::streams::topology::status,
         },
         krabka_protocol::owned::common::{
             streams_group_heartbeat_request::key_value::KeyValue,
@@ -2918,7 +2909,6 @@ async fn a_changed_validation_or_assignment_config_bumps_the_epoch() {
 /// `newStreamsGroupMetadataRecord` writes them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_bump_records_the_validated_topology_epoch() {
-    use crate::test_support::FakeMetadataSource;
 
     // (case, the topics in the image, the recorded validated topology epoch)
     let rows = [
