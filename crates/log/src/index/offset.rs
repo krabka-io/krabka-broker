@@ -223,8 +223,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn persists_across_reopen() {
+    /// Both a cleanly truncated index and Kafka's preallocated zero tail retain
+    /// the same entries when reopened.
+    #[yare::parameterized(
+        clean = { false },
+        preallocated = { true },
+    )]
+    fn persisted_entries_ignore_zero_padding(padded: bool) {
         let TempPath { dir: _dir, path } = written_index("00000000000000000000.index", &[
             IndexSeed {
                 key: 0,
@@ -235,38 +240,16 @@ mod tests {
                 coordinate: 4096,
             },
         ]);
-        let idx = OffsetIndex::open(&path).unwrap();
-        assert2::assert!(idx.entry_count() == 2);
-        assert2::assert!(idx.lookup(100) == 4096);
+        if padded {
+            let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+            file.write_all(&[0u8; OFFSET_ENTRY_SIZE * 2]).unwrap();
+            file.sync_data().unwrap();
+        }
+        let index = OffsetIndex::open(&path).unwrap();
+        assert_entry_metadata(&index, 2, Some(OffsetIndexEntry::new(100, 4096)));
+        check!(index.lookup(100) == 4096);
+        check!(index.lookup(150) == 4096);
     }
-
-    #[test]
-    fn ignores_trailing_zero_padding() {
-        // Kafka preallocates `.index` to `segment.index.bytes` and only
-        // truncates on clean shutdown; an unclean copy carries trailing
-        // zero entries. Loading must stop at the real data so the binary
-        // search stays monotonic.
-        let TempPath { dir: _dir, path } = written_index("00000000000000000000.index", &[
-            IndexSeed {
-                key: 0,
-                coordinate: 0,
-            },
-            IndexSeed {
-                key: 100,
-                coordinate: 4096,
-            },
-        ]);
-        // Append two zero-filled entries (preallocation padding).
-        let mut f = OpenOptions::new().append(true).open(&path).unwrap();
-        f.write_all(&[0u8; OFFSET_ENTRY_SIZE * 2]).unwrap();
-        f.sync_data().unwrap();
-        drop(f);
-
-        let idx = OffsetIndex::open(&path).unwrap();
-        assert_entry_metadata(&idx, 2, Some(OffsetIndexEntry::new(100, 4096)));
-        assert2::assert!(idx.lookup(150) == 4096);
-    }
-
     /// `floor_entry` is the entry `lookup` lands on, so a read can tell whether
     /// the indexed batch ends exactly on its target.
     #[test]

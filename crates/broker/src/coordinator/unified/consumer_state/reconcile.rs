@@ -897,21 +897,19 @@ mod tests {
         pending: &'a [TopicParts<'a>],
     }
 
-    impl<'a> ShapeSetup<'a> {
-        fn revoking_current_epoch(pending: &'a [TopicParts<'a>]) -> Self {
-            Self {
-                epochs: MemberEpochs {
-                    current: MemberEpoch(5),
-                    ..Default::default()
-                },
-                state: MemberAssignmentState::UnrevokedPartitions,
-                assigned: &[TopicParts {
-                    topic: T,
-                    parts: &[PartitionIndex(0)],
-                }],
-                pending,
-            }
-        }
+    fn revoking_current_epoch(pending: &[TopicParts<'_>]) -> Shape {
+        shape()
+            .epochs(MemberEpochs {
+                current: MemberEpoch(5),
+                ..Default::default()
+            })
+            .state(MemberAssignmentState::UnrevokedPartitions)
+            .assigned(&[TopicParts {
+                topic: T,
+                parts: &[PartitionIndex(0)],
+            }])
+            .pending(pending)
+            .call()
     }
 
     #[bon::builder]
@@ -1052,60 +1050,16 @@ mod tests {
                 target: topic_parts(ONE_PARTITION_PER_TOPIC),
                 owned: Some(owning_everything.clone()),
                 subscription: SubscriptionChange::Changed,
-                after: shape()
-                    .epochs(
-                        ShapeSetup::revoking_current_epoch(&[
-                            TopicParts {
-                                topic: T,
-                                parts: &[PartitionIndex(1)],
-                            },
-                            TopicParts {
-                                topic: U,
-                                parts: &[PartitionIndex(0)],
-                            },
-                        ])
-                        .epochs,
-                    )
-                    .state(
-                        ShapeSetup::revoking_current_epoch(&[
-                            TopicParts {
-                                topic: T,
-                                parts: &[PartitionIndex(1)],
-                            },
-                            TopicParts {
-                                topic: U,
-                                parts: &[PartitionIndex(0)],
-                            },
-                        ])
-                        .state,
-                    )
-                    .assigned(
-                        ShapeSetup::revoking_current_epoch(&[
-                            TopicParts {
-                                topic: T,
-                                parts: &[PartitionIndex(1)],
-                            },
-                            TopicParts {
-                                topic: U,
-                                parts: &[PartitionIndex(0)],
-                            },
-                        ])
-                        .assigned,
-                    )
-                    .pending(
-                        ShapeSetup::revoking_current_epoch(&[
-                            TopicParts {
-                                topic: T,
-                                parts: &[PartitionIndex(1)],
-                            },
-                            TopicParts {
-                                topic: U,
-                                parts: &[PartitionIndex(0)],
-                            },
-                        ])
-                        .pending,
-                    )
-                    .call(),
+                after: revoking_current_epoch(&[
+                    TopicParts {
+                        topic: T,
+                        parts: &[PartitionIndex(1)],
+                    },
+                    TopicParts {
+                        topic: U,
+                        parts: &[PartitionIndex(0)],
+                    },
+                ]),
                 ..Default::default()
             },
             SubscriptionRow {
@@ -1217,36 +1171,10 @@ mod tests {
                     .assigned(ONE_PARTITION_PER_TOPIC)
                     .call(),
                 target: topic_parts(ONE_PARTITION_PER_TOPIC),
-                after: shape()
-                    .epochs(
-                        ShapeSetup::revoking_current_epoch(&[TopicParts {
-                            topic: U,
-                            parts: &[PartitionIndex(0)],
-                        }])
-                        .epochs,
-                    )
-                    .state(
-                        ShapeSetup::revoking_current_epoch(&[TopicParts {
-                            topic: U,
-                            parts: &[PartitionIndex(0)],
-                        }])
-                        .state,
-                    )
-                    .assigned(
-                        ShapeSetup::revoking_current_epoch(&[TopicParts {
-                            topic: U,
-                            parts: &[PartitionIndex(0)],
-                        }])
-                        .assigned,
-                    )
-                    .pending(
-                        ShapeSetup::revoking_current_epoch(&[TopicParts {
-                            topic: U,
-                            parts: &[PartitionIndex(0)],
-                        }])
-                        .pending,
-                    )
-                    .call(),
+                after: revoking_current_epoch(&[TopicParts {
+                    topic: U,
+                    parts: &[PartitionIndex(0)],
+                }]),
                 ..Default::default()
             },
             SubscriptionRow {
@@ -1501,20 +1429,7 @@ mod tests {
             }])
             .call()
     }
-    fn stable_6_5_input() -> Shape {
-        shape()
-            .assigned(&[
-                TopicParts {
-                    topic: T,
-                    parts: &[PartitionIndex(0), PartitionIndex(1)],
-                },
-                TopicParts {
-                    topic: U,
-                    parts: &[PartitionIndex(0), PartitionIndex(1)],
-                },
-            ])
-            .call()
-    }
+    fn stable_6_5_input() -> Shape { shape().assigned(TWO_PARTITIONS_PER_TOPIC).call() }
     fn stable_5_4_input() -> Shape {
         shape()
             .epochs(MemberEpochs {
