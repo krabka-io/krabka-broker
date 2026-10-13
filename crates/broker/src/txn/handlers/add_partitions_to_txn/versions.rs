@@ -254,16 +254,28 @@ mod tests {
         test_context ["producer-client"];
     }
 
-    /// A v4+ request comes from a broker, so a principal without
-    /// `ClusterAction` gets Kafka's top-level `CLUSTER_AUTHORIZATION_FAILED`
-    /// and no transaction row.
-    #[tokio::test]
-    async fn handle_v4_without_cluster_action_returns_the_top_level_error() {
+    #[bon::builder]
+    async fn deny_all_response(
+        request: AddPartitionsToTxnRequest,
+        #[builder(default = 4)] version: i16,
+    ) -> AddPartitionsToTxnResponse {
         let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
         krabka_macros::request_test_identity! {
             bind(ctx);
             user ["ANONYMOUS"];
         };
+        let response = handle(&broker_handle.broker_arc_for_test(), request, version, &ctx)
+            .await
+            .expect("handle");
+        broker_handle.shutdown().await;
+        response
+    }
+
+    /// A v4+ request comes from a broker, so a principal without
+    /// `ClusterAction` gets Kafka's top-level `CLUSTER_AUTHORIZATION_FAILED`
+    /// and no transaction row.
+    #[tokio::test]
+    async fn handle_v4_without_cluster_action_returns_the_top_level_error() {
         let req = AddPartitionsToTxnRequest {
             transactions: vec![AddPartitionsToTxnTransaction {
                 transactional_id: "tid-4".into(),
@@ -275,9 +287,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let resp = handle(&broker_handle.broker_arc_for_test(), req, 4, &ctx)
-            .await
-            .expect("handle");
+        let resp = deny_all_response().request(req).call().await;
 
         let expected = AddPartitionsToTxnResponse {
             throttle_time_ms: 0,
@@ -287,7 +297,6 @@ mod tests {
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected);
-        broker_handle.shutdown().await;
     }
 
     struct Entry {
@@ -489,11 +498,6 @@ mod tests {
 
     #[tokio::test]
     async fn handle_v3_transactional_id_deny_returns_topic_rows() {
-        let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-        krabka_macros::request_test_identity! {
-            bind(ctx);
-            user ["ANONYMOUS"];
-        };
         let req = AddPartitionsToTxnRequest {
             v3_and_below_transactional_id: "tid-3".into(),
             v3_and_below_producer_id: 11,
@@ -501,9 +505,7 @@ mod tests {
             v3_and_below_topics: vec![topic("alpha", &[3, 4])],
             ..Default::default()
         };
-        let resp = handle(&broker_handle.broker_arc_for_test(), req, 3, &ctx)
-            .await
-            .expect("handle");
+        let resp = deny_all_response().request(req).version(3).call().await;
 
         let expected = AddPartitionsToTxnResponse {
             throttle_time_ms: 0,
@@ -522,6 +524,5 @@ mod tests {
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected);
-        broker_handle.shutdown().await;
     }
 }
