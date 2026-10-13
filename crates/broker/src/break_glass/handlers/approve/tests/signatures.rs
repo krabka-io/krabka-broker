@@ -16,7 +16,7 @@ use {
         codes,
         config::BreakGlassConfig,
         operator_keys::{OperatorKeyEntry, OperatorKeys},
-        test_support::{OperatorKeyFileSetup, ed25519_public_key_file},
+        test_support::ed25519_public_key_file,
     },
     assert2::{assert, check},
     krabka_metadata::BreakGlassProposalRecord,
@@ -32,10 +32,11 @@ struct OperatorKey {
 
 // An operator key bound to `principal`, plus the signer for it.
 fn operator_key(dir: &TempDir, key_id: &str, principal: &str) -> OperatorKey {
-    let (pair, path) = ed25519_public_key_file(dir.path(), OperatorKeyFileSetup {
-        name: &format!("{key_id}.pub"),
-        context: "write key file",
-    });
+    let (pair, path) = ed25519_public_key_file()
+        .dir(dir.path())
+        .name(&format!("{key_id}.pub"))
+        .context("write key file")
+        .call();
     OperatorKey {
         pair,
         entry: OperatorKeyEntry {

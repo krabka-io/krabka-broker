@@ -354,9 +354,9 @@ mod tests {
                 StreamsMemberWireState,
             },
             test_support::{
-                AssignmentDeletionProtocol, AssignmentDeletionSetup, ReplayCase, ReplayFixtures,
-                check_replay_cases, deletion_replay_cases, group_deletion_with_member_case,
-                replay_fixtures, replay_tombstone_constructor, streams_member,
+                AssignmentDeletionProtocol, ReplayCase, ReplayFixtures, check_replay_cases,
+                deletion_replay_cases, group_deletion_with_member_case, replay_fixtures,
+                replay_tombstone_constructor, streams_member,
             },
         },
         std::collections::BTreeMap,
@@ -469,14 +469,11 @@ mod tests {
         let ReplayFixtures {
             expected_seed: group,
             deletion: kafka_deletion,
-        } = replay_fixtures(
-            StreamsGroupSeed::new_group,
-            tombstone,
-            AssignmentDeletionSetup {
-                protocol: AssignmentDeletionProtocol::Streams,
-                ..Default::default()
-            },
-        );
+        } = replay_fixtures()
+            .seed(StreamsGroupSeed::new_group)
+            .tombstone(tombstone)
+            .protocol(AssignmentDeletionProtocol::Streams)
+            .call();
         let every_record = || {
             vec![
                 Record::Group(

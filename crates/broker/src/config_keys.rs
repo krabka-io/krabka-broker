@@ -102,6 +102,7 @@ mod recovery;
 pub(crate) mod registry;
 mod schema;
 mod topic_scope;
+
 mod trunk_log;
 mod validation;
 

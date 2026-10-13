@@ -77,9 +77,8 @@ mod tests {
     use {
         super::*,
         crate::segment::test_support::{
-            FIRST_LARGE_TIMESTAMP_BATCH, NO_LIMIT, ONE_RECORD_BATCH, RecordCount, RecordTimestamp,
-            SECOND_LARGE_TIMESTAMP_BATCH, SECOND_SINGLE_RECORD_BATCH, SampleBatchSetup,
-            SeededSegmentSetup, THIRD_SINGLE_RECORD_BATCH, TempSegment, sample_batch,
+            FIRST_LARGE_TIMESTAMP_BATCH, NO_LIMIT, ONE_RECORD_BATCH, SECOND_LARGE_TIMESTAMP_BATCH,
+            SECOND_SINGLE_RECORD_BATCH, THIRD_SINGLE_RECORD_BATCH, TempSegment, sample_batch,
             seeded_fixture, test_segment,
         },
         krabka_units::prelude::kibibytes,
@@ -101,8 +100,40 @@ mod tests {
         assert2::assert!(seg.last_offset() == Offset(105));
         assert2::assert!(
             read == vec![
-                sample_batch(crate::segment::test_support::INDEXED_READ_BATCHES[1]),
-                sample_batch(crate::segment::test_support::INDEXED_READ_BATCHES[2])
+                sample_batch()
+                    .offset(
+                        crate::segment::test_support::INDEXED_READ_BATCHES[1]
+                            .offset
+                            .0
+                    )
+                    .records(
+                        crate::segment::test_support::INDEXED_READ_BATCHES[1]
+                            .records
+                            .0
+                    )
+                    .timestamp(
+                        crate::segment::test_support::INDEXED_READ_BATCHES[1]
+                            .timestamp
+                            .0
+                    )
+                    .call(),
+                sample_batch()
+                    .offset(
+                        crate::segment::test_support::INDEXED_READ_BATCHES[2]
+                            .offset
+                            .0
+                    )
+                    .records(
+                        crate::segment::test_support::INDEXED_READ_BATCHES[2]
+                            .records
+                            .0
+                    )
+                    .timestamp(
+                        crate::segment::test_support::INDEXED_READ_BATCHES[2]
+                            .timestamp
+                            .0
+                    )
+                    .call()
             ]
         );
     }
@@ -118,14 +149,13 @@ mod tests {
         let TempSegment {
             dir: _dir,
             segment: seg,
-        } = seeded_fixture(SeededSegmentSetup {
-            batches: &[
+        } = seeded_fixture()
+            .batches(&[
                 ONE_RECORD_BATCH,
                 SECOND_SINGLE_RECORD_BATCH,
                 THIRD_SINGLE_RECORD_BATCH,
-            ],
-            ..Default::default()
-        });
+            ])
+            .call();
         // Exactly the whole segment: correct consumed accounting fits all three
         // batches; inflated accounting overshoots after the first.
         let max_size = seg.size();
@@ -140,16 +170,46 @@ mod tests {
             dir: _dir,
             segment: mut seg,
         } = test_segment();
-        seg.append(&sample_batch(FIRST_LARGE_TIMESTAMP_BATCH), kibibytes(4))
-            .unwrap();
-        seg.append(&sample_batch(SECOND_LARGE_TIMESTAMP_BATCH), kibibytes(4))
-            .unwrap();
+        seg.append(
+            &sample_batch()
+                .offset(FIRST_LARGE_TIMESTAMP_BATCH.offset.0)
+                .records(FIRST_LARGE_TIMESTAMP_BATCH.records.0)
+                .timestamp(FIRST_LARGE_TIMESTAMP_BATCH.timestamp.0)
+                .call(),
+            kibibytes(4),
+        )
+        .unwrap();
+        seg.append(
+            &sample_batch()
+                .offset(SECOND_LARGE_TIMESTAMP_BATCH.offset.0)
+                .records(SECOND_LARGE_TIMESTAMP_BATCH.records.0)
+                .timestamp(SECOND_LARGE_TIMESTAMP_BATCH.timestamp.0)
+                .call(),
+            kibibytes(4),
+        )
+        .unwrap();
         let read = seg.read(Offset(4), NO_LIMIT).unwrap();
         // Offset 4 falls inside the second batch (offsets 3..=4).
         assert2::assert!(
-            read == vec![sample_batch(
-                crate::segment::test_support::SECOND_LARGE_TIMESTAMP_BATCH
-            )]
+            read == vec![
+                sample_batch()
+                    .offset(
+                        crate::segment::test_support::SECOND_LARGE_TIMESTAMP_BATCH
+                            .offset
+                            .0
+                    )
+                    .records(
+                        crate::segment::test_support::SECOND_LARGE_TIMESTAMP_BATCH
+                            .records
+                            .0
+                    )
+                    .timestamp(
+                        crate::segment::test_support::SECOND_LARGE_TIMESTAMP_BATCH
+                            .timestamp
+                            .0
+                    )
+                    .call()
+            ]
         );
     }
 
@@ -160,11 +220,7 @@ mod tests {
             segment: mut seg,
         } = test_segment();
         seg.append(
-            &sample_batch(SampleBatchSetup {
-                records: RecordCount(2),
-                timestamp: RecordTimestamp(1_000),
-                ..Default::default()
-            }),
+            &sample_batch().records(2).timestamp(1_000).call(),
             kibibytes(4),
         )
         .unwrap();

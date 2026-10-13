@@ -16,9 +16,7 @@ use {
         authorizer::AuthorizationResult,
         broker::BrokerHandle,
         codes,
-        handlers::test_support::{
-            ClientTopicSetup, StartedBroker, create_topic as create_topic_from_test_support,
-        },
+        handlers::test_support::{StartedBroker, create_topic as create_topic_from_test_support},
         share_partition::session::FetchPartitions,
         test_support::{
             decode_response, encode_request, peer, principal, request_context,
@@ -119,12 +117,12 @@ async fn start() -> StartedBroker {
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
-    create_topic_from_test_support(broker, ClientTopicSetup {
-        client_id: "share-group-authorization-test",
-        name,
-        ..Default::default()
-    })
-    .await
+    create_topic_from_test_support()
+        .broker(broker)
+        .client_id("share-group-authorization-test")
+        .name(name)
+        .call()
+        .await
 }
 
 /// The versions that both RPCs serve.

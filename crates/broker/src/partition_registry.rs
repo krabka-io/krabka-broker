@@ -263,9 +263,7 @@ mod tests {
     use {
         super::PartitionRegistry,
         crate::{
-            log_dir::partition_dir,
-            partition::Partition,
-            test_support::{StandalonePartitionSetup, spawn_standalone_partition},
+            log_dir::partition_dir, partition::Partition, test_support::spawn_standalone_partition,
         },
         assert2::{assert, check},
         krabka_ids::PartitionIndex,
@@ -281,11 +279,12 @@ mod tests {
         let part_dir = partition_dir(log_dir, topic, partition.get());
         std::fs::create_dir_all(&part_dir).unwrap();
         let log = Log::open(&part_dir, LogConfig::default()).unwrap();
-        spawn_standalone_partition(log_dir, log, StandalonePartitionSetup {
-            topic,
-            partition,
-            ..Default::default()
-        })
+        spawn_standalone_partition()
+            .log_dir(log_dir)
+            .log(log)
+            .topic(topic)
+            .partition(partition)
+            .call()
     }
 
     #[tokio::test]

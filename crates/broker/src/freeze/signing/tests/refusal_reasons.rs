@@ -7,8 +7,8 @@
 
 use {
     super::{
-        ALICE, BOB, CLUSTER_ID, NOW_MS, OTHER_CLUSTER_ID, check_against, record, signed, signed_at,
-        trust,
+        ALICE, BOB, CLUSTER_ID, NOW_MS, OTHER_CLUSTER_ID, SigningFixture, check_against, signed,
+        signed_at, signing_fixture,
     },
     crate::{
         codes,
@@ -30,12 +30,11 @@ fn each_refusal_names_its_own_check_under_one_code() {
         expected: SignatureRefusal,
     }
 
-    let trust = trust();
-    let good = record();
-    let replaced = TopicFreezeRecord {
-        set_at_ms: NOW_MS,
-        ..record()
-    };
+    let SigningFixture {
+        trust,
+        good,
+        replaced,
+    } = signing_fixture();
 
     let cases: Vec<Case<'_>> = vec![
         Case {

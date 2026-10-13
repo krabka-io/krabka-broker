@@ -175,9 +175,7 @@ mod tests {
         super::{super::bucket_rate, *},
         crate::{
             quota::test_support::{
-                AliceBucket, QuotaRecordSetup, QuotaValue, UserBucketSetup,
-                alice_app1_producer_quota, alice_bucket, app1_producer_quota,
-                image_with_quota as quota_image,
+                AliceBucket, alice_app1_producer_quota, alice_bucket, app1_producer_quota,
             },
             throttle::TokenBucket,
         },
@@ -189,9 +187,9 @@ mod tests {
         },
     };
 
-    fn img_with_quota(setup: QuotaRecordSetup<'_>) -> Arc<MetadataImage> {
-        Arc::new(quota_image(setup))
-    }
+    crate::quota_record_builder!(
+        img_with_quota -> Arc<MetadataImage> = crate::quota::test_support::shared_image_from_quota_setup
+    );
 
     /// A refresh keeps each bucket at the rate its consumer created it with
     /// (#692). A `request_percentage` of 50 is 500 000 microseconds of handler
@@ -211,11 +209,7 @@ mod tests {
             let bucket = buckets.get_or_create(quota_key, &key, created_at);
 
             refresh_buckets(
-                &img_with_quota(QuotaRecordSetup {
-                    key: quota_key,
-                    value: QuotaValue(value),
-                    ..Default::default()
-                }),
+                &img_with_quota().key(quota_key).value(value).call(),
                 &buckets,
             );
 
@@ -228,23 +222,17 @@ mod tests {
 
     #[test]
     fn refresh_updates_existing_bucket_rate() {
-        let AliceBucket { buckets, bucket: b } = alice_bucket(UserBucketSetup::default());
+        let AliceBucket { buckets, bucket: b } = alice_bucket().call();
         assert!(b.byte_rate() == bucket_rate(0.0));
 
-        let img = img_with_quota(QuotaRecordSetup {
-            value: QuotaValue(2048.0),
-            ..Default::default()
-        });
+        let img = img_with_quota().value(2048.0).call();
         refresh_buckets(&img, &buckets);
         assert!(b.byte_rate() == bucket_rate(2048.0));
     }
 
     #[test]
     fn refresh_zeroes_bucket_when_quota_removed_from_image() {
-        let AliceBucket { buckets, bucket: b } = alice_bucket(UserBucketSetup {
-            rate: QuotaValue(1024.0),
-            ..Default::default()
-        });
+        let AliceBucket { buckets, bucket: b } = alice_bucket().rate(1024.0).call();
         assert!(b.byte_rate() == bucket_rate(1024.0));
 
         let empty = Arc::new(MetadataImage::new(uuid::Uuid::nil()));
@@ -302,11 +290,11 @@ mod tests {
             let key: EntityKey = vec![("ip".into(), Some("127.0.0.1".into()))];
             let b = buckets.get_or_create("connection_creation_rate", &key, 1.0);
 
-            let img = img_with_quota(QuotaRecordSetup {
-                entity: vec![("ip", entity_name)],
-                key: "connection_creation_rate",
-                value: QuotaValue(rate),
-            });
+            let img = img_with_quota()
+                .entity(vec![("ip", entity_name)])
+                .key("connection_creation_rate")
+                .value(rate)
+                .call();
             refresh_buckets(&img, &buckets);
             assert!(b.byte_rate() == bucket_rate(expected), "{case}");
         }
@@ -320,11 +308,11 @@ mod tests {
         let buckets = Arc::new(QuotaBuckets::new());
         let key: EntityKey = vec![("ip".into(), Some("::1".into()))];
         let b = buckets.get_or_create("connection_creation_rate", &key, 1.0);
-        let img = img_with_quota(QuotaRecordSetup {
-            entity: vec![("ip", Some("0:0:0:0:0:0:0:1"))],
-            key: "connection_creation_rate",
-            value: QuotaValue(3.0),
-        });
+        let img = img_with_quota()
+            .entity(vec![("ip", Some("0:0:0:0:0:0:0:1"))])
+            .key("connection_creation_rate")
+            .value(3.0)
+            .call();
 
         let _ = buckets.ip_names().update(&img);
         refresh_buckets(&img, &buckets);
@@ -346,11 +334,11 @@ mod tests {
         let buckets = Arc::new(QuotaBuckets::new());
         let key: EntityKey = vec![("ip".into(), Some(peer.to_string()))];
         let b = buckets.get_or_create("connection_creation_rate", &key, 1.0);
-        let img = img_with_quota(QuotaRecordSetup {
-            entity: vec![("ip", Some("localhost"))],
-            key: "connection_creation_rate",
-            value: QuotaValue(3.0),
-        });
+        let img = img_with_quota()
+            .entity(vec![("ip", Some("localhost"))])
+            .key("connection_creation_rate")
+            .value(3.0)
+            .call();
         let (_tx, rx) = watch::channel(img);
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(run(rx, Arc::clone(&buckets), shutdown.clone()));
@@ -443,19 +431,14 @@ mod tests {
     }
 
     fn db_image() -> Arc<MetadataImage> {
-        img_with_quota(QuotaRecordSetup {
-            entity: vec![("ip", Some("db"))],
-            key: "connection_creation_rate",
-            value: QuotaValue(3.0),
-        })
+        img_with_quota()
+            .entity(vec![("ip", Some("db"))])
+            .key("connection_creation_rate")
+            .value(3.0)
+            .call()
     }
 
-    fn other_image() -> Arc<MetadataImage> {
-        img_with_quota(QuotaRecordSetup {
-            value: QuotaValue(1.0),
-            ..Default::default()
-        })
-    }
+    fn other_image() -> Arc<MetadataImage> { img_with_quota().value(1.0).call() }
 
     /// A host name whose lookup failed is looked up again when its wait is
     /// over, with no image to prompt it: one lookup at the start, then after
@@ -597,16 +580,10 @@ mod tests {
             want,
         } in cases
         {
-            let AliceBucket { buckets, bucket: b } = alice_bucket(UserBucketSetup {
-                key: quota_key,
-                rate: QuotaValue(1024.0),
-            });
+            let AliceBucket { buckets, bucket: b } =
+                alice_bucket().key(quota_key).rate(1024.0).call();
 
-            let img = img_with_quota(QuotaRecordSetup {
-                key: quota_key,
-                value: QuotaValue(rate),
-                ..Default::default()
-            });
+            let img = img_with_quota().key(quota_key).value(rate).call();
             refresh_buckets(&img, &buckets);
             actual.push((quota_key, rate.to_string(), b.byte_rate()));
             expected.push((quota_key, rate.to_string(), bucket_rate(want)));
@@ -629,7 +606,7 @@ mod tests {
             ("client-id".into(), Some("app1".into())),
             ("user".into(), Some("alice".into())),
         ];
-        let alice = || quota_record(QuotaRecordSetup::default());
+        let alice = || quota_record().call();
         let app1 = || app1_producer_quota();
         let alice_app1 = || alice_app1_producer_quota();
         // (label, bucket key, quotas the bucket was made under, quotas after
@@ -695,13 +672,7 @@ mod tests {
         let b = buckets.get_or_create("producer_byte_rate", &key, rate);
         let drained = b.try_consume(5);
 
-        refresh_buckets(
-            &img_with_quota(QuotaRecordSetup {
-                value: QuotaValue(rate),
-                ..Default::default()
-            }),
-            &buckets,
-        );
+        refresh_buckets(&img_with_quota().value(rate).call(), &buckets);
 
         assert!((drained, b.try_consume(1)) == (1, 0));
     }

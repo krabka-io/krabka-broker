@@ -105,7 +105,19 @@ struct Case {
     expected: &'static [Expectation],
 }
 
-pub(super) fn data_batch(setup: DataBatchSetup) -> RecordBatch {
+#[bon::builder]
+pub(super) fn data_batch(
+    #[builder(into, default = ProducerEpoch (3))] epoch: ProducerEpoch,
+    #[builder(into, default)] base_sequence: ProducerSequence,
+    #[builder(into, default = RecordCount (3))] records: RecordCount,
+    #[builder(default)] transaction: TransactionMode,
+) -> RecordBatch {
+    let setup = DataBatchSetup {
+        epoch,
+        base_sequence,
+        records,
+        transaction,
+    };
     RecordBatch {
         attributes: Attributes::default()
             .with_transactional(matches!(setup.transaction, TransactionMode::Transactional)),
@@ -150,7 +162,12 @@ async fn run_steps(partition: &Partition, state: &ProducerState, steps: &[Step])
     for step in steps {
         match *step {
             Step::Data(setup) => {
-                let batch = data_batch(setup);
+                let batch = data_batch()
+                    .epoch(setup.epoch.0)
+                    .base_sequence(setup.base_sequence.0)
+                    .records(setup.records.0)
+                    .transaction(setup.transaction)
+                    .call();
                 let timestamp = batch.max_timestamp;
                 let offset = partition
                     .produce_batch(batch)

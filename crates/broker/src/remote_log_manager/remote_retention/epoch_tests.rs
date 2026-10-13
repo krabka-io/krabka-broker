@@ -25,29 +25,16 @@ struct EpochStart {
     first: Offset,
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct RetentionSegmentSetup<'a> {
-    #[default(Uuid::from_u128(1))]
-    id: Uuid,
-    #[default(Offset(0))]
-    start: Offset,
-    #[default(Offset(9))]
-    end: Offset,
-    #[default(&[EpochStart { epoch: LeaderEpoch(0), first: Offset(0) }])]
-    epochs: &'a [EpochStart],
-}
-
 /// A finished segment, optionally installed in the metadata manager.
+#[bon::builder]
 fn finished_segment(
     rlmm: Option<&Arc<dyn RemoteLogMetadataManager>>,
-    setup: RetentionSegmentSetup<'_>,
+    #[builder(default = Uuid :: from_u128 (1))] id: Uuid,
+    #[builder(into, default = Offset (0))] start: Offset,
+    #[builder(into, default = Offset (9))] end: Offset,
+    #[builder(default = &[EpochStart { epoch: LeaderEpoch(0), first: Offset(0) }])]
+    epochs: &'_ [EpochStart],
 ) -> RemoteLogSegmentMetadata {
-    let RetentionSegmentSetup {
-        id,
-        start,
-        end,
-        epochs,
-    } = setup;
     let segment_id = RemoteLogSegmentId::new(tp(), id);
     let started = RemoteLogSegmentMetadata::new(
         segment_id.clone(),
@@ -87,8 +74,9 @@ fn finished_segment(
 /// that reaches it. The rule is off without an earliest epoch.
 #[test]
 fn the_epoch_cache_eviction_set_holds_the_segments_below_the_earliest_epoch() {
-    let below = finished_segment(None, RetentionSegmentSetup {
-        epochs: &[
+    let below = finished_segment()
+        .maybe_rlmm(None)
+        .epochs(&[
             EpochStart {
                 epoch: LeaderEpoch(0),
                 first: Offset(0),
@@ -97,14 +85,14 @@ fn the_epoch_cache_eviction_set_holds_the_segments_below_the_earliest_epoch() {
                 epoch: LeaderEpoch(1),
                 first: Offset(5),
             },
-        ],
-        ..Default::default()
-    });
-    let reaches = finished_segment(None, RetentionSegmentSetup {
-        id: Uuid::from_u128(2),
-        start: Offset(10),
-        end: Offset(19),
-        epochs: &[
+        ])
+        .call();
+    let reaches = finished_segment()
+        .maybe_rlmm(None)
+        .id(Uuid::from_u128(2))
+        .start(10)
+        .end(19)
+        .epochs(&[
             EpochStart {
                 epoch: LeaderEpoch(1),
                 first: Offset(10),
@@ -113,17 +101,18 @@ fn the_epoch_cache_eviction_set_holds_the_segments_below_the_earliest_epoch() {
                 epoch: LeaderEpoch(2),
                 first: Offset(15),
             },
-        ],
-    });
-    let above = finished_segment(None, RetentionSegmentSetup {
-        id: Uuid::from_u128(3),
-        start: Offset(20),
-        end: Offset(29),
-        epochs: &[EpochStart {
+        ])
+        .call();
+    let above = finished_segment()
+        .maybe_rlmm(None)
+        .id(Uuid::from_u128(3))
+        .start(20)
+        .end(29)
+        .epochs(&[EpochStart {
             epoch: LeaderEpoch(3),
             first: Offset(20),
-        }],
-    });
+        }])
+        .call();
     let segments = [below.clone(), reaches.clone(), above];
 
     let cases = [
@@ -149,20 +138,21 @@ async fn remote_retention_pass_deletes_segments_below_the_earliest_epoch() {
     let (rsm, rlmm) = local_backends(remote_dir.path());
     // An unclean election left epoch 1's segment over offsets that the current
     // lineage assigns to epochs 2 and 3.
-    finished_segment(Some(&rlmm), RetentionSegmentSetup {
-        start: Offset(10),
-        end: Offset(19),
-        epochs: &[EpochStart {
+    finished_segment()
+        .maybe_rlmm(Some(&rlmm))
+        .start(10)
+        .end(19)
+        .epochs(&[EpochStart {
             epoch: LeaderEpoch(1),
             first: Offset(10),
-        }],
-        ..Default::default()
-    });
-    let current = finished_segment(Some(&rlmm), RetentionSegmentSetup {
-        id: Uuid::from_u128(2),
-        start: Offset(20),
-        end: Offset(29),
-        epochs: &[
+        }])
+        .call();
+    let current = finished_segment()
+        .maybe_rlmm(Some(&rlmm))
+        .id(Uuid::from_u128(2))
+        .start(20)
+        .end(29)
+        .epochs(&[
             EpochStart {
                 epoch: LeaderEpoch(2),
                 first: Offset(20),
@@ -171,8 +161,8 @@ async fn remote_retention_pass_deletes_segments_below_the_earliest_epoch() {
                 epoch: LeaderEpoch(3),
                 first: Offset(25),
             },
-        ],
-    });
+        ])
+        .call();
     // No retention setting: only the epoch axis is in play.
     let cfg = LogConfig {
         retention: None,

@@ -136,12 +136,10 @@ mod tests {
     use {
         super::*,
         crate::{
-            handlers::test_support::{ReplicatedPartitionSetup, replicated_partition},
+            handlers::test_support::replicated_partition,
             log_dir::partition_dir,
             log_dir_status::LogDirRegistry,
-            test_support::{
-                StandalonePartitionSetup, spawn_standalone_partition, topic_partition_image,
-            },
+            test_support::{spawn_standalone_partition, topic_partition_image},
         },
         assert2::assert,
         krabka_metadata::MetadataImage,
@@ -150,12 +148,11 @@ mod tests {
 
     fn image_with_topic(topic: &str, leader: u64) -> MetadataImage {
         topic_partition_image(topic, 2, || {
-            replicated_partition(ReplicatedPartitionSetup {
-                topic,
-                leader: krabka_audit::NodeId(leader),
-                replicas: &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-                ..Default::default()
-            })
+            replicated_partition()
+                .topic(topic)
+                .leader(leader)
+                .replicas(&[krabka_audit::NodeId(1), krabka_audit::NodeId(2)])
+                .call()
         })
     }
 
@@ -165,7 +162,7 @@ mod tests {
             krabka_log::LogConfig::default(),
         )
         .expect("open log");
-        spawn_standalone_partition(dir, log, StandalonePartitionSetup::default())
+        spawn_standalone_partition().log_dir(dir).log(log).call()
     }
 
     #[derive(Clone, Copy, Default)]
@@ -191,7 +188,12 @@ mod tests {
         partition: Arc<Partition>,
     }
 
-    async fn hosted_fixture(setup: HostedPartitionSetup) -> HostedFixture {
+    #[bon::builder]
+    async fn hosted_fixture(
+        #[builder(into, default = krabka_audit :: NodeId (1))] image_leader: krabka_audit::NodeId,
+        #[builder(default)] role: InstalledRole,
+    ) -> HostedFixture {
+        let setup = HostedPartitionSetup { image_leader, role };
         let dir = tempfile::tempdir().expect("tempdir");
         let image = image_with_topic("orders", setup.image_leader.0);
         let partitions = PartitionRegistry::new();
@@ -265,11 +267,7 @@ mod tests {
             image,
             partitions,
             ..
-        } = hosted_fixture(HostedPartitionSetup {
-            image_leader: krabka_audit::NodeId(2),
-            ..Default::default()
-        })
-        .await;
+        } = hosted_fixture().image_leader(2).call().await;
         partition_context!((log_dir_status, ctx), &partitions, &image);
 
         let refused = resolve_leadership("orders", 0, -1, -1, ctx).map(|_| ());
@@ -286,11 +284,7 @@ mod tests {
             partitions,
             partition,
             dir: _dir,
-        } = hosted_fixture(HostedPartitionSetup {
-            role: InstalledRole::Leader,
-            ..Default::default()
-        })
-        .await;
+        } = hosted_fixture().role(InstalledRole::Leader).call().await;
         partition_context!((log_dir_status, ctx), &partitions, &image);
         let resolved = resolve_leadership("orders", 0, -1, -1, ctx);
         assert!(resolved.is_ok());
@@ -312,7 +306,7 @@ mod tests {
             partitions,
             partition,
             dir: _dir,
-        } = hosted_fixture(HostedPartitionSetup::default()).await;
+        } = hosted_fixture().call().await;
         partition_context!((log_dir_status, ctx), &partitions, &image);
 
         let got = resolve_leadership("orders", 0, -1, -1, ctx).map(|_| ());

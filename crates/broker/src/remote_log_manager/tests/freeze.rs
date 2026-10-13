@@ -7,10 +7,7 @@
 
 use {
     super::*,
-    crate::{
-        remote_log_manager::test_support as fixtures,
-        test_support::{FreezeSetup, topic_freeze_record},
-    },
+    crate::{remote_log_manager::test_support as fixtures, test_support::topic_freeze_record},
     assert2::check,
     fixtures::{SweepCounts, TempDirs, local_backends, sweep_counts},
     krabka_metadata::PatternType,
@@ -39,13 +36,12 @@ fn image_with_orders_freeze(freeze: Option<FreezeScope<'_>>) -> MetadataImage {
         pattern_type,
     }) = freeze
     {
-        image.apply(&MetadataRecord::V1TopicFreeze(topic_freeze_record(
-            FreezeSetup {
-                scope,
-                pattern_type,
-                ..Default::default()
-            },
-        )));
+        image.apply(&MetadataRecord::V1TopicFreeze(
+            topic_freeze_record()
+                .scope(scope)
+                .pattern_type(pattern_type)
+                .call(),
+        ));
     }
     image
 }

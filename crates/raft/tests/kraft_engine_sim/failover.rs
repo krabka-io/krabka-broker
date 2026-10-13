@@ -30,7 +30,12 @@ struct SurvivingLeader {
 /// Start the failover fixture and retain its directories through the scenario.
 async fn elected_cluster(net: &SimNet, setup: SimClusterSetup<'_>) -> ElectedCluster {
     let ids = setup.ids;
-    let dirs = start_engines(net, setup);
+    let dirs = start_engines()
+        .net(net)
+        .ids(setup.ids)
+        .cluster_id(setup.cluster_id)
+        .timeouts(setup.timeouts)
+        .call();
     let (leader, epoch) = await_single_leader(net, ids, fixture::Duration::from_secs(10)).await;
     ElectedCluster {
         dirs,

@@ -246,7 +246,17 @@ pub(crate) struct DeletionTombstonesSetup<'a> {
     pub target: DeletionTarget,
 }
 
-pub(crate) fn deletion_tombstones(setup: DeletionTombstonesSetup<'_>) -> Vec<OffsetsRecord> {
+#[bon::builder]
+pub(crate) fn deletion_tombstones(
+    #[builder(default = "g")] group: &'_ str,
+    #[builder(default)] offsets: &'_ [NamedPartition<'_>],
+    #[builder(default)] target: DeletionTarget,
+) -> Vec<OffsetsRecord> {
+    let setup = DeletionTombstonesSetup {
+        group,
+        offsets,
+        target,
+    };
     let mut records: Vec<_> = setup
         .offsets
         .iter()
@@ -281,9 +291,19 @@ pub(crate) struct TopicDeletionTombstonesSetup<'a> {
     pub target: DeletionTarget,
 }
 
+#[bon::builder]
 pub(crate) fn topic_deletion_tombstones(
-    setup: TopicDeletionTombstonesSetup<'_>,
+    #[builder(default = "g")] group: &'_ str,
+    #[builder(default = "orders")] topic: &'_ str,
+    #[builder(default)] partitions: &'_ [krabka_ids::PartitionIndex],
+    #[builder(default)] target: DeletionTarget,
 ) -> Vec<OffsetsRecord> {
+    let setup = TopicDeletionTombstonesSetup {
+        group,
+        topic,
+        partitions,
+        target,
+    };
     let offsets: Vec<_> = setup
         .partitions
         .iter()
@@ -292,14 +312,27 @@ pub(crate) fn topic_deletion_tombstones(
             partition,
         })
         .collect();
-    deletion_tombstones(DeletionTombstonesSetup {
-        group: setup.group,
-        offsets: &offsets,
-        target: setup.target,
-    })
+    deletion_tombstones()
+        .group(setup.group)
+        .offsets(&offsets)
+        .target(setup.target)
+        .call()
 }
 
-pub(crate) fn offset_record(setup: OffsetRecordSetup<'_>) -> krabka_protocol::records::Record {
+#[bon::builder]
+pub(crate) fn offset_record(
+    #[builder(default = OffsetRecordSetup::default().group)] group: &'_ str,
+    #[builder(default = OffsetRecordSetup::default().topic)] topic: &'_ str,
+    #[builder(into, default = OffsetRecordSetup::default().partition)]
+    partition: krabka_ids::PartitionIndex,
+    #[builder(into, default = OffsetRecordSetup::default().offset)] offset: Offset,
+) -> krabka_protocol::records::Record {
+    let setup = OffsetRecordSetup {
+        group,
+        topic,
+        partition,
+        offset,
+    };
     let OffsetRecordSetup {
         group,
         topic,

@@ -18,11 +18,9 @@ use {
         fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
         freeze::resolve::resolve_topic_freeze,
         handlers::{
-            RequestContext,
-            create_topics::handle as create_topics_handle,
-            delete_records::test_support::gated_config,
-            fetch::handle as fetch_handle,
-            test_support::{CreateTopicSetup, configured_topic_request},
+            RequestContext, create_topics::handle as create_topics_handle,
+            delete_records::test_support::gated_config, fetch::handle as fetch_handle,
+            test_support::configured_topic_request,
         },
         heartbeat::fencing::{RegistrationChange, registration_change},
         partition::Partition,
@@ -66,10 +64,21 @@ struct TrimRequestSetup<'a> {
     timeout: RequestTimeoutMillis,
 }
 
-#[derive(Clone, Copy)]
+#[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 struct RequestTimeoutMillis(i32);
 
-fn request(setup: TrimRequestSetup<'_>) -> DeleteRecordsRequest {
+#[bon::builder]
+fn request(
+    #[builder(default = "orders")] topic: &'_ str,
+    #[builder(default = & [TrimTarget { index : PartitionIndex (0) , offset : Offset (- 1) }])]
+    partitions: &'_ [TrimTarget],
+    #[builder(into, default = RequestTimeoutMillis (5_000))] timeout: RequestTimeoutMillis,
+) -> DeleteRecordsRequest {
+    let setup = TrimRequestSetup {
+        topic,
+        partitions,
+        timeout,
+    };
     DeleteRecordsRequest {
         topics: vec![DeleteRecordsTopic {
             name: setup.topic.into(),
@@ -106,23 +115,38 @@ async fn drive(
 async fn drive_trim(
     broker: &Broker,
     ctx: &RequestContext<'_>,
-    setup: TrimRequestSetup<'_>,
+    request: DeleteRecordsRequest,
 ) -> DeleteRecordsResponse {
-    drive(broker, &request(setup), ctx).await
+    drive(broker, &request, ctx).await
 }
 
 /// Compare the entire response with independent caller-specified expected rows.
+#[bon::builder]
 async fn check_trim_response(
     broker: &Broker,
     context: &RequestContext<'_>,
     request: &DeleteRecordsRequest,
-    expected: ExpectedTrimRowsSetup<'_>,
+    #[builder(default = "orders")] topic: &'_ str,
+    #[builder(default = & [PartitionIndex (0)])] indices: &'_ [PartitionIndex],
+    #[builder(into, default = Offset (- 1))] low_watermark: Offset,
+    #[builder(into, default)] error: KafkaErrorCode,
 ) {
+    let expected = ExpectedTrimRowsSetup {
+        topic,
+        indices,
+        low_watermark,
+        error,
+    };
     let response = drive(broker, request, context).await;
     assert!(
         response
             == unthrottled_wire!(DeleteRecordsResponse {
-                topics: expected_trim_rows(expected),
+                topics: expected_trim_rows()
+                    .topic(expected.topic)
+                    .indices(expected.indices)
+                    .low_watermark(expected.low_watermark)
+                    .error(expected.error)
+                    .call(),
             })
     );
 }
@@ -135,23 +159,21 @@ struct RefusedTrimSetup<'a> {
     error: KafkaErrorCode,
 }
 
+#[bon::builder]
 async fn check_refused_trim(
     broker: &Broker,
     ctx: &RequestContext<'_>,
-    setup: RefusedTrimSetup<'_>,
+    #[builder(default = "orders")] topic: &'_ str,
+    #[builder(into, default = KafkaErrorCode (codes :: POLICY_VIOLATION))] error: KafkaErrorCode,
 ) {
-    let response = drive_trim(broker, ctx, TrimRequestSetup {
-        topic: setup.topic,
-        ..Default::default()
-    })
-    .await;
+    let setup = RefusedTrimSetup { topic, error };
+    let response = drive_trim(broker, ctx, request().topic(setup.topic).call()).await;
     assert!(
         response.topics
-            == expected_trim_rows(ExpectedTrimRowsSetup {
-                topic: setup.topic,
-                error: setup.error,
-                ..Default::default()
-            }),
+            == expected_trim_rows()
+                .topic(setup.topic)
+                .error(setup.error)
+                .call(),
         "{response:?}"
     );
 }
@@ -166,29 +188,43 @@ struct TrimFrontierSetup<'a> {
     frontier: Offset,
 }
 
+#[bon::builder]
 async fn check_trim_frontier(
     broker: &Broker,
     ctx: &RequestContext<'_>,
     partition: &Partition,
-    setup: TrimFrontierSetup<'_>,
+    #[builder(default = "orders")] topic: &'_ str,
+    #[builder(into, default)] offset: Offset,
+    #[builder(into, default)] low_watermark: Offset,
+    #[builder(into, default)] error: KafkaErrorCode,
+    #[builder(into, default)] frontier: Offset,
 ) {
-    let response = drive_trim(broker, ctx, TrimRequestSetup {
-        topic: setup.topic,
-        partitions: &[TrimTarget {
-            index: PartitionIndex(0),
-            offset: setup.offset,
-        }],
-        ..Default::default()
-    })
+    let setup = TrimFrontierSetup {
+        topic,
+        offset,
+        low_watermark,
+        error,
+        frontier,
+    };
+    let response = drive_trim(
+        broker,
+        ctx,
+        request()
+            .topic(setup.topic)
+            .partitions(&[TrimTarget {
+                index: PartitionIndex(0),
+                offset: setup.offset,
+            }])
+            .call(),
+    )
     .await;
     check!(
         response.topics
-            == expected_trim_rows(ExpectedTrimRowsSetup {
-                topic: setup.topic,
-                low_watermark: setup.low_watermark,
-                error: setup.error,
-                ..Default::default()
-            }),
+            == expected_trim_rows()
+                .topic(setup.topic)
+                .low_watermark(setup.low_watermark)
+                .error(setup.error)
+                .call(),
         "{}",
         setup.topic
     );
@@ -201,11 +237,12 @@ async fn check_trim_frontier(
 
 macro_rules! pending_partition_fixture {
     (($part:ident, $before:ident), $handle:expr, $broker:expr, $topic:expr, $context:expr) => {
-        topic_holding_a_pending_batch($handle, $context, PendingBatchTopicSetup {
-            topic: $topic,
-            ..Default::default()
-        })
-        .await;
+        topic_holding_a_pending_batch()
+            .broker_handle($handle)
+            .ctx($context)
+            .topic($topic)
+            .call()
+            .await;
         let $part = $broker
             .partitions
             .get($topic, krabka_ids::PartitionIndex(0))
@@ -218,9 +255,9 @@ macro_rules! pending_partition_fixture {
 async fn handle_denied_topic_returns_topic_auth_rows() {
     broker_fixture!((broker_handle, _dir, broker), deny_all);
     request_identity!((p, peer), principal("alice"));
-    let req = request(TrimRequestSetup {
-        topic: "secret",
-        partitions: &[
+    let req = request()
+        .topic("secret")
+        .partitions(&[
             TrimTarget {
                 index: PartitionIndex(0),
                 offset: Offset(3),
@@ -229,22 +266,18 @@ async fn handle_denied_topic_returns_topic_auth_rows() {
                 index: PartitionIndex(2),
                 offset: Offset(-1),
             },
-        ],
-        ..Default::default()
-    });
+        ])
+        .call();
 
-    check_trim_response(
-        &broker,
-        &test_context(&p, &peer),
-        &req,
-        ExpectedTrimRowsSetup {
-            topic: "secret",
-            indices: &[PartitionIndex(0), PartitionIndex(2)],
-            error: KafkaErrorCode(codes::TOPIC_AUTHORIZATION_FAILED),
-            ..Default::default()
-        },
-    )
-    .await;
+    check_trim_response()
+        .broker(&broker)
+        .context(&test_context(&p, &peer))
+        .request(&req)
+        .topic("secret")
+        .indices(&[PartitionIndex(0), PartitionIndex(2)])
+        .error(codes::TOPIC_AUTHORIZATION_FAILED)
+        .call()
+        .await;
     broker_handle.shutdown().await;
 }
 
@@ -252,27 +285,23 @@ async fn handle_denied_topic_returns_topic_auth_rows() {
 async fn handle_unknown_partition_preserves_requested_index() {
     broker_fixture!((broker_handle, _dir, broker), allow_all);
     request_identity!((p, peer), principal("admin"));
-    let req = request(TrimRequestSetup {
-        topic: "missing",
-        partitions: &[TrimTarget {
+    let req = request()
+        .topic("missing")
+        .partitions(&[TrimTarget {
             index: PartitionIndex(4),
             offset: Offset(0),
-        }],
-        ..Default::default()
-    });
+        }])
+        .call();
 
-    check_trim_response(
-        &broker,
-        &test_context(&p, &peer),
-        &req,
-        ExpectedTrimRowsSetup {
-            topic: "missing",
-            indices: &[PartitionIndex(4)],
-            error: KafkaErrorCode(codes::UNKNOWN_TOPIC_OR_PARTITION),
-            ..Default::default()
-        },
-    )
-    .await;
+    check_trim_response()
+        .broker(&broker)
+        .context(&test_context(&p, &peer))
+        .request(&req)
+        .topic("missing")
+        .indices(&[PartitionIndex(4)])
+        .error(codes::UNKNOWN_TOPIC_OR_PARTITION)
+        .call()
+        .await;
     broker_handle.shutdown().await;
 }
 
@@ -316,11 +345,17 @@ struct ConfiguredPendingBatchSetup<'a> {
 // Create `topic` with the given `delivery.mode`, then append one batch
 // that has come due and one that has not. Two records per batch puts the
 // log end offset at 4, and a scheduled topic's delivery watermark at 2.
+#[bon::builder]
 async fn topic_holding_a_pending_batch(
     broker_handle: &BrokerHandle,
     ctx: &RequestContext<'_>,
-    setup: PendingBatchTopicSetup<'_>,
+    #[builder(default = "orders")] topic: &'_ str,
+    delivery_mode: Option<&'_ str>,
 ) {
+    let setup = PendingBatchTopicSetup {
+        topic,
+        delivery_mode,
+    };
     let PendingBatchTopicSetup {
         topic,
         delivery_mode,
@@ -332,22 +367,28 @@ async fn topic_holding_a_pending_batch(
         })
         .into_iter()
         .collect();
-    topic_with_configs_holding_a_pending_batch(broker_handle, ctx, ConfiguredPendingBatchSetup {
-        topic,
-        configs: &configs,
-    })
-    .await;
+    topic_with_configs_holding_a_pending_batch()
+        .broker_handle(broker_handle)
+        .ctx(ctx)
+        .topic(topic)
+        .configs(&configs)
+        .call()
+        .await;
 }
 
 // `topic_holding_a_pending_batch` for a topic created with `configs`. It
 // waits until the delivery mode and the cleanup policy reach the partition
 // log before it appends.
+#[bon::builder]
 async fn topic_with_configs_holding_a_pending_batch(
     broker_handle: &BrokerHandle,
     ctx: &RequestContext<'_>,
-    setup: ConfiguredPendingBatchSetup<'_>,
+    #[builder(default = "orders")] topic: &'_ str,
+    #[builder(default)] configs: &'_ [ConfigPair<'_>],
 ) {
     use krabka_protocol::owned::create_topics_response;
+
+    let setup = ConfiguredPendingBatchSetup { topic, configs };
 
     let ConfiguredPendingBatchSetup { topic, configs } = setup;
     let broker = broker_handle.broker_arc_for_test();
@@ -365,11 +406,10 @@ async fn topic_with_configs_holding_a_pending_batch(
         });
     let version = create_topics_response::MAX_VERSION;
     let pairs: Vec<_> = configs.iter().map(|pair| (pair.name, pair.value)).collect();
-    let create = configured_topic_request(CreateTopicSetup {
-        topic,
-        configs: &pairs,
-        ..Default::default()
-    });
+    let create = configured_topic_request()
+        .topic(topic)
+        .configs(&pairs)
+        .call();
     let created = create_topics_handle(&broker, create, version, ctx)
         .await
         .expect("CreateTopics");
@@ -430,16 +470,19 @@ async fn a_trim_stops_at_the_delivery_watermark_of_a_scheduled_topic() {
     request_identity!((admin, peer, ctx), principal("admin"), test_context);
 
     for (topic, delivery_mode, expected_low_watermark) in cases {
-        topic_holding_a_pending_batch(&broker_handle, &ctx, PendingBatchTopicSetup {
-            topic,
-            delivery_mode,
-        })
-        .await;
+        topic_holding_a_pending_batch()
+            .broker_handle(&broker_handle)
+            .ctx(&ctx)
+            .topic(topic)
+            .maybe_delivery_mode(delivery_mode)
+            .call()
+            .await;
 
-        let resp = drive_trim(&broker, &test_context(&admin, &peer), TrimRequestSetup {
-            topic,
-            ..Default::default()
-        })
+        let resp = drive_trim(
+            &broker,
+            &test_context(&admin, &peer),
+            request().topic(topic).call(),
+        )
         .await;
 
         let expected = unthrottled_wire!(DeleteRecordsResponse {
@@ -464,19 +507,18 @@ async fn a_trim_stops_at_the_delivery_watermark_of_a_scheduled_topic() {
 async fn a_refused_trim_deletes_nothing() {
     broker_fixture!((broker_handle, _dir, broker), break_glass(gated_config()));
     request_identity!((principal, peer, ctx), principal("admin"), test_context);
-    topic_holding_a_pending_batch(&broker_handle, &ctx, PendingBatchTopicSetup::default()).await;
+    topic_holding_a_pending_batch()
+        .broker_handle(&broker_handle)
+        .ctx(&ctx)
+        .call()
+        .await;
     let part = broker
         .partitions
         .get("orders", krabka_ids::PartitionIndex(0))
         .expect("the partition is local");
     let before = part.log_start_offset();
 
-    let resp = drive_trim(
-        &broker,
-        &test_context(&principal, &peer),
-        TrimRequestSetup::default(),
-    )
-    .await;
+    let resp = drive_trim(&broker, &test_context(&principal, &peer), request().call()).await;
 
     let expected = vec![tagged_wire!(DeleteRecordsTopicResult {
         name: "orders".to_owned(),
@@ -506,7 +548,19 @@ struct ExpectedTrimRowsSetup<'a> {
     error: KafkaErrorCode,
 }
 
-fn expected_trim_rows(setup: ExpectedTrimRowsSetup<'_>) -> Vec<DeleteRecordsTopicResult> {
+#[bon::builder]
+fn expected_trim_rows(
+    #[builder(default = "orders")] topic: &'_ str,
+    #[builder(default = & [PartitionIndex (0)])] indices: &'_ [PartitionIndex],
+    #[builder(into, default = Offset (- 1))] low_watermark: Offset,
+    #[builder(into, default)] error: KafkaErrorCode,
+) -> Vec<DeleteRecordsTopicResult> {
+    let setup = ExpectedTrimRowsSetup {
+        topic,
+        indices,
+        low_watermark,
+        error,
+    };
     vec![tagged_wire!(DeleteRecordsTopicResult {
         name: setup.topic.to_owned(),
         partitions: setup
@@ -548,19 +602,17 @@ async fn a_trim_that_deletes_nothing_leaves_the_log_start_alone() {
     for (topic, offset, low_watermark, error_code) in cases {
         pending_partition_fixture!((part, before), &broker_handle, &broker, topic, &ctx);
 
-        check_trim_frontier(
-            &broker,
-            &test_context(&admin, &peer),
-            &part,
-            TrimFrontierSetup {
-                topic,
-                offset: Offset(offset),
-                low_watermark: Offset(low_watermark),
-                error: KafkaErrorCode(error_code),
-                frontier: before,
-            },
-        )
-        .await;
+        check_trim_frontier()
+            .broker(&broker)
+            .ctx(&test_context(&admin, &peer))
+            .partition(&part)
+            .topic(topic)
+            .offset(offset)
+            .low_watermark(low_watermark)
+            .error(error_code)
+            .frontier(before)
+            .call()
+            .await;
     }
 
     broker_handle.shutdown().await;
@@ -596,11 +648,12 @@ async fn a_frozen_topic_refuses_a_trim() {
         .wait_for_image(|image| resolve_topic_freeze(image, topic).is_some())
         .await;
 
-    check_refused_trim(&broker, &test_context(&admin, &peer), RefusedTrimSetup {
-        topic,
-        ..Default::default()
-    })
-    .await;
+    check_refused_trim()
+        .broker(&broker)
+        .ctx(&test_context(&admin, &peer))
+        .topic(topic)
+        .call()
+        .await;
     check!(part.log_start_offset() == before);
     broker_handle.shutdown().await;
 }
@@ -619,11 +672,13 @@ async fn a_replica_that_is_not_the_leader_refuses_a_trim() {
         std::sync::atomic::Ordering::Release,
     );
 
-    check_refused_trim(&broker, &test_context(&admin, &peer), RefusedTrimSetup {
-        topic,
-        error: KafkaErrorCode(codes::NOT_LEADER_OR_FOLLOWER),
-    })
-    .await;
+    check_refused_trim()
+        .broker(&broker)
+        .ctx(&test_context(&admin, &peer))
+        .topic(topic)
+        .error(codes::NOT_LEADER_OR_FOLLOWER)
+        .call()
+        .await;
     check!(part.log_start_offset() == before);
     broker_handle.shutdown().await;
 }
@@ -655,41 +710,41 @@ async fn a_compact_only_topic_refuses_a_trim() {
     request_identity!((admin, peer, ctx), principal("admin"), test_context);
 
     for (topic, policy, low_watermark, error_code, log_start) in cases {
-        topic_with_configs_holding_a_pending_batch(
-            &broker_handle,
-            &ctx,
-            ConfiguredPendingBatchSetup {
-                topic,
-                configs: &[ConfigPair {
-                    name: CLEANUP_POLICY,
-                    value: policy,
-                }],
-            },
-        )
-        .await;
+        topic_with_configs_holding_a_pending_batch()
+            .broker_handle(&broker_handle)
+            .ctx(&ctx)
+            .topic(topic)
+            .configs(&[ConfigPair {
+                name: CLEANUP_POLICY,
+                value: policy,
+            }])
+            .call()
+            .await;
         let part = broker
             .partitions
             .get(topic, krabka_ids::PartitionIndex(0))
             .expect("the partition is local");
 
-        let resp = drive_trim(&broker, &test_context(&admin, &peer), TrimRequestSetup {
-            topic,
-            partitions: &[TrimTarget {
-                index: PartitionIndex(0),
-                offset: Offset(2),
-            }],
-            ..Default::default()
-        })
+        let resp = drive_trim(
+            &broker,
+            &test_context(&admin, &peer),
+            request()
+                .topic(topic)
+                .partitions(&[TrimTarget {
+                    index: PartitionIndex(0),
+                    offset: Offset(2),
+                }])
+                .call(),
+        )
         .await;
 
         check!(
             resp.topics
-                == expected_trim_rows(ExpectedTrimRowsSetup {
-                    topic,
-                    low_watermark: Offset(low_watermark),
-                    error: KafkaErrorCode(error_code),
-                    ..Default::default()
-                }),
+                == expected_trim_rows()
+                    .topic(topic)
+                    .low_watermark(low_watermark)
+                    .error(error_code)
+                    .call(),
             "{policy}"
         );
         check!(
@@ -733,20 +788,23 @@ async fn a_partition_hosted_elsewhere_answers_not_leader_or_follower() {
         .wait_for_image(|image| image.partition(topic, 0).is_some())
         .await;
 
-    let resp = drive_trim(&broker, &test_context(&admin, &peer), TrimRequestSetup {
-        topic,
-        partitions: &[
-            TrimTarget {
-                index: PartitionIndex(0),
-                offset: Offset(1),
-            },
-            TrimTarget {
-                index: PartitionIndex(1),
-                offset: Offset(1),
-            },
-        ],
-        ..Default::default()
-    })
+    let resp = drive_trim(
+        &broker,
+        &test_context(&admin, &peer),
+        request()
+            .topic(topic)
+            .partitions(&[
+                TrimTarget {
+                    index: PartitionIndex(0),
+                    offset: Offset(1),
+                },
+                TrimTarget {
+                    index: PartitionIndex(1),
+                    offset: Offset(1),
+                },
+            ])
+            .call(),
+    )
     .await;
 
     let expected = vec![tagged_wire!(DeleteRecordsTopicResult {
@@ -782,7 +840,11 @@ async fn an_internal_topic_refuses_a_trim() {
         .wait_until_transaction_coordinator_ready()
         .await;
     broker_handle.wait_until_share_coordinator_ready().await;
-    topic_holding_a_pending_batch(&broker_handle, &ctx, PendingBatchTopicSetup::default()).await;
+    topic_holding_a_pending_batch()
+        .broker_handle(&broker_handle)
+        .ctx(&ctx)
+        .call()
+        .await;
 
     let cases = [
         (OFFSETS_TOPIC, -1_i64, codes::INVALID_TOPIC_EXCEPTION, 0_i64),
@@ -812,32 +874,33 @@ async fn an_internal_topic_refuses_a_trim() {
                 .expect("append a batch");
         }
 
-        check_trim_frontier(
-            &broker,
-            &test_context(&admin, &peer),
-            &part,
-            TrimFrontierSetup {
-                topic,
-                offset: Offset(-1),
-                low_watermark: Offset(low_watermark),
-                error: KafkaErrorCode(error_code),
-                frontier: Offset(log_start),
-            },
-        )
-        .await;
+        check_trim_frontier()
+            .broker(&broker)
+            .ctx(&test_context(&admin, &peer))
+            .partition(&part)
+            .topic(topic)
+            .offset(-1)
+            .low_watermark(low_watermark)
+            .error(error_code)
+            .frontier(log_start)
+            .call()
+            .await;
     }
 
     // A partition of an internal topic that the metadata does not hold is
     // unknown, as `KafkaApis` answers it before the internal-topic check.
     let missing = 10_000;
-    let resp = drive_trim(&broker, &test_context(&admin, &peer), TrimRequestSetup {
-        topic: OFFSETS_TOPIC,
-        partitions: &[TrimTarget {
-            index: PartitionIndex(missing),
-            offset: Offset(-1),
-        }],
-        ..Default::default()
-    })
+    let resp = drive_trim(
+        &broker,
+        &test_context(&admin, &peer),
+        request()
+            .topic(OFFSETS_TOPIC)
+            .partitions(&[TrimTarget {
+                index: PartitionIndex(missing),
+                offset: Offset(-1),
+            }])
+            .call(),
+    )
     .await;
     check!(
         resp.topics[0].partitions
@@ -1008,16 +1071,27 @@ struct DeleteToSetup<'a> {
     timeout: RequestTimeoutMillis,
 }
 
-async fn delete_to(broker: &Broker, setup: DeleteToSetup<'_>) -> Vec<DeleteRecordsTopicResult> {
+#[bon::builder]
+async fn delete_to(
+    broker: &Broker,
+    #[builder(default = "delete-records-followers")] topic: &'_ str,
+    #[builder(into, default)] offset: Offset,
+    #[builder(into, default = RequestTimeoutMillis (200))] timeout: RequestTimeoutMillis,
+) -> Vec<DeleteRecordsTopicResult> {
+    let setup = DeleteToSetup {
+        topic,
+        offset,
+        timeout,
+    };
     request_identity!((admin, peer, ctx), principal("admin"), test_context);
-    let request = request(TrimRequestSetup {
-        topic: setup.topic,
-        partitions: &[TrimTarget {
+    let request = request()
+        .topic(setup.topic)
+        .partitions(&[TrimTarget {
             index: PartitionIndex(0),
             offset: setup.offset,
-        }],
-        timeout: setup.timeout,
-    });
+        }])
+        .timeout(setup.timeout)
+        .call();
     drive(broker, &request, &ctx).await.topics
 }
 
@@ -1042,20 +1116,19 @@ async fn a_trim_waits_for_every_live_follower_to_reach_the_trim_point() {
 
     // The follower still reports log start 0, so the row times out with that
     // low watermark, and the leader log is trimmed all the same.
-    let timed_out = delete_to(&broker, DeleteToSetup {
-        topic,
-        offset: Offset(4),
-        ..Default::default()
-    })
-    .await;
+    let timed_out = delete_to()
+        .broker(&broker)
+        .topic(topic)
+        .offset(4)
+        .call()
+        .await;
     check!(
         timed_out
-            == expected_trim_rows(ExpectedTrimRowsSetup {
-                topic,
-                low_watermark: Offset(0),
-                error: KafkaErrorCode(codes::REQUEST_TIMED_OUT),
-                ..Default::default()
-            })
+            == expected_trim_rows()
+                .topic(topic)
+                .low_watermark(0)
+                .error(codes::REQUEST_TIMED_OUT)
+                .call()
     );
     check!(partition.log_start_offset() == krabka_log::Offset(4));
 
@@ -1063,12 +1136,13 @@ async fn a_trim_waits_for_every_live_follower_to_reach_the_trim_point() {
     let waiting = {
         let broker = broker.clone();
         tokio::spawn(async move {
-            delete_to(&broker, DeleteToSetup {
-                topic,
-                offset: Offset(6),
-                timeout: RequestTimeoutMillis(10_000),
-            })
-            .await
+            delete_to()
+                .broker(&broker)
+                .topic(topic)
+                .offset(6)
+                .timeout(10_000)
+                .call()
+                .await
         })
     };
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1078,30 +1152,17 @@ async fn a_trim_waits_for_every_live_follower_to_reach_the_trim_point() {
         .await
         .expect("the row completes once the follower reports")
         .expect("delete task");
-    check!(
-        completed
-            == expected_trim_rows(ExpectedTrimRowsSetup {
-                topic,
-                low_watermark: Offset(6),
-                ..Default::default()
-            })
-    );
+    check!(completed == expected_trim_rows().topic(topic).low_watermark(6).call());
 
     // A retry at a point every replica already passed answers at once.
-    let retry = delete_to(&broker, DeleteToSetup {
-        topic,
-        offset: Offset(5),
-        timeout: RequestTimeoutMillis(0),
-    })
-    .await;
-    check!(
-        retry
-            == expected_trim_rows(ExpectedTrimRowsSetup {
-                topic,
-                low_watermark: Offset(6),
-                ..Default::default()
-            })
-    );
+    let retry = delete_to()
+        .broker(&broker)
+        .topic(topic)
+        .offset(5)
+        .timeout(0)
+        .call()
+        .await;
+    check!(retry == expected_trim_rows().topic(topic).low_watermark(6).call());
 
     // A leadership this broker has published but not installed yet (no
     // replica set, no follower progress) still waits for the follower the
@@ -1112,39 +1173,32 @@ async fn a_trim_waits_for_every_live_follower_to_reach_the_trim_point() {
         *state = ReplicaState::new();
         state.hw = high_watermark;
     }
-    let not_installed = delete_to(&broker, DeleteToSetup {
-        topic,
-        offset: Offset(7),
-        ..Default::default()
-    })
-    .await;
+    let not_installed = delete_to()
+        .broker(&broker)
+        .topic(topic)
+        .offset(7)
+        .call()
+        .await;
     check!(
         not_installed
-            == expected_trim_rows(ExpectedTrimRowsSetup {
-                topic,
-                error: KafkaErrorCode(codes::REQUEST_TIMED_OUT),
-                ..Default::default()
-            })
+            == expected_trim_rows()
+                .topic(topic)
+                .error(codes::REQUEST_TIMED_OUT)
+                .call()
     );
     // The follower's next fetch reports its progress to the new leadership.
     follower_fetch(&broker, topic, APPENDED, 7).await;
 
     // A fenced follower is not live, so its old log start does not count.
     fence_follower(&broker_handle).await;
-    let fenced = delete_to(&broker, DeleteToSetup {
-        topic,
-        offset: Offset(8),
-        timeout: RequestTimeoutMillis(10_000),
-    })
-    .await;
-    check!(
-        fenced
-            == expected_trim_rows(ExpectedTrimRowsSetup {
-                topic,
-                low_watermark: Offset(8),
-                ..Default::default()
-            })
-    );
+    let fenced = delete_to()
+        .broker(&broker)
+        .topic(topic)
+        .offset(8)
+        .timeout(10_000)
+        .call()
+        .await;
+    check!(fenced == expected_trim_rows().topic(topic).low_watermark(8).call());
 
     broker_handle.shutdown().await;
 }

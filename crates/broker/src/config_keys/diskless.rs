@@ -137,30 +137,6 @@ mod tests {
             .collect()
     }
 
-    fn check_validation<const N: usize>(rows: [(&str, BTreeMap<String, String>, bool); N]) {
-        for (label, overrides, want_ok) in rows {
-            check!(
-                validate_topic_config_map(&overrides).is_ok() == want_ok,
-                "{label}"
-            );
-        }
-    }
-
-    /// `diskless=true` beside `other=value` is rejected with an error that
-    /// names both keys.
-    fn check_conflict_names(other: &str, value: &str) {
-        let error = validate_topic_config_map(&map(&[
-            ConfigPair {
-                key: DISKLESS,
-                value: "true",
-            },
-            ConfigPair { key: other, value },
-        ]))
-        .unwrap_err();
-        check!(error.contains(DISKLESS), "got: {error}");
-        check!(error.contains(other), "got: {error}");
-    }
-
     #[test]
     fn resolve_diskless_reads_a_kafka_boolean() {
         for (label, config, expected) in [
@@ -214,120 +190,109 @@ mod tests {
         assert!(error.contains(DISKLESS), "got: {error}");
     }
 
-    #[test]
-    fn diskless_and_tiered_storage_exclude_each_other() {
-        check_validation([
-            (
-                "both data paths on",
-                map(&[
-                    ConfigPair {
-                        key: DISKLESS,
-                        value: "true",
-                    },
-                    ConfigPair {
-                        key: REMOTE_STORAGE_ENABLE,
-                        value: "true",
-                    },
-                ]),
-                false,
-            ),
-            (
-                "diskless with tiering explicitly off",
-                map(&[
-                    ConfigPair {
-                        key: DISKLESS,
-                        value: "true",
-                    },
-                    ConfigPair {
-                        key: REMOTE_STORAGE_ENABLE,
-                        value: "false",
-                    },
-                ]),
-                true,
-            ),
-            (
-                "tiering with diskless explicitly off",
-                map(&[
-                    ConfigPair {
-                        key: DISKLESS,
-                        value: "false",
-                    },
-                    ConfigPair {
-                        key: REMOTE_STORAGE_ENABLE,
-                        value: "true",
-                    },
-                ]),
-                true,
-            ),
-            (
-                "diskless alone",
-                map(&[ConfigPair {
-                    key: DISKLESS,
-                    value: "true",
-                }]),
-                true,
-            ),
-            (
-                "tiering alone",
-                map(&[ConfigPair {
-                    key: REMOTE_STORAGE_ENABLE,
-                    value: "true",
-                }]),
-                true,
-            ),
-        ]);
-
-        check_conflict_names(REMOTE_STORAGE_ENABLE, "true");
+    #[derive(Clone, Copy)]
+    enum DisklessConflict {
+        TieredStorage,
+        ScheduledDelivery,
     }
 
-    #[test]
-    fn diskless_and_scheduled_delivery_exclude_each_other() {
-        check_validation([
-            (
-                "a scheduled diskless topic",
-                map(&[
-                    ConfigPair {
-                        key: DISKLESS,
-                        value: "true",
-                    },
-                    ConfigPair {
-                        key: DELIVERY_MODE,
-                        value: DELIVERY_MODE_SCHEDULED,
-                    },
-                ]),
-                false,
-            ),
-            (
-                "an immediate diskless topic",
-                map(&[
-                    ConfigPair {
-                        key: DISKLESS,
-                        value: "true",
-                    },
-                    ConfigPair {
-                        key: DELIVERY_MODE,
-                        value: "immediate",
-                    },
-                ]),
-                true,
-            ),
-            (
-                "a scheduled local-log topic",
-                map(&[
-                    ConfigPair {
-                        key: DISKLESS,
-                        value: "false",
-                    },
-                    ConfigPair {
-                        key: DELIVERY_MODE,
-                        value: DELIVERY_MODE_SCHEDULED,
-                    },
-                ]),
-                true,
-            ),
-        ]);
+    type DisklessValidCases = Vec<(&'static str, BTreeMap<String, String>)>;
 
-        check_conflict_names(DELIVERY_MODE, DELIVERY_MODE_SCHEDULED);
+    #[yare::parameterized(
+        tiered_storage = { DisklessConflict::TieredStorage },
+        scheduled_delivery = { DisklessConflict::ScheduledDelivery },
+    )]
+    fn diskless_excludes_conflicting_topic_features(conflict: DisklessConflict) {
+        let (key, conflicting_value, valid_cases): (&str, &str, DisklessValidCases) = match conflict
+        {
+            DisklessConflict::TieredStorage => (REMOTE_STORAGE_ENABLE, "true", vec![
+                (
+                    "diskless with tiering explicitly off",
+                    map(&[
+                        ConfigPair {
+                            key: DISKLESS,
+                            value: "true",
+                        },
+                        ConfigPair {
+                            key: REMOTE_STORAGE_ENABLE,
+                            value: "false",
+                        },
+                    ]),
+                ),
+                (
+                    "tiering with diskless explicitly off",
+                    map(&[
+                        ConfigPair {
+                            key: DISKLESS,
+                            value: "false",
+                        },
+                        ConfigPair {
+                            key: REMOTE_STORAGE_ENABLE,
+                            value: "true",
+                        },
+                    ]),
+                ),
+                (
+                    "diskless alone",
+                    map(&[ConfigPair {
+                        key: DISKLESS,
+                        value: "true",
+                    }]),
+                ),
+                (
+                    "tiering alone",
+                    map(&[ConfigPair {
+                        key: REMOTE_STORAGE_ENABLE,
+                        value: "true",
+                    }]),
+                ),
+            ]),
+            DisklessConflict::ScheduledDelivery => (DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, vec![
+                (
+                    "an immediate diskless topic",
+                    map(&[
+                        ConfigPair {
+                            key: DISKLESS,
+                            value: "true",
+                        },
+                        ConfigPair {
+                            key: DELIVERY_MODE,
+                            value: "immediate",
+                        },
+                    ]),
+                ),
+                (
+                    "a scheduled local-log topic",
+                    map(&[
+                        ConfigPair {
+                            key: DISKLESS,
+                            value: "false",
+                        },
+                        ConfigPair {
+                            key: DELIVERY_MODE,
+                            value: DELIVERY_MODE_SCHEDULED,
+                        },
+                    ]),
+                ),
+            ]),
+        };
+        for (label, overrides) in valid_cases {
+            assert2::check!(validate_topic_config_map(&overrides).is_ok(), "{label}");
+        }
+
+        let overrides = map(&[
+            ConfigPair {
+                key: DISKLESS,
+                value: "true",
+            },
+            ConfigPair {
+                key,
+                value: conflicting_value,
+            },
+        ]);
+        let error = validate_topic_config_map(&overrides).unwrap_err();
+        assert2::check!(error.contains(DISKLESS), "got: {error}");
+        assert2::check!(error.contains(key), "got: {error}");
     }
 
     #[test]

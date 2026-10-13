@@ -6,9 +6,7 @@
 //! authorizer, or nothing beyond the `for_tests` defaults.
 
 use {
-    crate::support::client::{
-        BrokerClientSetup, BrokerWithClient, connect_owned, start_broker_client,
-    },
+    crate::support::client::{BrokerWithClient, connect_owned, start_broker_client},
     krabka_broker::{Broker, BrokerConfig, BrokerHandle},
     krabka_client_core::Client,
     tempfile::TempDir,
@@ -131,11 +129,11 @@ pub async fn start_with_deny_all_authz() -> InProcess {
     config.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(HashSet::new()));
     // The broker's own heartbeat is denied too, so it stays fenced: it never
     // becomes alive in the liveness registry, and nothing here needs it to.
-    let BrokerWithClient { broker, client } = start_broker_client(config, BrokerClientSetup {
-        client_id: "krabka-broker-test-deny",
-        ..Default::default()
-    })
-    .await;
+    let BrokerWithClient { broker, client } = start_broker_client()
+        .config(config)
+        .client_id("krabka-broker-test-deny")
+        .call()
+        .await;
     InProcess {
         broker,
         client,

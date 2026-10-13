@@ -97,7 +97,7 @@ mod tests {
             coordinator::test_support::LeaderMove,
             partition::{
                 Partition,
-                test_support::{CommitFixtureLeader, CommitPartitionSetup, commit_partition},
+                test_support::{CommitFixtureLeader, commit_partition},
             },
         },
         assert2::assert,
@@ -193,11 +193,11 @@ mod tests {
             },
         ];
         for case in cases {
-            let (partition, _dir, hw_notify) = commit_partition(CommitPartitionSetup {
-                high_watermark: Offset(case.hw_now),
-                leader: CommitFixtureLeader::BrokerOneAtEpochZero,
-            })
-            .await;
+            let (partition, _dir, hw_notify) = commit_partition()
+                .high_watermark(case.hw_now)
+                .leader(CommitFixtureLeader::BrokerOneAtEpochZero)
+                .call()
+                .await;
 
             let changes = crate::coordinator::test_support::schedule_commit_changes!(case, partition;
                 captures {} leader(leader, epoch) {

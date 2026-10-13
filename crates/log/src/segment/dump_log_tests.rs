@@ -15,10 +15,7 @@ use {
     crate::{
         index::{OffsetIndexEntry, TimeIndexEntry},
         name,
-        segment::test_support::{
-            ONE_RECORD_BATCH, RecordCount, RecordTimestamp, SampleBatchSetup, TempSegment,
-            test_segment,
-        },
+        segment::test_support::{ONE_RECORD_BATCH, TempSegment, test_segment},
     },
     bytes::BytesMut,
     krabka_ids::{LeaderEpoch, Offset},
@@ -195,11 +192,11 @@ struct EncodedBatch {
 }
 
 fn encoded(base_offset: i64, records: i32, timestamp: i64) -> EncodedBatch {
-    let batch = sample_batch(SampleBatchSetup {
-        offset: Offset(base_offset),
-        records: RecordCount(records),
-        timestamp: RecordTimestamp(timestamp),
-    });
+    let batch = sample_batch()
+        .offset(base_offset)
+        .records(records)
+        .timestamp(timestamp)
+        .call();
     let mut wire = BytesMut::new();
     batch.encode(&mut wire).unwrap();
     EncodedBatch {
@@ -217,11 +214,11 @@ fn write_all_encoded(segment: &mut Segment, interval: ByteSize) {
     {
         segment
             .append(
-                &sample_batch(SampleBatchSetup {
-                    offset: Offset(base),
-                    records: RecordCount(records),
-                    timestamp: RecordTimestamp(timestamp),
-                }),
+                &sample_batch()
+                    .offset(base)
+                    .records(records)
+                    .timestamp(timestamp)
+                    .call(),
                 interval,
             )
             .unwrap();
@@ -334,7 +331,15 @@ fn the_index_takes_an_entry_only_once_more_than_the_interval_was_written() {
         interval: u64,
         expected: Vec<u32>,
     }
-    let size = u64::try_from(sample_batch(ONE_RECORD_BATCH).encoded_len()).unwrap();
+    let size = u64::try_from(
+        sample_batch()
+            .offset(ONE_RECORD_BATCH.offset.0)
+            .records(ONE_RECORD_BATCH.records.0)
+            .timestamp(ONE_RECORD_BATCH.timestamp.0)
+            .call()
+            .encoded_len(),
+    )
+    .unwrap();
     let cases = [
         IntervalCase {
             label: "an interval of one batch skips a batch exactly that far",
@@ -370,11 +375,7 @@ fn the_index_takes_an_entry_only_once_more_than_the_interval_was_written() {
             for offset in 0..5 {
                 segment
                     .append(
-                        &sample_batch(SampleBatchSetup {
-                            offset: Offset(offset),
-                            timestamp: RecordTimestamp(100 + offset),
-                            ..Default::default()
-                        }),
+                        &sample_batch().offset(offset).timestamp(100 + offset).call(),
                         interval,
                     )
                     .unwrap();
@@ -412,11 +413,7 @@ fn appends_after_a_truncation_keep_the_indexes_verifying() {
     // Older than the surviving maximum: no time entry, one offset entry.
     segment
         .append(
-            &sample_batch(SampleBatchSetup {
-                offset: Offset(6),
-                records: RecordCount(2),
-                timestamp: RecordTimestamp(150),
-            }),
+            &sample_batch().offset(6).records(2).timestamp(150).call(),
             DENSE_INDEX,
         )
         .unwrap();
@@ -424,11 +421,7 @@ fn appends_after_a_truncation_keep_the_indexes_verifying() {
     // Newer: the entry names the new batch's last offset.
     segment
         .append(
-            &sample_batch(SampleBatchSetup {
-                offset: Offset(8),
-                records: RecordCount(2),
-                timestamp: RecordTimestamp(400),
-            }),
+            &sample_batch().offset(8).records(2).timestamp(400).call(),
             DENSE_INDEX,
         )
         .unwrap();

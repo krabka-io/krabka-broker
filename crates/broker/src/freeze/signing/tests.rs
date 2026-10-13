@@ -9,7 +9,7 @@ use {
     super::{FreezeSignatureCheck, freeze_signing_bytes},
     crate::{
         operator_keys::{OperatorKeyEntry, OperatorKeys},
-        test_support::{OperatorKeyFileSetup, ed25519_public_key_file},
+        test_support::ed25519_public_key_file,
     },
     krabka_metadata::{PatternType, TopicFreezeRecord},
     krabka_units::minutes,
@@ -42,6 +42,23 @@ struct Trust {
     _dir: TempDir,
 }
 
+struct SigningFixture {
+    trust: Trust,
+    good: TopicFreezeRecord,
+    replaced: TopicFreezeRecord,
+}
+
+fn signing_fixture() -> SigningFixture {
+    SigningFixture {
+        trust: trust(),
+        good: record(),
+        replaced: TopicFreezeRecord {
+            set_at_ms: NOW_MS,
+            ..record()
+        },
+    }
+}
+
 /// An operator key pair, and the file that holds its public half.
 struct FreshKey {
     pair: Ed25519KeyPair,
@@ -49,10 +66,7 @@ struct FreshKey {
 }
 
 fn fresh_key(dir: &TempDir, name: &str) -> FreshKey {
-    let (pair, path) = ed25519_public_key_file(dir.path(), OperatorKeyFileSetup {
-        name,
-        ..Default::default()
-    });
+    let (pair, path) = ed25519_public_key_file().dir(dir.path()).name(name).call();
     FreshKey { pair, path }
 }
 

@@ -289,12 +289,12 @@ mod tests {
             authorizer::AllowAllAuthorizer,
             broker::BrokerHandle,
             handlers::test_support::{
-                ClientTopicSetup, StartedBroker, create_topic as create_topic_from_test_support,
+                StartedBroker, create_topic as create_topic_from_test_support,
             },
             share_partition::session::FetchPartitions,
             test_support::{
-                ShareApiSupport, ShareBrokerSetup, dispatch_wire, peer, principal,
-                start_broker_with, start_share_broker, test_ctx,
+                ShareApiSupport, dispatch_wire, peer, principal, start_broker_with,
+                start_share_broker, test_ctx,
             },
         },
         assert2::assert,
@@ -332,10 +332,10 @@ mod tests {
     #[tokio::test]
     async fn handle_disabled_feature_returns_top_level_unsupported_version() {
         let version = share_acknowledge_response::MAX_VERSION;
-        let (broker_handle, _dir) =
-            start_share_broker(std::sync::Arc::new(AllowAllAuthorizer), ShareBrokerSetup {
-                support: ShareApiSupport::Disabled,
-            })
+        let (broker_handle, _dir) = start_share_broker()
+            .authorizer(std::sync::Arc::new(AllowAllAuthorizer))
+            .support(ShareApiSupport::Disabled)
+            .call()
             .await;
         let broker = broker_handle.broker_arc_for_test();
         test_ctx!(ctx, "alice");
@@ -358,12 +358,12 @@ mod tests {
     use crate::handlers::test_support::{DenyTopicRead, TopicIdRef as TopicRef};
 
     async fn create_topic(broker: &BrokerHandle, name: &str) -> ProtoUuid {
-        create_topic_from_test_support(broker, ClientTopicSetup {
-            client_id: "share-acknowledge-resolution-test",
-            name,
-            ..Default::default()
-        })
-        .await
+        create_topic_from_test_support()
+            .broker(broker)
+            .client_id("share-acknowledge-resolution-test")
+            .name(name)
+            .call()
+            .await
     }
 
     /// Open a share session for `member` on partition 0 of `topic_id`,
@@ -479,11 +479,10 @@ mod tests {
         initialized_share_topic!(
             (broker_handle, _dir, known),
             async {
-                let (broker, dir) = start_share_broker(
-                    std::sync::Arc::new(AllowAllAuthorizer),
-                    ShareBrokerSetup::default(),
-                )
-                .await;
+                let (broker, dir) = start_share_broker()
+                    .authorizer(std::sync::Arc::new(AllowAllAuthorizer))
+                    .call()
+                    .await;
                 StartedBroker { broker, dir }
             },
             "ack-resolution",

@@ -341,9 +341,8 @@ mod tests {
                 ShareGroupTargetAssignmentMetadataValue, TopicPartitionsInfo,
             },
             test_support::{
-                AssignmentDeletionSetup, ReplayCase, ReplayFixtures, check_replay_cases,
-                member_deletion_with_target_case, proto_uuid, replay_fixtures,
-                replay_tombstone_constructor, share_member,
+                ReplayCase, ReplayFixtures, check_replay_cases, member_deletion_with_target_case,
+                proto_uuid, replay_fixtures, replay_tombstone_constructor, share_member,
             },
         },
     };
@@ -454,11 +453,10 @@ mod tests {
         let ReplayFixtures {
             expected_seed: group,
             deletion: kafka_deletion,
-        } = replay_fixtures(
-            ShareGroupSeed::new_group,
-            tombstone,
-            AssignmentDeletionSetup::default(),
-        );
+        } = replay_fixtures()
+            .seed(ShareGroupSeed::new_group)
+            .tombstone(tombstone)
+            .call();
         let rows: Vec<ReplayCase<'_, Record, ShareGroupSeed>> = vec![
             ReplayCase {
                 case: "every record of a group",

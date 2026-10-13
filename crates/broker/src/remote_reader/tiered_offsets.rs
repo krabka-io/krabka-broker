@@ -149,7 +149,21 @@ mod tests {
         publication: SegmentPublication,
     }
 
-    fn add_segment(reader: &RemoteReader, setup: TieredSegmentSetup) {
+    #[bon::builder]
+    fn add_segment(
+        reader: &RemoteReader,
+        #[builder(into, default = Offset (0))] start: Offset,
+        #[builder(into, default = Offset (9))] end: Offset,
+        #[builder(default = maplit :: btreemap ! { LeaderEpoch (0) => Offset (0) })]
+        epochs: BTreeMap<LeaderEpoch, Offset>,
+        #[builder(default)] publication: SegmentPublication,
+    ) {
+        let setup = TieredSegmentSetup {
+            start,
+            end,
+            epochs,
+            publication,
+        };
         let TieredSegmentSetup {
             start,
             end,
@@ -199,32 +213,30 @@ mod tests {
             reader,
             dir: _remote_dir,
         } = reader_with_metadata();
-        add_segment(&reader, TieredSegmentSetup {
-            start: Offset(-10),
-            end: Offset(-1),
-            epochs: maplit::btreemap! {LeaderEpoch(0) => Offset(-10)},
-            ..Default::default()
-        });
-        add_segment(&reader, TieredSegmentSetup {
-            start: Offset(20),
-            end: Offset(39),
-            epochs: maplit::btreemap! {
+        add_segment()
+            .reader(&reader)
+            .start(-10)
+            .end(-1)
+            .epochs(maplit::btreemap! {LeaderEpoch(0) => Offset(-10)})
+            .call();
+        add_segment()
+            .reader(&reader)
+            .start(20)
+            .end(39)
+            .epochs(maplit::btreemap! {
                 LeaderEpoch(0) => Offset(20),
                 LeaderEpoch(2) => Offset(30),
                 LeaderEpoch(4) => Offset(35),
-            },
-            ..Default::default()
-        });
-        add_segment(&reader, TieredSegmentSetup {
-            end: Offset(19),
-            ..Default::default()
-        });
-        add_segment(&reader, TieredSegmentSetup {
-            start: Offset(40),
-            end: Offset(99),
-            epochs: maplit::btreemap! {LeaderEpoch(8) => Offset(40)},
-            publication: SegmentPublication::Started,
-        });
+            })
+            .call();
+        add_segment().reader(&reader).end(19).call();
+        add_segment()
+            .reader(&reader)
+            .start(40)
+            .end(99)
+            .epochs(maplit::btreemap! {LeaderEpoch(8) => Offset(40)})
+            .publication(SegmentPublication::Started)
+            .call();
 
         assert!(reader.earliest_offset(&tp()).await.unwrap() == Some(0));
         let expected = Some(TieredOffset {
@@ -244,13 +256,13 @@ mod tests {
             reader,
             dir: _remote_dir,
         } = reader_with_metadata();
-        add_segment(&reader, TieredSegmentSetup::default());
-        add_segment(&reader, TieredSegmentSetup {
-            start: Offset(10),
-            end: Offset(19),
-            epochs: maplit::btreemap! {LeaderEpoch(7) => Offset(20)},
-            ..Default::default()
-        });
+        add_segment().reader(&reader).call();
+        add_segment()
+            .reader(&reader)
+            .start(10)
+            .end(19)
+            .epochs(maplit::btreemap! {LeaderEpoch(7) => Offset(20)})
+            .call();
         assert!(reader.latest_tiered_offset(&tp()).await.unwrap() == None);
     }
 
@@ -260,12 +272,12 @@ mod tests {
             reader,
             dir: _remote_dir,
         } = reader_with_metadata();
-        add_segment(&reader, TieredSegmentSetup {
-            start: Offset(i64::MAX),
-            end: Offset(i64::MAX),
-            epochs: maplit::btreemap! {LeaderEpoch(i32::MAX) => Offset(i64::MAX)},
-            ..Default::default()
-        });
+        add_segment()
+            .reader(&reader)
+            .start(i64::MAX)
+            .end(i64::MAX)
+            .epochs(maplit::btreemap! {LeaderEpoch(i32::MAX) => Offset(i64::MAX)})
+            .call();
         assert!(reader.earliest_offset(&tp()).await.unwrap() == Some(i64::MAX));
         assert!(
             reader.latest_tiered_offset(&tp()).await.unwrap()

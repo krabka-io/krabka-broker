@@ -9,16 +9,15 @@ use {
     crate::{
         config_keys::{UNCLEAN_LEADER_ELECTION_ENABLE, UNCLEAN_RECOVERY_STRATEGY},
         leader_election::test_support::{
-            ElectionSetup, ExpectedPartitionSetup, TopicConfigOverride, expected_clean_election,
-            expected_partition, img_with_partition, liveness_with_alive, one_partition_change,
+            TopicConfigOverride, expected_clean_election, expected_partition, img_with_partition,
+            liveness_with_alive, one_partition_change,
         },
         metrics::BrokerMetrics,
     },
     assert2::{assert, check},
-    krabka_metadata::LeaderEpoch,
 };
 
-#[derive(Clone, Copy)]
+#[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 struct ReplicaSlot(usize);
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
@@ -42,7 +41,19 @@ struct OfflineImage {
     good: uuid::Uuid,
 }
 
-fn offline_image(setup: OfflinePartitionSetup<'_>) -> OfflineImage {
+#[bon::builder]
+fn offline_image(
+    #[builder(into, default = NodeId (1))] leader: NodeId,
+    #[builder(default = & [NodeId (1) , NodeId (2)])] isr: &'_ [NodeId],
+    #[builder(required)] failed_replica: Option<usize>,
+    #[builder(default)] configs: &'_ [TopicConfigOverride<'_>],
+) -> OfflineImage {
+    let setup = OfflinePartitionSetup {
+        leader,
+        isr,
+        failed_replica: failed_replica.map(ReplicaSlot),
+        configs,
+    };
     let OfflinePartitionSetup {
         leader,
         isr,
@@ -56,26 +67,25 @@ fn offline_image(setup: OfflinePartitionSetup<'_>) -> OfflineImage {
         directories[index.0] = bad;
     }
     OfflineImage {
-        image: img_with_partition(ElectionSetup {
-            leader,
-            isr,
-            dirs: &directories,
-            configs,
-            ..Default::default()
-        }),
+        image: img_with_partition()
+            .leader(leader)
+            .isr(isr)
+            .dirs(&directories)
+            .configs(configs)
+            .call(),
         bad,
         good,
     }
 }
 
 fn unclean_election_image() -> OfflineImage {
-    offline_image(OfflinePartitionSetup {
-        configs: &[TopicConfigOverride::new(
+    offline_image()
+        .failed_replica(Some(0))
+        .configs(&[TopicConfigOverride::new(
             UNCLEAN_LEADER_ELECTION_ENABLE,
             "true",
-        )],
-        ..Default::default()
-    })
+        )])
+        .call()
 }
 
 async fn scan_offline_dir(
@@ -120,10 +130,10 @@ async fn offline_dir_elects_alive_isr_member_when_leader_dir_failed() {
         image: img,
         bad,
         good,
-    } = offline_image(OfflinePartitionSetup {
-        isr: &[NodeId(1), NodeId(2), NodeId(3)],
-        ..Default::default()
-    });
+    } = offline_image()
+        .isr(&[NodeId(1), NodeId(2), NodeId(3)])
+        .failed_replica(Some(0))
+        .call();
     let plan = scan_offline_dir(&img, 1, bad, &[1, 2, 3]).await;
     let MetadataRecord::V1Partition(pr) = &plan.changes[0] else {
         panic!()
@@ -139,7 +149,12 @@ async fn offline_dir_elects_alive_isr_member_when_leader_dir_failed() {
 async fn assert_offline_dir_no_changes(setup: OfflinePartitionSetup<'_>) {
     let OfflineImage {
         image: img, bad, ..
-    } = offline_image(setup);
+    } = offline_image()
+        .leader(setup.leader.0)
+        .isr(setup.isr)
+        .failed_replica(setup.failed_replica.map(|slot| slot.0))
+        .configs(setup.configs)
+        .call();
     let plan = scan_offline_dir(&img, 1, bad, &[1, 2, 3]).await;
     assert!(plan.changes.is_empty());
 }
@@ -160,22 +175,20 @@ async fn offline_dir_shrinks_isr_for_non_leader_replica() {
         image: img,
         bad,
         good,
-    } = offline_image(OfflinePartitionSetup {
-        isr: &[NodeId(1), NodeId(2), NodeId(3)],
-        failed_replica: Some(ReplicaSlot(1)),
-        ..Default::default()
-    });
+    } = offline_image()
+        .isr(&[NodeId(1), NodeId(2), NodeId(3)])
+        .failed_replica(Some(1))
+        .call();
     let plan = scan_offline_dir(&img, 2, bad, &[1, 2, 3]).await;
     let MetadataRecord::V1Partition(pr) = &plan.changes[0] else {
         panic!()
     };
-    let expected = expected_partition(ExpectedPartitionSetup {
-        leader: krabka_raft::NodeId(1),
-        isr: &[krabka_raft::NodeId(1), krabka_raft::NodeId(3)],
-        leader_epoch: LeaderEpoch(5),
-        directories: vec![good, bad, good],
-        ..Default::default()
-    });
+    let expected = expected_partition()
+        .leader(1)
+        .isr(&[krabka_raft::NodeId(1), krabka_raft::NodeId(3)])
+        .leader_epoch(5)
+        .directories(vec![good, bad, good])
+        .call();
     assert!(*pr == expected);
 }
 
@@ -199,10 +212,10 @@ async fn offline_dir_empty_isr_defers_offset_aware_strategies_to_urm() {
     ] {
         let OfflineImage {
             image: img, bad, ..
-        } = offline_image(OfflinePartitionSetup {
-            configs: &[TopicConfigOverride::new(UNCLEAN_RECOVERY_STRATEGY, name)],
-            ..Default::default()
-        });
+        } = offline_image()
+            .failed_replica(Some(0))
+            .configs(&[TopicConfigOverride::new(UNCLEAN_RECOVERY_STRATEGY, name)])
+            .call();
         // Only node 3 is alive, and it is outside the ISR.
         let plan = scan_offline_dir(&img, 1, bad, &[3]).await;
         assert!(plan.changes.is_empty(), "{name}: {:?}", plan.changes);
@@ -247,7 +260,7 @@ async fn offline_dir_empty_isr_no_unclean_leaves_partition_unavailable() {
     // not in ISR.  No recovery strategy, no unclean flag → no change.
     let OfflineImage {
         image: img, bad, ..
-    } = offline_image(OfflinePartitionSetup::default());
+    } = offline_image().failed_replica(Some(0)).call();
     // only 3 alive, but not in ISR
     let plan = scan_offline_dir(&img, 1, bad, &[3]).await;
     assert!(

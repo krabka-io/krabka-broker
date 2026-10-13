@@ -146,6 +146,7 @@ mod tests {
         userinfo_auths: Mutex<Vec<String>>,
     }
 
+    #[derive(derive_more::From, derive_more::Into)]
     /// Starts an HTTPS test server with these routes:
     ///   POST /introspect  -> `introspect_body` with `introspect_status`
     ///   GET  /userinfo    -> `userinfo_body` with 200, or 404 when it is None
@@ -173,7 +174,17 @@ mod tests {
         observed: Arc<ObservedRequests>,
     }
 
-    async fn serve_https(setup: HttpsResponseSetup) -> HttpsServer {
+    #[bon::builder]
+    async fn serve_https(
+        #[builder(default = "{}")] introspect_body: &'static str,
+        #[builder(into, default = HttpStatusCode (200))] introspect_status: HttpStatusCode,
+        userinfo_body: Option<&'static str>,
+    ) -> HttpsServer {
+        let setup = HttpsResponseSetup {
+            introspect_body,
+            introspect_status,
+            userinfo_body,
+        };
         let HttpsResponseSetup {
             introspect_body,
             introspect_status,
@@ -268,11 +279,19 @@ mod tests {
         timeout: krabka_units::Time,
     }
 
+    #[bon::builder]
     fn https_client(
         addr: SocketAddr,
         ca: &std::path::Path,
-        setup: HttpsClientSetup<'_>,
+        #[builder(default = "id")] client_id: &'_ str,
+        #[builder(default = "s")] secret: &'_ str,
+        #[builder(default = secs (5))] timeout: krabka_units::Time,
     ) -> Arc<dyn IntrospectionClient> {
+        let setup = HttpsClientSetup {
+            client_id,
+            secret,
+            timeout,
+        };
         let HttpsClientSetup {
             client_id,
             secret,
@@ -298,18 +317,37 @@ mod tests {
         observed: Arc<ObservedRequests>,
     }
 
+    #[bon::builder]
     async fn https_fixture(
-        response: HttpsResponseSetup,
+        #[builder(default = "{}")] introspect_body: &'static str,
+        #[builder(into, default = HttpStatusCode (200))] introspect_status: HttpStatusCode,
+        userinfo_body: Option<&'static str>,
         client: HttpsClientSetup<'_>,
     ) -> HttpsFixture {
+        let response = HttpsResponseSetup {
+            introspect_body,
+            introspect_status,
+            userinfo_body,
+        };
         let HttpsServer {
             addr,
             shutdown,
             ca_path,
             observed,
-        } = serve_https(response).await;
+        } = serve_https()
+            .introspect_body(response.introspect_body)
+            .introspect_status(response.introspect_status)
+            .maybe_userinfo_body(response.userinfo_body)
+            .call()
+            .await;
         HttpsFixture {
-            client: https_client(addr, &ca_path, client),
+            client: https_client()
+                .addr(addr)
+                .ca(&ca_path)
+                .client_id(client.client_id)
+                .secret(client.secret)
+                .timeout(client.timeout)
+                .call(),
             shutdown,
             observed,
         }
@@ -322,18 +360,15 @@ mod tests {
             client,
             shutdown: srv_shutdown,
             observed: _observed,
-        } = https_fixture(
-            HttpsResponseSetup {
-                introspect_body: body,
-                ..Default::default()
-            },
-            HttpsClientSetup {
+        } = https_fixture()
+            .introspect_body(body)
+            .client(HttpsClientSetup {
                 client_id: "kafka-broker",
                 secret: "secret",
                 ..Default::default()
-            },
-        )
-        .await;
+            })
+            .call()
+            .await;
         let resp = client.introspect("tok").await.unwrap();
         assert!(resp.get("active").and_then(serde_json::Value::as_bool) == Some(true));
         assert!(resp.get("sub").and_then(|v| v.as_str()) == Some("alice"));
@@ -346,14 +381,11 @@ mod tests {
             client,
             shutdown: srv_shutdown,
             ..
-        } = https_fixture(
-            HttpsResponseSetup {
-                introspect_body: r#"{"active":false}"#,
-                ..Default::default()
-            },
-            HttpsClientSetup::default(),
-        )
-        .await;
+        } = https_fixture()
+            .introspect_body(r#"{"active":false}"#)
+            .client(HttpsClientSetup::default())
+            .call()
+            .await;
         let resp = client.introspect("tok").await.unwrap();
         assert!(resp.get("active").and_then(serde_json::Value::as_bool) == Some(false));
         srv_shutdown.cancel();
@@ -365,15 +397,12 @@ mod tests {
             client,
             shutdown: srv_shutdown,
             ..
-        } = https_fixture(
-            HttpsResponseSetup {
-                introspect_body: r#"{"error":"x"}"#,
-                introspect_status: HttpStatusCode(500),
-                ..Default::default()
-            },
-            HttpsClientSetup::default(),
-        )
-        .await;
+        } = https_fixture()
+            .introspect_body(r#"{"error":"x"}"#)
+            .introspect_status(500)
+            .client(HttpsClientSetup::default())
+            .call()
+            .await;
         let err = client.introspect("tok").await.unwrap_err();
         assert!(
             matches!(err, IntrospectionError::Status(500)),
@@ -389,12 +418,11 @@ mod tests {
             shutdown: srv_shutdown,
             ca_path: ca,
             observed,
-        } = serve_https(HttpsResponseSetup {
-            introspect_body: r#"{"active":true,"sub":"alice"}"#,
-            userinfo_body: Some(r#"{"preferred_username":"alice","email":"a@b.c"}"#),
-            ..Default::default()
-        })
-        .await;
+        } = serve_https()
+            .introspect_body(r#"{"active":true,"sub":"alice"}"#)
+            .maybe_userinfo_body(Some(r#"{"preferred_username":"alice","email":"a@b.c"}"#))
+            .call()
+            .await;
         let client = ReqwestIntrospectionClient::build(
             format!("https://127.0.0.1:{}/introspect", addr.port()),
             Some(format!("https://127.0.0.1:{}/userinfo", addr.port())),
@@ -417,14 +445,11 @@ mod tests {
             client,
             shutdown: srv_shutdown,
             ..
-        } = https_fixture(
-            HttpsResponseSetup {
-                introspect_body: r#"{"active":true,"sub":"a"}"#,
-                ..Default::default()
-            },
-            HttpsClientSetup::default(),
-        )
-        .await;
+        } = https_fixture()
+            .introspect_body(r#"{"active":true,"sub":"a"}"#)
+            .client(HttpsClientSetup::default())
+            .call()
+            .await;
         let ui = client.userinfo("tok").await.unwrap();
         assert!(ui.is_none());
         srv_shutdown.cancel();
@@ -437,14 +462,11 @@ mod tests {
             client,
             shutdown: srv_shutdown,
             ..
-        } = https_fixture(
-            HttpsResponseSetup {
-                introspect_body: body,
-                ..Default::default()
-            },
-            HttpsClientSetup::default(),
-        )
-        .await;
+        } = https_fixture()
+            .introspect_body(body)
+            .client(HttpsClientSetup::default())
+            .call()
+            .await;
         let resp = client.introspect("tok").await.unwrap();
         assert!(resp.get("client_id").and_then(|v| v.as_str()) == Some("kafka-client"));
         assert!(resp.get("scope").and_then(|v| v.as_str()) == Some("kafka.write profile"));
@@ -457,18 +479,15 @@ mod tests {
             client,
             shutdown: srv_shutdown,
             observed,
-        } = https_fixture(
-            HttpsResponseSetup {
-                introspect_body: r#"{"active":true,"sub":"a"}"#,
-                ..Default::default()
-            },
-            HttpsClientSetup {
+        } = https_fixture()
+            .introspect_body(r#"{"active":true,"sub":"a"}"#)
+            .client(HttpsClientSetup {
                 client_id: "kafka-broker",
                 secret: "shh",
                 ..Default::default()
-            },
-        )
-        .await;
+            })
+            .call()
+            .await;
         client.introspect("tok").await.unwrap();
         let auths = observed.introspect_auths.lock().unwrap();
         assert!(auths.len() == 1);
@@ -483,14 +502,11 @@ mod tests {
             client,
             shutdown: srv_shutdown,
             observed,
-        } = https_fixture(
-            HttpsResponseSetup {
-                introspect_body: r#"{"active":true,"sub":"a"}"#,
-                ..Default::default()
-            },
-            HttpsClientSetup::default(),
-        )
-        .await;
+        } = https_fixture()
+            .introspect_body(r#"{"active":true,"sub":"a"}"#)
+            .client(HttpsClientSetup::default())
+            .call()
+            .await;
         client.introspect("opaque-abc").await.unwrap();
         let bodies = observed.introspect_bodies.lock().unwrap();
         assert!(bodies.len() == 1);
@@ -510,10 +526,11 @@ mod tests {
         let ca_path = dir.path().join("ca.pem");
         std::fs::write(&ca_path, cert.pem()).unwrap();
         drop(listener);
-        let client = https_client(addr, &ca_path, HttpsClientSetup {
-            timeout: millis(200),
-            ..Default::default()
-        });
+        let client = https_client()
+            .addr(addr)
+            .ca(&ca_path)
+            .timeout(millis(200))
+            .call();
         let err = client.introspect("tok").await.unwrap_err();
         assert!(
             matches!(err, IntrospectionError::Transport(_)),

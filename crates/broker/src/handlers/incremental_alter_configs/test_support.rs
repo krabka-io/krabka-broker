@@ -5,7 +5,7 @@
 
 use {
     super::{OP_DELETE, OP_SET, RESOURCE_TYPE_BROKER, RESOURCE_TYPE_TOPIC},
-    crate::test_support::broker_registration,
+    crate::{handlers::test_support::metadata_topic_record, test_support::broker_registration},
     krabka_metadata::{MetadataImage, MetadataRecord, NodeId, TopicConfigRecord},
     krabka_protocol::owned::{
         incremental_alter_configs_request::AlterConfigsResource,
@@ -86,12 +86,12 @@ pub(super) fn image_with_topic_config(
     overrides: &[StoredOverride<'_>],
 ) -> MetadataImage {
     let mut img = MetadataImage::new(uuid::Uuid::nil());
-    img.apply(&MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
-        name: name.into(),
-        topic_id: uuid::Uuid::nil(),
-        partitions: 1,
-        replication_factor: 1,
-    }));
+    img.apply(&MetadataRecord::V1Topic(metadata_topic_record(
+        name,
+        uuid::Uuid::nil(),
+        1,
+        1,
+    )));
     img.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: name.into(),
         overrides: overrides_map(overrides),

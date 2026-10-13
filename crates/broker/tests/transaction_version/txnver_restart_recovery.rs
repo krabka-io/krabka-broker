@@ -11,11 +11,8 @@ use {
         support::{
             client::start_client,
             topics::TopicPartitionCount,
-            transaction_wire::{TransactionPartitionsSetup, partitions_request, transaction_topic},
-            transactions::{
-                EndTransactionSetup, InitProducerSetup, ProducerIdentity, end_transaction_request,
-                init_producer_request,
-            },
+            transaction_wire::{partitions_request, transaction_topic},
+            transactions::{ProducerIdentity, end_transaction_request, init_producer_request},
         },
         txnver_harness::{
             NONE, create_topic, downgrade_transaction_version, expected_partitions, partition_code,
@@ -79,10 +76,11 @@ async fn init_producer_id(client: &Client, tid: &str) -> ProducerIdentity {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while std::time::Instant::now() < deadline {
         let resp = client
-            .send(init_producer_request(InitProducerSetup {
-                transactional_id: Some(tid.into()),
-                ..Default::default()
-            }))
+            .send(
+                init_producer_request()
+                    .maybe_transactional_id(Some(tid.into()))
+                    .call(),
+            )
             .await
             .expect("InitProducerId");
         if resp.error_code == 0 {
@@ -114,12 +112,13 @@ async fn add_partition_ongoing(
 ) {
     let added_topic = transaction_topic(topic, vec![partition]);
     let add = client
-        .send(partitions_request(TransactionPartitionsSetup {
-            transactional_id: tid,
-            producer,
-            topics: vec![added_topic],
-            ..Default::default()
-        }))
+        .send(
+            partitions_request()
+                .transactional_id(tid)
+                .producer(producer)
+                .topics(vec![added_topic])
+                .call(),
+        )
         .await
         .expect("AddPartitionsToTxn add");
     let expected = expected_partitions(tid, topic, &[partition_code(partition, NONE)]);
@@ -147,10 +146,12 @@ async fn commit_via_end_txn(
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         let resp = client
-            .send(end_transaction_request(tid, EndTransactionSetup {
-                producer,
-                ..Default::default()
-            }))
+            .send(
+                end_transaction_request()
+                    .transactional_id(tid)
+                    .producer(producer)
+                    .call(),
+            )
             .await
             .expect("EndTxn");
         // 15/16: coordinator still loading — keep retrying until the deadline.

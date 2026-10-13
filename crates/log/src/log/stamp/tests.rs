@@ -5,6 +5,7 @@
 use {
     super::*,
     crate::{
+        StampEntry,
         log::test_support::{
             ExpectedStamp, TempLog, abort_marker, append_transaction, check_stamps, commit_marker,
             install_stamps, rolling_test_log, sample_batch, stamp_entries, stamped_test_log,
@@ -16,6 +17,10 @@ use {
     krabka_units::prelude::mebibytes,
     tempfile::tempdir,
 };
+
+fn assert_stamp_entries(dir: &std::path::Path, expected: &[StampEntry]) {
+    assert2::assert!(stamp_entries(dir, 0) == expected);
+}
 
 // ---- .stampindex append-path wiring tests ----
 
@@ -63,14 +68,11 @@ fn stampindex_records_appended_batches_and_resolves_offsets() {
     ]);
 
     // The durable on-disk sidecar holds exactly one entry per data batch.
-    assert2::assert!(
-        stamp_entries(dir.path(), 0)
-            == [
-                stamp_entry(0, 1, 1_000),
-                stamp_entry(2, 2, 1_010),
-                stamp_entry(3, 5, 1_020),
-            ]
-    );
+    assert_stamp_entries(dir.path(), &[
+        stamp_entry(0, 1, 1_000),
+        stamp_entry(2, 2, 1_010),
+        stamp_entry(3, 5, 1_020),
+    ]);
 }
 
 /// A log with no injected stamp source stamps nothing. `stamp_for_offset`
@@ -136,7 +138,7 @@ fn control_markers_are_not_stamped() {
         }, // next data batch
     ]);
 
-    assert2::assert!(stamp_entries(dir.path(), 0) == [stamp_entry(0, 1, 1), stamp_entry(3, 3, 2),]);
+    assert_stamp_entries(dir.path(), &[stamp_entry(0, 1, 1), stamp_entry(3, 3, 2)]);
 }
 
 #[test]

@@ -58,10 +58,10 @@ enum Role {
 
 krabka_macros::compacted_batch!(Kept);
 
-#[derive(Clone, Copy)]
+#[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 struct ProducerEpoch(i16);
 
-#[derive(Clone, Copy, Default)]
+#[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
 struct ProducerSequence(i32);
 
 #[derive(Clone, Copy)]
@@ -97,23 +97,15 @@ struct RecordPayload<'a> {
     value: &'a str,
 }
 
-#[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-struct RecordSetup<'a> {
-    producer: Option<ProducerBatchIdentity>,
-    transaction: BatchTransaction,
-    #[default(RecordPayload { key: "k", value: "v" })]
-    payload: RecordPayload<'a>,
-    timestamp: UnixMillis,
-}
-
 /// A one-record data batch, ordinary and anonymous by default.
-fn record(setup: RecordSetup<'_>) -> RecordBatch {
-    let RecordSetup {
-        producer,
-        transaction,
-        payload: RecordPayload { key, value },
-        timestamp,
-    } = setup;
+#[bon::builder]
+fn record(
+    producer: Option<ProducerBatchIdentity>,
+    #[builder(default)] transaction: BatchTransaction,
+    #[builder(default = RecordPayload { key: "k", value: "v" })] payload: RecordPayload<'_>,
+    #[builder(into, default)] timestamp: UnixMillis,
+) -> RecordBatch {
+    let RecordPayload { key, value } = payload;
     let (producer_id, producer_epoch, base_sequence) = producer.map_or((-1, -1, -1), |producer| {
         (
             producer.identity.id.0,
@@ -158,62 +150,57 @@ fn histories(now_ms: UnixMillis) -> Vec<History> {
         })
     };
     let superseded = vec![
-        record(RecordSetup {
-            producer: idempotent(ProducerSequence(0)),
-            payload: RecordPayload {
+        record()
+            .maybe_producer(idempotent(ProducerSequence(0)))
+            .payload(RecordPayload {
                 key: "a",
                 value: "p-a",
-            },
-            timestamp: now_ms,
-            ..Default::default()
-        }),
-        record(RecordSetup {
-            producer: idempotent(ProducerSequence(1)),
-            payload: RecordPayload {
+            })
+            .timestamp(now_ms)
+            .call(),
+        record()
+            .maybe_producer(idempotent(ProducerSequence(1)))
+            .payload(RecordPayload {
                 key: "b",
                 value: "p-b",
-            },
-            timestamp: now_ms,
-            ..Default::default()
-        }),
-        record(RecordSetup {
-            payload: RecordPayload {
+            })
+            .timestamp(now_ms)
+            .call(),
+        record()
+            .payload(RecordPayload {
                 key: "a",
                 value: "a-2",
-            },
-            timestamp: now_ms,
-            ..Default::default()
-        }),
-        record(RecordSetup {
-            payload: RecordPayload {
+            })
+            .timestamp(now_ms)
+            .call(),
+        record()
+            .payload(RecordPayload {
                 key: "b",
                 value: "b-3",
-            },
-            timestamp: now_ms,
-            ..Default::default()
-        }),
-        record(RecordSetup {
-            payload: RecordPayload {
+            })
+            .timestamp(now_ms)
+            .call(),
+        record()
+            .payload(RecordPayload {
                 key: "c",
                 value: "c-4",
-            },
-            timestamp: now_ms,
-            ..Default::default()
-        }),
+            })
+            .timestamp(now_ms)
+            .call(),
     ];
     let committed = vec![
-        record(RecordSetup {
-            producer: Some(ProducerBatchIdentity {
+        record()
+            .maybe_producer(Some(ProducerBatchIdentity {
                 identity: TRANSACTIONAL,
                 sequence: ProducerSequence::default(),
-            }),
-            transaction: BatchTransaction::Transactional,
-            payload: RecordPayload {
+            }))
+            .transaction(BatchTransaction::Transactional)
+            .payload(RecordPayload {
                 key: "a",
                 value: "t-a",
-            },
-            timestamp: now_ms,
-        }),
+            })
+            .timestamp(now_ms)
+            .call(),
         build_marker_batch(
             TRANSACTIONAL.id,
             TRANSACTIONAL.epoch.0 + 1,
@@ -221,22 +208,20 @@ fn histories(now_ms: UnixMillis) -> Vec<History> {
             MarkerType::Commit,
             17,
         ),
-        record(RecordSetup {
-            payload: RecordPayload {
+        record()
+            .payload(RecordPayload {
                 key: "a",
                 value: "a-2",
-            },
-            timestamp: now_ms,
-            ..Default::default()
-        }),
-        record(RecordSetup {
-            payload: RecordPayload {
+            })
+            .timestamp(now_ms)
+            .call(),
+        record()
+            .payload(RecordPayload {
                 key: "c",
                 value: "c-3",
-            },
-            timestamp: now_ms,
-            ..Default::default()
-        }),
+            })
+            .timestamp(now_ms)
+            .call(),
     ];
     vec![
         // Kafka keeps the batch that holds the last sequence of an active

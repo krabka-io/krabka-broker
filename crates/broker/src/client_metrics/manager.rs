@@ -448,6 +448,34 @@ mod tests {
         ClientMetricsManager::new(krabka_units::kibibytes(1), INTERVAL_MS_DEFAULT)
     }
 
+    /// A manager, the image that subscribes it, the attributes of one client
+    /// instance, that instance's subscription id, and the clock reading to push at.
+    struct InstanceFixture {
+        manager: ClientMetricsManager,
+        image: MetadataImage,
+        attributes: super::ClientAttributes,
+        id: i32,
+        now: Instant,
+    }
+
+    #[bon::builder]
+    fn instance_fixture(#[builder(default = "60000")] interval: &'_ str) -> InstanceFixture {
+        let manager = manager();
+        let image = all_metrics_img(interval);
+        let attributes = attrs();
+        let id = subscription_id(
+            &compute_subscription(&image, &attributes, INTERVAL_MS_DEFAULT),
+            attributes.client_instance_id,
+        );
+        InstanceFixture {
+            manager,
+            image,
+            attributes,
+            id,
+            now: Instant::now(),
+        }
+    }
+
     #[derive(Clone, Copy, Default)]
     struct TelemetrySubscriptionId(i32);
 
@@ -481,16 +509,41 @@ mod tests {
         step: Step,
     }
 
+    #[bon::builder]
     fn run(
         m: &ClientMetricsManager,
         img: &MetadataImage,
         attrs: &ClientAttributes,
-        setup: TelemetryStepSetup,
+        #[builder(default = Instant :: now ())] now: Instant,
+        #[builder(default = Step :: Get)] step: Step,
     ) -> Outcome {
+        let setup = TelemetryStepSetup { now, step };
         match setup.step {
             Step::Get => Outcome::Get(m.get_subscription_at(img, attrs, setup.now)),
             Step::Push(check) => Outcome::Push(m.authorize_push_at(img, attrs, check, setup.now)),
         }
+    }
+
+    fn assert_push_at(
+        manager: &ClientMetricsManager,
+        image: &MetadataImage,
+        attributes: &ClientAttributes,
+        at: Instant,
+        check: PushCheck,
+        expected: &Outcome,
+        context: &str,
+    ) {
+        assert!(
+            run()
+                .m(manager)
+                .img(image)
+                .attrs(attributes)
+                .now(at)
+                .step(Step::Push(check))
+                .call()
+                == *expected,
+            "{context}"
+        );
     }
 
     fn reject_get(error_code: KafkaErrorCode) -> Outcome {
@@ -595,12 +648,14 @@ mod tests {
             ),
         ];
         for (name, at, check, expected) in steps {
-            assert!(
-                run(&m, &img, &attrs, TelemetryStepSetup {
-                    now: at,
-                    step: Step::Push(check)
-                }) == expected,
-                "step {name}"
+            assert_push_at(
+                &m,
+                &img,
+                &attrs,
+                at,
+                check,
+                &expected,
+                &format!("step {name}"),
             );
         }
     }
@@ -700,12 +755,14 @@ mod tests {
                     ..push(TelemetrySubscriptionId(id))
                 };
                 let at = t + Duration::from_secs(secs);
-                assert!(
-                    run(&m, &img, &attrs, TelemetryStepSetup {
-                        now: at,
-                        step: Step::Push(check)
-                    }) == expected,
-                    "row {name} at {secs} s"
+                assert_push_at(
+                    &m,
+                    &img,
+                    &attrs,
+                    at,
+                    check,
+                    &expected,
+                    &format!("row {name} at {secs} s"),
                 );
             }
         }
@@ -752,10 +809,14 @@ mod tests {
         for (name, attrs, id, expected) in rows {
             let m = manager();
             assert!(
-                run(&m, &img, &attrs, TelemetryStepSetup {
-                    now: Instant::now(),
-                    step: Step::Push(push(TelemetrySubscriptionId(id)))
-                }) == expected,
+                run()
+                    .m(&m)
+                    .img(&img)
+                    .attrs(&attrs)
+                    .now(Instant::now())
+                    .step(Step::Push(push(TelemetrySubscriptionId(id))))
+                    .call()
+                    == expected,
                 "row {name}"
             );
         }
@@ -824,7 +885,7 @@ mod tests {
         ];
         for (name, img, at, step, expected) in steps {
             assert!(
-                run(&m, img, &attrs, TelemetryStepSetup { now: at, step }) == expected,
+                run().m(&m).img(img).attrs(&attrs).now(at).step(step).call() == expected,
                 "step {name}"
             );
         }
@@ -884,7 +945,14 @@ mod tests {
         ];
         for (name, at, step, expected) in steps {
             assert!(
-                run(&m, &img, &attrs, TelemetryStepSetup { now: at, step }) == expected,
+                run()
+                    .m(&m)
+                    .img(&img)
+                    .attrs(&attrs)
+                    .now(at)
+                    .step(step)
+                    .call()
+                    == expected,
                 "step {name}"
             );
         }
@@ -967,31 +1035,37 @@ mod tests {
             ("at three intervals", "60000", 180, true),
         ];
         for (name, interval, idle, expired) in rows {
-            let m = manager();
-            let img = all_metrics_img(interval);
-            let attrs = attrs();
-            let id = subscription_id(
-                &compute_subscription(&img, &attrs, INTERVAL_MS_DEFAULT),
-                attrs.client_instance_id,
-            );
-            let t = Instant::now();
+            let InstanceFixture {
+                manager: m,
+                image: img,
+                attributes: attrs,
+                id,
+                now: t,
+            } = instance_fixture().interval(interval).call();
             let terminate = PushCheck {
                 terminating: true,
                 ..push(TelemetrySubscriptionId(id))
             };
             assert!(
-                run(&m, &img, &attrs, TelemetryStepSetup {
-                    now: t,
-                    step: Step::Push(terminate)
-                }) == ACCEPT
+                run()
+                    .m(&m)
+                    .img(&img)
+                    .attrs(&attrs)
+                    .now(t)
+                    .step(Step::Push(terminate))
+                    .call()
+                    == ACCEPT
             );
 
             m.evict_stale_at(3, floor, t + Duration::from_secs(idle));
 
-            let next = run(&m, &img, &attrs, TelemetryStepSetup {
-                now: t + Duration::from_secs(idle),
-                step: Step::Push(push(TelemetrySubscriptionId(id))),
-            });
+            let next = run()
+                .m(&m)
+                .img(&img)
+                .attrs(&attrs)
+                .now(t + Duration::from_secs(idle))
+                .step(Step::Push(push(TelemetrySubscriptionId(id))))
+                .call();
             let expected = if expired {
                 ACCEPT
             } else {
@@ -1005,24 +1079,26 @@ mod tests {
     /// old connection later does not drop the instance built since.
     #[test]
     fn an_expired_instances_connection_does_not_own_its_successor() {
-        let m = manager();
-        let img = all_metrics_img("60000");
-        let attrs = attrs();
-        let id = subscription_id(
-            &compute_subscription(&img, &attrs, INTERVAL_MS_DEFAULT),
-            attrs.client_instance_id,
-        );
-        let t = Instant::now();
+        let InstanceFixture {
+            manager: m,
+            image: img,
+            id,
+            now: t,
+            ..
+        } = instance_fixture().call();
         let secs = |s| t + Duration::from_secs(s);
         let terminate = PushCheck {
             terminating: true,
             ..push(TelemetrySubscriptionId(id))
         };
         let push_on = |connection: &str, at, check| {
-            run(&m, &img, &attrs_on(connection), TelemetryStepSetup {
-                now: secs(at),
-                step: Step::Push(check),
-            })
+            run()
+                .m(&m)
+                .img(&img)
+                .attrs(&attrs_on(connection))
+                .now(secs(at))
+                .step(Step::Push(check))
+                .call()
         };
 
         assert!(push_on("a", 0, terminate) == ACCEPT, "built on a");

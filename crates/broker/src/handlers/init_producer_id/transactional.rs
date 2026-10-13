@@ -483,7 +483,7 @@ mod tests {
             partition::Partition,
             partition_registry::PartitionRegistry,
             producer_id_manager::ProducerIdManager,
-            test_support::{StandalonePartitionSetup, open_partition, spawn_standalone_partition},
+            test_support::{open_partition, spawn_standalone_partition},
             txn::{bootstrap, state::TopicPartition, version::TxnVersion},
         },
         assert2::{assert, check},
@@ -515,7 +515,7 @@ mod tests {
         Unchanged,
     }
 
-    #[derive(Clone, Copy)]
+    #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
     struct ProducerEpoch(i16);
 
     #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
@@ -593,7 +593,10 @@ mod tests {
         let part_dir = partition_dir(dir.path(), "orders", 0);
         std::fs::create_dir_all(&part_dir).unwrap();
         let log = Log::open(&part_dir, LogConfig::default()).unwrap();
-        let part = spawn_standalone_partition(dir.path(), log, StandalonePartitionSetup::default());
+        let part = spawn_standalone_partition()
+            .log_dir(dir.path())
+            .log(log)
+            .call();
         assert!(part.log_end_offset() == 0);
         // The metadata reconcile installs this broker, node 1, as the leader.
         part.install_leader_change(1, 0).await;
@@ -646,7 +649,7 @@ mod tests {
         SpawnTogether,
     }
 
-    #[derive(Clone, Copy)]
+    #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
     struct InitCallCount(usize);
 
     #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
@@ -659,10 +662,20 @@ mod tests {
         count: InitCallCount,
     }
 
+    #[bon::builder]
     async fn spawn_inits(
         coordinator: &Arc<TxnCoordinator>,
-        setup: ConcurrentInitSetup,
+        #[builder(default = "tid")] tid: &'static str,
+        #[builder(default)] identity: InitIdentity,
+        #[builder(default)] scheduling: InitScheduling,
+        #[builder(into, default = InitCallCount (2))] count: InitCallCount,
     ) -> Vec<tokio::task::JoinHandle<Result<InitProducerIdResponse, BrokerError>>> {
+        let setup = ConcurrentInitSetup {
+            tid,
+            identity,
+            scheduling,
+            count,
+        };
         let mut calls = Vec::new();
         for _ in 0..setup.count.0 {
             let coordinator = Arc::clone(coordinator);
@@ -702,10 +715,7 @@ mod tests {
         }));
 
         let partitions = Arc::new(PartitionRegistry::new());
-        let part = open_partition(dir, StandalonePartitionSetup {
-            topic: bootstrap::TOPIC,
-            ..Default::default()
-        });
+        let part = open_partition().log_dir(dir).topic(bootstrap::TOPIC).call();
         partitions.insert(
             bootstrap::TOPIC.into(),
             PartitionIndex(0),
@@ -796,11 +806,10 @@ mod tests {
         } = coordinator_with_completed_transaction(dir, tid).await;
         let data_dir = partition_dir(dir, "orders", 0);
         std::fs::create_dir_all(&data_dir).expect("create the data partition directory");
-        let data = spawn_standalone_partition(
-            dir,
-            Log::open(&data_dir, LogConfig::default()).expect("open the data log"),
-            StandalonePartitionSetup::default(),
-        );
+        let data = spawn_standalone_partition()
+            .log_dir(dir)
+            .log(Log::open(&data_dir, LogConfig::default()).expect("open the data log"))
+            .call();
         // The metadata reconcile installs this broker, node 1, as the leader.
         data.install_leader_change(1, 0).await;
         coordinator
@@ -1215,11 +1224,11 @@ mod tests {
         let handle = coordinator.get(TID).expect("the seeded entry");
         let guard = handle.lock().await;
 
-        let calls = spawn_inits(&coordinator, ConcurrentInitSetup {
-            tid: TID,
-            ..Default::default()
-        })
-        .await;
+        let calls = spawn_inits()
+            .coordinator(&coordinator)
+            .tid(TID)
+            .call()
+            .await;
         drop(guard);
 
         let mut answered = Vec::new();
@@ -1256,13 +1265,13 @@ mod tests {
         check!(coordinator.get(TID).is_none());
 
         let write_lock = coordinator.lock_state_partition_for(TID).await;
-        let calls = spawn_inits(&coordinator, ConcurrentInitSetup {
-            tid: TID,
-            identity: InitIdentity::Anonymous,
-            scheduling: InitScheduling::SpawnTogether,
-            ..Default::default()
-        })
-        .await;
+        let calls = spawn_inits()
+            .coordinator(&coordinator)
+            .tid(TID)
+            .identity(InitIdentity::Anonymous)
+            .scheduling(InitScheduling::SpawnTogether)
+            .call()
+            .await;
         for _ in 0..10 {
             tokio::task::yield_now().await;
         }
@@ -1363,14 +1372,11 @@ mod tests {
             // abort.
             let ghost_dir = partition_dir(dir.path(), "ghost", 0);
             std::fs::create_dir_all(&ghost_dir).expect("create ghost partition dir");
-            let ghost = spawn_standalone_partition(
-                dir.path(),
-                Log::open(&ghost_dir, LogConfig::default()).expect("open ghost log"),
-                StandalonePartitionSetup {
-                    topic: "ghost",
-                    ..Default::default()
-                },
-            );
+            let ghost = spawn_standalone_partition()
+                .log_dir(dir.path())
+                .log(Log::open(&ghost_dir, LogConfig::default()).expect("open ghost log"))
+                .topic("ghost")
+                .call();
             ghost.install_leader_change(1, 0).await;
             coordinator
                 .partitions

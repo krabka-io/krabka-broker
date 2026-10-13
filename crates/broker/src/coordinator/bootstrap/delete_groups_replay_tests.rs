@@ -13,8 +13,7 @@ use {
         coordinator::{
             persistence::GroupMetadataValue,
             test_support::{
-                DeletionTarget, DeletionTombstonesSetup, NamedPartition, OffsetRecordSetup,
-                OffsetsRecord, TempLog, TopicDeletionTombstonesSetup, default_coordinator,
+                DeletionTarget, NamedPartition, OffsetsRecord, TempLog, default_coordinator,
                 deletion_tombstones, offset_record, parsed_offset_records,
                 replay_offset_batch as batch, temp_log, topic_deletion_tombstones,
             },
@@ -36,12 +35,11 @@ fn coordinator(log: Arc<InMemoryOffsetsLog>) -> Arc<GroupCoordinator> {
 }
 
 fn commit(topic: &str, partition: i32, offset: i64) -> Record {
-    offset_record(OffsetRecordSetup {
-        topic,
-        partition: krabka_ids::PartitionIndex(partition),
-        offset: krabka_log::Offset(offset),
-        ..Default::default()
-    })
+    offset_record()
+        .topic(topic)
+        .partition(partition)
+        .offset(offset)
+        .call()
 }
 
 #[derive(Clone, Copy)]
@@ -63,29 +61,25 @@ struct Row {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_deleted_group_and_its_offsets_stay_deleted_after_replay() {
-    let orders_group_tombstones = topic_deletion_tombstones(TopicDeletionTombstonesSetup {
-        partitions: &[krabka_ids::PartitionIndex(0), krabka_ids::PartitionIndex(1)],
-        target: DeletionTarget::Group,
-        ..Default::default()
-    });
+    let orders_group_tombstones = topic_deletion_tombstones()
+        .partitions(&[krabka_ids::PartitionIndex(0), krabka_ids::PartitionIndex(1)])
+        .target(DeletionTarget::Group)
+        .call();
     let rows = [
         Row {
             name: "no offsets",
             committed: vec![],
             transactional: vec![],
             marker_after_delete: MarkerAfterDelete::None,
-            expected_batch: deletion_tombstones(DeletionTombstonesSetup {
-                target: DeletionTarget::Group,
-                ..Default::default()
-            }),
+            expected_batch: deletion_tombstones().target(DeletionTarget::Group).call(),
         },
         Row {
             name: "two offsets on two topics",
             committed: vec![commit("orders", 0, 10), commit("payments", 3, 30)],
             transactional: vec![],
             marker_after_delete: MarkerAfterDelete::None,
-            expected_batch: deletion_tombstones(DeletionTombstonesSetup {
-                offsets: &[
+            expected_batch: deletion_tombstones()
+                .offsets(&[
                     NamedPartition {
                         topic: "orders",
                         partition: krabka_ids::PartitionIndex(0),
@@ -94,10 +88,9 @@ async fn a_deleted_group_and_its_offsets_stay_deleted_after_replay() {
                         topic: "payments",
                         partition: krabka_ids::PartitionIndex(3),
                     },
-                ],
-                target: DeletionTarget::Group,
-                ..Default::default()
-            }),
+                ])
+                .target(DeletionTarget::Group)
+                .call(),
         },
         Row {
             name: "one pending transactional offset",

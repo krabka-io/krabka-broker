@@ -1099,10 +1099,7 @@ mod tests {
             krabka_metadata::DeleteDelegationTokenRecord,
         };
 
-        let (mut engine, _dir) = build_engine_only(EngineSetup {
-            ids: &[NodeId(1)],
-            ..Default::default()
-        });
+        let (mut engine, _dir) = build_engine_only().ids(&[NodeId(1)]).call();
         let t1 = DelegationTokenRecord {
             token_id: "tok1".into(),
             owner: principal("alice"),
@@ -1131,10 +1128,7 @@ mod tests {
         assert2::assert!(matches!(res_exists, Err(RaftError::ChangeRejected(_))));
 
         // Token create when hwm < log_end_offset (uncommitted tail) is rejected
-        let (mut engine2, _dir2) = build_engine_only(EngineSetup {
-            ids: &[NodeId(1)],
-            ..Default::default()
-        });
+        let (mut engine2, _dir2) = build_engine_only().ids(&[NodeId(1)]).call();
         let t2 = DelegationTokenRecord {
             token_id: "tok2".into(),
             owner: principal("bob"),

@@ -11,8 +11,8 @@ use {
         compact::{
             build_offset_map,
             test_support::{
-                RETENTION, TransactionalRecordSetup, control_batch, make_record, rewrite_all,
-                rewrite_with_map, round_over, transactional_record, write_sealed_batches,
+                RETENTION, control_batch, make_record, rewrite_all, rewrite_with_map, round_over,
+                transactional_record, write_sealed_batches,
             },
         },
         test_support::KeyValue,
@@ -67,31 +67,30 @@ fn rewrite_at(
 #[test]
 fn an_aborted_transactions_records_are_dropped_and_the_committed_value_survives() {
     let dir = tempfile::tempdir().unwrap();
-    let committed = transactional_record(TransactionalRecordSetup {
-        offset: Offset(5),
-        payload: KeyValue {
+    let committed = transactional_record()
+        .offset(5)
+        .payload(KeyValue {
             key: b"k",
             value: b"committed",
-        },
-        ..Default::default()
-    });
+        })
+        .call();
     let commit_marker = control_batch(6, 1000, 1 /* COMMIT */);
-    let aborted_k = transactional_record(TransactionalRecordSetup {
-        offset: Offset(10),
-        producer: ProducerId(2000),
-        payload: KeyValue {
+    let aborted_k = transactional_record()
+        .offset(10)
+        .producer(2000)
+        .payload(KeyValue {
             key: b"k",
             value: b"aborted",
-        },
-    });
-    let aborted_j = transactional_record(TransactionalRecordSetup {
-        offset: Offset(11),
-        producer: ProducerId(2000),
-        payload: KeyValue {
+        })
+        .call();
+    let aborted_j = transactional_record()
+        .offset(11)
+        .producer(2000)
+        .payload(KeyValue {
             key: b"j",
             value: b"aborted",
-        },
-    });
+        })
+        .call();
     let abort_marker = control_batch(12, 2000, 0 /* ABORT */);
     let seg = write_sealed_batches(dir.path(), &[
         committed.clone(),
@@ -135,14 +134,13 @@ fn an_aborted_transactions_records_are_dropped_and_the_committed_value_survives(
 #[test]
 fn an_aborted_transaction_spanning_two_groups_keeps_its_marker_and_index_entry() {
     let dir = tempfile::tempdir().unwrap();
-    let aborted = transactional_record(TransactionalRecordSetup {
-        producer: ProducerId(2000),
-        payload: KeyValue {
+    let aborted = transactional_record()
+        .producer(2000)
+        .payload(KeyValue {
             key: b"k",
             value: b"aborted",
-        },
-        ..Default::default()
-    });
+        })
+        .call();
     let abort_marker = control_batch(1, 2000, 0 /* ABORT */);
     let seg_a = write_sealed_batches(dir.path(), std::slice::from_ref(&aborted));
     let seg_b = write_sealed_batches(dir.path(), std::slice::from_ref(&abort_marker));
@@ -234,14 +232,13 @@ fn a_marker_ages_out_once_its_own_transactions_data_is_gone() {
             old_marker.base_timestamp = horizon;
             old_marker.attributes = old_marker.attributes.with_delete_horizon(true);
         }
-        let live = transactional_record(TransactionalRecordSetup {
-            offset: Offset(1),
-            payload: KeyValue {
+        let live = transactional_record()
+            .offset(1)
+            .payload(KeyValue {
                 key: b"k1",
                 value: b"v2",
-            },
-            ..Default::default()
-        });
+            })
+            .call();
         let live_marker = control_batch(2, 1000, 1 /* COMMIT */);
         let seg = write_sealed_batches(dir.path(), &[old_marker, live, live_marker]);
         let mut txn = CleanedTransactionMetadata::default();
@@ -265,13 +262,12 @@ fn a_marker_ages_out_once_its_own_transactions_data_is_gone() {
 #[test]
 fn a_marker_is_stamped_the_pass_after_its_data_is_removed() {
     let dir = tempfile::tempdir().unwrap();
-    let superseded = transactional_record(TransactionalRecordSetup {
-        payload: KeyValue {
+    let superseded = transactional_record()
+        .payload(KeyValue {
             key: b"k",
             value: b"old",
-        },
-        ..Default::default()
-    });
+        })
+        .call();
     let marker = control_batch(1, 1000, 1 /* COMMIT */);
     let newer = RecordBatch {
         base_offset: 2,

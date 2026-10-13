@@ -388,7 +388,16 @@ mod tests {
         handle: tokio::task::JoinHandle<()>,
     }
 
-    fn memory_writer(directory: &std::path::Path, setup: MemoryWriterSetup) -> MemoryWriter {
+    #[bon::builder]
+    fn memory_writer(
+        directory: &std::path::Path,
+        #[builder(into, default = MemoryWriterSetup::default().capacity)] capacity: QueueCapacity,
+        #[builder(default = MemoryWriterSetup::default().checkpoints)] checkpoints: CheckpointSetup,
+    ) -> MemoryWriter {
+        let setup = MemoryWriterSetup {
+            capacity,
+            checkpoints,
+        };
         let MemoryWriterSetup {
             capacity,
             checkpoints,
@@ -396,7 +405,16 @@ mod tests {
         let spool = Spool::open(directory, ROOMY_CAP).unwrap();
         let (log, receiver) = AuditLog::new(capacity.0);
         let sink = Arc::new(MemorySink::default());
-        let handle = spawn_writer(receiver, quiet_params(sink.clone(), spool, checkpoints));
+        let handle = spawn_writer(
+            receiver,
+            quiet_params()
+                .sink(sink.clone())
+                .spool(spool)
+                .stats(checkpoints.stats)
+                .maybe_signer(checkpoints.signer)
+                .frequency(checkpoints.frequency)
+                .call(),
+        );
         MemoryWriter { log, sink, handle }
     }
 
@@ -416,17 +434,27 @@ mod tests {
         frequency: CheckpointFrequency,
     }
 
-    fn signed_writer(setup: SignedWriterSetup) -> SignedWriterFixture {
+    #[bon::builder]
+    fn signed_writer(
+        #[builder(into, default = QueueCapacity (16))] capacity: QueueCapacity,
+        #[builder(default = crate :: log :: test_support :: CheckpointFrequency :: Every (crate :: log :: test_support :: AuditEventCount (1_000_000)))]
+        frequency: CheckpointFrequency,
+    ) -> SignedWriterFixture {
+        let setup = SignedWriterSetup {
+            capacity,
+            frequency,
+        };
         let TestSigner { signer, public_key } = test_signer();
         let directory = tempfile::tempdir().unwrap();
-        let writer = memory_writer(directory.path(), MemoryWriterSetup {
-            capacity: setup.capacity,
-            checkpoints: CheckpointSetup {
+        let writer = memory_writer()
+            .directory(directory.path())
+            .capacity(setup.capacity)
+            .checkpoints(CheckpointSetup {
                 signer: Some(signer),
                 frequency: setup.frequency,
                 ..Default::default()
-            },
-        });
+            })
+            .call();
         SignedWriterFixture {
             public_key,
             directory,
@@ -468,8 +496,7 @@ mod tests {
     #[tokio::test]
     async fn emitted_events_reach_the_sink_in_order() {
         let dir = tempfile::tempdir().unwrap();
-        let MemoryWriter { log, sink, handle } =
-            memory_writer(dir.path(), MemoryWriterSetup::default());
+        let MemoryWriter { log, sink, handle } = memory_writer().directory(dir.path()).call();
 
         finish_lifecycle_writer(log, handle, &[NodeId(1), NodeId(2), NodeId(3)]).await;
 
@@ -488,7 +515,7 @@ mod tests {
             log,
             sink,
             handle: h,
-        } = memory_writer(dir.path(), MemoryWriterSetup::default());
+        } = memory_writer().directory(dir.path()).call();
         finish_lifecycle_writer(log, h, &[NodeId(1), NodeId(2)]).await;
 
         let recs = sink.records();
@@ -521,10 +548,10 @@ mod tests {
                     sink,
                     handle: h,
                 },
-        } = signed_writer(SignedWriterSetup {
-            capacity: QueueCapacity(64),
-            frequency: CheckpointFrequency::Every(AuditEventCount(2)),
-        });
+        } = signed_writer()
+            .capacity(64)
+            .frequency(CheckpointFrequency::Every(AuditEventCount(2)))
+            .call();
         for i in 0..4 {
             log.emit(life(NodeId(i)));
         }
@@ -567,7 +594,7 @@ mod tests {
                     sink,
                     handle: h,
                 },
-        } = signed_writer(SignedWriterSetup::default());
+        } = signed_writer().call();
         finish_lifecycle_writer(log, h, &[NodeId(1), NodeId(2), NodeId(3)]).await;
 
         let recs = sink.records();

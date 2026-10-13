@@ -22,7 +22,7 @@ use {
         broker::BrokerHandle,
         codes,
         fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
-        handlers::test_support::{ReplicatedTopicSetup, StartedBroker, seed_partition_replicas},
+        handlers::test_support::{StartedBroker, seed_partition_replicas},
         partition::Partition,
         test_support::{encode_request, peer, principal},
     },
@@ -92,12 +92,12 @@ use crate::test_support::single_value_batch as batch;
 /// Create `topic` with replicas 1 and 2, led by this broker, wait until node
 /// 2 is in the ISR, and append two batches.
 async fn partition(broker: &BrokerHandle, topic: &str, topic_id: u128) -> Arc<Partition> {
-    seed_partition_replicas(broker, ReplicatedTopicSetup {
-        topic,
-        topic_id: uuid::Uuid::from_u128(topic_id),
-        ..Default::default()
-    })
-    .await;
+    seed_partition_replicas()
+        .broker(broker)
+        .topic(topic)
+        .topic_id(uuid::Uuid::from_u128(topic_id))
+        .call()
+        .await;
 
     wait_for_local_partition!(
         (shared, partition),

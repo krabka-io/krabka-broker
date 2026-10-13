@@ -1,14 +1,11 @@
 use {
     super::*,
     crate::{
-        partition::Partition,
-        partition_registry::PartitionRegistry,
-        producer_id_manager::ProducerIdManager,
-        test_support::{StandalonePartitionSetup, open_partition},
-        txn::bootstrap,
+        partition::Partition, partition_registry::PartitionRegistry,
+        producer_id_manager::ProducerIdManager, test_support::open_partition, txn::bootstrap,
     },
     assert2::{assert, check},
-    std::sync::Arc,
+    std::{path::Path, sync::Arc},
 };
 
 const TID: &str = "tid-offsets";
@@ -179,7 +176,7 @@ struct LoggedCoordinator {
 }
 
 /// A coordinator over a real log that already leads state partition 0.
-async fn leading_coordinator(directory: &std::path::Path) -> Arc<TxnCoordinator> {
+async fn leading_coordinator(directory: &Path) -> Arc<TxnCoordinator> {
     let LoggedCoordinator { coordinator, .. } = coordinator_with_log(directory);
     coordinator
         .lead_state_partition_for_test(PartitionIndex(0))
@@ -187,7 +184,7 @@ async fn leading_coordinator(directory: &std::path::Path) -> Arc<TxnCoordinator>
     coordinator
 }
 
-fn coordinator_with_log(directory: &std::path::Path) -> LoggedCoordinator {
+fn coordinator_with_log(directory: &Path) -> LoggedCoordinator {
     let coordinator = Arc::new(TxnCoordinator::new(
         krabka_metadata::NodeId(1),
         Arc::new(PartitionRegistry::new()),
@@ -195,10 +192,10 @@ fn coordinator_with_log(directory: &std::path::Path) -> LoggedCoordinator {
         1,
         krabka_units::mebibytes(1),
     ));
-    let partition = open_partition(directory, StandalonePartitionSetup {
-        topic: bootstrap::TOPIC,
-        ..Default::default()
-    });
+    let partition = open_partition()
+        .log_dir(directory)
+        .topic(bootstrap::TOPIC)
+        .call();
     coordinator.partitions.insert(
         bootstrap::TOPIC.into(),
         PartitionIndex(0),

@@ -9,8 +9,8 @@ use {
             bootstrap::TOPIC as SHARE_STATE_TOPIC,
             config::ShareCoordinatorConfig,
             coordinator::test_support::{
-                ConfiguredCoordinator, CoordinatorWithRegistry, Logged, NOW_MS, StateSeedSetup,
-                batch, configured_coordinator, coordinator, image_with_topic, initialize_led_group,
+                ConfiguredCoordinator, CoordinatorWithRegistry, Logged, NOW_MS, batch,
+                configured_coordinator, coordinator, image_with_topic, initialize_led_group,
                 lead_all, logged_records, share_write,
             },
         },
@@ -972,7 +972,7 @@ async fn writes_append_updates_then_one_snapshot_at_the_threshold() {
         registry: _reg,
         clock: _clock,
     } = configured_coordinator(dir.path(), config);
-    let image = initialize_led_group(&coord, StateSeedSetup::default()).await;
+    let image = initialize_led_group().coordinator(&coord).call().await;
     let writes = [
         (0, 1, vec![
             batch(Offset(0)..=Offset(9)),
@@ -1098,7 +1098,7 @@ async fn an_operation_answers_only_when_its_record_commits_in_the_term() {
                 registry: reg,
                 clock: _clock,
             } = configured_coordinator(dir.path(), config);
-            let image = initialize_led_group(&coord, StateSeedSetup::default()).await;
+            let image = initialize_led_group().coordinator(&coord).call().await;
             let state_partition = coord.state_partition_for("g", &TOPIC, 0);
             let part = reg
                 .get(SHARE_STATE_TOPIC, state_partition)

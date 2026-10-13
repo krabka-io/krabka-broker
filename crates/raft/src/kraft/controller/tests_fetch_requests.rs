@@ -5,7 +5,7 @@
 use {
     super::*,
     crate::kraft::{
-        controller::test_support::{EngineSetup, build_engine_only, one_offset_batch},
+        controller::test_support::{build_engine_only, one_offset_batch},
         transport::wire::FETCH_VERSION,
     },
     assert2::check,
@@ -36,10 +36,7 @@ struct LeaderOf0And1 {
 }
 
 fn leader_of_0_and_1() -> LeaderOf0And1 {
-    let (mut engine, dir) = build_engine_only(EngineSetup {
-        ids: &[NodeId(0), NodeId(1)],
-        ..Default::default()
-    });
+    let (mut engine, dir) = build_engine_only().ids(&[NodeId(0), NodeId(1)]).call();
     engine.on_event(Event::ElectionTimeout);
     for epoch in [0, 1] {
         engine.on_event(Event::ReceiveVoteResponse {

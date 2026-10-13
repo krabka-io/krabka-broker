@@ -934,13 +934,12 @@ mod tests {
             codes::{NONE, NOT_LEADER_OR_FOLLOWER, OFFSET_OUT_OF_RANGE},
             config::{BrokerConfig, NodeRole},
             config_keys::{BROKER_WITNESS, WITNESS_TRUE},
-            handlers::produce::test_support::image_with_topic,
+            handlers::{
+                fetch::test_support::append_epoch_batches, produce::test_support::image_with_topic,
+            },
             partition::Partition,
             producer_state::ProducerState,
-            test_support::{
-                StandalonePartitionSetup, broker_registration, spawn_standalone_partition,
-                temporary_partition,
-            },
+            test_support::{broker_registration, spawn_standalone_partition, temporary_partition},
         },
         assert2::assert,
         krabka_ids::PartitionIndex,
@@ -1212,7 +1211,7 @@ mod tests {
     #[tokio::test]
     async fn a_read_needs_the_installed_role_and_the_image_to_name_this_node() {
         let image = stretch_image(&[]);
-        let (_dir, partition) = temporary_partition(StandalonePartitionSetup::default());
+        let (_dir, partition) = temporary_partition().call();
         let refused = |leader_id| super::PartitionData {
             current_leader: super::LeaderIdAndEpoch {
                 leader_id,
@@ -1259,28 +1258,22 @@ mod tests {
         );
     }
 
-    /// Append one single-record batch at `epoch` and return the offset it
-    /// landed at.
-    fn append_at_epoch(log: &mut Log, epoch: i32) -> i64 {
-        use krabka_protocol::records::{Record, RecordBatch};
-
-        let mut batch = RecordBatch {
-            partition_leader_epoch: epoch,
-            records: vec![Record::default()],
-            ..Default::default()
-        };
-        log.append(&mut batch).expect("append").0.0
+    fn epoch_checks_partition(dir: &std::path::Path) -> Arc<Partition> {
+        spawn_standalone_partition()
+            .log_dir(dir)
+            .log(Log::open(dir, LogConfig::default()).expect("open partition log"))
+            .topic("diverge")
+            .call()
     }
 
-    fn epoch_checks_partition(dir: &std::path::Path) -> Arc<Partition> {
-        spawn_standalone_partition(
-            dir,
-            Log::open(dir, LogConfig::default()).expect("open partition log"),
-            StandalonePartitionSetup {
-                topic: "diverge",
-                ..Default::default()
-            },
-        )
+    fn epoch_checks_partition_with_history(epochs: &[i32]) -> (tempfile::TempDir, Arc<Partition>) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let partition = epoch_checks_partition(dir.path());
+        {
+            let mut log = partition.log.lock().expect("log mutex poisoned");
+            append_epoch_batches(&mut log, epochs);
+        }
+        (dir, partition)
     }
 
     fn read_role(partition: &Partition) -> super::ReadRole<'_> {
@@ -1330,10 +1323,7 @@ mod tests {
         let with_history = epoch_checks_partition(history_dir.path());
         {
             let mut log = with_history.log.lock().expect("log mutex poisoned");
-            append_at_epoch(&mut log, 0);
-            append_at_epoch(&mut log, 0);
-            append_at_epoch(&mut log, 1);
-            append_at_epoch(&mut log, 1);
+            append_epoch_batches(&mut log, &[0, 0, 1, 1]);
         }
         // Every record is committed: a diverging row reports this live HW.
         with_history.replica_state.lock().await.hw = super::Offset(4);
@@ -1345,10 +1335,7 @@ mod tests {
         let with_gap = epoch_checks_partition(gap_dir.path());
         {
             let mut log = with_gap.log.lock().expect("log mutex poisoned");
-            append_at_epoch(&mut log, 0);
-            append_at_epoch(&mut log, 0);
-            append_at_epoch(&mut log, 3);
-            append_at_epoch(&mut log, 3);
+            append_epoch_batches(&mut log, &[0, 0, 3, 3]);
         }
         // Every record is committed: a diverging row reports this live HW.
         with_gap.replica_state.lock().await.hw = super::Offset(4);
@@ -1361,12 +1348,7 @@ mod tests {
         let trimmed = epoch_checks_partition(trimmed_dir.path());
         {
             let mut log = trimmed.log.lock().expect("log mutex poisoned");
-            append_at_epoch(&mut log, 0);
-            append_at_epoch(&mut log, 0);
-            append_at_epoch(&mut log, 1);
-            append_at_epoch(&mut log, 1);
-            append_at_epoch(&mut log, 2);
-            append_at_epoch(&mut log, 2);
+            append_epoch_batches(&mut log, &[0, 0, 1, 1, 2, 2]);
             log.set_log_start_offset(super::Offset(5))
                 .expect("move log start");
         }
@@ -1528,14 +1510,7 @@ mod tests {
             ),
         ];
         for (name, promoted, last_fetched_epoch, fetch_offset, want_final, want_out) in cases {
-            let dir = tempfile::tempdir().expect("tempdir");
-            let partition = epoch_checks_partition(dir.path());
-            {
-                let mut log = partition.log.lock().expect("log mutex poisoned");
-                for epoch in [0, 0, 1, 1] {
-                    append_at_epoch(&mut log, epoch);
-                }
-            }
+            let (_dir, partition) = epoch_checks_partition_with_history(&[0, 0, 1, 1]);
             if promoted {
                 partition
                     .install_local_leadership(&ProducerState::new(), None, 1, 3)
@@ -1560,12 +1535,9 @@ mod tests {
     /// look like a client or follower reset.
     #[tokio::test]
     async fn below_established_log_start_defers_to_an_offline_log_directory() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let partition = epoch_checks_partition(dir.path());
+        let (_dir, partition) = epoch_checks_partition_with_history(&[0, 0]);
         {
             let mut log = partition.log.lock().expect("log mutex poisoned");
-            append_at_epoch(&mut log, 0);
-            append_at_epoch(&mut log, 0);
             log.set_log_start_offset(super::Offset(1))
                 .expect("move log start");
         }
@@ -1611,17 +1583,11 @@ mod tests {
         ];
 
         for (name, epoch_moved, want) in cases {
-            let dir = tempfile::tempdir().expect("tempdir");
-            let partition = epoch_checks_partition(dir.path());
+            let (_dir, partition) = epoch_checks_partition_with_history(&[0, 0]);
             partition.install_replication_target(None, 1, 0).await;
             partition
                 .install_isr(&[NodeId(1), NodeId(2)], &[NodeId(1), NodeId(2)], NodeId(1))
                 .await;
-            {
-                let mut log = partition.log.lock().expect("log mutex poisoned");
-                append_at_epoch(&mut log, 0);
-                append_at_epoch(&mut log, 0);
-            }
             let position = super::FollowerPosition {
                 follower_id: 2,
                 broker_epoch: -1,

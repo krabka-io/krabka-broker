@@ -308,6 +308,11 @@ mod tests {
         }
     }
 
+    fn assert_empty(follower: &FollowerLog) {
+        assert2::assert!((follower.end_offset()) == (Offset(0)));
+        assert2::assert!((follower.last_epoch()) == (-1));
+    }
+
     #[cfg(unix)]
     #[test]
     fn interrupted_trim_keeps_a_recoverable_durable_range() {
@@ -571,8 +576,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert2::assert!((follower.end_offset()) == (Offset(0)));
-        assert2::assert!((follower.last_epoch()) == (-1));
+        assert_empty(&follower);
     }
 
     #[tokio::test]
@@ -612,7 +616,6 @@ mod tests {
             .unwrap();
 
         assert2::assert!((follower.start_offset()) == (Offset(0)));
-        assert2::assert!((follower.end_offset()) == (Offset(0)));
-        assert2::assert!((follower.last_epoch()) == (-1));
+        assert_empty(&follower);
     }
 }

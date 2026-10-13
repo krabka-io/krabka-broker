@@ -252,7 +252,7 @@ mod tests {
         super::*,
         crate::{
             partition_registry::PartitionRegistry,
-            share_partition::manager::test_support::{DataPartitionSetup, open_data_partition},
+            share_partition::manager::test_support::open_data_partition,
         },
         assert2::assert,
         bytes::Bytes,
@@ -345,8 +345,10 @@ mod tests {
     async fn partition() -> TestPartition {
         let dir = tempfile::tempdir().expect("temp dir");
         let registry = PartitionRegistry::new();
-        open_data_partition(&registry, dir.path(), DataPartitionSetup {
-            batches: vec![
+        open_data_partition()
+            .reg(&registry)
+            .log_dir(dir.path())
+            .batches(vec![
                 crate::share_partition::manager::test_support::TimedValues {
                     timestamp: crate::test_support::UnixMillis(1_000),
                     values: &[b"a", b"b"],
@@ -359,11 +361,10 @@ mod tests {
                     timestamp: crate::test_support::UnixMillis(3_000),
                     values: &[b"e"],
                 },
-            ],
-            high_watermark: Offset(5),
-            ..Default::default()
-        })
-        .await;
+            ])
+            .high_watermark(5)
+            .call()
+            .await;
         let part = registry
             .get("t", krabka_ids::PartitionIndex(0))
             .expect("partition registered");

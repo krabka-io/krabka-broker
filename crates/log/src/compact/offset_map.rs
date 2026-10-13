@@ -81,10 +81,9 @@ mod tests {
     use {
         super::*,
         crate::{
-            ProducerId,
             compact::test_support::{
-                TransactionalRecordSetup, control_batch, make_record, superseded_records,
-                transactional_record, write_sealed_batches, write_sealed_segment,
+                control_batch, make_record, superseded_records, transactional_record,
+                write_sealed_batches, write_sealed_segment,
             },
             test_support::KeyValue,
         },
@@ -169,40 +168,39 @@ mod tests {
     fn an_aborted_batch_never_enters_the_map() {
         let dir = tempdir().unwrap();
         let seg = write_sealed_batches(dir.path(), &[
-            transactional_record(TransactionalRecordSetup {
-                offset: Offset(5),
-                payload: KeyValue {
+            transactional_record()
+                .offset(5)
+                .payload(KeyValue {
                     key: b"k",
                     value: b"committed",
-                },
-                ..Default::default()
-            }),
+                })
+                .call(),
             control_batch(6, 1000, 1 /* COMMIT */),
-            transactional_record(TransactionalRecordSetup {
-                offset: Offset(10),
-                producer: ProducerId(2000),
-                payload: KeyValue {
+            transactional_record()
+                .offset(10)
+                .producer(2000)
+                .payload(KeyValue {
                     key: b"k",
                     value: b"aborted",
-                },
-            }),
-            transactional_record(TransactionalRecordSetup {
-                offset: Offset(11),
-                producer: ProducerId(2000),
-                payload: KeyValue {
+                })
+                .call(),
+            transactional_record()
+                .offset(11)
+                .producer(2000)
+                .payload(KeyValue {
                     key: b"only-aborted",
                     value: b"v",
-                },
-            }),
+                })
+                .call(),
             control_batch(12, 2000, 0 /* ABORT */),
         ]);
-        let aborted = vec![crate::test_support::aborted_txn(
-            crate::test_support::AbortedTxnSetup {
-                producer: ProducerId(2000),
-                bounds: Offset(10)..=Offset(12),
-                stable: Offset(13),
-            },
-        )];
+        let aborted = vec![
+            crate::test_support::aborted_txn()
+                .producer(2000)
+                .bounds(Offset(10)..=Offset(12))
+                .stable(13)
+                .call(),
+        ];
         let map = offset_map_for(&[&seg], aborted);
         assert2::assert!(map == maplit::hashmap! {Bytes::from_static(b"k") => Offset(5)});
     }

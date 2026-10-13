@@ -620,7 +620,18 @@ struct FormatArgvSetup<'a> {
     extra: &'a [&'a str],
 }
 
-fn argv_under(root: &Path, setup: FormatArgvSetup<'_>) -> Vec<String> {
+#[bon::builder]
+fn argv_under(
+    root: &Path,
+    metadata: Option<&'_ str>,
+    #[builder(default = & ["a"])] log_dirs: &'_ [&'_ str],
+    #[builder(default)] extra: &'_ [&'_ str],
+) -> Vec<String> {
+    let setup = FormatArgvSetup {
+        metadata,
+        log_dirs,
+        extra,
+    };
     let FormatArgvSetup {
         metadata,
         log_dirs,
@@ -778,11 +789,14 @@ fn the_metadata_log_directory_leads_the_directory_set() {
     } in cases
     {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let plan = plan_of(argv_under(tmp.path(), FormatArgvSetup {
-            metadata: *metadata,
-            log_dirs,
-            extra,
-        }))
+        let plan = plan_of(
+            argv_under()
+                .root(tmp.path())
+                .maybe_metadata(*metadata)
+                .log_dirs(log_dirs)
+                .extra(extra)
+                .call(),
+        )
         .unwrap_or_else(|Failure { code, message }| panic!("{what}: exit {code}: {message}"));
 
         let got: Vec<DirectoryWant<PathBuf, DirectoryKind>> = plan
@@ -838,11 +852,13 @@ fn the_directory_id_belongs_to_the_metadata_log_directory() {
     ];
     for Case { what, extra, kind } in cases {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let plan = plan_of(argv_under(tmp.path(), FormatArgvSetup {
-            metadata: Some("m"),
-            extra: &extra,
-            ..Default::default()
-        }))
+        let plan = plan_of(
+            argv_under()
+                .root(tmp.path())
+                .maybe_metadata(Some("m"))
+                .extra(&extra)
+                .call(),
+        )
         .unwrap_or_else(|Failure { code, message }| panic!("{what}: exit {code}: {message}"));
 
         let [metadata, data] = plan.targets.as_slice() else {
@@ -986,11 +1002,14 @@ async fn only_the_metadata_log_directory_gets_the_bootstrap_files() {
     } in cases
     {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let code = run_from_args(argv_under(tmp.path(), FormatArgvSetup {
-            metadata: *metadata,
-            log_dirs,
-            extra,
-        }))
+        let code = run_from_args(
+            argv_under()
+                .root(tmp.path())
+                .maybe_metadata(*metadata)
+                .log_dirs(log_dirs)
+                .extra(extra)
+                .call(),
+        )
         .await;
         check!(code == EXIT_OK, "{what}");
 
@@ -1098,11 +1117,13 @@ fn an_unreadable_metadata_log_directory_is_named() {
         std::fs::create_dir_all(&broken).expect("mkdir");
         std::fs::write(broken.join(META_PROPERTIES), UNREADABLE).expect("write");
 
-        let got = plan_of(argv_under(tmp.path(), FormatArgvSetup {
-            metadata,
-            log_dirs,
-            ..Default::default()
-        }))
+        let got = plan_of(
+            argv_under()
+                .root(tmp.path())
+                .maybe_metadata(metadata)
+                .log_dirs(log_dirs)
+                .call(),
+        )
         .map(|plan| PlannedDirs {
             targets: plan
                 .targets
@@ -1136,9 +1157,7 @@ fn an_unreadable_metadata_log_directory_is_named() {
 #[tokio::test]
 async fn a_directory_of_another_node_is_refused() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    check!(
-        crate::run_from_args(argv_under(tmp.path(), FormatArgvSetup::default())).await == EXIT_OK
-    );
+    check!(crate::run_from_args(argv_under().root(tmp.path()).call()).await == EXIT_OK);
     let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
     let message = format!(
         "Stored node id 1 doesn't match previous node id 2 in {}. If you moved your data, make \

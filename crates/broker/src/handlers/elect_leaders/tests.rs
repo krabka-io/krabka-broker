@@ -18,9 +18,7 @@ use {
         config::BreakGlassConfig,
         handlers::{
             RequestContext, encode_response,
-            test_support::{
-                ReplicatedPartitionSetup, replicated_partition, single_replica_partition,
-            },
+            test_support::{replicated_partition, single_replica_partition},
         },
         leader_election::{ElectionType, test_support::one_partition_change},
         test_support::{decode_response, start_broker_no_audit_with, test_ctx},
@@ -67,12 +65,11 @@ fn image_with(proposals: &[BreakGlassProposalRecord]) -> MetadataImage {
     image.apply(&MetadataRecord::V1Partition(PartitionRecord {
         isr: vec![NodeId(1)],
         leader_epoch: LeaderEpoch(5),
-        ..replicated_partition(ReplicatedPartitionSetup {
-            topic: TOPIC,
-            leader: NodeId(1),
-            replicas: &[NodeId(1), NodeId(2)],
-            ..Default::default()
-        })
+        ..replicated_partition()
+            .topic(TOPIC)
+            .leader(1)
+            .replicas(&[NodeId(1), NodeId(2)])
+            .call()
     }));
     for proposal in proposals {
         image.apply(&MetadataRecord::V1BreakGlassProposal(proposal.clone()));
@@ -87,12 +84,11 @@ fn elected() -> PartitionRecord {
         isr: vec![NodeId(2)],
         leader_epoch: LeaderEpoch(6),
         partition_epoch: 1,
-        ..replicated_partition(ReplicatedPartitionSetup {
-            topic: TOPIC,
-            leader: NodeId(2),
-            replicas: &[NodeId(1), NodeId(2)],
-            ..Default::default()
-        })
+        ..replicated_partition()
+            .topic(TOPIC)
+            .leader(2)
+            .replicas(&[NodeId(1), NodeId(2)])
+            .call()
     }
 }
 
@@ -150,7 +146,7 @@ async fn an_unclean_election_with_no_proposal_is_refused_and_appends_nothing() {
         dir: _dir,
         row,
         records,
-    } = election_fixture(ElectionCaseSetup::default()).await;
+    } = election_fixture().call().await;
 
     check!(row.error_code == codes::POLICY_VIOLATION);
     check!(
@@ -237,11 +233,10 @@ async fn a_preferred_election_is_never_gated() {
         dir: _dir,
         row,
         records,
-    } = election_fixture(ElectionCaseSetup {
-        election: ElectionType::Preferred,
-        ..Default::default()
-    })
-    .await;
+    } = election_fixture()
+        .election(ElectionType::Preferred)
+        .call()
+        .await;
 
     // Broker 1 leads, but it is dead, so Kafka would have left the partition
     // leaderless and the preferred replica is not available. It is never
@@ -258,11 +253,10 @@ async fn a_broker_with_no_approver_set_gates_nothing() {
         dir: _dir,
         row,
         records,
-    } = election_fixture(ElectionCaseSetup {
-        config: BreakGlassConfig::default(),
-        ..Default::default()
-    })
-    .await;
+    } = election_fixture()
+        .config(BreakGlassConfig::default())
+        .call()
+        .await;
 
     check!(row.error_code == codes::NONE);
     assert!(*one_partition_change(&records) == elected());
@@ -549,7 +543,17 @@ struct ElectionFixture {
     records: Vec<MetadataRecord>,
 }
 
-async fn election_fixture(setup: ElectionCaseSetup<'_>) -> ElectionFixture {
+#[bon::builder]
+async fn election_fixture(
+    #[builder(default = gated_config ())] config: BreakGlassConfig,
+    #[builder(default = ElectionType :: Unclean)] election: ElectionType,
+    #[builder(default)] proposals: &'_ [BreakGlassProposalRecord],
+) -> ElectionFixture {
+    let setup = ElectionCaseSetup {
+        config,
+        election,
+        proposals,
+    };
     let StartedBroker { handle, dir } = Box::pin(broker_with(setup.config)).await;
     let broker = handle.broker_arc_for_test();
     let ElectionOutcome { row, records } =

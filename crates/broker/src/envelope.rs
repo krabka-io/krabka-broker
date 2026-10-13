@@ -780,12 +780,11 @@ mod tests {
                     body: Bytes::from(create_topics.clone()),
                     body_flexible: true,
                 },
-                request_frame(EmbeddedFrameSetup {
-                    correlation_id: EmbeddedCorrelationId(5),
-                    client_id: Some("c"),
-                    body: &create_topics,
-                    ..Default::default()
-                }),
+                request_frame()
+                    .correlation_id(5)
+                    .maybe_client_id(Some("c"))
+                    .body(&create_topics)
+                    .call(),
             ),
             (
                 "non-flexible AlterConfigs with a null client id",
@@ -797,14 +796,13 @@ mod tests {
                     body: Bytes::from(alter_configs.clone()),
                     body_flexible: false,
                 },
-                request_frame(EmbeddedFrameSetup {
-                    api_key: krabka_ids::ApiKey(33),
-                    api_version: krabka_ids::ApiVersion(0),
-                    correlation_id: EmbeddedCorrelationId(-3),
-                    header: EmbeddedHeader::Legacy,
-                    body: &alter_configs,
-                    ..Default::default()
-                }),
+                request_frame()
+                    .api_key(33)
+                    .api_version(0)
+                    .correlation_id(-3)
+                    .header(EmbeddedHeader::Legacy)
+                    .body(&alter_configs)
+                    .call(),
             ),
         ];
 
@@ -837,7 +835,20 @@ mod tests {
         encoding: ForwardedBodyEncoding,
     }
 
-    fn forwarded(setup: ForwardedResponseSetup) -> ForwardedRequest {
+    #[bon::builder]
+    fn forwarded(
+        #[builder(into, default = krabka_ids :: ApiKey (19))] api_key: krabka_ids::ApiKey,
+        #[builder(into, default)] api_version: krabka_ids::ApiVersion,
+        #[builder(into, default = EmbeddedCorrelationId (0x0102_0304))]
+        correlation_id: EmbeddedCorrelationId,
+        #[builder(default)] encoding: ForwardedBodyEncoding,
+    ) -> ForwardedRequest {
+        let setup = ForwardedResponseSetup {
+            api_key,
+            api_version,
+            correlation_id,
+            encoding,
+        };
         ForwardedRequest {
             api_key: setup.api_key.0,
             api_version: setup.api_version.0,
@@ -854,23 +865,14 @@ mod tests {
     #[test]
     fn a_wrapped_response_unwraps_to_its_correlation_id_and_body() {
         let cases = [
-            (
-                "flexible body takes a v1 header",
-                forwarded(ForwardedResponseSetup::default()),
-            ),
+            ("flexible body takes a v1 header", forwarded().call()),
             (
                 "non-flexible body takes a v0 header",
-                forwarded(ForwardedResponseSetup {
-                    encoding: ForwardedBodyEncoding::Legacy,
-                    ..Default::default()
-                }),
+                forwarded().encoding(ForwardedBodyEncoding::Legacy).call(),
             ),
             (
                 "flexible ApiVersions takes a v0 header",
-                forwarded(ForwardedResponseSetup {
-                    api_key: krabka_ids::ApiKey(18),
-                    ..Default::default()
-                }),
+                forwarded().api_key(18).call(),
             ),
         ];
 
@@ -925,12 +927,11 @@ mod tests {
     /// receive side reads, and it survives the v0 codec.
     #[test]
     fn a_built_envelope_request_carries_what_the_receive_side_reads() {
-        let request_data = request_frame(EmbeddedFrameSetup {
-            correlation_id: EmbeddedCorrelationId(5),
-            client_id: Some("c"),
-            body: b"topics",
-            ..Default::default()
-        });
+        let request_data = request_frame()
+            .correlation_id(5)
+            .maybe_client_id(Some("c"))
+            .body(b"topics")
+            .call();
         let client = std::net::IpAddr::from([127, 0, 0, 1]);
 
         assert!(let Ok(request) = envelope_request(
@@ -1012,7 +1013,26 @@ mod tests {
         }
     }
 
-    fn request_frame(setup: EmbeddedFrameSetup<'_>) -> Bytes {
+    #[bon::builder]
+    fn request_frame(
+        #[builder(into, default = EmbeddedFrameSetup::default().api_key)]
+        api_key: krabka_ids::ApiKey,
+        #[builder(into, default = EmbeddedFrameSetup::default().api_version)]
+        api_version: krabka_ids::ApiVersion,
+        #[builder(into, default = EmbeddedFrameSetup::default().correlation_id)]
+        correlation_id: EmbeddedCorrelationId,
+        client_id: Option<&'_ str>,
+        #[builder(default = EmbeddedFrameSetup::default().header)] header: EmbeddedHeader,
+        #[builder(default = EmbeddedFrameSetup::default().body)] body: &'_ [u8],
+    ) -> Bytes {
+        let setup = EmbeddedFrameSetup {
+            api_key,
+            api_version,
+            correlation_id,
+            client_id,
+            header,
+            body,
+        };
         let EmbeddedFrameSetup {
             api_key,
             api_version,
@@ -1021,15 +1041,15 @@ mod tests {
             header,
             body,
         } = setup;
-        wire_request_frame(RequestFrameSetup {
-            api_key: krabka_ids::ApiKey(api_key.0),
-            api_version: krabka_ids::ApiVersion(api_version.0),
-            correlation_id: FrameCorrelationId(correlation_id.0),
-            client_id: client_id.map(str::as_bytes),
-            tagged: (header == EmbeddedHeader::Flexible).then_some(&[0][..]),
-            body,
-        })
-        .freeze()
+        wire_request_frame()
+            .api_key(api_key.0)
+            .api_version(api_version.0)
+            .correlation_id(correlation_id.0)
+            .maybe_client_id(client_id.map(str::as_bytes))
+            .maybe_tagged((header == EmbeddedHeader::Flexible).then_some(&[0][..]))
+            .body(body)
+            .call()
+            .freeze()
     }
 
     /// The embedded header is split off whole, and the body that remains is
@@ -1045,14 +1065,13 @@ mod tests {
         let cases = [
             (
                 "flexible IncrementalAlterConfigs",
-                request_frame(EmbeddedFrameSetup {
-                    api_key: krabka_ids::ApiKey(44),
-                    api_version: krabka_ids::ApiVersion(1),
-                    correlation_id: EmbeddedCorrelationId(77),
-                    client_id: Some("adminclient-1"),
-                    body: &incremental,
-                    ..Default::default()
-                }),
+                request_frame()
+                    .api_key(44)
+                    .api_version(1)
+                    .correlation_id(77)
+                    .maybe_client_id(Some("adminclient-1"))
+                    .body(&incremental)
+                    .call(),
                 true,
                 ForwardedRequest {
                     api_key: 44,
@@ -1065,14 +1084,13 @@ mod tests {
             ),
             (
                 "non-flexible AlterConfigs with a null client id",
-                request_frame(EmbeddedFrameSetup {
-                    api_key: krabka_ids::ApiKey(33),
-                    api_version: krabka_ids::ApiVersion(0),
-                    correlation_id: EmbeddedCorrelationId(3),
-                    header: EmbeddedHeader::Legacy,
-                    body: &alter_configs,
-                    ..Default::default()
-                }),
+                request_frame()
+                    .api_key(33)
+                    .api_version(0)
+                    .correlation_id(3)
+                    .header(EmbeddedHeader::Legacy)
+                    .body(&alter_configs)
+                    .call(),
                 false,
                 ForwardedRequest {
                     api_key: 33,
@@ -1126,12 +1144,11 @@ mod tests {
         ) -> Case {
             Case {
                 label,
-                frame: request_frame(EmbeddedFrameSetup {
-                    api_key: krabka_ids::ApiKey(api_key),
-                    api_version: krabka_ids::ApiVersion(0),
-                    body: b"",
-                    ..Default::default()
-                }),
+                frame: request_frame()
+                    .api_key(api_key)
+                    .api_version(0)
+                    .body(b"")
+                    .call(),
                 unstable,
                 want: Err(EnvelopeError::UnsupportedVersion),
             }
@@ -1152,34 +1169,23 @@ mod tests {
             },
             Case {
                 label: "Produce is not forwardable",
-                frame: request_frame(EmbeddedFrameSetup {
-                    api_key: krabka_ids::ApiKey(0),
-                    api_version: krabka_ids::ApiVersion(9),
-                    body: b"",
-                    ..Default::default()
-                }),
+                frame: request_frame().api_key(0).api_version(9).body(b"").call(),
                 unstable: Disabled,
                 want: Err(EnvelopeError::InvalidRequest),
             },
             Case {
                 label: "a nested Envelope is not forwardable",
-                frame: request_frame(EmbeddedFrameSetup {
-                    api_key: krabka_ids::ApiKey(58),
-                    api_version: krabka_ids::ApiVersion(0),
-                    body: b"",
-                    ..Default::default()
-                }),
+                frame: request_frame().api_key(58).api_version(0).body(b"").call(),
                 unstable: Disabled,
                 want: Err(EnvelopeError::InvalidRequest),
             },
             Case {
                 label: "a non-forwardable key is refused before its body is read",
-                frame: request_frame(EmbeddedFrameSetup {
-                    api_key: krabka_ids::ApiKey(3),
-                    api_version: krabka_ids::ApiVersion(12),
-                    body: b"garbage",
-                    ..Default::default()
-                }),
+                frame: request_frame()
+                    .api_key(3)
+                    .api_version(12)
+                    .body(b"garbage")
+                    .call(),
                 unstable: Disabled,
                 want: Err(EnvelopeError::InvalidRequest),
             },
@@ -1197,60 +1203,45 @@ mod tests {
             unsupported_version("a negative api key is unknown", -1, Enabled),
             Case {
                 label: "trunk's UnregisterController is unknown to 4.3.1",
-                frame: request_frame(EmbeddedFrameSetup {
-                    api_key: krabka_ids::ApiKey(94),
-                    api_version: krabka_ids::ApiVersion(0),
-                    body: &unregister_controller,
-                    ..Default::default()
-                }),
+                frame: request_frame()
+                    .api_key(94)
+                    .api_version(0)
+                    .body(&unregister_controller)
+                    .call(),
                 unstable: Disabled,
                 want: Err(EnvelopeError::UnsupportedVersion),
             },
             Case {
                 label: "trunk's UnregisterController is known under the flag",
-                frame: request_frame(EmbeddedFrameSetup {
-                    api_key: krabka_ids::ApiKey(94),
-                    api_version: krabka_ids::ApiVersion(0),
-                    body: &unregister_controller,
-                    ..Default::default()
-                }),
+                frame: request_frame()
+                    .api_key(94)
+                    .api_version(0)
+                    .body(&unregister_controller)
+                    .call(),
                 unstable: Enabled,
                 want: Ok(()),
             },
             Case {
                 label: "a body that does not decode",
-                frame: request_frame(EmbeddedFrameSetup {
-                    body: b"garbage",
-                    ..Default::default()
-                }),
+                frame: request_frame().body(b"garbage").call(),
                 unstable: Disabled,
                 want: Err(EnvelopeError::UnsupportedVersion),
             },
             Case {
                 label: "a body cut short",
-                frame: request_frame(EmbeddedFrameSetup {
-                    body: truncated,
-                    ..Default::default()
-                }),
+                frame: request_frame().body(truncated).call(),
                 unstable: Disabled,
                 want: Err(EnvelopeError::UnsupportedVersion),
             },
             Case {
                 label: "a version the request type does not have",
-                frame: request_frame(EmbeddedFrameSetup {
-                    api_version: krabka_ids::ApiVersion(99),
-                    body: &create_topics,
-                    ..Default::default()
-                }),
+                frame: request_frame().api_version(99).body(&create_topics).call(),
                 unstable: Disabled,
                 want: Err(EnvelopeError::UnsupportedVersion),
             },
             Case {
                 label: "a body that decodes",
-                frame: request_frame(EmbeddedFrameSetup {
-                    body: &create_topics,
-                    ..Default::default()
-                }),
+                frame: request_frame().body(&create_topics).call(),
                 unstable: Disabled,
                 want: Ok(()),
             },
@@ -1279,19 +1270,15 @@ mod tests {
         let cases = [
             (
                 "flexible body takes a v1 header",
-                forwarded(ForwardedResponseSetup {
-                    api_key: krabka_ids::ApiKey(44),
-                    ..Default::default()
-                }),
+                forwarded().api_key(44).call(),
                 vec![0x01, 0x02, 0x03, 0x04, 0x00, b'x'],
             ),
             (
                 "non-flexible body takes a v0 header",
-                forwarded(ForwardedResponseSetup {
-                    api_key: krabka_ids::ApiKey(33),
-                    encoding: ForwardedBodyEncoding::Legacy,
-                    ..Default::default()
-                }),
+                forwarded()
+                    .api_key(33)
+                    .encoding(ForwardedBodyEncoding::Legacy)
+                    .call(),
                 vec![0x01, 0x02, 0x03, 0x04, b'x'],
             ),
         ];
@@ -1346,12 +1333,11 @@ mod tests {
     #[test]
     fn an_envelope_request_round_trips_and_a_malformed_one_is_refused() {
         let request = EnvelopeRequest {
-            request_data: request_frame(EmbeddedFrameSetup {
-                correlation_id: EmbeddedCorrelationId(5),
-                client_id: Some("c"),
-                body: b"topics",
-                ..Default::default()
-            }),
+            request_data: request_frame()
+                .correlation_id(5)
+                .maybe_client_id(Some("c"))
+                .body(b"topics")
+                .call(),
             request_principal: Some(Bytes::from_static(JVM_USER_ALICE)),
             client_host_address: Bytes::from_static(&[127, 0, 0, 1]),
             unknown_tagged_fields: UnknownTaggedFields::default(),

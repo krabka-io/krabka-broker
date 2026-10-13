@@ -119,6 +119,26 @@ struct RecordIds {
     instance: String,
 }
 
+fn join_request(
+    group_id: String,
+    member_id: String,
+    group_instance_id: Option<String>,
+) -> JoinGroupRequest {
+    JoinGroupRequest {
+        group_id,
+        session_timeout_ms: 10_000,
+        rebalance_timeout_ms: 10_000,
+        member_id,
+        group_instance_id,
+        protocol_type: "consumer".into(),
+        protocols: vec![JoinGroupRequestProtocol {
+            name: "range".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
 /// A handler takes an id of 32767 bytes, and refuses one of 32768 bytes with a
 /// protocol error.
 fn check(label: &str, result: &Result<Bytes, BrokerError>, length: usize) {
@@ -424,19 +444,7 @@ async fn classic_join_takes_32767_byte_ids_and_refuses_32768() {
             member: member_id,
             instance: instance_id,
         } = ids(case, long, length, "");
-        let request = JoinGroupRequest {
-            group_id: group_id.clone(),
-            session_timeout_ms: 10_000,
-            rebalance_timeout_ms: 10_000,
-            member_id,
-            group_instance_id: Some(instance_id),
-            protocol_type: "consumer".into(),
-            protocols: vec![JoinGroupRequestProtocol {
-                name: "range".into(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
+        let request = join_request(group_id.clone(), member_id, Some(instance_id));
 
         let result = tokio::time::timeout(
             Duration::from_secs(20),
@@ -603,18 +611,7 @@ async fn a_generated_member_id_over_32767_bytes_fails_the_join() {
         } else {
             "c".repeat(row.prefix)
         };
-        let mut request = JoinGroupRequest {
-            group_id: group_id.clone(),
-            session_timeout_ms: 10_000,
-            rebalance_timeout_ms: 10_000,
-            group_instance_id: instance_id.clone(),
-            protocol_type: "consumer".into(),
-            protocols: vec![JoinGroupRequestProtocol {
-                name: "range".into(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
+        let mut request = join_request(group_id.clone(), String::new(), instance_id.clone());
 
         let mut response = join(&env, &request, row.version, &client_id).await;
         if response.error_code == codes::MEMBER_ID_REQUIRED {

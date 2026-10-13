@@ -20,7 +20,7 @@ use {
     tempfile::tempdir,
 };
 
-#[derive(Clone, Copy, Default)]
+#[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
 struct ProducerSequence(i32);
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
@@ -33,7 +33,17 @@ struct KeyedTransactionSetup<'a> {
 }
 
 /// One keyed transactional record; `Log::append` assigns its offset.
-fn transactional_keyed(setup: KeyedTransactionSetup<'_>) -> RecordBatch {
+#[bon::builder]
+fn transactional_keyed(
+    #[builder(into, default = ProducerId (1000))] producer: ProducerId,
+    #[builder(into, default)] sequence: ProducerSequence,
+    #[builder(default = KeyValue { key: b"k", value: b"v" })] payload: KeyValue<'_>,
+) -> RecordBatch {
+    let setup = KeyedTransactionSetup {
+        producer,
+        sequence,
+        payload,
+    };
     let KeyValue { key, value } = setup.payload;
     let mut batch = keyed_batch(0, &[KeyedRecord {
         offset_delta: 0,
@@ -103,22 +113,20 @@ fn index_of_the_fixture(log: &Log) -> Vec<AbortedTxn> {
 
 fn committed_and_aborted_batches(tail: [RecordBatch; 2]) -> Vec<RecordBatch> {
     let mut batches = vec![
-        transactional_keyed(KeyedTransactionSetup {
-            payload: KeyValue {
+        transactional_keyed()
+            .payload(KeyValue {
                 key: b"k",
                 value: b"committed",
-            },
-            ..Default::default()
-        }), // 0
+            })
+            .call(), // 0
         commit_marker(1000, 0), // 1
-        transactional_keyed(KeyedTransactionSetup {
-            producer: ProducerId(2000),
-            payload: KeyValue {
+        transactional_keyed()
+            .producer(2000)
+            .payload(KeyValue {
                 key: b"k",
                 value: b"aborted",
-            },
-            ..Default::default()
-        }), // 2
+            })
+            .call(), // 2
     ];
     batches.extend(tail);
     batches

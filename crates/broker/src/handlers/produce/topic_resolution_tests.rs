@@ -15,8 +15,8 @@ use {
         broker::BrokerHandle,
         codes,
         handlers::test_support::{
-            CaseOutcomes, ClientTopicSetup, StartedBroker, WireTopic, check_cases,
-            check_denied_topic_cases, create_topic as create_topic_from_test_support,
+            CaseOutcomes, StartedBroker, WireTopic, check_cases, check_denied_topic_cases,
+            create_topic as create_topic_from_test_support,
         },
         test_support::{
             DenyAll, decode_response, encode_request, peer, principal,
@@ -46,9 +46,7 @@ async fn start(authorizer: Arc<dyn Authorizer>) -> StartedBroker {
 /// One v2 batch with one record. A leader of a fresh topic appends it at
 /// offset 0.
 fn one_record_batch() -> RecordsPayload {
-    RecordsPayload::V2(vec![crate::test_support::repeated_records_batch(
-        crate::test_support::RepeatedRecordsSetup::default(),
-    )])
+    RecordsPayload::V2(vec![crate::test_support::repeated_records_batch().call()])
 }
 
 /// The partition row that Kafka's `PartitionResponse(error)` constructor
@@ -79,12 +77,12 @@ fn appended_partition(version: i16) -> PartitionProduceResponse {
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) {
-    create_topic_from_test_support(broker, ClientTopicSetup {
-        client_id: "produce-resolution-test",
-        name,
-        ..Default::default()
-    })
-    .await;
+    create_topic_from_test_support()
+        .broker(broker)
+        .client_id("produce-resolution-test")
+        .name(name)
+        .call()
+        .await;
 }
 
 /// Send one single-row `Produce` at `case.version` for `case.topic`. Return

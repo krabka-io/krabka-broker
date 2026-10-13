@@ -56,7 +56,6 @@ pub(super) struct IsrSetup<'a> {
     pub leader: NodeId,
     pub leader_epoch: LeaderEpoch,
     pub partition_epoch: PartitionEpoch,
-    pub stale_followers: &'a [StaleFollower],
 }
 
 /// A follower that was last caught up `caught_up_age` ago.
@@ -66,19 +65,18 @@ pub(super) struct StaleFollower {
     pub caught_up_age: Duration,
 }
 
-pub(super) async fn set_replica_state(part: &Partition, setup: IsrSetup<'_>) {
-    let IsrSetup {
-        isr,
-        replicas,
-        leader,
-        leader_epoch,
-        stale_followers,
-        ..
-    } = setup;
+pub(super) async fn set_replica_state(
+    part: &Partition,
+    record: MetadataRecord,
+    stale_followers: &[StaleFollower],
+) {
+    let MetadataRecord::V1Partition(record) = record else {
+        unreachable!("the test fixture must be a partition record");
+    };
     let now = Instant::now();
     let mut st = part.replica_state.lock().await;
-    st.install_isr(isr, replicas, leader, now);
-    st.current_leader_epoch = leader_epoch;
+    st.install_isr(&record.isr, &record.replicas, record.leader, now);
+    st.current_leader_epoch = record.leader_epoch;
     for &StaleFollower {
         node: follower,
         caught_up_age: last_caught_up_age,
@@ -99,7 +97,23 @@ pub(super) async fn set_replica_state(part: &Partition, setup: IsrSetup<'_>) {
 }
 
 /// Partition 0 of `topic` as the metadata image holds it.
-pub(super) fn partition(setup: IsrSetup<'_>) -> MetadataRecord {
+#[bon::builder]
+pub(super) fn partition(
+    #[builder(default = "t")] topic: &'_ str,
+    #[builder(default = & [NodeId (1) , NodeId (2)])] isr: &'_ [NodeId],
+    #[builder(default = & [NodeId (1) , NodeId (2)])] replicas: &'_ [NodeId],
+    #[builder(into, default = NodeId (1))] leader: NodeId,
+    #[builder(into, default)] leader_epoch: LeaderEpoch,
+    #[builder(into, default)] partition_epoch: PartitionEpoch,
+) -> MetadataRecord {
+    let setup = IsrSetup {
+        topic,
+        isr,
+        replicas,
+        leader,
+        leader_epoch,
+        partition_epoch,
+    };
     let IsrSetup {
         topic,
         isr,

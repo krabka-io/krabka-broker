@@ -365,13 +365,11 @@ mod tests {
     use {
         super::ConsumerQuotaOutcome,
         crate::{
-            handlers::test_support::{ReplicatedPartitionSetup, replicated_partition},
+            handlers::test_support::replicated_partition,
             metrics::BrokerMetrics,
             quota::{
                 QuotaBuckets,
-                test_support::{
-                    QuotaRecordSetup, QuotaValue, check_fractional_bandwidth, image_with_quota,
-                },
+                test_support::{check_fractional_bandwidth, image_with_quota},
             },
             throttle::{LEADER_THROTTLED_REPLICAS_KEY, TokenBucket},
         },
@@ -381,11 +379,11 @@ mod tests {
 
     #[test]
     fn consume_consumer_quota_tuple_match_overage_throttles() {
-        let img = image_with_quota(QuotaRecordSetup {
-            entity: vec![("user", Some("alice")), ("client-id", Some("app-x"))],
-            key: "consumer_byte_rate",
-            value: QuotaValue(1024.0),
-        });
+        let img = image_with_quota()
+            .entity(vec![("user", Some("alice")), ("client-id", Some("app-x"))])
+            .key("consumer_byte_rate")
+            .value(1024.0)
+            .call();
         // A one-second window, so 4096 bytes at 1024 B/s is over the burst
         // rather than inside the default 11-second one.
         let buckets = QuotaBuckets::with_window(secs(1));
@@ -412,10 +410,7 @@ mod tests {
     /// as it was. A throttled fetch that is not refunded stays charged.
     #[test]
     fn a_throttled_fetch_gives_the_whole_charge_back() {
-        let img = image_with_quota(QuotaRecordSetup {
-            key: "consumer_byte_rate",
-            ..Default::default()
-        });
+        let img = image_with_quota().key("consumer_byte_rate").call();
         let consume = |buckets: &QuotaBuckets, bytes| {
             super::consume_consumer_quota(&img, buckets, "alice", Some("app"), bytes)
         };
@@ -470,12 +465,12 @@ mod tests {
                 } else {
                     vec![NodeId(1)]
                 },
-                ..replicated_partition(ReplicatedPartitionSetup {
-                    topic: "t",
-                    partition: krabka_ids::PartitionIndex(partition),
-                    leader: NodeId(1),
-                    replicas: &[NodeId(1), NodeId(2)],
-                })
+                ..replicated_partition()
+                    .topic("t")
+                    .partition(partition)
+                    .leader(1)
+                    .replicas(&[NodeId(1), NodeId(2)])
+                    .call()
             }));
         }
         image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {

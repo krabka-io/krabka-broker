@@ -650,10 +650,10 @@ mod tests {
         AwaitingRegistration,
     }
 
-    #[derive(Clone, Copy)]
+    #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
     struct FixtureTopicId(u8);
 
-    #[derive(Clone, Copy)]
+    #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
     struct RoundRecordCount(usize);
 
     #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
@@ -874,7 +874,12 @@ mod tests {
 
     /// A produce round of the tests: `records` records for partition 0 of the
     /// topic `dlq.<id>`.
-    fn round_of(setup: ProduceRoundSetup) -> Round {
+    #[bon::builder]
+    fn round_of(
+        #[builder(into, default = FixtureTopicId (1))] id: FixtureTopicId,
+        #[builder(into, default = RoundRecordCount (1))] records: RoundRecordCount,
+    ) -> Round {
+        let setup = ProduceRoundSetup { id, records };
         let ProduceRoundSetup { id, records } = setup;
         let id = id.0;
         let records = records.0;
@@ -929,21 +934,24 @@ mod tests {
         }
     }
 
-    fn coalesced_writes(broker: FakeBroker, setup: CoalescedWriteSetup) -> CoalescedWrites {
+    #[bon::builder]
+    fn coalesced_writes(
+        broker: FakeBroker,
+        #[builder(into, default = RoundRecordCount (2))] first_records: RoundRecordCount,
+        #[builder(into, default = RoundRecordCount (1))] second_records: RoundRecordCount,
+    ) -> CoalescedWrites {
+        let setup = CoalescedWriteSetup {
+            first_records,
+            second_records,
+        };
         let Round {
             target: first,
             batch: first_batch,
-        } = round_of(ProduceRoundSetup {
-            records: setup.first_records,
-            ..Default::default()
-        });
+        } = round_of().records(setup.first_records).call();
         let Round {
             target: second,
             batch: second_batch,
-        } = round_of(ProduceRoundSetup {
-            id: FixtureTopicId(2),
-            records: setup.second_records,
-        });
+        } = round_of().id(2).records(setup.second_records).call();
         CoalescedWrites {
             sender: Coalescer::new(broker),
             metrics: BrokerMetrics::new(),
@@ -1029,7 +1037,7 @@ mod tests {
                 }
             }))
         });
-        let writes = coalesced_writes(broker.clone(), CoalescedWriteSetup::default());
+        let writes = coalesced_writes().broker(broker.clone()).call();
 
         let (done, refused) = futures_util::future::join(
             writes.first_write(),
@@ -1082,10 +1090,11 @@ mod tests {
                 }
             }))
         });
-        let writes = coalesced_writes(broker.clone(), CoalescedWriteSetup {
-            first_records: RoundRecordCount(1),
-            second_records: RoundRecordCount(3),
-        });
+        let writes = coalesced_writes()
+            .broker(broker.clone())
+            .first_records(1)
+            .second_records(3)
+            .call();
         let leaders = std::cell::Cell::new(0_u64);
 
         let (done, retried) = futures_util::future::join(
@@ -1162,7 +1171,7 @@ mod tests {
         for Case { broker, reason } in cases {
             let sender = Coalescer::new(broker.clone());
             let metrics = BrokerMetrics::new();
-            let Round { target, batch } = round_of(ProduceRoundSetup::default());
+            let Round { target, batch } = round_of().call();
 
             let written =
                 produce_round(&sender, &metrics, "g1", &target, || NodeId(1), &batch).await;
@@ -1192,10 +1201,7 @@ mod tests {
         });
         let sender = Coalescer::new(broker.clone());
         let metrics = BrokerMetrics::new();
-        let Round { target, batch } = round_of(ProduceRoundSetup {
-            records: RoundRecordCount(2),
-            ..Default::default()
-        });
+        let Round { target, batch } = round_of().records(2).call();
         let write = produce_round(&sender, &metrics, "g1", &target, || NodeId(1), &batch);
         tokio::pin!(write);
 

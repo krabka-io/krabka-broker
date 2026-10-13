@@ -15,8 +15,8 @@ use {
         codes,
         handlers::{RequestContext, test_support::StartedBroker},
         test_support::{
-            decode_response, encode_request, peer, principal, start_broker_no_audit_with,
-            try_dispatch_context,
+            decode_response, encode_request, peer, principal,
+            start_broker_with_authorizer_no_audit, try_dispatch_context,
         },
     },
     assert2::assert,
@@ -53,9 +53,18 @@ test_authorizer!(ReadOneGroup, (self, _source, request), {
 });
 
 async fn start() -> StartedBroker {
-    let (broker, dir) =
-        start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(ReadOneGroup)).await;
+    let (broker, dir) = start_broker_with_authorizer_no_audit(Arc::new(ReadOneGroup)).await;
     StartedBroker { broker, dir }
+}
+
+macro_rules! share_request_identity {
+    (($user:ident, $address:ident, $ctx:ident)) => {
+        request_identity!(
+            ($user, $address, $ctx),
+            principal("share-consumer"),
+            client_id = "share-client"
+        );
+    };
 }
 
 /// One row: the group id, the member id, and the top-level error code of
@@ -167,11 +176,7 @@ async fn dispatch_share_fetch(
 async fn group_and_member_ids_are_checked_in_kafka_order() {
     let StartedBroker { broker, dir: _dir } = start().await;
     let shared = broker.broker_arc_for_test();
-    request_identity!(
-        (user, address, ctx),
-        principal("share-consumer"),
-        client_id = "share-client"
-    );
+    share_request_identity!((user, address, ctx));
     let fetch_version = share_fetch_response::MAX_VERSION;
     let acknowledge_version = share_acknowledge_response::MAX_VERSION;
 
@@ -222,13 +227,9 @@ async fn group_and_member_ids_are_checked_in_kafka_order() {
 async fn a_member_the_group_does_not_know_still_fetches() {
     let StartedBroker { broker, dir: _dir } = start().await;
     let shared = broker.broker_arc_for_test();
+    share_request_identity!((user, address, ctx));
     let version = share_fetch_response::MAX_VERSION;
     let _actor = shared.group_coordinator.get_or_create_share(READABLE);
-    request_identity!(
-        (user, address, ctx),
-        principal("share-consumer"),
-        client_id = "share-client"
-    );
 
     let fetch = ShareFetchRequest {
         group_id: Some(READABLE.into()),

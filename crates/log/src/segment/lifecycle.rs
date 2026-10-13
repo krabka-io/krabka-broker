@@ -322,9 +322,8 @@ mod tests {
     use {
         super::*,
         crate::segment::test_support::{
-            DENSE_INDEX, NO_LIMIT, RecordCount, RecordTimestamp, SECOND_THREE_RECORD_BATCH,
-            SampleBatchSetup, SeededSegmentSetup, THREE_RECORD_BATCH, TempSegment, sample_batch,
-            seeded_fixture, segment_at, test_segment, two_record_fixture,
+            DENSE_INDEX, NO_LIMIT, SECOND_THREE_RECORD_BATCH, THREE_RECORD_BATCH, TempSegment,
+            sample_batch, seeded_fixture, segment_at, test_segment, two_record_fixture,
         },
         assert2::check,
         krabka_units::prelude::{ByteSize, ByteSizeExt, kibibytes},
@@ -348,11 +347,11 @@ mod tests {
         // timestamps 500, 600, 700.
         for i in 0..3i64 {
             seg.append(
-                &sample_batch(SampleBatchSetup {
-                    offset: Offset(100 + i * 2),
-                    records: RecordCount(2),
-                    timestamp: RecordTimestamp(500 + i * 100),
-                }),
+                &sample_batch()
+                    .offset(100 + i * 2)
+                    .records(2)
+                    .timestamp(500 + i * 100)
+                    .call(),
                 DENSE_INDEX,
             )
             .unwrap();
@@ -439,11 +438,7 @@ mod tests {
             } = test_segment();
             for (base, timestamp, interval) in batches {
                 seg.append(
-                    &sample_batch(SampleBatchSetup {
-                        offset: Offset(base),
-                        timestamp: RecordTimestamp(timestamp),
-                        ..Default::default()
-                    }),
+                    &sample_batch().offset(base).timestamp(timestamp).call(),
                     interval,
                 )
                 .unwrap();
@@ -474,13 +469,12 @@ mod tests {
         let TempSegment {
             dir: _dir,
             segment: mut seg,
-        } = seeded_fixture(SeededSegmentSetup {
-            batches: &[
+        } = seeded_fixture()
+            .batches(&[
                 THREE_RECORD_BATCH,        // offsets 0..=2
                 SECOND_THREE_RECORD_BATCH, // offsets 3..=5
-            ],
-            ..Default::default()
-        });
+            ])
+            .call();
         assert2::assert!(seg.last_offset() == 5);
 
         // target_abs = base(0) + rel(3) = 3. Drop batches with last >= 3.
@@ -488,9 +482,13 @@ mod tests {
         let read = seg.read(Offset(0), NO_LIMIT).unwrap();
         assert2::assert!(seg.last_offset() == Offset(2));
         assert2::assert!(
-            read == vec![sample_batch(
-                crate::segment::test_support::THREE_RECORD_BATCH
-            )]
+            read == vec![
+                sample_batch()
+                    .offset(crate::segment::test_support::THREE_RECORD_BATCH.offset.0)
+                    .records(crate::segment::test_support::THREE_RECORD_BATCH.records.0)
+                    .timestamp(crate::segment::test_support::THREE_RECORD_BATCH.timestamp.0)
+                    .call()
+            ]
         );
         let expected_size: usize = read.iter().map(RecordBatch::encoded_len).sum();
         assert2::assert!(seg.size().bytes_usize() == expected_size);
@@ -515,14 +513,8 @@ mod tests {
             dir: _dir,
             segment: mut seg,
         } = test_segment();
-        seg.append(
-            &sample_batch(SampleBatchSetup {
-                timestamp: RecordTimestamp(42),
-                ..Default::default()
-            }),
-            kibibytes(4),
-        )
-        .unwrap();
+        seg.append(&sample_batch().timestamp(42).call(), kibibytes(4))
+            .unwrap();
         seg.flush().unwrap();
     }
 }

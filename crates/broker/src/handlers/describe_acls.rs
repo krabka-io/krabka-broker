@@ -215,7 +215,7 @@ mod tests {
         want: usize,
     }
 
-    use crate::test_support::{AllowAclSetup, allow_acl as acl};
+    use crate::test_support::allow_acl as acl;
 
     fn request(
         resource_name: Option<&str>,
@@ -298,7 +298,7 @@ mod tests {
         });
         assert!(err == expected_err);
 
-        let desc = acl_description(&acl(AllowAclSetup::default()));
+        let desc = acl_description(&acl().call());
         let expected_desc = tagged_wire!(AclDescription {
             principal: "User:alice".into(),
             host: "*".into(),
@@ -475,10 +475,7 @@ mod tests {
                 .iter()
                 .map(|seed| AclEntry {
                     pattern_type: seed.pattern_type,
-                    ..acl(AllowAclSetup {
-                        resource_name: seed.name,
-                        ..Default::default()
-                    })
+                    ..acl().resource_name(seed.name).call()
                 })
                 .collect(),
         )
@@ -759,12 +756,13 @@ mod tests {
 
     #[test]
     fn acl_description_preserves_non_read_operations() {
-        let desc = acl_description(&acl(AllowAclSetup {
-            resource_name: "payments",
-            principal: "User:bob",
-            operation: AclOperation::Write,
-            ..Default::default()
-        }));
+        let desc = acl_description(
+            &acl()
+                .resource_name("payments")
+                .principal("User:bob")
+                .operation(AclOperation::Write)
+                .call(),
+        );
 
         assert!(desc.principal == "User:bob");
         assert!(desc.operation == OPERATION_WRITE);

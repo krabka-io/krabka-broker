@@ -6,6 +6,8 @@
 //! decides: authorization, coordinator routing, and whether a persister is
 //! installed at all. Once those hold, it hands the group's topics to `rows`.
 
+#[cfg(test)]
+use krabka_protocol::owned::describe_share_group_offsets_request::DescribeShareGroupOffsetsRequestTopic;
 use {
     super::{
         end_offsets::{ErrorAnswer, NetworkLatestOffsets},
@@ -13,17 +15,16 @@ use {
         topics::initialized_topics,
     },
     crate::{
-        authorizer::{AuthorizationResult, authorize_topics},
         broker::Broker,
         codes,
         coordinator::GroupCoordinator,
-        handlers::{RequestContext, group_coordinator_error, group_describe_denied},
+        handlers::{
+            RequestContext, allowed_topics, group_coordinator_error, group_describe_denied,
+        },
     },
     krabka_metadata::AclOperation,
     krabka_protocol::owned::{
-        describe_share_group_offsets_request::{
-            DescribeShareGroupOffsetsRequestGroup, DescribeShareGroupOffsetsRequestTopic,
-        },
+        describe_share_group_offsets_request::DescribeShareGroupOffsetsRequestGroup,
         describe_share_group_offsets_response::DescribeShareGroupOffsetsResponseGroup,
     },
 };
@@ -90,21 +91,30 @@ pub(super) async fn describe_group(
     // cannot describe with no row at all, the same way Kafka hides topic
     // existence from such a caller.
     let (requested, unauthorized) = if let Some(topics) = group.topics {
-        let allowed = allowed_topics(broker, image, ctx, &topics);
-        let mut requested = Vec::new();
-        let mut unauthorized = Vec::new();
-        for topic in topics {
-            if allowed.contains(topic.topic_name.as_str()) {
-                requested.push(topic);
-            } else {
-                unauthorized.push(unauthorized_topic(topic));
-            }
-        }
-        (requested, unauthorized)
+        let allowed = allowed_topics(
+            broker.config.authorizer.as_ref(),
+            image,
+            ctx,
+            AclOperation::Describe,
+            topics.iter().map(|topic| topic.topic_name.as_str()),
+        );
+        let (requested, denied): (Vec<_>, Vec<_>) = topics
+            .into_iter()
+            .partition(|topic| allowed.contains(topic.topic_name.as_str()));
+        (
+            requested,
+            denied.into_iter().map(unauthorized_topic).collect(),
+        )
     } else {
         let metadata = ng.and_then(|ng| ng.share_state_partition_metadata(&gid));
         let initialized = initialized_topics(metadata.as_ref(), image);
-        let allowed = allowed_topics(broker, image, ctx, &initialized);
+        let allowed = allowed_topics(
+            broker.config.authorizer.as_ref(),
+            image,
+            ctx,
+            AclOperation::Describe,
+            initialized.iter().map(|topic| topic.topic_name.as_str()),
+        );
         let requested = initialized
             .into_iter()
             .filter(|topic| allowed.contains(topic.topic_name.as_str()))
@@ -135,27 +145,6 @@ pub(super) async fn describe_group(
             ..Default::default()
         },
     }
-}
-
-/// The names among `topics` the caller may `Describe`.
-fn allowed_topics(
-    broker: &Broker,
-    image: &krabka_metadata::MetadataImage,
-    ctx: &RequestContext<'_>,
-    topics: &[DescribeShareGroupOffsetsRequestTopic],
-) -> std::collections::HashSet<String> {
-    authorize_topics(
-        broker.config.authorizer.as_ref(),
-        image,
-        ctx.principal,
-        ctx.peer,
-        AclOperation::Describe,
-        topics.iter().map(|topic| topic.topic_name.as_str()),
-    )
-    .into_iter()
-    .filter(|(_, result)| *result == AuthorizationResult::Allow)
-    .map(|(name, _)| name.to_string())
-    .collect()
 }
 
 #[cfg(test)]
@@ -234,7 +223,21 @@ mod tests {
         secret_partitions: Vec<PartitionIndex>,
     }
 
-    fn replay_initialized_group(broker: &Broker, setup: InitializedGroupSetup<'_>) {
+    #[bon::builder]
+    fn replay_initialized_group(
+        broker: &Broker,
+        #[builder(default = "g3")] group: &'_ str,
+        #[builder(default = uuid :: Uuid :: from_u128 (1))] orders: uuid::Uuid,
+        #[builder(default = uuid :: Uuid :: from_u128 (2))] secret: uuid::Uuid,
+        #[builder(default = vec ! [PartitionIndex (0) , PartitionIndex (1)])]
+        secret_partitions: Vec<PartitionIndex>,
+    ) {
+        let setup = InitializedGroupSetup {
+            group,
+            orders,
+            secret,
+            secret_partitions,
+        };
         let InitializedGroupSetup {
             group,
             orders,
@@ -366,11 +369,11 @@ mod tests {
             .await
             .expect("seed orders state");
 
-        replay_initialized_group(&broker, InitializedGroupSetup {
-            orders: orders_id,
-            secret: secret_id,
-            ..Default::default()
-        });
+        replay_initialized_group()
+            .broker(&broker)
+            .orders(orders_id)
+            .secret(secret_id)
+            .call();
 
         let result = describe_initialized_as_alice(
             &broker,
@@ -531,12 +534,13 @@ mod tests {
                 .await
                 .expect("seed secret state");
 
-            replay_initialized_group(&broker, InitializedGroupSetup {
-                group: "g2",
-                orders: orders_id,
-                secret: secret_id,
-                secret_partitions: vec![PartitionIndex(0)],
-            });
+            replay_initialized_group()
+                .broker(&broker)
+                .group("g2")
+                .orders(orders_id)
+                .secret(secret_id)
+                .secret_partitions(vec![PartitionIndex(0)])
+                .call();
 
             let result =
                 describe_initialized_as_alice(&broker, &image, request_group("g2", None)).await;

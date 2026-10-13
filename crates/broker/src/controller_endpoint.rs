@@ -173,11 +173,7 @@ pub(crate) struct ControllerDialer {
 
 #[cfg(test)]
 mod tests {
-    use {
-        super::*,
-        crate::test_support::{VoterImageSetup, voter_image},
-        assert2::assert,
-    };
+    use {super::*, crate::test_support::voter_image, assert2::assert};
 
     /// A listener a voter advertises.
     #[derive(Debug)]
@@ -245,14 +241,14 @@ mod tests {
     }
 
     fn image_with_voter(node: u64, host: &str, port: u16) -> krabka_metadata::MetadataImage {
-        voter_image(VoterImageSetup {
-            node: krabka_ids::NodeId(node),
-            endpoints: endpoints(&[NamedEndpoint {
+        voter_image()
+            .node(krabka_ids::NodeId(node))
+            .endpoints(endpoints(&[NamedEndpoint {
                 name: "CONTROLLER",
                 host,
                 port,
-            }]),
-        })
+            }]))
+            .call()
     }
 
     /// The voter set answers first, and the configured quorum answers for a

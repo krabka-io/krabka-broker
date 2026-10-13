@@ -233,7 +233,7 @@ mod tests {
                 test_support::offsets_partition_image,
             },
             partition::{Partition, ProducerAppendCheck},
-            test_support::{FakeMetadataSource, StandalonePartitionSetup, open_partition},
+            test_support::{FakeMetadataSource, open_partition},
             txn::handlers::txn_offset_commit::{test_support::request, verification::offset_batch},
         },
         assert2::{assert, check},
@@ -292,11 +292,11 @@ mod tests {
         registry.insert(
             OFFSETS_TOPIC.into(),
             PartitionIndex(OFFSETS_PARTITION),
-            open_partition(dir.path(), StandalonePartitionSetup {
-                topic: OFFSETS_TOPIC,
-                partition: krabka_ids::PartitionIndex(OFFSETS_PARTITION),
-                ..Default::default()
-            }),
+            open_partition()
+                .log_dir(dir.path())
+                .topic(OFFSETS_TOPIC)
+                .partition(OFFSETS_PARTITION)
+                .call(),
         );
         OffsetsRegistry {
             _dir: dir,

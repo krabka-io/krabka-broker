@@ -8,14 +8,14 @@
 
 use {
     crate::{
-        kafka_wire::AutomaticTopicSetup,
+        kafka_wire::create_automatic_topic_plaintext,
         log_dir_wire::{alter_replica_log_dirs, describe_log_dirs},
         plaintext_cluster::{
             ThreeBrokerCluster, broker_id, controller_leader_addr, node_id,
             start_three_broker_plaintext_cluster,
             start_three_broker_plaintext_cluster_with_log_dirs, wait_partition_exists,
         },
-        plaintext_wire::{CLIENT_ID, create_topic_plaintext},
+        plaintext_wire::CLIENT_ID,
         reassign_rpc::{drive_alter_reassignments, drive_list_reassignments},
         support::topics::{ConfiguredTopicSetup, TopicReplicationFactor},
     },
@@ -47,15 +47,16 @@ async fn preplacement_log_dir_preference_survives_until_reassignment_materialize
         d3: _d3,
         addr1: addr,
     } = start_three_broker_plaintext_cluster_with_log_dirs(&paths).await;
-    create_topic_plaintext(addr, AutomaticTopicSetup {
-        client_id: CLIENT_ID,
-        topic: ConfiguredTopicSetup {
-            name: ("preplaced").into(),
+    create_automatic_topic_plaintext()
+        .addr(addr)
+        .client_id(CLIENT_ID)
+        .topic(ConfiguredTopicSetup {
+            name: "preplaced".into(),
             replicas: TopicReplicationFactor(2),
             ..Default::default()
-        },
-    })
-    .await;
+        })
+        .call()
+        .await;
     wait_partition_exists(&h1, "preplaced", 0).await;
 
     let partition = h1
@@ -363,15 +364,16 @@ async fn cancel_via_null_replicas_reverts() {
 
 async fn foo_cluster() -> ThreeBrokerCluster {
     let cluster = start_three_broker_plaintext_cluster().await;
-    create_topic_plaintext(cluster.addr1, AutomaticTopicSetup {
-        client_id: CLIENT_ID,
-        topic: ConfiguredTopicSetup {
-            name: ("foo").into(),
+    create_automatic_topic_plaintext()
+        .addr(cluster.addr1)
+        .client_id(CLIENT_ID)
+        .topic(ConfiguredTopicSetup {
+            name: "foo".into(),
             replicas: TopicReplicationFactor(2),
             ..Default::default()
-        },
-    })
-    .await;
+        })
+        .call()
+        .await;
     wait_partition_exists(&cluster.h1, "foo", 0).await;
     cluster
 }

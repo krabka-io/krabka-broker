@@ -25,7 +25,7 @@ use {
     krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse,
 };
 
-#[derive(Clone, Copy, Default)]
+#[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
 struct LookupKeyType(i8);
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
@@ -43,11 +43,19 @@ struct VersionedResponse {
     response: FindCoordinatorResponse,
 }
 
+#[bon::builder]
 async fn check_lookup_versions(
     broker: &Broker,
-    setup: LookupSetup<'_>,
+    #[builder(default = "g")] key: &'_ str,
+    #[builder(into, default)] key_type: LookupKeyType,
+    #[builder(default = & ["g"])] keys: &'_ [&'_ str],
     rows: Vec<VersionedResponse>,
 ) {
+    let setup = LookupSetup {
+        key,
+        key_type,
+        keys,
+    };
     for VersionedResponse {
         version,
         response: expected,
@@ -384,7 +392,11 @@ async fn denied_group_key_answers_kafka_row_shape_per_version() {
             ),
         },
     ];
-    check_lookup_versions(&broker, LookupSetup::default(), rows).await;
+    check_lookup_versions()
+        .broker(&broker)
+        .rows(rows)
+        .call()
+        .await;
     broker_handle.shutdown().await;
 }
 
@@ -454,16 +466,14 @@ async fn unknown_key_type_fails_the_whole_request() {
             ),
         },
     ];
-    check_lookup_versions(
-        &broker,
-        LookupSetup {
-            key: "a",
-            key_type: LookupKeyType(i8::MAX),
-            keys: &["a", "b"],
-        },
-        rows,
-    )
-    .await;
+    check_lookup_versions()
+        .broker(&broker)
+        .key("a")
+        .key_type(i8::MAX)
+        .keys(&["a", "b"])
+        .rows(rows)
+        .call()
+        .await;
     let image = broker_handle.controller_image_for_test();
     assert!(image.topic(TXN_TOPIC).is_none());
     assert!(image.topic(TOPIC).is_none());

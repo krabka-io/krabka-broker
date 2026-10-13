@@ -33,10 +33,10 @@ use {
         cluster::start_single_broker_sasl_plaintext_with_users,
         kafka_wire::{
             PlainAuthenticationSetup,
-            quotas::{QuotaEntity, QuotaValue, UserQuotaSetup, alter_user_quota},
+            quotas::{QuotaEntity, alter_user_quota},
         },
         support::{
-            acl::{ClusterAclSetup, TopicAclSetup, cluster_acl_record, topic_acl_record},
+            acl::{cluster_acl_record, topic_acl_record},
             client::metric_value,
         },
         topic_admin::{TopicMutationResult, drive_create_topics_sasl, drive_delete_topics_sasl},
@@ -59,13 +59,13 @@ async fn wait_for_mutation_quota_in_image(handle: &krabka_broker::BrokerHandle) 
 
 /// Install Alice's shared mutation quota and return its complete wire response.
 async fn set_controller_mutation_quota(addr: std::net::SocketAddr) -> Vec<(QuotaEntity, i16)> {
-    alter_user_quota(addr, UserQuotaSetup {
-        authentication: PlainAuthenticationSetup::admin(CLIENT_ID),
-        key: "controller_mutation_rate",
-        value: QuotaValue(2.0),
-        ..Default::default()
-    })
-    .await
+    alter_user_quota()
+        .addr(addr)
+        .authentication(PlainAuthenticationSetup::admin(CLIENT_ID))
+        .key("controller_mutation_rate")
+        .value(2.0)
+        .call()
+        .await
 }
 
 /// Test 1: Set `controller_mutation_rate=2.0` for alice. A strict v7 request
@@ -81,10 +81,7 @@ async fn controller_mutation_rate_throttles_create_topics() {
 
     // Seed an ACL granting alice Cluster Create — this also disables the
     // compat shim (allow-all when no ACLs present in image).
-    let admin_acl = cluster_acl_record(ClusterAclSetup {
-        operation: AclOperation::Create,
-        ..Default::default()
-    });
+    let admin_acl = cluster_acl_record().operation(AclOperation::Create).call();
     handle
         .submit_metadata_record_for_test(admin_acl)
         .await
@@ -157,11 +154,10 @@ async fn controller_mutation_rate_throttles_delete_topics() {
 
     // Seed a dummy ACL to disable the compat shim (allow-all when no ACLs present).
     // Use an unrelated ACL; the real alice ACLs come below.
-    let shim_disable = topic_acl_record(TopicAclSetup {
-        topic: "__compat_shim_disable__",
-        principal: "User:admin",
-        ..Default::default()
-    });
+    let shim_disable = topic_acl_record()
+        .topic("__compat_shim_disable__")
+        .principal("User:admin")
+        .call();
     handle
         .submit_metadata_record_for_test(shim_disable)
         .await
@@ -181,11 +177,10 @@ async fn controller_mutation_rate_throttles_delete_topics() {
     assert!(ec == 0);
 
     // Grant alice Topic Delete on "to-delete".
-    let alice_delete_acl = topic_acl_record(TopicAclSetup {
-        topic: "to-delete",
-        operation: AclOperation::Delete,
-        ..Default::default()
-    });
+    let alice_delete_acl = topic_acl_record()
+        .topic("to-delete")
+        .operation(AclOperation::Delete)
+        .call();
     handle
         .submit_metadata_record_for_test(alice_delete_acl)
         .await
