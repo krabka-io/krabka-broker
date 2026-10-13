@@ -617,49 +617,40 @@ mod tests {
         .map_err(|error| error.to_string())
     }
 
-    // A Kafka cluster with a single controller: node 2 is a broker, and its
-    // id comes from the file alone. It used to run raft as node 1, the flag's
-    // default, and so refused to start as a non-controller in its own quorum.
-    #[test]
-    fn a_broker_only_node_takes_its_raft_id_from_the_file() {
-        let config = configured(
-            &[],
+    #[yare::parameterized(
+        broker_only_uses_file_id = {
             "broker_id = 2\n\
              controller_quorum_voters = [\"1@controller-1:9592\"]\n\
              [process]\n\
              roles = [\"broker\"]\n",
-        )
-        .expect("the config assembles");
-
+            2,
+            krabka_broker::NodeId(2),
+            krabka_broker::NodeId(1),
+            "controller-1:9592",
+        },
+        combined_without_voters_seeds_itself = {
+            "broker_id = 42\n",
+            42,
+            krabka_broker::NodeId(42),
+            krabka_broker::NodeId(42),
+            "0.0.0.0:9093",
+        },
+    )]
+    fn file_broker_id_seeds_the_raft_node_identity(
+        toml: &'static str,
+        broker_id: i32,
+        node_id: krabka_broker::NodeId,
+        voter_id: krabka_broker::NodeId,
+        voter_addr: &'static str,
+    ) {
+        let config = configured(&[], toml).expect("the config assembles");
         assert!(config.validate().is_ok());
         assert!(
             (
                 config.broker_id,
                 config.node_id,
                 config.controller_quorum_voters
-            ) == (2, krabka_broker::NodeId(2), vec![(
-                krabka_broker::NodeId(1),
-                "controller-1:9592".to_owned()
-            )])
-        );
-    }
-
-    // With no voter set anywhere, the node is the single voter of its own
-    // quorum, under the id the file names.
-    #[test]
-    fn a_combined_node_without_voters_seeds_itself_under_the_file_id() {
-        let config = configured(&[], "broker_id = 42\n").expect("the config assembles");
-
-        assert!(config.validate().is_ok());
-        assert!(
-            (
-                config.broker_id,
-                config.node_id,
-                config.controller_quorum_voters
-            ) == (42, krabka_broker::NodeId(42), vec![(
-                krabka_broker::NodeId(42),
-                "0.0.0.0:9093".to_owned()
-            )])
+            ) == (broker_id, node_id, vec![(voter_id, voter_addr.to_owned())])
         );
     }
 
