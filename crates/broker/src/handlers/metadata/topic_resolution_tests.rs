@@ -98,9 +98,7 @@ struct RequestedTopic {
 }
 
 impl RequestedTopic {
-    const fn new(name: Name, id: Id) -> Self {
-        Self { name, id }
-    }
+    const fn new(name: Name, id: Id) -> Self { Self { name, id } }
 }
 
 /// One table row.

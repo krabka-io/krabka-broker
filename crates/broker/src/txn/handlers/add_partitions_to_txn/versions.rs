@@ -384,10 +384,7 @@ mod tests {
             },
             Case {
                 name: "each entry is checked with its own producer epoch",
-                entries: [
-                    entry(EPOCH - 1, false, ONLY_A),
-                    entry(EPOCH, false, ONLY_B),
-                ],
+                entries: [entry(EPOCH - 1, false, ONLY_A), entry(EPOCH, false, ONLY_B)],
                 results: [A_FENCED, A_NONE],
                 enlisted: ENLISTED_B,
             },
@@ -397,7 +394,10 @@ mod tests {
                     entry(EPOCH, false, ONLY_A),
                     entry(EPOCH, false, B_AND_MISSING),
                 ],
-                results: [B_NOT_ATTEMPTED_MISSING_UNKNOWN, B_NOT_ATTEMPTED_MISSING_UNKNOWN],
+                results: [
+                    B_NOT_ATTEMPTED_MISSING_UNKNOWN,
+                    B_NOT_ATTEMPTED_MISSING_UNKNOWN,
+                ],
                 enlisted: &[],
             },
             Case {

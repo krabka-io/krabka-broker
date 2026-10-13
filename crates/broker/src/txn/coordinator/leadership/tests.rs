@@ -53,7 +53,11 @@ fn elected_and_loading(
 ) -> Step {
     Step {
         name,
-        image: image(Uuid::from_u128(topic), THIS_BROKER, LeaderEpoch(leader_epoch)),
+        image: image(
+            Uuid::from_u128(topic),
+            THIS_BROKER,
+            LeaderEpoch(leader_epoch),
+        ),
         changes: changes(unload, &[LoadSpec {
             partition: PartitionIndex(0),
             generation: LoadGeneration(generation),
@@ -216,7 +220,13 @@ fn an_election_loads_and_a_resignation_unloads() {
         elected_and_loading("this broker is elected again at epoch 2", 1, 2, &[], 2),
         Step {
             load_ends: Some(LoadStatus::Failed),
-            ..elected_and_loading("a new term during a load drops the load and starts another", 1, 3, &[PartitionIndex(0)], 3)
+            ..elected_and_loading(
+                "a new term during a load drops the load and starts another",
+                1,
+                3,
+                &[PartitionIndex(0)],
+                3,
+            )
         },
         Step {
             name: "a failed load waits for the next election",
@@ -233,7 +243,13 @@ fn an_election_loads_and_a_resignation_unloads() {
         },
         Step {
             load_ends: Some(LoadStatus::Loaded),
-            ..elected_and_loading("the next election loads again", 1, 4, &[PartitionIndex(0)], 4)
+            ..elected_and_loading(
+                "the next election loads again",
+                1,
+                4,
+                &[PartitionIndex(0)],
+                4,
+            )
         },
         Step {
             name: "a stale image from before the topic existed, while the log is open",
@@ -259,7 +275,13 @@ fn an_election_loads_and_a_resignation_unloads() {
             after: Some(leadership(Uuid::from_u128(2), LeaderEpoch(0), None)),
             ..Default::default()
         },
-        elected_and_loading("the topic is created a third time and this broker leads it at epoch 0", 3, 0, &[], 5),
+        elected_and_loading(
+            "the topic is created a third time and this broker leads it at epoch 0",
+            3,
+            0,
+            &[],
+            5,
+        ),
     ]);
 }
 

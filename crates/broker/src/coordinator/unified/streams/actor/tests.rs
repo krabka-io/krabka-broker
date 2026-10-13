@@ -698,7 +698,6 @@ fn heartbeat_change_rows() -> Vec<HeartbeatRow> {
 /// compares the whole response.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() {
-
     let rows = heartbeat_change_rows();
 
     for row in rows {
@@ -773,9 +772,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
 /// replay pairs the new assignment epoch with old member targets.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_new_target_persists_the_target_of_every_member() {
-    use crate::{
-        coordinator::unified::{persistence::Key, streams::persistence::StreamsGroupKey},
-    };
+    use crate::coordinator::unified::{persistence::Key, streams::persistence::StreamsGroupKey};
 
     let source = in_topic_source(2);
     let (coord, log) = make_coordinator();
@@ -823,9 +820,7 @@ async fn a_new_target_persists_the_target_of_every_member() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_seeded_group_asks_for_its_missing_internal_topics_again() {
     use {
-        crate::{
-            coordinator::unified::streams::topology::{InternalTopicSpec, status},
-        },
+        crate::coordinator::unified::streams::topology::{InternalTopicSpec, status},
         krabka_protocol::owned::common::streams_group_heartbeat_response::status::Status,
     };
 
@@ -893,9 +888,7 @@ async fn a_seeded_group_asks_for_its_missing_internal_topics_again() {
 /// the loaded member revokes both of its tasks instead.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_group_loaded_before_the_metadata_source_connects_assigns_its_tasks() {
-    use {
-        krabka_protocol::owned::common::streams_group_heartbeat_request::task_ids::TaskIds as OwnedTaskIds,
-    };
+    use krabka_protocol::owned::common::streams_group_heartbeat_request::task_ids::TaskIds as OwnedTaskIds;
 
     struct Row {
         member_id: &'static str,
@@ -1007,9 +1000,7 @@ async fn a_group_loaded_before_the_metadata_source_connects_assigns_its_tasks() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_join_sizes_the_internal_topics_as_kafka_does() {
     use {
-        crate::{
-            coordinator::unified::streams::topology::{InternalTopicSpec, status},
-        },
+        crate::coordinator::unified::streams::topology::{InternalTopicSpec, status},
         krabka_protocol::owned::{
             common::{
                 streams_group_heartbeat_request::topic_info::TopicInfo,
@@ -1150,9 +1141,7 @@ async fn a_join_sizes_the_internal_topics_as_kafka_does() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_heartbeat_status_list_follows_kafka() {
     use {
-        crate::{
-            coordinator::unified::streams::topology::status,
-        },
+        crate::coordinator::unified::streams::topology::status,
         krabka_protocol::owned::{
             common::streams_group_heartbeat_response::status::Status,
             streams_group_heartbeat_request::{Subtopology, Topology},
@@ -1536,9 +1525,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
 /// heartbeat of `m1` and then of `m2`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_member_keeps_its_epoch_until_it_revokes_and_is_fenced_after_its_timeout() {
-    use {
-        krabka_protocol::owned::common::streams_group_heartbeat_request::task_ids::TaskIds as OwnedTaskIds,
-    };
+    use krabka_protocol::owned::common::streams_group_heartbeat_request::task_ids::TaskIds as OwnedTaskIds;
 
     let accepted = accepted_tasks;
     // (name, rebalance timeout of m1, m1 revokes task 1, expected last m1 and
@@ -1634,9 +1621,7 @@ async fn a_member_keeps_its_epoch_until_it_revokes_and_is_fenced_after_its_timeo
 /// afterwards.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_topology_update_or_an_invalid_owned_task_is_refused() {
-    use {
-        krabka_protocol::owned::common::streams_group_heartbeat_request::task_ids::TaskIds,
-    };
+    use krabka_protocol::owned::common::streams_group_heartbeat_request::task_ids::TaskIds;
 
     let join = |member_id: &str, epoch, source: &str| {
         let mut topology = one_subtopology(SingleSubtopologySetup::default());
@@ -1733,7 +1718,6 @@ async fn a_topology_update_or_an_invalid_owned_task_is_refused() {
 /// trunk's: 4.3.1 refuses an instance id before the group sees the request.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_static_member_follows_kafka_static_membership() {
-
     let config = StreamsGroupConfig {
         max_size: 2,
         unstable_api_versions: UnstableApiVersions::Enabled,
@@ -2189,9 +2173,7 @@ fn older_epoch_commit_checks_each_tasks_assignment_epoch() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_member_missing_a_rack_aware_tag_gets_missing_client_tags_at_version_1() {
     use {
-        crate::{
-            coordinator::unified::streams::topology::status,
-        },
+        crate::coordinator::unified::streams::topology::status,
         krabka_protocol::owned::common::{
             streams_group_heartbeat_request::key_value::KeyValue,
             streams_group_heartbeat_response::status::Status,
@@ -2909,7 +2891,6 @@ async fn a_changed_validation_or_assignment_config_bumps_the_epoch() {
 /// `newStreamsGroupMetadataRecord` writes them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_bump_records_the_validated_topology_epoch() {
-
     // (case, the topics in the image, the recorded validated topology epoch)
     let rows = [
         (

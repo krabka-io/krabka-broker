@@ -460,10 +460,7 @@ async fn a_healthy_partition_in_the_same_request_is_unaffected() {
         .group(group)
         .topic_id(topic_id.0)
         .build()
-        .expect(vec![
-            acquired_run(0, 3, 4),
-            acquired_run(1, 0, 4),
-        ])
+        .expect(vec![acquired_run(0, 3, 4), acquired_run(1, 0, 4)])
         .await;
     broker.shutdown().await;
 }

@@ -13,8 +13,7 @@ use {
         authorizer::AuthorizationResult,
         broker::Broker,
         codes,
-        handlers::RequestContext,
-        handlers::test_support::StartedBroker,
+        handlers::{RequestContext, test_support::StartedBroker},
         test_support::{
             decode_response, encode_request, peer, principal, start_broker_no_audit_with,
             try_dispatch_context,
