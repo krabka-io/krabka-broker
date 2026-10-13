@@ -17,12 +17,10 @@
 //! cover the finalized version is `INVALID_REQUEST (42)`, and a candidate that
 //! is not caught up is `REQUEST_TIMED_OUT (7)`.
 
+#[cfg(test)]
+use crate::handlers::raft_voter::add_voter_request;
 use {
-    crate::{
-        broker::Broker,
-        codes,
-        handlers::raft_voter::{add_voter_request, respond},
-    },
+    crate::{broker::Broker, codes, handlers::raft_voter::respond},
     krabka_metadata::{Voter, VoterEndpoint},
     krabka_protocol::owned::{
         add_raft_voter_request::AddRaftVoterRequest, add_raft_voter_response::AddRaftVoterResponse,

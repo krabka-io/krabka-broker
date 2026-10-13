@@ -27,12 +27,14 @@
 //! `KafkaRaftClient.hasValidClusterId` returns true for a null cluster id. The
 //! add and remove paths already read it that way.
 
+#[cfg(test)]
+use crate::handlers::raft_voter::add_voter_request;
 use {
     crate::{
         codes,
         handlers::{
             ErrorCodeResponse as _, cluster_action_denied,
-            raft_voter::{Admitted, Refusals, add_voter_request},
+            raft_voter::{Admitted, Refusals},
         },
     },
     krabka_metadata::{Voter, VoterEndpoint},

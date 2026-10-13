@@ -5,9 +5,9 @@
 
 use {
     crate::{
-        Cli,
+        Cli, RestoreError,
         args::RestoreArgs,
-        backend::ArchiveStore,
+        backend::{ArchiveStore, open_archive},
         discover::{ArchiveObject, SegmentInventory},
     },
     clap::Parser as _,
@@ -46,8 +46,8 @@ pub(super) fn args_from(archive_dir: &std::path::Path, extra: &[&str]) -> Restor
     Cli::parse_from(argv).args
 }
 
-pub(super) async fn inventory_error(args: &RestoreArgs) -> crate::RestoreError {
-    let store = crate::backend::open_archive(args).expect("store");
+pub(super) async fn inventory_error(args: &RestoreArgs) -> RestoreError {
+    let store = open_archive(args).expect("store");
     super::inventory(&store, args).await.unwrap_err()
 }
 

@@ -13,6 +13,7 @@ use {
     crate::{
         api_catalog::UnstableApiVersions,
         coordinator::unified::{
+            GroupCoordinator,
             offsets_log::fake::InMemoryOffsetsLog,
             persistence::parse_key,
             streams::{
@@ -53,7 +54,7 @@ fn input_topic_source(partitions: u32) -> Arc<FakeMetadataSource> {
 fn coordinator_with_source(
     source: Arc<FakeMetadataSource>,
     max_size: Option<usize>,
-) -> Arc<crate::coordinator::unified::GroupCoordinator> {
+) -> Arc<GroupCoordinator> {
     let mut config = undelayed();
     if let Some(max_size) = max_size {
         config.max_size = max_size;
