@@ -6,10 +6,11 @@
 //! rules, as Kafka's `validateOffsetCommit` does with its `isTransactional`
 //! flag, and [`CommitFence`] says which rule a `ValidateCommit` runs.
 
+#[cfg(test)]
+use crate::codes;
 use {
     super::{ErrorCode, GroupActorHandle, GroupActorMessage},
     crate::{
-        codes,
         coordinator::unified::{classic_ops, group::CoordinatorGroup},
         task_util::ask,
     },
@@ -104,13 +105,12 @@ pub(crate) async fn validate_commit(
     handle: &GroupActorHandle,
     commit: CommitRequest,
 ) -> Option<ErrorCode> {
-    super::super::commit_validation_reply(
-        ask(&handle.tx, |reply| GroupActorMessage::ValidateCommit {
-            commit,
-            reply,
-        })
-        .await,
-    )
+    let result = ask(&handle.tx, |reply| GroupActorMessage::ValidateCommit {
+        commit,
+        reply,
+    })
+    .await;
+    super::super::commit_validation_reply(&result)
 }
 
 #[cfg(test)]
