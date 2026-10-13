@@ -597,6 +597,7 @@ mod tests {
         let default_user_app: Level = vec![("user", None), ("client-id", Some("app"))];
         let alice: Level = vec![("user", Some("alice"))];
         let default_user: Level = vec![("user", None)];
+        let alice_quota = || Some((user_key("alice"), 64.0));
         let cases: Vec<Row> = vec![
             Row {
                 label: "client-id levels never match a null client id",
@@ -609,15 +610,15 @@ mod tests {
                 label: "the user quota applies to a null client id",
                 configured: vec![alice.clone(), default_client.clone()],
                 principal: "alice",
-                null_expected: Some((user_key("alice"), 64.0)),
-                empty_expected: Some((user_key("alice"), 64.0)),
+                null_expected: alice_quota(),
+                empty_expected: alice_quota(),
             },
             Row {
                 label: "the default user quota applies to a null client id",
                 configured: vec![default_user.clone(), default_client],
                 principal: "alice",
-                null_expected: Some((user_key("alice"), 64.0)),
-                empty_expected: Some((user_key("alice"), 64.0)),
+                null_expected: alice_quota(),
+                empty_expected: alice_quota(),
             },
             Row {
                 label: "a (user, default client) quota shadows the user quota",
