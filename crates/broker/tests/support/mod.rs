@@ -69,6 +69,7 @@ pub mod discovery;
 pub mod diskless;
 pub mod durability;
 pub mod fetch;
+pub mod gssapi;
 pub mod listeners;
 pub mod load_test;
 pub mod offsets;
