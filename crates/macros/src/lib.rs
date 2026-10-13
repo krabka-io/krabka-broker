@@ -340,10 +340,33 @@
 //! `#[group_timing(session = KEY, heartbeat = KEY, assignment = KEY)]`.
 //! The implementation uses the broker's existing group timing parser and bounds.
 //!
+//! `#[derive(GroupLifecycle)]` adds epoch changes, session expiry queries, and
+//! member eviction to a group state. Select its existing policy with
+//! `#[group_lifecycle(protocol = "consumer" | "share" | "streams")]`.
+//! Consumer and share groups get assignment delay checks; consumer and streams
+//! groups get rebalance fencing. A successful streams epoch change marks the
+//! group dirty. All removals call the state's own `remove_member` method.
+//!
 //! `#[derive(FlexibleEpochValue)]` adds the version-zero epoch codec to a
 //! named struct with an `i32` epoch followed by an `i64` tagged value.
 //! `#[epoch_value(record = "RecordName")]` supplies the decoding error name.
 //! A zero tagged value is omitted on encode and restored on decode.
+//!
+//! `#[derive(KafkaUuid)]` adds display, parsing, and string serde to a UUID
+//! wrapper. It calls the declaration's existing `encode`, `decode`, and
+//! `KafkaUuidError` helpers. Display retains the formatter's padding rules.
+//!
+//! # Handler admission
+//!
+//! `#[voter_admission(request = TYPE, api = KEY, gate = FUNCTION, refusals = EXPR)]`
+//! goes on an ordinary async `handle(broker, version, req_bytes, ctx)` function.
+//! It runs the shared voter prelude before the operation body and returns early
+//! for an encoded refusal. The body retains its original tokens and scopes.
+//!
+//! `share_state_handler!(Request, Response, TopicRow, PartitionRow, serve)`
+//! declares a share-state handler. A denied request returns an error row for
+//! every requested partition in request order. An allowed request calls `serve`
+//! with the share coordinator and a fresh metadata snapshot.
 //!
 //! # Direct runtime and response tables
 //!
@@ -420,8 +443,10 @@ mod fixtures;
 mod flexible_array_value;
 mod flexible_epoch_value;
 mod gcs_fields;
+mod group_lifecycle;
 mod group_timing_config;
 mod human_units;
+mod kafka_uuid;
 mod krabka_env;
 mod legacy_fixtures;
 mod membership_defaults;
@@ -444,11 +469,13 @@ mod runtime_overlay;
 mod runtime_policy_fields;
 mod s3_fields;
 mod sendfile_match;
+mod share_state_handler;
 mod share_state_value;
 mod throttle_probes;
 mod timer_hooks;
 mod timestamped_batch;
 mod transport_errors;
+mod voter_admission;
 mod wire_fixtures;
 mod wire_values;
 
@@ -545,6 +572,16 @@ pub fn group_timing_config(item: ItemStruct) -> Result<TokenStream, ParseError> 
     group_timing_config::expand(item)
 }
 
+/// Derive group transitions with the selected protocol's existing lifecycle policy.
+#[moxy::derive(GroupLifecycle, attributes(group_lifecycle))]
+pub fn group_lifecycle(item: ItemStruct) -> Result<TokenStream, ParseError> {
+    group_lifecycle::expand(item)
+}
+
+/// Derive display, parsing, and string serde using the caller's Kafka UUID codec.
+#[moxy::derive(KafkaUuid)]
+pub fn kafka_uuid(item: ItemStruct) -> Result<TokenStream, ParseError> { kafka_uuid::expand(item) }
+
 /// Add the shared timing defaults before `FieldDefaults` derives the config constructor.
 #[moxy::attribute]
 pub fn membership_defaults(
@@ -576,6 +613,21 @@ pub fn flexible_array_value(item: ItemStruct) -> Result<TokenStream, ParseError>
 #[moxy::function]
 pub fn response_errors(tokens: NativeTokenStream) -> Result<TokenStream, ParseError> {
     response_encoding::expand(&tokens.into())
+}
+
+/// Check share-state admission and construct denial rows in request order.
+#[moxy::function]
+pub fn share_state_handler(tokens: NativeTokenStream) -> Result<TokenStream, ParseError> {
+    share_state_handler::expand(&tokens.into())
+}
+
+/// Run voter admission before the explicit handler's operation body.
+#[moxy::attribute]
+pub fn voter_admission(
+    meta: NativeTokenStream,
+    item: NativeTokenStream,
+) -> Result<NativeTokenStream, ParseError> {
+    voter_admission::expand(meta, item)
 }
 
 /// Generate the flat broker configuration declaration with its shared derives.

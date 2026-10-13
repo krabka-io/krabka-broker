@@ -292,9 +292,15 @@ Use the [moxy documentation](https://raw.githubusercontent.com/aacebo/moxy/refs/
 5. Migrate every caller and remove the old macro. Check emitted behavior with a compiled consumer test and malformed-input tests. For codecs, compare literal golden bytes and retain the existing decode-error tests.
 6. Run the macro tests, the affected broker tests, Clippy, and the format check. Keep dependency features limited to those the implementation uses.
 
+When a macro inserts code around caller expressions or a function body, retain those native token streams. Converting groups through moxy can merge their opening and closing delimiter spans. Use moxy to parse the declaration and generate new code, then join that code with the original native tokens.
+
 The group timing configs use `GroupTimingConfig`; flexible epoch records use `FlexibleEpochValue`. Runtime assignments use `set_runtime!`, and external response types use `response_errors!`. The startup and metric fixtures emit direct code. These examples live in `crates/macros/src/` with consumer tests in `crates/macros/tests/`.
 
 The broker config uses one `broker_config!` declaration with all fields in order. Membership configs use ordinary fields and `membership_defaults` before `FieldDefaults`. Share-state and array records use `ShareStateValue` and `FlexibleArrayValue`. The wire constructors emit exhaustive literals directly and retain the original expression tokens.
+
+Group states use `GroupLifecycle` with a named protocol policy. Voter handlers use ordinary async declarations with `voter_admission` for the shared admission step. The five share-state RPCs use one `share_state_handler!` expansion that emits admission and denial rows directly.
+
+The format crate's cluster and directory IDs use `KafkaUuid` with their existing codec helpers. The declarations retain their distinct types; the derive supplies display, parsing, and string serde.
 
 For parallel work, give each subagent one macro family and its callers. Keep shared exports with one owner. Review the combined diff for scope, spans, and caller behavior before running the checks.
 
