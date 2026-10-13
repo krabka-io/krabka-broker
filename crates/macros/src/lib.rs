@@ -466,11 +466,13 @@ use {
 mod api_names;
 mod async_write_delegate;
 mod auth_fixtures;
+mod background_controllers;
 mod bound_start_fixture;
 mod broker_config;
 mod cli_main;
 mod cli_support;
 mod config_table;
+mod connection_policy;
 mod container_fixtures;
 mod cross_storage_fixtures;
 mod decode_dispatch;
@@ -498,6 +500,7 @@ mod network_fixtures;
 mod object_ops;
 mod object_store_config;
 mod object_store_delegate;
+mod otlp_exporters;
 mod prelude;
 mod primitive_cmp;
 mod produce_fixtures;
@@ -522,6 +525,7 @@ mod timestamped_batch;
 mod transport_errors;
 mod value_framing;
 mod voter_admission;
+mod wire_codes;
 mod wire_fixtures;
 mod wire_values;
 mod worm_object_set;
@@ -698,6 +702,38 @@ pub fn extension_wire(
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {
     extension_wire::expand(&meta.into(), item)
+}
+
+/// Derive the controller adapter's three background-task trait implementations.
+/// The struct has `handle` and `node_id` fields, plus `holds_leadership` and
+/// `submit` methods. The derive delegates to the existing metadata source.
+#[moxy::derive(BackgroundControllers)]
+pub fn background_controllers(item: ItemStruct) -> Result<TokenStream, ParseError> {
+    background_controllers::expand(item)
+}
+
+/// Apply the existing retry and client options to an object-store builder expression.
+/// Accepts `connection_policy!(builder_expression, config_identifier)` and uses
+/// the caller's `retry_config`, `client_options`, and `ClientOptions` helpers.
+#[moxy::function]
+pub fn connection_policy(tokens: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    connection_policy::expand(tokens)
+}
+
+/// Declare wire constants and their ordered release, trunk, and private guard tables.
+/// Accepts `release TABLE { NAME = -1; } trunk TABLE { ... } private TABLE { ... }`.
+/// Each section emits public i16 constants and a private test-only `NamedCode` table.
+#[moxy::function]
+pub fn wire_codes(tokens: NativeTokenStream) -> Result<TokenStream, ParseError> {
+    wire_codes::expand(&tokens.into())
+}
+
+/// Implement transport selection for a typed OTLP exporter method declaration.
+/// Accepts an ordinary `fn method(&self) -> Result<SpanExporter, TelemetryError>;`
+/// declaration, or the same signature with `LogExporter`, inside `OtlpConfig`.
+#[moxy::function]
+pub fn otlp_exporter(tokens: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    otlp_exporters::expand(tokens)
 }
 
 /// Add flexible value framing around explicitly ordered private field codecs.

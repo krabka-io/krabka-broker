@@ -310,6 +310,8 @@ Function entry points remain typed functions in unit tests, which checks input d
 
 Extension handlers declare their owned request type under `extension_wire`; the attribute supplies the raw wire parameters, decoding and tracing. WORM admission uses one `worm_object_set!` rule with explicit proof and runtime headers. Ordinary proof functions use Creusot's `logic(open)` attribute directly. Their `cfg(creusot)` and adjacent mutation skip remain visible in source so the mutation checker can read them.
 
+Controller adapters use `BackgroundControllers` for the three background-task traits. Wire error codes use one `wire_codes!` declaration with release, trunk, and private sections. OTLP exporters use `otlp_exporter!` with complete method signatures. Object-store builders use `connection_policy!` around the builder expression. Catalog rows, static config keys, and topic authorization batches use ordinary Rust functions and constants.
+
 For parallel work, give each subagent one macro family and its callers. Keep shared exports with one owner. Review the combined diff for scope, spans, and caller behavior before running the checks.
 
 ## Logging and Observability
