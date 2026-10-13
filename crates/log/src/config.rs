@@ -324,8 +324,8 @@ pub struct LogConfig {
     /// the page cache and drop what it held of the range, so without this a
     /// consumer reading right behind the producer reads from disk. Every
     /// partition under [`SegmentAllocation::Preallocate`] holds up to this
-    /// much, plus one batch; `0` keeps only the newest batch. Default 1 MiB,
-    /// one default `max.partition.fetch.bytes`.
+    /// much, plus one batch; `0` keeps only the newest batch. Default 32 MiB:
+    /// see [`DEFAULT_TAIL_CACHE_SIZE`].
     #[default(DEFAULT_TAIL_CACHE_SIZE)]
     pub tail_cache_size: ByteSize,
 
