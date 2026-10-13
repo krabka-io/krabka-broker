@@ -222,16 +222,12 @@ mod tests {
         principal: Option<&str>,
         operation: i8,
     ) -> DescribeAclsRequest {
-        DescribeAclsRequest {
-            resource_type_filter: RESOURCE_TYPE_TOPIC,
-            resource_name_filter: resource_name.map(Into::into),
-            pattern_type_filter: PATTERN_TYPE_LITERAL,
-            principal_filter: principal.map(Into::into),
-            host_filter: Some("*".into()),
-            operation,
-            permission_type: PERMISSION_ALLOW,
-            ..Default::default()
-        }
+        crate::handlers::acl_test_support::acl_request_filter!(
+            DescribeAclsRequest,
+            resource_name,
+            principal,
+            operation
+        )
     }
 
     crate::test_support::context_helper!(client_id = "admin-client");
