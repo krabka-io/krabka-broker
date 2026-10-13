@@ -117,6 +117,35 @@ macro_rules! scheduled_tasks_type {
 }
 pub(crate) use scheduled_tasks_type;
 
+macro_rules! metadata_sweep_loop {
+    ($timer:expr, $cadence:expr, $shutdown:expr, $task:expr, $sweep:tt, $on_shutdown:tt $(,)?) => {
+        krabka_macros::sweep_loop! {
+            timer [$timer];
+            cadence [$cadence];
+            shutdown [$shutdown];
+            task [$task];
+            sweep $sweep;
+            on_shutdown $on_shutdown;
+        }
+    };
+}
+pub(crate) use metadata_sweep_loop;
+
+macro_rules! recover_after_refresh {
+    ($this:ident, $(#[$attribute:meta])* $body:block) => {
+        $(#[$attribute])*
+        pub(crate) async fn recover(
+            self: &Arc<Self>,
+            image: &krabka_metadata::MetadataImage,
+        ) -> Result<(), crate::error::BrokerError> {
+            let $this = self;
+            $this.refresh_leader_partitions(image).await.finished().await;
+            $body
+        }
+    };
+}
+pub(crate) use recover_after_refresh;
+
 #[cfg(test)]
 mod tests {
     use {super::*, assert2::assert, std::time::Duration};

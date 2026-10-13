@@ -1,5 +1,15 @@
 //! Shared live-broker and local-partition fixtures for handler tests.
 
+macro_rules! empty_share_offsets_response {
+    ($response:ident, $error_code:expr, $error_message:expr) => {
+        krabka_macros::unthrottled_wire!($response {
+            error_code: $error_code,
+            error_message: $error_message,
+            responses: Vec::new(),
+        })
+    };
+}
+
 use {
     crate::{
         api_catalog::UnstableApiVersions,

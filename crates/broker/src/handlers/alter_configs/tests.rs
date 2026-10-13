@@ -115,6 +115,22 @@ macro_rules! invalid_config_row {
     };
 }
 
+fn expected_resource_response(
+    resource_type: i8,
+    resource_name: &str,
+    error_code: i16,
+    error_message: Option<&str>,
+) -> AlterConfigsResponse {
+    krabka_macros::unthrottled_wire!(AlterConfigsResponse {
+        responses: vec![krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
+            error_code,
+            error_message: error_message.map(str::to_owned),
+            resource_type,
+            resource_name: resource_name.to_string(),
+        })],
+    })
+}
+
 #[tokio::test]
 async fn handle_preserves_resource_identity_for_unsupported_type() {
     let resp = Box::pin(drive_one(
@@ -123,14 +139,12 @@ async fn handle_preserves_resource_identity_for_unsupported_type() {
     ))
     .await;
 
-    let expected = krabka_macros::unthrottled_wire!(AlterConfigsResponse {
-        responses: vec![krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
-            error_code: codes::INVALID_REQUEST,
-            error_message: Some("Unknown resource type 77".to_string()),
-            resource_type: 77,
-            resource_name: "mystery".to_string(),
-        })],
-    });
+    let expected = expected_resource_response(
+        77,
+        "mystery",
+        codes::INVALID_REQUEST,
+        Some("Unknown resource type 77"),
+    );
     assert!(resp == expected);
 }
 
@@ -205,14 +219,8 @@ async fn authorized_group_resource_is_applied() {
     ))
     .await;
 
-    let expected = krabka_macros::unthrottled_wire!(AlterConfigsResponse {
-        responses: vec![krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
-            error_code: codes::NONE,
-            error_message: None,
-            resource_type: RESOURCE_TYPE_GROUP,
-            resource_name: "streams-app".to_string(),
-        })],
-    });
+    let expected =
+        expected_resource_response(RESOURCE_TYPE_GROUP, "streams-app", codes::NONE, None);
     assert!(resp == expected);
 }
 
@@ -224,14 +232,8 @@ async fn authorized_client_metrics_resource_is_applied() {
     ))
     .await;
 
-    let expected = krabka_macros::unthrottled_wire!(AlterConfigsResponse {
-        responses: vec![krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
-            error_code: codes::NONE,
-            error_message: None,
-            resource_type: RESOURCE_TYPE_CLIENT_METRICS,
-            resource_name: "sub-a".to_string(),
-        })],
-    });
+    let expected =
+        expected_resource_response(RESOURCE_TYPE_CLIENT_METRICS, "sub-a", codes::NONE, None);
     assert!(resp == expected);
 }
 
@@ -331,14 +333,7 @@ async fn authorized_broker_resource_is_applied() {
     ))
     .await;
 
-    let expected = krabka_macros::unthrottled_wire!(AlterConfigsResponse {
-        responses: vec![krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
-            error_code: codes::NONE,
-            error_message: None,
-            resource_type: RESOURCE_TYPE_BROKER,
-            resource_name: "1".to_string(),
-        })],
-    });
+    let expected = expected_resource_response(RESOURCE_TYPE_BROKER, "1", codes::NONE, None);
     assert!(resp == expected);
 }
 

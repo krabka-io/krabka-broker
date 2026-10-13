@@ -429,22 +429,22 @@ mod tests {
                 Arc::new(crate::authorizer::AllowAllAuthorizer),
                 crate::test_support::ShareApiSupport::Disabled,
                 vec!["missing"],
-                krabka_macros::unthrottled_wire!(DeleteShareGroupOffsetsResponse {
-                    error_code: codes::UNSUPPORTED_VERSION,
-                    error_message: Some("The version of API is not supported.".into()),
-                    responses: Vec::new(),
-                }),
+                empty_share_offsets_response!(
+                    DeleteShareGroupOffsetsResponse,
+                    codes::UNSUPPORTED_VERSION,
+                    Some("The version of API is not supported.".into())
+                ),
             ),
             (
                 "denied group returns top-level authorization failure",
                 Arc::new(crate::test_support::ControllerPeerAllowed(DenyAll)),
                 crate::test_support::ShareApiSupport::Enabled,
                 vec!["missing"],
-                krabka_macros::unthrottled_wire!(DeleteShareGroupOffsetsResponse {
-                    error_code: codes::GROUP_AUTHORIZATION_FAILED,
-                    error_message: Some("Group authorization failed.".into()),
-                    responses: Vec::new(),
-                }),
+                empty_share_offsets_response!(
+                    DeleteShareGroupOffsetsResponse,
+                    codes::GROUP_AUTHORIZATION_FAILED,
+                    Some("Group authorization failed.".into())
+                ),
             ),
         ];
         share_refusal_cases!(

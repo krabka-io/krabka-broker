@@ -430,11 +430,11 @@ mod tests {
                 crate::test_support::ShareApiSupport::Disabled,
                 "missing",
                 vec![0],
-                krabka_macros::unthrottled_wire!(AlterShareGroupOffsetsResponse {
-                    error_code: codes::UNSUPPORTED_VERSION,
-                    error_message: None,
-                    responses: Vec::new(),
-                }),
+                empty_share_offsets_response!(
+                    AlterShareGroupOffsetsResponse,
+                    codes::UNSUPPORTED_VERSION,
+                    None
+                ),
             ),
             (
                 "denied group returns top-level authorization failure",
@@ -442,11 +442,11 @@ mod tests {
                 crate::test_support::ShareApiSupport::Enabled,
                 "missing",
                 vec![0],
-                krabka_macros::unthrottled_wire!(AlterShareGroupOffsetsResponse {
-                    error_code: codes::GROUP_AUTHORIZATION_FAILED,
-                    error_message: None,
-                    responses: Vec::new(),
-                }),
+                empty_share_offsets_response!(
+                    AlterShareGroupOffsetsResponse,
+                    codes::GROUP_AUTHORIZATION_FAILED,
+                    None
+                ),
             ),
             (
                 "unknown topic preserves topic and partition fields",

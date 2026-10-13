@@ -64,10 +64,10 @@ mod tests {
         )
         .unwrap()
         .to_string();
-        assert!(output.contains(access_doc), "{output}");
-        assert!(output.contains("pub endpoint"), "{output}");
-        assert!(output.contains("pub access_key_id"), "{output}");
-        assert!(output.contains("pub secret_access_key"), "{output}");
-        assert!(output.contains("allow_http"), "{output}");
+        assert2::assert!(output.contains(access_doc), "{output}");
+        assert2::assert!(output.contains("pub endpoint"), "{output}");
+        assert2::assert!(output.contains("pub access_key_id"), "{output}");
+        assert2::assert!(output.contains("pub secret_access_key"), "{output}");
+        assert2::assert!(output.contains("allow_http"), "{output}");
     }
 }

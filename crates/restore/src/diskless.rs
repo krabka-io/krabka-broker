@@ -3,7 +3,7 @@
 use {
     crate::{
         ArchiveInventory, ArchiveStore, PartitionInventory, RestoreArgs, RestoreError,
-        args::PartitionRef,
+        args::{PartitionRef, offset_partitions},
         bound::Predicates,
         materialize::{
             open_partition_log,
@@ -116,7 +116,7 @@ pub(super) fn add_partitions(
         });
     }
     PartitionInventory::sort_by_topic_and_partition(&mut inventory.partitions);
-    for requested in crate::args::offset_partitions(args) {
+    for requested in offset_partitions(args) {
         if !inventory.holds(&requested.topic, requested.partition) {
             return Err(RestoreError::UnknownPartition {
                 topic: requested.topic.clone(),

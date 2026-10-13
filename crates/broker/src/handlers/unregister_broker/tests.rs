@@ -13,6 +13,7 @@ use {
         break_glass::gate::tests::{approved_proposal, image_of},
         broker::Broker,
         config::BreakGlassConfig,
+        controller_admin::CONTROLLER_ADMIN_CONNECTION_ID,
         handlers::{RequestContext, test_support::replicated_partition as partition_fixture},
         metrics::{
             BreakGlassAction as MetricBreakGlassAction, BreakGlassActionLabel, BrokerMetrics,

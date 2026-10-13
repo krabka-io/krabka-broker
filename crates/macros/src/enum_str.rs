@@ -1,8 +1,11 @@
 //! `#[derive(EnumStr)]`: see the crate documentation.
 
-use moxy::{
-    ast::{Attributed, Fields, ItemEnum, List, ParseError, Parser, Token},
-    token::{LitStr, TokenStream},
+use {
+    crate::meta::expression_tokens,
+    moxy::{
+        ast::{Attributed, Fields, ItemEnum, List, ParseError, Parser, Token},
+        token::{LitStr, TokenStream},
+    },
 };
 
 /// The value of a `key` or `key = name` argument: `None` for the bare key,
@@ -13,7 +16,7 @@ impl moxy::ast::FromMeta for FnName {
     fn from_meta(meta: &moxy::ast::Meta) -> Result<Self, ParseError> {
         match &meta.content {
             moxy::ast::MetaContent::Unit => Ok(Self(None)),
-            _ => crate::meta::expression_tokens(meta, "expected `key` or `key = name`")
+            _ => expression_tokens(meta, "expected `key` or `key = name`")
                 .map(|expr| Self(Some(expr))),
         }
     }

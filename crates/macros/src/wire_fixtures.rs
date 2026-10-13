@@ -56,9 +56,10 @@ pub(crate) fn retained_timestamp_bounds(
     let (tokens, _) = item_body(item, "retained_timestamp_bounds", TokenTree::is_keyword_fn)?;
     let item: TokenStream = tokens.into();
     let view: TokenStream = "@".parse().expect("Creusot view operator");
+    let requires = moxy::template! { requires };
     Ok(moxy::template! {
-        #[requires(super::time_index::sparse_timestamp_window_valid(window.0{{ view }}, window.1{{ view }}, window.2{{ view }}))]
-        #[requires(base{{ view }} >= 0 && {{ floor }}{{ view }} >= 0)]
+        #[{{ requires }}(super::time_index::sparse_timestamp_window_valid(window.0{{ view }}, window.1{{ view }}, window.2{{ view }}))]
+        #[{{ requires }}(base{{ view }} >= 0 && {{ floor }}{{ view }} >= 0)]
         {{ item }}
     })
 }
@@ -307,6 +308,7 @@ mod fixture_tests {
                 .unwrap(),
         )
         .unwrap();
+        check!(expanded.to_string().contains("requires"));
         let function = moxy::parse!({ expanded } as ItemFn).unwrap();
         check!(function.sig.ident == "candidate");
         check!(function.sig.params.inner.inputs.len() == 2);

@@ -58,17 +58,17 @@ pub(crate) async fn run(
     let timer = Arc::clone(&cfg.timer);
     // Failed partitions persist across sweeps until compaction succeeds.
     let mut uncleanable = UncleanablePartitions::default();
-    krabka_macros::sweep_loop! {
-        timer [&*timer];
-        cadence [(Duration::ZERO, cfg.interval.to_std())];
-        shutdown [&shutdown];
-        task [TASK];
-        sweep {
+    crate::task_util::metadata_sweep_loop!(
+        &*timer,
+        (Duration::ZERO, cfg.interval.to_std()),
+        &shutdown,
+        TASK,
+        {
             let image = cfg.current_image();
             tick_all(&partitions, image.as_deref(), &metrics, &mut uncleanable).await;
-        };
-        on_shutdown {
+        },
+        {
             tracing::debug!("cleaner task shutting down");
-        };
-    }
+        },
+    );
 }

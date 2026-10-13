@@ -36,6 +36,14 @@
 
 #![allow(dead_code)]
 
+#[macro_export]
+macro_rules! once_value {
+    ($value_type:ty, $initialize:block) => {{
+        static VALUE: std::sync::OnceLock<$value_type> = std::sync::OnceLock::new();
+        VALUE.get_or_init(|| $initialize)
+    }};
+}
+
 /// The preferred leader site in the three-site KFC-2 cluster.
 pub(crate) const SITE_A: &str = "site-a";
 /// The second data site.

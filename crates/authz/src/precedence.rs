@@ -18,7 +18,10 @@
 //! paths agree, with no drift.
 
 use {
-    crate::{AclCache, AuthorizationRequest, AuthorizationResult, Authorizer, SimpleAclAuthorizer},
+    crate::{
+        AclCache, AuthorizationRequest, AuthorizationResult, Authorizer, SimpleAclAuthorizer,
+        test_support::acl,
+    },
     krabka_metadata::{
         AclEntry, AclOperation, MetadataImage, MetadataRecord, PatternType, PermissionType,
         ResourceType,
@@ -130,7 +133,7 @@ fn entry(
     op: AclOperation,
     perm: PermissionType,
 ) -> AclEntry {
-    crate::test_support::acl()
+    acl()
         .rt(rt)
         .pattern(pattern)
         .name(name)

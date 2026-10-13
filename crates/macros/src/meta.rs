@@ -126,9 +126,23 @@ pub(crate) fn expression_tokens(
     }
 }
 
+pub(crate) fn parenthesized_list(
+    meta: &moxy::ast::Meta,
+    expected: &str,
+    delimiter: &str,
+) -> Result<(TokenStream, Span), ParseError> {
+    let moxy::ast::MetaContent::List(group) = &meta.content else {
+        return Err(ParseError::new(meta.span(), expected));
+    };
+    if !group.delim.is_paren() {
+        return Err(ParseError::new(group.span(), delimiter));
+    }
+    Ok((group.tokens.clone(), group.span()))
+}
+
 impl moxy::ast::FromMeta for Tokens {
     fn from_meta(meta: &moxy::ast::Meta) -> Result<Self, ParseError> {
-        crate::meta::expression_tokens(meta, "expected `key = <expression>`").map(Self)
+        expression_tokens(meta, "expected `key = <expression>`").map(Self)
     }
 }
 

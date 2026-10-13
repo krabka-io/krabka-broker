@@ -16,7 +16,10 @@ use {
         },
     },
     krabka_metadata::{AclOperation, MetadataImage, ResourceType},
-    std::collections::{HashMap, HashSet},
+    std::{
+        collections::{HashMap, HashSet},
+        sync::Arc,
+    },
 };
 
 /// Kafka's resource-specific refusal for the two config mutation APIs.
@@ -115,6 +118,15 @@ krabka_macros::named_acl_gates!(
     /// The barrier, write-freeze and break-glass control planes all use this gate.
     cluster_describe_denied: Cluster(Describe),
 );
+
+/// The metadata image authorized for a cluster-wide `Describe` request.
+pub(crate) fn cluster_describe_image(
+    broker: &Broker,
+    ctx: &RequestContext<'_>,
+) -> Option<Arc<MetadataImage>> {
+    let image = broker.controller.current_image();
+    (!cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx)).then_some(image)
+}
 
 /// Kafka's cluster shortcut is quiet: a denial falls back to per-topic checks.
 pub(crate) fn cluster_shortcut_denied(

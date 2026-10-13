@@ -11,6 +11,7 @@ use {
         harness::{round_trip, start_broker_stream},
         inter_broker::run_inter_broker_auth_test,
         support::{
+            gssapi::broker_config,
             manifest_dir,
             sasl::sasl_temp_config,
             wire::{CorrelationId as WireCorrelationId, SocketExchangeSetup},
@@ -134,7 +135,7 @@ async fn gssapi_inter_broker_client_authenticates_from_keytab() {
         std::env::var("SSPI_KDC_URL").unwrap_or_else(|_| "tcp://localhost:88".to_string());
 
     let (_log_dir, mut cfg) = sasl_temp_config(vec![SaslMechanism::Gssapi]);
-    cfg.gssapi = Some(crate::support::gssapi::broker_config(
+    cfg.gssapi = Some(broker_config(
         fixtures.join("kafka.keytab"),
         kdc_url.clone(),
     ));

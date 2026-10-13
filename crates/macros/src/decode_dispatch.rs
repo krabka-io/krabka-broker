@@ -1,9 +1,11 @@
 //! Decode one request before an ordinary raw dispatch function's native body.
 
 use {
-    crate::meta::{Tokens, edit_native_body, function_signature, parameter_ident},
+    crate::meta::{
+        Tokens, edit_native_body, function_signature, parameter_ident, parenthesized_list,
+    },
     moxy::{
-        ast::{FromMeta, Meta, MetaContent, Parse, ParseError, Parser, PatIdent, Path},
+        ast::{FromMeta, Meta, Parse, ParseError, Parser, PatIdent, Path},
         token::{Spanner, TokenStream},
     },
     proc_macro::{Delimiter, TokenStream as NativeTokenStream, TokenTree as NativeTokenTree},
@@ -19,19 +21,12 @@ struct RequestBinding(PatIdent);
 
 impl FromMeta for RequestBinding {
     fn from_meta(meta: &Meta) -> Result<Self, ParseError> {
-        let MetaContent::List(group) = &meta.content else {
-            return Err(ParseError::new(
-                meta.span(),
-                "expected `binding(req)` or `binding(mut req)`",
-            ));
-        };
-        if !group.delim.is_paren() {
-            return Err(ParseError::new(
-                group.span(),
-                "request binding needs parentheses",
-            ));
-        }
-        let parser = Parser::from_tokens(&group.tokens);
+        let (tokens, _) = parenthesized_list(
+            meta,
+            "expected `binding(req)` or `binding(mut req)`",
+            "request binding needs parentheses",
+        )?;
+        let parser = Parser::from_tokens(&tokens);
         let binding = PatIdent::parse(&parser)?;
         if !parser.is_empty()
             || binding.by_ref.is_some()

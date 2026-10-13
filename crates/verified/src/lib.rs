@@ -8,6 +8,16 @@
 // the grouping parentheses in Pearlite expressions as redundant Rust syntax.
 #![cfg_attr(creusot, allow(unused_imports, unused_parens))]
 
+macro_rules! creusot_open_spec {
+    ($item:item) => {
+        #[cfg(creusot)]
+        #[cfg_attr(test, mutants::skip)]
+        #[logic(open)]
+        $item
+    };
+}
+pub(crate) use creusot_open_spec;
+
 pub mod audit;
 pub mod authz;
 pub mod barrier;

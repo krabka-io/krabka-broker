@@ -436,13 +436,14 @@ mod tests {
     /// is created.
     #[tokio::test]
     async fn handle_refuses_a_required_topic_denied_for_describe() {
-        let version = streams_group_heartbeat_response::MAX_VERSION;
-        let StartedBroker {
-            broker: broker_handle,
-            dir: _dir,
-        } = start_broker_with_grants().await;
+        let (
+            version,
+            StartedBroker {
+                broker: broker_handle,
+                dir: _dir,
+            },
+        ) = start_granted_streams_broker().await;
         let broker = broker_handle.broker_arc_for_test();
-        set_streams_version(&broker, 1).await;
         let peer = peer();
         // `Group:Read` only: the source topic `in` gets no `Describe`.
         let principal = principal("Group:Read");
@@ -478,13 +479,14 @@ mod tests {
     async fn handle_reports_topics_unauthorized_to_create_in_status() {
         use krabka_protocol::owned::common::streams_group_heartbeat_request::topic_info::TopicInfo;
 
-        let version = streams_group_heartbeat_response::MAX_VERSION;
-        let StartedBroker {
-            broker: broker_handle,
-            dir: _dir,
-        } = start_broker_with_grants().await;
+        let (
+            version,
+            StartedBroker {
+                broker: broker_handle,
+                dir: _dir,
+            },
+        ) = start_granted_streams_broker().await;
         let broker = broker_handle.broker_arc_for_test();
-        set_streams_version(&broker, 1).await;
         create_source_topic(&broker, "in").await;
         let peer = peer();
         // `Read` on the group and `Describe` on the topics, but no `Create`
@@ -770,6 +772,13 @@ mod tests {
         })
         .await;
         StartedBroker { broker, dir }
+    }
+
+    async fn start_granted_streams_broker() -> (i16, StartedBroker) {
+        let started = start_broker_with_grants().await;
+        let broker = started.broker.broker_arc_for_test();
+        set_streams_version(&broker, 1).await;
+        (streams_group_heartbeat_response::MAX_VERSION, started)
     }
 
     /// Writes a `streams.version` `FeatureLevelRecord` at `level` and waits

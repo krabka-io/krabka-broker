@@ -63,17 +63,17 @@ pub(crate) async fn run(
     // rather than spinning on a timer that cannot be armed.
     const TASK: &str = "log retention";
     let timer = Arc::clone(&cfg.timer);
-    krabka_macros::sweep_loop! {
-        timer [&*timer];
-        cadence [(cfg.interval.to_std(), cfg.interval.to_std())];
-        shutdown [&shutdown];
-        task [TASK];
-        sweep {
+    crate::task_util::metadata_sweep_loop!(
+        &*timer,
+        (cfg.interval.to_std(), cfg.interval.to_std()),
+        &shutdown,
+        TASK,
+        {
             let image = cfg.current_image();
             tick_all(&partitions, image.as_deref(), &metrics).await;
-        };
-        on_shutdown {
+        },
+        {
             tracing::debug!("log retention task shutting down");
-        };
-    }
+        },
+    );
 }

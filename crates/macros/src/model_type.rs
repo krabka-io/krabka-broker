@@ -1,10 +1,9 @@
 //! Conditional proof/runtime derives attached to the original model declaration.
 
 use {
+    crate::meta::parenthesized_list,
     moxy::{
-        ast::{
-            FromMeta, Item, List, Meta, MetaContent, ParseError, Parser, Path, PathArguments, Token,
-        },
+        ast::{FromMeta, Item, List, Meta, ParseError, Parser, Path, PathArguments, Token},
         token::{Spanner, TokenStream},
     },
     proc_macro::TokenStream as NativeTokenStream,
@@ -34,19 +33,12 @@ impl DerivePaths {
 
 impl FromMeta for DerivePaths {
     fn from_meta(meta: &Meta) -> Result<Self, ParseError> {
-        let MetaContent::List(group) = &meta.content else {
-            return Err(ParseError::new(
-                meta.span(),
-                "expected a parenthesized list of derive paths",
-            ));
-        };
-        if !group.delim.is_paren() {
-            return Err(ParseError::new(
-                group.span(),
-                "expected parenthesized derive paths",
-            ));
-        }
-        let paths = List::<Path, Token![,]>::parse_all(&Parser::from_tokens(&group.tokens))?;
+        let (tokens, list_span) = parenthesized_list(
+            meta,
+            "expected a parenthesized list of derive paths",
+            "expected parenthesized derive paths",
+        )?;
+        let paths = List::<Path, Token![,]>::parse_all(&Parser::from_tokens(&tokens))?;
         if paths.is_empty()
             || paths.iter().any(|path| {
                 path.iter()
@@ -54,7 +46,7 @@ impl FromMeta for DerivePaths {
             })
         {
             return Err(ParseError::new(
-                group.span(),
+                list_span,
                 "expected at least one derive path without generic arguments",
             ));
         }
