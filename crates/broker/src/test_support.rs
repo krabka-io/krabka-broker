@@ -490,23 +490,24 @@ pub(crate) fn static_records_batch(
     values: &[&'static [u8]],
     timestamp_ms: UnixMillis,
 ) -> RecordBatch {
-    let records = values
-        .iter()
-        .enumerate()
-        .map(|(index, value)| Record {
-            attributes: 0,
-            offset_delta: i32::try_from(index).expect("record offset fits i32"),
-            timestamp_delta: 0,
-            key: None,
-            value: Some(Bytes::from_static(value)),
-            headers: vec![],
-        })
-        .collect();
+    let records = record_values(values);
     fixture_records_batch(
         records,
         RecordOffsetDelta(i32::try_from(values.len()).expect("record count fits i32") - 1),
         timestamp_ms,
     )
+}
+
+pub(crate) fn record_values(values: &[&'static [u8]]) -> Vec<Record> {
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| Record {
+            offset_delta: i32::try_from(index).expect("record offset fits i32"),
+            value: Some(Bytes::from_static(value)),
+            ..Default::default()
+        })
+        .collect()
 }
 
 #[derive(derive_more::From, derive_more::Into, Debug, Clone, Copy, PartialEq, Eq)]

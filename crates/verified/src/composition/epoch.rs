@@ -20,6 +20,12 @@ pub fn epoch_archive_valid(entries: Seq<EpochEntry>, base: Int, end: Int) -> boo
 }
 }
 
+open_logic! {
+pub(super) fn epoch_input_valid(entries: Seq<EpochEntry>, base: Int, start: Int, end: Int) -> bool {
+    pearlite! { epoch_window_valid(base, start, end) && epoch_archive_valid(entries, base, end) }
+}
+}
+
 type EpochTruncation = Result<Option<(i32, FetchWatermarks, FetchVisibility)>, ()>;
 
 /// Validate complete epoch history and export its actual resolved cut and
@@ -27,10 +33,8 @@ type EpochTruncation = Result<Option<(i32, FetchWatermarks, FetchVisibility)>, (
 /// epoch. Cuts below retained floors require the host's reset path. Applying
 /// the cut durably and faithfully decoded, batch-aligned history are external.
 #[ensures(match result {
-    Err(()) => !epoch_window_valid(segment_base@, w.log_start@, w.log_end@)
-        || !epoch_archive_valid(entries@, segment_base@, w.log_end@),
-    Ok(None) => epoch_window_valid(segment_base@, w.log_start@, w.log_end@)
-        && epoch_archive_valid(entries@, segment_base@, w.log_end@)
+    Err(()) => !epoch_input_valid(entries@, segment_base@, w.log_start@, w.log_end@),
+    Ok(None) => epoch_input_valid(entries@, segment_base@, w.log_start@, w.log_end@)
         && kafka_end_offset_for(entries@, requested@, w.log_end@, -1, -1),
     Ok(Some((found, bounded, visibility))) => resolved_epoch_cut(entries@, segment_base@, w, requested@, found@, bounded.log_end@)
         && segment_base@ <= bounded.log_end@ && bounded.log_end@ <= w.log_end@ && found@ <= requested@
@@ -96,8 +100,7 @@ pub(super) fn resolved_epoch_cut(
     found: Int,
     cut: Int,
 ) -> bool {
-    pearlite! { epoch_window_valid(base, window.log_start@, window.log_end@)
-    && epoch_archive_valid(entries, base, window.log_end@)
+    pearlite! { epoch_input_valid(entries, base, window.log_start@, window.log_end@)
     && kafka_end_offset_for(entries, requested, window.log_end@, found, cut) }
 }
 }
