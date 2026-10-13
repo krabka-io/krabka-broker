@@ -1194,41 +1194,21 @@ mod tests {
                 after: stable_6_5_expected(),
                 ..Default::default()
             },
-            SubscriptionRow {
-                regex: Some(RegexSetup {
-                    pattern: "u.*",
-                    resolved: Some(&["u"]),
-                }),
-                name: "the topics of a resolved regex are subscribed",
-                names: &[],
-                before: stable_5_4_input_two_topics(),
-                target: topic_parts(&[TopicParts {
-                    topic: U,
-                    parts: &[PartitionIndex(0)],
-                }]),
-                after: shape()
+            resolved_regex_row(
+                "the topics of a resolved regex are subscribed",
+                Some(&["u"]),
+                shape()
                     .assigned(&[TopicParts {
                         topic: U,
                         parts: &[PartitionIndex(0)],
                     }])
                     .call(),
-                ..Default::default()
-            },
-            SubscriptionRow {
-                regex: Some(RegexSetup {
-                    pattern: "u.*",
-                    resolved: None,
-                }),
-                name: "a regex the group has not resolved subscribes to nothing",
-                names: &[],
-                before: stable_5_4_input_two_topics(),
-                target: topic_parts(&[TopicParts {
-                    topic: U,
-                    parts: &[PartitionIndex(0)],
-                }]),
-                after: shape().call(),
-                ..Default::default()
-            },
+            ),
+            resolved_regex_row(
+                "a regex the group has not resolved subscribes to nothing",
+                None,
+                shape().call(),
+            ),
             // A member that keeps its epoch still records it as its previous epoch.
             waiting_subscription_row()
                 .name("an unreleased member that keeps waiting records the epoch it stays in")
@@ -1241,6 +1221,28 @@ mod tests {
                 })
                 .call(),
         ]
+    }
+
+    fn resolved_regex_row(
+        name: &'static str,
+        resolved: Option<&'static [&'static str]>,
+        after: Shape,
+    ) -> SubscriptionRow {
+        SubscriptionRow {
+            name,
+            names: &[],
+            regex: Some(RegexSetup {
+                pattern: "u.*",
+                resolved,
+            }),
+            before: stable_5_4_input_two_topics(),
+            target: topic_parts(&[TopicParts {
+                topic: U,
+                parts: &[PartitionIndex(0)],
+            }]),
+            after,
+            ..Default::default()
+        }
     }
 
     /// Kafka's `CurrentAssignmentBuilder` reads the member's subscription:
