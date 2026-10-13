@@ -135,31 +135,14 @@ pub(crate) async fn assert_dispatch_response<Request, Response, Handler, Handler
     assert!(&actual == expected);
 }
 
-/// Define config-image input fixtures with their record fields and starting image explicit.
-macro_rules! config_image_fixture {
-    ($(#[$attr:meta])* $vis:vis fn $name:ident($key:ident, $pairs:ident)
-     from $initial:expr; $variant:ident($record:ident { $key_field:ident, $map_field:ident })) => {
-        $(#[$attr])*
-        $vis fn $name($key: &str, $pairs: &[(&str, &str)]) -> krabka_metadata::MetadataImage {
-            let mut image = $initial;
-            image.apply(&krabka_metadata::MetadataRecord::$variant(krabka_metadata::$record {
-                $key_field: $key.into(),
-                $map_field: crate::test_support::string_pairs($pairs),
-            }));
-            image
-        }
-    };
+/// The current cluster id used to stamp a voter RPC before dispatch.
+pub(crate) fn voter_cluster_id(broker: &Broker) -> String {
+    broker.controller.current_image().cluster_id().to_string()
 }
 
-/// Stamp a voter RPC with the broker's current cluster and optional Raft term.
-macro_rules! stamp_voter_request {
-    ($request:ident, $broker:ident $(, $epoch:ident)?) => {
-        $request.cluster_id = Some($broker.controller.current_image().cluster_id().to_string());
-        $(stamp_voter_request!(@$epoch $request, $broker);)?
-    };
-    (@leader_epoch $request:ident, $broker:ident) => {
-        $request.current_leader_epoch = i32::try_from($broker.controller.quorum_state().current_term).unwrap_or(i32::MAX);
-    };
+/// The optional Raft term used by voter updates.
+pub(crate) fn voter_leader_epoch(broker: &Broker) -> i32 {
+    i32::try_from(broker.controller.quorum_state().current_term).unwrap_or(i32::MAX)
 }
 
 /// Refuses only topic reads while allowing setup and group operations.
@@ -279,21 +262,6 @@ pub(crate) const fn unauthorized_topic_cases(
         TopicResolutionCase::new(id_version, TopicRef::UnknownId, codes::UNKNOWN_TOPIC_ID),
         TopicResolutionCase::new(id_version, TopicRef::ZeroId, codes::UNKNOWN_TOPIC_ID),
     ]
-}
-
-/// Adapt typed acknowledgement ranges to each share API's concrete wire batch.
-macro_rules! acknowledgement_batches {
-    ($ty:ident, $batches:expr) => {
-        $batches
-            .into_iter()
-            .map(|batch| $ty {
-                first_offset: batch.first_offset.0,
-                last_offset: batch.last_offset.0,
-                acknowledge_types: batch.types.into_iter().map(|kind| kind.0).collect(),
-                ..Default::default()
-            })
-            .collect()
-    };
 }
 
 krabka_macros::create_topic_fixture!(configured_topic_request);
@@ -698,11 +666,11 @@ impl<R> CaseOutcomes<TopicCaseOutcome<R>> {
     }
 }
 
-/// Compare each table case's complete actual and expected outcome.
-pub(crate) async fn check_cases<C, T: std::fmt::Debug + PartialEq>(
+/// Collect cases in order without moving their caller's comparison boundary.
+pub(crate) async fn collect_cases<C, T>(
     cases: impl IntoIterator<Item = C>,
     mut drive: impl AsyncFnMut(C) -> CaseOutcomes<T>,
-) {
+) -> CaseOutcomes<Vec<T>> {
     let mut actual = Vec::new();
     let mut expected = Vec::new();
     for case in cases {
@@ -713,9 +681,17 @@ pub(crate) async fn check_cases<C, T: std::fmt::Debug + PartialEq>(
         actual.push(got);
         expected.push(want);
     }
-    assert!(actual == expected);
+    CaseOutcomes { actual, expected }
 }
 
+/// Compare each table case's complete actual and expected outcome.
+pub(crate) async fn check_cases<C, T: std::fmt::Debug + PartialEq>(
+    cases: impl IntoIterator<Item = C>,
+    drive: impl AsyncFnMut(C) -> CaseOutcomes<T>,
+) {
+    let CaseOutcomes { actual, expected } = collect_cases(cases, drive).await;
+    assert!(actual == expected);
+}
 /// Run an independent denied-topic model against one broker, comparing every full outcome.
 pub(crate) async fn check_denied_topic_cases<T: std::fmt::Debug + PartialEq>(
     cases: impl IntoIterator<Item = TopicResolutionCase>,
@@ -952,10 +928,7 @@ pub(crate) fn acknowledge_batches_request(
             topic_id,
             partitions: vec![AcknowledgePartition {
                 partition_index: partition.index.0,
-                acknowledgement_batches: acknowledgement_batches!(
-                    AcknowledgementBatch,
-                    partition.batches
-                ),
+                acknowledgement_batches: krabka_macros::acknowledgement_batches!(AcknowledgementBatch; [partition.batches]),
                 ..Default::default()
             }],
             ..Default::default()
@@ -1143,13 +1116,6 @@ pub(crate) fn build_topic_config_record_with_default_policy<Resource>(
     )
 }
 
-macro_rules! topic_config_record_with_default_policy {
-    ($resource:expr, $image:expr, $build:path $(,)?) => {
-        $crate::handlers::test_support::build_topic_config_record_with_default_policy(
-            $resource, $image, $build,
-        )
-    };
-}
 #[bon::builder]
 pub(crate) async fn create_topic(
     broker: &BrokerHandle,
@@ -1520,39 +1486,64 @@ pub(crate) fn check_config_result<T>(
     }
 }
 
-/// Collect actual and pinned expected outcomes for distinct per-case topic names.
+/// A lazily labelled case with its distinct per-case topic name.
+pub(crate) struct TopicCase<Case> {
+    pub(crate) index: u128,
+    pub(crate) case: Case,
+    pub(crate) label: String,
+    pub(crate) topic: String,
+}
+
+/// Prepare each topic only when its caller begins the corresponding operation.
 /// Comparisons and broker shutdown remain at each caller's original boundary.
-macro_rules! topic_case_outcomes {
-    (($actual:ident, $expected:ident), ($index:ident, $case:ident, $label:ident, $topic:ident),
-        $prefix:expr, $cases:expr, { $($body:tt)* }) => {
-        let mut $actual = Vec::new();
-        let mut $expected = Vec::new();
-        for ($index, $case) in (0_u128..).zip($cases) {
-            let $label = format!("{:?}", $case);
-            let $topic = format!("{}-{}", $prefix, $index);
-            $($body)*
+pub(crate) fn topic_cases<Case: std::fmt::Debug>(
+    prefix: &str,
+    cases: impl IntoIterator<Item = Case>,
+) -> impl Iterator<Item = TopicCase<Case>> {
+    (0_u128..).zip(cases).map(move |(index, case)| {
+        let label = format!("{case:?}");
+        let topic = format!("{prefix}-{index}");
+        TopicCase {
+            index,
+            case,
+            label,
+            topic,
         }
-    };
+    })
+}
+
+/// Collect distinct per-case topic operations before the caller shuts down its broker.
+pub(crate) async fn collect_topic_cases<Case: std::fmt::Debug, Outcome>(
+    prefix: &str,
+    cases: impl IntoIterator<Item = Case>,
+    drive: impl AsyncFnMut(TopicCase<Case>) -> CaseOutcomes<Outcome>,
+) -> CaseOutcomes<Vec<Outcome>> {
+    collect_cases(topic_cases(prefix, cases), drive).await
+}
+pub(crate) struct InitializedShareTopic {
+    pub(crate) started: StartedBroker,
+    pub(crate) topic_id: WireUuid,
 }
 
 /// Create the share topic before loading group/partition zero's persisted state.
-macro_rules! initialized_share_topic {
-    (($handle:ident, $directory:ident, $topic_id:ident), $start:expr, $topic:expr, $group:expr) => {
-        let StartedBroker {
-            broker: $handle,
-            dir: $directory,
-        } = $start.await;
-        let $topic_id = create_topic(&$handle, $topic).await;
-        crate::test_support::initialize_share_state(
-            &$handle,
-            $group,
-            uuid::Uuid::from_bytes($topic_id.0),
-            0,
-        )
-        .await;
-    };
+/// The caller's topic creator retains its own wire request identity.
+pub(crate) async fn initialized_share_topic(
+    start: impl Future<Output = StartedBroker>,
+    topic: &str,
+    group: &str,
+    create_topic: impl AsyncFnOnce(&BrokerHandle, &str) -> WireUuid,
+) -> InitializedShareTopic {
+    let started = start.await;
+    let topic_id = create_topic(&started.broker, topic).await;
+    initialize_share_state(
+        &started.broker,
+        group,
+        uuid::Uuid::from_bytes(topic_id.0),
+        0,
+    )
+    .await;
+    InitializedShareTopic { started, topic_id }
 }
-
 /// Project a replica list into sorted declared sites for independent test expectations.
 pub(crate) fn sorted_replica_sites(
     replicas: &[krabka_raft::NodeId],

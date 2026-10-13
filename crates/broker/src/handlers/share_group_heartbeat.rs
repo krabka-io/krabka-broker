@@ -212,6 +212,7 @@ mod tests {
         super::*,
         crate::{
             authorizer::AllowAllAuthorizer,
+            coordinator::unified::share::actor::{ShareDescribeView, ShareGroupActorHandle},
             handlers::{
                 encode_response,
                 group_heartbeat_test_support::{
@@ -283,15 +284,19 @@ mod tests {
         test_context ["client-a"];
     }
 
-    macro_rules! share_group_view {
-        (($actor:ident, $view:ident), $broker:ident, $group:expr) => {
-            let $actor = $broker.group_coordinator.get_or_create_share($group);
-            let $view = crate::task_util::ask(&$actor.tx, |reply| {
-                ShareGroupActorMessage::Describe { reply }
-            })
-            .await
-            .expect("share group view");
-        };
+    struct ShareGroupSnapshot {
+        actor: Arc<ShareGroupActorHandle>,
+        view: ShareDescribeView,
+    }
+
+    async fn share_group_view(broker: &Broker, group: &str) -> ShareGroupSnapshot {
+        let actor = broker.group_coordinator.get_or_create_share(group);
+        let view = ask(&actor.tx, |reply| ShareGroupActorMessage::Describe {
+            reply,
+        })
+        .await
+        .expect("share group view");
+        ShareGroupSnapshot { actor, view }
     }
 
     fn request(group_id: &str, subscribed: Vec<&str>) -> ShareGroupHeartbeatRequest {
@@ -549,7 +554,10 @@ mod tests {
             "{resp:?}"
         );
 
-        share_group_view!((actor, view), broker, "g");
+        let ShareGroupSnapshot {
+            actor: _actor,
+            view,
+        } = share_group_view(&broker, "g").await;
         assert!(view.members.is_empty(), "{view:?}");
 
         broker_handle.shutdown().await;
@@ -591,7 +599,10 @@ mod tests {
             .expect("ShareGroupHeartbeat handler");
         assert!(resp.error_code == codes::NONE, "{resp:?}");
 
-        share_group_view!((actor, view), broker, "g");
+        let ShareGroupSnapshot {
+            actor: _actor,
+            view,
+        } = share_group_view(&broker, "g").await;
         assert!(view.members.len() == 1, "{view:?}");
 
         broker_handle.shutdown().await;

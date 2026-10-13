@@ -481,6 +481,7 @@ pub(super) async fn refusal_tokens(controller: &ControllerHandle) -> RefusalToke
         hmac: hmac_for("expired"),
         expires_at: now - 1,
     };
+
     for seed in [
         TokenToSeed {
             id: "live",

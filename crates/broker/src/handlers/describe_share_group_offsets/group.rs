@@ -162,7 +162,7 @@ mod tests {
             handlers::{
                 RequestContext,
                 describe_share_group_offsets::test_support::{image_with_topic, register_topic},
-                test_support as handler_fixture_support,
+                test_support::{self as handler_fixture_support, TopicPartitionCount},
             },
             share_coordinator::persister_client::SharePersister,
             test_support as broker_fixture_support,
@@ -170,7 +170,7 @@ mod tests {
         assert2::assert,
         krabka_ids::PartitionIndex,
         krabka_log::Offset,
-        krabka_metadata::{MetadataRecord, ResourceType, TopicRecord},
+        krabka_metadata::{MetadataImage, MetadataRecord, ResourceType, TopicRecord},
         krabka_protocol::{
             owned::describe_share_group_offsets_response::{
                 DescribeShareGroupOffsetsResponsePartition, DescribeShareGroupOffsetsResponseTopic,
@@ -335,20 +335,30 @@ mod tests {
         })
     }
 
-    macro_rules! orders_and_secret_image {
-        (($orders:ident, $secret:ident, $image:ident), $secret_partitions:expr) => {
-            let $orders = uuid::Uuid::from_u128(1);
-            let $secret = uuid::Uuid::from_u128(2);
-            let mut $image = image_with_topic("orders", $orders);
-            $image.apply(&MetadataRecord::V1Topic(TopicRecord {
-                name: "secret".into(),
-                topic_id: $secret,
-                partitions: ($secret_partitions).0,
-                replication_factor: 1,
-            }));
-        };
+    struct OrdersAndSecretImage {
+        orders: uuid::Uuid,
+        secret: uuid::Uuid,
+        image: MetadataImage,
     }
-
+    #[bon::builder]
+    fn orders_and_secret_image(
+        #[builder(into)] secret_partitions: TopicPartitionCount,
+    ) -> OrdersAndSecretImage {
+        let orders = uuid::Uuid::from_u128(1);
+        let secret = uuid::Uuid::from_u128(2);
+        let mut image = image_with_topic("orders", orders);
+        image.apply(&MetadataRecord::V1Topic(TopicRecord {
+            name: "secret".into(),
+            topic_id: secret,
+            partitions: secret_partitions.0,
+            replication_factor: 1,
+        }));
+        OrdersAndSecretImage {
+            orders,
+            secret,
+            image,
+        }
+    }
     /// A denied topic requested with an empty `partitions` list answers a
     /// row with no partitions: `KafkaApis.describeShareGroupOffsetsForGroup`
     /// builds one `TOPIC_AUTHORIZATION_FAILED` row per partition the request
@@ -385,10 +395,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_denied_topic_named_with_no_partitions_has_no_partition_rows() {
-        orders_and_secret_image!(
-            (orders_id, secret_id, image),
-            crate::handlers::test_support::TopicPartitionCount(2)
-        );
+        let OrdersAndSecretImage {
+            orders: orders_id,
+            secret: secret_id,
+            image,
+        } = orders_and_secret_image()
+            .secret_partitions(TopicPartitionCount(2))
+            .call();
 
         krabka_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
@@ -551,10 +564,13 @@ mod tests {
                 persister,
             } = start_with_share_persister(case.authorizer).await;
 
-            orders_and_secret_image!(
-                (orders_id, secret_id, image),
-                crate::handlers::test_support::TopicPartitionCount(1)
-            );
+            let OrdersAndSecretImage {
+                orders: orders_id,
+                secret: secret_id,
+                image,
+            } = orders_and_secret_image()
+                .secret_partitions(TopicPartitionCount(1))
+                .call();
             register_topic(&broker, "orders", orders_id).await;
             persister
                 .initialize("g2", orders_id, 0, 1, Offset(7))

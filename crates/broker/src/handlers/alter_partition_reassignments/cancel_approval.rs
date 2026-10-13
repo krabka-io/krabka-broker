@@ -152,7 +152,7 @@ pub(super) fn alter_one(
     }
 }
 
-crate::handlers::partition_transition::authorizer! {
+krabka_macros::partition_gate! {
 /// KFC-9: find the approved proposal that authorizes a cancel of one partition,
 /// and stamp it consumed.
 ///
@@ -180,7 +180,7 @@ mod tests {
             handlers::alter_partition_reassignments::test_support::{
                 img_with, pending_reassignment_image,
             },
-            test_support::{ReassignmentSetup, start_broker_no_audit_with},
+            test_support::{ReassignmentSetup, StartedBroker, start_broker_no_audit_with},
         },
         assert2::{assert, check},
         std::sync::Arc,
@@ -189,18 +189,27 @@ mod tests {
 
     const NOW_MS: i64 = 60_000;
 
-    macro_rules! gated_cancel_fixture {
-        (($handle:ident, $directory:ident, $broker:ident)) => {
-            krabka_macros::broker_test_setup! {
-                bind($handle, $directory, $broker);
-                boot [crate::test_support::start_broker_no_audit_with(|config| {
-                                config.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
-                                config.break_glass = gated_config();
-                            })];
-            };
-        };
+    /// Retain the allow-all test policy while enabling the cancel approval gate.
+    async fn gated_cancel_broker() -> StartedBroker {
+        start_broker_no_audit_with(|config| {
+            config.authorizer = Arc::new(AllowAllAuthorizer);
+            config.break_glass = gated_config();
+        })
+        .await
     }
-
+    /// The planner tests explicitly permit replication-factor changes.
+    fn reassign_environment<'a>(
+        broker: &'a Broker,
+        image: &'a MetadataImage,
+        context: &'a RequestContext<'a>,
+    ) -> ReassignEnv<'a> {
+        ReassignEnv {
+            broker,
+            image,
+            ctx: context,
+            allow_rf_change: true,
+        }
+    }
     fn gated_config() -> BreakGlassConfig {
         BreakGlassConfig {
             approvers: ["User:alice", "User:bob"].map(str::to_owned).to_vec(),
@@ -269,25 +278,12 @@ mod tests {
         }
     }
 
-    macro_rules! reassign_env_fixture {
-        (($principal:ident, $peer:ident, $ctx:ident, $env:ident), $broker:ident, $image:ident) => {
-            krabka_macros::request_test_identity! {
-                bind($principal, $peer, $ctx);
-                user ["admin"];
-                client ["reassign-client"];
-            };
-            let $env = ReassignEnv {
-                broker: &$broker,
-                image: &$image,
-                ctx: &$ctx,
-                allow_rf_change: true,
-            };
-        };
-    }
-
     #[tokio::test]
     async fn an_approved_cancel_appends_the_consume_beside_the_partition_record() {
-        gated_cancel_fixture!((handle, _dir, broker));
+        krabka_macros::broker_test_setup!(
+            bind(handle, _dir, broker);
+            boot [gated_cancel_broker()];
+        );
         let proposal = approved_proposal(BreakGlassAction::CancelReassignment, "foo-0");
         let image = img_reassigning(std::slice::from_ref(&proposal));
         let CancelOutcome { row, batch } = cancel(&broker, &image);
@@ -307,7 +303,10 @@ mod tests {
 
     #[tokio::test]
     async fn an_unapproved_cancel_appends_nothing_and_carries_the_gate_text() {
-        gated_cancel_fixture!((handle, _dir, broker));
+        krabka_macros::broker_test_setup!(
+            bind(handle, _dir, broker);
+            boot [gated_cancel_broker()];
+        );
         let image = img_reassigning(&[]);
         let CancelOutcome { row, batch } = cancel(&broker, &image);
 
@@ -325,12 +324,20 @@ mod tests {
 
     #[tokio::test]
     async fn a_freeze_refuses_start_and_cancel_before_any_record_or_approval_spend() {
-        gated_cancel_fixture!((handle, _dir, broker));
+        krabka_macros::broker_test_setup!(
+            bind(handle, _dir, broker);
+            boot [gated_cancel_broker()];
+        );
         let image = img_reassigning(&[approved_proposal(
             BreakGlassAction::CancelReassignment,
             "foo-0",
         )]);
-        reassign_env_fixture!((principal, peer, ctx, env), broker, image);
+        krabka_macros::request_test_identity!(
+            bind(principal, peer, ctx);
+            user ["admin"];
+            client ["reassign-client"];
+        );
+        let env = reassign_environment(&broker, &image, &ctx);
         let record = krabka_metadata::TopicFreezeRecord {
             scope: "foo".into(),
             pattern_type: krabka_metadata::PatternType::Literal,
@@ -391,7 +398,12 @@ mod tests {
                 ..Default::default()
             })
             .call();
-        reassign_env_fixture!((principal, peer, ctx, env), broker, image);
+        krabka_macros::request_test_identity!(
+            bind(principal, peer, ctx);
+            user ["admin"];
+            client ["reassign-client"];
+        );
+        let env = reassign_environment(&broker, &image, &ctx);
 
         for (label, replicas, altered) in [
             ("already at the requested target", vec![1, 2], false),

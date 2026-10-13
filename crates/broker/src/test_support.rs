@@ -270,11 +270,16 @@ where
     }
 }
 
+pub(crate) struct TemporaryPartition {
+    pub(crate) dir: tempfile::TempDir,
+    pub(crate) partition: Arc<Partition>,
+}
+
 fn temporary_partition_impl(
     topic: &str,
     partition: krabka_ids::PartitionIndex,
     storage: StorageMode,
-) -> (tempfile::TempDir, Arc<Partition>) {
+) -> TemporaryPartition {
     let directory = tempfile::tempdir().expect("tempdir");
     let partition = open_partition()
         .log_dir(directory.path())
@@ -282,7 +287,10 @@ fn temporary_partition_impl(
         .partition(partition)
         .storage(storage)
         .call();
-    (directory, partition)
+    TemporaryPartition {
+        dir: directory,
+        partition,
+    }
 }
 
 fn open_partition_impl(
@@ -303,30 +311,16 @@ fn open_partition_impl(
         .call()
 }
 
-macro_rules! standalone_partition_builder {
-    ($(#[$doc:meta])* $name:ident, [$($extra_params:tt)*], [$($extra_args:tt)*], $helper:ident -> $result:ty) => {
-        $(#[$doc])*
-        #[bon::builder]
-        pub(crate) fn $name(
-            $($extra_params)*
-            #[builder(default = StandalonePartitionSetup::default().topic)] topic: &'_ str,
-            #[builder(into, default = StandalonePartitionSetup::default().partition)]
-            partition: krabka_ids::PartitionIndex,
-            #[builder(default = StandalonePartitionSetup::default().storage)] storage: StorageMode,
-        ) -> $result {
-            $helper($($extra_args)* topic, partition, storage)
-        }
-    };
-}
+krabka_macros::fixture_constructors! { temporary_partition:
 
-standalone_partition_builder! {
     /// Own the temporary directory alongside its replica until the caller drops both.
-    temporary_partition, [], [], temporary_partition_impl -> (tempfile::TempDir, Arc<Partition>)
+ pub(crate) temporary_partition -> TemporaryPartition = temporary_partition_impl;
 }
 
-standalone_partition_builder! {
+krabka_macros::fixture_constructors! { open_partition:
+
     /// Opens a local replica with a running writer in the supplied log directory.
-    open_partition, [log_dir: &std::path::Path,], [log_dir,], open_partition_impl -> Arc<Partition>
+ pub(crate) open_partition -> Arc<Partition> = open_partition_impl;
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -817,21 +811,6 @@ impl Default for ReassignmentSetup<'_> {
     }
 }
 
-/// Apply the common assignment fields to any reassignment fixture builder.
-#[macro_export]
-macro_rules! reassignment_fields {
-    ($builder:expr, $assignment:expr) => {{
-        let assignment = $assignment;
-        $builder
-            .replicas(assignment.replicas)
-            .isr(assignment.isr)
-            .adding(assignment.adding)
-            .removing(assignment.removing)
-            .leader(assignment.leader.0)
-            .directories(assignment.directories)
-    }};
-}
-
 pub(crate) fn replica_nodes(ids: &[u64]) -> Vec<NodeId> {
     ids.iter().copied().map(NodeId).collect()
 }
@@ -1112,29 +1091,9 @@ impl Authorizer for DenyAll {
 pub(crate) struct ControllerPeerAllowed<A>(pub(crate) A);
 
 // Wrappers customize individual authorization while forwarding metadata and scans.
-macro_rules! delegate_authorizer_metadata {
-    () => {
-        fn is_configured(&self) -> bool { self.0.is_configured() }
 
-        fn decision_ttl(&self) -> Option<std::time::Duration> { self.0.decision_ttl() }
-
-        fn authorize_by_resource_type(
-            &self,
-            source: &dyn crate::authorizer::AclSource,
-            principal: &krabka_security::Principal,
-            host: &std::net::SocketAddr,
-            resource_type: krabka_metadata::ResourceType,
-            operation: krabka_metadata::AclOperation,
-        ) -> crate::authorizer::AuthorizationResult {
-            self.0
-                .authorize_by_resource_type(source, principal, host, resource_type, operation)
-        }
-    };
-}
-
+#[krabka_macros::delegate_authorizer]
 impl<A: Authorizer> Authorizer for ControllerPeerAllowed<A> {
-    delegate_authorizer_metadata!();
-
     fn authorize(
         &self,
         source: &dyn AclSource,
@@ -1160,9 +1119,8 @@ impl<A: Authorizer> Authorizer for ControllerPeerAllowed<A> {
 #[derive(Debug)]
 struct SharedAuthorizer(std::sync::Arc<dyn Authorizer>);
 
+#[krabka_macros::delegate_authorizer]
 impl Authorizer for SharedAuthorizer {
-    delegate_authorizer_metadata!();
-
     fn authorize(
         &self,
         source: &dyn AclSource,

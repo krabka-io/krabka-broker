@@ -23,26 +23,17 @@ use {
     krabka_metadata::{
         AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
     },
-    krabka_protocol::owned::describe_delegation_token_request::{
-        DescribeDelegationTokenOwner, DescribeDelegationTokenRequest,
+    krabka_protocol::owned::{
+        describe_delegation_token_request::{
+            DescribeDelegationTokenOwner, DescribeDelegationTokenRequest,
+        },
+        describe_delegation_token_response::DescribeDelegationTokenResponse,
     },
     krabka_raft::ControllerHandle,
     krabka_security::SecretBytes,
     std::net::SocketAddr,
     tempfile::TempDir,
 };
-
-macro_rules! describe_token_response {
-    ($controller:expr, $request:expr, $authentication:expr, $secret:expr) => {
-        describe()
-            .controller($controller)
-            .authorizer(&simple_authz())
-            .maybe_request($request)
-            .maybe_authentication($authentication)
-            .maybe_secret($secret)
-            .call()
-    };
-}
 
 #[derive(Clone, Copy, Default)]
 struct DescribeTokenSetup<'a> {
@@ -51,6 +42,19 @@ struct DescribeTokenSetup<'a> {
     secret: Option<&'a SecretBytes>,
 }
 
+/// Describe with the shared ACL policy and explicit optional caller/token inputs.
+fn describe_token_response(
+    controller: &dyn MetadataSource,
+    setup: DescribeTokenSetup<'_>,
+) -> DescribeDelegationTokenResponse {
+    describe()
+        .controller(controller)
+        .authorizer(&simple_authz())
+        .maybe_request(setup.request)
+        .maybe_authentication(setup.authentication)
+        .maybe_secret(setup.secret)
+        .call()
+}
 #[bon::builder]
 fn describe(
     controller: &dyn MetadataSource,
@@ -412,12 +416,11 @@ async fn renewer_sees_the_token_and_owner_filter_matches_renewer_too() {
         ]),
         ..Default::default()
     };
-    let resp = describe_token_response!(
-        &*controller,
-        Some(&req),
-        Some(&authed("carol")),
-        Some(&secret)
-    );
+    let resp = describe_token_response(&*controller, DescribeTokenSetup {
+        request: Some(&req),
+        authentication: Some(&authed("carol")),
+        secret: Some(&secret),
+    });
     check_visible_token_ids(&resp, &["t-b"]);
     controller.cancel().await;
 }
@@ -713,12 +716,11 @@ async fn requester_of_a_token_minted_for_another_owner_finds_and_sees_it() {
             }),
             ..Default::default()
         };
-        let resp = describe_token_response!(
-            &*controller,
-            Some(&req),
-            Some(&authed(caller)),
-            Some(&secret)
-        );
+        let resp = describe_token_response(&*controller, DescribeTokenSetup {
+            request: Some(&req),
+            authentication: Some(&authed(caller)),
+            secret: Some(&secret),
+        });
         let visible: std::collections::HashSet<&str> = token_ids(&resp);
         let expected: std::collections::HashSet<&str> = expected.iter().copied().collect();
         assert!(

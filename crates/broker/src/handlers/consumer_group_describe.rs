@@ -406,34 +406,17 @@ mod tests {
             .collect()
     }
 
-    /// The same literal member identity appears in the input view and expected wire member.
-    /// Their assignments remain separate, including the independently expected wire mapping.
-    macro_rules! member_identity_fixture {
-        ($name:ident -> $type:ident, $encoding:ident, {$($extra:tt)*}) => {
-            fn $name(member_id: &str) -> $type {
-                member_identity_fixture!(@$encoding $type {
-                    member_id: member_id.into(),
-                    instance_id: None,
-                    rack_id: None,
-                    member_epoch: 5,
-                    client_id: "client".into(),
-                    client_host: "/10.0.0.1".into(),
-                    subscribed_topic_names: vec!["orders".into(), "payments".into()],
-                    subscribed_topic_regex: None,
-                    $($extra)*
-                })
-            }
-        };
-        (@plain $type:ident $fields:tt) => { $type $fields };
-        (@tagged $type:ident $fields:tt) => { krabka_macros::tagged_wire!($type $fields) };
-    }
+    // The same literal member identity appears in the input view and expected wire member.
+    // Their assignments remain separate, including the independently expected wire mapping.
 
-    member_identity_fixture!(view_member -> DescribeMember, plain, {
+    krabka_macros::member_identity_fixtures! {
+        plain fn view_member(member_id: &str) -> DescribeMember {
         assigned_partitions: HashMap::new(),
         partitions_pending_revocation: HashMap::new(),
         target_partitions: HashMap::new(),
         is_classic: false,
-    });
+    }
+    }
 
     fn view(group_state: &'static str, members: Vec<DescribeMember>) -> DescribeView {
         DescribeView {
@@ -460,11 +443,13 @@ mod tests {
         })
     }
 
-    member_identity_fixture!(wire_member -> Member, tagged, {
+    krabka_macros::member_identity_fixtures! {
+        tagged fn wire_member(member_id: &str) -> Member {
         assignment: assigned(vec![]),
         target_assignment: assigned(vec![]),
         member_type: MEMBER_TYPE_CONSUMER,
-    });
+    }
+    }
 
     fn wire_group(group_state: &str, assignor_name: &str, members: Vec<Member>) -> DescribedGroup {
         krabka_macros::tagged_wire!(DescribedGroup {

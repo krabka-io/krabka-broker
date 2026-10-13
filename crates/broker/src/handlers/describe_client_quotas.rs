@@ -218,13 +218,12 @@ pub(crate) fn entity_matches_filter(
 
 #[cfg(test)]
 mod tests {
-
     use {
         super::*,
         crate::{
             authorizer::AllowAllAuthorizer,
             broker::BrokerHandle,
-            quota::test_support::{QuotaRecordSetup, QuotaValue},
+            quota::test_support::{QuotaEntityInput, QuotaRecordSetup, QuotaValue},
         },
         assert2::{assert, check},
         krabka_metadata::MetadataRecord,
@@ -547,13 +546,16 @@ mod tests {
             dir: _dir,
         } = start_broker(Arc::new(AllowAllAuthorizer)).await;
         seed_quota(&broker_handle, QuotaRecordSetup {
-            entity: vec![("client-id", Some("app-1")), ("user", Some("alice"))],
+            entity: vec![
+                QuotaEntityInput::client_id(Some("app-1")),
+                QuotaEntityInput::user(Some("alice")),
+            ],
             value: QuotaValue(2048.0),
             ..Default::default()
         })
         .await;
         seed_quota(&broker_handle, QuotaRecordSetup {
-            entity: vec![("user", Some("bob"))],
+            entity: vec![QuotaEntityInput::user(Some("bob"))],
             key: "consumer_byte_rate",
             value: QuotaValue(512.0),
         })
@@ -617,7 +619,7 @@ mod tests {
         } = start_broker(Arc::new(AllowAllAuthorizer)).await;
         seed_alice_quota(&broker_handle).await;
         seed_quota(&broker_handle, QuotaRecordSetup {
-            entity: vec![("user", None)],
+            entity: vec![QuotaEntityInput::user(None)],
             value: QuotaValue(2048.0),
             ..Default::default()
         })

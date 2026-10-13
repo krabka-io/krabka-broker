@@ -166,10 +166,7 @@ async fn share_fetch(
                 .into_iter()
                 .map(|row| FetchPartition {
                     partition_index: row.index.0,
-                    acknowledgement_batches: acknowledgement_batches!(
-                        FetchAcknowledgeBatch,
-                        row.batches
-                    ),
+                    acknowledgement_batches: krabka_macros::acknowledgement_batches!(FetchAcknowledgeBatch; [row.batches]),
                     ..Default::default()
                 })
                 .collect(),

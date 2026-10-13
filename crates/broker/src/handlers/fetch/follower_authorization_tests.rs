@@ -27,8 +27,8 @@ use {
         handlers::{
             acl_wire::CLUSTER_RESOURCE_NAME,
             test_support::{
-                StartedBroker, default_records_batch, seed_partition_replicas,
-                wait_for_bound_partition,
+                CaseOutcomes, StartedBroker, collect_topic_cases, default_records_batch,
+                seed_partition_replicas, wait_for_bound_partition,
             },
         },
         partition::Partition,
@@ -392,60 +392,60 @@ async fn follower_fetch_needs_cluster_action() {
     }
 
     let StartedBroker { broker, dir: _dir } = start().await;
-    topic_case_outcomes!(
-        (actual, want),
-        (index, case, label, name),
-        "replicated",
-        cases,
-        {
-            let topic_id = uuid::Uuid::from_u128(index + 1);
-            let wire_id = WireUuid(topic_id.into_bytes());
-            let SeededPartition { partition, batch } =
-                replicated_partition(&broker, &name, topic_id).await;
-            let topic = TopicRef {
-                name: name.as_str(),
-                id: wire_id,
-            };
-            let fetch_setup = FetchRequestSetup {
-                version: case.version,
-                sender: case.sender,
-                topic,
-                ..Default::default()
-            };
+    let CaseOutcomes {
+        actual,
+        expected: want,
+    } = collect_topic_cases("replicated", cases, async |row| {
+        let topic_id = uuid::Uuid::from_u128(row.index + 1);
+        let wire_id = WireUuid(topic_id.into_bytes());
+        let SeededPartition { partition, batch } =
+            replicated_partition(&broker, &row.topic, topic_id).await;
+        let topic = TopicRef {
+            name: row.topic.as_str(),
+            id: wire_id,
+        };
+        let fetch_setup = FetchRequestSetup {
+            version: row.case.version,
+            sender: row.case.sender,
+            topic,
+            ..Default::default()
+        };
 
-            let from_start = fetch(
-                &broker,
-                case.version,
-                case.caller,
-                &request()
-                    .version(fetch_setup.version)
-                    .sender(fetch_setup.sender)
-                    .topic(fetch_setup.topic)
-                    .offset(fetch_setup.offset)
-                    .call(),
-            )
-            .await;
-            let from_log_end = fetch(
-                &broker,
-                case.version,
-                case.caller,
-                &request()
-                    .version(fetch_setup.version)
-                    .sender(fetch_setup.sender)
-                    .topic(fetch_setup.topic)
-                    .offset(LOG_END)
-                    .call(),
-            )
-            .await;
-            actual.push(Outcome {
-                case: label.clone(),
+        let from_start = fetch(
+            &broker,
+            row.case.version,
+            row.case.caller,
+            &request()
+                .version(fetch_setup.version)
+                .sender(fetch_setup.sender)
+                .topic(fetch_setup.topic)
+                .offset(fetch_setup.offset)
+                .call(),
+        )
+        .await;
+        let from_log_end = fetch(
+            &broker,
+            row.case.version,
+            row.case.caller,
+            &request()
+                .version(fetch_setup.version)
+                .sender(fetch_setup.sender)
+                .topic(fetch_setup.topic)
+                .offset(LOG_END)
+                .call(),
+        )
+        .await;
+        CaseOutcomes {
+            actual: Outcome {
+                case: row.label.clone(),
                 from_start,
                 from_log_end,
                 high_watermark: partition.high_watermark().await,
-            });
-            want.push(expected(case, label, topic, batch));
+            },
+            expected: expected(row.case, row.label, topic, batch),
         }
-    );
+    })
+    .await;
     broker.shutdown().await;
 
     assert!(actual == want);

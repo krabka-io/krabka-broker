@@ -935,32 +935,49 @@ mod tests {
         }
     }
 
+    /// A joined member and the broker resources kept until shutdown.
+    struct JoinedRegexMember {
+        handle: BrokerHandle,
+        directory: tempfile::TempDir,
+        broker: Arc<Broker>,
+        member: RegexMember,
+    }
+
     /// Kafka refreshes the resolution of a group's regular expressions when the
     /// metadata image has new topics (`lastMetadataImageWithNewTopics`), at the
     /// next heartbeat of any member. A Java client sends its pattern only when
     /// it joins, so a topic created after the join reaches the member only
     /// through that refresh.
-    macro_rules! joined_regex_member {
-        (($handle:ident, $directory:ident, $broker:ident, $member:ident), $topics:expr) => {
-            let StartedBroker {
-                handle: $handle,
-                dir: $directory,
-            } = broker_with_described_topics($topics).await;
-            let $broker = $handle.broker_arc_for_test();
-            let mut $member = RegexMember::new($broker.clone(), "m1");
-            $member.heartbeat(Some("^orders-.*")).await;
-        };
+    async fn joined_regex_member(topics: &[DescribedTopic<'_>]) -> JoinedRegexMember {
+        let StartedBroker {
+            handle,
+            dir: directory,
+        } = broker_with_described_topics(topics).await;
+        let broker = handle.broker_arc_for_test();
+        let mut member = RegexMember::new(broker.clone(), "m1");
+        member.heartbeat(Some("^orders-.*")).await;
+        JoinedRegexMember {
+            handle,
+            directory,
+            broker,
+            member,
+        }
     }
-
     #[tokio::test]
     async fn a_topic_created_after_the_join_is_assigned_to_a_member_that_never_resends_its_pattern()
     {
         let first = uuid::Uuid::from_u128(1);
         let second = uuid::Uuid::from_u128(2);
-        joined_regex_member!((broker_handle, _dir, broker, member), &[DescribedTopic {
+        let JoinedRegexMember {
+            handle: broker_handle,
+            directory: _dir,
+            broker,
+            mut member,
+        } = joined_regex_member(&[DescribedTopic {
             name: "orders-eu",
-            id: first
-        }]);
+            id: first,
+        }])
+        .await;
         member.heartbeat_until_holding(&[first]).await;
 
         let node = krabka_raft::NodeId(broker_handle.node_id());
@@ -989,16 +1006,22 @@ mod tests {
     async fn revoking_describe_on_a_resolved_topic_removes_it_at_a_later_heartbeat() {
         let allowed = uuid::Uuid::from_u128(1);
         let revoked = uuid::Uuid::from_u128(2);
-        joined_regex_member!((broker_handle, _dir, broker, member), &[
+        let JoinedRegexMember {
+            handle: broker_handle,
+            directory: _dir,
+            broker,
+            mut member,
+        } = joined_regex_member(&[
             DescribedTopic {
                 name: "orders-eu",
-                id: allowed
+                id: allowed,
             },
             DescribedTopic {
                 name: "orders-us",
-                id: revoked
-            }
-        ]);
+                id: revoked,
+            },
+        ])
+        .await;
         member.heartbeat_until_holding(&[allowed, revoked]).await;
 
         broker

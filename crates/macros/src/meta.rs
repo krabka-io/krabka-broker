@@ -8,6 +8,18 @@ use moxy::{
     token::{Group, Ident, Span, Spanner, TokenStream, TokenTree},
 };
 
+/// The common broker request-handler signature, with explicit wire schemas.
+pub(crate) fn broker_handler_signature(request: &Path, response: &Path) -> TokenStream {
+    moxy::template! {
+        pub(crate) async fn handle(
+            broker: &crate::broker::Broker,
+            req: {{ request }},
+            _version: i16,
+            ctx: &crate::handlers::RequestContext<'_>,
+        ) -> Result<{{ response }}, crate::error::BrokerError>
+    }
+}
+
 #[cfg(test)]
 pub(crate) struct RejectedStruct<'a> {
     pub(crate) label: &'a str,
@@ -69,6 +81,37 @@ pub(crate) fn parameter_ident<'a>(
     } else {
         Err(ParseError::new(parameter.span(), message))
     }
+}
+
+/// Validate a concrete async declaration and return its named parameter types.
+pub(crate) fn named_async_parameter_types(
+    signature: &Signature,
+    names: &[&str],
+    message: &str,
+) -> Result<Vec<String>, ParseError> {
+    let parameters = &signature.params.inner.inputs;
+    if !is_plain_async(signature)
+        || signature.generics.where_clause.is_some()
+        || signature.params.inner.variadic.is_some()
+        || parameters.len() != names.len()
+    {
+        return Err(ParseError::new(signature.span(), message));
+    }
+    parameters
+        .iter()
+        .zip(names)
+        .map(|(parameter, name)| {
+            let FnParam::Typed(parameter) = parameter else {
+                return Err(ParseError::new(signature.span(), message));
+            };
+            if !parameter.attrs.is_empty()
+                || compact(&moxy::template! { {{ parameter.pat }} }) != *name
+            {
+                return Err(ParseError::new(signature.span(), message));
+            }
+            Ok(compact(&moxy::template! { {{ parameter.ty }} }))
+        })
+        .collect()
 }
 
 /// Parse an ordinary function's header while keeping its operation body opaque.

@@ -289,26 +289,20 @@ async fn seed_controller_quota(handle: &BrokerHandle, rate: f64) {
     seed_controller_quota_helper(handle, rate).await;
 }
 
+/// Drive an invalid create request while retaining its complete wire response.
+async fn invalid_config_answer(
+    broker: &Broker,
+    request: &CreateTopicsRequest,
+) -> CreateTopicsResponse {
+    let response = drive(broker, request, &test_context(&principal("admin"), &peer())).await;
+    assert!(response.topics[0].error_code == codes::INVALID_CONFIG);
+    response
+}
+
 /// A denial on cluster `Create` is a shortcut only. `DenyAll` also denies the
 /// per-topic `Create` fallback, so the request still ends every row in
 /// `TOPIC_AUTHORIZATION_FAILED` -- but never `CLUSTER_AUTHORIZATION_FAILED`,
 /// which Kafka's `ControllerApis.createTopics` never answers for a topic row.
-macro_rules! invalid_config_answer {
-    (($response:ident, $message:ident), $broker:ident, $request:ident) => {
-        let $response = drive(
-            &$broker,
-            &$request,
-            &test_context(&principal("admin"), &peer()),
-        )
-        .await;
-        assert!($response.topics[0].error_code == codes::INVALID_CONFIG);
-        let $message = $response.topics[0]
-            .error_message
-            .as_deref()
-            .unwrap_or_default();
-    };
-}
-
 #[tokio::test]
 async fn handle_falls_back_to_topic_authorization_failed_for_each_topic() {
     krabka_macros::broker_test_setup! {
@@ -926,7 +920,8 @@ async fn handle_rejects_diskless_topic_without_a_rack_safe_wal_quorum() {
         },
     ])]);
 
-    invalid_config_answer!((resp, message), broker, req);
+    let resp = invalid_config_answer(&broker, &req).await;
+    let message = resp.topics[0].error_message.as_deref().unwrap_or_default();
     for needle in [
         "partition 0",
         "leader 1",
@@ -979,7 +974,8 @@ async fn diskless_wal_validation_names_the_active_leader_of_a_manual_assignment(
         ..Default::default()
     }]);
 
-    invalid_config_answer!((resp, message), broker, req);
+    let resp = invalid_config_answer(&broker, &req).await;
+    let message = resp.topics[0].error_message.as_deref().unwrap_or_default();
     check!(message.contains("partition 0 leader 3 "), "{message}");
     broker_handle.shutdown().await;
 }

@@ -23,19 +23,36 @@ use {
     uuid::Uuid,
 };
 
-/// Alice's identity and request context, with caller-owned borrowed storage.
-macro_rules! freeze_fixture {
-    ($image:ident, $principal:ident, $peer:ident, $ctx:ident; $entries:expr $(; $env:ident, $config:ident)?) => {
-        let $image = crate::freeze::handlers::set_freeze::tests::image($entries);
-        let $principal = crate::test_support::principal(crate::freeze::handlers::set_freeze::tests::ALICE_NAME);
-        let $peer = crate::freeze::handlers::set_freeze::tests::peer();
-        let $ctx = crate::freeze::handlers::set_freeze::tests::context(&$principal, &$peer);
-        $(let $env = crate::freeze::handlers::set_freeze::checks::FreezeEnv {
-            config: &$config,
-            image: &$image,
-            ctx: &$ctx,
-        };)?
-    };
+/// Alice's request inputs; identity and image remain owned while a context borrows them.
+struct FreezeFixture {
+    // Reverse declaration order retains the original local-variable teardown order.
+    peer: SocketAddr,
+    principal: Principal,
+    image: MetadataImage,
+}
+fn freeze_fixture(image: MetadataImage) -> FreezeFixture {
+    let principal = principal(ALICE_NAME);
+    let peer = peer();
+    FreezeFixture {
+        peer,
+        principal,
+        image,
+    }
+}
+impl FreezeFixture {
+    fn context(&self) -> RequestContext<'_> { context(&self.principal, &self.peer) }
+
+    fn environment<'a>(
+        &'a self,
+        config: &'a BrokerConfig,
+        ctx: &'a RequestContext<'a>,
+    ) -> super::checks::FreezeEnv<'a> {
+        super::checks::FreezeEnv {
+            config,
+            image: &self.image,
+            ctx,
+        }
+    }
 }
 
 mod approval;
@@ -90,6 +107,20 @@ fn with_freeze_env(
         ctx: &ctx,
     };
     check(&env);
+}
+
+/// Retain Alice's loaded trust set and identity while checking an independent image.
+fn with_alice_freeze_env(
+    make_image: impl FnOnce() -> MetadataImage,
+    check: impl FnOnce(&FreezeFixture, &super::checks::FreezeEnv<'_>),
+) {
+    let AliceKeyConfiguration {
+        dir: _dir, config, ..
+    } = alice_key_configuration();
+    let fixture = freeze_fixture(make_image());
+    let ctx = fixture.context();
+    let env = fixture.environment(&config, &ctx);
+    check(&fixture, &env);
 }
 
 // A broker configuration with alice's operator key loaded, and her key pair.

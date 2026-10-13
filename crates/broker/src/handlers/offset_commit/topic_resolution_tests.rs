@@ -19,13 +19,15 @@ use {
         codes,
         coordinator::unified::actor::GroupActorMessage,
         handlers::test_support::{configured_topic_request, created_topic_response},
-        test_support::{DenyAll, dispatch_wire, request_context, start_group_broker_no_audit},
+        test_support::{
+            DenyAll, dispatch_wire, peer, principal, request_context, start_group_broker_no_audit,
+        },
     },
     assert2::assert,
     krabka_protocol::{
         owned::{
             offset_commit_request::{
-                OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
+                self, OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
             },
             offset_commit_response::{
                 OffsetCommitResponse, OffsetCommitResponsePartition, OffsetCommitResponseTopic,
@@ -49,6 +51,25 @@ const KNOWN_NAME: &str = "offsets-resolution";
 use crate::handlers::test_support::{
     CaseOutcomes, DenyTopics, TopicRef, TopicResolutionCase as Case, WireTopic,
 };
+
+async fn consumer_commit(
+    broker: &BrokerHandle,
+    version: i16,
+    request: &OffsetCommitRequest,
+) -> OffsetCommitResponse {
+    let shared = broker.broker_arc_for_test();
+    let user = principal("consumer");
+    let address = peer();
+    let context = request_context(&user, &address, "consumer-client");
+    dispatch_wire(
+        &shared,
+        offset_commit_request::API_KEY,
+        version,
+        request,
+        &context,
+    )
+    .await
+}
 
 /// A topic-partition that a group holds a committed offset for.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -117,30 +138,6 @@ async fn committed_keys(broker: &BrokerHandle, group: &str) -> Vec<CommittedKey>
     keys
 }
 
-macro_rules! consumer_commit {
-    (
-        ($shared:ident, $user:ident, $address:ident, $context:ident, $actual:ident),
-        $broker:expr,
-        $version:expr,
-        $request:ident
-    ) => {
-        let $shared = $broker.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
-            bind($user, $address);
-            user ["consumer"];
-        };
-        let $context = request_context(&$user, &$address, "consumer-client");
-        let $actual: OffsetCommitResponse = crate::test_support::dispatch_wire(
-            &$shared,
-            krabka_protocol::owned::offset_commit_request::API_KEY,
-            $version,
-            &$request,
-            &$context,
-        )
-        .await;
-    };
-}
-
 /// Send one single-row `OffsetCommit` at `case.version` for `case.topic`, in
 /// a group of its own. Return the actual and the expected outcome.
 ///
@@ -177,12 +174,7 @@ async fn drive(
         ..Default::default()
     };
 
-    consumer_commit!(
-        (shared, user, address, ctx, actual),
-        broker,
-        case.version,
-        request
-    );
+    let actual = consumer_commit(broker, case.version, &request).await;
     let actual_keys = committed_keys(broker, &group).await;
 
     let id_only = case.version >= super::FIRST_TOPIC_ID_VERSION;
@@ -319,12 +311,7 @@ async fn refused_rows_precede_the_committed_row() {
         ..Default::default()
     };
 
-    consumer_commit!(
-        (shared, user, address, ctx, actual),
-        broker,
-        VERSION,
-        request
-    );
+    let actual = consumer_commit(&broker, VERSION, &request).await;
 
     let answer = |topic_id, error_code| OffsetCommitResponseTopic {
         topic_id,

@@ -264,8 +264,9 @@ mod tests {
                 produce::test_support::image_with_topic, test_support::seed_partition_replicas,
             },
             test_support::{
-                self as broker_fixture_support, append_partition_batch, record_values,
-                start_broker_no_audit, start_broker_with_authorizer_no_audit, temporary_partition,
+                self as broker_fixture_support, TemporaryPartition, append_partition_batch,
+                record_values, start_broker_no_audit, start_broker_with_authorizer_no_audit,
+                temporary_partition,
             },
         },
         assert2::assert,
@@ -451,7 +452,10 @@ mod tests {
     async fn leader_check_needs_the_installed_role_and_the_image_to_name_this_node() {
         let image = image_with_topic("orders", &[1, 2]);
 
-        let (_dir, partition) = temporary_partition().call();
+        let TemporaryPartition {
+            dir: _dir,
+            partition,
+        } = temporary_partition().call();
 
         // (this node, installed leader, refused)
         let cases = [

@@ -7,8 +7,6 @@
 //! A cluster with no authorizer configured has no ACLs to project, and says
 //! so with `SECURITY_DISABLED` rather than an empty listing.
 
-#[cfg(test)]
-use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     super::acl_wire::{
         NO_AUTHORIZER_MESSAGE, PatternTypeCode, ResourceTypeCode,
@@ -238,10 +236,7 @@ mod tests {
         test_context ["admin-client"];
     }
 
-    use crate::{
-        handlers::acl_test_support::{configured_authorizer, seed_acls},
-        test_support::start_broker_with_authorizer_no_audit as start_broker,
-    };
+    use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
 
     #[test]
     fn build_filter_keeps_empty_strings_and_decodes_axes() {
@@ -472,25 +467,10 @@ mod tests {
     /// the named resource, and only a null name is a wildcard.
     #[tokio::test]
     async fn handle_matches_patterns_the_way_kafka_does() {
-        let HandlerStartedBroker {
-            broker: broker_handle,
-            dir: _dir,
-        } = start_broker(configured_authorizer()).await;
-        seed_acls(
-            &broker_handle,
-            PATTERN_MATCHING_FIXTURE
-                .iter()
-                .map(|seed| AclEntry {
-                    pattern_type: seed.pattern_type,
-                    ..acl().resource_name(seed.name).call()
-                })
-                .collect(),
-        )
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
-        krabka_macros::request_test_identity! {
-            bind(ctx);
-            user ["admin"];
+        krabka_macros::broker_test_setup! {
+        bind(broker_handle, _dir, broker, ctx);
+        boot [acl_fixtures::start_configured_acls().entries(|| PATTERN_MATCHING_FIXTURE.iter().map(|seed| AclEntry { pattern_type: seed.pattern_type, ..acl().resource_name(seed.name).call() }).collect()).call()];
+        user ["admin"];
         };
 
         let all: &[ListedPattern] = &[

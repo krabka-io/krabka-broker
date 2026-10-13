@@ -13,9 +13,11 @@ use {
     },
     crate::{
         authorizer::AllowAllAuthorizer,
+        broker::Broker,
         codes,
         handlers::{
-            list_offsets::test_support::test_context, test_support::configured_topic_request,
+            context::RequestContext, list_offsets::test_support::test_context,
+            test_support::configured_topic_request,
         },
         test_support::{empty_acl_image, start_broker_with_authorizer_no_audit as start_broker},
     },
@@ -82,16 +84,17 @@ fn topic_describe_denied_yields_topic_authorization_failed_rows() {
     assert!(decoded.topics[0].partitions[0].error_code == codes::TOPIC_AUTHORIZATION_FAILED);
 }
 
-macro_rules! answer_request {
-    (
-        ($request:ident, $bytes:ident, $response:ident), $broker:ident, $version:ident, $ctx:ident
-    ) => {
-        let $request = encode_request(&$request, $version);
-        let $bytes = handle(&$broker, $version, &$request, &$ctx)
-            .await
-            .expect("handle");
-        let $response = decode_response(&$bytes, $version);
-    };
+async fn answer_request(
+    broker: &Broker,
+    request: &ListOffsetsRequest,
+    version: i16,
+    context: &RequestContext<'_>,
+) -> ListOffsetsResponse {
+    let request = encode_request(request, version);
+    let bytes = handle(broker, version, &request, context)
+        .await
+        .expect("handle");
+    decode_response(&bytes, version)
 }
 
 #[tokio::test]
@@ -126,7 +129,7 @@ async fn denied_handler_preserves_topic_and_partition_response_fields() {
         timeout_ms: 30_000,
         ..Default::default()
     };
-    answer_request!((req, bytes, resp), broker, version, ctx);
+    let resp = answer_request(&broker, &req, version, &ctx).await;
 
     let denied_row = |partition_index: i32| {
         krabka_macros::tagged_wire!(ListOffsetsPartitionResponse {
@@ -215,7 +218,7 @@ async fn denied_topic_rows_are_appended_after_authorized_rows_regardless_of_requ
             timeout_ms: 30_000,
             ..Default::default()
         };
-        answer_request!((req, bytes, resp), broker, version, ctx);
+        let resp = answer_request(&broker, &req, version, &ctx).await;
 
         let mut expected_order: Vec<&str> = case
             .request_topics

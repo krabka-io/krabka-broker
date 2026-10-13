@@ -305,14 +305,12 @@ mod tests {
             client,
         }
     }
-    macro_rules! topic_header {
-        ($response:ident, $topic:expr, $partitions:expr) => {
-            assert!(get_array_len(&mut $response, false).unwrap() == 1);
-            assert!(get_string_owned(&mut $response).unwrap() == $topic);
-            assert!(get_array_len(&mut $response, false).unwrap() == $partitions);
-        };
-    }
 
+    fn check_topic_header(response: &mut &[u8], topic: &str, partitions: usize) {
+        assert!(get_array_len(response, false).unwrap() == 1);
+        assert!(get_string_owned(response).unwrap() == topic);
+        assert!(get_array_len(response, false).unwrap() == partitions);
+    }
     #[tokio::test]
     async fn max_num_offsets_caps_legacy_segment_boundaries() {
         const TOPIC: &str = "list-offsets-v0-max";
@@ -359,7 +357,7 @@ mod tests {
 
         let response = answer(&broker_handle, &request).await;
         let mut response: &[u8] = &response;
-        topic_header!(response, TOPIC, 1);
+        check_topic_header(&mut response, TOPIC, 1);
         assert!(get_i32(&mut response).unwrap() == 0);
         assert!(get_i16(&mut response).unwrap() == codes::NONE);
         let count = get_array_len(&mut response, false).unwrap();
@@ -453,7 +451,7 @@ mod tests {
 
         let response = answer(&broker_handle, &request).await;
         let mut response: &[u8] = &response;
-        topic_header!(response, TOPIC, 2);
+        check_topic_header(&mut response, TOPIC, 2);
         for _ in 0..2 {
             assert!(get_i32(&mut response).unwrap() == 0);
             assert!(get_i16(&mut response).unwrap() == codes::INVALID_REQUEST);

@@ -123,8 +123,8 @@ mod tests {
         crate::{
             authorizer::AllowAllAuthorizer,
             test_support::{
-                GrantsInPrincipalName, decode_response, encode_request, peer,
-                start_broker_no_audit_with,
+                GrantsInPrincipalName, decode_response, dispatch_context, encode_request, peer,
+                principal, request_context, start_broker_no_audit_with,
             },
         },
         assert2::{assert, check},
@@ -137,7 +137,7 @@ mod tests {
             fetch_snapshot_response::{self, LeaderIdAndEpoch},
         },
         krabka_raft::SnapshotRange,
-        std::sync::Arc,
+        std::{net::SocketAddr, sync::Arc},
     };
 
     /// A request for partition 0 of the metadata topic, at the given id,
@@ -195,35 +195,29 @@ mod tests {
         }
     }
 
+    async fn snapshot_wire(
+        grants: &str,
+        broker: &Broker,
+        version: i16,
+        address: &SocketAddr,
+    ) -> Bytes {
+        let user = principal(grants);
+        let context = request_context(&user, address, "snapshot-test");
+        dispatch_context(
+            broker,
+            fetch_snapshot_request::API_KEY,
+            version,
+            &encode_request(&request(ReqSnapshotId::default(), 0, 0), version),
+            &context,
+        )
+        .await
+    }
+
     /// A broker listener serves `FetchSnapshot` only to a principal with
     /// `ClusterAction` on the cluster (#682). Kafka's
     /// `ControllerApis.handleFetchSnapshot` authorizes first, and a denial is
     /// `FetchSnapshotRequest.getErrorResponse`: a top-level
     /// `CLUSTER_AUTHORIZATION_FAILED` and no snapshot bytes.
-    macro_rules! snapshot_wire {
-        (
-            ($user:ident, $context:ident, $bytes:ident),
-            $grants:expr,
-            $broker:ident,
-            $version:expr,
-            $address:ident
-        ) => {
-            let $user = crate::test_support::principal($grants);
-            let $context = crate::test_support::request_context(&$user, &$address, "snapshot-test");
-            let $bytes = crate::test_support::dispatch_context(
-                &$broker,
-                fetch_snapshot_request::API_KEY,
-                $version,
-                &crate::test_support::encode_request(
-                    &request(ReqSnapshotId::default(), 0, 0),
-                    $version,
-                ),
-                &$context,
-            )
-            .await;
-        };
-    }
-
     #[tokio::test]
     async fn fetch_snapshot_needs_cluster_action() {
         let HandlerStartedBroker {
@@ -245,7 +239,7 @@ mod tests {
             fetch_snapshot_response::MAX_VERSION,
         ] {
             for grants in ["none", "Cluster:Describe+Cluster:Alter+Topic:Read"] {
-                snapshot_wire!((user, ctx, bytes), grants, broker, version, address);
+                let bytes = snapshot_wire(grants, &broker, version, &address).await;
                 check!(
                     crate::test_support::decode_response::<FetchSnapshotResponse>(&bytes, version)
                         == refused,
@@ -254,13 +248,7 @@ mod tests {
             }
             // With ClusterAction the request reaches the engine, which answers
             // a partition of its own.
-            snapshot_wire!(
-                (user, ctx, bytes),
-                "Cluster:ClusterAction",
-                broker,
-                version,
-                address
-            );
+            let bytes = snapshot_wire("Cluster:ClusterAction", &broker, version, &address).await;
             let served = decode_response::<FetchSnapshotResponse>(&bytes, version);
             check!(served.error_code == codes::NONE, "v{version}");
             check!(served.topics.len() == 1, "v{version}");

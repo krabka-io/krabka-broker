@@ -276,7 +276,8 @@ mod tests {
             broker::BrokerHandle,
             codes,
             coordinator::unified::{
-                GroupType, ShareGroupSeed, share::actor::ShareGroupActorMessage,
+                GroupType, ShareGroupSeed,
+                share::actor::{ShareGroupActorHandle, ShareGroupActorMessage},
             },
             handlers::{
                 RequestContext,
@@ -307,41 +308,39 @@ mod tests {
                 },
                 create_topics_response,
                 share_group_heartbeat_request::ShareGroupHeartbeatRequest,
+                share_group_heartbeat_response::ShareGroupHeartbeatResponse,
             },
             primitives::uuid::Uuid,
         },
         std::sync::Arc,
     };
 
-    macro_rules! joining_share_member {
-        (
-            ($tx:ident, $rx:ident, $response:ident),
-            $actor:expr,
-            $group:expr,
-            $member:expr,
-            $topics:expr
-        ) => {
-            let ($tx, $rx) = tokio::sync::oneshot::channel();
-            $actor
-                .tx
-                .send(ShareGroupActorMessage::Heartbeat {
-                    request: ShareGroupHeartbeatRequest {
-                        group_id: $group.into(),
-                        member_id: $member.into(),
-                        member_epoch: 0,
-                        subscribed_topic_names: Some($topics),
-                        ..Default::default()
-                    },
-                    client_id: "client-a".into(),
-                    client_host: "127.0.0.1".into(),
-                    reply: $tx,
-                })
-                .await
-                .expect("send heartbeat");
-            let $response = $rx.await.expect("heartbeat response");
-        };
+    /// Join the actor directly with the client identity used by the offset-reset cases.
+    async fn joining_share_member(
+        actor: &ShareGroupActorHandle,
+        group: &str,
+        member: &str,
+        topics: Vec<String>,
+    ) -> ShareGroupHeartbeatResponse {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        actor
+            .tx
+            .send(ShareGroupActorMessage::Heartbeat {
+                request: ShareGroupHeartbeatRequest {
+                    group_id: group.into(),
+                    member_id: member.into(),
+                    member_epoch: 0,
+                    subscribed_topic_names: Some(topics),
+                    ..Default::default()
+                },
+                client_id: "client-a".into(),
+                client_host: "127.0.0.1".into(),
+                reply: tx,
+            })
+            .await
+            .expect("send heartbeat");
+        rx.await.expect("heartbeat response")
     }
-
     const UNKNOWN_TOPIC_OR_PARTITION_MESSAGE: &str = UNKNOWN_TOPIC_OR_PARTITION;
 
     /// An authorizer with independently controllable answers for `Group`
@@ -771,9 +770,8 @@ mod tests {
         // `(topic_id, partition)` already in `state.initialized`.
         let actor = broker.group_coordinator.get_or_create_share("g-new");
         for member_id in ["m1", "m2"] {
-            joining_share_member!((tx, rx, resp), actor, "g-new", member_id, vec![
-                "new-topic".into()
-            ]);
+            let resp =
+                joining_share_member(&actor, "g-new", member_id, vec!["new-topic".into()]).await;
             assert!(resp.error_code == codes::NONE, "{resp:?}");
         }
         let (_, _, start_offset_after, _) = persister
@@ -798,7 +796,7 @@ mod tests {
 
         coordinator.mark_share("busy");
         let actor = coordinator.get_or_create_share("busy");
-        joining_share_member!((tx, rx, resp), actor, "busy", "member-1", Vec::new());
+        let resp = joining_share_member(&actor, "busy", "member-1", Vec::new()).await;
         assert!(resp.error_code == codes::NONE, "{resp:?}");
 
         krabka_macros::request_test_identity! {

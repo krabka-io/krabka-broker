@@ -241,20 +241,29 @@ async fn check_trim_frontier(
     );
 }
 
-macro_rules! pending_partition_fixture {
-    (($part:ident, $before:ident), $handle:expr, $broker:expr, $topic:expr, $context:expr) => {
-        topic_holding_a_pending_batch()
-            .broker_handle($handle)
-            .ctx($context)
-            .topic($topic)
-            .call()
-            .await;
-        let $part = $broker
-            .partitions
-            .get($topic, krabka_ids::PartitionIndex(0))
-            .expect("the partition is local");
-        let $before = $part.log_start_offset();
-    };
+struct PendingPartitionFixture {
+    part: Arc<Partition>,
+    before: Offset,
+}
+
+async fn pending_partition_fixture(
+    handle: &BrokerHandle,
+    broker: &Broker,
+    topic: &str,
+    context: &RequestContext<'_>,
+) -> PendingPartitionFixture {
+    topic_holding_a_pending_batch()
+        .broker_handle(handle)
+        .ctx(context)
+        .topic(topic)
+        .call()
+        .await;
+    let part = broker
+        .partitions
+        .get(topic, PartitionIndex(0))
+        .expect("the partition is local");
+    let before = part.log_start_offset();
+    PendingPartitionFixture { part, before }
 }
 
 #[tokio::test]
@@ -623,7 +632,8 @@ async fn a_trim_that_deletes_nothing_leaves_the_log_start_alone() {
     };
 
     for (topic, offset, low_watermark, error_code) in cases {
-        pending_partition_fixture!((part, before), &broker_handle, &broker, topic, &ctx);
+        let PendingPartitionFixture { part, before } =
+            pending_partition_fixture(&broker_handle, &broker, topic, &ctx).await;
 
         check_trim_frontier()
             .broker(&broker)
@@ -652,7 +662,8 @@ async fn a_frozen_topic_refuses_a_trim() {
         user ["admin"];
     };
     let topic = "delete-records-frozen";
-    pending_partition_fixture!((part, before), &broker_handle, &broker, topic, &ctx);
+    let PendingPartitionFixture { part, before } =
+        pending_partition_fixture(&broker_handle, &broker, topic, &ctx).await;
 
     broker_handle
         .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1TopicFreeze(
@@ -695,7 +706,8 @@ async fn a_replica_that_is_not_the_leader_refuses_a_trim() {
         user ["admin"];
     };
     let topic = "delete-records-follower";
-    pending_partition_fixture!((part, before), &broker_handle, &broker, topic, &ctx);
+    let PendingPartitionFixture { part, before } =
+        pending_partition_fixture(&broker_handle, &broker, topic, &ctx).await;
     part.current_leader.store(
         broker.config.node_id.0 + 1,
         std::sync::atomic::Ordering::Release,

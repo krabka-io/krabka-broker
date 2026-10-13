@@ -89,16 +89,25 @@ async fn submit_handshake_metadata(
         .expect(message);
 }
 
-macro_rules! api_version_wire {
-    (($request:ident, $bytes:ident, $response:ident), $broker:ident, $context:ident) => {
-        let $request = request("krabka-test", "1.0.0");
-        let $bytes = handle(&$broker, API_VERSIONS_V3, &$request, &$context)
-            .await
-            .expect("ApiVersions handler");
-        let $response = decode_response(API_VERSIONS_V3, &$bytes);
-    };
+/// Keep the response and both wire buffers alive through the handshake assertions.
+struct ApiVersionExchange {
+    response: ApiVersionsResponse,
+    _bytes: Bytes,
+    _request: Bytes,
 }
 
+async fn api_version_wire(broker: &Broker, context: &RequestContext<'_>) -> ApiVersionExchange {
+    let request = request("krabka-test", "1.0.0");
+    let bytes = handle(broker, API_VERSIONS_V3, &request, context)
+        .await
+        .expect("ApiVersions handler");
+    let response = decode_response(API_VERSIONS_V3, &bytes);
+    ApiVersionExchange {
+        response,
+        _bytes: bytes,
+        _request: request,
+    }
+}
 /// The advertised rows whose ranges are a deliberate choice, pinned whole.
 ///
 /// - Produce: min 0, as Kafka 4.x still advertises it
@@ -383,7 +392,8 @@ async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
     let metadata_offset = broker.controller.current_metadata_offset();
     assert!(metadata_offset >= before_topics + 10);
 
-    api_version_wire!((req, bytes, resp), broker, context);
+    let exchange = api_version_wire(&broker, &context).await;
+    let resp = &exchange.response;
 
     check!(resp.error_code == codes::NONE, "{resp:?}");
     // `request_context` arrives on `PLAINTEXT`, and a test broker leaves
@@ -521,7 +531,8 @@ async fn handle_reports_and_records_a_request_quota_throttle() {
         })
         .await;
 
-    api_version_wire!((req, bytes, resp), broker, context);
+    let exchange = api_version_wire(&broker, &context).await;
+    let resp = &exchange.response;
 
     check!(resp.error_code == codes::NONE, "{resp:?}");
     check!(resp.throttle_time_ms > 0, "{resp:?}");

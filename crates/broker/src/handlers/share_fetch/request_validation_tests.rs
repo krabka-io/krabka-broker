@@ -60,16 +60,6 @@ async fn start() -> StartedBroker {
     StartedBroker { broker, dir }
 }
 
-macro_rules! share_request_identity {
-    (($user:ident, $address:ident, $ctx:ident)) => {
-        krabka_macros::request_test_identity! {
-            bind($user, $address, $ctx);
-            user ["share-consumer"];
-            client ["share-client"];
-        };
-    };
-}
-
 /// One row: the group id, the member id, and the top-level error code of
 /// each API.
 struct Case {
@@ -179,7 +169,7 @@ async fn dispatch_share_fetch(
 async fn group_and_member_ids_are_checked_in_kafka_order() {
     let StartedBroker { broker, dir: _dir } = start().await;
     let shared = broker.broker_arc_for_test();
-    share_request_identity!((user, address, ctx));
+    krabka_macros::request_test_identity!(bind(user, address, ctx); user ["share-consumer"]; client ["share-client"];);
     let fetch_version = share_fetch_response::MAX_VERSION;
     let acknowledge_version = share_acknowledge_response::MAX_VERSION;
 
@@ -230,7 +220,7 @@ async fn group_and_member_ids_are_checked_in_kafka_order() {
 async fn a_member_the_group_does_not_know_still_fetches() {
     let StartedBroker { broker, dir: _dir } = start().await;
     let shared = broker.broker_arc_for_test();
-    share_request_identity!((user, address, ctx));
+    krabka_macros::request_test_identity!(bind(user, address, ctx); user ["share-consumer"]; client ["share-client"];);
     let version = share_fetch_response::MAX_VERSION;
     let _actor = shared.group_coordinator.get_or_create_share(READABLE);
 

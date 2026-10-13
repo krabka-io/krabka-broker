@@ -316,15 +316,19 @@ fn row(key: &str, error_code: i16, error_message: Option<String>) -> Coordinator
     }
 }
 
-macro_rules! mixed_share_keys {
-    (($valid:ident, $request:ident)) => {
-        let $valid = format!("share-group:{KAFKA_TOPIC_ID}:0");
-        let $request = FindCoordinatorRequest {
-            key_type: KEY_TYPE_SHARE,
-            coordinator_keys: vec!["malformed".into(), $valid.clone()],
-            ..Default::default()
-        };
+struct MixedShareRequest {
+    valid: String,
+    request: FindCoordinatorRequest,
+}
+
+fn mixed_share_keys() -> MixedShareRequest {
+    let valid = format!("share-group:{KAFKA_TOPIC_ID}:0");
+    let request = FindCoordinatorRequest {
+        key_type: KEY_TYPE_SHARE,
+        coordinator_keys: vec!["malformed".into(), valid.clone()],
+        ..Default::default()
     };
+    MixedShareRequest { valid, request }
 }
 
 /// A principal without `ClusterAction` that sends one malformed and one valid
@@ -342,7 +346,7 @@ async fn denied_share_request_answers_cluster_authorization_failed_on_every_key(
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    mixed_share_keys!((valid, request));
+    let MixedShareRequest { valid, request } = mixed_share_keys();
 
     let response = find(&broker, &request, 6, "alice").await;
 
@@ -413,7 +417,7 @@ async fn granted_share_request_validates_each_key() {
     .await;
     let broker = broker_handle.broker_arc_for_test();
     broker_handle.wait_until_share_coordinator_ready().await;
-    mixed_share_keys!((valid, request));
+    let MixedShareRequest { valid, request } = mixed_share_keys();
 
     let response = find(&broker, &request, 6, "admin").await;
 

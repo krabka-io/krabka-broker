@@ -148,24 +148,22 @@ async fn check_timeout_answers(
     }
 }
 
-macro_rules! transaction_v2_broker {
-    (($handle:ident, $directory:ident, $broker:ident)) => {
-        krabka_macros::broker_test_setup! {
-            bind($handle, $directory, $broker);
-            boot [start_broker_no_audit_with(|config| {
-                        config.transaction_state_num_partitions = 7;
-                        config.transaction_max_timeout = secs(8);
-                        config.features.transaction_two_phase_commit_enable = true;
-                        config.features.unstable_api_versions =
-                            crate::api_catalog::UnstableApiVersions::Enabled;
-                    })];
-        };
-    };
+/// The KIP-939 test configuration precedes coordinator readiness at each caller.
+async fn transaction_v2_broker() -> HandlerStartedBroker {
+    start_broker_no_audit_with(|config| {
+        config.transaction_state_num_partitions = 7;
+        config.transaction_max_timeout = secs(8);
+        config.features.transaction_two_phase_commit_enable = true;
+        config.features.unstable_api_versions = UnstableApiVersions::Enabled;
+    })
+    .await
 }
-
 #[tokio::test]
 async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
-    transaction_v2_broker!((broker_handle, _dir, broker));
+    krabka_macros::broker_test_setup!(
+        bind(broker_handle, _dir, broker);
+        boot [transaction_v2_broker()];
+    );
     krabka_macros::request_test_identity! {
         bind(principal, peer, context);
         user ["admin"];
@@ -380,7 +378,10 @@ async fn kip939_fields_follow_the_two_phase_commit_config_at_transaction_version
 
 #[tokio::test]
 async fn keep_prepared_txn_without_enable_2pc_preserves_finite_timeout() {
-    transaction_v2_broker!((broker_handle, _dir, broker));
+    krabka_macros::broker_test_setup!(
+        bind(broker_handle, _dir, broker);
+        boot [transaction_v2_broker()];
+    );
     wait_for_transaction_v2_coordinator(&broker_handle).await;
     krabka_macros::request_test_identity! {
         bind(principal, peer, context);
