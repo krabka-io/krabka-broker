@@ -10,6 +10,17 @@ macro_rules! empty_share_offsets_response {
     };
 }
 
+macro_rules! anonymous_request_identity {
+    ($principal:ident, $peer:ident, $ctx:ident) => {
+        krabka_macros::request_test_identity! {
+            bind($principal, $peer, $ctx);
+            user ["ANONYMOUS"];
+            client ["client-a"];
+            connection ["connection-a"];
+        };
+    };
+}
+pub(crate) use anonymous_request_identity;
 use {
     crate::{
         api_catalog::UnstableApiVersions,
@@ -552,6 +563,13 @@ pub(crate) async fn start_group_with_controller_peer(
 }
 
 pub(crate) async fn start_broker() -> StartedBroker { start_broker_with(|_| {}).await }
+
+pub(crate) async fn start_empty_acl_broker() -> StartedBroker {
+    start_broker_no_audit_with(|config| {
+        config.authorizer = Arc::new(SimpleAclAuthorizer::new(HashSet::new()));
+    })
+    .await
+}
 
 pub(crate) async fn start_broker_with(configure: impl FnOnce(&mut BrokerConfig)) -> StartedBroker {
     start_test_broker_with(configure).await

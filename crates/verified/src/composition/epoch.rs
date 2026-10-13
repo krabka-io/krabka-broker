@@ -3,7 +3,6 @@ use super::*;
 use creusot_std::prelude::*;
 
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
 #[logic(open)]
@@ -30,13 +29,6 @@ pub fn epoch_archive_valid(entries: Seq<EpochEntry>, base: Int, end: Int) -> boo
 #[cfg_attr(test, mutants::skip)]
 #[logic(open)]
 pub fn epoch_input_valid(entries: Seq<EpochEntry>, base: Int, start: Int, end: Int) -> bool {
-    pearlite! { epoch_window_valid(base, start, end) && epoch_archive_valid(entries, base, end) }
-}
-
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
-pub(super) fn epoch_input_valid(entries: Seq<EpochEntry>, base: Int, start: Int, end: Int) -> bool {
     pearlite! { epoch_window_valid(base, start, end) && epoch_archive_valid(entries, base, end) }
 }
 

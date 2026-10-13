@@ -14,8 +14,6 @@
 //! `CLIENT_METRICS` enumerates configured subscription names from the
 //! metadata image (see `MetadataImage::client_metrics_subscriptions`).
 
-#[cfg(test)]
-use crate::authorizer::SimpleAclAuthorizer;
 use {
     crate::{
         broker::Broker,
@@ -513,10 +511,7 @@ mod tests {
         let HandlerStartedBroker {
             broker: broker_handle,
             dir: _dir,
-        } = start_broker(Arc::new(SimpleAclAuthorizer::new(
-            std::collections::HashSet::new(),
-        )))
-        .await;
+        } = crate::handlers::test_support::start_empty_acl_broker().await;
         seed_topic(&broker_handle, "orders").await;
         let broker = broker_handle.broker_arc_for_test();
         let req = topic_listing_request();

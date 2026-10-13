@@ -8,6 +8,7 @@
 
 use {
     crate::support::share::broker_config,
+    assert2::assert,
     krabka_broker::Broker,
     krabka_client_core::Client,
     krabka_protocol::owned::{

@@ -11,6 +11,7 @@
 macro_rules! creusot_open_spec {
     ($item:item) => {
         #[cfg(creusot)]
+        // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
         #[cfg_attr(test, mutants::skip)]
         #[logic(open)]
         $item

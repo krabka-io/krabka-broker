@@ -43,12 +43,7 @@ fn topic_describe_denied_yields_topic_authorization_failed_rows() {
     };
 
     let EmptyAclImage { authorizer, image } = empty_acl_image();
-    krabka_macros::request_test_identity! {
-        bind(principal, peer, ctx);
-        user ["ANONYMOUS"];
-        client ["client-a"];
-        connection ["connection-a"];
-    };
+    crate::handlers::test_support::anonymous_request_identity!(principal, peer, ctx);
     assert!(crate::handlers::acl_denied(
         &authorizer,
         &image,

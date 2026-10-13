@@ -1044,18 +1044,6 @@ impl TaskSetup {
     }
 }
 
-fn record_final_drain_timeout(
-    idx: usize,
-    unresolved: usize,
-    dropped: &mut u64,
-    error: &mut String,
-) {
-    let unresolved = unresolved as u64;
-    *dropped += unresolved;
-    if error.is_empty() {
-        *error = format!("producer-{idx}-final-drain-timeout:{unresolved}");
-    }
-}
 struct ProducerTask {
     setup: TaskSetup,
     first_ack: Arc<AtomicU64>,

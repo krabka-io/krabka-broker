@@ -41,7 +41,7 @@ pub async fn list_groups_by_type(client: &Client, group_type: &str) -> ListGroup
             ..Default::default()
         })
         .await
-        .expect(&format!("ListGroups[{group_type}]"));
+        .unwrap_or_else(|_| panic!("ListGroups[{group_type}]"));
     assert!(
         response.error_code == 0,
         "list error: {:?}",
