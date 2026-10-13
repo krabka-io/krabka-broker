@@ -522,13 +522,11 @@ async fn dry_run_rejects_a_capture_that_selects_only_part_of_a_footer_run() {
     capture.partitions[0].ranges[0].entry.byte_len /= 2;
     capture.partitions[0].recovery_cutoff = 1;
     assert_dry_run_error(
-        DryRunErrorSetup::builder()
-            .archive(archive.path())
-            .target(target.path())
-            .capture_path(&capture_path)
-            .capture(&capture)
-            .expectation(DryRunExpectation::IntegrityOrRecords)
-            .build(),
+        archive.path(),
+        target.path(),
+        &capture_path,
+        &capture,
+        DryRunExpectation::IntegrityOrRecords,
     )
     .await;
 }
@@ -540,13 +538,11 @@ async fn dry_run_rejects_an_internal_batch_offset_gap() {
     let capture_path = archive.path().join("capture.json");
     let capture = fixture_with_second_base(archive.path(), true, false, 2);
     assert_dry_run_error(
-        DryRunErrorSetup::builder()
-            .archive(archive.path())
-            .target(target.path())
-            .capture_path(&capture_path)
-            .capture(&capture)
-            .expectation(DryRunExpectation::Integrity)
-            .build(),
+        archive.path(),
+        target.path(),
+        &capture_path,
+        &capture,
+        DryRunExpectation::Integrity,
     )
     .await;
 }
@@ -557,19 +553,16 @@ enum DryRunExpectation {
     IntegrityOrRecords,
 }
 
-#[derive(bon::Builder)]
-struct DryRunErrorSetup<'a> {
-    archive: &'a std::path::Path,
-    target: &'a std::path::Path,
-    capture_path: &'a std::path::Path,
-    capture: &'a DisklessWalCapture,
+async fn assert_dry_run_error(
+    archive: &std::path::Path,
+    target: &std::path::Path,
+    capture_path: &std::path::Path,
+    capture: &DisklessWalCapture,
     expectation: DryRunExpectation,
-}
-
-async fn assert_dry_run_error(setup: DryRunErrorSetup<'_>) {
-    write_capture(setup.capture_path, setup.capture);
-    let error = dry_run_error(setup.archive, setup.target, setup.capture_path).await;
-    match setup.expectation {
+) {
+    write_capture(capture_path, capture);
+    let error = dry_run_error(archive, target, capture_path).await;
+    match expectation {
         DryRunExpectation::Integrity => {
             check!(matches!(error, RestoreError::Integrity(_)));
         }
