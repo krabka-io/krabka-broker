@@ -165,6 +165,7 @@ pub(crate) fn site_contract(input: &TokenStream) -> Result<TokenStream, ParseErr
         ));
     }
     Ok(moxy::template! {
+        // cargo-mutants: generated Creusot spec function; not compiled outside Creusot, so no test can tell.
         #[cfg(creusot)]
         #[cfg_attr(test, mutants::skip)]
         #[logic]
