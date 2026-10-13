@@ -22,6 +22,7 @@ mod cli_args;
 
 use {
     assert2::{assert, check},
+    bytes::Bytes,
     clap::Parser as _,
     krabka_ids::Offset,
     krabka_log::{Log, LogConfig, name},
