@@ -36,6 +36,15 @@
 
 #![allow(dead_code)]
 
+/// The preferred leader site in the three-site KFC-2 cluster.
+pub(crate) const SITE_A: &str = "site-a";
+/// The second data site.
+pub(crate) const SITE_B: &str = "site-b";
+/// The witness site.
+pub(crate) const SITE_C: &str = "site-c";
+/// `SITES[i]` is the rack of broker `i + 1`.
+pub(crate) const SITES: [&str; 3] = [SITE_A, SITE_B, SITE_C];
+
 use {
     crate::support::{discovery::topic_metadata_request, topics::metadata_topic},
     assert2::assert,
