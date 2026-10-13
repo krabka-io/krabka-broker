@@ -219,8 +219,9 @@ macro_rules! check_token_mutation_refusal {
 }
 
 /// The shared credential and HMAC refusals precede each API's ownership and expiry checks.
-pub(super) fn mutation_credential_refusals(live_hmac: &[u8]) -> Vec<TokenMutationRefusalSetup> {
-    use crate::test_support::{KafkaErrorCode, UnixMillis};
+pub(super) fn mutation_credential_refusals(
+    live_hmac: &[u8],
+) -> impl Iterator<Item = TokenMutationRefusalSetup> + '_ {
     let token_authenticated = [
         ("token-authenticated owner", SecretProvision::Configured),
         (
@@ -229,7 +230,7 @@ pub(super) fn mutation_credential_refusals(live_hmac: &[u8]) -> Vec<TokenMutatio
         ),
     ]
     .into_iter()
-    .map(|(name, secret)| TokenMutationRefusalSetup {
+    .map(move |(name, secret)| TokenMutationRefusalSetup {
         name,
         authentication: authed_with_token("alice", CredentialSource::DelegationToken),
         secret,
@@ -238,29 +239,27 @@ pub(super) fn mutation_credential_refusals(live_hmac: &[u8]) -> Vec<TokenMutatio
         expiry: UnixMillis(-1),
         ..Default::default()
     });
-    token_authenticated
-        .chain([
-            TokenMutationRefusalSetup {
-                name: "tokens disabled",
-                secret: SecretProvision::Absent,
-                hmac: live_hmac.to_vec(),
-                error: KafkaErrorCode(DELEGATION_TOKEN_AUTH_DISABLED),
-                ..Default::default()
-            },
-            TokenMutationRefusalSetup {
-                name: "unknown hmac",
-                hmac: vec![0xFF; 32],
-                error: KafkaErrorCode(DELEGATION_TOKEN_NOT_FOUND),
-                ..Default::default()
-            },
-            TokenMutationRefusalSetup {
-                name: "hmac computed under another secret key",
-                hmac: krabka_security::compute_token_hmac(b"other", "live"),
-                error: KafkaErrorCode(DELEGATION_TOKEN_NOT_FOUND),
-                ..Default::default()
-            },
-        ])
-        .collect()
+    token_authenticated.chain([
+        TokenMutationRefusalSetup {
+            name: "tokens disabled",
+            secret: SecretProvision::Absent,
+            hmac: live_hmac.to_vec(),
+            error: KafkaErrorCode(DELEGATION_TOKEN_AUTH_DISABLED),
+            ..Default::default()
+        },
+        TokenMutationRefusalSetup {
+            name: "unknown hmac",
+            hmac: vec![0xFF; 32],
+            error: KafkaErrorCode(DELEGATION_TOKEN_NOT_FOUND),
+            ..Default::default()
+        },
+        TokenMutationRefusalSetup {
+            name: "hmac computed under another secret key",
+            hmac: krabka_security::compute_token_hmac(b"other", "live"),
+            error: KafkaErrorCode(DELEGATION_TOKEN_NOT_FOUND),
+            ..Default::default()
+        },
+    ])
 }
 
 /// Starts a single-voter controller and waits for its leader.

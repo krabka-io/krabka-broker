@@ -202,7 +202,6 @@ mod tests {
         refusal_token_fixture!((_dir, controller, secret, live, expired));
 
         let cases = mutation_credential_refusals(&live.0)
-            .into_iter()
             .chain([
                 TokenMutationRefusalSetup {
                     name: "expired token, foreign caller",

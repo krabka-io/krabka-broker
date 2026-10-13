@@ -381,6 +381,29 @@ mod timestamped_batch;
 mod transport_errors;
 mod wire_fixtures;
 
+/// Append the shared topic, topic-id and partition setters of Produce fixtures.
+#[moxy::attribute]
+pub fn share_produce_parameters(
+    meta: TokenStream,
+    item: TokenStream,
+) -> Result<TokenStream, ParseError> {
+    wire_fixtures::share_produce_parameters(meta, item)
+}
+
+/// Share sparse-window and nonnegative base/floor preconditions between timestamp kernels.
+#[moxy::attribute]
+pub fn retained_timestamp_bounds(
+    floor: TokenStream,
+    item: NativeTokenStream,
+) -> Result<NativeTokenStream, ParseError> {
+    let expanded = wire_fixtures::retained_timestamp_bounds(floor, item.into())?;
+    // Creusot captures and MIR bindings must share one identifier context.
+    Ok(expanded
+        .to_string()
+        .parse()
+        .expect("valid timestamp bounds expansion"))
+}
+
 // Token-to-token fixtures share the same Moxy adapter and error handling.
 macro_rules! function_macros {
     ($( $(#[$($doc:tt)*])* $name:ident => $module:ident::$delegate:ident; )*) => {

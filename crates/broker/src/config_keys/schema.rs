@@ -60,36 +60,23 @@ mod tests {
         super::{
             super::{
                 log_config::apply_to_log_config,
+                test_support::{TopicOverride, topic_config_record},
                 validation::{is_recognized, validate_topic_config},
             },
             *,
         },
         assert2::{assert, check},
         krabka_log::LogConfig,
+        krabka_metadata::{MetadataImage, MetadataRecord},
+        uuid::Uuid,
     };
 
-    /// A config override of a topic.
-    #[derive(Debug)]
-    struct TopicOverride<'a> {
-        key: &'a str,
-        value: &'a str,
-    }
-
     /// A metadata image whose topic `t` carries exactly `overrides`.
-    fn image_with_topic_config(overrides: &[TopicOverride<'_>]) -> krabka_metadata::MetadataImage {
-        use {
-            krabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord},
-            uuid::Uuid,
-        };
-
+    fn image_with_topic_config(overrides: &[TopicOverride<'_>]) -> MetadataImage {
         let mut image = MetadataImage::new(Uuid::nil());
-        image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
-            topic: "t".into(),
-            overrides: overrides
-                .iter()
-                .map(|TopicOverride { key, value }| ((*key).to_string(), (*value).to_string()))
-                .collect(),
-        }));
+        image.apply(&MetadataRecord::V1TopicConfig(topic_config_record(
+            overrides,
+        )));
         image
     }
 

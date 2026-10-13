@@ -166,24 +166,30 @@ fn homogeneous_builder_matches_kafka_scenarios() {
     run(homogeneous_rows_late());
 }
 
+#[bon::builder]
+fn empty_homogeneous_assignment(
+    name: &'static str,
+    #[builder(default = &[])] subscriptions: &[Uuid],
+) -> Scenario<'static> {
+    Scenario {
+        name,
+        group: group(HOMOGENEOUS, vec![member("A", subscriptions, &[])]),
+        topics: metadata(&[sized(tid(1), 3)]),
+        expected: assignment(&[expects("A", &[])]),
+    }
+}
+
 fn homogeneous_rows_early() -> Vec<Scenario<'static>> {
     let (first, second) = (tid(1), tid(2));
     vec![
-        Scenario {
-            name: "testOneMemberNoTopicSubscription",
-            group: group(HOMOGENEOUS, vec![member("A", &[], &[])]),
-            topics: metadata(&[sized(first, 3)]),
-            expected: assignment(&[expects("A", &[])]),
-        },
-        Scenario {
-            // Kafka throws PartitionAssignorException. The reconciler
-            // resolves subscriptions from the same snapshot, so a missing
-            // topic is skipped instead.
-            name: "testOneMemberSubscribedToNonexistentTopic",
-            group: group(HOMOGENEOUS, vec![member("A", &[second], &[])]),
-            topics: metadata(&[sized(first, 3)]),
-            expected: assignment(&[expects("A", &[])]),
-        },
+        empty_homogeneous_assignment()
+            .name("testOneMemberNoTopicSubscription")
+            .call(),
+        // The reconciler skips a topic absent from the subscription snapshot.
+        empty_homogeneous_assignment()
+            .name("testOneMemberSubscribedToNonexistentTopic")
+            .subscriptions(&[second])
+            .call(),
         Scenario {
             // Kafka's HashSet visits topic3 before topic1.
             name: "testFirstAssignmentTwoMembersTwoTopicsNoMemberRacks",

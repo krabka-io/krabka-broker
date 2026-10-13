@@ -158,7 +158,6 @@ mod tests {
         refusal_token_fixture!((_dir, controller, secret, live, expired));
 
         let cases = mutation_credential_refusals(&live.0)
-            .into_iter()
             .chain(ordinary_ownership_refusals(&live.0))
             .chain([
                 TokenMutationRefusalSetup {

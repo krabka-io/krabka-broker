@@ -122,21 +122,16 @@ pub(crate) fn resolve_remote_copy_lag(
 #[cfg(test)]
 mod tests {
     use {
-        super::*,
+        super::{
+            super::test_support::{TopicOverride, topic_config_record},
+            *,
+        },
         crate::test_support::single_partition_topic,
         assert2::check,
-        krabka_metadata::{
-            BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataRecord, TopicConfigRecord,
-        },
+        krabka_metadata::{BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataRecord},
     };
 
     const NODE: NodeId = NodeId(1);
-
-    /// A config override of topic `t`.
-    struct TopicOverride<'a> {
-        key: &'a str,
-        value: &'a str,
-    }
 
     /// A broker config set for `node_id`.
     struct BrokerSetting<'a> {
@@ -152,13 +147,9 @@ mod tests {
             "t",
             uuid::Uuid::from_u128(1),
         )));
-        image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
-            topic: "t".into(),
-            overrides: overrides
-                .iter()
-                .map(|TopicOverride { key, value }| ((*key).to_owned(), (*value).to_owned()))
-                .collect(),
-        }));
+        image.apply(&MetadataRecord::V1TopicConfig(topic_config_record(
+            overrides,
+        )));
         for BrokerSetting {
             node_id,
             key,
