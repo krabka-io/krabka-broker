@@ -15,7 +15,7 @@ use {
     },
     krabka_ids::PartitionIndex,
     krabka_protocol::owned::common::{
-        add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
+        add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic as RequestTopic,
         add_partitions_to_txn_response::{
             add_partitions_to_txn_partition_result::AddPartitionsToTxnPartitionResult,
             add_partitions_to_txn_topic_result::AddPartitionsToTxnTopicResult,
@@ -63,8 +63,8 @@ impl PartitionSpec {
     }
 }
 
-pub(super) fn topic(name: &str, partitions: &[i32]) -> AddPartitionsToTxnTopic {
-    AddPartitionsToTxnTopic {
+pub(super) fn topic(name: &str, partitions: &[i32]) -> RequestTopic {
+    RequestTopic {
         name: name.into(),
         partitions: partitions.to_vec(),
         ..Default::default()
