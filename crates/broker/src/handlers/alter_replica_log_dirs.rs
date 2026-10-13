@@ -202,6 +202,21 @@ mod tests {
         })
     }
 
+    async fn assert_partition_response(
+        broker: &Broker,
+        version: i16,
+        request: AlterReplicaLogDirsRequest,
+        topic: &str,
+        error_code: i16,
+        label: &str,
+    ) {
+        let bytes = handle(broker, version, 1, &encode_request(&request, version))
+            .await
+            .expect("handle");
+        let expected = expected_partition_response(topic, 0, error_code);
+        assert!(decode_response(&bytes, version) == expected, "{label}");
+    }
+
     #[tokio::test]
     async fn handle_preserves_unknown_target_response_shape() {
         let version = 2;
@@ -339,12 +354,7 @@ mod tests {
                 }],
                 ..Default::default()
             };
-            let bytes = handle(&broker, version, 1, &encode_request(&req, version))
-                .await
-                .expect("handle");
-
-            let expected = expected_partition_response(topic, 0, error_code);
-            assert!(decode_response(&bytes, version) == expected, "case {label}");
+            assert_partition_response(&broker, version, req, topic, error_code, label).await;
         }
         broker_handle.shutdown().await;
     }
@@ -413,12 +423,7 @@ mod tests {
                 ..Default::default()
             };
 
-            let bytes = handle(&broker, version, 1, &encode_request(&req, version))
-                .await
-                .expect("handle");
-
-            let expected = expected_partition_response("orders", 0, error_code);
-            assert!(decode_response(&bytes, version) == expected, "{name}");
+            assert_partition_response(&broker, version, req, "orders", error_code, name).await;
             // An empty partition moves within milliseconds once a move starts,
             // so a move that never starts is given a short look.
             let wait = if moves {
