@@ -6,18 +6,18 @@
 //! out of the page cache. The whole module is gated on the SENDFILE alias by
 //! its declaration in the parent, which is why nothing here carries a `cfg`.
 
-use std::sync::Arc;
-
-use krabka_ids::Offset;
-use krabka_protocol::records::HEADER_LEN;
-use krabka_units::prelude::{ByteSize, ByteSizeExt};
-use tracing::instrument;
-
-use super::{
-    RawSegmentDesc, Segment,
-    read_raw::{RawBatch, select_raw_range},
+use {
+    super::{
+        RawSegmentDesc, Segment,
+        read_raw::{RawBatch, select_raw_range},
+    },
+    crate::{config::DEFAULT_READ_AHEAD_MAX, error::LogError},
+    krabka_ids::Offset,
+    krabka_protocol::records::HEADER_LEN,
+    krabka_units::prelude::{ByteSize, ByteSizeExt},
+    std::sync::Arc,
+    tracing::instrument,
 };
-use crate::{config::DEFAULT_READ_AHEAD_MAX, error::LogError};
 
 /// Only small batches benefit from reading ahead to amortize header lookups.
 const SMALL_BATCH_THRESHOLD: usize = 16 * 1024;
@@ -156,15 +156,16 @@ impl Segment {
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
-    use krabka_units::prelude::{bytes, mebibytes};
-
-    use super::*;
-    use crate::{
-        segment::test_support::{
-            DENSE_INDEX, TempSegment, recording_advice, test_batch_at, test_segment,
+    use {
+        super::*,
+        crate::{
+            segment::test_support::{
+                DENSE_INDEX, TempSegment, recording_advice, test_batch_at, test_segment,
+            },
+            test_support::AdviceCall,
         },
-        test_support::AdviceCall,
+        bytes::Bytes,
+        krabka_units::prelude::{bytes, mebibytes},
     };
 
     // `pread` a `FileRegion` into a fresh `Vec`. These are the bytes that the
@@ -178,17 +179,14 @@ mod tests {
         let cases = [
             (vec![large; 10], vec![HEADER_LEN; 10]),
             (vec![1; 4000], vec![HEADER_LEN, HEADER_SCAN_WINDOW]),
-            (
-                vec![1, large, large, 1, large, large],
-                vec![
-                    HEADER_LEN,
-                    HEADER_SCAN_WINDOW,
-                    HEADER_LEN,
-                    HEADER_LEN,
-                    HEADER_SCAN_WINDOW,
-                    HEADER_LEN,
-                ],
-            ),
+            (vec![1, large, large, 1, large, large], vec![
+                HEADER_LEN,
+                HEADER_SCAN_WINDOW,
+                HEADER_LEN,
+                HEADER_LEN,
+                HEADER_SCAN_WINDOW,
+                HEADER_LEN,
+            ]),
         ];
         for (payload_sizes, mut expected_reads) in cases {
             let TempSegment {
