@@ -2,8 +2,8 @@
 
 use moxy::{
     ast::{
-        Attributes, Cursor, Field, FnParam, ItemStruct, List, Parse, ParseError, Parser, Path,
-        PathArguments, Pattern, Signature, Token, Type, Visibility,
+        Attributes, Cursor, Field, FnParam, ItemFn, ItemStruct, List, Parse, ParseError, Parser,
+        Path, PathArguments, Pattern, Signature, Token, Type, Visibility,
     },
     token::{Group, Ident, LitStr, Span, Spanner, TokenStream, TokenTree},
 };
@@ -286,6 +286,23 @@ pub(crate) fn item_body(
             format!("`#[{macro_name}]` needs a braced item of the expected kind"),
         )),
     }
+}
+
+pub(crate) fn function_header(
+    item: TokenStream,
+    macro_name: &str,
+    expected: &str,
+) -> Result<ItemFn, ParseError> {
+    let span = item.span();
+    let (mut tokens, body) = item_body(item, macro_name, TokenTree::is_keyword_fn)?;
+    if body + 1 != tokens.len() {
+        return Err(ParseError::new(span, expected));
+    }
+    let TokenTree::Group(group) = &mut tokens[body] else {
+        unreachable!()
+    };
+    group.tokens = TokenStream::new();
+    moxy::parse!({ TokenStream::from(tokens) })
 }
 
 pub(crate) fn named_body(

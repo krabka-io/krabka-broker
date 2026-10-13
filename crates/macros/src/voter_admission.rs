@@ -1,10 +1,10 @@
 //! One admission step before an ordinary voter handler's operation body.
 
 use {
-    crate::meta::{Tokens, compact, edit_native_body, item_body},
+    crate::meta::{Tokens, compact, edit_native_body, function_header},
     moxy::{
-        ast::{FnParam, FromMeta, ItemFn, Meta, ParseError},
-        token::{TokenStream, TokenTree},
+        ast::{FnParam, FromMeta, Meta, ParseError},
+        token::TokenStream,
     },
     proc_macro::TokenStream as NativeTokenStream,
 };
@@ -27,18 +27,11 @@ fn prefix(meta: &TokenStream, item: &TokenStream) -> Result<TokenStream, ParseEr
         gate,
         refusals,
     } = Admission::from_meta(&options)?;
-    let (mut header, body) = item_body(item.clone(), "voter_admission", TokenTree::is_keyword_fn)?;
-    if body + 1 != header.len() {
-        return Err(ParseError::new(
-            item.span(),
-            "expected one async voter handler",
-        ));
-    }
-    let TokenTree::Group(group) = &mut header[body] else {
-        unreachable!()
-    };
-    group.tokens = TokenStream::new();
-    let function: ItemFn = moxy::parse!({ TokenStream::from(header) })?;
+    let function = function_header(
+        item.clone(),
+        "voter_admission",
+        "expected one async voter handler",
+    )?;
     let inputs = &function.sig.params.inner.inputs;
     if function.sig.ident != "handle"
         || function.sig.asyncness.is_none()

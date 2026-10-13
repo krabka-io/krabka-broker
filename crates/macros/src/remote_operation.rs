@@ -1,28 +1,21 @@
 //! Shared tracing on ordinary remote-storage methods without recursive signature wrappers.
 
 use {
-    crate::meta::{compact, item_body, no_arguments},
+    crate::meta::{compact, function_header, no_arguments},
     moxy::{
-        ast::{FnParam, ItemFn, ParseError},
-        token::{TokenStream, TokenTree},
+        ast::{FnParam, ParseError},
+        token::TokenStream,
     },
     proc_macro::TokenStream as NativeTokenStream,
 };
 
 fn instrumentation(meta: &TokenStream, item: &TokenStream) -> Result<TokenStream, ParseError> {
     no_arguments(meta.clone(), "remote_operation")?;
-    let (mut header, body) = item_body(item.clone(), "remote_operation", TokenTree::is_keyword_fn)?;
-    if body + 1 != header.len() {
-        return Err(ParseError::new(
-            item.span(),
-            "expected one remote-storage method",
-        ));
-    }
-    let TokenTree::Group(group) = &mut header[body] else {
-        unreachable!()
-    };
-    group.tokens = TokenStream::new();
-    let method: ItemFn = moxy::parse!({ TokenStream::from(header) })?;
+    let method = function_header(
+        item.clone(),
+        "remote_operation",
+        "expected one remote-storage method",
+    )?;
     let (debug, parameters, fields) = match method.sig.ident.text() {
         "copy_log_segment_data" => (false, &["metadata", "data"][..], moxy::template! {
             start_offset = metadata.start_offset(), end_offset = metadata.end_offset(),
