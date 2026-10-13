@@ -1481,15 +1481,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
     ];
 
     for (name, max_size, partitions, beats, expected) in rows {
-        let source = Arc::new(
-            FakeMetadataSource::builder()
-                .image(image_of(None, &[ImageTopic {
-                    name: "in",
-                    id: 1,
-                    partitions,
-                }]))
-                .build(),
-        );
+        let source = input_topic_source(partitions);
         let coord = coordinator_with_source(source, Some(max_size));
         let handle = coord.get_or_create_streams("g");
         let mut epochs: HashMap<&str, i32> = HashMap::new();
