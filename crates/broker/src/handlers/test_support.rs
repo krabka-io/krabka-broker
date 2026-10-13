@@ -1380,6 +1380,10 @@ pub(crate) fn acquired_share_records(
         .collect()
 }
 
+pub(crate) fn share_topic_uuid(topic_id: krabka_protocol::primitives::uuid::Uuid) -> uuid::Uuid {
+    uuid::Uuid::from_bytes(topic_id.0)
+}
+
 pub(crate) fn metadata_version_gated(level: Option<i16>, minimum: i16) -> bool {
     let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
     if let Some(level) = level {
