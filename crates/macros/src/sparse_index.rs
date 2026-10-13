@@ -192,7 +192,7 @@ mod tests {
     fn generates_the_complete_file_index_contract_for_both_kinds() {
         for kind in ["offset", "time"] {
             let source = format!(
-                "#[sparse_index(kind = \"{kind}\")] struct DiskIndex {{ entries: Vec<(i64, u32)>, io: Arc<dyn LogIo>, file: File }}"
+                "#[sparse_index(kind = \"{kind}\")] struct DiskIndex {{ entries: Vec<IndexEntry<i64, u32>>, io: Arc<dyn LogIo>, file: File }}"
             );
             let declaration: ItemStruct = moxy::parse!({ source }).unwrap();
             let implementation: ItemImpl = moxy::parse!({ expand(declaration).unwrap() }).unwrap();
@@ -216,8 +216,8 @@ mod tests {
             "#[sparse_index(kind = \"stamp\")] struct OtherKind {}",
             "#[sparse_index(kind = 1)] struct WrongType {}",
             "#[sparse_index(kind = \"time\")] struct Tuple(File);",
-            "#[sparse_index(kind = \"offset\")] struct NoFile { io: Arc<dyn LogIo>, entries: Vec<(u32, u32)> }",
-            "#[sparse_index(kind = \"time\")] struct NoIo { file: File, entries: Vec<(i64, u32)> }",
+            "#[sparse_index(kind = \"offset\")] struct NoFile { io: Arc<dyn LogIo>, entries: Vec<IndexEntry<u32, u32>> }",
+            "#[sparse_index(kind = \"time\")] struct NoIo { file: File, entries: Vec<IndexEntry<i64, u32>> }",
             "#[sparse_index(kind = \"offset\")] struct NoEntries { file: File, io: Arc<dyn LogIo> }",
         ] {
             let declaration: ItemStruct = moxy::parse!({ source }).unwrap();
