@@ -202,7 +202,8 @@ mod replay_member_maps_tests {
     use {
         super::{
             GroupSeed, ShareGroupCurrentMemberAssignmentValue, ShareGroupSeed,
-            StreamsGroupCurrentMemberAssignmentValue, StreamsGroupSeed,
+            ShareGroupTargetAssignmentMemberValue, StreamsGroupCurrentMemberAssignmentValue,
+            StreamsGroupSeed, StreamsGroupTargetAssignmentMemberValue, TargetAssignmentMemberValue,
         },
         crate::{
             coordinator::unified::test_support::{
@@ -237,8 +238,10 @@ mod replay_member_maps_tests {
         assert!(seed.current_per_member["member"].member_epoch == -1);
         assert!(seed.member_tombstone("member").unwrap());
 
-        seed.target_per_member
-            .insert("member".into(), Default::default());
+        seed.target_per_member.insert(
+            "member".into(),
+            ShareGroupTargetAssignmentMemberValue::default(),
+        );
         let before = seed.clone();
         assert!(
             matches!(seed.member_tombstone("member"), Err(BrokerError::Startup(message))
@@ -290,10 +293,11 @@ mod replay_member_maps_tests {
         assert!(streams.member_tombstone("member").unwrap());
         consumer
             .target_per_member
-            .insert("member".into(), Default::default());
-        streams
-            .target_per_member
-            .insert("member".into(), Default::default());
+            .insert("member".into(), TargetAssignmentMemberValue::default());
+        streams.target_per_member.insert(
+            "member".into(),
+            StreamsGroupTargetAssignmentMemberValue::default(),
+        );
         for (result, record) in [
             (
                 consumer.member_tombstone("member"),
