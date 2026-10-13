@@ -495,6 +495,32 @@ pub(crate) fn replica_nodes_from_partitions(replicas: &[i32]) -> Vec<krabka_meta
         .collect()
 }
 
+#[cfg(test)]
+pub(crate) const ALL_BROKERS_FENCED_PARTITION_ERROR: &str = "All brokers specified in the manual partition assignment for partition 1 are fenced or in controlled shutdown.";
+
+#[cfg(test)]
+pub(crate) fn assigned_partition_record(
+    topic: &str,
+    partition: i32,
+    leader: krabka_metadata::NodeId,
+    replicas: &[i32],
+    isr: Vec<krabka_metadata::NodeId>,
+    leader_epoch: krabka_metadata::LeaderEpoch,
+) -> krabka_metadata::PartitionRecord {
+    krabka_metadata::PartitionRecord {
+        topic: topic.to_owned(),
+        partition,
+        leader,
+        replicas: replica_nodes_from_partitions(replicas),
+        isr,
+        leader_epoch,
+        adding_replicas: Vec::new(),
+        removing_replicas: Vec::new(),
+        directories: Vec::new(),
+        partition_epoch: 0,
+    }
+}
+
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 pub(crate) struct AclSetup<'a> {
     #[default(krabka_metadata::ResourceType::Topic)]
@@ -1382,6 +1408,22 @@ pub(crate) type ManualAssignmentRow = (
     Option<&'static str>,
     Vec<(krabka_raft::NodeId, Vec<krabka_raft::NodeId>)>,
 );
+
+#[cfg(test)]
+pub(crate) fn invalid_manual_assignment(
+    fenced: &'static [u64],
+    assignments: &'static [&'static [i32]],
+    error_message: &'static str,
+) -> ManualAssignmentRow {
+    (
+        fenced,
+        &[],
+        assignments,
+        codes::INVALID_REPLICA_ASSIGNMENT,
+        Some(error_message),
+        Vec::new(),
+    )
+}
 
 /// Start the canonical `ListOffsets` client, create its topic, then await the log.
 macro_rules! list_offsets_topic_fixture {

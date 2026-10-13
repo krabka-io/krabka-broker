@@ -392,20 +392,9 @@ mod tests {
                     decode_response(&resp, version).error_code
                 }
                 Api::Add => {
-                    let req = AddRaftVoterRequest {
-                        cluster_id: Some("cluster".into()),
-                        timeout_ms: 1_000,
-                        voter_id: 2,
-                        voter_directory_id: ProtoUuid([2; 16]),
-                        listeners: vec![add_raft_voter_request::Listener {
-                            name: "CONTROLLER".into(),
-                            host: "127.0.0.1".into(),
-                            port: 9093,
-                            ..Default::default()
-                        }],
-                        ack_when_committed: true,
-                        ..Default::default()
-                    };
+                    let req = crate::handlers::raft_voter::add_voter_request()
+                        .voter_id(2)
+                        .call();
                     let req_bytes = encode_other_request(&req, version);
                     let resp = add_raft_voter_handle(&broker, version, &req_bytes, &ctx)
                         .await

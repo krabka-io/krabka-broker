@@ -425,16 +425,10 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
             (n(4), vec![n(4)]),
             (n(3), vec![n(3)]),
         ]),
-        (
+        crate::handlers::test_support::invalid_manual_assignment(
             &[2, 3],
-            &[],
             &[&[2, 3]],
-            codes::INVALID_REPLICA_ASSIGNMENT,
-            Some(
-                "All brokers specified in the manual partition assignment for partition 1 are \
-                 fenced or in controlled shutdown.",
-            ),
-            vec![],
+            crate::handlers::test_support::ALL_BROKERS_FENCED_PARTITION_ERROR,
         ),
         (
             &[2],
@@ -495,20 +489,16 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
             .into_iter()
             .zip(lists)
             .zip(1..)
-            .map(
-                |(((leader, isr), replicas), partition)| krabka_metadata::PartitionRecord {
-                    topic: "grow".into(),
+            .map(|(((leader, isr), replicas), partition)| {
+                crate::handlers::test_support::assigned_partition_record(
+                    "grow",
                     partition,
                     leader,
-                    replicas: replica_nodes_from_partitions(replicas),
+                    replicas,
                     isr,
-                    leader_epoch: krabka_metadata::LeaderEpoch(0),
-                    adding_replicas: vec![],
-                    removing_replicas: vec![],
-                    directories: vec![],
-                    partition_epoch: 0,
-                },
-            )
+                    krabka_metadata::LeaderEpoch(0),
+                )
+            })
             .collect::<Vec<_>>();
         check!(
             added == expected_records,

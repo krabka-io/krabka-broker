@@ -172,28 +172,14 @@ mod tests {
     use {
         crate::test_support::{DenyAll, round_trip_response},
         assert2::assert,
-        krabka_protocol::{
-            owned::{add_raft_voter_request::Listener, add_raft_voter_response},
-            primitives::uuid::Uuid as ProtoUuid,
-        },
+        krabka_protocol::owned::add_raft_voter_response,
         std::sync::Arc,
     };
 
     fn request(voter_id: i32) -> AddRaftVoterRequest {
-        AddRaftVoterRequest {
-            cluster_id: Some("cluster".into()),
-            timeout_ms: 1_000,
-            voter_id,
-            voter_directory_id: ProtoUuid([2; 16]),
-            listeners: vec![Listener {
-                name: "CONTROLLER".into(),
-                host: "127.0.0.1".into(),
-                port: 9093,
-                ..Default::default()
-            }],
-            ack_when_committed: true,
-            ..Default::default()
-        }
+        crate::handlers::raft_voter::add_voter_request()
+            .voter_id(voter_id)
+            .call()
     }
 
     crate::handlers::raft_voter::test_dispatch!(80, AddRaftVoterRequest, AddRaftVoterResponse);
