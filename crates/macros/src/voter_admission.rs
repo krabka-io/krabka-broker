@@ -1,12 +1,12 @@
 //! One admission step before an ordinary voter handler's operation body.
 
 use {
-    crate::meta::{Tokens, compact, item_body},
+    crate::meta::{Tokens, compact, edit_native_body, item_body},
     moxy::{
         ast::{FnParam, FromMeta, ItemFn, Meta, ParseError},
         token::{TokenStream, TokenTree},
     },
-    proc_macro::{Group, TokenStream as NativeTokenStream, TokenTree as NativeTokenTree},
+    proc_macro::TokenStream as NativeTokenStream,
 };
 
 #[derive(moxy::FromMeta)]
@@ -74,18 +74,9 @@ pub(crate) fn expand(
 ) -> Result<NativeTokenStream, ParseError> {
     let parsed = TokenStream::from(item.clone());
     let admission: NativeTokenStream = prefix(&meta.into(), &parsed)?.into();
-    let mut tokens: Vec<_> = item.into_iter().collect();
-    let Some(NativeTokenTree::Group(body)) = tokens.pop() else {
-        return Err(ParseError::new(parsed.span(), "expected a function body"));
-    };
-    // Native operation tokens keep their scopes and separate delimiter spans.
-    let mut replacement = Group::new(
-        body.delimiter(),
-        admission.into_iter().chain(body.stream()).collect(),
-    );
-    replacement.set_span(body.span());
-    tokens.push(NativeTokenTree::Group(replacement));
-    Ok(tokens.into_iter().collect())
+    Ok(edit_native_body(item, |body| {
+        admission.into_iter().chain(body).collect()
+    }))
 }
 
 #[cfg(test)]

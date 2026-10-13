@@ -13,48 +13,10 @@ use {
 fn get_i32(buf: &mut &[u8]) -> Result<i32, BrokerError> { Ok(i32::from_be_bytes(take(buf)?)) }
 fn get_i64(buf: &mut &[u8]) -> Result<i64, BrokerError> { Ok(i64::from_be_bytes(take(buf)?)) }
 
-mod coordinator {
-    pub(crate) mod unified {
-        pub(crate) mod persistence {
-            pub(crate) mod flex {
-                use {
-                    crate::error::{BrokerError, take},
-                    bytes::{Bytes, BytesMut},
-                };
+#[path = "support/framing.rs"]
+mod framing;
 
-                pub(crate) fn encode_value<W>(write: W) -> Bytes
-                where
-                    W: FnOnce(&mut BytesMut),
-                {
-                    let mut framed = BytesMut::from(&b"\0\0"[..]);
-                    write(&mut framed);
-                    framed.extend_from_slice(&[0]);
-                    framed.freeze()
-                }
-
-                pub(crate) fn decode_value<T, R>(
-                    mut framed: &[u8],
-                    unknown_version: &'static str,
-                    read: R,
-                ) -> Result<T, BrokerError>
-                where
-                    R: FnOnce(&mut &[u8]) -> Result<T, BrokerError>,
-                {
-                    match take::<2>(&mut framed)? {
-                        [0, 0] => {
-                            let decoded = read(&mut framed)?;
-                            match take::<1>(&mut framed)? {
-                                [0] => Ok(decoded),
-                                _ => Err("bad trailer"),
-                            }
-                        }
-                        _ => Err(unknown_version),
-                    }
-                }
-            }
-        }
-    }
-}
+use framing::coordinator;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Offset(i64);

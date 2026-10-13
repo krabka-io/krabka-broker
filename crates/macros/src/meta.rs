@@ -114,6 +114,21 @@ pub(crate) fn edit_named_body(
     Ok(tokens.into())
 }
 
+/// Edit a validated item's final native body without rebuilding nested groups.
+pub(crate) fn edit_native_body(
+    item: proc_macro::TokenStream,
+    edit: impl FnOnce(proc_macro::TokenStream) -> proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    let mut tokens: Vec<_> = item.into_iter().collect();
+    let Some(proc_macro::TokenTree::Group(body)) = tokens.pop() else {
+        unreachable!("validated item body")
+    };
+    let mut replacement = proc_macro::Group::new(body.delimiter(), edit(body.stream()));
+    replacement.set_span(body.span());
+    tokens.push(proc_macro::TokenTree::Group(replacement));
+    tokens.into_iter().collect()
+}
+
 /// Require a nonempty token argument without changing its tokens or error span.
 pub(crate) fn required_tokens(
     tokens: TokenStream,

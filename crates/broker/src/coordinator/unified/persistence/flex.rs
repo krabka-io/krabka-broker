@@ -72,33 +72,6 @@ pub(crate) fn decode_value<T>(
     Ok(value)
 }
 
-/// Defines field codecs within the shared version-0 flexible record framing.
-/// The string literal is Kafka's record name, which the value-version error
-/// names.
-macro_rules! value_codec {
-    ($name:ident($record:literal), encode($($receiver:tt)*) -> $writer:ident $write:block decode($reader:ident) $read:block) => {
-        impl $name {
-            #[must_use]
-            pub fn encode($($receiver)*) -> bytes::Bytes {
-                $crate::coordinator::unified::persistence::flex::encode_value(|$writer| $write)
-            }
-
-            /// # Errors
-            /// Returns an error when the value version is not 0, or when a
-            /// field or the tagged-field trailer is truncated or invalid.
-            pub fn decode(buf: &[u8]) -> Result<Self, $crate::error::BrokerError> {
-                $crate::coordinator::unified::persistence::flex::decode_value(
-                    buf,
-                    concat!("unknown ", $record, " version"),
-                    |$reader| $read,
-                )
-            }
-        }
-    };
-}
-
-pub(crate) use value_codec;
-
 fn protocol(e: ProtocolError) -> BrokerError { BrokerError::Protocol(e) }
 
 // ───────────────────────────────────────────────────────────────── writers ──

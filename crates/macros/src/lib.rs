@@ -352,6 +352,12 @@
 //! `#[epoch_value(record = "RecordName")]` supplies the decoding error name.
 //! A zero tagged value is omitted on encode and restored on decode.
 //!
+//! `#[flexible_value(record = "KafkaRecord")]` goes on an inherent impl with
+//! private `encode_fields(self or &self, buf: &mut BytesMut)` and
+//! `decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError>` methods.
+//! It retains those methods and adds the public framed codecs. The field
+//! methods keep wire order explicit; the encoder retains its receiver ownership.
+//!
 //! `#[derive(KafkaUuid)]` adds display, parsing, and string serde to a UUID
 //! wrapper. It calls the declaration's existing `encode`, `decode`, and
 //! `KafkaUuidError` helpers. Display retains the formatter's padding rules.
@@ -367,6 +373,17 @@
 //! declares a share-state handler. A denied request returns an error row for
 //! every requested partition in request order. An allowed request calls `serve`
 //! with the share coordinator and a fresh metadata snapshot.
+//!
+//! # Storage methods
+//!
+//! `#[derive(SparseIndex)]` adds the existing loader and file operations to a
+//! sparse index. `#[sparse_index(kind = "offset" | "time")]` selects its raw
+//! entry layout and I/O target. The loader retains its monotonic-entry checks.
+//! `#[index_open]` adds the same tracing span to other ordinary index loaders.
+//!
+//! `#[remote_operation]` traces an ordinary remote-storage SPI method. Its
+//! existing method name selects the span level and fields. It retains the
+//! native method body, parameter names, and synchronous signature.
 //!
 //! # Direct runtime and response tables
 //!
@@ -442,6 +459,7 @@ mod field_defaults;
 mod fixtures;
 mod flexible_array_value;
 mod flexible_epoch_value;
+mod flexible_value;
 mod gcs_fields;
 mod group_lifecycle;
 mod group_timing_config;
@@ -463,6 +481,7 @@ mod projection_identity;
 mod raft_fixtures;
 mod refined_newtype;
 mod remote_metadata_fixtures;
+mod remote_operation;
 mod response_encoding;
 mod runtime_assignments;
 mod runtime_overlay;
@@ -471,26 +490,15 @@ mod s3_fields;
 mod sendfile_match;
 mod share_state_handler;
 mod share_state_value;
+mod sparse_index;
 mod throttle_probes;
 mod timer_hooks;
 mod timestamped_batch;
 mod transport_errors;
+mod value_framing;
 mod voter_admission;
 mod wire_fixtures;
 mod wire_values;
-
-// Token-to-token fixtures share the same Moxy adapter and error handling.
-macro_rules! function_macros {
-    ($( $(#[$($doc:tt)*])* $name:ident => $module:ident::$delegate:ident; )*) => {
-        $(
-            $(#[$($doc)*])*
-            #[moxy::function]
-            pub fn $name(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-                $module::$delegate(tokens)
-            }
-        )*
-    };
-}
 
 /// Derives `unregistered` and `register` for a struct of metric handles. The
 /// crate documentation lists the field attributes.
@@ -525,14 +533,26 @@ pub fn primitive_cmp(item: ItemStruct) -> Result<TokenStream, ParseError> {
     primitive_cmp::expand(item)
 }
 
-function_macros! {
-    /// Generates the broker's dispatch adapters and `register_dispatch_table`
-    /// from one table of api names. The crate documentation describes the table.
-    dispatch_table => dispatch::expand;
+/// Generates the broker's dispatch adapters and `register_dispatch_table`
+/// from one table of api names. The crate documentation describes the table.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn dispatch_table(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    dispatch::expand(tokens)
+}
 
-    /// Expands to the throttle-echo audit's `[(API_KEY, Probe); N]` array from one
-    /// table of api names. The crate documentation describes the table.
-    throttle_probes => throttle_probes::expand;
+/// Expands to the throttle-echo audit's `[(API_KEY, Probe); N]` array from one
+/// table of api names. The crate documentation describes the table.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn throttle_probes(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    throttle_probes::expand(tokens)
 }
 
 /// Derives `copy_into`, which copies each field of a clap argument group onto
@@ -581,6 +601,39 @@ pub fn group_lifecycle(item: ItemStruct) -> Result<TokenStream, ParseError> {
 /// Derive display, parsing, and string serde using the caller's Kafka UUID codec.
 #[moxy::derive(KafkaUuid)]
 pub fn kafka_uuid(item: ItemStruct) -> Result<TokenStream, ParseError> { kafka_uuid::expand(item) }
+
+/// Derive the sparse index's existing loader and file operations.
+#[moxy::derive(SparseIndex, attributes(sparse_index))]
+pub fn sparse_index(item: ItemStruct) -> Result<TokenStream, ParseError> {
+    sparse_index::expand(item)
+}
+
+/// Apply the shared index-open tracing span to an ordinary loader method.
+#[moxy::attribute]
+pub fn index_open(
+    meta: NativeTokenStream,
+    item: NativeTokenStream,
+) -> Result<NativeTokenStream, ParseError> {
+    sparse_index::index_open(meta, item)
+}
+
+/// Trace an ordinary remote-storage operation with its segment identity.
+#[moxy::attribute]
+pub fn remote_operation(
+    meta: NativeTokenStream,
+    item: NativeTokenStream,
+) -> Result<NativeTokenStream, ParseError> {
+    remote_operation::expand(meta, item)
+}
+
+/// Add flexible value framing around explicitly ordered private field codecs.
+#[moxy::attribute]
+pub fn flexible_value(
+    meta: NativeTokenStream,
+    item: NativeTokenStream,
+) -> Result<NativeTokenStream, ParseError> {
+    flexible_value::expand(&meta.into(), item)
+}
 
 /// Add the shared timing defaults before `FieldDefaults` derives the config constructor.
 #[moxy::attribute]
@@ -654,23 +707,54 @@ pub fn set_runtime(tokens: NativeTokenStream) -> Result<TokenStream, ParseError>
     runtime_assignments::expand(&tokens.into())
 }
 
-function_macros! {
-    /// Expands to an operator binary's `main`: tracing setup, then
-    /// `std::process::exit` with what the named crate's `run_from_args` returns.
-    /// The crate documentation describes the expansion.
-    cli_main => cli_main::expand;
+/// Expands to an operator binary's `main`: tracing setup, then
+/// `std::process::exit` with what the named crate's `run_from_args` returns.
+/// The crate documentation describes the expansion.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn cli_main(tokens: TokenStream) -> Result<TokenStream, ParseError> { cli_main::expand(tokens) }
 
-    /// Generate the bounded exhaustive Stateright runner under the supplied function name.
-    bounded_bfs => fixtures::bounded_bfs;
+/// Generate the bounded exhaustive Stateright runner under the supplied function name.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn bounded_bfs(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::bounded_bfs(tokens)
+}
 
-    /// Generate the single-topic delete request fixture with a five-second timeout.
-    delete_topic_request => fixtures::delete_topic_request;
+/// Generate the single-topic delete request fixture with a five-second timeout.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn delete_topic_request(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::delete_topic_request(tokens)
+}
 
-    /// Generate the compacted-batch test projection under the supplied struct name.
-    compacted_batch => fixtures::compacted_batch;
+/// Generate the compacted-batch test projection under the supplied struct name.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn compacted_batch(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::compacted_batch(tokens)
+}
 
-    /// Generate the benchmark's Kafka record-batch builder under the supplied function name.
-    record_batch_fixture => fixtures::record_batch;
+/// Generate the benchmark's Kafka record-batch builder under the supplied function name.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn record_batch_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::record_batch(tokens)
 }
 
 /// Prepend the common bucket, prefix, redacted credentials and endpoint fields to a GCS config.
@@ -680,22 +764,61 @@ pub fn gcs_fields(meta: TokenStream, item: TokenStream) -> Result<TokenStream, P
     gcs_fields::expand(meta, item)
 }
 
-function_macros! {
-    /// Generate action-to-message/log/timer adaptation inside a simulation impl.
-    simulation_actions => fixtures::simulation_actions;
-    /// Generate the shared simulation bus routing and replication preconditions.
-    simulation_transport => fixtures::simulation_transport;
-    /// Generate simulation leader heartbeats with the caller's interval.
-    simulation_heartbeat => fixtures::simulation_heartbeat;
-    /// Generate a saturating CI benchmark scenario with a caller-supplied name and size.
-    benchmark_scenario_fixture => fixtures::benchmark_scenario;
+/// Generate action-to-message/log/timer adaptation inside a simulation impl.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn simulation_actions(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::simulation_actions(tokens)
+}
+/// Generate the shared simulation bus routing and replication preconditions.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn simulation_transport(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::simulation_transport(tokens)
+}
+/// Generate simulation leader heartbeats with the caller's interval.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn simulation_heartbeat(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::simulation_heartbeat(tokens)
+}
+/// Generate a saturating CI benchmark scenario with a caller-supplied name and size.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn benchmark_scenario_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::benchmark_scenario(tokens)
+}
 
-    /// Generate the benchmark report's representative latency percentiles.
-    benchmark_latency_fixture => fixtures::benchmark_latency;
+/// Generate the benchmark report's representative latency percentiles.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn benchmark_latency_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::benchmark_latency(tokens)
+}
 
-    /// Generate the synthetic S3 archive config used by argument-mapping assertions.
-    s3_archive_config_fixture => fixtures::s3_archive_config;
-
+/// Generate the synthetic S3 archive config used by argument-mapping assertions.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn s3_archive_config_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::s3_archive_config(tokens)
 }
 
 /// Delegate unchanged metadata-log operations through `self.inner`, before `async_trait`.
@@ -707,9 +830,14 @@ pub fn metadata_log_delegate(
     fixtures::metadata_log_delegate(meta, item)
 }
 
-function_macros! {
-    /// Generate the finished remote-segment lookup assertions shared by manager fixtures.
-    remote_segment_check => fixtures::remote_segment_check;
+/// Generate the finished remote-segment lookup assertions shared by manager fixtures.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn remote_segment_check(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::remote_segment_check(tokens)
 }
 
 /// Add the shared runtime policy fields before TOML or CLI field derives.
@@ -721,51 +849,154 @@ pub fn runtime_policy_fields(
     runtime_policy_fields::expand(meta, item)
 }
 
-function_macros! {
-    /// Generate the shared simulation event adapter inside a harness impl.
-    simulation_step => fixtures::simulation_step;
+/// Generate the shared simulation event adapter inside a harness impl.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn simulation_step(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::simulation_step(tokens)
+}
 
-    /// Generate the shared two-partition metadata topic fixture.
-    snapshot_topic_fixture => fixtures::snapshot_topic;
+/// Generate the shared two-partition metadata topic fixture.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn snapshot_topic_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::snapshot_topic(tokens)
+}
 
-    /// Generate the timestamped record-batch fixture used by local and remote read tests.
-    timestamped_batch => timestamped_batch::expand;
+/// Generate the timestamped record-batch fixture used by local and remote read tests.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn timestamped_batch(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    timestamped_batch::expand(tokens)
+}
 
-    /// Generate a producer batch builder with the caller's exact record value expression.
-    producer_batch_fixture => wire_fixtures::producer_batch;
+/// Generate a producer batch builder with the caller's exact record value expression.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn producer_batch_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    wire_fixtures::producer_batch(tokens)
+}
 
-    /// Generate a one-topic `CreateTopics` request builder with explicit sizes and timeout.
-    create_topic_fixture => wire_fixtures::create_topic;
+/// Generate a one-topic `CreateTopics` request builder with explicit sizes and timeout.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn create_topic_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    wire_fixtures::create_topic(tokens)
+}
 
-    /// Generate the consumer Fetch request fixture for partition zero with a 1 MiB limit.
-    consumer_fetch_fixture => wire_fixtures::consumer_fetch;
+/// Generate the consumer Fetch request fixture for partition zero with a 1 MiB limit.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn consumer_fetch_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    wire_fixtures::consumer_fetch(tokens)
+}
 
-    /// Generate the initial single-replica metadata partition record builder.
-    single_replica_partition_fixture => wire_fixtures::single_replica_partition;
+/// Generate the initial single-replica metadata partition record builder.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn single_replica_partition_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    wire_fixtures::single_replica_partition(tokens)
+}
 
-    /// Generate the version-zero control-marker key and value fixture encoders.
-    control_marker_fixture => wire_fixtures::control_marker;
+/// Generate the version-zero control-marker key and value fixture encoders.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn control_marker_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    wire_fixtures::control_marker(tokens)
+}
 
-    /// Generate a topic record builder for one partition and one replica.
-    topic_record_fixture => wire_fixtures::topic_record;
+/// Generate a topic record builder for one partition and one replica.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn topic_record_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    wire_fixtures::topic_record(tokens)
+}
 
-    /// Generate the loopback ephemeral-port helper used by container tests.
-    ephemeral_port_fixture => wire_fixtures::ephemeral_port;
+/// Generate the loopback ephemeral-port helper used by container tests.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn ephemeral_port_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    wire_fixtures::ephemeral_port(tokens)
+}
 
-    /// Generate projection-based Eq and Hash, and optionally Debug, for model state.
-    projection_identity => projection_identity::expand;
+/// Generate projection-based Eq and Hash, and optionally Debug, for model state.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn projection_identity(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    projection_identity::expand(tokens)
+}
 
-    /// Generate the shared `MinIO` process/readiness helpers under the supplied module name.
-    minio_fixture => container_fixtures::expand;
+/// Generate the shared `MinIO` process/readiness helpers under the supplied module name.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn minio_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    container_fixtures::expand(tokens)
+}
 
-    /// Start a SCRAM client exchange while preserving its private handshake phase type.
-    scram_client_first => auth_fixtures::scram_client_first;
+/// Start a SCRAM client exchange while preserving its private handshake phase type.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn scram_client_first(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    auth_fixtures::scram_client_first(tokens)
+}
 
-    /// Generate the independent four-state remote-segment transition oracle.
-    remote_segment_transition_matrix => fixtures::remote_segment_transition_matrix;
+/// Generate the independent four-state remote-segment transition oracle.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn remote_segment_transition_matrix(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::remote_segment_transition_matrix(tokens)
+}
 
-    /// Generate a tracing capture layer with an explicit mutex poison policy.
-    capture_layer_fixture => fixtures::capture_layer;
+/// Generate a tracing capture layer with an explicit mutex poison policy.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn capture_layer_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::capture_layer(tokens)
 }
 
 /// Add the selected direct `ObjectStore` delegates to an implementation.
@@ -777,15 +1008,34 @@ pub fn object_store_delegate(
     object_store_delegate::expand(meta, item)
 }
 
-function_macros! {
-    /// Generate remote metadata lifecycle fixtures with an explicit timestamp policy.
-    remote_segment_fixtures => remote_metadata_fixtures::segment;
+/// Generate remote metadata lifecycle fixtures with an explicit timestamp policy.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn remote_segment_fixtures(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    remote_metadata_fixtures::segment(tokens)
+}
 
-    /// Generate the independent missing-partition metadata assertions.
-    remote_metadata_missing => remote_metadata_fixtures::missing;
+/// Generate the independent missing-partition metadata assertions.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn remote_metadata_missing(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    remote_metadata_fixtures::missing(tokens)
+}
 
-    /// Generate the direct flush and shutdown delegates for a tuple write wrapper.
-    async_write_delegate => async_write_delegate::expand;
+/// Generate the direct flush and shutdown delegates for a tuple write wrapper.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn async_write_delegate(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    async_write_delegate::expand(tokens)
 }
 
 /// Generate a model transition's signature and cloned state before its body.
@@ -815,33 +1065,94 @@ pub fn sendfile_match(tokens: NativeTokenStream) -> Result<NativeTokenStream, Pa
     sendfile_match::expand_native(tokens)
 }
 
-function_macros! {
-    /// Generate timer registration and completion helpers with caller-specific messages.
-    timer_hooks => timer_hooks::expand;
+/// Generate timer registration and completion helpers with caller-specific messages.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn timer_hooks(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    timer_hooks::expand(tokens)
+}
 
-    /// Generate the SCRAM proof XOR fixture without imposing extra length checks.
-    scram_client_proof_fixture => auth_fixtures::scram_client_proof;
+/// Generate the SCRAM proof XOR fixture without imposing extra length checks.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn scram_client_proof_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    auth_fixtures::scram_client_proof(tokens)
+}
 
-    /// Generate a single-partition Produce fixture with explicit request settings.
-    single_partition_produce_fixture => produce_fixtures::single_partition_produce;
+/// Generate a single-partition Produce fixture with explicit request settings.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn single_partition_produce_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    produce_fixtures::single_partition_produce(tokens)
+}
 
-    /// Generate a manual Kafka request-frame fixture with explicit header inputs.
-    request_frame_fixture => network_fixtures::request_frame;
+/// Generate a manual Kafka request-frame fixture with explicit header inputs.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn request_frame_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    network_fixtures::request_frame(tokens)
+}
 
-    /// Generate deterministic patterned bytes for framing tests and benchmarks.
-    patterned_bytes_fixture => network_fixtures::patterned_bytes;
+/// Generate deterministic patterned bytes for framing tests and benchmarks.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn patterned_bytes_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    network_fixtures::patterned_bytes(tokens)
+}
 
-    /// Generate the distinctive proposal UUID shared by signing golden fixtures.
-    break_glass_golden_id => network_fixtures::break_glass_golden_id;
+/// Generate the distinctive proposal UUID shared by signing golden fixtures.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn break_glass_golden_id(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    network_fixtures::break_glass_golden_id(tokens)
+}
 
-    /// Literal Kafka 4.3.1 principal bytes: alice or bob, token flag.
-    jvm_principal_golden => network_fixtures::jvm_principal_golden;
+/// Literal Kafka 4.3.1 principal bytes: alice or bob, token flag.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn jvm_principal_golden(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    network_fixtures::jvm_principal_golden(tokens)
+}
 
-    /// Generate a response frame prefix independently of production framing.
-    frame_prefix_fixture => network_fixtures::frame_prefix;
+/// Generate a response frame prefix independently of production framing.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn frame_prefix_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    network_fixtures::frame_prefix(tokens)
+}
 
-    /// Generate the independent file-region byte reader used by wire comparisons.
-    file_region_fixture => network_fixtures::file_region;
+/// Generate the independent file-region byte reader used by wire comparisons.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn file_region_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    network_fixtures::file_region(tokens)
 }
 
 /// Expand the common I/O, TLS and SASL error variants at their original position.
@@ -850,15 +1161,34 @@ pub fn transport_errors(meta: TokenStream, item: TokenStream) -> Result<TokenStr
     transport_errors::expand(meta, item)
 }
 
-function_macros! {
-    /// Generate a voter-set fixture whose endpoints and directory IDs remain empty.
-    empty_endpoint_voters => raft_fixtures::empty_endpoint_voters;
+/// Generate a voter-set fixture whose endpoints and directory IDs remain empty.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn empty_endpoint_voters(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    raft_fixtures::empty_endpoint_voters(tokens)
+}
 
-    /// Generate the one-record leader-epoch batch fixture.
-    epoch_record_batch_fixture => raft_fixtures::epoch_record_batch;
+/// Generate the one-record leader-epoch batch fixture.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn epoch_record_batch_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    raft_fixtures::epoch_record_batch(tokens)
+}
 
-    /// Generate the epoch-cache `LogView` delegation used by Raft simulations.
-    epoch_log_view => raft_fixtures::epoch_log_view;
+/// Generate the epoch-cache `LogView` delegation used by Raft simulations.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn epoch_log_view(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    raft_fixtures::epoch_log_view(tokens)
 }
 
 /// Derive a TOML table's schema and value traits with an explicit unknown-key policy.
@@ -873,12 +1203,24 @@ pub fn records_payload_match(tokens: NativeTokenStream) -> Result<NativeTokenStr
     sendfile_match::records_payload_native(tokens)
 }
 
-function_macros! {
-    /// Generate the canonical compressed legacy record used by policy tests.
-    legacy_policy_fixture => legacy_fixtures::policy;
+/// Generate the canonical compressed legacy record used by policy tests.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn legacy_policy_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    legacy_fixtures::policy(tokens)
+}
 
-    /// Generate keyed fixture records with explicit count and value size.
-    keyed_record_batch_fixture => network_fixtures::keyed_record_batch;
+/// Generate keyed fixture records with explicit count and value size.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn keyed_record_batch_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    network_fixtures::keyed_record_batch(tokens)
 }
 
 /// Add the shared generic argv signature to a command-line entry point.
@@ -896,66 +1238,204 @@ pub fn bootstrap_cli_fields(
     cli_support::bootstrap_cli_fields(meta, item)
 }
 
-function_macros! {
-    /// Generate a duration-parser check over each caller's literal cases.
-    duration_cases_fixture => cli_support::duration_cases;
+/// Generate a duration-parser check over each caller's literal cases.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn duration_cases_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    cli_support::duration_cases(tokens)
+}
 
-    /// Generate a sorted directory-tree fixture with the caller's path projection.
-    directory_tree_fixture => cli_support::directory_tree;
+/// Generate a sorted directory-tree fixture with the caller's path projection.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn directory_tree_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    cli_support::directory_tree(tokens)
+}
 
-    /// Generate a CLI entry point with the caller's documentation.
-    parsed_cli_entrypoint => cli_support::parsed_cli_entrypoint;
+/// Generate a CLI entry point with the caller's documentation.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn parsed_cli_entrypoint(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    cli_support::parsed_cli_entrypoint(tokens)
+}
 
-    /// Generate a duration-parser test from explicit literal cases.
-    duration_parser_fixture => cli_support::duration_parser_fixture;
+/// Generate a duration-parser test from explicit literal cases.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn duration_parser_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    cli_support::duration_parser_fixture(tokens)
+}
 
-    /// Generate bootstrap parser tests from accepted and refused arguments.
-    bootstrap_parser_fixture => cli_support::bootstrap_parser_fixture;
+/// Generate bootstrap parser tests from accepted and refused arguments.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn bootstrap_parser_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    cli_support::bootstrap_parser_fixture(tokens)
+}
 
-    /// Generate the shared snapshot fixture over an on-disk metadata log.
-    snapshot_node_fixture => cli_support::snapshot_node_fixture;
+/// Generate the shared snapshot fixture over an on-disk metadata log.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn snapshot_node_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    cli_support::snapshot_node_fixture(tokens)
+}
 
-    /// Connect a CLI client with the caller's identity and refusal exit code.
-    connect_cli_client => cli_support::connect_cli_client;
+/// Connect a CLI client with the caller's identity and refusal exit code.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn connect_cli_client(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    cli_support::connect_cli_client(tokens)
+}
 
-    /// Generate the temporary metadata and data directories used by format tests.
-    format_directories_fixture => cli_support::format_directories_fixture;
+/// Generate the temporary metadata and data directories used by format tests.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn format_directories_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    cli_support::format_directories_fixture(tokens)
+}
 
-    /// Generate the explicit topic map used by WAL capture fixtures.
-    wal_capture_topic_fixture => remote_metadata_fixtures::wal_capture_topic_fixture;
+/// Generate the explicit topic map used by WAL capture fixtures.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn wal_capture_topic_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    remote_metadata_fixtures::wal_capture_topic_fixture(tokens)
+}
 
-    /// Generate a CLI flag's name, environment and default-value projection.
-    flag_metadata_fixture => cli_support::flag_metadata_fixture;
+/// Generate a CLI flag's name, environment and default-value projection.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn flag_metadata_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    cli_support::flag_metadata_fixture(tokens)
+}
 
-    /// Generate a listener bind retry with an explicit caller timeout.
-    bind_retry_fixture => cli_support::bind_retry_fixture;
+/// Generate a listener bind retry with an explicit caller timeout.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn bind_retry_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    cli_support::bind_retry_fixture(tokens)
+}
 
-    /// Generate bound-listener configuration or startup with the caller's diagnostics.
-    bound_start_fixture => bound_start_fixture::expand;
+/// Generate bound-listener configuration or startup with the caller's diagnostics.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn bound_start_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    bound_start_fixture::expand(tokens)
+}
 
-    /// Generate directory-assignment requests with explicit broker and partition identities.
-    assignment_dirs_fixture => bound_start_fixture::assignment_dirs;
+/// Generate directory-assignment requests with explicit broker and partition identities.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn assignment_dirs_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    bound_start_fixture::assignment_dirs(tokens)
+}
 
-    /// Render a metric registry into caller-named bindings while retaining its lock guard.
-    metric_registry_fixture => bound_start_fixture::metric_registry;
+/// Render a metric registry into caller-named bindings while retaining its lock guard.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn metric_registry_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    bound_start_fixture::metric_registry(tokens)
+}
 
-    /// Generate indexed WORM segment metadata with an explicit segment-id namespace.
-    worm_segment_fixture => remote_metadata_fixtures::worm_segment;
+/// Generate indexed WORM segment metadata with an explicit segment-id namespace.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn worm_segment_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    remote_metadata_fixtures::worm_segment(tokens)
+}
 
-    /// Generate the started remote-segment fixture with an explicit metadata crate.
-    remote_started_segment => remote_metadata_fixtures::remote_started_segment;
+/// Generate the started remote-segment fixture with an explicit metadata crate.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn remote_started_segment(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    remote_metadata_fixtures::remote_started_segment(tokens)
+}
 
-    /// Generate a SCRAM user request preserving optional and ordered user lists.
-    scram_users_fixture => bound_start_fixture::scram_users;
+/// Generate a SCRAM user request preserving optional and ordered user lists.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn scram_users_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    bound_start_fixture::scram_users(tokens)
+}
 
-    /// Generate the first matching record header decoder with an explicit UTF-8 policy.
-    record_header_text => fixtures::record_header_text;
+/// Generate the first matching record header decoder with an explicit UTF-8 policy.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn record_header_text(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::record_header_text(tokens)
+}
 
-    /// Generate the shared dead-letter metric observations with caller-selected types.
-    share_dlq_meters => fixtures::share_dlq_meters;
+/// Generate the shared dead-letter metric observations with caller-selected types.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn share_dlq_meters(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::share_dlq_meters(tokens)
+}
 
-    /// Generate exported segment paths with an explicit snapshot and lazy epoch projection.
-    export_segment_data_fixture => network_fixtures::export_segment_data;
+/// Generate exported segment paths with an explicit snapshot and lazy epoch projection.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn export_segment_data_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    network_fixtures::export_segment_data(tokens)
 }
 
 /// Keep partition-spawn wrappers on one shared parameter list.
@@ -967,18 +1447,44 @@ pub fn partition_spawn_parameters(
     network_fixtures::partition_spawn_parameters(meta, item)
 }
 
-function_macros! {
-    /// Generate a checkpoint writer with a caller-selected failure kind.
-    epoch_checkpoint_failure => network_fixtures::epoch_checkpoint_failure;
+/// Generate a checkpoint writer with a caller-selected failure kind.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn epoch_checkpoint_failure(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    network_fixtures::epoch_checkpoint_failure(tokens)
+}
 
-    /// Generate a JVM checkpoint decoder fixture with explicit bytes, name and image.
-    jvm_checkpoint_dump_fixture => network_fixtures::jvm_checkpoint_dump;
+/// Generate a JVM checkpoint decoder fixture with explicit bytes, name and image.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn jvm_checkpoint_dump_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    network_fixtures::jvm_checkpoint_dump(tokens)
+}
 
-    /// Compose a compile-time Java string-producer probe with shared imports and setup.
-    java_string_producer_source => network_fixtures::java_string_producer;
+/// Compose a compile-time Java string-producer probe with shared imports and setup.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn java_string_producer_source(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    network_fixtures::java_string_producer(tokens)
+}
 
-    /// Define a wall-clock reader preserving caller attributes and overflow behavior.
-    epoch_millis_fn => network_fixtures::epoch_millis;
+/// Define a wall-clock reader preserving caller attributes and overflow behavior.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn epoch_millis_fn(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    network_fixtures::epoch_millis(tokens)
 }
 
 /// Gate original items or expressions on the supported sendfile platforms.
@@ -997,27 +1503,88 @@ pub fn test_authorizer(tokens: NativeTokenStream) -> Result<NativeTokenStream, P
     network_fixtures::test_authorizer(tokens)
 }
 
-function_macros! {
-    /// Generate checked Unix-millisecond fixtures with explicit panic contexts.
-    unix_millis_fixture => bound_start_fixture::unix_millis;
+/// Generate checked Unix-millisecond fixtures with explicit panic contexts.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn unix_millis_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    bound_start_fixture::unix_millis(tokens)
+}
 
-    /// Generate a Vec request frame with the caller's checked length-prefix type.
-    vector_request_fixture => bound_start_fixture::vector_request;
-    /// Generate the independent eight-row supported-feature oracle.
-    supported_features_fixture => cross_storage_fixtures::supported_features_fixture;
+/// Generate a Vec request frame with the caller's checked length-prefix type.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn vector_request_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    bound_start_fixture::vector_request(tokens)
+}
+/// Generate the independent eight-row supported-feature oracle.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn supported_features_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    cross_storage_fixtures::supported_features_fixture(tokens)
+}
 
-    /// Generate supported-feature rows from explicit wire bounds.
-    supported_feature_fixture => cross_storage_fixtures::supported_feature_fixture;
-    /// Generate finalized-feature rows from explicit wire levels.
-    finalized_feature_fixture => cross_storage_fixtures::finalized_feature_fixture;
-    /// Generate the record input used by byte-limit tests.
-    record_limit_fixture => cross_storage_fixtures::record_limit_fixture;
-    /// Generate keyed compaction batches with explicit producer state and timestamp.
-    compaction_record_fixture => cross_storage_fixtures::compaction_record_fixture;
-    /// Project registration feature bounds into an ordered map.
-    registration_feature_projection => cross_storage_fixtures::registration_feature_projection;
-    /// Generate the validated connection dispatch-capacity parser.
-    dispatch_capacity_parser => cli_support::dispatch_capacity_parser;
+/// Generate supported-feature rows from explicit wire bounds.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn supported_feature_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    cross_storage_fixtures::supported_feature_fixture(tokens)
+}
+/// Generate finalized-feature rows from explicit wire levels.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn finalized_feature_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    cross_storage_fixtures::finalized_feature_fixture(tokens)
+}
+/// Generate the record input used by byte-limit tests.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn record_limit_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    cross_storage_fixtures::record_limit_fixture(tokens)
+}
+/// Generate keyed compaction batches with explicit producer state and timestamp.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn compaction_record_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    cross_storage_fixtures::compaction_record_fixture(tokens)
+}
+/// Project registration feature bounds into an ordered map.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn registration_feature_projection(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    cross_storage_fixtures::registration_feature_projection(tokens)
+}
+/// Generate the validated connection dispatch-capacity parser.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn dispatch_capacity_parser(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    cli_support::dispatch_capacity_parser(tokens)
 }
 
 /// Share S3 endpoint and credential fields with the original configuration documentation.
@@ -1026,15 +1593,25 @@ pub fn s3_fields(meta: TokenStream, item: TokenStream) -> Result<TokenStream, Pa
     s3_fields::expand(meta, item)
 }
 
-function_macros! {
-    /// Define a named `SplitMix64` step that advances the caller's stream state.
-    /// Placement shuffles and benchmark byte streams share the exact same arithmetic.
-    splitmix64_step => deterministic_random::splitmix64_step;
+/// Define a named `SplitMix64` step that advances the caller's stream state.
+/// Placement shuffles and benchmark byte streams share the exact same arithmetic.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn splitmix64_step(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    deterministic_random::splitmix64_step(tokens)
 }
 
-function_macros! {
-    /// Generate an independent compression-byte oracle with a named codec level.
-    compression_bytes_fixture => cross_storage_fixtures::compression_bytes_fixture;
+/// Generate an independent compression-byte oracle with a named codec level.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn compression_bytes_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    cross_storage_fixtures::compression_bytes_fixture(tokens)
 }
 
 mod archive_rows;
@@ -1050,4 +1627,115 @@ pub fn validate_archive_rows(tokens: NativeTokenStream) -> Result<NativeTokenStr
         .to_string()
         .parse()
         .expect("valid archive walk expansion"))
+}
+
+#[cfg(test)]
+mod export_contract_tests {
+    use {super::*, assert2::assert};
+
+    #[test]
+    fn function_macros_keep_their_empty_input_contract() {
+        type Expand = fn(TokenStream) -> Result<TokenStream, ParseError>;
+        let entries: [(&str, Expand); 81] = [
+            ("dispatch_table", dispatch_table),
+            ("throttle_probes", throttle_probes),
+            ("cli_main", cli_main),
+            ("bounded_bfs", bounded_bfs),
+            ("delete_topic_request", delete_topic_request),
+            ("compacted_batch", compacted_batch),
+            ("record_batch_fixture", record_batch_fixture),
+            ("simulation_actions", simulation_actions),
+            ("simulation_transport", simulation_transport),
+            ("simulation_heartbeat", simulation_heartbeat),
+            ("benchmark_scenario_fixture", benchmark_scenario_fixture),
+            ("benchmark_latency_fixture", benchmark_latency_fixture),
+            ("s3_archive_config_fixture", s3_archive_config_fixture),
+            ("remote_segment_check", remote_segment_check),
+            ("simulation_step", simulation_step),
+            ("snapshot_topic_fixture", snapshot_topic_fixture),
+            ("timestamped_batch", timestamped_batch),
+            ("producer_batch_fixture", producer_batch_fixture),
+            ("create_topic_fixture", create_topic_fixture),
+            ("consumer_fetch_fixture", consumer_fetch_fixture),
+            (
+                "single_replica_partition_fixture",
+                single_replica_partition_fixture,
+            ),
+            ("control_marker_fixture", control_marker_fixture),
+            ("topic_record_fixture", topic_record_fixture),
+            ("ephemeral_port_fixture", ephemeral_port_fixture),
+            ("projection_identity", projection_identity),
+            ("minio_fixture", minio_fixture),
+            ("scram_client_first", scram_client_first),
+            (
+                "remote_segment_transition_matrix",
+                remote_segment_transition_matrix,
+            ),
+            ("capture_layer_fixture", capture_layer_fixture),
+            ("remote_segment_fixtures", remote_segment_fixtures),
+            ("remote_metadata_missing", remote_metadata_missing),
+            ("async_write_delegate", async_write_delegate),
+            ("timer_hooks", timer_hooks),
+            ("scram_client_proof_fixture", scram_client_proof_fixture),
+            (
+                "single_partition_produce_fixture",
+                single_partition_produce_fixture,
+            ),
+            ("request_frame_fixture", request_frame_fixture),
+            ("patterned_bytes_fixture", patterned_bytes_fixture),
+            ("break_glass_golden_id", break_glass_golden_id),
+            ("jvm_principal_golden", jvm_principal_golden),
+            ("frame_prefix_fixture", frame_prefix_fixture),
+            ("file_region_fixture", file_region_fixture),
+            ("empty_endpoint_voters", empty_endpoint_voters),
+            ("epoch_record_batch_fixture", epoch_record_batch_fixture),
+            ("epoch_log_view", epoch_log_view),
+            ("legacy_policy_fixture", legacy_policy_fixture),
+            ("keyed_record_batch_fixture", keyed_record_batch_fixture),
+            ("duration_cases_fixture", duration_cases_fixture),
+            ("directory_tree_fixture", directory_tree_fixture),
+            ("parsed_cli_entrypoint", parsed_cli_entrypoint),
+            ("duration_parser_fixture", duration_parser_fixture),
+            ("bootstrap_parser_fixture", bootstrap_parser_fixture),
+            ("snapshot_node_fixture", snapshot_node_fixture),
+            ("connect_cli_client", connect_cli_client),
+            ("format_directories_fixture", format_directories_fixture),
+            ("wal_capture_topic_fixture", wal_capture_topic_fixture),
+            ("flag_metadata_fixture", flag_metadata_fixture),
+            ("bind_retry_fixture", bind_retry_fixture),
+            ("bound_start_fixture", bound_start_fixture),
+            ("assignment_dirs_fixture", assignment_dirs_fixture),
+            ("metric_registry_fixture", metric_registry_fixture),
+            ("worm_segment_fixture", worm_segment_fixture),
+            ("remote_started_segment", remote_started_segment),
+            ("scram_users_fixture", scram_users_fixture),
+            ("record_header_text", record_header_text),
+            ("share_dlq_meters", share_dlq_meters),
+            ("export_segment_data_fixture", export_segment_data_fixture),
+            ("epoch_checkpoint_failure", epoch_checkpoint_failure),
+            ("jvm_checkpoint_dump_fixture", jvm_checkpoint_dump_fixture),
+            ("java_string_producer_source", java_string_producer_source),
+            ("epoch_millis_fn", epoch_millis_fn),
+            ("unix_millis_fixture", unix_millis_fixture),
+            ("vector_request_fixture", vector_request_fixture),
+            ("supported_features_fixture", supported_features_fixture),
+            ("supported_feature_fixture", supported_feature_fixture),
+            ("finalized_feature_fixture", finalized_feature_fixture),
+            ("record_limit_fixture", record_limit_fixture),
+            ("compaction_record_fixture", compaction_record_fixture),
+            (
+                "registration_feature_projection",
+                registration_feature_projection,
+            ),
+            ("dispatch_capacity_parser", dispatch_capacity_parser),
+            ("splitmix64_step", splitmix64_step),
+            ("compression_bytes_fixture", compression_bytes_fixture),
+        ];
+        let accepted: Vec<_> = entries
+            .into_iter()
+            .filter_map(|(name, expand)| expand(TokenStream::new()).is_ok().then_some(name))
+            .collect();
+        // Dispatch and throttle tables permit zero entries; fixtures need arguments.
+        assert!(accepted == ["dispatch_table", "throttle_probes"]);
+    }
 }

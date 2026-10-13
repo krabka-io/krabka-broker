@@ -1,7 +1,10 @@
 //! One array field within the existing flexible version-zero value framing.
 
 use {
-    crate::meta::{Tokens, field_ident, impl_block, named_fields},
+    crate::{
+        meta::{Tokens, field_ident, impl_block, named_fields},
+        value_framing::decode_method,
+    },
     moxy::{
         ast::{Attributed, ItemStruct, ParseError, Path},
         token::{LitStr, Spanner, TokenStream},
@@ -42,6 +45,9 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let encode: Path = moxy::parse!({ codec.encode.0 })?;
     let decode: Path = moxy::parse!({ codec.decode.0 })?;
     let record = LitStr::new(&codec.record, item.ident.span());
+    let decode = decode_method(&record, &moxy::template! {
+        |buf| Ok(Self { {{ field }}: {{ decode }}(buf)? })
+    });
     Ok(impl_block(item, &TokenStream::new(), &moxy::template! {
         #[must_use]
         pub fn encode(&self) -> bytes::Bytes {
@@ -50,15 +56,7 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
             })
         }
 
-        /// # Errors
-        /// Returns an error when the value version is not 0, or when a
-        /// field or the tagged-field trailer is truncated or invalid.
-        pub fn decode(buf: &[u8]) -> Result<Self, crate::error::BrokerError> {
-            crate::coordinator::unified::persistence::flex::decode_value(
-                buf, concat!("unknown ", {{ record }}, " version"),
-                |buf| Ok(Self { {{ field }}: {{ decode }}(buf)? }),
-            )
-        }
+        {{ decode }}
     }))
 }
 

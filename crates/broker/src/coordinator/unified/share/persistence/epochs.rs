@@ -21,8 +21,11 @@
 //! Both records end with the message's tagged-field count.
 
 use {
-    crate::coordinator::unified::persistence::{flex::value_codec, get_i32, get_i64},
-    bytes::BufMut,
+    crate::{
+        coordinator::unified::persistence::{get_i32, get_i64},
+        error::BrokerError,
+    },
+    bytes::{BufMut, BytesMut},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,13 +36,14 @@ pub struct ShareGroupMetadataValue {
     pub metadata_hash: i64,
 }
 
-value_codec! {
-    ShareGroupMetadataValue("ShareGroupMetadataValue"),
-    encode(self) -> buf {
+#[krabka_macros::flexible_value(record = "ShareGroupMetadataValue")]
+impl ShareGroupMetadataValue {
+    fn encode_fields(self, buf: &mut BytesMut) {
         buf.put_i32(self.epoch);
         buf.put_i64(self.metadata_hash);
     }
-    decode(buf) {
+
+    fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {
         let epoch = get_i32(buf)?;
         let metadata_hash = get_i64(buf)?;
         Ok(Self {

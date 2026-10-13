@@ -28,7 +28,7 @@
 use {
     crate::{
         coordinator::unified::persistence::{
-            flex::{get_assigned_topics, get_i8, put_assigned_topics, value_codec},
+            flex::{get_assigned_topics, get_i8, put_assigned_topics},
             get_i32,
         },
         error::BrokerError,
@@ -57,15 +57,16 @@ pub struct ShareGroupCurrentMemberAssignmentValue {
     pub assigned_partitions: Vec<(Uuid, Vec<i32>)>,
 }
 
-value_codec! {
-    ShareGroupCurrentMemberAssignmentValue("ShareGroupCurrentMemberAssignmentValue"),
-    encode(&self) -> buf {
+#[krabka_macros::flexible_value(record = "ShareGroupCurrentMemberAssignmentValue")]
+impl ShareGroupCurrentMemberAssignmentValue {
+    fn encode_fields(&self, buf: &mut BytesMut) {
         buf.put_i32(self.member_epoch);
         buf.put_i32(self.previous_member_epoch);
         buf.put_i8(MEMBER_STATE_STABLE);
         encode_topic_partitions(buf, &self.assigned_partitions);
     }
-    decode(buf) {
+
+    fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {
         let member_epoch = get_i32(buf)?;
         let previous_member_epoch = get_i32(buf)?;
         let _state = get_i8(buf)?;

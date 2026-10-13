@@ -31,7 +31,7 @@ use {
             flex::{
                 get_assigned_topics, get_compact_array, get_i32_array, get_uuid,
                 put_assigned_topics, put_compact_array, put_i32_array, put_tagged_fields, put_uuid,
-                read_tagged, value_codec,
+                read_tagged,
             },
             get_i32,
         },
@@ -133,16 +133,17 @@ pub struct CurrentMemberAssignmentValue {
     pub partitions_pending_revocation: Vec<CurrentTopicPartitions>,
 }
 
-value_codec! {
-    CurrentMemberAssignmentValue("ConsumerGroupCurrentMemberAssignmentValue"),
-    encode(&self) -> buf {
+#[krabka_macros::flexible_value(record = "ConsumerGroupCurrentMemberAssignmentValue")]
+impl CurrentMemberAssignmentValue {
+    fn encode_fields(&self, buf: &mut BytesMut) {
         buf.put_i32(self.member_epoch);
         buf.put_i32(self.previous_member_epoch);
         buf.put_i8(self.state as i8);
         encode_current_topic_partitions(buf, &self.assigned_partitions);
         encode_current_topic_partitions(buf, &self.partitions_pending_revocation);
     }
-    decode(buf) {
+
+    fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {
         let member_epoch = get_i32(buf)?;
         let previous_member_epoch = get_i32(buf)?;
         if buf.remaining() < 1 {
