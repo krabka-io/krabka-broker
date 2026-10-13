@@ -76,8 +76,12 @@ context_handler! {
             return Ok(reply(codes::INVALID_REQUEST, Some(message.to_owned())));
         }
 
-        if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
-            return Ok(reply(error_code, None));
+        if let Some(response) = crate::handlers::group_coordinator_error_response(
+            broker,
+            &req.group_id,
+            reply,
+        ) {
+            return Ok(response);
         }
 
         // Kafka creates a share group only on a join, and answers

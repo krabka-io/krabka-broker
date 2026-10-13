@@ -22,7 +22,8 @@ use {
         fetch_session::{FINAL_EPOCH, INITIAL_EPOCH, INVALID_SESSION_ID},
         handlers::test_support::{
             check_cases, check_denied_topic_cases, create_topic as create_topic_from_test_support,
-            seed_partition_replicas,
+            seed_partition_replicas, UNKNOWN_TOPIC_ID as UNKNOWN_ID,
+            OTHER_UNKNOWN_TOPIC_ID as OTHER_UNKNOWN_ID,
         },
         test_support::{DenyAll, KafkaErrorCode, start_broker_with_authorizer_no_audit as start},
     },
@@ -38,12 +39,6 @@ use {
     },
     std::sync::Arc,
 };
-
-/// An id that no topic in these tests has.
-const UNKNOWN_ID: WireUuid = WireUuid([0x0b; 16]);
-
-/// A second id that no topic in these tests has.
-const OTHER_UNKNOWN_ID: WireUuid = WireUuid([0x0c; 16]);
 
 /// A name that no topic in these tests has.
 const UNKNOWN_NAME: &str = "no-such-topic";

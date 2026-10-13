@@ -87,8 +87,12 @@ context_handler! {
             return Ok(reply(error_code, Some(message)));
         }
 
-        if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
-            return Ok(reply(error_code, None));
+        if let Some(response) = crate::handlers::group_coordinator_error_response(
+            broker,
+            &req.group_id,
+            reply,
+        ) {
+            return Ok(response);
         }
 
         // Kafka creates a streams group only on a join, in place of nothing or of
