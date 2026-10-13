@@ -569,6 +569,18 @@ mod tests {
     /// A group at epoch 6 with member `a`, holding `before`, and member `b`,
     /// holding `other`, assigned and pending revocation, and the target `target`
     /// for `a`.
+    /// [`group`] whose other member holds nothing.
+    fn group_without_other(before: &Held, target: &[PartitionIndex]) -> GroupState {
+        group(
+            before,
+            Holding {
+                assigned: &[],
+                pending: &[],
+            },
+            target,
+        )
+    }
+
     fn group(before: &Held, other: Holding<'_>, target: &[PartitionIndex]) -> GroupState {
         let mut g = GroupState::new("g");
         g.group_epoch = TARGET_EPOCH;
@@ -799,14 +811,7 @@ mod tests {
             assigned: &[PartitionIndex(0), PartitionIndex(1), PartitionIndex(2)],
             ..Default::default()
         });
-        let mut g = group(
-            &before,
-            Holding {
-                assigned: &[],
-                pending: &[],
-            },
-            &[PartitionIndex(0), PartitionIndex(1)],
-        );
+        let mut g = group_without_other(&before, &[PartitionIndex(0), PartitionIndex(1)]);
 
         check!(held_by(&g, "a") == before);
         check!(g.target.epoch == TARGET_EPOCH);
@@ -832,14 +837,7 @@ mod tests {
             pending: &[PartitionIndex(1)],
             ..Default::default()
         });
-        let mut g = group(
-            &before,
-            Holding {
-                assigned: &[],
-                pending: &[],
-            },
-            &[PartitionIndex(0), PartitionIndex(1)],
-        );
+        let mut g = group_without_other(&before, &[PartitionIndex(0), PartitionIndex(1)]);
 
         g.reconcile_member("a", Some(&parts(&[PartitionIndex(0)])), false, &topics());
 

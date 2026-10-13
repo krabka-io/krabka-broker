@@ -55,6 +55,18 @@ struct PartitionOutcome {
     acquired: Vec<OffsetRun>,
 }
 
+/// A partition that answers `NONE` and acquires the one run of offsets.
+fn acquired_run(partition_index: i32, first_offset: i64, last_offset: i64) -> PartitionOutcome {
+    PartitionOutcome {
+        partition_index,
+        error_code: codes::NONE,
+        acquired: vec![OffsetRun {
+            first_offset,
+            last_offset,
+        }],
+    }
+}
+
 /// `DeleteRecords` v2, matching the other handler tests.
 const DELETE_RECORDS_VERSION: i16 = 2;
 
@@ -422,14 +434,7 @@ async fn an_unreadable_partition_fails_alone() {
                 error_code: codes::CORRUPT_MESSAGE,
                 acquired: vec![],
             },
-            PartitionOutcome {
-                partition_index: 1,
-                error_code: codes::NONE,
-                acquired: vec![OffsetRun {
-                    first_offset: 0,
-                    last_offset: 4,
-                }],
-            },
+            acquired_run(1, 0, 4),
         ])
         .await;
     broker.shutdown().await;
@@ -456,22 +461,8 @@ async fn a_healthy_partition_in_the_same_request_is_unaffected() {
         .topic_id(topic_id.0)
         .build()
         .expect(vec![
-            PartitionOutcome {
-                partition_index: 0,
-                error_code: codes::NONE,
-                acquired: vec![OffsetRun {
-                    first_offset: 3,
-                    last_offset: 4,
-                }],
-            },
-            PartitionOutcome {
-                partition_index: 1,
-                error_code: codes::NONE,
-                acquired: vec![OffsetRun {
-                    first_offset: 0,
-                    last_offset: 4,
-                }],
-            },
+            acquired_run(0, 3, 4),
+            acquired_run(1, 0, 4),
         ])
         .await;
     broker.shutdown().await;

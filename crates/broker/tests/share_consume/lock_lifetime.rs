@@ -154,16 +154,16 @@ async fn renew_extends_lock_not_redelivered() {
 async fn no_renew_redelivers_after_lock_expiry() {
     let fixture = lock_fixture(Duration::from_millis(500), None).await;
     let (client, tid, member) = (&fixture.client, fixture.tid, &fixture.member);
-    let session = ShareSessionSetup::joined(&member, tid);
+    let session = ShareSessionSetup::joined(member, tid);
 
-    acquire_initial_record(&client, &member, tid).await;
+    acquire_initial_record(client, member, tid).await;
 
     // Intentional calibrated timing: no renew — wait 800ms (well past the 500ms
     // lock + a sweeper tick) so the record is reverted to Available and
     // re-delivered. This sleep mirrors the renew test's timing to prove that
     // WITHOUT a renew the lock IS swept; it is NOT a flaky state-guess.
     tokio::time::sleep(Duration::from_millis(800)).await;
-    fetch_redelivered(&client, ShareFetchSetup::from(session)).await;
+    fetch_redelivered(client, ShareFetchSetup::from(session)).await;
 }
 
 /// A joined share-group member and the owners that keep its broker running.

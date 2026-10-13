@@ -178,15 +178,16 @@ struct BrokerProcess {
 }
 
 impl BrokerProcess {
-    fn user(&self) -> String {
+    fn docker_user(root: &std::path::Path) -> String {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt as _;
-            let metadata = std::fs::metadata(self.root.path()).expect("stat broker root");
+            let metadata = std::fs::metadata(root).expect("stat broker root");
             format!("{}:{}", metadata.uid(), metadata.gid())
         }
         #[cfg(not(unix))]
         {
+            let _ = root;
             "0:0".to_string()
         }
     }
@@ -210,7 +211,7 @@ impl BrokerProcess {
 
     fn format(&self, cluster_id: &str, voters: &str, primary: Option<&TinyFs>) {
         let mount = format!("{}:{ROOT}", self.root.path().display());
-        let user = self.user();
+        let user = Self::docker_user(self.root.path());
         let broker_image = image();
         let log_dir = format!("--log-dir={PRIMARY}");
         let cluster = format!("--cluster-id={cluster_id}");
@@ -264,7 +265,7 @@ impl BrokerProcess {
 
     fn run(&self, cluster_id: &str, primary: Option<&TinyFs>, extra: Option<&TinyFs>) {
         let root_mount = format!("{}:{ROOT}", self.root.path().display());
-        let user = self.user();
+        let user = Self::docker_user(self.root.path());
         let client = format!("{}:9092", self.client_port);
         let controller = format!("{}:9093", self.controller_port);
         let metrics = format!("{}:9404", self.metrics_port);

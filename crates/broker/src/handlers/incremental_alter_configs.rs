@@ -60,6 +60,11 @@ mod group_scope;
 mod test_support;
 mod topic_scope;
 
+fn set_error_response(out: &mut AlterConfigsResourceResponse, (code, message): (i16, String)) {
+    out.error_code = code;
+    out.error_message = Some(message);
+}
+
 use {
     self::{
         broker_logger_scope::handle_broker_logger_scoped, broker_scope::handle_broker_scoped,
@@ -300,6 +305,22 @@ async fn process_resource(
                 tracing::error!(%error, "IncrementalAlterConfigs submit_change failed");
                 return resource_refusal(&resource, codes::UNKNOWN_SERVER_ERROR);
             }
+        }
+    }
+}
+
+/// Queue the records of one scope's validation, or answer its refusal on the
+/// resource's response.
+fn submit_or_refuse(
+    result: Result<impl IntoIterator<Item = MetadataRecord>, (i16, String)>,
+    out: &mut AlterConfigsResourceResponse,
+    to_submit: &mut Vec<MetadataRecord>,
+) {
+    match result {
+        Ok(records) => to_submit.extend(records),
+        Err((code, message)) => {
+            out.error_code = code;
+            out.error_message = Some(message);
         }
     }
 }

@@ -10,6 +10,17 @@ pub(super) use crate::broker::FetchVisibility;
 pub(super) use crate::broker::{clamped_fetch_watermarks, committed_fetch_response};
 #[cfg(creusot)]
 pub(super) use crate::leader_epoch::kafka_end_offset_for;
+
+pub(super) mod oauth_jwks_prelude {
+    pub(super) use crate::{
+        jwks::{JwksCacheDecision, JwksCacheFacts, jwks_cache_admission},
+        oauth::{
+            OAuthSessionDecision, OAuthSessionFacts, oauth_session_admission,
+            oauth_validation_admission,
+        },
+    };
+}
+
 use {
     crate::{
         audit::{AuditLosses, settle_loss_batch},

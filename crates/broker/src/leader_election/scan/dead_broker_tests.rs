@@ -33,6 +33,14 @@ fn unclean_single_isr_image() -> krabka_metadata::MetadataImage {
     })
 }
 
+async fn assert_unclean_election(img: &MetadataImage) {
+    let plan = failover_with_alive(img, NodeId(1), &[2u64, 3]).await;
+    assert!(plan.recoveries.is_empty());
+    let change = one_partition_change(&plan.changes);
+    assert!(change.leader == 2);
+    assert!(change.isr == vec![NodeId(2)]);
+}
+
 /// Only the preferred replica is in the ISR; broker three precedes broker two among followers.
 fn preferred_replica_alone_in_isr() -> krabka_metadata::MetadataImage {
     img_with_partition(ElectionSetup {
@@ -230,14 +238,7 @@ async fn failover_unclean_does_not_apply_when_isr_still_has_alive_member() {
         )],
         ..Default::default()
     });
-    let plan = failover_with_alive(&img, /*dead=*/ NodeId(1), &[2u64, 3]).await;
-    assert!(plan.recoveries.is_empty());
-    let pr = one_partition_change(&plan.changes);
-    assert!(pr.leader == 2);
-    assert!(
-        pr.isr == vec![NodeId(2)],
-        "clean ISR-only election keeps the surviving ISR member, not a singleton-of-some-other-replica"
-    );
+    assert_unclean_election(&img).await;
 }
 
 #[tokio::test]
@@ -310,12 +311,7 @@ async fn topic_none_overrides_cluster_strategy_and_uses_cluster_legacy_flag() {
         entries: &[TopicConfigOverride::new(UNCLEAN_RECOVERY_STRATEGY, "None")],
         ..Default::default()
     });
-    let plan = failover_with_alive(&img, NodeId(1), &[2u64, 3]).await;
-
-    assert!(plan.recoveries.is_empty());
-    let change = one_partition_change(&plan.changes);
-    assert!(change.leader == 2);
-    assert!(change.isr == vec![NodeId(2)]);
+    assert_unclean_election(&img).await;
 }
 
 #[tokio::test]

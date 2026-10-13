@@ -130,6 +130,21 @@ macro_rules! seed_index_fixture {
     };
 }
 
+mod prelude {
+    pub(super) use {
+        crate::{
+            error::LogError,
+            io::{IoTarget, LogIo},
+        },
+        std::{fs::File, path::Path},
+        tracing::instrument,
+        zerocopy::{
+            BigEndian, IntoBytes,
+            byteorder::{I64, U32},
+        },
+    };
+}
+
 mod offset;
 mod time;
 

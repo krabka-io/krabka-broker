@@ -711,6 +711,32 @@ mod tests {
         standby: &'static [i32],
     }
 
+    /// An expectation with no standby tasks and nothing pending.
+    fn settled(
+        changed: bool,
+        state: StreamsMemberAssignmentState,
+        epoch: i32,
+        active: &'static [i32],
+    ) -> ExpectedMember {
+        ExpectedMember {
+            changed,
+            state,
+            epoch,
+            active,
+            standby: &[],
+            active_pending: &[],
+            standby_pending: &[],
+        }
+    }
+
+    /// A heartbeat that reports `active` and no standby tasks.
+    fn owning(active: &'static [i32]) -> Option<OwnedSetup> {
+        Some(OwnedSetup {
+            active,
+            standby: &[],
+        })
+    }
+
     /// One row: the name, `m1`, another member, the target active and standby
     /// tasks of `m1`, the owned tasks of its heartbeat or `None`, and what is
     /// expected of `m1`.
@@ -758,19 +784,8 @@ mod tests {
                 other: None,
                 target_active: &[0, 1],
                 target_standby: &[],
-                owned: Some(OwnedSetup {
-                    active: &[0],
-                    standby: &[],
-                }),
-                expected: ExpectedMember {
-                    changed: true,
-                    state: Stable,
-                    epoch: 2,
-                    active: &[0, 1],
-                    standby: &[],
-                    active_pending: &[],
-                    standby_pending: &[],
-                },
+                owned: owning(&[0]),
+                expected: settled(true, Stable, 2, &[0, 1]),
             },
             BuilderRow {
                 name: "a member keeps its epoch while it owns a revoked task",
@@ -781,10 +796,7 @@ mod tests {
                 other: None,
                 target_active: &[0],
                 target_standby: &[],
-                owned: Some(OwnedSetup {
-                    active: &[0, 1],
-                    standby: &[],
-                }),
+                owned: owning(&[0, 1]),
                 expected: ExpectedMember {
                     changed: true,
                     state: UnrevokedTasks,
@@ -804,19 +816,8 @@ mod tests {
                 other: None,
                 target_active: &[0],
                 target_standby: &[],
-                owned: Some(OwnedSetup {
-                    active: &[],
-                    standby: &[],
-                }),
-                expected: ExpectedMember {
-                    changed: true,
-                    state: Stable,
-                    epoch: 2,
-                    active: &[0],
-                    standby: &[],
-                    active_pending: &[],
-                    standby_pending: &[],
-                },
+                owned: owning(&[]),
+                expected: settled(true, Stable, 2, &[0]),
             },
             BuilderRow {
                 name: "an unrevoked member moves on once it stops reporting the task",
@@ -824,19 +825,8 @@ mod tests {
                 other: None,
                 target_active: &[0],
                 target_standby: &[],
-                owned: Some(OwnedSetup {
-                    active: &[0],
-                    standby: &[],
-                }),
-                expected: ExpectedMember {
-                    changed: true,
-                    state: Stable,
-                    epoch: 2,
-                    active: &[0],
-                    standby: &[],
-                    active_pending: &[],
-                    standby_pending: &[],
-                },
+                owned: owning(&[0]),
+                expected: settled(true, Stable, 2, &[0]),
             },
             BuilderRow {
                 name: "an unrevoked member that still reports the task waits",
@@ -844,10 +834,7 @@ mod tests {
                 other: None,
                 target_active: &[0],
                 target_standby: &[],
-                owned: Some(OwnedSetup {
-                    active: &[0, 1],
-                    standby: &[],
-                }),
+                owned: owning(&[0, 1]),
                 expected: ExpectedMember {
                     changed: false,
                     state: UnrevokedTasks,
@@ -892,19 +879,8 @@ mod tests {
                 }),
                 target_active: &[0, 1],
                 target_standby: &[],
-                owned: Some(OwnedSetup {
-                    active: &[],
-                    standby: &[],
-                }),
-                expected: ExpectedMember {
-                    changed: true,
-                    state: UnreleasedTasks,
-                    epoch: 2,
-                    active: &[0],
-                    standby: &[],
-                    active_pending: &[],
-                    standby_pending: &[],
-                },
+                owned: owning(&[]),
+                expected: settled(true, UnreleasedTasks, 2, &[0]),
             },
             BuilderRow {
                 name: "a standby task that the same process runs as active is held back",
@@ -915,19 +891,8 @@ mod tests {
                 }),
                 target_active: &[],
                 target_standby: &[0],
-                owned: Some(OwnedSetup {
-                    active: &[],
-                    standby: &[],
-                }),
-                expected: ExpectedMember {
-                    changed: true,
-                    state: UnreleasedTasks,
-                    epoch: 2,
-                    active: &[],
-                    standby: &[],
-                    active_pending: &[],
-                    standby_pending: &[],
-                },
+                owned: owning(&[]),
+                expected: settled(true, UnreleasedTasks, 2, &[]),
             },
             BuilderRow {
                 name: "a standby task that another process runs as active is given",
@@ -938,10 +903,7 @@ mod tests {
                 }),
                 target_active: &[],
                 target_standby: &[0],
-                owned: Some(OwnedSetup {
-                    active: &[],
-                    standby: &[],
-                }),
+                owned: owning(&[]),
                 expected: ExpectedMember {
                     changed: true,
                     state: Stable,

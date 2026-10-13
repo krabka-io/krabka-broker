@@ -3,15 +3,7 @@
 //! `LogSegment.append`, the offset is the **last** offset of the batch that
 //! starts at the position, not its base offset.
 
-use {
-    crate::{
-        error::LogError,
-        io::{IoTarget, LogIo},
-    },
-    std::{fs::File, path::Path},
-    tracing::instrument,
-    zerocopy::{BigEndian, IntoBytes, byteorder::U32},
-};
+use super::prelude::*;
 
 /// 8 bytes per entry.
 pub const OFFSET_ENTRY_SIZE: usize = 8;

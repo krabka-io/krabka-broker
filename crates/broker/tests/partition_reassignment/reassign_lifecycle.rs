@@ -208,7 +208,8 @@ async fn list_in_flight_returns_pending_rows() {
     let _g = case_lock!();
 
     let cluster = foo_cluster().await;
-    let (h1, h2, h3) = (cluster.h1, cluster.h2, cluster.h3);
+    let h1 = cluster.h1;
+    let (h2, h3) = (cluster.h2, cluster.h3);
 
     let pr = h1.partition_record_for_test("foo", 0).expect("partition");
     let new_replica: i32 = (1..=3)

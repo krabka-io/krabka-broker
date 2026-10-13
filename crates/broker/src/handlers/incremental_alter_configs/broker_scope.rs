@@ -8,7 +8,7 @@
 //! live in [`crate::config_keys::broker_dynamic`].
 
 use {
-    super::{OP_APPEND, OP_DELETE, OP_SET, OP_SUBTRACT},
+    super::{OP_APPEND, OP_DELETE, OP_SET, OP_SUBTRACT, submit_or_refuse},
     crate::{
         api_catalog::UnstableApiVersions,
         codes,
@@ -211,13 +211,7 @@ pub(super) fn handle_broker_scoped(
     out: &mut AlterConfigsResourceResponse,
     to_submit: &mut Vec<MetadataRecord>,
 ) {
-    match broker_records(resource, context) {
-        Ok(records) => to_submit.extend(records),
-        Err((code, message)) => {
-            out.error_code = code;
-            out.error_message = Some(message);
-        }
-    }
+    submit_or_refuse(broker_records(resource, context), out, to_submit);
 }
 
 #[cfg(test)]

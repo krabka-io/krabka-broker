@@ -17,8 +17,10 @@
 //! cannot do it in this test, because the nodes wait ten minutes before they
 //! call a follower slow.
 
+#![cfg(unix)]
+
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt as _;
+use std::{os::unix::fs::PermissionsExt as _, path::PathBuf};
 use {
     crate::support::{
         NodeIndex, RoleNodeSetup,
@@ -35,7 +37,7 @@ use {
     krabka_client_producer::{Acks, Producer, ProducerRecord},
     std::{
         collections::BTreeMap,
-        path::{Path, PathBuf},
+        path::Path,
         time::{Duration, SystemTime, UNIX_EPOCH},
     },
     tempfile::TempDir,
@@ -233,16 +235,6 @@ impl Drop for ReadOnlyTree {
     }
 }
 
-#[cfg(not(unix))]
-struct ReadOnlyTree;
-
-#[cfg(not(unix))]
-impl ReadOnlyTree {
-    fn new(_root: &Path) -> Self { Self }
-
-    fn refuses_writes(&self) -> bool { false }
-}
-
 /// Produces one record to partition 0 of [`TOPIC`] with the timestamp
 /// `timestamp_ms`, and waits for the leader to acknowledge it.
 async fn produce(producer: &Producer, timestamp_ms: i64) {
@@ -333,7 +325,9 @@ async fn a_follower_whose_log_directory_fails_leaves_the_isr() {
         .wait_until_local_log_end_offset(TOPIC, 0, 1)
         .await;
 
+    #[cfg(unix)]
     let read_only = ReadOnlyTree::new(follower.extra.path());
+    #[cfg(unix)]
     if !read_only.refuses_writes() {
         // Root writes through the permission bits, so nothing fails.
         drop(read_only);
@@ -379,6 +373,7 @@ async fn a_follower_whose_log_directory_fails_leaves_the_isr() {
     );
 
     drop(producer);
+    #[cfg(unix)]
     drop(read_only);
     cluster.shutdown().await;
 }

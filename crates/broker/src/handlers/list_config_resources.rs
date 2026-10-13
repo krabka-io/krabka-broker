@@ -259,6 +259,13 @@ mod tests {
         img
     }
 
+    const fn listed(resource_type: i8, name: &str) -> ListedResource<'_> {
+        ListedResource {
+            resource_type,
+            name,
+        }
+    }
+
     fn rows(expected: &[ListedResource<'_>]) -> Vec<ConfigResource> {
         expected
             .iter()
@@ -295,48 +302,21 @@ mod tests {
     fn collect_resources_matches_kafka_filter_and_order() {
         let img = populated_image();
         let all = [
-            ListedResource {
-                resource_type: RESOURCE_TYPE_GROUP,
-                name: "g-1",
-            },
-            ListedResource {
-                resource_type: RESOURCE_TYPE_CLIENT_METRICS,
-                name: "sub-1",
-            },
-            ListedResource {
-                resource_type: RESOURCE_TYPE_BROKER_LOGGER,
-                name: "2",
-            },
-            ListedResource {
-                resource_type: RESOURCE_TYPE_BROKER_LOGGER,
-                name: "10",
-            },
-            ListedResource {
-                resource_type: RESOURCE_TYPE_BROKER,
-                name: "2",
-            },
-            ListedResource {
-                resource_type: RESOURCE_TYPE_BROKER,
-                name: "10",
-            },
-            ListedResource {
-                resource_type: RESOURCE_TYPE_TOPIC,
-                name: "t-a",
-            },
-            ListedResource {
-                resource_type: RESOURCE_TYPE_TOPIC,
-                name: "t-b",
-            },
+            listed(RESOURCE_TYPE_GROUP, "g-1"),
+            listed(RESOURCE_TYPE_CLIENT_METRICS, "sub-1"),
+            listed(RESOURCE_TYPE_BROKER_LOGGER, "2"),
+            listed(RESOURCE_TYPE_BROKER_LOGGER, "10"),
+            listed(RESOURCE_TYPE_BROKER, "2"),
+            listed(RESOURCE_TYPE_BROKER, "10"),
+            listed(RESOURCE_TYPE_TOPIC, "t-a"),
+            listed(RESOURCE_TYPE_TOPIC, "t-b"),
         ];
         let cases: Vec<Case<'_>> = vec![
             Case {
                 name: "v0 lists client metrics",
                 version: 0,
                 requested: vec![],
-                expected: vec![ListedResource {
-                    resource_type: RESOURCE_TYPE_CLIENT_METRICS,
-                    name: "sub-1",
-                }],
+                expected: vec![listed(RESOURCE_TYPE_CLIENT_METRICS, "sub-1")],
             },
             Case {
                 name: "v1 empty filter lists every type",
@@ -349,14 +329,8 @@ mod tests {
                 version: 1,
                 requested: vec![RESOURCE_TYPE_TOPIC, RESOURCE_TYPE_TOPIC],
                 expected: vec![
-                    ListedResource {
-                        resource_type: RESOURCE_TYPE_TOPIC,
-                        name: "t-a",
-                    },
-                    ListedResource {
-                        resource_type: RESOURCE_TYPE_TOPIC,
-                        name: "t-b",
-                    },
+                    listed(RESOURCE_TYPE_TOPIC, "t-a"),
+                    listed(RESOURCE_TYPE_TOPIC, "t-b"),
                 ],
             },
             Case {
@@ -368,26 +342,11 @@ mod tests {
                     RESOURCE_TYPE_GROUP,
                 ],
                 expected: vec![
-                    ListedResource {
-                        resource_type: RESOURCE_TYPE_GROUP,
-                        name: "g-1",
-                    },
-                    ListedResource {
-                        resource_type: RESOURCE_TYPE_BROKER,
-                        name: "2",
-                    },
-                    ListedResource {
-                        resource_type: RESOURCE_TYPE_BROKER,
-                        name: "10",
-                    },
-                    ListedResource {
-                        resource_type: RESOURCE_TYPE_TOPIC,
-                        name: "t-a",
-                    },
-                    ListedResource {
-                        resource_type: RESOURCE_TYPE_TOPIC,
-                        name: "t-b",
-                    },
+                    listed(RESOURCE_TYPE_GROUP, "g-1"),
+                    listed(RESOURCE_TYPE_BROKER, "2"),
+                    listed(RESOURCE_TYPE_BROKER, "10"),
+                    listed(RESOURCE_TYPE_TOPIC, "t-a"),
+                    listed(RESOURCE_TYPE_TOPIC, "t-b"),
                 ],
             },
             Case {
@@ -395,24 +354,15 @@ mod tests {
                 version: 1,
                 requested: vec![RESOURCE_TYPE_BROKER_LOGGER],
                 expected: vec![
-                    ListedResource {
-                        resource_type: RESOURCE_TYPE_BROKER_LOGGER,
-                        name: "2",
-                    },
-                    ListedResource {
-                        resource_type: RESOURCE_TYPE_BROKER_LOGGER,
-                        name: "10",
-                    },
+                    listed(RESOURCE_TYPE_BROKER_LOGGER, "2"),
+                    listed(RESOURCE_TYPE_BROKER_LOGGER, "10"),
                 ],
             },
             Case {
                 name: "v1 client metrics filter",
                 version: 1,
                 requested: vec![RESOURCE_TYPE_CLIENT_METRICS],
-                expected: vec![ListedResource {
-                    resource_type: RESOURCE_TYPE_CLIENT_METRICS,
-                    name: "sub-1",
-                }],
+                expected: vec![listed(RESOURCE_TYPE_CLIENT_METRICS, "sub-1")],
             },
         ];
         for Case {

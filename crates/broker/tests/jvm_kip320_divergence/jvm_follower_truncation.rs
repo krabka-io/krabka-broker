@@ -5,14 +5,10 @@
 //! log end offset, and that a `kafka-console-consumer` then recovers. Its
 //! divergence recipe is specific to this direction, so it has its own file.
 
-use {
-    crate::{
-        docker::{KAFKA_IMAGE, docker_run_kafka_tool_with_image},
-        dump_log::grep_base_offsets,
-        test_support::truncation::*,
-    },
-    krabka_metadata::{LeaderEpoch, MetadataRecord},
-    std::time::{Duration, Instant},
+use crate::{
+    docker::{KAFKA_IMAGE, docker_run_kafka_tool_with_image},
+    dump_log::grep_base_offsets,
+    test_support::truncation::{prelude::*, *},
 };
 
 /// Recreates a shorter Krabka-led suffix, then verifies the JVM follower

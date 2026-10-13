@@ -3,15 +3,7 @@
 #[cfg(creusot)]
 use crate::oauth::{OAuthAuthenticationKind, OAuthExpiryPresence, OAuthSessionCap};
 use {
-    crate::{
-        jwks::{
-            JwksCacheDecision, JwksCacheFacts, jwks_cache_admission, jwks_publication_generations,
-        },
-        oauth::{
-            OAuthSessionDecision, OAuthSessionFacts, oauth_session_admission,
-            oauth_validation_admission,
-        },
-    },
+    super::oauth_jwks_prelude::*, crate::jwks::jwks_publication_generations,
     creusot_std::prelude::*,
 };
 

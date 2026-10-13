@@ -3,14 +3,8 @@
 //! to the handwritten `KRaft` voter, so it lives apart from the broker-only observer path.
 
 use {
-    super::MetadataSource,
-    krabka_metadata::{MetadataImage, MetadataRecord},
-    krabka_raft::{
-        AddVoter, ControllerHandle, DelegationTokenMutation, Node, NodeId, QuorumState, RaftError,
-        ReconfigOutcome, RemoveVoter, SnapshotRange, SubmitChangeResult, UpdateVoter,
-    },
-    std::{collections::BTreeSet, net::SocketAddr, sync::Arc},
-    tokio::sync::watch,
+    super::{MetadataSource, prelude::*},
+    krabka_raft::ControllerHandle,
 };
 
 #[async_trait::async_trait]

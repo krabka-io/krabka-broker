@@ -869,13 +869,10 @@ mod tests {
             planned_follower(TOPIC_A, &part_a, &request, crate::codes::NONE),
             planned_follower(TOPIC_B, &part_b, &request, crate::codes::NONE),
         ];
-        let phases = RequestPhases::default();
         // A response budget far smaller than either partition's one batch:
         // the first partition's read still serves it whole, which alone
         // spends the entire budget before the second partition is read.
-        let GroupedResponses {
-            responses: topics, ..
-        } = super::execute_pending_reads(&broker, pending, 0, 8, 0, false, &phases).await;
+        let topics = read_with_tiny_budget(&broker, pending).await;
 
         let served_a = &topics[0].partitions[0];
         let served_b = &topics[1].partitions[0];
@@ -1071,10 +1068,7 @@ mod tests {
                 consumer_read("aborted", &aborted, read_committed),
             ];
 
-            let phases = RequestPhases::default();
-            let GroupedResponses {
-                responses: topics, ..
-            } = super::execute_pending_reads(&broker, pending, 0, 8, 0, false, &phases).await;
+            let topics = read_with_tiny_budget(&broker, pending).await;
 
             assert!(
                 served_base_offsets(&topics[0].partitions[0]) == vec![0],
@@ -1772,6 +1766,17 @@ mod tests {
         assert!(served_base_offsets(&pending[0].out) == vec![0]);
         broker_handle.shutdown().await;
     }
+    /// Read `pending` under an 8 byte response budget and return the topics.
+    async fn read_with_tiny_budget(
+        broker: &Broker,
+        pending: Vec<super::PendingRead>,
+    ) -> Vec<krabka_protocol::owned::fetch_response::FetchableTopicResponse> {
+        let phases = RequestPhases::default();
+        let GroupedResponses { responses, .. } =
+            super::execute_pending_reads(broker, pending, 0, 8, 0, false, &phases).await;
+        responses
+    }
+
     fn planned_follower(
         topic: &str,
         part: &std::sync::Arc<Partition>,

@@ -25,7 +25,7 @@ use {
             },
             test_support::{MemberEpoch, assert_single_member_limit, heartbeat_write_failures},
         },
-        test_support::{StreamsJoinSetup, streams_join_request},
+        test_support::{FakeMetadataSource, StreamsJoinSetup, streams_join_request},
     },
     assert2::{assert, check},
 };
@@ -582,6 +582,19 @@ struct HeartbeatRow {
     >,
 }
 
+/// A metadata source whose image holds only the topic `in`.
+fn in_topic_source(partitions: i32) -> Arc<FakeMetadataSource> {
+    Arc::new(
+        FakeMetadataSource::builder()
+            .image(image_of(None, &[ImageTopic {
+                name: "in",
+                id: 1,
+                partitions,
+            }]))
+            .build(),
+    )
+}
+
 /// Rows for [`a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment`].
 fn heartbeat_change_rows() -> Vec<HeartbeatRow> {
     use {
@@ -785,15 +798,7 @@ async fn a_new_target_persists_the_target_of_every_member() {
         test_support::FakeMetadataSource,
     };
 
-    let source = Arc::new(
-        FakeMetadataSource::builder()
-            .image(image_of(None, &[ImageTopic {
-                name: "in",
-                id: 1,
-                partitions: 2,
-            }]))
-            .build(),
-    );
+    let source = in_topic_source(2);
     let (coord, log) = make_coordinator();
     coord.set_metadata_source(source.clone());
     let handle = coord.get_or_create_streams("g");
@@ -936,15 +941,7 @@ async fn a_group_loaded_before_the_metadata_source_connects_assigns_its_tasks() 
     }
 
     let source = || {
-        Arc::new(
-            FakeMetadataSource::builder()
-                .image(image_of(None, &[ImageTopic {
-                    name: "in",
-                    id: 1,
-                    partitions: 2,
-                }]))
-                .build(),
-        )
+        in_topic_source(2)
     };
     let request = |member_id: &str, member_epoch, owned: Vec<i32>| StreamsGroupHeartbeatRequest {
         group_id: "g".into(),
@@ -1317,15 +1314,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
     ];
 
     for row in rows {
-        let source = Arc::new(
-            FakeMetadataSource::builder()
-                .image(image_of(None, &[ImageTopic {
-                    name: "in",
-                    id: 1,
-                    partitions: 1,
-                }]))
-                .build(),
-        );
+        let source = in_topic_source(1);
         let (coord, _log) = make_coordinator();
         coord.set_metadata_source(source);
         let handle = coord.get_or_create_streams("g");
@@ -1620,15 +1609,7 @@ async fn a_member_keeps_its_epoch_until_it_revokes_and_is_fenced_after_its_timeo
     ];
 
     for (name, rebalance_timeout_ms, revokes, expected_m1, expected_m2) in rows {
-        let source = Arc::new(
-            FakeMetadataSource::builder()
-                .image(image_of(None, &[ImageTopic {
-                    name: "in",
-                    id: 1,
-                    partitions: 2,
-                }]))
-                .build(),
-        );
+        let source = in_topic_source(2);
         let (coord, _log) = make_coordinator();
         coord.set_metadata_source(source);
         let handle = coord.get_or_create_streams("g");
@@ -1941,15 +1922,7 @@ async fn a_static_member_follows_kafka_static_membership() {
     ];
 
     for (name, beats, expected, members) in rows {
-        let source = Arc::new(
-            FakeMetadataSource::builder()
-                .image(image_of(None, &[ImageTopic {
-                    name: "in",
-                    id: 1,
-                    partitions: 1,
-                }]))
-                .build(),
-        );
+        let source = in_topic_source(1);
         let coord = coordinator_with_log(config.clone(), Arc::new(InMemoryOffsetsLog::default()));
         coord.set_metadata_source(source);
         let handle = coord.get_or_create_streams("g");
@@ -2345,15 +2318,7 @@ async fn a_member_missing_a_rack_aware_tag_gets_missing_client_tags_at_version_1
             },
             log,
         );
-        coord.set_metadata_source(Arc::new(
-            FakeMetadataSource::builder()
-                .image(image_of(None, &[ImageTopic {
-                    name: "in",
-                    id: 1,
-                    partitions: 1,
-                }]))
-                .build(),
-        ));
+        coord.set_metadata_source(in_topic_source(1));
         let handle = coord.get_or_create_streams("g");
         let mut epoch = 0;
         let mut last = None;

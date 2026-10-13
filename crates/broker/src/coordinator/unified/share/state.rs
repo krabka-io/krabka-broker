@@ -160,9 +160,7 @@ pub struct ShareGroupState {
 }
 
 impl ShareGroupState {
-    crate::coordinator::unified::member_helpers::assignment_delay_method!();
-
-    crate::coordinator::unified::member_helpers::bump_group_epoch!(self;);
+    crate::coordinator::unified::member_helpers::shared_group_state_methods!();
 
     crate::coordinator::unified::member_helpers::evict_expired! {
         /// Remove members whose `last_seen` is older than `session_timeout`, and

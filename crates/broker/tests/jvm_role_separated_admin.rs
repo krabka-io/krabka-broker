@@ -244,7 +244,7 @@ fn finalized_level(describe_stdout: &str, feature: &str) -> Option<i64> {
 async fn admin_write_tools_reach_the_controller_from_a_broker_only_node() {
     const TOPIC: &str = "role-separated-admin";
 
-    let cluster = start_role_separated().await;
+    let cluster = Box::pin(start_role_separated()).await;
     let bootstrap = bootstrap();
 
     let created = kafka_tool("/opt/kafka/bin/kafka-topics.sh", bootstrap, &[

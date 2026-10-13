@@ -6,7 +6,7 @@
 
 use {
     super::{
-        OP_DELETE, OP_SET,
+        OP_DELETE, OP_SET, submit_or_refuse,
         topic_scope::{merge_list_op, not_a_list},
     },
     crate::{
@@ -80,13 +80,11 @@ pub(super) fn handle_group_scoped(
     out: &mut AlterConfigsResourceResponse,
     to_submit: &mut Vec<MetadataRecord>,
 ) {
-    match group_record(resource, image, bounds, unstable) {
-        Ok(record) => to_submit.push(record),
-        Err((code, message)) => {
-            out.error_code = code;
-            out.error_message = Some(message);
-        }
-    }
+    submit_or_refuse(
+        group_record(resource, image, bounds, unstable).map(|record| [record]),
+        out,
+        to_submit,
+    );
 }
 
 #[cfg(test)]

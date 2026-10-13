@@ -45,6 +45,17 @@ const BROKER: &str = "broker";
 const CLIENT: &str = "client";
 /// The topics [`CLIENT`] may write, an internal topic included.
 const CLIENT_TOPICS: [&str; 3] = ["a", "missing", OFFSETS_TOPIC];
+/// Partition 0 of topic `a` and of topic `b`.
+const A_AND_B: &[PartitionSpec] = &[
+    PartitionSpec {
+        topic: "a",
+        partition: 0,
+    },
+    PartitionSpec {
+        topic: "b",
+        partition: 0,
+    },
+];
 
 #[derive(Debug)]
 struct Grants;
@@ -253,16 +264,7 @@ fn cases() -> [Case; 9] {
             name: "v4, ClusterAction only",
             version: 4,
             caller: BROKER,
-            partitions: &[
-                PartitionSpec {
-                    topic: "a",
-                    partition: 0,
-                },
-                PartitionSpec {
-                    topic: "b",
-                    partition: 0,
-                },
-            ],
+            partitions: A_AND_B,
             verify_only: false,
             expect: Expect::Rows(&[
                 RowSpec {
@@ -337,16 +339,7 @@ fn cases() -> [Case; 9] {
             name: "v3, Write on a and not on b",
             version: 3,
             caller: CLIENT,
-            partitions: &[
-                PartitionSpec {
-                    topic: "a",
-                    partition: 0,
-                },
-                PartitionSpec {
-                    topic: "b",
-                    partition: 0,
-                },
-            ],
+            partitions: A_AND_B,
             verify_only: false,
             expect: Expect::Rows(&[
                 RowSpec {

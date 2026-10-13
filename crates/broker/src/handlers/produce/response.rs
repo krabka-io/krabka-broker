@@ -1,7 +1,10 @@
 //! Topic-level response assembly for the KIP-516 id-resolution failures,
 //! which answer every partition row of one topic with the same error code.
 
-use super::{INVALID_OFFSET, framing::FramedTopic};
+use {
+    super::{INVALID_OFFSET, framing::FramedTopic},
+    crate::handlers::map_partition_rows,
+};
 
 /// Build a topic-level error response for the KIP-516 id-resolution failures
 /// `UNKNOWN_TOPIC_ID` and `INCONSISTENT_TOPIC_ID`.
@@ -19,16 +22,15 @@ pub(super) fn build_topic_error_response(
     TopicProduceResponse {
         name: topic.name.clone(),
         topic_id: topic.topic_id,
-        partition_responses: topic
-            .partition_data
-            .iter()
-            .map(|p| PartitionProduceResponse {
-                index: p.index,
+        partition_responses: map_partition_rows(
+            topic.partition_data.iter().map(|p| p.index),
+            |index| PartitionProduceResponse {
+                index,
                 error_code: code,
                 base_offset: INVALID_OFFSET,
                 ..Default::default()
-            })
-            .collect(),
+            },
+        ),
         ..Default::default()
     }
 }

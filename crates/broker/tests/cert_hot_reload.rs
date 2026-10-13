@@ -144,7 +144,9 @@ async fn periodic_watcher_reloads_on_mtime_change() {
     fixture.cfg.tls_reload_interval = krabka_units::millis(100);
     let (cert_path, key_path) = (fixture.cert_path.clone(), fixture.key_path.clone());
 
-    let handle = Broker::start(fixture.cfg.clone()).await.expect("broker start");
+    let handle = Broker::start(fixture.cfg.clone())
+        .await
+        .expect("broker start");
     let addr = handle.listen_addr();
 
     let cert_b = cert_der_from_pem(DEV_CERT_B);

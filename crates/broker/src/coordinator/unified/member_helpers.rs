@@ -121,6 +121,14 @@ macro_rules! assignment_delay_method {
 use crate::coordinator::unified::consumer_state::same_assignment;
 pub(crate) use assignment_delay_method;
 
+macro_rules! shared_group_state_methods {
+    () => {
+        $crate::coordinator::unified::member_helpers::assignment_delay_method!();
+        $crate::coordinator::unified::member_helpers::bump_group_epoch!(self;);
+    };
+}
+pub(crate) use shared_group_state_methods;
+
 /// An absent heartbeat field keeps the stored value; allocate only when it changes.
 pub(crate) fn update_present<T: Clone + PartialEq>(
     stored: &mut Option<T>,

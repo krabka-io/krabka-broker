@@ -154,7 +154,17 @@ fn base_offsets(records: Option<&RecordsPayload>) -> Vec<i64> {
                 other => panic!("fetched records are not v2 batches: {other:?}"),
             }
         }
-        other => panic!("unexpected records payload: {other:?}"),
+        RecordsPayload::Legacy(_) => panic!("unexpected legacy records payload"),
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "watchos",
+            target_os = "freebsd",
+            target_os = "dragonfly"
+        ))]
+        RecordsPayload::FileRegions(_) => panic!("unexpected file-region records payload"),
     };
     batches.iter().map(|batch| batch.base_offset).collect()
 }

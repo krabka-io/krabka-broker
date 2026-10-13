@@ -13,13 +13,7 @@
 
 use {
     super::failover_state::{FailoverState, pr_of},
-    crate::{
-        config_keys::effective_min_insync_replicas,
-        elr::{maintain::next_partition_elr, state::PartitionElr},
-        test_support::elr_model_image,
-    },
-    krabka_metadata::{MetadataImage, PartitionRecord},
-    std::collections::BTreeSet,
+    crate::test_support::elr_model_prelude::*,
 };
 
 /// The one topic the modelled partition belongs to.

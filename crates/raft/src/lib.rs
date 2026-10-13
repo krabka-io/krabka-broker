@@ -51,7 +51,6 @@
 //! and controller configuration. [`ControllerHandle::add_learner`] stages a
 //! node identity; [`ControllerHandle::change_membership`] reconciles a
 //! one-voter delta into `add_voter` or `remove_voter`.
-//!
 //! Mixed JVM and Krabka controller quorums are outside this crate's
 //! compatibility target.
 

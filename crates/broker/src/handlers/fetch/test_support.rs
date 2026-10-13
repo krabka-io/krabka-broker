@@ -5,7 +5,8 @@ use {
         broker::BrokerHandle,
         codes::NONE,
         fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
-        test_support::{KafkaErrorCode, encode_request},
+        handlers::test_support::StartedBroker,
+        test_support::{KafkaErrorCode, encode_request, start_broker_no_audit_with},
     },
     assert2::assert,
     krabka_ids::{ApiVersion, Offset, PartitionIndex},
@@ -14,6 +15,17 @@ use {
         owned::{fetch_request::FetchRequest, fetch_response::FetchResponse},
     },
 };
+
+/// Start a broker whose follower node 2 never fetches on its own. The lag
+/// window is wide enough to keep node 2 in the ISR for the whole test, so only
+/// the fetches of a case move the high watermark.
+pub(super) async fn start_with_idle_follower() -> StartedBroker {
+    let (broker, dir) = start_broker_no_audit_with(|cfg| {
+        cfg.replica_lag_time_max = krabka_units::secs(600);
+    })
+    .await;
+    StartedBroker { broker, dir }
+}
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 pub(super) struct FetchWireSetup<'a> {

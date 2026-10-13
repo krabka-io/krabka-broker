@@ -218,7 +218,7 @@ fn inter_broker(value: &str) -> DescribeConfigsResourceResult {
 fn a_named_broker_reports_the_listener_keys_of_its_roles() {
     let advertised_brokers = "CLIENT://broker-1.example:9092,INTERNAL://broker-1.internal:9094";
     let broker_map = "CLIENT:SASL_SSL,INTERNAL:SASL_PLAINTEXT,CONTROLLER:SSL";
-    let cases = [
+    let cases = vec![
         (
             "controller-only",
             two_listener_node(&[Controller], None),

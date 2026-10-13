@@ -263,7 +263,10 @@ mod time_tests {
                 coordinate: 100,
             },
         ]);
-        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
         std::io::Write::write_all(&mut f, &[0u8; TIME_ENTRY_SIZE * 2]).unwrap();
         f.sync_data().unwrap();
         drop(f);
