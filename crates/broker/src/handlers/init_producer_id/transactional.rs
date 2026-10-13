@@ -916,13 +916,7 @@ mod tests {
             .await
             .expect("init responds");
             check!(
-                fenced
-                    == InitProducerIdResponse {
-                        error_code: codes::CONCURRENT_TRANSACTIONS,
-                        producer_id: -1,
-                        producer_epoch: -1,
-                        ..Default::default()
-                    },
+                fenced == concurrent_transactions_response(),
                 "{}",
                 case.name
             );
@@ -1340,12 +1334,7 @@ mod tests {
                         .expect("InitProducerId responds")
                 }
             };
-            let concurrent = InitProducerIdResponse {
-                error_code: codes::CONCURRENT_TRANSACTIONS,
-                producer_id: -1,
-                producer_epoch: -1,
-                ..Default::default()
-            };
+            let concurrent = concurrent_transactions_response();
 
             check!(init((1000, 3)).await == concurrent, "{txnv:?}");
             let published = coordinator.get(TID).expect("entry").lock().await.clone();
@@ -1448,15 +1437,7 @@ mod tests {
         let response = init.await.expect("init task").expect("init responds");
 
         check!(expired == vec![TID.to_string()]);
-        check!(
-            response
-                == InitProducerIdResponse {
-                    error_code: codes::CONCURRENT_TRANSACTIONS,
-                    producer_id: -1,
-                    producer_epoch: -1,
-                    ..Default::default()
-                }
-        );
+        check!(response == concurrent_transactions_response());
         // The id stays expired: nothing was published back into the map, and
         // the log ends at the tombstone the sweep appended.
         check!(coordinator.get(TID).is_none());
@@ -1490,15 +1471,7 @@ mod tests {
         seed(&coordinator, ongoing).await;
 
         let fenced = init_near_exhaustion(&coordinator, TID).await;
-        check!(
-            fenced
-                == InitProducerIdResponse {
-                    error_code: codes::CONCURRENT_TRANSACTIONS,
-                    producer_id: -1,
-                    producer_epoch: -1,
-                    ..Default::default()
-                }
-        );
+        check!(fenced == concurrent_transactions_response());
 
         let entry = coordinator.get(TID).expect("entry").lock().await.clone();
         check!(entry.state == TxnState::CompleteAbort);
