@@ -747,7 +747,7 @@ async fn acl_preamble_for_null_and_empty_transactional_id() {
         };
         if !case.acls.is_empty() {
             acl_fixtures::seed_case_acls(&broker, case.acls).await;
-        };
+        }
 
         krabka_macros::request_test_identity! {
             bind(principal, peer, context);

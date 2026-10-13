@@ -476,10 +476,9 @@ mod tests {
             broker: broker_handle,
             dir: _dir,
         } = start_broker(configured_authorizer()).await;
-        let seeded = PATTERN_MATCHING_FIXTURE;
         seed_acls(
             &broker_handle,
-            seeded
+            PATTERN_MATCHING_FIXTURE
                 .iter()
                 .map(|seed| AclEntry {
                     pattern_type: seed.pattern_type,

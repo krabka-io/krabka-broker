@@ -468,6 +468,10 @@ pub(super) async fn seed_token(
 
 /// A live token and one just expired, both with the same future maximum.
 pub(super) async fn refusal_tokens(controller: &ControllerHandle) -> RefusalTokens {
+    struct TokenToSeed<'a> {
+        id: &'a str,
+        token: &'a RefusalToken,
+    }
     let now = now_ms();
     let live = RefusalToken {
         hmac: hmac_for("live"),
@@ -477,10 +481,6 @@ pub(super) async fn refusal_tokens(controller: &ControllerHandle) -> RefusalToke
         hmac: hmac_for("expired"),
         expires_at: now - 1,
     };
-    struct TokenToSeed<'a> {
-        id: &'a str,
-        token: &'a RefusalToken,
-    }
     for seed in [
         TokenToSeed {
             id: "live",

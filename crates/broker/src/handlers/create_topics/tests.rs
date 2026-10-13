@@ -1908,7 +1908,7 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
         };
         if !case.acls.is_empty() {
             acl_fixtures::seed_case_acls(&broker, case.acls).await;
-        };
+        }
 
         krabka_macros::request_test_identity! {
             bind(p, peer);

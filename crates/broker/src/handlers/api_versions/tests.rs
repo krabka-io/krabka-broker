@@ -75,8 +75,6 @@ fn decode_response(version: i16, bytes: &Bytes) -> ApiVersionsResponse {
 /// below reports `throttle_time_ms = 0`.
 fn anonymous_principal() -> krabka_security::Principal { principal("ANONYMOUS") }
 
-/// Retain the broker directory and the anonymous handshake's borrowed resources.
-
 /// Metadata-driven handshakes submit their setup only after this controller leads.
 async fn submit_handshake_metadata(
     broker: &Broker,

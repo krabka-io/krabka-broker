@@ -677,7 +677,7 @@ async fn rows_follow_kafkas_describe_and_delete_decisions() {
         .await;
         if !case.acls.is_empty() {
             acl_fixtures::seed_case_acls(&broker, case.acls).await;
-        };
+        }
 
         let mut rows: Vec<_> = case.names.iter().map(|name| named_state(name)).collect();
         if case.by_id {
