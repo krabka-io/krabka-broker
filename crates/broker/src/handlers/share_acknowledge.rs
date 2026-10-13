@@ -198,22 +198,22 @@ async fn process_topics(context: &AcknowledgeContext<'_>) -> Vec<ShareAcknowledg
                 partition_index: ap.partition_index,
                 ..Default::default()
             };
-
-            // Kafka's `KafkaApis.handleAcknowledgements` validates the batches
-            // first, then checks the topic `Read`, then asks the metadata
-            // cache for the partition. A partition with no batch then answers
-            // NONE without reaching the share partition.
-            let batches_are_valid = acknowledgement_batches_are_valid(
+            let batches = || {
                 ap.acknowledgement_batches.iter().map(|batch| {
                     (
                         batch.first_offset,
                         batch.last_offset,
                         batch.acknowledge_types.as_slice(),
                     )
-                }),
-                version >= 2,
-                req.is_renew_ack,
-            );
+                })
+            };
+
+            // Kafka's `KafkaApis.handleAcknowledgements` validates the batches
+            // first, then checks the topic `Read`, then asks the metadata
+            // cache for the partition. A partition with no batch then answers
+            // NONE without reaching the share partition.
+            let batches_are_valid =
+                acknowledgement_batches_are_valid(batches(), version >= 2, req.is_renew_ack);
             let error = if !batches_are_valid {
                 Some(codes::INVALID_REQUEST)
             } else if denied {
@@ -258,16 +258,9 @@ async fn process_topics(context: &AcknowledgeContext<'_>) -> Vec<ShareAcknowledg
                 renewal,
                 max_attempts: settings.delivery_count_limit,
             };
-            let batches = ap.acknowledgement_batches.iter().map(|batch| {
-                (
-                    batch.first_offset,
-                    batch.last_offset,
-                    batch.acknowledge_types.as_slice(),
-                )
-            });
             out.error_code = mgr
                 .apply_durably(group, topic_id, ap.partition_index, &cell, &mut st, |st| {
-                    apply_acknowledgements(st, &application, batches)
+                    apply_acknowledgements(st, &application, batches())
                 })
                 .await;
             parts.push(out);
