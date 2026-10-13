@@ -48,6 +48,22 @@ fn candidate_vote(cluster_id: Option<uuid::Uuid>, directories: VoteDirectories) 
     }
 }
 
+fn preferred_candidate(id: i32) -> PreferredCandidate {
+    PreferredCandidate {
+        id: NodeId(id),
+        directory_id: uuid::Uuid::from_u128(id.try_into().unwrap()),
+    }
+}
+
+fn end_request(preferred_candidates: Vec<PreferredCandidate>) -> PeerRequest {
+    PeerRequest::EndQuorumEpoch {
+        cluster_id: Some(uuid::Uuid::from_u128(9)),
+        leader_id: NodeId(1),
+        leader_epoch: 4,
+        preferred_candidates,
+    }
+}
+
 fn begin_request() -> PeerRequest {
     PeerRequest::BeginQuorumEpoch {
         cluster_id: Some(uuid::Uuid::from_u128(9)),
@@ -227,21 +243,10 @@ fn encoded_vote_request_carries_target_voter_and_empty_cluster_id() {
 fn begin_end_round_trip() {
     let begin = begin_request();
     assert2::assert!(decode_begin(&begin.encode()) == Some(begin));
-    let end = PeerRequest::EndQuorumEpoch {
-        cluster_id: Some(uuid::Uuid::from_u128(9)),
-        leader_id: NodeId(1),
-        leader_epoch: 4,
-        preferred_candidates: vec![
-            PreferredCandidate {
-                id: NodeId(3),
-                directory_id: uuid::Uuid::from_u128(3),
-            },
-            PreferredCandidate {
-                id: NodeId(2),
-                directory_id: uuid::Uuid::from_u128(2),
-            },
-        ],
-    };
+    let end = end_request(vec![
+        preferred_candidate(3),
+        preferred_candidate(2),
+    ]);
     assert2::assert!(decode_end(&end.encode()) == Some(end));
 }
 
@@ -284,15 +289,7 @@ fn encoded_begin_and_end_requests_are_kafkas_singleton_requests() {
     };
     assert2::check!(raw_begin == expected_begin);
 
-    let end = PeerRequest::EndQuorumEpoch {
-        cluster_id: Some(uuid::Uuid::from_u128(9)),
-        leader_id: NodeId(1),
-        leader_epoch: 4,
-        preferred_candidates: vec![PreferredCandidate {
-            id: NodeId(2),
-            directory_id: uuid::Uuid::from_u128(2),
-        }],
-    };
+    let end = end_request(vec![preferred_candidate(2)]);
     let expected_end = |version: i16| EndQuorumEpochRequest {
         cluster_id: Some("AAAAAAAAAAAAAAAAAAAACQ".into()),
         topics: vec![eqe::TopicData {

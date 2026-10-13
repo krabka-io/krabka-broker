@@ -135,6 +135,30 @@ mod tests {
             .collect()
     }
 
+    fn check_validation<const N: usize>(rows: [(&str, BTreeMap<String, String>, bool); N]) {
+        for (label, overrides, want_ok) in rows {
+            check!(
+                validate_topic_config_map(&overrides).is_ok() == want_ok,
+                "{label}"
+            );
+        }
+    }
+
+    /// `diskless=true` beside `other=value` is rejected with an error that
+    /// names both keys.
+    fn check_conflict_names(other: &str, value: &str) {
+        let error = validate_topic_config_map(&map(&[
+            ConfigPair {
+                key: DISKLESS,
+                value: "true",
+            },
+            ConfigPair { key: other, value },
+        ]))
+        .unwrap_err();
+        check!(error.contains(DISKLESS), "got: {error}");
+        check!(error.contains(other), "got: {error}");
+    }
+
     #[test]
     fn resolve_diskless_reads_a_kafka_boolean() {
         for (label, config, expected) in [
@@ -190,7 +214,7 @@ mod tests {
 
     #[test]
     fn diskless_and_tiered_storage_exclude_each_other() {
-        for (label, overrides, want_ok) in [
+        check_validation([
             (
                 "both data paths on",
                 map(&[
@@ -249,31 +273,14 @@ mod tests {
                 }]),
                 true,
             ),
-        ] {
-            check!(
-                validate_topic_config_map(&overrides).is_ok() == want_ok,
-                "{label}"
-            );
-        }
+        ]);
 
-        let error = validate_topic_config_map(&map(&[
-            ConfigPair {
-                key: DISKLESS,
-                value: "true",
-            },
-            ConfigPair {
-                key: REMOTE_STORAGE_ENABLE,
-                value: "true",
-            },
-        ]))
-        .unwrap_err();
-        check!(error.contains(DISKLESS), "got: {error}");
-        check!(error.contains(REMOTE_STORAGE_ENABLE), "got: {error}");
+        check_conflict_names(REMOTE_STORAGE_ENABLE, "true");
     }
 
     #[test]
     fn diskless_and_scheduled_delivery_exclude_each_other() {
-        for (label, overrides, want_ok) in [
+        check_validation([
             (
                 "a scheduled diskless topic",
                 map(&[
@@ -316,26 +323,9 @@ mod tests {
                 ]),
                 true,
             ),
-        ] {
-            check!(
-                validate_topic_config_map(&overrides).is_ok() == want_ok,
-                "{label}"
-            );
-        }
+        ]);
 
-        let error = validate_topic_config_map(&map(&[
-            ConfigPair {
-                key: DISKLESS,
-                value: "true",
-            },
-            ConfigPair {
-                key: DELIVERY_MODE,
-                value: DELIVERY_MODE_SCHEDULED,
-            },
-        ]))
-        .unwrap_err();
-        check!(error.contains(DISKLESS), "got: {error}");
-        check!(error.contains(DELIVERY_MODE), "got: {error}");
+        check_conflict_names(DELIVERY_MODE, DELIVERY_MODE_SCHEDULED);
     }
 
     #[test]

@@ -64,20 +64,7 @@ use support::share::coordinator_key as share_coordinator_key;
 
 use crate::support::{share::ShareProduceSetup, topics::CreateTopicSetup};
 
-/// A running broker and the directory that backs it.
-struct StartedBroker {
-    broker: BrokerHandle,
-    dir: tempfile::TempDir,
-}
-
-/// Boots one broker bound to `0.0.0.0:9092` that advertises
-/// `host.docker.internal:9092`. The Docker container's connect after Metadata
-/// then targets a hostname it can resolve. This mirrors
-/// `jvm_consumer_group_next_gen.rs::start_host_broker`.
-async fn start_host_broker() -> StartedBroker {
-    let (broker, dir) = support::start_jvm_single("krabka_broker=info,info", |_| {}).await;
-    StartedBroker { broker, dir }
-}
+use support::{StartedBroker, start_host_broker};
 async fn connect() -> Client {
     support::client::connect_owned(
         support::jvm_client_addr(),

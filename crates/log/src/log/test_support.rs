@@ -151,6 +151,28 @@ pub fn check_stamps(log: &Log, expected: &[ExpectedStamp]) {
     }
 }
 
+/// Check the stamps of a three-batch log from `stamped_rolling_log(10, 1, 3)`
+/// after its first segment has been evicted.
+pub fn check_front_evicted_stamps(log: &Log) {
+    check_stamps(
+        log,
+        &[
+            ExpectedStamp {
+                offset: 0,
+                stamp: None,
+            },
+            ExpectedStamp {
+                offset: 1,
+                stamp: Some(11),
+            },
+            ExpectedStamp {
+                offset: 2,
+                stamp: Some(12),
+            },
+        ],
+    );
+}
+
 /// Read every aborted interval from the caller's explicit sidecar filename.
 #[cfg(test)]
 pub fn transaction_entries(dir: &std::path::Path, filename: &str) -> Vec<AbortedTxn> {

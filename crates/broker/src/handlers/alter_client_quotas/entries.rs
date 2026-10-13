@@ -319,30 +319,9 @@ mod tests {
     use assert2::check;
 
     use super::*;
-    use crate::handlers::alter_client_quotas::test_support::{EntityPart, QuotaOp, entry};
-
-    fn part<'a>(entity_type: &'a str, entity_name: Option<&'a str>) -> EntityPart<'a> {
-        EntityPart {
-            entity_type,
-            entity_name,
-        }
-    }
-
-    fn op(key: &'static str, value: f64) -> QuotaOp {
-        QuotaOp {
-            key,
-            value,
-            remove: false,
-        }
-    }
-
-    fn op_remove(key: &'static str, value: f64) -> QuotaOp {
-        QuotaOp {
-            key,
-            value,
-            remove: true,
-        }
-    }
+    use crate::handlers::alter_client_quotas::test_support::{
+        EntityPart, QuotaOp, entry, op, op_remove, part,
+    };
 
     type Entity = Vec<EntityPart<'static>>;
     type Ops = Vec<QuotaOp>;

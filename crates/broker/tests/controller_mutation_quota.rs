@@ -42,6 +42,18 @@ use crate::{
     topic_admin::{TopicMutationResult, drive_create_topics_sasl, drive_delete_topics_sasl},
 };
 
+/// Wait until the `controller_mutation_rate` quota is visible in the broker's
+/// metadata image.
+async fn wait_for_mutation_quota_in_image(handle: &krabka_broker::BrokerHandle) {
+    handle
+        .wait_for_image(|img| {
+            img.client_quotas()
+                .values()
+                .any(|configs| configs.contains_key("controller_mutation_rate"))
+        })
+        .await;
+}
+
 /// Install Alice's shared mutation quota and return its complete wire response.
 async fn set_controller_mutation_quota(addr: std::net::SocketAddr) -> Vec<(QuotaEntity, i16)> {
     alter_user_quota(
@@ -87,13 +99,7 @@ async fn controller_mutation_rate_throttles_create_topics() {
     // straight from the image on the first consume (the bucket is created
     // lazily with that rate; the refresh task only re-rates existing buckets),
     // so image visibility — not the refresh task — is the real precondition.
-    handle
-        .wait_for_image(|img| {
-            img.client_quotas()
-                .values()
-                .any(|configs| configs.contains_key("controller_mutation_rate"))
-        })
-        .await;
+    wait_for_mutation_quota_in_image(&handle).await;
 
     // This operation crosses the limit but is accepted under strict quota
     // semantics because the bucket was not already exhausted.
@@ -198,13 +204,7 @@ async fn controller_mutation_rate_throttles_delete_topics() {
     assert!(alter[0].1 == 0);
     // Wait for alice's controller_mutation_rate quota to land in the image
     // before deleting; DeleteTopics reads the rate from the image on consume.
-    handle
-        .wait_for_image(|img| {
-            img.client_quotas()
-                .values()
-                .any(|configs| configs.contains_key("controller_mutation_rate"))
-        })
-        .await;
+    wait_for_mutation_quota_in_image(&handle).await;
 
     let TopicMutationResult {
         throttle_time_ms: throttle_ms,

@@ -70,19 +70,17 @@ fn bootstrap_addr() -> &'static str {
 /// `kafka-streams-groups.sh` admin tool (`StreamsGroupDescribe` / `ListGroups`).
 const KAFKA_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.1.0";
 const STREAMS_GROUPS: &str = "/opt/kafka/bin/kafka-streams-groups.sh";
-/// A running broker and the directory that backs it.
-struct StartedBroker {
-    broker: BrokerHandle,
-    dir: tempfile::TempDir,
-}
+use support::StartedBroker;
 
-/// Boot one broker bound to `0.0.0.0:9092`. It advertises `host.docker.internal:
-/// 9092` so the Docker container's post-Metadata connect targets a hostname it
-/// can resolve. Mirrors `jvm_share_groups.rs::start_host_broker`.
+/// Boot one host broker and wait for its group coordinator, which the streams
+/// group heartbeat needs.
 async fn start_host_broker() -> StartedBroker {
-    let (broker, dir) = support::start_jvm_single("krabka_broker=info,info", |_| {}).await;
-    broker.wait_until_group_coordinator_ready().await;
-    StartedBroker { broker, dir }
+    let started = support::start_host_broker().await;
+    started
+        .broker
+        .wait_until_group_coordinator_ready()
+        .await;
+    started
 }
 /// Native client that connects to the broker's local loopback listener. The
 /// container reaches the same broker through `host.docker.internal`.

@@ -639,6 +639,12 @@ mod tests {
             unstable: UnstableApiVersions,
             steps: [Move; 3],
         }
+        let mv = |after_secs, terminating, compression_supported, outcome| Move {
+            after_secs,
+            terminating,
+            compression_supported,
+            outcome,
+        };
         let unsupported = || reject_push(KafkaErrorCode(codes::UNSUPPORTED_COMPRESSION_TYPE));
         let locked = || reject_push(KafkaErrorCode(codes::INVALID_REQUEST));
         let rows: [Row; 4] = [
@@ -646,96 +652,36 @@ mod tests {
                 name: "4.3.1: a rejected terminating push locks the instance",
                 unstable: Disabled,
                 steps: [
-                    Move {
-                        after_secs: 0,
-                        terminating: true,
-                        compression_supported: false,
-                        outcome: unsupported(),
-                    },
-                    Move {
-                        after_secs: 60,
-                        terminating: false,
-                        compression_supported: true,
-                        outcome: locked(),
-                    },
-                    Move {
-                        after_secs: 120,
-                        terminating: false,
-                        compression_supported: true,
-                        outcome: ACCEPT,
-                    },
+                    mv(0, true, false, unsupported()),
+                    mv(60, false, true, locked()),
+                    mv(120, false, true, ACCEPT),
                 ],
             },
             Row {
                 name: "trunk: a rejected terminating push leaves the instance open",
                 unstable: Enabled,
                 steps: [
-                    Move {
-                        after_secs: 0,
-                        terminating: true,
-                        compression_supported: false,
-                        outcome: unsupported(),
-                    },
-                    Move {
-                        after_secs: 60,
-                        terminating: false,
-                        compression_supported: true,
-                        outcome: ACCEPT,
-                    },
-                    Move {
-                        after_secs: 120,
-                        terminating: false,
-                        compression_supported: true,
-                        outcome: ACCEPT,
-                    },
+                    mv(0, true, false, unsupported()),
+                    mv(60, false, true, ACCEPT),
+                    mv(120, false, true, ACCEPT),
                 ],
             },
             Row {
                 name: "4.3.1: the push that the lock refuses resets the flag",
                 unstable: Disabled,
                 steps: [
-                    Move {
-                        after_secs: 0,
-                        terminating: true,
-                        compression_supported: true,
-                        outcome: ACCEPT,
-                    },
-                    Move {
-                        after_secs: 60,
-                        terminating: false,
-                        compression_supported: true,
-                        outcome: locked(),
-                    },
-                    Move {
-                        after_secs: 120,
-                        terminating: false,
-                        compression_supported: true,
-                        outcome: ACCEPT,
-                    },
+                    mv(0, true, true, ACCEPT),
+                    mv(60, false, true, locked()),
+                    mv(120, false, true, ACCEPT),
                 ],
             },
             Row {
                 name: "trunk: an accepted terminating push locks until expiry",
                 unstable: Enabled,
                 steps: [
-                    Move {
-                        after_secs: 0,
-                        terminating: true,
-                        compression_supported: true,
-                        outcome: ACCEPT,
-                    },
-                    Move {
-                        after_secs: 60,
-                        terminating: false,
-                        compression_supported: true,
-                        outcome: locked(),
-                    },
-                    Move {
-                        after_secs: 120,
-                        terminating: false,
-                        compression_supported: true,
-                        outcome: locked(),
-                    },
+                    mv(0, true, true, ACCEPT),
+                    mv(60, false, true, locked()),
+                    mv(120, false, true, locked()),
                 ],
             },
         ];

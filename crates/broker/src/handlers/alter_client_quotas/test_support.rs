@@ -23,6 +23,29 @@ pub(super) struct QuotaOp {
     pub(super) remove: bool,
 }
 
+pub(super) fn part<'a>(entity_type: &'a str, entity_name: Option<&'a str>) -> EntityPart<'a> {
+    EntityPart {
+        entity_type,
+        entity_name,
+    }
+}
+
+pub(super) fn op(key: &'static str, value: f64) -> QuotaOp {
+    QuotaOp {
+        key,
+        value,
+        remove: false,
+    }
+}
+
+pub(super) fn op_remove(key: &'static str, value: f64) -> QuotaOp {
+    QuotaOp {
+        key,
+        value,
+        remove: true,
+    }
+}
+
 pub(super) fn entry(entity: Vec<EntityPart<'_>>, ops: Vec<QuotaOp>) -> EntryData {
     EntryData {
         entity: entity

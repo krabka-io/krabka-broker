@@ -26,16 +26,7 @@ const KAFKA_IMAGE_NEXT_GEN: &str = "mirror.gcr.io/apache/kafka:4.0.0";
 /// heartbeat's `SubscribedTopicRegex` instead of being compiled client-side.
 const KAFKA_IMAGE_CLASSIC: &str = "mirror.gcr.io/confluentinc/cp-kafka:7.4.0";
 
-/// A running broker and the directory that backs it.
-struct StartedBroker {
-    broker: krabka_broker::BrokerHandle,
-    dir: tempfile::TempDir,
-}
-
-async fn start_host_broker() -> StartedBroker {
-    let (broker, dir) = support::start_jvm_single("krabka_broker=info,info", |_| {}).await;
-    StartedBroker { broker, dir }
-}
+use support::{StartedBroker, start_host_broker};
 /// Pre-create a topic with the classic admin tooling. Krabka's broker does
 /// not auto-create topics on the produce path, so tests must create them
 /// explicitly. This matches the existing `jvm_acceptance.rs` convention.

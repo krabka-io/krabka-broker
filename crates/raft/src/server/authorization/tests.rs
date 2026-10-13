@@ -93,6 +93,15 @@ fn each_controller_api_needs_the_kafka_operation() {
     }
 }
 
+/// The refusal of a `SubmitChange` without `ClusterAction`.
+fn submit_change_refusal() -> Refusal {
+    Refusal::SubmitChange(KrabkaSubmitChangeResponse {
+        error_code: 31,
+        leader_hint: -1,
+        result: Bytes::new(),
+    })
+}
+
 /// One decoded refusal.
 #[derive(Debug, PartialEq)]
 enum Refusal {
@@ -548,11 +557,7 @@ async fn a_denied_request_never_reaches_the_engine() {
             api: API_KEY_SUBMIT_CHANGE,
             version: 0,
             body: submit_change("denied-topic"),
-            refused: Some(Refusal::SubmitChange(KrabkaSubmitChangeResponse {
-                error_code: 31,
-                leader_hint: -1,
-                result: Bytes::new(),
-            })),
+            refused: Some(submit_change_refusal()),
             committed_topic: None,
         },
         Case {
@@ -561,11 +566,7 @@ async fn a_denied_request_never_reaches_the_engine() {
             api: API_KEY_SUBMIT_CHANGE,
             version: 0,
             body: submit_change("denied-topic"),
-            refused: Some(Refusal::SubmitChange(KrabkaSubmitChangeResponse {
-                error_code: 31,
-                leader_hint: -1,
-                result: Bytes::new(),
-            })),
+            refused: Some(submit_change_refusal()),
             committed_topic: None,
         },
         Case {

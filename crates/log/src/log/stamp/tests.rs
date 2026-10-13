@@ -10,8 +10,8 @@ use super::*;
 use crate::{
     log::test_support::{
         ExpectedStamp, TempLog, abort_marker, append_transaction, check_stamps, commit_marker,
-        install_stamps, rolling_test_log, sample_batch, stamped_test_log, test_log,
-        transactional_batch,
+        install_stamps, rolling_test_log, sample_batch, stamp_entries, stamped_test_log,
+        test_log, transactional_batch,
     },
     test_support::{open_log, stamp_entry},
 };
@@ -66,11 +66,11 @@ fn stampindex_records_appended_batches_and_resolves_offsets() {
 
     // The durable on-disk sidecar holds exactly one entry per data batch.
     assert2::assert!(
-        crate::log::test_support::stamp_entries(dir.path(), 0)
+        stamp_entries(dir.path(), 0)
             == [
-                crate::test_support::stamp_entry(0, 1, 1_000),
-                crate::test_support::stamp_entry(2, 2, 1_010),
-                crate::test_support::stamp_entry(3, 5, 1_020),
+                stamp_entry(0, 1, 1_000),
+                stamp_entry(2, 2, 1_010),
+                stamp_entry(3, 5, 1_020),
             ]
     );
 }
@@ -148,10 +148,10 @@ fn control_markers_are_not_stamped() {
     );
 
     assert2::assert!(
-        crate::log::test_support::stamp_entries(dir.path(), 0)
+        stamp_entries(dir.path(), 0)
             == [
-                crate::test_support::stamp_entry(0, 1, 1),
-                crate::test_support::stamp_entry(3, 3, 2),
+                stamp_entry(0, 1, 1),
+                stamp_entry(3, 3, 2),
             ]
     );
 }
@@ -414,12 +414,12 @@ fn transaction_commit_stamps_data_in_sealed_segments() {
         ],
     );
     assert2::assert!(
-        crate::log::test_support::stamp_entries(dir.path(), 0)
-            == [crate::test_support::stamp_entry(0, 0, 50)]
+        stamp_entries(dir.path(), 0)
+            == [stamp_entry(0, 0, 50)]
     );
     assert2::assert!(
-        crate::log::test_support::stamp_entries(dir.path(), 1)
-            == [crate::test_support::stamp_entry(1, 1, 50)]
+        stamp_entries(dir.path(), 1)
+            == [stamp_entry(1, 1, 50)]
     );
 }
 

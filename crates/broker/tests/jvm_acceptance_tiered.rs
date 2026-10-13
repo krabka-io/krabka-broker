@@ -52,13 +52,7 @@ async fn start_minio_topic(topic: &str, rlmm: krabka_broker::RlmmKind) -> MinioT
 async fn tiered_storage_round_trip_through_minio() {
     const TOPIC: &str = "krabka-tiered-minio-itest";
 
-    let MinioTopic {
-        port: _minio_port,
-        minio: _minio,
-        broker,
-        dir: _dir,
-        config: _cfg,
-    } = start_minio_topic(TOPIC, krabka_broker::RlmmKind::InMemory).await;
+    let minio_topic = start_minio_topic(TOPIC, krabka_broker::RlmmKind::InMemory).await;
 
     // Give the `RemoteLogManager` enough ticks (1 s interval) to (a) copy
     // every sealed segment to MinIO and (b) run the local-retention pass.
@@ -78,7 +72,7 @@ async fn tiered_storage_round_trip_through_minio() {
         "expected >={RECORDS} records from remote tier, got {consumed}"
     );
 
-    broker.shutdown().await;
+    minio_topic.broker.shutdown().await;
     // `_minio` is dropped here; the container is removed via `docker rm -f`.
 }
 
@@ -96,13 +90,7 @@ async fn tiered_storage_round_trip_through_minio() {
 async fn tiered_storage_disable_needs_delete_on_disable() {
     const TOPIC: &str = "krabka-tiered-disable-itest";
 
-    let MinioTopic {
-        port: _minio_port,
-        minio: _minio,
-        broker,
-        dir: _dir,
-        config: _cfg,
-    } = start_minio_topic(TOPIC, krabka_broker::RlmmKind::InMemory).await;
+    let minio_topic = start_minio_topic(TOPIC, krabka_broker::RlmmKind::InMemory).await;
     wait_for_minio_segments(MINIO_BUCKET, 2).await;
 
     let bootstrap = broker0_advertised();
@@ -160,13 +148,13 @@ async fn tiered_storage_disable_needs_delete_on_disable() {
         "the disabled topic's segments must be gone from the bucket: {listing}"
     );
     check!(
-        broker
+        minio_topic.broker
             .partition_log_start_for_test(TOPIC, 0)
             .is_some_and(|start| start > 0),
         "the log start offset must have risen to the local log start"
     );
 
-    broker.shutdown().await;
+    minio_topic.broker.shutdown().await;
 }
 
 // ---------------------------------------------------------------------------

@@ -463,6 +463,16 @@ fn the_compaction_lag_conflict_carries_kafkas_message() {
     );
 }
 
+/// A tiered topic's config map: `remote.storage.enable=true` followed by `rest`.
+fn tiered_pairs<const N: usize>(rest: [ConfigPair<'static>; N]) -> Vec<ConfigPair<'static>> {
+    let mut pairs = vec![ConfigPair {
+        key: REMOTE_STORAGE_ENABLE,
+        value: "true",
+    }];
+    pairs.extend(rest);
+    pairs
+}
+
 /// One row of the tiered-storage table.
 struct TierCase<'a> {
     /// The broker's tier state.
@@ -494,11 +504,7 @@ fn tier_cases_a() -> Vec<TierCase<'static>> {
         },
         TierCase {
             tier_on: true,
-            pairs: vec![
-                ConfigPair {
-                    key: REMOTE_STORAGE_ENABLE,
-                    value: "true",
-                },
+            pairs: tiered_pairs([
                 ConfigPair {
                     key: RETENTION_BYTES,
                     value: "100",
@@ -507,7 +513,7 @@ fn tier_cases_a() -> Vec<TierCase<'static>> {
                     key: LOCAL_RETENTION_BYTES,
                     value: "-1",
                 },
-            ],
+            ]),
             want: Err(
                 "Invalid value -1 for configuration local.retention.bytes: Value must not be -1 \
                  as retention.bytes value is set as 100."
@@ -516,11 +522,7 @@ fn tier_cases_a() -> Vec<TierCase<'static>> {
         },
         TierCase {
             tier_on: true,
-            pairs: vec![
-                ConfigPair {
-                    key: REMOTE_STORAGE_ENABLE,
-                    value: "true",
-                },
+            pairs: tiered_pairs([
                 ConfigPair {
                     key: RETENTION_BYTES,
                     value: "100",
@@ -529,7 +531,7 @@ fn tier_cases_a() -> Vec<TierCase<'static>> {
                     key: LOCAL_RETENTION_BYTES,
                     value: "200",
                 },
-            ],
+            ]),
             want: Err(
                 "Invalid value 200 for configuration local.retention.bytes: Value must not be \
                  more than retention.bytes property value: 100"
@@ -538,11 +540,7 @@ fn tier_cases_a() -> Vec<TierCase<'static>> {
         },
         TierCase {
             tier_on: true,
-            pairs: vec![
-                ConfigPair {
-                    key: REMOTE_STORAGE_ENABLE,
-                    value: "true",
-                },
+            pairs: tiered_pairs([
                 ConfigPair {
                     key: RETENTION_BYTES,
                     value: "-1",
@@ -551,21 +549,15 @@ fn tier_cases_a() -> Vec<TierCase<'static>> {
                     key: LOCAL_RETENTION_BYTES,
                     value: "-1",
                 },
-            ],
+            ]),
             want: Ok(()),
         },
         TierCase {
             tier_on: true,
-            pairs: vec![
-                ConfigPair {
-                    key: REMOTE_STORAGE_ENABLE,
-                    value: "true",
-                },
-                ConfigPair {
-                    key: LOCAL_RETENTION_MS,
-                    value: "-1",
-                },
-            ],
+            pairs: tiered_pairs([ConfigPair {
+                key: LOCAL_RETENTION_MS,
+                value: "-1",
+            }]),
             want: Err(
                 "Invalid value -1 for configuration local.retention.ms: Value must not be -1 as \
                  retention.ms value is set as 604800000."
@@ -574,11 +566,7 @@ fn tier_cases_a() -> Vec<TierCase<'static>> {
         },
         TierCase {
             tier_on: true,
-            pairs: vec![
-                ConfigPair {
-                    key: REMOTE_STORAGE_ENABLE,
-                    value: "true",
-                },
+            pairs: tiered_pairs([
                 ConfigPair {
                     key: RETENTION_MS,
                     value: "-1",
@@ -587,16 +575,12 @@ fn tier_cases_a() -> Vec<TierCase<'static>> {
                     key: LOCAL_RETENTION_MS,
                     value: "5000",
                 },
-            ],
+            ]),
             want: Ok(()),
         },
         TierCase {
             tier_on: true,
-            pairs: vec![
-                ConfigPair {
-                    key: REMOTE_STORAGE_ENABLE,
-                    value: "true",
-                },
+            pairs: tiered_pairs([
                 ConfigPair {
                     key: REMOTE_LOG_COPY_DISABLE,
                     value: "true",
@@ -609,7 +593,7 @@ fn tier_cases_a() -> Vec<TierCase<'static>> {
                     key: LOCAL_RETENTION_MS,
                     value: "500",
                 },
-            ],
+            ]),
             want: Err(
                 "When `remote.log.copy.disable` is set to true, the `local.retention.ms` and \
                  `retention.ms` must be set to the identical value because there will be no more \
@@ -626,11 +610,7 @@ fn tier_cases_b() -> Vec<TierCase<'static>> {
     vec![
         TierCase {
             tier_on: true,
-            pairs: vec![
-                ConfigPair {
-                    key: REMOTE_STORAGE_ENABLE,
-                    value: "true",
-                },
+            pairs: tiered_pairs([
                 ConfigPair {
                     key: REMOTE_LOG_COPY_DISABLE,
                     value: "true",
@@ -639,49 +619,31 @@ fn tier_cases_b() -> Vec<TierCase<'static>> {
                     key: LOCAL_RETENTION_MS,
                     value: "-2",
                 },
-            ],
+            ]),
             want: Ok(()),
         },
         TierCase {
             tier_on: true,
-            pairs: vec![
-                ConfigPair {
-                    key: REMOTE_STORAGE_ENABLE,
-                    value: "true",
-                },
-                ConfigPair {
-                    key: CLEANUP_POLICY,
-                    value: "compact",
-                },
-            ],
+            pairs: tiered_pairs([ConfigPair {
+                key: CLEANUP_POLICY,
+                value: "compact",
+            }]),
             want: policy_message.clone(),
         },
         TierCase {
             tier_on: true,
-            pairs: vec![
-                ConfigPair {
-                    key: REMOTE_STORAGE_ENABLE,
-                    value: "true",
-                },
-                ConfigPair {
-                    key: CLEANUP_POLICY,
-                    value: "compact,delete",
-                },
-            ],
+            pairs: tiered_pairs([ConfigPair {
+                key: CLEANUP_POLICY,
+                value: "compact,delete",
+            }]),
             want: policy_message,
         },
         TierCase {
             tier_on: true,
-            pairs: vec![
-                ConfigPair {
-                    key: REMOTE_STORAGE_ENABLE,
-                    value: "true",
-                },
-                ConfigPair {
-                    key: CLEANUP_POLICY,
-                    value: "",
-                },
-            ],
+            pairs: tiered_pairs([ConfigPair {
+                key: CLEANUP_POLICY,
+                value: "",
+            }]),
             want: Ok(()),
         },
         TierCase {
@@ -705,11 +667,7 @@ fn tier_cases_b() -> Vec<TierCase<'static>> {
         // Kafka trunk's copy-lag rules against the effective local retention.
         TierCase {
             tier_on: true,
-            pairs: vec![
-                ConfigPair {
-                    key: REMOTE_STORAGE_ENABLE,
-                    value: "true",
-                },
+            pairs: tiered_pairs([
                 ConfigPair {
                     key: LOCAL_RETENTION_MS,
                     value: "1000",
@@ -718,7 +676,7 @@ fn tier_cases_b() -> Vec<TierCase<'static>> {
                     key: REMOTE_COPY_LAG_MS,
                     value: "2000",
                 },
-            ],
+            ]),
             want: Err(
                 "Invalid value 2000 for configuration remote.copy.lag.ms: Value must not exceed \
                  local.retention.ms (effective value: 1000)"
@@ -727,11 +685,7 @@ fn tier_cases_b() -> Vec<TierCase<'static>> {
         },
         TierCase {
             tier_on: true,
-            pairs: vec![
-                ConfigPair {
-                    key: REMOTE_STORAGE_ENABLE,
-                    value: "true",
-                },
+            pairs: tiered_pairs([
                 ConfigPair {
                     key: LOCAL_RETENTION_MS,
                     value: "-1",
@@ -744,16 +698,12 @@ fn tier_cases_b() -> Vec<TierCase<'static>> {
                     key: REMOTE_COPY_LAG_MS,
                     value: "2000",
                 },
-            ],
+            ]),
             want: Ok(()),
         },
         TierCase {
             tier_on: true,
-            pairs: vec![
-                ConfigPair {
-                    key: REMOTE_STORAGE_ENABLE,
-                    value: "true",
-                },
+            pairs: tiered_pairs([
                 ConfigPair {
                     key: RETENTION_BYTES,
                     value: "100",
@@ -762,7 +712,7 @@ fn tier_cases_b() -> Vec<TierCase<'static>> {
                     key: REMOTE_COPY_LAG_BYTES,
                     value: "200",
                 },
-            ],
+            ]),
             want: Err(
                 "Invalid value 200 for configuration remote.copy.lag.bytes: Value must not \
                  exceed local.retention.bytes (effective value: 100)"

@@ -10,7 +10,7 @@ use super::*;
 use crate::{
     config::LogConfig,
     log::test_support::{
-        ExpectedStamp, TempLog, append_samples, check_contiguous_exports, check_stamps, rolled_log,
+        ExpectedStamp, TempLog, append_samples, check_contiguous_exports, check_front_evicted_stamps, check_stamps, rolled_log,
         sample_batch, sample_batch_with_epoch, sample_log, stamped_rolling_log, test_log,
     },
     stamp_index::OffsetRange,
@@ -66,23 +66,7 @@ fn tiered_local_delete_removes_only_deleted_segment_stamp_indexes() {
     check!(!log.sealed_txn_indexes.contains_key(&Offset(0)));
     check!(log.sealed_txn_indexes.contains_key(&Offset(1)));
 
-    check_stamps(
-        &log,
-        &[
-            ExpectedStamp {
-                offset: 0,
-                stamp: None,
-            },
-            ExpectedStamp {
-                offset: 1,
-                stamp: Some(11),
-            },
-            ExpectedStamp {
-                offset: 2,
-                stamp: Some(12),
-            },
-        ],
-    );
+    check_front_evicted_stamps(&log);
 }
 
 #[test]
@@ -532,6 +516,23 @@ fn roll_and_describe(log: &mut Log) -> AfterRoll {
     }
 }
 
+/// The state after three records sit in one sealed segment and an empty
+/// active segment opens at offset 3.
+fn after_rolling_three_records(rolled: bool) -> AfterRoll {
+    AfterRoll {
+        rolled,
+        sealed: vec![OffsetRange {
+            first: Offset(0),
+            last: Offset(2),
+        }],
+        active: Some(ActiveBase {
+            base_offset: Offset(3),
+            size: ByteSize::ZERO,
+        }),
+        log_end: Offset(3),
+    }
+}
+
 // Kafka's `UnifiedLog.roll()` as tiered local retention calls it: a roll
 // seals the active segment's records and opens an empty segment at the log
 // end, and a second roll over that empty segment does nothing, because there
@@ -557,35 +558,13 @@ fn roll_seals_the_active_records_and_never_rolls_an_empty_segment() {
     log.append(&mut sample_batch(3)).unwrap();
     check!(
         roll_and_describe(&mut log)
-            == AfterRoll {
-                rolled: true,
-                sealed: vec![OffsetRange {
-                    first: Offset(0),
-                    last: Offset(2),
-                }],
-                active: Some(ActiveBase {
-                    base_offset: Offset(3),
-                    size: ByteSize::ZERO,
-                }),
-                log_end: Offset(3),
-            },
+            == after_rolling_three_records(true),
         "the three records move into a sealed segment"
     );
 
     check!(
         roll_and_describe(&mut log)
-            == AfterRoll {
-                rolled: false,
-                sealed: vec![OffsetRange {
-                    first: Offset(0),
-                    last: Offset(2),
-                }],
-                active: Some(ActiveBase {
-                    base_offset: Offset(3),
-                    size: ByteSize::ZERO,
-                }),
-                log_end: Offset(3),
-            },
+            == after_rolling_three_records(false),
         "the fresh segment is empty, so a second roll does nothing"
     );
 }

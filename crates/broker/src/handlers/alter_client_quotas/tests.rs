@@ -13,7 +13,7 @@ use krabka_protocol::owned::alter_client_quotas_response::{
 };
 
 use super::{
-    test_support::{EntityPart, QuotaOp, entry, request},
+    test_support::{EntityPart, QuotaOp, entry, op, part, request},
     *,
 };
 use crate::{
@@ -74,20 +74,8 @@ fn quota_value(handle: &BrokerHandle, user: &str, quota_key: &str) -> Option<f64
 fn whole_request_error_answers_every_entry() {
     let req = request(
         vec![
-            entry(
-                vec![EntityPart {
-                    entity_type: "user",
-                    entity_name: Some("alice"),
-                }],
-                vec![],
-            ),
-            entry(
-                vec![EntityPart {
-                    entity_type: "client-id",
-                    entity_name: Some("app"),
-                }],
-                vec![],
-            ),
+            entry(vec![part("user", Some("alice"))], vec![]),
+            entry(vec![part("client-id", Some("app"))], vec![]),
         ],
         false,
     );
@@ -96,18 +84,12 @@ fn whole_request_error_answers_every_entry() {
 
     let expected = expected_response(vec![
         expected_entry(
-            EntityPart {
-                entity_type: "user",
-                entity_name: Some("alice"),
-            },
+            part("user", Some("alice")),
             CLUSTER_AUTHORIZATION_FAILED,
             Some("denied".into()),
         ),
         expected_entry(
-            EntityPart {
-                entity_type: "client-id",
-                entity_name: Some("app"),
-            },
+            part("client-id", Some("app")),
             CLUSTER_AUTHORIZATION_FAILED,
             Some("denied".into()),
         ),
@@ -125,15 +107,8 @@ async fn handle_denies_cluster_alter_for_each_entry() {
     );
     let req = request(
         vec![entry(
-            vec![EntityPart {
-                entity_type: "user",
-                entity_name: Some("alice"),
-            }],
-            vec![QuotaOp {
-                key: "producer_byte_rate",
-                value: 1024.0,
-                remove: false,
-            }],
+            vec![part("user", Some("alice"))],
+            vec![op("producer_byte_rate", 1024.0)],
         )],
         false,
     );
@@ -144,10 +119,7 @@ async fn handle_denies_cluster_alter_for_each_entry() {
         .version(version)
         .context(&ctx)
         .expected(expected_response(vec![expected_entry(
-            EntityPart {
-                entity_type: "user",
-                entity_name: Some("alice"),
-            },
+            part("user", Some("alice")),
             CLUSTER_AUTHORIZATION_FAILED,
             Some("Cluster authorization failed.".into()),
         )]))
@@ -190,15 +162,8 @@ async fn cluster_alter_configs_gates_the_quota_write() {
         let ctx = test_context(&principal, &peer);
         let req = request(
             vec![entry(
-                vec![EntityPart {
-                    entity_type: "user",
-                    entity_name: Some(user),
-                }],
-                vec![QuotaOp {
-                    key: "producer_byte_rate",
-                    value: 1024.0,
-                    remove: false,
-                }],
+                vec![part("user", Some(user))],
+                vec![op("producer_byte_rate", 1024.0)],
             )],
             false,
         );
@@ -217,10 +182,7 @@ async fn cluster_alter_configs_gates_the_quota_write() {
             .version(version)
             .context(&ctx)
             .expected(expected_response(vec![expected_entry(
-                EntityPart {
-                    entity_type: "user",
-                    entity_name: Some(user),
-                },
+                part("user", Some(user)),
                 error_code,
                 error_message,
             )]))
@@ -246,26 +208,12 @@ async fn handle_returns_entry_results_and_submits_valid_changes() {
     let req = request(
         vec![
             entry(
-                vec![EntityPart {
-                    entity_type: "user",
-                    entity_name: Some("alice"),
-                }],
-                vec![QuotaOp {
-                    key: "producer_byte_rate",
-                    value: 1024.0,
-                    remove: false,
-                }],
+                vec![part("user", Some("alice"))],
+                vec![op("producer_byte_rate", 1024.0)],
             ),
             entry(
-                vec![EntityPart {
-                    entity_type: "user",
-                    entity_name: Some("bob"),
-                }],
-                vec![QuotaOp {
-                    key: "unknown_quota_key",
-                    value: 1.0,
-                    remove: false,
-                }],
+                vec![part("user", Some("bob"))],
+                vec![op("unknown_quota_key", 1.0)],
             ),
         ],
         false,
@@ -274,19 +222,9 @@ async fn handle_returns_entry_results_and_submits_valid_changes() {
     let resp = handle(&broker, req, version, &ctx).await.expect("handle");
 
     let expected = expected_response(vec![
+        expected_entry(part("user", Some("alice")), 0, None),
         expected_entry(
-            EntityPart {
-                entity_type: "user",
-                entity_name: Some("alice"),
-            },
-            0,
-            None,
-        ),
-        expected_entry(
-            EntityPart {
-                entity_type: "user",
-                entity_name: Some("bob"),
-            },
+            part("user", Some("bob")),
             INVALID_REQUEST,
             Some("Invalid configuration key unknown_quota_key".into()),
         ),
@@ -314,29 +252,15 @@ async fn handle_validate_only_reports_success_without_submitting() {
     );
     let req = request(
         vec![entry(
-            vec![EntityPart {
-                entity_type: "user",
-                entity_name: Some("carol"),
-            }],
-            vec![QuotaOp {
-                key: "producer_byte_rate",
-                value: 2048.0,
-                remove: false,
-            }],
+            vec![part("user", Some("carol"))],
+            vec![op("producer_byte_rate", 2048.0)],
         )],
         true,
     );
 
     let resp = handle(&broker, req, version, &ctx).await.expect("handle");
 
-    let expected = expected_response(vec![expected_entry(
-        EntityPart {
-            entity_type: "user",
-            entity_name: Some("carol"),
-        },
-        0,
-        None,
-    )]);
+    let expected = expected_response(vec![expected_entry(part("user", Some("carol")), 0, None)]);
     assert!(resp == expected);
     assert!(quota_value(&broker_handle, "carol", "producer_byte_rate") == None);
     broker_handle.shutdown().await;
@@ -350,14 +274,7 @@ async fn repeated_entity_answers_one_row_with_and_without_validate_only() {
     let version = 1;
     test_ctx!(ctx, "admin");
     let row = |name: &str, code: i16, message: Option<&str>| {
-        expected_entry(
-            EntityPart {
-                entity_type: "user",
-                entity_name: Some(name),
-            },
-            code,
-            message.map(Into::into),
-        )
+        expected_entry(part("user", Some(name)), code, message.map(Into::into))
     };
     let expected = expected_response(vec![
         row(
@@ -373,37 +290,16 @@ async fn repeated_entity_answers_one_row_with_and_without_validate_only() {
         let req = request(
             vec![
                 entry(
-                    vec![EntityPart {
-                        entity_type: "user",
-                        entity_name: Some("dave"),
-                    }],
-                    vec![QuotaOp {
-                        key: "producer_byte_rate",
-                        value: 1024.0,
-                        remove: false,
-                    }],
+                    vec![part("user", Some("dave"))],
+                    vec![op("producer_byte_rate", 1024.0)],
                 ),
                 entry(
-                    vec![EntityPart {
-                        entity_type: "user",
-                        entity_name: Some("erin"),
-                    }],
-                    vec![QuotaOp {
-                        key: "request_percentage",
-                        value: 4.0,
-                        remove: false,
-                    }],
+                    vec![part("user", Some("erin"))],
+                    vec![op("request_percentage", 4.0)],
                 ),
                 entry(
-                    vec![EntityPart {
-                        entity_type: "user",
-                        entity_name: Some("dave"),
-                    }],
-                    vec![QuotaOp {
-                        key: "consumer_byte_rate",
-                        value: 2048.0,
-                        remove: false,
-                    }],
+                    vec![part("user", Some("dave"))],
+                    vec![op("consumer_byte_rate", 2048.0)],
                 ),
             ],
             validate_only,

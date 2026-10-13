@@ -65,51 +65,76 @@ fn replayed_control_state(log: &KraftLog, initial: VoterSet) -> QuorumState {
     state
 }
 
-#[test]
-fn restart_replays_control_records_only_through_persisted_high_watermark() {
+/// The log and replayed state after the recovery voters' control batches
+/// were written and the log was reopened.
+struct RestartedControl {
+    _dir: tempfile::TempDir,
+    log: KraftLog,
+    state: QuorumState,
+    committed: VoterSet,
+}
+
+/// Write control batches with `write(log, committed, uncommitted)`, reopen
+/// the log, and replay its control records from the initial voter set.
+fn restart_after_control_writes(
+    write: impl FnOnce(&mut KraftLog, &VoterSet, &VoterSet),
+) -> RestartedControl {
     let RecoveryVoters {
         initial,
         committed,
         uncommitted,
     } = recovery_voters();
-    let ReopenedLog { dir: _dir, log } = reopened_control_log(|log| {
+    let ReopenedLog { dir, log } =
+        reopened_control_log(|log| write(log, &committed, &uncommitted));
+    let state = replayed_control_state(&log, initial);
+    RestartedControl {
+        _dir: dir,
+        log,
+        state,
+        committed,
+    }
+}
+
+#[test]
+fn restart_replays_control_records_only_through_persisted_high_watermark() {
+    let RestartedControl {
+        log,
+        state,
+        committed,
+        ..
+    } = restart_after_control_writes(|log, committed, uncommitted| {
         let mut batch =
-            typed_control_batch(1, &[ControlRecord::Voters(voter_set_to_wire(&committed))])
+            typed_control_batch(1, &[ControlRecord::Voters(voter_set_to_wire(committed))])
                 .expect("committed voter batch");
         log.append(&mut batch, 0)
             .expect("append committed voter batch");
         log.advance_hwm(log.log_end_offset());
         let mut batch =
-            typed_control_batch(1, &[ControlRecord::Voters(voter_set_to_wire(&uncommitted))])
+            typed_control_batch(1, &[ControlRecord::Voters(voter_set_to_wire(uncommitted))])
                 .expect("uncommitted voter batch");
         log.append(&mut batch, 0)
             .expect("append uncommitted voter batch");
     });
     assert2::assert!(log.hwm() < log.log_end_offset());
-    let state = replayed_control_state(&log, initial);
     assert2::assert!(state.voters == committed);
 }
 
 #[test]
 fn control_replay_stops_inside_a_partially_committed_batch() {
-    let RecoveryVoters {
-        initial,
-        committed,
-        uncommitted,
-    } = recovery_voters();
-    let ReopenedLog { dir: _dir, log } = reopened_control_log(|log| {
+    let RestartedControl {
+        state, committed, ..
+    } = restart_after_control_writes(|log, committed, uncommitted| {
         let mut batch = typed_control_batch(
             1,
             &[
-                ControlRecord::Voters(voter_set_to_wire(&committed)),
-                ControlRecord::Voters(voter_set_to_wire(&uncommitted)),
+                ControlRecord::Voters(voter_set_to_wire(committed)),
+                ControlRecord::Voters(voter_set_to_wire(uncommitted)),
             ],
         )
         .expect("mixed-commit voter batch");
         log.append(&mut batch, 0).expect("append voter batch");
         log.advance_hwm(Offset(1));
     });
-    let state = replayed_control_state(&log, initial);
 
     assert2::assert!(state.voters == committed);
 }

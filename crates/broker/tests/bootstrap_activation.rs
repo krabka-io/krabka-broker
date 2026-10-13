@@ -348,6 +348,17 @@ enum EligibleLeaderReplicas {
     Disabled,
 }
 
+const TWO_BROKERS: &[NodeSpec] = &[
+    NodeSpec {
+        id: NodeId(1),
+        roles: BROKER,
+    },
+    NodeSpec {
+        id: NodeId(2),
+        roles: BROKER,
+    },
+];
+
 struct Case {
     what: &'static str,
     quorum: Quorum,
@@ -376,16 +387,7 @@ async fn the_active_controller_writes_the_bootstrap_records_once() {
                 id: NodeId(3001),
                 roles: CONTROLLER,
             }],
-            brokers: &[
-                NodeSpec {
-                    id: NodeId(1),
-                    roles: BROKER,
-                },
-                NodeSpec {
-                    id: NodeId(2),
-                    roles: BROKER,
-                },
-            ],
+            brokers: TWO_BROKERS,
             eligible_leader_replicas: EligibleLeaderReplicas::Enabled,
             min_insync_replicas: MinimumInsyncReplicas(2),
         },
@@ -406,16 +408,7 @@ async fn the_active_controller_writes_the_bootstrap_records_once() {
                     roles: CONTROLLER,
                 },
             ],
-            brokers: &[
-                NodeSpec {
-                    id: NodeId(1),
-                    roles: BROKER,
-                },
-                NodeSpec {
-                    id: NodeId(2),
-                    roles: BROKER,
-                },
-            ],
+            brokers: TWO_BROKERS,
             eligible_leader_replicas: EligibleLeaderReplicas::Enabled,
             min_insync_replicas: MinimumInsyncReplicas(1),
         },

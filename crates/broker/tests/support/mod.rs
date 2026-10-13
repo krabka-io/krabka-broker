@@ -114,7 +114,7 @@ pub use self::{
         start_reusing_addrs, two_controller_followers, wait_for_all_brokers_registered,
     },
     containers::{
-        ContainerInput, JvmAdminSetup, JvmBrokerSetup, JvmDockerSetup, JvmListeners,
+        StartedBroker, start_host_broker, ContainerInput, JvmAdminSetup, JvmBrokerSetup, JvmDockerSetup, JvmListeners,
         JvmSingleBrokerSetup, JvmStaticVoterSetup, bridge_gateway, combined_output, docker,
         docker_exec, docker_logs, docker_output, docker_run_blocking, docker_tool_command,
         fixture_cache_dir, format_jvm_voter, free_port, init_jvm_tracing, jvm_acks_all_producer,

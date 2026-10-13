@@ -58,6 +58,16 @@ struct ElectedSnapshotPair {
     epoch: u32,
 }
 
+/// A fresh three-voter network whose first two voters are elected.
+async fn elected_pair_on_new_network(
+    cluster_id: uuid::Uuid,
+    interval: u64,
+) -> (SimNet, [NodeId; 3], ElectedSnapshotPair) {
+    let (net, ids) = three_voter_network();
+    let pair = elected_snapshot_pair(&net, &ids, cluster_id, interval).await;
+    (net, ids, pair)
+}
+
 async fn elected_snapshot_pair(
     net: &SimNet,
     ids: &[NodeId],
@@ -222,15 +232,14 @@ async fn lagging_follower_catches_up_via_snapshot() {
 /// the follower's own serve path from election/discovery timing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_leader() {
-    let (net, ids) = three_voter_network();
     let cid = uuid::Uuid::from_u128(501);
     let interval = 5u64;
-
+    let (net, ids, pair) = elected_pair_on_new_network(cid, interval).await;
     let ElectedSnapshotPair {
         dirs,
         leader,
         epoch,
-    } = elected_snapshot_pair(&net, &ids, cid, interval).await;
+    } = pair;
     let live = [NodeId(1), NodeId(2)];
     assert2::assert!(leader == NodeId(1));
     let follower = NodeId(2);
@@ -344,15 +353,14 @@ async fn follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_lea
 /// exact rather than a race.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpoint() {
-    let (net, ids) = three_voter_network();
     let cid = uuid::Uuid::from_u128(502);
     let interval = 5u64;
-
+    let (net, ids, pair) = elected_pair_on_new_network(cid, interval).await;
     let ElectedSnapshotPair {
         dirs,
         leader,
         epoch,
-    } = elected_snapshot_pair(&net, &ids, cid, interval).await;
+    } = pair;
     let live = [NodeId(1), NodeId(2)];
     let leader_dir = dirs[&leader].path().to_path_buf();
 

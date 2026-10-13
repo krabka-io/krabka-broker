@@ -20,6 +20,15 @@ fn check_transaction_offsets(log: &Log, stable: Offset) {
     assert2::assert!(log.lso() == stable);
 }
 
+/// Append `producer` verbatim at leader epoch 4 after giving it a bogus base
+/// offset (999) and epoch (-1), which the log must overwrite.
+fn append_with_bogus_base(log: &mut Log, producer: &mut RecordBatch) {
+    producer.base_offset = 999;
+    producer.partition_leader_epoch = -1;
+    let EncodedVerbatim { batch: vb, .. } = verbatim_from(producer, LeaderEpoch(4));
+    log.append_verbatim(&vb).unwrap();
+}
+
 fn producer_with_timestamp(timestamp: i64) -> RecordBatch {
     let mut producer = test_batch_at(0);
     producer.base_timestamp = timestamp;
@@ -61,10 +70,7 @@ fn append_verbatim_assigns_offsets_and_is_byte_exact() {
     let mut expected_wire = bytes::BytesMut::new();
     for _ in 0..3 {
         let mut producer = test_batch_at(0);
-        producer.base_offset = 999;
-        producer.partition_leader_epoch = -1;
-        let EncodedVerbatim { batch: vb, .. } = verbatim_from(&producer, LeaderEpoch(4));
-        log.append_verbatim(&vb).unwrap();
+        append_with_bogus_base(&mut log, &mut producer);
         // Re-encode the expectation with the assigned offset + epoch.
         let mut stamped = producer.clone();
         stamped.base_offset = (log.log_end_offset() - 1).0;
@@ -251,10 +257,7 @@ fn append_verbatim_stamps_full_offset_range() {
 
     // A four-record producer batch, appended verbatim, spans offsets 0..=3.
     let mut producer = sample_batch(4);
-    producer.base_offset = 999; // bogus; the log overwrites it with 0
-    producer.partition_leader_epoch = -1;
-    let EncodedVerbatim { batch: vb, .. } = verbatim_from(&producer, LeaderEpoch(4));
-    log.append_verbatim(&vb).unwrap();
+    append_with_bogus_base(&mut log, &mut producer); // the log overwrites 999 with 0
 
     // last_offset is base(0) + delta(3) = 3.
     check!(log.stamp_for_offset(Offset(0)) == Some(500));
