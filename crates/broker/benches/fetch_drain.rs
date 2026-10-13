@@ -41,30 +41,6 @@
 
 use criterion::{criterion_group, criterion_main};
 
-/// Every response size the sweep covers, and the label each is reported under.
-const SIZES: [ResponseSize; 5] = [
-    ResponseSize::new("4KiB", 4 * 1024),
-    ResponseSize::new("16KiB", 16 * 1024),
-    ResponseSize::new("32KiB", 32 * 1024),
-    ResponseSize::new("64KiB", 64 * 1024),
-    ResponseSize::new("256KiB", 256 * 1024),
-];
-
-/// One response size the sweep covers, with the label it is reported under.
-struct ResponseSize {
-    label: &'static str,
-    records_bytes: usize,
-}
-
-impl ResponseSize {
-    const fn new(label: &'static str, records_bytes: usize) -> Self {
-        Self {
-            label,
-            records_bytes,
-        }
-    }
-}
-
 /// The sweep, on the platforms that have a file-to-socket `sendfile(2)`:
 /// Linux, the Apple targets, and FreeBSD/DragonFly.
 #[cfg(any(
@@ -77,8 +53,31 @@ impl ResponseSize {
     target_os = "dragonfly",
 ))]
 mod sweep {
+    /// Every response size the sweep covers, and the label each is reported under.
+    const SIZES: [ResponseSize; 5] = [
+        ResponseSize::new("4KiB", 4 * 1024),
+        ResponseSize::new("16KiB", 16 * 1024),
+        ResponseSize::new("32KiB", 32 * 1024),
+        ResponseSize::new("64KiB", 64 * 1024),
+        ResponseSize::new("256KiB", 256 * 1024),
+    ];
+
+    /// One response size the sweep covers, with the label it is reported under.
+    struct ResponseSize {
+        label: &'static str,
+        records_bytes: usize,
+    }
+
+    impl ResponseSize {
+        const fn new(label: &'static str, records_bytes: usize) -> Self {
+            Self {
+                label,
+                records_bytes,
+            }
+        }
+    }
+
     use {
-        super::{ResponseSize, SIZES},
         assert2::assert,
         bytes::{BufMut, Bytes, BytesMut},
         criterion::{Criterion, Throughput},

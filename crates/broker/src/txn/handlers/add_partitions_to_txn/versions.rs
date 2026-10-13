@@ -312,162 +312,99 @@ mod tests {
     const UNKNOWN: i16 = codes::UNKNOWN_TOPIC_OR_PARTITION;
     const NOT_ATTEMPTED: i16 = codes::OPERATION_NOT_ATTEMPTED;
 
+    const ONLY_A: &[TopicSpec] = &[TopicSpec {
+        name: "a",
+        partitions: &[0],
+    }];
+    const ONLY_B: &[TopicSpec] = &[TopicSpec {
+        name: "b",
+        partitions: &[0],
+    }];
+    const B_AND_MISSING: &[TopicSpec] = &[
+        TopicSpec {
+            name: "b",
+            partitions: &[0],
+        },
+        TopicSpec {
+            name: "missing",
+            partitions: &[0],
+        },
+    ];
+    const A_NONE: Rows = &[TopicRows {
+        name: "a",
+        rows: &[PartitionCode {
+            partition: 0,
+            code: NONE,
+        }],
+    }];
+    const B_NONE: Rows = &[TopicRows {
+        name: "b",
+        rows: &[PartitionCode {
+            partition: 0,
+            code: NONE,
+        }],
+    }];
+    const A_FENCED: Rows = &[TopicRows {
+        name: "a",
+        rows: &[PartitionCode {
+            partition: 0,
+            code: FENCED,
+        }],
+    }];
+    const B_NOT_ATTEMPTED_MISSING_UNKNOWN: Rows = &[
+        TopicRows {
+            name: "b",
+            rows: &[PartitionCode {
+                partition: 0,
+                code: NOT_ATTEMPTED,
+            }],
+        },
+        TopicRows {
+            name: "missing",
+            rows: &[PartitionCode {
+                partition: 0,
+                code: UNKNOWN,
+            }],
+        },
+    ];
+    const ENLISTED_B: &[PartitionSpec] = &[PartitionSpec {
+        topic: "b",
+        partition: 0,
+    }];
+
     /// The cases of the repeated transactional id: two entries each, the rows
     /// each answers, and the partitions enlisted afterwards.
     fn repeated_id_cases() -> [Case; 4] {
         [
             Case {
                 name: "both entries add the second entry's partitions",
-                entries: [
-                    entry(EPOCH, false, &[TopicSpec {
-                        name: "a",
-                        partitions: &[0],
-                    }]),
-                    entry(EPOCH, false, &[TopicSpec {
-                        name: "b",
-                        partitions: &[0],
-                    }]),
-                ],
-                results: [
-                    &[TopicRows {
-                        name: "a",
-                        rows: &[PartitionCode {
-                            partition: 0,
-                            code: NONE,
-                        }],
-                    }],
-                    &[TopicRows {
-                        name: "a",
-                        rows: &[PartitionCode {
-                            partition: 0,
-                            code: NONE,
-                        }],
-                    }],
-                ],
-                enlisted: &[PartitionSpec {
-                    topic: "b",
-                    partition: 0,
-                }],
+                entries: [entry(EPOCH, false, ONLY_A), entry(EPOCH, false, ONLY_B)],
+                results: [A_NONE, A_NONE],
+                enlisted: ENLISTED_B,
             },
             Case {
                 name: "each entry is checked with its own producer epoch",
                 entries: [
-                    entry(EPOCH - 1, false, &[TopicSpec {
-                        name: "a",
-                        partitions: &[0],
-                    }]),
-                    entry(EPOCH, false, &[TopicSpec {
-                        name: "b",
-                        partitions: &[0],
-                    }]),
+                    entry(EPOCH - 1, false, ONLY_A),
+                    entry(EPOCH, false, ONLY_B),
                 ],
-                results: [
-                    &[TopicRows {
-                        name: "a",
-                        rows: &[PartitionCode {
-                            partition: 0,
-                            code: FENCED,
-                        }],
-                    }],
-                    &[TopicRows {
-                        name: "a",
-                        rows: &[PartitionCode {
-                            partition: 0,
-                            code: NONE,
-                        }],
-                    }],
-                ],
-                enlisted: &[PartitionSpec {
-                    topic: "b",
-                    partition: 0,
-                }],
+                results: [A_FENCED, A_NONE],
+                enlisted: ENLISTED_B,
             },
             Case {
                 name: "a failed partition check lists the checked partitions",
                 entries: [
-                    entry(EPOCH, false, &[TopicSpec {
-                        name: "a",
-                        partitions: &[0],
-                    }]),
-                    entry(EPOCH, false, &[
-                        TopicSpec {
-                            name: "b",
-                            partitions: &[0],
-                        },
-                        TopicSpec {
-                            name: "missing",
-                            partitions: &[0],
-                        },
-                    ]),
+                    entry(EPOCH, false, ONLY_A),
+                    entry(EPOCH, false, B_AND_MISSING),
                 ],
-                results: [
-                    &[
-                        TopicRows {
-                            name: "b",
-                            rows: &[PartitionCode {
-                                partition: 0,
-                                code: NOT_ATTEMPTED,
-                            }],
-                        },
-                        TopicRows {
-                            name: "missing",
-                            rows: &[PartitionCode {
-                                partition: 0,
-                                code: UNKNOWN,
-                            }],
-                        },
-                    ],
-                    &[
-                        TopicRows {
-                            name: "b",
-                            rows: &[PartitionCode {
-                                partition: 0,
-                                code: NOT_ATTEMPTED,
-                            }],
-                        },
-                        TopicRows {
-                            name: "missing",
-                            rows: &[PartitionCode {
-                                partition: 0,
-                                code: UNKNOWN,
-                            }],
-                        },
-                    ],
-                ],
+                results: [B_NOT_ATTEMPTED_MISSING_UNKNOWN, B_NOT_ATTEMPTED_MISSING_UNKNOWN],
                 enlisted: &[],
             },
             Case {
                 name: "the verify-only entry verifies what the add entry added",
-                entries: [
-                    entry(EPOCH, false, &[TopicSpec {
-                        name: "a",
-                        partitions: &[0],
-                    }]),
-                    entry(EPOCH, true, &[TopicSpec {
-                        name: "b",
-                        partitions: &[0],
-                    }]),
-                ],
-                results: [
-                    &[TopicRows {
-                        name: "a",
-                        rows: &[PartitionCode {
-                            partition: 0,
-                            code: NONE,
-                        }],
-                    }],
-                    &[TopicRows {
-                        name: "b",
-                        rows: &[PartitionCode {
-                            partition: 0,
-                            code: NONE,
-                        }],
-                    }],
-                ],
-                enlisted: &[PartitionSpec {
-                    topic: "b",
-                    partition: 0,
-                }],
+                entries: [entry(EPOCH, false, ONLY_A), entry(EPOCH, true, ONLY_B)],
+                results: [A_NONE, B_NONE],
+                enlisted: ENLISTED_B,
             },
         ]
     }

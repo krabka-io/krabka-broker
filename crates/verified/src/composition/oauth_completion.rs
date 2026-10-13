@@ -6,8 +6,8 @@ use {super::oauth_jwks_prelude::*, creusot_std::prelude::*};
 
 // cargo-mutants: #[cfg(creusot)] specification, absent from runtime tests.
 #[cfg(creusot)]
-#[logic]
 #[cfg_attr(test, mutants::skip)]
+#[logic]
 fn completed_snapshot_admissible(
     cache: Option<JwksCacheFacts>,
     started_ms: i64,

@@ -356,6 +356,27 @@ mod tests {
         }
     }
 
+    /// The rows of the two-topic freeze case: both partitions of the frozen
+    /// topic answer `frozen`, and the unfrozen topic's partition `unfrozen`.
+    fn expected_rows(frozen: i16, unfrozen: i16) -> Vec<AddPartitionsToTxnTopicResult> {
+        vec![
+            topic_result(FROZEN_TOPIC, &[
+                PartitionCode {
+                    partition: 0,
+                    code: frozen,
+                },
+                PartitionCode {
+                    partition: 1,
+                    code: frozen,
+                },
+            ]),
+            topic_result(UNFROZEN_TOPIC, &[PartitionCode {
+                partition: 0,
+                code: unfrozen,
+            }]),
+        ]
+    }
+
     async fn anonymous_freeze_request(broker: &Broker, version: i16) -> AddPartitionsToTxnResponse {
         test_ctx!(ctx, "ANONYMOUS");
         handle(broker, freeze_case_request(version), version, &ctx)
@@ -395,22 +416,7 @@ mod tests {
             let broker = broker_handle.broker_arc_for_test();
             let resp = anonymous_freeze_request(&broker, version).await;
 
-            let expected = vec![
-                topic_result(FROZEN_TOPIC, &[
-                    PartitionCode {
-                        partition: 0,
-                        code: codes::POLICY_VIOLATION,
-                    },
-                    PartitionCode {
-                        partition: 1,
-                        code: codes::POLICY_VIOLATION,
-                    },
-                ]),
-                topic_result(UNFROZEN_TOPIC, &[PartitionCode {
-                    partition: 0,
-                    code: codes::NONE,
-                }]),
-            ];
+            let expected = expected_rows(codes::POLICY_VIOLATION, codes::NONE);
             check!(topic_rows(&resp, version) == expected, "{label}");
 
             // The refusal is the enlistment itself and not only the code: no
@@ -452,22 +458,10 @@ mod tests {
             // Both topics report the ACL deny. The frozen one reports 29 and
             // not 44: its freeze state never reaches a caller with no right
             // to read it.
-            let expected = vec![
-                topic_result(FROZEN_TOPIC, &[
-                    PartitionCode {
-                        partition: 0,
-                        code: codes::TOPIC_AUTHORIZATION_FAILED,
-                    },
-                    PartitionCode {
-                        partition: 1,
-                        code: codes::TOPIC_AUTHORIZATION_FAILED,
-                    },
-                ]),
-                topic_result(UNFROZEN_TOPIC, &[PartitionCode {
-                    partition: 0,
-                    code: codes::TOPIC_AUTHORIZATION_FAILED,
-                }]),
-            ];
+            let expected = expected_rows(
+                codes::TOPIC_AUTHORIZATION_FAILED,
+                codes::TOPIC_AUTHORIZATION_FAILED,
+            );
             check!(topic_rows(&resp, version) == expected, "{label}");
 
             broker_handle.shutdown().await;

@@ -110,9 +110,8 @@ pub(crate) fn handle_leave(
 #[cfg(test)]
 mod tests {
     use {
-        super::*,
-        assert2::{assert, check},
-        crate::coordinator::unified::classic_ops::test_support,
+        super::{super::test_support::prelude::*, *},
+        assert2::assert,
         krabka_protocol::owned::leave_group_request::MemberIdentity,
     };
 
@@ -134,7 +133,7 @@ mod tests {
             ),
         ];
         for (before, after) in rows {
-            let mut g = test_support::stable_two_member_group();
+            let mut g = stable_two_member_group();
             g.state = before;
             let req = LeaveGroupRequest {
                 group_id: "g".into(),
@@ -169,7 +168,7 @@ mod tests {
             (3, GroupState::CompletingRebalance),
             (3, GroupState::Stable),
         ] {
-            let mut g = test_support::stable_two_member_group();
+            let mut g = stable_two_member_group();
             g.state = state;
             g.add_pending_member("pending".into(), Instant::now() + Duration::from_mins(1));
             let req = LeaveGroupRequest {
@@ -201,7 +200,7 @@ mod tests {
             );
         }
         // An id that is neither a member nor pending is still unknown.
-        let mut g = test_support::stable_two_member_group();
+        let mut g = stable_two_member_group();
         let req = LeaveGroupRequest {
             group_id: "g".into(),
             member_id: "ghost".into(),
@@ -215,7 +214,7 @@ mod tests {
     #[test]
     fn leave_v3_list_with_instance_resolution_and_unknown() {
         let mut g = ClassicState::new("g");
-        let _ = test_support::handle_join(&mut g, &test_support::join_req("m1", Some("inst-a")), "h");
+        let _ = handle_join(&mut g, &join_req("m1", Some("inst-a")), "h");
         let req = LeaveGroupRequest {
             group_id: "g".into(),
             members: vec![
