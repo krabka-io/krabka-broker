@@ -49,7 +49,10 @@ fn prefix(meta: &TokenStream, item: &TokenStream) -> Result<TokenStream, ParseEr
             "expected async fn handle(broker: ..., version: ..., req_bytes: ..., ctx: ...)",
         ));
     }
-    let (request, api, gate, refusals) = (request.0, api.0, gate.0, refusals.0);
+    let request = request.tokens;
+    let api = api.tokens;
+    let gate = gate.tokens;
+    let refusals = refusals.tokens;
     Ok(moxy::template! {
         let crate::handlers::raft_voter::Admitted { req, image, quorum } =
             match crate::handlers::raft_voter::prelude::<{{ request }}, _>(

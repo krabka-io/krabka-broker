@@ -313,7 +313,9 @@ pub(crate) fn compact(tokens: &(impl ToString + ?Sized)) -> String {
 }
 
 /// The value of a `key = <expression>` argument, as the expression's tokens.
-pub(crate) struct Tokens(pub(crate) TokenStream);
+pub(crate) struct Tokens {
+    pub(crate) tokens: TokenStream,
+}
 
 pub(crate) fn expression_tokens(
     meta: &moxy::ast::Meta,
@@ -341,8 +343,15 @@ pub(crate) fn parenthesized_list(
 
 impl moxy::ast::FromMeta for Tokens {
     fn from_meta(meta: &moxy::ast::Meta) -> Result<Self, ParseError> {
-        expression_tokens(meta, "expected `key = <expression>`").map(Self)
+        expression_tokens(meta, "expected `key = <expression>`")
+            .map(|tokens| Self { tokens })
     }
+}
+
+/// An item's complete tokens and the index of its brace-delimited body.
+pub(crate) struct ItemBody {
+    pub(crate) tokens: Vec<TokenTree>,
+    pub(crate) body_index: usize,
 }
 
 /// Locate an item body while preserving attributes, visibility and generics.
@@ -350,7 +359,7 @@ pub(crate) fn item_body(
     item: TokenStream,
     macro_name: &str,
     is_kind: fn(&moxy::token::TokenTree) -> bool,
-) -> Result<(Vec<moxy::token::TokenTree>, usize), ParseError> {
+) -> Result<ItemBody, ParseError> {
     let tokens: Vec<_> = item.into_iter().collect();
     let body = tokens
         .iter()
@@ -362,7 +371,10 @@ pub(crate) fn item_body(
         })
         .flatten();
     match body {
-        Some(body) => Ok((tokens, body)),
+        Some(body) => Ok(ItemBody {
+            tokens,
+            body_index: body,
+        }),
         None => Err(ParseError::new(
             tokens.first().map_or_else(Span::call_site, Spanner::span),
             format!("`#[{macro_name}]` needs a braced item of the expected kind"),
@@ -376,7 +388,10 @@ pub(crate) fn function_header(
     expected: &str,
 ) -> Result<ItemFn, ParseError> {
     let span = item.span();
-    let (mut tokens, body) = item_body(item, macro_name, TokenTree::is_keyword_fn)?;
+    let ItemBody {
+        mut tokens,
+        body_index: body,
+    } = item_body(item, macro_name, TokenTree::is_keyword_fn)?;
     if body + 1 != tokens.len() {
         return Err(ParseError::new(span, expected));
     }
@@ -387,10 +402,7 @@ pub(crate) fn function_header(
     moxy::parse!({ TokenStream::from(tokens) })
 }
 
-pub(crate) fn named_body(
-    item: TokenStream,
-    macro_name: &str,
-) -> Result<(Vec<moxy::token::TokenTree>, usize), ParseError> {
+pub(crate) fn named_body(item: TokenStream, macro_name: &str) -> Result<ItemBody, ParseError> {
     item_body(item, macro_name, moxy::token::TokenTree::is_keyword_struct)
 }
 
@@ -400,7 +412,10 @@ pub(crate) fn edit_named_body(
     macro_name: &str,
     edit: impl FnOnce(TokenStream) -> Result<TokenStream, ParseError>,
 ) -> Result<TokenStream, ParseError> {
-    let (mut tokens, body) = named_body(item, macro_name)?;
+    let ItemBody {
+        mut tokens,
+        body_index: body,
+    } = named_body(item, macro_name)?;
     let TokenTree::Group(group) = &mut tokens[body] else {
         unreachable!()
     };

@@ -18,7 +18,7 @@ pub(crate) fn share_produce_parameters(
     if let Some(token) = meta.into_iter().next() {
         return Err(ParseError::new(token.span(), "expected no arguments"));
     }
-    let (mut tokens, _) = item_body(item, "share_produce_parameters", TokenTree::is_keyword_fn)?;
+    let mut tokens = item_body(item, "share_produce_parameters", TokenTree::is_keyword_fn)?.tokens;
     let function = tokens.iter().position(TokenTree::is_keyword_fn).unwrap();
     let Some(TokenTree::Group(arguments)) = tokens.get_mut(function + 2) else {
         return Err(ParseError::new(
@@ -53,7 +53,7 @@ pub(crate) fn retained_timestamp_bounds(
     item: TokenStream,
 ) -> Result<TokenStream, ParseError> {
     let floor = name(floor)?;
-    let (tokens, _) = item_body(item, "retained_timestamp_bounds", TokenTree::is_keyword_fn)?;
+    let tokens = item_body(item, "retained_timestamp_bounds", TokenTree::is_keyword_fn)?.tokens;
     let item: TokenStream = tokens.into();
     let view: TokenStream = "@".parse().expect("Creusot view operator");
     let requires = moxy::template! { requires };
