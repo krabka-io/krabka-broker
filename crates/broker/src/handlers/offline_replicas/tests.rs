@@ -151,6 +151,12 @@ fn check_replica_cases<E: std::fmt::Debug + PartialEq>(
 #[test]
 fn offline_replicas_matches_kafka_replica_state_rules() {
     let (good, bad) = (dir(0x600d), dir(0xbad));
+    let first_broker_without_dirs = || {
+        vec![
+            Registered::new(NodeId(1), vec![]),
+            Registered::new(NodeId(2), vec![good]),
+        ]
+    };
     let cases = vec![
         replica_case()
             .expected(vec![])
@@ -183,19 +189,13 @@ fn offline_replicas_matches_kafka_replica_state_rules() {
         replica_case()
             .expected(vec![1])
             .name("registration whose last online dir was retired offlines its replicas")
-            .registrations(vec![
-                Registered::new(NodeId(1), vec![]),
-                Registered::new(NodeId(2), vec![good]),
-            ])
+            .registrations(first_broker_without_dirs())
             .directories(vec![bad, good])
             .call(),
         replica_case()
             .expected(vec![])
             .name("registration with no online dir keeps an unassigned replica online")
-            .registrations(vec![
-                Registered::new(NodeId(1), vec![]),
-                Registered::new(NodeId(2), vec![good]),
-            ])
+            .registrations(first_broker_without_dirs())
             .directories(vec![Uuid::nil(), good])
             .call(),
         replica_case()

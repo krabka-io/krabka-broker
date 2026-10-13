@@ -120,6 +120,17 @@ fn snapshot_directory() -> SnapshotLocation {
     SnapshotLocation { dir, path }
 }
 
+/// A fresh snapshot of `topic_id`'s one partition holding `segments`.
+fn snapshot_with_segments(topic_id: Uuid, segments: &[SnapshotSegmentEntry]) -> SnapshotLocation {
+    let location = snapshot_directory();
+    snapshot_of()
+        .path(&location.path)
+        .topic_id(topic_id)
+        .segments(segments)
+        .call();
+    location
+}
+
 /// A two-segment archive on disk, with the ids of its topic and segments.
 struct TwoSegmentArchive {
     dir: tempfile::TempDir,
@@ -364,16 +375,11 @@ async fn a_delete_finished_segment_with_bytes_still_present_is_a_disagreement() 
     let SnapshotLocation {
         dir: _snap_dir,
         path: snap_path,
-    } = snapshot_directory();
-    snapshot_of()
-        .path(&snap_path)
-        .topic_id(topic_id)
-        .segments(&[SnapshotSegmentEntry {
-            segment_id: seg,
-            base_offset: Offset(0),
-            state: RemoteLogSegmentState::DeleteSegmentFinished,
-        }])
-        .call();
+    } = snapshot_with_segments(topic_id, &[SnapshotSegmentEntry {
+        segment_id: seg,
+        base_offset: Offset(0),
+        state: RemoteLogSegmentState::DeleteSegmentFinished,
+    }]);
 
     expect_metadata_disagreement(archive.path(), &snap_path).await;
 }
@@ -450,26 +456,15 @@ async fn duplicate_segment_keys_in_the_snapshot_are_a_disagreement() {
         segment_id,
     } = single_segment_archive(Offset(0));
 
+    let entry = SnapshotSegmentEntry {
+        segment_id,
+        base_offset: Offset(0),
+        state: RemoteLogSegmentState::CopySegmentFinished,
+    };
     let SnapshotLocation {
         dir: _snap_dir,
         path: snap_path,
-    } = snapshot_directory();
-    snapshot_of()
-        .path(&snap_path)
-        .topic_id(topic_id)
-        .segments(&[
-            SnapshotSegmentEntry {
-                segment_id,
-                base_offset: Offset(0),
-                state: RemoteLogSegmentState::CopySegmentFinished,
-            },
-            SnapshotSegmentEntry {
-                segment_id,
-                base_offset: Offset(0),
-                state: RemoteLogSegmentState::CopySegmentFinished,
-            },
-        ])
-        .call();
+    } = snapshot_with_segments(topic_id, &[entry, entry]);
 
     expect_metadata_disagreement(archive.path(), &snap_path).await;
 }
