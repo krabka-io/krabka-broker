@@ -11,11 +11,12 @@ use {
         clean_shutdown::write,
         error::BrokerError,
         future_log::{abort_moves, shutdown_moves},
+        partition::Partition,
         partition_registry::PartitionRegistry,
         time_util::now_ms,
     },
     krabka_ids::PartitionIndex,
-    std::net::SocketAddr,
+    std::{net::SocketAddr, sync::Arc},
     tokio::task::JoinHandle,
 };
 
@@ -102,6 +103,10 @@ fn abort_partition_writers(partitions: &PartitionRegistry) {
 }
 
 impl BrokerHandle {
+    fn maybe_local_partition(&self, topic: &str, partition: i32) -> Option<Arc<Partition>> {
+        self.broker.partitions.get(topic, PartitionIndex(partition))
+    }
+
     /// Test-only: the shared broker state behind this handle, for the unit
     /// tests that drive a subsystem taking `&Arc<Broker>` directly rather than
     /// over a socket. `BrokerControllerAdminRouter::bind` is one.

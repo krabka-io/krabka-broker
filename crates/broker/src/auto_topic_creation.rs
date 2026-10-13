@@ -322,7 +322,7 @@ impl AutoTopicCreation {
         }
         let rows = creatable
             .iter()
-            .map(|topic| row(codes::UNKNOWN_TOPIC_OR_PARTITION, &topic.name));
+            .map(|topic| topic_error_row(broker, &topic.name, codes::UNKNOWN_TOPIC_OR_PARTITION));
         uncreatable.extend(rows);
         self.send_create_topic_request(broker, creatable, identity, None);
         uncreatable

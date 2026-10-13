@@ -13,14 +13,6 @@ use {
 };
 
 impl BrokerHandle {
-    pub(super) fn maybe_local_partition(
-        &self,
-        topic: &str,
-        partition: i32,
-    ) -> Option<std::sync::Arc<Partition>> {
-        self.broker.partitions.get(topic, PartitionIndex(partition))
-    }
-
     /// This broker's partition `topic-partition`, or a
     /// [`BrokerError::Replication`][crate::error::BrokerError::Replication]
     /// naming it when it is not hosted here.
@@ -29,10 +21,9 @@ impl BrokerHandle {
         topic: &str,
         partition: i32,
     ) -> Result<std::sync::Arc<Partition>, BrokerError> {
-        self.maybe_local_partition(topic, partition)
-            .ok_or_else(|| {
-                BrokerError::Replication(format!("partition {topic}-{partition} not local"))
-            })
+        self.maybe_local_partition(topic, partition).ok_or_else(|| {
+            BrokerError::Replication(format!("partition {topic}-{partition} not local"))
+        })
     }
 
     /// Test-only: truncate this broker's local partition log so no
