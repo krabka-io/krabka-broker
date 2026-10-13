@@ -32,7 +32,7 @@ use {
         codes,
         handlers::{
             ErrorCodeResponse as _, cluster_action_denied,
-            raft_voter::{Admitted, Refusals},
+            raft_voter::{Admitted, Refusals, add_voter_request},
         },
     },
     krabka_metadata::{Voter, VoterEndpoint},
@@ -392,9 +392,7 @@ mod tests {
                     decode_response(&resp, version).error_code
                 }
                 Api::Add => {
-                    let req = crate::handlers::raft_voter::add_voter_request()
-                        .voter_id(2)
-                        .call();
+                    let req = add_voter_request().voter_id(2).call();
                     let req_bytes = encode_other_request(&req, version);
                     let resp = add_raft_voter_handle(&broker, version, &req_bytes, &ctx)
                         .await

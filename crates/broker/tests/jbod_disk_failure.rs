@@ -30,10 +30,11 @@ use {
         two_dir_topic::{Setup, create_and_wait, start},
     },
     assert2::{assert, check},
+    bytes::BytesMut,
     krabka_broker::{Broker, BrokerConfig, BrokerHandle},
     krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion},
     krabka_protocol::{
-        Decode,
+        Decode, Encode,
         owned::{
             assign_replicas_to_dirs_response::AssignReplicasToDirsResponse,
             broker_heartbeat_request::BrokerHeartbeatRequest,

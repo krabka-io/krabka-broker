@@ -18,7 +18,11 @@
 //! is not caught up is `REQUEST_TIMED_OUT (7)`.
 
 use {
-    crate::{broker::Broker, codes, handlers::raft_voter::respond},
+    crate::{
+        broker::Broker,
+        codes,
+        handlers::raft_voter::{add_voter_request, respond},
+    },
     krabka_metadata::{Voter, VoterEndpoint},
     krabka_protocol::owned::{
         add_raft_voter_request::AddRaftVoterRequest, add_raft_voter_response::AddRaftVoterResponse,
@@ -177,9 +181,7 @@ mod tests {
     };
 
     fn request(voter_id: i32) -> AddRaftVoterRequest {
-        crate::handlers::raft_voter::add_voter_request()
-            .voter_id(voter_id)
-            .call()
+        add_voter_request().voter_id(voter_id).call()
     }
 
     crate::handlers::raft_voter::test_dispatch!(80, AddRaftVoterRequest, AddRaftVoterResponse);

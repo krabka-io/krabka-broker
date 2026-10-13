@@ -303,6 +303,17 @@ pub(crate) async fn assert_single_member_limit<H, Q, R: HeartbeatStatus>(
     assert2::check!(existing_epoch == epoch);
 }
 
+/// Build a one-member coordinator fixture and exercise its heartbeat limit.
+pub(crate) async fn assert_single_member_limit_with_log<H, Q, R: HeartbeatStatus>(
+    make_handle: impl FnOnce(Arc<InMemoryOffsetsLog>) -> Arc<H>,
+    request: impl Fn(&str, i32) -> Q,
+    heartbeat: impl AsyncFn(&H, Q) -> R,
+) {
+    let log = Arc::new(InMemoryOffsetsLog::default());
+    let handle = make_handle(log);
+    assert_single_member_limit(&handle, request, heartbeat).await;
+}
+
 /// Run the shared session-timeout contract after protocol-specific setup.
 pub(crate) async fn check_group_session_timeout<H, R: HeartbeatStatus>(
     create: impl Fn(&str) -> Arc<H>,

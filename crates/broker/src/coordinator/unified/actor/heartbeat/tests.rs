@@ -18,7 +18,10 @@ use {
             offsets_log::fake::InMemoryOffsetsLog,
             persistence_next_gen::GroupMetadataValue,
             reconciler::{ReconcileInput, metadata_hash},
-            test_support::{MemberEpoch, assert_next_tombstone_batch, consumer_join_request},
+            test_support::{
+                MemberEpoch, assert_next_tombstone_batch, assert_single_member_limit_with_log,
+                consumer_join_request,
+            },
         },
         test_support::KafkaErrorCode,
     },
@@ -65,26 +68,25 @@ async fn first_join_adopts_client_member_id() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn member_limit_rejects_only_new_members() {
-    let log = Arc::new(InMemoryOffsetsLog::default());
-    let coord = coordinator_with_log(
-        NextGenConfig {
-            max_size: 1,
-            ..NextGenConfig::assigning_at_once()
+    assert_single_member_limit_with_log(
+        |log| {
+            coordinator_with_log(
+                NextGenConfig {
+                    max_size: 1,
+                    ..NextGenConfig::assigning_at_once()
+                },
+                empty_metadata(),
+                log,
+            )
+            .0
+            .get_or_create_consumer("g")
         },
-        empty_metadata(),
-        log,
-    );
-    let handle = coord.get_or_create_consumer("g");
-
-    let joined = rpc::consumer_heartbeat(&handle, "m1", 0, Some("t")).await;
-    check!(joined.error_code == codes::NONE);
-
-    let rejected = rpc::consumer_heartbeat(&handle, "m2", 0, Some("t")).await;
-    check!(rejected.error_code == codes::GROUP_MAX_SIZE_REACHED);
-
-    let existing = rpc::consumer_heartbeat(&handle, "m1", joined.member_epoch, Some("t")).await;
-    check!(existing.error_code == codes::NONE);
-    check!(existing.member_epoch == joined.member_epoch);
+        |member_id, member_epoch| (member_id.to_owned(), member_epoch),
+        async |handle, (member_id, member_epoch)| {
+            rpc::consumer_heartbeat(handle, &member_id, member_epoch, Some("t")).await
+        },
+    )
+    .await;
 }
 
 /// A consumer actor exists from its first heartbeat, but the group only from

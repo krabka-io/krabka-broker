@@ -13,7 +13,10 @@ use {
                 PartitionMutation, VERSION, assn, expected_response, expected_result, request,
                 seed_controller_quota, seed_topic, topic_req,
             },
-            test_support::{replica_availability, replica_nodes_from_partitions},
+            test_support::{
+                ALL_BROKERS_FENCED_PARTITION_ERROR, assigned_partition_record,
+                invalid_manual_assignment, replica_availability, replica_nodes_from_partitions,
+            },
         },
         test_support::{
             DenyAll, begin_controlled_shutdown, fence_remote_broker, make_witness, peer, principal,
@@ -425,11 +428,7 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
             (n(4), vec![n(4)]),
             (n(3), vec![n(3)]),
         ]),
-        crate::handlers::test_support::invalid_manual_assignment(
-            &[2, 3],
-            &[&[2, 3]],
-            crate::handlers::test_support::ALL_BROKERS_FENCED_PARTITION_ERROR,
-        ),
+        invalid_manual_assignment(&[2, 3], &[&[2, 3]], ALL_BROKERS_FENCED_PARTITION_ERROR),
         (
             &[2],
             &[3],
@@ -490,7 +489,7 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
             .zip(lists)
             .zip(1..)
             .map(|(((leader, isr), replicas), partition)| {
-                crate::handlers::test_support::assigned_partition_record(
+                assigned_partition_record(
                     "grow",
                     partition,
                     leader,

@@ -14,7 +14,8 @@ use {
             RequestContext,
             describe_configs::effective_topic_configs,
             test_support::{
-                TopicPartitionCount, TopicReplicationFactor, acl, cluster_acl,
+                ALL_BROKERS_FENCED_PARTITION_ERROR, TopicPartitionCount, TopicReplicationFactor,
+                acl, assigned_partition_record, cluster_acl, invalid_manual_assignment,
                 replica_availability, replica_nodes_from_partitions,
                 seed_controller_quota as seed_controller_quota_helper,
             },
@@ -1291,11 +1292,7 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
             ),
             vec![],
         ),
-        crate::handlers::test_support::invalid_manual_assignment(
-            &[3],
-            &[&[2], &[3]],
-            crate::handlers::test_support::ALL_BROKERS_FENCED_PARTITION_ERROR,
-        ),
+        invalid_manual_assignment(&[3], &[&[2], &[3]], ALL_BROKERS_FENCED_PARTITION_ERROR),
         (&[2], &[3], &[&[2, 3, 4]], codes::NONE, None, vec![(
             n(4),
             vec![n(3), n(4)],
@@ -1370,7 +1367,7 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
             .zip(lists)
             .enumerate()
             .map(|(index, ((leader, isr), replicas))| {
-                crate::handlers::test_support::assigned_partition_record(
+                assigned_partition_record(
                     "manual",
                     i32::try_from(index).expect("index"),
                     leader,

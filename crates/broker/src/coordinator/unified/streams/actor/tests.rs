@@ -23,7 +23,7 @@ use {
                 },
                 state::{StreamsGroupState, StreamsMemberState},
             },
-            test_support::{assert_single_member_limit, heartbeat_write_failures},
+            test_support::{assert_single_member_limit_with_log, heartbeat_write_failures},
         },
         test_support::{FakeMetadataSource, streams_join_request},
     },
@@ -146,16 +146,22 @@ async fn second_heartbeat_at_right_epoch_accepted() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn member_limit_rejects_only_new_members() {
-    let log = Arc::new(InMemoryOffsetsLog::default());
-    let coord = coordinator_with_log(
-        StreamsGroupConfig {
-            max_size: 1,
-            ..undelayed()
+    assert_single_member_limit_with_log(
+        |log| {
+            coordinator_with_log(
+                StreamsGroupConfig {
+                    max_size: 1,
+                    ..undelayed()
+                },
+                log,
+            )
+            .0
+            .get_or_create_streams("g")
         },
-        log,
-    );
-    let handle = coord.get_or_create_streams("g");
-    assert_single_member_limit(&handle, member_request, heartbeat).await;
+        member_request,
+        heartbeat,
+    )
+    .await;
 }
 
 /// Kafka 4.3.1's `throwIfStreamsGroupIsFull(group)` runs on every join and
