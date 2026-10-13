@@ -46,13 +46,13 @@ use {
             is_controller_managed_topic_config,
         },
         handlers::{
-            RequestContext, audit_resource, config_resource_refusal, decode_request,
+            RequestContext, audit_resource, config_resource_refusal,
             describe_configs::{
                 RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS,
                 RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
             },
             encode_response,
-            forward_to_controller::{controller_listener_dispatch, to_active_controller},
+            forward_to_controller::{controller_listener_dispatch, to_active_controller_or_handle},
             response_encoding::{ErrorRow as _, ResourceErrorRow},
         },
     },
@@ -123,20 +123,16 @@ raw_dispatch! {
     let mut response = if req.resources.is_empty() {
         AlterConfigsResponse::default()
     } else {
-        let body = encode_response(&req, version)?;
-        match to_active_controller(
+        to_active_controller_or_handle(
             broker,
+            req,
             alter_configs_request::API_KEY,
-            &body,
             version,
             ctx,
-            |code, message| encode_response(&request_refusal(&req, code, message), version),
+            request_refusal,
+            |req| handle(broker, req, version, ctx),
         )
-        .await
-        {
-            Some(answer) => decode_request::<AlterConfigsResponse>(&answer?, version)?,
-            None => handle(broker, req, version, ctx).await?,
-        }
+        .await?
     };
     indexed_responses.extend(forwarded_indices.into_iter().zip(response.responses));
     response.responses = ordered_resource_responses(indexed_responses);

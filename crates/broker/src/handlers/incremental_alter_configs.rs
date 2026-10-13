@@ -33,9 +33,8 @@ use {
             group::GroupBounds,
         },
         handlers::{
-            RequestContext, audit_resource, config_resource_refusal, decode_request,
-            encode_response,
-            forward_to_controller::{controller_listener_dispatch, to_active_controller},
+            RequestContext, audit_resource, config_resource_refusal, encode_response,
+            forward_to_controller::{controller_listener_dispatch, to_active_controller_or_handle},
             response_encoding::ErrorRow as _,
         },
     },
@@ -158,20 +157,16 @@ raw_dispatch! {
     let mut response = if req.resources.is_empty() {
         IncrementalAlterConfigsResponse::default()
     } else {
-        let body = encode_response(&req, version)?;
-        match to_active_controller(
+        to_active_controller_or_handle(
             broker,
+            req.clone(),
             incremental_alter_configs_request::API_KEY,
-            &body,
             version,
             ctx,
-            |code, message| encode_response(&request_refusal(&req, code, message), version),
+            request_refusal,
+            |incremental_request| handle(broker, incremental_request, version, ctx),
         )
-        .await
-        {
-            Some(answer) => decode_request::<IncrementalAlterConfigsResponse>(&answer?, version)?,
-            None => handle(broker, req.clone(), version, ctx).await?,
-        }
+        .await?
     };
     indexed_responses.extend(forwarded_indices.into_iter().zip(response.responses));
     if !local.is_empty() {
