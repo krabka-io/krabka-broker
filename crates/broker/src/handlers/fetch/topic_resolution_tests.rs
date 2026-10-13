@@ -21,10 +21,9 @@ use {
         codes,
         fetch_session::{FINAL_EPOCH, INITIAL_EPOCH, INVALID_SESSION_ID},
         handlers::test_support::{
-            CaseOutcomes, StartedBroker, WireTopic, check_cases, check_denied_topic_cases,
+            CaseOutcomes, OTHER_UNKNOWN_TOPIC_ID as OTHER_UNKNOWN_ID, StartedBroker,
+            UNKNOWN_TOPIC_ID as UNKNOWN_ID, WireTopic, check_cases, check_denied_topic_cases,
             create_topic as create_topic_from_test_support, seed_partition_replicas,
-            UNKNOWN_TOPIC_ID as UNKNOWN_ID,
-            OTHER_UNKNOWN_TOPIC_ID as OTHER_UNKNOWN_ID,
         },
         test_support::{DenyAll, KafkaErrorCode, start_broker_with_authorizer_no_audit},
     },

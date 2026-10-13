@@ -1,7 +1,6 @@
 //! `krabka-log` adapter for the sans-IO quorum core.
 
 use {
-    krabka_ids::LeaderEpoch,
     krabka_kraft_core::{Epoch, LogOffsetMetadata, LogView},
     krabka_log::Log,
     std::sync::{Arc, Mutex, MutexGuard},
@@ -33,12 +32,7 @@ impl LogView for ShardLog {
     fn end_offset(&self) -> i64 { self.lock().log_end_offset().0 }
 
     fn last_epoch(&self) -> Epoch {
-        let latest = self
-            .lock()
-            .epoch_checkpoint()
-            .latest_epoch()
-            .unwrap_or(LeaderEpoch(0));
-        u32::try_from(latest.0).unwrap_or(0)
+        krabka_raft::kraft::log::latest_epoch_in(self.lock().epoch_checkpoint())
     }
 
     fn end_offset_for_epoch(&self, epoch: Epoch) -> LogOffsetMetadata {

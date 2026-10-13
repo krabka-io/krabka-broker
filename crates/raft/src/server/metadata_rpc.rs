@@ -359,16 +359,7 @@ mod tests {
         .expect("metadata fetch dispatch");
         check!(
             decode_metadata_fetch_response(&fetch)
-                == KrabkaMetadataFetchResponse {
-                    error_code: PRIVATE_UNSUPPORTED_VERSION,
-                    leader_hint: -1,
-                    leader_epoch: -1,
-                    log_start_offset: -1,
-                    high_watermark: -1,
-                    quorum_high_watermark: -1,
-                    snapshot_id: None,
-                    records: Bytes::new(),
-                }
+                == KrabkaMetadataFetchResponse::unsupported_version()
         );
     }
 

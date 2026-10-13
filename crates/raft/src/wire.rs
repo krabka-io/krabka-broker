@@ -356,6 +356,20 @@ pub struct KrabkaMetadataFetchResponse {
 }
 
 impl KrabkaMetadataFetchResponse {
+    /// An unsupported-version refusal in the v0 response shape.
+    pub fn unsupported_version() -> Self {
+        Self {
+            error_code: PRIVATE_UNSUPPORTED_VERSION,
+            leader_hint: -1,
+            leader_epoch: -1,
+            log_start_offset: -1,
+            high_watermark: -1,
+            quorum_high_watermark: -1,
+            snapshot_id: None,
+            records: Bytes::new(),
+        }
+    }
+
     /// # Errors
     /// Returns an error if the record payload is too large for the wire format.
     pub fn encode_v0(&self, out: &mut Vec<u8>) -> Result<(), ProtocolError> {
@@ -554,16 +568,7 @@ mod tests {
         };
         let mut submit_refusal_bytes = Vec::new();
         submit_refusal.encode_v0(&mut submit_refusal_bytes).unwrap();
-        let fetch_refusal = KrabkaMetadataFetchResponse {
-            error_code: PRIVATE_UNSUPPORTED_VERSION,
-            leader_hint: -1,
-            leader_epoch: -1,
-            log_start_offset: -1,
-            high_watermark: -1,
-            quorum_high_watermark: -1,
-            snapshot_id: None,
-            records: Bytes::new(),
-        };
+        let fetch_refusal = KrabkaMetadataFetchResponse::unsupported_version();
         let mut fetch_refusal_bytes = Vec::new();
         fetch_refusal.encode_v0(&mut fetch_refusal_bytes).unwrap();
         let submit = Some(Bytes::from(submit_refusal_bytes));
