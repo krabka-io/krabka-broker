@@ -15,8 +15,8 @@ use {
         handlers::test_support::single_replica_partition,
         share_coordinator::bootstrap::TOPIC,
         test_support::{
-            DenyAll, KafkaErrorCode, broker_registration, dispatch_wire, peer, principal,
-            start_broker_no_audit, start_broker_no_audit_with,
+            DenyAll, KafkaErrorCode, broker_registration, dispatch_wire, start_broker_no_audit,
+            start_broker_no_audit_with,
         },
         txn::bootstrap::TOPIC as TXN_TOPIC,
     },
@@ -41,6 +41,12 @@ struct LookupSetup<'a> {
 struct VersionedResponse {
     version: krabka_ids::ApiVersion,
     response: FindCoordinatorResponse,
+}
+
+async fn no_bootstrap_broker() -> (BrokerHandle, tempfile::TempDir, std::sync::Arc<Broker>) {
+    let (handle, directory) = start_broker_no_audit().await;
+    let broker = handle.broker_arc_for_test();
+    (handle, directory, broker)
 }
 
 #[bon::builder]
@@ -121,11 +127,11 @@ async fn configured_partition_count_controls_txn_topic_and_routing() {
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    request_identity!(
-        (principal, peer, context),
-        principal("admin"),
-        client_id = "admin-client"
-    );
+    krabka_macros::request_test_identity! {
+        bind(principal, peer, context);
+        user ["admin"];
+        client ["admin-client"];
+    };
     let version = krabka_protocol::owned::find_coordinator_response::MAX_VERSION;
     let tid = "my-tid"; // hashes to partition 43 with the old fixed count of 50
     let request = FindCoordinatorRequest {
@@ -157,13 +163,12 @@ async fn configured_partition_count_controls_txn_topic_and_routing() {
 
 #[tokio::test]
 async fn share_key_type_before_v6_is_invalid_without_bootstrap() {
-    let (broker_handle, _dir) = start_broker_no_audit().await;
-    let broker = broker_handle.broker_arc_for_test();
-    request_identity!(
-        (principal, peer, context),
-        principal("alice"),
-        client_id = "share-client"
-    );
+    let (broker_handle, _dir, broker) = no_bootstrap_broker().await;
+    krabka_macros::request_test_identity! {
+        bind(principal, peer, context);
+        user ["alice"];
+        client ["share-client"];
+    };
     let version = 5;
     let request = FindCoordinatorRequest {
         key_type: KEY_TYPE_SHARE,
@@ -181,13 +186,12 @@ async fn share_key_type_before_v6_is_invalid_without_bootstrap() {
 
 #[tokio::test]
 async fn v4_empty_key_array_stays_empty_without_bootstrap() {
-    let (broker_handle, _dir) = start_broker_no_audit().await;
-    let broker = broker_handle.broker_arc_for_test();
-    request_identity!(
-        (principal, peer, context),
-        principal("alice"),
-        client_id = "txn-client"
-    );
+    let (broker_handle, _dir, broker) = no_bootstrap_broker().await;
+    krabka_macros::request_test_identity! {
+        bind(principal, peer, context);
+        user ["alice"];
+        client ["txn-client"];
+    };
     let version = 4;
     let request = FindCoordinatorRequest {
         key_type: KEY_TYPE_TRANSACTION,
@@ -220,11 +224,11 @@ async fn mixed_rejection_and_resolution_preserve_key_order_and_errors() {
     broker_handle
         .wait_until_transaction_coordinator_ready()
         .await;
-    request_identity!(
-        (principal, peer, context),
-        principal("alice"),
-        client_id = "txn-client"
-    );
+    krabka_macros::request_test_identity! {
+        bind(principal, peer, context);
+        user ["alice"];
+        client ["txn-client"];
+    };
     let version = krabka_protocol::owned::find_coordinator_response::MAX_VERSION;
     let request = FindCoordinatorRequest {
         key_type: KEY_TYPE_TRANSACTION,
@@ -262,11 +266,11 @@ async fn malformed_share_key_is_invalid_without_bootstrap() {
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    request_identity!(
-        (principal, peer, context),
-        principal("alice"),
-        client_id = "share-client"
-    );
+    krabka_macros::request_test_identity! {
+        bind(principal, peer, context);
+        user ["alice"];
+        client ["share-client"];
+    };
     let version = krabka_protocol::owned::find_coordinator_response::MAX_VERSION;
     let request = FindCoordinatorRequest {
         key_type: KEY_TYPE_SHARE,
@@ -290,11 +294,11 @@ async fn find(
     version: i16,
     principal_name: &str,
 ) -> FindCoordinatorResponse {
-    request_identity!(
-        (principal, peer, context),
-        principal(principal_name),
-        client_id = "find-client"
-    );
+    krabka_macros::request_test_identity! {
+        bind(principal, peer, context);
+        user [principal_name];
+        client ["find-client"];
+    };
     dispatch_wire(
         broker,
         krabka_protocol::owned::find_coordinator_request::API_KEY,
@@ -442,8 +446,7 @@ async fn granted_share_request_validates_each_key() {
 /// bootstrapped.
 #[tokio::test]
 async fn unknown_key_type_fails_the_whole_request() {
-    let (broker_handle, _dir) = start_broker_no_audit().await;
-    let broker = broker_handle.broker_arc_for_test();
+    let (broker_handle, _dir, broker) = no_bootstrap_broker().await;
     let message = response::error_message(codes::INVALID_REQUEST);
     let rows = vec![
         VersionedResponse {

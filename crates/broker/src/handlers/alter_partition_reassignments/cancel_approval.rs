@@ -168,6 +168,7 @@ use crate::handlers::partition_transition::partition_target as cancel_target;
 
 #[cfg(test)]
 mod tests {
+
     use {
         super::*,
         crate::{
@@ -191,13 +192,13 @@ mod tests {
 
     macro_rules! gated_cancel_fixture {
         (($handle:ident, $directory:ident, $broker:ident)) => {
-            broker_fixture!(
-                ($handle, $directory, $broker),
-                crate::test_support::start_broker_no_audit_with(|config| {
-                    config.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
-                    config.break_glass = gated_config();
-                })
-            );
+            krabka_macros::broker_test_setup! {
+                bind($handle, $directory, $broker);
+                boot [crate::test_support::start_broker_no_audit_with(|config| {
+                                config.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+                                config.break_glass = gated_config();
+                            })];
+            };
         };
     }
 
@@ -264,12 +265,11 @@ mod tests {
 
     macro_rules! reassign_env_fixture {
         (($principal:ident, $peer:ident, $ctx:ident, $env:ident), $broker:ident, $image:ident) => {
-            request_identity!(
-                ($principal, $peer, $ctx),
-                crate::test_support::principal("admin"),
-                client_id = "reassign-client",
-                address = crate::test_support::peer()
-            );
+            krabka_macros::request_test_identity! {
+                bind($principal, $peer, $ctx);
+                user ["admin"];
+                client ["reassign-client"];
+            };
             let $env = ReassignEnv {
                 broker: &$broker,
                 image: &$image,
@@ -440,12 +440,11 @@ mod tests {
     }
 
     fn cancel(broker: &Broker, image: &MetadataImage) -> CancelOutcome {
-        request_identity!(
-            (principal, peer, ctx),
-            crate::test_support::principal("admin"),
-            client_id = "reassign-client",
-            address = crate::test_support::peer()
-        );
+        krabka_macros::request_test_identity! {
+            bind(principal, peer, ctx);
+            user ["admin"];
+            client ["reassign-client"];
+        };
         let env = ReassignEnv {
             broker,
             image,

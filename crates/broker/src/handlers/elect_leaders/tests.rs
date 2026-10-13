@@ -23,7 +23,6 @@ use {
         leader_election::{ElectionType, test_support::one_partition_change},
         test_support::{
             decode_response, gated_break_glass_config as gated_config, start_broker_no_audit_with,
-            test_ctx,
         },
     },
     assert2::{assert, check},
@@ -120,7 +119,10 @@ struct ElectionOutcome {
 async fn elect(broker: &Broker, image: &MetadataImage, election: ElectionType) -> ElectionOutcome {
     let alive = alive();
     let witnesses = HashSet::new();
-    test_ctx!(ctx, "admin");
+    krabka_macros::request_test_identity! {
+        bind(ctx);
+        user ["admin"];
+    };
     let env = ElectionEnv {
         broker,
         image,
@@ -195,7 +197,10 @@ async fn a_topic_wide_proposal_is_spent_once_for_every_partition_it_covers() {
     )]);
     let alive = alive();
     let witnesses = HashSet::new();
-    test_ctx!(ctx, "admin");
+    krabka_macros::request_test_identity! {
+        bind(ctx);
+        user ["admin"];
+    };
     let env = ElectionEnv {
         broker: &broker,
         image: &image,
@@ -265,7 +270,10 @@ async fn a_broker_with_no_approver_set_gates_nothing() {
 async fn the_wire_handler_refuses_an_unclean_election_that_no_proposal_covers() {
     let StartedBroker { handle, dir: _dir } = broker_with(gated_config()).await;
     let broker = handle.broker_arc_for_test();
-    test_ctx!(ctx, "admin");
+    krabka_macros::request_test_identity! {
+        bind(ctx);
+        user ["admin"];
+    };
     let request = |election_type| ElectLeadersRequest {
         election_type,
         topic_partitions: Some(vec![TopicPartitions {
@@ -434,7 +442,10 @@ async fn the_handler_elects_exactly_the_partitions_the_request_names() {
     } = broker_with(BreakGlassConfig::default()).await;
     let broker = broker_handle.broker_arc_for_test();
     seed_preferred_topic(&broker).await;
-    test_ctx!(ctx, "admin");
+    krabka_macros::request_test_identity! {
+        bind(ctx);
+        user ["admin"];
+    };
     let cases: Vec<ElectCase> = vec![
         ElectCase {
             topic_partitions: Some(vec![named(TOPIC, &[])]),
