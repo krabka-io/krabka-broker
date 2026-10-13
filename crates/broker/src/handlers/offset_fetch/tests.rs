@@ -12,7 +12,7 @@ use {
         broker::{Broker, BrokerHandle},
         codes,
         coordinator::unified::{
-            actor::{GroupActorMessage, GroupKindTag},
+            actor::{GroupActorMessage, GroupKindTag, test_support::rpc},
             classic_state::OffsetEntry,
             regex_resolver::no_topic_regex_resolver,
         },
@@ -56,8 +56,7 @@ async fn seed_committed_offset(
     let h = broker
         .group_coordinator
         .get_or_create_group(group, GroupKindTag::Classic);
-    let (tx, rx) = oneshot::channel();
-    h.tx.send(GroupActorMessage::UpdateCommitted {
+    let rx = rpc::begin(&h, |reply| GroupActorMessage::UpdateCommitted {
         entries: vec![((topic.to_string(), partition.0), OffsetEntry {
             offset,
             leader_epoch: 5,
@@ -66,10 +65,9 @@ async fn seed_committed_offset(
             expire_timestamp_ms: None,
             topic_id: None,
         })],
-        reply: tx,
+        reply,
     })
-    .await
-    .expect("send UpdateCommitted");
+    .await;
     rx.await.expect("UpdateCommitted ack");
 }
 
@@ -155,18 +153,16 @@ async fn seed_pending_txn_offsets(
     let h = broker
         .group_coordinator
         .get_or_create_group(group, GroupKindTag::Classic);
-    let (tx, rx) = oneshot::channel();
-    h.tx.send(GroupActorMessage::AddPendingTxnOffsets {
+    let rx = rpc::begin(&h, |reply| GroupActorMessage::AddPendingTxnOffsets {
         producer_id: producer.0,
         written_at: written_at.0,
         keys: keys
             .into_iter()
             .map(|PendingKey { topic, partition }| (topic, partition.0))
             .collect(),
-        reply: tx,
+        reply,
     })
-    .await
-    .expect("send AddPendingTxnOffsets");
+    .await;
     rx.await.expect("AddPendingTxnOffsets ack");
 }
 
@@ -188,8 +184,7 @@ async fn resolve_pending_txn_offsets(
     let h = broker
         .group_coordinator
         .get_or_create_group(group, GroupKindTag::Classic);
-    let (tx, rx) = oneshot::channel();
-    h.tx.send(GroupActorMessage::ResolveTxnOffsets {
+    let rx = rpc::begin(&h, |reply| GroupActorMessage::ResolveTxnOffsets {
         producer_id: producer.0,
         resolved_through: resolved_through.0,
         committed: committed
@@ -197,10 +192,9 @@ async fn resolve_pending_txn_offsets(
             .into_iter()
             .map(|offset| ((offset.topic, offset.partition), offset.entry))
             .collect(),
-        reply: tx,
+        reply,
     })
-    .await
-    .expect("send ResolveTxnOffsets");
+    .await;
     rx.await.expect("ResolveTxnOffsets ack");
 }
 
