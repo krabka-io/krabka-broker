@@ -384,7 +384,7 @@ mod tests {
                 SizeField::Message => out.max_message_size == base.max_message_size,
                 SizeField::Segment => out.segment_size == base.segment_size,
             };
-            assert!(retained, "{key}={corrupt}");
+            assert2::assert!(retained, "{key}={corrupt}");
         }
     }
 
