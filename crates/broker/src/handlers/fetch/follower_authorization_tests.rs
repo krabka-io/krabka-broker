@@ -16,6 +16,8 @@
 //! that never fetches, so the high watermark stays at 0 until a fetch as node
 //! 2 moves it.
 
+#[cfg(test)]
+use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     super::FIRST_TOPIC_ID_VERSION,
     crate::{
@@ -24,7 +26,10 @@ use {
         codes,
         handlers::{
             acl_wire::CLUSTER_RESOURCE_NAME,
-            test_support::{StartedBroker, default_records_batch, seed_partition_replicas},
+            test_support::{
+                StartedBroker, default_records_batch, seed_partition_replicas,
+                wait_for_bound_partition,
+            },
         },
         partition::Partition,
         test_support::{append_partition_batch, start_broker_no_audit_with},
@@ -82,7 +87,7 @@ impl Caller {
 #[derive(Debug)]
 struct Grants;
 
-test_authorizer!(Grants, (self, _source, request), {
+krabka_macros::test_authorizer!(Grants, request; {
     let allowed = match request.principal.name.as_str() {
         "reader" => {
             request.resource_type == ResourceType::Topic && request.operation == AclOperation::Read
@@ -166,7 +171,10 @@ struct Outcome {
 }
 
 async fn start() -> StartedBroker {
-    let (handle, dir) = start_broker_no_audit_with(|cfg| {
+    let HandlerStartedBroker {
+        broker: handle,
+        dir,
+    } = start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(Grants);
         // Node 2 never fetches. Keep it in the ISR for the whole test, so only
         // a fetch as node 2 can move the high watermark.
@@ -202,13 +210,13 @@ async fn replicated_partition(
 
     let shared = broker.broker_arc_for_test();
     let follower = krabka_raft::NodeId(2);
-    wait_for_bound_partition!(
-        (shared, partition),
+    let partition = wait_for_bound_partition(
+        &shared,
         topic,
-        partition,
-        partition.replica_state.lock().await.isr.contains(&follower),
-        "the broker leads the partition with node 2 in the ISR"
-    );
+        async |partition| partition.replica_state.lock().await.isr.contains(&follower),
+        "the broker leads the partition with node 2 in the ISR",
+    )
+    .await;
 
     let mut batch = default_records_batch(&RECORDS);
     append_partition_batch(&partition, &mut batch);

@@ -581,7 +581,7 @@ mod tests {
     #[derive(Debug)]
     struct TopicReadOnly;
 
-    test_authorizer!(TopicReadOnly, (self, _source, request), {
+    krabka_macros::test_authorizer!(TopicReadOnly, request; {
         if request.operation == AclOperation::Read {
             AuthorizationResult::Allow
         } else {

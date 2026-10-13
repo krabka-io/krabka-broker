@@ -11,6 +11,8 @@
 //! and it holds back the `Applied` audit events until that append's outcome is
 //! known.
 
+#[cfg(test)]
+use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     super::{
         plan::RowError,
@@ -374,7 +376,10 @@ mod tests {
     /// that names it claims a reassignment that never happened.
     #[tokio::test]
     async fn only_a_start_that_plans_a_record_counts_as_altered() {
-        let (handle, _dir) = start_broker_no_audit_with(|cfg| {
+        let HandlerStartedBroker {
+            broker: handle,
+            dir: _dir,
+        } = start_broker_no_audit_with(|cfg| {
             cfg.authorizer = Arc::new(AllowAllAuthorizer);
         })
         .await;

@@ -361,7 +361,7 @@ mod tests {
         #[derive(Debug)]
         struct GrantOnly(AclOperation);
 
-        test_authorizer!(GrantOnly, (self, _source, req), {
+        krabka_macros::test_authorizer!(GrantOnly, req; {
             if req.operation == self.0 {
                 crate::authorizer::AuthorizationResult::Allow
             } else {

@@ -60,6 +60,8 @@
 //! never as null. This is the only API that reports ELR; Kafka's Metadata
 //! schema has no field for it in any version. See [`crate::elr`].
 
+#[cfg(test)]
+use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     crate::{
         authorizer::{AuthorizationResult, authorize_topics},
@@ -528,7 +530,7 @@ mod tests {
     #[derive(Debug)]
     struct DenyTopics(&'static [&'static str]);
 
-    test_authorizer!(DenyTopics, (self, _source, request), {
+    krabka_macros::test_authorizer!(DenyTopics, request; {
         if request.resource_type == ResourceType::Topic
             && request.operation == AclOperation::Describe
             && self.0.contains(&request.resource_name)
@@ -656,7 +658,10 @@ mod tests {
         (
             ($handle:ident, $dir:ident, $broker:ident, $ctx:ident), $authorizer:expr, $topics:expr
         ) => {
-            let ($handle, $dir) = start_broker($authorizer).await;
+            let HandlerStartedBroker {
+                broker: $handle,
+                dir: $dir,
+            } = start_broker($authorizer).await;
             for setup in $topics {
                 seed_topic(&$handle, setup).await;
             }
@@ -719,7 +724,10 @@ mod tests {
     /// cursor's offset into `a`.
     #[tokio::test]
     async fn cursor_offset_on_a_denied_topic_does_not_leak_onto_the_next_topic() {
-        let (broker_handle, _dir) = start_broker(Arc::new(DenyTopics(&["a"]))).await;
+        let HandlerStartedBroker {
+            broker: broker_handle,
+            dir: _dir,
+        } = start_broker(Arc::new(DenyTopics(&["a"]))).await;
         seed_topic(&broker_handle, TopicSetup {
             topic: "a",
             ..TopicSetup::single_replica()
@@ -903,7 +911,10 @@ mod tests {
     async fn budget_exhausted_at_topic_boundary_emits_no_row_for_the_next_topic(
         next_topic_exists: bool,
     ) {
-        let (broker_handle, _dir) = start_broker(Arc::new(AllowAllAuthorizer)).await;
+        let HandlerStartedBroker {
+            broker: broker_handle,
+            dir: _dir,
+        } = start_broker(Arc::new(AllowAllAuthorizer)).await;
         seed_topic(&broker_handle, TopicSetup {
             topic: "a",
             ..TopicSetup::single_replica()
@@ -1086,7 +1097,10 @@ mod tests {
     /// renders `Elr: `.
     #[tokio::test]
     async fn response_partition_carries_the_elr_the_image_holds() {
-        let (broker_handle, _dir) = start_broker(Arc::new(AllowAllAuthorizer)).await;
+        let HandlerStartedBroker {
+            broker: broker_handle,
+            dir: _dir,
+        } = start_broker(Arc::new(AllowAllAuthorizer)).await;
         seed_topic_with_elr(&broker_handle, "0:2:3").await;
         let broker = broker_handle.broker_arc_for_test();
         let topic = orders_topic(&broker).await;
@@ -1120,7 +1134,10 @@ mod tests {
     /// struct-field-deletion mutant, which would set it to 0.
     #[tokio::test]
     async fn response_partition_carries_leader_epoch() {
-        let (broker_handle, _dir) = start_broker(Arc::new(AllowAllAuthorizer)).await;
+        let HandlerStartedBroker {
+            broker: broker_handle,
+            dir: _dir,
+        } = start_broker(Arc::new(AllowAllAuthorizer)).await;
         seed_topic_with_epoch(&broker_handle, LeaderEpoch(9)).await;
         let broker = broker_handle.broker_arc_for_test();
         let topic = orders_topic(&broker).await;

@@ -1,5 +1,7 @@
 //! The legacy `ListOffsets` v0 wire shape and segment-boundary lookup.
 
+#[cfg(test)]
+use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     super::{
         DescribeSplit, IndexedTopic, PartitionRow, TopicPartitions,
@@ -286,6 +288,23 @@ mod tests {
         std::{sync::Arc, time::Duration},
     };
 
+    struct ConnectedBroker {
+        handle: BrokerHandle,
+        directory: tempfile::TempDir,
+        client: krabka_client_core::Client,
+    }
+    async fn connected_broker() -> ConnectedBroker {
+        let HandlerStartedBroker {
+            broker: handle,
+            dir: directory,
+        } = start_broker_with_authorizer_no_audit(Arc::new(AllowAllAuthorizer)).await;
+        let client = client_for(&handle).await;
+        ConnectedBroker {
+            handle,
+            directory,
+            client,
+        }
+    }
     macro_rules! topic_header {
         ($response:ident, $topic:expr, $partitions:expr) => {
             assert!(get_array_len(&mut $response, false).unwrap() == 1);
@@ -297,9 +316,11 @@ mod tests {
     #[tokio::test]
     async fn max_num_offsets_caps_legacy_segment_boundaries() {
         const TOPIC: &str = "list-offsets-v0-max";
-        let (broker_handle, _dir) =
-            start_broker_with_authorizer_no_audit(Arc::new(AllowAllAuthorizer)).await;
-        let client = client_for(&broker_handle).await;
+        let ConnectedBroker {
+            handle: broker_handle,
+            directory: _dir,
+            client,
+        } = connected_broker().await;
         create_topic(&client, TOPIC, vec![
             krabka_protocol::owned::create_topics_request::CreatableTopicConfig {
                 name: "internal.segment.bytes".into(),
@@ -408,9 +429,11 @@ mod tests {
     #[tokio::test]
     async fn duplicate_partition_gets_invalid_request_on_every_row() {
         const TOPIC: &str = "list-offsets-v0-duplicate";
-        let (broker_handle, _dir) =
-            start_broker_with_authorizer_no_audit(Arc::new(AllowAllAuthorizer)).await;
-        let client = client_for(&broker_handle).await;
+        let ConnectedBroker {
+            handle: broker_handle,
+            directory: _dir,
+            client,
+        } = connected_broker().await;
         create_topic(&client, TOPIC, vec![]).await;
         broker_handle.wait_until_partition_present(TOPIC, 0).await;
 

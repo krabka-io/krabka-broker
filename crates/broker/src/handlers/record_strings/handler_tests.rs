@@ -13,6 +13,8 @@
 //! more is over the bound, and Kafka cannot write it. The join answers with an
 //! error and no member id.
 
+#[cfg(test)]
+use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     crate::{
         authorizer::AllowAllAuthorizer,
@@ -163,7 +165,10 @@ struct Env {
 
 impl Env {
     async fn start() -> Self {
-        let (handle, dir) = start_broker_with(|cfg| {
+        let HandlerStartedBroker {
+            broker: handle,
+            dir,
+        } = start_broker_with(|cfg| {
             cfg.authorizer = Arc::new(AllowAllAuthorizer);
             cfg.streams_group.enable = true;
             cfg.classic_group_initial_rebalance_delay = krabka_units::secs(0);

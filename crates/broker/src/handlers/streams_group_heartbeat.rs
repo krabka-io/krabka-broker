@@ -11,6 +11,8 @@
 //! KIP-1071 early access, AND the `streams_group.enable` config kill-switch.
 //! BOTH must allow the request.
 
+#[cfg(test)]
+use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     crate::{
         broker::Broker,
@@ -736,7 +738,10 @@ mod tests {
     async fn configured_streams_broker(
         configure: impl FnOnce(&mut BrokerConfig),
     ) -> ConfiguredBroker {
-        let (handle, directory) = start_group_broker_with(|cfg| {
+        let HandlerStartedBroker {
+            broker: handle,
+            dir: directory,
+        } = start_group_broker_with(|cfg| {
             cfg.authorizer = Arc::new(AllowAllAuthorizer);
             configure(cfg);
         })
@@ -768,7 +773,7 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    async fn start_broker(streams_enabled: bool) -> (BrokerHandle, tempfile::TempDir) {
+    async fn start_broker(streams_enabled: bool) -> HandlerStartedBroker {
         start_group_broker_with(|cfg| {
             cfg.authorizer = Arc::new(AllowAllAuthorizer);
             cfg.streams_group.enable = streams_enabled;
@@ -781,7 +786,7 @@ mod tests {
     /// for the tests that drive a specific ACL gate rather than allow
     /// everything.
     async fn start_broker_with_grants() -> StartedBroker {
-        let (broker, dir) = start_group_broker_with(|cfg| {
+        let HandlerStartedBroker { broker, dir } = start_group_broker_with(|cfg| {
             cfg.authorizer = Arc::new(ControllerPeerAllowed(GrantsInPrincipalName));
             cfg.streams_group.enable = true;
         })

@@ -659,12 +659,12 @@ mod tests {
     }
 
     async fn local_read_setup(topic: &str) -> ReadSetup {
-        let (broker_handle, dir) = handler_fixture_support::start_broker().await;
-        let broker = broker_handle.broker_arc_for_test();
-        let part = handler_fixture_support::local_partition(&broker, dir.path(), topic);
+        let started = handler_fixture_support::start_broker().await;
+        let broker = started.broker.broker_arc_for_test();
+        let part = handler_fixture_support::local_partition(&broker, started.dir.path(), topic);
         ReadSetup {
-            broker_handle,
-            dir,
+            broker_handle: started.broker,
+            dir: started.dir,
             broker,
             part,
         }

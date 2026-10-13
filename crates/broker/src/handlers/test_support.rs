@@ -19,11 +19,12 @@ use {
         producer_state::ProducerState,
         share_partition::state::RecordState,
         test_support::{
-            ControllerPeerAllowed, DenyAll, GrantsInPrincipalName, StandalonePartitionSetup,
-            StorageMode, broker_registration, decode_response, encode_request,
-            initialize_share_state, peer, principal, request_context, sasl_principal,
-            start_broker_no_audit_with, start_broker_with as start_test_broker_with,
-            start_group_broker_no_audit, start_share_broker, try_dispatch_context,
+            ControllerPeerAllowed, DenyAll, GrantsInPrincipalName, ShareApiSupport,
+            StandalonePartitionSetup, StorageMode, broker_registration, decode_response,
+            encode_request, initialize_share_state, peer, principal, request_context,
+            sasl_principal, start_broker_no_audit_with,
+            start_broker_with as start_test_broker_with, start_group_broker_no_audit,
+            start_share_broker, try_dispatch_context,
         },
         topic_policy::TopicPolicy,
     },
@@ -33,13 +34,15 @@ use {
     krabka_protocol::{
         Decode, Encode,
         owned::{
+            create_topics_request::CreateTopicsRequest,
+            create_topics_response::CreateTopicsResponse,
             produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
             produce_response::ProduceResponse,
         },
         primitives::uuid::Uuid as WireUuid,
         records::{Record, RecordBatch, RecordsPayload},
     },
-    std::{collections::HashSet, future::Future, path::Path, sync::Arc},
+    std::{collections::HashSet, future::Future, path::Path, sync::Arc, time::Duration},
 };
 
 /// An id that no topic in topic-resolution tests has.
@@ -159,24 +162,11 @@ macro_rules! stamp_voter_request {
     };
 }
 
-/// Authorizer fixtures state their complete policy while sharing the trait signature.
-macro_rules! test_authorizer {
-    ($ty:ident, ($this:ident, $source:ident, $request:ident), $decision:block) => {
-        impl crate::authorizer::Authorizer for $ty {
-            fn authorize(
-                &$this,
-                $source: &dyn crate::authorizer::AclSource,
-                $request: &crate::authorizer::AuthorizationRequest<'_>,
-            ) -> crate::authorizer::AuthorizationResult $decision
-        }
-    };
-}
-
 /// Refuses only topic reads while allowing setup and group operations.
 #[derive(Debug)]
 pub(crate) struct DenyTopicRead;
 
-test_authorizer!(DenyTopicRead, (self, _source, request), {
+krabka_macros::test_authorizer!(DenyTopicRead, request; {
     if request.resource_type == krabka_metadata::ResourceType::Topic
         && request.operation == krabka_metadata::AclOperation::Read
     {
@@ -190,7 +180,7 @@ test_authorizer!(DenyTopicRead, (self, _source, request), {
 #[derive(Debug)]
 pub(crate) struct DenyTopics;
 
-test_authorizer!(DenyTopics, (self, _source, request), {
+krabka_macros::test_authorizer!(DenyTopics, request; {
     if request.resource_type == krabka_metadata::ResourceType::Topic {
         crate::authorizer::AuthorizationResult::Deny
     } else {
@@ -443,6 +433,58 @@ pub(crate) struct StartedBroker {
     pub(crate) broker: BrokerHandle,
     pub(crate) dir: tempfile::TempDir,
 }
+/// An independent share API input and expected refusal response.
+pub(crate) struct ShareRefusalCase<Input, Response> {
+    pub(crate) name: &'static str,
+    pub(crate) authorizer: Arc<dyn Authorizer>,
+    pub(crate) enabled: ShareApiSupport,
+    pub(crate) input: Input,
+    pub(crate) expected: Response,
+}
+
+/// The shared feature and group-refusal policies, constructed before case inputs.
+pub(crate) struct ShareRefusalPolicy {
+    name: &'static str,
+    authorizer: Arc<dyn Authorizer>,
+    enabled: ShareApiSupport,
+}
+impl ShareRefusalPolicy {
+    pub(crate) fn unsupported(name: &'static str) -> Self {
+        Self {
+            name,
+            authorizer: Arc::new(AllowAllAuthorizer),
+            enabled: ShareApiSupport::Disabled,
+        }
+    }
+
+    pub(crate) fn group_denied(name: &'static str) -> Self {
+        Self {
+            name,
+            authorizer: Arc::new(ControllerPeerAllowed(DenyAll)),
+            enabled: ShareApiSupport::Enabled,
+        }
+    }
+
+    pub(crate) fn with_input<Input, Response>(
+        self,
+        input: Input,
+        expected: Response,
+    ) -> ShareRefusalCase<Input, Response> {
+        ShareRefusalCase {
+            name: self.name,
+            authorizer: self.authorizer,
+            enabled: self.enabled,
+            input,
+            expected,
+        }
+    }
+}
+/// A broker handle and its live view, retaining the broker directory.
+pub(crate) struct LiveBrokerFixture {
+    pub(crate) handle: BrokerHandle,
+    pub(crate) directory: tempfile::TempDir,
+    pub(crate) broker: Arc<Broker>,
+}
 
 pub(crate) fn cluster_acl(operation: krabka_metadata::AclOperation) -> krabka_metadata::AclEntry {
     let setup = AclSetup::cluster(operation);
@@ -454,7 +496,7 @@ pub(crate) fn cluster_acl(operation: krabka_metadata::AclOperation) -> krabka_me
         .call()
 }
 
-pub(crate) async fn start_allow_all_no_audit() -> (BrokerHandle, tempfile::TempDir) {
+pub(crate) async fn start_allow_all_no_audit() -> StartedBroker {
     start_broker_no_audit_with(|config| {
         config.authorizer = Arc::new(AllowAllAuthorizer);
     })
@@ -466,7 +508,7 @@ pub(crate) fn allow_all_authorizer() -> Arc<dyn Authorizer> { Arc::new(AllowAllA
 
 pub(crate) fn deny_all_authorizer() -> Arc<dyn Authorizer> { Arc::new(DenyAll) }
 
-pub(crate) async fn start_share_allow_all() -> (BrokerHandle, tempfile::TempDir) {
+pub(crate) async fn start_share_allow_all() -> StartedBroker {
     start_share_broker()
         .authorizer(allow_all_authorizer())
         .call()
@@ -479,7 +521,7 @@ pub(crate) fn controller_peer_authorizer() -> Arc<dyn Authorizer> {
     )))
 }
 
-pub(crate) async fn start_with_extra_log_dir(extra: &Path) -> (BrokerHandle, tempfile::TempDir) {
+pub(crate) async fn start_with_extra_log_dir(extra: &Path) -> StartedBroker {
     start_test_broker_with({
         let extra_dir = extra.to_path_buf();
         move |config| config.extra_log_dirs = vec![extra_dir]
@@ -495,7 +537,7 @@ fn set_local_storage(config: &mut BrokerConfig, directory: &Path) {
 
 pub(crate) async fn start_with_local_remote_storage(
     directory: &tempfile::TempDir,
-) -> (BrokerHandle, tempfile::TempDir) {
+) -> StartedBroker {
     start_broker_with(|config| {
         set_local_storage(config, directory.path());
         config.remote_log_metadata = RlmmKind::InMemory;
@@ -503,9 +545,7 @@ pub(crate) async fn start_with_local_remote_storage(
     .await
 }
 
-pub(crate) async fn start_with_local_object_store(
-    directory: &tempfile::TempDir,
-) -> (BrokerHandle, tempfile::TempDir) {
+pub(crate) async fn start_with_local_object_store(directory: &tempfile::TempDir) -> StartedBroker {
     start_broker_no_audit_with(|config| {
         config.authorizer = Arc::new(AllowAllAuthorizer);
         set_local_storage(config, directory.path());
@@ -515,7 +555,7 @@ pub(crate) async fn start_with_local_object_store(
 
 pub(crate) async fn start_with_break_glass(
     configure: impl FnOnce() -> BreakGlassConfig,
-) -> (BrokerHandle, tempfile::TempDir) {
+) -> StartedBroker {
     start_broker_no_audit_with(|config| {
         config.authorizer = Arc::new(AllowAllAuthorizer);
         config.break_glass = configure();
@@ -523,23 +563,19 @@ pub(crate) async fn start_with_break_glass(
     .await
 }
 
-pub(crate) async fn start_with_principal_grants() -> (BrokerHandle, tempfile::TempDir) {
+pub(crate) async fn start_with_principal_grants() -> StartedBroker {
     start_broker_no_audit_with(|config| config.authorizer = Arc::new(GrantsInPrincipalName)).await
 }
 
 pub(crate) async fn start_group_with_controller_peer(
     authorizer: impl Authorizer + 'static,
-) -> (BrokerHandle, tempfile::TempDir) {
+) -> StartedBroker {
     start_group_broker_no_audit(Arc::new(ControllerPeerAllowed(authorizer))).await
 }
 
-pub(crate) async fn start_broker() -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_with(|_| {}).await
-}
+pub(crate) async fn start_broker() -> StartedBroker { start_broker_with(|_| {}).await }
 
-pub(crate) async fn start_broker_with(
-    configure: impl FnOnce(&mut BrokerConfig),
-) -> (BrokerHandle, tempfile::TempDir) {
+pub(crate) async fn start_broker_with(configure: impl FnOnce(&mut BrokerConfig)) -> StartedBroker {
     start_test_broker_with(configure).await
 }
 
@@ -630,6 +666,13 @@ pub(crate) async fn share_acknowledge_wire(
 pub(crate) struct CaseOutcomes<T> {
     pub(crate) actual: T,
     pub(crate) expected: T,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct LabeledCaseOutcome<Response, State> {
+    pub(crate) label: &'static str,
+    pub(crate) response: Response,
+    pub(crate) state: State,
 }
 
 /// The actual or the expected outcome of one [`TopicResolutionCase`].
@@ -1012,24 +1055,6 @@ pub(crate) async fn share_record_states(
         .collect()
 }
 
-/// Bind the client's response before waiting or inspecting subsequent metadata.
-macro_rules! created_topic_fixture {
-    (($client:ident, $response:ident), $broker:expr, $client_id:expr, $request:expr) => {
-        let $client = krabka_client_core::Client::builder()
-            .bootstrap($broker.listen_addr().to_string())
-            .client_id($client_id)
-            .build()
-            .await
-            .expect("client build");
-        let $response = $client.send($request).await.expect("CreateTopics");
-        assert!(
-            $response.topics[0].error_code == crate::codes::NONE,
-            "{:?}",
-            $response
-        );
-    };
-}
-
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 pub(crate) struct ClientTopicSetup<'a> {
     #[default("admin-client")]
@@ -1038,6 +1063,49 @@ pub(crate) struct ClientTopicSetup<'a> {
     pub name: &'a str,
     #[default(TopicPartitionCount(1))]
     pub partitions: TopicPartitionCount,
+}
+
+pub(crate) struct CreatedTopicResponse {
+    pub(crate) client: krabka_client_core::Client,
+    pub(crate) response: CreateTopicsResponse,
+}
+/// Keep the connected client and full response alive at the caller's original boundary.
+#[bon::builder]
+pub(crate) async fn created_topic_response(
+    broker: &BrokerHandle,
+    client_id: &str,
+    request: impl FnOnce() -> CreateTopicsRequest,
+) -> CreatedTopicResponse {
+    let client = krabka_client_core::Client::builder()
+        .bootstrap(broker.listen_addr().to_string())
+        .client_id(client_id)
+        .build()
+        .await
+        .expect("client build");
+    let response = client.send(request()).await.expect("CreateTopics");
+    assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
+    CreatedTopicResponse { client, response }
+}
+
+/// Await the same candidate and borrowing predicate without changing the polling cadence.
+pub(crate) async fn wait_for_bound_partition(
+    shared: &Broker,
+    topic: &str,
+    mut condition: impl AsyncFnMut(&Arc<Partition>) -> bool,
+    expectation: &str,
+) -> Arc<Partition> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(partition) = shared.partitions.get(topic, krabka_ids::PartitionIndex(0))
+                && condition(&partition).await
+            {
+                return partition;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect(expectation)
 }
 
 pub(crate) fn metadata_topic_record(
@@ -1099,15 +1167,20 @@ pub(crate) async fn create_topic(
         name,
         partitions,
     } = setup;
-    created_topic_fixture!(
-        (client, response),
-        broker,
-        client_id,
-        configured_topic_request()
-            .topic(name)
-            .num_partitions(partitions)
-            .call()
-    );
+    let CreatedTopicResponse {
+        client: _client,
+        response: _response,
+    } = created_topic_response()
+        .broker(broker)
+        .client_id(client_id)
+        .request(|| {
+            configured_topic_request()
+                .topic(name)
+                .num_partitions(partitions)
+                .call()
+        })
+        .call()
+        .await;
     for partition in 0..partitions.0 {
         broker.wait_until_partition_present(name, partition).await;
     }
@@ -1514,52 +1587,6 @@ pub(crate) async fn initialize_earliest_share(
     for partition in partitions {
         initialize_share_state(broker, group, uuid::Uuid::from_bytes(topic_id.0), partition).await;
     }
-}
-
-/// Bind the shared runtime before waiting for a candidate that satisfies the caller's predicate.
-macro_rules! wait_for_local_partition {
-    (
-        ($shared:ident, $partition:ident),
-        $broker:expr,
-        $topic:expr,
-        $candidate:ident,
-        $condition:expr,
-        $expect:literal
-    ) => {
-        let $shared = $broker.broker_arc_for_test();
-        wait_for_bound_partition!(
-            ($shared, $partition),
-            $topic,
-            $candidate,
-            $condition,
-            $expect
-        );
-    };
-}
-
-macro_rules! wait_for_bound_partition {
-    (
-        ($shared:ident, $partition:ident),
-        $topic:expr,
-        $candidate:ident,
-        $condition:expr,
-        $expect:literal
-    ) => {
-        let $partition = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            loop {
-                if let Some($candidate) = $shared
-                    .partitions
-                    .get($topic, krabka_ids::PartitionIndex(0))
-                    && $condition
-                {
-                    return $candidate;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect($expect);
-    };
 }
 
 pub(crate) fn share_fetch_topics(

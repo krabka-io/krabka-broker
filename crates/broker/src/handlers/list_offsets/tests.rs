@@ -1,6 +1,10 @@
 //! The tests for the handler entry point: the per-topic `Describe` gate and
 //! the response a denied topic receives.
 
+#[cfg(test)]
+use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
+#[cfg(test)]
+use crate::test_support::EmptyAclImage;
 use {
     super::{
         handle,
@@ -36,7 +40,7 @@ fn topic_describe_denied_yields_topic_authorization_failed_rows() {
         ListOffsetsPartitionResponse, ListOffsetsResponse, ListOffsetsTopicResponse,
     };
 
-    let (authorizer, image) = empty_acl_image();
+    let EmptyAclImage { authorizer, image } = empty_acl_image();
     krabka_macros::request_test_identity! {
         bind(principal, peer, ctx);
         user ["ANONYMOUS"];
@@ -256,7 +260,10 @@ async fn duplicate_partitions_get_invalid_request_on_every_row() {
 
     const TOPIC: &str = "list-offsets-duplicate";
 
-    let (broker_handle, _dir) = start_broker(Arc::new(AllowAllAuthorizer)).await;
+    let HandlerStartedBroker {
+        broker: broker_handle,
+        dir: _dir,
+    } = start_broker(Arc::new(AllowAllAuthorizer)).await;
     let client = client_for(&broker_handle).await;
     client
         .send(

@@ -272,7 +272,7 @@ mod tests {
     use {
         super::handle as alter_share_group_offsets_handle,
         crate::{
-            authorizer::{AuthorizationResult, Authorizer},
+            authorizer::AuthorizationResult,
             broker::BrokerHandle,
             codes,
             coordinator::unified::{
@@ -282,15 +282,17 @@ mod tests {
                 RequestContext,
                 create_topics::handle as create_topics_handle,
                 test_support::{
-                    self as handler_fixture_support, CreateTopicSetup,
-                    configured_topic_request_from,
+                    self as handler_fixture_support, CreateTopicSetup, ShareRefusalCase,
+                    ShareRefusalPolicy, configured_topic_request_from,
                 },
             },
             share_coordinator::{
                 coordinator::message::UNKNOWN_TOPIC_OR_PARTITION,
                 handlers::test_support::lead_share_state_partitions,
             },
-            test_support::{DenyAll, ShareApiSupport, start_share_broker},
+            test_support::{
+                ShareApiSupport, StartedBroker as HandlerStartedBroker, start_share_broker,
+            },
         },
         assert2::assert,
         krabka_protocol::{
@@ -352,7 +354,7 @@ mod tests {
         denied_topics: Vec<String>,
     }
 
-    test_authorizer!(ScenarioAuthorizer, (self, _source, req), {
+    krabka_macros::test_authorizer!(ScenarioAuthorizer, req; {
         use krabka_metadata::{AclOperation, ResourceType};
         let allowed = match (req.resource_type, req.operation) {
             (ResourceType::Group, AclOperation::Read) => self.group_read,
@@ -429,47 +431,49 @@ mod tests {
 
     #[tokio::test]
     async fn handle_error_scenarios_preserve_expected_rows() {
-        type Case<'a> = (
-            &'a str,
-            Arc<dyn Authorizer>,
-            ShareApiSupport,
-            &'a str,
-            Vec<i32>,
-            AlterShareGroupOffsetsResponse,
-        );
+        struct AlterOffsetsInput {
+            topic_name: &'static str,
+            partitions: Vec<i32>,
+        }
         let version = alter_share_group_offsets_response::MAX_VERSION;
-        let cases: Vec<Case<'_>> = vec![
-            (
+        let cases: Vec<ShareRefusalCase<AlterOffsetsInput, AlterShareGroupOffsetsResponse>> = vec![
+            ShareRefusalPolicy::unsupported(
                 "disabled feature returns top-level unsupported version",
-                Arc::new(crate::authorizer::AllowAllAuthorizer),
-                crate::test_support::ShareApiSupport::Disabled,
-                "missing",
-                vec![0],
+            )
+            .with_input(
+                AlterOffsetsInput {
+                    topic_name: "missing",
+                    partitions: vec![0],
+                },
                 krabka_macros::unthrottled_wire!(AlterShareGroupOffsetsResponse {
                     error_code: codes::UNSUPPORTED_VERSION,
                     error_message: None,
                     responses: Vec::new(),
                 }),
             ),
-            (
+            ShareRefusalPolicy::group_denied(
                 "denied group returns top-level authorization failure",
-                Arc::new(crate::test_support::ControllerPeerAllowed(DenyAll)),
-                crate::test_support::ShareApiSupport::Enabled,
-                "missing",
-                vec![0],
+            )
+            .with_input(
+                AlterOffsetsInput {
+                    topic_name: "missing",
+                    partitions: vec![0],
+                },
                 krabka_macros::unthrottled_wire!(AlterShareGroupOffsetsResponse {
                     error_code: codes::GROUP_AUTHORIZATION_FAILED,
                     error_message: None,
                     responses: Vec::new(),
                 }),
             ),
-            (
-                "unknown topic preserves topic and partition fields",
-                Arc::new(crate::authorizer::AllowAllAuthorizer),
-                crate::test_support::ShareApiSupport::Enabled,
-                "missing-topic",
-                vec![3, 5],
-                krabka_macros::unthrottled_wire!(AlterShareGroupOffsetsResponse {
+            ShareRefusalCase {
+                name: "unknown topic preserves topic and partition fields",
+                authorizer: Arc::new(crate::authorizer::AllowAllAuthorizer),
+                enabled: ShareApiSupport::Enabled,
+                input: AlterOffsetsInput {
+                    topic_name: "missing-topic",
+                    partitions: vec![3, 5],
+                },
+                expected: krabka_macros::unthrottled_wire!(AlterShareGroupOffsetsResponse {
                     error_code: codes::NONE,
                     error_message: None,
                     responses: vec![krabka_macros::tagged_wire!(
@@ -499,12 +503,12 @@ mod tests {
                         }
                     )],
                 }),
-            ),
+            },
         ];
         krabka_macros::share_refusal_matrix! {
-            case(case, authorizer, share_enabled, topic_name, partitions, expected) [cases];
+            case(row) [cases];
             bind(broker_handle, _dir, broker, ctx, resp);
-            invoke [alter_share_group_offsets_handle(&broker, request("g1", topic_name, &partitions), version, &ctx)];
+            invoke [alter_share_group_offsets_handle(&broker, request("g1", row.input.topic_name, &row.input.partitions), version, &ctx)];
         };
     }
 
@@ -587,7 +591,10 @@ mod tests {
                     Vec::new()
                 },
             });
-            let (broker_handle, _dir) = start_share_broker().authorizer(authorizer).call().await;
+            let HandlerStartedBroker {
+                broker: broker_handle,
+                dir: _dir,
+            } = start_share_broker().authorizer(authorizer).call().await;
             let broker = broker_handle.broker_arc_for_test();
             krabka_macros::request_test_identity! {
                 bind(ctx);

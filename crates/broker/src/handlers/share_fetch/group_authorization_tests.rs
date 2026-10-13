@@ -11,6 +11,8 @@
 //! Each table crosses the group grant with the topic grant. One broker serves
 //! every case, and the principal name selects the grants.
 
+#[cfg(test)]
+use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     crate::{
         authorizer::AuthorizationResult,
@@ -89,7 +91,7 @@ impl Grants {
 #[derive(Debug)]
 struct GrantsByName;
 
-test_authorizer!(GrantsByName, (self, _source, request), {
+krabka_macros::test_authorizer!(GrantsByName, request; {
     let Some(grants) = Grants::ALL
         .into_iter()
         .find(|grants| grants.principal_name() == request.principal.name)
@@ -111,7 +113,7 @@ test_authorizer!(GrantsByName, (self, _source, request), {
 });
 
 async fn start() -> StartedBroker {
-    let (broker, dir) =
+    let HandlerStartedBroker { broker, dir } =
         start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(GrantsByName)).await;
     StartedBroker { broker, dir }
 }

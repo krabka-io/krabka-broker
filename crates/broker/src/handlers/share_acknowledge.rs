@@ -18,6 +18,8 @@
 //! `SocketAddr` in its `RequestContext`, for the group `Read` and per-topic
 //! `Read` ACL gates.
 
+#[cfg(test)]
+use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     crate::{
         broker::Broker,
@@ -333,7 +335,10 @@ mod tests {
     #[tokio::test]
     async fn handle_disabled_feature_returns_top_level_unsupported_version() {
         let version = share_acknowledge_response::MAX_VERSION;
-        let (broker_handle, _dir) = start_share_broker()
+        let HandlerStartedBroker {
+            broker: broker_handle,
+            dir: _dir,
+        } = start_share_broker()
             .authorizer(std::sync::Arc::new(AllowAllAuthorizer))
             .support(ShareApiSupport::Disabled)
             .call()
@@ -483,7 +488,7 @@ mod tests {
         initialized_share_topic!(
             (broker_handle, _dir, known),
             async {
-                let (broker, dir) = start_share_broker()
+                let HandlerStartedBroker { broker, dir } = start_share_broker()
                     .authorizer(std::sync::Arc::new(AllowAllAuthorizer))
                     .call()
                     .await;
@@ -507,7 +512,7 @@ mod tests {
         initialized_share_topic!(
             (broker_handle, _dir, known),
             async {
-                let (broker, dir) = start_broker_with(|cfg| {
+                let HandlerStartedBroker { broker, dir } = start_broker_with(|cfg| {
                     cfg.authorizer = std::sync::Arc::new(DenyTopicRead);
                 })
                 .await;

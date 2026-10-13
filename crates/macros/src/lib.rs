@@ -1814,18 +1814,27 @@ pub fn reaper_task(
 }
 
 mod archive_rows;
+mod authorization_refusal;
 mod broker_test_setup;
 mod described_group_rows;
 mod forwardable_requests;
+mod freeze_refusal_rules;
 mod group_record_key;
+mod handler_wire_fixtures;
 mod model_properties;
 mod model_runner;
+mod quorum_epoch_wire;
 mod reconciliation_fields;
 mod reconciliation_operations;
 mod reconciliation_projection;
 mod request_test_identity;
 mod scheduled_loads;
+mod share_fixture_schemas;
 mod share_refusal_matrix;
+mod share_state_constructors;
+mod share_state_operation;
+mod share_state_results;
+mod simulation_message;
 
 /// Declare forwardable API keys and decode each embedded body with its selected request type.
 #[moxy::function]
@@ -1855,6 +1864,87 @@ pub fn reconciliation_member(item: ItemStruct) -> Result<TokenStream, ParseError
 #[moxy::derive(GroupRecordKey, attributes(group_key))]
 pub fn group_record_key(item: ItemEnum) -> Result<TokenStream, ParseError> {
     group_record_key::expand(item)
+}
+
+/// Implement partition routing from a visible simulation message declaration.
+#[moxy::derive(PartitionMessage)]
+pub fn partition_message(item: ItemStruct) -> Result<TokenStream, ParseError> {
+    simulation_message::expand(item)
+}
+
+/// Adapt the external quorum-epoch request types listed at the caller.
+#[moxy::function]
+pub fn quorum_epoch_requests(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    quorum_epoch_wire::requests(&input.into()).map(Into::into)
+}
+
+/// Map native voter listeners to the selected quorum wire endpoint type.
+#[moxy::function]
+pub fn voter_endpoints(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    quorum_epoch_wire::voter_endpoints(input)
+}
+
+/// Supply the common quorum-epoch response layout under an explicit function signature.
+#[moxy::function]
+pub fn quorum_epoch_encoder(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    quorum_epoch_wire::encoder(input)
+}
+
+/// Encode a typed authorization refusal with its optional native message expression.
+#[moxy::function]
+pub fn authorization_refusal(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    authorization_refusal::expand(input)
+}
+
+/// Share an exhaustive freeze mutation inventory under explicit runtime and logical headers.
+#[moxy::function]
+pub fn freeze_refusal_rules(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    freeze_refusal_rules::expand(input)
+}
+
+/// Construct the fixed empty ACL matching filter for the selected external request type.
+#[moxy::function]
+pub fn empty_match_acl_filter(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    handler_wire_fixtures::empty_match_acl_filter(&input.into()).map(Into::into)
+}
+
+/// Compare a delegation-token refusal with the full selected wire response.
+#[moxy::function]
+pub fn token_refusal_result(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    handler_wire_fixtures::token_refusal_result(&input.into()).map(Into::into)
+}
+
+/// Construct an external share-state request from visible field expressions.
+#[moxy::function]
+pub fn share_state_request(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    share_state_constructors::expand(input)
+}
+
+/// Associate share-state response schemas with the listed request types.
+#[moxy::function]
+pub fn share_fixture_schemas(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    share_fixture_schemas::expand(&input.into()).map(Into::into)
+}
+
+/// Adapt the listed external response rows to the partition-result trait.
+#[moxy::function]
+pub fn share_partition_results(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    described_group_rows::partition_results(&input.into()).map(Into::into)
+}
+
+/// Run native share-state partition operations concurrently while preserving request order.
+#[moxy::function]
+pub fn share_state_results(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    share_state_results::expand(input)
+}
+
+/// Add shared active-state admission and reply handling to a visible async method.
+#[moxy::attribute]
+pub fn share_state_operation(
+    meta: NativeTokenStream,
+    item: NativeTokenStream,
+) -> Result<NativeTokenStream, ParseError> {
+    share_state_operation::expand(&meta.into(), item)
 }
 
 /// Derive group projection construction and epoch checks from its visible fields.

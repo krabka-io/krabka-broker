@@ -22,7 +22,9 @@ use {
         broker::BrokerHandle,
         codes,
         fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
-        handlers::test_support::{StartedBroker, seed_partition_replicas},
+        handlers::test_support::{
+            StartedBroker, seed_partition_replicas, wait_for_bound_partition,
+        },
         partition::Partition,
         test_support::encode_request,
     },
@@ -99,19 +101,21 @@ async fn partition(broker: &BrokerHandle, topic: &str, topic_id: u128) -> Arc<Pa
         .call()
         .await;
 
-    wait_for_local_partition!(
-        (shared, partition),
-        broker,
+    let shared = broker.broker_arc_for_test();
+    let partition = wait_for_bound_partition(
+        &shared,
         topic,
-        partition,
-        partition
-            .replica_state
-            .lock()
-            .await
-            .isr
-            .contains(&krabka_raft::NodeId(FOLLOWER)),
-        "the broker leads the partition with node 2 in the ISR"
-    );
+        async |partition| {
+            partition
+                .replica_state
+                .lock()
+                .await
+                .isr
+                .contains(&krabka_raft::NodeId(FOLLOWER))
+        },
+        "the broker leads the partition with node 2 in the ISR",
+    )
+    .await;
 
     for value in [&b"first"[..], &b"second"[..]] {
         partition

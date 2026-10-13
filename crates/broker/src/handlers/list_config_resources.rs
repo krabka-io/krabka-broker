@@ -306,8 +306,10 @@ mod tests {
     /// broker 3 (SSL only) is absent. v0 lists client metrics only.
     macro_rules! listing_fixture {
         (($handle:ident, $directory:ident, $broker:ident, $context:ident), $topic:expr) => {
-            let ($handle, $directory) =
-                start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+            let HandlerStartedBroker {
+                broker: $handle,
+                dir: $directory,
+            } = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
             seed_topic(&$handle, $topic).await;
             let $broker = $handle.broker_arc_for_test();
             krabka_macros::request_test_identity! {
@@ -401,8 +403,8 @@ mod tests {
     }
 
     use crate::test_support::{
-        broker_registration, describe_configs_acl_cases, grant_optional_cluster_operation,
-        start_broker_with_authorizer_no_audit as start_broker,
+        StartedBroker as HandlerStartedBroker, broker_registration, describe_configs_acl_cases,
+        grant_optional_cluster_operation, start_broker_with_authorizer_no_audit as start_broker,
     };
 
     async fn seed_topic(handle: &BrokerHandle, name: &str) {
@@ -508,7 +510,10 @@ mod tests {
     /// `CLUSTER_AUTHORIZATION_FAILED` and no resources.
     #[tokio::test]
     async fn cluster_describe_configs_gates_the_enumeration() {
-        let (broker_handle, _dir) = start_broker(Arc::new(SimpleAclAuthorizer::new(
+        let HandlerStartedBroker {
+            broker: broker_handle,
+            dir: _dir,
+        } = start_broker(Arc::new(SimpleAclAuthorizer::new(
             std::collections::HashSet::new(),
         )))
         .await;

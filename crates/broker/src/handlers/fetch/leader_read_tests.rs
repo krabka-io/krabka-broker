@@ -21,7 +21,9 @@ use {
         broker::BrokerHandle,
         codes,
         fetch_session::INVALID_SESSION_ID,
-        handlers::test_support::{StartedBroker, default_records_batch, seed_partition_replicas},
+        handlers::test_support::{
+            StartedBroker, default_records_batch, seed_partition_replicas, wait_for_bound_partition,
+        },
         partition::Partition,
         test_support::{KafkaErrorCode, append_partition_batch},
     },
@@ -113,24 +115,26 @@ async fn partition(
         .call()
         .await;
 
-    wait_for_local_partition!(
-        (shared, partition),
-        broker,
+    let shared = broker.broker_arc_for_test();
+    let partition = wait_for_bound_partition(
+        &shared,
         topic,
-        partition,
-        partition
-            .current_leader
-            .load(std::sync::atomic::Ordering::Acquire)
-            == leader.0
-            && (leader != THIS_NODE
-                || partition
-                    .replica_state
-                    .lock()
-                    .await
-                    .isr
-                    .contains(&krabka_raft::NodeId(OTHER_NODE.0))),
-        "the broker holds the partition in its role"
-    );
+        async |partition| {
+            partition
+                .current_leader
+                .load(std::sync::atomic::Ordering::Acquire)
+                == leader.0
+                && (leader != THIS_NODE
+                    || partition
+                        .replica_state
+                        .lock()
+                        .await
+                        .isr
+                        .contains(&krabka_raft::NodeId(OTHER_NODE.0)))
+        },
+        "the broker holds the partition in its role",
+    )
+    .await;
 
     let mut batch = default_records_batch(&[b"first", b"second"]);
     append_partition_batch(&partition, &mut batch);

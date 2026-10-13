@@ -4,6 +4,8 @@
 
 #[cfg(test)]
 use crate::config::BrokerConfig;
+#[cfg(test)]
+use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     crate::{
         broker::Broker,
@@ -213,8 +215,8 @@ mod tests {
             handlers::{
                 encode_response,
                 group_heartbeat_test_support::{
-                    acl_authorizer, alice_peer, describe_acl, grant_group_read, group_read_acl,
-                    subscribed_names_describe_denied_table as denied_table_fixture,
+                    RequestIdentity, acl_authorizer, alice_peer, describe_acl, grant_group_read,
+                    group_read_acl, subscribed_names_describe_denied_table as denied_table_fixture,
                     topic_with_partitions,
                 },
                 group_read_denied,
@@ -384,7 +386,7 @@ mod tests {
             boot [start_broker(Arc::new(acl_authorizer()))];
         };
         grant_group_read(&broker, "g").await;
-        let (principal, peer) = alice_peer();
+        let RequestIdentity { principal, peer } = alice_peer();
         let ctx = request_context(&principal, &peer, "c");
         // No Describe grant for "topic-b" -- if the malformed-request check
         // did not run first, this would answer `TOPIC_AUTHORIZATION_FAILED`.
@@ -535,7 +537,7 @@ mod tests {
             .submit_change(vec![group_read_acl("g"), describe_acl("topic-a")])
             .await
             .expect("grant group Read and Describe(topic-a)");
-        let (principal, peer) = alice_peer();
+        let RequestIdentity { principal, peer } = alice_peer();
         let ctx = request_context(&principal, &peer, "c");
         let req = request("g", vec!["topic-a", "topic-b"]);
 
@@ -558,8 +560,10 @@ mod tests {
     /// heartbeat succeeds and creates a member.
     #[tokio::test]
     async fn handle_all_authorized_creates_member() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(ControllerPeerAllowed(acl_authorizer()))).await;
+        let HandlerStartedBroker {
+            broker: broker_handle,
+            dir: _dir,
+        } = start_broker(Arc::new(ControllerPeerAllowed(acl_authorizer()))).await;
         broker_handle.wait_until_group_coordinator_ready().await;
         let broker = broker_handle.broker_arc_for_test();
         let allowed_id = uuid::Uuid::from_u128(1);
@@ -578,7 +582,7 @@ mod tests {
             .submit_change(records)
             .await
             .expect("grant ACLs and create topic");
-        let (principal, peer) = alice_peer();
+        let RequestIdentity { principal, peer } = alice_peer();
         let ctx = request_context(&principal, &peer, "c");
         let req = request("g", vec!["topic-a"]);
 
@@ -596,7 +600,10 @@ mod tests {
     #[tokio::test]
     async fn handle_persists_request_client_identity() {
         let version = VERSION;
-        let (broker_handle, _dir) = start_broker(std::sync::Arc::new(AllowAllAuthorizer)).await;
+        let HandlerStartedBroker {
+            broker: broker_handle,
+            dir: _dir,
+        } = start_broker(std::sync::Arc::new(AllowAllAuthorizer)).await;
         broker_handle.wait_until_group_coordinator_ready().await;
         let broker = broker_handle.broker_arc_for_test();
         krabka_macros::request_test_identity! {
@@ -659,7 +666,10 @@ mod tests {
         use crate::coordinator::unified::actor::GroupKindTag;
 
         let version = VERSION;
-        let (broker_handle, _dir) = start_broker(Arc::new(AllowAllAuthorizer)).await;
+        let HandlerStartedBroker {
+            broker: broker_handle,
+            dir: _dir,
+        } = start_broker(Arc::new(AllowAllAuthorizer)).await;
         broker_handle.wait_until_group_coordinator_ready().await;
         let broker = broker_handle.broker_arc_for_test();
         let coordinator = &broker.group_coordinator;

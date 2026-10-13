@@ -25,6 +25,8 @@
 //! It answers `SNAPSHOT_NOT_FOUND` for the metadata partition and
 //! `UNKNOWN_TOPIC_OR_PARTITION` for any other.
 
+#[cfg(test)]
+use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     crate::{
         broker::Broker,
@@ -224,7 +226,10 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_snapshot_needs_cluster_action() {
-        let (handle, _dir) = start_broker_no_audit_with(|config| {
+        let HandlerStartedBroker {
+            broker: handle,
+            dir: _dir,
+        } = start_broker_no_audit_with(|config| {
             config.authorizer = Arc::new(GrantsInPrincipalName);
         })
         .await;
@@ -268,7 +273,10 @@ mod tests {
     #[tokio::test]
     async fn the_broker_listener_answers_as_kafkas_raft_client_does() {
         let version = fetch_snapshot_response::MAX_VERSION;
-        let (handle, _dir) = start_broker_no_audit_with(|config| {
+        let HandlerStartedBroker {
+            broker: handle,
+            dir: _dir,
+        } = start_broker_no_audit_with(|config| {
             config.authorizer = Arc::new(AllowAllAuthorizer);
         })
         .await;

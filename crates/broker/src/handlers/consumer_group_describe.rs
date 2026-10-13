@@ -24,6 +24,8 @@
 //!   assignment or target assignment names one is replaced by a
 //!   `TOPIC_AUTHORIZATION_FAILED` row with no members.
 
+#[cfg(test)]
+use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     crate::{
         authorizer::Authorizer,
@@ -672,7 +674,10 @@ mod tests {
     /// with the lookup's message, and an empty id is `INVALID_GROUP_ID`.
     #[tokio::test]
     async fn handle_answers_a_group_that_is_not_a_consumer_group() {
-        let (broker_handle, _dir) = start_group_broker_with(|_| {}).await;
+        let HandlerStartedBroker {
+            broker: broker_handle,
+            dir: _dir,
+        } = start_group_broker_with(|_| {}).await;
         let broker = broker_handle.broker_arc_for_test();
         let _ = broker
             .group_coordinator
@@ -859,8 +864,10 @@ mod tests {
     #[tokio::test]
     async fn handle_fills_authorized_operations_only_on_opt_in_for_clean_rows() {
         let authorizer = std::sync::Arc::new(AllowAllAuthorizer);
-        let (broker_handle, _dir) =
-            start_group_broker_no_audit(std::sync::Arc::clone(&authorizer) as _).await;
+        let HandlerStartedBroker {
+            broker: broker_handle,
+            dir: _dir,
+        } = start_group_broker_no_audit(std::sync::Arc::clone(&authorizer) as _).await;
         let broker = broker_handle.broker_arc_for_test();
         let _ = broker
             .group_coordinator

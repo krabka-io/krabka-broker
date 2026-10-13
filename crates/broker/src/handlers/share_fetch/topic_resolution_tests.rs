@@ -8,6 +8,8 @@
 //! `KafkaApis.getAcknowledgeBatchesFromShareFetchRequest` also answers
 //! `UNKNOWN_TOPIC_ID` as the acknowledge error of those partitions.
 
+#[cfg(test)]
+use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     crate::{
         authorizer::{AllowAllAuthorizer, Authorizer},
@@ -57,7 +59,8 @@ struct Outcome {
 }
 
 async fn start(authorizer: Arc<dyn Authorizer>) -> StartedBroker {
-    let (broker, dir) = start_broker_no_audit_with(|cfg| cfg.authorizer = authorizer).await;
+    let HandlerStartedBroker { broker, dir } =
+        start_broker_no_audit_with(|cfg| cfg.authorizer = authorizer).await;
     StartedBroker { broker, dir }
 }
 

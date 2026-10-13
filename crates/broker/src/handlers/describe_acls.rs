@@ -7,6 +7,8 @@
 //! A cluster with no authorizer configured has no ACLs to project, and says
 //! so with `SECURITY_DISABLED` rather than an empty listing.
 
+#[cfg(test)]
+use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     super::acl_wire::{
         NO_AUTHORIZER_MESSAGE, PatternTypeCode, ResourceTypeCode,
@@ -160,7 +162,6 @@ fn build_filter(req: &DescribeAclsRequest) -> Result<AclBindingFilter, UnknownEl
 
 #[cfg(test)]
 mod tests {
-
     use {
         super::*,
         crate::{
@@ -168,9 +169,9 @@ mod tests {
             handlers::{
                 RequestContext,
                 acl_test_support::{
-                    OPERATION_ANY, OPERATION_READ, OPERATION_WRITE, PATTERN_TYPE_ANY,
-                    PATTERN_TYPE_LITERAL, PATTERN_TYPE_MATCH, PATTERN_TYPE_PREFIXED,
-                    PERMISSION_ALLOW, PERMISSION_ANY, RESOURCE_TYPE_TOPIC,
+                    self as acl_fixtures, OPERATION_ANY, OPERATION_READ, OPERATION_WRITE,
+                    PATTERN_TYPE_ANY, PATTERN_TYPE_LITERAL, PATTERN_TYPE_MATCH,
+                    PATTERN_TYPE_PREFIXED, PERMISSION_ALLOW, PERMISSION_ANY, RESOURCE_TYPE_TOPIC,
                     expected_empty_match_filter,
                 },
                 acl_wire::PATTERN_MATCHING_FIXTURE,
@@ -244,7 +245,7 @@ mod tests {
 
     #[test]
     fn build_filter_keeps_empty_strings_and_decodes_axes() {
-        let req = empty_match_acl_filter!(DescribeAclsRequest);
+        let req = krabka_macros::empty_match_acl_filter!(DescribeAclsRequest);
 
         let built = build_filter(&req).expect("filter");
 
@@ -362,7 +363,11 @@ mod tests {
 
     #[tokio::test]
     async fn handle_answers_security_disabled_when_no_authorizer_is_configured() {
-        security_disabled_acl_fixture!((broker_handle, _dir, broker, ctx));
+        krabka_macros::broker_test_setup! {
+        bind(broker_handle, _dir, broker, ctx);
+        boot [acl_fixtures::start_security_disabled_acls()];
+        user ["admin"];
+        };
 
         let resp = describe_alice_orders(&broker, &ctx);
 
@@ -404,12 +409,11 @@ mod tests {
     /// operations are valid, and no stored binding carries them.
     #[tokio::test]
     async fn handle_answers_an_empty_listing_for_values_no_binding_carries() {
-        seeded_acl_fixture!(
-            (broker_handle, _dir, broker, ctx),
-            start_broker(configured_authorizer()),
-            vec![crate::handlers::acl_test_support::alice_orders_acl()],
-            "admin"
-        );
+        krabka_macros::broker_test_setup! {
+        bind(broker_handle, _dir, broker, ctx);
+        boot [acl_fixtures::start_orders_acl()];
+        user ["admin"];
+        };
         let any = DescribeAclsRequest {
             resource_type_filter: 1,
             resource_name_filter: None,
@@ -468,7 +472,10 @@ mod tests {
     /// the named resource, and only a null name is a wildcard.
     #[tokio::test]
     async fn handle_matches_patterns_the_way_kafka_does() {
-        let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
+        let HandlerStartedBroker {
+            broker: broker_handle,
+            dir: _dir,
+        } = start_broker(configured_authorizer()).await;
         let seeded = PATTERN_MATCHING_FIXTURE;
         seed_acls(
             &broker_handle,
@@ -674,12 +681,11 @@ mod tests {
     /// only an empty field.
     #[tokio::test]
     async fn handle_takes_only_null_principal_and_host_as_any() {
-        seeded_acl_fixture!(
-            (broker_handle, _dir, broker, ctx),
-            start_broker(configured_authorizer()),
-            vec![crate::handlers::acl_test_support::alice_orders_acl()],
-            "admin"
-        );
+        krabka_macros::broker_test_setup! {
+        bind(broker_handle, _dir, broker, ctx);
+        boot [acl_fixtures::start_orders_acl()];
+        user ["admin"];
+        };
 
         let cases: [NullableFilterCase; 4] = [
             NullableFilterCase {
@@ -730,12 +736,11 @@ mod tests {
 
     #[tokio::test]
     async fn handle_returns_only_matching_acl_fields() {
-        seeded_acl_fixture!(
-            (broker_handle, _dir, broker, ctx),
-            start_broker(configured_authorizer()),
-            crate::handlers::acl_test_support::orders_payments_acls(),
-            "admin"
-        );
+        krabka_macros::broker_test_setup! {
+        bind(broker_handle, _dir, broker, ctx);
+        boot [acl_fixtures::start_orders_payments_acls()];
+        user ["admin"];
+        };
 
         let resp = describe_alice_orders(&broker, &ctx);
 

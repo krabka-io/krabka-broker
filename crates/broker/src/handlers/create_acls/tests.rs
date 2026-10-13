@@ -5,6 +5,8 @@
 //! stamps every creation, the positional interleaving of accepted and rejected
 //! creations, and the absence of a principal or resource-name length limit.
 
+#[cfg(test)]
+use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     super::handle,
     crate::{
@@ -173,7 +175,10 @@ async fn handle_answers_security_disabled_for_each_creation_when_no_authorizer_i
 /// A broker with `unstable.feature.versions.enable`, the mode in which
 /// `CreateAcls` applies Kafka trunk's host validation.
 async fn start_trunk_broker() -> TrunkBroker {
-    let (handle, dir) = start_broker_no_audit_with(|cfg| {
+    let HandlerStartedBroker {
+        broker: handle,
+        dir,
+    } = start_broker_no_audit_with(|cfg| {
         cfg.authorizer = configured_authorizer();
         cfg.features.unstable_feature_versions = krabka_raft::UnstableFeatureVersions::Enabled;
     })

@@ -1,5 +1,7 @@
 //! Controller mutations through a broker whose observer stopped before newer commits.
 
+#[cfg(test)]
+use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     super::test_support::replicated_partition,
     crate::{
@@ -46,12 +48,18 @@ struct StoppedObserver {
 }
 
 async fn stopped_observer() -> StoppedObserver {
-    let (controller, controller_dir) = start_broker_no_audit().await;
+    let HandlerStartedBroker {
+        broker: controller,
+        dir: controller_dir,
+    } = start_broker_no_audit().await;
     controller.wait_until_controller_leader().await;
     let authority = controller.broker_arc_for_test();
     let addr = controller.controller_addr();
     let cluster_id = authority.controller.current_image().cluster_id();
-    let (observer, observer_dir) = start_broker_no_audit_with(|config| {
+    let HandlerStartedBroker {
+        broker: observer,
+        dir: observer_dir,
+    } = start_broker_no_audit_with(|config| {
         config.roles = vec![NodeRole::Broker];
         config.node_id = NodeId(2);
         config.broker_id = 2;

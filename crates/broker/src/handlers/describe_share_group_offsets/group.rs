@@ -7,6 +7,8 @@
 //! installed at all. Once those hold, it hands the group's topics to `rows`.
 
 #[cfg(test)]
+use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
+#[cfg(test)]
 use krabka_protocol::owned::describe_share_group_offsets_request::DescribeShareGroupOffsetsRequestTopic;
 use {
     super::{
@@ -184,7 +186,7 @@ mod tests {
     #[derive(Debug)]
     struct DenyDescribeOnTopic(&'static str);
 
-    test_authorizer!(DenyDescribeOnTopic, (self, _source, request), {
+    krabka_macros::test_authorizer!(DenyDescribeOnTopic, request; {
         if request.resource_type == ResourceType::Topic
             && request.operation == AclOperation::Describe
             && request.resource_name == self.0
@@ -352,15 +354,17 @@ mod tests {
     /// builds one `TOPIC_AUTHORIZATION_FAILED` row per partition the request
     /// named, and does not look the group's initialized partitions up.
     /// Retain this enabled share broker and its installed state persister together.
-    async fn start_with_share_persister(
-        authorizer: Arc<dyn Authorizer>,
-    ) -> (
-        BrokerHandle,
-        tempfile::TempDir,
-        Arc<Broker>,
-        Arc<SharePersister>,
-    ) {
-        let (handle, directory) = broker_fixture_support::start_share_broker()
+    struct SharePersisterFixture {
+        handle: BrokerHandle,
+        directory: tempfile::TempDir,
+        broker: Arc<Broker>,
+        persister: Arc<SharePersister>,
+    }
+    async fn start_with_share_persister(authorizer: Arc<dyn Authorizer>) -> SharePersisterFixture {
+        let HandlerStartedBroker {
+            broker: handle,
+            dir: directory,
+        } = broker_fixture_support::start_share_broker()
             .authorizer(authorizer)
             .support(broker_fixture_support::ShareApiSupport::Enabled)
             .call()
@@ -371,7 +375,12 @@ mod tests {
             .share_persister()
             .cloned()
             .expect("share persister");
-        (handle, directory, broker, persister)
+        SharePersisterFixture {
+            handle,
+            directory,
+            broker,
+            persister,
+        }
     }
 
     #[tokio::test]
@@ -468,8 +477,12 @@ mod tests {
         ];
 
         for case in cases {
-            let (broker_handle, _dir, broker, persister) =
-                start_with_share_persister(case.authorizer).await;
+            let SharePersisterFixture {
+                handle: broker_handle,
+                directory: _dir,
+                broker,
+                persister,
+            } = start_with_share_persister(case.authorizer).await;
             let image = image_with_topic("orders", topic_id);
             register_topic(&broker, "orders", topic_id).await;
             persister
@@ -531,8 +544,12 @@ mod tests {
         ];
 
         for case in cases {
-            let (broker_handle, _dir, broker, persister) =
-                start_with_share_persister(case.authorizer).await;
+            let SharePersisterFixture {
+                handle: broker_handle,
+                directory: _dir,
+                broker,
+                persister,
+            } = start_with_share_persister(case.authorizer).await;
 
             orders_and_secret_image!(
                 (orders_id, secret_id, image),

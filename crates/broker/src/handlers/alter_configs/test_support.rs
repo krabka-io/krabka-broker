@@ -5,6 +5,8 @@
 //! resource shapes and the same seeded images, so the fixtures live in one
 //! module rather than being duplicated per test file.
 
+#[cfg(test)]
+use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     super::{RESOURCE_TYPE_BROKER, RESOURCE_TYPE_TOPIC, handle},
     crate::{
@@ -133,7 +135,10 @@ pub(super) async fn drive_many(
     resources: Vec<AlterConfigsResource>,
 ) -> AlterConfigsResponse {
     let version = 2;
-    let (broker_handle, _dir) = start_broker(authorizer).await;
+    let HandlerStartedBroker {
+        broker: broker_handle,
+        dir: _dir,
+    } = start_broker(authorizer).await;
     let broker = broker_handle.broker_arc_for_test();
     krabka_macros::request_test_identity! {
         bind(ctx);

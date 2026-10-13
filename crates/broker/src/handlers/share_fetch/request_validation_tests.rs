@@ -8,6 +8,8 @@
 //! characters) with `INVALID_REQUEST`. They do not ask the group coordinator
 //! whether the member exists.
 
+#[cfg(test)]
+use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     crate::{
         authorizer::AuthorizationResult,
@@ -41,7 +43,7 @@ const LOCK_TIMEOUT_MS: i32 = 30_000;
 #[derive(Debug)]
 struct ReadOneGroup;
 
-test_authorizer!(ReadOneGroup, (self, _source, request), {
+krabka_macros::test_authorizer!(ReadOneGroup, request; {
     if request.resource_type == ResourceType::Group
         && request.operation == AclOperation::Read
         && request.resource_name != READABLE
@@ -53,7 +55,8 @@ test_authorizer!(ReadOneGroup, (self, _source, request), {
 });
 
 async fn start() -> StartedBroker {
-    let (broker, dir) = start_broker_with_authorizer_no_audit(Arc::new(ReadOneGroup)).await;
+    let HandlerStartedBroker { broker, dir } =
+        start_broker_with_authorizer_no_audit(Arc::new(ReadOneGroup)).await;
     StartedBroker { broker, dir }
 }
 

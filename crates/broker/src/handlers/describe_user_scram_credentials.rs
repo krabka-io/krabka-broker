@@ -238,7 +238,7 @@ mod tests {
     #[derive(Debug)]
     struct ClusterDescribeOnly;
 
-    test_authorizer!(ClusterDescribeOnly, (self, _source, req), {
+    krabka_macros::test_authorizer!(ClusterDescribeOnly, req; {
         if req.resource_type == ResourceType::Cluster
             && req.resource_name == crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME
             && req.operation == AclOperation::Describe

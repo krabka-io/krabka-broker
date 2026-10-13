@@ -4,6 +4,8 @@
 //! These drive `handle` against a live broker, so they live apart from the
 //! unit tests that each sibling module keeps beside its own helpers.
 
+#[cfg(test)]
+use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     super::*,
     crate::{
@@ -1141,7 +1143,10 @@ async fn delete_to(
 /// on a fenced broker is not live and does not hold the row.
 #[tokio::test]
 async fn a_trim_waits_for_every_live_follower_to_reach_the_trim_point() {
-    let (broker_handle, _dir) = start_broker_no_audit_with(|cfg| {
+    let HandlerStartedBroker {
+        broker: broker_handle,
+        dir: _dir,
+    } = start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
         // The follower never fetches on its own. Keep it in the ISR and alive
         // for the whole test, so only the fetches below move its state.

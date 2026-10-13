@@ -3,13 +3,12 @@
 //! One operator, Alice, holds a key in the trust set and authenticates on the
 //! connection, so a test can present a record she signed as well as one the
 //! trust set refuses.
-
 use {
     crate::{
         cluster_id::encode,
         config::BrokerConfig,
         freeze::signing::freeze_signing_bytes,
-        handlers::RequestContext,
+        handlers::{RequestContext, test_support::StartedBroker},
         operator_keys::{OperatorKeyEntry, OperatorKeys},
         test_support::{
             ed25519_public_key_file, frozen_topics_image, principal, start_broker_no_audit_with,
@@ -151,7 +150,10 @@ async fn handle_processes_request_and_encodes_response() {
 
     let dir = tempfile::TempDir::new().unwrap();
     let AliceKeys { config, .. } = config_with_alice(&dir);
-    let (broker_handle, _dir) = start_broker_no_audit_with(|cfg| {
+    let StartedBroker {
+        broker: broker_handle,
+        dir: _dir,
+    } = start_broker_no_audit_with(|cfg| {
         cfg.operator_keys = config.operator_keys;
     })
     .await;
