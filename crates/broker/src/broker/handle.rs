@@ -248,10 +248,7 @@ impl BrokerHandle {
     /// assert that all followers caught up.
     #[must_use]
     pub fn local_log_end_offset(&self, topic: &str, partition: i32) -> Option<i64> {
-        let part = self
-            .broker
-            .partitions
-            .get(topic, PartitionIndex(partition))?;
+        let part = self.maybe_local_partition(topic, partition)?;
         // Unwrap `Offset` -> `i64` at this test-helper boundary: integration
         // tests compare the result against raw offset literals.
         Some(part.log_end_offset().0)

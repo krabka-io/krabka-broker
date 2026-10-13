@@ -488,8 +488,8 @@ impl Model for DpModel {
     }
 }
 
-fn append_committed_prefix<T: Copy>(committed: &mut Vec<T>, leader_log: &[T], hwm: Offset) {
-    while model_offset(committed.len()) < hwm {
+fn append_committed_prefix<T: Copy>(committed: &mut Vec<T>, leader_log: &[T], hwm: i64) {
+    while model_offset(committed.len()).0 < hwm {
         let offset = committed.len();
         committed.push(leader_log[offset]);
     }
