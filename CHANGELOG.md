@@ -25,6 +25,14 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Changed
 
+- The default `log_tail_cache_size` is 32 MiB, up from 1 MiB. A partition with
+  `preallocate=true` writes through `O_DIRECT`, which leaves nothing in the
+  page cache, so a consumer that fell more than the tail cache behind the
+  producer read from the disk and fell further behind. With 1 MiB, a consumer
+  of one partition taking about 600 MB/s fell seconds behind the producer;
+  with 32 MiB its end-to-end p99 stayed under 100 ms (#1370). Each partition
+  with `preallocate=true` now holds up to 32 MiB of its newest data in memory.
+  Set `log_tail_cache_size` to keep the old value.
 - A partition with `preallocate=true` acknowledges a produce request once
   its `O_DIRECT` write is queued, not once the write is on the disk, as a
   partition without `preallocate` acknowledges once its bytes are in the page
