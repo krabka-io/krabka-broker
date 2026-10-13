@@ -22,7 +22,7 @@ use {
         broker::BrokerHandle,
         codes,
         fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
-        handlers::test_support::{ReplicatedTopicSetup, seed_partition_replicas},
+        handlers::test_support::{ReplicatedTopicSetup, StartedBroker, seed_partition_replicas},
         partition::Partition,
         test_support::{encode_request, peer, principal, start_broker_no_audit_with},
     },
@@ -86,12 +86,6 @@ struct Outcome {
     high_watermark: Offset,
 }
 
-/// A running broker and the temporary directory that holds its data.
-struct StartedBroker {
-    handle: BrokerHandle,
-    dir: tempfile::TempDir,
-}
-
 async fn start() -> StartedBroker {
     let (handle, dir) = start_broker_no_audit_with(|cfg| {
         // Node 2 never fetches on its own. Keep it in the ISR for the whole
@@ -99,7 +93,10 @@ async fn start() -> StartedBroker {
         cfg.replica_lag_time_max = krabka_units::secs(600);
     })
     .await;
-    StartedBroker { handle, dir }
+    StartedBroker {
+        broker: handle,
+        dir,
+    }
 }
 
 /// A batch of one record with `value`.
@@ -273,10 +270,7 @@ async fn a_follower_learns_the_high_watermark_it_moved_one_fetch_later() {
         },
     ];
 
-    let StartedBroker {
-        handle: broker,
-        dir: _dir,
-    } = start().await;
+    let StartedBroker { broker, dir: _dir } = start().await;
     topic_case_outcomes!(
         (actual, want),
         (index, case, label, name),

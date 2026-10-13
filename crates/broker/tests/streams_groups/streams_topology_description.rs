@@ -190,12 +190,8 @@ async fn one_member_is_asked_and_its_push_is_described() {
 /// join creates is asked again and describes nothing stored.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_deleted_and_recreated_group_is_asked_again() {
-    let GroupCoordinatorBoot {
-        broker: _broker,
-        bootstrap,
-        directory: _dir,
-    } = Box::pin(boot_with_plugin()).await;
-    let client = connect(&bootstrap).await;
+    let booted = Box::pin(boot_with_plugin()).await;
+    let client = connect(&booted.bootstrap).await;
     finalize_streams_version(&client).await;
     create_topic(&client, SOURCE, 1).await;
     let member = client

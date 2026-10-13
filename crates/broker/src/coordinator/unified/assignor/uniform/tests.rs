@@ -35,6 +35,10 @@ struct MemberPartitions<'a> {
     partitions: Partitions<'a>,
 }
 
+fn expects<'a>(member: &'a str, partitions: Partitions<'a>) -> MemberPartitions<'a> {
+    MemberPartitions { member, partitions }
+}
+
 /// A topic and its partition count.
 struct TopicCount {
     topic: Uuid,
@@ -169,10 +173,7 @@ fn homogeneous_rows_early() -> Vec<Scenario<'static>> {
             name: "testOneMemberNoTopicSubscription",
             group: group(HOMOGENEOUS, vec![member("A", &[], &[])]),
             topics: metadata(&[sized(first, 3)]),
-            expected: assignment(&[MemberPartitions {
-                member: "A",
-                partitions: &[],
-            }]),
+            expected: assignment(&[expects("A", &[])]),
         },
         Scenario {
             // Kafka throws PartitionAssignorException. The reconciler
@@ -181,10 +182,7 @@ fn homogeneous_rows_early() -> Vec<Scenario<'static>> {
             name: "testOneMemberSubscribedToNonexistentTopic",
             group: group(HOMOGENEOUS, vec![member("A", &[second], &[])]),
             topics: metadata(&[sized(first, 3)]),
-            expected: assignment(&[MemberPartitions {
-                member: "A",
-                partitions: &[],
-            }]),
+            expected: assignment(&[expects("A", &[])]),
         },
         Scenario {
             // Kafka's HashSet visits topic3 before topic1.
@@ -195,14 +193,8 @@ fn homogeneous_rows_early() -> Vec<Scenario<'static>> {
             ]),
             topics: metadata(&[sized(second, 3), sized(first, 2)]),
             expected: assignment(&[
-                MemberPartitions {
-                    member: "A",
-                    partitions: &[owns(first, &[0, 1])],
-                },
-                MemberPartitions {
-                    member: "B",
-                    partitions: &[owns(second, &[0, 1, 2])],
-                },
+                expects("A", &[owns(first, &[0, 1])]),
+                expects("B", &[owns(second, &[0, 1, 2])]),
             ]),
         },
         Scenario {
@@ -214,18 +206,9 @@ fn homogeneous_rows_early() -> Vec<Scenario<'static>> {
             ]),
             topics: metadata(&[sized(first, 2)]),
             expected: assignment(&[
-                MemberPartitions {
-                    member: "A",
-                    partitions: &[],
-                },
-                MemberPartitions {
-                    member: "B",
-                    partitions: &[owns(first, &[0])],
-                },
-                MemberPartitions {
-                    member: "C",
-                    partitions: &[owns(first, &[1])],
-                },
+                expects("A", &[]),
+                expects("B", &[owns(first, &[0])]),
+                expects("C", &[owns(first, &[1])]),
             ]),
         },
         Scenario {
@@ -242,14 +225,8 @@ fn homogeneous_rows_early() -> Vec<Scenario<'static>> {
             ]),
             topics: metadata(&[sized(first, 3), sized(second, 3)]),
             expected: assignment(&[
-                MemberPartitions {
-                    member: "A",
-                    partitions: &[owns(first, &[0, 1]), owns(second, &[0])],
-                },
-                MemberPartitions {
-                    member: "B",
-                    partitions: &[owns(first, &[2]), owns(second, &[1, 2])],
-                },
+                expects("A", &[owns(first, &[0, 1]), owns(second, &[0])]),
+                expects("B", &[owns(first, &[2]), owns(second, &[1, 2])]),
             ]),
         },
     ]
@@ -273,14 +250,8 @@ fn homogeneous_rows_late() -> Vec<Scenario<'static>> {
             ]),
             topics: metadata(&[sized(second, 6), sized(first, 5)]),
             expected: assignment(&[
-                MemberPartitions {
-                    member: "A",
-                    partitions: &[owns(second, &[0, 2]), owns(first, &[0, 3, 4])],
-                },
-                MemberPartitions {
-                    member: "B",
-                    partitions: &[owns(second, &[1, 3, 4, 5]), owns(first, &[1, 2])],
-                },
+                expects("A", &[owns(second, &[0, 2]), owns(first, &[0, 3, 4])]),
+                expects("B", &[owns(second, &[1, 3, 4, 5]), owns(first, &[1, 2])]),
             ]),
         },
         Scenario {
@@ -298,18 +269,9 @@ fn homogeneous_rows_late() -> Vec<Scenario<'static>> {
             ]),
             topics: metadata(&[sized(first, 3), sized(second, 3)]),
             expected: assignment(&[
-                MemberPartitions {
-                    member: "A",
-                    partitions: &[owns(first, &[0, 2])],
-                },
-                MemberPartitions {
-                    member: "B",
-                    partitions: &[owns(first, &[1]), owns(second, &[1])],
-                },
-                MemberPartitions {
-                    member: "C",
-                    partitions: &[owns(second, &[0, 2])],
-                },
+                expects("A", &[owns(first, &[0, 2])]),
+                expects("B", &[owns(first, &[1]), owns(second, &[1])]),
+                expects("C", &[owns(second, &[0, 2])]),
             ]),
         },
         Scenario {
@@ -327,14 +289,8 @@ fn homogeneous_rows_late() -> Vec<Scenario<'static>> {
             ]),
             topics: metadata(&[sized(second, 3), sized(first, 3)]),
             expected: assignment(&[
-                MemberPartitions {
-                    member: "A",
-                    partitions: &[owns(second, &[0]), owns(first, &[0, 2])],
-                },
-                MemberPartitions {
-                    member: "B",
-                    partitions: &[owns(second, &[1, 2]), owns(first, &[1])],
-                },
+                expects("A", &[owns(second, &[0]), owns(first, &[0, 2])]),
+                expects("B", &[owns(second, &[1, 2]), owns(first, &[1])]),
             ]),
         },
         Scenario {
@@ -345,14 +301,8 @@ fn homogeneous_rows_late() -> Vec<Scenario<'static>> {
             ]),
             topics: metadata(&[sized(first, 2), sized(second, 2)]),
             expected: assignment(&[
-                MemberPartitions {
-                    member: "A",
-                    partitions: &[owns(second, &[0])],
-                },
-                MemberPartitions {
-                    member: "B",
-                    partitions: &[owns(second, &[1])],
-                },
+                expects("A", &[owns(second, &[0])]),
+                expects("B", &[owns(second, &[1])]),
             ]),
         },
     ]
@@ -398,14 +348,8 @@ fn heterogeneous_rows_early() -> Vec<Scenario<'static>> {
             ]),
             topics: metadata(&[sized(t1, 3), sized(t3, 6)]),
             expected: assignment(&[
-                MemberPartitions {
-                    member: "A",
-                    partitions: &[owns(t1, &[0, 1, 2]), owns(t3, &[4])],
-                },
-                MemberPartitions {
-                    member: "B",
-                    partitions: &[owns(t3, &[0, 1, 2, 3, 5])],
-                },
+                expects("A", &[owns(t1, &[0, 1, 2]), owns(t3, &[4])]),
+                expects("B", &[owns(t3, &[0, 1, 2, 3, 5])]),
             ]),
         },
         Scenario {
@@ -417,18 +361,9 @@ fn heterogeneous_rows_early() -> Vec<Scenario<'static>> {
             ]),
             topics: metadata(&[sized(t1, 2), sized(t3, 1)]),
             expected: assignment(&[
-                MemberPartitions {
-                    member: "A",
-                    partitions: &[owns(t3, &[0])],
-                },
-                MemberPartitions {
-                    member: "B",
-                    partitions: &[],
-                },
-                MemberPartitions {
-                    member: "C",
-                    partitions: &[owns(t1, &[0, 1])],
-                },
+                expects("A", &[owns(t3, &[0])]),
+                expects("B", &[]),
+                expects("C", &[owns(t1, &[0, 1])]),
             ]),
         },
         Scenario {
@@ -444,18 +379,9 @@ fn heterogeneous_rows_early() -> Vec<Scenario<'static>> {
             ]),
             topics: metadata(&[sized(t1, 6), sized(t2, 4), sized(t3, 4)]),
             expected: assignment(&[
-                MemberPartitions {
-                    member: "A",
-                    partitions: &[owns(t1, &[0, 1, 2, 5])],
-                },
-                MemberPartitions {
-                    member: "B",
-                    partitions: &[owns(t1, &[3]), owns(t2, &[0, 1, 2, 3])],
-                },
-                MemberPartitions {
-                    member: "C",
-                    partitions: &[owns(t1, &[4]), owns(t3, &[0, 1, 2, 3])],
-                },
+                expects("A", &[owns(t1, &[0, 1, 2, 5])]),
+                expects("B", &[owns(t1, &[3]), owns(t2, &[0, 1, 2, 3])]),
+                expects("C", &[owns(t1, &[4]), owns(t3, &[0, 1, 2, 3])]),
             ]),
         },
     ]
@@ -478,14 +404,8 @@ fn heterogeneous_rows_late() -> Vec<Scenario<'static>> {
             ]),
             topics: metadata(&[sized(t1, 6), sized(t2, 5), sized(t3, 3), sized(t4, 3)]),
             expected: assignment(&[
-                MemberPartitions {
-                    member: "A",
-                    partitions: &[owns(t1, &[0, 1, 2, 3, 4, 5]), owns(t3, &[0, 1, 2])],
-                },
-                MemberPartitions {
-                    member: "B",
-                    partitions: &[owns(t2, &[0, 1, 2, 3, 4]), owns(t4, &[0, 1, 2])],
-                },
+                expects("A", &[owns(t1, &[0, 1, 2, 3, 4, 5]), owns(t3, &[0, 1, 2])]),
+                expects("B", &[owns(t2, &[0, 1, 2, 3, 4]), owns(t4, &[0, 1, 2])]),
             ]),
         },
         Scenario {
@@ -497,18 +417,9 @@ fn heterogeneous_rows_late() -> Vec<Scenario<'static>> {
             ]),
             topics: metadata(&[sized(t1, 6), sized(t2, 7)]),
             expected: assignment(&[
-                MemberPartitions {
-                    member: "A",
-                    partitions: &[owns(t1, &[0, 2, 3, 4, 5])],
-                },
-                MemberPartitions {
-                    member: "B",
-                    partitions: &[owns(t1, &[1]), owns(t2, &[1, 2, 6])],
-                },
-                MemberPartitions {
-                    member: "C",
-                    partitions: &[owns(t2, &[0, 3, 4, 5])],
-                },
+                expects("A", &[owns(t1, &[0, 2, 3, 4, 5])]),
+                expects("B", &[owns(t1, &[1]), owns(t2, &[1, 2, 6])]),
+                expects("C", &[owns(t2, &[0, 3, 4, 5])]),
             ]),
         },
         Scenario {
@@ -519,14 +430,8 @@ fn heterogeneous_rows_late() -> Vec<Scenario<'static>> {
             ]),
             topics: metadata(&[sized(t1, 3), sized(t2, 8), sized(t3, 3)]),
             expected: assignment(&[
-                MemberPartitions {
-                    member: "A",
-                    partitions: &[owns(t1, &[0, 1, 2]), owns(t3, &[0, 1, 2])],
-                },
-                MemberPartitions {
-                    member: "B",
-                    partitions: &[owns(t2, &[0, 1, 2, 3, 4, 5, 6, 7])],
-                },
+                expects("A", &[owns(t1, &[0, 1, 2]), owns(t3, &[0, 1, 2])]),
+                expects("B", &[owns(t2, &[0, 1, 2, 3, 4, 5, 6, 7])]),
             ]),
         },
         Scenario {
@@ -537,14 +442,8 @@ fn heterogeneous_rows_late() -> Vec<Scenario<'static>> {
             ]),
             topics: metadata(&[sized(t1, 3), sized(t2, 5)]),
             expected: assignment(&[
-                MemberPartitions {
-                    member: "A",
-                    partitions: &[owns(t1, &[0, 1, 2])],
-                },
-                MemberPartitions {
-                    member: "B",
-                    partitions: &[owns(t2, &[0, 1, 2, 3, 4])],
-                },
+                expects("A", &[owns(t1, &[0, 1, 2])]),
+                expects("B", &[owns(t2, &[0, 1, 2, 3, 4])]),
             ]),
         },
         Scenario {
@@ -559,14 +458,8 @@ fn heterogeneous_rows_late() -> Vec<Scenario<'static>> {
             ]),
             topics: metadata(&[sized(t1, 2), sized(t2, 2), sized(t3, 2)]),
             expected: assignment(&[
-                MemberPartitions {
-                    member: "A",
-                    partitions: &[owns(t2, &[0]), owns(t3, &[0, 1])],
-                },
-                MemberPartitions {
-                    member: "B",
-                    partitions: &[owns(t1, &[0, 1]), owns(t2, &[1])],
-                },
+                expects("A", &[owns(t2, &[0]), owns(t3, &[0, 1])]),
+                expects("B", &[owns(t1, &[0, 1]), owns(t2, &[1])]),
             ]),
         },
         Scenario {
@@ -576,16 +469,7 @@ fn heterogeneous_rows_late() -> Vec<Scenario<'static>> {
                 member("B", &[], &[]),
             ]),
             topics: metadata(&[sized(t1, 3)]),
-            expected: assignment(&[
-                MemberPartitions {
-                    member: "A",
-                    partitions: &[owns(t1, &[0, 1, 2])],
-                },
-                MemberPartitions {
-                    member: "B",
-                    partitions: &[],
-                },
-            ]),
+            expected: assignment(&[expects("A", &[owns(t1, &[0, 1, 2])]), expects("B", &[])]),
         },
     ]
 }
@@ -624,24 +508,12 @@ fn replica_racks_do_not_outrank_balance() {
         let actual = UniformAssignor.assign(&group(subscription_type, members.clone()), &topics);
         let expected = match subscription_type {
             SubscriptionType::Homogeneous => assignment(&[
-                MemberPartitions {
-                    member: "A",
-                    partitions: &[owns(topic, &[0, 1])],
-                },
-                MemberPartitions {
-                    member: "B",
-                    partitions: &[owns(topic, &[2, 3])],
-                },
+                expects("A", &[owns(topic, &[0, 1])]),
+                expects("B", &[owns(topic, &[2, 3])]),
             ]),
             SubscriptionType::Heterogeneous => assignment(&[
-                MemberPartitions {
-                    member: "A",
-                    partitions: &[owns(topic, &[0, 2])],
-                },
-                MemberPartitions {
-                    member: "B",
-                    partitions: &[owns(topic, &[1, 3])],
-                },
+                expects("A", &[owns(topic, &[0, 2])]),
+                expects("B", &[owns(topic, &[1, 3])]),
             ]),
         };
         assert!(actual == expected, "{subscription_type:?}");
@@ -872,14 +744,5 @@ proptest! {
 
 /// Kafka's independent expected mapping when neither fixture member gets a partition.
 fn empty_two_member_assignment() -> Assignment {
-    assignment(&[
-        MemberPartitions {
-            member: "A",
-            partitions: &[],
-        },
-        MemberPartitions {
-            member: "B",
-            partitions: &[],
-        },
-    ])
+    assignment(&[expects("A", &[]), expects("B", &[])])
 }

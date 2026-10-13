@@ -304,19 +304,6 @@ async fn heartbeat_until(
     );
 }
 
-/// Heartbeats until the share state of every partition in `partitions` of
-/// `topic` exists.
-async fn heartbeat_until_initialized(
-    broker: &krabka_broker::BrokerHandle,
-    client: &krabka_client_core::Client,
-    group: &str,
-    members: &[MemberSubscription<'_>],
-    topic: uuid::Uuid,
-    partitions: std::ops::Range<i32>,
-) {
-    heartbeat_until(broker, client, group, members, topic, partitions, true).await;
-}
-
 /// A topic that is deleted loses its share state, as Kafka's
 /// `GroupMetadataManager.maybeCleanupShareGroupState` deletes it on the
 /// metadata update. The share state of the other subscribed topic stays.
@@ -393,7 +380,7 @@ async fn unassigned_partitions_keep_their_share_state() {
         };
         let first = client.send(join("member-a", "a")).await.unwrap();
         assert!(first.error_code == 0, "{group}: first join failed");
-        heartbeat_until_initialized(
+        heartbeat_until(
             &broker,
             &client,
             group,
@@ -404,6 +391,7 @@ async fn unassigned_partitions_keep_their_share_state() {
             }],
             topic_a,
             0..2,
+            true,
         )
         .await;
 
@@ -412,7 +400,7 @@ async fn unassigned_partitions_keep_their_share_state() {
             assert!(second.error_code == 0, "{group}: second join failed");
             let left = client.send(heartbeat(group, "member-a", -1)).await.unwrap();
             assert!(left.error_code == 0, "{group}: leave failed");
-            heartbeat_until_initialized(
+            heartbeat_until(
                 &broker,
                 &client,
                 group,
@@ -423,11 +411,12 @@ async fn unassigned_partitions_keep_their_share_state() {
                 }],
                 topic_b,
                 0..2,
+                true,
             )
             .await;
         }
         if move_subscription {
-            heartbeat_until_initialized(
+            heartbeat_until(
                 &broker,
                 &client,
                 group,
@@ -438,6 +427,7 @@ async fn unassigned_partitions_keep_their_share_state() {
                 }],
                 topic_b,
                 0..2,
+                true,
             )
             .await;
         }
@@ -480,7 +470,7 @@ async fn every_initialized_partition_starts_uninitialized() {
         "join failed: {:?}",
         joined.error_code
     );
-    heartbeat_until_initialized(
+    heartbeat_until(
         &broker,
         &client,
         "g-grow",
@@ -491,6 +481,7 @@ async fn every_initialized_partition_starts_uninitialized() {
         }],
         tid,
         0..2,
+        true,
     )
     .await;
 
@@ -509,7 +500,7 @@ async fn every_initialized_partition_starts_uninitialized() {
         .await
         .expect("CreatePartitions");
     assert!(grown.results[0].error_code == 0, "{grown:?}");
-    heartbeat_until_initialized(
+    heartbeat_until(
         &broker,
         &client,
         "g-grow",
@@ -520,6 +511,7 @@ async fn every_initialized_partition_starts_uninitialized() {
         }],
         tid,
         0..4,
+        true,
     )
     .await;
 

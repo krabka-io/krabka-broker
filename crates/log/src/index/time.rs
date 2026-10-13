@@ -9,7 +9,6 @@ use {
         io::{IoTarget, LogIo},
     },
     std::{fs::File, path::Path},
-    tracing::instrument,
     zerocopy::{BigEndian, IntoBytes, byteorder::I64},
 };
 
@@ -95,7 +94,7 @@ impl TimeIndex {
         krabka_verified::log_index::time_index_scan_start(&self.entries, target_timestamp)
     }
 
-    #[instrument(level = "debug", skip(self), fields(entries = tracing::field::Empty), err)]
+    #[tracing::instrument(level = "debug", skip(self), fields(entries = tracing::field::Empty), err)]
     pub fn truncate_by_relative_offset(&mut self, max_rel_exclusive: u32) -> Result<(), LogError> {
         super::truncate_index(
             &mut self.file,
@@ -130,7 +129,6 @@ mod time_tests {
             test_support::TempPath,
         },
         assert2::check,
-        std::{fs::OpenOptions, io::Write},
     };
 
     seed_index_fixture!(TimeIndex, i64);
@@ -265,8 +263,8 @@ mod time_tests {
                 coordinate: 100,
             },
         ]);
-        let mut f = OpenOptions::new().append(true).open(&path).unwrap();
-        f.write_all(&[0u8; TIME_ENTRY_SIZE * 2]).unwrap();
+        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        std::io::Write::write_all(&mut f, &[0u8; TIME_ENTRY_SIZE * 2]).unwrap();
         f.sync_data().unwrap();
         drop(f);
 

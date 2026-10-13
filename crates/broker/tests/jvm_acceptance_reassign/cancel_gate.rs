@@ -51,7 +51,7 @@ use {
         cluster::offline_for_partition,
         jvm_acceptance::{
             SaslClusterSetup,
-            break_glass::{approve as approve_proposal, propose},
+            break_glass::{approve, propose},
             broker0_advertised, plain_client_properties, start_registered_sasl_cluster,
             wait_three_brokers_registered,
         },
@@ -221,23 +221,6 @@ async fn approve_a_cancel(bootstrap: &str) {
         second.held == second.required,
         "two distinct principals must satisfy the rule: {second:?}",
     );
-}
-
-/// The approvals a proposal holds, and the approvals it requires.
-#[derive(Debug)]
-struct Approvals {
-    held: i32,
-    required: i32,
-}
-
-/// Add one approval as `operator`, and answer with the approvals now held.
-async fn approve(
-    bootstrap: &str,
-    operator: (&str, &str),
-    proposal_id: krabka_protocol::primitives::uuid::Uuid,
-) -> Approvals {
-    let (held, required) = approve_proposal(bootstrap, operator, proposal_id).await;
-    Approvals { held, required }
 }
 
 /// The gate off, then on and unapproved, then on and approved -- the same

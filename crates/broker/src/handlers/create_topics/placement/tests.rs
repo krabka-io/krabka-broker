@@ -32,47 +32,40 @@ struct BrokerRack {
     rack: Option<&'static str>,
 }
 
+/// A broker with a rack.
+const fn racked(node_id: u64, rack: &'static str) -> BrokerRack {
+    BrokerRack {
+        node_id,
+        rack: Some(rack),
+    }
+}
+
 /// One broker in each of the sites `a`, `b`, and `c`.
-const THREE_SITES: [BrokerRack; 3] = [
-    BrokerRack {
-        node_id: 1,
-        rack: Some("a"),
-    },
-    BrokerRack {
-        node_id: 2,
-        rack: Some("b"),
-    },
-    BrokerRack {
-        node_id: 3,
-        rack: Some("c"),
-    },
-];
+const THREE_SITES: [BrokerRack; 3] = [racked(1, "a"), racked(2, "b"), racked(3, "c")];
 
 /// Two brokers in each of the sites `a`, `b`, and `c`.
 const SIX_BROKERS: [BrokerRack; 6] = [
+    racked(1, "a"),
+    racked(2, "b"),
+    racked(3, "c"),
+    racked(4, "a"),
+    racked(5, "b"),
+    racked(6, "c"),
+];
+
+/// Three brokers that register without a rack.
+const RACKLESS_BROKERS: [BrokerRack; 3] = [
     BrokerRack {
         node_id: 1,
-        rack: Some("a"),
+        rack: None,
     },
     BrokerRack {
         node_id: 2,
-        rack: Some("b"),
+        rack: None,
     },
     BrokerRack {
         node_id: 3,
-        rack: Some("c"),
-    },
-    BrokerRack {
-        node_id: 4,
-        rack: Some("a"),
-    },
-    BrokerRack {
-        node_id: 5,
-        rack: Some("b"),
-    },
-    BrokerRack {
-        node_id: 6,
-        rack: Some("c"),
+        rack: None,
     },
 ];
 
@@ -424,24 +417,7 @@ fn site_broker_views_read_the_rack_and_the_witness_role() {
 /// broker thus stays a candidate, unlike one in controlled shutdown.
 #[test]
 fn a_fenced_broker_is_a_tagged_last_resort_candidate() {
-    let mut image = stretch_image(
-        &[
-            BrokerRack {
-                node_id: 1,
-                rack: None,
-            },
-            BrokerRack {
-                node_id: 2,
-                rack: None,
-            },
-            BrokerRack {
-                node_id: 3,
-                rack: None,
-            },
-        ],
-        &[],
-        None,
-    );
+    let mut image = stretch_image(&RACKLESS_BROKERS, &[], None);
     let fenced = std::collections::HashSet::from([2]);
     let views = views_with_fenced_brokers(&image, &fenced);
 
@@ -584,24 +560,7 @@ fn a_fenced_broker_is_out_of_controlled_shutdown() {
         ),
     ];
     for case in cases {
-        let mut image = stretch_image(
-            &[
-                BrokerRack {
-                    node_id: 1,
-                    rack: None,
-                },
-                BrokerRack {
-                    node_id: 2,
-                    rack: None,
-                },
-                BrokerRack {
-                    node_id: 3,
-                    rack: None,
-                },
-            ],
-            &[],
-            None,
-        );
+        let mut image = stretch_image(&RACKLESS_BROKERS, &[], None);
         let mut registration = image.broker(NodeId(3)).expect("registered").clone();
         registration.in_controlled_shutdown = true;
         registration.fenced = case.registration_fenced;
@@ -641,24 +600,7 @@ fn a_fenced_broker_is_out_of_controlled_shutdown() {
 /// in the replica list and out of the ISR.
 #[test]
 fn the_isr_leaves_out_fenced_and_shutting_down_brokers() {
-    let mut image = stretch_image(
-        &[
-            BrokerRack {
-                node_id: 1,
-                rack: None,
-            },
-            BrokerRack {
-                node_id: 2,
-                rack: None,
-            },
-            BrokerRack {
-                node_id: 3,
-                rack: None,
-            },
-        ],
-        &[],
-        None,
-    );
+    let mut image = stretch_image(&RACKLESS_BROKERS, &[], None);
     enter_controlled_shutdown(&mut image, 3);
     let fenced = std::collections::HashSet::from([2]);
     let inactive = inactive_brokers(&image, &fenced);
@@ -837,24 +779,7 @@ fn a_witness_replicates_but_leads_no_partition() {
 /// id.
 #[test]
 fn a_cluster_without_racks_starts_each_topic_at_a_random_broker() {
-    let image = stretch_image(
-        &[
-            BrokerRack {
-                node_id: 1,
-                rack: None,
-            },
-            BrokerRack {
-                node_id: 2,
-                rack: None,
-            },
-            BrokerRack {
-                node_id: 3,
-                rack: None,
-            },
-        ],
-        &[],
-        None,
-    );
+    let image = stretch_image(&RACKLESS_BROKERS, &[], None);
     let views = broker_views(&image, Some(NodeId(1)));
 
     let leaders = (0..64)

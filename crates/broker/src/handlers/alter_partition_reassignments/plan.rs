@@ -500,6 +500,16 @@ mod tests {
         }
     }
 
+    /// The in-flight assignment whose ISR holds only the adding replica.
+    fn adding_isr_assignment() -> ReassignmentSetup<'static> {
+        ReassignmentSetup {
+            isr: vec![NodeId(3)],
+            adding: vec![NodeId(3)],
+            leader: NodeId(3),
+            ..Default::default()
+        }
+    }
+
     /// A start row: label, partition state, target, the KIP-860 flag, and the
     /// planned record.
     struct StartCase<'a> {
@@ -778,12 +788,7 @@ mod tests {
             },
             CancelCase {
                 label: "an ISR of adding replicas needs unclean election",
-                state: ReassignmentSetup {
-                    isr: vec![NodeId(3)],
-                    adding: vec![NodeId(3)],
-                    leader: NodeId(3),
-                    ..Default::default()
-                },
+                state: adding_isr_assignment(),
                 unclean: UncleanElection::Forbidden,
                 expected: Err(RowError {
                     code: INVALID_REPLICA_ASSIGNMENT,
@@ -792,12 +797,7 @@ mod tests {
             },
             CancelCase {
                 label: "an ISR of adding replicas reverts uncleanly when the topic allows it",
-                state: ReassignmentSetup {
-                    isr: vec![NodeId(3)],
-                    adding: vec![NodeId(3)],
-                    leader: NodeId(3),
-                    ..Default::default()
-                },
+                state: adding_isr_assignment(),
                 unclean: UncleanElection::Allowed,
                 expected: Ok(Some(record(PlanRecordSetup {
                     replicas: &[NodeId(1), NodeId(2)],

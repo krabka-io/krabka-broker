@@ -174,6 +174,14 @@ mod tests {
         error_code: i16,
     }
 
+    /// A partition row that answers `NONE`.
+    fn none_at(partition_index: i32) -> PartitionCode {
+        PartitionCode {
+            partition_index,
+            error_code: codes::NONE,
+        }
+    }
+
     /// A request topic the handler refused, and the code it answers.
     struct RefusedTopic {
         topic: OffsetCommitRequestTopic,
@@ -223,24 +231,12 @@ mod tests {
                 use_topic_ids: true,
                 refused: Vec::new(),
                 committed: vec![
-                    response_topic("", ID_A, &[PartitionCode {
-                        partition_index: 0,
-                        error_code: codes::NONE,
-                    }]),
-                    response_topic("", ID_A, &[PartitionCode {
-                        partition_index: 1,
-                        error_code: codes::NONE,
-                    }]),
+                    response_topic("", ID_A, &[none_at(0)]),
+                    response_topic("", ID_A, &[none_at(1)]),
                 ],
                 expected: vec![
-                    response_topic("", ID_A, &[PartitionCode {
-                        partition_index: 0,
-                        error_code: codes::NONE,
-                    }]),
-                    response_topic("", ID_A, &[PartitionCode {
-                        partition_index: 1,
-                        error_code: codes::NONE,
-                    }]),
+                    response_topic("", ID_A, &[none_at(0)]),
+                    response_topic("", ID_A, &[none_at(1)]),
                 ],
             },
             Case {
@@ -260,10 +256,7 @@ mod tests {
                         error_code: codes::UNKNOWN_TOPIC_ID,
                     },
                 ],
-                committed: vec![response_topic("a", ID_A, &[PartitionCode {
-                    partition_index: 0,
-                    error_code: codes::NONE,
-                }])],
+                committed: vec![response_topic("a", ID_A, &[none_at(0)])],
                 expected: vec![
                     response_topic("", WireUuid::ZERO, &[
                         PartitionCode {
@@ -279,10 +272,7 @@ mod tests {
                         partition_index: 0,
                         error_code: codes::UNKNOWN_TOPIC_ID,
                     }]),
-                    response_topic("a", ID_A, &[PartitionCode {
-                        partition_index: 0,
-                        error_code: codes::NONE,
-                    }]),
+                    response_topic("a", ID_A, &[none_at(0)]),
                 ],
             },
             Case {
@@ -293,14 +283,8 @@ mod tests {
                     error_code: codes::TOPIC_AUTHORIZATION_FAILED,
                 }],
                 committed: vec![
-                    response_topic("b", WireUuid::ZERO, &[PartitionCode {
-                        partition_index: 0,
-                        error_code: codes::NONE,
-                    }]),
-                    response_topic("a", WireUuid::ZERO, &[PartitionCode {
-                        partition_index: 1,
-                        error_code: codes::NONE,
-                    }]),
+                    response_topic("b", WireUuid::ZERO, &[none_at(0)]),
+                    response_topic("a", WireUuid::ZERO, &[none_at(1)]),
                 ],
                 expected: vec![
                     response_topic("a", WireUuid::ZERO, &[
@@ -308,15 +292,9 @@ mod tests {
                             partition_index: 0,
                             error_code: codes::TOPIC_AUTHORIZATION_FAILED,
                         },
-                        PartitionCode {
-                            partition_index: 1,
-                            error_code: codes::NONE,
-                        },
+                        none_at(1),
                     ]),
-                    response_topic("b", WireUuid::ZERO, &[PartitionCode {
-                        partition_index: 0,
-                        error_code: codes::NONE,
-                    }]),
+                    response_topic("b", WireUuid::ZERO, &[none_at(0)]),
                 ],
             },
         ];

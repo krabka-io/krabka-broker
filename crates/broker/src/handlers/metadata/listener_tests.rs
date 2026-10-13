@@ -237,6 +237,19 @@ struct Columns {
     offline_replicas: Vec<i32>,
 }
 
+impl Columns {
+    /// A partition whose only surviving replica is node 2.
+    fn only_node_two(error_code: i16, leader: i32) -> Self {
+        Self {
+            error_code,
+            leader,
+            replicas: vec![2],
+            isr: vec![2],
+            offline_replicas: vec![],
+        }
+    }
+}
+
 /// One response to compare: the request version and listener, and the columns
 /// expected.
 struct ListenerCase<'a> {
@@ -334,27 +347,9 @@ async fn a_leader_without_an_endpoint_on_the_listener_answers_no_leader_and_an_e
                     isr: vec![2, 1],
                     offline_replicas: vec![],
                 },
-                Columns {
-                    error_code: no_leader,
-                    leader: -1,
-                    replicas: vec![2],
-                    isr: vec![2],
-                    offline_replicas: vec![],
-                },
-                Columns {
-                    error_code: no_leader,
-                    leader: -1,
-                    replicas: vec![2],
-                    isr: vec![2],
-                    offline_replicas: vec![],
-                },
-                Columns {
-                    error_code: codes::REPLICA_NOT_AVAILABLE,
-                    leader: 2,
-                    replicas: vec![2],
-                    isr: vec![2],
-                    offline_replicas: vec![],
-                },
+                Columns::only_node_two(no_leader, -1),
+                Columns::only_node_two(no_leader, -1),
+                Columns::only_node_two(codes::REPLICA_NOT_AVAILABLE, 2),
             ],
         },
         ListenerCase {

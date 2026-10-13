@@ -14,12 +14,10 @@ use {
         },
     },
     krabka_ids::PartitionIndex,
-    krabka_protocol::owned::common::{
-        add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
-        add_partitions_to_txn_response::{
-            add_partitions_to_txn_partition_result::AddPartitionsToTxnPartitionResult,
-            add_partitions_to_txn_topic_result::AddPartitionsToTxnTopicResult,
-        },
+    krabka_protocol::owned::common::add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
+    krabka_protocol::owned::common::add_partitions_to_txn_response::{
+        add_partitions_to_txn_partition_result::AddPartitionsToTxnPartitionResult,
+        add_partitions_to_txn_topic_result::AddPartitionsToTxnTopicResult,
     },
     std::collections::HashSet,
 };

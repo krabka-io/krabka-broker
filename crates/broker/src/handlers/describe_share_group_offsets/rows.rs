@@ -379,6 +379,17 @@ mod tests {
         summary: Option<ShareStateSummary>,
     }
 
+    /// The stored summary of `orders` partition 0.
+    fn orders_summary(summary: Option<ShareStateSummary>) -> StoredSummary {
+        StoredSummary {
+            key: SummaryKey {
+                topic_id: ORDERS,
+                partition: 0,
+            },
+            summary,
+        }
+    }
+
     /// The end offset a lookup answers for a partition.
     struct EndAnswer {
         partition: TopicPartition,
@@ -519,13 +530,7 @@ mod tests {
                 name: "lag is the end offset less the start offset and the delivered count",
                 group: "g",
                 topics: vec![topic("orders", &[0])],
-                summaries: vec![StoredSummary {
-                    key: SummaryKey {
-                        topic_id: ORDERS,
-                        partition: 0,
-                    },
-                    summary: Some((1, 4, Offset(21), 10)),
-                }],
+                summaries: vec![orders_summary(Some((1, 4, Offset(21), 10)))],
                 ends: vec![EndAnswer {
                     partition: orders(0),
                     end_offset: Ok(40),
@@ -544,13 +549,7 @@ mod tests {
                 name: "an uninitialized delivered count has no lag",
                 group: "g",
                 topics: vec![topic("orders", &[0])],
-                summaries: vec![StoredSummary {
-                    key: SummaryKey {
-                        topic_id: ORDERS,
-                        partition: 0,
-                    },
-                    summary: Some((1, 2, Offset(5), -1)),
-                }],
+                summaries: vec![orders_summary(Some((1, 2, Offset(5), -1)))],
                 ends: vec![],
                 want: Ok(vec![row("orders", ORDERS, vec![part(0, 5, 2, -1)])]),
             },
@@ -558,13 +557,7 @@ mod tests {
                 name: "a failed state read has no data and no error",
                 group: "g",
                 topics: vec![topic("orders", &[0])],
-                summaries: vec![StoredSummary {
-                    key: SummaryKey {
-                        topic_id: ORDERS,
-                        partition: 0,
-                    },
-                    summary: None,
-                }],
+                summaries: vec![orders_summary(None)],
                 ends: vec![],
                 want: Ok(vec![row("orders", ORDERS, vec![no_data(0)])]),
             },
@@ -572,13 +565,7 @@ mod tests {
                 name: "a failed end offset lookup carries its error",
                 group: "g",
                 topics: vec![topic("orders", &[0])],
-                summaries: vec![StoredSummary {
-                    key: SummaryKey {
-                        topic_id: ORDERS,
-                        partition: 0,
-                    },
-                    summary: Some((1, 4, Offset(21), 10)),
-                }],
+                summaries: vec![orders_summary(Some((1, 4, Offset(21), 10)))],
                 ends: vec![],
                 want: Ok(vec![row("orders", ORDERS, vec![
                     DescribeShareGroupOffsetsResponsePartition {

@@ -618,6 +618,29 @@ pub(crate) struct CaseOutcomes<T> {
     pub(crate) expected: T,
 }
 
+/// The actual or the expected outcome of one [`TopicResolutionCase`].
+#[derive(Debug, PartialEq)]
+pub(crate) struct TopicCaseOutcome<R> {
+    pub(crate) version: i16,
+    pub(crate) topic: TopicRef,
+    pub(crate) response: R,
+}
+
+impl<R> CaseOutcomes<TopicCaseOutcome<R>> {
+    /// Pair the response a case produced with the response it must produce.
+    pub(crate) fn for_topic_case(case: TopicResolutionCase, actual: R, expected: R) -> Self {
+        let outcome = |response| TopicCaseOutcome {
+            version: case.version,
+            topic: case.topic,
+            response,
+        };
+        Self {
+            actual: outcome(actual),
+            expected: outcome(expected),
+        }
+    }
+}
+
 /// Compare each table case's complete actual and expected outcome.
 pub(crate) async fn check_cases<C, T: std::fmt::Debug + PartialEq>(
     cases: impl IntoIterator<Item = C>,

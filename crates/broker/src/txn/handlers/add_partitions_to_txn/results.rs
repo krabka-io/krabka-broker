@@ -158,17 +158,18 @@ fn topic_result(
     topic: &AddPartitionsToTxnTopic,
     code: impl Fn(i32) -> i16,
 ) -> AddPartitionsToTxnTopicResult {
+    let results_by_partition = topic
+        .partitions
+        .iter()
+        .map(|&partition_index| AddPartitionsToTxnPartitionResult {
+            partition_index,
+            partition_error_code: code(partition_index),
+            ..Default::default()
+        })
+        .collect();
     AddPartitionsToTxnTopicResult {
         name: topic.name.clone(),
-        results_by_partition: topic
-            .partitions
-            .iter()
-            .map(|&partition_index| AddPartitionsToTxnPartitionResult {
-                partition_index,
-                partition_error_code: code(partition_index),
-                ..Default::default()
-            })
-            .collect(),
+        results_by_partition,
         ..Default::default()
     }
 }

@@ -304,6 +304,23 @@ mod tests {
 
     krabka_macros::scram_users_fixture!(scram_users_request);
 
+    const ALICE: SeededUser<'static> = SeededUser {
+        user: "alice",
+        mechanism: SaslMechanism::ScramSha512,
+        iterations: 4096,
+    };
+
+    const ALICE_ONLY: [SeededUser<'static>; 1] = [ALICE];
+
+    const ALICE_AND_BOB: [SeededUser<'static>; 2] = [
+        ALICE,
+        SeededUser {
+            user: "bob",
+            mechanism: SaslMechanism::ScramSha512,
+            iterations: 8192,
+        },
+    ];
+
     fn run_handle_filter(
         users_filter: Option<Vec<String>>,
         seeded: &[SeededUser<'_>],
@@ -315,18 +332,7 @@ mod tests {
 
     #[test]
     fn describe_all_users_when_filter_none() {
-        let resp = run_handle_filter(None, &[
-            SeededUser {
-                user: "alice",
-                mechanism: SaslMechanism::ScramSha512,
-                iterations: 4096,
-            },
-            SeededUser {
-                user: "bob",
-                mechanism: SaslMechanism::ScramSha512,
-                iterations: 8192,
-            },
-        ]);
+        let resp = run_handle_filter(None, &ALICE_AND_BOB);
         assert!(resp.results.len() == 2);
         let users: Vec<&str> = resp.results.iter().map(|r| r.user.as_str()).collect();
         assert!(users.contains(&"alice") && users.contains(&"bob"));
@@ -334,18 +340,7 @@ mod tests {
 
     #[test]
     fn describe_filter_returns_only_listed_users() {
-        let resp = run_handle_filter(Some(vec!["alice".into()]), &[
-            SeededUser {
-                user: "alice",
-                mechanism: SaslMechanism::ScramSha512,
-                iterations: 4096,
-            },
-            SeededUser {
-                user: "bob",
-                mechanism: SaslMechanism::ScramSha512,
-                iterations: 8192,
-            },
-        ]);
+        let resp = run_handle_filter(Some(vec!["alice".into()]), &ALICE_AND_BOB);
         let expected = vec![tagged_wire!(DescribeUserScramCredentialsResult {
             user: "alice".to_string(),
             error_code: 0,
@@ -360,11 +355,7 @@ mod tests {
 
     #[test]
     fn unknown_user_returns_resource_not_found() {
-        let resp = run_handle_filter(Some(vec!["ghost".into()]), &[SeededUser {
-            user: "alice",
-            mechanism: SaslMechanism::ScramSha512,
-            iterations: 4096,
-        }]);
+        let resp = run_handle_filter(Some(vec!["ghost".into()]), &ALICE_ONLY);
         let expected = vec![tagged_wire!(DescribeUserScramCredentialsResult {
             user: "ghost".to_string(),
             error_code: 91,
@@ -380,18 +371,7 @@ mod tests {
     fn duplicate_requested_user_returns_single_duplicate_resource_row() {
         const KAFKA_DUPLICATE_RESOURCE: i16 = 92;
 
-        let resp = run_handle_filter(Some(vec!["alice".into(), "bob".into(), "alice".into()]), &[
-            SeededUser {
-                user: "alice",
-                mechanism: SaslMechanism::ScramSha512,
-                iterations: 4096,
-            },
-            SeededUser {
-                user: "bob",
-                mechanism: SaslMechanism::ScramSha512,
-                iterations: 8192,
-            },
-        ]);
+        let resp = run_handle_filter(Some(vec!["alice".into(), "bob".into(), "alice".into()]), &ALICE_AND_BOB);
 
         assert!(
             resp.results.len() == 2,

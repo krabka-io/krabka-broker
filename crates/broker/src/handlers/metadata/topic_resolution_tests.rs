@@ -97,6 +97,12 @@ struct RequestedTopic {
     id: Id,
 }
 
+impl RequestedTopic {
+    const fn new(name: Name, id: Id) -> Self {
+        Self { name, id }
+    }
+}
+
 /// One table row.
 #[derive(Debug, Clone)]
 struct Case {
@@ -385,24 +391,14 @@ async fn topic_ids_follow_kafka_version_rules() {
         // From version 12 on, the ids win and the names are ignored.
         Case {
             version: 12,
-            rows: [RequestedTopic {
-                name: Name::A,
-                id: Id::B,
-            }]
-            .to_vec(),
+            rows: vec![RequestedTopic::new(Name::A, Id::B)],
             expect: Rows(vec![Row::Described(Id::B)]),
         },
         Case {
             version: 12,
             rows: vec![
-                RequestedTopic {
-                    name: Name::A,
-                    id: Id::Zero,
-                },
-                RequestedTopic {
-                    name: Name::Null,
-                    id: Id::B,
-                },
+                RequestedTopic::new(Name::A, Id::Zero),
+                RequestedTopic::new(Name::Null, Id::B),
             ],
             expect: Rows(vec![Row::Described(Id::B)]),
         },

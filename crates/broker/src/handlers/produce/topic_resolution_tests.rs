@@ -33,16 +33,10 @@ const UNKNOWN_ID: WireUuid = WireUuid([0x0b; 16]);
 const UNKNOWN_NAME: &str = "no-such-topic";
 
 use crate::handlers::test_support::{
-    TopicRef, TopicResolutionCase as Case, unauthorized_topic_cases,
+    TopicCaseOutcome, TopicRef, TopicResolutionCase as Case, unauthorized_topic_cases,
 };
 
-/// The actual or the expected outcome of one [`Case`].
-#[derive(Debug, PartialEq)]
-struct Outcome {
-    version: i16,
-    topic: TopicRef,
-    response: ProduceResponse,
-}
+type Outcome = TopicCaseOutcome<ProduceResponse>;
 
 async fn start(authorizer: Arc<dyn Authorizer>) -> StartedBroker {
     let (broker, dir) = start_broker_with_authorizer_no_audit(authorizer).await;
@@ -170,18 +164,7 @@ async fn drive(broker: &BrokerHandle, known: Option<&str>, case: Case) -> CaseOu
         }],
         ..Default::default()
     };
-    CaseOutcomes {
-        actual: Outcome {
-            version: case.version,
-            topic: case.topic,
-            response: actual,
-        },
-        expected: Outcome {
-            version: case.version,
-            topic: case.topic,
-            response: expected,
-        },
-    }
+    CaseOutcomes::for_topic_case(case, actual, expected)
 }
 
 #[tokio::test]

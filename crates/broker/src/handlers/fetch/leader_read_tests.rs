@@ -22,7 +22,7 @@ use {
         codes,
         fetch_session::INVALID_SESSION_ID,
         handlers::test_support::{
-            ReplicatedTopicSetup, default_records_batch, seed_partition_replicas,
+            ReplicatedTopicSetup, StartedBroker, default_records_batch, seed_partition_replicas,
         },
         partition::Partition,
         test_support::{KafkaErrorCode, append_partition_batch, start_broker_no_audit_with},
@@ -94,19 +94,16 @@ struct Outcome {
     tracked_followers: Vec<u64>,
 }
 
-/// A running broker and the temporary directory that holds its data.
-struct StartedBroker {
-    handle: BrokerHandle,
-    dir: tempfile::TempDir,
-}
-
 async fn start() -> StartedBroker {
     let (handle, dir) = start_broker_no_audit_with(|cfg| {
         // Node 2 never fetches. Keep it in the ISR for the whole test.
         cfg.replica_lag_time_max = krabka_units::secs(600);
     })
     .await;
-    StartedBroker { handle, dir }
+    StartedBroker {
+        broker: handle,
+        dir,
+    }
 }
 
 /// Create `topic` with replicas 1 and 2, led by `leader`, wait until this
@@ -332,10 +329,7 @@ async fn a_read_needs_the_leader_and_an_assigned_follower() {
         },
     ];
 
-    let StartedBroker {
-        handle: broker,
-        dir: _dir,
-    } = start().await;
+    let StartedBroker { broker, dir: _dir } = start().await;
     topic_case_outcomes!(
         (actual, want),
         (index, case, label, name),

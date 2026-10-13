@@ -8,7 +8,7 @@
 use {
     crate::test_support::truncation::*,
     krabka_metadata::{LeaderEpoch, MetadataRecord},
-    std::time::{Duration, Instant},
+    std::time::Instant,
 };
 
 /// Parks the Krabka replica behind a phantom leader, then verifies that it
@@ -84,7 +84,7 @@ async fn kip320_krabka_follower_truncates_from_jvm_leader() {
     // 5. Observe the truncation itself, before adding any new leader records.
     //    Equal final LEOs alone would not distinguish truncate-and-refetch from
     //    leaving the bogus suffix in place.
-    let dl = Instant::now() + Duration::from_secs(45);
+    let dl = Instant::now() + std::time::Duration::from_secs(45);
     let mut final_leo = krabka_leo_diverged;
     loop {
         final_leo = c1.local_log_end_offset(TOPIC, 0).unwrap_or(final_leo);
@@ -95,7 +95,7 @@ async fn kip320_krabka_follower_truncates_from_jvm_leader() {
             Instant::now() <= dl,
             "Krabka follower did not truncate to JVM prefix LEO {prefix_leo}; current LEO={final_leo}"
         );
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
     let jvm_prefix_dump =
         dump_log_in_container(&container, &format!("/tmp/kraft-mixed-logs/{TOPIC}-0"));

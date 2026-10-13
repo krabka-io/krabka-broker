@@ -244,18 +244,18 @@ async fn handle_returns_entry_results_and_submits_valid_changes() {
 
 #[tokio::test]
 async fn handle_validate_only_reports_success_without_submitting() {
-    let version = 1;
-    broker_fixture!(
-        (broker_handle, _dir, broker),
-        allow_all,
-        context(ctx, "admin")
-    );
     let req = request(
         vec![entry(vec![part("user", Some("carol"))], vec![op(
             "producer_byte_rate",
             2048.0,
         )])],
         true,
+    );
+    let version = 1;
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        allow_all,
+        context(ctx, "admin")
     );
 
     let resp = handle(&broker, req, version, &ctx).await.expect("handle");

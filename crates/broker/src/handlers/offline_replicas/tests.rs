@@ -52,6 +52,15 @@ struct Registered {
     online_dirs: Vec<Uuid>,
 }
 
+impl Registered {
+    fn new(node_id: NodeId, online_dirs: Vec<Uuid>) -> Self {
+        Self {
+            node_id,
+            online_dirs,
+        }
+    }
+}
+
 /// Image with `t-0` on `replicas`/`directories` and a registration for every
 /// broker in `registrations`.
 fn image(registrations: &[Registered], replicas: &[NodeId], directories: &[Uuid]) -> MetadataImage {
@@ -129,14 +138,8 @@ fn offline_replicas_matches_kafka_replica_state_rules() {
         replica_case(vec![], ReplicaCaseSetup {
             name: "every replica registered, online dir, unfenced",
             registrations: vec![
-                Registered {
-                    node_id: NodeId(1),
-                    online_dirs: vec![good, bad],
-                },
-                Registered {
-                    node_id: NodeId(2),
-                    online_dirs: vec![good],
-                },
+                Registered::new(NodeId(1), vec![good, bad]),
+                Registered::new(NodeId(2), vec![good]),
             ],
             ..Default::default()
         }),
@@ -152,10 +155,7 @@ fn offline_replicas_matches_kafka_replica_state_rules() {
         }),
         replica_case(vec![2], ReplicaCaseSetup {
             name: "unregistered broker",
-            registrations: vec![Registered {
-                node_id: NodeId(1),
-                online_dirs: vec![good],
-            }],
+            registrations: vec![Registered::new(NodeId(1), vec![good])],
             ..Default::default()
         }),
         replica_case(vec![], ReplicaCaseSetup {
@@ -166,14 +166,8 @@ fn offline_replicas_matches_kafka_replica_state_rules() {
         replica_case(vec![1], ReplicaCaseSetup {
             name: "registration whose last online dir was retired offlines its replicas",
             registrations: vec![
-                Registered {
-                    node_id: NodeId(1),
-                    online_dirs: vec![],
-                },
-                Registered {
-                    node_id: NodeId(2),
-                    online_dirs: vec![good],
-                },
+                Registered::new(NodeId(1), vec![]),
+                Registered::new(NodeId(2), vec![good]),
             ],
             directories: vec![bad, good],
             ..Default::default()
@@ -181,14 +175,8 @@ fn offline_replicas_matches_kafka_replica_state_rules() {
         replica_case(vec![], ReplicaCaseSetup {
             name: "registration with no online dir keeps an unassigned replica online",
             registrations: vec![
-                Registered {
-                    node_id: NodeId(1),
-                    online_dirs: vec![],
-                },
-                Registered {
-                    node_id: NodeId(2),
-                    online_dirs: vec![good],
-                },
+                Registered::new(NodeId(1), vec![]),
+                Registered::new(NodeId(2), vec![good]),
             ],
             directories: vec![Uuid::nil(), good],
             ..Default::default()
@@ -231,10 +219,7 @@ fn a_replica_on_a_dead_log_dir_neither_leads_nor_stays_in_the_isr() {
             availability(NO_LEADER_ID, vec![], vec![1]),
             ReplicaCaseSetup {
                 name: "sole replica on a failed log dir",
-                registrations: vec![Registered {
-                    node_id: NodeId(1),
-                    online_dirs: vec![good],
-                }],
+                registrations: vec![Registered::new(NodeId(1), vec![good])],
                 replicas: vec![NodeId(1)],
                 directories: vec![bad],
                 ..Default::default()
@@ -250,10 +235,7 @@ fn a_replica_on_a_dead_log_dir_neither_leads_nor_stays_in_the_isr() {
         ),
         replica_case(availability(1, vec![1], vec![]), ReplicaCaseSetup {
             name: "sole replica on a directory nobody has assigned yet",
-            registrations: vec![Registered {
-                node_id: NodeId(1),
-                online_dirs: vec![good],
-            }],
+            registrations: vec![Registered::new(NodeId(1), vec![good])],
             replicas: vec![NodeId(1)],
             directories: vec![Uuid::nil()],
             ..Default::default()
@@ -265,10 +247,7 @@ fn a_replica_on_a_dead_log_dir_neither_leads_nor_stays_in_the_isr() {
         }),
         replica_case(availability(1, vec![1, 2], vec![2]), ReplicaCaseSetup {
             name: "unregistered follower keeps its ISR seat",
-            registrations: vec![Registered {
-                node_id: NodeId(1),
-                online_dirs: vec![good],
-            }],
+            registrations: vec![Registered::new(NodeId(1), vec![good])],
             ..Default::default()
         }),
         replica_case(availability(1, vec![1, 2], vec![]), ReplicaCaseSetup {
@@ -292,14 +271,8 @@ fn a_broker_without_the_request_listener_is_offline_and_cannot_be_the_leader() {
     // no registration.
     let mut img = image(
         &[
-            Registered {
-                node_id: NodeId(1),
-                online_dirs: vec![good],
-            },
-            Registered {
-                node_id: NodeId(2),
-                online_dirs: vec![good],
-            },
+            Registered::new(NodeId(1), vec![good]),
+            Registered::new(NodeId(2), vec![good]),
         ],
         &[NodeId(1), NodeId(2)],
         &[good, good],
@@ -361,18 +334,9 @@ fn electable_is_the_registered_brokers_the_unavailable_set_does_not_name() {
     let good = dir(0x600d);
     let img = image(
         &[
-            Registered {
-                node_id: NodeId(1),
-                online_dirs: vec![good],
-            },
-            Registered {
-                node_id: NodeId(2),
-                online_dirs: vec![good],
-            },
-            Registered {
-                node_id: NodeId(3),
-                online_dirs: vec![good],
-            },
+            Registered::new(NodeId(1), vec![good]),
+            Registered::new(NodeId(2), vec![good]),
+            Registered::new(NodeId(3), vec![good]),
         ],
         &[NodeId(1), NodeId(2)],
         &[good, good],
@@ -419,10 +383,7 @@ fn electable_is_the_registered_brokers_the_unavailable_set_does_not_name() {
 fn an_unregistered_broker_is_never_electable() {
     let good = dir(0x600d);
     let img = image(
-        &[Registered {
-            node_id: NodeId(1),
-            online_dirs: vec![good],
-        }],
+        &[Registered::new(NodeId(1), vec![good])],
         &[NodeId(1), NodeId(2)],
         &[good, good],
     );
@@ -489,14 +450,8 @@ fn a_leaderless_partition_projects_no_leader_and_an_isr_without_its_last_leader(
     {
         let mut img = image(
             &[
-                Registered {
-                    node_id: NodeId(1),
-                    online_dirs: vec![good],
-                },
-                Registered {
-                    node_id: NodeId(2),
-                    online_dirs: vec![good],
-                },
+                Registered::new(NodeId(1), vec![good]),
+                Registered::new(NodeId(2), vec![good]),
             ],
             &replicas.iter().copied().map(NodeId).collect::<Vec<_>>(),
             &vec![good; replicas.len()],

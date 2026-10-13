@@ -350,13 +350,9 @@ async fn a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpo
     let cid = uuid::Uuid::from_u128(502);
     let interval = 5u64;
     let (net, _ids, pair) = elected_pair_on_new_network(cid, interval).await;
-    let ElectedSnapshotPair {
-        dirs,
-        leader,
-        epoch,
-    } = pair;
+    let (leader, epoch) = (pair.leader, pair.epoch);
     let live = [NodeId(1), NodeId(2)];
-    let leader_dir = dirs[&leader].path().to_path_buf();
+    let leader_dir = pair.dirs[&leader].path().to_path_buf();
 
     let submit = async |name: String, id: u128| {
         tokio::time::timeout(

@@ -152,14 +152,8 @@ async fn renew_extends_lock_not_redelivered() {
 /// suppressed the redelivery, and that slack in the timing did not.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn no_renew_redelivers_after_lock_expiry() {
-    let LockFixture {
-        permit: _permit,
-        broker: _broker,
-        client,
-        dir: _dir,
-        tid,
-        member,
-    } = lock_fixture(Duration::from_millis(500), None).await;
+    let fixture = lock_fixture(Duration::from_millis(500), None).await;
+    let (client, tid, member) = (&fixture.client, fixture.tid, &fixture.member);
     let session = ShareSessionSetup::joined(&member, tid);
 
     acquire_initial_record(&client, &member, tid).await;

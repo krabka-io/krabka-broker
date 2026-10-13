@@ -125,6 +125,22 @@ struct ServingConfig<'a> {
     static_broker: StaticBrokerConfigs<'a>,
 }
 
+/// A broker resource that serves a 30 second idle window beside the
+/// per-listener `overrides`.
+fn idle_window_serving<'a>(
+    resource_name: &str,
+    overrides: &'a std::collections::BTreeMap<String, krabka_units::Time>,
+) -> ServingConfig<'a> {
+    ServingConfig {
+        node: serving_node_for(RESOURCE_TYPE_BROKER, resource_name),
+        static_broker: StaticBrokerConfigs {
+            connections_max_idle: Some(krabka_units::secs(30)),
+            connections_max_idle_overrides: overrides,
+            ..untuned()
+        },
+    }
+}
+
 /// Describe one resource with the supplied node and static settings,
 /// while every logger runs at `info`.
 fn describe_at(
@@ -1703,14 +1719,7 @@ fn a_configured_idle_window_and_its_listener_override_report_as_static() {
     let overrides = std::iter::once(("EXTERNAL".to_owned(), krabka_units::secs(5))).collect();
 
     let result = describe_at(
-        ServingConfig {
-            node: serving_node_for(RESOURCE_TYPE_BROKER, "7"),
-            static_broker: StaticBrokerConfigs {
-                connections_max_idle: Some(krabka_units::secs(30)),
-                connections_max_idle_overrides: &overrides,
-                ..untuned()
-            },
-        },
+        idle_window_serving("7", &overrides),
         &MetadataImage::new(Uuid::nil()),
         RESOURCE_TYPE_BROKER,
         "7",
@@ -1768,14 +1777,7 @@ fn the_cluster_default_resource_reports_no_idle_window() {
     let overrides = std::iter::once(("EXTERNAL".to_owned(), krabka_units::secs(5))).collect();
 
     let result = describe_at(
-        ServingConfig {
-            node: serving_node_for(RESOURCE_TYPE_BROKER, ""),
-            static_broker: StaticBrokerConfigs {
-                connections_max_idle: Some(krabka_units::secs(30)),
-                connections_max_idle_overrides: &overrides,
-                ..untuned()
-            },
-        },
+        idle_window_serving("", &overrides),
         &MetadataImage::new(Uuid::nil()),
         RESOURCE_TYPE_BROKER,
         "",

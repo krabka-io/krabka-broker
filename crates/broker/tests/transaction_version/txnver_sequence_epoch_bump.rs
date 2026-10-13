@@ -309,54 +309,42 @@ async fn codes_across_restart(case: &Case) -> [i16; 3] {
     [live_rejected, recovered_rejected, recovered_accepted]
 }
 
+/// A case whose probe at sequence 3 is out of order and whose probe at
+/// sequence 0 is accepted, both at the bumped epoch.
+fn epoch_bump_case(name: &'static str, topic: &'static str, setup: Setup) -> Case {
+    Case {
+        name,
+        topic,
+        setup,
+        rejected: ProbeBatch {
+            epoch_offset: ProducerEpochOffset(0),
+            sequence: ProducerSequence(3),
+        },
+        accepted: ProbeBatch {
+            epoch_offset: ProducerEpochOffset(0),
+            sequence: ProducerSequence(0),
+        },
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn first_sequence_at_a_new_epoch_gets_the_same_answer_before_and_after_restart() {
     let cases = [
-        Case {
-            name: "tv2-commit-bumps-the-epoch",
-            topic: "seq-tv2",
-            setup: Setup::Transaction { downgrade_to: None },
-            rejected: ProbeBatch {
-                epoch_offset: ProducerEpochOffset(0),
-                sequence: ProducerSequence(3),
-            },
-            accepted: ProbeBatch {
-                epoch_offset: ProducerEpochOffset(0),
-                sequence: ProducerSequence(0),
-            },
-        },
-        Case {
-            name: "tv1-cluster-v5-commit-bumps-the-epoch",
-            topic: "seq-tv1",
-            setup: Setup::Transaction {
+        epoch_bump_case("tv2-commit-bumps-the-epoch", "seq-tv2", Setup::Transaction {
+            downgrade_to: None,
+        }),
+        // The EndTxn v5 request of this client is a TV_2 client whatever
+        // `transaction.version` the cluster finalized (Kafka's
+        // `transactionVersionForEndTxn`), so the commit bumps the epoch as
+        // it does at TV_2.
+        epoch_bump_case(
+            "tv1-cluster-v5-commit-bumps-the-epoch",
+            "seq-tv1",
+            Setup::Transaction {
                 downgrade_to: Some(TransactionFeatureLevel(1)),
             },
-            // The EndTxn v5 request of this client is a TV_2 client whatever
-            // `transaction.version` the cluster finalized (Kafka's
-            // `transactionVersionForEndTxn`), so the commit bumps the epoch as
-            // it does at TV_2.
-            rejected: ProbeBatch {
-                epoch_offset: ProducerEpochOffset(0),
-                sequence: ProducerSequence(3),
-            },
-            accepted: ProbeBatch {
-                epoch_offset: ProducerEpochOffset(0),
-                sequence: ProducerSequence(0),
-            },
-        },
-        Case {
-            name: "idempotent-epoch-bump",
-            topic: "seq-idempotent",
-            setup: Setup::Idempotent,
-            rejected: ProbeBatch {
-                epoch_offset: ProducerEpochOffset(0),
-                sequence: ProducerSequence(3),
-            },
-            accepted: ProbeBatch {
-                epoch_offset: ProducerEpochOffset(0),
-                sequence: ProducerSequence(0),
-            },
-        },
+        ),
+        epoch_bump_case("idempotent-epoch-bump", "seq-idempotent", Setup::Idempotent),
     ];
     for case in &cases {
         let codes = codes_across_restart(case).await;

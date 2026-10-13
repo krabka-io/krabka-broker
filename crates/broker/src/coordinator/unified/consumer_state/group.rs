@@ -11,7 +11,8 @@ use {
     crate::{
         codes,
         coordinator::unified::{
-            INITIAL_GROUP_EPOCH, actor::CommitFence, persistence_next_gen::MemberAssignmentState,
+            INITIAL_GROUP_EPOCH, actor::CommitFence, member_helpers,
+            persistence_next_gen::MemberAssignmentState,
         },
     },
     krabka_protocol::primitives::uuid::Uuid,
@@ -77,15 +78,15 @@ enum LogPresence {
 }
 
 impl GroupState {
-    crate::coordinator::unified::member_helpers::assignment_delay_method!();
+    member_helpers::assignment_delay_method!();
 
-    crate::coordinator::unified::member_helpers::bump_group_epoch!(self;);
+    member_helpers::bump_group_epoch!(self;);
 
-    crate::coordinator::unified::member_helpers::expired_members_method!();
+    member_helpers::expired_members_method!();
 
-    crate::coordinator::unified::member_helpers::evict_expired!();
+    member_helpers::evict_expired!();
 
-    crate::coordinator::unified::member_helpers::fence_rebalance_timeouts_method! {
+    member_helpers::fence_rebalance_timeouts_method! {
     /// Removes every member whose rebalance timeout fired at `now` while the
     /// member still had partitions to revoke. Returns the removed member ids,
     /// sorted.

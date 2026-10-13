@@ -1596,51 +1596,45 @@ async fn automatic_placement_takes_fenced_brokers_last_and_shrinks_the_isr() {
         outcome: Result<&'static [u64], &'static str>,
     }
 
+    const fn row(
+        fenced: &'static [u64],
+        shutting_down: &'static [u64],
+        rf: i16,
+        outcome: Result<&'static [u64], &'static str>,
+    ) -> FencedRow {
+        FencedRow {
+            fenced,
+            shutting_down,
+            rf,
+            outcome,
+        }
+    }
+
     let rows: [FencedRow; 6] = [
-        FencedRow {
-            fenced: &[3],
-            shutting_down: &[],
-            rf: 3,
-            outcome: Ok(&[1, 2, 3]),
-        },
-        FencedRow {
-            fenced: &[2, 3],
-            shutting_down: &[],
-            rf: 3,
-            outcome: Ok(&[1, 2, 3]),
-        },
-        FencedRow {
-            fenced: &[2, 3],
-            shutting_down: &[],
-            rf: 1,
-            outcome: Ok(&[1]),
-        },
-        FencedRow {
-            fenced: &[2],
-            shutting_down: &[3],
-            rf: 2,
-            outcome: Ok(&[1, 2]),
-        },
-        FencedRow {
-            fenced: &[3],
-            shutting_down: &[],
-            rf: 4,
-            outcome: Err(
+        row(&[3], &[], 3, Ok(&[1, 2, 3])),
+        row(&[2, 3], &[], 3, Ok(&[1, 2, 3])),
+        row(&[2, 3], &[], 1, Ok(&[1])),
+        row(&[2], &[3], 2, Ok(&[1, 2])),
+        row(
+            &[3],
+            &[],
+            4,
+            Err(
                 "Unable to replicate the partition 4 time(s): The target replication factor of 4 \
                  cannot be reached because only 3 broker(s) are registered or some brokers have \
                  all their log directories cordoned.",
             ),
-        },
-        FencedRow {
-            fenced: &[],
-            shutting_down: &[3],
-            rf: 3,
-            outcome: Err(
+        ),
+        row(
+            &[],
+            &[3],
+            3,
+            Err(
                 "Unable to replicate the partition 3 time(s): The target replication factor of 3 \
                  cannot be reached because only 2 broker(s) are registered or some brokers have \
                  all their log directories cordoned.",
             ),
-        },
+        ),
     ];
 
     for FencedRow {

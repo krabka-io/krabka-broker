@@ -333,11 +333,8 @@ async fn empty_group_loses_its_offsets_after_the_retention() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn live_group_keeps_its_offsets_across_the_same_interval() {
-    let StartedBroker {
-        handle: broker_handle,
-        dir: _dir,
-    } = start().await;
-    let broker = broker_handle.broker_arc_for_test();
+    let started = start().await;
+    let broker = started.handle.broker_arc_for_test();
     seed_group_with_member(&broker);
     commit_offset(&broker, 42, -1).await;
 

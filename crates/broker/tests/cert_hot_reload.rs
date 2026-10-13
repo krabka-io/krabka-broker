@@ -140,16 +140,11 @@ async fn reload_tls_swaps_served_cert() {
 async fn periodic_watcher_reloads_on_mtime_change() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let CertFixture {
-        log_dir: _log_dir,
-        pem_dir: _pem_dir,
-        cert_path,
-        key_path,
-        mut cfg,
-    } = cert_fixture();
-    cfg.tls_reload_interval = krabka_units::millis(100);
+    let mut fixture = cert_fixture();
+    fixture.cfg.tls_reload_interval = krabka_units::millis(100);
+    let (cert_path, key_path) = (fixture.cert_path.clone(), fixture.key_path.clone());
 
-    let handle = Broker::start(cfg).await.expect("broker start");
+    let handle = Broker::start(fixture.cfg.clone()).await.expect("broker start");
     let addr = handle.listen_addr();
 
     let cert_b = cert_der_from_pem(DEV_CERT_B);

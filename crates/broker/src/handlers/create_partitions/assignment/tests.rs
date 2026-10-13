@@ -32,6 +32,22 @@ struct BrokerSite {
     site: &'static str,
 }
 
+/// Three brokers, one per site `a`, `b` and `c`.
+const THREE_SITES: [BrokerSite; 3] = [
+    BrokerSite {
+        node_id: 1,
+        site: "a",
+    },
+    BrokerSite {
+        node_id: 2,
+        site: "b",
+    },
+    BrokerSite {
+        node_id: 3,
+        site: "c",
+    },
+];
+
 /// Brokers with a site each. A broker whose id is in `witnesses` also
 /// carries the witness role.
 fn site_brokers(brokers: &[BrokerSite], witnesses: &[u64]) -> Vec<SiteBrokerView> {
@@ -162,20 +178,7 @@ fn new_partitions_start_at_a_fresh_random_broker() {
 
 #[test]
 fn three_sites_hold_one_replica_of_every_new_partition() {
-    const SITES: [BrokerSite; 3] = [
-        BrokerSite {
-            node_id: 1,
-            site: "a",
-        },
-        BrokerSite {
-            node_id: 2,
-            site: "b",
-        },
-        BrokerSite {
-            node_id: 3,
-            site: "c",
-        },
-    ];
+    const SITES: [BrokerSite; 3] = THREE_SITES;
     let brokers = site_brokers(&SITES, &[]);
 
     for seed in SEEDS {
@@ -295,20 +298,7 @@ fn a_fenced_broker_takes_a_new_partition_only_as_a_last_resort() {
 
 #[test]
 fn a_manual_assignment_overrides_the_site_placement() {
-    const SITES: [BrokerSite; 3] = [
-        BrokerSite {
-            node_id: 1,
-            site: "a",
-        },
-        BrokerSite {
-            node_id: 2,
-            site: "b",
-        },
-        BrokerSite {
-            node_id: 3,
-            site: "c",
-        },
-    ];
+    const SITES: [BrokerSite; 3] = THREE_SITES;
     let brokers = site_brokers(&SITES, &[]);
     let provided = vec![assn(&[2, 3])];
 
@@ -324,20 +314,7 @@ fn a_manual_assignment_overrides_the_site_placement() {
 
 #[test]
 fn a_cluster_of_witnesses_returns_invalid_rf() {
-    const SITES: [BrokerSite; 3] = [
-        BrokerSite {
-            node_id: 1,
-            site: "a",
-        },
-        BrokerSite {
-            node_id: 2,
-            site: "b",
-        },
-        BrokerSite {
-            node_id: 3,
-            site: "c",
-        },
-    ];
+    const SITES: [BrokerSite; 3] = THREE_SITES;
     let brokers = site_brokers(&SITES, &[1, 2, 3]);
 
     let err = automatic(&brokers, 1, 3, None, 0)

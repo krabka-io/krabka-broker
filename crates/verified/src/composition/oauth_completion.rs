@@ -15,8 +15,8 @@ use {
 
 // cargo-mutants: #[cfg(creusot)] specification, absent from runtime tests.
 #[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
 #[logic]
+#[cfg_attr(test, mutants::skip)]
 fn completed_snapshot_admissible(
     cache: Option<JwksCacheFacts>,
     started_ms: i64,

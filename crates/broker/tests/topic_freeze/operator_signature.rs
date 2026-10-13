@@ -231,15 +231,9 @@ async fn an_unsigned_thaw_is_refused_whatever_require_signature_says() {
 /// tell an attacker which check they got past.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_signature_captured_from_a_freeze_is_refused_as_a_thaw() {
-    let OperatorCase {
-        keys: _keys,
-        logs: _logs,
-        broker,
-        client,
-        key,
-        frozen,
-        control,
-    } = operator_case(false).await;
+    let case = operator_case(false).await;
+    let (broker, client, key) = (case.broker, case.client, case.key);
+    let (frozen, control) = (case.frozen, case.control);
 
     let cluster = cluster_id(&client).await;
     let set_at_ms = now_ms();

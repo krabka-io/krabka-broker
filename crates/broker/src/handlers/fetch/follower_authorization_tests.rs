@@ -24,7 +24,9 @@ use {
         codes,
         handlers::{
             acl_wire::CLUSTER_RESOURCE_NAME,
-            test_support::{ReplicatedTopicSetup, default_records_batch, seed_partition_replicas},
+            test_support::{
+                ReplicatedTopicSetup, StartedBroker, default_records_batch, seed_partition_replicas,
+            },
         },
         partition::Partition,
         test_support::{append_partition_batch, start_broker_no_audit_with},
@@ -165,12 +167,6 @@ struct Outcome {
     high_watermark: Offset,
 }
 
-/// A running broker and the temporary directory that holds its data.
-struct StartedBroker {
-    handle: BrokerHandle,
-    dir: tempfile::TempDir,
-}
-
 async fn start() -> StartedBroker {
     let (handle, dir) = start_broker_no_audit_with(|cfg| {
         cfg.authorizer = Arc::new(Grants);
@@ -179,7 +175,10 @@ async fn start() -> StartedBroker {
         cfg.replica_lag_time_max = krabka_units::secs(600);
     })
     .await;
-    StartedBroker { handle, dir }
+    StartedBroker {
+        broker: handle,
+        dir,
+    }
 }
 
 /// The leader partition a case seeded and the batch as the log stored it.
@@ -372,10 +371,7 @@ async fn follower_fetch_needs_cluster_action() {
         ]);
     }
 
-    let StartedBroker {
-        handle: broker,
-        dir: _dir,
-    } = start().await;
+    let StartedBroker { broker, dir: _dir } = start().await;
     topic_case_outcomes!(
         (actual, want),
         (index, case, label, name),
