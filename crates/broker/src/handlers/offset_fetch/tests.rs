@@ -471,15 +471,21 @@ fn no_offset_row(error_code: i16) -> OffsetFetchResponsePartitions {
 }
 
 /// The partition row of the seeded offset of the known topic.
+macro_rules! seeded_offset_row {
+    ($response:ty) => {
+        $response {
+            partition_index: 0,
+            committed_offset: 42,
+            committed_leader_epoch: 5,
+            metadata: Some(String::new()),
+            error_code: codes::NONE,
+            ..Default::default()
+        }
+    };
+}
+
 fn seeded_row() -> OffsetFetchResponsePartitions {
-    OffsetFetchResponsePartitions {
-        partition_index: 0,
-        committed_offset: 42,
-        committed_leader_epoch: 5,
-        metadata: Some(String::new()),
-        error_code: codes::NONE,
-        ..Default::default()
-    }
+    seeded_offset_row!(OffsetFetchResponsePartitions)
 }
 
 struct TopicReferenceCase {
@@ -682,14 +688,7 @@ test_authorizer!(DescribeKnownTopic, (self, _source, req), {
 /// The legacy (v0 to v7) partition row of the seeded offset of the known
 /// topic.
 fn legacy_seeded_row() -> OffsetFetchResponsePartition {
-    OffsetFetchResponsePartition {
-        partition_index: 0,
-        committed_offset: 42,
-        committed_leader_epoch: 5,
-        metadata: Some(String::new()),
-        error_code: codes::NONE,
-        ..Default::default()
-    }
+    seeded_offset_row!(OffsetFetchResponsePartition)
 }
 
 /// The legacy (v0 to v7) partition row of a refused topic.
