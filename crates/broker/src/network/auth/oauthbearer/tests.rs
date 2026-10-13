@@ -39,6 +39,23 @@ async fn authenticate(
     handle_authenticate_oauthbearer(request, auth, validator, || now_ms, max_session_lifetime).await
 }
 
+async fn authenticate_state(
+    mut auth: ConnectionAuth,
+    token: &str,
+    validator: &krabka_security::OAuthBearerValidator,
+    now_ms: i64,
+) -> (ConnectionAuth, SaslAuthenticateResponse) {
+    let response = authenticate(
+        &oauthbearer_client_response(token),
+        &mut auth,
+        validator,
+        now_ms,
+        None,
+    )
+    .await;
+    (auth, response)
+}
+
 fn signed_validator(cache_expiry: Option<Time>) -> krabka_security::OAuthBearerValidator {
     let mut validator =
         krabka_security::SignedJwsValidator::new(krabka_security::JwksHandle::default());
@@ -81,13 +98,11 @@ async fn reauthenticate(
     now_ms: i64,
     token: &str,
 ) -> Reauthenticated {
-    let mut auth = oauth_reauthenticating("alice", now_ms + 1_000);
-    let response = authenticate(
-        &oauthbearer_client_response(token),
-        &mut auth,
+    let (auth, response) = authenticate_state(
+        oauth_reauthenticating("alice", now_ms + 1_000),
+        token,
         validator,
         now_ms,
-        None,
     )
     .await;
     Reauthenticated { auth, response }
@@ -122,15 +137,7 @@ async fn oauthbearer_valid_token_authenticates() {
     let validator = krabka_security::OAuthBearerValidator::default();
     let now_ms = 1_000_000_000_000;
     let token = unsecured_token("svc-account", 1_000_000_900); // exp seconds → future of now
-    let mut auth = oauth_pending();
-    let resp = authenticate(
-        &oauthbearer_client_response(&token),
-        &mut auth,
-        &validator,
-        now_ms,
-        None,
-    )
-    .await;
+    let (auth, resp) = authenticate_state(oauth_pending(), &token, &validator, now_ms).await;
     assert_success_authenticate_response(&resp, b"", 900_000);
     let p = auth.principal().expect("authenticated");
     assert!(p.name == "svc-account");
@@ -158,16 +165,8 @@ async fn oauthbearer_invalid_token_returns_error_json_then_fails_on_dummy() {
     let now_ms = 5_000_000_000_000;
     // exp far in the past → expired.
     let token = unsecured_token("admin", 1_000_000_000);
-    let mut auth = oauth_pending();
+    let (mut auth, resp) = authenticate_state(oauth_pending(), &token, &validator, now_ms).await;
     // Round 1: rejected → error JSON, error_code 0, connection stays open.
-    let resp = authenticate(
-        &oauthbearer_client_response(&token),
-        &mut auth,
-        &validator,
-        now_ms,
-        None,
-    )
-    .await;
     assert_invalid_token_challenge(&resp);
     assert!(matches!(auth, ConnectionAuth::Negotiating {
         exchange: SaslExchange::OAuthBearerFailed,
