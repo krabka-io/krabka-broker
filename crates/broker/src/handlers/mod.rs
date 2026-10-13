@@ -20,7 +20,6 @@
 
 use crate::error::BrokerError;
 
-#[macro_use]
 mod wire_types;
 #[cfg(test)]
 #[macro_use]

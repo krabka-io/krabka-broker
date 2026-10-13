@@ -64,51 +64,51 @@ pub fn quota_charge(
     (new_available.0, new_debt)
 }
 
-model_types! {
-    @proof (derive(std::clone::Clone, Copy, DeepModel));
-    /// Selected user/client quota candidate, in Kafka's precedence order.
-    ///
-    /// The order is `DefaultQuotaCallback`'s in Kafka's `ClientQuotaManager`:
-    /// every `user=U` level ranks above every `user=<default>` level, and both
-    /// rank above the `client-id`-only levels.
-    pub enum UserClientQuotaPrecedence {
-        /// 1. `user=U, client-id=C`
-        ExactPair,
-        /// 2. `user=U, client-id=<default>`
-        ExactUserDefaultClient,
-        /// 3. `user=U`
-        ExactUser,
-        /// 4. `user=<default>, client-id=C`
-        DefaultUserExactClient,
-        /// 5. `user=<default>, client-id=<default>`
-        DefaultPair,
-        /// 6. `user=<default>`
-        DefaultUser,
-        /// 7. `client-id=C`
-        ExactClient,
-        /// 8. `client-id=<default>`
-        DefaultClient,
-        None,
-    }
+/// Selected user/client quota candidate, in Kafka's precedence order.
+///
+/// The order is `DefaultQuotaCallback`'s in Kafka's `ClientQuotaManager`:
+/// every `user=U` level ranks above every `user=<default>` level, and both
+/// rank above the `client-id`-only levels.
+#[krabka_macros::model_type]
+pub enum UserClientQuotaPrecedence {
+    /// 1. `user=U, client-id=C`
+    ExactPair,
+    /// 2. `user=U, client-id=<default>`
+    ExactUserDefaultClient,
+    /// 3. `user=U`
+    ExactUser,
+    /// 4. `user=<default>, client-id=C`
+    DefaultUserExactClient,
+    /// 5. `user=<default>, client-id=<default>`
+    DefaultPair,
+    /// 6. `user=<default>`
+    DefaultUser,
+    /// 7. `client-id=C`
+    ExactClient,
+    /// 8. `client-id=<default>`
+    DefaultClient,
+    None,
+}
 
-    /// Whether one canonical quota candidate exists in the metadata image.
-    pub enum QuotaCandidatePresence {
-        Absent,
-        Present,
-    }
+/// Whether one canonical quota candidate exists in the metadata image.
+#[krabka_macros::model_type]
+pub enum QuotaCandidatePresence {
+    Absent,
+    Present,
+}
 
-    /// Presence of each canonical user/client quota candidate, in Kafka's
-    /// precedence order.
-    pub struct UserClientQuotaFacts {
-        pub exact_pair: QuotaCandidatePresence,
-        pub exact_user_default_client: QuotaCandidatePresence,
-        pub exact_user: QuotaCandidatePresence,
-        pub default_user_exact_client: QuotaCandidatePresence,
-        pub default_pair: QuotaCandidatePresence,
-        pub default_user: QuotaCandidatePresence,
-        pub exact_client: QuotaCandidatePresence,
-        pub default_client: QuotaCandidatePresence,
-    }
+/// Presence of each canonical user/client quota candidate, in Kafka's
+/// precedence order.
+#[krabka_macros::model_type]
+pub struct UserClientQuotaFacts {
+    pub exact_pair: QuotaCandidatePresence,
+    pub exact_user_default_client: QuotaCandidatePresence,
+    pub exact_user: QuotaCandidatePresence,
+    pub default_user_exact_client: QuotaCandidatePresence,
+    pub default_pair: QuotaCandidatePresence,
+    pub default_user: QuotaCandidatePresence,
+    pub exact_client: QuotaCandidatePresence,
+    pub default_client: QuotaCandidatePresence,
 }
 
 open_logic! {
@@ -195,14 +195,12 @@ pub fn user_client_quota_precedence(facts: UserClientQuotaFacts) -> UserClientQu
     }
 }
 
-model_types! {
-    @proof (derive(std::clone::Clone, Copy, DeepModel));
-    /// Selected IP quota candidate.
-    pub enum IpQuotaPrecedence {
-        Exact,
-        Default,
-        None,
-    }
+/// Selected IP quota candidate.
+#[krabka_macros::model_type]
+pub enum IpQuotaPrecedence {
+    Exact,
+    Default,
+    None,
 }
 
 /// Select an exact IP quota before the IP default.

@@ -87,19 +87,16 @@ use {
     krabka_ids::{LeaderEpoch, Offset},
 };
 
-model_types! {
-    @derives (derive(std::clone::Clone, Copy, DeepModel))
-        (derive(Clone, Copy, Debug));
-    /// One User-resource ACL projected for a token owner's `DescribeTokens` check.
-    /// Equality, prefix and CIDR facts must faithfully describe the stored entry.
-    struct TokenDescriptionAcl {
-        resource: AclResourceFacts,
-        pattern: AclPatternKind,
-        operation: AclOperationKind,
-        allow: bool,
-        principal: (bool, bool),  // wildcard, exact
-        host: (bool, bool, bool), // wildcard, exact, supported CIDR match
-    }
+/// One User-resource ACL projected for a token owner's `DescribeTokens` check.
+/// Equality, prefix and CIDR facts must faithfully describe the stored entry.
+#[krabka_macros::model_type(runtime(Clone, Copy, Debug))]
+struct TokenDescriptionAcl {
+    resource: AclResourceFacts,
+    pattern: AclPatternKind,
+    operation: AclOperationKind,
+    allow: bool,
+    principal: (bool, bool),  // wildcard, exact
+    host: (bool, bool, bool), // wildcard, exact, supported CIDR match
 }
 
 type WalFetchSupport = (i64, i64, Vec<(u64, i64)>);

@@ -304,6 +304,8 @@ The format crate's cluster and directory IDs use `KafkaUuid` with their existing
 
 Sparse offset and time indexes use `SparseIndex`; other loaders use `index_open` for their shared tracing span. Remote-storage SPI methods use `remote_operation` on ordinary declarations. Complex coordinator values keep their field codecs as private methods under `flexible_value`, so wire order stays visible. The macros crate declares its public moxy entry points as ordinary functions.
 
+Model structs and enums use `model_type` to select proof and runtime derives. `sendfile_cfg` gates each item with the shared sendfile platform predicate. Kafka handlers keep explicit function signatures. `decode_dispatch(request = Type, binding(req))` adds decoding before the native body; `binding(mut req)` permits request mutation. `decoded_dispatch!` accepts the same metadata in brackets after the parameters and before the return type. These forms apply when decoding is the first operation. Handlers that forward before decoding or answer malformed requests keep their own decode order and error handling.
+
 Function entry points remain typed functions in unit tests, which checks input diagnostics. Compiled consumers check the procedural-macro adapter and emitted behavior.
 
 For parallel work, give each subagent one macro family and its callers. Keep shared exports with one owner. Review the combined diff for scope, spans, and caller behavior before running the checks.

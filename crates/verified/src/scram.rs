@@ -2,47 +2,48 @@
 
 use creusot_std::prelude::*;
 
-model_types! {
-    @proof (derive(std::clone::Clone, Copy, DeepModel));
-    /// Credential operation represented by one KIP-554 request row.
-    pub enum ScramAlterationKind {
-        Delete,
-        Upsert,
-    }
+/// Credential operation represented by one KIP-554 request row.
+#[krabka_macros::model_type]
+pub enum ScramAlterationKind {
+    Delete,
+    Upsert,
+}
 
-    /// State left by an earlier row for the same user.
-    pub enum ScramPriorState {
-        Unseen,
-        Accepted,
-        Rejected,
-    }
+/// State left by an earlier row for the same user.
+#[krabka_macros::model_type]
+pub enum ScramPriorState {
+    Unseen,
+    Accepted,
+    Rejected,
+}
 
-    /// Scalar facts projected from one request row and the current metadata image.
-    pub struct ScramAlterationFacts {
-        pub kind: ScramAlterationKind,
-        pub prior: ScramPriorState,
-        pub authorized: bool,
-        pub name_empty: bool,
-        pub mechanism: i8,
-        pub iterations: i32,
-        pub min_iterations: i32,
-        pub max_iterations: i32,
-        pub deletion_target_exists: bool,
-    }
+/// Scalar facts projected from one request row and the current metadata image.
+#[krabka_macros::model_type]
+pub struct ScramAlterationFacts {
+    pub kind: ScramAlterationKind,
+    pub prior: ScramPriorState,
+    pub authorized: bool,
+    pub name_empty: bool,
+    pub mechanism: i8,
+    pub iterations: i32,
+    pub min_iterations: i32,
+    pub max_iterations: i32,
+    pub deletion_target_exists: bool,
+}
 
-    /// The first applicable Kafka error, or the mechanism of one accepted row.
-    pub enum ScramAlterationDecision {
-        KeepPriorError,
-        Duplicate,
-        Unauthorized,
-        EmptyName,
-        UnsupportedMechanism,
-        TooFewIterations,
-        TooManyIterations,
-        MissingCredential,
-        AcceptSha256,
-        AcceptSha512,
-    }
+/// The first applicable Kafka error, or the mechanism of one accepted row.
+#[krabka_macros::model_type]
+pub enum ScramAlterationDecision {
+    KeepPriorError,
+    Duplicate,
+    Unauthorized,
+    EmptyName,
+    UnsupportedMechanism,
+    TooFewIterations,
+    TooManyIterations,
+    MissingCredential,
+    AcceptSha256,
+    AcceptSha512,
 }
 
 open_logic! {

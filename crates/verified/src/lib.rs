@@ -19,30 +19,6 @@ macro_rules! open_logic {
     };
 }
 
-/// Declare model types with the crate's proof and runtime derive policy.
-/// A custom pair preserves types whose proof model or runtime traits differ.
-macro_rules! model_types {
-    (@derives ($proof:meta) ($runtime:meta); $($item:item)*) => {
-        $(
-            #[cfg_attr(creusot, $proof)]
-            #[cfg_attr(not(creusot), $runtime)]
-            $item
-        )*
-    };
-    (@copy_only $($item:item)*) => {
-        model_types! {
-            @derives (derive(std::clone::Clone, Copy)) (derive(Clone, Copy, Debug, PartialEq, Eq));
-            $($item)*
-        }
-    };
-    (@proof ($proof:meta); $($item:item)*) => {
-        model_types! {
-            @derives ($proof) (derive(Clone, Copy, Debug, PartialEq, Eq));
-            $($item)*
-        }
-    };
-}
-
 pub mod audit;
 pub mod authz;
 pub mod barrier;

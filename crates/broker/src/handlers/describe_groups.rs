@@ -37,7 +37,11 @@ use {
             actor::{ClassicView, GroupActorMessage},
             classic_state::GroupState,
         },
-        handlers::authorized_operations::fill_group_authorized_operations,
+        error::BrokerError,
+        handlers::{
+            ApiVersion, RequestContext, authorized_operations::fill_group_authorized_operations,
+            group_coordinator_error, group_describe_denied,
+        },
         task_util::{AskError, ask},
     },
     bytes::Bytes,
@@ -54,58 +58,54 @@ const GROUP_ID_NOT_FOUND_MIN_VERSION: i16 = 6;
 /// The first `DescribeGroups` version with `authorized_operations`.
 const AUTHORIZED_OPERATIONS_MIN_VERSION: i16 = 3;
 
-context_handler! {
-    DescribeGroupsRequest => DescribeGroupsResponse,
-    (broker, req, version, ctx),
-    {
-        let image = broker.controller.current_image();
+pub(crate) async fn handle(
+    broker: &Broker,
+    req: DescribeGroupsRequest,
+    version: ApiVersion,
+    ctx: &RequestContext<'_>,
+) -> Result<DescribeGroupsResponse, BrokerError> {
+    let image = broker.controller.current_image();
 
-        // Kafka answers every GROUP_AUTHORIZATION_FAILED row first, then the
-        // coordinator results for the allowed groups in request order.
-        let mut denied: Vec<DescribedGroup> = Vec::new();
-        let mut groups: Vec<DescribedGroup> = Vec::with_capacity(req.groups.len());
-        for gid in req.groups {
-            if crate::handlers::group_describe_denied(
-                broker.config.authorizer.as_ref(),
-                &image,
-                ctx,
-                gid.as_str(),
-            ) {
-                denied.push(DescribedGroup {
-                    group_id: gid,
-                    error_code: codes::GROUP_AUTHORIZATION_FAILED,
-                    ..Default::default()
-                });
-                continue;
-            }
-            if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &gid) {
-                groups.push(DescribedGroup {
-                    group_id: gid,
-                    error_code,
-                    ..Default::default()
-                });
-                continue;
-            }
-            groups.push(describe_one(broker, gid, version).await);
+    // Kafka answers every GROUP_AUTHORIZATION_FAILED row first, then the
+    // coordinator results for the allowed groups in request order.
+    let mut denied: Vec<DescribedGroup> = Vec::new();
+    let mut groups: Vec<DescribedGroup> = Vec::with_capacity(req.groups.len());
+    for gid in req.groups {
+        if group_describe_denied(broker.config.authorizer.as_ref(), &image, ctx, gid.as_str()) {
+            denied.push(DescribedGroup {
+                group_id: gid,
+                error_code: codes::GROUP_AUTHORIZATION_FAILED,
+                ..Default::default()
+            });
+            continue;
         }
-
-        // KIP-430: Kafka fills the bitfield for every coordinator row whose error
-        // is NONE, a below-v6 `Dead` row included.
-        fill_group_authorized_operations(
-            broker.config.authorizer.as_ref(),
-            &image,
-            ctx,
-            version >= AUTHORIZED_OPERATIONS_MIN_VERSION && req.include_authorized_operations,
-            &mut groups,
-        );
-
-        denied.extend(groups);
-        Ok(DescribeGroupsResponse {
-            groups: denied,
-            throttle_time_ms: 0,
-            ..Default::default()
-        })
+        if let Some(error_code) = group_coordinator_error(broker, &gid) {
+            groups.push(DescribedGroup {
+                group_id: gid,
+                error_code,
+                ..Default::default()
+            });
+            continue;
+        }
+        groups.push(describe_one(broker, gid, version).await);
     }
+
+    // KIP-430: Kafka fills the bitfield for every coordinator row whose error
+    // is NONE, a below-v6 `Dead` row included.
+    fill_group_authorized_operations(
+        broker.config.authorizer.as_ref(),
+        &image,
+        ctx,
+        version >= AUTHORIZED_OPERATIONS_MIN_VERSION && req.include_authorized_operations,
+        &mut groups,
+    );
+
+    denied.extend(groups);
+    Ok(DescribeGroupsResponse {
+        groups: denied,
+        throttle_time_ms: 0,
+        ..Default::default()
+    })
 }
 
 /// Describes one allowed group the way `GroupMetadataManager.describeGroups`

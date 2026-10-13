@@ -33,7 +33,8 @@ use {
             group::GroupBounds,
         },
         handlers::{
-            RequestContext, audit_resource, config_resource_refusal, encode_response,
+            ApiVersion, DispatchResult, RequestContext, audit_resource, config_resource_refusal,
+            encode_response,
             forward_to_controller::{controller_listener_dispatch, to_active_controller_or_handle},
             response_encoding::ErrorRow as _,
         },
@@ -84,101 +85,105 @@ const OP_DELETE: i8 = 1;
 const OP_APPEND: i8 = 2;
 const OP_SUBTRACT: i8 = 3;
 
-raw_dispatch! {
+krabka_macros::decoded_dispatch! {
     /// Keep logger changes on this node and validate broker keys against local settings.
     /// Topic, group, and other resource operations use the controller's image.
-    mut IncrementalAlterConfigsRequest, (broker, version, req_bytes, ctx, req), {
-    controller_listener_dispatch!(
-        broker,
-        ctx,
-        req,
-        version,
-        self::handle,
-        self::request_refusal
-    );
-    let image = broker.controller.current_image();
-    let duplicates = super::alter_configs::duplicate_resource_flags(
-        req.resources
-            .iter()
-            .map(|resource| (resource.resource_type, resource.resource_name.as_str())),
-    );
-    let mut local = Vec::new();
-    let mut local_indices = Vec::new();
-    let mut indexed_responses = Vec::new();
-    let mut forwarded = Vec::new();
-    let mut forwarded_indices = Vec::new();
-    for (index, (resource, duplicate)) in std::mem::take(&mut req.resources)
-        .into_iter()
-        .zip(duplicates)
-        .enumerate()
+    pub(crate) async fn dispatch(
+        broker: &Broker,
+        version: ApiVersion,
+        req_bytes: &[u8],
+        ctx: &RequestContext<'_>,
+    )
+        [request = IncrementalAlterConfigsRequest, binding(mut req)] -> DispatchResult
     {
-        if resource.resource_type == RESOURCE_TYPE_BROKER_LOGGER {
-            local_indices.push(index);
-            local.push(resource);
-            continue;
-        }
-        if resource.resource_type == RESOURCE_TYPE_BROKER {
-            let shape = validate_resource_shape(&resource, duplicate);
-            let preprocessed = shape.and_then(|()| {
-                broker_scope::preprocess_broker_resource(
-                    &resource,
-                    BrokerConfigContext {
+        controller_listener_dispatch!(
+            broker,
+            ctx,
+            req,
+            version,
+            self::handle,
+            self::request_refusal
+        );
+        let image = broker.controller.current_image();
+        let duplicates = super::alter_configs::duplicate_resource_flags(
+            req.resources
+                .iter()
+                .map(|resource| (resource.resource_type, resource.resource_name.as_str())),
+        );
+        let mut local = Vec::new();
+        let mut local_indices = Vec::new();
+        let mut indexed_responses = Vec::new();
+        let mut forwarded = Vec::new();
+        let mut forwarded_indices = Vec::new();
+        for (index, (resource, duplicate)) in std::mem::take(&mut req.resources)
+            .into_iter()
+            .zip(duplicates)
+            .enumerate()
+        {
+            if resource.resource_type == RESOURCE_TYPE_BROKER_LOGGER {
+                local_indices.push(index);
+                local.push(resource);
+                continue;
+            }
+            if resource.resource_type == RESOURCE_TYPE_BROKER {
+                let shape = validate_resource_shape(&resource, duplicate);
+                let preprocessed = shape.and_then(|()| {
+                    broker_scope::preprocess_broker_resource(&resource, BrokerConfigContext {
                         image: &image,
                         serving: broker.config.node_id,
                         log_dirs: &broker.config.broker_log_dirs(),
                         unstable: broker.config.features.unstable_api_versions,
-                    },
-                )
-            });
-            if let Err((code, message)) = preprocessed {
-                let (code, message) = if validate_resource_shape(&resource, duplicate).is_err() {
-                    (code, message)
-                } else {
-                    config_resource_refusal(
-                        broker.config.authorizer.as_ref(),
-                        &image,
-                        ctx,
-                        (resource.resource_type, &resource.resource_name),
-                        true,
-                    )
-                    .unwrap_or((code, message))
-                };
-                indexed_responses.push((
-                    index,
-                    resource_refusal(&resource, code).with_error(code, message),
-                ));
-                continue;
+                    })
+                });
+                if let Err((code, message)) = preprocessed {
+                    let (code, message) = if validate_resource_shape(&resource, duplicate).is_err() {
+                        (code, message)
+                    } else {
+                        config_resource_refusal(
+                            broker.config.authorizer.as_ref(),
+                            &image,
+                            ctx,
+                            (resource.resource_type, &resource.resource_name),
+                            true,
+                        )
+                        .unwrap_or((code, message))
+                    };
+                    indexed_responses.push((
+                        index,
+                        resource_refusal(&resource, code).with_error(code, message),
+                    ));
+                    continue;
+                }
             }
+            forwarded_indices.push(index);
+            forwarded.push(resource);
         }
-        forwarded_indices.push(index);
-        forwarded.push(resource);
-    }
-    req.resources = forwarded;
-    let mut response = if req.resources.is_empty() {
-        IncrementalAlterConfigsResponse::default()
-    } else {
-        to_active_controller_or_handle(
-            broker,
-            req.clone(),
-            incremental_alter_configs_request::API_KEY,
-            version,
-            ctx,
-            request_refusal,
-            |incremental_request| handle(broker, incremental_request, version, ctx),
-        )
-        .await?
-    };
-    indexed_responses.extend(forwarded_indices.into_iter().zip(response.responses));
-    if !local.is_empty() {
-        req.resources = local;
-        indexed_responses.extend(
-            local_indices
-                .into_iter()
-                .zip(handle(broker, req, version, ctx).await?.responses),
-        );
-    }
-    response.responses = super::alter_configs::ordered_resource_responses(indexed_responses);
-    encode_response(&response, version)
+        req.resources = forwarded;
+        let mut response = if req.resources.is_empty() {
+            IncrementalAlterConfigsResponse::default()
+        } else {
+            to_active_controller_or_handle(
+                broker,
+                req.clone(),
+                incremental_alter_configs_request::API_KEY,
+                version,
+                ctx,
+                request_refusal,
+                |incremental_request| handle(broker, incremental_request, version, ctx),
+            )
+            .await?
+        };
+        indexed_responses.extend(forwarded_indices.into_iter().zip(response.responses));
+        if !local.is_empty() {
+            req.resources = local;
+            indexed_responses.extend(
+                local_indices
+                    .into_iter()
+                    .zip(handle(broker, req, version, ctx).await?.responses),
+            );
+        }
+        response.responses = super::alter_configs::ordered_resource_responses(indexed_responses);
+        encode_response(&response, version)
     }
 }
 

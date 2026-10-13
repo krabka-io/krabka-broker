@@ -8,6 +8,7 @@
 //! guarded image submission. Admission is rebuilt after a conflicting commit.
 
 use {
+    crate::{error::BrokerError, handlers::ApiVersion},
     krabka_metadata::{MetadataImage, MetadataRecord, NodeId},
     krabka_protocol::{
         owned::{
@@ -44,26 +45,30 @@ use {
     },
 };
 
-context_handler! {
-    AlterPartitionRequest => AlterPartitionResponse,
-    (broker, req, _version, ctx),
-    {
-        let result = guarded_operation_on_source(
-            broker.controller.as_ref(),
-            tokio::time::Instant::now() + Duration::from_secs(5),
-            |image| alter_partition_once(broker, &req, ctx, image),
-        ).await;
-        let response = match result {
-            Ok(Ok(response)) => response,
-            Ok(Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown)) => refusal(codes::NOT_CONTROLLER),
-            Err(_) => refusal(codes::REQUEST_TIMED_OUT),
-            Ok(Err(error)) => {
-                tracing::error!(%error, "AlterPartition guarded submission failed");
-                refusal(codes::UNKNOWN_SERVER_ERROR)
-            }
-        };
-        Ok(response)
-    }
+pub(crate) async fn handle(
+    broker: &Broker,
+    req: AlterPartitionRequest,
+    _version: ApiVersion,
+    ctx: &RequestContext<'_>,
+) -> Result<AlterPartitionResponse, BrokerError> {
+    let result = guarded_operation_on_source(
+        broker.controller.as_ref(),
+        tokio::time::Instant::now() + Duration::from_secs(5),
+        |image| alter_partition_once(broker, &req, ctx, image),
+    )
+    .await;
+    let response = match result {
+        Ok(Ok(response)) => response,
+        Ok(Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown)) => {
+            refusal(codes::NOT_CONTROLLER)
+        }
+        Err(_) => refusal(codes::REQUEST_TIMED_OUT),
+        Ok(Err(error)) => {
+            tracing::error!(%error, "AlterPartition guarded submission failed");
+            refusal(codes::UNKNOWN_SERVER_ERROR)
+        }
+    };
+    Ok(response)
 }
 
 fn refusal(error_code: i16) -> AlterPartitionResponse {

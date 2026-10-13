@@ -7,20 +7,17 @@ use {
     creusot_std::prelude::*,
 };
 
-model_types! {
-    @derives (derive(DeepModel))
-        (derive(Clone, Copy, Debug));
-    /// One field position from the decoded walk. `checked` means subject/body
-    /// validation succeeded; `failure` classifies a registry lookup failure.
-    /// Empty non-null fields are admitted by the host without registry validation.
-    pub struct SchemaWalkField {
-        pub role: SchemaFieldRole,
-        pub present: bool,
-        pub empty: bool,
-        pub prefix: Option<(u8, u8, u8, u8, u8)>,
-        pub checked: bool,
-        pub failure: Option<SchemaFailureKind>,
-    }
+/// One field position from the decoded walk. `checked` means subject/body
+/// validation succeeded; `failure` classifies a registry lookup failure.
+/// Empty non-null fields are admitted by the host without registry validation.
+#[krabka_macros::model_type(proof(DeepModel), runtime(Clone, Copy, Debug))]
+pub struct SchemaWalkField {
+    pub role: SchemaFieldRole,
+    pub present: bool,
+    pub empty: bool,
+    pub prefix: Option<(u8, u8, u8, u8, u8)>,
+    pub checked: bool,
+    pub failure: Option<SchemaFailureKind>,
 }
 
 open_logic! {

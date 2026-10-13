@@ -10,35 +10,34 @@
 
 use creusot_std::prelude::*;
 
-model_types! {
-    @copy_only
-    /// What the local retention walk knows about one local segment.
-    pub struct LocalRetentionSegment {
-        /// No pass may delete this segment, and every pass stops at it. The host
-        /// sets it for a segment that holds a record whose delivery time has not
-        /// arrived, or for a tiered segment that the remote tier does not cover
-        /// whole. It plays the part of Kafka's high-watermark bound and its
-        /// `isSegmentEligibleForDeletion` check.
-        pub blocked: bool,
-        /// The segment breaches `retention.ms`, or it lies wholly below the log
-        /// start offset.
-        pub expired: bool,
-        /// The segment's exact size in bytes.
-        pub size: u64,
-    }
+/// What the local retention walk knows about one local segment.
+#[krabka_macros::model_type(proof(std::clone::Clone, Copy))]
+pub struct LocalRetentionSegment {
+    /// No pass may delete this segment, and every pass stops at it. The host
+    /// sets it for a segment that holds a record whose delivery time has not
+    /// arrived, or for a tiered segment that the remote tier does not cover
+    /// whole. It plays the part of Kafka's high-watermark bound and its
+    /// `isSegmentEligibleForDeletion` check.
+    pub blocked: bool,
+    /// The segment breaches `retention.ms`, or it lies wholly below the log
+    /// start offset.
+    pub expired: bool,
+    /// The segment's exact size in bytes.
+    pub size: u64,
+}
 
-    /// What the remote retention walk knows about one finished remote segment.
-    pub struct RemoteRetentionSegment {
-        /// A scheduled batch is not due, or its activation cannot be established.
-        /// Every retention axis stops before this segment.
-        pub blocked: bool,
-        /// The segment's whole offset range lies below the log start offset.
-        pub log_start_breached: bool,
-        /// The segment breaches `retention.ms`.
-        pub time_expired: bool,
-        /// The segment's exact size in bytes.
-        pub size: u64,
-    }
+/// What the remote retention walk knows about one finished remote segment.
+#[krabka_macros::model_type(proof(std::clone::Clone, Copy))]
+pub struct RemoteRetentionSegment {
+    /// A scheduled batch is not due, or its activation cannot be established.
+    /// Every retention axis stops before this segment.
+    pub blocked: bool,
+    /// The segment's whole offset range lies below the log start offset.
+    pub log_start_breached: bool,
+    /// The segment breaches `retention.ms`.
+    pub time_expired: bool,
+    /// The segment's exact size in bytes.
+    pub size: u64,
 }
 
 mod remote_retention_model;

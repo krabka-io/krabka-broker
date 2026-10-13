@@ -4,16 +4,13 @@ use creusot_std::prelude::ensures;
 #[cfg(creusot)]
 use creusot_std::prelude::{DeepModel, logic};
 
-model_types! {
-    @derives (derive(DeepModel))
-        (derive(Debug, Clone, Copy, PartialEq, Eq));
-    /// Why a manifest signature is not an accepted attestation.
-    pub enum WormSignatureDecision {
-        Unsigned,
-        Untrusted,
-        Invalid,
-        Admit,
-    }
+/// Why a manifest signature is not an accepted attestation.
+#[krabka_macros::model_type(proof(DeepModel), runtime(Debug, Clone, Copy, PartialEq, Eq))]
+pub enum WormSignatureDecision {
+    Unsigned,
+    Untrusted,
+    Invalid,
+    Admit,
 }
 
 /// Requires a present signature, an externally trusted key, and verification
@@ -41,44 +38,45 @@ pub fn worm_signature_decision(
     }
 }
 
-model_types! {
-    @derives (derive(DeepModel))
-        (derive(Debug, Clone, Copy, PartialEq, Eq));
-    /// Why the objects named by one manifest are not an exact archive set.
-    pub enum WormObjectSetDecision {
-        Empty,
-        DuplicateKey,
-        CoordinateMismatch,
-        MissingObject,
-        CountMismatch,
-        SizeMismatch,
-        DigestMismatch,
-        Admit,
-    }
+/// Why the objects named by one manifest are not an exact archive set.
+#[krabka_macros::model_type(proof(DeepModel), runtime(Debug, Clone, Copy, PartialEq, Eq))]
+pub enum WormObjectSetDecision {
+    Empty,
+    DuplicateKey,
+    CoordinateMismatch,
+    MissingObject,
+    CountMismatch,
+    SizeMismatch,
+    DigestMismatch,
+    Admit,
+}
 
-    /// Host observations about the objects belonging to one signed segment.
-    pub struct WormObjectIdentityFacts {
-        pub unique_keys: bool,
-        pub coordinates_match: bool,
-    }
+/// Host observations about the objects belonging to one signed segment.
+#[krabka_macros::model_type(proof(DeepModel), runtime(Debug, Clone, Copy, PartialEq, Eq))]
+pub struct WormObjectIdentityFacts {
+    pub unique_keys: bool,
+    pub coordinates_match: bool,
+}
 
-    pub struct WormObjectAvailabilityFacts {
-        pub all_present: bool,
-        pub sizes_match: bool,
-    }
+#[krabka_macros::model_type(proof(DeepModel), runtime(Debug, Clone, Copy, PartialEq, Eq))]
+pub struct WormObjectAvailabilityFacts {
+    pub all_present: bool,
+    pub sizes_match: bool,
+}
 
-    pub struct WormDigestFacts {
-        pub require_digests: bool,
-        pub digests_match: bool,
-    }
+#[krabka_macros::model_type(proof(DeepModel), runtime(Debug, Clone, Copy, PartialEq, Eq))]
+pub struct WormDigestFacts {
+    pub require_digests: bool,
+    pub digests_match: bool,
+}
 
-    pub struct WormObjectSetFacts {
-        pub object_count: u64,
-        pub listed_count: u64,
-        pub identity: WormObjectIdentityFacts,
-        pub availability: WormObjectAvailabilityFacts,
-        pub digests: WormDigestFacts,
-    }
+#[krabka_macros::model_type(proof(DeepModel), runtime(Debug, Clone, Copy, PartialEq, Eq))]
+pub struct WormObjectSetFacts {
+    pub object_count: u64,
+    pub listed_count: u64,
+    pub identity: WormObjectIdentityFacts,
+    pub availability: WormObjectAvailabilityFacts,
+    pub digests: WormDigestFacts,
 }
 
 macro_rules! worm_rule_body {

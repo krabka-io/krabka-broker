@@ -2,13 +2,11 @@
 
 use creusot_std::prelude::*;
 
-model_types! {
-    @proof (derive(std::clone::Clone, Copy, DeepModel));
-    pub enum ProduceBatchAdmission {
-        Admit,
-        InvalidRecord,
-        InvalidTimestamp,
-    }
+#[krabka_macros::model_type]
+pub enum ProduceBatchAdmission {
+    Admit,
+    InvalidRecord,
+    InvalidTimestamp,
 }
 
 /// Compute the exclusive durability frontier for an acknowledged Produce

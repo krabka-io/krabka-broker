@@ -2,21 +2,20 @@
 
 use creusot_std::prelude::*;
 
-model_types! {
-    @proof (derive(std::clone::Clone, Copy, DeepModel));
-    /// Pure decision for one snapshot response chunk.
-    pub enum SnapshotChunkDecision {
-        Restart,
-        Continue { next_position: i64 },
-        Complete,
-    }
+/// Pure decision for one snapshot response chunk.
+#[krabka_macros::model_type]
+pub enum SnapshotChunkDecision {
+    Restart,
+    Continue { next_position: i64 },
+    Complete,
+}
 
-    /// Admission result for a fully assembled snapshot at the controller boundary.
-    pub enum SnapshotInstallDecision {
-        Reject,
-        Stale,
-        Install,
-    }
+/// Admission result for a fully assembled snapshot at the controller boundary.
+#[krabka_macros::model_type]
+pub enum SnapshotInstallDecision {
+    Reject,
+    Stale,
+    Install,
 }
 
 /// Classify a decoded, fully assembled snapshot against live controller state.

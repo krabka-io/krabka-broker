@@ -2,15 +2,13 @@
 
 use creusot_std::prelude::*;
 
-model_types! {
-    @proof (derive(std::clone::Clone, Copy, DeepModel));
-    /// Result of authorizing and epoch-fencing one diskless WAL Fetch.
-    pub enum WalFetchAdmission {
-        Denied,
-        FencedLeaderEpoch,
-        UnknownLeaderEpoch,
-        Serve,
-    }
+/// Result of authorizing and epoch-fencing one diskless WAL Fetch.
+#[krabka_macros::model_type]
+pub enum WalFetchAdmission {
+    Denied,
+    FencedLeaderEpoch,
+    UnknownLeaderEpoch,
+    Serve,
 }
 
 mod batch_equal;

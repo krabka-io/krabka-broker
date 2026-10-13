@@ -12,7 +12,7 @@ readme = "README.md"
 keywords = ["krabka", "derive", "metrics", "proc-macro"]
 categories = ["development-tools::procedural-macro-helpers"]
 # `krabka-log` derives with these macros, so they publish with it.
-include = ["src/**/*.rs", "README.md", "CHANGELOG.md"]
+include = ["build.rs", "src/**/*.rs", "README.md", "CHANGELOG.md"]
 [lints]
 workspace = true
 

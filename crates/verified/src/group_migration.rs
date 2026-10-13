@@ -2,27 +2,27 @@
 
 use creusot_std::prelude::*;
 
-model_types! {
-    @proof (derive(std::clone::Clone, Copy, DeepModel));
-    pub enum GroupMigrationDirection {
-        Upgrade,
-        Downgrade,
-    }
+#[krabka_macros::model_type]
+pub enum GroupMigrationDirection {
+    Upgrade,
+    Downgrade,
+}
 
-    pub enum GroupMigrationRecordAction {
-        Write,
-        Tombstone,
-    }
+#[krabka_macros::model_type]
+pub enum GroupMigrationRecordAction {
+    Write,
+    Tombstone,
+}
 
-    pub struct GroupMigrationRecordPlan {
-        pub classic_group: GroupMigrationRecordAction,
-        pub next_gen_group: GroupMigrationRecordAction,
-        pub next_gen_target: GroupMigrationRecordAction,
-        pub member_metadata: GroupMigrationRecordAction,
-        pub target_member: GroupMigrationRecordAction,
-        pub current_member: GroupMigrationRecordAction,
-        pub member_count: usize,
-    }
+#[krabka_macros::model_type]
+pub struct GroupMigrationRecordPlan {
+    pub classic_group: GroupMigrationRecordAction,
+    pub next_gen_group: GroupMigrationRecordAction,
+    pub next_gen_target: GroupMigrationRecordAction,
+    pub member_metadata: GroupMigrationRecordAction,
+    pub target_member: GroupMigrationRecordAction,
+    pub current_member: GroupMigrationRecordAction,
+    pub member_count: usize,
 }
 
 open_logic! {

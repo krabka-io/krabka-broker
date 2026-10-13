@@ -385,6 +385,18 @@
 //! existing method name selects the span level and fields. It retains the
 //! native method body, parameter names, and synchronous signature.
 //!
+//! `#[model_type]` attaches the existing proof and runtime derives to an
+//! ordinary struct or enum. `proof(...)` and `runtime(...)` replace only the
+//! selected derive list, preserving its path order and the declaration tokens.
+//!
+//! `#[sendfile_cfg]` gates one ordinary item with the fetch path's shared
+//! platform predicate. Apply it separately to imports, exports and methods.
+//!
+//! `#[decode_dispatch(request = TYPE, binding(req))]` decodes a request before
+//! the handler's native body. `binding(mut req)` retains an owned mutable
+//! request. `decoded_dispatch!` accepts the same explicit function, with
+//! `[request = TYPE, binding(req)]` after its parameters and before its return type.
+//!
 //! # Direct runtime and response tables
 //!
 //! `set_runtime!` applies optional fields in table order. Each group names a
@@ -452,6 +464,7 @@ mod cli_support;
 mod config_table;
 mod container_fixtures;
 mod cross_storage_fixtures;
+mod decode_dispatch;
 mod deterministic_random;
 mod dispatch;
 mod enum_str;
@@ -470,6 +483,7 @@ mod legacy_fixtures;
 mod membership_defaults;
 mod meta;
 mod metrics;
+mod model_type;
 mod network_fixtures;
 mod object_ops;
 mod object_store_config;
@@ -487,6 +501,7 @@ mod runtime_assignments;
 mod runtime_overlay;
 mod runtime_policy_fields;
 mod s3_fields;
+mod sendfile_cfg;
 mod sendfile_match;
 mod share_state_handler;
 mod share_state_value;
@@ -624,6 +639,39 @@ pub fn remote_operation(
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {
     remote_operation::expand(meta, item)
+}
+
+/// Attach the selected proof and runtime derives to an ordinary model declaration.
+#[moxy::attribute]
+pub fn model_type(
+    meta: NativeTokenStream,
+    item: NativeTokenStream,
+) -> Result<NativeTokenStream, ParseError> {
+    model_type::expand(meta, item)
+}
+
+/// Keep an ordinary item on the platforms supported by the sendfile fetch path.
+#[moxy::attribute]
+pub fn sendfile_cfg(
+    meta: NativeTokenStream,
+    item: NativeTokenStream,
+) -> Result<NativeTokenStream, ParseError> {
+    sendfile_cfg::expand(meta, item)
+}
+
+/// Decode the selected request before an ordinary raw dispatch function's body.
+#[moxy::attribute]
+pub fn decode_dispatch(
+    meta: NativeTokenStream,
+    item: NativeTokenStream,
+) -> Result<NativeTokenStream, ParseError> {
+    decode_dispatch::expand(&meta.into(), item)
+}
+
+/// Decode a request using bracketed metadata after the function parameters.
+#[moxy::function]
+pub fn decoded_dispatch(tokens: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    decode_dispatch::expand_function(tokens)
 }
 
 /// Add flexible value framing around explicitly ordered private field codecs.

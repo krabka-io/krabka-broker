@@ -6,81 +6,84 @@
 
 use creusot_std::prelude::*;
 
-model_types! {
-    @proof (derive(std::clone::Clone, Copy, DeepModel));
-    /// Offset-aware recovery mode resolved for one partition.
-    pub enum FailoverRecovery {
-        None,
-        Balanced,
-        Aggressive,
-    }
+/// Offset-aware recovery mode resolved for one partition.
+#[krabka_macros::model_type]
+pub enum FailoverRecovery {
+    None,
+    Balanced,
+    Aggressive,
+}
 
-    /// Safety action selected after the host classifies live ISR and replicas.
-    pub enum FailoverAction {
-        ElectClean,
-        ElectFromElr,
-        /// The partition's single last-known leader comes back as an unclean
-        /// leader (Kafka's `canElectLastKnownLeader`).
-        ElectLastKnown,
-        Recover(FailoverRecovery),
-        ElectUnclean,
-        Unavailable,
-        ShrinkIsr,
-        NoChange,
-    }
+/// Safety action selected after the host classifies live ISR and replicas.
+#[krabka_macros::model_type]
+pub enum FailoverAction {
+    ElectClean,
+    ElectFromElr,
+    /// The partition's single last-known leader comes back as an unclean
+    /// leader (Kafka's `canElectLastKnownLeader`).
+    ElectLastKnown,
+    Recover(FailoverRecovery),
+    ElectUnclean,
+    Unavailable,
+    ShrinkIsr,
+    NoChange,
+}
 
-    /// What the live members of the partition's ISR can do once the leader is
-    /// gone. Every live ISR member holds every committed record; a witness is a
-    /// live member that never leads.
-    pub enum LiveIsr {
-        /// No ISR member is live.
-        Empty,
-        /// Every live ISR member is a witness, so none can lead.
-        WitnessesOnly,
-        /// A live ISR member that is not a witness can lead.
-        Electable,
-    }
+/// What the live members of the partition's ISR can do once the leader is
+/// gone. Every live ISR member holds every committed record; a witness is a
+/// live member that never leads.
+#[krabka_macros::model_type]
+pub enum LiveIsr {
+    /// No ISR member is live.
+    Empty,
+    /// Every live ISR member is a witness, so none can lead.
+    WitnessesOnly,
+    /// A live ISR member that is not a witness can lead.
+    Electable,
+}
 
-    /// The out-of-ISR options, consulted only when no ISR member is live.
-    pub struct OutOfIsrFacts {
-        /// A live KIP-966 eligible leader replica can lead.
-        pub has_electable_elr: bool,
-        /// Kafka's `canElectLastKnownLeader`, less the empty-ISR test that
-        /// [`LiveIsr::Empty`] already carries: the target ELR is empty, the
-        /// partition's `lastKnownElr` holds exactly one replica, and that replica
-        /// is live and can lead.
-        pub last_known_leader_electable: bool,
-        /// The topic's resolved offset-aware recovery strategy.
-        pub recovery: FailoverRecovery,
-        /// The KIP-841 out-of-ISR election is both permitted by
-        /// `unclean.leader.election.enable` and has a live replica to elect.
-        pub unclean_election_available: bool,
-    }
+/// The out-of-ISR options, consulted only when no ISR member is live.
+#[krabka_macros::model_type]
+pub struct OutOfIsrFacts {
+    /// A live KIP-966 eligible leader replica can lead.
+    pub has_electable_elr: bool,
+    /// Kafka's `canElectLastKnownLeader`, less the empty-ISR test that
+    /// [`LiveIsr::Empty`] already carries: the target ELR is empty, the
+    /// partition's `lastKnownElr` holds exactly one replica, and that replica
+    /// is live and can lead.
+    pub last_known_leader_electable: bool,
+    /// The topic's resolved offset-aware recovery strategy.
+    pub recovery: FailoverRecovery,
+    /// The KIP-841 out-of-ISR election is both permitted by
+    /// `unclean.leader.election.enable` and has a live replica to elect.
+    pub unclean_election_available: bool,
+}
 
-    /// What the host established about one partition before the failover
-    /// decision. The kernel does not see replica sets; every field is the host's
-    /// classification of them.
-    pub struct FailoverFacts {
-        /// The partition's leader is the replica that went away.
-        pub leader_dead: bool,
-        /// The live ISR is smaller than the recorded ISR.
-        pub isr_shrunk: bool,
-        /// What the live ISR members can do.
-        pub live_isr: LiveIsr,
-        /// The options left when no ISR member is live.
-        pub out_of_isr: OutOfIsrFacts,
-    }
+/// What the host established about one partition before the failover
+/// decision. The kernel does not see replica sets; every field is the host's
+/// classification of them.
+#[krabka_macros::model_type]
+pub struct FailoverFacts {
+    /// The partition's leader is the replica that went away.
+    pub leader_dead: bool,
+    /// The live ISR is smaller than the recorded ISR.
+    pub isr_shrunk: bool,
+    /// What the live ISR members can do.
+    pub live_isr: LiveIsr,
+    /// The options left when no ISR member is live.
+    pub out_of_isr: OutOfIsrFacts,
+}
 
-    /// One surviving replica's log as KIP-966 unclean recovery ranks it, from its
-    /// `GetReplicaLogInfo` answer.
-    pub struct RecoveryCandidate {
-        /// The leader epoch of the last record the replica wrote.
-        pub last_epoch: i32,
-        /// The offset one past the replica's last record.
-        pub log_end_offset: i64,
-        /// The replica's broker id, which breaks a tie deterministically.
-        pub broker_id: u64,
-    }
+/// One surviving replica's log as KIP-966 unclean recovery ranks it, from its
+/// `GetReplicaLogInfo` answer.
+#[krabka_macros::model_type]
+pub struct RecoveryCandidate {
+    /// The leader epoch of the last record the replica wrote.
+    pub last_epoch: i32,
+    /// The offset one past the replica's last record.
+    pub log_end_offset: i64,
+    /// The replica's broker id, which breaks a tie deterministically.
+    pub broker_id: u64,
 }
 
 mod failover;
