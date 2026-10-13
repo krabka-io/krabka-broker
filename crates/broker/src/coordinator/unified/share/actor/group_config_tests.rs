@@ -5,19 +5,19 @@
 
 // A metadata image that holds each group config in `overrides`: a group id
 // and its `share.*` entries.
-use crate::coordinator::unified::{
-    GroupCoordinator,
-    share::{actor::test_support::TopicMetadataSetup, config::ShareGroupConfig},
-    test_support::{check_group_session_timeout, fixed_source},
-};
 use {
     super::{
         ShareGroupActorHandle,
         test_support::{heartbeat, seed_initialized},
     },
     crate::{
-        coordinator::unified::test_support::{
-            check_group_assignment_timing, group_config_image as group_image,
+        coordinator::unified::{
+            GroupCoordinator,
+            share::{actor::test_support::TopicMetadataSetup, config::ShareGroupConfig},
+            test_support::{
+                check_group_assignment_timing, check_group_session_timeout, fixed_source,
+                group_config_image as group_image,
+            },
         },
         test_support::FakeMetadataSource,
     },

@@ -28,7 +28,6 @@ const CLIENT_ID: &str = "krabka-mutation-quota-test";
 // ─────────────────────────────────────────────────────────────────────────────
 // Integration tests
 // ─────────────────────────────────────────────────────────────────────────────
-use crate::support::client::metric_value;
 use {
     crate::{
         cluster::start_single_broker_sasl_plaintext_with_users,
@@ -36,7 +35,10 @@ use {
             PlainAuthenticationSetup,
             quotas::{QuotaEntity, alter_user_quota},
         },
-        support::acl::{cluster_acl_record, topic_acl_record},
+        support::{
+            acl::{cluster_acl_record, topic_acl_record},
+            client::metric_value,
+        },
         topic_admin::{drive_create_topics_sasl, drive_delete_topics_sasl},
     },
     assert2::{assert, check},
