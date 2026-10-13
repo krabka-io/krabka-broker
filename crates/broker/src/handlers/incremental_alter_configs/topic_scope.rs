@@ -165,7 +165,7 @@ mod tests {
                     AlterableConfig, assert, check, image_with_topic_config, make_del_cfg,
                     make_set_cfg, make_topic_resource,
                 },
-                test_support::{check_config_result, topic_config_record_with_default_policy},
+                test_support::check_config_result,
             },
             test_support::string_pairs,
             throttle::LEADER_THROTTLED_REPLICAS_KEY,

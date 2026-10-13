@@ -338,7 +338,6 @@ mod tests {
             assert2::check,
             krabka_metadata::AclOperation,
             krabka_protocol::owned::{
-                add_raft_voter_request::{self, AddRaftVoterRequest},
                 add_raft_voter_response::AddRaftVoterResponse,
                 remove_raft_voter_request::RemoveRaftVoterRequest,
                 remove_raft_voter_response::RemoveRaftVoterResponse,

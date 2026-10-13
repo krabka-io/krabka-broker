@@ -16,8 +16,7 @@ use {
             test_support::{
                 ALL_BROKERS_FENCED_PARTITION_ERROR, TopicPartitionCount, TopicReplicationFactor,
                 acl, assigned_partition_record, cluster_acl, invalid_manual_assignment,
-                replica_availability, replica_nodes_from_partitions,
-                seed_controller_quota as seed_controller_quota_helper,
+                replica_availability, seed_controller_quota as seed_controller_quota_helper,
             },
         },
         test_support::{

@@ -156,7 +156,6 @@ async fn member_limit_rejects_only_new_members() {
                 },
                 log,
             )
-            .0
             .get_or_create_streams("g")
         },
         member_request,

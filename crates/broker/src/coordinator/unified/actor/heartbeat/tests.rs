@@ -15,7 +15,6 @@ use {
                     seed_classic_member,
                 },
             },
-            offsets_log::fake::InMemoryOffsetsLog,
             persistence_next_gen::GroupMetadataValue,
             reconciler::{ReconcileInput, metadata_hash},
             test_support::{
@@ -28,7 +27,7 @@ use {
     assert2::{assert, check},
     krabka_ids::PartitionIndex,
     krabka_protocol::primitives::uuid::Uuid,
-    std::{collections::HashMap, sync::Arc},
+    std::collections::HashMap,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -78,7 +77,6 @@ async fn member_limit_rejects_only_new_members() {
                 empty_metadata(),
                 log,
             )
-            .0
             .get_or_create_consumer("g")
         },
         |member_id, member_epoch| (member_id.to_owned(), member_epoch),

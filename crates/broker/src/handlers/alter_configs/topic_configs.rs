@@ -107,7 +107,7 @@ mod tests {
                 alter_configs::test_support::{
                     image_with_topic, image_with_topic_config, topic_resource,
                 },
-                test_support::{check_config_result, topic_config_record_with_default_policy},
+                test_support::check_config_result,
             },
         },
         assert2::{assert, check},

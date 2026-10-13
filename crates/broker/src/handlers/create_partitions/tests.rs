@@ -15,7 +15,7 @@ use {
             },
             test_support::{
                 ALL_BROKERS_FENCED_PARTITION_ERROR, assigned_partition_record,
-                invalid_manual_assignment, replica_availability, replica_nodes_from_partitions,
+                invalid_manual_assignment, replica_availability,
             },
         },
         test_support::{
