@@ -76,7 +76,11 @@ use {
 mod missing_topics;
 
 /// Named refusals and absent topics have no partitions and carry the zero id.
-fn topic_error_row(broker: &Broker, name: &str, error_code: i16) -> MetadataResponseTopic {
+pub(crate) fn topic_error_row(
+    broker: &Broker,
+    name: &str,
+    error_code: i16,
+) -> MetadataResponseTopic {
     MetadataResponseTopic {
         error_code,
         name: Some(name.to_owned()),
