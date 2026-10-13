@@ -10,7 +10,8 @@ use krabka_metadata::TopicFreezeRecord;
 use krabka_units::{convert::TimeExt as _, minutes};
 
 use super::{
-    ALICE, BOB, CLUSTER_ID, NOW_MS, OTHER_CLUSTER_ID, check_against, record, signed, trust,
+    ALICE, BOB, CLUSTER_ID, NOW_MS, OTHER_CLUSTER_ID, SigningFixture, check_against, signed,
+    signing_fixture,
 };
 use crate::{
     codes,

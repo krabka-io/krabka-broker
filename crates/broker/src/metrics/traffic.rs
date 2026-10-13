@@ -199,7 +199,7 @@ mod tests {
             ("bytes_out", &m.partition_bytes_out, &lbl_p0, 2048),
             ("cpu_micros", &m.partition_cpu_micros, &lbl_p0, 500),
         ];
-        super::assert_metric_counter_cases!(cases);
+        crate::metrics::assert_metric_counter_cases!(cases);
         // `partition_disk_bytes` is a Gauge family (i64), so it stays
         // out of the Counter table above.
         let disk_p0 = m.partition_disk_bytes.get_or_create(&lbl_p0).get();

@@ -500,7 +500,9 @@ async fn tick_all_leaves_a_partition_uncleanable_for_a_record_above_the_decompre
 
     // A different limit that still refuses the record is a different verdict,
     // so the partition runs again and is refused again.
-    with_limit(Some(krabka_units::bytes(50)));
+    update_log_config(&partition, |config| {
+        config.max_decompressed_record = Some(krabka_units::bytes(50));
+    });
     tick_all(&registry, None, &metrics, &mut uncleanable).await;
     check!(failures(&metrics, "orders", CleanerFailureReason::Other) == 2);
     tick_all(&registry, None, &metrics, &mut uncleanable).await;
@@ -512,7 +514,9 @@ async fn tick_all_leaves_a_partition_uncleanable_for_a_record_above_the_decompre
 
     // The operator raises the limit: the next sweep compacts the partition and
     // clears the mark.
-    with_limit(None);
+    update_log_config(&partition, |config| {
+        config.max_decompressed_record = None;
+    });
     tick_all(&registry, None, &metrics, &mut uncleanable).await;
 
     check!(record_count(&partition) < before, "the retry compacted");

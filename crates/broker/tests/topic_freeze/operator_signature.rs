@@ -262,7 +262,7 @@ async fn a_signature_survives_a_controller_restart_and_still_verifies() {
     // case fail for a reason that has nothing to do with the signature.
     config.bootstrap_mode = BootstrapMode::Rejoin;
     let broker = support::start_reusing_addrs(&config, "the signed-freeze restart").await;
-    let client = connect_owned(
+    let client = support::client::connect_owned(
         broker.listen_addr().to_string(),
         "krabka-broker-test",
         "client build",

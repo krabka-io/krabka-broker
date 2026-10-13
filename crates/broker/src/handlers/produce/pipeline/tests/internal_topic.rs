@@ -11,10 +11,7 @@ use std::{path::PathBuf, sync::Arc};
 use assert2::check;
 use krabka_protocol::owned::produce_response::PartitionProduceResponse;
 
-use super::{
-    super::{PartitionInput, append_seed_batch, process_partition},
-    seed_batch,
-};
+use super::{PartitionInput, append_seed_batch, process_partition, seed_batch};
 use crate::{
     codes::{INVALID_TOPIC_EXCEPTION, NONE},
     config::BrokerConfig,

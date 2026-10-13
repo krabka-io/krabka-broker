@@ -6,7 +6,6 @@ use crate::{
     config::{NodeRole, StretchProfile},
     file_config::FileConfig,
     host_port::local_host_name,
-    test_support::metadata_partition_record,
 };
 
 /// The gap `wait_for_self_registration_published` closes: a `submit_change`
@@ -471,7 +470,7 @@ mod unclean_restart {
     use std::sync::Arc;
 
     use assert2::assert;
-    use krabka_metadata::{LeaderEpoch, MetadataRecord, NodeId, PartitionRecord};
+    use krabka_metadata::{MetadataRecord, NodeId};
 
     use crate::{
         authorizer::AllowAllAuthorizer,
@@ -480,8 +479,8 @@ mod unclean_restart {
         config::BrokerConfig,
         elr::{TopicElr, state::PartitionElr},
         test_support::{
-            IsrResponseCheck, elr_topic_records, propose_isr, start_broker_with_authorizer,
-            started_controller_broker, wait_for_controller_leader,
+            IsrResponseCheck, elr_topic_records, metadata_partition_record, propose_isr,
+            start_broker_with_authorizer, started_controller_broker, wait_for_controller_leader,
         },
     };
 

@@ -335,7 +335,7 @@ mod tests {
             value.push(0);
         }
         built.records[0].value = Some(Bytes::from(value));
-        assert!(parse_barrier_marker(&built.records[0]).is_err());
+        assert2::assert!(parse_barrier_marker(&built.records[0]).is_err());
     }
 
     #[test]

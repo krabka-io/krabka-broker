@@ -115,9 +115,7 @@ pub(crate) fn resolve_remote_copy_lag(
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use krabka_metadata::{
-        BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataRecord, TopicConfigRecord,
-    };
+    use krabka_metadata::{BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataRecord};
 
     use super::*;
     use crate::{

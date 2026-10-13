@@ -148,9 +148,9 @@ mod tests {
 
     #[bon::builder]
     fn pending_records(
-        #[builder(default)] group_metadata: Option<StreamsGroupMetadataValue>,
+        group_metadata: Option<StreamsGroupMetadataValue>,
         #[builder(default)] member_metadata: Vec<(String, Option<StreamsGroupMemberMetadataValue>)>,
-        #[builder(default)] topology: Option<StreamsGroupTopologyValue>,
+        topology: Option<StreamsGroupTopologyValue>,
         #[builder(default)] target_per_member: Vec<(
             String,
             Option<StreamsGroupTargetAssignmentMemberValue>,

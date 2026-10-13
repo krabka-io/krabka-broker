@@ -198,7 +198,7 @@ async fn truncate_dedup_entry(truncate_offset: i64, expected: Decision) {
     let s = ProducerState::new();
     commit_fixture().state(&s).offset(100).call().await; // last_offset 104
     s.truncate("t", PartitionIndex(0), truncate_offset).await;
-    assert!(s.check("t", PartitionIndex(0), 1000, 0, 0, 4).await == expected);
+    assert2::assert!(s.check("t", PartitionIndex(0), 1000, 0, 0, 4).await == expected);
 }
 
 #[tokio::test]

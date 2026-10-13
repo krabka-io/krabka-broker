@@ -15,13 +15,13 @@ use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 use super::*;
 use crate::{
     handlers::{
-        partition::Partition,
         produce::{
             framing::PartitionPayload,
             test_support::{PipelineFixture, encode_batch, image_with_topic, pipeline_input},
         },
         test_support::replicated_partition,
     },
+    partition::Partition,
     schema_validation::{SchemaGate, SchemaValidator, ValidationMode},
 };
 

@@ -12,8 +12,6 @@ use krabka_protocol::{
 };
 
 use super::request::{EffectivePartition, EffectiveTopic, FetchAuthorization};
-#[cfg(test)]
-use crate::handlers::fetch::test_support::append_epoch_batches;
 use crate::{
     broker::Broker,
     codes,
@@ -900,7 +898,9 @@ mod tests {
         codes::{NONE, NOT_LEADER_OR_FOLLOWER, OFFSET_OUT_OF_RANGE},
         config::{BrokerConfig, NodeRole},
         config_keys::{BROKER_WITNESS, WITNESS_TRUE},
-        handlers::produce::test_support::image_with_topic,
+        handlers::{
+            fetch::test_support::append_epoch_batches, produce::test_support::image_with_topic,
+        },
         partition::Partition,
         producer_state::ProducerState,
         test_support::{broker_registration, spawn_standalone_partition, temporary_partition},

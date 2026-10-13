@@ -40,7 +40,14 @@ fn epoch_five_member() -> StreamsMemberState {
 fn input_topic_source(partitions: u32) -> Arc<FakeMetadataSource> {
     Arc::new(
         FakeMetadataSource::builder()
-            .image(image_of(None, &[("in", 1, partitions)]))
+            .image(image_of(
+                None,
+                &[(
+                    "in",
+                    1,
+                    i32::try_from(partitions).expect("partition count fits i32"),
+                )],
+            ))
             .build(),
     )
 }
@@ -562,9 +569,7 @@ fn one_subtopology(
 async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() {
     use krabka_protocol::owned::common::streams_group_heartbeat_response::status::Status;
 
-    use crate::{
-        coordinator::unified::streams::topology::status, test_support::FakeMetadataSource,
-    };
+    use crate::coordinator::unified::streams::topology::status;
 
     enum Change {
         Image(Box<krabka_metadata::MetadataImage>),
@@ -848,8 +853,6 @@ async fn a_seeded_group_asks_for_its_missing_internal_topics_again() {
 async fn a_group_loaded_before_the_metadata_source_connects_assigns_its_tasks() {
     use krabka_protocol::owned::common::streams_group_heartbeat_request::task_ids::TaskIds as OwnedTaskIds;
 
-    use crate::test_support::FakeMetadataSource;
-
     struct Row {
         member_id: &'static str,
         member_epoch: i32,
@@ -1106,9 +1109,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
         streams_group_heartbeat_request::{Subtopology, Topology},
     };
 
-    use crate::{
-        coordinator::unified::streams::topology::status, test_support::FakeMetadataSource,
-    };
+    use crate::coordinator::unified::streams::topology::status;
 
     #[derive(Clone, Copy)]
     enum Beat {
@@ -1484,8 +1485,6 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
 async fn a_member_keeps_its_epoch_until_it_revokes_and_is_fenced_after_its_timeout() {
     use krabka_protocol::owned::common::streams_group_heartbeat_request::task_ids::TaskIds as OwnedTaskIds;
 
-    use crate::test_support::FakeMetadataSource;
-
     let accepted = accepted_tasks;
     // (name, rebalance timeout of m1, m1 revokes task 1, expected last m1 and
     // m2 responses)
@@ -1667,8 +1666,6 @@ async fn a_topology_update_or_an_invalid_owned_task_is_refused() {
 /// trunk's: 4.3.1 refuses an instance id before the group sees the request.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_static_member_follows_kafka_static_membership() {
-    use crate::test_support::FakeMetadataSource;
-
     let config = StreamsGroupConfig {
         max_size: 2,
         unstable_api_versions: UnstableApiVersions::Enabled,
@@ -2031,9 +2028,7 @@ async fn a_member_missing_a_rack_aware_tag_gets_missing_client_tags_at_version_1
         streams_group_heartbeat_response::status::Status,
     };
 
-    use crate::{
-        coordinator::unified::streams::topology::status, test_support::FakeMetadataSource,
-    };
+    use crate::coordinator::unified::streams::topology::status;
 
     /// One heartbeat of member `m1`: its request version, whether it joins,
     /// heartbeats at its epoch or leaves, and the client tags it sends.

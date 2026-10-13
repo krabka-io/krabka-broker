@@ -312,7 +312,7 @@ async fn invalid_topic_rows_answer_invalid_request_and_delete_nothing() {
 /// exist before it authorizes their deletion.
 async fn seed_topic(broker: &Broker, ctx: &RequestContext<'_>, setup: CreateTopicSetup<'_>) {
     let name = setup.topic;
-    let req = crate::handlers::test_support::configured_topic_request_from!(setup);
+    let req = crate::handlers::test_support::configured_topic_request_from(setup);
     let resp = create_topics_handle(broker, req, CREATE_VERSION, ctx)
         .await
         .expect("handle CreateTopics");

@@ -1048,7 +1048,7 @@ mod tests {
     /// old connection later does not drop the instance built since.
     #[test]
     fn an_expired_instances_connection_does_not_own_its_successor() {
-        let (m, img, attrs, id, t) = instance_fixture().call();
+        let (m, img, _attrs, id, t) = instance_fixture().call();
         let secs = |s| t + Duration::from_secs(s);
         let terminate = PushCheck {
             terminating: true,

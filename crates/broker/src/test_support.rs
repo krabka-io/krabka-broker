@@ -2965,10 +2965,10 @@ pub(crate) fn metadata_partition_record(
     topic: String,
     replica_ids: Vec<u64>,
     isr_ids: Vec<u64>,
-    #[builder(default = "0")] partition: i32,
-    #[builder(default = "1")] leader_id: u64,
-    #[builder(default = "1")] leader_epoch: i32,
-    #[builder(default = "4")] partition_epoch: i32,
+    #[builder(default = 0)] partition: i32,
+    #[builder(default = 1)] leader_id: u64,
+    #[builder(default = 1)] leader_epoch: i32,
+    #[builder(default = 4)] partition_epoch: i32,
 ) -> PartitionRecord {
     let directories = vec![uuid::Uuid::nil(); replica_ids.len()];
     PartitionRecord {

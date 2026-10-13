@@ -9,7 +9,7 @@ use std::{
 };
 
 use assert2::{assert, check};
-use bytes::{BufMut as _, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use krabka_client_core::{MockBroker, MockReply};
 use krabka_protocol::{
     Encode as _, UnknownTaggedFields,
@@ -32,7 +32,7 @@ use crate::{
     test_support::{
         ControllerPeerAllowed, FakeMetadataSource, GrantsInPrincipalName,
         described_creation_configs, principal, request_context, start_broker_no_audit,
-        start_broker_no_audit_with, start_broker_with_authorizer_no_audit,
+        start_broker_with_authorizer_no_audit,
     },
 };
 

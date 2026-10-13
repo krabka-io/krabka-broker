@@ -5,6 +5,7 @@
 //! a newer stamp than the entry it replaces. Together they are what stops an
 //! old signed thaw from being replayed.
 
+use assert2::check;
 use krabka_metadata::TopicFreezeRecord;
 use krabka_units::{Time, convert::TimeExt as _, minutes, secs};
 

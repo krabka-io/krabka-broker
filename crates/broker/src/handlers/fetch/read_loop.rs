@@ -20,8 +20,6 @@ use super::{
     request::EffectivePartition,
     response::group_into_topic_responses,
 };
-#[cfg(test)]
-use crate::handlers::fetch::test_support::append_epoch_batches;
 use crate::{
     broker::Broker, codes, diskless::read::try_diskless_read, metrics::RequestPhases,
     partition::Partition,
@@ -645,7 +643,7 @@ mod tests {
         broker::{Broker, spawn_partition},
         codes::{NONE, OFFSET_OUT_OF_RANGE},
         diskless::wal_index::WalFlushRecord,
-        handlers::test_support::partition,
+        handlers::{fetch::test_support::append_epoch_batches, test_support::partition},
         metrics::RequestPhases,
         partition::{Partition, test_support::test_partition},
         producer_state::ProducerState,

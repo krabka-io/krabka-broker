@@ -39,7 +39,7 @@ fn committed() -> AclCreationResult {
 }
 
 async fn check_no_acls_created(
-    broker: &BrokerHandle,
+    broker: BrokerHandle,
     response: CreateAclsResponse,
     expected: CreateAclsResponse,
 ) {
@@ -103,7 +103,7 @@ async fn handle_denies_cluster_alter_for_each_creation() {
     let expected = unthrottled_wire!(CreateAclsResponse {
         results: vec![denied.clone(), denied],
     });
-    check_no_acls_created(&broker_handle, resp, expected).await;
+    check_no_acls_created(broker_handle, resp, expected).await;
 }
 
 #[tokio::test]
@@ -168,7 +168,7 @@ async fn handle_answers_security_disabled_for_each_creation_when_no_authorizer_i
     let expected = unthrottled_wire!(CreateAclsResponse {
         results: vec![disabled.clone(), disabled],
     });
-    check_no_acls_created(&broker_handle, resp, expected).await;
+    check_no_acls_created(broker_handle, resp, expected).await;
 }
 
 /// A broker with `unstable.feature.versions.enable`, the mode in which

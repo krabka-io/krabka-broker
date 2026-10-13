@@ -65,6 +65,6 @@ mod tests {
             ("replication_out", &m.replication_bytes_out, &lbl3, 4_000),
             ("replication_out", &m.replication_bytes_out, &lbl4, 0),
         ];
-        super::assert_metric_counter_cases!(cases);
+        crate::metrics::assert_metric_counter_cases!(cases);
     }
 }

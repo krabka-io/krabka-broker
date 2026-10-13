@@ -214,7 +214,6 @@ mod tests {
     fn rows(rules: InitializationRules) -> Vec<Row> {
         let trunk = matches!(rules, InitializationRules::Trunk);
         let fenced = "The coordinator rejected the request because the state epoch did not match.";
-        let unknown = "This server does not host this topic-partition.";
         vec![
             // Trunk takes a repeat as a no-op; 4.3.1 writes a new snapshot.
             Row {

@@ -12,7 +12,6 @@ use std::{
 
 use bytes::Bytes;
 use krabka_ids::PartitionIndex;
-use krabka_protocol::records::RecordBatch;
 use krabka_units::{mebibytes, millis};
 
 use super::MovePolicy;

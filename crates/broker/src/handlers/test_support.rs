@@ -434,12 +434,6 @@ macro_rules! acknowledgement_batches {
 krabka_macros::create_topic_fixture!(configured_topic_request);
 krabka_macros::single_replica_partition_fixture!(single_replica_partition);
 
-macro_rules! configured_topic_request_from {
-    ($setup:expr) => {{ $crate::handlers::test_support::configured_topic_request_from($setup) }};
-}
-
-pub(crate) use configured_topic_request_from;
-
 /// A partition with the supplied leader and replicas, initially all in ISR.
 /// Callers keep differing ISR, epoch, directory, and reassignment values explicit.
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
@@ -1065,7 +1059,9 @@ pub(crate) fn build_topic_config_record_with_default_policy<Resource>(
 
 macro_rules! topic_config_record_with_default_policy {
     ($resource:expr, $image:expr, $build:path $(,)?) => {
-        build_topic_config_record_with_default_policy($resource, $image, $build)
+        $crate::handlers::test_support::build_topic_config_record_with_default_policy(
+            $resource, $image, $build,
+        )
     };
 }
 pub(crate) use topic_config_record_with_default_policy;

@@ -24,7 +24,7 @@ pub(super) mod test_support {
         #[builder(default = String::from("i"))] client_instance_id: String,
         #[builder(default = String::from("c"))] client_id: String,
         #[builder(default)] attributes: Vec<(String, String)>,
-        #[builder(default)] delta_start: Option<u64>,
+        delta_start: Option<u64>,
     ) -> DataPoint {
         DataPoint {
             metric,

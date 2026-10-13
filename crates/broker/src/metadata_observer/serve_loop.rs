@@ -691,17 +691,24 @@ mod tests {
         },
     )]
     #[tokio::test]
-    async fn the_loop_stops_when_it_cannot_wait_for_a_voter(
+    fn the_loop_stops_when_it_cannot_wait_for_a_voter(
         targets: Vec<(NodeId, String)>,
         failure: TimerFailure,
     ) {
-        // With no voters the loop parks; after an unreachable voter it backs
-        // off before trying the next one. In all cases a failed park stops it.
-        let dir = tempfile::tempdir().unwrap();
-        let timer = BrokenTimer::dead(failure);
-        let observer = run_until_it_stops(config_on(targets, timer.injectable(), dir.path())).await;
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                // With no voters the loop parks; after an unreachable voter it backs
+                // off before trying the next one. In all cases a failed park stops it.
+                let dir = tempfile::tempdir().unwrap();
+                let timer = BrokenTimer::dead(failure);
+                let observer =
+                    run_until_it_stops(config_on(targets, timer.injectable(), dir.path())).await;
 
-        check_unanswered_shutdown(&observer, &timer);
+                check_unanswered_shutdown(&observer, &timer);
+            });
     }
 
     #[tokio::test]
