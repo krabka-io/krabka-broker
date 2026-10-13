@@ -303,37 +303,32 @@ mod tests {
         }
 
         let too_long = "a".repeat(krabka_log::topic_name::MAX_TOPIC_NAME_LENGTH + 1);
-        let cases: Vec<NameCase<'_>> = vec![
-            NameCase {
-                name: "",
-                authorizer: Arc::new(AllowAllAuthorizer),
-                expected_code: codes::INVALID_TOPIC_EXCEPTION,
-                expected_message: Some(krabka_log::topic_name::InvalidTopicName::Empty.to_string()),
-            },
-            NameCase {
-                name: "",
-                authorizer: Arc::new(DenyAll),
-                expected_code: codes::INVALID_TOPIC_EXCEPTION,
-                expected_message: Some(krabka_log::topic_name::InvalidTopicName::Empty.to_string()),
-            },
-            NameCase {
-                name: "a/b",
-                authorizer: Arc::new(AllowAllAuthorizer),
-                expected_code: codes::INVALID_TOPIC_EXCEPTION,
-                expected_message: Some(
-                    krabka_log::topic_name::InvalidTopicName::IllegalCharacter("a/b".into())
-                        .to_string(),
-                ),
-            },
-            NameCase {
-                name: "a/b",
-                authorizer: Arc::new(DenyAll),
-                expected_code: codes::INVALID_TOPIC_EXCEPTION,
-                expected_message: Some(
-                    krabka_log::topic_name::InvalidTopicName::IllegalCharacter("a/b".into())
-                        .to_string(),
-                ),
-            },
+        let invalid_name_cases = |name, message: String| {
+            [
+                NameCase {
+                    name,
+                    authorizer: Arc::new(AllowAllAuthorizer),
+                    expected_code: codes::INVALID_TOPIC_EXCEPTION,
+                    expected_message: Some(message.clone()),
+                },
+                NameCase {
+                    name,
+                    authorizer: Arc::new(DenyAll),
+                    expected_code: codes::INVALID_TOPIC_EXCEPTION,
+                    expected_message: Some(message),
+                },
+            ]
+        };
+        let mut cases: Vec<NameCase<'_>> = Vec::new();
+        cases.extend(invalid_name_cases(
+            "",
+            krabka_log::topic_name::InvalidTopicName::Empty.to_string(),
+        ));
+        cases.extend(invalid_name_cases(
+            "a/b",
+            krabka_log::topic_name::InvalidTopicName::IllegalCharacter("a/b".into()).to_string(),
+        ));
+        cases.extend([
             NameCase {
                 name: too_long.as_str(),
                 authorizer: Arc::new(AllowAllAuthorizer),
@@ -354,7 +349,7 @@ mod tests {
                 expected_code: codes::TOPIC_AUTHORIZATION_FAILED,
                 expected_message: Some("Topic authorization failed.".into()),
             },
-        ];
+        ]);
 
         for NameCase {
             name,
