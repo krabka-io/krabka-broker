@@ -1,7 +1,10 @@
 //! Builders for requests shared by integration and unit tests.
 
 /// Build a barrier marker batch using the broker's production wire encoder.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if the marker cannot be encoded as a record batch.
 pub fn barrier_marker_batch(
     group: &str,
     epoch: i64,

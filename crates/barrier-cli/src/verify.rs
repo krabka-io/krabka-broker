@@ -289,7 +289,12 @@ fn check_batch(
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check, krabka_protocol::records::RecordBatch};
+    use {
+        super::*,
+        assert2::check,
+        bytes::Bytes,
+        krabka_protocol::records::{Attributes, Record, RecordBatch},
+    };
 
     /// A barrier marker fixture made with the broker's production encoder.
     fn marker_batch(group: &str, epoch: i64, offset: i64) -> RecordBatch {
