@@ -11,6 +11,7 @@ use super::{
 use creusot_std::prelude::*;
 
 #[cfg(creusot)]
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg_attr(test, mutants::skip)]
 #[logic(open)]
 fn voter_set_change_admission_valid(

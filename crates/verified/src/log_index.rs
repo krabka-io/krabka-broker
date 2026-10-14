@@ -26,6 +26,7 @@ pub type TimeEntry = IndexEntry<i64, u32>;
 pub(crate) type RangeEntry = IndexEntry<i64, i64>;
 
 #[cfg(creusot)]
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg_attr(test, mutants::skip)]
 #[logic(open)]
 fn time_keys_nondecreasing(entries: Seq<TimeEntry>) -> bool {
@@ -36,6 +37,7 @@ fn time_keys_nondecreasing(entries: Seq<TimeEntry>) -> bool {
 }
 
 #[cfg(creusot)]
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg_attr(test, mutants::skip)]
 #[logic(open)]
 fn offset_keys_strictly_increasing(entries: Seq<OffsetEntry>) -> bool {
