@@ -242,7 +242,6 @@ mod tests {
     use {
         super::{declaration, template},
         crate::meta::compact,
-        assert2::assert,
     };
 
     #[yare::parameterized(

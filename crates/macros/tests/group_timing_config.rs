@@ -1,9 +1,6 @@
 //! The generated timing methods preserve borrowing, bounds and unrelated fields.
 
-use {
-    assert2::assert,
-    std::{borrow::Cow, collections::BTreeMap, time::Duration},
-};
+use std::{borrow::Cow, collections::BTreeMap, time::Duration};
 
 mod coordinator {
     pub(crate) mod unified {

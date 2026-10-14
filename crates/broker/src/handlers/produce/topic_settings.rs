@@ -523,18 +523,20 @@ mod tests {
         assert!(topic_min_insync_replicas(&img, NODE, "t", 1) == 3);
     }
 
-    #[test]
-    fn topic_min_isr_uses_broker_fallback_unless_valid_override_exists() {
-        let cases = [(None, 2), (Some(3), 3)];
-
-        for (override_value, expected) in cases {
-            let mut img = image_with_topic("t", &[1, 2, 3]);
-            if let Some(value) = override_value {
-                set_min_isr(&mut img, "t", value);
-            }
-
-            assert!(topic_min_insync_replicas(&img, NODE, "t", 2) == expected);
+    #[yare::parameterized(
+        broker_default = { None, 2 },
+        valid_topic_override = { Some(3), 3 },
+    )]
+    fn topic_min_isr_uses_broker_fallback_unless_valid_override_exists(
+        override_value: Option<i32>,
+        expected: i32,
+    ) {
+        let mut img = image_with_topic("t", &[1, 2, 3]);
+        if let Some(value) = override_value {
+            set_min_isr(&mut img, "t", value);
         }
+
+        assert2::assert!(topic_min_insync_replicas(&img, NODE, "t", 2) == expected);
     }
 
     #[test]

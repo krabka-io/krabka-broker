@@ -95,7 +95,6 @@ pub(crate) fn expand(
 mod tests {
     use {
         super::{compact, instrumentation},
-        assert2::assert,
         moxy::token::TokenStream,
     };
 

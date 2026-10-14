@@ -278,7 +278,6 @@ pub(crate) fn platform_cfg() -> TokenStream {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
 
     #[yare::parameterized(
         cfg_attribute = { "feature = \"inline\"" },
@@ -308,7 +307,6 @@ mod tests {
 
 #[cfg(test)]
 mod records_tests {
-    use assert2::assert;
 
     #[yare::parameterized(
         result_error_arm = { "Err (b)" },
@@ -325,6 +323,6 @@ mod records_tests {
 
     #[test]
     fn rejects_an_arm_that_would_hide_a_portable_alternative() {
-        assert!(super::records_payload("match payload { RecordsPayload::FileRegions(_) | RecordsPayload::Raw(_) => (), _ => (), }".parse().unwrap()).is_err());
+        assert2::assert!(super::records_payload("match payload { RecordsPayload::FileRegions(_) | RecordsPayload::Raw(_) => (), _ => (), }".parse().unwrap()).is_err());
     }
 }

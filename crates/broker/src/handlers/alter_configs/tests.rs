@@ -298,34 +298,37 @@ async fn null_config_value_is_a_validation_error_even_when_unauthorized() {
 /// A valid, uniquely-named resource with well-formed configs still gets an
 /// authorization check: the validate-first ordering does not skip
 /// authorization for a resource that passes validation.
-#[tokio::test]
-async fn valid_resource_still_gets_an_authorization_check() {
-    for (label, req_resource, want_code) in [
-        (
-            "topic",
-            resource(RESOURCE_TYPE_TOPIC, "orders"),
-            codes::TOPIC_AUTHORIZATION_FAILED,
-        ),
-        (
-            "group",
-            group_resource("streams-app", &[]),
-            codes::GROUP_AUTHORIZATION_FAILED,
-        ),
-        (
-            "client-metrics",
-            client_metrics_resource("sub-a", &[]),
-            codes::CLUSTER_AUTHORIZATION_FAILED,
-        ),
-        (
-            "broker",
-            resource(RESOURCE_TYPE_BROKER, "1"),
-            codes::CLUSTER_AUTHORIZATION_FAILED,
-        ),
-    ] {
-        let resp = Box::pin(drive_one(Arc::new(DenyAll), req_resource)).await;
-        assert!(resp.responses.len() == 1);
-        check!(resp.responses[0].error_code == want_code, "{label}");
-    }
+#[yare::parameterized(
+    topic = {
+        "topic",
+        resource(RESOURCE_TYPE_TOPIC, "orders"),
+        codes::TOPIC_AUTHORIZATION_FAILED,
+    },
+    group = {
+        "group",
+        group_resource("streams-app", &[]),
+        codes::GROUP_AUTHORIZATION_FAILED,
+    },
+    client_metrics = {
+        "client-metrics",
+        client_metrics_resource("sub-a", &[]),
+        codes::CLUSTER_AUTHORIZATION_FAILED,
+    },
+    broker = {
+        "broker",
+        resource(RESOURCE_TYPE_BROKER, "1"),
+        codes::CLUSTER_AUTHORIZATION_FAILED,
+    },
+)]
+#[test_macro(tokio::test)]
+async fn valid_resource_still_gets_an_authorization_check(
+    label: &str,
+    req_resource: AlterConfigsResource,
+    want_code: i16,
+) {
+    let resp = Box::pin(drive_one(Arc::new(DenyAll), req_resource)).await;
+    assert2::assert!(resp.responses.len() == 1);
+    check!(resp.responses[0].error_code == want_code, "{label}");
 }
 
 #[tokio::test]

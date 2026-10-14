@@ -1416,19 +1416,20 @@ mod tests {
     /// Java's `CIBackRef` does not, and the two agree on every ASCII text. The
     /// divergence is documented in `java_fold`; this test pins its extent, so
     /// that a change to it is noticed.
-    #[test]
-    fn a_backreference_under_an_ascii_fold_is_unicode_insensitive_for_non_ascii_text() {
-        // (pattern, input, whole input matches here)
-        for (source, input, expected) in [
-            ("(?i)(\u{e9})\\1", "\u{e9}\u{c9}", true),
-            ("(?i)(\u{e9})\\1", "\u{e9}\u{e9}", true),
-            ("(?i)(\u{3c3})\\1", "\u{3c3}\u{3c2}", true),
-        ] {
-            check!(
-                pattern(source).matches(input).ok() == Some(expected),
-                "{source:?} against {input:?}"
-            );
-        }
+    #[yare::parameterized(
+        accented_uppercase = { "(?i)(\u{e9})\\1", "\u{e9}\u{c9}", true },
+        accented_same_case = { "(?i)(\u{e9})\\1", "\u{e9}\u{e9}", true },
+        greek_final_sigma = { "(?i)(\u{3c3})\\1", "\u{3c3}\u{3c2}", true },
+    )]
+    fn a_backreference_under_an_ascii_fold_is_unicode_insensitive_for_non_ascii_text(
+        source: &str,
+        input: &str,
+        expected: bool,
+    ) {
+        check!(
+            pattern(source).matches(input).ok() == Some(expected),
+            "{source:?} against {input:?}"
+        );
     }
 
     /// Under `(?iu)` Java's `CIBackRef` compares the keys of the chars, and

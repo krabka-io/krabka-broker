@@ -1,5 +1,27 @@
 use {super::*, assert2::assert};
 
+fn epochs_and_watermarks() -> ([EpochEntry; 2], FetchWatermarks) {
+    (
+        [
+            EpochEntry {
+                epoch: LeaderEpoch(2),
+                start_offset: Offset(100),
+            },
+            EpochEntry {
+                epoch: LeaderEpoch(5),
+                start_offset: Offset(105),
+            },
+        ],
+        FetchWatermarks {
+            log_start: 100,
+            log_end: 110,
+            hw: 109,
+            lso: 108,
+            deliverable: 107,
+        },
+    )
+}
+
 #[test]
 fn restored_state_composition_boundaries() {
     let time_entries = [
@@ -28,23 +50,7 @@ fn restored_state_composition_boundaries() {
         10,
     );
     time_range::check_cursors(&[IndexEntry::new(10, 1)], i64::MAX - 1, i64::MAX, 0, 10);
-    let epochs = [
-        EpochEntry {
-            epoch: LeaderEpoch(2),
-            start_offset: Offset(100),
-        },
-        EpochEntry {
-            epoch: LeaderEpoch(5),
-            start_offset: Offset(105),
-        },
-    ];
-    let w = FetchWatermarks {
-        log_start: 100,
-        log_end: 110,
-        hw: 109,
-        lso: 108,
-        deliverable: 107,
-    };
+    let (epochs, w) = epochs_and_watermarks();
     assert!(
         epoch_and_offset_for_entries(&epochs, LeaderEpoch(3), Offset(110))
             == (LeaderEpoch(2), Offset(105))
@@ -124,23 +130,7 @@ fn restored_state_composition_boundaries() {
     above_history = { 6 },
 )]
 fn epoch_replay_accepts_signed_and_gap_requests(requested: i32) {
-    let epochs = [
-        EpochEntry {
-            epoch: LeaderEpoch(2),
-            start_offset: Offset(100),
-        },
-        EpochEntry {
-            epoch: LeaderEpoch(5),
-            start_offset: Offset(105),
-        },
-    ];
-    let w = FetchWatermarks {
-        log_start: 100,
-        log_end: 110,
-        hw: 109,
-        lso: 108,
-        deliverable: 107,
-    };
+    let (epochs, w) = epochs_and_watermarks();
     assert2::assert!(validated_epochs_bound_truncated_fetch(&epochs, requested, 100, w).is_ok());
     assert2::assert!(validated_epochs_bound_truncated_fetch(&[], requested, 100, w).is_ok());
 }
@@ -247,12 +237,10 @@ fn loss_replay_is_idempotent_for_generation_and_count_cases(
     marker_generation: u64,
     marker_count: u64,
 ) {
-    let (settled, replayed) = loss_settlement_is_idempotent(
-        AuditLosses { generation, count },
-        AuditLosses {
+    let (settled, replayed) =
+        loss_settlement_is_idempotent(AuditLosses { generation, count }, AuditLosses {
             generation: marker_generation,
             count: marker_count,
-        },
-    );
+        });
     assert2::assert!(settled == replayed);
 }

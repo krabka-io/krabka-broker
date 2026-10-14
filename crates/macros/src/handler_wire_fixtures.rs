@@ -65,7 +65,6 @@ mod tests {
     use {
         super::{empty_match_acl_filter, token_refusal_result},
         crate::meta::compact,
-        assert2::assert,
     };
 
     #[yare::parameterized(

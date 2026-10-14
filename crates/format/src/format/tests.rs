@@ -32,6 +32,16 @@ struct DirectoryCase<'a, Expected> {
     want: &'a [DirectoryWant<&'a str, Expected>],
 }
 
+fn find_directory_case<'case, 'data, Expected>(
+    cases: &'case [DirectoryCase<'data, Expected>],
+    scenario: &str,
+) -> &'case DirectoryCase<'data, Expected> {
+    cases
+        .iter()
+        .find(|case| case.what == scenario)
+        .expect("named yare case exists")
+}
+
 /// A temporary root and the data directory path inside it.
 struct DataDirectory {
     root: tempfile::TempDir,
@@ -591,26 +601,17 @@ fn the_metadata_log_directory_leads_the_directory_set(scenario: &str) {
             ],
         },
     ];
-    let DirectoryCase {
-        what,
-        metadata,
-        log_dirs,
-        extra,
-        want,
-    } = cases
-        .iter()
-        .find(|case| case.what == scenario)
-        .expect("named yare case exists");
+    let case = find_directory_case(&cases, scenario);
     let tmp = tempfile::tempdir().expect("tempdir");
     let plan = plan_of(
         argv_under()
             .root(tmp.path())
-            .maybe_metadata(*metadata)
-            .log_dirs(log_dirs)
-            .extra(extra)
+            .maybe_metadata(case.metadata)
+            .log_dirs(case.log_dirs)
+            .extra(case.extra)
             .call(),
     )
-    .unwrap_or_else(|Failure { code, message }| panic!("{what}: exit {code}: {message}"));
+    .unwrap_or_else(|Failure { code, message }| panic!("{}: exit {code}: {message}", case.what));
 
     let got: Vec<DirectoryWant<PathBuf, DirectoryKind>> = plan
         .targets
@@ -620,20 +621,21 @@ fn the_metadata_log_directory_leads_the_directory_set(scenario: &str) {
             expected: target.kind,
         })
         .collect();
-    let want: Vec<DirectoryWant<PathBuf, DirectoryKind>> = want
+    let want: Vec<DirectoryWant<PathBuf, DirectoryKind>> = case
+        .want
         .iter()
         .map(|wanted| DirectoryWant {
             dir: tmp.path().join(wanted.dir),
             expected: wanted.expected,
         })
         .collect();
-    check!(got == want, "{what}");
+    check!(got == want, "{}", case.what);
     let ids: std::collections::HashSet<DirectoryId> = plan
         .targets
         .iter()
         .map(|target| target.directory_id)
         .collect();
-    check!(ids.len() == plan.targets.len(), "{what}: {ids:?}");
+    check!(ids.len() == plan.targets.len(), "{}: {ids:?}", case.what);
 }
 
 /// `--directory-id` and the local `--initial-controllers` entry name the id of
@@ -790,36 +792,29 @@ async fn only_the_metadata_log_directory_gets_the_bootstrap_files(scenario: &str
             ],
         },
     ];
-    let DirectoryCase {
-        what,
-        metadata,
-        log_dirs,
-        extra,
-        want,
-    } = cases
-        .iter()
-        .find(|case| case.what == scenario)
-        .expect("named yare case exists");
+    let case = find_directory_case(&cases, scenario);
     let tmp = tempfile::tempdir().expect("tempdir");
     let code = run_from_args(
         argv_under()
             .root(tmp.path())
-            .maybe_metadata(*metadata)
-            .log_dirs(log_dirs)
-            .extra(extra)
+            .maybe_metadata(case.metadata)
+            .log_dirs(case.log_dirs)
+            .extra(case.extra)
             .call(),
     )
     .await;
-    check!(code == EXIT_OK, "{what}");
+    check!(code == EXIT_OK, "{}", case.what);
 
-    let got: Vec<DirectoryWant<String, Vec<String>>> = want
+    let got: Vec<DirectoryWant<String, Vec<String>>> = case
+        .want
         .iter()
         .map(|wanted| DirectoryWant {
             dir: wanted.dir.to_owned(),
             expected: files_under(&tmp.path().join(wanted.dir)),
         })
         .collect();
-    let want: Vec<DirectoryWant<String, Vec<String>>> = want
+    let want: Vec<DirectoryWant<String, Vec<String>>> = case
+        .want
         .iter()
         .map(|wanted| DirectoryWant {
             dir: wanted.dir.to_owned(),
@@ -830,17 +825,18 @@ async fn only_the_metadata_log_directory_gets_the_bootstrap_files(scenario: &str
                 .collect(),
         })
         .collect();
-    check!(got == want, "{what}");
+    check!(got == want, "{}", case.what);
 
     let dirs: Vec<PathBuf> = got
         .iter()
         .map(|wanted| tmp.path().join(&wanted.dir))
         .collect();
     let ensemble = Ensemble::load(&dirs).expect("survey");
-    check!(ensemble.formatted.len() == dirs.len(), "{what}");
+    check!(ensemble.formatted.len() == dirs.len(), "{}", case.what);
     check!(
         ensemble.verify(None, 1).is_ok_and(|id| id.is_some()),
-        "{what}: one cluster id, node 1, and distinct directory ids"
+        "{}: one cluster id, node 1, and distinct directory ids",
+        case.what
     );
 }
 

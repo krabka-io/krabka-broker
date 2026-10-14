@@ -85,9 +85,7 @@ impl TokenBucket {
     /// # Panics
     /// Panics if the injected clock reads more than `u64::MAX` nanoseconds
     /// since its origin, about 584 years.
-    pub fn record(&self, tokens: u64) -> u64 {
-        self.record_capped(tokens, None)
-    }
+    pub fn record(&self, tokens: u64) -> u64 { self.record_capped(tokens, None) }
 
     /// Charges `tokens` as [`Self::record`] does, and keeps at most `max_wait`
     /// of debt: the debt the refill repays in `max_wait` at the current rate.
@@ -285,6 +283,14 @@ mod tests {
 
     const SEC: u64 = 1_000_000_000;
     const M: u64 = MICROS_PER_TOKEN;
+    const UNLIMITED_BUCKET_STATE: BucketState = BucketState {
+        micro_rate_per_sec: 0,
+        micro_burst: 0,
+        micro_available: 0,
+        micro_debt: 0,
+        last_refill_nanos: 0,
+        micro_refill_fraction: 0,
+    };
 
     /// Builds a bucket whose refill clock is a manual timeline starting at its
     /// own zero-duration origin, which is what the refill differences measure
@@ -297,6 +303,10 @@ mod tests {
         let clock = ManualMonotonicClock::new_shared();
         let bucket = Arc::new(TokenBucket::with_clock(clock.clone()));
         ManualBucket { bucket, clock }
+    }
+
+    fn advance_clock(clock: &ManualMonotonicClock, duration: Duration) {
+        clock.advance(duration).expect("manual time moves forward");
     }
 
     /// A bucket and the manual clock that drives its refill.
@@ -320,6 +330,17 @@ mod tests {
             last_refill_nanos: last_refill,
             micro_refill_fraction: 0,
         }
+    }
+
+    fn assert_consume_step_matches(
+        actual: (Option<u64>, BucketState),
+        expected: (Option<u64>, BucketState),
+    ) {
+        check!(actual == expected);
+    }
+
+    fn assert_rate_change_grant(actual: u64, expected: u64) {
+        check!(actual == expected);
     }
 
     fn advance_one_ns_and_poll(bucket: &TokenBucket, clock: &ManualMonotonicClock) {
@@ -414,9 +435,7 @@ mod tests {
         try_consume_with_timeout(&b, 1024);
         // 500ms at 1024 tokens/s refills exactly 512 tokens — deterministic,
         // where a real 500ms sleep only gets "roughly" 512 under scheduler jitter.
-        clock
-            .advance(Duration::from_millis(500))
-            .expect("manual time moves forward");
+        advance_clock(&clock, Duration::from_millis(500));
         let g = try_consume_with_timeout(&b, 1024);
         assert2::assert!(g == 512);
     }
@@ -432,120 +451,18 @@ mod tests {
 
         let mut grants = Vec::new();
         for _ in 0..10 {
-            clock
-                .advance(Duration::from_millis(100))
-                .expect("manual time moves forward");
+            advance_clock(&clock, Duration::from_millis(100));
             grants.push(try_consume_with_timeout(&b, 1));
         }
 
-        check!(grants == vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
-    }
-
-    #[test]
-    fn bucket_caps_at_burst_capacity() {
-        let ManualBucket { bucket: b, clock } = manual_bucket();
-        b.set_byte_rate_with_burst(bytes_per_sec(1024), bytes(2048));
-        try_consume_with_timeout(&b, 2048);
-        // 2.5s at 1024 tokens/s would refill 2560 tokens, but the 2048 burst cap
-        // clamps it; advancing logical time makes this exact and instant.
-        clock
-            .advance(Duration::from_millis(2500))
-            .expect("manual time moves forward");
-        let g = try_consume_with_timeout(&b, 4096);
-        assert2::assert!(g == 2048);
-    }
-
-    /// A rate change keeps the balance, as Kafka's
-    /// `ClientQuotaManager.updateQuotaMetricConfigs` swaps a metric's bound
-    /// and leaves what it recorded (#1241). Each row drives one bucket
-    /// through a consume, an optional wait, a change of rate and burst, and a
-    /// consume that asks for more than the bucket can hold. The last grant is
-    /// the balance that survived the change.
-    #[yare::parameterized(
-        drained_rate_increase = { 1_000, 1_000, 1_000, 0, 2_000, 2_000, 0 },
-        old_rate_refill = { 1_000, 1_000, 1_000, 500, 2_000, 2_000, 500 },
-        capped_at_new_burst = { 1_000, 1_000, 0, 0, 2_000, 300, 300 },
-        keeps_balance_under_new_burst = { 1_000, 1_000, 600, 0, 2_000, 2_000, 400 },
-        first_rate_starts_full = { 0, 0, 0, 0, 1_000, 1_000, 1_000 },
-        unlimited_then_limited = { 0, 0, 5_000, 0, 1_000, 700, 700 },
-    )]
-    fn a_rate_change_keeps_the_balance(
-        rate: u64,
-        burst: u64,
-        spent: u64,
-        wait_ms: u64,
-        new_rate: u64,
-        new_burst: u64,
-        want: u64,
-    ) {
-        let ManualBucket { bucket: b, clock } = manual_bucket();
-        b.set_token_rate_with_burst(rate, burst);
-        b.try_consume(spent);
-        clock
-            .advance(Duration::from_millis(wait_ms))
-            .expect("manual time moves forward");
-        b.set_token_rate_with_burst(new_rate, new_burst);
-        check!(b.try_consume(u64::MAX) == want);
-    }
-
-    /// A bucket in debt stays in debt across a change of its rate: the client
-    /// is still throttled, now by `debt / new rate`.
-    #[test]
-    fn a_rate_change_keeps_the_debt() {
-        let ManualBucket {
-            bucket: b,
-            clock: _clock,
-        } = manual_bucket();
-        b.set_token_rate_with_burst(1_000, 1_000);
-        check!(b.record(3_000) == 2_000 * MICROS_PER_TOKEN);
-
-        b.set_token_rate_with_burst(2_000, 2_000);
-
-        check!((b.try_consume(1), b.record(0)) == (0, 2_000 * MICROS_PER_TOKEN));
-    }
-
-    #[test]
-    fn positive_rate_zero_burst_grants_zero() {
-        let b = Arc::new(TokenBucket::new());
-        b.set_byte_rate_with_burst(bytes_per_sec(1024), bytes(0));
-
-        assert2::assert!(try_consume_with_timeout(&b, 1) == 0);
-    }
-
-    /// One whole-token consume step on the locked group, table-driven over the
-    /// cases that differ only in the group, the clock and the request. Each
-    /// row pins the grant and the whole group after the step. The group is in
-    /// micro-tokens and the request in whole tokens.
-    #[yare::parameterized(
-        unlimited = { bucket_state(0, 0, 0, 0, 0), 5 * SEC, 7, None, bucket_state(0, 0, 0, 0, 0) },
-        full_elapsed_second = { bucket_state(10 * M, 20 * M, 0, 0, 0), SEC, 4, Some(4 * M), bucket_state(10 * M, 20 * M, 6 * M, 0, SEC) },
-        refill_capped_at_burst = { bucket_state(10 * M, 20 * M, 15 * M, 0, 0), SEC, 0, Some(0), bucket_state(10 * M, 20 * M, 20 * M, 0, SEC) },
-        fractional_remainder = { bucket_state(4, 10 * M, 0, 0, 0), SEC / 2 + SEC / 8, 10, Some(0), BucketState { micro_refill_fraction: 500_000_000, ..bucket_state(4, 10 * M, 2, 0, SEC / 2 + SEC / 8) } },
-        zero_burst = { bucket_state(10 * M, 0, 0, 0, 0), SEC, 3, Some(0), bucket_state(10 * M, 0, 0, 0, SEC) },
-        clock_behind_last_refill = { bucket_state(10 * M, 20 * M, 3 * M, 0, SEC), 0, 5, Some(3 * M), bucket_state(10 * M, 20 * M, 0, 0, SEC) },
-        half_token_stays_in_bucket = { bucket_state(M / 2, M, 0, 0, 0), SEC, 1, Some(0), bucket_state(M / 2, M, M / 2, 0, SEC) },
-        two_half_tokens_make_one = { bucket_state(M / 2, M, 0, 0, 0), 2 * SEC, 1, Some(M), bucket_state(M / 2, M, 0, 0, 2 * SEC) },
-        part_balance_grants_whole_tokens = { bucket_state(M, 3 * M, 2 * M + M / 4, 0, 0), 0, 5, Some(2 * M), bucket_state(M, 3 * M, M / 4, 0, 0) },
-        refill_reduces_debt = { bucket_state(10 * M, 20 * M, 0, 8 * M, 0), SEC / 2, 3, Some(0), bucket_state(10 * M, 20 * M, 0, 3 * M, SEC / 2) },
-        refill_past_debt_goes_to_balance = { bucket_state(10 * M, 20 * M, 0, 4 * M, 0), SEC, 3, Some(3 * M), bucket_state(10 * M, 20 * M, 3 * M, 0, SEC) },
-    )]
-    fn consume_step_refills_caps_and_grants(
-        before: BucketState,
-        now: u64,
-        requested: u64,
-        grant: Option<u64>,
-        after: BucketState,
-    ) {
-        let mut state = before;
-        let granted = state.consume(now, requested);
-        check!((granted, state) == (grant, after));
+        assert2::assert!(grants.as_slice() == &[0, 0, 0, 0, 0, 0, 0, 0, 0, 1][..]);
     }
 
     /// One `record` step on the locked group: the charge is taken in full, the
     /// balance pays what it can, and the debt is what it could not. Each row
     /// pins the debt reported and the whole group after the step.
     #[yare::parameterized(
-        unlimited = { bucket_state(0, 0, 0, 0, 0), 5 * SEC, 7, None, bucket_state(0, 0, 0, 0, 0) },
+        unlimited = { UNLIMITED_BUCKET_STATE, 5 * SEC, 7, None, UNLIMITED_BUCKET_STATE },
         within_balance = { bucket_state(10 * M, 20 * M, 20 * M, 0, 0), 0, 12, Some(0), bucket_state(10 * M, 20 * M, 8 * M, 0, 0) },
         charge_past_balance = { bucket_state(10 * M, 20 * M, 5 * M, 0, 0), 0, 12, Some(7 * M), bucket_state(10 * M, 20 * M, 0, 7 * M, 0) },
         adds_to_existing_debt = { bucket_state(10 * M, 20 * M, 0, 7 * M, 0), 0, 3, Some(10 * M), bucket_state(10 * M, 20 * M, 0, 10 * M, 0) },
@@ -711,9 +628,7 @@ mod tests {
         b.set_token_rate_with_burst(1_000, 1_000);
 
         let reported = b.record_capped(1_000_000, max_wait) / MICROS_PER_TOKEN;
-        clock
-            .advance(Duration::from_secs(3))
-            .expect("manual time moves forward");
+        advance_clock(&clock, Duration::from_secs(3));
         let granted = b.try_consume(u64::MAX);
 
         check!((reported, granted) == (debt, grant));
@@ -727,9 +642,7 @@ mod tests {
         let ManualBucket { bucket, clock } = manual_bucket();
         bucket.set_byte_rate_with_burst(ByteRate::from_bytes_per_sec_f64(rate), bytes(1));
         check!(bucket.record_bounded(u64::MAX, Time::from_secs_f64(0.5)) == cap);
-        clock
-            .advance(Duration::from_millis(500))
-            .expect("manual time moves forward");
+        advance_clock(&clock, Duration::from_millis(500));
         check!(bucket.record(0) == 0);
     }
 
@@ -760,9 +673,7 @@ mod tests {
         let mut whole = Vec::new();
         for _ in 0..5 {
             whole.push(try_consume_with_timeout(&b, 1));
-            clock
-                .advance(Duration::from_secs(1))
-                .expect("manual time moves forward");
+            advance_clock(&clock, Duration::from_secs(1));
         }
         let debt = b.record(1);
 
@@ -781,9 +692,7 @@ mod tests {
         let mut debts = Vec::new();
         for _ in 0..4 {
             debts.push(b.record(2_000) / MICROS_PER_TOKEN);
-            clock
-                .advance(Duration::from_secs(1))
-                .expect("manual time moves forward");
+            advance_clock(&clock, Duration::from_secs(1));
         }
 
         // The first charge is 1000 over the balance. Each later second's
@@ -807,9 +716,7 @@ mod tests {
 
         // A second's refill of 100 repays a debt of 30 and leaves 70.
         check!(b.record(30) == 30 * MICROS_PER_TOKEN);
-        clock
-            .advance(Duration::from_secs(1))
-            .expect("manual time moves forward");
+        advance_clock(&clock, Duration::from_secs(1));
         check!(b.try_consume(1_000) == 70);
     }
 
@@ -877,9 +784,7 @@ mod tests {
     fn try_consume_waits_for_an_in_flight_reset() {
         let ManualBucket { bucket: b, clock } = manual_bucket();
         b.set_token_rate_with_burst(10, 10);
-        clock
-            .advance(Duration::from_secs(1))
-            .expect("manual time moves forward");
+        advance_clock(&clock, Duration::from_secs(1));
 
         // Stand in for a reset part-way through its critical section: the lock
         // is held and the group is rewritten to a smaller burst.
@@ -945,9 +850,7 @@ mod tests {
             .collect();
 
         for _ in 0..STEPS {
-            clock
-                .advance(Duration::from_millis(1))
-                .expect("manual time moves forward");
+            advance_clock(&clock, Duration::from_millis(1));
             std::thread::yield_now();
         }
         stop.store(true, Relaxed);
@@ -971,9 +874,7 @@ mod tests {
             rate: u64,
             burst: u64,
         }
-        const fn rate_burst(rate: u64, burst: u64) -> RateBurst {
-            RateBurst { rate, burst }
-        }
+        const fn rate_burst(rate: u64, burst: u64) -> RateBurst { RateBurst { rate, burst } }
         // Rate and burst pairs the resetter cycles through, largest burst first.
         const CONFIGS: [RateBurst; 4] = [
             rate_burst(1_000_000, 4_096),
@@ -1063,5 +964,103 @@ mod tests {
         check!(!timed_out);
         let state = *b.lock_state();
         check!(state.micro_available <= state.micro_burst);
+    }
+
+    #[yare::parameterized(
+        positive_rate_zero_burst = { 1024, 0, 1, 0 },
+    )]
+    fn positive_rate_zero_burst_grants_zero(rate: u32, burst: u32, requested: u64, expected: u64) {
+        let b = Arc::new(TokenBucket::new());
+        b.set_byte_rate_with_burst(bytes_per_sec(rate), bytes(burst));
+
+        assert2::assert!(try_consume_with_timeout(&b, requested) == expected);
+    }
+
+    /// A bucket in debt stays in debt across a change of its rate: the client
+    /// is still throttled, now by `debt / new rate`.
+    #[test]
+    fn a_rate_change_keeps_the_debt() {
+        let ManualBucket {
+            bucket: b,
+            clock: _clock,
+        } = manual_bucket();
+        b.set_token_rate_with_burst(1_000, 1_000);
+        check!(b.record(3_000) == 2_000 * MICROS_PER_TOKEN);
+
+        b.set_token_rate_with_burst(2_000, 2_000);
+
+        check!((b.try_consume(1), b.record(0)) == (0, 2_000 * MICROS_PER_TOKEN));
+    }
+
+    /// A rate change keeps the balance, as Kafka's
+    /// `ClientQuotaManager.updateQuotaMetricConfigs` swaps a metric's bound
+    /// and leaves what it recorded (#1241). Each row drives one bucket
+    /// through a consume, an optional wait, a change of rate and burst, and a
+    /// consume that asks for more than the bucket can hold. The last grant is
+    /// the balance that survived the change.
+    #[yare::parameterized(
+        drained_rate_increase = { 1_000, 1_000, 1_000, 0, 2_000, 2_000, 0 },
+        old_rate_refill = { 1_000, 1_000, 1_000, 500, 2_000, 2_000, 500 },
+        capped_at_new_burst = { 1_000, 1_000, 0, 0, 2_000, 300, 300 },
+        keeps_balance_under_new_burst = { 1_000, 1_000, 600, 0, 2_000, 2_000, 400 },
+        first_rate_starts_full = { 0, 0, 0, 0, 1_000, 1_000, 1_000 },
+        unlimited_then_limited = { 0, 0, 5_000, 0, 1_000, 700, 700 },
+    )]
+    fn a_rate_change_keeps_the_balance(
+        rate: u64,
+        burst: u64,
+        spent: u64,
+        wait_ms: u64,
+        new_rate: u64,
+        new_burst: u64,
+        want: u64,
+    ) {
+        let ManualBucket { bucket: b, clock } = manual_bucket();
+        b.set_token_rate_with_burst(rate, burst);
+        b.try_consume(spent);
+        advance_clock(&clock, Duration::from_millis(wait_ms));
+        b.set_token_rate_with_burst(new_rate, new_burst);
+        assert_rate_change_grant(b.try_consume(u64::MAX), want);
+    }
+
+    /// One whole-token consume step on the locked group, table-driven over the
+    /// cases that differ only in the group, the clock and the request. Each
+    /// row pins the grant and the whole group after the step. The group is in
+    /// micro-tokens and the request in whole tokens.
+    #[yare::parameterized(
+        unlimited = { UNLIMITED_BUCKET_STATE, 5 * SEC, 7, None, UNLIMITED_BUCKET_STATE },
+        full_elapsed_second = { bucket_state(10 * M, 20 * M, 0, 0, 0), SEC, 4, Some(4 * M), bucket_state(10 * M, 20 * M, 6 * M, 0, SEC) },
+        refill_capped_at_burst = { bucket_state(10 * M, 20 * M, 15 * M, 0, 0), SEC, 0, Some(0), bucket_state(10 * M, 20 * M, 20 * M, 0, SEC) },
+        fractional_remainder = { bucket_state(4, 10 * M, 0, 0, 0), SEC / 2 + SEC / 8, 10, Some(0), BucketState { micro_refill_fraction: 500_000_000, ..bucket_state(4, 10 * M, 2, 0, SEC / 2 + SEC / 8) } },
+        zero_burst = { bucket_state(10 * M, 0, 0, 0, 0), SEC, 3, Some(0), bucket_state(10 * M, 0, 0, 0, SEC) },
+        clock_behind_last_refill = { bucket_state(10 * M, 20 * M, 3 * M, 0, SEC), 0, 5, Some(3 * M), bucket_state(10 * M, 20 * M, 0, 0, SEC) },
+        half_token_stays_in_bucket = { bucket_state(M / 2, M, 0, 0, 0), SEC, 1, Some(0), bucket_state(M / 2, M, M / 2, 0, SEC) },
+        two_half_tokens_make_one = { bucket_state(M / 2, M, 0, 0, 0), 2 * SEC, 1, Some(M), bucket_state(M / 2, M, 0, 0, 2 * SEC) },
+        part_balance_grants_whole_tokens = { bucket_state(M, 3 * M, 2 * M + M / 4, 0, 0), 0, 5, Some(2 * M), bucket_state(M, 3 * M, M / 4, 0, 0) },
+        refill_reduces_debt = { bucket_state(10 * M, 20 * M, 0, 8 * M, 0), SEC / 2, 3, Some(0), bucket_state(10 * M, 20 * M, 0, 3 * M, SEC / 2) },
+        refill_past_debt_goes_to_balance = { bucket_state(10 * M, 20 * M, 0, 4 * M, 0), SEC, 3, Some(3 * M), bucket_state(10 * M, 20 * M, 3 * M, 0, SEC) },
+    )]
+    fn consume_step_refills_caps_and_grants(
+        before: BucketState,
+        now: u64,
+        requested: u64,
+        grant: Option<u64>,
+        after: BucketState,
+    ) {
+        let mut state = before;
+        let granted = state.consume(now, requested);
+        assert_consume_step_matches((granted, state), (grant, after));
+    }
+
+    #[test]
+    fn bucket_caps_at_burst_capacity() {
+        let ManualBucket { bucket: b, clock } = manual_bucket();
+        b.set_byte_rate_with_burst(bytes_per_sec(1024), bytes(2048));
+        try_consume_with_timeout(&b, 2048);
+        // 2.5s at 1024 tokens/s would refill 2560 tokens, but the 2048 burst cap
+        // clamps it; advancing logical time makes this exact and instant.
+        advance_clock(&clock, Duration::from_millis(2500));
+        let g = try_consume_with_timeout(&b, 4096);
+        assert2::assert!(g == 2048);
     }
 }

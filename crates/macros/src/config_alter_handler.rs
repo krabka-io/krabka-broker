@@ -58,7 +58,7 @@ pub(crate) fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
 
 #[cfg(test)]
 mod tests {
-    use {super::expand, crate::meta::compact, assert2::assert};
+    use {super::expand, crate::meta::compact};
 
     #[yare::parameterized(
         audit_in_process = { true },

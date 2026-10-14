@@ -140,7 +140,7 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
 
 #[cfg(test)]
 mod tests {
-    use {super::default_name, assert2::assert};
+    use super::default_name;
 
     #[yare::parameterized(
         strips_trailing_total = { "isr_shrinks_total", "isr_shrinks" },

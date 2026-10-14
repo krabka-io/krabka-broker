@@ -1,6 +1,6 @@
 //! The endpoint derive moves owned fields and leaves wire extensions at default.
 
-use {assert2::assert, krabka_macros::NodeEndpoints};
+use krabka_macros::NodeEndpoints;
 
 #[derive(Debug, PartialEq, NodeEndpoints)]
 #[node_endpoints(targets(WireEndpoint))]

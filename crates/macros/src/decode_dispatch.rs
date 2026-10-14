@@ -136,7 +136,7 @@ pub(crate) fn expand_function(input: NativeTokenStream) -> Result<NativeTokenStr
 
 #[cfg(test)]
 mod tests {
-    use {super::prefix, crate::meta::compact, assert2::assert};
+    use {super::prefix, crate::meta::compact};
 
     #[yare::parameterized(
         immutable = { "req" },

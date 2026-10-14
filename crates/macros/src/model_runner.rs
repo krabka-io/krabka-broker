@@ -123,7 +123,6 @@ mod tests {
     use {
         super::{RunnerStatements, options, statements},
         crate::meta::function_signature,
-        assert2::assert,
     };
 
     #[yare::parameterized(

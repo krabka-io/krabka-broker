@@ -692,49 +692,54 @@ mod tests {
     /// has no rebalance timeout field, so its session timeout is the member's
     /// rebalance timeout, and that is what the group persists. From v1 the
     /// request's own rebalance timeout stands.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn join_v0_takes_the_rebalance_timeout_from_the_session_timeout() {
+    #[yare::parameterized(
+        v0_uses_session_timeout = { 0, -1, 45_000 },
+        v1_uses_request_timeout = { 1, 90_000, 90_000 },
+    )]
+    #[test_macro(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+    async fn join_v0_takes_the_rebalance_timeout_from_the_session_timeout(
+        version: i16,
+        requested_ms: i32,
+        want_ms: i32,
+    ) {
         use krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol;
 
-        // (version, rebalance timeout the request carries, the one persisted)
-        for (version, requested_ms, want_ms) in [(0, -1, 45_000), (1, 90_000, 90_000)] {
-            let (coord, log) = make_coordinator_with_config(NextGenConfig {
-                classic_initial_rebalance_delay: Duration::ZERO,
-                ..NextGenConfig::assigning_at_once()
-            });
-            let handle = marked_classic_handle(&coord, "g");
-            let rx = rpc::begin(&handle, |tx| GroupActorMessage::ClassicJoin {
-                req: JoinGroupRequest {
-                    group_id: "g".into(),
-                    session_timeout_ms: 45_000,
-                    rebalance_timeout_ms: requested_ms,
-                    protocol_type: "consumer".into(),
-                    protocols: vec![JoinGroupRequestProtocol {
-                        name: "range".into(),
-                        ..Default::default()
-                    }],
+        let (coord, log) = make_coordinator_with_config(NextGenConfig {
+            classic_initial_rebalance_delay: Duration::ZERO,
+            ..NextGenConfig::assigning_at_once()
+        });
+        let handle = marked_classic_handle(&coord, "g");
+        let rx = rpc::begin(&handle, |tx| GroupActorMessage::ClassicJoin {
+            req: JoinGroupRequest {
+                group_id: "g".into(),
+                session_timeout_ms: 45_000,
+                rebalance_timeout_ms: requested_ms,
+                protocol_type: "consumer".into(),
+                protocols: vec![JoinGroupRequestProtocol {
+                    name: "range".into(),
                     ..Default::default()
-                },
-                version,
-                client_id: "client-a".into(),
-                client_host: "127.0.0.1".into(),
-                regex_resolver: no_topic_regex_resolver(),
-                reply: tx,
-            })
-            .await;
-            let joined = rx.await.unwrap();
-            check!(joined.error_code == codes::NONE, "v{version}");
+                }],
+                ..Default::default()
+            },
+            version,
+            client_id: "client-a".into(),
+            client_host: "127.0.0.1".into(),
+            regex_resolver: no_topic_regex_resolver(),
+            reply: tx,
+        })
+        .await;
+        let joined = rx.await.unwrap();
+        check!(joined.error_code == codes::NONE, "v{version}");
 
-            let synced = rpc::classic_sync(&handle, &joined.member_id, joined.generation_id).await;
-            check!(synced.error_code == codes::NONE, "v{version}");
+        let synced = rpc::classic_sync(&handle, &joined.member_id, joined.generation_id).await;
+        check!(synced.error_code == codes::NONE, "v{version}");
 
-            let persisted = last_classic_metadata(&log).await;
-            check!(persisted.members.len() == 1, "v{version}");
-            check!(
-                persisted.members[0].rebalance_timeout_ms == want_ms,
-                "v{version}"
-            );
-        }
+        let persisted = last_classic_metadata(&log).await;
+        check!(persisted.members.len() == 1, "v{version}");
+        check!(
+            persisted.members[0].rebalance_timeout_ms == want_ms,
+            "v{version}"
+        );
     }
 
     /// A `Stable` group whose one member, `m1`, is the static member

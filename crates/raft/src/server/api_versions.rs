@@ -288,51 +288,52 @@ mod tests {
         }
     }
 
-    #[test]
-    fn api_versions_body_advertises_kip595_set_both_shapes() {
+    #[yare::parameterized(
+        legacy_shape = { 0i16 },
+        flexible_shape = { 4i16 },
+    )]
+    fn api_versions_body_advertises_kip595_set_both_shapes(req_v: i16) {
         use krabka_protocol::{Decode, owned::api_versions_response::ApiVersionsResponse};
         let mut image = krabka_metadata::MetadataImage::new(Uuid::nil());
         image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
             name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
             level: 24,
         }));
-        for req_v in [0i16, 4i16] {
-            let body = super::api_versions_response_body(req_v, view(&image, 41));
-            let v = req_v.clamp(0, 4);
-            let mut cur = &body[..];
-            let resp = ApiVersionsResponse::decode(&mut cur, v).expect("decode body");
-            assert2::assert!(cur.is_empty());
-            assert2::assert!(resp.error_code == 0);
-            let keys: std::collections::BTreeSet<i16> =
-                resp.api_keys.iter().map(|k| k.api_key).collect();
-            for want in [1i16, 18, 52, 53, 54, 59, 70] {
-                assert2::assert!(keys.contains(&want));
-            }
-            // `BrokerRegistration` and `BrokerHeartbeat` reach the controller
-            // listener through the Admin router, so the native table must not
-            // advertise them on its own.
-            // `an_admin_router_contributes_its_own_api_versions` covers the
-            // other half: with a router bound, a key is advertised.
-            assert2::assert!(!keys.contains(&62i16));
-            assert2::assert!(!keys.contains(&63i16));
-            // Vote is advertised over its whole schema range, as Kafka's
-            // `ApiKeys` does.
-            let vote = resp.api_keys.iter().find(|k| k.api_key == 52).unwrap();
-            assert2::assert!(vote.min_version == 0 && vote.max_version == 2);
-            if req_v >= 3 {
-                let finalized_metadata = resp
-                    .finalized_features
-                    .iter()
-                    .find(|feature| feature.name == "metadata.version")
-                    .expect("metadata.version finalized");
-                assert2::assert!(
-                    (
-                        finalized_metadata.min_version_level,
-                        finalized_metadata.max_version_level
-                    ) == (24, 24)
-                );
-                assert2::assert!(resp.finalized_features_epoch == 41);
-            }
+        let body = super::api_versions_response_body(req_v, view(&image, 41));
+        let v = req_v.clamp(0, 4);
+        let mut cur = &body[..];
+        let resp = ApiVersionsResponse::decode(&mut cur, v).expect("decode body");
+        assert2::assert!(cur.is_empty());
+        assert2::assert!(resp.error_code == 0);
+        let keys: std::collections::BTreeSet<i16> =
+            resp.api_keys.iter().map(|k| k.api_key).collect();
+        for want in [1i16, 18, 52, 53, 54, 59, 70] {
+            assert2::assert!(keys.contains(&want));
+        }
+        // `BrokerRegistration` and `BrokerHeartbeat` reach the controller
+        // listener through the Admin router, so the native table must not
+        // advertise them on its own.
+        // `an_admin_router_contributes_its_own_api_versions` covers the
+        // other half: with a router bound, a key is advertised.
+        assert2::assert!(!keys.contains(&62i16));
+        assert2::assert!(!keys.contains(&63i16));
+        // Vote is advertised over its whole schema range, as Kafka's
+        // `ApiKeys` does.
+        let vote = resp.api_keys.iter().find(|k| k.api_key == 52).unwrap();
+        assert2::assert!(vote.min_version == 0 && vote.max_version == 2);
+        if req_v >= 3 {
+            let finalized_metadata = resp
+                .finalized_features
+                .iter()
+                .find(|feature| feature.name == "metadata.version")
+                .expect("metadata.version finalized");
+            assert2::assert!(
+                (
+                    finalized_metadata.min_version_level,
+                    finalized_metadata.max_version_level
+                ) == (24, 24)
+            );
+            assert2::assert!(resp.finalized_features_epoch == 41);
         }
     }
 
@@ -362,13 +363,10 @@ mod tests {
         }
 
         let image = krabka_metadata::MetadataImage::new(Uuid::nil());
-        let body = super::api_versions_response_body(
-            4,
-            ApiVersionsView {
-                admin_router: Some(&HeartbeatRouter),
-                ..view(&image, -1)
-            },
-        );
+        let body = super::api_versions_response_body(4, ApiVersionsView {
+            admin_router: Some(&HeartbeatRouter),
+            ..view(&image, -1)
+        });
         let resp = ApiVersionsResponse::decode(&mut &body[..], 4).expect("decode body");
 
         let heartbeat = resp

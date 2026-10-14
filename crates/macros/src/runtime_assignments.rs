@@ -94,7 +94,7 @@ pub(crate) fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
 
 #[cfg(test)]
 mod tests {
-    use {super::expand, assert2::assert};
+    use super::expand;
 
     #[yare::parameterized(
         missing_plain_value = { "runtime => cfg; plain:;" },

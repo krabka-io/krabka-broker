@@ -7,6 +7,12 @@ use super::*;
     caught_up_follower = { true, false, OPEN_TXN, 10, FetchVisibility { out_of_range: false, empty: true, limit_offset: 10, effective_lso: 6, read_committed_aborts: false, response_hw: 8, response_lso: 6 } },
     below_log_start = { false, false, OPEN_TXN, 1, FetchVisibility { out_of_range: true, empty: false, limit_offset: 8, effective_lso: 6, read_committed_aborts: false, response_hw: 8, response_lso: 6 } },
     lso_capped_at_high_watermark = { false, true, FetchWatermarks { lso: 9, ..OPEN_TXN }, 3, FetchVisibility { out_of_range: false, empty: false, limit_offset: 8, effective_lso: 8, read_committed_aborts: true, response_hw: 8, response_lso: 8 } },
+    follower_ignores_delivery_watermark = { true, false, FetchWatermarks { deliverable: 2, ..OPEN_TXN }, 3, FetchVisibility { out_of_range: false, empty: false, limit_offset: 10, effective_lso: 6, read_committed_aborts: false, response_hw: 8, response_lso: 6 } },
+    consumer_caps_before_undelivered_batch = { false, false, FetchWatermarks { deliverable: 5, ..OPEN_TXN }, 3, FetchVisibility { out_of_range: false, empty: false, limit_offset: 5, effective_lso: 6, read_committed_aborts: false, response_hw: 8, response_lso: 6 } },
+    consumer_at_delivery_watermark_is_empty = { false, false, FetchWatermarks { deliverable: 5, ..OPEN_TXN }, 5, FetchVisibility { out_of_range: false, empty: true, limit_offset: 5, effective_lso: 6, read_committed_aborts: false, response_hw: 8, response_lso: 6 } },
+    read_committed_uses_lowest_delivery_bound = { false, true, FetchWatermarks { deliverable: 4, ..OPEN_TXN }, 3, FetchVisibility { out_of_range: false, empty: false, limit_offset: 4, effective_lso: 6, read_committed_aborts: true, response_hw: 8, response_lso: 6 } },
+    delivery_above_high_watermark_is_capped = { false, false, FetchWatermarks { deliverable: 10, ..OPEN_TXN }, 8, FetchVisibility { out_of_range: false, empty: true, limit_offset: 8, effective_lso: 6, read_committed_aborts: false, response_hw: 8, response_lso: 6 } },
+    delivery_below_log_start_leaves_empty_window = { false, true, FetchWatermarks { deliverable: 0, ..OPEN_TXN }, 2, FetchVisibility { out_of_range: false, empty: true, limit_offset: 0, effective_lso: 6, read_committed_aborts: true, response_hw: 8, response_lso: 6 } },
 )]
 fn fetch_visibility_matches_kafka_fetch_scenarios(
     is_follower: bool,
@@ -22,30 +28,14 @@ fn fetch_visibility_matches_kafka_fetch_scenarios(
     );
 }
 
-#[yare::parameterized(
-    follower_ignores_delivery_watermark = { true, false, FetchWatermarks { deliverable: 2, ..OPEN_TXN }, 3, FetchVisibility { out_of_range: false, empty: false, limit_offset: 10, effective_lso: 6, read_committed_aborts: false, response_hw: 8, response_lso: 6 } },
-    consumer_caps_before_undelivered_batch = { false, false, FetchWatermarks { deliverable: 5, ..OPEN_TXN }, 3, FetchVisibility { out_of_range: false, empty: false, limit_offset: 5, effective_lso: 6, read_committed_aborts: false, response_hw: 8, response_lso: 6 } },
-    consumer_at_delivery_watermark_is_empty = { false, false, FetchWatermarks { deliverable: 5, ..OPEN_TXN }, 5, FetchVisibility { out_of_range: false, empty: true, limit_offset: 5, effective_lso: 6, read_committed_aborts: false, response_hw: 8, response_lso: 6 } },
-    read_committed_uses_lowest_delivery_bound = { false, true, FetchWatermarks { deliverable: 4, ..OPEN_TXN }, 3, FetchVisibility { out_of_range: false, empty: false, limit_offset: 4, effective_lso: 6, read_committed_aborts: true, response_hw: 8, response_lso: 6 } },
-    delivery_above_high_watermark_is_capped = { false, false, FetchWatermarks { deliverable: 10, ..OPEN_TXN }, 8, FetchVisibility { out_of_range: false, empty: true, limit_offset: 8, effective_lso: 6, read_committed_aborts: false, response_hw: 8, response_lso: 6 } },
-    delivery_below_log_start_leaves_empty_window = { false, true, FetchWatermarks { deliverable: 0, ..OPEN_TXN }, 2, FetchVisibility { out_of_range: false, empty: true, limit_offset: 0, effective_lso: 6, read_committed_aborts: true, response_hw: 8, response_lso: 6 } },
-)]
-fn fetch_visibility_caps_only_a_consumer_at_the_delivery_watermark(
+#[derive(Clone, Copy)]
+struct FetchContext {
     is_follower: bool,
     read_committed: bool,
-    watermarks: FetchWatermarks,
-    fetch_offset: i64,
-    expected: FetchVisibility,
-) {
-    // As above, both fetcher roles report the partition's own HW and LSO.
-    assert2::assert!(
-        fetch_visibility(is_follower, read_committed, watermarks, fetch_offset) == expected
-    );
 }
 
 fn assert_offset_visibility_case(
-    is_follower: bool,
-    read_committed: bool,
+    context: FetchContext,
     limit_offset: i64,
     read_committed_aborts: bool,
     offset: i64,
@@ -60,72 +50,87 @@ fn assert_offset_visibility_case(
         deliverable: 8,
     };
     assert2::assert!(
-        fetch_visibility(is_follower, read_committed, watermarks, offset)
-            == FetchVisibility {
-                out_of_range,
-                empty,
-                limit_offset,
-                effective_lso: 7,
-                read_committed_aborts,
-                response_hw: 8,
-                response_lso: 7,
-            }
+        fetch_visibility(
+            context.is_follower,
+            context.read_committed,
+            watermarks,
+            offset
+        ) == FetchVisibility {
+            out_of_range,
+            empty,
+            limit_offset,
+            effective_lso: 7,
+            read_committed_aborts,
+            response_hw: 8,
+            response_lso: 7,
+        }
     );
 }
 
 #[yare::parameterized(
-    below_log_start = { 1, true, false },
-    at_log_start = { 2, false, false },
-    between_high_watermark_and_log_end = { 9, false, true },
-    at_log_end = { 10, false, true },
-    beyond_log_end = { 11, true, false },
-    maximum_offset = { i64::MAX, true, false },
+    uncommitted_below_log_start = { 8, false, 1, true, false },
+    uncommitted_at_log_start = { 8, false, 2, false, false },
+    uncommitted_between_high_watermark_and_log_end = { 8, false, 9, false, true },
+    uncommitted_at_log_end = { 8, false, 10, false, true },
+    uncommitted_beyond_log_end = { 8, false, 11, true, false },
+    uncommitted_maximum_offset = { 8, false, i64::MAX, true, false },
+    read_committed_below_log_start = { 7, true, 1, true, false },
+    read_committed_at_log_start = { 7, true, 2, false, false },
+    read_committed_between_high_watermark_and_log_end = { 7, true, 9, false, true },
+    read_committed_at_log_end = { 7, true, 10, false, true },
+    read_committed_beyond_log_end = { 7, true, 11, true, false },
+    read_committed_maximum_offset = { 7, true, i64::MAX, true, false },
 )]
-fn consumer_uncommitted_fetch_offsets_are_classified(offset: i64, out_of_range: bool, empty: bool) {
+fn consumer_fetch_offsets_are_classified(
+    limit_offset: i64,
+    read_committed: bool,
+    offset: i64,
+    out_of_range: bool,
+    empty: bool,
+) {
     // Kafka accepts LEO itself as an empty read; offsets beyond LEO are errors.
-    assert_offset_visibility_case(false, false, 8, false, offset, out_of_range, empty);
+    assert_offset_visibility_case(
+        FetchContext {
+            is_follower: false,
+            read_committed,
+        },
+        limit_offset,
+        read_committed,
+        offset,
+        out_of_range,
+        empty,
+    );
 }
 
 #[yare::parameterized(
-    below_log_start = { 1, true, false },
-    at_log_start = { 2, false, false },
-    between_high_watermark_and_log_end = { 9, false, true },
-    at_log_end = { 10, false, true },
-    beyond_log_end = { 11, true, false },
-    maximum_offset = { i64::MAX, true, false },
+    uncommitted_below_log_start = { false, 1, true, false },
+    uncommitted_at_log_start = { false, 2, false, false },
+    uncommitted_before_log_end = { false, 9, false, false },
+    uncommitted_at_log_end = { false, 10, false, true },
+    uncommitted_beyond_log_end = { false, 11, true, false },
+    uncommitted_maximum_offset = { false, i64::MAX, true, false },
+    read_committed_below_log_start = { true, 1, true, false },
+    read_committed_at_log_start = { true, 2, false, false },
+    read_committed_before_log_end = { true, 9, false, false },
+    read_committed_at_log_end = { true, 10, false, true },
+    read_committed_beyond_log_end = { true, 11, true, false },
+    read_committed_maximum_offset = { true, i64::MAX, true, false },
 )]
-fn consumer_read_committed_fetch_offsets_are_classified(
+fn follower_fetch_offsets_are_classified(
+    read_committed: bool,
     offset: i64,
     out_of_range: bool,
     empty: bool,
 ) {
-    assert_offset_visibility_case(false, true, 7, true, offset, out_of_range, empty);
-}
-
-#[yare::parameterized(
-    below_log_start = { 1, true, false },
-    at_log_start = { 2, false, false },
-    before_log_end = { 9, false, false },
-    at_log_end = { 10, false, true },
-    beyond_log_end = { 11, true, false },
-    maximum_offset = { i64::MAX, true, false },
-)]
-fn follower_uncommitted_fetch_offsets_are_classified(offset: i64, out_of_range: bool, empty: bool) {
-    assert_offset_visibility_case(true, false, 10, false, offset, out_of_range, empty);
-}
-
-#[yare::parameterized(
-    below_log_start = { 1, true, false },
-    at_log_start = { 2, false, false },
-    before_log_end = { 9, false, false },
-    at_log_end = { 10, false, true },
-    beyond_log_end = { 11, true, false },
-    maximum_offset = { i64::MAX, true, false },
-)]
-fn follower_read_committed_fetch_offsets_are_classified(
-    offset: i64,
-    out_of_range: bool,
-    empty: bool,
-) {
-    assert_offset_visibility_case(true, true, 10, false, offset, out_of_range, empty);
+    assert_offset_visibility_case(
+        FetchContext {
+            is_follower: true,
+            read_committed,
+        },
+        10,
+        false,
+        offset,
+        out_of_range,
+        empty,
+    );
 }

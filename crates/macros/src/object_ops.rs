@@ -77,7 +77,7 @@ pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream
 
 #[cfg(test)]
 mod tests {
-    use {super::expand, crate::meta::compact, assert2::assert};
+    use {super::expand, crate::meta::compact};
 
     #[yare::parameterized(
         trait_declaration = { "#[async_trait] trait Ops { #[doc = \"Upload\"] put_from_path!(); }" },

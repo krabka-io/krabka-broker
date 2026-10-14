@@ -158,7 +158,7 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert};
+    use super::*;
 
     #[yare::parameterized(
         wrong_epoch = { "epoch: u32, delivery_complete_count: i32, state_batches: Vec<StateBatch>" },

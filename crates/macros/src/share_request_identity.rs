@@ -66,7 +66,7 @@ pub(crate) fn expand(
 
 #[cfg(test)]
 mod tests {
-    use {super::admission, crate::meta::compact, assert2::assert};
+    use {super::admission, crate::meta::compact};
 
     #[yare::parameterized(fetch = { "Fetch" }, acknowledge = { "Acknowledge" })]
     fn both_handlers_retain_snapshot_and_ordered_early_refusal(api: &str) {

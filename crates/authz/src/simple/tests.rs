@@ -42,6 +42,35 @@ fn prefixed_topic_write_allowed_when(denial: AclSetup) {
     );
 }
 
+fn resource_auth_context(
+    entries: Vec<krabka_metadata::AclEntry>,
+    flag: bool,
+) -> (krabka_metadata::MetadataImage, SimpleAclAuthorizer) {
+    let mut image = img();
+    for entry in entries {
+        image.apply(&MetadataRecord::V1AccessControlEntry(entry));
+    }
+    let authorizer = SimpleAclAuthorizer::new(no_super()).with_allow_everyone_if_no_acl_found(flag);
+    (image, authorizer)
+}
+
+fn check_resource_auth_context(
+    entries: Vec<krabka_metadata::AclEntry>,
+    flag: bool,
+    expected: AuthorizationResult,
+    authorize: impl FnOnce(
+        &krabka_metadata::MetadataImage,
+        &SimpleAclAuthorizer,
+        &Principal,
+        &std::net::SocketAddr,
+    ) -> AuthorizationResult,
+) {
+    let (image, authorizer) = resource_auth_context(entries, flag);
+    let principal = alice();
+    let host = addr();
+    assert2::assert!(authorize(&image, &authorizer, &principal, &host) == expected);
+}
+
 #[test]
 fn empty_image_with_no_super_users_defaults_to_deny() {
     // There is no compat shim that returns Allow in this case —
@@ -197,7 +226,7 @@ fn simple_acl_authorizer_is_configured() {
 mod authorize_by_resource_type {
     use {
         super::*,
-        krabka_metadata::{AclOperation, MetadataRecord, PatternType, ResourceType},
+        krabka_metadata::{AclOperation, PatternType, ResourceType},
     };
 
     #[test]
@@ -422,16 +451,19 @@ mod authorize_by_resource_type {
         flag: bool,
         expected: AuthorizationResult,
     ) {
-        let mut img = img();
-        for entry in entries {
-            img.apply(&MetadataRecord::V1AccessControlEntry(entry));
-        }
-        let a = alice();
-        let h = addr();
-        let auth = SimpleAclAuthorizer::new(no_super()).with_allow_everyone_if_no_acl_found(flag);
-        assert2::check!(
-            auth.authorize_by_resource_type(&img, &a, &h, ResourceType::Topic, AclOperation::Write)
-                == expected
+        check_resource_auth_context(
+            entries,
+            flag,
+            expected,
+            |image, authorizer, principal, host| {
+                authorizer.authorize_by_resource_type(
+                    image,
+                    principal,
+                    host,
+                    ResourceType::Topic,
+                    AclOperation::Write,
+                )
+            },
         );
     }
 }
@@ -459,12 +491,12 @@ fn allow_everyone_if_no_acl_found_applies_only_when_no_acl_touches_the_resource(
     flag: bool,
     expected: AuthorizationResult,
 ) {
-    let mut img = img();
-    for entry in entries {
-        img.apply(&MetadataRecord::V1AccessControlEntry(entry));
-    }
-    let a = alice();
-    let h = addr();
-    let auth = SimpleAclAuthorizer::new(no_super()).with_allow_everyone_if_no_acl_found(flag);
-    assert2::assert!(auth.authorize(&img, &req().p(&a).host(&h).call()) == expected);
+    check_resource_auth_context(
+        entries,
+        flag,
+        expected,
+        |image, authorizer, principal, host| {
+            authorizer.authorize(image, &req().p(principal).host(host).call())
+        },
+    );
 }

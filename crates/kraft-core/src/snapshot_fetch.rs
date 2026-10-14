@@ -93,9 +93,7 @@ impl SnapshotFetchState {
 
     /// The byte position to request next, that is, the bytes received so far.
     #[must_use]
-    pub fn next_position(&self) -> i64 {
-        i64::try_from(self.buf.len()).unwrap_or(i64::MAX)
-    }
+    pub fn next_position(&self) -> i64 { i64::try_from(self.buf.len()).unwrap_or(i64::MAX) }
 
     /// Feed one response chunk.
     ///
@@ -142,6 +140,12 @@ impl SnapshotFetchState {
 #[cfg(test)]
 mod tests {
     use {super::*, assert2::assert, krabka_units::prelude::bytes};
+
+    fn start_three_byte_chunk(s: &mut SnapshotFetchState) {
+        assert2::assert!(
+            s.on_chunk((10, 1), 6, 0, b"abc") == SnapshotFetchStep::Continue { next_position: 3 }
+        );
+    }
 
     #[test]
     fn snapshot_fetch_max_accepts_only_whole_bytes_within_the_security_ceiling() {
@@ -251,9 +255,7 @@ mod tests {
         chunk: &[u8],
     ) {
         let mut s = SnapshotFetchState::new((10, 1), NodeId(2));
-        assert2::assert!(
-            s.on_chunk((10, 1), 6, 0, b"abc") == SnapshotFetchStep::Continue { next_position: 3 }
-        );
+        start_three_byte_chunk(&mut s);
         assert2::assert!(s.on_chunk(id, size, position, chunk) == SnapshotFetchStep::Restart);
         assert2::assert!(s.next_position() == 3);
     }
@@ -261,9 +263,7 @@ mod tests {
     #[test]
     fn accepted_chunks_complete_the_latched_snapshot() {
         let mut s = SnapshotFetchState::new((10, 1), NodeId(2));
-        assert2::assert!(
-            s.on_chunk((10, 1), 6, 0, b"abc") == SnapshotFetchStep::Continue { next_position: 3 }
-        );
+        start_three_byte_chunk(&mut s);
         assert2::assert!(
             s.on_chunk((10, 1), 6, 3, b"def")
                 == SnapshotFetchStep::Complete(Bytes::from_static(b"abcdef"))

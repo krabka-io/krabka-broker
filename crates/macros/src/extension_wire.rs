@@ -200,7 +200,7 @@ pub(crate) fn expand(
 
 #[cfg(test)]
 mod tests {
-    use {super::adapter, crate::meta::compact, assert2::assert};
+    use {super::adapter, crate::meta::compact};
 
     const HANDLER: &str = "pub(crate) async fn handle(source: &Broker, mut owned: Request, negotiated: ApiVersion, caller: &RequestContext<'_>) -> DispatchResult { if unrelated::<Type>(&value) { operation().await?; } }";
     const OPTIONS: &str = "name = \"handle_control\", api = \"Control\", level = \"info\"";

@@ -205,27 +205,29 @@ async fn offline_dir_idempotent_after_failover() {
     .await;
 }
 
-#[tokio::test]
-async fn offline_dir_empty_isr_defers_offset_aware_strategies_to_urm() {
-    for (name, strategy) in [
-        ("Balanced", RecoveryStrategy::Balanced),
-        ("Aggressive", RecoveryStrategy::Aggressive),
-    ] {
-        let OfflineImage {
-            image: img, bad, ..
-        } = offline_image()
-            .failed_replica(Some(0))
-            .configs(&[TopicConfigOverride::new(UNCLEAN_RECOVERY_STRATEGY, name)])
-            .call();
-        // Only node 3 is alive, and it is outside the ISR.
-        let plan = scan_offline_dir(&img, 1, bad, &[3]).await;
-        assert!(plan.changes.is_empty(), "{name}: {:?}", plan.changes);
-        assert!(
-            plan.recoveries == vec![("t".to_string(), 0, strategy)],
-            "{name}: {:?}",
-            plan.recoveries
-        );
-    }
+#[yare::parameterized(
+    balanced = { "Balanced", RecoveryStrategy::Balanced },
+    aggressive = { "Aggressive", RecoveryStrategy::Aggressive },
+)]
+#[test_macro(tokio::test)]
+async fn offline_dir_empty_isr_defers_offset_aware_strategies_to_urm(
+    name: &str,
+    strategy: RecoveryStrategy,
+) {
+    let OfflineImage {
+        image: img, bad, ..
+    } = offline_image()
+        .failed_replica(Some(0))
+        .configs(&[TopicConfigOverride::new(UNCLEAN_RECOVERY_STRATEGY, name)])
+        .call();
+    // Only node 3 is alive, and it is outside the ISR.
+    let plan = scan_offline_dir(&img, 1, bad, &[3]).await;
+    assert2::assert!(plan.changes.is_empty(), "{name}: {:?}", plan.changes);
+    assert2::assert!(
+        plan.recoveries == vec![("t".to_string(), 0, strategy)],
+        "{name}: {:?}",
+        plan.recoveries
+    );
 }
 
 #[tokio::test]

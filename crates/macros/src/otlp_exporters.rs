@@ -112,7 +112,7 @@ pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, Pars
 
 #[cfg(test)]
 mod tests {
-    use {super::exporter, assert2::assert};
+    use super::exporter;
 
     #[yare::parameterized(
         span_exporter = { "SpanExporter" },

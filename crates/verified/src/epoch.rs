@@ -40,8 +40,8 @@ mod tests {
 
     #[test]
     fn rejects_the_maximum_and_values_above_it() {
-        assert!(exact_epoch_successor(i64::from(i32::MAX), i64::from(i32::MAX)).is_none());
-        assert!(exact_epoch_successor(i64::MAX, i64::MAX).is_none());
-        assert!(exact_epoch_successor(7, 6).is_none());
+        assert2::assert!(exact_epoch_successor(i64::from(i32::MAX), i64::from(i32::MAX)).is_none());
+        assert2::assert!(exact_epoch_successor(i64::MAX, i64::MAX).is_none());
+        assert2::assert!(exact_epoch_successor(7, 6).is_none());
     }
 }

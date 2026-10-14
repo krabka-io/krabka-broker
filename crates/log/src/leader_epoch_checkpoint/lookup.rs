@@ -169,27 +169,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn epoch_for_offset_at_epoch_boundary() {
-        let TempCheckpoint {
-            dir: _d,
-            checkpoint: c,
-        } = checkpoint(&[entry(0, 0), entry(1, 50)]);
-        // Offset exactly at epoch 1's start_offset → belongs to epoch 1.
-        assert2::assert!(c.epoch_for_offset(Offset(50)) == Some(LeaderEpoch(1)));
-    }
-
+    /// Epoch 1 owns its first offset and all following offsets once it is the
+    /// last recorded epoch.
     #[yare::parameterized(
+        epoch_boundary = { "epoch 1 start", 50 },
         past_last = { "past last entry", 100 },
         far_past_last = { "far past last entry", 999 },
     )]
-    fn epoch_for_offset_past_last_entry(_name: &str, offset: i64) {
+    fn epoch_for_offset_at_or_past_last_entry(_name: &str, offset: i64) {
         let TempCheckpoint {
             dir: _d,
             checkpoint: c,
         } = checkpoint(&[entry(0, 0), entry(1, 50)]);
-        // Any offset >= 50 that extends beyond the last known epoch → epoch 1
-        // (the current / latest epoch owns all subsequent offsets).
         assert2::assert!(c.epoch_for_offset(Offset(offset)) == Some(LeaderEpoch(1)));
     }
 

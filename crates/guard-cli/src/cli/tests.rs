@@ -15,22 +15,25 @@ krabka_macros::duration_parser_fixture!(
         /// with no unit is refused rather than guessed at.
     },
     [
-        ("30m", Some(1_800_000)),
-        ("1h", Some(3_600_000)),
-        ("1 hour", Some(3_600_000)),
+        thirty_minutes = { "30m", Some(1_800_000) },
+        one_hour = { "1h", Some(3_600_000) },
+        one_hour_words = { "1 hour", Some(3_600_000) },
         // A unit is required, so a number alone cannot be read as the
         // wrong scale. Zero is the one exemption, having no scale.
-        ("30", None),
-        ("0", Some(0)),
-        ("banana", None),
-        ("", None),
+        missing_unit = { "30", None },
+        zero = { "0", Some(0) },
+        invalid_word = { "banana", None },
+        empty = { "", None },
     ]
 );
 
-krabka_macros::bootstrap_parser_fixture!(
-    ["krabka-guard", "freeze", "list"],
-    ["krabka-guard", "-b", "localhost:9092", "freeze", "list"]
-);
+krabka_macros::bootstrap_parser_fixture!(["krabka-guard", "freeze", "list"], [
+    "krabka-guard",
+    "-b",
+    "localhost:9092",
+    "freeze",
+    "list"
+]);
 
 /// `--topic` and `--prefix` name the two pattern types, and exactly one of
 /// them is given. A freeze with neither would have no scope, and a freeze

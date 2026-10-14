@@ -1,7 +1,5 @@
 //! Both native headers consume the same exhaustive mutation inventory.
 
-use assert2::assert;
-
 #[derive(Clone, Copy)]
 enum Kind {
     Write,

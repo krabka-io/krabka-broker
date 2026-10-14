@@ -58,7 +58,7 @@ pub(crate) fn expand(
 
 #[cfg(test)]
 mod tests {
-    use {super::body, crate::meta::compact, assert2::assert};
+    use {super::body, crate::meta::compact};
 
     #[yare::parameterized(allow = { "Allow" }, deny = { "Deny" })]
     fn preserves_parameter_order_and_selects_the_requested_decision(decision: &str) {

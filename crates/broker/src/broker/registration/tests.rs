@@ -256,25 +256,28 @@ fn broker_witness_record(node_id: u64, value: Option<&str>) -> krabka_metadata::
     })
 }
 
-#[test]
-fn registration_batch_publishes_or_clears_the_witness_role() {
-    use crate::config::NodeRole::{Broker, Controller, Witness};
-    for (roles, expected_witness) in [
-        (vec![Controller, Broker, Witness], Some("true")),
-        (vec![Controller, Broker], None),
-    ] {
-        let log_dir = tempdir().expect("temp log dir");
-        let config = node_with_roles(log_dir.path(), roles);
-        assert!(
-            broker_registration_batch(&config)
-                == vec![
-                    krabka_metadata::MetadataRecord::V1BrokerRegistration(
-                        self_registration_record(&config)
-                    ),
-                    broker_witness_record(4, expected_witness),
-                ]
-        );
-    }
+#[yare::parameterized(
+    witness = {
+        vec![NodeRole::Controller, NodeRole::Broker, NodeRole::Witness],
+        Some("true"),
+    },
+    broker_controller = { vec![NodeRole::Controller, NodeRole::Broker], None },
+)]
+fn registration_batch_publishes_or_clears_the_witness_role(
+    roles: Vec<NodeRole>,
+    expected_witness: Option<&str>,
+) {
+    let log_dir = tempdir().expect("temp log dir");
+    let config = node_with_roles(log_dir.path(), roles);
+    assert2::assert!(
+        broker_registration_batch(&config)
+            == vec![
+                krabka_metadata::MetadataRecord::V1BrokerRegistration(self_registration_record(
+                    &config
+                )),
+                broker_witness_record(4, expected_witness),
+            ]
+    );
 }
 
 #[test]

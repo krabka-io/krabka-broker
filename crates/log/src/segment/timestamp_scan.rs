@@ -393,45 +393,59 @@ mod tests {
             .call()
     }
 
-    #[test]
-    fn first_record_timestamp_survives_appends_and_reloads_after_truncation() {
-        use krabka_compression::CompressionType;
-
-        for codec in [CompressionType::None, CompressionType::Lz4] {
-            for timestamp_type in [TimestampType::CreateTime, TimestampType::LogAppendTime] {
-                let TempSegment {
-                    dir,
-                    segment: mut seg,
-                } = test_segment();
-                assert2::assert!(seg.first_record_timestamp().is_none());
-                let mut batch = sample_batch().records(2).call();
-                batch.records[0].timestamp_delta = -5;
-                batch.attributes = batch
-                    .attributes
-                    .with_compression(codec)
-                    .with_timestamp_type(timestamp_type);
-                let expected = if timestamp_type == TimestampType::LogAppendTime {
-                    batch.max_timestamp
-                } else {
-                    -5
-                };
-                seg.append(&batch, DENSE_INDEX).unwrap();
-                assert2::assert!(seg.first_record_timestamp() == Some(expected));
-                seg.append(&sample_batch().offset(2).timestamp(100).call(), DENSE_INDEX)
-                    .unwrap();
-                assert2::assert!(seg.first_record_timestamp() == Some(expected));
-                drop(seg);
-                let mut seg = Segment::open_active(dir.path(), Offset(0), true).unwrap();
-                assert2::assert!(seg.first_record_timestamp() == Some(expected));
-                seg.truncate_to_relative(2).unwrap();
-                assert2::assert!(seg.first_record_timestamp() == Some(expected));
-                seg.truncate_to_relative(0).unwrap();
-                assert2::assert!(seg.first_record_timestamp().is_none());
-                seg.append(&sample_batch().timestamp(200).call(), DENSE_INDEX)
-                    .unwrap();
-                assert2::assert!(seg.first_record_timestamp() == Some(200));
-            }
-        }
+    #[yare::parameterized(
+        none_create_time = {
+            krabka_compression::CompressionType::None,
+            TimestampType::CreateTime,
+        },
+        none_log_append_time = {
+            krabka_compression::CompressionType::None,
+            TimestampType::LogAppendTime,
+        },
+        lz4_create_time = {
+            krabka_compression::CompressionType::Lz4,
+            TimestampType::CreateTime,
+        },
+        lz4_log_append_time = {
+            krabka_compression::CompressionType::Lz4,
+            TimestampType::LogAppendTime,
+        },
+    )]
+    fn first_record_timestamp_survives_appends_and_reloads_after_truncation(
+        codec: krabka_compression::CompressionType,
+        timestamp_type: TimestampType,
+    ) {
+        let TempSegment {
+            dir,
+            segment: mut seg,
+        } = test_segment();
+        assert2::assert!(seg.first_record_timestamp().is_none());
+        let mut batch = sample_batch().records(2).call();
+        batch.records[0].timestamp_delta = -5;
+        batch.attributes = batch
+            .attributes
+            .with_compression(codec)
+            .with_timestamp_type(timestamp_type);
+        let expected = if timestamp_type == TimestampType::LogAppendTime {
+            batch.max_timestamp
+        } else {
+            -5
+        };
+        seg.append(&batch, DENSE_INDEX).unwrap();
+        assert2::assert!(seg.first_record_timestamp() == Some(expected));
+        seg.append(&sample_batch().offset(2).timestamp(100).call(), DENSE_INDEX)
+            .unwrap();
+        assert2::assert!(seg.first_record_timestamp() == Some(expected));
+        drop(seg);
+        let mut seg = Segment::open_active(dir.path(), Offset(0), true).unwrap();
+        assert2::assert!(seg.first_record_timestamp() == Some(expected));
+        seg.truncate_to_relative(2).unwrap();
+        assert2::assert!(seg.first_record_timestamp() == Some(expected));
+        seg.truncate_to_relative(0).unwrap();
+        assert2::assert!(seg.first_record_timestamp().is_none());
+        seg.append(&sample_batch().timestamp(200).call(), DENSE_INDEX)
+            .unwrap();
+        assert2::assert!(seg.first_record_timestamp() == Some(200));
     }
 
     /// The scan reports the offset of the maximum timestamp as

@@ -256,10 +256,7 @@ pub(crate) fn vector_request(input: TokenStream) -> Result<TokenStream, ParseErr
 
 #[cfg(test)]
 mod tests {
-    use {
-        super::{expand, metric_registry},
-        assert2::assert,
-    };
+    use super::{expand, metric_registry};
 
     #[yare::parameterized(
         expect = { "expect" },

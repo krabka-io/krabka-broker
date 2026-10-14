@@ -94,7 +94,7 @@ pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, Pars
 
 #[cfg(test)]
 mod tests {
-    use {super::declaration, assert2::assert};
+    use super::declaration;
 
     #[yare::parameterized(
         missing_code = { "Response, output, version" },

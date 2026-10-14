@@ -154,6 +154,36 @@ fn refused_fetch_answer(leader: QuorumLeader) -> PeerResponse {
     })
 }
 
+fn kafka_empty_fetch_response(
+    leader_id: i32,
+    leader_epoch: i32,
+    node_endpoints: Vec<fetch_resp::NodeEndpoint>,
+) -> FetchResponse {
+    FetchResponse {
+        responses: vec![fetch_resp::FetchableTopicResponse {
+            topic: METADATA_TOPIC.to_string(),
+            topic_id: METADATA_TOPIC_ID,
+            partitions: vec![fetch_resp::PartitionData {
+                partition_index: METADATA_PARTITION,
+                error_code: NOT_LEADER_OR_FOLLOWER,
+                high_watermark: -1,
+                log_start_offset: 3,
+                aborted_transactions: Some(Vec::new()),
+                records: Some(RecordsPayload::Raw(Bytes::new())),
+                current_leader: fetch_resp::LeaderIdAndEpoch {
+                    leader_id,
+                    leader_epoch,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        node_endpoints,
+        ..Default::default()
+    }
+}
+
 #[yare::parameterized(
     served = { "served", fetch_answer(0, leader(Some(2), 5, Some(leader_endpoint("controller-2", 9093)))) },
     records = { "records", FetchAnswer {
@@ -191,61 +221,22 @@ fn fetch_response_round_trips(case: &'static str, answer: FetchAnswer) {
         known_leader = {
             "known leader",
             refused_fetch_answer(leader(Some(2), 5, Some(leader_endpoint("controller-2", 9093)))),
-            FetchResponse {
-                responses: vec![fetch_resp::FetchableTopicResponse {
-                    topic: METADATA_TOPIC.to_string(),
-                    topic_id: METADATA_TOPIC_ID,
-                    partitions: vec![fetch_resp::PartitionData {
-                        partition_index: METADATA_PARTITION,
-                        error_code: NOT_LEADER_OR_FOLLOWER,
-                        high_watermark: -1,
-                        log_start_offset: 3,
-                        aborted_transactions: Some(Vec::new()),
-                        records: Some(RecordsPayload::Raw(Bytes::new())),
-                        current_leader: fetch_resp::LeaderIdAndEpoch {
-                            leader_id: 2,
-                            leader_epoch: 5,
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                node_endpoints: vec![fetch_resp::NodeEndpoint {
+            kafka_empty_fetch_response(
+                2,
+                5,
+                vec![fetch_resp::NodeEndpoint {
                     node_id: 2,
                     host: "controller-2".into(),
                     port: 9093,
                     ..Default::default()
                 }],
-                ..Default::default()
-            }
+            )
         },
         // `singletonFetchResponse` adds no entry without a leader id.
         unknown_leader = {
             "unknown leader",
             refused_fetch_answer(leader(None, 5, Some(leader_endpoint("controller-2", 9093)))),
-            FetchResponse {
-                responses: vec![fetch_resp::FetchableTopicResponse {
-                    topic: METADATA_TOPIC.to_string(),
-                    topic_id: METADATA_TOPIC_ID,
-                    partitions: vec![fetch_resp::PartitionData {
-                        partition_index: METADATA_PARTITION,
-                        error_code: NOT_LEADER_OR_FOLLOWER,
-                        high_watermark: -1,
-                        log_start_offset: 3,
-                        aborted_transactions: Some(Vec::new()),
-                        records: Some(RecordsPayload::Raw(Bytes::new())),
-                        current_leader: fetch_resp::LeaderIdAndEpoch {
-                            leader_id: -1,
-                            leader_epoch: 5,
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }
+            kafka_empty_fetch_response(-1, 5, Vec::new())
         },
 )]
 fn a_refused_fetch_is_kafkas_empty_fetch_response(

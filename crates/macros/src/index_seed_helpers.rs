@@ -56,7 +56,7 @@ pub(crate) fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
 
 #[cfg(test)]
 mod tests {
-    use {super::expand, crate::meta::compact, assert2::assert};
+    use {super::expand, crate::meta::compact};
 
     #[yare::parameterized(offset = { "OffsetIndex, u32" }, time = { "TimeIndex, i64" })]
     fn indexes_keep_both_key_types_and_flush_before_reopening(declaration: &str) {

@@ -17,12 +17,12 @@ fn high_watermark_is_monotonic_and_clamped(
 
 #[test]
 fn windows_and_frontiers_use_exact_boundaries() {
-    assert!(in_half_open_window(5, 5, 8));
-    assert!(in_half_open_window(7, 5, 8));
-    assert!(!in_half_open_window(4, 5, 8));
-    assert!(!in_half_open_window(8, 5, 8));
-    assert!(!frontier_reaches(4, 5));
-    assert!(frontier_reaches(5, 5));
+    assert2::assert!(in_half_open_window(5, 5, 8));
+    assert2::assert!(in_half_open_window(7, 5, 8));
+    assert2::assert!(!in_half_open_window(4, 5, 8));
+    assert2::assert!(!in_half_open_window(8, 5, 8));
+    assert2::assert!(!frontier_reaches(4, 5));
+    assert2::assert!(frontier_reaches(5, 5));
 }
 
 #[yare::parameterized(
@@ -251,7 +251,7 @@ fn fetch_response_is_fenced_before_one_exclusive_mutation() {
         ),
     ];
     for (case, fence, response, body, expected) in cases {
-        assert!(
+        assert2::assert!(
             fetch_response_mutation(fence, response, body) == expected,
             "{case}"
         );

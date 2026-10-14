@@ -1,6 +1,6 @@
 //! Both exporter types retain transport selection, configuration and build errors.
 
-use {assert2::assert, std::marker::PhantomData};
+use std::marker::PhantomData;
 
 #[derive(Clone, Copy)]
 enum OtlpProtocol {

@@ -160,7 +160,7 @@ pub(crate) fn wal_capture_topic_fixture(input: TokenStream) -> Result<TokenStrea
 
 #[cfg(test)]
 mod tests {
-    use {super::segment, assert2::assert};
+    use super::segment;
 
     #[yare::parameterized(
         crate_end = { "started, finish, crate, end" },

@@ -52,19 +52,16 @@ pub(super) fn matches_resource(entry: &AclEntry, resource_type: ResourceType, na
         PatternType::Literal => AclPatternKind::Literal,
         PatternType::Prefixed => AclPatternKind::Prefixed,
     };
-    acl_resource_match(
-        pattern,
-        AclResourceFacts {
-            resource_type: if entry.resource_type == resource_type {
-                AclResourceTypeMatch::Same
-            } else {
-                AclResourceTypeMatch::Different
-            },
-            exact_name: entry.resource_name == name,
-            wildcard_name: entry.resource_name == "*",
-            name_has_prefix: name.starts_with(entry.resource_name.as_str()),
+    acl_resource_match(pattern, AclResourceFacts {
+        resource_type: if entry.resource_type == resource_type {
+            AclResourceTypeMatch::Same
+        } else {
+            AclResourceTypeMatch::Different
         },
-    )
+        exact_name: entry.resource_name == name,
+        wildcard_name: entry.resource_name == "*",
+        name_has_prefix: name.starts_with(entry.resource_name.as_str()),
+    })
 }
 
 /// Returns true when an ACL with the `stored` operation and `permission`
@@ -354,6 +351,18 @@ mod tests {
         }
     }
 
+    fn check_host_acl(
+        base: krabka_metadata::MetadataImage,
+        peer: &str,
+        acl_host: &str,
+        expected: AuthorizationResult,
+    ) {
+        let principal = alice();
+        let auth = SimpleAclAuthorizer::new(no_super());
+        let image = image_with_acls(base, [topic_acl().host(acl_host).call()]);
+        check_peer(&auth, &principal, &image, peer, expected, Some(acl_host));
+    }
+
     /// The ACL host comparison must use the JDK's `getHostAddress()` text,
     /// not Rust's `Display` text, because that is what Kafka tooling writes
     /// into ACL host strings. See the module doc on
@@ -371,10 +380,7 @@ mod tests {
         acl_host: &'static str,
         expected: AuthorizationResult,
     ) {
-        let principal = alice();
-        let auth = SimpleAclAuthorizer::new(no_super());
-        let image = image_with_acls(img(), [topic_acl().host(acl_host).call()]);
-        check_peer(&auth, &principal, &image, peer, expected, Some(acl_host));
+        check_host_acl(img(), peer, acl_host, expected);
     }
 
     /// KIP-1276: a CIDR ACL host matches by numeric range, not by comparing
@@ -390,10 +396,7 @@ mod tests {
         acl_host: &'static str,
         expected: AuthorizationResult,
     ) {
-        let principal = alice();
-        let auth = SimpleAclAuthorizer::new(no_super());
-        let image = image_with_acls(cidr_img(), [topic_acl().host(acl_host).call()]);
-        check_peer(&auth, &principal, &image, peer, expected, Some(acl_host));
+        check_host_acl(cidr_img(), peer, acl_host, expected);
     }
 
     /// Kafka 4.3.1 compares every ACL host as text, and trunk reads a range
@@ -428,16 +431,13 @@ mod tests {
         peer_outside_range = { "192.168.0.1:5000", AuthorizationResult::Allow },
     )]
     fn cidr_deny_overrides_wildcard_allow_inside_range(peer: &str, expected: AuthorizationResult) {
-        let img = image_with_acls(
-            cidr_img(),
-            [
-                topic_acl().call(),
-                topic_acl()
-                    .permission(PermissionType::Deny)
-                    .host("10.0.0.0/8")
-                    .call(),
-            ],
-        );
+        let img = image_with_acls(cidr_img(), [
+            topic_acl().call(),
+            topic_acl()
+                .permission(PermissionType::Deny)
+                .host("10.0.0.0/8")
+                .call(),
+        ]);
         let a = alice();
         let auth = SimpleAclAuthorizer::new(no_super());
         check_peer(&auth, &a, &img, peer, expected, None);

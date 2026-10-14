@@ -65,7 +65,6 @@ mod tests {
     use {
         super::{Split, expand, split},
         crate::meta::compact,
-        assert2::assert,
         moxy::token::TokenStream,
     };
 
@@ -134,9 +133,8 @@ mod tests {
     )]
     fn a_call_without_a_crate_path_is_an_error(tokens: &str) {
         let input: TokenStream = tokens.parse().expect("tokens");
-        let error = match expand(input) {
-            Ok(_) => panic!("{tokens}"),
-            Err(error) => error,
+        let Err(error) = expand(input) else {
+            panic!("{tokens}");
         };
         assert2::assert!(
             error.message()

@@ -153,7 +153,7 @@ pub(crate) fn expand(
 
 #[cfg(test)]
 mod tests {
-    use {super::wrappers, crate::meta::compact, assert2::assert};
+    use {super::wrappers, crate::meta::compact};
 
     #[yare::parameterized(
         empty_impl = { "" },

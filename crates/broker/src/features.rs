@@ -165,6 +165,22 @@ pub(crate) fn share_dlq_supported(image: &krabka_metadata::MetadataImage) -> boo
 mod tests {
     use {super::*, crate::codes::UNSUPPORTED_VERSION, assert2::assert};
 
+    fn image_with_finalized_level(
+        feature: &str,
+        finalized: Option<i16>,
+    ) -> krabka_metadata::MetadataImage {
+        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        if let Some(level) = finalized {
+            image.apply(&krabka_metadata::MetadataRecord::V1FeatureLevel(
+                krabka_metadata::FeatureLevelRecord {
+                    name: feature.into(),
+                    level,
+                },
+            ));
+        }
+        image
+    }
+
     #[test]
     fn feature_enabled_treats_absence_as_disabled() {
         use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
@@ -189,14 +205,7 @@ mod tests {
         groups: bool,
         dlq: bool,
     ) {
-        use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
-        let mut image = MetadataImage::new(uuid::Uuid::nil());
-        if let Some(level) = finalized {
-            image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                name: SHARE_VERSION.into(),
-                level,
-            }));
-        }
+        let image = image_with_finalized_level(SHARE_VERSION, finalized);
         assert2::assert!(share_groups_enabled(&image) == groups, "{finalized:?}");
         assert2::assert!(share_dlq_supported(&image) == dlq, "{finalized:?}");
     }
@@ -214,14 +223,7 @@ mod tests {
         finalized: Option<i16>,
         want: bool,
     ) {
-        use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
-        let mut image = MetadataImage::new(uuid::Uuid::nil());
-        if let Some(level) = finalized {
-            image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                name: METADATA_VERSION.into(),
-                level,
-            }));
-        }
+        let image = image_with_finalized_level(METADATA_VERSION, finalized);
         assert2::assert!(cidr_hosts_supported(&image) == want, "{finalized:?}");
     }
 

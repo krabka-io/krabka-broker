@@ -64,7 +64,6 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
 mod tests {
     use {
         super::expand,
-        assert2::assert,
         moxy::{ast::ItemStruct, token::TokenStream},
     };
 

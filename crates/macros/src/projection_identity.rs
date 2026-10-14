@@ -70,7 +70,7 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream, ParseError> {
 
 #[cfg(test)]
 mod tests {
-    use {super::arguments, assert2::assert};
+    use super::arguments;
 
     #[yare::parameterized(
         without_debug = { "State, canonical", false },

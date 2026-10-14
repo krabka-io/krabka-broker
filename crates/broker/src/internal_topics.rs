@@ -166,46 +166,24 @@ mod tests {
     /// Kafka's three names answer as Kafka answers, Krabka's own topics answer
     /// `true`, and nothing else does. `__remote_log_metadata` is the row that
     /// is easy to guess wrong: broker-owned in spirit, ordinary to Kafka.
-    #[test]
-    fn a_broker_owned_topic_is_internal_and_nothing_else_is() {
+    #[yare::parameterized(
+        offsets = { "__consumer_offsets", true },
+        txn_state = { "__transaction_state", true },
+        share_state = { "__share_group_state", true },
+        audit_log = { "__krabka_audit", true },
+        barrier_state = { "__barrier_state", true },
+        diskless_index = { "__diskless_wal_index", true },
+        remote_log_metadata = { "__remote_log_metadata", false },
+        raft_metadata = { "__cluster_metadata", false },
+        ordinary = { "orders", false },
+        single_underscore = { "_foo", false },
+        user_prefix = { "__user_topic", false },
+        internal_suffix = { "__consumer_offsets-2", false },
+        internal_prefix = { "__consumer_offset", false },
+    )]
+    fn a_broker_owned_topic_is_internal_and_nothing_else_is(name: &str, expected: bool) {
         let config = BrokerConfig::for_tests(PathBuf::from("/nonexistent"));
-        for (label, name, expected) in [
-            ("the offsets topic", "__consumer_offsets", true),
-            ("the transaction state topic", "__transaction_state", true),
-            ("the share group state topic", "__share_group_state", true),
-            ("the audit log", "__krabka_audit", true),
-            ("the barrier state topic", "__barrier_state", true),
-            ("the diskless WAL index", "__diskless_wal_index", true),
-            (
-                "the tiered-storage metadata topic, ordinary on Kafka",
-                "__remote_log_metadata",
-                false,
-            ),
-            (
-                "the raft metadata log, which is never a metadata topic row",
-                "__cluster_metadata",
-                false,
-            ),
-            ("an ordinary topic", "orders", false),
-            ("a single-underscore name", "_foo", false),
-            (
-                "an application topic that borrows the prefix",
-                "__user_topic",
-                false,
-            ),
-            (
-                "a name that only extends an internal one",
-                "__consumer_offsets-2",
-                false,
-            ),
-            (
-                "a name that is only a prefix of an internal one",
-                "__consumer_offset",
-                false,
-            ),
-        ] {
-            check!(is_internal_topic(&config, name) == expected, "{label}");
-        }
+        check!(is_internal_topic(&config, name) == expected, "{name}");
     }
 
     /// An operator who renames the audit log gets the flag on the name the

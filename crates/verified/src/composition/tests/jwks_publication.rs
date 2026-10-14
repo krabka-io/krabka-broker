@@ -26,7 +26,7 @@ pub(super) fn expected_trace(initial: u64, fetches: &[bool]) -> (u64, u64) {
     maximum = { u64::MAX },
 )]
 fn writer_generations_cover_parity_and_exhaustion(generation: u64) {
-    let valid = generation % 2 == 0 && u128::from(generation) + 2 <= u128::from(u64::MAX);
+    let valid = generation.is_multiple_of(2) && u128::from(generation) + 2 <= u128::from(u64::MAX);
     let result = jwks_publication_generations(generation);
     assert2::assert!(result.is_some() == valid);
     if let Some((writing, committed)) = result {
