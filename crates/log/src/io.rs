@@ -154,6 +154,7 @@ pub trait LogIo: Debug + Send + Sync {
     /// the page cache, each of those reads waits for the disk under the log
     /// lock, and one large read is faster. A host that cannot ask answers
     /// true, which keeps the walk.
+    #[krabka_macros::sendfile_cfg]
     fn is_cached(&self, file: &File, offset: u64) -> bool { is_cached(file, offset) }
 
     /// Reserve disk blocks for the `len` bytes of a `.log` file from `offset`
@@ -290,7 +291,10 @@ fn advise_will_need(file: &File, offset: u64, len: u64) {
 fn advise_will_need(file: &File, offset: u64, len: u64) { let _ = (file, offset, len); }
 
 /// `preadv2(RWF_NOWAIT)` of one byte: it fails with `EAGAIN` instead of
-/// reading from the disk when the page cache does not hold the byte.
+/// reading from the disk when the page cache does not hold the byte. Linux
+/// 5.9 and 5.10 can return zero bytes instead (a bug `preadv2(2)` documents);
+/// callers only ask about bytes below the end of the file, so zero bytes also
+/// means not cached.
 #[cfg(target_os = "linux")]
 fn is_cached(file: &File, offset: u64) -> bool {
     let mut byte = [0u8; 1];
@@ -301,11 +305,12 @@ fn is_cached(file: &File, offset: u64) -> bool {
             offset,
             rustix::io::ReadWriteFlags::NOWAIT,
         ),
-        Err(rustix::io::Errno::AGAIN)
+        Err(rustix::io::Errno::AGAIN) | Ok(0)
     )
 }
 
 #[cfg(not(target_os = "linux"))]
+#[krabka_macros::sendfile_cfg]
 fn is_cached(file: &File, offset: u64) -> bool {
     let _ = (file, offset);
     true

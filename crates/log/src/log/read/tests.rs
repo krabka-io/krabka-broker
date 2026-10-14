@@ -6,6 +6,7 @@ use {
     super::*,
     crate::{
         config::LogConfig,
+        io::LogIo,
         log::{
             RawRead,
             test_support::{
@@ -13,6 +14,7 @@ use {
                 test_batch_at, test_log, tiny_segments,
             },
         },
+        name::log_path,
         segment::Segment,
         test_support::{AdviceCall, RecordedAdvice, segmented_log},
     },
@@ -568,24 +570,25 @@ fn configured_read_ahead_max_reaches_both_verbatim_reads() {
 
 /// A disk that reports the bytes of the `.log` file with inode `cold` as not
 /// in the page cache, and every other byte as cached.
+#[krabka_macros::sendfile_cfg]
 #[derive(Debug)]
 struct ColdFile {
     cold: u64,
 }
 
-impl crate::io::LogIo for ColdFile {
+#[krabka_macros::sendfile_cfg]
+impl LogIo for ColdFile {
     fn is_cached(&self, file: &std::fs::File, _offset: u64) -> bool {
         use std::os::unix::fs::MetadataExt;
         file.metadata().unwrap().ino() != self.cold
     }
 }
 
-/// The inode of segment `index`'s `.log` file.
+/// The inode of the `.log` file of the segment based at `base`.
+#[krabka_macros::sendfile_cfg]
 fn segment_inode(dir: &std::path::Path, base: i64) -> u64 {
     use std::os::unix::fs::MetadataExt;
-    std::fs::metadata(crate::name::log_path(dir, base))
-        .unwrap()
-        .ino()
+    std::fs::metadata(log_path(dir, base)).unwrap().ino()
 }
 
 #[krabka_macros::sendfile_cfg]
