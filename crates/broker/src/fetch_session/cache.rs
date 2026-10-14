@@ -173,7 +173,10 @@ mod tests {
             },
         },
         assert2::assert,
-        krabka_protocol::primitives::uuid::Uuid as WireUuid,
+        krabka_protocol::{
+            owned::fetch_request::{FetchTopic, ForgottenTopic},
+            primitives::uuid::Uuid as WireUuid,
+        },
     };
 
     #[derive(Clone, Copy)]
@@ -190,6 +193,19 @@ mod tests {
             SessionDecision::Incremental { .. }
         ));
         assert!(cache.total_partitions_cached() == expected.0);
+    }
+
+    fn incremental_request(
+        session_id: impl Into<RequestSessionId>,
+        topics: Vec<FetchTopic>,
+        forgotten: Vec<ForgottenTopic>,
+    ) -> krabka_protocol::owned::fetch_request::FetchRequest {
+        req()
+            .session_id(session_id)
+            .session_epoch(1)
+            .topics(topics)
+            .forgotten(forgotten)
+            .call()
     }
 
     #[test]
@@ -304,16 +320,15 @@ mod tests {
                 .partitions(vec![krabka_ids::PartitionIndex(1)])
                 .call(),
         ];
-        let r = req()
-            .session_id(RequestSessionId(id))
-            .session_epoch(1)
-            .topics(vec![topic("t", &[
+        let r = incremental_request(
+            RequestSessionId(id),
+            vec![topic("t", &[
                 krabka_ids::PartitionIndex(0),
                 krabka_ids::PartitionIndex(2),
                 krabka_ids::PartitionIndex(3),
-            ])])
-            .forgotten(forgotten)
-            .call();
+            ])],
+            forgotten,
+        );
         check_incremental_count(&cache, &r, CachedPartitionCount(3));
 
         // Close drops the whole session and its partitions.
@@ -326,17 +341,17 @@ mod tests {
     fn counters_track_large_incremental_add_delta() {
         let AllocatedCache { cache, id } = two_partition_cache();
 
-        let r = req()
-            .session_id(RequestSessionId(id))
-            .session_epoch(1)
-            .topics(vec![topic("t", &[
+        let r = incremental_request(
+            RequestSessionId(id),
+            vec![topic("t", &[
                 krabka_ids::PartitionIndex(0),
                 krabka_ids::PartitionIndex(1),
                 krabka_ids::PartitionIndex(2),
                 krabka_ids::PartitionIndex(3),
                 krabka_ids::PartitionIndex(4),
-            ])])
-            .call();
+            ])],
+            vec![],
+        );
         check_incremental_count(&cache, &r, CachedPartitionCount(5));
     }
 
@@ -358,11 +373,7 @@ mod tests {
                 .call(),
         ];
 
-        let r = req()
-            .session_id(id)
-            .session_epoch(1)
-            .forgotten(forgotten)
-            .call();
+        let r = incremental_request(id, vec![], forgotten);
         check_incremental_count(&cache, &r, CachedPartitionCount(2));
     }
 }

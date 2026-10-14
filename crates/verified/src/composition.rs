@@ -104,7 +104,7 @@ type WalFetchSupport = (i64, i64, Vec<(u64, i64)>);
 type WalCopyBatch = (i64, i32, Vec<u8>);
 
 mod quota_time;
-use quota_time::capped_charge_is_repaid_by_elapsed_time;
+use quota_time::{DeadlineInputs, capped_charge_is_repaid_by_elapsed_time};
 
 mod quota;
 use quota::{

@@ -22,11 +22,7 @@ use {
     },
     krabka_client_admin::{AdminClient, CreateTopicSpec, TopicMutationOptions},
     krabka_client_core::Client,
-    krabka_protocol::{
-        owned::produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-        primitives::uuid::Uuid as WireUuid,
-        records::{Record, RecordBatch},
-    },
+    krabka_protocol::records::{Record, RecordBatch},
     krabka_remote_storage::diskless::{DisklessPartitionCapture, DisklessWalCapture},
     std::{
         collections::BTreeMap,
@@ -159,21 +155,9 @@ async fn produce(bootstrap: &str, topic_id: Uuid) {
                 ..RecordBatch::default()
             };
             let response = client
-                .send(ProduceRequest {
-                    acks: -1,
-                    timeout_ms: 30_000,
-                    topic_data: vec![TopicProduceData {
-                        name: TOPIC.into(),
-                        topic_id: WireUuid(topic_id.into_bytes()),
-                        partition_data: vec![PartitionProduceData {
-                            index: 0,
-                            records: Some(batch.into()),
-                            ..Default::default()
-                        }],
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                })
+                .send(krabka_broker::testing::single_partition_produce_request(
+                    TOPIC, topic_id, 0, batch, -1, 30_000,
+                ))
                 .await
                 .expect("Produce");
             match response.responses[0].partition_responses[0].error_code {

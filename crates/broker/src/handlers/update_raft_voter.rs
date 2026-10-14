@@ -228,11 +228,7 @@ mod tests {
     #[tokio::test]
     async fn handle_rejects_negative_voter_id_before_reconfig() {
         let version = 0;
-        krabka_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker, ctx);
-            boot [start_broker] allow_all;
-            user ["admin"];
-        };
+        allow_all_broker_setup!((broker_handle, _dir, broker, ctx), start_broker, "admin");
         let request = stamp_request(&broker, request(-7));
         let resp = answer(&broker, version, &request, &ctx).await;
 
@@ -253,11 +249,7 @@ mod tests {
     #[tokio::test]
     async fn handle_reports_the_kafka_code_for_each_rejected_field() {
         let version = 0;
-        krabka_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker, ctx);
-            boot [start_broker] allow_all;
-            user ["admin"];
-        };
+        allow_all_broker_setup!((broker_handle, _dir, broker, ctx), start_broker, "admin");
         let cluster_id = broker.controller.current_image().cluster_id().to_string();
         let epoch = i32::try_from(broker.controller.quorum_state().current_term)
             .expect("the test quorum's term fits an i32");
@@ -332,11 +324,7 @@ mod tests {
     #[tokio::test]
     async fn handle_accepts_a_request_that_names_no_cluster() {
         let version = 0;
-        krabka_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker, ctx);
-            boot [start_broker] allow_all;
-            user ["admin"];
-        };
+        allow_all_broker_setup!((broker_handle, _dir, broker, ctx), start_broker, "admin");
         let mut named = request(2);
         // Kafka's `UpdateVoterHandler` checks the voter's kraft.version range
         // against the cluster's before it looks the voter up, so the range
@@ -496,11 +484,7 @@ mod tests {
     #[tokio::test]
     async fn handle_reports_reconfig_error_from_controller() {
         let version = 0;
-        krabka_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker, ctx);
-            boot [start_broker] allow_all;
-            user ["admin"];
-        };
+        allow_all_broker_setup!((broker_handle, _dir, broker, ctx), start_broker, "admin");
         let mut request = request(2);
         // The range covers the cluster's kraft.version, so Kafka's handler
         // reaches the voter lookup.

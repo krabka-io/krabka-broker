@@ -114,17 +114,21 @@ fn only_a_rejection_from_a_higher_epoch_steps_us_down(
 ) {
     let log = FakeLog::new(5, 1);
     let mut m = three_voter_machine();
+    let local_voter = NodeId(1);
+    let challenger = NodeId(2);
+    let binding_epoch = 3;
+    let directory_id = uuid::Uuid::nil();
     // Cast a binding vote at epoch 3, so a step-down has something to
     // clear and "nothing happened" is distinguishable.
     m.on_event(
         Event::ReceiveVoteRequest {
-            from: NodeId(2),
+            from: challenger,
             cluster_id: None,
-            voter_id: NodeId(1),
-            voter_directory_id: uuid::Uuid::nil(),
-            candidate_epoch: 3,
-            candidate: NodeId(2),
-            candidate_directory_id: uuid::Uuid::nil(),
+            voter_id: local_voter,
+            voter_directory_id: directory_id,
+            candidate_epoch: binding_epoch,
+            candidate: challenger,
+            candidate_directory_id: directory_id,
             candidate_log_end: LogEnd {
                 last_epoch: 1,
                 last_offset: 5,

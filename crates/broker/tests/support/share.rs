@@ -11,7 +11,6 @@ use {
     krabka_client_core::Client,
     krabka_protocol::{
         owned::{
-            produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
             share_acknowledge_request::{
                 AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch as AckAckBatch,
                 ShareAcknowledgeRequest,
@@ -182,24 +181,14 @@ pub async fn produce_batch(client: &Client, batch: RecordBatch) {
     let partition = partition.0;
     for _ in 0..40 {
         let resp = client
-            .send(ProduceRequest {
-                transactional_id: None,
-                acks: -1,
-                timeout_ms: 5_000,
-                topic_data: vec![TopicProduceData {
-                    name: topic.to_string(),
-                    // Produce negotiates v13, which carries topic_id (not name)
-                    // on the wire; the broker resolves the topic by id.
-                    topic_id: wire(topic_id),
-                    partition_data: vec![PartitionProduceData {
-                        index: partition,
-                        records: Some(batch.clone().into()),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
+            .send(krabka_broker::testing::single_partition_produce_request(
+                topic,
+                topic_id,
+                partition,
+                batch.clone(),
+                -1,
+                5_000,
+            ))
             .await
             .expect("Produce");
         let p = &resp.responses[0].partition_responses[0];

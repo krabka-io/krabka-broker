@@ -206,11 +206,7 @@ async fn cluster_alter_configs_gates_the_quota_write() {
 #[test_macro(tokio::test)]
 async fn handle_reports_entry_results_and_obeys_validate_only(validate_only: bool) {
     let version = 1;
-    krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, ctx);
-        boot [start_broker] allow_all;
-        user ["admin"];
-    };
+    allow_all_broker_setup!((broker_handle, _dir, broker, ctx), start_broker, "admin");
     let (entries, expected_entries, stored) = if validate_only {
         (
             vec![entry(vec![part("user", Some("carol"))], vec![op(

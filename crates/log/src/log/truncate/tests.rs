@@ -8,8 +8,9 @@ use {
         leader_epoch_checkpoint::EpochEntry,
         log::test_support::{
             ExpectedStamp, TempLog, append_samples, check_front_evicted_stamps, check_stamps,
-            rolling_test_log, sample_batch, sample_batch_with_epoch, stamped_rolling_log,
-            stamped_test_log, test_batch_at, test_log, tiny_segments,
+            log_with_three_then_two_records, rolling_test_log, sample_batch,
+            sample_batch_with_epoch, stamped_rolling_log, stamped_test_log, test_batch_at,
+            test_log, tiny_segments,
         },
         producer_snapshot::ProducerSnapshotEntry,
         stamp_index::{StampEntry, StampIndex},
@@ -72,11 +73,7 @@ fn a_truncation_below_every_local_segment_resets_the_log_at_the_target() {
 
 #[test]
 fn truncate_to_drops_later_records() {
-    let TempLog { dir: _dir, mut log } = test_log();
-    let mut b1 = sample_batch(3);
-    let mut b2 = sample_batch(2);
-    log.append(&mut b1).unwrap();
-    log.append(&mut b2).unwrap();
+    let TempLog { dir: _dir, mut log } = log_with_three_then_two_records();
     check!(log.log_end_offset() == Offset(5));
     log.truncate_to(Offset(3)).unwrap();
     // First batch (offsets 0..=2) survives; last_offset == 2, end == 3.

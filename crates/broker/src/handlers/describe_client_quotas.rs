@@ -778,11 +778,7 @@ mod tests {
 
     #[tokio::test]
     async fn successful_empty_match_uses_some_empty_entries() {
-        krabka_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker, ctx);
-            boot [start_broker] allow_all;
-            user ["admin"];
-        };
+        allow_all_broker_setup!((broker_handle, _dir, broker, ctx), start_broker, "admin");
 
         let resp = handle(
             &broker,

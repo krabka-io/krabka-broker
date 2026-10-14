@@ -129,6 +129,21 @@ pub(super) async fn seed_mutation_token(
     }
 }
 
+pub(super) async fn mutation_token_for_case(
+    controller: &ControllerHandle,
+    index: usize,
+    expiry_delta: TokenPeriodMillis,
+    maximum_delta: TokenPeriodMillis,
+) -> SeededToken {
+    seed_mutation_token()
+        .controller(controller)
+        .index(TokenMutationIndex(index))
+        .expiry_delta(expiry_delta)
+        .maximum_delta(maximum_delta)
+        .call()
+        .await
+}
+
 pub(super) struct MutationResponse<Response> {
     pub(super) actual: Response,
     pub(super) expected: Response,

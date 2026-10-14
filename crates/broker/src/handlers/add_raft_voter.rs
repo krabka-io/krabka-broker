@@ -261,11 +261,7 @@ mod tests {
     #[tokio::test]
     async fn handle_reports_reconfig_error_from_controller() {
         let version = 1;
-        krabka_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker, ctx);
-            boot [start_broker] allow_all;
-            user ["admin"];
-        };
+        allow_all_broker_setup!((broker_handle, _dir, broker, ctx), start_broker, "admin");
         let mut request = request(2);
         request.cluster_id = Some(voter_cluster_id(&broker));
         let resp = answer(&broker, version, &request, &ctx).await;

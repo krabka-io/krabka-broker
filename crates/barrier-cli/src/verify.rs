@@ -293,36 +293,13 @@ mod tests {
         super::*,
         assert2::check,
         bytes::Bytes,
-        krabka_protocol::records::{Attributes, Record},
+        krabka_protocol::records::{Attributes, Record, RecordBatch},
     };
 
-    /// A barrier marker for `group` at `epoch`, built the way the broker builds
-    /// one so the key layout cannot drift from the parser.
+    /// A barrier marker fixture made with the broker's production encoder.
     fn marker_batch(group: &str, epoch: i64, offset: i64) -> RecordBatch {
-        let mut key = Vec::new();
-        key.extend_from_slice(&0i16.to_be_bytes());
-        key.extend_from_slice(&1000i16.to_be_bytes());
-        let mut value = Vec::new();
-        value.extend_from_slice(&0i16.to_be_bytes());
-        let bytes = group.as_bytes();
-        value.extend_from_slice(
-            &i16::try_from(bytes.len())
-                .expect("short group")
-                .to_be_bytes(),
-        );
-        value.extend_from_slice(bytes);
-        value.extend_from_slice(&epoch.to_be_bytes());
-        value.extend_from_slice(&1_724_500_000_000i64.to_be_bytes());
-        RecordBatch {
-            base_offset: offset,
-            attributes: Attributes::default().with_control(true),
-            records: vec![Record {
-                key: Some(Bytes::from(key)),
-                value: Some(Bytes::from(value)),
-                ..Record::default()
-            }],
-            ..RecordBatch::default()
-        }
+        krabka_broker::testing::barrier_marker_batch(group, epoch, 1_724_500_000_000, offset)
+            .expect("valid marker fixture")
     }
 
     #[test]

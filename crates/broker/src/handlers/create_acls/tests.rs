@@ -152,11 +152,7 @@ async fn handle_submits_valid_creations_and_reports_invalid_creations_in_order()
 /// that state.
 #[tokio::test]
 async fn handle_answers_security_disabled_for_each_creation_when_no_authorizer_is_configured() {
-    krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, ctx);
-        boot [start_broker] allow_all;
-        user ["admin"];
-    };
+    allow_all_broker_setup!((broker_handle, _dir, broker, ctx), start_broker, "admin");
     let req = request(vec![
         creation("topic-a", "User:alice", OPERATION_READ),
         creation("topic-b", "User:bob", OPERATION_WRITE),

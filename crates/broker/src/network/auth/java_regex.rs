@@ -208,6 +208,13 @@ mod tests {
         JavaPattern::compile(source).unwrap_or_else(|error| panic!("{source}: {error}"))
     }
 
+    fn assert_pattern_matches(source: &str, input: &str, expected: bool) {
+        check!(
+            pattern(source).matches(input).ok() == Some(expected),
+            "{source:?} against {input:?}"
+        );
+    }
+
     /// One whole-input match: whether `source` matches all of `input`.
     struct MatchCase<'a> {
         source: &'a str,
@@ -1404,10 +1411,7 @@ mod tests {
         input: &str,
         expected: bool,
     ) {
-        check!(
-            pattern(source).matches(input).ok() == Some(expected),
-            "{source:?} against {input:?}"
-        );
+        assert_pattern_matches(source, input, expected);
     }
 
     /// A backreference under an ASCII fold is written `(?i:\1)`, and
@@ -1426,10 +1430,7 @@ mod tests {
         input: &str,
         expected: bool,
     ) {
-        check!(
-            pattern(source).matches(input).ok() == Some(expected),
-            "{source:?} against {input:?}"
-        );
+        assert_pattern_matches(source, input, expected);
     }
 
     /// Under `(?iu)` Java's `CIBackRef` compares the keys of the chars, and

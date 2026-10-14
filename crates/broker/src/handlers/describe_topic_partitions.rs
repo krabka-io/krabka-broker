@@ -980,11 +980,7 @@ mod tests {
                 is_internal: false,
             },
         ];
-        krabka_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker, ctx);
-            boot [start_broker] allow_all;
-            user ["admin"];
-        };
+        allow_all_broker_setup!((broker_handle, _dir, broker, ctx), start_broker, "admin");
 
         for MissingTopicCase {
             name,
