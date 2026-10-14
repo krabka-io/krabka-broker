@@ -278,6 +278,7 @@ pub(crate) fn platform_cfg() -> TokenStream {
 
 #[cfg(test)]
 mod tests {
+    use super::expand;
 
     #[yare::parameterized(
         cfg_attribute = { "feature = \"inline\"" },
@@ -287,7 +288,7 @@ mod tests {
         platform_gate = { "target_os = \"dragonfly\"" },
     )]
     fn preserves_guards_attributes_and_async_arm_bodies(retained: &str) {
-        let output = crate::sendfile_match::expand("match operation { #[cfg(feature = \"inline\")] WriteOp::Inline(bytes) if bytes.is_empty() => write(bytes).await?, WriteOp::File(region) => drain(region).await?, }".parse().unwrap()).unwrap().to_string();
+        let output = expand("match operation { #[cfg(feature = \"inline\")] WriteOp::Inline(bytes) if bytes.is_empty() => write(bytes).await?, WriteOp::File(region) => drain(region).await?, }".parse().unwrap()).unwrap().to_string();
         assert2::assert!(output.contains(retained), "{retained}: {output}");
     }
 
@@ -298,15 +299,13 @@ mod tests {
         wrong_variant_owner = { "match value { Other::Inline(b) => b, Other::File(f) => f }" },
     )]
     fn requires_an_exhaustive_write_op_match(input: &str) {
-        assert2::assert!(
-            crate::sendfile_match::expand(input.parse().unwrap()).is_err(),
-            "{input}"
-        );
+        assert2::assert!(expand(input.parse().unwrap()).is_err(), "{input}");
     }
 }
 
 #[cfg(test)]
 mod records_tests {
+    use super::records_payload;
 
     #[yare::parameterized(
         result_error_arm = { "Err (b)" },
@@ -316,7 +315,7 @@ mod records_tests {
         platform_gate = { "target_os = \"dragonfly\"" },
     )]
     fn retains_result_errors_guards_and_portable_alternatives(retained: &str) {
-        let output = crate::sendfile_match::records_payload("match payload { Ok(RecordsPayload::Raw(b) | RecordsPayload::Legacy(b)) | Err(b) => portable(b), #[cfg(feature = \"files\")] Ok(RecordsPayload::FileRegions(r)) if !r.is_empty() => files(r).await, Ok(RecordsPayload::V2(b)) => batches(b), }".parse().unwrap()).unwrap().to_string();
+        let output = records_payload("match payload { Ok(RecordsPayload::Raw(b) | RecordsPayload::Legacy(b)) | Err(b) => portable(b), #[cfg(feature = \"files\")] Ok(RecordsPayload::FileRegions(r)) if !r.is_empty() => files(r).await, Ok(RecordsPayload::V2(b)) => batches(b), }".parse().unwrap()).unwrap().to_string();
         assert2::assert!(output.contains(retained), "{retained}: {output}");
         assert2::assert!(output.matches("target_os = \"linux\"").count() == 1);
     }

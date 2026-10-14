@@ -94,7 +94,10 @@ mod tests {
     use {
         super::*,
         crate::{
-            leader_epoch_checkpoint::test_support::{TempCheckpoint, checkpoint, entry, fresh},
+            leader_epoch_checkpoint::{
+                EpochEntry,
+                test_support::{TempCheckpoint, checkpoint, entry, fresh},
+            },
             test_support::TempPath,
         },
         assert2::check,
@@ -210,7 +213,7 @@ mod tests {
     )]
     fn epoch_and_offset_for_follows_kafka_end_offset_for(
         name: &str,
-        recorded: &[crate::leader_epoch_checkpoint::EpochEntry],
+        recorded: &[EpochEntry],
         requested: i32,
         log_end: i64,
         expected: (LeaderEpoch, Offset),

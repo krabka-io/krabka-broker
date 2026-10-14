@@ -2,7 +2,9 @@
 
 use {
     super::TopicElr,
-    crate::test_support::{finalize_elr_version, partition_elr as elr},
+    crate::test_support::{
+        elr_model_prelude::PartitionElr, finalize_elr_version, partition_elr as elr,
+    },
     assert2::assert,
     krabka_metadata::{
         MetadataImage, MetadataRecord, NodeId, PartitionElrRecord, PartitionRecord,
@@ -41,7 +43,7 @@ fn orders_partition_image() -> MetadataImage {
 fn parse_projects_each_partition_of_the_config_value(
     value: &'static str,
     partition: i32,
-    want: crate::test_support::elr_model_prelude::PartitionElr,
+    want: PartitionElr,
 ) {
     assert2::assert!(TopicElr::parse(value).partition(partition) == want);
 }
@@ -92,7 +94,7 @@ fn of_topic_reads_legacy_elr_until_it_is_migrated() {
     no_elr = { elr(&[], &[]), 1, false },
 )]
 fn a_one_member_last_known_elr_naming_the_recorded_leader_marks_the_partition(
-    state: crate::test_support::elr_model_prelude::PartitionElr,
+    state: PartitionElr,
     recorded_leader: u64,
     want: bool,
 ) {

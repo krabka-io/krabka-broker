@@ -11,7 +11,8 @@ use {
             KraftController,
             controller::test_support::{
                 EngineInDir, await_leader, build, build_engine_only, commit_pending,
-                one_offset_batch, submit_change_with_timeout, topic_record, topic_record_named,
+                one_offset_batch, single_voter_leader_engine, submit_change_with_timeout,
+                submit_on_engine, topic_record, topic_record_named,
             },
             event::Event,
             types::NodeId,
@@ -51,9 +52,9 @@ struct TopicSubmitFixture {
 }
 
 fn topic_submit_fixture(records: &[MetadataRecord]) -> TopicSubmitFixture {
-    let (mut engine, directory) = super::test_support::single_voter_leader_engine();
+    let (mut engine, directory) = single_voter_leader_engine();
     let images = engine.image_tx.subscribe();
-    let mut created = super::test_support::submit_on_engine(&mut engine, records);
+    let mut created = submit_on_engine(&mut engine, records);
     assert!(matches!(created.try_recv(), Ok(Ok(_))));
     let expected_image = engine.image_tx.borrow().clone();
     TopicSubmitFixture {
@@ -119,10 +120,10 @@ async fn assert_rejected_change_and_shutdown(
 
 #[test]
 fn direct_single_voter_submit_applies_image_and_resolves_waiter() {
-    let (mut engine, _dir) = crate::kraft::controller::test_support::single_voter_leader_engine();
+    let (mut engine, _dir) = single_voter_leader_engine();
     assert2::assert!(engine.image.topic("direct").is_none());
 
-    let mut rx = super::test_support::submit_on_engine(&mut engine, &topic_record("direct"));
+    let mut rx = submit_on_engine(&mut engine, &topic_record("direct"));
 
     assert!(matches!(rx.try_recv(), Ok(Ok(_))));
     check!(engine.image.topic("direct").is_some());
@@ -142,7 +143,7 @@ fn guarded_delete_rejects_a_recreated_topic() {
     let delete = MetadataRecord::V1DeleteTopic(DeleteTopicRecord {
         name: "orders".into(),
     });
-    let mut replaced = super::test_support::submit_on_engine(
+    let mut replaced = submit_on_engine(
         &mut engine,
         &[vec![delete.clone()], topic_record_named("orders", 2)].concat(),
     );
@@ -187,10 +188,8 @@ fn guarded_config_rejects_stale_maps_and_accepts_a_fresh_merge() {
                 .collect(),
         })
     };
-    let mut updated = super::test_support::submit_on_engine(
-        &mut engine,
-        &[config(&[over("cleanup.policy", "compact")])],
-    );
+    let mut updated =
+        submit_on_engine(&mut engine, &[config(&[over("cleanup.policy", "compact")])]);
     assert!(matches!(updated.try_recv(), Ok(Ok(_))));
     assert_stale_submit()
         .engine(&mut engine)
@@ -288,11 +287,11 @@ async fn guarded_change_waits_for_no_uncommitted_mutations() {
 
 #[test]
 fn offset_advance_submit_returns_actor_ordered_base() {
-    let (mut engine, _dir) = super::test_support::single_voter_leader_engine();
-    let mut rx = super::test_support::submit_on_engine(&mut engine, &topic_record("topic"));
+    let (mut engine, _dir) = single_voter_leader_engine();
+    let mut rx = submit_on_engine(&mut engine, &topic_record("topic"));
     assert!(matches!(rx.try_recv(), Ok(Ok(_))));
 
-    let mut rx = super::test_support::submit_on_engine(&mut engine, &offset_advance("topic", 3));
+    let mut rx = submit_on_engine(&mut engine, &offset_advance("topic", 3));
     let first = rx.try_recv().expect("first reply").expect("first ok");
     let mut rx = super::test_support::submit_on_engine(&mut engine, &offset_advance("topic", 5));
     let second = rx.try_recv().expect("second reply").expect("second ok");
@@ -310,19 +309,15 @@ fn offset_advance_submit_returns_actor_ordered_base() {
     maximum_count = { i64::MAX },
 )]
 fn offset_advance_submit_rejects_counts_outside_verified_domain(count: i64) {
-    let (mut engine, _dir) = crate::kraft::controller::test_support::single_voter_leader_engine();
+    let (mut engine, _dir) = single_voter_leader_engine();
 
     for records in [topic_record("topic"), offset_advance("topic", 1)] {
-        let mut rx =
-            crate::kraft::controller::test_support::submit_on_engine(&mut engine, &records);
+        let mut rx = submit_on_engine(&mut engine, &records);
         assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
     }
     let log_end = engine.log.log_end_offset();
 
-    let mut rx = crate::kraft::controller::test_support::submit_on_engine(
-        &mut engine,
-        &offset_advance("topic", count),
-    );
+    let mut rx = submit_on_engine(&mut engine, &offset_advance("topic", count));
 
     assert2::assert!(matches!(
         rx.try_recv(),
@@ -408,10 +403,10 @@ async fn break_glass_consume_is_exact_and_single_flight_until_commit() {
     let (ctrl, _dir) = super::test_support::three_voter_leader().await;
     let proposal = break_glass_proposal(0x271, BreakGlassAction::DeleteRecords, "orders-3", 1_000);
 
-    let create = super::test_support::spawn_submit(
-        &ctrl,
-        vec![MetadataRecord::V1BreakGlassProposal(proposal.clone())],
-    );
+    let create =
+        super::test_support::spawn_submit(&ctrl, vec![MetadataRecord::V1BreakGlassProposal(
+            proposal.clone(),
+        )]);
     acknowledge_tip(&ctrl, NodeId(2)).await;
     create.await.unwrap().unwrap();
 
@@ -439,11 +434,11 @@ async fn break_glass_consume_is_exact_and_single_flight_until_commit() {
         consumed_at_ms: i64::MAX,
         ..proposal.clone()
     };
-    let first = super::test_support::pending_submission(
-        &ctrl,
-        vec![MetadataRecord::V1BreakGlassProposal(consumed.clone())],
-    )
-    .await;
+    let first =
+        super::test_support::pending_submission(&ctrl, vec![MetadataRecord::V1BreakGlassProposal(
+            consumed.clone(),
+        )])
+        .await;
 
     let concurrent = tokio::time::timeout(
         StdDuration::from_secs(1),
@@ -482,11 +477,11 @@ async fn a_new_leader_refuses_a_consume_until_its_own_epoch_commits() {
     let (ctrl, _dir) = super::test_support::three_voter_leader().await;
     commit_pending(&ctrl, NodeId(2)).await;
     let proposal = break_glass_proposal(0x591, BreakGlassAction::DeleteTopic, "doomed", i64::MAX);
-    let create = super::test_support::pending_submission(
-        &ctrl,
-        vec![MetadataRecord::V1BreakGlassProposal(proposal.clone())],
-    )
-    .await;
+    let create =
+        super::test_support::pending_submission(&ctrl, vec![MetadataRecord::V1BreakGlassProposal(
+            proposal.clone(),
+        )])
+        .await;
     commit_pending(&ctrl, NodeId(2)).await;
     create.await.unwrap().unwrap();
 
@@ -577,11 +572,11 @@ async fn topic_freeze_replacement_is_newer_only_and_single_flight_until_commit()
     assert2::check!(ctrl.quorum_state().await.unwrap().log_end_offset == log_end);
 
     let replacement = freeze("orders", i64::MAX, true);
-    let replace = super::test_support::pending_submission(
-        &ctrl,
-        vec![MetadataRecord::V1TopicFreeze(replacement.clone())],
-    )
-    .await;
+    let replace =
+        super::test_support::pending_submission(&ctrl, vec![MetadataRecord::V1TopicFreeze(
+            replacement.clone(),
+        )])
+        .await;
 
     let concurrent = tokio::time::timeout(
         StdDuration::from_secs(1),
@@ -640,11 +635,11 @@ async fn delegation_token_mutation_is_generation_bound_and_retry_idempotent() {
     let (ctrl, _dir) = super::test_support::three_voter_leader().await;
     commit_pending(&ctrl, NodeId(2)).await;
 
-    let create = super::test_support::pending_submission(
-        &ctrl,
-        vec![MetadataRecord::V1DelegationToken(original.clone())],
-    )
-    .await;
+    let create =
+        super::test_support::pending_submission(&ctrl, vec![MetadataRecord::V1DelegationToken(
+            original.clone(),
+        )])
+        .await;
     commit_pending(&ctrl, NodeId(2)).await;
     create.await.unwrap().unwrap();
 

@@ -127,7 +127,7 @@ mod tests {
     )]
     fn supported_features_follow_kafkas_minimums_and_alter_level_zero(
         api_version: i16,
-        unstable: crate::UnstableFeatureVersions,
+        unstable: UnstableFeatureVersions,
         expected: Vec<SupportedFeatureKey>,
     ) {
         // `share.version` 2 (KIP-1191) is trunk's, so only the flag advertises it.

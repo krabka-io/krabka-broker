@@ -180,13 +180,10 @@ fn truncate_start_of(entries: &mut Vec<EpochEntry>, start_offset: Offset) -> boo
         // The one entry at the new start is put back unchanged.
         return false;
     }
-    entries.splice(
-        ..removed,
-        [EpochEntry {
-            epoch: newest_removed,
-            start_offset,
-        }],
-    );
+    entries.splice(..removed, [EpochEntry {
+        epoch: newest_removed,
+        start_offset,
+    }]);
     true
 }
 
@@ -195,8 +192,9 @@ mod tests {
     use {
         super::*,
         crate::{
-            leader_epoch_checkpoint::test_support::{
-                TempCheckpoint, check_persisted, checkpoint, entry, fresh,
+            leader_epoch_checkpoint::{
+                EpochEntry,
+                test_support::{TempCheckpoint, check_persisted, checkpoint, entry, fresh},
             },
             test_support::TempPath,
         },
@@ -270,10 +268,10 @@ mod tests {
     )]
     fn assign_follows_kafka_leader_epoch_file_cache_assign(
         name: &str,
-        recorded: &[crate::leader_epoch_checkpoint::EpochEntry],
+        recorded: &[EpochEntry],
         epoch: i32,
         start: i64,
-        expected: &[crate::leader_epoch_checkpoint::EpochEntry],
+        expected: &[EpochEntry],
     ) {
         let TempCheckpoint {
             dir: _d,
@@ -325,9 +323,9 @@ mod tests {
     )]
     fn truncate_from_start_follows_kafka_leader_epoch_file_cache(
         name: &str,
-        recorded: &[crate::leader_epoch_checkpoint::EpochEntry],
+        recorded: &[EpochEntry],
         start: i64,
-        expected: &[crate::leader_epoch_checkpoint::EpochEntry],
+        expected: &[EpochEntry],
     ) {
         let TempCheckpoint {
             dir: _d,

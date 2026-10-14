@@ -361,7 +361,12 @@ pub(super) fn apply_listener_settings(
 mod tests {
     use {
         crate::{
-            config::BrokerConfig,
+            api_catalog::UnstableApiVersions,
+            config::{BrokerConfig, TopicCreationOrigins},
+            coordinator::unified::{
+                config::ConsumerGroupMigrationPolicy,
+                streams::description::TopologyDescriptionPlugin,
+            },
             file_config::{
                 FileConfig, FileConfigError,
                 test_support::{configured, configured_feature, configured_unwrap_parse},
@@ -508,13 +513,13 @@ connections_max_idle = "5s"
         neither_named = {
             "neither named",
             "broker_id = 0\n",
-            Ok((1, 1, crate::config::TopicCreationOrigins::default())),
+            Ok((1, 1, TopicCreationOrigins::default())),
         },
         both_as_properties = {
             "both as properties",
             "[server_properties]\n\"num.partitions\" = \"6\"\n\
              \"default.replication.factor\" = \"3\"\n",
-            Ok((6, 3, crate::config::TopicCreationOrigins {
+            Ok((6, 3, TopicCreationOrigins {
                 num_partitions: true,
                 default_replication_factor: true,
             })),
@@ -523,7 +528,7 @@ connections_max_idle = "5s"
             "a dedicated key wins over the property",
             "[runtime]\nnum_partitions = 4\n\
              [server_properties]\n\"num.partitions\" = \"6\"\n",
-            Ok((4, 1, crate::config::TopicCreationOrigins {
+            Ok((4, 1, TopicCreationOrigins {
                 num_partitions: true,
                 default_replication_factor: false,
             })),
@@ -542,10 +547,8 @@ connections_max_idle = "5s"
     fn apply_to_reads_the_topic_creation_defaults_from_server_properties(
         label: &str,
         source: &str,
-        expected: Result<(i32, i16, crate::config::TopicCreationOrigins), &str>,
+        expected: Result<(i32, i16, TopicCreationOrigins), &str>,
     ) {
-        use crate::config::BrokerConfig;
-
         let file: FileConfig = toml::from_str(source).expect("parse");
         let mut config = BrokerConfig::default();
         let result = file
@@ -666,7 +669,7 @@ connections_max_idle = "5s"
             "not named",
             "broker_id = 0\n",
             Ok(Supplied {
-                value: crate::coordinator::unified::config::ConsumerGroupMigrationPolicy::Bidirectional,
+                value: ConsumerGroupMigrationPolicy::Bidirectional,
                 supplied: false,
             }),
         },
@@ -674,7 +677,7 @@ connections_max_idle = "5s"
             "disabled",
             "[server_properties]\n\"group.consumer.migration.policy\" = \"disabled\"\n",
             Ok(Supplied {
-                value: crate::coordinator::unified::config::ConsumerGroupMigrationPolicy::Disabled,
+                value: ConsumerGroupMigrationPolicy::Disabled,
                 supplied: true,
             }),
         },
@@ -682,7 +685,7 @@ connections_max_idle = "5s"
             "upper case",
             "[server_properties]\n\"group.consumer.migration.policy\" = \"DOWNGRADE\"\n",
             Ok(Supplied {
-                value: crate::coordinator::unified::config::ConsumerGroupMigrationPolicy::Downgrade,
+                value: ConsumerGroupMigrationPolicy::Downgrade,
                 supplied: true,
             }),
         },
@@ -690,7 +693,7 @@ connections_max_idle = "5s"
             "mixed case",
             "[server_properties]\n\"group.consumer.migration.policy\" = \"Upgrade\"\n",
             Ok(Supplied {
-                value: crate::coordinator::unified::config::ConsumerGroupMigrationPolicy::Upgrade,
+                value: ConsumerGroupMigrationPolicy::Upgrade,
                 supplied: true,
             }),
         },
@@ -703,10 +706,7 @@ connections_max_idle = "5s"
     fn the_consumer_group_migration_policy_is_read_from_server_properties(
         label: &str,
         source: &str,
-        expected: Result<
-            Supplied<crate::coordinator::unified::config::ConsumerGroupMigrationPolicy>,
-            String,
-        >,
+        expected: Result<Supplied<ConsumerGroupMigrationPolicy>, String>,
     ) {
         let result = file_outcome(source, |cfg| Supplied {
             value: cfg.next_gen_consumer_group.migration_policy,
@@ -824,15 +824,15 @@ connections_max_idle = "5s"
     #[yare::parameterized(
         default_disabled = {
             "broker_id = 0",
-            Ok(crate::api_catalog::UnstableApiVersions::Disabled),
+            Ok(UnstableApiVersions::Disabled),
         },
         enabled = {
             "[server_properties]\n\"unstable.api.versions.enable\" = \"true\"\n",
-            Ok(crate::api_catalog::UnstableApiVersions::Enabled),
+            Ok(UnstableApiVersions::Enabled),
         },
         uppercase_false = {
             "[server_properties]\n\"unstable.api.versions.enable\" = \"FALSE\"\n",
-            Ok(crate::api_catalog::UnstableApiVersions::Disabled),
+            Ok(UnstableApiVersions::Disabled),
         },
         invalid_yes = {
             "[server_properties]\n\"unstable.api.versions.enable\" = \"yes\"\n",
@@ -841,7 +841,7 @@ connections_max_idle = "5s"
     )]
     fn apply_to_reads_unstable_api_versions_enable_from_server_properties(
         source: &str,
-        expected: Result<crate::api_catalog::UnstableApiVersions, String>,
+        expected: Result<UnstableApiVersions, String>,
     ) {
         let applied = configured_feature(source, |cfg| cfg.features.unstable_api_versions);
         assert2::assert!(applied == expected, "{source}");
@@ -879,10 +879,10 @@ connections_max_idle = "5s"
     /// by default, Kafka's in-memory plugin when it names that class, and
     /// refused for any class krabka cannot load.
     #[yare::parameterized(
-        default = { "broker_id = 0", Ok(crate::coordinator::unified::streams::description::TopologyDescriptionPlugin::None) },
+        default = { "broker_id = 0", Ok(TopologyDescriptionPlugin::None) },
         in_memory = {
             "[server_properties]\n\"group.streams.topology.description.plugin.class\" = \"org.apache.kafka.server.streams.InMemoryTopologyDescriptionPlugin\"\n",
-            Ok(crate::coordinator::unified::streams::description::TopologyDescriptionPlugin::InMemory),
+            Ok(TopologyDescriptionPlugin::InMemory),
         },
         unsupported_plugin = {
             "[server_properties]\n\"group.streams.topology.description.plugin.class\" = \"com.example.JdbcTopologyStore\"\n",
@@ -891,10 +891,7 @@ connections_max_idle = "5s"
     )]
     fn apply_to_reads_the_topology_description_plugin_from_server_properties(
         source: &str,
-        expected: Result<
-            crate::coordinator::unified::streams::description::TopologyDescriptionPlugin,
-            String,
-        >,
+        expected: Result<TopologyDescriptionPlugin, String>,
     ) {
         let file: FileConfig = toml::from_str(source).unwrap();
         let mut config = BrokerConfig::default();

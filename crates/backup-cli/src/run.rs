@@ -941,9 +941,11 @@ async fn read_manifest(store: &Archive, id: &str) -> Result<Manifest, BackupErro
 mod tests {
     use {
         super::{
-            BackupError, DISKLESS_WAL_INDEX, FileEd25519Signer, GROUP_OFFSETS, MANIFEST,
-            METADATA_CHECKPOINT, RLMM_SNAPSHOT, Sha256Digest, capture, list, restore_offsets,
-            verify, verify_offsets_boundary,
+            BackupError, CAPTURE_ROOT, DISKLESS_WAL_INDEX, FileEd25519Signer, GROUP_OFFSETS,
+            MANIFEST, MAX_SNAPSHOT_BYTES, METADATA_CHECKPOINT, RLMM_SNAPSHOT,
+            RLMM_SNAPSHOT_RELATIVE, Sha256Digest, artifact_byte_limit, capture, check_capture_size,
+            list, newest_metadata_checkpoint, restore_offsets, upload_capped, verify,
+            verify_offsets_boundary,
         },
         crate::{
             archive::{Archive, ArchiveArgs},
@@ -979,11 +981,11 @@ mod tests {
         diskless_wal_index = { DISKLESS_WAL_INDEX, 256 * 1024 * 1024 },
     )]
     fn capture_size_limits_match_readers_at_the_boundary(name: &str, expected: u64) {
-        let limit = crate::run::artifact_byte_limit(name);
+        let limit = artifact_byte_limit(name);
         check!(limit == expected);
-        check!(crate::run::check_capture_size(name, limit, limit).is_ok());
-        check!(crate::run::check_capture_size(name, limit + 1, limit).is_err());
-        check!(crate::run::check_capture_size(name, u64::MAX, limit).is_err());
+        check!(check_capture_size(name, limit, limit).is_ok());
+        check!(check_capture_size(name, limit + 1, limit).is_err());
+        check!(check_capture_size(name, u64::MAX, limit).is_err());
     }
 
     #[yare::parameterized(
@@ -1011,7 +1013,7 @@ mod tests {
             .put_new(&capture_key(id, "earlier"), b"valid".to_vec())
             .await
             .unwrap();
-        let result = crate::run::upload_capped(&store, id, name, "node", vec![b'x'; size], 8).await;
+        let result = upload_capped(&store, id, name, "node", vec![b'x'; size], 8).await;
         if expected_success {
             check!(
                 result.unwrap()
@@ -1053,15 +1055,15 @@ mod tests {
     async fn capture_rejects_oversized_local_snapshots_without_committing(name: &str) {
         let node = node_with_both_inputs();
         let path = if name == RLMM_SNAPSHOT {
-            node.path().join(crate::run::RLMM_SNAPSHOT_RELATIVE)
+            node.path().join(RLMM_SNAPSHOT_RELATIVE)
         } else {
-            crate::run::newest_metadata_checkpoint(node.path()).unwrap()
+            newest_metadata_checkpoint(node.path()).unwrap()
         };
         std::fs::OpenOptions::new()
             .write(true)
             .open(path)
             .unwrap()
-            .set_len(crate::run::MAX_SNAPSHOT_BYTES + 1)
+            .set_len(MAX_SNAPSHOT_BYTES + 1)
             .unwrap();
         let ArchiveFixture {
             root: _root,
@@ -1070,10 +1072,7 @@ mod tests {
         } = archive_fixture();
         let error = capture(Some(node.path()), None, &args).await.unwrap_err();
         check!(error.to_string().contains(name));
-        let ids = store
-            .child_directories(crate::run::CAPTURE_ROOT)
-            .await
-            .unwrap();
+        let ids = store.child_directories(CAPTURE_ROOT).await.unwrap();
         check!(ids.len() == usize::from(name == METADATA_CHECKPOINT));
         for id in ids {
             check!(store.get(&capture_key(&id, RLMM_SNAPSHOT)).await.unwrap() == RLMM_BYTES);

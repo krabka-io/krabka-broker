@@ -120,7 +120,7 @@ mod tests {
     use {
         super::*,
         crate::{
-            index::{IndexFixture, IndexSeed},
+            index::{IndexFixture, IndexSeed, index_fixture},
             test_support::TempPath,
         },
         assert2::check,
@@ -130,23 +130,20 @@ mod tests {
     krabka_macros::index_seed_helpers!(OffsetIndex, u32);
 
     fn reference_index() -> IndexFixture<OffsetIndex> {
-        populated_index(
-            "00000000000000000000.index",
-            &[
-                IndexSeed {
-                    key: 0,
-                    coordinate: 0,
-                },
-                IndexSeed {
-                    key: 100,
-                    coordinate: 4096,
-                },
-                IndexSeed {
-                    key: 200,
-                    coordinate: 8192,
-                },
-            ],
-        )
+        populated_index("00000000000000000000.index", &[
+            IndexSeed {
+                key: 0,
+                coordinate: 0,
+            },
+            IndexSeed {
+                key: 100,
+                coordinate: 4096,
+            },
+            IndexSeed {
+                key: 200,
+                coordinate: 8192,
+            },
+        ])
     }
 
     fn assert_entry_metadata(index: &OffsetIndex, count: usize, last: Option<OffsetIndexEntry>) {
@@ -210,7 +207,7 @@ mod tests {
             dir: _dir,
             path: _path,
             index: idx,
-        } = crate::index::index_fixture("00000000000000000000.index", OffsetIndex::open);
+        } = index_fixture("00000000000000000000.index", OffsetIndex::open);
         assert2::assert!(idx.lookup(offset) == 0);
     }
 
@@ -221,19 +218,16 @@ mod tests {
         preallocated = { true },
     )]
     fn persisted_entries_ignore_zero_padding(padded: bool) {
-        let TempPath { dir: _dir, path } = written_index(
-            "00000000000000000000.index",
-            &[
-                IndexSeed {
-                    key: 0,
-                    coordinate: 0,
-                },
-                IndexSeed {
-                    key: 100,
-                    coordinate: 4096,
-                },
-            ],
-        );
+        let TempPath { dir: _dir, path } = written_index("00000000000000000000.index", &[
+            IndexSeed {
+                key: 0,
+                coordinate: 0,
+            },
+            IndexSeed {
+                key: 100,
+                coordinate: 4096,
+            },
+        ]);
         if padded {
             let mut file = OpenOptions::new().append(true).open(&path).unwrap();
             file.write_all(&[0u8; OFFSET_ENTRY_SIZE * 2]).unwrap();
@@ -262,19 +256,16 @@ mod tests {
             dir: _dir,
             path: _path,
             index: idx,
-        } = populated_index(
-            "00000000000000000000.index",
-            &[
-                IndexSeed {
-                    key: 4,
-                    coordinate: 0,
-                },
-                IndexSeed {
-                    key: 9,
-                    coordinate: 50,
-                },
-            ],
-        );
+        } = populated_index("00000000000000000000.index", &[
+            IndexSeed {
+                key: 4,
+                coordinate: 0,
+            },
+            IndexSeed {
+                key: 9,
+                coordinate: 50,
+            },
+        ]);
         check!(idx.floor_entry(target) == want, "case {name}");
         check!(
             idx.lookup(target) == want.map_or(0, |entry| entry.position),

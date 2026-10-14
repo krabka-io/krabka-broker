@@ -39,14 +39,10 @@ impl AclCache {
     }
 
     #[must_use]
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
+    pub fn len(&self) -> usize { self.entries.len() }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
+    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
 }
 
 impl AclSource for AclCache {
@@ -66,9 +62,7 @@ impl AclSource for AclCache {
         Box::new(self.entries.iter().filter(move |e| e.resource_type == rt))
     }
 
-    fn cidr_hosts_supported(&self) -> bool {
-        self.cidr_hosts_supported
-    }
+    fn cidr_hosts_supported(&self) -> bool { self.cidr_hosts_supported }
 }
 
 #[cfg(test)]
@@ -76,7 +70,7 @@ mod tests {
 
     use {
         super::*,
-        crate::test_support::acl as entry,
+        crate::{AuthorizationResult, test_support::acl as entry},
         krabka_metadata::{AclOperation, MetadataImage, MetadataRecord, ResourceType},
         uuid::Uuid,
     };
@@ -159,15 +153,15 @@ mod tests {
     /// comparison below the level, where the range applies to no peer, and a
     /// range at or above it. A cache that is not told compares as text.
     #[yare::parameterized(
-        unfinalized_version = { None, Some(false), crate::AuthorizationResult::Deny },
-        below_range_level = { Some(krabka_metadata::metadata_version::CIDR_ACL_MIN_LEVEL - 1), Some(false), crate::AuthorizationResult::Deny },
-        minimum_range_level = { Some(krabka_metadata::metadata_version::CIDR_ACL_MIN_LEVEL), Some(true), crate::AuthorizationResult::Allow },
-        unconfigured_cache = { None, None, crate::AuthorizationResult::Deny },
+        unfinalized_version = { None, Some(false), AuthorizationResult::Deny },
+        below_range_level = { Some(krabka_metadata::metadata_version::CIDR_ACL_MIN_LEVEL - 1), Some(false), AuthorizationResult::Deny },
+        minimum_range_level = { Some(krabka_metadata::metadata_version::CIDR_ACL_MIN_LEVEL), Some(true), AuthorizationResult::Allow },
+        unconfigured_cache = { None, None, AuthorizationResult::Deny },
     )]
     fn a_cache_reads_a_slash_host_as_the_cluster_does(
         level: Option<i16>,
         cache_support: Option<bool>,
-        expected: crate::AuthorizationResult,
+        expected: AuthorizationResult,
     ) {
         use {
             crate::{AuthorizationRequest, Authorizer, SimpleAclAuthorizer},

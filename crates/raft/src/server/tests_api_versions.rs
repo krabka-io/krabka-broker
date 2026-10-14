@@ -5,10 +5,13 @@
 
 use {
     super::{
-        ConnectionContext, ListenerApiVersions, handle_conn,
+        ConnectionContext, ListenerApiVersions, Unstable, handle_conn,
         test_support::{read_frame, single_voter_engine},
     },
-    crate::{AllowAllGrants, ControllerApiVersions as _, ListenerLimits, kraft::KraftController},
+    crate::{
+        AllowAllGrants, ControllerApiVersions as _, ListenerLimits, UnstableApiVersions,
+        kraft::KraftController,
+    },
     assert2::check,
     krabka_protocol::{
         Decode, Encode,
@@ -86,26 +89,26 @@ fn api_version_cases(version_five: ApiVersionCase) -> [ApiVersionCase; 7] {
 /// one the handshake gives before authentication.
 #[yare::parameterized(
     stable = {
-        crate::UnstableApiVersions::Disabled,
+        UnstableApiVersions::Disabled,
         4,
         api_version_case(5, request_body(5, "krabka"), 0, 35, false)
     },
     unstable = {
-        crate::UnstableApiVersions::Enabled,
+        UnstableApiVersions::Enabled,
         5,
         api_version_case(5, request_body(5, "krabka"), 5, 0, true)
     },
 )]
 #[test_macro(tokio::test)]
 async fn controller_listener_answers_api_versions_refusals_and_keeps_the_connection(
-    api_versions: crate::UnstableApiVersions,
+    api_versions: UnstableApiVersions,
     served_max: i16,
     version_five: ApiVersionCase,
 ) {
     // With unstable api versions disabled the listener serves Kafka 4.3.1's
     // v0-v4, so v5 is answered the way that release answers it.
     let rows = api_version_cases(version_five);
-    let unstable = crate::server::Unstable { api_versions };
+    let unstable = Unstable { api_versions };
     let (engine, _dir) = single_voter_engine();
     let listener_api_versions = ListenerApiVersions {
         engine: engine.clone(),

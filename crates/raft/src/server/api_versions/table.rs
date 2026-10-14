@@ -65,7 +65,10 @@ pub(in crate::server) fn flexible_min(api_key: i16) -> Option<i16> {
 #[cfg(test)]
 mod tests {
     use {
-        super::*,
+        super::{
+            super::{ApiVersionsView, api_versions_response_body},
+            *,
+        },
         crate::{
             UnstableApiVersions,
             kraft::{
@@ -207,15 +210,12 @@ mod tests {
         // the vendored range, except `ApiVersions`, whose KIP-1242 v5 is
         // trunk's.
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let body = crate::server::api_versions::api_versions_response_body(
-            4,
-            crate::server::api_versions::ApiVersionsView {
-                image: &image,
-                metadata_offset: -1,
-                admin_router: None,
-                unstable,
-            },
-        );
+        let body = api_versions_response_body(4, ApiVersionsView {
+            image: &image,
+            metadata_offset: -1,
+            admin_router: None,
+            unstable,
+        });
         let response = ApiVersionsResponse::decode(&mut &body[..], 4).expect("decode response");
         assert2::assert!(
             response.api_keys == expected_entries(api_versions_max),
