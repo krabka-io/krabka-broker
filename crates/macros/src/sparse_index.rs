@@ -209,9 +209,15 @@ mod tests {
         unknown_kind = { "#[sparse_index(kind = \"stamp\")] struct OtherKind {}" },
         numeric_kind = { "#[sparse_index(kind = 1)] struct WrongType {}" },
         tuple_struct = { "#[sparse_index(kind = \"time\")] struct Tuple(File);" },
-        missing_file = { "#[sparse_index(kind = \"offset\")] struct NoFile { io: Arc<dyn LogIo>, entries: Vec<IndexEntry<u32, u32>> }" },
-        missing_io = { "#[sparse_index(kind = \"time\")] struct NoIo { file: File, entries: Vec<IndexEntry<i64, u32>> }" },
-        missing_entries = { "#[sparse_index(kind = \"offset\")] struct NoEntries { file: File, io: Arc<dyn LogIo> }" },
+        missing_file = {
+            "#[sparse_index(kind = \"offset\")] struct NoFile { io: Arc<dyn LogIo>, entries: Vec<IndexEntry<u32, u32>> }",
+        },
+        missing_io = {
+            "#[sparse_index(kind = \"time\")] struct NoIo { file: File, entries: Vec<IndexEntry<i64, u32>> }",
+        },
+        missing_entries = {
+            "#[sparse_index(kind = \"offset\")] struct NoEntries { file: File, io: Arc<dyn LogIo> }",
+        },
     )]
     fn rejects_invalid_kind_layout_and_absent_fields(source: &str) {
         let declaration: ItemStruct = moxy::parse!({ source }).unwrap();

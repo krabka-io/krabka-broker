@@ -213,9 +213,15 @@ mod tests {
         unknown_policy = { "Request(self) { required(); optional(); unknown; }" },
         extra_empty_block = { "Request(self) { required(); optional(); extra {} }" },
         extra_list = { "Request(self) { required(); optional(); extra [self.names.iter()] }" },
-        extra_offset_arg = { "Request(self) { required(); optional(); offset_metadata(topics, extra); }" },
-        offset_and_extra = { "Request(self) { required(); optional(); offset_metadata(topics); extra { self.names.iter() } }" },
-        duplicate_request = { "Request(self) { required(); optional(); } Request(self) { required(); optional(); }" },
+        extra_offset_arg = {
+            "Request(self) { required(); optional(); offset_metadata(topics, extra); }",
+        },
+        offset_and_extra = {
+            "Request(self) { required(); optional(); offset_metadata(topics); extra { self.names.iter() } }",
+        },
+        duplicate_request = {
+            "Request(self) { required(); optional(); } Request(self) { required(); optional(); }",
+        },
     )]
     fn refuses_invalid_rows_receivers_fields_and_traversal_policies(input: &str) {
         assert2::assert!(requests(&input.parse().unwrap()).is_err(), "{input}");

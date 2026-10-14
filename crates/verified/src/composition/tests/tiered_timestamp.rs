@@ -23,7 +23,12 @@ proptest! {
     remote_match_is_earlier = { (2, 1_600), (7, 7_000), 6, Some((2, 1_600)) },
     exclusive_bound = { (7, 7_000), (2, 1_600), 2, None },
     same_offset = { (2, 1_600), (2, 1_600), 6, Some((2, 1_600)) },
-    maximum_offset_is_exclusive = { (i64::MAX, i64::MAX), (i64::MAX - 1, i64::MAX), i64::MAX, Some((i64::MAX - 1, i64::MAX)) },
+    maximum_offset_is_exclusive = {
+        (i64::MAX, i64::MAX),
+        (i64::MAX - 1, i64::MAX),
+        i64::MAX,
+        Some((i64::MAX - 1, i64::MAX)),
+    },
 )]
 fn a_later_remote_hit_cannot_hide_a_visible_local_match(
     remote: (i64, i64),

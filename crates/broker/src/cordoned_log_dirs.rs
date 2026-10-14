@@ -332,27 +332,38 @@ mod tests {
         whitespace = { "  ", Ok(vec![]) },
         one_directory = { "/d1", Ok(vec![PathBuf::from("/d1")]) },
         trimmed_ordered_directories = {
-            "/d2 , /d1", Ok(vec![PathBuf::from("/d1"), PathBuf::from("/d2")])
+            "/d2 , /d1",
+            Ok(vec![PathBuf::from("/d1"), PathBuf::from("/d2")]),
         },
         duplicate_directory = { "/d1,/d1", Ok(vec![PathBuf::from("/d1")]) },
         wildcard = { "*", Ok(vec![PathBuf::from("/d1"), PathBuf::from("/d2")]) },
         trailing_empty_entry = {
-            "/d1,", Err("Configuration 'cordoned.log.dirs' values must not be empty.".to_owned())
+            "/d1,",
+            Err("Configuration 'cordoned.log.dirs' values must not be empty.".to_owned()),
         },
         wildcard_with_directory = {
             "*,/d1",
-            Err("requirement failed: When cordoned.log.dirs is set to *, it must not \
-                 contain other values".to_owned())
+            Err(
+                "requirement failed: When cordoned.log.dirs is set to *, it must not \
+                         contain other values"
+                    .to_owned(),
+            ),
         },
         missing_directory = {
             "/nope",
-            Err("requirement failed: All entries in cordoned.log.dirs must be present in \
-                 log.dirs or log.dir. Missing entries : /nope".to_owned())
+            Err(
+                "requirement failed: All entries in cordoned.log.dirs must be present in \
+                         log.dirs or log.dir. Missing entries : /nope"
+                    .to_owned(),
+            ),
         },
         multiple_missing_directories = {
             "/x,/d1,/y",
-            Err("requirement failed: All entries in cordoned.log.dirs must be present in \
-                 log.dirs or log.dir. Missing entries : /x, /y".to_owned())
+            Err(
+                "requirement failed: All entries in cordoned.log.dirs must be present in \
+                         log.dirs or log.dir. Missing entries : /x, /y"
+                    .to_owned(),
+            ),
         },
     )]
     fn values_resolve_as_kafka_validates_them(value: &str, want: Result<Vec<PathBuf>, String>) {

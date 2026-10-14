@@ -423,108 +423,107 @@ mod tests {
         context_metadata = {
             "context: Metadata;",
             format!(
-                    "{signature} {{
-                        Box::pin(::tracing::Instrument::instrument(
-                            async move {{
-                                (crate::handlers::metadata::handle(broker, version, body, ctx))
-                                    .await{ERROR_EVENT}
-                            }},
-                            ::tracing::info_span!(\"handle_metadata\", api = \"Metadata\", version,
-                                req_bytes = body.len(),),
-                        ))
-                    }}
-                    {registration}",
-                    signature = context_signature("metadata"),
-                    registration = registration("context", "Metadata", "metadata"),
-                )
+                "{signature} {{
+                                Box::pin(::tracing::Instrument::instrument(
+                                    async move {{
+                                        (crate::handlers::metadata::handle(broker, version, body, ctx))
+                                            .await{ERROR_EVENT}
+                                    }},
+                                    ::tracing::info_span!(\"handle_metadata\", api = \"Metadata\", version,
+                                        req_bytes = body.len(),),
+                                ))
+                            }}
+                            {registration}",
+                signature = context_signature("metadata"),
+                registration = registration("context", "Metadata", "metadata"),
+            ),
         },
         sync_context_describe_configs = {
             "sync_context: DescribeConfigs => x::describe;",
-                format!(
-                    "{signature} {{
-                        let span = ::tracing::info_span!(\"handle_describe_configs\",
-                            api = \"DescribeConfigs\", version, req_bytes = body.len(),);
-                        let _entered = span.enter();
-                        Box::pin(::std::future::ready(
-                            (x::describe(broker, version, body, ctx)){ERROR_EVENT},
-                        ))
-                    }}
-                    {registration}",
-                    signature = context_signature("describe_configs"),
-                    registration = registration("context", "DescribeConfigs", "describe_configs"),
-                )
+            format!(
+                "{signature} {{
+                                let span = ::tracing::info_span!(\"handle_describe_configs\",
+                                    api = \"DescribeConfigs\", version, req_bytes = body.len(),);
+                                let _entered = span.enter();
+                                Box::pin(::std::future::ready(
+                                    (x::describe(broker, version, body, ctx)){ERROR_EVENT},
+                                ))
+                            }}
+                            {registration}",
+                signature = context_signature("describe_configs"),
+                registration = registration("context", "DescribeConfigs", "describe_configs"),
+            ),
         },
         typed_list_groups = {
             "typed: ListGroups;",
-                format!(
-                    "{signature} {{
-                        Box::pin(::tracing::Instrument::instrument(
-                            async move {{
-                                (async move {{
+            format!(
+                "{signature} {{
+                                Box::pin(::tracing::Instrument::instrument(
+                                    async move {{
+                                        (async move {{
+                                            let mut cur = body;
+                                            let req = {{
+                                                use krabka_protocol::Decode as _;
+                                                {decode}
+                                            }};
+                                            {response}
+                                        }}).await{ERROR_EVENT}
+                                    }},
+                                    ::tracing::info_span!(\"handle_list_groups\", api = \"ListGroups\",
+                                        version,),
+                                ))
+                            }}
+                            {registration}",
+                signature = context_signature("list_groups"),
+                decode = decode("list_groups", "ListGroupsRequest"),
+                response = async_typed_handler_response("crate::handlers::list_groups::handle",),
+                registration = registration("context", "ListGroups", "list_groups"),
+            ),
+        },
+        typed_own_span_update_features = {
+            "typed_own_span: UpdateFeatures;",
+            format!(
+                "{signature} {{
+                                Box::pin(async move {{
                                     let mut cur = body;
                                     let req = {{
                                         use krabka_protocol::Decode as _;
                                         {decode}
                                     }};
-                                    {response}
-                                }}).await{ERROR_EVENT}
-                            }},
-                            ::tracing::info_span!(\"handle_list_groups\", api = \"ListGroups\",
-                                version,),
-                        ))
-                    }}
-                    {registration}",
-                    signature = context_signature("list_groups"),
-                    decode = decode("list_groups", "ListGroupsRequest"),
-                    response =
-                        async_typed_handler_response("crate::handlers::list_groups::handle",),
-                    registration = registration("context", "ListGroups", "list_groups"),
-                )
-        },
-        typed_own_span_update_features = {
-            "typed_own_span: UpdateFeatures;",
-                format!(
-                    "{signature} {{
-                        Box::pin(async move {{
-                            let mut cur = body;
-                            let req = {{
-                                use krabka_protocol::Decode as _;
-                                {decode}
-                            }};
-                            let resp = crate::handlers::update_features::handle(
-                                broker, req, version, ctx).await?;
-                            crate::handlers::encode_response(&resp, version)
-                        }})
-                    }}
-                    {registration}",
-                    signature = context_signature("update_features"),
-                    decode = decode("update_features", "UpdateFeaturesRequest"),
-                    registration = registration("context", "UpdateFeatures", "update_features"),
-                )
+                                    let resp = crate::handlers::update_features::handle(
+                                        broker, req, version, ctx).await?;
+                                    crate::handlers::encode_response(&resp, version)
+                                }})
+                            }}
+                            {registration}",
+                signature = context_signature("update_features"),
+                decode = decode("update_features", "UpdateFeaturesRequest"),
+                registration = registration("context", "UpdateFeatures", "update_features"),
+            ),
         },
         typed_group_heartbeat = {
             "typed_group: Heartbeat;",
-                format!(
-                    "{signature} {{
-                        Box::pin(::tracing::Instrument::instrument(
-                            async move {{
-                                (async move {{
-                                    let mut cur = body;
-                                    let req = crate::handlers::decode_group_request::<
-                                        krabka_protocol::owned::heartbeat_request::HeartbeatRequest,
-                                    >(&mut cur, version)?;
-                                    {response}
-                                }}).await{ERROR_EVENT}
-                            }},
-                            ::tracing::info_span!(\"handle_heartbeat\", api = \"Heartbeat\",
-                                version,),
-                        ))
-                    }}
-                    {registration}",
-                    signature = context_signature("heartbeat"),
-                    response = async_typed_handler_response("crate::handlers::heartbeat::handle"),
-                    registration = registration("context", "Heartbeat", "heartbeat"),
-                )
+            format!(
+                "{signature} {{
+                                Box::pin(::tracing::Instrument::instrument(
+                                    async move {{
+                                        (async move {{
+                                            let mut cur = body;
+                                            let req = crate::handlers::decode_group_request::<
+                                                krabka_protocol::owned::heartbeat_request::HeartbeatRequest,
+                                            >(&mut cur, version)?;
+                                            {response}
+                                        }}).await{ERROR_EVENT}
+                                    }},
+                                    ::tracing::info_span!(\"handle_heartbeat\", api = \"Heartbeat\",
+                                        version,),
+                                ))
+                            }}
+                            {registration}",
+                signature = context_signature("heartbeat"),
+                response = async_typed_handler_response("crate::handlers::heartbeat::handle"),
+                registration = registration("context", "Heartbeat", "heartbeat"),
+            ),
         },
         typed_sync_describe_acls = {
             "typed_sync: DescribeAcls;",
@@ -532,12 +531,12 @@ mod tests {
         },
         typed_infallible_list_config_resources = {
             "typed_infallible: ListConfigResources;",
-                sync_adapter(
-                    "list_config_resources",
-                    "ListConfigResources",
-                    "ListConfigResourcesRequest",
-                    false,
-                ),
+            sync_adapter(
+                "list_config_resources",
+                "ListConfigResources",
+                "ListConfigResourcesRequest",
+                false,
+            ),
         },
         auth_create_delegation_token = {
             "auth: CreateDelegationToken;",
@@ -545,25 +544,25 @@ mod tests {
         },
         telemetry_push_telemetry = {
             "telemetry: PushTelemetry;",
-                format!(
-                    "fn push_telemetry_adapter<'a>(
-                        broker: &'a Broker,
-                        version: ApiVersion,
-                        correlation_id: CorrelationId,
-                        body: &'a [u8],
-                        ctx: &'a TelemetryContext<'a>,
-                    ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {{
-                        let span = ::tracing::info_span!(\"handle_push_telemetry\",
-                            api = \"PushTelemetry\", version, req_bytes = body.len(),);
-                        let _entered = span.enter();
-                        Box::pin(::std::future::ready(
-                            (crate::handlers::push_telemetry::handle(
-                                broker, version, correlation_id, body, ctx)){ERROR_EVENT},
-                        ))
-                    }}
-                    {registration}",
-                    registration = registration("telemetry", "PushTelemetry", "push_telemetry"),
-                )
+            format!(
+                "fn push_telemetry_adapter<'a>(
+                                broker: &'a Broker,
+                                version: ApiVersion,
+                                correlation_id: CorrelationId,
+                                body: &'a [u8],
+                                ctx: &'a TelemetryContext<'a>,
+                            ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {{
+                                let span = ::tracing::info_span!(\"handle_push_telemetry\",
+                                    api = \"PushTelemetry\", version, req_bytes = body.len(),);
+                                let _entered = span.enter();
+                                Box::pin(::std::future::ready(
+                                    (crate::handlers::push_telemetry::handle(
+                                        broker, version, correlation_id, body, ctx)){ERROR_EVENT},
+                                ))
+                            }}
+                            {registration}",
+                registration = registration("telemetry", "PushTelemetry", "push_telemetry"),
+            ),
         },
     )]
     fn each_section_expands_to_its_adapter_and_registration(table: &str, expected: String) {
@@ -589,7 +588,10 @@ mod tests {
             "typed_sync_own_span: DescribeAcls;",
             format!("unknown section `typed_sync_own_span`; expected one of: {LABELS}")
         },
-        duplicate_api = { "typed: ListGroups; context: ListGroups;", "`ListGroups` appears twice in the table".to_owned() },
+        duplicate_api = {
+            "typed: ListGroups; context: ListGroups;",
+            "`ListGroups` appears twice in the table".to_owned(),
+        },
         missing_handler = { "typed: ListGroups =>;", "expected tokens after `=>`".to_owned() },
         handler_for_auth = {
             "auth: CreateDelegationToken => x::handle;",

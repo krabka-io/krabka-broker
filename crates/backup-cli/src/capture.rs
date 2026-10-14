@@ -159,8 +159,14 @@ mod tests {
     };
 
     #[yare::parameterized(
-        regular = { "00000000000000123456-0000000042.checkpoint", Some(CheckpointId { end_offset: 123_456, epoch: 42 }) },
-        zero = { "00000000000000000000-0000000000.checkpoint", Some(CheckpointId { end_offset: 0, epoch: 0 }) },
+        regular = {
+            "00000000000000123456-0000000042.checkpoint",
+            Some(CheckpointId { end_offset: 123_456, epoch: 42 }),
+        },
+        zero = {
+            "00000000000000000000-0000000000.checkpoint",
+            Some(CheckpointId { end_offset: 0, epoch: 0 }),
+        },
         short_both_fields = { "123456-42.checkpoint", None },
         short_epoch = { "00000000000000123456-42.checkpoint", None },
         snapshot = { "snapshot", None },

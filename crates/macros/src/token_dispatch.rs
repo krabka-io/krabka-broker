@@ -132,12 +132,24 @@ mod tests {
     }
 
     #[yare::parameterized(
-        sync = { "fn answer(broker: &Broker, req: RenewDelegationTokenRequest, auth: &ConnectionAuth, peer: &SocketAddr) -> RenewDelegationTokenResponse {}" },
-        mutable_request = { "async fn answer(broker: &Broker, mut req: RenewDelegationTokenRequest, auth: &ConnectionAuth, peer: &SocketAddr) -> RenewDelegationTokenResponse {}" },
-        wrong_request = { "async fn answer(broker: &Broker, req: OtherRequest, auth: &ConnectionAuth, peer: &SocketAddr) -> RenewDelegationTokenResponse {}" },
-        wrong_response = { "async fn answer(broker: &Broker, req: RenewDelegationTokenRequest, auth: &ConnectionAuth, peer: &SocketAddr) -> OtherResponse {}" },
-        extra_method = { "async fn answer(broker: &Broker, req: RenewDelegationTokenRequest, auth: &ConnectionAuth, peer: &SocketAddr) -> RenewDelegationTokenResponse {} fn other() {}" },
-        owned_peer = { "async fn answer(broker: &Broker, req: RenewDelegationTokenRequest, auth: &ConnectionAuth, peer: SocketAddr) -> RenewDelegationTokenResponse {}" },
+        sync = {
+            "fn answer(broker: &Broker, req: RenewDelegationTokenRequest, auth: &ConnectionAuth, peer: &SocketAddr) -> RenewDelegationTokenResponse {}",
+        },
+        mutable_request = {
+            "async fn answer(broker: &Broker, mut req: RenewDelegationTokenRequest, auth: &ConnectionAuth, peer: &SocketAddr) -> RenewDelegationTokenResponse {}",
+        },
+        wrong_request = {
+            "async fn answer(broker: &Broker, req: OtherRequest, auth: &ConnectionAuth, peer: &SocketAddr) -> RenewDelegationTokenResponse {}",
+        },
+        wrong_response = {
+            "async fn answer(broker: &Broker, req: RenewDelegationTokenRequest, auth: &ConnectionAuth, peer: &SocketAddr) -> OtherResponse {}",
+        },
+        extra_method = {
+            "async fn answer(broker: &Broker, req: RenewDelegationTokenRequest, auth: &ConnectionAuth, peer: &SocketAddr) -> RenewDelegationTokenResponse {} fn other() {}",
+        },
+        owned_peer = {
+            "async fn answer(broker: &Broker, req: RenewDelegationTokenRequest, auth: &ConnectionAuth, peer: SocketAddr) -> RenewDelegationTokenResponse {}",
+        },
     )]
     fn refuses_incompatible_or_extra_headers(invalid: &str) {
         assert2::assert!(adapter(&invalid.parse().unwrap()).is_err(), "{invalid}");

@@ -147,9 +147,15 @@ mod tests {
     }
 
     #[yare::parameterized(
-        unknown_order = { "bfs = bfs, pin = pin, depth = 1, states = 2, checker = checker, order = \"unknown\"" },
-        computed_bfs = { "bfs = bfs + extra, pin = pin, depth = 1, states = 2, checker = checker, order = \"properties_first\"" },
-        parenthesized_checker = { "bfs = bfs, pin = pin, depth = 1, states = 2, checker = (checker), order = \"properties_first\"" },
+        unknown_order = {
+            "bfs = bfs, pin = pin, depth = 1, states = 2, checker = checker, order = \"unknown\"",
+        },
+        computed_bfs = {
+            "bfs = bfs + extra, pin = pin, depth = 1, states = 2, checker = checker, order = \"properties_first\"",
+        },
+        parenthesized_checker = {
+            "bfs = bfs, pin = pin, depth = 1, states = 2, checker = (checker), order = \"properties_first\"",
+        },
     )]
     fn runner_metadata_rejects_unknown_order_and_non_names(input: &str) {
         assert2::assert!(options(&input.parse().unwrap()).is_err(), "{input}");

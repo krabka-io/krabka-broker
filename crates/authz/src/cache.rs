@@ -154,8 +154,16 @@ mod tests {
     /// range at or above it. A cache that is not told compares as text.
     #[yare::parameterized(
         unfinalized_version = { None, Some(false), AuthorizationResult::Deny },
-        below_range_level = { Some(krabka_metadata::metadata_version::CIDR_ACL_MIN_LEVEL - 1), Some(false), AuthorizationResult::Deny },
-        minimum_range_level = { Some(krabka_metadata::metadata_version::CIDR_ACL_MIN_LEVEL), Some(true), AuthorizationResult::Allow },
+        below_range_level = {
+            Some(krabka_metadata::metadata_version::CIDR_ACL_MIN_LEVEL - 1),
+            Some(false),
+            AuthorizationResult::Deny,
+        },
+        minimum_range_level = {
+            Some(krabka_metadata::metadata_version::CIDR_ACL_MIN_LEVEL),
+            Some(true),
+            AuthorizationResult::Allow,
+        },
         unconfigured_cache = { None, None, AuthorizationResult::Deny },
     )]
     fn a_cache_reads_a_slash_host_as_the_cluster_does(

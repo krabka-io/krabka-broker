@@ -169,7 +169,11 @@ fn record_at(offset_delta: i32, key: Option<&[u8]>, delta: i64) -> Record {
 /// `LogAppendTime`, where `writeDefaultBatchHeader` writes the append time.
 #[yare::parameterized(
     create_time = { "CreateTime", Attributes::default(), 1_002 },
-    log_append_time = { "LogAppendTime", Attributes::default().with_timestamp_type(TimestampType::LogAppendTime), 1_050 },
+    log_append_time = {
+        "LogAppendTime",
+        Attributes::default().with_timestamp_type(TimestampType::LogAppendTime),
+        1_050,
+    },
 )]
 fn a_batch_that_loses_its_newest_record_recomputes_its_max_timestamp(
     label: &str,
@@ -539,11 +543,23 @@ fn retain_empty_follows_kafkas_cleaner_rules() {
 /// and timestamp-type bits, the max timestamp and the producer state carry
 /// over.
 #[yare::parameterized(
-    compressed = { "compressed", Attributes::default().with_compression(CompressionType::Gzip), Attributes::default() },
-    delete_horizon = { "delete horizon", Attributes::default().with_delete_horizon(true), Attributes::default() },
+    compressed = {
+        "compressed",
+        Attributes::default().with_compression(CompressionType::Gzip),
+        Attributes::default(),
+    },
+    delete_horizon = {
+        "delete horizon",
+        Attributes::default().with_delete_horizon(true),
+        Attributes::default(),
+    },
     transactional_log_append_time = {
         "transactional LogAppendTime, compressed, with a horizon",
-        Attributes::default().with_transactional(true).with_timestamp_type(TimestampType::LogAppendTime).with_compression(CompressionType::Gzip).with_delete_horizon(true),
+        Attributes::default()
+            .with_transactional(true)
+            .with_timestamp_type(TimestampType::LogAppendTime)
+            .with_compression(CompressionType::Gzip)
+            .with_delete_horizon(true),
         Attributes::default().with_transactional(true).with_timestamp_type(TimestampType::LogAppendTime),
     },
 )]

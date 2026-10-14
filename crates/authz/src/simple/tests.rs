@@ -310,13 +310,30 @@ mod authorize_by_resource_type {
             AuthorizationResult::Allow,
         },
         narrower_prefix_probe_collision = {
-            vec![(PatternType::Literal, "ord"), (PatternType::Prefixed, "ord\u{10ffff}"), (PatternType::Prefixed, "order"), (PatternType::Prefixed, "ord-")],
+            vec![
+                (PatternType::Literal, "ord"),
+                (PatternType::Prefixed, "ord\u{10ffff}"),
+                (PatternType::Prefixed, "order"),
+                (PatternType::Prefixed, "ord-"),
+            ],
             "ordinary",
             AuthorizationResult::Allow,
         },
-        same_prefix_denies = { vec![(PatternType::Prefixed, "ord")], "orders", AuthorizationResult::Deny },
-        broader_prefix_denies = { vec![(PatternType::Prefixed, "or")], "orders", AuthorizationResult::Deny },
-        wildcard_denies = { vec![(PatternType::Literal, "*")], "orders", AuthorizationResult::Deny },
+        same_prefix_denies = {
+            vec![(PatternType::Prefixed, "ord")],
+            "orders",
+            AuthorizationResult::Deny,
+        },
+        broader_prefix_denies = {
+            vec![(PatternType::Prefixed, "or")],
+            "orders",
+            AuthorizationResult::Deny,
+        },
+        wildcard_denies = {
+            vec![(PatternType::Literal, "*")],
+            "orders",
+            AuthorizationResult::Deny,
+        },
     )]
     fn prefix_grants_survive_finite_literal_and_narrower_prefix_exclusions(
         exclusions: Vec<(PatternType, &'static str)>,
@@ -392,11 +409,36 @@ mod authorize_by_resource_type {
     }
 
     #[yare::parameterized(
-        literal_denies_same_name = { "orders", PatternType::Literal, "orders", AuthorizationResult::Deny },
-        prefix_denies_within_range = { "orders", PatternType::Prefixed, "ord", AuthorizationResult::Deny },
-        prefix_denies_outside_range = { "orders", PatternType::Prefixed, "orders-", AuthorizationResult::Allow },
-        wildcard_grant_literal_deny = { "*", PatternType::Literal, "hardcode", AuthorizationResult::Allow },
-        wildcard_grant_prefix_deny = { "*", PatternType::Prefixed, "hard", AuthorizationResult::Allow },
+        literal_denies_same_name = {
+            "orders",
+            PatternType::Literal,
+            "orders",
+            AuthorizationResult::Deny,
+        },
+        prefix_denies_within_range = {
+            "orders",
+            PatternType::Prefixed,
+            "ord",
+            AuthorizationResult::Deny,
+        },
+        prefix_denies_outside_range = {
+            "orders",
+            PatternType::Prefixed,
+            "orders-",
+            AuthorizationResult::Allow,
+        },
+        wildcard_grant_literal_deny = {
+            "*",
+            PatternType::Literal,
+            "hardcode",
+            AuthorizationResult::Allow,
+        },
+        wildcard_grant_prefix_deny = {
+            "*",
+            PatternType::Prefixed,
+            "hard",
+            AuthorizationResult::Allow,
+        },
         wildcard_denies_wildcard = { "*", PatternType::Literal, "*", AuthorizationResult::Deny },
     )]
     fn literal_and_wildcard_grants_follow_kafka_pattern_dominance(
@@ -418,10 +460,16 @@ mod authorize_by_resource_type {
     }
 
     #[yare::parameterized(
-        different_principal = { AclSetup { principal: "User:bob", op: AclOperation::Write, ..Default::default() } },
-        different_host = { AclSetup { host: "192.0.2.1", op: AclOperation::Write, ..Default::default() } },
+        different_principal = {
+            AclSetup { principal: "User:bob", op: AclOperation::Write, ..Default::default() },
+        },
+        different_host = {
+            AclSetup { host: "192.0.2.1", op: AclOperation::Write, ..Default::default() },
+        },
         different_operation = { AclSetup { op: AclOperation::Read, ..Default::default() } },
-        different_resource_type = { AclSetup { rt: ResourceType::Group, op: AclOperation::Write, ..Default::default() } },
+        different_resource_type = {
+            AclSetup { rt: ResourceType::Group, op: AclOperation::Write, ..Default::default() },
+        },
     )]
     fn resource_type_denials_match_the_caller_host_operation_and_type(excluded: AclSetup) {
         prefixed_topic_write_allowed_when(AclSetup {
@@ -440,11 +488,66 @@ mod authorize_by_resource_type {
     #[yare::parameterized(
         no_acl_flag_off = { vec![], false, AuthorizationResult::Deny },
         no_acl_flag_on = { vec![], true, AuthorizationResult::Allow },
-        other_topic_flag_off = { vec![topic_acl().op(AclOperation::Write).principal("User:bob").pattern(PatternType::Literal).name("orders").call()], false, AuthorizationResult::Deny },
-        other_topic_flag_on = { vec![topic_acl().op(AclOperation::Write).principal("User:bob").pattern(PatternType::Literal).name("orders").call()], true, AuthorizationResult::Allow },
-        literal_hardcode = { vec![topic_acl().op(AclOperation::Write).principal("User:bob").pattern(PatternType::Literal).name("hardcode").call()], true, AuthorizationResult::Deny },
-        prefix_covers_hardcode = { vec![topic_acl().op(AclOperation::Write).principal("User:bob").pattern(PatternType::Prefixed).name("hard").call()], true, AuthorizationResult::Deny },
-        wildcard = { vec![topic_acl().op(AclOperation::Write).principal("User:bob").pattern(PatternType::Literal).name("*").call()], true, AuthorizationResult::Deny },
+        other_topic_flag_off = {
+            vec![
+                topic_acl()
+                    .op(AclOperation::Write)
+                    .principal("User:bob")
+                    .pattern(PatternType::Literal)
+                    .name("orders")
+                    .call(),
+            ],
+            false,
+            AuthorizationResult::Deny,
+        },
+        other_topic_flag_on = {
+            vec![
+                topic_acl()
+                    .op(AclOperation::Write)
+                    .principal("User:bob")
+                    .pattern(PatternType::Literal)
+                    .name("orders")
+                    .call(),
+            ],
+            true,
+            AuthorizationResult::Allow,
+        },
+        literal_hardcode = {
+            vec![
+                topic_acl()
+                    .op(AclOperation::Write)
+                    .principal("User:bob")
+                    .pattern(PatternType::Literal)
+                    .name("hardcode")
+                    .call(),
+            ],
+            true,
+            AuthorizationResult::Deny,
+        },
+        prefix_covers_hardcode = {
+            vec![
+                topic_acl()
+                    .op(AclOperation::Write)
+                    .principal("User:bob")
+                    .pattern(PatternType::Prefixed)
+                    .name("hard")
+                    .call(),
+            ],
+            true,
+            AuthorizationResult::Deny,
+        },
+        wildcard = {
+            vec![
+                topic_acl()
+                    .op(AclOperation::Write)
+                    .principal("User:bob")
+                    .pattern(PatternType::Literal)
+                    .name("*")
+                    .call(),
+            ],
+            true,
+            AuthorizationResult::Deny,
+        },
     )]
     fn hardcoded_name_probe_honours_allow_everyone_if_no_acl_found(
         entries: Vec<krabka_metadata::AclEntry>,
@@ -477,14 +580,38 @@ mod authorize_by_resource_type {
 #[yare::parameterized(
     no_acl_flag_off = { vec![], false, AuthorizationResult::Deny },
     no_acl_flag_on = { vec![], true, AuthorizationResult::Allow },
-    resource_acl_other_principal_flag_off = { vec![topic_acl().principal("User:bob").call()], false, AuthorizationResult::Deny },
-    resource_acl_other_principal_flag_on = { vec![topic_acl().principal("User:bob").call()], true, AuthorizationResult::Deny },
-    other_resource_flag_off = { vec![topic_acl().name("other").call()], false, AuthorizationResult::Deny },
-    other_resource_flag_on = { vec![topic_acl().name("other").call()], true, AuthorizationResult::Allow },
+    resource_acl_other_principal_flag_off = {
+        vec![topic_acl().principal("User:bob").call()],
+        false,
+        AuthorizationResult::Deny,
+    },
+    resource_acl_other_principal_flag_on = {
+        vec![topic_acl().principal("User:bob").call()],
+        true,
+        AuthorizationResult::Deny,
+    },
+    other_resource_flag_off = {
+        vec![topic_acl().name("other").call()],
+        false,
+        AuthorizationResult::Deny,
+    },
+    other_resource_flag_on = {
+        vec![topic_acl().name("other").call()],
+        true,
+        AuthorizationResult::Allow,
+    },
     matching_allow_flag_off = { vec![topic_acl().call()], false, AuthorizationResult::Allow },
     matching_allow_flag_on = { vec![topic_acl().call()], true, AuthorizationResult::Allow },
-    matching_deny_flag_off = { vec![topic_acl().permission(PermissionType::Deny).call()], false, AuthorizationResult::Deny },
-    matching_deny_flag_on = { vec![topic_acl().permission(PermissionType::Deny).call()], true, AuthorizationResult::Deny },
+    matching_deny_flag_off = {
+        vec![topic_acl().permission(PermissionType::Deny).call()],
+        false,
+        AuthorizationResult::Deny,
+    },
+    matching_deny_flag_on = {
+        vec![topic_acl().permission(PermissionType::Deny).call()],
+        true,
+        AuthorizationResult::Deny,
+    },
 )]
 fn allow_everyone_if_no_acl_found_applies_only_when_no_acl_touches_the_resource(
     entries: Vec<krabka_metadata::AclEntry>,

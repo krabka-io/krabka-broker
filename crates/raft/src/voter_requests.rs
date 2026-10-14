@@ -581,7 +581,13 @@ mod tests {
                 request
             },
             true,
-            Some((INVALID_REQUEST, Some("Add voter request didn't include the endpoint for the default listener CONTROLLER".into())))
+            Some((
+                INVALID_REQUEST,
+                Some(
+                    "Add voter request didn't include the endpoint for the default listener CONTROLLER"
+                        .into(),
+                ),
+            )),
         },
         this_cluster = {
             "this cluster",
@@ -605,22 +611,35 @@ mod tests {
 
     #[yare::parameterized(
         foreign_cluster = {
-            "foreign cluster id", remove_voter_request(Some("cluster-b"), 2, DIRECTORY), true,
-            Some(foreign_cluster_refusal())
+            "foreign cluster id",
+            remove_voter_request(Some("cluster-b"), 2, DIRECTORY),
+            true,
+            Some(foreign_cluster_refusal()),
         },
         follower = {
-            "a follower", remove_voter_request(None, -1, DIRECTORY), false,
-            Some((NOT_LEADER_OR_FOLLOWER, None))
+            "a follower",
+            remove_voter_request(None, -1, DIRECTORY),
+            false,
+            Some((NOT_LEADER_OR_FOLLOWER, None)),
         },
         negative_voter = {
-            "negative voter id", remove_voter_request(None, -1, DIRECTORY), true,
-            Some((INVALID_REQUEST, Some("Remove voter request didn't include a valid voter".into())))
+            "negative voter id",
+            remove_voter_request(None, -1, DIRECTORY),
+            true,
+            Some((INVALID_REQUEST, Some("Remove voter request didn't include a valid voter".into()))),
         },
         zero_directory = {
-            "zero directory id", remove_voter_request(None, 2, WireUuid::ZERO), true,
-            Some((INVALID_REQUEST, Some("Remove voter request didn't include a valid voter".into())))
+            "zero directory id",
+            remove_voter_request(None, 2, WireUuid::ZERO),
+            true,
+            Some((INVALID_REQUEST, Some("Remove voter request didn't include a valid voter".into()))),
         },
-        valid_voter = { "a valid voter", remove_voter_request(Some(CLUSTER), 2, DIRECTORY), true, None },
+        valid_voter = {
+            "a valid voter",
+            remove_voter_request(Some(CLUSTER), 2, DIRECTORY),
+            true,
+            None,
+        },
     )]
     fn remove_voter_checks_run_in_kafka_order(
         label: &'static str,
@@ -638,38 +657,63 @@ mod tests {
         foreign_cluster = {
             "foreign cluster id",
             UpdateRaftVoterRequest { cluster_id: Some("cluster-b".into()), ..update_voter_request() },
-            true, Some(INCONSISTENT_CLUSTER_ID)
+            true,
+            Some(INCONSISTENT_CLUSTER_ID),
         },
         epoch_below = {
             "an epoch below the local one",
             UpdateRaftVoterRequest { current_leader_epoch: 6, ..update_voter_request() },
-            true, Some(FENCED_LEADER_EPOCH)
+            true,
+            Some(FENCED_LEADER_EPOCH),
         },
         epoch_above = {
             "an epoch above the local one",
             UpdateRaftVoterRequest { current_leader_epoch: 8, ..update_voter_request() },
-            true, Some(UNKNOWN_LEADER_EPOCH)
+            true,
+            Some(UNKNOWN_LEADER_EPOCH),
         },
         follower = { "a follower", update_voter_request(), false, Some(NOT_LEADER_OR_FOLLOWER) },
         zero_directory = {
             "zero directory id",
             UpdateRaftVoterRequest { voter_directory_id: WireUuid::ZERO, ..update_voter_request() },
-            true, Some(INVALID_REQUEST)
+            true,
+            Some(INVALID_REQUEST),
         },
         negative_kraft_version = {
             "a negative kraft.version",
-            UpdateRaftVoterRequest { k_raft_version_feature: KRaftVersionFeature { min_supported_version: -1, ..update_voter_request().k_raft_version_feature }, ..update_voter_request() },
-            true, Some(INVALID_REQUEST)
+            UpdateRaftVoterRequest {
+                k_raft_version_feature: KRaftVersionFeature {
+                    min_supported_version: -1,
+                    ..update_voter_request().k_raft_version_feature
+                },
+                ..update_voter_request()
+            },
+            true,
+            Some(INVALID_REQUEST),
         },
         inverted_kraft_version = {
             "an inverted kraft.version range",
-            UpdateRaftVoterRequest { k_raft_version_feature: KRaftVersionFeature { min_supported_version: 2, ..update_voter_request().k_raft_version_feature }, ..update_voter_request() },
-            true, Some(INVALID_REQUEST)
+            UpdateRaftVoterRequest {
+                k_raft_version_feature: KRaftVersionFeature {
+                    min_supported_version: 2,
+                    ..update_voter_request().k_raft_version_feature
+                },
+                ..update_voter_request()
+            },
+            true,
+            Some(INVALID_REQUEST),
         },
         no_controller_listener = {
             "no controller listener",
-            UpdateRaftVoterRequest { listeners: vec![UpdateListener { name: "PLAINTEXT".into(), ..Default::default() }], ..update_voter_request() },
-            true, Some(INVALID_REQUEST)
+            UpdateRaftVoterRequest {
+                listeners: vec![UpdateListener {
+                    name: "PLAINTEXT".into(),
+                    ..Default::default()
+                }],
+                ..update_voter_request()
+            },
+            true,
+            Some(INVALID_REQUEST),
         },
         valid_update = { "a valid update", update_voter_request(), true, None },
     )]
@@ -689,7 +733,13 @@ mod tests {
         known_leader = {
             "a known leader",
             quorum(false),
-            CurrentLeader { leader_id: 1, leader_epoch: 7, host: "controller-1".into(), port: 9093, ..Default::default() }
+            CurrentLeader {
+                leader_id: 1,
+                leader_epoch: 7,
+                host: "controller-1".into(),
+                port: 9093,
+                ..Default::default()
+            },
         },
         no_leader = {
             "no leader",
@@ -715,17 +765,30 @@ mod tests {
         lagging = {
             "a lagging candidate",
             Err(RaftError::VoterNotCaughtUp { id: NodeId(3), lag: 10 }),
-            (REQUEST_TIMED_OUT, Some(format!("Aborted add voter operation for {TEST_VOTER_KEY} since it is lagging behind")))
+            (
+                REQUEST_TIMED_OUT,
+                Some(format!(
+                    "Aborted add voter operation for {TEST_VOTER_KEY} since it is lagging behind"
+                )),
+            ),
         },
         pending_change = {
             "a pending change",
             Err(RaftError::ReconfigInProgress),
-            (REQUEST_TIMED_OUT, Some("Request timed out waiting for leader to handle previous voter change request".into()))
+            (
+                REQUEST_TIMED_OUT,
+                Some("Request timed out waiting for leader to handle previous voter change request".into()),
+            ),
         },
         duplicate_voter = {
             "a duplicate voter",
             Err(RaftError::DuplicateVoter(NodeId(3))),
-            (DUPLICATE_VOTER, Some(format!("The voter id for {TEST_VOTER_KEY} is already part of the set of voters")))
+            (
+                DUPLICATE_VOTER,
+                Some(format!(
+                    "The voter id for {TEST_VOTER_KEY} is already part of the set of voters"
+                )),
+            ),
         },
         unknown_voter = {
             "an unknown voter",

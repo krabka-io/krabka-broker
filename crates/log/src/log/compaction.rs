@@ -1206,9 +1206,24 @@ mod tests {
     }
 
     #[yare::parameterized(
-        compressed_oversized = { "compressed, oversized", krabka_compression::CompressionType::Gzip, Some(bytes(100)), true },
-        compressed_without_limit = { "compressed, no limit", krabka_compression::CompressionType::Gzip, None, false },
-        uncompressed_oversized = { "uncompressed, oversized", krabka_compression::CompressionType::None, Some(bytes(100)), false },
+        compressed_oversized = {
+            "compressed, oversized",
+            krabka_compression::CompressionType::Gzip,
+            Some(bytes(100)),
+            true,
+        },
+        compressed_without_limit = {
+            "compressed, no limit",
+            krabka_compression::CompressionType::Gzip,
+            None,
+            false,
+        },
+        uncompressed_oversized = {
+            "uncompressed, oversized",
+            krabka_compression::CompressionType::None,
+            Some(bytes(100)),
+            false,
+        },
     )]
     fn compact_refuses_a_compressed_record_above_the_limit_and_leaves_the_log_alone(
         name: &'static str,

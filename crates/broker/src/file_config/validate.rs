@@ -437,7 +437,7 @@ mod tests {
         log_defaults_supplied = {
             "the log defaults that back a topic key supplied, at Kafka's own default value",
             "[runtime]\nmessage_max_bytes = \"1048588B\"\nlog_segment_bytes = \"1GiB\"\n\
-             default_min_insync_replicas = 1\n",
+                     default_min_insync_replicas = 1\n",
             StaticConfigOrigins {
                 log: LogOrigins {
                     message_max_bytes: true,
@@ -450,7 +450,7 @@ mod tests {
         authentication_limits_supplied = {
             "the authentication limits supplied, at Kafka's own default value",
             "[runtime]\nsasl_server_max_receive = \"524288B\"\n\
-             connection_failed_authentication_delay = \"100ms\"\n",
+                     connection_failed_authentication_delay = \"100ms\"\n",
             StaticConfigOrigins {
                 authentication: AuthenticationOrigins {
                     sasl_server_max_receive: true,

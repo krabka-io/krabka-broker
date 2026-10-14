@@ -95,8 +95,16 @@ mod tests {
 
     #[yare::parameterized(
         replace_codec = { 3, CompressionType::Gzip, 1 },
-        preserve_timestamp_with_codec = { attrs::TIMESTAMP_TYPE_BIT, CompressionType::Gzip, attrs::TIMESTAMP_TYPE_BIT | 1 },
-        preserve_timestamp_without_codec = { attrs::TIMESTAMP_TYPE_BIT, CompressionType::None, attrs::TIMESTAMP_TYPE_BIT },
+        preserve_timestamp_with_codec = {
+            attrs::TIMESTAMP_TYPE_BIT,
+            CompressionType::Gzip,
+            attrs::TIMESTAMP_TYPE_BIT | 1,
+        },
+        preserve_timestamp_without_codec = {
+            attrs::TIMESTAMP_TYPE_BIT,
+            CompressionType::None,
+            attrs::TIMESTAMP_TYPE_BIT,
+        },
     )]
     fn attrs_with_compression_replaces_low_bits_keeps_high(
         initial: i8,

@@ -185,7 +185,10 @@ fn kafka_empty_fetch_response(
 }
 
 #[yare::parameterized(
-    served = { "served", fetch_answer(0, leader(Some(2), 5, Some(leader_endpoint("controller-2", 9093)))) },
+    served = {
+        "served",
+        fetch_answer(0, leader(Some(2), 5, Some(leader_endpoint("controller-2", 9093)))),
+    },
     records = { "records", FetchAnswer {
         records: Bytes::from_static(b"\x01\x02\x03"),
         ..fetch_answer(0, leader(Some(2), 5, Some(leader_endpoint("controller-2", 9093))))
@@ -198,12 +201,18 @@ fn kafka_empty_fetch_response(
         snapshot_id: Some((42, 3)),
         ..fetch_answer(0, leader(Some(2), 5, Some(leader_endpoint("controller-2", 9093))))
     } },
-    leader_without_an_endpoint = { "leader without an endpoint", fetch_answer(0, leader(Some(2), 5, None)) },
+    leader_without_an_endpoint = {
+        "leader without an endpoint",
+        fetch_answer(0, leader(Some(2), 5, None)),
+    },
     follower_redirect_to_leader_zero = { "follower redirect to leader 0", fetch_answer(
         NOT_LEADER_OR_FOLLOWER,
         leader(Some(0), 5, Some(leader_endpoint("controller-0", 9093))),
     ) },
-    unknown_leader = { "unknown leader", fetch_answer(NOT_LEADER_OR_FOLLOWER, leader(None, 5, None)) },
+    unknown_leader = {
+        "unknown leader",
+        fetch_answer(NOT_LEADER_OR_FOLLOWER, leader(None, 5, None)),
+    },
 )]
 fn fetch_response_round_trips(case: &'static str, answer: FetchAnswer) {
     let response = PeerResponse::Fetch(answer);
@@ -221,16 +230,12 @@ fn fetch_response_round_trips(case: &'static str, answer: FetchAnswer) {
         known_leader = {
             "known leader",
             refused_fetch_answer(leader(Some(2), 5, Some(leader_endpoint("controller-2", 9093)))),
-            kafka_empty_fetch_response(
-                2,
-                5,
-                vec![fetch_resp::NodeEndpoint {
-                    node_id: 2,
-                    host: "controller-2".into(),
-                    port: 9093,
-                    ..Default::default()
-                }],
-            )
+            kafka_empty_fetch_response(2, 5, vec![fetch_resp::NodeEndpoint {
+                node_id: 2,
+                host: "controller-2".into(),
+                port: 9093,
+                ..Default::default()
+            }]),
         },
         // `singletonFetchResponse` adds no entry without a leader id.
         unknown_leader = {

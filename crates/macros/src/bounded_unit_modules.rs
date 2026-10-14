@@ -138,11 +138,19 @@ mod tests {
 
     #[yare::parameterized(
         empty = { "" },
-        unsupported_bound = { "mod x: Time [codec = human, bound = \"signed\", requirement = \"time\"];" },
-        nonpath_codec = { "mod x: Time [codec = human + other, bound = \"positive\", requirement = \"time\"];" },
-        empty_requirement = { "mod x: Time [codec = human, bound = \"positive\", requirement = \"\"];" },
+        unsupported_bound = {
+            "mod x: Time [codec = human, bound = \"signed\", requirement = \"time\"];",
+        },
+        nonpath_codec = {
+            "mod x: Time [codec = human + other, bound = \"positive\", requirement = \"time\"];",
+        },
+        empty_requirement = {
+            "mod x: Time [codec = human, bound = \"positive\", requirement = \"\"];",
+        },
         wrong_delimiter = { "mod x: Time (codec = human);" },
-        duplicate_module = { "mod x: Time [codec = human, bound = \"positive\", requirement = \"time\"]; mod x: Time [codec = human, bound = \"positive\", requirement = \"time\"];" },
+        duplicate_module = {
+            "mod x: Time [codec = human, bound = \"positive\", requirement = \"time\"]; mod x: Time [codec = human, bound = \"positive\", requirement = \"time\"];",
+        },
     )]
     fn rejects_duplicate_modules_nonpaths_and_unsupported_policies(declaration: &str) {
         assert2::assert!(

@@ -99,9 +99,24 @@ fn refused<T>(result: Result<T, LogError>) -> bool {
 /// only of one: a batch the producer did not compress is never held to the
 /// limit.
 #[yare::parameterized(
-    compressed_oversized = { "compressed, oversized", CompressionType::Gzip, Some(LIMIT), ExpectedLimit::RefusesRecord },
-    compressed_no_limit = { "compressed, no limit", CompressionType::Gzip, None, ExpectedLimit::AllowsRecord },
-    uncompressed_oversized = { "uncompressed, oversized", CompressionType::None, Some(LIMIT), ExpectedLimit::AllowsRecord },
+    compressed_oversized = {
+        "compressed, oversized",
+        CompressionType::Gzip,
+        Some(LIMIT),
+        ExpectedLimit::RefusesRecord,
+    },
+    compressed_no_limit = {
+        "compressed, no limit",
+        CompressionType::Gzip,
+        None,
+        ExpectedLimit::AllowsRecord,
+    },
+    uncompressed_oversized = {
+        "uncompressed, oversized",
+        CompressionType::None,
+        Some(LIMIT),
+        ExpectedLimit::AllowsRecord,
+    },
 )]
 fn the_passes_refuse_a_compressed_record_above_the_limit(
     name: &str,
@@ -149,9 +164,24 @@ fn the_passes_refuse_a_compressed_record_above_the_limit(
 /// round, so such a batch is not read; one the pass keeps empty is read.
 #[yare::parameterized(
     deleted_outright = { "deleted outright", Offset(10), None, ExpectedLimit::AllowsRecord },
-    last_batch_of_round = { "the last batch of the round", Offset(1), None, ExpectedLimit::RefusesRecord },
-    active_producers_last_batch = { "an active producer's last data batch", Offset(10), Some(Offset(0)), ExpectedLimit::RefusesRecord },
-    another_active_producer_batch = { "another batch of an active producer", Offset(10), Some(Offset(5)), ExpectedLimit::AllowsRecord },
+    last_batch_of_round = {
+        "the last batch of the round",
+        Offset(1),
+        None,
+        ExpectedLimit::RefusesRecord,
+    },
+    active_producers_last_batch = {
+        "an active producer's last data batch",
+        Offset(10),
+        Some(Offset(0)),
+        ExpectedLimit::RefusesRecord,
+    },
+    another_active_producer_batch = {
+        "another batch of an active producer",
+        Offset(10),
+        Some(Offset(5)),
+        ExpectedLimit::AllowsRecord,
+    },
 )]
 fn an_aborted_batch_is_read_only_when_the_pass_keeps_it_empty(
     name: &str,

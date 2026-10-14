@@ -283,7 +283,7 @@ mod tests {
                 addr: "127.0.0.1:9092".parse().unwrap(),
                 source: std::io::ErrorKind::ConnectionRefused.into(),
             },
-            true
+            true,
         },
         offset_out_of_range = { ClientError::Server { error_code: 1 }, false },
         corrupt_message = { ClientError::Server { error_code: 2 }, false },

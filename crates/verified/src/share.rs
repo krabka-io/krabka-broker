@@ -128,13 +128,55 @@ mod tests {
     };
 
     #[yare::parameterized(
-        not_coordinator = { ShareOffsetMutationGate::NotCoordinator, 3, 3, 7, ShareOffsetMutationDecision::NotCoordinator },
-        nonempty_group = { ShareOffsetMutationGate::NonEmptyGroup, 3, 3, 7, ShareOffsetMutationDecision::NonEmptyGroup },
-        unrequested = { ShareOffsetMutationGate::Unrequested, 3, 3, 7, ShareOffsetMutationDecision::Unrequested },
-        fenced_epoch = { ShareOffsetMutationGate::Admissible { exact_retry: false }, 2, 3, 7, ShareOffsetMutationDecision::FencedLeaderEpoch },
-        state_epoch_overflow = { ShareOffsetMutationGate::Admissible { exact_retry: false }, 3, 3, i32::MAX, ShareOffsetMutationDecision::StateEpochOverflow },
-        exact_retry = { ShareOffsetMutationGate::Admissible { exact_retry: true }, 3, 3, 7, ShareOffsetMutationDecision::ExactRetry },
-        apply = { ShareOffsetMutationGate::Admissible { exact_retry: false }, 3, 3, 7, ShareOffsetMutationDecision::Apply { next_state_epoch: 8 } },
+        not_coordinator = {
+            ShareOffsetMutationGate::NotCoordinator,
+            3,
+            3,
+            7,
+            ShareOffsetMutationDecision::NotCoordinator,
+        },
+        nonempty_group = {
+            ShareOffsetMutationGate::NonEmptyGroup,
+            3,
+            3,
+            7,
+            ShareOffsetMutationDecision::NonEmptyGroup,
+        },
+        unrequested = {
+            ShareOffsetMutationGate::Unrequested,
+            3,
+            3,
+            7,
+            ShareOffsetMutationDecision::Unrequested,
+        },
+        fenced_epoch = {
+            ShareOffsetMutationGate::Admissible { exact_retry: false },
+            2,
+            3,
+            7,
+            ShareOffsetMutationDecision::FencedLeaderEpoch,
+        },
+        state_epoch_overflow = {
+            ShareOffsetMutationGate::Admissible { exact_retry: false },
+            3,
+            3,
+            i32::MAX,
+            ShareOffsetMutationDecision::StateEpochOverflow,
+        },
+        exact_retry = {
+            ShareOffsetMutationGate::Admissible { exact_retry: true },
+            3,
+            3,
+            7,
+            ShareOffsetMutationDecision::ExactRetry,
+        },
+        apply = {
+            ShareOffsetMutationGate::Admissible { exact_retry: false },
+            3,
+            3,
+            7,
+            ShareOffsetMutationDecision::Apply { next_state_epoch: 8 },
+        },
     )]
     fn offset_mutation_fails_closed_and_advances_exactly_once(
         gate: ShareOffsetMutationGate,

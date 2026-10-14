@@ -116,7 +116,9 @@ mod tests {
         wrong_interval_type = { "async fn run(interval: Other, shutdown: CancellationToken) {}" },
         return_type = { "async fn run(interval: Time, shutdown: CancellationToken) -> bool {}" },
         generic_function = { "async fn run<T>(interval: Time, shutdown: CancellationToken) {}" },
-        extra_function = { "async fn run(interval: Time, shutdown: CancellationToken) {} fn extra() {}" },
+        extra_function = {
+            "async fn run(interval: Time, shutdown: CancellationToken) {} fn extra() {}",
+        },
     )]
     fn rejects_invalid_reaper_signatures(invalid: &str) {
         let metadata = "shutdown_message = \"reaper stopped\"".parse().unwrap();

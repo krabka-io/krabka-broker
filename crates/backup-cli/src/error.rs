@@ -109,7 +109,10 @@ mod tests {
         invalid_argument = { BackupError::InvalidArgument("bad".to_owned()), EXIT_BAD_ARGUMENT },
         io = { BackupError::Io(std::io::Error::other("disk")), EXIT_UNREADABLE },
         no_such_capture = { BackupError::NoSuchCapture("none".to_owned()), EXIT_UNREADABLE },
-        unsupported_version = { BackupError::UnsupportedVersion { context: "manifest.json".to_owned(), found: None, expected: 0 }, EXIT_UNREADABLE },
+        unsupported_version = {
+            BackupError::UnsupportedVersion { context: "manifest.json".to_owned(), found: None, expected: 0 },
+            EXIT_UNREADABLE,
+        },
         integrity = { BackupError::Integrity("digest".to_owned()), EXIT_INTEGRITY },
         cluster = { BackupError::Cluster("refused".to_owned()), EXIT_CLUSTER },
     )]

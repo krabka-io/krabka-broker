@@ -262,7 +262,7 @@ fn the_remaining_kafka_topic_config_names_are_accepted(key: &str, accepted: &str
             SEGMENT_BYTES.to_string() => "52428800".to_string(),
             RETENTION_MS.to_string() => "-1".to_string(),
             MESSAGE_TIMESTAMP_TYPE.to_string() => "CreateTime".to_string(),
-        }
+        },
     },
     windowed_changelog = {
         maplit::btreemap! {
@@ -270,7 +270,7 @@ fn the_remaining_kafka_topic_config_names_are_accepted(key: &str, accepted: &str
             RETENTION_MS.to_string() => "86400000".to_string(),
             MIN_COMPACTION_LAG_MS.to_string() => "0".to_string(),
             MESSAGE_TIMESTAMP_TYPE.to_string() => "CreateTime".to_string(),
-        }
+        },
     },
 )]
 fn streams_topic_override_set_is_accepted(overrides: std::collections::BTreeMap<String, String>) {

@@ -161,13 +161,21 @@ mod tests {
     use super::*;
 
     #[yare::parameterized(
-        wrong_epoch = { "epoch: u32, delivery_complete_count: i32, state_batches: Vec<StateBatch>" },
+        wrong_epoch = {
+            "epoch: u32, delivery_complete_count: i32, state_batches: Vec<StateBatch>",
+        },
         missing_delivery = { "epoch: i32, state_batches: Vec<StateBatch>" },
         missing_batches = { "epoch: i32, delivery_complete_count: i32" },
-        wrong_delivery = { "epoch: i32, delivery_complete_count: i64, state_batches: Vec<StateBatch>" },
+        wrong_delivery = {
+            "epoch: i32, delivery_complete_count: i64, state_batches: Vec<StateBatch>",
+        },
         scalar_batches = { "epoch: i32, delivery_complete_count: i32, state_batches: StateBatch" },
-        generic_epoch = { "epoch: i32<u8>, delivery_complete_count: i32, state_batches: Vec<StateBatch>" },
-        two_batch_types = { "epoch: i32, delivery_complete_count: i32, state_batches: Vec<StateBatch, StateBatch>" },
+        generic_epoch = {
+            "epoch: i32<u8>, delivery_complete_count: i32, state_batches: Vec<StateBatch>",
+        },
+        two_batch_types = {
+            "epoch: i32, delivery_complete_count: i32, state_batches: Vec<StateBatch, StateBatch>",
+        },
         missing_delivery_and_batches = { "epoch: i32" },
     )]
     fn refuses_unknown_scalar_types_and_missing_or_invalid_trailers(fields: &str) {

@@ -590,7 +590,10 @@ mod tests {
     #[yare::parameterized(
         inverted = { "inverted", vec![stamp_entry(7, 6, 1)] },
         overlap = { "overlap", vec![stamp_entry(0, 4, 1), stamp_entry(4, 8, 2)] },
-        conflicting_retry = { "conflicting-retry", vec![stamp_entry(0, 4, 1), stamp_entry(0, 4, 2)] },
+        conflicting_retry = {
+            "conflicting-retry",
+            vec![stamp_entry(0, 4, 1), stamp_entry(0, 4, 2)],
+        },
     )]
     fn open_rejects_malformed_ranges(name: &str, entries: Vec<StampEntry>) {
         let dir = TempDir::new().unwrap();

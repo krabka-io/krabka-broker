@@ -248,10 +248,18 @@ mod tests {
         user_only = { "bind(ctx); user [\"admin\"];" },
         principal_and_peer = { "bind(principal, peer); user [native_user()];" },
         client = { "bind(principal, peer, ctx); user [native_user()]; client [client];" },
-        context = { "bind(ctx); identity [principal(user)]; address [peer()]; context [test_context];" },
-        native_address = { "bind(p, peer); identity [principal(user)]; address [address::<1, 2>()];" },
-        peer_and_client = { "bind(p, peer, ctx); identity [principal(user)]; address [peer()]; client [client];" },
-        connection = { "bind(p, peer, ctx); identity [principal(user)]; address [peer()]; client [client]; connection [connection];" },
+        context = {
+            "bind(ctx); identity [principal(user)]; address [peer()]; context [test_context];",
+        },
+        native_address = {
+            "bind(p, peer); identity [principal(user)]; address [address::<1, 2>()];",
+        },
+        peer_and_client = {
+            "bind(p, peer, ctx); identity [principal(user)]; address [peer()]; client [client];",
+        },
+        connection = {
+            "bind(p, peer, ctx); identity [principal(user)]; address [peer()]; client [client]; connection [connection];",
+        },
     )]
     fn exposes_identity_or_keeps_context_resources_hygienic(valid: &str) {
         let identity = declaration(&valid.parse().unwrap()).unwrap();
@@ -265,7 +273,9 @@ mod tests {
         wrong_order = { "bind(p, peer); address [a]; identity [p];" },
         empty_identity = { "bind(p, peer); identity []; address [a];" },
         client_without_binding = { "bind(p, peer); identity [p]; address [a]; client [c];" },
-        connection_without_client = { "bind(ctx); identity [p]; address [a]; context [test_context]; connection [c];" },
+        connection_without_client = {
+            "bind(ctx); identity [p]; address [a]; context [test_context]; connection [c];",
+        },
         closure_context = { "bind(ctx); identity [p]; address [a]; context [|p,a| p];" },
     )]
     fn validates_policy_and_rejects_invalid_identity_declarations(invalid: &str) {

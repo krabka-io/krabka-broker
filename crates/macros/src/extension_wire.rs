@@ -253,7 +253,9 @@ mod tests {
         borrowed_request = { HANDLER.replace("mut owned: Request", "owned: &Request") },
         mutable_broker = { HANDLER.replace("source: &Broker", "source: &mut Broker") },
         wrong_context = { HANDLER.replace("caller: &RequestContext<'_>", "caller: Context") },
-        duplicate_wire_name = { HANDLER.replace("negotiated: ApiVersion", "req_bytes: ApiVersion") },
+        duplicate_wire_name = {
+            HANDLER.replace("negotiated: ApiVersion", "req_bytes: ApiVersion"),
+        },
         wrong_version = { HANDLER.replace("negotiated: ApiVersion", "negotiated: u16") },
         ref_pattern = { HANDLER.replace("mut owned", "ref owned") },
         duplicate_pattern = { HANDLER.replace("mut owned", "source") },
@@ -262,8 +264,12 @@ mod tests {
         mutable_source = { HANDLER.replace("source: &Broker", "mut source: &Broker") },
         destructured_request = { HANDLER.replace("mut owned", "(left, right)") },
         attributed_pattern = { HANDLER.replace("mut owned", "#[cfg(any())] owned") },
-        where_clause = { HANDLER.replace("DispatchResult {", "DispatchResult where Request: Clone {") },
-        variadic = { HANDLER.replace("caller: &RequestContext<'_>", "caller: &RequestContext<'_>, ...") },
+        where_clause = {
+            HANDLER.replace("DispatchResult {", "DispatchResult where Request: Clone {"),
+        },
+        variadic = {
+            HANDLER.replace("caller: &RequestContext<'_>", "caller: &RequestContext<'_>, ..."),
+        },
         missing_body = { HANDLER.split('{').next().unwrap().to_owned() },
         trailing_item = { format!("{HANDLER} fn extra() {{}}") },
         non_function = { "struct Request {}".to_owned() },

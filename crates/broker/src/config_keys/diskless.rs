@@ -295,8 +295,14 @@ mod tests {
         ordinary_key_added = {
             Some(map(&[ConfigPair { key: DISKLESS, value: "true" }])),
             map(&[
-                ConfigPair { key: DISKLESS, value: "true" },
-                ConfigPair { key: "retention.ms", value: "60000" },
+                ConfigPair {
+                    key: DISKLESS,
+                    value: "true",
+                },
+                ConfigPair {
+                    key: "retention.ms",
+                    value: "60000",
+                },
             ]),
             true,
         },

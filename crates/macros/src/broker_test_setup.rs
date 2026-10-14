@@ -200,11 +200,19 @@ mod tests {
 
     #[yare::parameterized(
         typed_starter = { "bind(handle, dir, broker); boot [start::<1, 2>(authorizer)];" },
-        ready_block = { "bind(handle, dir, broker); boot [{ start(config) }]; ready { let part = local_partition(&broker, dir.path()); };" },
-        allow_all_controller = { "bind(handle, dir, broker, ctx); boot [start_broker] allow_all; ready controller_leader; user [\"admin\"];" },
+        ready_block = {
+            "bind(handle, dir, broker); boot [{ start(config) }]; ready { let part = local_partition(&broker, dir.path()); };",
+        },
+        allow_all_controller = {
+            "bind(handle, dir, broker, ctx); boot [start_broker] allow_all; ready controller_leader; user [\"admin\"];",
+        },
         deny_all = { "bind(handle,dir,broker); boot [start_broker] deny_all;" },
-        controller_peer = { "bind(h,d,b,p,peer); boot [start_broker] controller_peer; user [\"alice\"];" },
-        native_client = { "bind(h,d,b,p,peer,ctx); boot [start_broker] allow_all; user [\"admin\"]; client [native_client::<1, 2>()];" },
+        controller_peer = {
+            "bind(h,d,b,p,peer); boot [start_broker] controller_peer; user [\"alice\"];",
+        },
+        native_client = {
+            "bind(h,d,b,p,peer,ctx); boot [start_broker] allow_all; user [\"admin\"]; client [native_client::<1, 2>()];",
+        },
     )]
     fn keeps_native_starters_and_combined_policy_order_explicit(valid: &str) {
         let setup = declaration(&valid.parse().unwrap()).unwrap();
@@ -223,11 +231,15 @@ mod tests {
         four_bindings = { "bind(h,d,b,c); boot [start()];" },
         unknown_policy = { "bind(h,d,b); boot [start] unknown;" },
         user_without_policy = { "bind(h,d,b); boot [start()]; user [\"admin\"];" },
-        malformed_client = { "bind(h,d,b,p,peer); boot [start()]; user [\"admin\"]; client [\"bad\"];" },
+        malformed_client = {
+            "bind(h,d,b,p,peer); boot [start()]; user [\"admin\"]; client [\"bad\"];",
+        },
         empty_user = { "bind(h,d,b,ctx); boot [start()]; user [];" },
         empty_client = { "bind(h,d,b,p,peer,ctx); boot [start()]; user [\"admin\"]; client [];" },
         client_without_peers = { "bind(h,d,b,ctx); boot [start()]; client [\"bad\"];" },
-        invalid_starter = { "bind(h,d,b,c); boot [start]; user [\"admin\"]; ready controller_leader;" },
+        invalid_starter = {
+            "bind(h,d,b,c); boot [start]; user [\"admin\"]; ready controller_leader;",
+        },
     )]
     fn rejects_invalid_combined_setups(invalid: &str) {
         assert2::assert!(declaration(&invalid.parse().unwrap()).is_err(), "{invalid}");

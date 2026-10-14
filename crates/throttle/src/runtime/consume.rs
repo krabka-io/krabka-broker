@@ -463,13 +463,58 @@ mod tests {
     /// pins the debt reported and the whole group after the step.
     #[yare::parameterized(
         unlimited = { UNLIMITED_BUCKET_STATE, 5 * SEC, 7, None, UNLIMITED_BUCKET_STATE },
-        within_balance = { bucket_state(10 * M, 20 * M, 20 * M, 0, 0), 0, 12, Some(0), bucket_state(10 * M, 20 * M, 8 * M, 0, 0) },
-        charge_past_balance = { bucket_state(10 * M, 20 * M, 5 * M, 0, 0), 0, 12, Some(7 * M), bucket_state(10 * M, 20 * M, 0, 7 * M, 0) },
-        adds_to_existing_debt = { bucket_state(10 * M, 20 * M, 0, 7 * M, 0), 0, 3, Some(10 * M), bucket_state(10 * M, 20 * M, 0, 10 * M, 0) },
-        refill_repaid_before_charge = { bucket_state(10 * M, 20 * M, 0, 7 * M, 0), SEC, 4, Some(M), bucket_state(10 * M, 20 * M, 0, M, SEC) },
-        fractional_refill_remainder = { bucket_state(4, 10 * M, 0, 0, 0), SEC / 2 + SEC / 8, 10, Some(10 * M - 2), BucketState { micro_refill_fraction: 500_000_000, ..bucket_state(4, 10 * M, 0, 10 * M - 2, SEC / 2 + SEC / 8) } },
-        half_token_debt = { bucket_state(M / 2, M, M / 2, 0, 0), 0, 1, Some(M / 2), bucket_state(M / 2, M, 0, M / 2, 0) },
-        debt_saturates = { bucket_state(M, M, 0, u64::MAX - 5, 0), 0, 1, Some(u64::MAX), bucket_state(M, M, 0, u64::MAX, 0) },
+        within_balance = {
+            bucket_state(10 * M, 20 * M, 20 * M, 0, 0),
+            0,
+            12,
+            Some(0),
+            bucket_state(10 * M, 20 * M, 8 * M, 0, 0),
+        },
+        charge_past_balance = {
+            bucket_state(10 * M, 20 * M, 5 * M, 0, 0),
+            0,
+            12,
+            Some(7 * M),
+            bucket_state(10 * M, 20 * M, 0, 7 * M, 0),
+        },
+        adds_to_existing_debt = {
+            bucket_state(10 * M, 20 * M, 0, 7 * M, 0),
+            0,
+            3,
+            Some(10 * M),
+            bucket_state(10 * M, 20 * M, 0, 10 * M, 0),
+        },
+        refill_repaid_before_charge = {
+            bucket_state(10 * M, 20 * M, 0, 7 * M, 0),
+            SEC,
+            4,
+            Some(M),
+            bucket_state(10 * M, 20 * M, 0, M, SEC),
+        },
+        fractional_refill_remainder = {
+            bucket_state(4, 10 * M, 0, 0, 0),
+            SEC / 2 + SEC / 8,
+            10,
+            Some(10 * M - 2),
+            BucketState {
+                micro_refill_fraction: 500_000_000,
+                ..bucket_state(4, 10 * M, 0, 10 * M - 2, SEC / 2 + SEC / 8)
+            },
+        },
+        half_token_debt = {
+            bucket_state(M / 2, M, M / 2, 0, 0),
+            0,
+            1,
+            Some(M / 2),
+            bucket_state(M / 2, M, 0, M / 2, 0),
+        },
+        debt_saturates = {
+            bucket_state(M, M, 0, u64::MAX - 5, 0),
+            0,
+            1,
+            Some(u64::MAX),
+            bucket_state(M, M, 0, u64::MAX, 0),
+        },
     )]
     fn record_step_charges_in_full_and_leaves_the_rest_as_debt(
         before: BucketState,
@@ -1029,16 +1074,79 @@ mod tests {
     /// micro-tokens and the request in whole tokens.
     #[yare::parameterized(
         unlimited = { UNLIMITED_BUCKET_STATE, 5 * SEC, 7, None, UNLIMITED_BUCKET_STATE },
-        full_elapsed_second = { bucket_state(10 * M, 20 * M, 0, 0, 0), SEC, 4, Some(4 * M), bucket_state(10 * M, 20 * M, 6 * M, 0, SEC) },
-        refill_capped_at_burst = { bucket_state(10 * M, 20 * M, 15 * M, 0, 0), SEC, 0, Some(0), bucket_state(10 * M, 20 * M, 20 * M, 0, SEC) },
-        fractional_remainder = { bucket_state(4, 10 * M, 0, 0, 0), SEC / 2 + SEC / 8, 10, Some(0), BucketState { micro_refill_fraction: 500_000_000, ..bucket_state(4, 10 * M, 2, 0, SEC / 2 + SEC / 8) } },
-        zero_burst = { bucket_state(10 * M, 0, 0, 0, 0), SEC, 3, Some(0), bucket_state(10 * M, 0, 0, 0, SEC) },
-        clock_behind_last_refill = { bucket_state(10 * M, 20 * M, 3 * M, 0, SEC), 0, 5, Some(3 * M), bucket_state(10 * M, 20 * M, 0, 0, SEC) },
-        half_token_stays_in_bucket = { bucket_state(M / 2, M, 0, 0, 0), SEC, 1, Some(0), bucket_state(M / 2, M, M / 2, 0, SEC) },
-        two_half_tokens_make_one = { bucket_state(M / 2, M, 0, 0, 0), 2 * SEC, 1, Some(M), bucket_state(M / 2, M, 0, 0, 2 * SEC) },
-        part_balance_grants_whole_tokens = { bucket_state(M, 3 * M, 2 * M + M / 4, 0, 0), 0, 5, Some(2 * M), bucket_state(M, 3 * M, M / 4, 0, 0) },
-        refill_reduces_debt = { bucket_state(10 * M, 20 * M, 0, 8 * M, 0), SEC / 2, 3, Some(0), bucket_state(10 * M, 20 * M, 0, 3 * M, SEC / 2) },
-        refill_past_debt_goes_to_balance = { bucket_state(10 * M, 20 * M, 0, 4 * M, 0), SEC, 3, Some(3 * M), bucket_state(10 * M, 20 * M, 3 * M, 0, SEC) },
+        full_elapsed_second = {
+            bucket_state(10 * M, 20 * M, 0, 0, 0),
+            SEC,
+            4,
+            Some(4 * M),
+            bucket_state(10 * M, 20 * M, 6 * M, 0, SEC),
+        },
+        refill_capped_at_burst = {
+            bucket_state(10 * M, 20 * M, 15 * M, 0, 0),
+            SEC,
+            0,
+            Some(0),
+            bucket_state(10 * M, 20 * M, 20 * M, 0, SEC),
+        },
+        fractional_remainder = {
+            bucket_state(4, 10 * M, 0, 0, 0),
+            SEC / 2 + SEC / 8,
+            10,
+            Some(0),
+            BucketState {
+                micro_refill_fraction: 500_000_000,
+                ..bucket_state(4, 10 * M, 2, 0, SEC / 2 + SEC / 8)
+            },
+        },
+        zero_burst = {
+            bucket_state(10 * M, 0, 0, 0, 0),
+            SEC,
+            3,
+            Some(0),
+            bucket_state(10 * M, 0, 0, 0, SEC),
+        },
+        clock_behind_last_refill = {
+            bucket_state(10 * M, 20 * M, 3 * M, 0, SEC),
+            0,
+            5,
+            Some(3 * M),
+            bucket_state(10 * M, 20 * M, 0, 0, SEC),
+        },
+        half_token_stays_in_bucket = {
+            bucket_state(M / 2, M, 0, 0, 0),
+            SEC,
+            1,
+            Some(0),
+            bucket_state(M / 2, M, M / 2, 0, SEC),
+        },
+        two_half_tokens_make_one = {
+            bucket_state(M / 2, M, 0, 0, 0),
+            2 * SEC,
+            1,
+            Some(M),
+            bucket_state(M / 2, M, 0, 0, 2 * SEC),
+        },
+        part_balance_grants_whole_tokens = {
+            bucket_state(M, 3 * M, 2 * M + M / 4, 0, 0),
+            0,
+            5,
+            Some(2 * M),
+            bucket_state(M, 3 * M, M / 4, 0, 0),
+        },
+        refill_reduces_debt = {
+            bucket_state(10 * M, 20 * M, 0, 8 * M, 0),
+            SEC / 2,
+            3,
+            Some(0),
+            bucket_state(10 * M, 20 * M, 0, 3 * M, SEC / 2),
+        },
+        refill_past_debt_goes_to_balance = {
+            bucket_state(10 * M, 20 * M, 0, 4 * M, 0),
+            SEC,
+            3,
+            Some(3 * M),
+            bucket_state(10 * M, 20 * M, 3 * M, 0, SEC),
+        },
     )]
     fn consume_step_refills_caps_and_grants(
         before: BucketState,

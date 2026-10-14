@@ -268,12 +268,48 @@ mod tests {
     /// record it reads to the limit. A batch the producer did not compress is
     /// never held to it.
     #[yare::parameterized(
-        found_before_oversized_batch = { krabka_compression::CompressionType::Gzip, 10, 1_000, Some(100), Ok(Some((10, 1_000))) },
-        oversized_record_is_match = { krabka_compression::CompressionType::Gzip, 10, 1_100, Some(100), Err(LARGE) },
-        oversized_record_before_match = { krabka_compression::CompressionType::Gzip, 10, 1_200, Some(100), Err(LARGE) },
-        batch_below_offset_floor = { krabka_compression::CompressionType::Gzip, 13, 1_100, Some(100), Ok(None) },
-        no_limit = { krabka_compression::CompressionType::Gzip, 10, 1_100, None, Ok(Some((11, 1_100))) },
-        uncompressed_batch = { krabka_compression::CompressionType::None, 10, 1_100, Some(100), Ok(Some((11, 1_100))) },
+        found_before_oversized_batch = {
+            krabka_compression::CompressionType::Gzip,
+            10,
+            1_000,
+            Some(100),
+            Ok(Some((10, 1_000))),
+        },
+        oversized_record_is_match = {
+            krabka_compression::CompressionType::Gzip,
+            10,
+            1_100,
+            Some(100),
+            Err(LARGE),
+        },
+        oversized_record_before_match = {
+            krabka_compression::CompressionType::Gzip,
+            10,
+            1_200,
+            Some(100),
+            Err(LARGE),
+        },
+        batch_below_offset_floor = {
+            krabka_compression::CompressionType::Gzip,
+            13,
+            1_100,
+            Some(100),
+            Ok(None),
+        },
+        no_limit = {
+            krabka_compression::CompressionType::Gzip,
+            10,
+            1_100,
+            None,
+            Ok(Some((11, 1_100))),
+        },
+        uncompressed_batch = {
+            krabka_compression::CompressionType::None,
+            10,
+            1_100,
+            Some(100),
+            Ok(Some((11, 1_100))),
+        },
     )]
     fn first_record_at_or_after_timestamp_refuses_only_the_records_kafka_reads(
         codec: krabka_compression::CompressionType,

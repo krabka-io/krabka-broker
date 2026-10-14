@@ -175,13 +175,35 @@ mod tests {
 
     #[yare::parameterized(
         withdrawn = { all_failing(), BreakGlassAdmission::Withdrawn },
-        consumed = { BreakGlassProposalFacts { withdrawn: false, ..all_failing() }, BreakGlassAdmission::Consumed },
-        expired = { BreakGlassProposalFacts { withdrawn: false, consumed: false, ..all_failing() }, BreakGlassAdmission::Expired },
-        insufficient_approvals = { BreakGlassProposalFacts { held_approvals: 1, ..base_facts() }, BreakGlassAdmission::NotEnoughApprovals },
-        unsigned = { BreakGlassProposalFacts { signing: BreakGlassApprovalSigning::NotAllSigned, ..base_facts() }, BreakGlassAdmission::Unsigned },
-        optional_unsigned = { BreakGlassProposalFacts { signature_policy: BreakGlassSignaturePolicy::Optional, signing: BreakGlassApprovalSigning::NotAllSigned, ..base_facts() }, BreakGlassAdmission::Usable },
+        consumed = {
+            BreakGlassProposalFacts { withdrawn: false, ..all_failing() },
+            BreakGlassAdmission::Consumed,
+        },
+        expired = {
+            BreakGlassProposalFacts { withdrawn: false, consumed: false, ..all_failing() },
+            BreakGlassAdmission::Expired,
+        },
+        insufficient_approvals = {
+            BreakGlassProposalFacts { held_approvals: 1, ..base_facts() },
+            BreakGlassAdmission::NotEnoughApprovals,
+        },
+        unsigned = {
+            BreakGlassProposalFacts { signing: BreakGlassApprovalSigning::NotAllSigned, ..base_facts() },
+            BreakGlassAdmission::Unsigned,
+        },
+        optional_unsigned = {
+            BreakGlassProposalFacts {
+                signature_policy: BreakGlassSignaturePolicy::Optional,
+                signing: BreakGlassApprovalSigning::NotAllSigned,
+                ..base_facts()
+            },
+            BreakGlassAdmission::Usable,
+        },
         admitted = { base_facts(), BreakGlassAdmission::Usable },
-        extra_approvals = { BreakGlassProposalFacts { held_approvals: 3, ..base_facts() }, BreakGlassAdmission::Usable },
+        extra_approvals = {
+            BreakGlassProposalFacts { held_approvals: 3, ..base_facts() },
+            BreakGlassAdmission::Usable,
+        },
     )]
     fn break_glass_checks_are_ordered_and_fail_closed(
         facts: BreakGlassProposalFacts,

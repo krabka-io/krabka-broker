@@ -121,7 +121,9 @@ mod tests {
 
     #[yare::parameterized(
         empty_input = { "" },
-        multiple_case_bindings = { "case(label,auth,expected) [cases]; bind(h,d,b,c,r); invoke [handle()];" },
+        multiple_case_bindings = {
+            "case(label,auth,expected) [cases]; bind(h,d,b,c,r); invoke [handle()];",
+        },
         empty_case_list = { "case(row) []; bind(h,d,b,c,r); invoke [handle()];" },
         short_binding_list = { "case(row) [cases]; bind(h,d,b,c); invoke [handle()];" },
         empty_invoke = { "case(row) [cases]; bind(h,d,b,c,r); invoke [];" },

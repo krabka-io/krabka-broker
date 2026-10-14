@@ -83,12 +83,24 @@ const NODE_ID: &str = "1";
     standalone = { &["--standalone", "--controller-listener", "controller-1:9093"], EXIT_OK },
     no_initial_controllers = { &["--no-initial-controllers"], EXIT_OK },
     kraft_one_without_quorum = { &["--feature", "kraft.version=1"], EXIT_INVALID_FEATURE },
-    standalone_kraft_zero = { &["--standalone", "--controller-listener", "c:9093", "--feature", "kraft.version=0"], EXIT_INVALID_FEATURE },
-    duplicate_kraft_feature = { &["--no-initial-controllers", "--feature", "kraft.version=1", "--feature", "kraft.version=1"], EXIT_INVALID_FEATURE },
+    standalone_kraft_zero = {
+        &["--standalone", "--controller-listener", "c:9093", "--feature", "kraft.version=0"],
+        EXIT_INVALID_FEATURE,
+    },
+    duplicate_kraft_feature = {
+        &["--no-initial-controllers", "--feature", "kraft.version=1", "--feature", "kraft.version=1"],
+        EXIT_INVALID_FEATURE,
+    },
     kraft_above_range = { &["--feature", "kraft.version=2"], EXIT_INVALID_FEATURE },
     standalone_without_listener = { &["--standalone"], EXIT_BOOTSTRAP_FAIL },
-    listener_without_port = { &["--standalone", "--controller-listener", "hostonly"], EXIT_BOOTSTRAP_FAIL },
-    listener_without_host = { &["--standalone", "--controller-listener", ":9093"], EXIT_BOOTSTRAP_FAIL },
+    listener_without_port = {
+        &["--standalone", "--controller-listener", "hostonly"],
+        EXIT_BOOTSTRAP_FAIL,
+    },
+    listener_without_host = {
+        &["--standalone", "--controller-listener", ":9093"],
+        EXIT_BOOTSTRAP_FAIL,
+    },
     listener_port_zero = { &["--standalone", "--controller-listener", "c:0"], EXIT_BOOTSTRAP_FAIL },
 )]
 #[test_macro(tokio::test)]
@@ -103,10 +115,22 @@ async fn exit_code_for_each_argv(extra: &[&str], want: i32) {
 /// before it checks that the feature defines the level. So the first error a
 /// command line with several wrong things reports is fixed.
 #[yare::parameterized(
-    unknown_release_first = { &["--release-version", "9.9-IV0", "--feature", "kraft.version=9"], "krabka format: Unknown metadata.version '9.9-IV0'." },
-    unknown_feature_first = { &["--feature", "nope.version=1", "--feature", "kraft.version=9"], "krabka format: Unsupported feature: nope.version." },
-    mode_conflict_first = { &["--feature", "kraft.version=9"], "krabka format: kraft.version=9 requires --standalone," },
-    undefined_kraft_level = { &["--no-initial-controllers", "--feature", "kraft.version=9"], "krabka format: No feature:kraft.version with feature level 9" },
+    unknown_release_first = {
+        &["--release-version", "9.9-IV0", "--feature", "kraft.version=9"],
+        "krabka format: Unknown metadata.version '9.9-IV0'.",
+    },
+    unknown_feature_first = {
+        &["--feature", "nope.version=1", "--feature", "kraft.version=9"],
+        "krabka format: Unsupported feature: nope.version.",
+    },
+    mode_conflict_first = {
+        &["--feature", "kraft.version=9"],
+        "krabka format: kraft.version=9 requires --standalone,",
+    },
+    undefined_kraft_level = {
+        &["--no-initial-controllers", "--feature", "kraft.version=9"],
+        "krabka format: No feature:kraft.version with feature level 9",
+    },
 )]
 fn the_first_error_follows_kafkas_order(extra: &[&str], want: &str) {
     use clap::Parser as _;
@@ -148,7 +172,10 @@ fn checkpoint_len(log_dir: &std::path::Path) -> u64 {
 #[yare::parameterized(
     static_format = { &[], false },
     standalone = { &["--standalone", "--controller-listener", "controller-1:9093"], true },
-    explicit_controllers = { &["--initial-controllers", "1@host:9093:00000000-0000-0000-0000-000000000003"], true },
+    explicit_controllers = {
+        &["--initial-controllers", "1@host:9093:00000000-0000-0000-0000-000000000003"],
+        true,
+    },
     no_initial_controllers = { &["--no-initial-controllers"], true },
 )]
 #[test_macro(tokio::test)]
@@ -194,10 +221,26 @@ async fn the_checkpoint_carries_voters_only_when_the_quorum_has_them() {
 /// The explicit quorum must name each controller once and must include
 /// this node.
 #[yare::parameterized(
-    valid_pair = { "1", "1@host-a:9093:00000000-0000-0000-0000-000000000001,2@host-b:9093:00000000-0000-0000-0000-000000000002", EXIT_OK },
-    duplicate_node_id = { "1", "1@host-a:9093:00000000-0000-0000-0000-000000000001,1@host-c:9093:00000000-0000-0000-0000-00000000000c", EXIT_BOOTSTRAP_FAIL },
-    duplicate_directory_id = { "1", "1@host-a:9093:00000000-0000-0000-0000-000000000001,3@host-d:9093:00000000-0000-0000-0000-000000000001", EXIT_BOOTSTRAP_FAIL },
-    local_node_missing = { "9", "1@host-a:9093:00000000-0000-0000-0000-000000000001,2@host-b:9093:00000000-0000-0000-0000-000000000002", EXIT_BOOTSTRAP_FAIL },
+    valid_pair = {
+        "1",
+        "1@host-a:9093:00000000-0000-0000-0000-000000000001,2@host-b:9093:00000000-0000-0000-0000-000000000002",
+        EXIT_OK,
+    },
+    duplicate_node_id = {
+        "1",
+        "1@host-a:9093:00000000-0000-0000-0000-000000000001,1@host-c:9093:00000000-0000-0000-0000-00000000000c",
+        EXIT_BOOTSTRAP_FAIL,
+    },
+    duplicate_directory_id = {
+        "1",
+        "1@host-a:9093:00000000-0000-0000-0000-000000000001,3@host-d:9093:00000000-0000-0000-0000-000000000001",
+        EXIT_BOOTSTRAP_FAIL,
+    },
+    local_node_missing = {
+        "9",
+        "1@host-a:9093:00000000-0000-0000-0000-000000000001,2@host-b:9093:00000000-0000-0000-0000-000000000002",
+        EXIT_BOOTSTRAP_FAIL,
+    },
 )]
 #[test_macro(tokio::test)]
 async fn an_explicit_quorum_is_checked_for_duplicates_and_for_this_node(
@@ -642,8 +685,14 @@ fn the_metadata_log_directory_leads_the_directory_set(scenario: &str) {
 /// the metadata log directory, also when `--metadata-log-dir` puts it apart
 /// from the log directories. A data directory gets another id.
 #[yare::parameterized(
-    static_directory_id = { &["--directory-id", "00000000-0000-0000-0000-000000000064"], DirectoryKind::StaticMetadata },
-    dynamic_voter_directory_id = { &["--initial-controllers", "1@controller-1:9093:00000000-0000-0000-0000-000000000064"], DirectoryKind::DynamicMetadataVoter },
+    static_directory_id = {
+        &["--directory-id", "00000000-0000-0000-0000-000000000064"],
+        DirectoryKind::StaticMetadata,
+    },
+    dynamic_voter_directory_id = {
+        &["--initial-controllers", "1@controller-1:9093:00000000-0000-0000-0000-000000000064"],
+        DirectoryKind::DynamicMetadataVoter,
+    },
 )]
 fn the_directory_id_belongs_to_the_metadata_log_directory(extra: &[&str], kind: DirectoryKind) {
     let id = DirectoryId(uuid::Uuid::from_u128(0x64));
@@ -703,7 +752,9 @@ krabka_macros::directory_tree_fixture!(
     static_separate_metadata = { "static, a separate metadata log directory" },
     dynamic_separate_metadata = { "standalone, a separate metadata log directory" },
     dynamic_first_log_dir = { "standalone, the first --log-dir" },
-    dynamic_metadata_is_log_dir = { "standalone, a metadata log directory that is also a log directory" },
+    dynamic_metadata_is_log_dir = {
+        "standalone, a metadata log directory that is also a log directory",
+    },
 )]
 #[test_macro(tokio::test)]
 async fn only_the_metadata_log_directory_gets_the_bootstrap_files(scenario: &str) {

@@ -140,14 +140,50 @@ mod tests {
     }
 
     #[yare::parameterized(
-        missing = { BreakGlassConsumptionFacts { proposal: BreakGlassProposalState::Missing, ..exact_pending() }, BreakGlassConsumptionDecision::Missing },
-        zero_timestamp = { BreakGlassConsumptionFacts { consumed_at_ms: 0, ..exact_pending() }, BreakGlassConsumptionDecision::Malformed },
-        missing_precedes_tail = { BreakGlassConsumptionFacts { proposal: BreakGlassProposalState::Missing, consumed_at_ms: 0, uncommitted_tail: true }, BreakGlassConsumptionDecision::Missing },
-        negative_timestamp = { BreakGlassConsumptionFacts { consumed_at_ms: -1, uncommitted_tail: true, ..exact_pending() }, BreakGlassConsumptionDecision::Malformed },
-        stale_zero_timestamp = { BreakGlassConsumptionFacts { proposal: BreakGlassProposalState::Stale, consumed_at_ms: 0, ..exact_pending() }, BreakGlassConsumptionDecision::Malformed },
-        stale = { BreakGlassConsumptionFacts { proposal: BreakGlassProposalState::Stale, ..exact_pending() }, BreakGlassConsumptionDecision::Stale },
-        stale_with_tail = { BreakGlassConsumptionFacts { proposal: BreakGlassProposalState::Stale, uncommitted_tail: true, ..exact_pending() }, BreakGlassConsumptionDecision::Stale },
-        in_flight = { BreakGlassConsumptionFacts { uncommitted_tail: true, ..exact_pending() }, BreakGlassConsumptionDecision::InFlight },
+        missing = {
+            BreakGlassConsumptionFacts { proposal: BreakGlassProposalState::Missing, ..exact_pending() },
+            BreakGlassConsumptionDecision::Missing,
+        },
+        zero_timestamp = {
+            BreakGlassConsumptionFacts { consumed_at_ms: 0, ..exact_pending() },
+            BreakGlassConsumptionDecision::Malformed,
+        },
+        missing_precedes_tail = {
+            BreakGlassConsumptionFacts {
+                proposal: BreakGlassProposalState::Missing,
+                consumed_at_ms: 0,
+                uncommitted_tail: true,
+            },
+            BreakGlassConsumptionDecision::Missing,
+        },
+        negative_timestamp = {
+            BreakGlassConsumptionFacts { consumed_at_ms: -1, uncommitted_tail: true, ..exact_pending() },
+            BreakGlassConsumptionDecision::Malformed,
+        },
+        stale_zero_timestamp = {
+            BreakGlassConsumptionFacts {
+                proposal: BreakGlassProposalState::Stale,
+                consumed_at_ms: 0,
+                ..exact_pending()
+            },
+            BreakGlassConsumptionDecision::Malformed,
+        },
+        stale = {
+            BreakGlassConsumptionFacts { proposal: BreakGlassProposalState::Stale, ..exact_pending() },
+            BreakGlassConsumptionDecision::Stale,
+        },
+        stale_with_tail = {
+            BreakGlassConsumptionFacts {
+                proposal: BreakGlassProposalState::Stale,
+                uncommitted_tail: true,
+                ..exact_pending()
+            },
+            BreakGlassConsumptionDecision::Stale,
+        },
+        in_flight = {
+            BreakGlassConsumptionFacts { uncommitted_tail: true, ..exact_pending() },
+            BreakGlassConsumptionDecision::InFlight,
+        },
     )]
     fn consumption_requires_the_exact_current_proposal_and_no_uncommitted_tail(
         facts: BreakGlassConsumptionFacts,
@@ -157,11 +193,29 @@ mod tests {
     }
 
     #[yare::parameterized(
-        ungated = { BreakGlassLocalActionFacts { spend: BreakGlassLocalSpendState::Ungated, commit_succeeded: false }, BreakGlassLocalActionDecision::Apply },
-        pending_commit = { BreakGlassLocalActionFacts { spend: BreakGlassLocalSpendState::Pending, commit_succeeded: true }, BreakGlassLocalActionDecision::Apply },
-        committed = { BreakGlassLocalActionFacts { spend: BreakGlassLocalSpendState::Committed, commit_succeeded: false }, BreakGlassLocalActionDecision::Apply },
-        pending_uncommitted = { BreakGlassLocalActionFacts { spend: BreakGlassLocalSpendState::Pending, commit_succeeded: false }, BreakGlassLocalActionDecision::Reject },
-        mismatched = { BreakGlassLocalActionFacts { spend: BreakGlassLocalSpendState::MissingOrMismatched, commit_succeeded: true }, BreakGlassLocalActionDecision::Reject },
+        ungated = {
+            BreakGlassLocalActionFacts { spend: BreakGlassLocalSpendState::Ungated, commit_succeeded: false },
+            BreakGlassLocalActionDecision::Apply,
+        },
+        pending_commit = {
+            BreakGlassLocalActionFacts { spend: BreakGlassLocalSpendState::Pending, commit_succeeded: true },
+            BreakGlassLocalActionDecision::Apply,
+        },
+        committed = {
+            BreakGlassLocalActionFacts { spend: BreakGlassLocalSpendState::Committed, commit_succeeded: false },
+            BreakGlassLocalActionDecision::Apply,
+        },
+        pending_uncommitted = {
+            BreakGlassLocalActionFacts { spend: BreakGlassLocalSpendState::Pending, commit_succeeded: false },
+            BreakGlassLocalActionDecision::Reject,
+        },
+        mismatched = {
+            BreakGlassLocalActionFacts {
+                spend: BreakGlassLocalSpendState::MissingOrMismatched,
+                commit_succeeded: true,
+            },
+            BreakGlassLocalActionDecision::Reject,
+        },
     )]
     fn local_actions_run_only_after_a_matching_durable_spend(
         facts: BreakGlassLocalActionFacts,

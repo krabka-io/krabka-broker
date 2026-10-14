@@ -64,7 +64,12 @@ fn log_at(start: Start) -> TempLog {
     no_producer_state = { "no producer state", Start::Empty, 0, Ok(true) },
     after_commit = { "after a commit", Start::CommittedAtEpoch3, 3, Ok(true) },
     open_transaction = { "open transaction", Start::OpenAtEpoch3, 3, Ok(false) },
-    stale_epoch = { "open transaction, stale epoch", Start::OpenAtEpoch3, 2, Err(TransactionAppendRefusal::StaleProducerEpoch) },
+    stale_epoch = {
+        "open transaction, stale epoch",
+        Start::OpenAtEpoch3,
+        2,
+        Err(TransactionAppendRefusal::StaleProducerEpoch),
+    },
     newer_epoch = { "open transaction, newer epoch", Start::OpenAtEpoch3, 4, Ok(true) },
 )]
 fn a_verification_starts_only_outside_an_open_transaction(
@@ -86,13 +91,55 @@ fn a_verification_starts_only_outside_an_open_transaction(
 /// The append-time check of `UnifiedLog.analyzeAndValidateProducerState` and
 /// `ProducerAppendInfo`.
 #[yare::parameterized(
-    no_transaction_no_guard = { "no transaction, no guard", Start::CommittedAtEpoch3, batch(3, 2, true), Presented::Sentinel, Err(TransactionAppendRefusal::InvalidTransactionState) },
-    no_transaction_current_guard = { "no transaction, current guard", Start::CommittedAtEpoch3, batch(3, 2, true), Presented::StartedGuard, Ok(()) },
-    marker_cleared_guard = { "a marker cleared the guard", Start::OpenAtEpoch3, batch(3, 2, true), Presented::GuardBeforeMarker, Err(TransactionAppendRefusal::InvalidTransactionState) },
-    open_transaction = { "open transaction", Start::OpenAtEpoch3, batch(3, 2, true), Presented::Sentinel, Ok(()) },
-    stale_epoch = { "stale epoch", Start::CommittedAtEpoch3, batch(2, 2, true), Presented::Sentinel, Err(TransactionAppendRefusal::StaleProducerEpoch) },
-    non_transactional_in_open = { "non-transactional batch in an open transaction", Start::OpenAtEpoch3, batch(3, 2, false), Presented::Sentinel, Err(TransactionAppendRefusal::InvalidTransactionState) },
-    non_transactional_after_commit = { "non-transactional batch after a commit", Start::CommittedAtEpoch3, batch(3, 2, false), Presented::Sentinel, Ok(()) },
+    no_transaction_no_guard = {
+        "no transaction, no guard",
+        Start::CommittedAtEpoch3,
+        batch(3, 2, true),
+        Presented::Sentinel,
+        Err(TransactionAppendRefusal::InvalidTransactionState),
+    },
+    no_transaction_current_guard = {
+        "no transaction, current guard",
+        Start::CommittedAtEpoch3,
+        batch(3, 2, true),
+        Presented::StartedGuard,
+        Ok(()),
+    },
+    marker_cleared_guard = {
+        "a marker cleared the guard",
+        Start::OpenAtEpoch3,
+        batch(3, 2, true),
+        Presented::GuardBeforeMarker,
+        Err(TransactionAppendRefusal::InvalidTransactionState),
+    },
+    open_transaction = {
+        "open transaction",
+        Start::OpenAtEpoch3,
+        batch(3, 2, true),
+        Presented::Sentinel,
+        Ok(()),
+    },
+    stale_epoch = {
+        "stale epoch",
+        Start::CommittedAtEpoch3,
+        batch(2, 2, true),
+        Presented::Sentinel,
+        Err(TransactionAppendRefusal::StaleProducerEpoch),
+    },
+    non_transactional_in_open = {
+        "non-transactional batch in an open transaction",
+        Start::OpenAtEpoch3,
+        batch(3, 2, false),
+        Presented::Sentinel,
+        Err(TransactionAppendRefusal::InvalidTransactionState),
+    },
+    non_transactional_after_commit = {
+        "non-transactional batch after a commit",
+        Start::CommittedAtEpoch3,
+        batch(3, 2, false),
+        Presented::Sentinel,
+        Ok(()),
+    },
 )]
 fn an_append_needs_an_open_transaction_or_the_current_guard(
     name: &str,
@@ -129,10 +176,34 @@ fn an_append_needs_an_open_transaction_or_the_current_guard(
 
 /// Kafka's `ProducerAppendInfo.checkSequence` with a verification state.
 #[yare::parameterized(
-    version_two_sequence_zero = { "transaction version 2, no batch, sequence 0", true, 0, 0, Ok(()) },
-    version_two_sequence_five = { "transaction version 2, no batch, sequence 5", true, 5, 5, Err(TransactionAppendRefusal::OutOfOrderSequence) },
-    version_one_sequence_five = { "transaction version 1, no batch, sequence 5", false, 5, 5, Ok(()) },
-    above_lowest_sequence = { "above the lowest verified sequence", false, 5, 7, Err(TransactionAppendRefusal::OutOfOrderSequence) },
+    version_two_sequence_zero = {
+        "transaction version 2, no batch, sequence 0",
+        true,
+        0,
+        0,
+        Ok(()),
+    },
+    version_two_sequence_five = {
+        "transaction version 2, no batch, sequence 5",
+        true,
+        5,
+        5,
+        Err(TransactionAppendRefusal::OutOfOrderSequence),
+    },
+    version_one_sequence_five = {
+        "transaction version 1, no batch, sequence 5",
+        false,
+        5,
+        5,
+        Ok(()),
+    },
+    above_lowest_sequence = {
+        "above the lowest verified sequence",
+        false,
+        5,
+        7,
+        Err(TransactionAppendRefusal::OutOfOrderSequence),
+    },
 )]
 fn a_verified_first_batch_keeps_the_verified_sequence(
     name: &str,

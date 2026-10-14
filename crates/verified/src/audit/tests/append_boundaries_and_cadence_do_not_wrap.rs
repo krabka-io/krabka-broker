@@ -32,11 +32,31 @@ fn append_boundaries_and_cadence_do_not_wrap() {
 }
 
 #[yare::parameterized(
-    reports_every_pending_loss = { AuditLosses { generation: 4, count: 2 }, AuditLosses { generation: 4, count: 2 }, AuditLosses { generation: 4, count: 0 } },
-    later_loss_moves_to_new_generation = { AuditLosses { generation: 4, count: 3 }, AuditLosses { generation: 4, count: 2 }, AuditLosses { generation: 5, count: 1 } },
-    different_generation_marker_settles_nothing = { AuditLosses { generation: 5, count: 1 }, AuditLosses { generation: 4, count: 2 }, AuditLosses { generation: 5, count: 1 } },
-    over_report_clamps_to_zero = { AuditLosses { generation: 4, count: 1 }, AuditLosses { generation: 4, count: 2 }, AuditLosses { generation: 4, count: 0 } },
-    final_generation_saturates = { AuditLosses { generation: u64::MAX, count: 3 }, AuditLosses { generation: u64::MAX, count: 1 }, AuditLosses { generation: u64::MAX, count: 2 } },
+    reports_every_pending_loss = {
+        AuditLosses { generation: 4, count: 2 },
+        AuditLosses { generation: 4, count: 2 },
+        AuditLosses { generation: 4, count: 0 },
+    },
+    later_loss_moves_to_new_generation = {
+        AuditLosses { generation: 4, count: 3 },
+        AuditLosses { generation: 4, count: 2 },
+        AuditLosses { generation: 5, count: 1 },
+    },
+    different_generation_marker_settles_nothing = {
+        AuditLosses { generation: 5, count: 1 },
+        AuditLosses { generation: 4, count: 2 },
+        AuditLosses { generation: 5, count: 1 },
+    },
+    over_report_clamps_to_zero = {
+        AuditLosses { generation: 4, count: 1 },
+        AuditLosses { generation: 4, count: 2 },
+        AuditLosses { generation: 4, count: 0 },
+    },
+    final_generation_saturates = {
+        AuditLosses { generation: u64::MAX, count: 3 },
+        AuditLosses { generation: u64::MAX, count: 1 },
+        AuditLosses { generation: u64::MAX, count: 2 },
+    },
 )]
 fn loss_settlement_keeps_later_losses_in_a_fresh_generation(
     state: AuditLosses,
@@ -59,7 +79,14 @@ fn checkpoint_requires_an_exact_nonempty_position() {
 
 #[yare::parameterized(
     exact_marker = { true, 2, 3, Some(2), 1, AuditLossMarkerAdmission::Admit { generation: 2 } },
-    earlier_generation = { true, 2, 3, Some(1), 0, AuditLossMarkerAdmission::Admit { generation: 1 } },
+    earlier_generation = {
+        true,
+        2,
+        3,
+        Some(1),
+        0,
+        AuditLossMarkerAdmission::Admit { generation: 1 },
+    },
     missing_generation_one_field = { true, 1, 3, None, 0, AuditLossMarkerAdmission::Reject },
     missing_generation = { true, 2, 3, None, 0, AuditLossMarkerAdmission::Reject },
     too_many_fields = { true, 3, 3, Some(2), 1, AuditLossMarkerAdmission::Reject },

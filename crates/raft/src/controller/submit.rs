@@ -447,7 +447,10 @@ mod tests {
     }
 
     #[yare::parameterized(
-        registered_voter = { NodeId(2), Some("demo-broker-2-0.demo-broker-headless.default.svc.cluster.local:9093".to_owned()) },
+        registered_voter = {
+            NodeId(2),
+            Some("demo-broker-2-0.demo-broker-headless.default.svc.cluster.local:9093".to_owned()),
+        },
         unknown_voter = { NodeId(99), None },
     )]
     fn controller_endpoint_addr_keeps_dns_hostname_not_parsed_socketaddr(
@@ -665,12 +668,48 @@ mod tests {
     #[yare::parameterized(
         applied = { 0, -1, API_KEY_SUBMIT_CHANGE, 0, SubmitResponseExpectation::Applied },
         topic_exists = { 2, -1, API_KEY_SUBMIT_CHANGE, 0, SubmitResponseExpectation::TopicExists },
-        uncommitted_tail = { SUBMIT_CHANGE_UNCOMMITTED_TAIL, -1, API_KEY_SUBMIT_CHANGE, 0, SubmitResponseExpectation::UncommittedTail },
-        cluster_authorization = { PRIVATE_CLUSTER_AUTHORIZATION_FAILED, -1, API_KEY_SUBMIT_CHANGE, 0, SubmitResponseExpectation::ClusterAuthorizationFailed },
-        submit_unsupported_version = { PRIVATE_UNSUPPORTED_VERSION, -1, API_KEY_SUBMIT_CHANGE, 2, SubmitResponseExpectation::UnsupportedVersion },
-        token_unsupported_version = { PRIVATE_UNSUPPORTED_VERSION, -1, API_KEY_DELEGATION_TOKEN_MUTATION, 2, SubmitResponseExpectation::UnsupportedVersion },
-        not_leader_with_hint = { 1, 9, API_KEY_SUBMIT_CHANGE, 0, SubmitResponseExpectation::NotLeaderWithHint },
-        not_leader_without_hint = { 3, -1, API_KEY_SUBMIT_CHANGE, 0, SubmitResponseExpectation::NotLeaderWithoutHint },
+        uncommitted_tail = {
+            SUBMIT_CHANGE_UNCOMMITTED_TAIL,
+            -1,
+            API_KEY_SUBMIT_CHANGE,
+            0,
+            SubmitResponseExpectation::UncommittedTail,
+        },
+        cluster_authorization = {
+            PRIVATE_CLUSTER_AUTHORIZATION_FAILED,
+            -1,
+            API_KEY_SUBMIT_CHANGE,
+            0,
+            SubmitResponseExpectation::ClusterAuthorizationFailed,
+        },
+        submit_unsupported_version = {
+            PRIVATE_UNSUPPORTED_VERSION,
+            -1,
+            API_KEY_SUBMIT_CHANGE,
+            2,
+            SubmitResponseExpectation::UnsupportedVersion,
+        },
+        token_unsupported_version = {
+            PRIVATE_UNSUPPORTED_VERSION,
+            -1,
+            API_KEY_DELEGATION_TOKEN_MUTATION,
+            2,
+            SubmitResponseExpectation::UnsupportedVersion,
+        },
+        not_leader_with_hint = {
+            1,
+            9,
+            API_KEY_SUBMIT_CHANGE,
+            0,
+            SubmitResponseExpectation::NotLeaderWithHint,
+        },
+        not_leader_without_hint = {
+            3,
+            -1,
+            API_KEY_SUBMIT_CHANGE,
+            0,
+            SubmitResponseExpectation::NotLeaderWithoutHint,
+        },
     )]
     fn translate_submit_change_response_maps_each_error_code(
         code: i16,

@@ -571,8 +571,7 @@ mod tests {
         },
         shutdown = { Box::new(BrokerError::Shutdown) as Box<dyn std::error::Error>, false },
         bare_message = {
-            Box::new(std::io::Error::other("failed to read the config"))
-                as Box<dyn std::error::Error>,
+            Box::new(std::io::Error::other("failed to read the config")) as Box<dyn std::error::Error>,
             false,
         },
     )]

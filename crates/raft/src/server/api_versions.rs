@@ -790,7 +790,10 @@ mod tests {
     /// its view has none.
     #[yare::parameterized(
         disabled = { UnstableApiVersions::Disabled, LATEST_PRODUCTION_METADATA_VERSION },
-        enabled = { UnstableApiVersions::Enabled, krabka_metadata::metadata_version::METADATA_VERSION_MAX },
+        enabled = {
+            UnstableApiVersions::Enabled,
+            krabka_metadata::metadata_version::METADATA_VERSION_MAX,
+        },
     )]
     fn the_controller_listener_caps_supported_features_with_the_api_flag(
         unstable: UnstableApiVersions,

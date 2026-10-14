@@ -28,12 +28,28 @@ fn reload_keeps_exactly_the_half_open_range_above_the_log_start(offset: i64, kep
 }
 
 #[yare::parameterized(
-    all_match_segment_bases = { &[0_i64, 4, 8][..], &[0_i64, 4, 8][..], &[false, false, false][..] },
+    all_match_segment_bases = {
+        &[0_i64, 4, 8][..],
+        &[0_i64, 4, 8][..],
+        &[false, false, false][..],
+    },
     older_strays_removed = { &[2_i64, 4, 6][..], &[0_i64, 4, 8][..], &[true, false, true][..] },
-    clean_shutdown_snapshot_preserved = { &[4_i64, 8, 11][..], &[0_i64, 4, 8][..], &[false, false, false][..] },
-    only_newest_above_bases_preserved = { &[9_i64, 11][..], &[0_i64, 4, 8][..], &[true, false][..] },
+    clean_shutdown_snapshot_preserved = {
+        &[4_i64, 8, 11][..],
+        &[0_i64, 4, 8][..],
+        &[false, false, false][..],
+    },
+    only_newest_above_bases_preserved = {
+        &[9_i64, 11][..],
+        &[0_i64, 4, 8][..],
+        &[true, false][..],
+    },
     newest_snapshot_without_segments = { &[3_i64, 7][..], &[][..], &[true, false][..] },
-    input_order_is_irrelevant = { &[11_i64, 2, 4][..], &[8_i64, 0, 4][..], &[false, true, false][..] },
+    input_order_is_irrelevant = {
+        &[11_i64, 2, 4][..],
+        &[8_i64, 0, 4][..],
+        &[false, true, false][..],
+    },
 )]
 fn stray_snapshots_follow_kafka_remove_stray_snapshots(
     snapshots: &[i64],
@@ -97,15 +113,27 @@ const MARKER_ONLY: ProducerSnapshotEntryFacts = ProducerSnapshotEntryFacts {
     }, true },
     negative_snapshot_offset = { -1, MARKER_ONLY, false },
     negative_producer_id = { 10, ProducerSnapshotEntryFacts { producer_id: -1, ..VALID }, false },
-    negative_producer_epoch = { 10, ProducerSnapshotEntryFacts { producer_epoch: -1, ..VALID }, false },
+    negative_producer_epoch = {
+        10,
+        ProducerSnapshotEntryFacts { producer_epoch: -1, ..VALID },
+        false,
+    },
     coordinator_epoch_below_sentinel = { 10, ProducerSnapshotEntryFacts {
         coordinator_epoch: -2, ..VALID
     }, false },
-    last_record_at_boundary = { 10, ProducerSnapshotEntryFacts { last_offset: 10, ..VALID }, false },
+    last_record_at_boundary = {
+        10,
+        ProducerSnapshotEntryFacts { last_offset: 10, ..VALID },
+        false,
+    },
     delta_below_zero = { 10, ProducerSnapshotEntryFacts {
         last_offset: 0, offset_delta: 1, current_txn_first_offset: -1, ..VALID
     }, false },
-    sentinel_with_delta = { 10, ProducerSnapshotEntryFacts { offset_delta: 1, ..MARKER_ONLY }, false },
+    sentinel_with_delta = {
+        10,
+        ProducerSnapshotEntryFacts { offset_delta: 1, ..MARKER_ONLY },
+        false,
+    },
     transaction_at_boundary = { 10, ProducerSnapshotEntryFacts {
         current_txn_first_offset: 10, ..VALID
     }, false },

@@ -150,9 +150,22 @@ fn plan(records: Vec<MetadataRecord>, features: &[&str]) -> UpdatePlan {
     },
     downgrade_without_downgrade_type = {
         "a downgrade without a downgrade type",
-        image(&[FeatureLevel { name: "metadata.version", level: 25 }, FeatureLevel { name: "group.version", level: 1 }]),
+        image(&[
+            FeatureLevel {
+                name: "metadata.version",
+                level: 25,
+            },
+            FeatureLevel {
+                name: "group.version",
+                level: 1,
+            },
+        ]),
         vec![named_update("group.version", 0, UPGRADE)],
-        Err(invalid("group.version", 0, "Can't downgrade the version of this feature without setting the upgrade type to either safe or unsafe downgrade.")),
+        Err(invalid(
+            "group.version",
+            0,
+            "Can't downgrade the version of this feature without setting the upgrade type to either safe or unsafe downgrade.",
+        )),
     },
     downgrade_type_raises_level = {
         "a downgrade type that raises the level",
@@ -164,13 +177,26 @@ fn plan(records: Vec<MetadataRecord>, features: &[&str]) -> UpdatePlan {
         "dependencies read the levels the request proposes",
         image(&[FeatureLevel { name: "metadata.version", level: 22 }]),
         vec![metadata_update(23, UPGRADE), elr_update(1, UPGRADE)],
-        Ok(UpdatePlan { enables_elr: true, ..plan(vec![feature_record("metadata.version", 23), feature_record("eligible.leader.replicas.version", 1)], &["metadata.version", "eligible.leader.replicas.version"]) }),
+        Ok(UpdatePlan {
+            enables_elr: true,
+            ..plan(
+                vec![
+                    feature_record("metadata.version", 23),
+                    feature_record("eligible.leader.replicas.version", 1),
+                ],
+                &["metadata.version", "eligible.leader.replicas.version"],
+            )
+        }),
     },
     unmet_dependency = {
         "an unmet dependency",
         image(&[FeatureLevel { name: "metadata.version", level: 22 }]),
         vec![elr_update(1, UPGRADE)],
-        Err(invalid("eligible.leader.replicas.version", 1, "eligible.leader.replicas.version could not be set to 1 because it depends on metadata.version level 23")),
+        Err(invalid(
+            "eligible.leader.replicas.version",
+            1,
+            "eligible.leader.replicas.version could not be set to 1 because it depends on metadata.version level 23",
+        )),
     },
 )]
 fn rows_validate_as_kafkas_update_feature(
@@ -191,11 +217,31 @@ fn rows_validate_as_kafkas_update_feature(
 /// is refused with `QuorumFeatures.reasonNotSupported`'s text, as a 4.3.1
 /// controller refuses it. With the flag set, trunk's levels are accepted.
 #[yare::parameterized(
-    latest_stable_level = { LOCAL, 30, Ok(plan(vec![feature_record("metadata.version", 30)], &["metadata.version"])) },
-    first_unstable_level_is_refused = { LOCAL, 31, Err(invalid("metadata.version", 31, "Local controller 1 only supports versions 7-30")) },
-    higher_unstable_level_is_refused = { LOCAL, 33, Err(invalid("metadata.version", 33, "Local controller 1 only supports versions 7-30")) },
-    enabled_unstable_level = { LocalController { unstable_features: UnstableFeatureVersions::Enabled, ..LOCAL }, 31, Ok(plan(vec![feature_record("metadata.version", 31)], &["metadata.version"])) },
-    enabled_higher_unstable_level = { LocalController { unstable_features: UnstableFeatureVersions::Enabled, ..LOCAL }, 33, Ok(plan(vec![feature_record("metadata.version", 33)], &["metadata.version"])) },
+    latest_stable_level = {
+        LOCAL,
+        30,
+        Ok(plan(vec![feature_record("metadata.version", 30)], &["metadata.version"])),
+    },
+    first_unstable_level_is_refused = {
+        LOCAL,
+        31,
+        Err(invalid("metadata.version", 31, "Local controller 1 only supports versions 7-30")),
+    },
+    higher_unstable_level_is_refused = {
+        LOCAL,
+        33,
+        Err(invalid("metadata.version", 33, "Local controller 1 only supports versions 7-30")),
+    },
+    enabled_unstable_level = {
+        LocalController { unstable_features: UnstableFeatureVersions::Enabled, ..LOCAL },
+        31,
+        Ok(plan(vec![feature_record("metadata.version", 31)], &["metadata.version"])),
+    },
+    enabled_higher_unstable_level = {
+        LocalController { unstable_features: UnstableFeatureVersions::Enabled, ..LOCAL },
+        33,
+        Ok(plan(vec![feature_record("metadata.version", 33)], &["metadata.version"])),
+    },
 )]
 fn an_unstable_metadata_version_needs_unstable_feature_versions(
     local: LocalController,
@@ -337,10 +383,26 @@ fn metadata_version_downgrades_follow_did_metadata_change() {
 }
 
 #[yare::parameterized(
-    upgrade = { "upgrade", vec![named_update("kraft.version", 1, UPGRADE)], Ok(UpdatePlan { kraft_upgrade: Some(1), ..plan(vec![], &["kraft.version"]) }) },
-    upgrade_to_current = { "upgrade to the current level", vec![named_update("kraft.version", 0, UPGRADE)], Ok(plan(vec![], &["kraft.version"])) },
-    downgrade_type_raises_level = { "a downgrade type that raises the level", vec![named_update("kraft.version", 1, SAFE)], Err(invalid("kraft.version", 1, "Can't downgrade to a newer version.")) },
-    above_supported_range = { "above the supported range", vec![named_update("kraft.version", 2, UPGRADE)], Err(invalid("kraft.version", 2, "Local controller 1 only supports versions 0-1")) },
+    upgrade = {
+        "upgrade",
+        vec![named_update("kraft.version", 1, UPGRADE)],
+        Ok(UpdatePlan { kraft_upgrade: Some(1), ..plan(vec![], &["kraft.version"]) }),
+    },
+    upgrade_to_current = {
+        "upgrade to the current level",
+        vec![named_update("kraft.version", 0, UPGRADE)],
+        Ok(plan(vec![], &["kraft.version"])),
+    },
+    downgrade_type_raises_level = {
+        "a downgrade type that raises the level",
+        vec![named_update("kraft.version", 1, SAFE)],
+        Err(invalid("kraft.version", 1, "Can't downgrade to a newer version.")),
+    },
+    above_supported_range = {
+        "above the supported range",
+        vec![named_update("kraft.version", 2, UPGRADE)],
+        Err(invalid("kraft.version", 2, "Local controller 1 only supports versions 0-1")),
+    },
 )]
 fn kraft_version_rows_follow_kafka(
     case: &str,

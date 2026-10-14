@@ -182,7 +182,9 @@ mod tests {
 
     #[yare::parameterized(
         empty = { "broker answer {}" },
-        extra_field = { "broker answer { request: Request, response: Response, api: API, operation: \"extra\" }" },
+        extra_field = {
+            "broker answer { request: Request, response: Response, api: API, operation: \"extra\" }",
+        },
         tuple = { "broker answer (request: Request)" },
     )]
     fn broker_driver_rejects_invalid_inputs(input: &str) {

@@ -178,8 +178,16 @@ mod tests {
 
     /// The shared flag checks reach the operator as a bad argument, exit 2.
     #[yare::parameterized(
-        orphan_s3_region = { Some("eu-west-1"), true, "--archive-s3-region needs --archive-s3-bucket" },
-        no_backend = { None, false, "no archive backend selected: pass one of --archive-local, --archive-s3-bucket, or --archive-gcs-bucket" },
+        orphan_s3_region = {
+            Some("eu-west-1"),
+            true,
+            "--archive-s3-region needs --archive-s3-bucket",
+        },
+        no_backend = {
+            None,
+            false,
+            "no archive backend selected: pass one of --archive-local, --archive-s3-bucket, or --archive-gcs-bucket",
+        },
     )]
     fn a_flag_set_the_archive_cannot_mean_is_a_bad_argument(
         s3_region: Option<&str>,

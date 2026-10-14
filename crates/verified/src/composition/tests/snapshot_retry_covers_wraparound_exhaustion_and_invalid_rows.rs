@@ -14,13 +14,39 @@ fn snapshot_entry() -> ProducerSnapshotEntryFacts {
 
 #[yare::parameterized(
     snapshot_matches_row = { i64::MAX - 1, snapshot_entry() },
-    negative_delta = { i64::MAX, ProducerSnapshotEntryFacts { offset_delta: -1, ..snapshot_entry() } },
-    offset_before_base = { i64::MAX, ProducerSnapshotEntryFacts { last_offset: 1, ..snapshot_entry() } },
-    negative_epoch = { i64::MAX, ProducerSnapshotEntryFacts { producer_epoch: -1, ..snapshot_entry() } },
-    negative_producer = { i64::MAX, ProducerSnapshotEntryFacts { producer_id: -1, ..snapshot_entry() } },
-    invalid_coordinator_epoch = { i64::MAX, ProducerSnapshotEntryFacts { coordinator_epoch: -2, ..snapshot_entry() } },
-    future_transaction_start = { i64::MAX, ProducerSnapshotEntryFacts { current_txn_first_offset: i64::MAX, ..snapshot_entry() } },
-    negative_offset_and_sequence = { i64::MAX, ProducerSnapshotEntryFacts { last_offset: -1, last_sequence: -1, offset_delta: 0, ..snapshot_entry() } },
+    negative_delta = {
+        i64::MAX,
+        ProducerSnapshotEntryFacts { offset_delta: -1, ..snapshot_entry() },
+    },
+    offset_before_base = {
+        i64::MAX,
+        ProducerSnapshotEntryFacts { last_offset: 1, ..snapshot_entry() },
+    },
+    negative_epoch = {
+        i64::MAX,
+        ProducerSnapshotEntryFacts { producer_epoch: -1, ..snapshot_entry() },
+    },
+    negative_producer = {
+        i64::MAX,
+        ProducerSnapshotEntryFacts { producer_id: -1, ..snapshot_entry() },
+    },
+    invalid_coordinator_epoch = {
+        i64::MAX,
+        ProducerSnapshotEntryFacts { coordinator_epoch: -2, ..snapshot_entry() },
+    },
+    future_transaction_start = {
+        i64::MAX,
+        ProducerSnapshotEntryFacts { current_txn_first_offset: i64::MAX, ..snapshot_entry() },
+    },
+    negative_offset_and_sequence = {
+        i64::MAX,
+        ProducerSnapshotEntryFacts {
+            last_offset: -1,
+            last_sequence: -1,
+            offset_delta: 0,
+            ..snapshot_entry()
+        },
+    },
 )]
 fn snapshot_retry_rejects_invalid_rows(snapshot: i64, row: ProducerSnapshotEntryFacts) {
     assert2::assert!(reloaded_snapshot_preserves_last_batch_retry(snapshot, row, 7) == None);

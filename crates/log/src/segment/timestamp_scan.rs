@@ -783,10 +783,34 @@ mod record_limit_tests {
     /// returns, so the limit fails a lookup only for a record Kafka reads. An
     /// uncompressed batch is never held to it.
     #[yare::parameterized(
-        before_oversized_batch = { "found before the oversized batch", CompressionType::Gzip, Some(LIMIT), 1_000, Ok(Some((Offset(0), 1_000))) },
-        oversized_match = { "the oversized record is the match", CompressionType::Gzip, Some(LIMIT), 1_001, Err(LARGE) },
-        gzip_without_limit = { "no limit", CompressionType::Gzip, None, 1_001, Ok(Some((Offset(1), 1_001))) },
-        uncompressed = { "an uncompressed batch is never held to it", CompressionType::None, Some(LIMIT), 1_001, Ok(Some((Offset(1), 1_001))) },
+        before_oversized_batch = {
+            "found before the oversized batch",
+            CompressionType::Gzip,
+            Some(LIMIT),
+            1_000,
+            Ok(Some((Offset(0), 1_000))),
+        },
+        oversized_match = {
+            "the oversized record is the match",
+            CompressionType::Gzip,
+            Some(LIMIT),
+            1_001,
+            Err(LARGE),
+        },
+        gzip_without_limit = {
+            "no limit",
+            CompressionType::Gzip,
+            None,
+            1_001,
+            Ok(Some((Offset(1), 1_001))),
+        },
+        uncompressed = {
+            "an uncompressed batch is never held to it",
+            CompressionType::None,
+            Some(LIMIT),
+            1_001,
+            Ok(Some((Offset(1), 1_001))),
+        },
     )]
     fn a_lookup_by_timestamp_refuses_only_the_records_kafka_reads(
         name: &str,

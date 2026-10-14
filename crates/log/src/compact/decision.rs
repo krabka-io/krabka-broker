@@ -172,7 +172,13 @@ mod core_tests {
     }
 
     #[yare::parameterized(
-        stamp_new_horizon = { "stamp new horizon", None, true, 100, RetainDecision::SetHorizon(150) },
+        stamp_new_horizon = {
+            "stamp new horizon",
+            None,
+            true,
+            100,
+            RetainDecision::SetHorizon(150),
+        },
         keep_before_horizon = { "keep before horizon", Some(150), true, 149, RetainDecision::Keep },
         delete_at_horizon = { "delete at horizon", Some(150), true, 150, RetainDecision::Delete },
         delete_superseded = { "delete superseded", None, false, 100, RetainDecision::Delete },
@@ -208,9 +214,27 @@ mod core_tests {
     }
 
     #[yare::parameterized(
-        keep_while_data_survives = { "keep while data survives", None, TxnDataState::DataSurvives, 100, RetainDecision::Keep },
-        stamp_after_data_gone = { "stamp after data gone", None, TxnDataState::DataFullyGone, 100, RetainDecision::SetHorizon(150) },
-        delete_aged_marker = { "delete aged marker", Some(150), TxnDataState::DataFullyGone, 150, RetainDecision::Delete },
+        keep_while_data_survives = {
+            "keep while data survives",
+            None,
+            TxnDataState::DataSurvives,
+            100,
+            RetainDecision::Keep,
+        },
+        stamp_after_data_gone = {
+            "stamp after data gone",
+            None,
+            TxnDataState::DataFullyGone,
+            100,
+            RetainDecision::SetHorizon(150),
+        },
+        delete_aged_marker = {
+            "delete aged marker",
+            Some(150),
+            TxnDataState::DataFullyGone,
+            150,
+            RetainDecision::Delete,
+        },
     )]
     fn marker_retained_while_data_survives_then_ages(
         name: &str,

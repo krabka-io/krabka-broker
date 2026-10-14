@@ -146,7 +146,7 @@ mod tests {
                 registration_listener("PLAINTEXT", "host", 9092, 0),
                 registration_listener("SSL", "host", 9093, 1),
             ],
-            true
+            true,
         },
         empty = { "none at all", vec![], false },
         nameless = {
@@ -170,7 +170,7 @@ mod tests {
                 registration_listener("PLAINTEXT", "host", 9092, 0),
                 registration_listener("PLAINTEXT", "host", 9093, 0),
             ],
-            false
+            false,
         },
         unknown_protocol = {
             "an unknown security protocol",

@@ -301,16 +301,28 @@ impl AdmissionDomain {
 
 #[yare::parameterized(
     admission_refused = {
-        false, true, "value", Err(ShareStateError::Inactive)
+        false,
+        true,
+        "value",
+        Err(ShareStateError::Inactive),
     },
     operation_succeeds = {
-        true, true, "value", Ok(5)
+        true,
+        true,
+        "value",
+        Ok(5),
     },
     operation_refused = {
-        true, true, "refuse", Err(ShareStateError::Refused)
+        true,
+        true,
+        "refuse",
+        Err(ShareStateError::Refused),
     },
     commit_refused = {
-        true, false, "value", Err(ShareStateError::Commit)
+        true,
+        false,
+        "value",
+        Err(ShareStateError::Commit),
     },
 )]
 #[test_macro(tokio::test)]

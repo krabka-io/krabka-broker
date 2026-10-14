@@ -211,10 +211,35 @@ mod tests {
     /// to it.
     #[yare::parameterized(
         nothing_formatted = { formatted(vec![]), None, Ok(None) },
-        no_records_given_id = { formatted(vec![]), Some(ClusterId(Uuid::from_u128(0xc1))), Ok(Some(ClusterId(Uuid::from_u128(0xc1)))) },
-        set_supplies_id = { formatted(vec![directory("/a", meta(0xc1, 1, 0x1000)), directory("/b", meta(0xc1, 1, 0x2000))]), None, Ok(Some(ClusterId(Uuid::from_u128(0xc1)))) },
-        given_id_disagrees = { formatted(vec![directory("/a", meta(0xc1, 1, 0x1000))]), Some(ClusterId(Uuid::from_u128(0xc2))), Err(format!("Invalid cluster.id in: {}. Expected {}, but read {}", Path::new("/a").join(META_PROPERTIES).display(), ClusterId(Uuid::from_u128(0xc2)), ClusterId(Uuid::from_u128(0xc1)))) },
-        another_nodes_directory = { formatted(vec![directory("/a", meta(0xc1, 2, 0x1000))]), Some(ClusterId(Uuid::from_u128(0xc1))), Err(node_id_mismatch_message().stored(2).previous(1).path(&Path::new("/a").join(META_PROPERTIES)).call()) },
+        no_records_given_id = {
+            formatted(vec![]),
+            Some(ClusterId(Uuid::from_u128(0xc1))),
+            Ok(Some(ClusterId(Uuid::from_u128(0xc1)))),
+        },
+        set_supplies_id = {
+            formatted(vec![directory("/a", meta(0xc1, 1, 0x1000)), directory("/b", meta(0xc1, 1, 0x2000))]),
+            None,
+            Ok(Some(ClusterId(Uuid::from_u128(0xc1)))),
+        },
+        given_id_disagrees = {
+            formatted(vec![directory("/a", meta(0xc1, 1, 0x1000))]),
+            Some(ClusterId(Uuid::from_u128(0xc2))),
+            Err(format!(
+                "Invalid cluster.id in: {}. Expected {}, but read {}",
+                Path::new("/a").join(META_PROPERTIES).display(),
+                ClusterId(Uuid::from_u128(0xc2)),
+                ClusterId(Uuid::from_u128(0xc1))
+            )),
+        },
+        another_nodes_directory = {
+            formatted(vec![directory("/a", meta(0xc1, 2, 0x1000))]),
+            Some(ClusterId(Uuid::from_u128(0xc1))),
+            Err(node_id_mismatch_message()
+                .stored(2)
+                .previous(1)
+                .path(&Path::new("/a").join(META_PROPERTIES))
+                .call()),
+        },
     )]
     fn verify_matches_kafka_meta_properties_ensemble(
         ensemble: Ensemble,
@@ -230,7 +255,10 @@ mod tests {
         nothing = { &[][..], true },
         bootstrap_files = { &["bootstrap.json", "bootstrap.records.bin"][..], true },
         half_written_marker = { &[META_PROPERTIES_TMP][..], true },
-        checkpoint = { &["__cluster_metadata-0/00000000000000000000-0000000000.checkpoint"][..], true },
+        checkpoint = {
+            &["__cluster_metadata-0/00000000000000000000-0000000000.checkpoint"][..],
+            true,
+        },
         user_data = { &["orders-0/0.log"][..], false },
         metadata_log = { &["__cluster_metadata-0/00000000000000000000.log"][..], false },
         stray_file = { &["notes.txt"][..], false },

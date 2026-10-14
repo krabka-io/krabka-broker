@@ -268,9 +268,15 @@ mod tests {
     #[yare::parameterized(
         unit_struct = { "struct Member;" },
         missing_required_fields = { "struct Member { id: String }" },
-        generic_member = { "struct Member<T> { id: String, member_epoch: i32, assignment_state: State, assigned: Vec<i32>, pending_revocation: Vec<i32>, target: Vec<i32> }" },
-        required_field_marked_extra = { "struct Member { #[reconciliation(extra)] id: String, member_epoch: i32, assignment_state: State, assigned: Vec<i32>, pending_revocation: Vec<i32>, target: Vec<i32> }" },
-        unknown_field = { "struct Member { id: String, member_epoch: i32, assignment_state: State, assigned: Vec<i32>, pending_revocation: Vec<i32>, target: Vec<i32>, epochs: Vec<i32> }" },
+        generic_member = {
+            "struct Member<T> { id: String, member_epoch: i32, assignment_state: State, assigned: Vec<i32>, pending_revocation: Vec<i32>, target: Vec<i32> }",
+        },
+        required_field_marked_extra = {
+            "struct Member { #[reconciliation(extra)] id: String, member_epoch: i32, assignment_state: State, assigned: Vec<i32>, pending_revocation: Vec<i32>, target: Vec<i32> }",
+        },
+        unknown_field = {
+            "struct Member { id: String, member_epoch: i32, assignment_state: State, assigned: Vec<i32>, pending_revocation: Vec<i32>, target: Vec<i32>, epochs: Vec<i32> }",
+        },
     )]
     fn projections_require_common_fields_and_mark_only_extra_fields(input: &str) {
         assert2::assert!(member(moxy::parse!({ input }).unwrap()).is_err(), "{input}");
@@ -307,7 +313,9 @@ mod tests {
 
     #[yare::parameterized(
         wrong_epoch_type = { "struct Projection { epoch: i32, violations: BTreeSet<Violation> }" },
-        wrong_violation_collection = { "struct Projection { epoch: i16, violations: Vec<Violation> }" },
+        wrong_violation_collection = {
+            "struct Projection { epoch: i16, violations: Vec<Violation> }",
+        },
         missing_violations = { "struct Projection { epoch: i16 }" },
     )]
     fn epoch_ledger_rejects_wrong_fields(input: &str) {
@@ -344,8 +352,12 @@ mod tests {
     }
 
     #[yare::parameterized(
-        multiple_violation_types = { "struct Projection { epoch: i16, violations: BTreeSet<Violation, Other> }" },
-        reference_violation_type = { "struct Projection { epoch: i16, violations: BTreeSet<&Violation> }" },
+        multiple_violation_types = {
+            "struct Projection { epoch: i16, violations: BTreeSet<Violation, Other> }",
+        },
+        reference_violation_type = {
+            "struct Projection { epoch: i16, violations: BTreeSet<&Violation> }",
+        },
         generic_violation_type = { "struct Projection<T> { epoch: i16, violations: BTreeSet<T> }" },
     )]
     fn violation_generic_arguments_reject_incompatible_schemas(declaration: &str) {

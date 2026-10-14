@@ -61,7 +61,9 @@ mod tests {
         tuple_struct = { "struct Config(bool);" },
         enumeration = { "enum Config { Enabled }" },
         multiple_structs = { "struct Config { enabled: bool } struct Other {}" },
-        nonempty_second_struct = { "struct Config {} struct Other { value: Option<std::path::PathBuf> }" },
+        nonempty_second_struct = {
+            "struct Config {} struct Other { value: Option<std::path::PathBuf> }",
+        },
         trailing_function = { "struct Config {} fn trailing() {}" },
     )]
     fn requires_exactly_one_named_struct(invalid: &str) {

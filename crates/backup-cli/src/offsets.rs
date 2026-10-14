@@ -332,7 +332,11 @@ mod tests {
     #[yare::parameterized(
         pre_1_0 = { "pre-1.0 offsets file", r#"{"groups":[]}"#, None },
         future = { "future version", r#"{"version":1,"groups":[]}"#, Some("1") },
-        non_numeric = { "version that is not a number", r#"{"version":"0","groups":[]}"#, Some("\"0\"") },
+        non_numeric = {
+            "version that is not a number",
+            r#"{"version":"0","groups":[]}"#,
+            Some("\"0\""),
+        },
     )]
     fn an_offsets_file_with_a_missing_or_unknown_version_is_refused(
         name: &str,

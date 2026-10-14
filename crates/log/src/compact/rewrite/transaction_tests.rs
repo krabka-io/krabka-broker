@@ -179,23 +179,23 @@ fn an_aborted_transaction_spanning_two_groups_keeps_its_marker_and_index_entry()
 /// delete horizon of every output batch)`.
 #[yare::parameterized(
     no_horizon_yet = {
-            "no horizon yet: stamp now + delete.retention.ms",
-            None,
-            100,
-            vec![
-                BatchHorizon {
-                    base_offset: 0,
-                    delete_horizon_ms: Some(150),
-                },
-                BatchHorizon {
-                    base_offset: 1,
-                    delete_horizon_ms: None,
-                },
-                BatchHorizon {
-                    base_offset: 2,
-                    delete_horizon_ms: None,
-                },
-            ]
+        "no horizon yet: stamp now + delete.retention.ms",
+        None,
+        100,
+        vec![
+            BatchHorizon {
+                base_offset: 0,
+                delete_horizon_ms: Some(150),
+            },
+            BatchHorizon {
+                base_offset: 1,
+                delete_horizon_ms: None,
+            },
+            BatchHorizon {
+                base_offset: 2,
+                delete_horizon_ms: None,
+            },
+        ],
     },
     horizon_not_reached = {
         "horizon not reached: keep as it is",
@@ -214,22 +214,22 @@ fn an_aborted_transaction_spanning_two_groups_keeps_its_marker_and_index_entry()
                 base_offset: 2,
                 delete_horizon_ms: None,
             },
-        ]
+        ],
     },
     horizon_reached = {
-            "horizon reached: drop the marker, keep the live data and its marker",
-            Some(100),
-            200,
-            vec![
-                BatchHorizon {
-                    base_offset: 1,
-                    delete_horizon_ms: None,
-                },
-                BatchHorizon {
-                    base_offset: 2,
-                    delete_horizon_ms: None,
-                },
-            ]
+        "horizon reached: drop the marker, keep the live data and its marker",
+        Some(100),
+        200,
+        vec![
+            BatchHorizon {
+                base_offset: 1,
+                delete_horizon_ms: None,
+            },
+            BatchHorizon {
+                base_offset: 2,
+                delete_horizon_ms: None,
+            },
+        ],
     },
 )]
 fn a_marker_ages_out_once_its_own_transactions_data_is_gone(

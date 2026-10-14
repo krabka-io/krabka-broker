@@ -187,7 +187,14 @@ proptest! {
     complete_first_batch = { &[3, 6][..], 0, 0, 1, 3, Some((1, 3)) },
     empty_prefix_at_floor = { &[3, 6][..], 0, 1, 1, 1, Some((0, 1)) },
     empty_maximum_log = { &[][..], i64::MAX, i64::MAX, i64::MAX, i64::MAX, Some((0, i64::MAX)) },
-    maximum_frontier = { &[i64::MAX][..], i64::MAX - 3, i64::MAX - 2, i64::MAX - 2, i64::MAX, Some((1, i64::MAX)) },
+    maximum_frontier = {
+        &[i64::MAX][..],
+        i64::MAX - 3,
+        i64::MAX - 2,
+        i64::MAX - 2,
+        i64::MAX,
+        Some((1, i64::MAX)),
+    },
 )]
 fn checkpoint_recovery_handles_empty_interior_and_extreme_frontiers(
     ends: &[i64],

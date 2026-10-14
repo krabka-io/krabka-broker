@@ -201,7 +201,12 @@ mod tests {
         unrefreshed_zero = { 0, 0, 0, JwksOnDemandDecision::Refresh { next_refresh_ms: 0 } },
         unrefreshed_pause = { 5, 0, 10, JwksOnDemandDecision::Refresh { next_refresh_ms: 5 } },
         first_refresh = { 100, 0, 10, JwksOnDemandDecision::Refresh { next_refresh_ms: 100 } },
-        unrefreshed_max = { i64::MAX, 0, i64::MAX, JwksOnDemandDecision::Refresh { next_refresh_ms: i64::MAX } },
+        unrefreshed_max = {
+            i64::MAX,
+            0,
+            i64::MAX,
+            JwksOnDemandDecision::Refresh { next_refresh_ms: i64::MAX },
+        },
         pause_boundary = { 110, 100, 10, JwksOnDemandDecision::Refresh { next_refresh_ms: 110 } },
         before_pause_boundary = { 109, 100, 10, JwksOnDemandDecision::RateLimited },
         negative_clock = { -1, 0, 10, JwksOnDemandDecision::RateLimited },

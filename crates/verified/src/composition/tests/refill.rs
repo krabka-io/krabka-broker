@@ -29,7 +29,14 @@ proptest! {
     retained_fraction = { (0, 0, 0), (1, 1), 3, 10, 10, (0, 0, 0, 6) },
     zero_burst = { (0, 7, 0), (1, 1), 3, 0, 10, (0, 0, 7, 6) },
     saturation_discards_fraction = { (0, 0, 0), (1, 1), 1_500_000_000, 1, 10, (1, 0, 0, 0) },
-    maximum_values = { (0, u64::MAX, 0), (u64::MAX, 0), u64::MAX, u64::MAX, u64::MAX, (u64::MAX, 0, 0, 0) },
+    maximum_values = {
+        (0, u64::MAX, 0),
+        (u64::MAX, 0),
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+        (u64::MAX, 0, 0, 0),
+    },
 )]
 fn refill_partition_covers_fractional_debt_and_saturation_boundaries(
     initial: (u64, u64, u64),

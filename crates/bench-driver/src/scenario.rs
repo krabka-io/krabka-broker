@@ -653,7 +653,10 @@ mode:
         negative_duration = { "duration: -60s", "a positive extent" },
         zero_duration = { "duration: 0", "a positive extent" },
         negative_warmup = { "warmup: -10s", "an extent of zero or more" },
-        negative_failover_kill_after = { "failover:\n  kill_after: -4s", "an extent of zero or more" },
+        negative_failover_kill_after = {
+            "failover:\n  kill_after: -4s",
+            "an extent of zero or more",
+        },
     )]
     fn scenario_yaml_rejects_unrunnable_magnitudes(field: &str, requirement: &str) {
         // The human forms accept a sign, so every field that used to be an

@@ -342,8 +342,18 @@ mod tests {
     }
 
     #[yare::parameterized(
-        absent = { None, Some("eligible.leader.replicas.version could not be set to 1 because it depends on metadata.version level 23") },
-        below = { Some(22), Some("eligible.leader.replicas.version could not be set to 1 because it depends on metadata.version level 23") },
+        absent = {
+            None,
+            Some(
+                "eligible.leader.replicas.version could not be set to 1 because it depends on metadata.version level 23",
+            ),
+        },
+        below = {
+            Some(22),
+            Some(
+                "eligible.leader.replicas.version could not be set to 1 because it depends on metadata.version level 23",
+            ),
+        },
         minimum = { Some(23), None },
         above = { Some(30), None },
     )]

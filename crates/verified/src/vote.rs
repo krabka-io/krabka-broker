@@ -186,7 +186,13 @@ mod tests {
     }
 
     #[yare::parameterized(
-        signed_maximum = { i32::MAX as u64, i32::MAX as u64, i32::MAX as u32, i32::MAX as u32, VoteEncodeDecision::Accept },
+        signed_maximum = {
+            i32::MAX as u64,
+            i32::MAX as u64,
+            i32::MAX as u32,
+            i32::MAX as u32,
+            VoteEncodeDecision::Accept,
+        },
         voter_overflow = { i32::MAX as u64 + 1, 0, 0, 0, VoteEncodeDecision::Reject },
         candidate_overflow = { 0, i32::MAX as u64 + 1, 0, 0, VoteEncodeDecision::Reject },
         epoch_overflow = { 0, 0, i32::MAX as u32 + 1, 0, VoteEncodeDecision::Reject },
@@ -203,14 +209,46 @@ mod tests {
     }
 
     #[yare::parameterized(
-        other_voter = { VoteTarget { voter_id: 1, local_id: 2, directory_matches: true }, VoteMembership { cluster_matches: true, local_is_voter: true, candidate_is_voter: true }, VoteAdmissionDecision::IgnoreWrongTarget },
-        zero_other_voter = { VoteTarget { voter_id: 0, local_id: 1, directory_matches: true }, VoteMembership { cluster_matches: true, local_is_voter: true, candidate_is_voter: true }, VoteAdmissionDecision::IgnoreWrongTarget },
-        directory_mismatch = { VoteTarget { voter_id: 1, local_id: 1, directory_matches: false }, VoteMembership { cluster_matches: true, local_is_voter: true, candidate_is_voter: true }, VoteAdmissionDecision::IgnoreWrongTarget },
-        exact_target = { VoteTarget { voter_id: 0, local_id: 0, directory_matches: true }, VoteMembership { cluster_matches: true, local_is_voter: true, candidate_is_voter: true }, VoteAdmissionDecision::Consider },
-        cluster_mismatch = { VoteTarget { voter_id: 1, local_id: 1, directory_matches: true }, VoteMembership { cluster_matches: false, local_is_voter: true, candidate_is_voter: true }, VoteAdmissionDecision::Deny },
-        local_not_voter = { VoteTarget { voter_id: 1, local_id: 1, directory_matches: true }, VoteMembership { cluster_matches: true, local_is_voter: false, candidate_is_voter: true }, VoteAdmissionDecision::Deny },
-        candidate_not_voter = { VoteTarget { voter_id: 1, local_id: 1, directory_matches: true }, VoteMembership { cluster_matches: true, local_is_voter: true, candidate_is_voter: false }, VoteAdmissionDecision::Deny },
-        valid_nonzero_target = { VoteTarget { voter_id: 1, local_id: 1, directory_matches: true }, VoteMembership { cluster_matches: true, local_is_voter: true, candidate_is_voter: true }, VoteAdmissionDecision::Consider },
+        other_voter = {
+            VoteTarget { voter_id: 1, local_id: 2, directory_matches: true },
+            VoteMembership { cluster_matches: true, local_is_voter: true, candidate_is_voter: true },
+            VoteAdmissionDecision::IgnoreWrongTarget,
+        },
+        zero_other_voter = {
+            VoteTarget { voter_id: 0, local_id: 1, directory_matches: true },
+            VoteMembership { cluster_matches: true, local_is_voter: true, candidate_is_voter: true },
+            VoteAdmissionDecision::IgnoreWrongTarget,
+        },
+        directory_mismatch = {
+            VoteTarget { voter_id: 1, local_id: 1, directory_matches: false },
+            VoteMembership { cluster_matches: true, local_is_voter: true, candidate_is_voter: true },
+            VoteAdmissionDecision::IgnoreWrongTarget,
+        },
+        exact_target = {
+            VoteTarget { voter_id: 0, local_id: 0, directory_matches: true },
+            VoteMembership { cluster_matches: true, local_is_voter: true, candidate_is_voter: true },
+            VoteAdmissionDecision::Consider,
+        },
+        cluster_mismatch = {
+            VoteTarget { voter_id: 1, local_id: 1, directory_matches: true },
+            VoteMembership { cluster_matches: false, local_is_voter: true, candidate_is_voter: true },
+            VoteAdmissionDecision::Deny,
+        },
+        local_not_voter = {
+            VoteTarget { voter_id: 1, local_id: 1, directory_matches: true },
+            VoteMembership { cluster_matches: true, local_is_voter: false, candidate_is_voter: true },
+            VoteAdmissionDecision::Deny,
+        },
+        candidate_not_voter = {
+            VoteTarget { voter_id: 1, local_id: 1, directory_matches: true },
+            VoteMembership { cluster_matches: true, local_is_voter: true, candidate_is_voter: false },
+            VoteAdmissionDecision::Deny,
+        },
+        valid_nonzero_target = {
+            VoteTarget { voter_id: 1, local_id: 1, directory_matches: true },
+            VoteMembership { cluster_matches: true, local_is_voter: true, candidate_is_voter: true },
+            VoteAdmissionDecision::Consider,
+        },
     )]
     fn admission_requires_the_exact_target_and_both_memberships(
         target: VoteTarget,

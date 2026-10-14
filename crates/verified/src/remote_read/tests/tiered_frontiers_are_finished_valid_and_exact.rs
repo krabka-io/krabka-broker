@@ -1,5 +1,14 @@
 use {super::*, crate::log_index::IndexEntry};
 
+fn entries_with_duplicate_timestamp() -> [IndexEntry<i64, u32>; 4] {
+    [
+        IndexEntry::new(1_000, 0),
+        IndexEntry::new(2_000, 10),
+        IndexEntry::new(2_000, 20),
+        IndexEntry::new(3_000, 30),
+    ]
+}
+
 #[test]
 fn tiered_frontiers_are_finished_valid_and_exact() {
     let starts = [20, 0, -1, 40];
@@ -23,12 +32,36 @@ fn tiered_epoch_owner_has_the_greatest_valid_start() {
 }
 
 #[yare::parameterized(
-    before_first = { &[IndexEntry::new(1_000, 0), IndexEntry::new(2_000, 10), IndexEntry::new(2_000, 20), IndexEntry::new(3_000, 30)][..], 500, 0 },
-    at_first = { &[IndexEntry::new(1_000, 0), IndexEntry::new(2_000, 10), IndexEntry::new(2_000, 20), IndexEntry::new(3_000, 30)][..], 1_000, 0 },
-    between_first_second = { &[IndexEntry::new(1_000, 0), IndexEntry::new(2_000, 10), IndexEntry::new(2_000, 20), IndexEntry::new(3_000, 30)][..], 1_500, 1 },
-    duplicate_timestamp = { &[IndexEntry::new(1_000, 0), IndexEntry::new(2_000, 10), IndexEntry::new(2_000, 20), IndexEntry::new(3_000, 30)][..], 2_000, 1 },
-    after_duplicate = { &[IndexEntry::new(1_000, 0), IndexEntry::new(2_000, 10), IndexEntry::new(2_000, 20), IndexEntry::new(3_000, 30)][..], 2_500, 3 },
-    after_last = { &[IndexEntry::new(1_000, 0), IndexEntry::new(2_000, 10), IndexEntry::new(2_000, 20), IndexEntry::new(3_000, 30)][..], 4_000, 4 },
+    before_first = {
+        &entries_with_duplicate_timestamp()[..],
+        500,
+        0,
+    },
+    at_first = {
+        &entries_with_duplicate_timestamp()[..],
+        1_000,
+        0,
+    },
+    between_first_second = {
+        &entries_with_duplicate_timestamp()[..],
+        1_500,
+        1,
+    },
+    duplicate_timestamp = {
+        &entries_with_duplicate_timestamp()[..],
+        2_000,
+        1,
+    },
+    after_duplicate = {
+        &entries_with_duplicate_timestamp()[..],
+        2_500,
+        3,
+    },
+    after_last = {
+        &entries_with_duplicate_timestamp()[..],
+        4_000,
+        4,
+    },
 )]
 fn remote_time_index_selects_strict_predecessor_prefix(
     entries: &[IndexEntry<i64, u32>],
@@ -39,11 +72,36 @@ fn remote_time_index_selects_strict_predecessor_prefix(
 }
 
 #[yare::parameterized(
-    zeroed_padding = { "zeroed padding ends the index", &[IndexEntry::new(1_000, 0), IndexEntry::new(2_000, 10), IndexEntry::new(0, 0), IndexEntry::new(9_000, 20)][..], i64::MAX, 2 },
-    repeated_offset = { "a repeated offset is padding", &[IndexEntry::new(1_000, 0), IndexEntry::new(2_000, 10), IndexEntry::new(3_000, 10)][..], i64::MAX, 2 },
+    zeroed_padding = {
+        "zeroed padding ends the index",
+        &[
+            IndexEntry::new(1_000, 0),
+            IndexEntry::new(2_000, 10),
+            IndexEntry::new(0, 0),
+            IndexEntry::new(9_000, 20),
+        ][..],
+        i64::MAX,
+        2,
+    },
+    repeated_offset = {
+        "a repeated offset is padding",
+        &[IndexEntry::new(1_000, 0), IndexEntry::new(2_000, 10), IndexEntry::new(3_000, 10)][..],
+        i64::MAX,
+        2,
+    },
     empty_index = { "an empty index", &[][..], i64::MAX, 0 },
-    first_entry_at_target = { "the first entry at the target", &[IndexEntry::new(1_000, 0), IndexEntry::new(2_000, 10)][..], 1_000, 0 },
-    unsorted_timestamps = { "unsorted timestamps stop at the first one at the target", &[IndexEntry::new(1_000, 0), IndexEntry::new(5_000, 10), IndexEntry::new(2_000, 20)][..], 3_000, 1 },
+    first_entry_at_target = {
+        "the first entry at the target",
+        &[IndexEntry::new(1_000, 0), IndexEntry::new(2_000, 10)][..],
+        1_000,
+        0,
+    },
+    unsorted_timestamps = {
+        "unsorted timestamps stop at the first one at the target",
+        &[IndexEntry::new(1_000, 0), IndexEntry::new(5_000, 10), IndexEntry::new(2_000, 20)][..],
+        3_000,
+        1,
+    },
 )]
 fn remote_time_index_stops_at_padding_or_the_target(
     what: &str,
@@ -88,9 +146,25 @@ fn fetch_end_position_handles_exact_and_overflow_boundaries(
     epoch_start_after_request = { 0, 99, 49, true, Some(50), None, None },
     request_at_epoch_start = { 0, 99, 50, true, Some(50), None, Some(50) },
     next_epoch_after_range = { 0, 99, 49, true, Some(0), Some(100), None },
-    overflowing_relative_offset = { i64::MIN, i64::MAX, i64::MAX, true, Some(i64::MIN), None, None },
+    overflowing_relative_offset = {
+        i64::MIN,
+        i64::MAX,
+        i64::MAX,
+        true,
+        Some(i64::MIN),
+        None,
+        None,
+    },
     zero_relative_offset = { i64::MIN, i64::MAX, i64::MIN, true, Some(i64::MIN), None, Some(0) },
-    max_relative_offset = { i64::MIN, i64::MAX, i64::MIN + i64::from(u32::MAX), true, Some(i64::MIN), None, Some(u32::MAX) },
+    max_relative_offset = {
+        i64::MIN,
+        i64::MAX,
+        i64::MIN + i64::from(u32::MAX),
+        true,
+        Some(i64::MIN),
+        None,
+        Some(u32::MAX),
+    },
 )]
 fn admits_exact_finished_lineage_range_and_rejects_every_other_case(
     start: i64,

@@ -40,7 +40,14 @@ proptest! {
     unrepresentable_debt = { 0, u64::MAX, 0, 20, 1, None },
     maximum_debt_decreases = { 0, u64::MAX, 1, 20, 1, Some((0, u64::MAX - 1, 0)) },
     refill_releases_all_debt = { 0, u64::MAX, u64::MAX, 20, u64::MAX, Some((0, 0, 0)) },
-    maximum_available_and_burst = { u64::MAX, 0, u64::MAX, u64::MAX, u64::MAX, Some((u64::MAX, 0, u64::MAX)) },
+    maximum_available_and_burst = {
+        u64::MAX,
+        0,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+        Some((u64::MAX, 0, u64::MAX)),
+    },
     zero_burst = { 0, 0, 0, 0, u64::MAX, Some((0, 0, 0)) },
 )]
 fn quota_round_trip_requires_representable_debt_and_bounded_debt_releases_consumers(

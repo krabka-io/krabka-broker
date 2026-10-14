@@ -114,9 +114,13 @@ mod tests {
     }
 
     #[yare::parameterized(
-        sync = { "fn flush(state: &State, delta: Delta, log: &Log, coordinator: &Coordinator, now: i64) {}" },
+        sync = {
+            "fn flush(state: &State, delta: Delta, log: &Log, coordinator: &Coordinator, now: i64) {}",
+        },
         missing_arguments = { "async fn flush(state: &State) {}" },
-        missing_receiver = { "async fn flush(_: &State, delta: Delta, log: &Log, coordinator: &Coordinator, now: i64) {}" },
+        missing_receiver = {
+            "async fn flush(_: &State, delta: Delta, log: &Log, coordinator: &Coordinator, now: i64) {}",
+        },
     )]
     fn rejects_invalid_record_boundary_signatures(invalid: &str) {
         let metadata = "group [&state.id]; encode [native!(delta, |&Row { value }| value)];"

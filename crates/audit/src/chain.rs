@@ -155,10 +155,16 @@ mod tests {
     }
 
     #[yare::parameterized(
-        round_trip = { to_hex(&chain_hash(&GENESIS_HEAD, 7, b"x")), Some(chain_hash(&GENESIS_HEAD, 7, b"x")) },
+        round_trip = {
+            to_hex(&chain_hash(&GENESIS_HEAD, 7, b"x")),
+            Some(chain_hash(&GENESIS_HEAD, 7, b"x")),
+        },
         non_hex = { "zz".to_owned(), None },
         odd_length = { "abc".to_owned(), None },
-        uppercase = { to_hex(&chain_hash(&GENESIS_HEAD, 7, b"x")).to_uppercase(), Some(chain_hash(&GENESIS_HEAD, 7, b"x")) },
+        uppercase = {
+            to_hex(&chain_hash(&GENESIS_HEAD, 7, b"x")).to_uppercase(),
+            Some(chain_hash(&GENESIS_HEAD, 7, b"x")),
+        },
     )]
     fn hex_round_trips(input: String, expected: Option<[u8; 32]>) {
         check!(from_hex32(&input) == expected);

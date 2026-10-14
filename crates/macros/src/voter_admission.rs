@@ -98,10 +98,16 @@ mod tests {
     #[yare::parameterized(
         sync = { "fn handle(broker: &Broker, version: i16, req_bytes: &[u8], ctx: &Context) {}" },
         missing_arguments = { "async fn handle(broker: &Broker) {}" },
-        wrong_body_name = { "async fn handle(broker: &Broker, version: i16, body: &[u8], ctx: &Context) {}" },
-        wrong_method = { "async fn other(broker: &Broker, version: i16, req_bytes: &[u8], ctx: &Context) {}" },
+        wrong_body_name = {
+            "async fn handle(broker: &Broker, version: i16, body: &[u8], ctx: &Context) {}",
+        },
+        wrong_method = {
+            "async fn other(broker: &Broker, version: i16, req_bytes: &[u8], ctx: &Context) {}",
+        },
         non_function = { "struct Config {}" },
-        extra_item = { "async fn handle(broker: &Broker, version: i16, req_bytes: &[u8], ctx: &Context) {} fn extra() {}" },
+        extra_item = {
+            "async fn handle(broker: &Broker, version: i16, req_bytes: &[u8], ctx: &Context) {} fn extra() {}",
+        },
     )]
     fn rejects_incorrect_handler_shapes(invalid: &str) {
         let meta = "request = Request, api = 80, gate = gate, refusals = refusals"

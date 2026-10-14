@@ -1178,19 +1178,27 @@ mod tests {
     #[yare::parameterized(
         flush_future_version = {
             WalFlushRecord::from_bytes(&with_version(GOLDEN_FLUSH_RECORD, 3)).map(|_| ()),
-            format!("unsupported diskless WAL index format version 3: this build reads version 2.{PRE_1_0_NOTE}"),
+            format!(
+                "unsupported diskless WAL index format version 3: this build reads version 2.{PRE_1_0_NOTE}"
+            ),
         },
         flush_pre_1_0_layout = {
             WalFlushRecord::from_bytes(&GOLDEN_FLUSH_RECORD[2..]).map(|_| ()),
-            format!("unsupported diskless WAL index format version 1280: this build reads version 2.{PRE_1_0_NOTE}"),
+            format!(
+                "unsupported diskless WAL index format version 1280: this build reads version 2.{PRE_1_0_NOTE}"
+            ),
         },
         floor_future_version = {
             WalDeleteFloorRecord::from_bytes(&with_version(GOLDEN_FLOOR_RECORD, 1)).map(|_| ()),
-            format!("unsupported diskless WAL delete-floor record version 1: this build reads version 0.{PRE_1_0_NOTE}"),
+            format!(
+                "unsupported diskless WAL delete-floor record version 1: this build reads version 0.{PRE_1_0_NOTE}"
+            ),
         },
         floor_pre_1_0_layout = {
             WalDeleteFloorRecord::from_bytes(&GOLDEN_FLOOR_RECORD[2..]).map(|_| ()),
-            format!("unsupported diskless WAL delete-floor record version 4096: this build reads version 0.{PRE_1_0_NOTE}"),
+            format!(
+                "unsupported diskless WAL delete-floor record version 4096: this build reads version 0.{PRE_1_0_NOTE}"
+            ),
         },
         empty_value = {
             WalDeleteFloorRecord::from_bytes(&[]).map(|_| ()),
@@ -1269,9 +1277,18 @@ mod tests {
     }
 
     #[yare::parameterized(
-        unknown_version = { with_version(GOLDEN_RANGE_KEY, 7), "unknown diskless WAL index key version 7" },
-        missing_pre_1_0_version = { GOLDEN_RANGE_KEY[2..].to_vec(), "unknown diskless WAL index key version 17" },
-        one_byte_delete_floor_tag = { [&[0xf0], &GOLDEN_FLOOR_KEY[2..]].concat(), "unknown diskless WAL index key version -4096" },
+        unknown_version = {
+            with_version(GOLDEN_RANGE_KEY, 7),
+            "unknown diskless WAL index key version 7",
+        },
+        missing_pre_1_0_version = {
+            GOLDEN_RANGE_KEY[2..].to_vec(),
+            "unknown diskless WAL index key version 17",
+        },
+        one_byte_delete_floor_tag = {
+            [&[0xf0], &GOLDEN_FLOOR_KEY[2..]].concat(),
+            "unknown diskless WAL index key version -4096",
+        },
         wrong_length = { GOLDEN_RANGE_KEY[..29].to_vec(), "invalid diskless WAL index key" },
     )]
     fn index_keys_of_another_version_are_refused(key: Vec<u8>, expected: &str) {

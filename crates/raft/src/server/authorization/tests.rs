@@ -57,7 +57,10 @@ const MESSAGE: &str = "Cluster authorization failed.";
     assign_replicas_to_dirs = { 73, Some(ClusterOperation::ClusterAction) },
     submit_change = { API_KEY_SUBMIT_CHANGE, Some(ClusterOperation::ClusterAction) },
     metadata_fetch = { API_KEY_METADATA_FETCH, Some(ClusterOperation::ClusterAction) },
-    delegation_token_mutation = { API_KEY_DELEGATION_TOKEN_MUTATION, Some(ClusterOperation::ClusterAction) },
+    delegation_token_mutation = {
+        API_KEY_DELEGATION_TOKEN_MUTATION,
+        Some(ClusterOperation::ClusterAction),
+    },
     add_raft_voter = { 80, Some(ClusterOperation::Alter) },
     remove_raft_voter = { 81, Some(ClusterOperation::Alter) },
     describe_cluster = { 60, Some(ClusterOperation::Alter) },

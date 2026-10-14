@@ -232,9 +232,18 @@ mod tests {
         add_partitions_to_txn = { "AddPartitionsToTxn", "add_partitions_to_txn" },
         api_versions = { "ApiVersions", "api_versions" },
         offset_for_leader_epoch = { "OffsetForLeaderEpoch", "offset_for_leader_epoch" },
-        describe_user_scram_credentials = { "DescribeUserScramCredentials", "describe_user_scram_credentials" },
-        get_telemetry_subscriptions = { "GetTelemetrySubscriptions", "get_telemetry_subscriptions" },
-        streams_group_topology_description_update = { "StreamsGroupTopologyDescriptionUpdate", "streams_group_topology_description_update" },
+        describe_user_scram_credentials = {
+            "DescribeUserScramCredentials",
+            "describe_user_scram_credentials",
+        },
+        get_telemetry_subscriptions = {
+            "GetTelemetrySubscriptions",
+            "get_telemetry_subscriptions",
+        },
+        streams_group_topology_description_update = {
+            "StreamsGroupTopologyDescriptionUpdate",
+            "streams_group_topology_description_update",
+        },
         metadata = { "Metadata", "metadata" },
     )]
     fn derives_every_name_the_tables_use(api: &str, snake: &str) {

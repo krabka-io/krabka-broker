@@ -217,8 +217,20 @@ mod tests {
         empty_no_protocols = { "empty, no protocols", false, "consumer", &[][..], false },
         empty_other_type = { "empty, anything else", false, "connect", &["x"][..], true },
         stable_other_type = { "stable, other type", true, "connect", &["sticky"][..], false },
-        stable_missing_protocol = { "stable, protocol one member lacks", true, "consumer", &["range"][..], false },
-        stable_shared_protocol = { "stable, shared protocol", true, "consumer", &["x", "sticky"][..], true },
+        stable_missing_protocol = {
+            "stable, protocol one member lacks",
+            true,
+            "consumer",
+            &["range"][..],
+            false,
+        },
+        stable_shared_protocol = {
+            "stable, shared protocol",
+            true,
+            "consumer",
+            &["x", "sticky"][..],
+            true,
+        },
     )]
     fn supports_protocols_matches_kafka(
         name: &str,

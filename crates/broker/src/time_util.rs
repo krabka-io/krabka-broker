@@ -181,7 +181,8 @@ mod tests {
     #[yare::parameterized(
         epoch = { UNIX_EPOCH, 0 },
         millisecond_precision = {
-            UNIX_EPOCH + Duration::from_millis(1_700_000_000_123), 1_700_000_000_123
+            UNIX_EPOCH + Duration::from_millis(1_700_000_000_123),
+            1_700_000_000_123,
         },
         before_epoch_saturates_to_zero = { UNIX_EPOCH - Duration::from_millis(1), 0 },
     )]

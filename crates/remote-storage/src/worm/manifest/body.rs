@@ -162,7 +162,7 @@ mod tests {
                     public_key: HexBytes(vec![0x01, 0x02, 0x03]),
                     signature: HexBytes(vec![0xfe, 0xed]),
                 }),
-            }
+            },
         },
         every_optional_absent = {
             SegmentManifest {
@@ -171,7 +171,7 @@ mod tests {
                     ..sample_body()
                 },
                 signature: None,
-            }
+            },
         },
     )]
     fn manifest_json_round_trips(manifest: SegmentManifest) {

@@ -157,9 +157,24 @@ fn tierable_segments_carry_leader_epochs() {
 }
 
 #[yare::parameterized(
-    within_one_epoch = { "within one epoch", Offset(60), Offset(90), vec![(LeaderEpoch(1), Offset(60))] },
-    straddles_epochs = { "straddles epochs", Offset(40), Offset(60), vec![(LeaderEpoch(0), Offset(40)), (LeaderEpoch(1), Offset(50))] },
-    covers_all_epochs = { "covers all epochs", Offset(0), Offset(200), vec![(LeaderEpoch(0), Offset(0)), (LeaderEpoch(1), Offset(50)), (LeaderEpoch(2), Offset(100))] },
+    within_one_epoch = {
+        "within one epoch",
+        Offset(60),
+        Offset(90),
+        vec![(LeaderEpoch(1), Offset(60))],
+    },
+    straddles_epochs = {
+        "straddles epochs",
+        Offset(40),
+        Offset(60),
+        vec![(LeaderEpoch(0), Offset(40)), (LeaderEpoch(1), Offset(50))],
+    },
+    covers_all_epochs = {
+        "covers all epochs",
+        Offset(0),
+        Offset(200),
+        vec![(LeaderEpoch(0), Offset(0)), (LeaderEpoch(1), Offset(50)), (LeaderEpoch(2), Offset(100))],
+    },
 )]
 fn epochs_for_range_clamps_and_filters(
     name: &str,

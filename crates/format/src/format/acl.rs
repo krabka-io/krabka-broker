@@ -160,11 +160,21 @@ mod tests {
     }
 
     #[yare::parameterized(
-        unknown_operation = { "principal=User:u,host=*,operation=Bogus,permission=Allow,resource=Topic:t" },
-        unknown_permission = { "principal=User:u,host=*,operation=All,permission=Maybe,resource=Topic:t" },
-        bad_pattern_suffix = { "principal=User:u,host=*,operation=All,permission=Allow,resource=Topic:t:Weird" },
-        unknown_resource_type = { "principal=User:u,host=*,operation=All,permission=Allow,resource=Bogus:t" },
-        missing_resource_name = { "principal=User:u,host=*,operation=All,permission=Allow,resource=Topic" },
+        unknown_operation = {
+            "principal=User:u,host=*,operation=Bogus,permission=Allow,resource=Topic:t",
+        },
+        unknown_permission = {
+            "principal=User:u,host=*,operation=All,permission=Maybe,resource=Topic:t",
+        },
+        bad_pattern_suffix = {
+            "principal=User:u,host=*,operation=All,permission=Allow,resource=Topic:t:Weird",
+        },
+        unknown_resource_type = {
+            "principal=User:u,host=*,operation=All,permission=Allow,resource=Bogus:t",
+        },
+        missing_resource_name = {
+            "principal=User:u,host=*,operation=All,permission=Allow,resource=Topic",
+        },
         malformed_pair = { "malformedpair" },
         missing_principal = { "host=*,operation=All,permission=Allow,resource=Topic:t" },
         missing_host = { "principal=User:u,operation=All,permission=Allow,resource=Topic:t" },

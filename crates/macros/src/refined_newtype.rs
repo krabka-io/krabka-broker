@@ -357,13 +357,28 @@ mod tests {
 
     #[yare::parameterized(
         byte_size = {
-            "ByteSize", "bytes_i64", "from_bytes_i64", "i64", "byte_size", "::krabka_units::bytes(7)"
+            "ByteSize",
+            "bytes_i64",
+            "from_bytes_i64",
+            "i64",
+            "byte_size",
+            "::krabka_units::bytes(7)",
         },
         time = {
-            "Time", "millis_i64", "from_millis", "i64", "time", "::krabka_units::millis(7)"
+            "Time",
+            "millis_i64",
+            "from_millis",
+            "i64",
+            "time",
+            "::krabka_units::millis(7)",
         },
         frequency = {
-            "Frequency", "per_sec_u64", "from_per_sec_u64", "u64", "frequency", "::krabka_units::per_sec(7)"
+            "Frequency",
+            "per_sec_u64",
+            "from_per_sec_u64",
+            "u64",
+            "frequency",
+            "::krabka_units::per_sec(7)",
         },
     )]
     fn quantity_contracts_expose_checked_units_getters_defaults_and_text_parsers(

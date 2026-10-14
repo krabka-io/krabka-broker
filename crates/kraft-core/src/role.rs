@@ -250,7 +250,11 @@ mod tests {
         fetched_not_caught_up = { 10 * 3_600_000 - 1, 0, false },
         currently_caught_up = { 10 * 3_600_000 - 1, 10 * 3_600_000 - 1, true },
         caught_up_long_ago = { 10 * 3_600_000 - 1, 5 * 3_600_000, true },
-        just_inside_window = { 10 * 3_600_000 - 3_600_000 + 1, 10 * 3_600_000 - 3_600_000 + 1, true },
+        just_inside_window = {
+            10 * 3_600_000 - 3_600_000 + 1,
+            10 * 3_600_000 - 3_600_000 + 1,
+            true,
+        },
         exact_window_edge = { 10 * 3_600_000 - 3_600_000, 10 * 3_600_000 - 3_600_000, false },
         silent_two_hours = { 8 * 3_600_000, 8 * 3_600_000, false },
     )]

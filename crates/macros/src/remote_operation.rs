@@ -149,7 +149,9 @@ mod tests {
         wrong_argument = { "fn fetch_index(&self, segment: &Metadata, index_type: IndexType) {}" },
         missing_argument = { "fn fetch_index(&self, metadata: &Metadata) {}" },
         item = { "struct Storage {}" },
-        extra_method = { "fn fetch_index(&self, metadata: &Metadata, index_type: IndexType) {} fn extra() {}" },
+        extra_method = {
+            "fn fetch_index(&self, metadata: &Metadata, index_type: IndexType) {} fn extra() {}",
+        },
     )]
     fn refuses_arguments_and_methods_outside_the_fixed_spi(invalid: &str) {
         assert2::assert!(instrumentation(&TokenStream::new(), &invalid.parse().unwrap()).is_err());

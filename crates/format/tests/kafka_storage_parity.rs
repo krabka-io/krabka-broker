@@ -223,8 +223,12 @@ fn the_cluster_id_is_written_and_printed_in_kafka_form(scenario: &str) {
 #[yare::parameterized(
     directory_id_kafka_form = { &["--directory-id", "AAAAAAAAAAAAAAAAAAAAZA"] },
     directory_id_hyphenated = { &["--directory-id", "00000000-0000-0000-0000-000000000064"] },
-    controller_id_kafka_form = { &["--initial-controllers", "1@controller-1:9093:AAAAAAAAAAAAAAAAAAAAZA"] },
-    controller_id_hyphenated = { &["--initial-controllers", "1@controller-1:9093:00000000-0000-0000-0000-000000000064"] },
+    controller_id_kafka_form = {
+        &["--initial-controllers", "1@controller-1:9093:AAAAAAAAAAAAAAAAAAAAZA"],
+    },
+    controller_id_hyphenated = {
+        &["--initial-controllers", "1@controller-1:9093:00000000-0000-0000-0000-000000000064"],
+    },
 )]
 fn directory_ids_are_written_in_kafka_form(extra: &[&str]) {
     const DIRECTORY_ID: &str = "AAAAAAAAAAAAAAAAAAAAZA";

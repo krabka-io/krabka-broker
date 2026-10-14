@@ -85,14 +85,62 @@ fn retention_prefix_applies_each_kafka_predicate_and_keeps_the_newest_range(
 }
 
 #[yare::parameterized(
-    floor_equal_to_last_offset = { &[100, 200][..], &[10, 10][..], &[10, 20][..], policy().start(10).call(), 0 },
-    timestamp_equal_to_horizon = { &[500, 900][..], &[10, 10][..], &[10, 20][..], policy().maybe_retention(Some(500)).call(), 0 },
-    zero_diff_zero_byte_range = { &[100, 200][..], &[0, 10][..], &[10, 20][..], policy().maybe_bytes(Some(10)).call(), 1 },
-    horizon_below_min = { THREE_TIMESTAMPS, THREE_BYTE_LENS, THREE_LAST_OFFSETS, policy().maybe_retention(Some(1)).now(i64::MIN).call(), 0 },
-    horizon_above_max = { THREE_TIMESTAMPS, THREE_BYTE_LENS, THREE_LAST_OFFSETS, policy().maybe_retention(Some(-1)).now(i64::MAX).call(), 0 },
-    size_sum_does_not_overflow = { THREE_TIMESTAMPS, &[u64::MAX, u64::MAX, u64::MAX][..], THREE_LAST_OFFSETS, policy().maybe_bytes(Some(u64::MAX)).call(), 2 },
-    newest_range_is_preserved = { &[10][..], &[100][..], &[4][..], policy().maybe_retention(Some(1)).maybe_bytes(Some(0)).start(99).call(), 0 },
-    empty_index = { &[][..], &[][..], &[][..], policy().maybe_retention(Some(1)).maybe_bytes(Some(0)).start(99).call(), 0 },
+    floor_equal_to_last_offset = {
+        &[100, 200][..],
+        &[10, 10][..],
+        &[10, 20][..],
+        policy().start(10).call(),
+        0,
+    },
+    timestamp_equal_to_horizon = {
+        &[500, 900][..],
+        &[10, 10][..],
+        &[10, 20][..],
+        policy().maybe_retention(Some(500)).call(),
+        0,
+    },
+    zero_diff_zero_byte_range = {
+        &[100, 200][..],
+        &[0, 10][..],
+        &[10, 20][..],
+        policy().maybe_bytes(Some(10)).call(),
+        1,
+    },
+    horizon_below_min = {
+        THREE_TIMESTAMPS,
+        THREE_BYTE_LENS,
+        THREE_LAST_OFFSETS,
+        policy().maybe_retention(Some(1)).now(i64::MIN).call(),
+        0,
+    },
+    horizon_above_max = {
+        THREE_TIMESTAMPS,
+        THREE_BYTE_LENS,
+        THREE_LAST_OFFSETS,
+        policy().maybe_retention(Some(-1)).now(i64::MAX).call(),
+        0,
+    },
+    size_sum_does_not_overflow = {
+        THREE_TIMESTAMPS,
+        &[u64::MAX, u64::MAX, u64::MAX][..],
+        THREE_LAST_OFFSETS,
+        policy().maybe_bytes(Some(u64::MAX)).call(),
+        2,
+    },
+    newest_range_is_preserved = {
+        &[10][..],
+        &[100][..],
+        &[4][..],
+        policy().maybe_retention(Some(1)).maybe_bytes(Some(0)).start(99).call(),
+        0,
+    },
+    empty_index = {
+        &[][..],
+        &[][..],
+        &[][..],
+        policy().maybe_retention(Some(1)).maybe_bytes(Some(0)).start(99).call(),
+        0,
+    },
 )]
 fn retention_prefix_boundaries_follow_kafkas_strict_and_inclusive_comparisons(
     max_timestamps: &[i64],

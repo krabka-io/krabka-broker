@@ -194,8 +194,12 @@ mod tests {
         wrong_group_delimiter = { "timer {};" },
         missing_timer = { "cadence [timer];" },
         missing_semicolon = { "timer [timer]" },
-        wrong_sweep_group = { "timer [timer]; cadence [Cadence { first: 0, later: 1 }]; shutdown [&shutdown]; task [TASK]; sweep []; on_shutdown {};" },
-        unexpected_trailing_input = { "timer [timer]; cadence [Cadence { first: 0, later: 1 }]; shutdown [&shutdown]; task [TASK]; sweep {}; on_shutdown {}; extra" },
+        wrong_sweep_group = {
+            "timer [timer]; cadence [Cadence { first: 0, later: 1 }]; shutdown [&shutdown]; task [TASK]; sweep []; on_shutdown {};",
+        },
+        unexpected_trailing_input = {
+            "timer [timer]; cadence [Cadence { first: 0, later: 1 }]; shutdown [&shutdown]; task [TASK]; sweep {}; on_shutdown {}; extra",
+        },
     )]
     fn refuses_each_invalid_sweep_clause(invalid: &str) {
         assert2::assert!(validate(&invalid.parse().unwrap()).is_err(), "{invalid}");

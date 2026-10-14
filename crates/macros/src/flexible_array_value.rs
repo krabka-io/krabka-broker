@@ -90,11 +90,21 @@ mod tests {
 
     #[yare::parameterized(
         missing_attribute = { "struct Value { items: Vec<i32> }" },
-        missing_decoder = { "#[array_value(record = \"Record\", encode = write)] struct Value { items: Vec<i32> }" },
-        missing_field = { "#[array_value(record = \"Record\", encode = write, decode = read)] struct Value {}" },
-        multiple_fields = { "#[array_value(record = \"Record\", encode = write, decode = read)] struct Value { a: Vec<i32>, b: Vec<i32> }" },
-        scalar_field = { "#[array_value(record = \"Record\", encode = write, decode = read)] struct Value { item: i32 }" },
-        invalid_encoder = { "#[array_value(record = \"Record\", encode = 42, decode = read)] struct Value { items: Vec<i32> }" },
+        missing_decoder = {
+            "#[array_value(record = \"Record\", encode = write)] struct Value { items: Vec<i32> }",
+        },
+        missing_field = {
+            "#[array_value(record = \"Record\", encode = write, decode = read)] struct Value {}",
+        },
+        multiple_fields = {
+            "#[array_value(record = \"Record\", encode = write, decode = read)] struct Value { a: Vec<i32>, b: Vec<i32> }",
+        },
+        scalar_field = {
+            "#[array_value(record = \"Record\", encode = write, decode = read)] struct Value { item: i32 }",
+        },
+        invalid_encoder = {
+            "#[array_value(record = \"Record\", encode = 42, decode = read)] struct Value { items: Vec<i32> }",
+        },
     )]
     fn refuses_missing_codecs_or_multiple_fields(input: &str) {
         let item: ItemStruct = moxy::parse!({ input }).unwrap();

@@ -171,12 +171,22 @@ mod tests {
     }
 
     #[yare::parameterized(
-        sync = { "fn dispatch(b: &Broker, v: ApiVersion, bytes: &[u8], ctx: &Context) -> DispatchResult {}" },
-        wrong_name = { "async fn other(b: &Broker, v: ApiVersion, bytes: &[u8], ctx: &Context) -> DispatchResult {}" },
+        sync = {
+            "fn dispatch(b: &Broker, v: ApiVersion, bytes: &[u8], ctx: &Context) -> DispatchResult {}",
+        },
+        wrong_name = {
+            "async fn other(b: &Broker, v: ApiVersion, bytes: &[u8], ctx: &Context) -> DispatchResult {}",
+        },
         wrong_arguments = { "async fn dispatch(b: &Broker) -> DispatchResult {}" },
-        missing_result = { "async fn dispatch(b: &Broker, v: ApiVersion, bytes: &[u8], ctx: &Context) {}" },
-        missing_body = { "async fn dispatch(b: &Broker, v: ApiVersion, bytes: &[u8], ctx: &Context) -> DispatchResult;" },
-        trailing_item = { "async fn dispatch(b: &Broker, v: ApiVersion, bytes: &[u8], ctx: &Context) -> DispatchResult {} fn extra() {}" },
+        missing_result = {
+            "async fn dispatch(b: &Broker, v: ApiVersion, bytes: &[u8], ctx: &Context) {}",
+        },
+        missing_body = {
+            "async fn dispatch(b: &Broker, v: ApiVersion, bytes: &[u8], ctx: &Context) -> DispatchResult;",
+        },
+        trailing_item = {
+            "async fn dispatch(b: &Broker, v: ApiVersion, bytes: &[u8], ctx: &Context) -> DispatchResult {} fn extra() {}",
+        },
         non_function = { "struct Request {}" },
     )]
     fn refuses_incompatible_entry_points(item: &str) {

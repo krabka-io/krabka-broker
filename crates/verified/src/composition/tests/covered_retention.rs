@@ -115,7 +115,12 @@ fn a_global_maximum_cannot_cover_a_hole_or_hide_later_anchored_coverage() {
 #[yare::parameterized(
     minimum_to_maximum = { &[(i64::MIN, i64::MAX)][..], (0, i64::MAX, 0, true), 1, None },
     maximum_remote = { &[(i64::MAX, i64::MAX)][..], (i64::MAX, i64::MAX, u64::MAX, true), 1, None },
-    maximum_target_representable = { &[(i64::MAX - 1, i64::MAX)][..], (i64::MAX - 1, i64::MAX - 1, 0, true), 1, Some(i64::MAX) },
+    maximum_target_representable = {
+        &[(i64::MAX - 1, i64::MAX)][..],
+        (i64::MAX - 1, i64::MAX - 1, 0, true),
+        1,
+        Some(i64::MAX),
+    },
     live_maximum = { &[(i64::MAX, i64::MAX)][..], (i64::MAX, i64::MAX, 0, false), 0, None },
 )]
 fn maximum_offset_can_be_selected_but_has_no_representable_delete_target(

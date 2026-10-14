@@ -107,7 +107,7 @@ async fn add_response_for(
             test_listener("CONTROLLER", "host", 9093),
             test_listener("PLAINTEXT", "host", 9092),
         ],
-        ListenerUsability::Usable
+        ListenerUsability::Usable,
     },
     empty = { "none at all", vec![], ListenerUsability::Unusable },
     nameless = {
@@ -131,7 +131,7 @@ async fn add_response_for(
             test_listener("CONTROLLER", "host", 9093),
             test_listener("CONTROLLER", "other", 9094),
         ],
-        ListenerUsability::Unusable
+        ListenerUsability::Unusable,
     },
     later_bad_listener = {
         "one good listener followed by a bad one",
@@ -139,7 +139,7 @@ async fn add_response_for(
             test_listener("CONTROLLER", "host", 9093),
             test_listener("", "host", 9094),
         ],
-        ListenerUsability::Unusable
+        ListenerUsability::Unusable,
     },
 )]
 fn wire_listeners_must_be_usable_and_uniquely_named(

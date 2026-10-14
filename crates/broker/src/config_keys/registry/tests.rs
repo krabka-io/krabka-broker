@@ -91,7 +91,10 @@ fn topic_key_types_match_apache_kafka(name: &str, expected: ConfigType) {
     follower_throttled_rate = { FOLLOWER_THROTTLED_RATE_KEY, ConfigType::Long },
     alter_log_dirs_throttled_rate = { ALTER_LOG_DIRS_THROTTLED_RATE_KEY, ConfigType::Long },
     unclean_leader_election_enable = { UNCLEAN_LEADER_ELECTION_ENABLE, ConfigType::Boolean },
-    remote_list_offsets_request_timeout_ms = { REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS, ConfigType::Long },
+    remote_list_offsets_request_timeout_ms = {
+        REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS,
+        ConfigType::Long,
+    },
     offsets_retention_minutes = { OFFSETS_RETENTION_MINUTES, ConfigType::Int },
     offsets_retention_check_interval_ms = { OFFSETS_RETENTION_CHECK_INTERVAL_MS, ConfigType::Long },
     connections_max_idle_ms = { CONNECTIONS_MAX_IDLE_MS, ConfigType::Long },

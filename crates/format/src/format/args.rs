@@ -240,11 +240,36 @@ mod tests {
     /// required `--log-dir`, and clap refuses it twice.
     #[yare::parameterized(
         log_only = { &["--log-dir", "/a"], None, &["/a"][..], None },
-        metadata_and_logs = { &["--metadata-log-dir", "/m", "--log-dir", "/a,/b"], Some("/m"), &["/a", "/b"][..], None },
-        same_metadata_and_log = { &["--log-dir=/a", "--metadata-log-dir=/a"], Some("/a"), &["/a"][..], None },
-        comma_in_metadata_is_path = { &["--metadata-log-dir", "/m,/n", "--log-dir", "/a"], Some("/m,/n"), &["/a"][..], None },
-        missing_required_log = { &["--metadata-log-dir", "/m"], None, &[][..], Some(ErrorKind::MissingRequiredArgument) },
-        repeated_metadata_conflicts = { &["--metadata-log-dir", "/m", "--metadata-log-dir", "/n", "--log-dir", "/a"], None, &[][..], Some(ErrorKind::ArgumentConflict) },
+        metadata_and_logs = {
+            &["--metadata-log-dir", "/m", "--log-dir", "/a,/b"],
+            Some("/m"),
+            &["/a", "/b"][..],
+            None,
+        },
+        same_metadata_and_log = {
+            &["--log-dir=/a", "--metadata-log-dir=/a"],
+            Some("/a"),
+            &["/a"][..],
+            None,
+        },
+        comma_in_metadata_is_path = {
+            &["--metadata-log-dir", "/m,/n", "--log-dir", "/a"],
+            Some("/m,/n"),
+            &["/a"][..],
+            None,
+        },
+        missing_required_log = {
+            &["--metadata-log-dir", "/m"],
+            None,
+            &[][..],
+            Some(ErrorKind::MissingRequiredArgument),
+        },
+        repeated_metadata_conflicts = {
+            &["--metadata-log-dir", "/m", "--metadata-log-dir", "/n", "--log-dir", "/a"],
+            None,
+            &[][..],
+            Some(ErrorKind::ArgumentConflict),
+        },
     )]
     fn metadata_log_dir_is_one_optional_path(
         argv: &[&str],
@@ -294,11 +319,32 @@ mod tests {
     /// `--directory-id` takes either id form and refuses the ids that Kafka
     /// reserves, which the broker would refuse at startup.
     #[yare::parameterized(
-        usable_uuid = { uuid::Uuid::from_u64_pair(1, 1).to_string(), Ok(DirectoryId::from(uuid::Uuid::from_u64_pair(1, 1))) },
-        usable_kafka_form = { DirectoryId::from(uuid::Uuid::from_u64_pair(1, 1)).to_string(), Ok(DirectoryId::from(uuid::Uuid::from_u64_pair(1, 1))) },
-        reserved_one = { uuid::Uuid::from_u128(1).to_string(), Err(format!("Invalid reserved directory ID {}: Kafka reserves the 100 lowest directory ids", DirectoryId::from(uuid::Uuid::from_u128(1)))) },
-        reserved_ninety_nine = { uuid::Uuid::from_u128(99).to_string(), Err(format!("Invalid reserved directory ID {}: Kafka reserves the 100 lowest directory ids", DirectoryId::from(uuid::Uuid::from_u128(99)))) },
-        first_usable = { DirectoryId::from(uuid::Uuid::from_u128(100)).to_string(), Ok(DirectoryId::from(uuid::Uuid::from_u128(100))) },
+        usable_uuid = {
+            uuid::Uuid::from_u64_pair(1, 1).to_string(),
+            Ok(DirectoryId::from(uuid::Uuid::from_u64_pair(1, 1))),
+        },
+        usable_kafka_form = {
+            DirectoryId::from(uuid::Uuid::from_u64_pair(1, 1)).to_string(),
+            Ok(DirectoryId::from(uuid::Uuid::from_u64_pair(1, 1))),
+        },
+        reserved_one = {
+            uuid::Uuid::from_u128(1).to_string(),
+            Err(format!(
+                "Invalid reserved directory ID {}: Kafka reserves the 100 lowest directory ids",
+                DirectoryId::from(uuid::Uuid::from_u128(1))
+            )),
+        },
+        reserved_ninety_nine = {
+            uuid::Uuid::from_u128(99).to_string(),
+            Err(format!(
+                "Invalid reserved directory ID {}: Kafka reserves the 100 lowest directory ids",
+                DirectoryId::from(uuid::Uuid::from_u128(99))
+            )),
+        },
+        first_usable = {
+            DirectoryId::from(uuid::Uuid::from_u128(100)).to_string(),
+            Ok(DirectoryId::from(uuid::Uuid::from_u128(100))),
+        },
     )]
     fn parse_directory_id_refuses_reserved_ids(input: String, want: Result<DirectoryId, String>) {
         assert2::check!(parse_directory_id(&input) == want, "{input:?}");

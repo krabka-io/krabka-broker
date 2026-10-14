@@ -527,7 +527,9 @@ mod tests {
     #[yare::parameterized(
         owned_receiver = { "fn actions(self, state: &State, out: &mut Vec<Action>) {}" },
         mutable_receiver = { "fn actions(&mut self, state: &State, out: &mut Vec<Action>) {}" },
-        wrong_receiver_name = { "fn actions(model: &Model, state: &State, out: &mut Vec<Action>) {}" },
+        wrong_receiver_name = {
+            "fn actions(model: &Model, state: &State, out: &mut Vec<Action>) {}",
+        },
         wrong_method_name = { "fn events(&self, state: &State, out: &mut Vec<Action>) {}" },
         return_type = { "fn actions(&self, state: &State, out: &mut Vec<Action>) -> bool {}" },
         missing_parameters = { "fn actions(&self) {}" },

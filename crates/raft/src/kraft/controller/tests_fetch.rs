@@ -32,12 +32,42 @@ use {
 };
 
 #[yare::parameterized(
-    future_snapshot_installs = { false, 11, 3, 10, krabka_verified::SnapshotInstallDecision::Install },
-    snapshot_at_log_end_is_stale = { false, 10, 3, 10, krabka_verified::SnapshotInstallDecision::Stale },
+    future_snapshot_installs = {
+        false,
+        11,
+        3,
+        10,
+        krabka_verified::SnapshotInstallDecision::Install,
+    },
+    snapshot_at_log_end_is_stale = {
+        false,
+        10,
+        3,
+        10,
+        krabka_verified::SnapshotInstallDecision::Stale,
+    },
     older_snapshot_is_stale = { false, 9, 3, 10, krabka_verified::SnapshotInstallDecision::Stale },
-    pending_install_is_rejected = { true, 11, 3, 10, krabka_verified::SnapshotInstallDecision::Reject },
-    negative_end_is_rejected = { false, -1, 3, 10, krabka_verified::SnapshotInstallDecision::Reject },
-    negative_epoch_is_rejected = { false, 11, -1, 10, krabka_verified::SnapshotInstallDecision::Reject },
+    pending_install_is_rejected = {
+        true,
+        11,
+        3,
+        10,
+        krabka_verified::SnapshotInstallDecision::Reject,
+    },
+    negative_end_is_rejected = {
+        false,
+        -1,
+        3,
+        10,
+        krabka_verified::SnapshotInstallDecision::Reject,
+    },
+    negative_epoch_is_rejected = {
+        false,
+        11,
+        -1,
+        10,
+        krabka_verified::SnapshotInstallDecision::Reject,
+    },
 )]
 fn snapshot_install_admission_rejects_malformed_stale_and_pending_cases(
     pending: bool,

@@ -2160,7 +2160,7 @@ mod tests {
                 recovery_at_ms: 5_000,
                 dropped: 3,
                 latency_spike_max: millis(9),
-            }
+            },
         },
         no_ack_after_kill = {
             FailoverStamps {
@@ -2168,7 +2168,7 @@ mod tests {
                 recovery_at_ms: 0,
                 dropped: 3,
                 latency_spike_max: millis(9),
-            }
+            },
         },
     )]
     fn finalize_timing_records_no_disturbance(failover: FailoverStamps) {

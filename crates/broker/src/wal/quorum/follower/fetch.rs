@@ -144,7 +144,11 @@ mod tests {
         negative_end_offset = { 3, -1, Ok(None) },
         named_divergence = { 3, 10, Ok(Some(LogOffsetMetadata { offset: 10, epoch: 3 })) },
         epoch_zero = { 0, 0, Ok(Some(LogOffsetMetadata { offset: 0, epoch: 0 })) },
-        negative_epoch = { -1, 10, Err(String::from("leader returned an invalid WAL diverging epoch")) },
+        negative_epoch = {
+            -1,
+            10,
+            Err(String::from("leader returned an invalid WAL diverging epoch")),
+        },
     )]
     fn diverging_epoch_is_absent_at_the_kafka_default_and_needs_a_real_epoch(
         epoch: i32,

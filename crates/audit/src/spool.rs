@@ -1470,14 +1470,30 @@ mod tests {
         spool_v0_frame = { SPOOL_FILE, GOLDEN_SPOOL[6..].to_vec(), None },
         spool_empty = { SPOOL_FILE, Vec::new(), None },
         spool_short_header = { SPOOL_FILE, b"KAU".to_vec(), None },
-        spool_future_version = { SPOOL_FILE, [FUTURE_HEADER, &GOLDEN_SPOOL[6..]].concat(), Some(1) },
+        spool_future_version = {
+            SPOOL_FILE,
+            [FUTURE_HEADER, &GOLDEN_SPOOL[6..]].concat(),
+            Some(1),
+        },
         spool_negative_version = { SPOOL_FILE, NEGATIVE_HEADER.to_vec(), Some(-1) },
         losses_empty_version = { LOSS_STATE_FILE, [0u8; 16].to_vec(), None },
         losses_future_version = { LOSS_STATE_FILE, [FUTURE_HEADER, &[0u8; 16]].concat(), Some(1) },
         replay_offset_empty_version = { REPLAY_OFFSET_FILE, [0u8; 8].to_vec(), None },
-        replay_offset_future_version = { REPLAY_OFFSET_FILE, [FUTURE_HEADER, &[0u8; 8]].concat(), Some(1) },
-        replay_poison_empty_version = { REPLAY_POISON_FILE, [&0u64.to_be_bytes()[..], &GOLDEN_SPOOL[6..]].concat(), None },
-        replay_poison_future_version = { REPLAY_POISON_FILE, [FUTURE_HEADER, &0u64.to_be_bytes(), &GOLDEN_SPOOL[6..]].concat(), Some(1) },
+        replay_offset_future_version = {
+            REPLAY_OFFSET_FILE,
+            [FUTURE_HEADER, &[0u8; 8]].concat(),
+            Some(1),
+        },
+        replay_poison_empty_version = {
+            REPLAY_POISON_FILE,
+            [&0u64.to_be_bytes()[..], &GOLDEN_SPOOL[6..]].concat(),
+            None,
+        },
+        replay_poison_future_version = {
+            REPLAY_POISON_FILE,
+            [FUTURE_HEADER, &0u64.to_be_bytes(), &GOLDEN_SPOOL[6..]].concat(),
+            Some(1),
+        },
     )]
     fn open_refuses_a_missing_or_unknown_file_header(
         file: &str,

@@ -175,36 +175,85 @@ mod tests {
             WormObjectSetFacts { object_count: 0, listed_count: 0, ..broken_object_set() },
             WormObjectSetDecision::Empty
         },
-        duplicate_key = { "a repeated key", broken_object_set(), WormObjectSetDecision::DuplicateKey },
+        duplicate_key = {
+            "a repeated key",
+            broken_object_set(),
+            WormObjectSetDecision::DuplicateKey,
+        },
         coordinate_mismatch = {
             "a key at the wrong coordinates",
-            WormObjectSetFacts { identity: WormObjectIdentityFacts { unique_keys: true, coordinates_match: false }, ..broken_object_set() },
-            WormObjectSetDecision::CoordinateMismatch
+            WormObjectSetFacts {
+                identity: WormObjectIdentityFacts {
+                    unique_keys: true,
+                    coordinates_match: false,
+                },
+                ..broken_object_set()
+            },
+            WormObjectSetDecision::CoordinateMismatch,
         },
         missing_object = {
             "a missing object",
-            WormObjectSetFacts { identity: WormObjectIdentityFacts { unique_keys: true, coordinates_match: true }, ..broken_object_set() },
-            WormObjectSetDecision::MissingObject
+            WormObjectSetFacts {
+                identity: WormObjectIdentityFacts {
+                    unique_keys: true,
+                    coordinates_match: true,
+                },
+                ..broken_object_set()
+            },
+            WormObjectSetDecision::MissingObject,
         },
         count_mismatch = {
             "another object count",
-            WormObjectSetFacts { identity: WormObjectIdentityFacts { unique_keys: true, coordinates_match: true }, availability: WormObjectAvailabilityFacts { all_present: true, sizes_match: false }, ..broken_object_set() },
-            WormObjectSetDecision::CountMismatch
+            WormObjectSetFacts {
+                identity: WormObjectIdentityFacts {
+                    unique_keys: true,
+                    coordinates_match: true,
+                },
+                availability: WormObjectAvailabilityFacts {
+                    all_present: true,
+                    sizes_match: false,
+                },
+                ..broken_object_set()
+            },
+            WormObjectSetDecision::CountMismatch,
         },
         size_mismatch = {
             "another object size",
-            WormObjectSetFacts { identity: WormObjectIdentityFacts { unique_keys: true, coordinates_match: true }, availability: WormObjectAvailabilityFacts { all_present: true, sizes_match: false }, listed_count: 1, ..broken_object_set() },
-            WormObjectSetDecision::SizeMismatch
+            WormObjectSetFacts {
+                identity: WormObjectIdentityFacts {
+                    unique_keys: true,
+                    coordinates_match: true,
+                },
+                availability: WormObjectAvailabilityFacts {
+                    all_present: true,
+                    sizes_match: false,
+                },
+                listed_count: 1,
+                ..broken_object_set()
+            },
+            WormObjectSetDecision::SizeMismatch,
         },
         required_digest_mismatch = {
             "a required digest mismatch",
-            WormObjectSetFacts { digests: WormDigestFacts { require_digests: true, digests_match: false }, ..exact_object_set() },
-            WormObjectSetDecision::DigestMismatch
+            WormObjectSetFacts {
+                digests: WormDigestFacts {
+                    require_digests: true,
+                    digests_match: false,
+                },
+                ..exact_object_set()
+            },
+            WormObjectSetDecision::DigestMismatch,
         },
         optional_digest_mismatch = {
             "a digest mismatch nobody required",
-            WormObjectSetFacts { digests: WormDigestFacts { require_digests: false, digests_match: false }, ..exact_object_set() },
-            WormObjectSetDecision::Admit
+            WormObjectSetFacts {
+                digests: WormDigestFacts {
+                    require_digests: false,
+                    digests_match: false,
+                },
+                ..exact_object_set()
+            },
+            WormObjectSetDecision::Admit,
         },
         exact = { "an exact set", exact_object_set(), WormObjectSetDecision::Admit },
     )]

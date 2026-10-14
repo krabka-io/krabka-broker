@@ -609,7 +609,7 @@ mod tests {
                     epoch: BarrierEpoch(7),
                     ..Default::default()
                 })
-                .call()
+                .call(),
         },
     )]
     fn a_barrier_marker_leaves_an_open_transaction_untouched(

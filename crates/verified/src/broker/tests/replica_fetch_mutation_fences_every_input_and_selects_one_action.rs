@@ -8,7 +8,10 @@ use super::*;
         diverging_epoch: 0,
         ..LIVE_ROW
     }, ReplicaFetchMutation::Truncate },
-    fenced_leader_epoch_retries = { ReplicaFetchFacts { error_code: 74, ..LIVE_ROW }, ReplicaFetchMutation::Retry },
+    fenced_leader_epoch_retries = {
+        ReplicaFetchFacts { error_code: 74, ..LIVE_ROW },
+        ReplicaFetchMutation::Retry,
+    },
     error_row_with_divergence_retries = { ReplicaFetchFacts {
         error_code: 1, diverging_epoch: 7, ..LIVE_ROW
     }, ReplicaFetchMutation::Retry },

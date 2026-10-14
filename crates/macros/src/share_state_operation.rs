@@ -80,13 +80,25 @@ mod tests {
 
     #[yare::parameterized(
         sync = { "fn read(&self, image: &Image, group: &str, topic: Uuid, partition: i32) {}" },
-        owned_receiver = { "async fn read(self, image: &Image, group: &str, topic: Uuid, partition: i32) {}" },
+        owned_receiver = {
+            "async fn read(self, image: &Image, group: &str, topic: Uuid, partition: i32) {}",
+        },
         missing_arguments = { "async fn read(&self, image: &Image) {}" },
-        unsafe_signature = { "async unsafe fn read(&self, image: &Image, group: &str, topic: Uuid, partition: i32) {}" },
-        extern_signature = { "async extern \"C\" fn read(&self, image: &Image, group: &str, topic: Uuid, partition: i32) {}" },
-        generic = { "async fn read<T>(&self, image: &Image, group: &str, topic: Uuid, partition: i32) {}" },
-        mutable_receiver = { "async fn read(&mut self, image: &Image, group: &str, topic: Uuid, partition: i32) {}" },
-        missing_image_binding = { "async fn read(&self, _: &Image, group: &str, topic: Uuid, partition: i32) {}" },
+        unsafe_signature = {
+            "async unsafe fn read(&self, image: &Image, group: &str, topic: Uuid, partition: i32) {}",
+        },
+        extern_signature = {
+            "async extern \"C\" fn read(&self, image: &Image, group: &str, topic: Uuid, partition: i32) {}",
+        },
+        generic = {
+            "async fn read<T>(&self, image: &Image, group: &str, topic: Uuid, partition: i32) {}",
+        },
+        mutable_receiver = {
+            "async fn read(&mut self, image: &Image, group: &str, topic: Uuid, partition: i32) {}",
+        },
+        missing_image_binding = {
+            "async fn read(&self, _: &Image, group: &str, topic: Uuid, partition: i32) {}",
+        },
     )]
     fn rejects_unsupported_operation_signatures(source: &str) {
         let signature = function_signature(&source.parse().unwrap()).unwrap();

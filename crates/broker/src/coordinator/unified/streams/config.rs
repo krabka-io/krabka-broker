@@ -669,9 +669,18 @@ mod tests {
     #[yare::parameterized(
         latest = { "latest", Some(ShareAutoOffsetReset::Latest) },
         earliest = { "earliest", Some(ShareAutoOffsetReset::Earliest) },
-        one_hour = { "by_duration:PT1H", Some(ShareAutoOffsetReset::ByDuration(Duration::from_secs(3_600))) },
-        normalized_duration = { "by_duration:P1DT2H3M4.5S", Some(ShareAutoOffsetReset::ByDuration(Duration::new(93_784, 500_000_000))) },
-        zero_duration = { "by_duration:PT0S", Some(ShareAutoOffsetReset::ByDuration(Duration::ZERO)) },
+        one_hour = {
+            "by_duration:PT1H",
+            Some(ShareAutoOffsetReset::ByDuration(Duration::from_secs(3_600))),
+        },
+        normalized_duration = {
+            "by_duration:P1DT2H3M4.5S",
+            Some(ShareAutoOffsetReset::ByDuration(Duration::new(93_784, 500_000_000))),
+        },
+        zero_duration = {
+            "by_duration:PT0S",
+            Some(ShareAutoOffsetReset::ByDuration(Duration::ZERO)),
+        },
         negative_duration = { "by_duration:-PT1H", None },
         negative_component = { "by_duration:PT-1H", None },
         missing_time = { "by_duration:PT", None },

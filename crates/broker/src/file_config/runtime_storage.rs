@@ -294,7 +294,7 @@ record_decompression_output_ceiling = "512MiB"
             concat!(
                 "record_decompression_output_floor = \"1GiB\"\n",
                 "record_decompression_output_ceiling = \"16MiB\"\n",
-            )
+            ),
         },
     )]
     fn runtime_file_config_rejects_invalid_record_decompression_relations(body: &str) {

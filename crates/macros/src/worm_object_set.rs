@@ -223,19 +223,45 @@ mod tests {
     }
 
     #[yare::parameterized(
-        unknown_mode = { "Other; { fn f(facts: Facts) -> WormObjectSetDecision } (facts); count [1] listed [1]" },
-        wrong_observed_binding = { "Runtime; { fn f(facts: Facts) -> WormObjectSetDecision } (other); count [1] listed [1]" },
-        function_body_in_header = { "Runtime; { fn f(facts: Facts) -> WormObjectSetDecision {} } (facts); count [1] listed [1]" },
-        async_header = { "Runtime; { async fn f(facts: Facts) -> WormObjectSetDecision } (facts); count [1] listed [1]" },
-        const_header = { "Runtime; { const fn f(facts: Facts) -> WormObjectSetDecision } (facts); count [1] listed [1]" },
-        unsafe_header = { "Runtime; { unsafe fn f(facts: Facts) -> WormObjectSetDecision } (facts); count [1] listed [1]" },
-        extern_header = { "Runtime; { extern fn f(facts: Facts) -> WormObjectSetDecision } (facts); count [1] listed [1]" },
-        generic_header = { "Runtime; { fn f<T>(facts: Facts) -> WormObjectSetDecision } (facts); count [1] listed [1]" },
-        extra_parameter = { "Runtime; { fn f(facts: Facts, extra: bool) -> WormObjectSetDecision } (facts); count [1] listed [1]" },
-        wrong_return_type = { "Runtime; { fn f(facts: Facts) -> bool } (facts); count [1] listed [1]" },
-        empty_count = { "Runtime; { fn f(facts: Facts) -> WormObjectSetDecision } (facts); count [] listed [1]" },
-        empty_listed_count = { "Runtime; { fn f(facts: Facts) -> WormObjectSetDecision } (facts); count [1] listed []" },
-        trailing_metadata = { "Runtime; { fn f(facts: Facts) -> WormObjectSetDecision } (facts); count [1] listed [1] extra" },
+        unknown_mode = {
+            "Other; { fn f(facts: Facts) -> WormObjectSetDecision } (facts); count [1] listed [1]",
+        },
+        wrong_observed_binding = {
+            "Runtime; { fn f(facts: Facts) -> WormObjectSetDecision } (other); count [1] listed [1]",
+        },
+        function_body_in_header = {
+            "Runtime; { fn f(facts: Facts) -> WormObjectSetDecision {} } (facts); count [1] listed [1]",
+        },
+        async_header = {
+            "Runtime; { async fn f(facts: Facts) -> WormObjectSetDecision } (facts); count [1] listed [1]",
+        },
+        const_header = {
+            "Runtime; { const fn f(facts: Facts) -> WormObjectSetDecision } (facts); count [1] listed [1]",
+        },
+        unsafe_header = {
+            "Runtime; { unsafe fn f(facts: Facts) -> WormObjectSetDecision } (facts); count [1] listed [1]",
+        },
+        extern_header = {
+            "Runtime; { extern fn f(facts: Facts) -> WormObjectSetDecision } (facts); count [1] listed [1]",
+        },
+        generic_header = {
+            "Runtime; { fn f<T>(facts: Facts) -> WormObjectSetDecision } (facts); count [1] listed [1]",
+        },
+        extra_parameter = {
+            "Runtime; { fn f(facts: Facts, extra: bool) -> WormObjectSetDecision } (facts); count [1] listed [1]",
+        },
+        wrong_return_type = {
+            "Runtime; { fn f(facts: Facts) -> bool } (facts); count [1] listed [1]",
+        },
+        empty_count = {
+            "Runtime; { fn f(facts: Facts) -> WormObjectSetDecision } (facts); count [] listed [1]",
+        },
+        empty_listed_count = {
+            "Runtime; { fn f(facts: Facts) -> WormObjectSetDecision } (facts); count [1] listed []",
+        },
+        trailing_metadata = {
+            "Runtime; { fn f(facts: Facts) -> WormObjectSetDecision } (facts); count [1] listed [1] extra",
+        },
     )]
     fn refuses_unknown_modes_malformed_headers_and_missing_observations(input: &str) {
         assert2::assert!(validate(&input.parse().unwrap()).is_err(), "{input}");

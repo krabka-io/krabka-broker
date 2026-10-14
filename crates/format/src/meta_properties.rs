@@ -650,17 +650,44 @@ mod tests {
     /// throws for it, and the first fault in Kafka's order wins.
     #[yare::parameterized(
         bad_version = { "version=one\n", "Invalid meta.properties version string 'one'" },
-        unknown_version = { "version=2\nnode.id=1\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n", "Unknown meta.properties version number 2" },
-        unsupported_zero = { "version=0\nbroker.id=1\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n", "Unsupported meta.properties version 0: krabka reads version 1, which a KRaft node writes" },
-        missing_version = { "node.id=1\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n", "Unsupported meta.properties version 0: krabka reads version 1, which a KRaft node writes" },
-        old_json = { "{\n  \"cluster_id\": \"AQIDBAUGBwgJCgsMDQ4PEA\",\n  \"version\": 3\n}\n", "Unsupported meta.properties version 0: krabka reads version 1, which a KRaft node writes" },
+        unknown_version = {
+            "version=2\nnode.id=1\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n",
+            "Unknown meta.properties version number 2",
+        },
+        unsupported_zero = {
+            "version=0\nbroker.id=1\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n",
+            "Unsupported meta.properties version 0: krabka reads version 1, which a KRaft node writes",
+        },
+        missing_version = {
+            "node.id=1\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n",
+            "Unsupported meta.properties version 0: krabka reads version 1, which a KRaft node writes",
+        },
+        old_json = {
+            "{\n  \"cluster_id\": \"AQIDBAUGBwgJCgsMDQ4PEA\",\n  \"version\": 3\n}\n",
+            "Unsupported meta.properties version 0: krabka reads version 1, which a KRaft node writes",
+        },
         no_node_or_cluster = { "version=1\n", "Failed to find node.id" },
-        node_trailing_space = { "version=1\nnode.id=1 \ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n", "Unable to read node.id as a base-10 number." },
-        node_overflow = { "version=1\nnode.id=2147483648\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n", "Unable to read node.id as a base-10 number." },
-        bad_directory_precedes_cluster_missing = { "version=1\nnode.id=1\ndirectory.id=nope\n", "Unable to read directory.id as a Uuid: Input string `nope` decoded as 3 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID" },
+        node_trailing_space = {
+            "version=1\nnode.id=1 \ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n",
+            "Unable to read node.id as a base-10 number.",
+        },
+        node_overflow = {
+            "version=1\nnode.id=2147483648\ncluster.id=AQIDBAUGBwgJCgsMDQ4PEA\n",
+            "Unable to read node.id as a base-10 number.",
+        },
+        bad_directory_precedes_cluster_missing = {
+            "version=1\nnode.id=1\ndirectory.id=nope\n",
+            "Unable to read directory.id as a Uuid: Input string `nope` decoded as 3 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
+        },
         no_cluster = { "version=1\nnode.id=1\n", "cluster.id was not found." },
-        invalid_cluster = { "version=1\nnode.id=1\ncluster.id=AAAAAA\n", "Unable to read cluster.id as a Uuid: Input string `AAAAAA` decoded as 4 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID" },
-        malformed_escape = { "version=1\nnode.id=1\ncluster.id=\\u00zz\n", "Malformed \\uxxxx encoding." },
+        invalid_cluster = {
+            "version=1\nnode.id=1\ncluster.id=AAAAAA\n",
+            "Unable to read cluster.id as a Uuid: Input string `AAAAAA` decoded as 4 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
+        },
+        malformed_escape = {
+            "version=1\nnode.id=1\ncluster.id=\\u00zz\n",
+            "Malformed \\uxxxx encoding.",
+        },
     )]
     fn a_bad_file_gets_kafkas_message(text: &str, want: &str) {
         assert2::check!(

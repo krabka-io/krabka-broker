@@ -93,13 +93,22 @@ fn absent_invalid_and_other_protocol_timings_borrow_the_original(kind: &str) {
     assignment = { vec![Override { key: ASSIGNMENT, value: "0" }], 45, 5, 0 },
     multiple_clamped = {
         vec![
-            Override { key: SESSION, value: "0" },
-            Override { key: HEARTBEAT, value: "20000" },
-            Override { key: ASSIGNMENT, value: "20000" },
+            Override {
+                key: SESSION,
+                value: "0",
+            },
+            Override {
+                key: HEARTBEAT,
+                value: "20000",
+            },
+            Override {
+                key: ASSIGNMENT,
+                value: "20000",
+            },
         ],
         45,
         15,
-        15
+        15,
     },
 )]
 fn applies_each_timing_and_keeps_unrelated_configuration(

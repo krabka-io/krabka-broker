@@ -36,14 +36,46 @@ fn member_facts(
 
 #[yare::parameterized(
     leader = { "the leader stays", member_facts(IsrMemberRole::Leader, false, false, false), true },
-    reassigned_away = { "a reassigned-away member leaves", member_facts(IsrMemberRole::Unassigned, true, true, true), false },
-    idle_at_leader_end = { "an idle follower at the leader's log end stays", member_facts(IsrMemberRole::InSyncFollower, true, false, false), true },
-    recently_caught_up = { "a follower that caught up recently stays", member_facts(IsrMemberRole::InSyncFollower, false, true, true), true },
-    fetching_behind = { "a follower fetching but behind for too long leaves", member_facts(IsrMemberRole::InSyncFollower, false, false, true), false },
-    stopped_fetching = { "a follower that stopped fetching behind the leader leaves", member_facts(IsrMemberRole::InSyncFollower, false, false, false), false },
-    out_of_sync_caught_up = { "a follower that fetched and caught up rejoins", member_facts(IsrMemberRole::OutOfSyncFollower, false, true, true), true },
-    old_catchup_fetching = { "a follower caught up long ago but fetching again stays out", member_facts(IsrMemberRole::OutOfSyncFollower, true, false, true), false },
-    old_catchup_stopped = { "a follower that caught up but stopped fetching stays out", member_facts(IsrMemberRole::OutOfSyncFollower, false, true, false), false },
+    reassigned_away = {
+        "a reassigned-away member leaves",
+        member_facts(IsrMemberRole::Unassigned, true, true, true),
+        false,
+    },
+    idle_at_leader_end = {
+        "an idle follower at the leader's log end stays",
+        member_facts(IsrMemberRole::InSyncFollower, true, false, false),
+        true,
+    },
+    recently_caught_up = {
+        "a follower that caught up recently stays",
+        member_facts(IsrMemberRole::InSyncFollower, false, true, true),
+        true,
+    },
+    fetching_behind = {
+        "a follower fetching but behind for too long leaves",
+        member_facts(IsrMemberRole::InSyncFollower, false, false, true),
+        false,
+    },
+    stopped_fetching = {
+        "a follower that stopped fetching behind the leader leaves",
+        member_facts(IsrMemberRole::InSyncFollower, false, false, false),
+        false,
+    },
+    out_of_sync_caught_up = {
+        "a follower that fetched and caught up rejoins",
+        member_facts(IsrMemberRole::OutOfSyncFollower, false, true, true),
+        true,
+    },
+    old_catchup_fetching = {
+        "a follower caught up long ago but fetching again stays out",
+        member_facts(IsrMemberRole::OutOfSyncFollower, true, false, true),
+        false,
+    },
+    old_catchup_stopped = {
+        "a follower that caught up but stopped fetching stays out",
+        member_facts(IsrMemberRole::OutOfSyncFollower, false, true, false),
+        false,
+    },
 )]
 fn isr_maintenance_keeps_caught_up_followers_and_drops_the_rest(
     label: &str,

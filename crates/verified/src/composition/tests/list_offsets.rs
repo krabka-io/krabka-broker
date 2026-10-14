@@ -111,7 +111,19 @@ fn visibility_is_exclusive_and_does_not_assume_monotone_timestamps(
 
 #[yare::parameterized(
     empty = { 0, vec![], vec![], vec![], 0, 0, ListOffsetsSelectionDecision::Unknown },
-    max_offset = { i64::MAX - 1, vec![0], vec![i64::MAX], vec![], i64::MAX, i64::MAX, ListOffsetsSelectionDecision::Resolved { offset: i64::MAX - 1, timestamp: i64::MAX, leader_epoch: -1 } },
+    max_offset = {
+        i64::MAX - 1,
+        vec![0],
+        vec![i64::MAX],
+        vec![],
+        i64::MAX,
+        i64::MAX,
+        ListOffsetsSelectionDecision::Resolved {
+            offset: i64::MAX - 1,
+            timestamp: i64::MAX,
+            leader_epoch: -1,
+        },
+    },
 )]
 fn empty_indexes_and_maximum_offsets_keep_exclusive_visibility(
     base: i64,

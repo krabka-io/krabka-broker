@@ -205,14 +205,14 @@ mod tests {
                 min_isr: Some(1),
                 ..KafkaMetadataLogConfig::new("127.0.0.1:9092")
             },
-            [("cleanup.policy", "delete"), ("min.insync.replicas", "1"), ("retention.ms", "-1")]
+            [("cleanup.policy", "delete"), ("min.insync.replicas", "1"), ("retention.ms", "-1")],
         },
         compacted = {
             KafkaMetadataLogConfig {
                 compacted: true,
                 ..KafkaMetadataLogConfig::new("127.0.0.1:9092")
             },
-            [("cleanup.policy", "compact"), ("min.insync.replicas", "2"), ("retention.ms", "-1")]
+            [("cleanup.policy", "compact"), ("min.insync.replicas", "2"), ("retention.ms", "-1")],
         },
     )]
     fn creation_configs_follow_kafkas_metadata_topic(

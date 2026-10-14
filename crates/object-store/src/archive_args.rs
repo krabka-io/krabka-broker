@@ -309,14 +309,46 @@ mod tests {
     }
 
     #[yare::parameterized(
-        s3_region = { &["--archive-s3-region", "eu-west-1"][..], "--archive-s3-region", "--archive-s3-bucket" },
-        s3_endpoint = { &["--archive-s3-endpoint", "http://minio:9000"][..], "--archive-s3-endpoint", "--archive-s3-bucket" },
-        s3_access_key = { &["--archive-s3-access-key-id", "key"][..], "--archive-s3-access-key-id", "--archive-s3-bucket" },
-        s3_secret_key = { &["--archive-s3-secret-access-key", "secret"][..], "--archive-s3-secret-access-key", "--archive-s3-bucket" },
-        s3_http = { &["--archive-s3-allow-http"][..], "--archive-s3-allow-http", "--archive-s3-bucket" },
-        gcs_service_account = { &["--archive-gcs-service-account-path", "/etc/sa.json"][..], "--archive-gcs-service-account-path", "--archive-gcs-bucket" },
-        gcs_endpoint = { &["--archive-gcs-endpoint", "http://fake-gcs:4443"][..], "--archive-gcs-endpoint", "--archive-gcs-bucket" },
-        gcs_http = { &["--archive-gcs-allow-http"][..], "--archive-gcs-allow-http", "--archive-gcs-bucket" },
+        s3_region = {
+            &["--archive-s3-region", "eu-west-1"][..],
+            "--archive-s3-region",
+            "--archive-s3-bucket",
+        },
+        s3_endpoint = {
+            &["--archive-s3-endpoint", "http://minio:9000"][..],
+            "--archive-s3-endpoint",
+            "--archive-s3-bucket",
+        },
+        s3_access_key = {
+            &["--archive-s3-access-key-id", "key"][..],
+            "--archive-s3-access-key-id",
+            "--archive-s3-bucket",
+        },
+        s3_secret_key = {
+            &["--archive-s3-secret-access-key", "secret"][..],
+            "--archive-s3-secret-access-key",
+            "--archive-s3-bucket",
+        },
+        s3_http = {
+            &["--archive-s3-allow-http"][..],
+            "--archive-s3-allow-http",
+            "--archive-s3-bucket",
+        },
+        gcs_service_account = {
+            &["--archive-gcs-service-account-path", "/etc/sa.json"][..],
+            "--archive-gcs-service-account-path",
+            "--archive-gcs-bucket",
+        },
+        gcs_endpoint = {
+            &["--archive-gcs-endpoint", "http://fake-gcs:4443"][..],
+            "--archive-gcs-endpoint",
+            "--archive-gcs-bucket",
+        },
+        gcs_http = {
+            &["--archive-gcs-allow-http"][..],
+            "--archive-gcs-allow-http",
+            "--archive-gcs-bucket",
+        },
     )]
     fn every_sub_flag_needs_the_backend_it_belongs_to(
         stray: &[&str],

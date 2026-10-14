@@ -262,12 +262,42 @@ mod tests {
     }
 
     #[yare::parameterized(
-        every_literal = { "every pattern type takes a literal entry", FreezeFilter::EveryPatternType, PatternType::Literal, true },
-        every_prefixed = { "every pattern type takes a prefixed entry", FreezeFilter::EveryPatternType, PatternType::Prefixed, true },
-        one_own = { "one pattern type takes its own", FreezeFilter::One(PatternType::Literal), PatternType::Literal, true },
-        one_other = { "one pattern type refuses the other", FreezeFilter::One(PatternType::Literal), PatternType::Prefixed, false },
-        nothing_literal = { "nothing takes no literal entry", FreezeFilter::Nothing, PatternType::Literal, false },
-        nothing_prefixed = { "nothing takes no prefixed entry", FreezeFilter::Nothing, PatternType::Prefixed, false },
+        every_literal = {
+            "every pattern type takes a literal entry",
+            FreezeFilter::EveryPatternType,
+            PatternType::Literal,
+            true,
+        },
+        every_prefixed = {
+            "every pattern type takes a prefixed entry",
+            FreezeFilter::EveryPatternType,
+            PatternType::Prefixed,
+            true,
+        },
+        one_own = {
+            "one pattern type takes its own",
+            FreezeFilter::One(PatternType::Literal),
+            PatternType::Literal,
+            true,
+        },
+        one_other = {
+            "one pattern type refuses the other",
+            FreezeFilter::One(PatternType::Literal),
+            PatternType::Prefixed,
+            false,
+        },
+        nothing_literal = {
+            "nothing takes no literal entry",
+            FreezeFilter::Nothing,
+            PatternType::Literal,
+            false,
+        },
+        nothing_prefixed = {
+            "nothing takes no prefixed entry",
+            FreezeFilter::Nothing,
+            PatternType::Prefixed,
+            false,
+        },
     )]
     fn a_filter_accepts_the_pattern_types_it_selects(
         label: &str,

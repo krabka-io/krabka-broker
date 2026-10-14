@@ -421,7 +421,9 @@ mod tests {
         empty_custom_metadata = { Some(CustomMetadata(Vec::new())) },
         another_backend = { Some(CustomMetadata(b"s3://bucket/key".to_vec())) },
         unrelated_json = { Some(CustomMetadata(br#"{"key":"value"}"#.to_vec())) },
-        bad_chain_head = { Some(CustomMetadata(br#"{"epoch_id":"00000000-0000-0000-0000-000000000001","seq":1,"prev_head":"zz","head":null,"manifest_version_id":null}"#.to_vec())) },
+        bad_chain_head = {
+            Some(CustomMetadata(br#"{"epoch_id":"00000000-0000-0000-0000-000000000001","seq":1,"prev_head":"zz","head":null,"manifest_version_id":null}"#.to_vec())),
+        },
     )]
     fn next_chain_stamp_starts_new_epoch_when_no_receipt_decodes(custom: Option<CustomMetadata>) {
         let fresh = EpochId(Uuid::from_u128(0xfeed));
@@ -462,7 +464,7 @@ mod tests {
                 epoch_id: epoch(),
                 seq: ManifestSeq(11),
                 prev_head: head(0x5a),
-            })
+            }),
         },
         receipt = {
             WormChainRecord::request(ChainStamp {
@@ -471,7 +473,7 @@ mod tests {
                 prev_head: head(0x5a),
             })
             .with_head(head(0x6b))
-            .with_manifest_version(Some("3HL4kqtJlcpXroDTDmjVBH40Nrjfkd".to_string()))
+            .with_manifest_version(Some("3HL4kqtJlcpXroDTDmjVBH40Nrjfkd".to_string())),
         },
     )]
     fn chain_record_round_trips_through_custom_metadata(record: WormChainRecord) {

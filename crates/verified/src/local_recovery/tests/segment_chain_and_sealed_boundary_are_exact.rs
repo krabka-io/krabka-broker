@@ -21,7 +21,12 @@ fn segment_chain_and_sealed_boundary_are_exact() {
     cleaned_and_swap_without_original = { true, true, false, LocalRecoverySwapAction::AbortSwap },
     committed_originals_untouched = { false, true, true, LocalRecoverySwapAction::CompleteSwap },
     committed_original_deleted = { false, true, false, LocalRecoverySwapAction::CompleteSwap },
-    promoted_log_sidecars_pending = { false, false, true, LocalRecoverySwapAction::PromoteSidecars },
+    promoted_log_sidecars_pending = {
+        false,
+        false,
+        true,
+        LocalRecoverySwapAction::PromoteSidecars,
+    },
     no_log = { false, false, false, LocalRecoverySwapAction::Reject },
 )]
 fn swap_action_completes_every_committed_swap(

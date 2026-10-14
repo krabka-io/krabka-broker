@@ -106,10 +106,31 @@ fn election_timer_only_starts_non_leader_voters(is_voter: bool, is_leader: bool,
 }
 
 #[yare::parameterized(
-    follower = { Role::Follower { leader_id: NodeId(7), fetch_deadline: SimInstant(10), has_fetched_from_leader: false }, Some(NodeId(7)) },
-    observer_with_leader = { Role::Observer { leader_id: Some(NodeId(9)), fetch_deadline: SimInstant(10) }, Some(NodeId(9)) },
-    observer_without_leader = { Role::Observer { leader_id: None, fetch_deadline: SimInstant(10) }, None },
-    leader = { Role::Leader { replicas: std::collections::BTreeMap::new(), fetched_voters: std::collections::BTreeSet::new(), high_watermark: 0, epoch_start_offset: 0 }, None },
+    follower = {
+        Role::Follower {
+            leader_id: NodeId(7),
+            fetch_deadline: SimInstant(10),
+            has_fetched_from_leader: false,
+        },
+        Some(NodeId(7)),
+    },
+    observer_with_leader = {
+        Role::Observer { leader_id: Some(NodeId(9)), fetch_deadline: SimInstant(10) },
+        Some(NodeId(9)),
+    },
+    observer_without_leader = {
+        Role::Observer { leader_id: None, fetch_deadline: SimInstant(10) },
+        None,
+    },
+    leader = {
+        Role::Leader {
+            replicas: std::collections::BTreeMap::new(),
+            fetched_voters: std::collections::BTreeSet::new(),
+            high_watermark: 0,
+            epoch_start_offset: 0,
+        },
+        None,
+    },
 )]
 fn following_leader_for_role_reports_followed_leader_only(role: Role, want: Option<NodeId>) {
     assert2::assert!(following_leader_for_role(&role) == want);

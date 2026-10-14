@@ -158,10 +158,18 @@ mod tests {
     #[yare::parameterized(
         empty_impl = { "" },
         missing_decode = { "fn encode_fields(&self, buf: &mut BytesMut) {}" },
-        mutable_encode_receiver = { "fn encode_fields(&mut self, buf: &mut BytesMut) {} fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {}" },
-        public_encode_method = { "pub fn encode_fields(&self, buf: &mut BytesMut) {} fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {}" },
-        borrowed_decode_buffer = { "fn encode_fields(&self, buf: &mut BytesMut) {} fn decode_fields(buf: &[u8]) -> Result<Self, BrokerError> {}" },
-        duplicate_encode_method = { "fn encode_fields(&self, buf: &mut BytesMut) {} fn encode_fields(self, buf: &mut BytesMut) {} fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {}" },
+        mutable_encode_receiver = {
+            "fn encode_fields(&mut self, buf: &mut BytesMut) {} fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {}",
+        },
+        public_encode_method = {
+            "pub fn encode_fields(&self, buf: &mut BytesMut) {} fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {}",
+        },
+        borrowed_decode_buffer = {
+            "fn encode_fields(&self, buf: &mut BytesMut) {} fn decode_fields(buf: &[u8]) -> Result<Self, BrokerError> {}",
+        },
+        duplicate_encode_method = {
+            "fn encode_fields(&self, buf: &mut BytesMut) {} fn encode_fields(self, buf: &mut BytesMut) {} fn decode_fields(buf: &mut &[u8]) -> Result<Self, BrokerError> {}",
+        },
     )]
     fn rejects_missing_duplicate_and_incompatible_field_codecs(methods: &str) {
         let item = format!("impl Value {{ {methods} }}").parse().unwrap();

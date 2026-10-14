@@ -131,7 +131,9 @@ mod tests {
         owned_receiver = { "fn build(self) -> Result<SpanExporter, TelemetryError>;" },
         mutable_receiver = { "fn build(&mut self) -> Result<SpanExporter, TelemetryError>;" },
         async_method = { "async fn build(&self) -> Result<SpanExporter, TelemetryError>;" },
-        extra_argument = { "fn build(&self, extra: bool) -> Result<SpanExporter, TelemetryError>;" },
+        extra_argument = {
+            "fn build(&self, extra: bool) -> Result<SpanExporter, TelemetryError>;",
+        },
         bare_result = { "fn build(&self) -> SpanExporter;" },
         wrong_exporter = { "fn build(&self) -> Result<Other, TelemetryError>;" },
         wrong_error = { "fn build(&self) -> Result<SpanExporter, OtherError>;" },

@@ -518,7 +518,7 @@ connections_max_idle = "5s"
         both_as_properties = {
             "both as properties",
             "[server_properties]\n\"num.partitions\" = \"6\"\n\
-             \"default.replication.factor\" = \"3\"\n",
+                     \"default.replication.factor\" = \"3\"\n",
             Ok((6, 3, TopicCreationOrigins {
                 num_partitions: true,
                 default_replication_factor: true,
@@ -527,7 +527,7 @@ connections_max_idle = "5s"
         dedicated_key_wins_over_property = {
             "a dedicated key wins over the property",
             "[runtime]\nnum_partitions = 4\n\
-             [server_properties]\n\"num.partitions\" = \"6\"\n",
+                         [server_properties]\n\"num.partitions\" = \"6\"\n",
             Ok((4, 1, TopicCreationOrigins {
                 num_partitions: true,
                 default_replication_factor: false,
@@ -639,12 +639,18 @@ connections_max_idle = "5s"
         zero = {
             "zero",
             "[server_properties]\n\"log.roll.ms\" = \"0\"\n",
-            Err("invalid config: server_properties `log.roll.ms` must be a positive integer, got `0`".to_owned()),
+            Err(
+                "invalid config: server_properties `log.roll.ms` must be a positive integer, got `0`"
+                    .to_owned(),
+            ),
         },
         a_word = {
             "a word",
             "[server_properties]\n\"log.roll.ms\" = \"soon\"\n",
-            Err("invalid config: server_properties `log.roll.ms` must be a positive integer, got `soon`".to_owned()),
+            Err(
+                "invalid config: server_properties `log.roll.ms` must be a positive integer, got `soon`"
+                    .to_owned(),
+            ),
         },
     )]
     fn log_roll_ms_is_read_from_server_properties(
@@ -836,7 +842,10 @@ connections_max_idle = "5s"
         },
         invalid_yes = {
             "[server_properties]\n\"unstable.api.versions.enable\" = \"yes\"\n",
-            Err("server_properties `unstable.api.versions.enable` must be `true` or `false`, got `yes`".to_owned()),
+            Err(
+                "server_properties `unstable.api.versions.enable` must be `true` or `false`, got `yes`"
+                    .to_owned(),
+            ),
         },
     )]
     fn apply_to_reads_unstable_api_versions_enable_from_server_properties(
@@ -864,7 +873,10 @@ connections_max_idle = "5s"
         },
         invalid_one = {
             "[server_properties]\n\"unstable.feature.versions.enable\" = \"1\"\n",
-            Err("server_properties `unstable.feature.versions.enable` must be `true` or `false`, got `1`".to_owned()),
+            Err(
+                "server_properties `unstable.feature.versions.enable` must be `true` or `false`, got `1`"
+                    .to_owned(),
+            ),
         },
     )]
     fn apply_to_reads_unstable_feature_versions_enable_from_server_properties(

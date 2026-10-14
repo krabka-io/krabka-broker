@@ -266,8 +266,14 @@ mod tests {
 
     #[yare::parameterized(
         pre_1_0_checkpoint = { "3 7\n", DurableOffsetDecodeError::MissingVersion },
-        future_version = { "1\n3 7\n", DurableOffsetDecodeError::UnsupportedVersion { found: "1".to_owned() } },
-        non_numeric_version = { "v0\n3 7\n", DurableOffsetDecodeError::UnsupportedVersion { found: "v0".to_owned() } },
+        future_version = {
+            "1\n3 7\n",
+            DurableOffsetDecodeError::UnsupportedVersion { found: "1".to_owned() },
+        },
+        non_numeric_version = {
+            "v0\n3 7\n",
+            DurableOffsetDecodeError::UnsupportedVersion { found: "v0".to_owned() },
+        },
         empty_file = { "", DurableOffsetDecodeError::UnsupportedVersion { found: String::new() } },
     )]
     fn durable_offset_decode_rejects_a_missing_or_unknown_version(

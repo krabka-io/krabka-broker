@@ -209,24 +209,29 @@ mod tests {
         wildcard_broker_one = { "*", 1, ThrottledPartitions::All },
         wildcard_broker_nine = { "*", 9, ThrottledPartitions::All },
         first_replica = {
-            "0:1,0:2,1:3", 1,
-            ThrottledPartitions::Listed([0].into_iter().collect())
+            "0:1,0:2,1:3",
+            1,
+            ThrottledPartitions::Listed([0].into_iter().collect()),
         },
         second_replica = {
-            "0:1,0:2,1:3", 2,
-            ThrottledPartitions::Listed([0].into_iter().collect())
+            "0:1,0:2,1:3",
+            2,
+            ThrottledPartitions::Listed([0].into_iter().collect()),
         },
         third_replica = {
-            "0:1,0:2,1:3", 3,
-            ThrottledPartitions::Listed([1].into_iter().collect())
+            "0:1,0:2,1:3",
+            3,
+            ThrottledPartitions::Listed([1].into_iter().collect()),
         },
         no_matching_replicas = {
-            "0:1,0:2,1:3", 4,
-            ThrottledPartitions::Listed([].into_iter().collect())
+            "0:1,0:2,1:3",
+            4,
+            ThrottledPartitions::Listed([].into_iter().collect()),
         },
         multiple_matching_partitions = {
-            "0:1,2:1,5:1,3:2", 1,
-            ThrottledPartitions::Listed([0, 2, 5].into_iter().collect())
+            "0:1,2:1,5:1,3:2",
+            1,
+            ThrottledPartitions::Listed([0, 2, 5].into_iter().collect()),
         },
     )]
     fn a_broker_keeps_only_the_entries_that_name_it(

@@ -206,7 +206,19 @@ mod tests {
         both_lists = {
             "proof(DeepModel), runtime(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Display, From, Into)",
             vec!["DeepModel"],
-            vec!["Debug", "Clone", "Copy", "PartialEq", "Eq", "PartialOrd", "Ord", "Hash", "Display", "From", "Into"]
+            vec![
+                "Debug",
+                "Clone",
+                "Copy",
+                "PartialEq",
+                "Eq",
+                "PartialOrd",
+                "Ord",
+                "Hash",
+                "Display",
+                "From",
+                "Into",
+            ],
         },
     )]
     fn overrides_replace_only_the_selected_list_in_original_path_order(

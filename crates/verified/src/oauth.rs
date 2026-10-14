@@ -164,11 +164,26 @@ mod tests {
     }
 
     #[yare::parameterized(
-        default_lifetime = { facts(), OAuthSessionDecision::Admit { session_lifetime_ms: 100, effective_expires_at_ms: 1_100 } },
-        capped_lifetime = { OAuthSessionFacts { cap: OAuthSessionCap::Enabled, cap_ms: 40, ..facts() }, OAuthSessionDecision::Admit { session_lifetime_ms: 40, effective_expires_at_ms: 1_040 } },
-        longer_cap = { OAuthSessionFacts { cap: OAuthSessionCap::Enabled, cap_ms: 500, ..facts() }, OAuthSessionDecision::Admit { session_lifetime_ms: 100, effective_expires_at_ms: 1_100 } },
-        same_principal_reauthentication = { OAuthSessionFacts { authentication: OAuthAuthenticationKind::Reauthentication, ..facts() }, OAuthSessionDecision::Admit { session_lifetime_ms: 100, effective_expires_at_ms: 1_100 } },
-        max_lifetime = { OAuthSessionFacts { token_expires_at_ms: i64::MAX, now_ms: 0, ..facts() }, OAuthSessionDecision::Admit { session_lifetime_ms: i64::MAX, effective_expires_at_ms: i64::MAX } },
+        default_lifetime = {
+            facts(),
+            OAuthSessionDecision::Admit { session_lifetime_ms: 100, effective_expires_at_ms: 1_100 },
+        },
+        capped_lifetime = {
+            OAuthSessionFacts { cap: OAuthSessionCap::Enabled, cap_ms: 40, ..facts() },
+            OAuthSessionDecision::Admit { session_lifetime_ms: 40, effective_expires_at_ms: 1_040 },
+        },
+        longer_cap = {
+            OAuthSessionFacts { cap: OAuthSessionCap::Enabled, cap_ms: 500, ..facts() },
+            OAuthSessionDecision::Admit { session_lifetime_ms: 100, effective_expires_at_ms: 1_100 },
+        },
+        same_principal_reauthentication = {
+            OAuthSessionFacts { authentication: OAuthAuthenticationKind::Reauthentication, ..facts() },
+            OAuthSessionDecision::Admit { session_lifetime_ms: 100, effective_expires_at_ms: 1_100 },
+        },
+        max_lifetime = {
+            OAuthSessionFacts { token_expires_at_ms: i64::MAX, now_ms: 0, ..facts() },
+            OAuthSessionDecision::Admit { session_lifetime_ms: i64::MAX, effective_expires_at_ms: i64::MAX },
+        },
     )]
     fn session_expiry_is_exact_and_capped(
         facts: OAuthSessionFacts,
@@ -180,9 +195,19 @@ mod tests {
     #[yare::parameterized(
         missing_expiry = { OAuthSessionFacts { expiry: OAuthExpiryPresence::Missing, ..facts() } },
         expired = { OAuthSessionFacts { token_expires_at_ms: 1_000, ..facts() } },
-        overflowing_lifetime = { OAuthSessionFacts { token_expires_at_ms: i64::MAX, now_ms: -1, ..facts() } },
-        nonpositive_cap = { OAuthSessionFacts { cap: OAuthSessionCap::Enabled, cap_ms: 0, ..facts() } },
-        changed_principal = { OAuthSessionFacts { authentication: OAuthAuthenticationKind::Reauthentication, principal: OAuthPrincipalMatch::Differs, ..facts() } },
+        overflowing_lifetime = {
+            OAuthSessionFacts { token_expires_at_ms: i64::MAX, now_ms: -1, ..facts() },
+        },
+        nonpositive_cap = {
+            OAuthSessionFacts { cap: OAuthSessionCap::Enabled, cap_ms: 0, ..facts() },
+        },
+        changed_principal = {
+            OAuthSessionFacts {
+                authentication: OAuthAuthenticationKind::Reauthentication,
+                principal: OAuthPrincipalMatch::Differs,
+                ..facts()
+            },
+        },
     )]
     fn invalid_lifetime_or_principal_fails_closed(rejected: OAuthSessionFacts) {
         assert2::check!(oauth_session_admission(rejected) == OAuthSessionDecision::Reject);

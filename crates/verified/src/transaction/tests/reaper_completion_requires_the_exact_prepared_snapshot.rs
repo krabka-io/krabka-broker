@@ -2,66 +2,109 @@ use {super::*, assert2::assert};
 
 #[yare::parameterized(
     prepared_exactly = {
-        snapshot().call(), snapshot().call(), snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(), true,
-        TransactionReaperCompletionDecision::Proceed
+        snapshot().call(),
+        snapshot().call(),
+        snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(),
+        true,
+        TransactionReaperCompletionDecision::Proceed,
     },
     zero_identity = {
         snapshot().producer_id(0).producer_epoch(0).call(),
         snapshot().producer_id(0).producer_epoch(0).call(),
-        snapshot().producer_id(0).producer_epoch(1).state(COMPLETE_ABORT).call(), true,
-        TransactionReaperCompletionDecision::Proceed
+        snapshot().producer_id(0).producer_epoch(1).state(COMPLETE_ABORT).call(),
+        true,
+        TransactionReaperCompletionDecision::Proceed,
     },
     changed_prepared_state = {
-        snapshot().call(), snapshot().call(), snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(), false,
-        TransactionReaperCompletionDecision::RejectChangedPreparedState
+        snapshot().call(),
+        snapshot().call(),
+        snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(),
+        false,
+        TransactionReaperCompletionDecision::RejectChangedPreparedState,
     },
     current_state_changed = {
-        snapshot().state(ONGOING).call(), snapshot().call(), snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(), true,
-        TransactionReaperCompletionDecision::RejectChangedPreparedState
+        snapshot().state(ONGOING).call(),
+        snapshot().call(),
+        snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(),
+        true,
+        TransactionReaperCompletionDecision::RejectChangedPreparedState,
     },
     epoch_advanced = {
-        snapshot().producer_epoch(5).call(), snapshot().call(), snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(), true,
-        TransactionReaperCompletionDecision::RejectStaleIdentity
+        snapshot().producer_epoch(5).call(),
+        snapshot().call(),
+        snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(),
+        true,
+        TransactionReaperCompletionDecision::RejectStaleIdentity,
     },
     pid_rotated = {
-        snapshot().producer_id(9).call(), snapshot().call(), snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(), false,
-        TransactionReaperCompletionDecision::RejectStaleIdentity
+        snapshot().producer_id(9).call(),
+        snapshot().call(),
+        snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(),
+        false,
+        TransactionReaperCompletionDecision::RejectStaleIdentity,
     },
     completion_identity_pending = {
-        snapshot().producer_epoch(4).call(), snapshot().call(), snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(), true,
-        TransactionReaperCompletionDecision::RejectStaleIdentity
+        snapshot().producer_epoch(4).call(),
+        snapshot().call(),
+        snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(),
+        true,
+        TransactionReaperCompletionDecision::RejectStaleIdentity,
     },
     already_complete_not_exact = {
-        snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(), snapshot().call(), snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(), false,
-        TransactionReaperCompletionDecision::AlreadyComplete
+        snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(),
+        snapshot().call(),
+        snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(),
+        false,
+        TransactionReaperCompletionDecision::AlreadyComplete,
     },
     already_complete_exact = {
-        snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(), snapshot().call(), snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(), true,
-        TransactionReaperCompletionDecision::AlreadyComplete
+        snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(),
+        snapshot().call(),
+        snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(),
+        true,
+        TransactionReaperCompletionDecision::AlreadyComplete,
     },
     negative_current_pid = {
-        snapshot().producer_id(-1).call(), snapshot().call(), snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(), true,
-        TransactionReaperCompletionDecision::RejectMalformed
+        snapshot().producer_id(-1).call(),
+        snapshot().call(),
+        snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(),
+        true,
+        TransactionReaperCompletionDecision::RejectMalformed,
     },
     negative_current_epoch = {
-        snapshot().producer_epoch(-1).call(), snapshot().call(), snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(), true,
-        TransactionReaperCompletionDecision::RejectMalformed
+        snapshot().producer_epoch(-1).call(),
+        snapshot().call(),
+        snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(),
+        true,
+        TransactionReaperCompletionDecision::RejectMalformed,
     },
     negative_prepared_pid = {
-        snapshot().call(), snapshot().producer_id(-1).call(), snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(), true,
-        TransactionReaperCompletionDecision::RejectMalformed
+        snapshot().call(),
+        snapshot().producer_id(-1).call(),
+        snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(),
+        true,
+        TransactionReaperCompletionDecision::RejectMalformed,
     },
     negative_prepared_epoch = {
-        snapshot().call(), snapshot().producer_epoch(-1).call(), snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(), true,
-        TransactionReaperCompletionDecision::RejectMalformed
+        snapshot().call(),
+        snapshot().producer_epoch(-1).call(),
+        snapshot().producer_epoch(4).state(COMPLETE_ABORT).call(),
+        true,
+        TransactionReaperCompletionDecision::RejectMalformed,
     },
     negative_completion_pid = {
-        snapshot().call(), snapshot().call(), snapshot().producer_id(-1).producer_epoch(4).state(COMPLETE_ABORT).call(), true,
-        TransactionReaperCompletionDecision::RejectMalformed
+        snapshot().call(),
+        snapshot().call(),
+        snapshot().producer_id(-1).producer_epoch(4).state(COMPLETE_ABORT).call(),
+        true,
+        TransactionReaperCompletionDecision::RejectMalformed,
     },
     negative_completion_epoch = {
-        snapshot().call(), snapshot().call(), snapshot().producer_epoch(-1).state(COMPLETE_ABORT).call(), true,
-        TransactionReaperCompletionDecision::RejectMalformed
+        snapshot().call(),
+        snapshot().call(),
+        snapshot().producer_epoch(-1).state(COMPLETE_ABORT).call(),
+        true,
+        TransactionReaperCompletionDecision::RejectMalformed,
     },
 )]
 fn reaper_completion_requires_the_exact_prepared_snapshot(

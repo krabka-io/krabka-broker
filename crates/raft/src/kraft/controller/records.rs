@@ -350,7 +350,7 @@ mod metadata_record_batch_tests {
                 bytes::Bytes::from_static(b"b"),
                 bytes::Bytes::from_static(b"c"),
             ],
-            vec![0, 1, 2]
+            vec![0, 1, 2],
         },
     )]
     fn metadata_record_offset_deltas_cover_empty_single_and_multiple_batches(

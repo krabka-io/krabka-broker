@@ -197,17 +197,47 @@ mod tests {
 
     #[yare::parameterized(
         missing_metadata = { "struct Seed {}", "needs `#[replay_member_maps" },
-        unknown_protocol = { "#[replay_member_maps(protocol = \"classic\")] struct Seed {}", "replay protocol" },
+        unknown_protocol = {
+            "#[replay_member_maps(protocol = \"classic\")] struct Seed {}",
+            "replay protocol",
+        },
         non_string_protocol = { "#[replay_member_maps(protocol = 1)] struct Seed {}", "string" },
-        tuple_seed = { "#[replay_member_maps(protocol = \"share\")] struct Seed();", "named fields" },
-        missing_members = { "#[replay_member_maps(protocol = \"consumer\")] struct Seed {}", "members" },
-        missing_current_map = { "#[replay_member_maps(protocol = \"consumer\")] struct Seed { members: HashMap<String, M> }", "current_per_member" },
-        missing_target_map = { "#[replay_member_maps(protocol = \"streams\")] struct Seed { members: HashMap<String, M>, current_per_member: HashMap<String, C> }", "target_per_member" },
-        vector_members = { "#[replay_member_maps(protocol = \"share\")] struct Seed { members: Vec<M> }", "HashMap" },
-        bare_hash_map = { "#[replay_member_maps(protocol = \"share\")] struct Seed { members: HashMap }", "HashMap" },
-        wrong_hash_key = { "#[replay_member_maps(protocol = \"share\")] struct Seed { members: HashMap<u32, M> }", "HashMap" },
-        missing_hash_value = { "#[replay_member_maps(protocol = \"share\")] struct Seed { members: HashMap<String> }", "HashMap" },
-        non_hash_map_members = { "#[replay_member_maps(protocol = \"share\")] struct Seed { members: (String, M) }", "HashMap" },
+        tuple_seed = {
+            "#[replay_member_maps(protocol = \"share\")] struct Seed();",
+            "named fields",
+        },
+        missing_members = {
+            "#[replay_member_maps(protocol = \"consumer\")] struct Seed {}",
+            "members",
+        },
+        missing_current_map = {
+            "#[replay_member_maps(protocol = \"consumer\")] struct Seed { members: HashMap<String, M> }",
+            "current_per_member",
+        },
+        missing_target_map = {
+            "#[replay_member_maps(protocol = \"streams\")] struct Seed { members: HashMap<String, M>, current_per_member: HashMap<String, C> }",
+            "target_per_member",
+        },
+        vector_members = {
+            "#[replay_member_maps(protocol = \"share\")] struct Seed { members: Vec<M> }",
+            "HashMap",
+        },
+        bare_hash_map = {
+            "#[replay_member_maps(protocol = \"share\")] struct Seed { members: HashMap }",
+            "HashMap",
+        },
+        wrong_hash_key = {
+            "#[replay_member_maps(protocol = \"share\")] struct Seed { members: HashMap<u32, M> }",
+            "HashMap",
+        },
+        missing_hash_value = {
+            "#[replay_member_maps(protocol = \"share\")] struct Seed { members: HashMap<String> }",
+            "HashMap",
+        },
+        non_hash_map_members = {
+            "#[replay_member_maps(protocol = \"share\")] struct Seed { members: (String, M) }",
+            "HashMap",
+        },
     )]
     fn rejects_unknown_protocols_incomplete_maps_and_wrong_record_containers(
         declaration: &str,

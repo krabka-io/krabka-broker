@@ -173,8 +173,14 @@ mod tests {
 
     #[yare::parameterized(
         next_chunk = {
-            true, None, 0, 6, 0, 3, 10,
-            SnapshotChunkDecision::Continue { next_position: 3 }
+            true,
+            None,
+            0,
+            6,
+            0,
+            3,
+            10,
+            SnapshotChunkDecision::Continue { next_position: 3 },
         },
         final_chunk = { true, Some(6), 3, 6, 3, 3, 10, SnapshotChunkDecision::Complete },
         empty_snapshot = { true, None, 0, 0, 0, 0, 10, SnapshotChunkDecision::Complete },
@@ -184,16 +190,40 @@ mod tests {
         fixed_size_changed = { true, Some(7), 3, 6, 3, 3, 10, SnapshotChunkDecision::Restart },
         position_replayed = { true, Some(6), 3, 6, 0, 3, 10, SnapshotChunkDecision::Restart },
         position_skipped = { true, Some(6), 3, 6, 2, 3, 10, SnapshotChunkDecision::Restart },
-        chunk_starts_after_position = { true, Some(6), 3, 6, 4, 2, 10, SnapshotChunkDecision::Restart },
-        chunk_exceeds_declared_size = { true, Some(6), 3, 6, 3, 4, 10, SnapshotChunkDecision::Restart },
+        chunk_starts_after_position = {
+            true,
+            Some(6),
+            3,
+            6,
+            4,
+            2,
+            10,
+            SnapshotChunkDecision::Restart,
+        },
+        chunk_exceeds_declared_size = {
+            true,
+            Some(6),
+            3,
+            6,
+            3,
+            4,
+            10,
+            SnapshotChunkDecision::Restart,
+        },
         negative_received = { true, None, -1, 6, -1, 3, 10, SnapshotChunkDecision::Restart },
         negative_chunk_size = { true, None, 0, 6, 0, -1, 10, SnapshotChunkDecision::Restart },
         negative_max_size = { true, None, 0, 6, 0, 3, -1, SnapshotChunkDecision::Restart },
         negative_declared_size = { true, None, 0, -1, 0, 0, 10, SnapshotChunkDecision::Restart },
         exceeds_max_size = { true, None, 0, 11, 0, 1, 10, SnapshotChunkDecision::Restart },
         addition_overflow = {
-            true, None, i64::MAX, i64::MAX, i64::MAX, 1, i64::MAX,
-            SnapshotChunkDecision::Restart
+            true,
+            None,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            1,
+            i64::MAX,
+            SnapshotChunkDecision::Restart,
         },
     )]
     fn chunk_admission_covers_retries_order_bounds_and_completion(

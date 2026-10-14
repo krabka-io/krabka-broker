@@ -174,13 +174,28 @@ fn initial_controllers_persists_the_local_listed_directory_id() {
 
 #[yare::parameterized(
     local_controller_missing = {
-        &["--node-id", "3", "--initial-controllers", "2@two.example:9093:00000000-0000-0000-0000-000000000002"][..]
+        &[
+            "--node-id",
+            "3",
+            "--initial-controllers",
+            "2@two.example:9093:00000000-0000-0000-0000-000000000002",
+        ][..],
     },
     duplicate_node_id = {
-        &["--node-id", "2", "--initial-controllers", "2@two.example:9093:00000000-0000-0000-0000-000000000002,2@other.example:9093:00000000-0000-0000-0000-000000000003"][..]
+        &[
+            "--node-id",
+            "2",
+            "--initial-controllers",
+            "2@two.example:9093:00000000-0000-0000-0000-000000000002,2@other.example:9093:00000000-0000-0000-0000-000000000003",
+        ][..],
     },
     duplicate_directory_id = {
-        &["--node-id", "2", "--initial-controllers", "2@two.example:9093:00000000-0000-0000-0000-000000000002,3@three.example:9093:00000000-0000-0000-0000-000000000002"][..]
+        &[
+            "--node-id",
+            "2",
+            "--initial-controllers",
+            "2@two.example:9093:00000000-0000-0000-0000-000000000002,3@three.example:9093:00000000-0000-0000-0000-000000000002",
+        ][..],
     },
 )]
 fn initial_controllers_rejects_ambiguous_or_missing_local_identity(args: &[&str]) {
@@ -190,10 +205,22 @@ fn initial_controllers_rejects_ambiguous_or_missing_local_identity(args: &[&str]
 #[yare::parameterized(
     standalone_and_none = { &["--node-id", "1", "--standalone", "--no-initial-controllers"][..] },
     explicit_and_none = {
-        &["--node-id", "1", "--initial-controllers", "1@one.example:9093:00000000-0000-0000-0000-000000000001", "--no-initial-controllers"][..]
+        &[
+            "--node-id",
+            "1",
+            "--initial-controllers",
+            "1@one.example:9093:00000000-0000-0000-0000-000000000001",
+            "--no-initial-controllers",
+        ][..],
     },
     standalone_and_explicit = {
-        &["--node-id", "1", "--standalone", "--initial-controllers", "1@one.example:9093:00000000-0000-0000-0000-000000000001"][..]
+        &[
+            "--node-id",
+            "1",
+            "--standalone",
+            "--initial-controllers",
+            "1@one.example:9093:00000000-0000-0000-0000-000000000001",
+        ][..],
     },
 )]
 fn dynamic_modes_are_mutually_exclusive(args: &[&str]) { check_refused_case(args, 2); }

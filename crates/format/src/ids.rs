@@ -287,16 +287,58 @@ mod tests {
         ignored_low_bits = { "_____________________x", Ok("_____________________w") },
         rounded_low_bits = { "AAAAAAAAAAAAAAAAAAAAAB", Ok("AAAAAAAAAAAAAAAAAAAAAA") },
         padded = { "AAAAAAAAAAAAAAAAAAAAAA==", Ok("AAAAAAAAAAAAAAAAAAAAAA") },
-        hyphenated_is_too_long = { "01020304-0506-0708-090a-0b0c0d0e0f10", Err("Input string with prefix `01020304-0506-0708-090a-` is too long to be decoded as a base64 UUID") },
-        unicode_too_long = { "AAAAAAAAAAAAAAAAAAAAAAA😀", Err("Input string with prefix `AAAAAAAAAAAAAAAAAAAAAAA?` is too long to be decoded as a base64 UUID") },
-        twenty_four_chars = { "AAAAAAAAAAAAAAAAAAAAAAAA", Err("Input string `AAAAAAAAAAAAAAAAAAAAAAAA` decoded as 18 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID") },
-        empty = { "", Err("Input string `` decoded as 0 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID") },
-        short = { "AAAAAA", Err("Input string `AAAAAA` decoded as 4 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID") },
-        bad_padding_length = { "AAAAAAAAAAAAAAAAAAAA==", Err("Input string `AAAAAAAAAAAAAAAAAAAA==` decoded as 15 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID") },
-        twenty_one_chars = { "AAAAAAAAAAAAAAAAAAAAA", Err("Input string `AAAAAAAAAAAAAAAAAAAAA` is not base64url: Invalid input length: 21") },
-        invalid_plus = { "AAAAAAAAAAAAAAAAAAAA+A", Err("Input string `AAAAAAAAAAAAAAAAAAAA+A` is not base64url: Invalid symbol 43, offset 20.") },
-        bad_padding = { "AAAAAAAAAAAAAAAAAAAAAA=", Err("Input string `AAAAAAAAAAAAAAAAAAAAAA=` is not base64url: Invalid padding") },
-        non_ascii = { "AAAAAAAAAAAAAAAAAAAAAé", Err("Input string `AAAAAAAAAAAAAAAAAAAAAé` is not base64url: Invalid symbol 195, offset 21.") },
+        hyphenated_is_too_long = {
+            "01020304-0506-0708-090a-0b0c0d0e0f10",
+            Err(
+                "Input string with prefix `01020304-0506-0708-090a-` is too long to be decoded as a base64 UUID",
+            ),
+        },
+        unicode_too_long = {
+            "AAAAAAAAAAAAAAAAAAAAAAA😀",
+            Err(
+                "Input string with prefix `AAAAAAAAAAAAAAAAAAAAAAA?` is too long to be decoded as a base64 UUID",
+            ),
+        },
+        twenty_four_chars = {
+            "AAAAAAAAAAAAAAAAAAAAAAAA",
+            Err(
+                "Input string `AAAAAAAAAAAAAAAAAAAAAAAA` decoded as 18 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
+            ),
+        },
+        empty = {
+            "",
+            Err(
+                "Input string `` decoded as 0 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
+            ),
+        },
+        short = {
+            "AAAAAA",
+            Err(
+                "Input string `AAAAAA` decoded as 4 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
+            ),
+        },
+        bad_padding_length = {
+            "AAAAAAAAAAAAAAAAAAAA==",
+            Err(
+                "Input string `AAAAAAAAAAAAAAAAAAAA==` decoded as 15 bytes, which is not equal to the expected 16 bytes of a base64-encoded UUID",
+            ),
+        },
+        twenty_one_chars = {
+            "AAAAAAAAAAAAAAAAAAAAA",
+            Err("Input string `AAAAAAAAAAAAAAAAAAAAA` is not base64url: Invalid input length: 21"),
+        },
+        invalid_plus = {
+            "AAAAAAAAAAAAAAAAAAAA+A",
+            Err("Input string `AAAAAAAAAAAAAAAAAAAA+A` is not base64url: Invalid symbol 43, offset 20."),
+        },
+        bad_padding = {
+            "AAAAAAAAAAAAAAAAAAAAAA=",
+            Err("Input string `AAAAAAAAAAAAAAAAAAAAAA=` is not base64url: Invalid padding"),
+        },
+        non_ascii = {
+            "AAAAAAAAAAAAAAAAAAAAAé",
+            Err("Input string `AAAAAAAAAAAAAAAAAAAAAé` is not base64url: Invalid symbol 195, offset 21."),
+        },
     )]
     fn parse_and_render_match_kafka_uuid(input: &str, want: Result<&str, &str>) {
         let want = want.map(str::to_owned).map_err(str::to_owned);

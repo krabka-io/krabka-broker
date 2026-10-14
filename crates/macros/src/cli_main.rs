@@ -88,8 +88,16 @@ mod tests {
     #[yare::parameterized(
         crate_name = { "krabka_format", "krabka_format", "" },
         trailing_comma = { "krabka_format,", "krabka_format", "" },
-        runtime_options = { "crate::cli, flavor = \"multi_thread\"", "crate::cli", "flavor=\"multi_thread\"" },
-        multiple_runtime_options = { "app, flavor = \"multi_thread\", worker_threads = 2", "app", "flavor=\"multi_thread\",worker_threads=2" },
+        runtime_options = {
+            "crate::cli, flavor = \"multi_thread\"",
+            "crate::cli",
+            "flavor=\"multi_thread\"",
+        },
+        multiple_runtime_options = {
+            "app, flavor = \"multi_thread\", worker_threads = 2",
+            "app",
+            "flavor=\"multi_thread\",worker_threads=2",
+        },
     )]
     fn the_first_top_level_comma_ends_the_path(tokens: &str, path: &str, runtime: &str) {
         assert2::assert!(
@@ -119,8 +127,16 @@ mod tests {
     #[yare::parameterized(
         crate_name = { "krabka_format", "#[::tokio::main]", "krabka_format" },
         trailing_comma = { "krabka_format,", "#[::tokio::main]", "krabka_format" },
-        runtime_options = { "crate::cli, flavor = \"multi_thread\"", "#[::tokio::main(flavor=\"multi_thread\")]", "crate::cli" },
-        multiple_runtime_options = { "app, flavor = \"multi_thread\", worker_threads = 2", "#[::tokio::main(flavor=\"multi_thread\",worker_threads=2)]", "app" },
+        runtime_options = {
+            "crate::cli, flavor = \"multi_thread\"",
+            "#[::tokio::main(flavor=\"multi_thread\")]",
+            "crate::cli",
+        },
+        multiple_runtime_options = {
+            "app, flavor = \"multi_thread\", worker_threads = 2",
+            "#[::tokio::main(flavor=\"multi_thread\",worker_threads=2)]",
+            "app",
+        },
     )]
     fn the_runtime_arguments_pass_through_to_tokio_main(tokens: &str, attribute: &str, path: &str) {
         assert2::assert!(expanded(tokens) == main_under(attribute, path), "{tokens}");

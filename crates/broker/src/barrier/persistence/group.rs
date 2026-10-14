@@ -135,7 +135,11 @@ mod tests {
         group_at_limit = { TopicNameRecord::Group, MAX_STRING_BYTES, true },
         group_over_limit = { TopicNameRecord::Group, MAX_STRING_BYTES + 1, false },
         injection_start_at_limit = { TopicNameRecord::InjectionStart, MAX_STRING_BYTES, true },
-        injection_start_over_limit = { TopicNameRecord::InjectionStart, MAX_STRING_BYTES + 1, false },
+        injection_start_over_limit = {
+            TopicNameRecord::InjectionStart,
+            MAX_STRING_BYTES + 1,
+            false,
+        },
     )]
     fn topic_name_length_respects_the_i16_encoding_limit(
         record: TopicNameRecord,

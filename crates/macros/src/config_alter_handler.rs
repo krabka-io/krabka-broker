@@ -100,7 +100,9 @@ mod tests {
         invalid_response = { VALID.replace("response = Response", "response = 1") },
         nonpath_audit = { VALID.replace("audit = audit", "audit = audit()") },
         nonpath_process = { VALID.replace("process = process", "process = process()") },
-        invalid_boolean = { VALID.replace("audits_in_process = true", "audits_in_process = \"yes\"") },
+        invalid_boolean = {
+            VALID.replace("audits_in_process = true", "audits_in_process = \"yes\""),
+        },
     )]
     fn rejects_missing_unknown_and_nonpath_operation_selectors(invalid: String) {
         assert2::assert!(expand(&invalid.parse().unwrap()).is_err(), "{invalid}");

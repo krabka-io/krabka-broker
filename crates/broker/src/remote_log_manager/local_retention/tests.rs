@@ -669,8 +669,18 @@ async fn local_retention_still_evicts_under_a_write_once_archive() {
 /// copied segments are evicted)`.
 #[yare::parameterized(
     stable_release = { "4.3.1 keeps them", UnstableApiVersions::Disabled, false, false },
-    unstable_ages_file = { "trunk ages them by their file", UnstableApiVersions::Enabled, false, true },
-    unstable_without_copy = { "trunk keeps them when the tier takes no copies", UnstableApiVersions::Enabled, true, false },
+    unstable_ages_file = {
+        "trunk ages them by their file",
+        UnstableApiVersions::Enabled,
+        false,
+        true,
+    },
+    unstable_without_copy = {
+        "trunk keeps them when the tier takes no copies",
+        UnstableApiVersions::Enabled,
+        true,
+        false,
+    },
 )]
 #[test_macro(tokio::test)]
 async fn future_stamped_segments_leave_the_disk_only_under_trunks_rule(

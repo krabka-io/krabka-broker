@@ -258,7 +258,9 @@ mod tests {
         action = { ApprovalSigningInput { action: 7, ..approval_input() } },
         target = { ApprovalSigningInput { target: "orders", ..approval_input() } },
         proposer = { ApprovalSigningInput { proposer: "User:mallory", ..approval_input() } },
-        creation_time = { ApprovalSigningInput { created_at_ms: 1_770_000_000_001, ..approval_input() } },
+        creation_time = {
+            ApprovalSigningInput { created_at_ms: 1_770_000_000_001, ..approval_input() },
+        },
         expiry = { ApprovalSigningInput { expires_at_ms: 1_770_000_180_001, ..approval_input() } },
     )]
     fn a_change_to_any_signed_approval_field_changes_the_bytes(

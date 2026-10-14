@@ -529,7 +529,8 @@ mod tests {
             "*,/remote/broker/logs",
             Err((
                 codes::INVALID_REQUEST,
-                "requirement failed: When cordoned.log.dirs is set to *, it must not contain other values".to_owned(),
+                "requirement failed: When cordoned.log.dirs is set to *, it must not contain other values"
+                    .to_owned(),
             )),
         },
     )]
@@ -576,78 +577,116 @@ mod tests {
     #[yare::parameterized(
         custom_key_allowed = { map(&[("plugin.custom.key", "x")]), false, Ok(()) },
         broker_log_dirs_refused = {
-            map(&[("log.dirs", "/tmp")]), false,
-            Err("Cannot update these configs dynamically: [log.dirs]")
+            map(&[("log.dirs", "/tmp")]),
+            false,
+            Err("Cannot update these configs dynamically: [log.dirs]"),
         },
         ssl_key_requires_listener_prefix = {
-            map(&[("ssl.keystore.location", "/k")]), true,
-            Err("These security configs can be dynamically updated only per-listener using \
-                 the listener prefix: [ssl.keystore.location]")
+            map(&[("ssl.keystore.location", "/k")]),
+            true,
+            Err(
+                "These security configs can be dynamically updated only per-listener using \
+                         the listener prefix: [ssl.keystore.location]",
+            ),
         },
         listener_ssl_key_requires_named_broker = {
-            map(&[("listener.name.client.ssl.keystore.location", "/k")]), false,
-            Err("Cannot update these configs at default cluster level, broker id must be \
-                 specified: [listener.name.client.ssl.keystore.location]")
+            map(&[("listener.name.client.ssl.keystore.location", "/k")]),
+            false,
+            Err(
+                "Cannot update these configs at default cluster level, broker id must be \
+                         specified: [listener.name.client.ssl.keystore.location]",
+            ),
         },
         listener_ssl_key_allowed_on_named_broker = {
-            map(&[("listener.name.client.ssl.keystore.location", "/k")]), true, Ok(())
+            map(&[("listener.name.client.ssl.keystore.location", "/k")]),
+            true,
+            Ok(()),
         },
-        topic_retention_value_allowed = { map(&[("log.retention.ms", " 86400000 ")]), false, Ok(()) },
+        topic_retention_value_allowed = {
+            map(&[("log.retention.ms", " 86400000 ")]),
+            false,
+            Ok(()),
+        },
         dynamic_integer_value_allowed = { map(&[("num.io.threads", "16")]), false, Ok(()) },
         throttle_rate_must_be_nonnegative = {
-            map(&[(LEADER_THROTTLED_RATE_KEY, "-1")]), true,
-            Err("Invalid value -1 for configuration leader.replication.throttled.rate: Value \
-                must be at least 0")
+            map(&[(LEADER_THROTTLED_RATE_KEY, "-1")]),
+            true,
+            Err(
+                "Invalid value -1 for configuration leader.replication.throttled.rate: Value \
+                        must be at least 0",
+            ),
         },
         minimum_insync_replicas_must_be_positive = {
-            map(&[("min.insync.replicas", "0")]), true,
-            Err("Invalid value 0 for configuration min.insync.replicas: Value must be at \
-                 least 1")
+            map(&[("min.insync.replicas", "0")]),
+            true,
+            Err(
+                "Invalid value 0 for configuration min.insync.replicas: Value must be at \
+                         least 1",
+            ),
         },
         startup_only_key_refused = {
-            map(&[("auto.leader.rebalance.enable", "false")]), false,
-            Err("Cannot update these configs dynamically: [auto.leader.rebalance.enable]")
+            map(&[("auto.leader.rebalance.enable", "false")]),
+            false,
+            Err("Cannot update these configs dynamically: [auto.leader.rebalance.enable]"),
         },
         queued_max_requests_refused = {
-            map(&[("queued.max.requests", "10")]), true,
-            Err("Cannot update these configs dynamically: [queued.max.requests]")
+            map(&[("queued.max.requests", "10")]),
+            true,
+            Err("Cannot update these configs dynamically: [queued.max.requests]"),
         },
         non_dynamic_key_precedes_bad_value = {
-            map(&[("log.cleaner.enable", "false"), ("num.io.threads", "abc")]), false,
-            Err("Cannot update these configs dynamically: [log.cleaner.enable]")
+            map(&[("log.cleaner.enable", "false"), ("num.io.threads", "abc")]),
+            false,
+            Err("Cannot update these configs dynamically: [log.cleaner.enable]"),
         },
         offsets_replication_factor_refused = {
-            map(&[("offsets.topic.replication.factor", "1")]), false,
-            Err("Cannot update these configs dynamically: [offsets.topic.replication.factor]")
+            map(&[("offsets.topic.replication.factor", "1")]),
+            false,
+            Err("Cannot update these configs dynamically: [offsets.topic.replication.factor]"),
         },
         dynamic_integer_value_must_parse = {
-            map(&[("num.io.threads", "abc")]), false,
-            Err("Invalid value abc for configuration num.io.threads: Not a number of type INT")
+            map(&[("num.io.threads", "abc")]),
+            false,
+            Err("Invalid value abc for configuration num.io.threads: Not a number of type INT"),
         },
         connection_limit_must_be_nonnegative = {
-            map(&[("max.connections", "-5")]), false,
-            Err("Invalid value -5 for configuration max.connections: Value must be at least 0")
+            map(&[("max.connections", "-5")]),
+            false,
+            Err("Invalid value -5 for configuration max.connections: Value must be at least 0"),
         },
         network_threads_must_be_positive = {
-            map(&[("num.network.threads", "0")]), false,
-            Err("Invalid value 0 for configuration num.network.threads: Value must be at \
-                 least 1")
+            map(&[("num.network.threads", "0")]),
+            false,
+            Err(
+                "Invalid value 0 for configuration num.network.threads: Value must be at \
+                         least 1",
+            ),
         },
         tiered_offset_boolean_is_case_insensitive = {
-            map(&[("follower.fetch.last.tiered.offset.enable", " TRUE ")]), false, Ok(())
+            map(&[("follower.fetch.last.tiered.offset.enable", " TRUE ")]),
+            false,
+            Ok(()),
         },
         listener_override_reports_base_key = {
-            map(&[("listener.name.external.num.network.threads", "abc")]), false,
-            Err("Invalid value abc for configuration num.network.threads: Not a number of \
-                 type INT")
+            map(&[("listener.name.external.num.network.threads", "abc")]),
+            false,
+            Err(
+                "Invalid value abc for configuration num.network.threads: Not a number of \
+                         type INT",
+            ),
         },
         per_broker_key_refused_on_cluster_default = {
-            map(&[("sasl.enabled.mechanisms", "PLAIN")]), false,
-            Err("Cannot update these configs at default cluster level, broker id must be \
-                 specified: [sasl.enabled.mechanisms]")
+            map(&[("sasl.enabled.mechanisms", "PLAIN")]),
+            false,
+            Err(
+                "Cannot update these configs at default cluster level, broker id must be \
+                         specified: [sasl.enabled.mechanisms]",
+            ),
         },
         per_broker_key_allowed_on_named_broker = {
-            map(&[("sasl.enabled.mechanisms", "PLAIN")]), true, Ok(())
+            map(&[("sasl.enabled.mechanisms", "PLAIN")]),
+            true,
+            Ok(()),
         },
     )]
     fn dynamic_broker_configs_follow_kafkas_validate_configs(

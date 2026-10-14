@@ -360,19 +360,25 @@ struct ElrScanCase<'a> {
         ElrScanCase {
             label: "no unclean election and no offset-aware strategy",
             policy: &[],
-        }
+        },
     },
     unclean_enabled = {
         ElrScanCase {
             label: "unclean election enabled",
-            policy: &[TopicConfigOverride::new(UNCLEAN_LEADER_ELECTION_ENABLE, "true")],
-        }
+            policy: &[TopicConfigOverride::new(
+                UNCLEAN_LEADER_ELECTION_ENABLE,
+                "true",
+            )],
+        },
     },
     balanced_recovery = {
         ElrScanCase {
             label: "balanced offset-aware recovery",
-            policy: &[TopicConfigOverride::new(UNCLEAN_RECOVERY_STRATEGY, "Balanced")],
-        }
+            policy: &[TopicConfigOverride::new(
+                UNCLEAN_RECOVERY_STRATEGY,
+                "Balanced",
+            )],
+        },
     },
     aggressive_recovery_and_unclean = {
         ElrScanCase {
@@ -381,7 +387,7 @@ struct ElrScanCase<'a> {
                 TopicConfigOverride::new(UNCLEAN_RECOVERY_STRATEGY, "Aggressive"),
                 TopicConfigOverride::new(UNCLEAN_LEADER_ELECTION_ENABLE, "true"),
             ],
-        }
+        },
     },
 )]
 #[test_macro(tokio::test)]

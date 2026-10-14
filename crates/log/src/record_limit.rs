@@ -139,10 +139,34 @@ mod tests {
     /// Only a compressed batch is held to the limit, and the first oversized
     /// record among the ones read decides.
     #[yare::parameterized(
-        compressed_oversized = { "compressed, oversized", CompressionType::Gzip, vec![record(10), record(1_000)], 2, Some(1_014) },
-        compressed_oversized_not_read = { "compressed, oversized record not read", CompressionType::Gzip, vec![record(10), record(1_000)], 1, None },
-        compressed_within_limit = { "compressed, within the limit", CompressionType::Snappy, vec![record(10), record(10)], 2, None },
-        uncompressed_oversized = { "uncompressed, oversized", CompressionType::None, vec![record(10), record(1_000)], 2, None },
+        compressed_oversized = {
+            "compressed, oversized",
+            CompressionType::Gzip,
+            vec![record(10), record(1_000)],
+            2,
+            Some(1_014),
+        },
+        compressed_oversized_not_read = {
+            "compressed, oversized record not read",
+            CompressionType::Gzip,
+            vec![record(10), record(1_000)],
+            1,
+            None,
+        },
+        compressed_within_limit = {
+            "compressed, within the limit",
+            CompressionType::Snappy,
+            vec![record(10), record(10)],
+            2,
+            None,
+        },
+        uncompressed_oversized = {
+            "uncompressed, oversized",
+            CompressionType::None,
+            vec![record(10), record(1_000)],
+            2,
+            None,
+        },
     )]
     fn only_a_compressed_batch_is_held_to_the_limit(
         name: &str,

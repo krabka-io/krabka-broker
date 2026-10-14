@@ -262,8 +262,18 @@ fn to_timestamp_straddling_the_bound_filters_the_right_split() {
 }
 
 #[yare::parameterized(
-    append_time_before_bound = { "append time before the bound", 1, BatchDecision::Keep, RecordDecision::Keep },
-    append_time_at_bound = { "append time at the bound", 0, BatchDecision::Empty, RecordDecision::Drop },
+    append_time_before_bound = {
+        "append time before the bound",
+        1,
+        BatchDecision::Keep,
+        RecordDecision::Keep,
+    },
+    append_time_at_bound = {
+        "append time at the bound",
+        0,
+        BatchDecision::Empty,
+        RecordDecision::Drop,
+    },
 )]
 fn to_timestamp_judges_log_append_time_records_by_the_batch_max_timestamp(
     name: &str,

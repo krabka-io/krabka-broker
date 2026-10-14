@@ -159,16 +159,34 @@ mod tests {
 
     #[yare::parameterized(
         empty_enum = { "#[group_key(invalid = \"bad\")] enum Key {}" },
-        generic_enum = { "#[group_key(invalid = \"bad\")] enum Key<T> { #[group_key(version = V)] A { group_id: String } }" },
+        generic_enum = {
+            "#[group_key(invalid = \"bad\")] enum Key<T> { #[group_key(version = V)] A { group_id: String } }",
+        },
         missing_enum_metadata = { "enum Key { #[group_key(version = V)] A { group_id: String } }" },
-        missing_variant_metadata = { "#[group_key(invalid = \"bad\")] enum Key { A { group_id: String } }" },
-        tuple_variant = { "#[group_key(invalid = \"bad\")] enum Key { #[group_key(version = V)] A(String) }" },
-        reversed_required_fields = { "#[group_key(invalid = \"bad\")] enum Key { #[group_key(version = V)] A { member_id: String, group_id: String } }" },
-        non_string_field = { "#[group_key(invalid = \"bad\")] enum Key { #[group_key(version = V)] A { group_id: i32 } }" },
-        extra_field = { "#[group_key(invalid = \"bad\")] enum Key { #[group_key(version = V)] A { group_id: String, topic: String } }" },
-        unsupported_field = { "#[group_key(invalid = \"bad\")] enum Key { #[group_key(version = V)] A { group_id: String, member_id: String, regex: String } }" },
-        duplicate_version = { "#[group_key(invalid = \"bad\")] enum Key { #[group_key(version = V)] A { group_id: String }, #[group_key(version = V)] B { group_id: String } }" },
-        expression_version = { "#[group_key(invalid = \"bad\")] enum Key { #[group_key(version = V + 1)] A { group_id: String } }" },
+        missing_variant_metadata = {
+            "#[group_key(invalid = \"bad\")] enum Key { A { group_id: String } }",
+        },
+        tuple_variant = {
+            "#[group_key(invalid = \"bad\")] enum Key { #[group_key(version = V)] A(String) }",
+        },
+        reversed_required_fields = {
+            "#[group_key(invalid = \"bad\")] enum Key { #[group_key(version = V)] A { member_id: String, group_id: String } }",
+        },
+        non_string_field = {
+            "#[group_key(invalid = \"bad\")] enum Key { #[group_key(version = V)] A { group_id: i32 } }",
+        },
+        extra_field = {
+            "#[group_key(invalid = \"bad\")] enum Key { #[group_key(version = V)] A { group_id: String, topic: String } }",
+        },
+        unsupported_field = {
+            "#[group_key(invalid = \"bad\")] enum Key { #[group_key(version = V)] A { group_id: String, member_id: String, regex: String } }",
+        },
+        duplicate_version = {
+            "#[group_key(invalid = \"bad\")] enum Key { #[group_key(version = V)] A { group_id: String }, #[group_key(version = V)] B { group_id: String } }",
+        },
+        expression_version = {
+            "#[group_key(invalid = \"bad\")] enum Key { #[group_key(version = V + 1)] A { group_id: String } }",
+        },
     )]
     fn record_shapes_and_metadata_are_validated(declaration: &str) {
         let item = moxy::parse!({ declaration }).unwrap();

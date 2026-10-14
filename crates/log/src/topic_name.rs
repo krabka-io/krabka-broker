@@ -88,10 +88,19 @@ mod tests {
         dot = { ".".to_owned(), Err(InvalidTopicName::Dot) },
         dot_dot = { "..".to_owned(), Err(InvalidTopicName::DotDot) },
         multiple_dots = { "...".to_owned(), Ok(()) },
-        too_long = { "a".repeat(MAX_TOPIC_NAME_LENGTH + 1), Err(InvalidTopicName::TooLong("a".repeat(MAX_TOPIC_NAME_LENGTH + 1))) },
+        too_long = {
+            "a".repeat(MAX_TOPIC_NAME_LENGTH + 1),
+            Err(InvalidTopicName::TooLong("a".repeat(MAX_TOPIC_NAME_LENGTH + 1))),
+        },
         slash = { "a/b".to_owned(), Err(InvalidTopicName::IllegalCharacter("a/b".to_owned())) },
-        parent_path = { "../x".to_owned(), Err(InvalidTopicName::IllegalCharacter("../x".to_owned())) },
-        absolute_path = { "/tmp/x".to_owned(), Err(InvalidTopicName::IllegalCharacter("/tmp/x".to_owned())) },
+        parent_path = {
+            "../x".to_owned(),
+            Err(InvalidTopicName::IllegalCharacter("../x".to_owned())),
+        },
+        absolute_path = {
+            "/tmp/x".to_owned(),
+            Err(InvalidTopicName::IllegalCharacter("/tmp/x".to_owned())),
+        },
         space = { "a b".to_owned(), Err(InvalidTopicName::IllegalCharacter("a b".to_owned())) },
         non_ascii = { "é".repeat(200), Err(InvalidTopicName::IllegalCharacter("é".repeat(200))) },
     )]
@@ -100,11 +109,20 @@ mod tests {
     }
 
     #[yare::parameterized(
-        empty = { InvalidTopicName::Empty, "Topic name is invalid: the empty string is not allowed" },
+        empty = {
+            InvalidTopicName::Empty,
+            "Topic name is invalid: the empty string is not allowed",
+        },
         dot = { InvalidTopicName::Dot, "Topic name is invalid: '.' is not allowed" },
         dot_dot = { InvalidTopicName::DotDot, "Topic name is invalid: '..' is not allowed" },
-        too_long = { InvalidTopicName::TooLong("x".to_owned()), "Topic name is invalid: the length of 'x' is longer than the max allowed length 249" },
-        illegal_character = { InvalidTopicName::IllegalCharacter("a/b".to_owned()), "Topic name is invalid: 'a/b' contains one or more characters other than ASCII alphanumerics, '.', '_' and '-'" },
+        too_long = {
+            InvalidTopicName::TooLong("x".to_owned()),
+            "Topic name is invalid: the length of 'x' is longer than the max allowed length 249",
+        },
+        illegal_character = {
+            InvalidTopicName::IllegalCharacter("a/b".to_owned()),
+            "Topic name is invalid: 'a/b' contains one or more characters other than ASCII alphanumerics, '.', '_' and '-'",
+        },
     )]
     fn invalid_topic_name_messages_are_kafka_text(error: InvalidTopicName, message: &str) {
         check!(error.to_string() == message);

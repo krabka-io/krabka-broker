@@ -683,11 +683,27 @@ mod tests {
     }
 
     #[yare::parameterized(
-        epoch_older_than_log = { "an epoch older than the log", 1, LogOffsetMetadata { offset: 0, epoch: 1 } },
-        completed_prior_epoch = { "a completed prior epoch", 2, LogOffsetMetadata { offset: 1, epoch: 2 } },
-        between_held_epochs = { "an epoch between two the log holds", 3, LogOffsetMetadata { offset: 1, epoch: 2 } },
+        epoch_older_than_log = {
+            "an epoch older than the log",
+            1,
+            LogOffsetMetadata { offset: 0, epoch: 1 },
+        },
+        completed_prior_epoch = {
+            "a completed prior epoch",
+            2,
+            LogOffsetMetadata { offset: 1, epoch: 2 },
+        },
+        between_held_epochs = {
+            "an epoch between two the log holds",
+            3,
+            LogOffsetMetadata { offset: 1, epoch: 2 },
+        },
         current_epoch = { "the current epoch", 4, LogOffsetMetadata { offset: 2, epoch: 4 } },
-        newer_than_log = { "an epoch newer than the log", 9, LogOffsetMetadata { offset: 2, epoch: 4 } },
+        newer_than_log = {
+            "an epoch newer than the log",
+            9,
+            LogOffsetMetadata { offset: 2, epoch: 4 },
+        },
     )]
     fn logview_end_offset_for_epoch_follows_kafka(
         case: &str,

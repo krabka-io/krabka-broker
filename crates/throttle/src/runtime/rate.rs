@@ -231,7 +231,10 @@ mod tests {
         kibibyte_rate = { kibibytes_per_sec(64), mebibytes(1) },
         fractional = { ByteRate::from_bytes_per_sec_f64(0.5), ByteSize::from_bytes_f64(5.5) },
         quarter_rate = { ByteRate::from_bytes_per_sec_f64(1.25), ByteSize::from_bytes_f64(0.75) },
-        submicro = { ByteRate::from_bytes_per_sec_f64(0.000_001), ByteSize::from_bytes_f64(0.000_011) },
+        submicro = {
+            ByteRate::from_bytes_per_sec_f64(0.000_001),
+            ByteSize::from_bytes_f64(0.000_011),
+        },
     )]
     fn rate_and_burst_round_trip_through_the_accessors(rate: ByteRate, burst: ByteSize) {
         let b = TokenBucket::new();

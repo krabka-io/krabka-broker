@@ -161,8 +161,14 @@ mod tests {
     use super::*;
 
     #[yare::parameterized(
-        committed = { None, AppendOutcome { phase: PrivilegedPhase::Applied, reason: "committed in the append" } },
-        refused = { Some("submit failed: not the controller"), AppendOutcome { phase: PrivilegedPhase::Refused, reason: "submit failed: not the controller" } },
+        committed = {
+            None,
+            AppendOutcome { phase: PrivilegedPhase::Applied, reason: "committed in the append" },
+        },
+        refused = {
+            Some("submit failed: not the controller"),
+            AppendOutcome { phase: PrivilegedPhase::Refused, reason: "submit failed: not the controller" },
+        },
     )]
     fn an_append_that_did_not_commit_is_audited_as_a_refusal(
         failure: Option<&str>,

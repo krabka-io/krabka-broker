@@ -188,12 +188,18 @@ fn heartbeat_interval_parses_from_env() {
     timeout_size = { "KRABKA_OTLP_TIMEOUT", "1MiB" },
     timeout_nan = { "KRABKA_OTLP_TIMEOUT", "NaNs" },
     timeout_negative = { "KRABKA_OTLP_TIMEOUT", "-1s" },
-    timeout_overflow = { "KRABKA_OTLP_TIMEOUT", "999999999999999999999999999999999999999999999999999999999999s" },
+    timeout_overflow = {
+        "KRABKA_OTLP_TIMEOUT",
+        "999999999999999999999999999999999999999999999999999999999999s",
+    },
     heartbeat_missing_unit = { "KRABKA_OTLP_HEARTBEAT_INTERVAL", "5" },
     heartbeat_size = { "KRABKA_OTLP_HEARTBEAT_INTERVAL", "1MiB" },
     heartbeat_nan = { "KRABKA_OTLP_HEARTBEAT_INTERVAL", "NaNs" },
     heartbeat_negative = { "KRABKA_OTLP_HEARTBEAT_INTERVAL", "-1s" },
-    heartbeat_overflow = { "KRABKA_OTLP_HEARTBEAT_INTERVAL", "999999999999999999999999999999999999999999999999999999999999s" },
+    heartbeat_overflow = {
+        "KRABKA_OTLP_HEARTBEAT_INTERVAL",
+        "999999999999999999999999999999999999999999999999999999999999s",
+    },
 )]
 fn custom_otlp_times_reject_malformed_values(name: &str, value: &str) {
     let error = config_from_env(

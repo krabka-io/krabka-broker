@@ -80,8 +80,12 @@ mod tests {
     use {super::expand, crate::meta::compact};
 
     #[yare::parameterized(
-        trait_declaration = { "#[async_trait] trait Ops { #[doc = \"Upload\"] put_from_path!(); }" },
-        implementation = { "#[async_trait] impl Ops for Client { put_from_path!({ self.upload(key, src, threshold, chunk_size, req).await }); }" },
+        trait_declaration = {
+            "#[async_trait] trait Ops { #[doc = \"Upload\"] put_from_path!(); }",
+        },
+        implementation = {
+            "#[async_trait] impl Ops for Client { put_from_path!({ self.upload(key, src, threshold, chunk_size, req).await }); }",
+        },
     )]
     fn preserves_declaration_docs_and_implementation_body(item: &str) {
         let output = expand("".parse().unwrap(), item.parse().unwrap()).unwrap();

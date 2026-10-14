@@ -178,16 +178,66 @@ mod tests {
     /// must apply only to ALLOW ACLs. A DENY Read ACL must not also deny
     /// Describe.
     #[yare::parameterized(
-        allow_read_describe = { PermissionType::Allow, AclOperation::Read, AclOperation::Describe, true },
-        allow_write_describe = { PermissionType::Allow, AclOperation::Write, AclOperation::Describe, true },
-        allow_delete_describe = { PermissionType::Allow, AclOperation::Delete, AclOperation::Describe, true },
-        allow_alter_describe = { PermissionType::Allow, AclOperation::Alter, AclOperation::Describe, true },
-        allow_alter_configs_describe_configs = { PermissionType::Allow, AclOperation::AlterConfigs, AclOperation::DescribeConfigs, true },
-        deny_read_describe = { PermissionType::Deny, AclOperation::Read, AclOperation::Describe, false },
-        deny_write_describe = { PermissionType::Deny, AclOperation::Write, AclOperation::Describe, false },
-        deny_delete_describe = { PermissionType::Deny, AclOperation::Delete, AclOperation::Describe, false },
-        deny_alter_describe = { PermissionType::Deny, AclOperation::Alter, AclOperation::Describe, false },
-        deny_alter_configs_describe_configs = { PermissionType::Deny, AclOperation::AlterConfigs, AclOperation::DescribeConfigs, false },
+        allow_read_describe = {
+            PermissionType::Allow,
+            AclOperation::Read,
+            AclOperation::Describe,
+            true,
+        },
+        allow_write_describe = {
+            PermissionType::Allow,
+            AclOperation::Write,
+            AclOperation::Describe,
+            true,
+        },
+        allow_delete_describe = {
+            PermissionType::Allow,
+            AclOperation::Delete,
+            AclOperation::Describe,
+            true,
+        },
+        allow_alter_describe = {
+            PermissionType::Allow,
+            AclOperation::Alter,
+            AclOperation::Describe,
+            true,
+        },
+        allow_alter_configs_describe_configs = {
+            PermissionType::Allow,
+            AclOperation::AlterConfigs,
+            AclOperation::DescribeConfigs,
+            true,
+        },
+        deny_read_describe = {
+            PermissionType::Deny,
+            AclOperation::Read,
+            AclOperation::Describe,
+            false,
+        },
+        deny_write_describe = {
+            PermissionType::Deny,
+            AclOperation::Write,
+            AclOperation::Describe,
+            false,
+        },
+        deny_delete_describe = {
+            PermissionType::Deny,
+            AclOperation::Delete,
+            AclOperation::Describe,
+            false,
+        },
+        deny_alter_describe = {
+            PermissionType::Deny,
+            AclOperation::Alter,
+            AclOperation::Describe,
+            false,
+        },
+        deny_alter_configs_describe_configs = {
+            PermissionType::Deny,
+            AclOperation::AlterConfigs,
+            AclOperation::DescribeConfigs,
+            false,
+        },
     )]
     fn implication_table_applies_only_to_allow_acls(
         permission: PermissionType,
@@ -370,10 +420,18 @@ mod tests {
     #[yare::parameterized(
         ipv4_text = { "127.0.0.1:5000", "127.0.0.1", AuthorizationResult::Allow },
         mapped_peer_ipv4_acl = { "[::ffff:10.0.0.5]:5000", "10.0.0.5", AuthorizationResult::Allow },
-        mapped_peer_ipv6_acl = { "[::ffff:10.0.0.5]:5000", "::ffff:10.0.0.5", AuthorizationResult::Deny },
+        mapped_peer_ipv6_acl = {
+            "[::ffff:10.0.0.5]:5000",
+            "::ffff:10.0.0.5",
+            AuthorizationResult::Deny,
+        },
         expanded_ipv6_acl = { "[::1]:5000", "0:0:0:0:0:0:0:1", AuthorizationResult::Allow },
         compressed_ipv6_acl = { "[::1]:5000", "::1", AuthorizationResult::Deny },
-        expanded_global_ipv6_acl = { "[2001:db8::5]:5000", "2001:db8:0:0:0:0:0:5", AuthorizationResult::Allow },
+        expanded_global_ipv6_acl = {
+            "[2001:db8::5]:5000",
+            "2001:db8:0:0:0:0:0:5",
+            AuthorizationResult::Allow,
+        },
     )]
     fn host_matching_uses_jdk_address_text(
         peer: &'static str,
@@ -404,8 +462,14 @@ mod tests {
     /// applies to no peer, so a range ALLOW grants nothing and a range DENY
     /// denies nothing.
     #[yare::parameterized(
-        range_allow_is_text = { vec![(PermissionType::Allow, "10.0.0.0/8")], AuthorizationResult::Deny },
-        wildcard_allow_wins = { vec![(PermissionType::Allow, "*"), (PermissionType::Deny, "10.0.0.0/8")], AuthorizationResult::Allow },
+        range_allow_is_text = {
+            vec![(PermissionType::Allow, "10.0.0.0/8")],
+            AuthorizationResult::Deny,
+        },
+        wildcard_allow_wins = {
+            vec![(PermissionType::Allow, "*"), (PermissionType::Deny, "10.0.0.0/8")],
+            AuthorizationResult::Allow,
+        },
     )]
     fn a_host_with_a_slash_is_plain_text_below_the_cidr_metadata_version(
         entries: Vec<(PermissionType, &'static str)>,

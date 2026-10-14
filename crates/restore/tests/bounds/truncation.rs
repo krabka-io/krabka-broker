@@ -69,7 +69,11 @@ async fn to_offset_filters_records_past_a_bound_inside_one_batch() {
 
 #[yare::parameterized(
     orders = { &["--to-offset", "orders:3=100"][..], "orders", 3 },
-    selected_missing_topic = { &["--topic", "payments", "--to-offset", "payments:0=10"][..], "payments", 0 },
+    selected_missing_topic = {
+        &["--topic", "payments", "--to-offset", "payments:0=10"][..],
+        "payments",
+        0,
+    },
 )]
 #[test_macro(tokio::test)]
 async fn bounds_on_absent_partitions_are_rejected(

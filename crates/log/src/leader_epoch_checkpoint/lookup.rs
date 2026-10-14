@@ -203,13 +203,55 @@ mod tests {
     /// through `append` as the log builds them.
     #[yare::parameterized(
         empty = { "empty checkpoint", &[][..], 0, 9, (UNDEFINED_EPOCH, UNDEFINED_OFFSET) },
-        undefined = { "undefined requested epoch", &[entry(0, 0), entry(1, 50)][..], -1, 100, (UNDEFINED_EPOCH, UNDEFINED_OFFSET) },
-        latest = { "latest recorded epoch keeps the log end", &[entry(0, 0), entry(1, 50)][..], 1, 100, (LeaderEpoch(1), Offset(100)) },
-        oldest = { "oldest epoch ends at the next start", &[entry(0, 0), entry(1, 50), entry(2, 100)][..], 0, 200, (LeaderEpoch(0), Offset(50)) },
-        middle = { "middle epoch ends at the next start", &[entry(0, 0), entry(1, 50), entry(2, 100)][..], 1, 200, (LeaderEpoch(1), Offset(100)) },
-        gap = { "gap epoch resolves to the floor epoch", &[entry(0, 0), entry(5, 100)][..], 3, 200, (LeaderEpoch(0), Offset(100)) },
-        future = { "future epoch cannot be placed", &[entry(0, 0), entry(1, 50)][..], 7, 100, (UNDEFINED_EPOCH, UNDEFINED_OFFSET) },
-        below_first = { "below every recorded epoch keeps the requested epoch", &[entry(3, 30), entry(4, 40)][..], 1, 100, (LeaderEpoch(1), Offset(30)) },
+        undefined = {
+            "undefined requested epoch",
+            &[entry(0, 0), entry(1, 50)][..],
+            -1,
+            100,
+            (UNDEFINED_EPOCH, UNDEFINED_OFFSET),
+        },
+        latest = {
+            "latest recorded epoch keeps the log end",
+            &[entry(0, 0), entry(1, 50)][..],
+            1,
+            100,
+            (LeaderEpoch(1), Offset(100)),
+        },
+        oldest = {
+            "oldest epoch ends at the next start",
+            &[entry(0, 0), entry(1, 50), entry(2, 100)][..],
+            0,
+            200,
+            (LeaderEpoch(0), Offset(50)),
+        },
+        middle = {
+            "middle epoch ends at the next start",
+            &[entry(0, 0), entry(1, 50), entry(2, 100)][..],
+            1,
+            200,
+            (LeaderEpoch(1), Offset(100)),
+        },
+        gap = {
+            "gap epoch resolves to the floor epoch",
+            &[entry(0, 0), entry(5, 100)][..],
+            3,
+            200,
+            (LeaderEpoch(0), Offset(100)),
+        },
+        future = {
+            "future epoch cannot be placed",
+            &[entry(0, 0), entry(1, 50)][..],
+            7,
+            100,
+            (UNDEFINED_EPOCH, UNDEFINED_OFFSET),
+        },
+        below_first = {
+            "below every recorded epoch keeps the requested epoch",
+            &[entry(3, 30), entry(4, 40)][..],
+            1,
+            100,
+            (LeaderEpoch(1), Offset(30)),
+        },
     )]
     fn epoch_and_offset_for_follows_kafka_end_offset_for(
         name: &str,

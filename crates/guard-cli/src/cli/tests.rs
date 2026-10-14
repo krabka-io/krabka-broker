@@ -79,7 +79,10 @@ fn a_freeze_names_exactly_one_scope() {
 /// no key file would name a signature that was never made.
 #[yare::parameterized(
     no_signature = { &[][..], true },
-    all_flags = { &["--sign-with", "key.pk8", "--key-id", "alice-yubi", "--principal", "User:alice"][..], true },
+    all_flags = {
+        &["--sign-with", "key.pk8", "--key-id", "alice-yubi", "--principal", "User:alice"][..],
+        true,
+    },
     missing_key_id = { &["--sign-with", "key.pk8", "--principal", "User:alice"][..], false },
     missing_principal = { &["--sign-with", "key.pk8", "--key-id", "alice-yubi"][..], false },
     missing_key_file = { &["--key-id", "alice-yubi"][..], false },

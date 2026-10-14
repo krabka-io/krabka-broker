@@ -113,12 +113,20 @@ mod tests {
 
     #[yare::parameterized(
         missing_attribute = { "struct Value { epoch: i32, timestamp: i64 }" },
-        nonstring_record = { "#[epoch_value(record = 0)] struct Value { epoch: i32, timestamp: i64 }" },
+        nonstring_record = {
+            "#[epoch_value(record = 0)] struct Value { epoch: i32, timestamp: i64 }",
+        },
         tuple_struct = { "#[epoch_value(record = \"Record\")] struct Value(i32, i64);" },
         missing_timestamp = { "#[epoch_value(record = \"Record\")] struct Value { epoch: i32 }" },
-        reversed_fields = { "#[epoch_value(record = \"Record\")] struct Value { timestamp: i64, epoch: i32 }" },
-        unsigned_timestamp = { "#[epoch_value(record = \"Record\")] struct Value { epoch: i32, timestamp: u64 }" },
-        borrowed_epoch = { "#[epoch_value(record = \"Record\")] struct Value { epoch: &i32, timestamp: i64 }" },
+        reversed_fields = {
+            "#[epoch_value(record = \"Record\")] struct Value { timestamp: i64, epoch: i32 }",
+        },
+        unsigned_timestamp = {
+            "#[epoch_value(record = \"Record\")] struct Value { epoch: i32, timestamp: u64 }",
+        },
+        borrowed_epoch = {
+            "#[epoch_value(record = \"Record\")] struct Value { epoch: &i32, timestamp: i64 }",
+        },
     )]
     fn refuses_missing_record_names_and_incorrect_field_layouts(input: &str) {
         let item: ItemStruct = moxy::parse!({ input }).unwrap();

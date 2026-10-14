@@ -74,7 +74,11 @@ fn offset_and_time_index_entries_are_strict_and_bounded() {
     one_abort = { vec![txn(7, 100, 102)], SEGMENT, true },
     sequential_aborts = { vec![txn(7, 100, 102), txn(8, 103, 104)], SEGMENT, true },
     interleaved_abort_marker_order = { vec![txn(2, 105, 108), txn(1, 100, 110)], SEGMENT, true },
-    transaction_spans_segment_roll = { vec![txn(1_000, 0, 3)], RestoreSegmentExtent { base_offset: 3, last_offset: 4 }, true },
+    transaction_spans_segment_roll = {
+        vec![txn(1_000, 0, 3)],
+        RestoreSegmentExtent { base_offset: 3, last_offset: 4 },
+        true,
+    },
     marker_order_regresses = { vec![txn(1, 100, 110), txn(2, 105, 108)], SEGMENT, false },
     repeated_marker = { vec![txn(1, 100, 104), txn(2, 101, 104)], SEGMENT, false },
     marker_before_segment = { vec![txn(7, 90, 99)], SEGMENT, false },

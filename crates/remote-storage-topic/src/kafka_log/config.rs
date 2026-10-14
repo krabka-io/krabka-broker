@@ -245,20 +245,59 @@ mod tests {
     }
 
     #[yare::parameterized(
-        create_timeout_zero = { "topic_create_timeout", configured(|cfg| cfg.topic_create_timeout = Time::ZERO) },
-        create_timeout_submillisecond = { "topic_create_timeout", configured(|cfg| cfg.topic_create_timeout = Time::from_micros(500)) },
-        create_timeout_infinite = { "topic_create_timeout", configured(|cfg| cfg.topic_create_timeout = Time::from_secs_f64(f64::INFINITY)) },
-        create_timeout_too_large = { "topic_create_timeout", configured(|cfg| cfg.topic_create_timeout = Time::from_millis(i64::from(i32::MAX) + 1)) },
+        create_timeout_zero = {
+            "topic_create_timeout",
+            configured(|cfg| cfg.topic_create_timeout = Time::ZERO),
+        },
+        create_timeout_submillisecond = {
+            "topic_create_timeout",
+            configured(|cfg| cfg.topic_create_timeout = Time::from_micros(500)),
+        },
+        create_timeout_infinite = {
+            "topic_create_timeout",
+            configured(|cfg| cfg.topic_create_timeout = Time::from_secs_f64(f64::INFINITY)),
+        },
+        create_timeout_too_large = {
+            "topic_create_timeout",
+            configured(|cfg| cfg.topic_create_timeout = Time::from_millis(i64::from(i32::MAX) + 1)),
+        },
         fetch_wait_zero = { "fetch_max_wait", configured(|cfg| cfg.fetch_max_wait = Time::ZERO) },
-        fetch_wait_submillisecond = { "fetch_max_wait", configured(|cfg| cfg.fetch_max_wait = Time::from_micros(500)) },
-        fetch_wait_infinite = { "fetch_max_wait", configured(|cfg| cfg.fetch_max_wait = Time::from_secs_f64(f64::INFINITY)) },
-        fetch_wait_too_large = { "fetch_max_wait", configured(|cfg| cfg.fetch_max_wait = Time::from_millis(i64::from(i32::MAX) + 1)) },
-        fetch_bytes_zero = { "fetch_max_bytes", configured(|cfg| cfg.fetch_max_bytes = ByteSize::ZERO) },
-        fetch_bytes_fractional = { "fetch_max_bytes", configured(|cfg| cfg.fetch_max_bytes = ByteSize::from_bytes_f64(0.5)) },
-        fetch_bytes_infinite = { "fetch_max_bytes", configured(|cfg| cfg.fetch_max_bytes = ByteSize::from_bytes_f64(f64::INFINITY)) },
-        fetch_bytes_too_large = { "fetch_max_bytes", configured(|cfg| cfg.fetch_max_bytes = ByteSize::from_bytes_i64(i64::from(i32::MAX) + 1)) },
-        retry_backoff_zero = { "fetch_retry_backoff", configured(|cfg| cfg.fetch_retry_backoff = Time::ZERO) },
-        retry_backoff_infinite = { "fetch_retry_backoff", configured(|cfg| cfg.fetch_retry_backoff = Time::from_secs_f64(f64::INFINITY)) },
+        fetch_wait_submillisecond = {
+            "fetch_max_wait",
+            configured(|cfg| cfg.fetch_max_wait = Time::from_micros(500)),
+        },
+        fetch_wait_infinite = {
+            "fetch_max_wait",
+            configured(|cfg| cfg.fetch_max_wait = Time::from_secs_f64(f64::INFINITY)),
+        },
+        fetch_wait_too_large = {
+            "fetch_max_wait",
+            configured(|cfg| cfg.fetch_max_wait = Time::from_millis(i64::from(i32::MAX) + 1)),
+        },
+        fetch_bytes_zero = {
+            "fetch_max_bytes",
+            configured(|cfg| cfg.fetch_max_bytes = ByteSize::ZERO),
+        },
+        fetch_bytes_fractional = {
+            "fetch_max_bytes",
+            configured(|cfg| cfg.fetch_max_bytes = ByteSize::from_bytes_f64(0.5)),
+        },
+        fetch_bytes_infinite = {
+            "fetch_max_bytes",
+            configured(|cfg| cfg.fetch_max_bytes = ByteSize::from_bytes_f64(f64::INFINITY)),
+        },
+        fetch_bytes_too_large = {
+            "fetch_max_bytes",
+            configured(|cfg| cfg.fetch_max_bytes = ByteSize::from_bytes_i64(i64::from(i32::MAX) + 1)),
+        },
+        retry_backoff_zero = {
+            "fetch_retry_backoff",
+            configured(|cfg| cfg.fetch_retry_backoff = Time::ZERO),
+        },
+        retry_backoff_infinite = {
+            "fetch_retry_backoff",
+            configured(|cfg| cfg.fetch_retry_backoff = Time::from_secs_f64(f64::INFINITY)),
+        },
     )]
     fn config_rejects_invalid_transport_policy(field: &str, cfg: KafkaMetadataLogConfig) {
         let error = cfg.validate().expect_err("invalid policy must fail");
