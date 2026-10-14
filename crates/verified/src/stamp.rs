@@ -183,7 +183,7 @@ enum StampLookupQuery {
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+#[logic(open(crate))]
 fn stamp_lookup_matches(query: StampLookupQuery, base: i64, last: i64) -> bool {
     pearlite! { match query {
         StampLookupQuery::Exact { base: target_base, last: target_last } =>
@@ -195,7 +195,7 @@ fn stamp_lookup_matches(query: StampLookupQuery, base: i64, last: i64) -> bool {
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+#[logic(open(crate))]
 fn no_stamp_lookup_before(
     bases: Seq<i64>,
     lasts: Seq<i64>,
@@ -209,7 +209,7 @@ fn no_stamp_lookup_before(
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+#[logic(open(crate))]
 fn stamp_lookup_cursor_valid(
     bases: Seq<i64>,
     lasts: Seq<i64>,
@@ -225,7 +225,7 @@ fn stamp_lookup_cursor_valid(
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+#[logic(open(crate))]
 fn stamp_lookup_result(
     result: Option<usize>,
     bases: Seq<i64>,
