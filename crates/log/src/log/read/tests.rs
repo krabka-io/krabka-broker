@@ -639,3 +639,26 @@ fn the_descriptor_walk_stops_at_an_uncached_segment() {
     let first = log.read_raw(Offset(0), second, mebibytes(10)).unwrap();
     assert2::assert!(sent == first.total);
 }
+
+#[krabka_macros::sendfile_cfg]
+/// A fetch that starts past a segment's last offset has nothing to walk in
+/// it, so the segment never blocks the fetch, cached or not.
+#[test]
+fn a_fetch_past_a_segment_never_blocks_on_it() {
+    let dir = tempdir().unwrap();
+    let mut log = segmented_log(dir.path(), bytes(100));
+    for off in 0..6 {
+        log.append(&mut test_batch_at(off)).unwrap();
+    }
+    log.test_set_io(std::sync::Arc::new(ColdFile {
+        cold: segment_inode(dir.path(), 0),
+    }));
+    let end = log.log_end_offset();
+    let first = &log.segments[0];
+    assert2::assert!(
+        first
+            .fetch_would_block(Offset(0), end, mebibytes(1))
+            .unwrap()
+    );
+    assert2::assert!(!first.fetch_would_block(end, end, mebibytes(1)).unwrap());
+}
