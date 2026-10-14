@@ -158,9 +158,9 @@ pub fn covering_stamp_range_index(bases: &[i64], lasts: &[i64], offset: i64) -> 
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+#[logic(open(crate))]
 /// Both parallel arrays contain every index before this scan cursor.
-fn stamp_cursor_in_bounds(bases: Seq<i64>, lasts: Seq<i64>, index: Int) -> bool {
+pub(crate) fn stamp_cursor_in_bounds(bases: Seq<i64>, lasts: Seq<i64>, index: Int) -> bool {
     pearlite! { index <= bases.len() && stamp_range_arrays_parallel(bases, lasts) }
 }
 
@@ -175,7 +175,7 @@ pub fn stamp_range_arrays_parallel(bases: Seq<i64>, lasts: Seq<i64>) -> bool {
 
 #[cfg(creusot)]
 #[derive(Clone, Copy)]
-enum StampLookupQuery {
+pub(crate) enum StampLookupQuery {
     Exact { base: i64, last: i64 },
     Covering { offset: i64 },
 }
@@ -184,7 +184,7 @@ enum StampLookupQuery {
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
 #[logic(open(crate))]
-fn stamp_lookup_matches(query: StampLookupQuery, base: i64, last: i64) -> bool {
+pub(crate) fn stamp_lookup_matches(query: StampLookupQuery, base: i64, last: i64) -> bool {
     pearlite! { match query {
         StampLookupQuery::Exact { base: target_base, last: target_last } =>
             base@ == target_base@ && last@ == target_last@,
@@ -196,7 +196,7 @@ fn stamp_lookup_matches(query: StampLookupQuery, base: i64, last: i64) -> bool {
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
 #[logic(open(crate))]
-fn no_stamp_lookup_before(
+pub(crate) fn no_stamp_lookup_before(
     bases: Seq<i64>,
     lasts: Seq<i64>,
     count: Int,
@@ -210,7 +210,7 @@ fn no_stamp_lookup_before(
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
 #[logic(open(crate))]
-fn stamp_lookup_cursor_valid(
+pub(crate) fn stamp_lookup_cursor_valid(
     bases: Seq<i64>,
     lasts: Seq<i64>,
     index: Int,
@@ -226,7 +226,7 @@ fn stamp_lookup_cursor_valid(
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
 #[logic(open(crate))]
-fn stamp_lookup_result(
+pub(crate) fn stamp_lookup_result(
     result: Option<usize>,
     bases: Seq<i64>,
     lasts: Seq<i64>,
