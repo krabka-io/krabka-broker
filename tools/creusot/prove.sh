@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-packages=(krabka-macros krabka-verified)
+packages=(krabka-verified)
 
 # Creusot builds with the nightly its release pins, which trails the stable
 # `rust-version` the sibling crates declare: Creusot 0.13.0's nightly-2026-06-22

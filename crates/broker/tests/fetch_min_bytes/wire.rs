@@ -137,18 +137,16 @@ fn base_offsets(records: Option<&RecordsPayload>) -> Vec<i64> {
     let Some(payload) = records else {
         return Vec::new();
     };
-    let batches = match payload {
-        RecordsPayload::V2(batches) => batches.clone(),
-        RecordsPayload::Raw(raw) => {
-            match RecordsPayload::from_bytes(raw.clone()).expect("decode the fetched records") {
-                RecordsPayload::V2(batches) => batches,
-                RecordsPayload::Raw(raw) => panic!("fetched records are not v2 batches: {raw:?}"),
-                RecordsPayload::Legacy(legacy) => {
-                    panic!("fetched records are not v2 batches: {legacy:?}")
-                }
-            }
-        }
-        RecordsPayload::Legacy(legacy) => panic!("unexpected records payload: {legacy:?}"),
+    let batches = if let Some(batches) = payload.as_v2() {
+        batches.to_vec()
+    } else if let RecordsPayload::Raw(raw) = payload {
+        let decoded = RecordsPayload::from_bytes(raw.clone()).expect("decode the fetched records");
+        let Some(batches) = decoded.as_v2() else {
+            panic!("fetched records are not v2 batches: {decoded:?}");
+        };
+        batches.to_vec()
+    } else {
+        panic!("unexpected records payload: {payload:?}");
     };
     batches.iter().map(|batch| batch.base_offset).collect()
 }
