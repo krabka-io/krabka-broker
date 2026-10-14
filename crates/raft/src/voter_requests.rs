@@ -316,8 +316,7 @@ pub fn update_voter_current_leader(quorum: &QuorumStateSnapshot) -> CurrentLeade
         leader_epoch: i32::try_from(quorum.leader_epoch).unwrap_or(i32::MAX),
         host: endpoint
             .as_ref()
-            .map(|endpoint| endpoint.host.clone())
-            .unwrap_or_default(),
+            .map_or_default(|endpoint| endpoint.host.clone()),
         port: endpoint.map_or(0, |endpoint| i32::from(endpoint.port)),
         ..Default::default()
     }

@@ -414,7 +414,7 @@ mod tests {
             "{length} bytes is a protocol error"
         );
         assert2::assert!(coordinator.state.contains_key(&tid) == persisted);
-        assert2::assert!(log.log_end_offset().0 == if persisted { 1 } else { 0 });
+        assert2::assert!(log.log_end_offset().0 == i64::from(persisted));
     }
 
     /// The replay follows Kafka's `TransactionStateManager.loadTransactionMetadata`.

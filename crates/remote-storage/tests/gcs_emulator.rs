@@ -244,15 +244,12 @@ impl FakeGcs {
             .expect("read the object listing");
         let listing: serde_json::Value =
             serde_json::from_slice(&body).expect("parse the object listing");
-        listing["items"]
-            .as_array()
-            .map(|items| {
-                items
-                    .iter()
-                    .map(|item| item["name"].as_str().unwrap_or_default().to_owned())
-                    .collect()
-            })
-            .unwrap_or_default()
+        listing["items"].as_array().map_or_default(|items| {
+            items
+                .iter()
+                .map(|item| item["name"].as_str().unwrap_or_default().to_owned())
+                .collect()
+        })
     }
 }
 

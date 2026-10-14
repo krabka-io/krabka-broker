@@ -15,11 +15,11 @@ use {
 #[cfg(test)]
 fn assert_topic_name_encoding<E>(
     length: usize,
-    encodes: bool,
+    should_encode: bool,
     encoded: Result<Vec<u8>, E>,
     round_trips: impl FnOnce(&[u8]) -> bool,
 ) {
-    assert2::assert!(encoded.is_ok() == encodes, "{length} bytes");
+    assert2::assert!(encoded.is_ok() == should_encode, "{length} bytes");
     if let Ok(bytes) = encoded {
         assert2::assert!(round_trips(&bytes), "{length} bytes");
     }

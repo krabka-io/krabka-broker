@@ -265,8 +265,7 @@ impl GroupState {
             let target_here: HashSet<i32> = if subscription.contains(&topic_id) {
                 target
                     .get(&topic_id)
-                    .map(|parts| parts.iter().copied().collect())
-                    .unwrap_or_default()
+                    .map_or_default(|parts| parts.iter().copied().collect())
             } else {
                 HashSet::new()
             };
@@ -303,8 +302,7 @@ impl GroupState {
             let pending_here: HashSet<i32> = member
                 .partitions_pending_revocation
                 .get(&topic_id)
-                .map(|parts| parts.iter().copied().collect())
-                .unwrap_or_default();
+                .map_or_default(|parts| parts.iter().copied().collect());
             for partition in partitions {
                 if held_by_others.contains(&TopicIdPartition {
                     topic_id,
@@ -567,8 +565,7 @@ mod tests {
         let list = |partitions: &Partitions| {
             partitions
                 .get(&T)
-                .map(|ids| ids.iter().copied().map(PartitionIndex).collect())
-                .unwrap_or_default()
+                .map_or_default(|ids| ids.iter().copied().map(PartitionIndex).collect())
         };
         Held {
             epoch: MemberEpoch(member.member_epoch),

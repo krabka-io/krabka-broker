@@ -49,8 +49,7 @@ pub(crate) fn recover_from_partition_tail(
             let value: &[u8] = rec
                 .value
                 .as_ref()
-                .map(std::convert::AsRef::as_ref)
-                .unwrap_or_default();
+                .map_or_default(std::convert::AsRef::as_ref);
             if let (Some(seq), Some(prev)) = (seq, prev) {
                 last = Some(ChainResume {
                     next_seq: seq + 1,

@@ -157,8 +157,7 @@ impl IpNames {
         self.lock()
             .names
             .get(&peer)
-            .map(|names| names.iter().cloned().collect())
-            .unwrap_or_default()
+            .map_or_default(|names| names.iter().cloned().collect())
     }
 
     /// Rebuilds the address index from `image`'s `ip` entities, and forgets

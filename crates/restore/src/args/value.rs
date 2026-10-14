@@ -254,7 +254,7 @@ mod tests {
     }
 
     #[yare::parameterized(
-        empty = { "".to_owned() },
+        empty = { String::new() },
         dot = { ".".to_owned() },
         double_dot = { "..".to_owned() },
         whitespace = { "has space".to_owned() },

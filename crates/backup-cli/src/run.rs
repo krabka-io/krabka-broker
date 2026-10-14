@@ -443,8 +443,7 @@ fn diskless_index_present(metadata: &TopicMetadata, name: &str) -> Result<bool, 
             error
                 .message
                 .as_deref()
-                .map(|message| format!(" {message:?}"))
-                .unwrap_or_default()
+                .map_or_default(|message| format!(" {message:?}"))
         ))),
     }
 }

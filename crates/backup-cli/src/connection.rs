@@ -203,8 +203,7 @@ fn sasl_credentials(properties: &BTreeMap<String, String>) -> Result<SaslCredent
     let mechanism = required(properties, "sasl.mechanism")?;
     let options = properties
         .get("sasl.jaas.config")
-        .map(|value| jaas_options(value))
-        .unwrap_or_default();
+        .map_or_default(|value| jaas_options(value));
     match mechanism.as_str() {
         "PLAIN" => Ok(SaslCredentials::Plain {
             username: required(&options, "username")?,

@@ -389,7 +389,7 @@ fn trusted_capture_setup() -> TrustedCaptureSetup {
     let wal = std::fs::read(archive.path().join(&wal_key)).unwrap();
     let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
     let signer = FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), "capture-key".into()).unwrap();
-    let public_key = signer.public_key().to_vec();
+    let public_key = signer.public_key().clone();
     std::fs::write(&public_path, &public_key).unwrap();
     let head = capture
         .seal(

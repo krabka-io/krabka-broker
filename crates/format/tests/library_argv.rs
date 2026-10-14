@@ -30,6 +30,8 @@ fn library_argv_returns_instead_of_exiting_the_embedding_process(flag: &str, exp
         .env(CHILD, "1")
         .output()
         .unwrap();
-    std::assert!(output.status.success(), "{output:?}");
-    std::assert!(String::from_utf8_lossy(&output.stdout).contains("formatter returned to caller"));
+    assert2::assert!(output.status.success(), "{output:?}");
+    assert2::assert!(
+        String::from_utf8_lossy(&output.stdout).contains("formatter returned to caller")
+    );
 }

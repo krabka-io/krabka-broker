@@ -130,8 +130,7 @@ pub fn client_moves(
     let owned: BTreeSet<_> = owned
         .iter()
         .find(|row| row.member_id == id)
-        .map(|row| row.partitions.iter().copied().collect())
-        .unwrap_or_default();
+        .map_or_default(|row| row.partitions.iter().copied().collect());
     advertised
         .iter()
         .filter(|partition| !owned.contains(*partition))
@@ -306,8 +305,7 @@ pub fn advertised_for(advertised: &[MemberPartitions], id: &str) -> Vec<i32> {
     advertised
         .iter()
         .find(|row| row.member_id == id)
-        .map(|row| row.partitions.clone())
-        .unwrap_or_default()
+        .map_or_default(|row| row.partitions.clone())
 }
 
 pub fn exclusive_ownership(owned: &[MemberPartitions]) -> bool {

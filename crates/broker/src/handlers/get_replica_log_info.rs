@@ -93,8 +93,7 @@ fn respond(
 ) -> Result<Bytes, BrokerError> {
     let mut cur: &[u8] = req_bytes;
     let topic_partitions = GetReplicaLogInfoRequest::decode(&mut cur, version)
-        .map(|req| req.topic_partitions)
-        .unwrap_or_default();
+        .map_or_default(|req| req.topic_partitions);
     let topic_partition_log_info_list = topic_partitions
         .into_iter()
         .map(|tp| TopicPartitionLogInfo {

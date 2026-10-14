@@ -160,7 +160,6 @@ mod tests {
         token_fixtures::check_refusals()
             .cases(|live, expired| {
                 mutation_credential_refusals(&live.hmac)
-                    .into_iter()
                     .chain(ordinary_ownership_refusals(&live.hmac))
                     .chain([
                         TokenMutationRefusalSetup {

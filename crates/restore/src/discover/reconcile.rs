@@ -239,14 +239,12 @@ fn summarize_scan(segments: &[SegmentInventory]) -> String {
 /// One-line summary of what the RLMM snapshot states for a partition, for a
 /// [`RestoreError::MetadataDisagreement`] message.
 fn summarize_dump(dump: Option<&PartitionDump>) -> String {
-    let mut bases: Vec<i64> = dump
-        .map(|dump| {
-            dump.segments
-                .iter()
-                .map(RemoteLogSegmentMetadata::start_offset)
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut bases: Vec<i64> = dump.map_or_default(|dump| {
+        dump.segments
+            .iter()
+            .map(RemoteLogSegmentMetadata::start_offset)
+            .collect()
+    });
     bases.sort_unstable();
     summarize(bases.len(), &bases)
 }

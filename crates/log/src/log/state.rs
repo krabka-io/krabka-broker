@@ -373,8 +373,7 @@ impl Log {
                 earlier: self
                     .earlier_batches
                     .get(&entry.producer_id)
-                    .map(|earlier| earlier.iter().copied().collect())
-                    .unwrap_or_default(),
+                    .map_or_default(|earlier| earlier.iter().copied().collect()),
             })
             .collect()
     }

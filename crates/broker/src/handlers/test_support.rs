@@ -962,8 +962,7 @@ pub(crate) fn share_fetch_partition_rows(
         .responses
         .into_iter()
         .next()
-        .map(|topic| topic.partitions)
-        .unwrap_or_default()
+        .map_or_default(|topic| topic.partitions)
 }
 
 #[bon::builder]

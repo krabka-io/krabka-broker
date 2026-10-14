@@ -527,7 +527,7 @@ mod tests {
             written || matches!(result, Err(crate::error::BrokerError::Protocol(_))),
             "member id of {length} bytes is a protocol error"
         );
-        check!(log.batches().await.len() == if written { 1 } else { 0 });
+        check!(log.batches().await.len() == usize::from(written));
     }
 
     #[test]

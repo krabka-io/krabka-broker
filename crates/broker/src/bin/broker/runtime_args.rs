@@ -248,8 +248,7 @@ mod tests {
                 let long = arg.get_long().unwrap_or_default();
                 let env = arg
                     .get_env()
-                    .map(|env| env.to_string_lossy().into_owned())
-                    .unwrap_or_default();
+                    .map_or_default(|env| env.to_string_lossy().into_owned());
                 let help = arg.get_help().map(ToString::to_string);
                 let accepted = PROBES
                     .iter()

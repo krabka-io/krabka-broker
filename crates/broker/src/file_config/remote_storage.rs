@@ -343,7 +343,7 @@ pub(super) fn apply_remote_storage(
             cfg.remote_log_metadata = RlmmKind::InMemory;
         } else {
             let mut policy = KafkaRlmmConfig {
-                bootstrap: km.map(|k| k.bootstrap.clone()).unwrap_or_default(),
+                bootstrap: km.map_or_default(|k| k.bootstrap.clone()),
                 num_partitions: km
                     .and_then(|k| k.num_partitions)
                     .unwrap_or(DEFAULT_RLMM_TOPIC_NUM_PARTITIONS),

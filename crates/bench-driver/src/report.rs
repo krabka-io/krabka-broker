@@ -1035,10 +1035,8 @@ notes,errors_count\n",
             ),
             None => (String::new(), String::new(), String::new()),
         };
-        let opt_bytes =
-            |o: Option<ByteSize>| o.map(|v| v.bytes_i64().to_string()).unwrap_or_default();
-        let opt_millis =
-            |o: Option<Time>| o.map(|v| v.millis_i64().to_string()).unwrap_or_default();
+        let opt_bytes = |o: Option<ByteSize>| o.map_or_default(|v| v.bytes_i64().to_string());
+        let opt_millis = |o: Option<Time>| o.map_or_default(|v| v.millis_i64().to_string());
         let p = &r.producer_latency;
         let c = &r.consumer_e2e_latency;
         let cols = [

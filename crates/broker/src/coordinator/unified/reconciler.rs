@@ -48,8 +48,7 @@ impl ReconcileInput {
                         topic_id: *topic_id,
                         partition,
                     })
-                    .map(|racks| racks.iter().map(String::as_str).collect())
-                    .unwrap_or_default()
+                    .map_or_default(|racks| racks.iter().map(String::as_str).collect())
             })
             .collect();
         Some(topic_hash::topic_hash(topic_id.0, name, racks.into_iter()))
@@ -407,19 +406,19 @@ mod tests {
 
     /// The topics that `member_id` is assigned, by name.
     fn assigned_names(group: &GroupState, input: &ReconcileInput, member_id: &str) -> Vec<String> {
-        let mut names: Vec<String> = group
-            .target
-            .per_member
-            .get(member_id)
-            .map(|topics| {
-                input
-                    .topic_id_by_name
-                    .iter()
-                    .filter(|(_, id)| topics.contains_key(id))
-                    .map(|(name, _)| name.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut names: Vec<String> =
+            group
+                .target
+                .per_member
+                .get(member_id)
+                .map_or_default(|topics| {
+                    input
+                        .topic_id_by_name
+                        .iter()
+                        .filter(|(_, id)| topics.contains_key(id))
+                        .map(|(name, _)| name.clone())
+                        .collect()
+                });
         names.sort();
         names
     }

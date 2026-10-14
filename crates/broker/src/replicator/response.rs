@@ -858,13 +858,6 @@ mod tests {
             /// The `(epoch, start offset)` entries left in the epoch history.
             expected_epochs: &'static [(i32, i64)],
         }
-        let case = |name, runs, diverging, expected_end, expected_epochs| Case {
-            name,
-            runs,
-            diverging,
-            expected_end,
-            expected_epochs,
-        };
         const FOLLOWER_RUNS_4_THEN_6: &[Run] = &[
             Run {
                 leader_epoch: 4,
@@ -875,6 +868,13 @@ mod tests {
                 count: 5,
             },
         ];
+        let case = |name, runs, diverging, expected_end, expected_epochs| Case {
+            name,
+            runs,
+            diverging,
+            expected_end,
+            expected_epochs,
+        };
         let cases = [
             case(
                 // The leader went 4 -> 5 -> 7 while this follower went 4 -> 6:

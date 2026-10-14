@@ -284,8 +284,7 @@ pub async fn topic_id_for(
     resp.topics
         .iter()
         .find(|t| t.name.as_deref() == Some(name))
-        .map(|t| t.topic_id)
-        .unwrap_or_default()
+        .map_or_default(|t| t.topic_id)
 }
 
 pub fn lazy_mutex(lock: &std::sync::OnceLock<tokio::sync::Mutex<()>>) -> &tokio::sync::Mutex<()> {

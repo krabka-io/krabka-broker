@@ -88,8 +88,7 @@ fn heartbeat(
     let result = step
         .resolutions
         .take()
-        .map(|resolved| apply_regex_result(state, resolved, &metadata.input))
-        .unwrap_or_default();
+        .map_or_default(|resolved| apply_regex_result(state, resolved, &metadata.input));
     Beat { step, result }
 }
 
@@ -125,8 +124,7 @@ fn target_topics(state: &GroupState, member_id: &str) -> HashSet<Uuid> {
         .target
         .per_member
         .get(member_id)
-        .map(|topics| topics.keys().copied().collect())
-        .unwrap_or_default()
+        .map_or_default(|topics| topics.keys().copied().collect())
 }
 
 fn resolved(topics: &[&str]) -> RegularExpressionValue {

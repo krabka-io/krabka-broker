@@ -644,7 +644,7 @@ fn the_metadata_log_directory_leads_the_directory_set(scenario: &str) {
             ],
         },
     ];
-    let case = find_directory_case(&cases, scenario);
+    let case = find_directory_case(cases, scenario);
     let tmp = tempfile::tempdir().expect("tempdir");
     let plan = plan_of(
         argv_under()
@@ -843,7 +843,7 @@ async fn only_the_metadata_log_directory_gets_the_bootstrap_files(scenario: &str
             ],
         },
     ];
-    let case = find_directory_case(&cases, scenario);
+    let case = find_directory_case(cases, scenario);
     let tmp = tempfile::tempdir().expect("tempdir");
     let code = run_from_args(
         argv_under()

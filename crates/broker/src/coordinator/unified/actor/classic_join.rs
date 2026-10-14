@@ -899,8 +899,7 @@ mod tests {
                 .assigned_partitions
                 .iter()
                 .find(|tp| tp.topic == "t")
-                .map(|tp| tp.partitions.clone())
-                .unwrap_or_default()
+                .map_or_default(|tp| tp.partitions.clone())
         };
         let p_c = parts(&sync_c);
         let p_2 = parts(&sync2);
