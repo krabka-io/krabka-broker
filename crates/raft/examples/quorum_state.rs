@@ -1,24 +1,18 @@
 // docs:begin quorum_state
 use {
     assert2::assert,
-    krabka_metadata::{KRaftVersionRange, Voter, VoterEndpoint, VoterSet},
+    krabka_metadata::VoterSet,
     krabka_raft::kraft::{NodeId, QuorumState, QuorumStateMachine},
     krabka_units::prelude::millis,
     uuid::Uuid,
 };
 
+#[path = "../tests/support/voter.rs"]
+mod voter_fixture;
+
 fn main() {
     let node = NodeId(1);
-    let voters = VoterSet::from_voters([Voter {
-        id: node,
-        directory_id: Uuid::new_v4(),
-        endpoints: vec![VoterEndpoint {
-            name: "CONTROLLER".into(),
-            host: "127.0.0.1".into(),
-            port: 9093,
-        }],
-        kraft_version: KRaftVersionRange { min: 0, max: 1 },
-    }]);
+    let voters = VoterSet::from_voters([voter_fixture::voter(1, Uuid::new_v4())]);
     let state = QuorumState::bootstrap(Uuid::new_v4(), voters);
     let machine = QuorumStateMachine::new(node, state, millis(1_000));
     assert!(machine.is_voter());

@@ -1,5 +1,29 @@
 //! Shared live-broker and local-partition fixtures for handler tests.
 
+macro_rules! handler_drive {
+    ($request:ty => $response:ty, $handle:path, $version:expr) => {
+        async fn drive(
+            broker: &crate::broker::Broker,
+            req: &$request,
+            ctx: &crate::handlers::RequestContext<'_>,
+        ) -> $response {
+            $handle(broker, req.clone(), $version, ctx)
+                .await
+                .expect("handle")
+        }
+    };
+}
+
+macro_rules! allow_all_broker_setup {
+    (($($binding:ident),+), $boot:ident, $user:literal) => {
+        krabka_macros::broker_test_setup! {
+            bind($($binding),+);
+            boot [$boot] allow_all;
+            user [$user];
+        }
+    };
+}
+
 macro_rules! empty_share_offsets_response {
     ($response:ident, $error_code:expr, $error_message:expr) => {
         krabka_macros::unthrottled_wire!($response {

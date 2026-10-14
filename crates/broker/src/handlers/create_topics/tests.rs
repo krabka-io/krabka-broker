@@ -281,15 +281,7 @@ krabka_macros::wire_codec_helpers! {
 
 use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
 
-async fn drive(
-    broker: &Broker,
-    req: &CreateTopicsRequest,
-    ctx: &RequestContext<'_>,
-) -> CreateTopicsResponse {
-    handle(broker, req.clone(), VERSION, ctx)
-        .await
-        .expect("handle")
-}
+handler_drive!(CreateTopicsRequest => CreateTopicsResponse, handle, VERSION);
 
 async fn seed_controller_quota(handle: &BrokerHandle, rate: f64) {
     seed_controller_quota_helper(handle, rate).await;
@@ -344,11 +336,11 @@ async fn handle_falls_back_to_topic_authorization_failed_for_each_topic() {
 
 #[tokio::test]
 async fn handle_reports_invalid_partition_count_and_replication_factor() {
-    krabka_macros::broker_test_setup! {
-    bind(broker_handle, _dir, broker, p, peer);
-    boot [start_broker] allow_all;
-    user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, p, peer),
+        start_broker,
+        "admin"
+    );
     let req = request(vec![topic("bad-count", 0, 1), topic("bad-rf", 1, 2)]);
 
     let resp = drive(&broker, &req, &test_context(&p, &peer)).await;
@@ -547,11 +539,11 @@ async fn minus_one_takes_the_broker_topic_creation_defaults() {
 
 #[tokio::test]
 async fn handle_success_persists_topic_config_and_success_fields() {
-    krabka_macros::broker_test_setup! {
-    bind(broker_handle, _dir, broker, p, peer);
-    boot [start_broker] allow_all;
-    user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, p, peer),
+        start_broker,
+        "admin"
+    );
     let req = request(vec![topic_with_config("configured")]);
 
     let resp = drive_single_topic(&broker, &req, &test_context(&p, &peer)).await;
@@ -587,11 +579,11 @@ async fn handle_success_persists_topic_config_and_success_fields() {
 /// stored as the client sent it, which is what `DescribeConfigs` echoes back.
 #[tokio::test]
 async fn handle_creates_a_topic_whose_cleanup_policy_names_both_halves() {
-    krabka_macros::broker_test_setup! {
-    bind(broker_handle, _dir, broker, p, peer);
-    boot [start_broker] allow_all;
-    user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, p, peer),
+        start_broker,
+        "admin"
+    );
     let req = request(vec![topic_with_configs("windowed-changelog", &[
         ConfigPair {
             name: "cleanup.policy",
@@ -628,11 +620,11 @@ async fn handle_rejects_invalid_topic_configs_before_creating_the_topic() {
         needles: &'a [&'a str],
     }
 
-    krabka_macros::broker_test_setup! {
-    bind(broker_handle, _dir, broker, p, peer);
-    boot [start_broker] allow_all;
-    user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, p, peer),
+        start_broker,
+        "admin"
+    );
 
     let cases: [RejectedConfig<'_>; 10] = [
         RejectedConfig {
@@ -785,11 +777,11 @@ async fn handle_rejects_invalid_topic_configs_before_creating_the_topic() {
 
 #[tokio::test]
 async fn handle_creates_a_scheduled_topic_and_persists_its_delivery_configs() {
-    krabka_macros::broker_test_setup! {
-    bind(broker_handle, _dir, broker, p, peer);
-    boot [start_broker] allow_all;
-    user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, p, peer),
+        start_broker,
+        "admin"
+    );
     let req = request(vec![topic_with_configs("retries", &[
         ConfigPair {
             name: "delivery.mode",
@@ -1007,11 +999,11 @@ fn diskless_wal_validation_uses_the_local_registration_fallback() {
 
 #[tokio::test]
 async fn a_created_topic_with_the_key_off_stays_on_the_local_log_path() {
-    krabka_macros::broker_test_setup! {
-    bind(broker_handle, _dir, broker, p, peer);
-    boot [start_broker] allow_all;
-    user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, p, peer),
+        start_broker,
+        "admin"
+    );
     let req = request(vec![topic_with_configs("plain", &[ConfigPair {
         name: "krabka.diskless",
         value: "false",
@@ -1030,11 +1022,11 @@ async fn a_created_topic_with_the_key_off_stays_on_the_local_log_path() {
 
 #[tokio::test]
 async fn duplicate_topic_reports_error_without_success_fields() {
-    krabka_macros::broker_test_setup! {
-    bind(broker_handle, _dir, broker, p, peer);
-    boot [start_broker] allow_all;
-    user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, p, peer),
+        start_broker,
+        "admin"
+    );
     let req = request(vec![topic("dupe", 1, 1)]);
     let first = drive(&broker, &req, &test_context(&p, &peer)).await;
     assert!(first.topics[0].error_code == codes::NONE);
@@ -1061,11 +1053,11 @@ async fn validate_only_answers_the_verdict_and_commits_nothing() {
         expected: CreatableTopicResult,
     }
 
-    krabka_macros::broker_test_setup! {
-    bind(broker_handle, _dir, broker, p, peer);
-    boot [start_broker] allow_all;
-    user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, p, peer),
+        start_broker,
+        "admin"
+    );
     let committed = drive(
         &broker,
         &request(vec![topic("existing", 1, 1)]),
@@ -1235,11 +1227,11 @@ krabka_macros::test_authorizer!(DenyDescribeConfigs, req; {
 /// so this case names the two rows the layering turns on and their values.
 #[tokio::test]
 async fn created_topic_configs_separate_a_request_value_from_an_inherited_default() {
-    krabka_macros::broker_test_setup! {
-    bind(broker_handle, _dir, broker, p, peer);
-    boot [start_broker] allow_all;
-    user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, p, peer),
+        start_broker,
+        "admin"
+    );
     let req = request(vec![topic_with_config("effective")]);
 
     let resp = drive(&broker, &req, &test_context(&p, &peer)).await;
@@ -1281,11 +1273,11 @@ async fn created_topic_configs_separate_a_request_value_from_an_inherited_defaul
 /// Streams' `InternalTopicManager` -- must see no difference.
 #[tokio::test]
 async fn created_topic_configs_match_describe_configs_for_the_same_topic() {
-    krabka_macros::broker_test_setup! {
-    bind(broker_handle, _dir, broker, p, peer);
-    boot [start_broker] allow_all;
-    user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, p, peer),
+        start_broker,
+        "admin"
+    );
     let req = request(vec![topic_with_config("mirrored")]);
 
     let resp = drive(&broker, &req, &test_context(&p, &peer)).await;
@@ -1825,11 +1817,11 @@ async fn automatic_placement_takes_fenced_brokers_last_and_shrinks_the_isr() {
 /// checks and mints the same ids without committing.
 #[tokio::test]
 async fn topic_ids_never_start_with_a_dash() {
-    krabka_macros::broker_test_setup! {
-    bind(broker_handle, _dir, broker, p, peer);
-    boot [start_broker] allow_all;
-    user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, p, peer),
+        start_broker,
+        "admin"
+    );
     let mut req = request(
         (0..2500)
             .map(|n| topic(&format!("topic-{n}"), 1, 1))
@@ -2351,11 +2343,11 @@ async fn rows_follow_kafkas_check_order_and_messages() {
     cases.extend(check_order_limit_cases());
 
     handler_fixture_support::check_cases(cases, async |case| {
-        krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, p, peer);
-        boot [start_broker] allow_all;
-        user ["admin"];
-        };
+        allow_all_broker_setup!(
+            (broker_handle, _dir, broker, p, peer),
+            start_broker,
+            "admin"
+        );
         let seeded = drive(
             &broker,
             &request(vec![topic("t", 1, 1)]),

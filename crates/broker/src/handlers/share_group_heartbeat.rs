@@ -418,11 +418,11 @@ mod tests {
     #[tokio::test]
     async fn handle_refuses_malformed_heartbeats_as_kafka_does() {
         let version = VERSION;
-        krabka_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker, ctx);
-            boot [start_broker] allow_all;
-            user ["ANONYMOUS"];
-        };
+        allow_all_broker_setup!(
+            (broker_handle, _dir, broker, ctx),
+            start_broker,
+            "ANONYMOUS"
+        );
         let valid = heartbeat_request()
             .group_id("g".into())
             .member_id("member-1".into())

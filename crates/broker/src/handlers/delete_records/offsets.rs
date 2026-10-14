@@ -57,19 +57,6 @@ mod tests {
         delivery_frontier = { 8, 8, 10, 2, Some(5), Apply { frontier: 5 } },
         stale_request = { 3, 8, 10, 5, None, Noop { frontier: 5 } },
         exact_retry = { 5, 8, 10, 5, None, Noop { frontier: 5 } },
-    )]
-    fn trim_decision_covers_bounds_stale_requests_and_retries(
-        requested: i64,
-        hw: i64,
-        leo: i64,
-        start: i64,
-        delivery: Option<i64>,
-        expected: DeleteRecordsTrimDecision,
-    ) {
-        assert_trim_decision_case(requested, hw, leo, start, delivery, expected);
-    }
-
-    #[yare::parameterized(
         negative_request = { -2, 8, 10, 2, None, RejectMalformed },
         high_watermark_above_log_end = { 1, 1, 0, 0, None, RejectMalformed },
         start_above_log_end = { 1, 3, 10, 4, None, RejectMalformed },
@@ -79,7 +66,7 @@ mod tests {
         above_log_end = { 11, 8, 10, 2, None, RejectOutOfRange },
         maximum_request = { i64::MAX, 8, 10, 2, None, RejectOutOfRange },
     )]
-    fn trim_decision_fails_closed_on_malformed_and_overflow_edges(
+    fn trim_decision_covers_valid_and_invalid_edges(
         requested: i64,
         hw: i64,
         leo: i64,

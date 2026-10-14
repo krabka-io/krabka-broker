@@ -290,13 +290,13 @@ mod tests {
                 hmac,
 
                 maximum: max_timestamp_ms,
-            } = token_fixtures::seed_mutation_token()
-                .controller(&controller)
-                .index(index)
-                .expiry_delta(expiry_delta)
-                .maximum_delta(maximum_delta)
-                .call()
-                .await;
+            } = token_fixtures::mutation_token_for_case(
+                &controller,
+                index,
+                expiry_delta,
+                maximum_delta,
+            )
+            .await;
 
             let MutationExecution {
                 window,

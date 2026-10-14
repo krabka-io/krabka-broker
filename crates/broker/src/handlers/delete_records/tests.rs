@@ -108,15 +108,7 @@ krabka_macros::wire_codec_helpers! {
 
 use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
 
-async fn drive(
-    broker: &Broker,
-    req: &DeleteRecordsRequest,
-    ctx: &RequestContext<'_>,
-) -> DeleteRecordsResponse {
-    handle(broker, req.clone(), VERSION, ctx)
-        .await
-        .expect("handle")
-}
+handler_drive!(DeleteRecordsRequest => DeleteRecordsResponse, handle, VERSION);
 
 async fn drive_trim(
     broker: &Broker,
@@ -301,11 +293,11 @@ async fn handle_denied_topic_returns_topic_auth_rows() {
 
 #[tokio::test]
 async fn handle_unknown_partition_preserves_requested_index() {
-    krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, p, peer);
-        boot [start_broker] allow_all;
-        user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, p, peer),
+        start_broker,
+        "admin"
+    );
     let req = request()
         .topic("missing")
         .partitions(&[TrimTarget {
@@ -487,11 +479,11 @@ async fn a_trim_stops_at_the_delivery_watermark_of_a_scheduled_topic() {
         ),
     ];
 
-    krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, admin, peer, ctx);
-        boot [start_broker] allow_all;
-        user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, admin, peer, ctx),
+        start_broker,
+        "admin"
+    );
 
     for (topic, delivery_mode, expected_low_watermark) in cases {
         topic_holding_a_pending_batch()
@@ -625,11 +617,11 @@ async fn a_trim_that_deletes_nothing_leaves_the_log_start_alone() {
         ),
     ];
 
-    krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, admin, peer, ctx);
-        boot [start_broker] allow_all;
-        user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, admin, peer, ctx),
+        start_broker,
+        "admin"
+    );
 
     for (topic, offset, low_watermark, error_code) in cases {
         let PendingPartitionFixture { part, before } =
@@ -656,11 +648,11 @@ async fn a_trim_that_deletes_nothing_leaves_the_log_start_alone() {
 /// caller who could otherwise trim still cannot.
 #[tokio::test]
 async fn a_frozen_topic_refuses_a_trim() {
-    krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, admin, peer, ctx);
-        boot [start_broker] allow_all;
-        user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, admin, peer, ctx),
+        start_broker,
+        "admin"
+    );
     let topic = "delete-records-frozen";
     let PendingPartitionFixture { part, before } =
         pending_partition_fixture(&broker_handle, &broker, topic, &ctx).await;
@@ -700,11 +692,11 @@ async fn a_frozen_topic_refuses_a_trim() {
 /// client re-resolves the leader rather than deleting on a stale replica.
 #[tokio::test]
 async fn a_replica_that_is_not_the_leader_refuses_a_trim() {
-    krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, admin, peer, ctx);
-        boot [start_broker] allow_all;
-        user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, admin, peer, ctx),
+        start_broker,
+        "admin"
+    );
     let topic = "delete-records-follower";
     let PendingPartitionFixture { part, before } =
         pending_partition_fixture(&broker_handle, &broker, topic, &ctx).await;
@@ -747,11 +739,11 @@ async fn a_compact_only_topic_refuses_a_trim() {
             2,
         ),
     ];
-    krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, admin, peer, ctx);
-        boot [start_broker] allow_all;
-        user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, admin, peer, ctx),
+        start_broker,
+        "admin"
+    );
 
     for (topic, policy, low_watermark, error_code, log_start) in cases {
         topic_with_configs_holding_a_pending_batch()
@@ -805,11 +797,11 @@ async fn a_compact_only_topic_refuses_a_trim() {
 /// partition the metadata does not hold answers `UNKNOWN_TOPIC_OR_PARTITION`.
 #[tokio::test]
 async fn a_partition_hosted_elsewhere_answers_not_leader_or_follower() {
-    krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, admin, peer);
-        boot [start_broker] allow_all;
-        user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, admin, peer),
+        start_broker,
+        "admin"
+    );
     let topic = "delete-records-elsewhere";
     let elsewhere = krabka_metadata::NodeId(broker.config.node_id.0 + 1);
     broker
@@ -879,11 +871,11 @@ async fn a_partition_hosted_elsewhere_answers_not_leader_or_follower() {
 /// would move the log start.
 #[tokio::test]
 async fn an_internal_topic_refuses_a_trim() {
-    krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, admin, peer, ctx);
-        boot [start_broker] allow_all;
-        user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, admin, peer, ctx),
+        start_broker,
+        "admin"
+    );
 
     broker_handle.wait_until_group_coordinator_ready().await;
     broker_handle

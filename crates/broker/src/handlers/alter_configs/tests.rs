@@ -59,11 +59,7 @@ fn expected_resource_response(
 /// including both occurrences of a duplicate resource.
 #[tokio::test]
 async fn dispatch_preserves_mixed_resource_order_and_duplicates() {
-    krabka_macros::broker_test_setup! {
-        bind(handle, _dir, broker, ctx);
-        boot [start_broker] allow_all;
-        user ["admin"];
-    };
+    allow_all_broker_setup!((handle, _dir, broker, ctx), start_broker, "admin");
     let duplicate_topic = duplicate_config_resource_response(RESOURCE_TYPE_TOPIC, "duplicate");
     let rows = [
         (

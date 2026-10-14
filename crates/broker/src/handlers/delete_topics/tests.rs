@@ -102,11 +102,11 @@ async fn handle_denied_topic_returns_authorization_failure() {
 
 #[tokio::test]
 async fn handle_unknown_name_and_id_preserve_error_rows() {
-    krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, p, peer);
-        boot [start_broker] allow_all;
-        user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, p, peer),
+        start_broker,
+        "admin"
+    );
     let bogus_id = WireUuid([8; 16]);
     let req = request(vec![named_state("missing"), id_state(bogus_id)]);
 
