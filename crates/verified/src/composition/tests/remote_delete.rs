@@ -93,12 +93,9 @@ fn selected_rows_cannot_move_the_floor_past_failed_deletes_or_gaps() {
             for published in [None, Some(current)] {
                 for allowed in [false, true] {
                     for debt in [0, 1, u64::MAX] {
-                        for outcomes in [
-                            &[][..],
-                            &[false, true],
-                            &[true, false, true],
-                            &[true, true, true],
-                        ] {
+                        for outcomes in [&[][..], &[false, true], &[true, false, true], &[
+                            true, true, true,
+                        ]] {
                             check_plan(current, published, allowed, rows, debt, outcomes);
                         }
                     }

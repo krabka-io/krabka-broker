@@ -44,19 +44,17 @@ fn broker_registration_projection_preserves_existing_epoch() {
         fenced: false,
         ..new_registration()
     };
-    let mut rx = super::test_support::submit_on_engine(
-        &mut engine,
-        &[MetadataRecord::V1BrokerRegistration(registration)],
-    );
+    let mut rx = super::test_support::submit_on_engine(&mut engine, &[
+        MetadataRecord::V1BrokerRegistration(registration),
+    ]);
     assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
     let mut projection = engine.image.broker(NodeId(7)).unwrap().clone();
     let assigned_epoch = projection.broker_epoch;
     projection.log_dirs.clear();
 
-    let mut rx = super::test_support::submit_on_engine(
-        &mut engine,
-        &[MetadataRecord::V1BrokerRegistration(projection)],
-    );
+    let mut rx = super::test_support::submit_on_engine(&mut engine, &[
+        MetadataRecord::V1BrokerRegistration(projection),
+    ]);
 
     assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
     let stored = engine.image.broker(NodeId(7)).unwrap();
@@ -137,10 +135,10 @@ fn a_registration_change_applies_only_at_the_epoch_it_names() {
 
     let (mut engine, _dir) = super::test_support::single_voter_leader_engine();
     let submit = |engine: &mut Engine, record: BrokerRegistrationRecord| {
-        let mut rx = super::test_support::submit_on_engine(
-            engine,
-            &[MetadataRecord::V1BrokerRegistration(record)],
-        );
+        let mut rx =
+            super::test_support::submit_on_engine(engine, &[MetadataRecord::V1BrokerRegistration(
+                record,
+            )]);
         assert!(matches!(rx.try_recv(), Ok(Ok(_))));
         engine.image.broker(NodeId(7)).cloned()
     };
@@ -397,15 +395,13 @@ fn a_registration_change_at_a_replaced_epoch_is_dropped() {
         let mut rx = super::test_support::submit_on_engine(engine, records);
         assert!(matches!(rx.try_recv(), Ok(Ok(_))));
     };
-    submit(
-        &mut engine,
-        &[MetadataRecord::V1BrokerRegistration(new_registration())],
-    );
+    submit(&mut engine, &[MetadataRecord::V1BrokerRegistration(
+        new_registration(),
+    )]);
     let first_epoch = engine.image.broker_epoch(NodeId(7)).expect("registered");
-    submit(
-        &mut engine,
-        &[MetadataRecord::V1BrokerRegistration(new_registration())],
-    );
+    submit(&mut engine, &[MetadataRecord::V1BrokerRegistration(
+        new_registration(),
+    )]);
     let reregistered = engine.image.broker(NodeId(7)).cloned();
     let start = engine.log.log_end_offset();
 

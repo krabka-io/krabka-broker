@@ -177,13 +177,10 @@ fn prevote_majority_promotes_to_candidate_and_bumps_epoch() {
             m.quorum_state().voted_key.map(|k| k.id),
         ) == (true, 1, Some(NodeId(1)))
     );
-    assert2::assert!(actions.iter().any(|a| matches!(
-        a,
-        Action::SendVoteRequest {
-            pre_vote: false,
-            epoch: 1
-        }
-    )));
+    assert2::assert!(actions.iter().any(|a| matches!(a, Action::SendVoteRequest {
+        pre_vote: false,
+        epoch: 1
+    })));
 }
 
 #[test]
@@ -288,13 +285,14 @@ fn removed_voter_response_retallies_retained_grants() {
         matches!(m.role(), Role::Candidate { .. }),
         "retained grants form a majority after the voter-set shrink"
     );
-    assert2::assert!(actions.iter().any(|action| matches!(
-        action,
-        Action::SendVoteRequest {
-            epoch: 1,
-            pre_vote: false
-        }
-    )));
+    assert2::assert!(
+        actions
+            .iter()
+            .any(|action| matches!(action, Action::SendVoteRequest {
+                epoch: 1,
+                pre_vote: false
+            }))
+    );
 }
 
 #[test]

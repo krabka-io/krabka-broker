@@ -181,9 +181,7 @@ pub struct FailoverSpec {
     pub target: String,
 }
 
-fn default_failover_target() -> String {
-    "partition0_leader".to_string()
-}
+fn default_failover_target() -> String { "partition0_leader".to_string() }
 
 /// The scenario configuration. The driver loads it from YAML and
 /// echoes it back into `RunOutput.scenario` for the report.
@@ -241,39 +239,17 @@ pub struct Scenario {
     pub failover: Option<FailoverSpec>,
 }
 
-fn default_mode_tag() -> ModeTag {
-    ModeTag::Ci
-}
-fn default_msg_size() -> ByteSize {
-    kibibytes(1)
-}
-fn default_partitions() -> i32 {
-    6
-}
-fn default_replicas() -> i16 {
-    1
-}
-fn default_producers() -> usize {
-    1
-}
-fn default_consumers() -> usize {
-    1
-}
-fn default_acks() -> Acks {
-    Acks::Leader
-}
-fn default_linger() -> Time {
-    millis(5)
-}
-fn default_batch_size() -> ByteSize {
-    kibibytes(16)
-}
-fn default_duration() -> Time {
-    secs(60)
-}
-fn default_warmup() -> Time {
-    secs(10)
-}
+fn default_mode_tag() -> ModeTag { ModeTag::Ci }
+fn default_msg_size() -> ByteSize { kibibytes(1) }
+fn default_partitions() -> i32 { 6 }
+fn default_replicas() -> i16 { 1 }
+fn default_producers() -> usize { 1 }
+fn default_consumers() -> usize { 1 }
+fn default_acks() -> Acks { Acks::Leader }
+fn default_linger() -> Time { millis(5) }
+fn default_batch_size() -> ByteSize { kibibytes(16) }
+fn default_duration() -> Time { secs(60) }
+fn default_warmup() -> Time { secs(10) }
 
 // ── Output schema ───────────────────────────────────────────────────────────
 

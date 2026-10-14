@@ -1,8 +1,6 @@
 use {super::*, proptest::prelude::*};
 
-fn saturated(value: i128) -> i64 {
-    i64::try_from(value.min(i128::from(i64::MAX))).unwrap()
-}
+fn saturated(value: i128) -> i64 { i64::try_from(value.min(i128::from(i64::MAX))).unwrap() }
 
 // Wide closed-form deadlines and a symbolic extension/no-op schedule. No
 // production deadline, mutation, credential or request policy is called.

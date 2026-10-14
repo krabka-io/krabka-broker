@@ -398,9 +398,7 @@ fn write_partition_line(out: &mut String, partition: &PartitionReport) {
 }
 
 /// `"s"` for anything but exactly one, so counts read as plain English.
-fn plural(count: u64) -> &'static str {
-    if count == 1 { "" } else { "s" }
-}
+fn plural(count: u64) -> &'static str { if count == 1 { "" } else { "s" } }
 
 /// Group `n`'s digits with `,` every three places, for a human scanning a
 /// terminal. `krabka-restore` has no formatting-number dependency in its

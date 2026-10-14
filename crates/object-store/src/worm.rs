@@ -140,15 +140,11 @@ pub async fn verify_gcs_worm_bucket(cfg: &GcsConfig) -> Result<(), ObjectStoreEr
     if !credential.bearer.is_empty() {
         request = request.bearer_auth(&credential.bearer);
     }
-    let body = read_ok_body(
-        request,
-        "GCS Buckets.get",
-        &RetryConfig {
-            max_retries: cfg.max_retries,
-            retry_timeout: cfg.retry_timeout,
-            ..RetryConfig::default()
-        },
-    )
+    let body = read_ok_body(request, "GCS Buckets.get", &RetryConfig {
+        max_retries: cfg.max_retries,
+        retry_timeout: cfg.retry_timeout,
+        ..RetryConfig::default()
+    })
     .await?;
     let policy: GcsBucketPolicy = serde_json::from_slice(&body)
         .map_err(|error| ObjectStoreError::Backend(format!("GCS Buckets.get: {error}")))?;

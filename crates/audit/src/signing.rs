@@ -57,21 +57,15 @@ impl FileEd25519Signer {
     /// Stable identifier for the key. Every checkpoint records it, so chains
     /// span key-rotation epochs verifiably.
     #[must_use]
-    pub fn key_id(&self) -> &str {
-        &self.key_id
-    }
+    pub fn key_id(&self) -> &str { &self.key_id }
 
     /// Ed25519 signature over `msg`.
     #[must_use]
-    pub fn sign(&self, msg: &[u8]) -> Vec<u8> {
-        self.key_pair.sign(msg).as_ref().to_vec()
-    }
+    pub fn sign(&self, msg: &[u8]) -> Vec<u8> { self.key_pair.sign(msg).as_ref().to_vec() }
 
     /// Raw 32-byte Ed25519 public key.
     #[must_use]
-    pub fn public_key(&self) -> Vec<u8> {
-        self.public_key.clone()
-    }
+    pub fn public_key(&self) -> Vec<u8> { self.public_key.clone() }
 }
 
 /// Canonical checkpoint signed payload.

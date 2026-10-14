@@ -59,27 +59,15 @@ mod tests {
             ("unregistered broker", None, 7, 7, D::Missing),
             ("older epoch", Some(7), 6, i64::MAX, D::Stale),
             ("newer epoch", Some(7), 8, i64::MAX, D::Stale),
-            (
-                "behind its registration",
-                Some(7),
-                7,
-                6,
-                D::Current { caught_up: false },
-            ),
-            (
-                "at its registration",
-                Some(7),
-                7,
-                7,
-                D::Current { caught_up: true },
-            ),
-            (
-                "past its registration",
-                Some(7),
-                7,
-                9,
-                D::Current { caught_up: true },
-            ),
+            ("behind its registration", Some(7), 7, 6, D::Current {
+                caught_up: false,
+            }),
+            ("at its registration", Some(7), 7, 7, D::Current {
+                caught_up: true,
+            }),
+            ("past its registration", Some(7), 7, 9, D::Current {
+                caught_up: true,
+            }),
         ];
         for (case, registered_epoch, request_epoch, metadata_offset, expected) in cases {
             assert!(

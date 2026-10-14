@@ -92,16 +92,13 @@ fn an_aborted_transactions_records_are_dropped_and_the_committed_value_survives(
         })
         .call();
     let abort_marker = control_batch(12, 2000, 0 /* ABORT */);
-    let seg = write_sealed_batches(
-        dir.path(),
-        &[
-            committed.clone(),
-            commit_marker.clone(),
-            aborted_k,
-            aborted_j,
-            abort_marker.clone(),
-        ],
-    );
+    let seg = write_sealed_batches(dir.path(), &[
+        committed.clone(),
+        commit_marker.clone(),
+        aborted_k,
+        aborted_j,
+        abort_marker.clone(),
+    ]);
     let segment_refs = vec![&seg];
     let entry = aborted_entry(2000, 10, 12);
     let map = build_offset_map(&segment_refs, vec![entry], None).unwrap();

@@ -61,14 +61,10 @@ impl Archive {
     /// Returns [`BackupError::ObjectStore`] when the key already exists or the write fails.
     pub async fn put_new(&self, relative: &str, bytes: Vec<u8>) -> Result<(), BackupError> {
         self.client
-            .put(
-                &self.key(relative),
-                bytes.into(),
-                PutRequest {
-                    mode: PutMode::Create,
-                    ..PutRequest::default()
-                },
-            )
+            .put(&self.key(relative), bytes.into(), PutRequest {
+                mode: PutMode::Create,
+                ..PutRequest::default()
+            })
             .await?;
         Ok(())
     }

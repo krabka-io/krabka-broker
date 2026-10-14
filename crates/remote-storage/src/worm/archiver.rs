@@ -55,9 +55,7 @@ impl WormArchiver {
     /// An archiver that signs with `signer`, or leaves manifests unsigned when
     /// `signer` is `None`.
     #[must_use]
-    pub fn new(signer: Option<Arc<FileEd25519Signer>>) -> Self {
-        Self { signer }
-    }
+    pub fn new(signer: Option<Arc<FileEd25519Signer>>) -> Self { Self { signer } }
 
     /// Loads the signing key that `cfg` names, if it names one.
     ///
@@ -172,9 +170,7 @@ mod tests {
 
     const KEY_ID: &str = "worm-archiver-key";
 
-    fn epoch() -> EpochId {
-        EpochId(Uuid::from_u128(0xabcd))
-    }
+    fn epoch() -> EpochId { EpochId(Uuid::from_u128(0xabcd)) }
 
     fn metadata(segment_id: u128, stamp: Option<ChainStamp>) -> RemoteLogSegmentMetadata {
         let md = RemoteLogSegmentMetadata::new(

@@ -170,9 +170,7 @@ pub struct FaultPolicy {
 impl FaultPolicy {
     /// A policy that injects nothing.
     #[must_use]
-    pub fn none() -> Self {
-        Self::default()
-    }
+    pub fn none() -> Self { Self::default() }
 
     /// Apply `fault` to `op`, replacing any previous entry for it.
     #[must_use]
@@ -192,9 +190,7 @@ impl FaultPolicy {
 
     /// The fault configured for `op`, if any.
     #[must_use]
-    pub fn fault(&self, op: StoreOp) -> Option<OpFault> {
-        self.faults.get(&op).copied()
-    }
+    pub fn fault(&self, op: StoreOp) -> Option<OpFault> { self.faults.get(&op).copied() }
 }
 
 /// Per-operation call counters, so a test can assert how many times the store
@@ -274,9 +270,7 @@ impl FaultInjectingStore {
     /// How many calls of class `op` have reached this store, failed ones
     /// included.
     #[must_use]
-    pub fn attempts(&self, op: StoreOp) -> u64 {
-        self.counters.slot(op).load(Ordering::SeqCst)
-    }
+    pub fn attempts(&self, op: StoreOp) -> u64 { self.counters.slot(op).load(Ordering::SeqCst) }
 
     /// Count the call, sleep out any injected latency, and report whether the
     /// caller should be failed.
@@ -303,9 +297,7 @@ impl std::fmt::Display for FaultInjectingStore {
 
 /// The path a listing fault reports. Listing has no single location, and the
 /// error kinds that matter carry the store name rather than the path.
-fn listing_path() -> Path {
-    Path::from("")
-}
+fn listing_path() -> Path { Path::from("") }
 
 #[async_trait::async_trait]
 impl ObjectStore for FaultInjectingStore {

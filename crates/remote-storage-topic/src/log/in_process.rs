@@ -142,9 +142,7 @@ impl InProcessMetadataEventLog {
 
 #[async_trait]
 impl MetadataEventLog for InProcessMetadataEventLog {
-    fn partition_count(&self) -> i32 {
-        self.inner.partition_count
-    }
+    fn partition_count(&self) -> i32 { self.inner.partition_count }
 
     async fn publish(&self, partition: i32, event: Bytes) -> Result<i64, MetadataLogError> {
         self.append(partition, None, Some(event))
@@ -187,15 +185,12 @@ impl MetadataEventLog for InProcessMetadataEventLog {
             for record in records.iter().skip(begin) {
                 snapshot.push(record.clone());
             }
-            assigned.insert(
-                ps.partition,
-                PartitionCursor {
-                    next: i64::try_from(records.len()).expect("len fits in i64"),
-                    // Initially-assigned: backlog rides the chained
-                    // snapshot stream, so live records can go direct.
-                    via_inject: false,
-                },
-            );
+            assigned.insert(ps.partition, PartitionCursor {
+                next: i64::try_from(records.len()).expect("len fits in i64"),
+                // Initially-assigned: backlog rides the chained
+                // snapshot stream, so live records can go direct.
+                via_inject: false,
+            });
         }
 
         let (inject_tx, inject_rx) = mpsc::unbounded_channel::<MetadataEventRecord>();

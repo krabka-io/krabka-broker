@@ -223,60 +223,51 @@ mod time_tests {
             dir: _dir,
             path: _path,
             index: idx,
-        } = populated_index(
-            "00000000000000000000.timeindex",
-            &[
-                IndexSeed {
-                    key: 1_000_000,
-                    coordinate: 0,
-                },
-                IndexSeed {
-                    key: 2_000_000,
-                    coordinate: 100,
-                },
-                IndexSeed {
-                    key: 3_000_000,
-                    coordinate: 200,
-                },
-            ],
-        );
+        } = populated_index("00000000000000000000.timeindex", &[
+            IndexSeed {
+                key: 1_000_000,
+                coordinate: 0,
+            },
+            IndexSeed {
+                key: 2_000_000,
+                coordinate: 100,
+            },
+            IndexSeed {
+                key: 3_000_000,
+                coordinate: 200,
+            },
+        ]);
         check!(idx.scan_start(ts) == want, "case {name}: ts={ts}");
     }
 
     #[test]
     fn persists_across_reopen() {
-        let TempPath { dir: _dir, path } = written_index(
-            "00000000000000000000.timeindex",
-            &[
-                IndexSeed {
-                    key: 1,
-                    coordinate: 0,
-                },
-                IndexSeed {
-                    key: 2,
-                    coordinate: 50,
-                },
-            ],
-        );
+        let TempPath { dir: _dir, path } = written_index("00000000000000000000.timeindex", &[
+            IndexSeed {
+                key: 1,
+                coordinate: 0,
+            },
+            IndexSeed {
+                key: 2,
+                coordinate: 50,
+            },
+        ]);
         let idx = TimeIndex::open(&path).unwrap();
         assert2::assert!(idx.entry_count() == 2);
     }
 
     #[test]
     fn ignores_trailing_zero_padding() {
-        let TempPath { dir: _dir, path } = written_index(
-            "00000000000000000000.timeindex",
-            &[
-                IndexSeed {
-                    key: 1_000,
-                    coordinate: 0,
-                },
-                IndexSeed {
-                    key: 2_000,
-                    coordinate: 100,
-                },
-            ],
-        );
+        let TempPath { dir: _dir, path } = written_index("00000000000000000000.timeindex", &[
+            IndexSeed {
+                key: 1_000,
+                coordinate: 0,
+            },
+            IndexSeed {
+                key: 2_000,
+                coordinate: 100,
+            },
+        ]);
         let mut f = std::fs::OpenOptions::new()
             .append(true)
             .open(&path)

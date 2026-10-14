@@ -78,14 +78,11 @@ pub fn action_messages(
         Action::SendVoteRequest { .. } => voters,
         Action::SendBeginQuorumEpoch { .. } | Action::SendEndQuorumEpoch { .. } => peers,
         Action::ReplyVote { to, epoch, granted } => {
-            return Some(vec![(
-                *to,
-                Event::ReceiveVoteResponse {
-                    from: source,
-                    epoch: *epoch,
-                    vote_granted: *granted,
-                },
-            )]);
+            return Some(vec![(*to, Event::ReceiveVoteResponse {
+                from: source,
+                epoch: *epoch,
+                vote_granted: *granted,
+            })]);
         }
         _ => return None,
     };

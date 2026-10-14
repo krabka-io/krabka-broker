@@ -91,9 +91,7 @@ struct RestoredCluster {
 
 impl RestoredCluster {
     /// Restore the round-trip fixture and boot a broker on the result.
-    async fn start() -> Self {
-        Self::start_with(build_fixture(), &[]).await
-    }
+    async fn start() -> Self { Self::start_with(build_fixture(), &[]).await }
 
     async fn start_with(fixture: Fixture, extra: &[&str]) -> Self {
         let (target, log_dir, mut controller, report) =

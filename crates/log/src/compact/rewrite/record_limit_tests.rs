@@ -198,12 +198,9 @@ fn an_aborted_batch_is_read_only_when_the_pass_keeps_it_empty(
     // An oversized compressed batch of an aborted transaction, then the
     // abort marker in the next segment (past the pass), which the
     // aborted-transaction list names all the same.
-    let seg = write_sealed_batches(
-        dir.path(),
-        &[keyed_batch()
-            .producer(BatchProducer::Transactional(producer))
-            .call()],
-    );
+    let seg = write_sealed_batches(dir.path(), &[keyed_batch()
+        .producer(BatchProducer::Transactional(producer))
+        .call()]);
     let segments = [&seg];
     let aborted = AbortedTxn {
         start_offset: Offset(0),

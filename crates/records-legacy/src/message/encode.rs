@@ -52,9 +52,7 @@ impl Message {
     }
 }
 
-fn nullable_bytes_len(b: Option<&Bytes>) -> usize {
-    4 + b.map_or(0, Bytes::len)
-}
+fn nullable_bytes_len(b: Option<&Bytes>) -> usize { 4 + b.map_or(0, Bytes::len) }
 
 fn put_nullable_bytes(buf: &mut Vec<u8>, b: Option<&Bytes>) {
     match b {

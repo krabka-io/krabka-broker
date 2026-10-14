@@ -56,9 +56,7 @@ use RequestProperty::{
 };
 
 impl RequestFlags {
-    fn contains(self, property: RequestProperty) -> bool {
-        self.0 & property as u16 != 0
-    }
+    fn contains(self, property: RequestProperty) -> bool { self.0 & property as u16 != 0 }
 }
 
 #[derive(Clone, Copy)]

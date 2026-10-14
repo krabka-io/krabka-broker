@@ -32,9 +32,7 @@ use {
 const METADATA_TOPIC: &str = "__cluster_metadata";
 
 /// The Kafka base64 form of a cluster id that is not the engines' nil id.
-fn foreign_cluster_id() -> String {
-    URL_SAFE_NO_PAD.encode(Uuid::from_u128(7).as_bytes())
-}
+fn foreign_cluster_id() -> String { URL_SAFE_NO_PAD.encode(Uuid::from_u128(7).as_bytes()) }
 
 /// Delivers one inbound request to `engine` and returns its answer, or `None`
 /// when the engine dropped the reply, which closes the connection.

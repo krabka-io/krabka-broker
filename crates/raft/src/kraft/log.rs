@@ -174,9 +174,7 @@ impl KraftLog {
     /// The first I/O error a write to the metadata log directory returned, or
     /// `None` while every write has succeeded.
     #[must_use]
-    pub fn failure(&self) -> Option<&str> {
-        self.failure.as_deref()
-    }
+    pub fn failure(&self) -> Option<&str> { self.failure.as_deref() }
 
     /// Records the error of a failed write when it is an I/O error, and
     /// passes `result` on.
@@ -194,26 +192,18 @@ impl KraftLog {
     }
 
     #[must_use]
-    pub fn log_start_offset(&self) -> Offset {
-        self.log.log_start_offset()
-    }
+    pub fn log_start_offset(&self) -> Offset { self.log.log_start_offset() }
 
     #[must_use]
-    pub fn log_end_offset(&self) -> Offset {
-        self.log.log_end_offset()
-    }
+    pub fn log_end_offset(&self) -> Offset { self.log.log_end_offset() }
 
     #[must_use]
-    pub fn hwm(&self) -> Offset {
-        self.hwm
-    }
+    pub fn hwm(&self) -> Offset { self.hwm }
 
     /// The size of every segment's `.log` file together, Kafka's
     /// `UnifiedLog.size`, which the metadata log's size retention weighs.
     #[must_use]
-    pub fn size(&self) -> ByteSize {
-        self.log.size()
-    }
+    pub fn size(&self) -> ByteSize { self.log.size() }
 
     /// Leader path: appends a batch stamped with `append_timestamp_ms`.
     /// krabka-log assigns the offset and records the batch's
@@ -319,9 +309,7 @@ impl KraftLog {
     /// The append timestamp of the last committed record (`hwm - 1`), for the
     /// header of a snapshot taken at the high watermark.
     #[must_use]
-    pub fn last_committed_timestamp_ms(&self) -> Option<i64> {
-        self.timestamp_below(self.hwm)
-    }
+    pub fn last_committed_timestamp_ms(&self) -> Option<i64> { self.timestamp_below(self.hwm) }
 
     /// Serves KIP-595 `Fetch`: verbatim batch bytes in
     /// `[offset, min(hwm, log_end))`.
@@ -450,9 +438,7 @@ impl LogView for KraftLog {
     // `LogView` is defined by the pure `krabka-kraft-core` consensus engine and
     // speaks raw `i64` offsets; unwrap the `krabka-log` `Offset`s with `.0` at
     // this boundary so the core sees the integers it expects.
-    fn end_offset(&self) -> i64 {
-        self.log.log_end_offset().0
-    }
+    fn end_offset(&self) -> i64 { self.log.log_end_offset().0 }
 
     fn last_epoch(&self) -> Epoch {
         // The log seam speaks `krabka_ids::LeaderEpoch(i32)`; the core's
@@ -589,12 +575,10 @@ mod tests {
                     .iter()
                     .map(|batch| (batch.base_timestamp, batch.max_timestamp))
                     .collect::<Vec<_>>(),
-            ) == (
-                Some(older),
-                Some(newer),
-                Some(older),
-                vec![(older, older), (newer, newer)],
-            )
+            ) == (Some(older), Some(newer), Some(older), vec![
+                (older, older),
+                (newer, newer)
+            ],)
         );
     }
 
@@ -936,13 +920,10 @@ mod tests {
 
         check!(
             (log.log_start_offset(), segment_files(dir.path()))
-                == (
-                    Offset(2),
-                    vec![
-                        "00000000000000000002.log".to_owned(),
-                        "00000000000000000003.log".to_owned(),
-                    ]
-                )
+                == (Offset(2), vec![
+                    "00000000000000000002.log".to_owned(),
+                    "00000000000000000003.log".to_owned(),
+                ])
         );
     }
 

@@ -7,9 +7,7 @@ use {
 
 type Row = ProducerSnapshotEntryFacts;
 
-fn modulo(value: i64) -> i32 {
-    i32::try_from(value.rem_euclid(1_i64 << 31)).unwrap()
-}
+fn modulo(value: i64) -> i32 { i32::try_from(value.rem_euclid(1_i64 << 31)).unwrap() }
 
 fn row(epoch: i16, last: i64, delta: i32, sequence: i32) -> Row {
     Row {

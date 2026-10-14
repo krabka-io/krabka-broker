@@ -127,21 +127,15 @@ pub struct ControllerHandle {
 impl ControllerHandle {
     /// Current metadata snapshot (cheap; `Arc` clone).
     #[must_use]
-    pub fn current_image(&self) -> Arc<MetadataImage> {
-        self.engine.current_image()
-    }
+    pub fn current_image(&self) -> Arc<MetadataImage> { self.engine.current_image() }
 
     /// The address the controller listener actually bound to.
     #[must_use]
-    pub fn controller_bound_addr(&self) -> SocketAddr {
-        self.controller_bound_addr
-    }
+    pub fn controller_bound_addr(&self) -> SocketAddr { self.controller_bound_addr }
 
     /// Subscribe to leader-id changes.
     #[must_use]
-    pub fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> {
-        self.leader.clone()
-    }
+    pub fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> { self.leader.clone() }
 
     /// Subscribe to the controller's fatal fault: the message of the fault
     /// that made it stop itself, and `None` until then.
@@ -154,15 +148,11 @@ impl ControllerHandle {
     /// the broker turns it into its own shutdown. The channel closes without a
     /// value when the controller is shut down for any other reason.
     #[must_use]
-    pub fn watch_fatal(&self) -> watch::Receiver<Option<String>> {
-        self.fatal.clone()
-    }
+    pub fn watch_fatal(&self) -> watch::Receiver<Option<String>> { self.fatal.clone() }
 
     /// Subscribe to metadata-image changes.
     #[must_use]
-    pub fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> {
-        self.engine.watch_image()
-    }
+    pub fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> { self.engine.watch_image() }
 
     /// Snapshot the controller's current quorum state. Used by the broker's
     /// `DescribeQuorum` (`api_key=55`, KIP-595) handler. Cheap — a `watch`
@@ -174,14 +164,11 @@ impl ControllerHandle {
             .voters
             .iter()
             .map(|v| {
-                (
-                    v.id,
-                    Node {
-                        directory_id: v.directory_id,
-                        endpoints: v.endpoints.clone(),
-                        kraft_version: v.kraft_version,
-                    },
-                )
+                (v.id, Node {
+                    directory_id: v.directory_id,
+                    endpoints: v.endpoints.clone(),
+                    kraft_version: v.kraft_version,
+                })
             })
             .collect();
         let per_voter_matched_index: BTreeMap<NodeId, u64> = snap
@@ -209,9 +196,7 @@ impl ControllerHandle {
 
     /// Snapshot the full consensus state.
     #[must_use]
-    pub fn quorum_snapshot(&self) -> QuorumStateSnapshot {
-        self.engine.quorum_snapshot()
-    }
+    pub fn quorum_snapshot(&self) -> QuorumStateSnapshot { self.engine.quorum_snapshot() }
 
     /// Highest `__cluster_metadata` offset the quorum has committed, as this
     /// node last heard it, or `-1` before the first committed record.
@@ -235,9 +220,7 @@ impl ControllerHandle {
     }
 
     /// Drain the listener and stop the engine. Idempotent in practice.
-    pub async fn shutdown(self) {
-        self.cancel().await;
-    }
+    pub async fn shutdown(self) { self.cancel().await; }
 
     /// Stop the engine and cancel the controller listener without consuming
     /// `self`. Used by `BrokerHandle::shutdown` where the controller is behind

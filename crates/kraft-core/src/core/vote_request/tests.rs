@@ -638,13 +638,10 @@ fn a_prospective_replica_that_followed_a_leader_grants_no_binding_vote_in_that_e
 
     check!(
         (
-            matches!(
-                m.role(),
-                Role::Prospective {
-                    abandoned_leader: Some(NodeId(3)),
-                    ..
-                }
-            ),
+            matches!(m.role(), Role::Prospective {
+                abandoned_leader: Some(NodeId(3)),
+                ..
+            }),
             m.quorum_state().leader_id,
             m.quorum_state().voted_key,
         ) == (true, None, None)
@@ -669,13 +666,10 @@ fn a_second_pre_vote_round_still_remembers_the_abandoned_leader() {
     m.on_event(Event::ElectionTimeout, &OUR_LOG, SimInstant(60));
 
     check!(
-        matches!(
-            m.role(),
-            Role::Prospective {
-                abandoned_leader: Some(NodeId(3)),
-                ..
-            }
-        ),
+        matches!(m.role(), Role::Prospective {
+            abandoned_leader: Some(NodeId(3)),
+            ..
+        }),
         "{:?}",
         m.role()
     );

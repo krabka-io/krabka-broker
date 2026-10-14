@@ -94,14 +94,11 @@ impl LogIo for GatedIo {
 }
 
 fn first_append(dir: &std::path::Path, strict: bool) -> Log {
-    let mut log = Log::open(
-        dir,
-        LogConfig {
-            flush_on_append: strict,
-            retention: None,
-            ..tiny_segments()
-        },
-    )
+    let mut log = Log::open(dir, LogConfig {
+        flush_on_append: strict,
+        retention: None,
+        ..tiny_segments()
+    })
     .unwrap();
     let mut first = sample_batch(1);
     first.producer_id = 41;

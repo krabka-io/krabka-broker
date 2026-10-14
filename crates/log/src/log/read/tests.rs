@@ -9,12 +9,12 @@ use {
         log::{
             RawRead,
             test_support::{
-                NO_LIMIT, TempLog, append_samples, configured_test_log, sample_batch,
-                test_batch_at, test_log, tiny_segments,
+                NO_LIMIT, TempLog, append_samples, sample_batch, test_batch_at, test_log,
+                tiny_segments,
             },
         },
         segment::Segment,
-        test_support::{AdviceCall, RecordedAdvice, segmented_log},
+        test_support::segmented_log,
     },
     assert2::check,
     krabka_units::prelude::{gibibytes, kibibytes, mebibytes},
@@ -538,6 +538,11 @@ fn a_small_budget_preserves_unindexed_descriptor_records_before_a_seam() {
 /// the default 4 MiB past it.
 #[test]
 fn configured_read_ahead_max_reaches_both_verbatim_reads() {
+    use crate::{
+        log::test_support::configured_test_log,
+        test_support::{AdviceCall, RecordedAdvice},
+    };
+
     let budget = ByteSize::from_bytes(1_000);
     let mut actual = Vec::new();
     let mut expected = Vec::new();
@@ -557,14 +562,10 @@ fn configured_read_ahead_max_reaches_both_verbatim_reads() {
         log.read_raw_desc(Offset(0), end, budget).unwrap();
         actual.push((read_ahead_max, "read_raw_desc", advice.take()));
         for path in ["read_raw", "read_raw_desc"] {
-            expected.push((
-                read_ahead_max,
-                path,
-                vec![AdviceCall {
-                    offset: 0,
-                    len: hinted,
-                }],
-            ));
+            expected.push((read_ahead_max, path, vec![AdviceCall {
+                offset: 0,
+                len: hinted,
+            }]));
         }
     }
     check!(actual == expected);

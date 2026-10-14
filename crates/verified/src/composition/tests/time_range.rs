@@ -141,11 +141,9 @@ fn time_range_rejects_invalid_extents(base: i64, end: i64) {
 )]
 fn time_range_rejects_out_of_extent_offsets_at_boundary_widths(end: i64) {
     check_range(
-        (
-            &[0, 1, u32::MAX],
-            &[i64::MAX, i64::MIN, i64::MAX],
-            &[(0, 0)],
-        ),
+        (&[0, 1, u32::MAX], &[i64::MAX, i64::MIN, i64::MAX], &[(
+            0, 0,
+        )]),
         (0, end, 1),
         (i64::MIN, i64::MIN),
     );

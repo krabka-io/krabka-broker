@@ -548,9 +548,7 @@ mod tests {
         TempPath { dir, path }
     }
 
-    fn sample_file() -> TempPath {
-        snapshot_file(&sample(), 102)
-    }
+    fn sample_file() -> TempPath { snapshot_file(&sample(), 102) }
 
     fn sample_files(offsets: impl IntoIterator<Item = i64>) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();

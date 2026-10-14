@@ -23,22 +23,19 @@ async fn filtered_and_empty_restore_batches_preserve_retry_coordinates_after_reo
     let args = args_from(&["--exclude-key", "^drop$"], target.path());
     let partition = topic_id_partition("orders", 0);
     let predicates = Predicates::from_args(&args).unwrap();
-    let mut original = batch(
-        9,
-        vec![
-            if empty {
-                record_with_key(0, "drop")
-            } else {
-                record(0, "head")
-            },
-            if empty {
-                record_with_key(1, "drop")
-            } else {
-                record(1, "middle")
-            },
-            record_with_key(2, "drop"),
-        ],
-    );
+    let mut original = batch(9, vec![
+        if empty {
+            record_with_key(0, "drop")
+        } else {
+            record(0, "head")
+        },
+        if empty {
+            record_with_key(1, "drop")
+        } else {
+            record(1, "middle")
+        },
+        record_with_key(2, "drop"),
+    ]);
     original.producer_id = 7;
     original.producer_epoch = 2;
     original.base_sequence = sequence;

@@ -31,13 +31,9 @@ pub(crate) mod sync_observer {
     }
 
     #[cfg(unix)]
-    pub(super) fn take_dir_syncs() -> Vec<PathBuf> {
-        DIR_SYNCS.take()
-    }
+    pub(super) fn take_dir_syncs() -> Vec<PathBuf> { DIR_SYNCS.take() }
 
-    pub(crate) fn take_segment_flushes() -> Vec<Offset> {
-        SEGMENT_FLUSHES.take()
-    }
+    pub(crate) fn take_segment_flushes() -> Vec<Offset> { SEGMENT_FLUSHES.take() }
 
     #[cfg(unix)]
     pub(super) fn record_dir_sync(dir: PathBuf) {

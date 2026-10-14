@@ -128,9 +128,7 @@ impl CacheState {
     }
 
     /// The least-recently-used key, or `None` when the cache is empty.
-    fn lru(&self) -> Option<CacheKey> {
-        self.order.first_key_value().map(|(_, key)| *key)
-    }
+    fn lru(&self) -> Option<CacheKey> { self.order.first_key_value().map(|(_, key)| *key) }
 }
 
 /// A bounded on-disk cache of remote segment index objects.
@@ -168,9 +166,7 @@ impl RemoteIndexCache {
     /// A cache that stores nothing: every lookup runs the fetcher and reports
     /// [`IndexCacheOutcome::Disabled`].
     #[must_use]
-    pub fn disabled() -> Self {
-        Self::empty(None, 0)
-    }
+    pub fn disabled() -> Self { Self::empty(None, 0) }
 
     fn empty(root: Option<PathBuf>, max_bytes: u64) -> Self {
         Self {
@@ -185,9 +181,7 @@ impl RemoteIndexCache {
 
     /// Whether this cache stores anything.
     #[must_use]
-    pub fn is_enabled(&self) -> bool {
-        self.root.is_some()
-    }
+    pub fn is_enabled(&self) -> bool { self.root.is_some() }
 
     /// The counters the broker publishes.
     ///
@@ -348,13 +342,10 @@ impl RemoteIndexCache {
             }
             state.clock += 1;
             let clock = state.clock;
-            state.entries.insert(
-                key,
-                CacheEntry {
-                    size,
-                    last_used: clock,
-                },
-            );
+            state.entries.insert(key, CacheEntry {
+                size,
+                last_used: clock,
+            });
             state.order.insert(clock, key);
             state.total_bytes += size;
             evicted

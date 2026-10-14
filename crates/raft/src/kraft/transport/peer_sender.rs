@@ -43,9 +43,7 @@ pub trait PeerSender: Send + Sync {
     fn update_voters(&self, _voters: &krabka_metadata::VoterSet) {}
 
     /// Transport-only bootstrap peers used by an observer with no voter view.
-    fn discovery_peers(&self) -> Vec<NodeId> {
-        Vec::new()
-    }
+    fn discovery_peers(&self) -> Vec<NodeId> { Vec::new() }
 
     /// Address `leader` at `address`, the `host:port` it announced in a
     /// response's `NodeEndpoints`. A voter-set listener for the same node
@@ -81,12 +79,9 @@ mod tests {
             .await
             .expect_err("null sender should reject peer sends");
 
-        assert2::assert!(matches!(
-            err,
-            RaftError::NotLeader {
-                current_leader: Some(NodeId(7))
-            }
-        ));
+        assert2::assert!(matches!(err, RaftError::NotLeader {
+            current_leader: Some(NodeId(7))
+        }));
     }
 
     #[tokio::test]

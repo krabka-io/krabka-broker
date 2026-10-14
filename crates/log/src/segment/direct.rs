@@ -63,9 +63,7 @@ impl DioAlign {
     /// starts this many bytes further into an aligned buffer, at an aligned
     /// offset, is aligned in both address and offset. Both values are powers
     /// of two, so the larger is a multiple of the smaller.
-    fn step(self) -> usize {
-        self.mem.max(self.block)
-    }
+    fn step(self) -> usize { self.mem.max(self.block) }
 }
 
 /// A growable byte buffer whose contents start on an `align`-aligned address.
@@ -92,9 +90,7 @@ impl AlignedBuf {
         }
     }
 
-    pub(crate) fn clear(&mut self) {
-        self.len = 0;
-    }
+    pub(crate) fn clear(&mut self) { self.len = 0; }
 
     pub(crate) fn extend_from_slice(&mut self, bytes: &[u8]) {
         let new_len = self.len + bytes.len();
@@ -114,13 +110,9 @@ impl AlignedBuf {
         self.len = len;
     }
 
-    pub(crate) fn as_slice(&self) -> &[u8] {
-        &self.storage[self.offset..self.offset + self.len]
-    }
+    pub(crate) fn as_slice(&self) -> &[u8] { &self.storage[self.offset..self.offset + self.len] }
 
-    fn capacity(&self) -> usize {
-        self.storage.len() - self.offset
-    }
+    fn capacity(&self) -> usize { self.storage.len() - self.offset }
 
     /// Make room for `needed` bytes after the aligned start.
     fn reserve(&mut self, needed: usize) {
@@ -342,29 +334,19 @@ impl DirectWriter {
         })
     }
 
-    pub(crate) fn end(&self) -> u64 {
-        self.end
-    }
+    pub(crate) fn end(&self) -> u64 { self.end }
 
-    #[cfg(test)]
-    pub(crate) fn file(&self) -> &File {
-        &self.shared.file
-    }
+    #[cfg(all(test, unix))]
+    pub(crate) fn file(&self) -> &File { &self.shared.file }
 
     /// The block size that file offsets and write lengths align to.
-    pub(crate) fn block(&self) -> usize {
-        self.align.block
-    }
+    pub(crate) fn block(&self) -> usize { self.align.block }
 
     /// Write the next appends through `io`.
-    pub(crate) fn set_io(&self, io: Arc<dyn LogIo>) {
-        *self.shared.io.lock().unwrap() = io;
-    }
+    pub(crate) fn set_io(&self, io: Arc<dyn LogIo>) { *self.shared.io.lock().unwrap() = io; }
 
     /// Every byte below this is on the disk.
-    pub(crate) fn written(&self) -> u64 {
-        self.shared.queue.lock().unwrap().written
-    }
+    pub(crate) fn written(&self) -> u64 { self.shared.queue.lock().unwrap().written }
 
     /// Queue the concatenation of `parts` to be written at [`Self::end`].
     ///
@@ -447,9 +429,7 @@ impl DirectWriter {
     /// # Errors
     ///
     /// The error of a failed write.
-    pub(crate) fn drain(&self) -> std::io::Result<()> {
-        self.settle().failed()
-    }
+    pub(crate) fn drain(&self) -> std::io::Result<()> { self.settle().failed() }
 
     /// Wait until no write is queued or running and the bytes are on the
     /// disk, or a write failed, and return the queue then.
@@ -502,9 +482,7 @@ impl DirectWriter {
 impl Drop for DirectWriter {
     /// The write threads hold the file and its buffers until the queue is
     /// empty, so a dropped writer still finishes what it queued.
-    fn drop(&mut self) {
-        drop(self.settle());
-    }
+    fn drop(&mut self) { drop(self.settle()); }
 }
 
 /// The threads that write every segment's queued appends.
@@ -744,17 +722,11 @@ impl TailCache {
 
     /// Learn that every byte below `written` is on the disk, so the chunks
     /// below it can be evicted.
-    pub(crate) fn set_written(&mut self, written: u64) {
-        self.written = self.written.max(written);
-    }
+    pub(crate) fn set_written(&mut self, written: u64) { self.written = self.written.max(written); }
 
-    pub(crate) fn start(&self) -> u64 {
-        self.start
-    }
+    pub(crate) fn start(&self) -> u64 { self.start }
 
-    pub(crate) fn end(&self) -> u64 {
-        self.start + to_u64(self.len)
-    }
+    pub(crate) fn end(&self) -> u64 { self.start + to_u64(self.len) }
 
     /// Record `bytes` appended at [`Self::end`].
     ///
@@ -970,9 +942,7 @@ mod tests {
             })
         }
 
-        fn take_calls(&self) -> Vec<WriteCall> {
-            std::mem::take(&mut *self.calls.lock().unwrap())
-        }
+        fn take_calls(&self) -> Vec<WriteCall> { std::mem::take(&mut *self.calls.lock().unwrap()) }
 
         fn hold(&self, held: bool) {
             *self.held.lock().unwrap() = held;

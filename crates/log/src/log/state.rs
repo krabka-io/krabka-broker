@@ -42,9 +42,7 @@ impl Log {
     /// `log.dir` of a partition. The broker does not have to repeat the
     /// directory-layout convention.
     #[must_use]
-    pub fn dir(&self) -> &Path {
-        &self.dir
-    }
+    pub fn dir(&self) -> &Path { &self.dir }
 
     /// First absolute offset any reader may ask for, wherever the records for
     /// it live: Kafka's global `logStartOffset`.
@@ -54,9 +52,7 @@ impl Log {
     /// the ones the remote tier serves. A fetch below *this* floor is
     /// `OFFSET_OUT_OF_RANGE` and no tier answers it.
     #[must_use]
-    pub fn log_start_offset(&self) -> Offset {
-        self.start_offset
-    }
+    pub fn log_start_offset(&self) -> Offset { self.start_offset }
 
     /// The global floor, when this process is the one that moved it.
     ///
@@ -317,9 +313,7 @@ impl Log {
     /// [`Log::last_stable_offset`], which releases replicated transactions
     /// and caps the answer at the high watermark.
     #[must_use]
-    pub fn lso(&self) -> Offset {
-        self.lso
-    }
+    pub fn lso(&self) -> Offset { self.lso }
 
     /// First offset of `producer_id`'s currently open transaction on this
     /// partition, or `None` when no transaction from that producer is pending.
@@ -414,18 +408,14 @@ impl Log {
     /// prefix; see [`LogConfig::delivery_clock_uncertainty`].
     /// # Panics
     /// Panics when another thread poisoned the log configuration lock.
-    pub fn set_config(&self, new: LogConfig) {
-        *self.config.write().unwrap() = new;
-    }
+    pub fn set_config(&self, new: LogConfig) { *self.config.write().unwrap() = new; }
 
     /// Snapshot the current config. This allocates a clone, which is cheap
     /// because `LogConfig` is small and `Clone`.
     #[must_use]
     /// # Panics
     /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
-    pub fn config_snapshot(&self) -> LogConfig {
-        self.config.read().unwrap().clone()
-    }
+    pub fn config_snapshot(&self) -> LogConfig { self.config.read().unwrap().clone() }
 
     /// Replace the log's I/O implementation for fault-injection tests.
     ///
@@ -474,9 +464,7 @@ impl Log {
 
     /// Access the per-partition leader-epoch checkpoint.
     #[must_use]
-    pub fn epoch_checkpoint(&self) -> &LeaderEpochCheckpoint {
-        &self.epoch_checkpoint
-    }
+    pub fn epoch_checkpoint(&self) -> &LeaderEpochCheckpoint { &self.epoch_checkpoint }
 
     /// Kafka's `UnifiedLog.assignEpochStartOffset`: record that `epoch`
     /// starts at `start_offset` through
@@ -752,13 +740,10 @@ mod tests {
     #[test]
     fn set_config_swaps_active_config() {
         let dir = tempdir().expect("tempdir");
-        let log = Log::open(
-            dir.path(),
-            LogConfig {
-                retention: Some(minutes(1)),
-                ..LogConfig::default()
-            },
-        )
+        let log = Log::open(dir.path(), LogConfig {
+            retention: Some(minutes(1)),
+            ..LogConfig::default()
+        })
         .expect("open");
         log.set_config(LogConfig {
             retention: Some(minutes(2)),

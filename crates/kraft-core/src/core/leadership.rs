@@ -202,21 +202,15 @@ mod tests {
         } = following_second_voter_with_actions();
         check!(
             (
-                matches!(
-                    m.role(),
-                    Role::Follower {
-                        leader_id: NodeId(2),
-                        ..
-                    }
-                ),
+                matches!(m.role(), Role::Follower {
+                    leader_id: NodeId(2),
+                    ..
+                }),
                 m.quorum_state().leader_epoch,
                 m.quorum_state().leader_id,
-                actions.iter().any(|a| matches!(
-                    a,
-                    Action::SendFetch {
-                        leader_id: NodeId(2)
-                    }
-                )),
+                actions.iter().any(|a| matches!(a, Action::SendFetch {
+                    leader_id: NodeId(2)
+                })),
                 actions
                     .iter()
                     .any(|a| matches!(a, Action::PersistQuorumState)),
@@ -278,12 +272,11 @@ mod tests {
                 m.quorum_state().leader_id,
                 m.quorum_state().leader_epoch,
                 matches!(m.role(), Role::Follower { .. }),
-                actions.iter().any(|action| matches!(
-                    action,
-                    Action::SendFetch {
+                actions
+                    .iter()
+                    .any(|action| matches!(action, Action::SendFetch {
                         leader_id: NodeId(99)
-                    }
-                )),
+                    })),
             ) == (Some(NodeId(99)), 4, true, true)
         );
     }
@@ -296,20 +289,14 @@ mod tests {
             actions,
             ..
         } = following_second_voter_with_actions();
-        assert2::assert!(matches!(
-            m.role(),
-            Role::Follower {
-                leader_id: NodeId(2),
-                ..
-            }
-        ));
+        assert2::assert!(matches!(m.role(), Role::Follower {
+            leader_id: NodeId(2),
+            ..
+        }));
         check!(m.quorum_state().leader_id == Some(NodeId(2)));
-        assert2::assert!(actions.iter().any(|a| matches!(
-            a,
-            Action::SendFetch {
-                leader_id: NodeId(2)
-            }
-        )));
+        assert2::assert!(actions.iter().any(|a| matches!(a, Action::SendFetch {
+            leader_id: NodeId(2)
+        })));
     }
 
     /// Kafka's `strictExponentialElectionBackoffMs` with a 1000 ms maximum.

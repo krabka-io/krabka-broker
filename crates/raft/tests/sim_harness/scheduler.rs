@@ -32,15 +32,12 @@ impl<L: SimNodeLog> Sim<L> {
         // (BTreeMap iteration is ascending by id, so the first minimum wins).
         let best = krabka_kraft_core::simulation_support::earliest_timer(self.nodes.values().map(
             |node| {
-                (
-                    node.id,
-                    [
-                        node.election_deadline,
-                        node.fetch_deadline,
-                        node.heartbeat_deadline,
-                        node.check_quorum_deadline,
-                    ],
-                )
+                (node.id, [
+                    node.election_deadline,
+                    node.fetch_deadline,
+                    node.heartbeat_deadline,
+                    node.check_quorum_deadline,
+                ])
             },
         ));
         let Some((deadline, id, kind)) = best else {

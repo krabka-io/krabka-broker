@@ -152,19 +152,14 @@ fn trusted_args(
     public_key: &std::path::Path,
     head: &str,
 ) -> krabka_restore::RestoreArgs {
-    capture_args(
-        archive,
-        target,
-        capture,
-        &[
-            "--worm-key-id".to_owned(),
-            "capture-key".to_owned(),
-            "--worm-public-key".to_owned(),
-            public_key.display().to_string(),
-            "--worm-expect-head".to_owned(),
-            format!("{CAPTURE_HEAD_NAME}={head}"),
-        ],
-    )
+    capture_args(archive, target, capture, &[
+        "--worm-key-id".to_owned(),
+        "capture-key".to_owned(),
+        "--worm-public-key".to_owned(),
+        public_key.display().to_string(),
+        "--worm-expect-head".to_owned(),
+        format!("{CAPTURE_HEAD_NAME}={head}"),
+    ])
 }
 
 fn write_capture(path: &std::path::Path, capture: &DisklessWalCapture) {

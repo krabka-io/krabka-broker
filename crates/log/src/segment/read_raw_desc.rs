@@ -182,17 +182,14 @@ mod tests {
         let cases = [
             (vec![large; 10], vec![HEADER_LEN; 10]),
             (vec![1; 4000], vec![HEADER_LEN, HEADER_SCAN_WINDOW]),
-            (
-                vec![1, large, large, 1, large, large],
-                vec![
-                    HEADER_LEN,
-                    HEADER_SCAN_WINDOW,
-                    HEADER_LEN,
-                    HEADER_LEN,
-                    HEADER_SCAN_WINDOW,
-                    HEADER_LEN,
-                ],
-            ),
+            (vec![1, large, large, 1, large, large], vec![
+                HEADER_LEN,
+                HEADER_SCAN_WINDOW,
+                HEADER_LEN,
+                HEADER_LEN,
+                HEADER_SCAN_WINDOW,
+                HEADER_LEN,
+            ]),
         ];
         for (payload_sizes, mut expected_reads) in cases {
             let TempSegment {

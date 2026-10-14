@@ -145,14 +145,10 @@ fn archive_segment_at(
 /// the pipeline reaches segment verification, plus whatever `extra` flags a
 /// scenario needs.
 fn restore_args(archive_root: &StdPath, log_dir: &StdPath, extra: &[&str]) -> RestoreArgs {
-    let argv = cli_args::restore_argv(
-        archive_root,
-        log_dir,
-        cli_args::RestoreOptions {
-            extra,
-            ..Default::default()
-        },
-    );
+    let argv = cli_args::restore_argv(archive_root, log_dir, cli_args::RestoreOptions {
+        extra,
+        ..Default::default()
+    });
     Cli::try_parse_from(argv).expect("valid command line").args
 }
 
@@ -412,11 +408,9 @@ async fn continue_on_corrupt_preserves_both_sides_of_an_interior_gap() {
             expected.extend(segment.original_batches);
         }
     }
-    let report = restore(&restore_args(
-        archive.path(),
-        &log_dir,
-        &["--continue-on-corrupt"],
-    ))
+    let report = restore(&restore_args(archive.path(), &log_dir, &[
+        "--continue-on-corrupt",
+    ]))
     .await
     .unwrap();
     check!(report.skipped.len() == 1);

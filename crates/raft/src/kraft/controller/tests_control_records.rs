@@ -351,9 +351,7 @@ fn update_voter_preflight_at_level_0_updates_voter_history() {
 async fn reconfiguration_refuses_when_epoch_not_committed_and_admits_when_committed() {
     use crate::reconfig::{ReconfigOutcome, RemoveVoter, UpdateVoter, VoterChange};
 
-    fn add_of(id: u64) -> VoterChange {
-        VoterChange::Add(add_request(id, 0))
-    }
+    fn add_of(id: u64) -> VoterChange { VoterChange::Add(add_request(id, 0)) }
 
     let (mut leader, _dir) = build_engine_only().call();
     leader.on_event(Event::ElectionTimeout);

@@ -827,34 +827,25 @@ mod tests {
     #[test]
     fn compaction_keeps_barrier_markers_and_never_indexes_their_key() {
         let TempLog { dir: _dir, mut log } = compact_test_log();
-        log.append(&mut keyed_batch(
-            0,
-            &[KeyedRecord {
-                offset_delta: 0,
-                key: b"k1",
-                value: b"v0",
-            }],
-        ))
+        log.append(&mut keyed_batch(0, &[KeyedRecord {
+            offset_delta: 0,
+            key: b"k1",
+            value: b"v0",
+        }]))
         .unwrap(); // 0
         log.append(&mut barrier_marker().call()).unwrap(); // 1
-        log.append(&mut keyed_batch(
-            0,
-            &[KeyedRecord {
-                offset_delta: 0,
-                key: b"k1",
-                value: b"v1",
-            }],
-        ))
+        log.append(&mut keyed_batch(0, &[KeyedRecord {
+            offset_delta: 0,
+            key: b"k1",
+            value: b"v1",
+        }]))
         .unwrap(); // 2
         log.append(&mut barrier_marker().epoch(2).call()).unwrap(); // 3
-        log.append(&mut keyed_batch(
-            0,
-            &[KeyedRecord {
-                offset_delta: 0,
-                key: b"tail",
-                value: b"t",
-            }],
-        ))
+        log.append(&mut keyed_batch(0, &[KeyedRecord {
+            offset_delta: 0,
+            key: b"tail",
+            value: b"t",
+        }]))
         .unwrap(); // 4, active
 
         // The dedup map holds the data key only. `should_index_key` keeps the

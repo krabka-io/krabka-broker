@@ -228,14 +228,11 @@ mod tests {
         let bytes = SnapshotWriter::serialize(&image, timestamp).unwrap();
         let mut cur: &[u8] = &bytes;
 
-        check_header(
-            &mut cur,
-            SnapshotHeaderRecord {
-                version: 0,
-                last_contained_log_timestamp: timestamp,
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-            },
-        );
+        check_header(&mut cur, SnapshotHeaderRecord {
+            version: 0,
+            last_contained_log_timestamp: timestamp,
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+        });
 
         let kraft_version = RecordBatch::decode(&mut cur).expect("kraft.version batch");
         check!(
@@ -300,14 +297,11 @@ mod tests {
         let bytes = SnapshotWriter::serialize(&image, 99).unwrap();
         let mut cur: &[u8] = &bytes;
 
-        check_header(
-            &mut cur,
-            SnapshotHeaderRecord {
-                version: 0,
-                last_contained_log_timestamp: 99,
-                ..Default::default()
-            },
-        );
+        check_header(&mut cur, SnapshotHeaderRecord {
+            version: 0,
+            last_contained_log_timestamp: 99,
+            ..Default::default()
+        });
 
         let kraft_version = RecordBatch::decode(&mut cur).expect("kraft.version batch");
         check!(

@@ -14,9 +14,7 @@ pub const FILENAME_DIGITS: usize = 20;
 
 /// `0` → `"00000000000000000000"`. `1847` → `"00000000000000001847"`.
 #[must_use]
-pub fn format_base_offset(base_offset: i64) -> String {
-    format!("{base_offset:020}")
-}
+pub fn format_base_offset(base_offset: i64) -> String { format!("{base_offset:020}") }
 
 /// Parse a `.log` filename and return its base offset.
 /// `"00000000000000001847.log"` → `Ok(1847)`.
@@ -74,9 +72,7 @@ pub fn stampindex_path(dir: &Path, base_offset: i64) -> PathBuf {
 
 /// Path to the per-partition `.leader-epoch-checkpoint` file.
 #[must_use]
-pub fn leader_epoch_checkpoint_path(dir: &Path) -> PathBuf {
-    dir.join("leader-epoch-checkpoint")
-}
+pub fn leader_epoch_checkpoint_path(dir: &Path) -> PathBuf { dir.join("leader-epoch-checkpoint") }
 
 /// Path to the per-partition `log-start-offset-checkpoint` file.
 ///
@@ -130,20 +126,14 @@ mod tests {
     }
 
     #[test]
-    fn zero() {
-        check_offset_case(0, "00000000000000000000");
-    }
+    fn zero() { check_offset_case(0, "00000000000000000000"); }
     #[test]
-    fn small() {
-        check_offset_case(1847, "00000000000000001847");
-    }
+    fn small() { check_offset_case(1847, "00000000000000001847"); }
     // Plan had "00000000001000000000000" (23 chars) which is wrong:
     // `{:020}` zero-pads to 20 chars, and 1_000_000_000_000 is 13 digits,
     // so we expect 7 leading zeros + "1000000000000" = 20 chars total.
     #[test]
-    fn large() {
-        check_offset_case(1_000_000_000_000, "00000001000000000000");
-    }
+    fn large() { check_offset_case(1_000_000_000_000, "00000001000000000000"); }
 
     #[test]
     fn rejects_non_log_extension() {

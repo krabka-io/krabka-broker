@@ -36,11 +36,13 @@ impl Log {
         // Producer snapshots are pruned separately by retain_reload_range:
         // the snapshot exactly at the cut must survive deleting its segment.
         let now = std::time::SystemTime::now();
-        self.retire_files(
-            base,
-            now,
-            &["log", "index", "timeindex", "txnindex", "stampindex"],
-        )
+        self.retire_files(base, now, &[
+            "log",
+            "index",
+            "timeindex",
+            "txnindex",
+            "stampindex",
+        ])
     }
 
     /// Truncate the log so that no record at offset `>= offset` remains.

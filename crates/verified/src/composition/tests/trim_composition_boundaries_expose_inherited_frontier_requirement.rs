@@ -19,12 +19,9 @@ fn trim_composition_boundaries_expose_inherited_frontier_requirement() {
             == DeleteRecordsTrimApplication::TrimLocal { frontier: 8 }
     );
     for (requested, wal, local) in [(5, 0, 0), (5, 8, 3), (5, 3, 8), (i64::MAX, 0, 0)] {
-        for applied in [
-            &[][..],
-            &[false, false],
-            &[true],
-            &[false, true, false, true, true],
-        ] {
+        for applied in [&[][..], &[false, false], &[true], &[
+            false, true, false, true, true,
+        ]] {
             let frontier = requested.max(wal).max(local);
             let result = trim_steps_converge(requested, wal, local, applied);
             assert!(result.0 >= wal && result.1 >= local);
@@ -64,12 +61,9 @@ fn logical_trim_witnesses_cover_request_boundaries(requested: i64) {
         has_delivery_watermark: true,
         delivery_watermark: 5,
     };
-    trim_witnesses::check_logical(
-        DeleteRecordsTrimFacts { requested, ..facts },
-        3,
-        2,
-        &[0, 3, 5, 10, 11],
-    );
+    trim_witnesses::check_logical(DeleteRecordsTrimFacts { requested, ..facts }, 3, 2, &[
+        0, 3, 5, 10, 11,
+    ]);
 }
 
 #[yare::parameterized(

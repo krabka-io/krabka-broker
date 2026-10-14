@@ -97,15 +97,11 @@ pub struct VerifyOutcome {
 impl VerifyOutcome {
     /// Whether any entry's signature was checked and found wrong.
     #[must_use]
-    pub fn any_signature_failed(&self) -> bool {
-        self.has(Unproved::SignatureDidNotVerify)
-    }
+    pub fn any_signature_failed(&self) -> bool { self.has(Unproved::SignatureDidNotVerify) }
 
     /// Whether any entry names a key the local trust set does not hold.
     #[must_use]
-    pub fn any_key_is_unknown(&self) -> bool {
-        self.has(Unproved::UnknownKeyId)
-    }
+    pub fn any_key_is_unknown(&self) -> bool { self.has(Unproved::UnknownKeyId) }
 
     /// How many entries verified.
     #[must_use]

@@ -242,9 +242,7 @@ impl RemoteLogMetadataCache {
         self.delete_state = delete_state;
     }
 
-    pub(crate) fn delete_state(&self) -> Option<RemotePartitionDeleteState> {
-        self.delete_state
-    }
+    pub(crate) fn delete_state(&self) -> Option<RemotePartitionDeleteState> { self.delete_state }
 
     pub(crate) fn set_delete_state(&mut self, state: RemotePartitionDeleteState) {
         self.delete_state = Some(state);
@@ -271,9 +269,7 @@ mod tests {
         assert2::{assert, check},
     };
 
-    fn tp() -> TopicIdPartition {
-        TopicIdPartition::new(Uuid::from_u128(1), "t", 0)
-    }
+    fn tp() -> TopicIdPartition { TopicIdPartition::new(Uuid::from_u128(1), "t", 0) }
 
     use krabka_ids::Offset;
 

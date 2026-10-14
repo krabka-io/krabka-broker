@@ -115,30 +115,20 @@ impl QuorumStateMachine {
     }
 
     #[must_use]
-    pub fn quorum_state(&self) -> &QuorumState {
-        &self.state
-    }
+    pub fn quorum_state(&self) -> &QuorumState { &self.state }
 
     /// This replica's own node id.
     #[must_use]
-    pub fn me(&self) -> NodeId {
-        self.me
-    }
+    pub fn me(&self) -> NodeId { self.me }
 
     #[must_use]
-    pub fn role(&self) -> &Role {
-        &self.role
-    }
+    pub fn role(&self) -> &Role { &self.role }
 
     #[must_use]
-    pub fn is_voter(&self) -> bool {
-        self.state.voters.contains(self.me)
-    }
+    pub fn is_voter(&self) -> bool { self.state.voters.contains(self.me) }
 
     #[cfg(test)]
-    pub(crate) fn force_epoch(&mut self, e: Epoch) {
-        self.state.leader_epoch = e;
-    }
+    pub(crate) fn force_epoch(&mut self, e: Epoch) { self.state.leader_epoch = e; }
 
     /// The deadline for an election timer armed at `now`.
     ///

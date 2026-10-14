@@ -153,10 +153,10 @@ fn creation_configs(cfg: &KafkaMetadataLogConfig) -> BTreeMap<String, String> {
 async fn ensure_compacted(admin: &mut AdminClient, topic: &str) -> Result<(), MetadataLogError> {
     let outcomes = admin
         .incremental_alter_configs(
-            &BTreeMap::from([(
-                ConfigResource::topic(topic),
-                vec![AlterConfigOp::set("cleanup.policy", "compact")],
-            )]),
+            &BTreeMap::from([(ConfigResource::topic(topic), vec![AlterConfigOp::set(
+                "cleanup.policy",
+                "compact",
+            )])]),
             IncrementalAlterConfigsOptions::default(),
         )
         .await
@@ -187,9 +187,7 @@ fn warn_if_zero_topic_id(topic: &str, topic_id: WireUuid) {
 
 /// Convert the admin client's `uuid::Uuid` to the wire `Uuid` Fetch
 /// requires.
-fn to_wire_uuid(u: uuid::Uuid) -> WireUuid {
-    WireUuid(*u.as_bytes())
-}
+fn to_wire_uuid(u: uuid::Uuid) -> WireUuid { WireUuid(*u.as_bytes()) }
 
 #[cfg(test)]
 mod tests {

@@ -26,9 +26,7 @@ pub struct Sha256Digest(
 impl Sha256Digest {
     /// Digest of `bytes`.
     #[must_use]
-    pub fn of(bytes: &[u8]) -> Self {
-        Self(Sha256::digest(bytes).into())
-    }
+    pub fn of(bytes: &[u8]) -> Self { Self(Sha256::digest(bytes).into()) }
 }
 
 /// Variable-length bytes that serialise as a lowercase hex string.

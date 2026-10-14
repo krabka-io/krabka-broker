@@ -197,10 +197,9 @@ mod tests {
     async fn oversized_snapshot_count_falls_back_to_replay() {
         let dir = snapshot_test_dir("oversized-count");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join(SNAPSHOT_FILE_NAME),
-            [0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1],
-        )
+        std::fs::write(dir.join(SNAPSHOT_FILE_NAME), [
+            0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1,
+        ])
         .unwrap();
         let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
         let mp = metadata_partition_for(&tp(), log.partition_count());
@@ -325,11 +324,11 @@ mod tests {
         // First lifetime: seed three finished segments, then shutdown-flush.
         let pre_cache;
         {
-            let m = start_seeded_manager_in(
-                log.clone(),
-                dir.clone(),
-                &[seed(10, 0, 99), seed(11, 100, 199), seed(12, 200, 299)],
-            )
+            let m = start_seeded_manager_in(log.clone(), dir.clone(), &[
+                seed(10, 0, 99),
+                seed(11, 100, 199),
+                seed(12, 200, 299),
+            ])
             .await;
             pre_cache = m.list_remote_log_segments(&tp()).unwrap();
             m.shutdown_and_flush().await;

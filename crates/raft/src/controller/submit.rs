@@ -747,18 +747,16 @@ mod tests {
                             version: got_version
                         } if got == api_key && got_version == version
                     ),
-                    SubmitResponseExpectation::NotLeaderWithHint => matches!(
-                        error,
-                        RaftError::NotLeader {
+                    SubmitResponseExpectation::NotLeaderWithHint => {
+                        matches!(error, RaftError::NotLeader {
                             current_leader: Some(NodeId(9))
-                        }
-                    ),
-                    SubmitResponseExpectation::NotLeaderWithoutHint => matches!(
-                        error,
-                        RaftError::NotLeader {
+                        })
+                    }
+                    SubmitResponseExpectation::NotLeaderWithoutHint => {
+                        matches!(error, RaftError::NotLeader {
                             current_leader: None
-                        }
-                    ),
+                        })
+                    }
                 };
                 assert2::assert!(matches);
             }
@@ -808,21 +806,14 @@ mod tests {
             .expect_send_submit_change()
             .returning(|_, _, _, _| Ok(submit_change_response_bytes(1, 4)));
 
-        let err = forward_submit_via(
-            &transport,
-            NodeId(7),
-            "leader-host:9093",
-            0,
-            &[topic_record("z")],
-        )
+        let err = forward_submit_via(&transport, NodeId(7), "leader-host:9093", 0, &[
+            topic_record("z"),
+        ])
         .await
         .expect_err("not leader");
-        assert2::assert!(matches!(
-            err,
-            RaftError::NotLeader {
-                current_leader: Some(NodeId(4))
-            }
-        ));
+        assert2::assert!(matches!(err, RaftError::NotLeader {
+            current_leader: Some(NodeId(4))
+        }));
     }
 
     #[tokio::test]
@@ -839,13 +830,9 @@ mod tests {
                 )))
             });
 
-        let err = forward_submit_via(
-            &transport,
-            NodeId(7),
-            "leader-host:9093",
-            0,
-            &[topic_record("z")],
-        )
+        let err = forward_submit_via(&transport, NodeId(7), "leader-host:9093", 0, &[
+            topic_record("z"),
+        ])
         .await
         .expect_err("network error");
         assert2::assert!(matches!(err, RaftError::Network(_)));
@@ -899,12 +886,9 @@ mod tests {
             .forward_raw(API_KEY_METADATA_FETCH, 0, bytes::Bytes::new())
             .await
             .expect_err("no leader is known yet");
-        assert2::assert!(matches!(
-            err,
-            RaftError::NotLeader {
-                current_leader: None
-            }
-        ));
+        assert2::assert!(matches!(err, RaftError::NotLeader {
+            current_leader: None
+        }));
         ctrl.shutdown().await;
     }
 

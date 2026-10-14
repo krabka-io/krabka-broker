@@ -174,16 +174,12 @@ impl PeerSender for RealPeerSender {
 
         let connection = self
             .dialer
-            .dial(
-                NodeId(u64::MAX),
-                address,
-                ConnectionOptions {
-                    client_id: "krabka-voter-probe".into(),
-                    dispatch_queue_capacity: self.dispatch_queue_capacity,
-                    frame_max: self.frame_max,
-                    ..ConnectionOptions::default()
-                },
-            )
+            .dial(NodeId(u64::MAX), address, ConnectionOptions {
+                client_id: "krabka-voter-probe".into(),
+                dispatch_queue_capacity: self.dispatch_queue_capacity,
+                frame_max: self.frame_max,
+                ..ConnectionOptions::default()
+            })
             .await
             .map_err(RaftError::Network)?;
         let response = connection
@@ -232,9 +228,7 @@ impl PeerSender for RealPeerSender {
         }
     }
 
-    fn discovery_peers(&self) -> Vec<NodeId> {
-        self.bootstrap.keys().copied().collect()
-    }
+    fn discovery_peers(&self) -> Vec<NodeId> { self.bootstrap.keys().copied().collect() }
 
     fn remember_leader_endpoint(&self, leader: NodeId, address: String) {
         if let Ok(mut aliases) = self.aliases.write()

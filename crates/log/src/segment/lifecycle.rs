@@ -43,9 +43,7 @@ std::thread_local! {
 
 impl Segment {
     #[cfg(all(test, not(target_os = "wasi")))]
-    pub(crate) fn test_fail_flush_handles(fail: bool) {
-        FAIL_FLUSH_HANDLES.set(fail);
-    }
+    pub(crate) fn test_fail_flush_handles(fail: bool) { FAIL_FLUSH_HANDLES.set(fail); }
 
     #[cfg(not(target_os = "wasi"))]
     pub(crate) fn flush_handles(&self) -> std::io::Result<[std::sync::Arc<std::fs::File>; 3]> {

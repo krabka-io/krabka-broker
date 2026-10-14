@@ -405,10 +405,11 @@ mod tests {
         let recs = decode_message_set(&mut cur, legacy_bytes.len()).unwrap();
         // No structural representation of headers in v0/v1.
         assert2::assert!(
-            recs == crate::set::test_support::sample_records_v1_at(
-                1000,
-                [1_700_000_000, 1_700_000_100, 1_700_000_500]
-            )
+            recs == crate::set::test_support::sample_records_v1_at(1000, [
+                1_700_000_000,
+                1_700_000_100,
+                1_700_000_500
+            ])
         );
     }
 

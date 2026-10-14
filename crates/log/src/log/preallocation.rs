@@ -7,14 +7,13 @@
 //! log asked for, and on Linux through the blocks a real file holds, which
 //! says the kernel did it.
 
+#[cfg(target_os = "linux")]
+use super::{
+    Log,
+    test_support::{assert_log_end_offset, sample_batch},
+};
 use {
-    super::{
-        Log,
-        test_support::{
-            NO_LIMIT, TempLog, append_samples, assert_log_end_offset, configured_test_log,
-            sample_batch,
-        },
-    },
+    super::test_support::{NO_LIMIT, TempLog, append_samples, configured_test_log},
     crate::{
         config::{LogConfig, SegmentAllocation},
         io::{DirectFile, LogIo},
@@ -200,13 +199,10 @@ fn a_truncated_segment_takes_its_reservation_again() {
     let requests = io.requests.lock().unwrap().clone();
     assert2::assert!(
         requests
-            == [
-                whole(),
-                Request::Reserve {
-                    offset: kept,
-                    len: SEGMENT.bytes_u64() - kept,
-                },
-            ]
+            == [whole(), Request::Reserve {
+                offset: kept,
+                len: SEGMENT.bytes_u64() - kept,
+            },]
     );
 }
 

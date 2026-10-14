@@ -45,14 +45,11 @@ fn transactional_keyed(
         payload,
     };
     let KeyValue { key, value } = setup.payload;
-    let mut batch = keyed_batch(
-        0,
-        &[KeyedRecord {
-            offset_delta: 0,
-            key,
-            value,
-        }],
-    );
+    let mut batch = keyed_batch(0, &[KeyedRecord {
+        offset_delta: 0,
+        key,
+        value,
+    }]);
     batch.producer_id = setup.producer.0;
     batch.producer_epoch = 0;
     batch.base_sequence = setup.sequence.0;
@@ -68,14 +65,11 @@ fn log_with_a_batch_per_segment(dir: &std::path::Path, batches: Vec<RecordBatch>
     for mut batch in batches {
         log.append(&mut batch).unwrap();
     }
-    let mut tail = keyed_batch(
-        0,
-        &[KeyedRecord {
-            offset_delta: 0,
-            key: b"tail",
-            value: b"t",
-        }],
-    );
+    let mut tail = keyed_batch(0, &[KeyedRecord {
+        offset_delta: 0,
+        key: b"tail",
+        value: b"t",
+    }]);
     log.append(&mut tail).unwrap();
     // The pass groups by `segment.bytes`; widen it so this pass merges them.
     set_segment_size(&mut log, mebibytes(1));
@@ -104,9 +98,7 @@ fn marker_offsets(log: &Log) -> Vec<i64> {
         .collect()
 }
 
-fn aborted_txns(log: &Log) -> Vec<AbortedTxn> {
-    log.aborted_in_range(Offset(0), Offset(10))
-}
+fn aborted_txns(log: &Log) -> Vec<AbortedTxn> { log.aborted_in_range(Offset(0), Offset(10)) }
 
 /// The one aborted transaction the fixtures write: producer 2000's data at
 /// offset 2 and its abort marker at offset 3.
@@ -146,14 +138,11 @@ fn committed_then_aborted(dir: &std::path::Path) -> Log {
         dir,
         committed_and_aborted_batches([
             abort_marker(2000, 0), // 3
-            keyed_batch(
-                0,
-                &[KeyedRecord {
-                    offset_delta: 0,
-                    key: b"after",
-                    value: b"a",
-                }],
-            ), // 4
+            keyed_batch(0, &[KeyedRecord {
+                offset_delta: 0,
+                key: b"after",
+                value: b"a",
+            }]), // 4
         ]),
     )
 }
@@ -193,16 +182,16 @@ fn an_abort_marker_and_its_index_entry_age_out_once_the_aborted_data_is_gone() {
     // (case, whether the producers expire before the first pass, then for
     // each pass the marker offsets and whether the index entry stays)
     let cases = [
-        (
-            "expired producers",
-            true,
-            [(vec![1, 3], true), (vec![1, 3], false), (vec![1], false)],
-        ),
-        (
-            "active producers",
-            false,
-            [(vec![1, 3], true), (vec![1, 3], true), (vec![1, 3], true)],
-        ),
+        ("expired producers", true, [
+            (vec![1, 3], true),
+            (vec![1, 3], false),
+            (vec![1], false),
+        ]),
+        ("active producers", false, [
+            (vec![1, 3], true),
+            (vec![1, 3], true),
+            (vec![1, 3], true),
+        ]),
     ];
     // The third pass runs after the delete horizon of the first two.
     let delete_retention_ms = LogConfig::default().delete_retention.millis_i64_trunc();
@@ -245,14 +234,11 @@ fn an_aborted_batch_is_dropped_when_its_marker_lies_beyond_the_consumed_range() 
     let mut log = log_with_a_batch_per_segment(
         dir.path(),
         committed_and_aborted_batches([
-            keyed_batch(
-                0,
-                &[KeyedRecord {
-                    offset_delta: 0,
-                    key: b"other",
-                    value: b"o",
-                }],
-            ), // 3
+            keyed_batch(0, &[KeyedRecord {
+                offset_delta: 0,
+                key: b"other",
+                value: b"o",
+            }]), // 3
             abort_marker(2000, 0), // 4
         ]),
     );

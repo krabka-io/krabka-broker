@@ -298,13 +298,10 @@ fn repeated_summaries(values: &[f64], commit: &str) -> Vec<BenchmarkSummary> {
             suite: "test".to_string(),
             commit: commit.to_string(),
             timestamp: "2026-09-09T00:00:00Z".to_string(),
-            benchmarks: BTreeMap::from([(
-                "hot/path".to_string(),
-                BenchmarkMetric {
-                    ns_per_iter: *value,
-                    variance_ns: 1.0,
-                },
-            )]),
+            benchmarks: BTreeMap::from([("hot/path".to_string(), BenchmarkMetric {
+                ns_per_iter: *value,
+                variance_ns: 1.0,
+            })]),
         })
         .collect()
 }
@@ -358,13 +355,10 @@ fn missing_repeated_samples_cannot_pass() {
 
     let error = compare_summaries(&reference, &candidate, 0.03).unwrap_err();
 
-    assert!(matches!(
-        error,
-        ParseBenchesError::TooFewSamples {
-            side: "reference",
-            count: 2
-        }
-    ));
+    assert!(matches!(error, ParseBenchesError::TooFewSamples {
+        side: "reference",
+        count: 2
+    }));
 }
 
 #[test]
@@ -387,13 +381,10 @@ fn comparison_rejects_invalid_inputs() {
     let other = repeated_summaries(&[100.0, 101.0, 99.0], "other")
         .into_iter()
         .map(|mut summary| {
-            summary.benchmarks = BTreeMap::from([(
-                "other/path".into(),
-                BenchmarkMetric {
-                    ns_per_iter: 1.0,
-                    variance_ns: 0.0,
-                },
-            )]);
+            summary.benchmarks = BTreeMap::from([("other/path".into(), BenchmarkMetric {
+                ns_per_iter: 1.0,
+                variance_ns: 0.0,
+            })]);
             summary
         })
         .collect::<Vec<_>>();

@@ -126,16 +126,12 @@ impl TokenBucket {
     /// means no limit, or a rate under one token per second:
     /// [`Self::byte_rate`] reads a fractional rate back exactly.
     #[must_use]
-    pub fn token_rate(&self) -> u64 {
-        self.fast_path_rate() / MICROS_PER_TOKEN
-    }
+    pub fn token_rate(&self) -> u64 { self.fast_path_rate() / MICROS_PER_TOKEN }
 
     /// The configured burst capacity in whole raw tokens, rounded down. This
     /// is the most the bucket holds.
     #[must_use]
-    pub fn token_burst(&self) -> u64 {
-        self.lock_state().micro_burst / MICROS_PER_TOKEN
-    }
+    pub fn token_burst(&self) -> u64 { self.lock_state().micro_burst / MICROS_PER_TOKEN }
 
     /// Updates a byte throughput and bursts one second's worth, keeping the
     /// balance as [`Self::set_token_rate_with_burst`] says.
@@ -204,9 +200,7 @@ impl TokenBucket {
     /// The configured event throughput in whole events per second, rounded
     /// down. Zero means no limit.
     #[must_use]
-    pub fn event_rate(&self) -> Frequency {
-        Frequency::from_per_sec_u64(self.token_rate())
-    }
+    pub fn event_rate(&self) -> Frequency { Frequency::from_per_sec_u64(self.token_rate()) }
 }
 
 #[cfg(test)]

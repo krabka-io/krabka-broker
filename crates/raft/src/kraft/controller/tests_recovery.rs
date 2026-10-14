@@ -123,13 +123,10 @@ fn control_replay_stops_inside_a_partially_committed_batch() {
     let RestartedControl {
         state, committed, ..
     } = restart_after_control_writes(|log, committed, uncommitted| {
-        let mut batch = typed_control_batch(
-            1,
-            &[
-                ControlRecord::Voters(voter_set_to_wire(committed)),
-                ControlRecord::Voters(voter_set_to_wire(uncommitted)),
-            ],
-        )
+        let mut batch = typed_control_batch(1, &[
+            ControlRecord::Voters(voter_set_to_wire(committed)),
+            ControlRecord::Voters(voter_set_to_wire(uncommitted)),
+        ])
         .expect("mixed-commit voter batch");
         log.append(&mut batch, 0).expect("append voter batch");
         log.advance_hwm(Offset(1));
@@ -237,16 +234,13 @@ fn control_state_at_replays_version_and_voters_at_boundary_offsets() {
 
     {
         let mut log = KraftLog::open(dir.path(), &MetadataLogConfig::default()).expect("open log");
-        let mut batch0 = typed_control_batch(
-            1,
-            &[ControlRecord::KRaftVersion(
-                krabka_protocol::owned::k_raft_version_record::KRaftVersionRecord {
-                    version: 0,
-                    k_raft_version: 1,
-                    ..Default::default()
-                },
-            )],
-        )
+        let mut batch0 = typed_control_batch(1, &[ControlRecord::KRaftVersion(
+            krabka_protocol::owned::k_raft_version_record::KRaftVersionRecord {
+                version: 0,
+                k_raft_version: 1,
+                ..Default::default()
+            },
+        )])
         .expect("batch 0");
         log.append(&mut batch0, 0).expect("append 0");
         log.advance_hwm(log.log_end_offset());
@@ -257,16 +251,13 @@ fn control_state_at_replays_version_and_voters_at_boundary_offsets() {
         log.append(&mut batch1, 0).expect("append 1");
         log.advance_hwm(log.log_end_offset());
 
-        let mut batch2 = typed_control_batch(
-            1,
-            &[ControlRecord::KRaftVersion(
-                krabka_protocol::owned::k_raft_version_record::KRaftVersionRecord {
-                    version: 0,
-                    k_raft_version: -1,
-                    ..Default::default()
-                },
-            )],
-        )
+        let mut batch2 = typed_control_batch(1, &[ControlRecord::KRaftVersion(
+            krabka_protocol::owned::k_raft_version_record::KRaftVersionRecord {
+                version: 0,
+                k_raft_version: -1,
+                ..Default::default()
+            },
+        )])
         .expect("batch 2");
         log.append(&mut batch2, 0).expect("append 2");
         log.advance_hwm(log.log_end_offset());

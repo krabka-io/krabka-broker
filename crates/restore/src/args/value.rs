@@ -72,9 +72,7 @@ impl Eq for HeaderPattern {}
 /// Parse a node id as `krabka-format --node-id` parses it: Kafka's
 /// `node.id`, an `int` that is not negative. The restore formats the target
 /// with the id, so an id that the formatter refuses is refused here first.
-pub(super) fn parse_node_id(s: &str) -> Result<NodeId, String> {
-    krabka_format::parse_node_id(s)
-}
+pub(super) fn parse_node_id(s: &str) -> Result<NodeId, String> { krabka_format::parse_node_id(s) }
 
 /// Parses a `--cluster-id` value in Kafka's base64 `Uuid` form (what
 /// `Metadata` and `DescribeCluster` report, e.g. `AQIDBAUGBwgJCgsMDQ4PEA`) or

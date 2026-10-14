@@ -137,9 +137,7 @@ impl FakeGcs {
     }
 
     /// The base URL `GcsConfig::endpoint` points at.
-    fn endpoint(&self) -> String {
-        format!("http://127.0.0.1:{}", self.port)
-    }
+    fn endpoint(&self) -> String { format!("http://127.0.0.1:{}", self.port) }
 
     /// Poll the control plane until the emulator answers a real Cloud Storage
     /// request, so the first backend call does not race container startup.
@@ -165,9 +163,7 @@ impl FakeGcs {
     }
 
     /// The control-plane collection buckets are listed from and created in.
-    fn buckets_url(&self) -> String {
-        format!("{}/storage/v1/b?project=krabka", self.endpoint())
-    }
+    fn buckets_url(&self) -> String { format!("{}/storage/v1/b?project=krabka", self.endpoint()) }
 
     /// Create a bucket through the emulator's JSON control plane, which is the
     /// one operation no `object_store` API reaches. Returns the bucket name.

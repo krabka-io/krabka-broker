@@ -143,15 +143,11 @@ pub struct UnrecognizedKeys {
 impl UnrecognizedKeys {
     /// Whether the scan attributed every key it saw.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.sample.is_empty() && self.omitted == 0
-    }
+    pub fn is_empty(&self) -> bool { self.sample.is_empty() && self.omitted == 0 }
 
     /// Every unattributable key the scan saw, sample and omitted together.
     #[must_use]
-    pub fn total(&self) -> u64 {
-        self.sample.len() as u64 + self.omitted
-    }
+    pub fn total(&self) -> u64 { self.sample.len() as u64 + self.omitted }
 
     /// Record one key, keeping it only while the sample has room.
     fn record(&mut self, key: Path) {

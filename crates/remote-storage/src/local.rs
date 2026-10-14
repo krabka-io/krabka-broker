@@ -44,9 +44,7 @@ impl LocalTieredStorage {
     /// configured parent directory. To share a tier with it, pass
     /// `<remote.log.storage.local.dir>/kafka-tiered-storage` here.
     #[must_use]
-    pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
-    }
+    pub fn new(root: impl Into<PathBuf>) -> Self { Self { root: root.into() } }
 
     /// The directory that holds every remote segment for one partition.
     fn partition_dir(&self, metadata: &RemoteLogSegmentMetadata) -> PathBuf {

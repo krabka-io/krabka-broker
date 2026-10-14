@@ -123,18 +123,11 @@ fn installed_wal_fetch_support_boundaries() {
     );
     check_two_durable_followers(&[0, i64::MAX, i64::MAX], w);
     assert!(
-        installed_wal_quorum_bounds_fetch(
-            &[1, 2, 3],
-            &[3, 8, 10],
-            1,
-            3,
-            0,
-            FetchWatermarks {
-                lso: 5,
-                deliverable: 6,
-                ..w
-            }
-        ) == Some((8, 5, std::vec![(2, 8), (3, 10)]))
+        installed_wal_quorum_bounds_fetch(&[1, 2, 3], &[3, 8, 10], 1, 3, 0, FetchWatermarks {
+            lso: 5,
+            deliverable: 6,
+            ..w
+        }) == Some((8, 5, std::vec![(2, 8), (3, 10)]))
     );
 }
 
@@ -151,16 +144,9 @@ fn floor_only_and_inherited_hwm_need_no_new_support(current: i64, start: i64) {
         deliverable: 10,
     };
     assert2::assert!(
-        installed_wal_quorum_bounds_fetch(
-            &[1, 2, 3],
-            &[0, 0, 0],
-            1,
-            3,
-            current,
-            FetchWatermarks {
-                log_start: start,
-                ..w
-            }
-        ) == Some((5, 5, std::vec![]))
+        installed_wal_quorum_bounds_fetch(&[1, 2, 3], &[0, 0, 0], 1, 3, current, FetchWatermarks {
+            log_start: start,
+            ..w
+        }) == Some((5, 5, std::vec![]))
     );
 }

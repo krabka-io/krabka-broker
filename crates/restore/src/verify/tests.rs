@@ -69,18 +69,15 @@ async fn authenticated_size_mismatch_is_rejected_from_head_metadata() {
     let dir = TempDir::new().expect("tempdir");
     let store = archive_at(dir.path());
     let object = write_object(dir.path(), "wal.ckwl", b"oversized");
-    let authenticated = BTreeMap::from([(
-        object.key.to_string(),
-        ObjectEntry {
-            suffix: ".ckwl".into(),
-            key: object.key.to_string(),
-            size_bytes: 1,
-            sha256: Sha256Digest::of(b"x"),
-            e_tag: None,
-            version_id: None,
-            create_precondition: false,
-        },
-    )]);
+    let authenticated = BTreeMap::from([(object.key.to_string(), ObjectEntry {
+        suffix: ".ckwl".into(),
+        key: object.key.to_string(),
+        size_bytes: 1,
+        sha256: Sha256Digest::of(b"x"),
+        e_tag: None,
+        version_id: None,
+        create_precondition: false,
+    })]);
 
     let error = fetch_capped(
         store.ops(),
@@ -412,9 +409,7 @@ fn segment_bytes(batch1_max_ts: i64, batch2_max_ts: i64) -> SegmentBytes {
     }
 }
 
-fn valid_segment_bytes() -> SegmentBytes {
-    segment_bytes(1020, 1040)
-}
+fn valid_segment_bytes() -> SegmentBytes { segment_bytes(1020, 1040) }
 
 struct WrittenSegment {
     fixture: SegmentBytes,
@@ -511,21 +506,18 @@ async fn authenticated_fetch_rejects_object_replacement() {
         .map(|artifact| {
             let key = artifact.key.to_string();
             let bytes = std::fs::read(dir.path().join(&key)).expect("read object");
-            (
-                key.clone(),
-                krabka_remote_storage::ObjectEntry {
-                    suffix: artifact
-                        .key
-                        .extension()
-                        .map_or_else(String::new, |suffix| format!(".{suffix}")),
-                    key,
-                    size_bytes: u64::try_from(bytes.len()).unwrap(),
-                    sha256: krabka_remote_storage::Sha256Digest::of(&bytes),
-                    e_tag: None,
-                    version_id: None,
-                    create_precondition: true,
-                },
-            )
+            (key.clone(), krabka_remote_storage::ObjectEntry {
+                suffix: artifact
+                    .key
+                    .extension()
+                    .map_or_else(String::new, |suffix| format!(".{suffix}")),
+                key,
+                size_bytes: u64::try_from(bytes.len()).unwrap(),
+                sha256: krabka_remote_storage::Sha256Digest::of(&bytes),
+                e_tag: None,
+                version_id: None,
+                create_precondition: true,
+            })
         })
         .collect();
 

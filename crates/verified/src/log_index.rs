@@ -18,9 +18,7 @@ impl<Key, Coordinate> IndexEntry<Key, Coordinate> {
     /// Construct a decoded entry without changing its encoded field order.
     #[ensures(result.key == key && result.coordinate == coordinate)]
     #[must_use]
-    pub const fn new(key: Key, coordinate: Coordinate) -> Self {
-        Self { key, coordinate }
-    }
+    pub const fn new(key: Key, coordinate: Coordinate) -> Self { Self { key, coordinate } }
 }
 
 pub type OffsetEntry = IndexEntry<u32, u32>;

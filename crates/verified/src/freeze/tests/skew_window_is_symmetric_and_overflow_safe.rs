@@ -49,10 +49,9 @@ fn signature_rules_return_the_first_failure(
 #[test]
 fn scope_precedence_is_literal_then_longest_prefix() {
     assert2::check!(
-        freeze_scope_decision(
-            FreezeScopeRank::NoMatch,
-            FreezeScopeRank::Prefix { length: 3 },
-        ) == FreezeScopeDecision::Replace
+        freeze_scope_decision(FreezeScopeRank::NoMatch, FreezeScopeRank::Prefix {
+            length: 3
+        },) == FreezeScopeDecision::Replace
     );
     assert2::check!(
         freeze_scope_decision(
@@ -79,10 +78,9 @@ fn scope_precedence_is_literal_then_longest_prefix() {
         ) == FreezeScopeDecision::Replace
     );
     assert2::check!(
-        freeze_scope_decision(
-            FreezeScopeRank::Literal,
-            FreezeScopeRank::Prefix { length: 5 }
-        ) == FreezeScopeDecision::Keep
+        freeze_scope_decision(FreezeScopeRank::Literal, FreezeScopeRank::Prefix {
+            length: 5
+        }) == FreezeScopeDecision::Keep
     );
 }
 

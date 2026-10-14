@@ -348,14 +348,10 @@ impl StampIndex {
     }
 
     /// Route this sidecar's writes and syncs through `io`.
-    pub(crate) fn set_io(&mut self, io: Arc<dyn LogIo>) {
-        self.io = io;
-    }
+    pub(crate) fn set_io(&mut self, io: Arc<dyn LogIo>) { self.io = io; }
 
     #[must_use]
-    pub fn entries(&self) -> &[StampEntry] {
-        &self.entries
-    }
+    pub fn entries(&self) -> &[StampEntry] { &self.entries }
 
     fn coordinates(entries: &[StampEntry]) -> StampCoordinates {
         let (bases, lasts) = entries

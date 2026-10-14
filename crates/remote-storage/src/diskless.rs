@@ -355,9 +355,7 @@ impl WalFlushRecord {
 
     /// [`Self::FORMAT_VERSION`] as the `i16` the value leads with. The
     /// version is far below `i16::MAX`, so the conversion keeps its value.
-    const fn wire_version() -> i16 {
-        Self::FORMAT_VERSION.cast_signed()
-    }
+    const fn wire_version() -> i16 { Self::FORMAT_VERSION.cast_signed() }
 }
 
 /// One live capture range and its authoritative object.
@@ -941,19 +939,13 @@ pub struct WalObjectBuilder {
 
 impl WalObjectBuilder {
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
+    pub fn new() -> Self { Self::default() }
 
     #[must_use]
-    pub fn body_len(&self) -> usize {
-        self.body.len()
-    }
+    pub fn body_len(&self) -> usize { self.body.len() }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
+    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
 
     /// Append one contiguous partition run.
     ///

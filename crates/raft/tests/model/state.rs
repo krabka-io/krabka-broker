@@ -156,9 +156,7 @@ pub(super) fn node_high_watermark(n: &NodeModel) -> i64 {
 }
 
 /// True if and only if `n` currently believes it is the leader.
-pub(super) fn is_leader(n: &NodeModel) -> bool {
-    n.machine.role().is_leader()
-}
+pub(super) fn is_leader(n: &NodeModel) -> bool { n.machine.role().is_leader() }
 
 /// Select the one authority an appender would route to. During an election
 /// handoff the model can contain leaders from different epochs; the

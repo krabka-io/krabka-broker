@@ -158,11 +158,12 @@ async fn restored_snapshot_reaches_describe_configs_and_describe_acls() {
     )
     .expect("write metadata snapshot");
 
-    let (_target, log_dir, mut controller, report) = restore_for_controller(
-        fixture.archive_root.path(),
-        &["--metadata-snapshot", &snapshot_path.display().to_string()],
-    )
-    .await;
+    let (_target, log_dir, mut controller, report) =
+        restore_for_controller(fixture.archive_root.path(), &[
+            "--metadata-snapshot",
+            &snapshot_path.display().to_string(),
+        ])
+        .await;
     check!(report.metadata.topic_configs == 1);
     check!(report.metadata.access_control_entries == 1);
 

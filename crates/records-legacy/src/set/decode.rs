@@ -327,13 +327,10 @@ mod tests {
     #[test]
     fn entry_negative_message_size_rejected() {
         let err = entry_error(-1, &[0u8; 4]); // keep region >= 12 bytes
-        assert2::assert!(matches!(
-            err,
-            LegacyRecordsError::NegativeLength {
-                label: "message_size",
-                len: -1
-            }
-        ));
+        assert2::assert!(matches!(err, LegacyRecordsError::NegativeLength {
+            label: "message_size",
+            len: -1
+        }));
     }
 
     #[test]

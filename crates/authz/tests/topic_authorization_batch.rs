@@ -51,11 +51,14 @@ impl Authorizer for DispatchProbe {
 }
 
 #[yare::parameterized(
-    normal_dispatch = { None },
-    logging_enabled = { Some(true) },
-    logging_disabled = { Some(false) },
+    normal_dispatch = { || None },
+    logging_enabled = { || Some(true) },
+    logging_disabled = { || Some(false) },
 )]
-fn batch_dispatch_keeps_quiet_checks_borrowed_keys_and_repeated_names(log_denied: Option<bool>) {
+fn batch_dispatch_keeps_quiet_checks_borrowed_keys_and_repeated_names(
+    log_denied: fn() -> Option<bool>,
+) {
+    let log_denied = log_denied();
     let principal = Principal {
         name: "batch".into(),
         auth_method: AuthMethod::SaslPlain,

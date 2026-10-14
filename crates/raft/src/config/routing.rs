@@ -259,17 +259,11 @@ mod tests {
     }
 
     impl krabka_metadata::Feature for Listed {
-        fn name(&self) -> &'static str {
-            self.name
-        }
+        fn name(&self) -> &'static str { self.name }
 
-        fn supported_range(&self) -> (i16, i16) {
-            (self.min, self.max)
-        }
+        fn supported_range(&self) -> (i16, i16) { (self.min, self.max) }
 
-        fn default_level(&self, _bootstrap_mv: i16) -> i16 {
-            self.min
-        }
+        fn default_level(&self, _bootstrap_mv: i16) -> i16 { self.min }
     }
 
     /// The range each node advertises: Kafka 4.3.1's by default, and the

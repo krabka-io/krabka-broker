@@ -359,9 +359,7 @@ mod tests {
             }
         }
 
-        fn calls(&self) -> Vec<Call> {
-            std::mem::take(&mut *self.calls.lock().unwrap())
-        }
+        fn calls(&self) -> Vec<Call> { std::mem::take(&mut *self.calls.lock().unwrap()) }
     }
 
     impl RangeFetcher for ScriptedFetcher {
@@ -411,14 +409,11 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_retriable_fetch_failure_looks_the_leader_up_again_and_resumes() {
-        let fetcher = ScriptedFetcher::new(
-            [Ok(1), Ok(2)],
-            [
-                Ok(page(0..2)),
-                Err(ClientError::Server { error_code: 6 }),
-                Ok(page(2..4)),
-            ],
-        );
+        let fetcher = ScriptedFetcher::new([Ok(1), Ok(2)], [
+            Ok(page(0..2)),
+            Err(ClientError::Server { error_code: 6 }),
+            Ok(page(2..4)),
+        ]);
 
         let records = read(&fetcher, 1, 0, 4).await.unwrap();
 
@@ -464,14 +459,10 @@ mod tests {
         assert!(records == vec![record(0, Some(b"v")), record(1, Some(b"v"))]);
         assert!(
             fetcher.calls()
-                == vec![
-                    Call::Leader,
-                    Call::Leader,
-                    Call::Fetch {
-                        leader: 3,
-                        offset: 0
-                    },
-                ]
+                == vec![Call::Leader, Call::Leader, Call::Fetch {
+                    leader: 3,
+                    offset: 0
+                },]
         );
     }
 
@@ -504,13 +495,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_fetch_that_makes_no_progress_stalls_the_read() {
-        let fetcher = ScriptedFetcher::new(
-            [Ok(1)],
-            [Ok(FetchPartitionResult {
-                records: Vec::new(),
-                next_offset: None,
-            })],
-        );
+        let fetcher = ScriptedFetcher::new([Ok(1)], [Ok(FetchPartitionResult {
+            records: Vec::new(),
+            next_offset: None,
+        })]);
 
         let error = read(&fetcher, 1, 4, 10).await.unwrap_err();
 
@@ -537,13 +525,10 @@ mod tests {
         check!(seen == vec![0]);
         check!(
             fetcher.calls()
-                == vec![
-                    Call::Leader,
-                    Call::Fetch {
-                        leader: 1,
-                        offset: 0
-                    }
-                ]
+                == vec![Call::Leader, Call::Fetch {
+                    leader: 1,
+                    offset: 0
+                }]
         );
     }
 

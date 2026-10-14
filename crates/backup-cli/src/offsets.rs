@@ -360,13 +360,10 @@ mod tests {
     fn the_offsets_file_counts_every_partition_of_every_group() {
         let file = GroupOffsetsFile {
             version: GROUP_OFFSETS_VERSION,
-            groups: vec![
-                captured(),
-                GroupOffsets {
-                    group: "empty".to_owned(),
-                    offsets: Vec::new(),
-                },
-            ],
+            groups: vec![captured(), GroupOffsets {
+                group: "empty".to_owned(),
+                offsets: Vec::new(),
+            }],
         };
         check!(file.offset_count() == 3);
     }

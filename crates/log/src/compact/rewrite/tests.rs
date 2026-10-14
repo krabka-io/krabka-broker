@@ -102,14 +102,10 @@ fn rewrite_drops_superseded_records() {
 #[test]
 fn rewrite_keeps_tombstone_as_latest() {
     let dir = tempfile::tempdir().unwrap();
-    let first_segment = write_sealed_segment(
-        dir.path(),
-        0,
-        vec![
-            make_record(0, Some(b"k1"), Some(b"v1")),
-            make_record(1, Some(b"k1"), None), // tombstone
-        ],
-    );
+    let first_segment = write_sealed_segment(dir.path(), 0, vec![
+        make_record(0, Some(b"k1"), Some(b"v1")),
+        make_record(1, Some(b"k1"), None), // tombstone
+    ]);
     let segment_refs = vec![&first_segment];
     let out = rewrite_simple(dir.path(), &segment_refs);
     let bytes = fs::read(&out.log_swap).unwrap();
@@ -357,13 +353,10 @@ fn rewrite_retain_empty_for_active_producer() {
     let segment_refs = vec![&seg];
     let mut active = HashMap::new();
     // pid 1000 is active, and its last data batch ends at offset 0.
-    active.insert(
-        ProducerId(1000),
-        ProducerLastRecord {
-            last_data_offset: Some(Offset(0)),
-            producer_epoch: 7,
-        },
-    );
+    active.insert(ProducerId(1000), ProducerLastRecord {
+        last_data_offset: Some(Offset(0)),
+        producer_epoch: 7,
+    });
     let out = rewrite_all(
         dir.path(),
         &segment_refs,
@@ -424,16 +417,13 @@ fn rewrite_retain_empty_extends_last_offset() {
     let batches = read_rewrite(&out, 0, 105);
     assert2::assert!(
         batches
-            == vec![
-                keyed_value_batch(0, b"k1", b"v1"),
-                RecordBatch {
-                    base_offset: 100,
-                    last_offset_delta: 5,
-                    base_timestamp: -1,
-                    producer_id: -1,
-                    ..RecordBatch::default()
-                },
-            ]
+            == vec![keyed_value_batch(0, b"k1", b"v1"), RecordBatch {
+                base_offset: 100,
+                last_offset_delta: 5,
+                base_timestamp: -1,
+                producer_id: -1,
+                ..RecordBatch::default()
+            },]
     );
 }
 
@@ -604,22 +594,16 @@ fn a_retained_empty_batch_has_no_compression_horizon_or_base_timestamp(
 #[test]
 fn only_the_last_group_of_a_round_keeps_an_emptied_last_batch() {
     let dir = tempfile::tempdir().unwrap();
-    let first = write_sealed_batches(
-        dir.path(),
-        &[one_record_batch(
-            0,
-            ProducerIdAndEpoch { id: -1, epoch: -1 },
-            None,
-        )],
-    );
-    let second = write_sealed_batches(
-        dir.path(),
-        &[one_record_batch(
-            1,
-            ProducerIdAndEpoch { id: -1, epoch: -1 },
-            None,
-        )],
-    );
+    let first = write_sealed_batches(dir.path(), &[one_record_batch(
+        0,
+        ProducerIdAndEpoch { id: -1, epoch: -1 },
+        None,
+    )]);
+    let second = write_sealed_batches(dir.path(), &[one_record_batch(
+        1,
+        ProducerIdAndEpoch { id: -1, epoch: -1 },
+        None,
+    )]);
     let map = build_offset_map(&[&first, &second], vec![], None).unwrap();
     let active = HashMap::new();
     let round = CleaningRound {
@@ -645,14 +629,11 @@ fn only_the_last_group_of_a_round_keeps_an_emptied_last_batch() {
 
     assert2::assert!(
         outputs
-            == [
-                vec![],
-                vec![RecordBatch {
-                    base_offset: 1,
-                    base_timestamp: -1,
-                    last_offset_delta: 0,
-                    ..RecordBatch::default()
-                }]
-            ]
+            == [vec![], vec![RecordBatch {
+                base_offset: 1,
+                base_timestamp: -1,
+                last_offset_delta: 0,
+                ..RecordBatch::default()
+            }]]
     );
 }

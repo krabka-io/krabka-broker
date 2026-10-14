@@ -148,9 +148,7 @@ impl Default for Role {
 
 impl Role {
     #[must_use]
-    pub fn is_leader(&self) -> bool {
-        matches!(self, Role::Leader { .. })
-    }
+    pub fn is_leader(&self) -> bool { matches!(self, Role::Leader { .. }) }
 }
 
 #[cfg(test)]

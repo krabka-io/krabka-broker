@@ -138,9 +138,7 @@ pub fn newest_metadata_checkpoint(log_dir: &Path) -> Option<PathBuf> {
 ///
 /// The zero-padded epoch millisecond orders captures across timestamps; a random UUID suffix distinguishes concurrent captures and repeated clock values. Legacy timestamp-only names retain their position in the same listing, and `--capture latest` still needs only a lexicographic maximum.
 #[must_use]
-pub fn capture_id(now_ms: u64) -> String {
-    format!("{now_ms:016}-{}", Uuid::new_v4().simple())
-}
+pub fn capture_id(now_ms: u64) -> String { format!("{now_ms:016}-{}", Uuid::new_v4().simple()) }
 
 /// The archive-relative key of one artifact inside one capture.
 #[must_use]

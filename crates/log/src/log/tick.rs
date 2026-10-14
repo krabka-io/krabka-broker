@@ -323,15 +323,12 @@ mod tests {
         } in cases
         {
             let dir = tempdir().unwrap();
-            let mut log = Log::open(
-                dir.path(),
-                LogConfig {
-                    retention: Some(secs(10)),
-                    retention_size,
-                    cleanup_policy,
-                    ..tiny_segments()
-                },
-            )
+            let mut log = Log::open(dir.path(), LogConfig {
+                retention: Some(secs(10)),
+                retention_size,
+                cleanup_policy,
+                ..tiny_segments()
+            })
             .unwrap();
             for timestamp in [1_000, 95_000, 95_000] {
                 let mut batch = sample_batch(1);
@@ -409,13 +406,10 @@ mod tests {
         deleted: bool,
     ) {
         let dir = tempdir().unwrap();
-        let mut log = Log::open(
-            dir.path(),
-            LogConfig {
-                retention: Some(secs(60 * 60)),
-                ..tiny_segments()
-            },
-        )
+        let mut log = Log::open(dir.path(), LogConfig {
+            retention: Some(secs(60 * 60)),
+            ..tiny_segments()
+        })
         .unwrap();
         let mut untimed = sample_batch(1);
         untimed.max_timestamp = -1;
@@ -477,13 +471,10 @@ mod tests {
     #[test]
     fn tick_removes_only_retained_away_segment_stamp_indexes() {
         let dir = tempdir().unwrap();
-        let mut log = Log::open(
-            dir.path(),
-            LogConfig {
-                retention: Some(millis(1)),
-                ..tiny_segments()
-            },
-        )
+        let mut log = Log::open(dir.path(), LogConfig {
+            retention: Some(millis(1)),
+            ..tiny_segments()
+        })
         .unwrap();
         install_stamps(&mut log, 10, 1);
         for timestamp in [0, 0, 1_000] {
@@ -596,14 +587,11 @@ mod tests {
         // Tiered topic: tick must not delete any segment, however old.
         // The remote-log manager owns local eviction.
         let dir_tiered = tempdir().unwrap();
-        let mut tiered = rolled_log(
-            dir_tiered.path(),
-            &LogConfig {
-                remote_storage_enable: true,
-                retention: Some(millis(1)),
-                ..LogConfig::default()
-            },
-        );
+        let mut tiered = rolled_log(dir_tiered.path(), &LogConfig {
+            remote_storage_enable: true,
+            retention: Some(millis(1)),
+            ..LogConfig::default()
+        });
         let sealed_before = tiered.tierable_segments().len();
         assert2::assert!(sealed_before > 0);
         tiered.tick(far_future, Offset(i64::MAX)).unwrap();
@@ -611,14 +599,11 @@ mod tests {
 
         // Non-tiered baseline: tick should still evict aggressively.
         let dir_plain = tempdir().unwrap();
-        let mut plain = rolled_log(
-            dir_plain.path(),
-            &LogConfig {
-                remote_storage_enable: false,
-                retention: Some(millis(1)),
-                ..LogConfig::default()
-            },
-        );
+        let mut plain = rolled_log(dir_plain.path(), &LogConfig {
+            remote_storage_enable: false,
+            retention: Some(millis(1)),
+            ..LogConfig::default()
+        });
         assert2::assert!(!plain.tierable_segments().is_empty());
         plain.tick(far_future, Offset(i64::MAX)).unwrap();
         // Non-tiered path: every segment is past retention, so every sealed

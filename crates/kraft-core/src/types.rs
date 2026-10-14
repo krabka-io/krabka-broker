@@ -14,9 +14,7 @@ pub struct SimInstant(pub u64);
 
 impl SimInstant {
     #[must_use]
-    pub fn saturating_add_ms(self, ms: u64) -> Self {
-        Self(self.0.saturating_add(ms))
-    }
+    pub fn saturating_add_ms(self, ms: u64) -> Self { Self(self.0.saturating_add(ms)) }
 }
 
 /// Consensus epoch, always non-negative; the wire leader epoch is
@@ -142,9 +140,7 @@ impl QuorumState {
 
     /// Majority size for the current voter set: `floor(n/2) + 1`.
     #[must_use]
-    pub fn majority(&self) -> usize {
-        krabka_verified::consensus::majority_size(self.voters.len())
-    }
+    pub fn majority(&self) -> usize { krabka_verified::consensus::majority_size(self.voters.len()) }
 }
 
 #[cfg(test)]

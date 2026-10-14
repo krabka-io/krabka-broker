@@ -309,23 +309,20 @@ fn truncate_preserves_stamp_indexes_before_promoted_segment() {
 
     log.truncate_to(Offset(2)).unwrap();
 
-    check_stamps(
-        &log,
-        &[
-            ExpectedStamp {
-                offset: 0,
-                stamp: Some(10),
-            },
-            ExpectedStamp {
-                offset: 1,
-                stamp: Some(11),
-            },
-            ExpectedStamp {
-                offset: 2,
-                stamp: None,
-            },
-        ],
-    );
+    check_stamps(&log, &[
+        ExpectedStamp {
+            offset: 0,
+            stamp: Some(10),
+        },
+        ExpectedStamp {
+            offset: 1,
+            stamp: Some(11),
+        },
+        ExpectedStamp {
+            offset: 2,
+            stamp: None,
+        },
+    ]);
 }
 
 #[test]
@@ -395,13 +392,10 @@ fn a_no_op_truncation_still_drops_an_epoch_no_record_backs(name: &str, target: i
 #[test]
 fn trim_to_offset_drops_old_segments() {
     let dir = tempdir().expect("tempdir");
-    let mut log = Log::open(
-        dir.path(),
-        LogConfig {
-            segment_size: bytes(200), // small so we roll fast
-            ..LogConfig::default()
-        },
-    )
+    let mut log = Log::open(dir.path(), LogConfig {
+        segment_size: bytes(200), // small so we roll fast
+        ..LogConfig::default()
+    })
     .expect("open");
     // Append 30 records to force multiple sealed segments.
     append_samples(&mut log, 30, 1);

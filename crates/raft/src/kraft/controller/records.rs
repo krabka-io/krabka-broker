@@ -372,12 +372,9 @@ mod metadata_record_batch_tests {
 
     #[test]
     fn metadata_control_batch_keeps_the_leader_epoch() {
-        let control = typed_control_batch(
-            7,
-            &[ControlRecord::KRaftVersion(
-                krabka_protocol::owned::k_raft_version_record::KRaftVersionRecord::default(),
-            )],
-        )
+        let control = typed_control_batch(7, &[ControlRecord::KRaftVersion(
+            krabka_protocol::owned::k_raft_version_record::KRaftVersionRecord::default(),
+        )])
         .expect("control batch");
         check!(control.partition_leader_epoch == 7);
     }

@@ -173,18 +173,11 @@ fn schedules_handle_empty_and_signed_extreme_extents(
     batches: &[(i64, i32)],
     times: &[i64],
 ) {
-    check_witness(
-        batches,
-        times,
-        &[],
-        0,
-        i64::MAX,
-        FetchWatermarks {
-            log_start: start,
-            log_end: end,
-            hw: end,
-            lso: i64::MIN,
-            deliverable: i64::MIN,
-        },
-    );
+    check_witness(batches, times, &[], 0, i64::MAX, FetchWatermarks {
+        log_start: start,
+        log_end: end,
+        hw: end,
+        lso: i64::MIN,
+        deliverable: i64::MIN,
+    });
 }

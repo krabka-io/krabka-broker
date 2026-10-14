@@ -366,9 +366,7 @@ impl LogLevelController {
 
     /// Whether a logger by this name exists on this node.
     #[must_use]
-    pub fn contains(&self, name: &str) -> bool {
-        self.level(name).is_some()
-    }
+    pub fn contains(&self, name: &str) -> bool { self.level(name).is_some() }
 
     /// Pin `name` to `level`, in this process only.
     ///

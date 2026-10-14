@@ -144,14 +144,11 @@ fn compaction_keeps_the_last_record_of_each_producer_in_the_log() {
             let dir = tempdir().unwrap();
             // One batch for each segment, and no delete retention, so that the
             // third pass finds the delete horizon of a marker passed.
-            let mut log = Log::open(
-                dir.path(),
-                LogConfig {
-                    cleanup_policy: CleanupPolicy::Compact,
-                    delete_retention: Time::ZERO,
-                    ..tiny_segments()
-                },
-            )
+            let mut log = Log::open(dir.path(), LogConfig {
+                cleanup_policy: CleanupPolicy::Compact,
+                delete_retention: Time::ZERO,
+                ..tiny_segments()
+            })
             .unwrap();
             for batch in batches.iter().cloned() {
                 append(&mut log, path, batch);

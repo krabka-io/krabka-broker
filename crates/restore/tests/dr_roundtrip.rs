@@ -309,16 +309,14 @@ async fn a_captured_cluster_restores_with_its_configuration_and_its_group_positi
         krabka_backup::manifest::METADATA_CHECKPOINT,
     ));
     let post_log_dir = workspace.path().join("post");
-    let report = restore(&controller.restore_args(
-        fixture.archive_root.path(),
-        &post_log_dir,
-        &[
+    let report = restore(
+        &controller.restore_args(fixture.archive_root.path(), &post_log_dir, &[
             "--rlmm-snapshot",
             &rlmm.display().to_string(),
             "--metadata-snapshot",
             &checkpoint.display().to_string(),
-        ],
-    ))
+        ]),
+    )
     .await
     .expect("restore from the archive");
     check!(report.metadata.topic_configs == 1);

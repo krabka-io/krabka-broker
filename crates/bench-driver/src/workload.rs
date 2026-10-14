@@ -79,9 +79,7 @@ pub const DEFAULT_SAMPLE_INTERVAL: Time = secs(2);
 ///
 /// Panics if the named default is not protocol-safe.
 #[must_use]
-pub const fn default_producer_request_timeout() -> Time {
-    DEFAULT_PRODUCER_REQUEST_TIMEOUT
-}
+pub const fn default_producer_request_timeout() -> Time { DEFAULT_PRODUCER_REQUEST_TIMEOUT }
 
 /// Return the validated consumer request-timeout default for `stack`.
 ///
@@ -113,9 +111,7 @@ pub const fn default_consumer_build_initial_backoff() -> Time {
 }
 
 #[must_use]
-pub const fn default_consumer_build_max_backoff() -> Time {
-    DEFAULT_CONSUMER_BUILD_MAX_BACKOFF
-}
+pub const fn default_consumer_build_max_backoff() -> Time { DEFAULT_CONSUMER_BUILD_MAX_BACKOFF }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConsumerBuildRetryPolicy {
@@ -146,19 +142,13 @@ impl ConsumerBuildRetryPolicy {
     }
 
     #[must_use]
-    pub const fn attempts(self) -> u32 {
-        self.attempts.into_value()
-    }
+    pub const fn attempts(self) -> u32 { self.attempts.into_value() }
 
     #[must_use]
-    pub fn initial_backoff(self) -> Time {
-        self.initial_backoff
-    }
+    pub fn initial_backoff(self) -> Time { self.initial_backoff }
 
     #[must_use]
-    pub fn max_backoff(self) -> Time {
-        self.max_backoff
-    }
+    pub fn max_backoff(self) -> Time { self.max_backoff }
 }
 
 impl Default for ConsumerBuildRetryPolicy {
@@ -173,14 +163,10 @@ impl Default for ConsumerBuildRetryPolicy {
 }
 
 #[must_use]
-pub const fn default_consumer_poll_timeout() -> Time {
-    DEFAULT_CONSUMER_POLL_TIMEOUT
-}
+pub const fn default_consumer_poll_timeout() -> Time { DEFAULT_CONSUMER_POLL_TIMEOUT }
 
 #[must_use]
-pub const fn default_consumer_poll_error_backoff() -> Time {
-    DEFAULT_CONSUMER_POLL_ERROR_BACKOFF
-}
+pub const fn default_consumer_poll_error_backoff() -> Time { DEFAULT_CONSUMER_POLL_ERROR_BACKOFF }
 
 /// The fixed sampling grid. Every task gets a copy, so all tasks bucket into
 /// the same slices.
@@ -255,9 +241,7 @@ impl Grid {
     }
 
     /// The width of one slice, as the extent the per-slice rates divide by.
-    fn interval(&self) -> Time {
-        Time::from_millis(saturating_u64_to_i64(self.interval_ms))
-    }
+    fn interval(&self) -> Time { Time::from_millis(saturating_u64_to_i64(self.interval_ms)) }
 }
 
 /// Parameters wired in from `main` and the CLI. This struct is distinct from
@@ -1252,16 +1236,12 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
     // Counter behind each record key, so keys vary within this task. The task
     // index is folded in, so two tasks never mint the same key.
     let mut sent_records = (idx as u64) << 40;
-    let mut observations = ProducerObservations::new(
-        idx,
-        scenario.msg_size.bytes_u64(),
-        grid,
-        SharedHandles {
+    let mut observations =
+        ProducerObservations::new(idx, scenario.msg_size.bytes_u64(), grid, SharedHandles {
             stop: &stop,
             first_ack: &first_ack,
             kill_at: &kill_at,
-        },
-    );
+        });
 
     let mut pacer = match scenario.mode {
         LoadMode::Saturate => None,
@@ -1580,9 +1560,7 @@ mod tests {
         }
     }
 
-    fn scenario(rf: i16) -> Scenario {
-        short_scenario(rf)
-    }
+    fn scenario(rf: i16) -> Scenario { short_scenario(rf) }
 
     #[derive(Debug, PartialEq, Eq)]
     struct ProducerCounters {

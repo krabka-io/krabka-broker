@@ -94,9 +94,7 @@ impl Engine {
     /// watermark on a leader, and the highest watermark a leader has reported
     /// on a follower, which is the larger of the two while the follower is
     /// still replaying.
-    pub fn quorum_high_watermark(&self) -> i64 {
-        self.log.hwm().0.max(self.leader_reported_hwm)
-    }
+    pub fn quorum_high_watermark(&self) -> i64 { self.log.hwm().0.max(self.leader_reported_hwm) }
 
     /// Wall-clock milliseconds of `at`, or -1 when the clock base cannot be
     /// mapped to the Unix epoch.
@@ -110,9 +108,7 @@ impl Engine {
     /// Wall-clock milliseconds of a progress timestamp the leader tracks, or -1
     /// while it has not recorded that event (a zero instant), as Kafka reports
     /// it.
-    fn tracked_ms(&self, at: SimInstant) -> i64 {
-        if at.0 == 0 { -1 } else { self.unix_ms(at) }
-    }
+    fn tracked_ms(&self, at: SimInstant) -> i64 { if at.0 == 0 { -1 } else { self.unix_ms(at) } }
 
     /// Snapshot the consensus state for `DescribeQuorum`.
     pub fn quorum_state_snapshot(&self) -> QuorumStateSnapshot {

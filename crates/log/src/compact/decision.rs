@@ -140,9 +140,7 @@ pub(crate) struct RewrittenTimestamps {
 mod core_tests {
     use {super::*, assert2::check};
 
-    fn data(has_key: bool, has_value: bool) -> RecordMeta {
-        RecordMeta { has_key, has_value }
-    }
+    fn data(has_key: bool, has_value: bool) -> RecordMeta { RecordMeta { has_key, has_value } }
 
     fn batch(is_control: bool, producer_id: i64, existing_horizon: Option<i64>) -> BatchMeta {
         BatchMeta {

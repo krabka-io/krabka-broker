@@ -249,9 +249,7 @@ mod tests {
         check!(error.to_string().contains(reason));
     }
 
-    fn config(endpoint: String) -> S3Config {
-        s3_config("bucket", endpoint)
-    }
+    fn config(endpoint: String) -> S3Config { s3_config("bucket", endpoint) }
 
     #[test]
     fn parses_incomplete_uploads_and_pagination() {
@@ -352,14 +350,10 @@ mod tests {
         drop(listener);
 
         let client = s3_http_client(&config(endpoint.clone())).unwrap();
-        let error = read_ok_body(
-            client.get(endpoint),
-            "ListMultipartUploads",
-            &RetryConfig {
-                max_retries: 0,
-                ..RetryConfig::default()
-            },
-        )
+        let error = read_ok_body(client.get(endpoint), "ListMultipartUploads", &RetryConfig {
+            max_retries: 0,
+            ..RetryConfig::default()
+        })
         .await
         .unwrap_err();
 

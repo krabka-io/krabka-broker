@@ -388,9 +388,7 @@ impl Drop for KafkaMetadataEventLog {
 
 #[async_trait]
 impl MetadataEventLog for KafkaMetadataEventLog {
-    fn partition_count(&self) -> i32 {
-        self.partition_count
-    }
+    fn partition_count(&self) -> i32 { self.partition_count }
 
     #[instrument(
         level = "debug",
@@ -499,20 +497,17 @@ impl RangeFetcher for KafkaMetadataEventLog {
         partition: i32,
         offset: i64,
     ) -> Result<FetchPartitionResult, ClientError> {
-        fetch_partition_with_isolation_progress(
-            leader,
-            IsolatedFetch {
-                topic: &self.topic,
-                topic_id: self.topic_id,
-                partition,
-                fetch_offset: offset,
-                max_wait: self.fetch_max_wait,
-                max: krabka_client_core::DEFAULT_FETCH_RESPONSE_MAX,
-                partition_max: self.fetch_max_bytes,
-                fetch_min: FetchMinBytes::default(),
-                isolation_level: 0,
-            },
-        )
+        fetch_partition_with_isolation_progress(leader, IsolatedFetch {
+            topic: &self.topic,
+            topic_id: self.topic_id,
+            partition,
+            fetch_offset: offset,
+            max_wait: self.fetch_max_wait,
+            max: krabka_client_core::DEFAULT_FETCH_RESPONSE_MAX,
+            partition_max: self.fetch_max_bytes,
+            fetch_min: FetchMinBytes::default(),
+            isolation_level: 0,
+        })
         .await
     }
 }

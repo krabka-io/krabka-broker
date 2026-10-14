@@ -128,9 +128,7 @@ pub const fn in_half_open_window(value: i64, start: i64, end: i64) -> bool {
 /// Whether a monotonic frontier has reached a target offset.
 #[must_use]
 #[cfg_attr(creusot, ensures(result == (frontier@ >= target@)))]
-pub const fn frontier_reaches(frontier: i64, target: i64) -> bool {
-    frontier >= target
-}
+pub const fn frontier_reaches(frontier: i64, target: i64) -> bool { frontier >= target }
 
 /// Return the length of the strictly ordered control-record prefix below a
 /// half-open frontier.

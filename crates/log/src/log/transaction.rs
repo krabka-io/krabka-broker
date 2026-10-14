@@ -493,11 +493,9 @@ mod tests {
             let TempLog { dir: _dir, mut log } = test_log();
             log.append(&mut sample_batch(10)).unwrap(); // offsets 0 to 9
             if case.transaction {
-                log.append(&mut transactional_batch(
-                    1000,
-                    0,
-                    &["a", "b", "c", "d", "e"],
-                ))
+                log.append(&mut transactional_batch(1000, 0, &[
+                    "a", "b", "c", "d", "e",
+                ]))
                 .unwrap(); // offsets 10 to 14
                 log.append(&mut commit_marker(1000, 0)).unwrap(); // offset 15
             } else {

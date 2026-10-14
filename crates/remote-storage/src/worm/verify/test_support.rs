@@ -324,14 +324,10 @@ pub(super) async fn put_entry(
     body: &[u8],
 ) -> ObjectEntry {
     let outcome = ops
-        .put(
-            &Path::from(key),
-            Bytes::copy_from_slice(body),
-            PutRequest {
-                digest: true,
-                ..Default::default()
-            },
-        )
+        .put(&Path::from(key), Bytes::copy_from_slice(body), PutRequest {
+            digest: true,
+            ..Default::default()
+        })
         .await
         .unwrap();
     ObjectEntry {

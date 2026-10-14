@@ -6,20 +6,22 @@
 use {
     super::*,
     crate::{
-        kraft::controller::{
-            checkpoint::{
-                checkpoint_id_is_newer, latest_checkpoint_id, load_checkpoint_by_id,
-                load_latest_checkpoint, parse_checkpoint_name, retain_latest_checkpoint,
-                retain_recent_checkpoints, write_checkpoint,
+        kraft::{
+            controller::{
+                checkpoint::{
+                    checkpoint_id_is_newer, latest_checkpoint_id, load_checkpoint_by_id,
+                    load_latest_checkpoint, parse_checkpoint_name, retain_latest_checkpoint,
+                    retain_recent_checkpoints, write_checkpoint,
+                },
+                records::decode_control_record,
+                test_support::{
+                    ControllerInDir, await_leader, build, build_engine_only,
+                    elect_single_voter_engine, one_offset_batch, open_test_controller_with,
+                    submit_change_with_timeout, topic_record, voter_set,
+                },
             },
-            records::decode_control_record,
-            test_support::{
-                ControllerInDir, await_leader, build, build_engine_only, elect_single_voter_engine,
-                one_offset_batch, open_test_controller_with, submit_change_with_timeout,
-                topic_record, voter_set,
-            },
+            snapshot_fetch::SnapshotId,
         },
-        kraft::snapshot_fetch::SnapshotId,
         snapshot::SnapshotWriter,
     },
     assert2::assert,

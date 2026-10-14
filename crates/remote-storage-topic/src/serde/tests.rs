@@ -19,9 +19,7 @@ fn tp() -> TopicIdPartition {
     TopicIdPartition::new(Uuid::from_u128(0xCAFE_BABE), "orders-📦", 7)
 }
 
-fn seg_id(id: Uuid) -> RemoteLogSegmentId {
-    RemoteLogSegmentId::new(tp(), id)
-}
+fn seg_id(id: Uuid) -> RemoteLogSegmentId { RemoteLogSegmentId::new(tp(), id) }
 
 #[derive(krabka_macros::FieldDefaults)]
 struct AddSegmentSetup {

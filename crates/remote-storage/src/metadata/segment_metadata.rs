@@ -157,58 +157,40 @@ impl RemoteLogSegmentMetadata {
 
     /// The segment's unique id.
     #[must_use]
-    pub fn remote_log_segment_id(&self) -> &RemoteLogSegmentId {
-        &self.remote_log_segment_id
-    }
+    pub fn remote_log_segment_id(&self) -> &RemoteLogSegmentId { &self.remote_log_segment_id }
 
     /// First offset (inclusive) covered by this segment.
     #[must_use]
-    pub fn start_offset(&self) -> i64 {
-        self.start_offset
-    }
+    pub fn start_offset(&self) -> i64 { self.start_offset }
 
     /// Last offset (inclusive) covered by this segment.
     #[must_use]
-    pub fn end_offset(&self) -> i64 {
-        self.end_offset
-    }
+    pub fn end_offset(&self) -> i64 { self.end_offset }
 
     /// Highest record timestamp in this segment.
     #[must_use]
-    pub fn max_timestamp_ms(&self) -> i64 {
-        self.max_timestamp_ms
-    }
+    pub fn max_timestamp_ms(&self) -> i64 { self.max_timestamp_ms }
 
     /// Id of the broker that produced this metadata.
     #[must_use]
-    pub fn broker_id(&self) -> i32 {
-        self.broker_id
-    }
+    pub fn broker_id(&self) -> i32 { self.broker_id }
 
     /// Wall-clock time the latest event for this segment was created.
     #[must_use]
-    pub fn event_timestamp_ms(&self) -> i64 {
-        self.event_timestamp_ms
-    }
+    pub fn event_timestamp_ms(&self) -> i64 { self.event_timestamp_ms }
 
     /// Size of the `.log` data in bytes.
     #[must_use]
-    pub fn segment_size_in_bytes(&self) -> i32 {
-        self.segment_size_in_bytes
-    }
+    pub fn segment_size_in_bytes(&self) -> i32 { self.segment_size_in_bytes }
 
     /// Opaque metadata the [`RemoteStorageManager`](crate::RemoteStorageManager)
     /// attached at copy time, if any.
     #[must_use]
-    pub fn custom_metadata(&self) -> Option<&CustomMetadata> {
-        self.custom_metadata.as_ref()
-    }
+    pub fn custom_metadata(&self) -> Option<&CustomMetadata> { self.custom_metadata.as_ref() }
 
     /// Current lifecycle state.
     #[must_use]
-    pub fn state(&self) -> RemoteLogSegmentState {
-        self.state
-    }
+    pub fn state(&self) -> RemoteLogSegmentState { self.state }
 
     /// Map of leader epoch → first offset that epoch contributed to this
     /// segment.
@@ -241,9 +223,7 @@ impl RemoteLogSegmentMetadata {
     /// `true` if the segment has no transaction index (KIP-405 `txnIndexEmpty`).
     /// Defaults to `false`. Serialized as the JVM record's tagged field (tag 0).
     #[must_use]
-    pub fn txn_index_empty(&self) -> bool {
-        self.txn_index_empty
-    }
+    pub fn txn_index_empty(&self) -> bool { self.txn_index_empty }
 
     /// Builder-style setter for [`Self::txn_index_empty`].
     #[must_use]
@@ -277,9 +257,7 @@ mod tests {
         uuid::Uuid,
     };
 
-    fn seg_id() -> RemoteLogSegmentId {
-        RemoteLogSegmentId::new(tp(), Uuid::from_u128(99))
-    }
+    fn seg_id() -> RemoteLogSegmentId { RemoteLogSegmentId::new(tp(), Uuid::from_u128(99)) }
 
     fn epochs() -> BTreeMap<LeaderEpoch, i64> {
         maplit::btreemap! {LeaderEpoch(0) => 0}
@@ -305,9 +283,7 @@ mod tests {
         )
     }
 
-    fn started_metadata() -> RemoteLogSegmentMetadata {
-        metadata_range(0, 10, epochs()).unwrap()
-    }
+    fn started_metadata() -> RemoteLogSegmentMetadata { metadata_range(0, 10, epochs()).unwrap() }
 
     #[test]
     fn accessors_return_constructed_values() {

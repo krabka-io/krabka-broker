@@ -741,14 +741,10 @@ async fn send_fetch_uses_snapshot_epoch_only_until_log_extends_past_boundary() {
     .encode();
     let mut sends = record_peer_sends(&mut engine, fetch_response.clone());
 
-    check_sent_fetch(
-        &mut engine,
-        &mut sends,
-        SentFetch {
-            fetch_epoch: 7,
-            fetch_offset: 10,
-        },
-    )
+    check_sent_fetch(&mut engine, &mut sends, SentFetch {
+        fetch_epoch: 7,
+        fetch_offset: 10,
+    })
     .await;
 
     let mut batch = one_offset_batch(10, 9, b"after-snapshot");
@@ -756,14 +752,10 @@ async fn send_fetch_uses_snapshot_epoch_only_until_log_extends_past_boundary() {
         .log
         .append_at(&mut batch, Offset(10))
         .expect("append after snapshot");
-    check_sent_fetch(
-        &mut engine,
-        &mut sends,
-        SentFetch {
-            fetch_epoch: 9,
-            fetch_offset: 11,
-        },
-    )
+    check_sent_fetch(&mut engine, &mut sends, SentFetch {
+        fetch_epoch: 9,
+        fetch_offset: 11,
+    })
     .await;
 }
 
@@ -880,13 +872,10 @@ async fn leaderless_observer_discovers_the_leader_through_a_follower_redirect() 
         .call();
     let transport = Arc::new(EndpointRecorder::default());
     observer.peers = transport.clone();
-    assert2::assert!(matches!(
-        observer.core.role(),
-        Role::Observer {
-            leader_id: None,
-            ..
-        }
-    ));
+    assert2::assert!(matches!(observer.core.role(), Role::Observer {
+        leader_id: None,
+        ..
+    }));
     let epoch = observer.core.quorum_state().leader_epoch;
     let leader_endpoint = wire::QuorumLeader {
         leader_id: Some(NodeId(2)),
@@ -905,13 +894,10 @@ async fn leaderless_observer_discovers_the_leader_through_a_follower_redirect() 
     })
     .encode();
     observer.on_fetch_response(NodeId(1), &redirect);
-    assert2::assert!(matches!(
-        observer.core.role(),
-        Role::Observer {
-            leader_id: Some(NodeId(2)),
-            ..
-        }
-    ));
+    assert2::assert!(matches!(observer.core.role(), Role::Observer {
+        leader_id: Some(NodeId(2)),
+        ..
+    }));
     assert2::assert!(
         *transport.endpoints.lock().expect("endpoint lock")
             == vec![LearnedEndpoint {

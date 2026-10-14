@@ -349,13 +349,10 @@ impl QuorumStateMachine {
             .into_iter()
             .collect();
         let fetch_deadline = now.saturating_add_ms(self.election_timeout_ms);
-        actions.extend([
-            Action::SendFetch { leader_id },
-            Action::ResetTimer {
-                kind: TimerKind::Fetch,
-                deadline: fetch_deadline,
-            },
-        ]);
+        actions.extend([Action::SendFetch { leader_id }, Action::ResetTimer {
+            kind: TimerKind::Fetch,
+            deadline: fetch_deadline,
+        }]);
         actions
     }
 

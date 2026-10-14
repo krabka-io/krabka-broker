@@ -320,9 +320,7 @@ impl PeerRequest {
 
     /// Decodes a request body. Returns `None` on a malformed frame.
     #[must_use]
-    pub fn decode(buf: &[u8]) -> Option<Self> {
-        decode_vote(buf)
-    }
+    pub fn decode(buf: &[u8]) -> Option<Self> { decode_vote(buf) }
 }
 
 /// Decodes a request body at `version`. The inbound handlers run Kafka's

@@ -198,9 +198,7 @@ impl ArchiveArgs {
 
     /// `--archive-prefix`, through [`normalize_prefix`].
     #[must_use]
-    pub fn normalized_prefix(&self) -> Option<String> {
-        normalize_prefix(self.prefix.as_deref())
-    }
+    pub fn normalized_prefix(&self) -> Option<String> { normalize_prefix(self.prefix.as_deref()) }
 }
 
 /// Trim the whitespace and separators an operator copies out of a console URL,

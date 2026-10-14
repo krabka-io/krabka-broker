@@ -112,9 +112,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "partition_count must be positive")]
-    fn rejects_zero_partition_count() {
-        let _ = metadata_partition_for(&tp("t", 0), 0);
-    }
+    fn rejects_zero_partition_count() { let _ = metadata_partition_for(&tp("t", 0), 0); }
 
     #[test]
     fn metadata_partitions_for_dedupes_and_sorts() {

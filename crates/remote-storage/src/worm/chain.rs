@@ -244,13 +244,9 @@ mod tests {
         uuid::Uuid,
     };
 
-    fn epoch() -> EpochId {
-        EpochId(Uuid::from_u128(0x1234))
-    }
+    fn epoch() -> EpochId { EpochId(Uuid::from_u128(0x1234)) }
 
-    fn head(byte: u8) -> ChainHead {
-        ChainHead([byte; 32])
-    }
+    fn head(byte: u8) -> ChainHead { ChainHead([byte; 32]) }
 
     fn sample_metadata(
         start_offset: i64,

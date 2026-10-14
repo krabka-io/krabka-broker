@@ -122,9 +122,7 @@ pub(super) async fn seeded_blocking(
 }
 
 /// The chain epoch every stamped fixture belongs to.
-pub(super) fn worm_epoch() -> EpochId {
-    EpochId(Uuid::from_u128(0x5eed))
-}
+pub(super) fn worm_epoch() -> EpochId { EpochId(Uuid::from_u128(0x5eed)) }
 
 /// A [`WormConfig`] naming a throwaway PKCS#8 Ed25519 key written into
 /// `dir`. `ring` mints it because `krabka-audit` exposes no key generator.

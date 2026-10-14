@@ -40,14 +40,11 @@ pub async fn read_capped(
         });
     }
     let result = store
-        .get_opts(
-            key,
-            GetOptions {
-                version: meta.version,
-                if_match: meta.e_tag,
-                ..GetOptions::default()
-            },
-        )
+        .get_opts(key, GetOptions {
+            version: meta.version,
+            if_match: meta.e_tag,
+            ..GetOptions::default()
+        })
         .await?;
     if result.meta.size > max_bytes {
         return Err(ObjectStoreError::TooLarge {
@@ -105,14 +102,11 @@ mod tests {
     async fn over_cap_returns_too_large() {
         let store = store_with("k", b"hello world").await;
         let err = read_capped(&store, &Path::from("k"), 4).await.unwrap_err();
-        assert!(matches!(
-            err,
-            ObjectStoreError::TooLarge {
-                size: 11,
-                max_bytes: 4,
-                ..
-            }
-        ));
+        assert!(matches!(err, ObjectStoreError::TooLarge {
+            size: 11,
+            max_bytes: 4,
+            ..
+        }));
     }
 
     #[tokio::test]
@@ -182,13 +176,10 @@ mod tests {
                 assert!(options.version.as_deref() == Some("original"));
                 let original = self
                     .inner
-                    .get_opts(
-                        location,
-                        GetOptions {
-                            version: None,
-                            ..options
-                        },
-                    )
+                    .get_opts(location, GetOptions {
+                        version: None,
+                        ..options
+                    })
                     .await?;
                 self.inner
                     .put(location, PutPayload::from_static(b"123456789"))

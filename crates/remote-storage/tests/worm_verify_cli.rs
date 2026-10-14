@@ -32,9 +32,7 @@ const SEGMENTS: usize = 2;
 const SEGMENT_SPAN: i64 = 100;
 
 /// Kafka renders UUIDs in URL-safe, unpadded Base64 for remote-tier paths.
-fn uuid_b64(uuid: Uuid) -> String {
-    URL_SAFE_NO_PAD.encode(uuid.as_bytes())
-}
+fn uuid_b64(uuid: Uuid) -> String { URL_SAFE_NO_PAD.encode(uuid.as_bytes()) }
 
 krabka_macros::worm_segment_fixture!(
     metadata,
@@ -210,9 +208,7 @@ impl Fixture {
         std::fs::write(self.root().join(&self.manifest_keys[index]), &sealed.bytes).unwrap();
     }
 
-    fn root(&self) -> &Path {
-        self.root.path()
-    }
+    fn root(&self) -> &Path { self.root.path() }
 
     /// The arguments every test shares: the archive and the trusted key.
     fn base_args(&self) -> Vec<String> {

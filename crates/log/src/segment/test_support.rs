@@ -156,9 +156,7 @@ pub(super) struct TempSegment {
     pub(super) segment: Segment,
 }
 
-pub(super) fn test_segment() -> TempSegment {
-    segment_at(Offset(0))
-}
+pub(super) fn test_segment() -> TempSegment { segment_at(Offset(0)) }
 
 pub(super) fn segment_at(base: Offset) -> TempSegment {
     let dir = tempdir().unwrap();
