@@ -11,14 +11,15 @@ use super::{
 use creusot_std::prelude::*;
 
 #[cfg(creusot)]
-#[logic]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
 fn voter_set_change_admission_valid(
     voters: CurrentVoterSet,
     kind: VoterChangeKind,
-    result: VoterReconfigurationDecision,
+    decision: VoterReconfigurationDecision,
 ) -> bool {
     pearlite! {
-        match result {
+        match decision {
             VoterReconfigurationDecision::Admit(plan) =>
                 voters.kraft_version@ == 1 && admitted_plan(voters, kind, plan),
             VoterReconfigurationDecision::UnsupportedKraftVersion => voters.kraft_version@ != 1,

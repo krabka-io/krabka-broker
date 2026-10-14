@@ -1,5 +1,10 @@
 //! Builders for requests shared by integration and unit tests.
 
+use crate::{
+    barrier::marker::{BarrierMarker, build_barrier_batch},
+    error::BrokerError,
+};
+
 /// Build a barrier marker batch using the broker's production wire encoder.
 ///
 /// # Errors
@@ -10,9 +15,9 @@ pub fn barrier_marker_batch(
     epoch: i64,
     triggered_at: i64,
     base_offset: i64,
-) -> Result<krabka_protocol::records::RecordBatch, crate::error::BrokerError> {
-    crate::barrier::marker::build_barrier_batch(
-        &crate::barrier::marker::BarrierMarker {
+) -> Result<krabka_protocol::records::RecordBatch, BrokerError> {
+    build_barrier_batch(
+        &BarrierMarker {
             group: group.to_owned(),
             epoch,
             triggered_at,

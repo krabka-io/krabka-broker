@@ -2,7 +2,7 @@ use super::*;
 
 type DeadlineQuota = (u64, u64, u64, u64, u64, u64);
 
-#[derive(Clone, Copy)]
+#[derive(std::clone::Clone, Copy)]
 pub(super) struct DeadlineInputs {
     /// Available balance, retained debt and fractional refill credit.
     pub(super) initial: (u64, u64, u64),
