@@ -226,43 +226,52 @@ mod tests {
 
     #[test]
     fn an_abort_marker_with_no_batch_left_is_discardable_and_leaves_the_index() {
-        let kept = run(vec![aborted(7, 1, 2)], vec![Step::Control(
-            control_batch(2, 7, ABORT),
-            true,
-        )]);
+        let kept = run(
+            vec![aborted(7, 1, 2)],
+            vec![Step::Control(control_batch(2, 7, ABORT), true)],
+        );
         assert2::assert!(kept.is_empty());
     }
 
     #[test]
     fn a_commit_marker_is_discardable_once_the_batches_before_it_are_gone() {
-        run(vec![], vec![
-            Step::Control(control_batch(0, 7, COMMIT), true),
-            Step::Data(data(1, 7, true), false),
-            Step::Control(control_batch(2, 7, COMMIT), false),
-            // The second marker consumed the observation, so the next
-            // marker of the same producer has no batch behind it.
-            Step::Control(control_batch(3, 7, COMMIT), true),
-        ]);
+        run(
+            vec![],
+            vec![
+                Step::Control(control_batch(0, 7, COMMIT), true),
+                Step::Data(data(1, 7, true), false),
+                Step::Control(control_batch(2, 7, COMMIT), false),
+                // The second marker consumed the observation, so the next
+                // marker of the same producer has no batch behind it.
+                Step::Control(control_batch(3, 7, COMMIT), true),
+            ],
+        );
     }
 
     #[test]
     fn one_producers_data_does_not_hold_another_producers_marker() {
-        run(vec![], vec![
-            Step::Data(data(0, 7, true), false),
-            Step::Control(control_batch(1, 8, COMMIT), true),
-            Step::Control(control_batch(2, 7, COMMIT), false),
-        ]);
+        run(
+            vec![],
+            vec![
+                Step::Data(data(0, 7, true), false),
+                Step::Control(control_batch(1, 8, COMMIT), true),
+                Step::Control(control_batch(2, 7, COMMIT), false),
+            ],
+        );
     }
 
     #[test]
     fn non_transactional_batches_and_unknown_control_types_hold_nothing() {
-        run(vec![], vec![
-            Step::Data(data(0, 7, false), false),
-            Step::Control(control_batch(1, 7, COMMIT), true),
-            // A control type that is neither commit nor abort, such as a
-            // barrier marker, is never discardable.
-            Step::Control(control_batch(2, -1, 1000), false),
-        ]);
+        run(
+            vec![],
+            vec![
+                Step::Data(data(0, 7, false), false),
+                Step::Control(control_batch(1, 7, COMMIT), true),
+                // A control type that is neither commit nor abort, such as a
+                // barrier marker, is never discardable.
+                Step::Control(control_batch(2, -1, 1000), false),
+            ],
+        );
     }
 
     #[test]
@@ -286,12 +295,15 @@ mod tests {
         // The first transaction of producer 7 aborts at 2, the second commits.
         // The second transaction's data starts after the first one's marker,
         // so it is not aborted.
-        let kept = run(vec![aborted(7, 0, 2)], vec![
-            Step::Data(data(0, 7, true), true),
-            Step::Control(control_batch(2, 7, ABORT), false),
-            Step::Data(data(3, 7, true), false),
-            Step::Control(control_batch(4, 7, COMMIT), false),
-        ]);
+        let kept = run(
+            vec![aborted(7, 0, 2)],
+            vec![
+                Step::Data(data(0, 7, true), true),
+                Step::Control(control_batch(2, 7, ABORT), false),
+                Step::Data(data(3, 7, true), false),
+                Step::Control(control_batch(4, 7, COMMIT), false),
+            ],
+        );
         assert2::assert!(kept == vec![aborted(7, 0, 2)]);
     }
 }

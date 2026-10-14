@@ -157,32 +157,24 @@ required_approval = 2
     assert!(toml::from_str::<FileConfig>(toml).is_err());
 }
 
-#[test]
-fn background_unclean_recovery_accepts_exactly_three_spellings() {
-    for (name, spelling, expected) in [
-        ("off", "off", Some(BackgroundUncleanRecovery::Off)),
-        (
-            "audit-only",
-            "audit-only",
-            Some(BackgroundUncleanRecovery::AuditOnly),
-        ),
-        (
-            "require",
-            "require",
-            Some(BackgroundUncleanRecovery::Require),
-        ),
-        ("a fourth spelling", "audit_only", None),
-        ("a mode that does not exist", "warn", None),
-    ] {
-        let toml = format!(
-            "[break_glass]\nsigned_actions = []\nbackground_unclean_recovery = {spelling:?}\n"
-        );
-        let parsed = toml::from_str::<FileConfig>(&toml)
-            .ok()
-            .and_then(|file| file.break_glass)
-            .and_then(|section| section.background_unclean_recovery);
-        check!(parsed == expected, "case {name}");
-    }
+#[yare::parameterized(
+    off = { "off", Some(BackgroundUncleanRecovery::Off) },
+    audit_only = { "audit-only", Some(BackgroundUncleanRecovery::AuditOnly) },
+    require = { "require", Some(BackgroundUncleanRecovery::Require) },
+    fourth_spelling = { "audit_only", None },
+    unknown_mode = { "warn", None },
+)]
+fn background_unclean_recovery_accepts_exactly_three_spellings(
+    spelling: &str,
+    expected: Option<BackgroundUncleanRecovery>,
+) {
+    let toml =
+        format!("[break_glass]\nsigned_actions = []\nbackground_unclean_recovery = {spelling:?}\n");
+    let parsed = toml::from_str::<FileConfig>(&toml)
+        .ok()
+        .and_then(|file| file.break_glass)
+        .and_then(|section| section.background_unclean_recovery);
+    check!(parsed == expected, "case {spelling}");
 }
 
 /// Apply privileged-action sections beside the fixture's Alice operator key.

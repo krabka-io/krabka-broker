@@ -362,10 +362,13 @@ mod tests {
         }
 
         let image = krabka_metadata::MetadataImage::new(Uuid::nil());
-        let body = super::api_versions_response_body(4, ApiVersionsView {
-            admin_router: Some(&HeartbeatRouter),
-            ..view(&image, -1)
-        });
+        let body = super::api_versions_response_body(
+            4,
+            ApiVersionsView {
+                admin_router: Some(&HeartbeatRouter),
+                ..view(&image, -1)
+            },
+        );
         let resp = ApiVersionsResponse::decode(&mut &body[..], 4).expect("decode body");
 
         let heartbeat = resp
@@ -405,41 +408,50 @@ mod tests {
     /// #646: an unstable last version is advertised, and accepted, only under
     /// `unstable.api.versions.enable`, as Kafka's `ApiKeys.toApiVersion` and
     /// `ApiKeys.isVersionEnabled` gate it.
-    #[test]
-    fn unstable_last_versions_follow_unstable_api_versions_enable() {
-        for (unstable, advertised_max, v6_disabled) in [
-            (UnstableApiVersions::Disabled, 5, true),
-            (UnstableApiVersions::Enabled, 6, false),
-        ] {
-            let api_keys = advertised_api_keys(Some(&UnstableRouter), unstable);
-            let row = api_keys
-                .iter()
-                .find(|key| key.api_key == 22)
-                .expect("router api advertised");
-            assert2::check!(
-                (row.min_version, row.max_version) == (0, advertised_max),
-                "{unstable:?}"
-            );
-            assert2::check!(
-                is_disabled_version(22, 6, Some(&UnstableRouter), unstable) == v6_disabled,
-                "{unstable:?}"
-            );
-            assert2::check!(
-                !is_disabled_version(22, 5, Some(&UnstableRouter), unstable),
-                "{unstable:?}"
-            );
-            // An out-of-range version is the decoder's business, not this
-            // gate's; an api the listener does not know is not disabled.
-            assert2::check!(!is_disabled_version(22, 7, Some(&UnstableRouter), unstable));
-            assert2::check!(!is_disabled_version(22, 6, None, unstable));
-        }
+    #[yare::parameterized(
+        disabled = { UnstableApiVersions::Disabled, 5, true },
+        enabled = { UnstableApiVersions::Enabled, 6, false },
+    )]
+    fn unstable_last_versions_follow_unstable_api_versions_enable(
+        unstable: UnstableApiVersions,
+        advertised_max: i16,
+        v6_disabled: bool,
+    ) {
+        let api_keys = advertised_api_keys(Some(&UnstableRouter), unstable);
+        let row = api_keys
+            .iter()
+            .find(|key| key.api_key == 22)
+            .expect("router api advertised");
+        assert2::check!(
+            (row.min_version, row.max_version) == (0, advertised_max),
+            "{unstable:?}"
+        );
+        assert2::check!(
+            is_disabled_version(22, 6, Some(&UnstableRouter), unstable) == v6_disabled,
+            "{unstable:?}"
+        );
+        assert2::check!(
+            !is_disabled_version(22, 5, Some(&UnstableRouter), unstable),
+            "{unstable:?}"
+        );
+        // An out-of-range version is the decoder's business, not this
+        // gate's; an api the listener does not know is not disabled.
+        assert2::check!(!is_disabled_version(22, 7, Some(&UnstableRouter), unstable));
+        assert2::check!(!is_disabled_version(22, 6, None, unstable));
     }
 
     /// A router api Kafka 4.3.1 does not have -- `UnregisterController` (94),
     /// a trunk key -- is neither advertised nor accepted while unstable api
     /// versions are disabled, and is served whole when they are enabled.
-    #[test]
-    fn an_api_kafka_4_3_1_lacks_follows_unstable_api_versions_enable() {
+    #[yare::parameterized(
+        disabled = { UnstableApiVersions::Disabled, None, true },
+        enabled = { UnstableApiVersions::Enabled, Some((0, 0)), false },
+    )]
+    fn an_api_kafka_4_3_1_lacks_follows_unstable_api_versions_enable(
+        unstable: UnstableApiVersions,
+        advertised: Option<(i16, i16)>,
+        disabled: bool,
+    ) {
         struct TrunkRouter;
         impl ControllerAdminRouter for TrunkRouter {
             fn api_versions(&self) -> &[ControllerApiVersion] {
@@ -457,20 +469,15 @@ mod tests {
             }
         }
 
-        for (unstable, advertised, disabled) in [
-            (UnstableApiVersions::Disabled, None, true),
-            (UnstableApiVersions::Enabled, Some((0, 0)), false),
-        ] {
-            let row = advertised_api_keys(Some(&TrunkRouter), unstable)
-                .into_iter()
-                .find(|key| key.api_key == 94)
-                .map(|key| (key.min_version, key.max_version));
-            assert2::check!(row == advertised, "{unstable:?}");
-            assert2::check!(
-                is_disabled_version(94, 0, Some(&TrunkRouter), unstable) == disabled,
-                "{unstable:?}"
-            );
-        }
+        let row = advertised_api_keys(Some(&TrunkRouter), unstable)
+            .into_iter()
+            .find(|key| key.api_key == 94)
+            .map(|key| (key.min_version, key.max_version));
+        assert2::check!(row == advertised, "{unstable:?}");
+        assert2::check!(
+            is_disabled_version(94, 0, Some(&TrunkRouter), unstable) == disabled,
+            "{unstable:?}"
+        );
     }
 
     /// The controller listener's table is strictly ascending by api key, the
@@ -783,33 +790,29 @@ mod tests {
     /// production level, and with only the API flag set it advertises the
     /// highest level krabka knows. The listener takes no feature flag at all:
     /// its view has none.
-    #[test]
-    fn the_controller_listener_caps_supported_features_with_the_api_flag() {
-        use krabka_metadata::metadata_version::METADATA_VERSION_MAX;
-
+    #[yare::parameterized(
+        disabled = { UnstableApiVersions::Disabled, LATEST_PRODUCTION_METADATA_VERSION },
+        enabled = { UnstableApiVersions::Enabled, krabka_metadata::metadata_version::METADATA_VERSION_MAX },
+    )]
+    fn the_controller_listener_caps_supported_features_with_the_api_flag(
+        unstable: UnstableApiVersions,
+        want_max: i16,
+    ) {
         let image = krabka_metadata::MetadataImage::new(Uuid::nil());
-        for (unstable, want_max) in [
-            (
-                UnstableApiVersions::Disabled,
-                LATEST_PRODUCTION_METADATA_VERSION,
-            ),
-            (UnstableApiVersions::Enabled, METADATA_VERSION_MAX),
-        ] {
-            let view = ApiVersionsView {
-                unstable,
-                ..view(&image, 0)
-            };
-            let body = super::api_versions_response_body(4, view);
-            let resp = ApiVersionsResponse::decode(&mut &body[..], 4).expect("decode");
-            let metadata_version = resp
-                .supported_features
-                .iter()
-                .find(|feature| feature.name == "metadata.version")
-                .expect("metadata.version is supported");
-            assert2::check!(
-                metadata_version.max_version == want_max,
-                "unstable.api.versions.enable {unstable:?}"
-            );
-        }
+        let view = ApiVersionsView {
+            unstable,
+            ..view(&image, 0)
+        };
+        let body = super::api_versions_response_body(4, view);
+        let resp = ApiVersionsResponse::decode(&mut &body[..], 4).expect("decode");
+        let metadata_version = resp
+            .supported_features
+            .iter()
+            .find(|feature| feature.name == "metadata.version")
+            .expect("metadata.version is supported");
+        assert2::check!(
+            metadata_version.max_version == want_max,
+            "unstable.api.versions.enable {unstable:?}"
+        );
     }
 }

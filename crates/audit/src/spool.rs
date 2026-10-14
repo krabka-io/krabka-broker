@@ -258,7 +258,9 @@ fn loss_marker_batch(record: &AuditRecord) -> Option<AuditLosses> {
     })
 }
 
-fn io<E: std::fmt::Display>(e: E) -> AuditError { AuditError::Io(e.to_string()) }
+fn io<E: std::fmt::Display>(e: E) -> AuditError {
+    AuditError::Io(e.to_string())
+}
 
 fn persist_loss_state(path: &Path, state: AuditLosses) -> Result<(), AuditError> {
     let mut bytes = [0_u8; LOSS_STATE_LEN];
@@ -429,16 +431,24 @@ impl Spool {
     }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool { self.count.0 == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.count.0 == 0
+    }
 
     #[must_use]
-    pub fn count(&self) -> RecordCount { self.count }
+    pub fn count(&self) -> RecordCount {
+        self.count
+    }
 
-    pub(crate) fn pending_losses(&self) -> Arc<PendingLosses> { Arc::clone(&self.pending_losses) }
+    pub(crate) fn pending_losses(&self) -> Arc<PendingLosses> {
+        Arc::clone(&self.pending_losses)
+    }
 
     /// How many bytes the spool currently holds.
     #[must_use]
-    pub fn size(&self) -> ByteSize { ByteSize::from_bytes(self.bytes.0) }
+    pub fn size(&self) -> ByteSize {
+        ByteSize::from_bytes(self.bytes.0)
+    }
 
     /// Whether [`Spool::open`] found a torn tail frame and cut it off.
     ///
@@ -447,7 +457,9 @@ impl Spool {
     /// whether it had to -- healing a spool that was intact would mean
     /// discarding good bytes, so the two cases are worth telling apart.
     #[must_use]
-    pub fn recovered_torn_tail(&self) -> bool { self.recovered_torn_tail }
+    pub fn recovered_torn_tail(&self) -> bool {
+        self.recovered_torn_tail
+    }
 
     /// Append a record to the spool.
     ///
@@ -497,7 +509,9 @@ impl Spool {
         self.clear_replay_poison()
     }
 
-    pub(crate) fn abort_replay(&self) -> Result<(), AuditError> { self.clear_replay_poison() }
+    pub(crate) fn abort_replay(&self) -> Result<(), AuditError> {
+        self.clear_replay_poison()
+    }
 
     fn clear_replay_poison(&self) -> Result<(), AuditError> {
         let path = self.path.with_file_name(REPLAY_POISON_FILE);
@@ -711,7 +725,9 @@ impl Spool {
 }
 
 /// [`HEADER_LEN`] as a file offset.
-fn header_len_u64() -> u64 { u64::try_from(HEADER_LEN).expect("a six-byte header fits u64") }
+fn header_len_u64() -> u64 {
+    u64::try_from(HEADER_LEN).expect("a six-byte header fits u64")
+}
 
 // cargo-mutants: I/O-only wrapper with no in-process signal (fsyncs directory entry).
 #[cfg(unix)]
@@ -1327,6 +1343,9 @@ mod tests {
         0x00, 0x00, 0x00, 0x02, b'v', b'1', // value
     ];
 
+    const FUTURE_HEADER: &[u8] = &[b'K', b'A', b'U', b'D', 0x00, 0x01];
+    const NEGATIVE_HEADER: &[u8] = &[b'K', b'A', b'U', b'D', 0xff, 0xff];
+
     fn golden_record() -> AuditRecord {
         AuditRecord {
             class: AuditEventClass::ApplicationLifecycle,
@@ -1339,13 +1358,6 @@ mod tests {
     struct ExpectedSidecar {
         file: &'static str,
         want: Vec<u8>,
-    }
-
-    /// A spool file with its contents and the version its header refusal must name.
-    struct HeaderCase {
-        file: &'static str,
-        contents: Vec<u8>,
-        found: Option<i16>,
     }
 
     fn spooled_golden_record() -> TempSpool {
@@ -1454,76 +1466,51 @@ mod tests {
     /// Every file in the spool directory refuses a header it does not know:
     /// none at all (the 0.x layout, which started straight with the data) is
     /// `found: None`, and a version other than 0 is named.
-    #[test]
-    fn open_refuses_a_missing_or_unknown_file_header() {
-        let v0_frame = &GOLDEN_SPOOL[6..];
-        let future: &[u8] = &[b'K', b'A', b'U', b'D', 0x00, 0x01];
-        let negative: &[u8] = &[b'K', b'A', b'U', b'D', 0xff, 0xff];
-        let case = |file, contents, found| HeaderCase {
-            file,
-            contents,
-            found,
+    #[yare::parameterized(
+        spool_v0_frame = { SPOOL_FILE, GOLDEN_SPOOL[6..].to_vec(), None },
+        spool_empty = { SPOOL_FILE, Vec::new(), None },
+        spool_short_header = { SPOOL_FILE, b"KAU".to_vec(), None },
+        spool_future_version = { SPOOL_FILE, [FUTURE_HEADER, &GOLDEN_SPOOL[6..]].concat(), Some(1) },
+        spool_negative_version = { SPOOL_FILE, NEGATIVE_HEADER.to_vec(), Some(-1) },
+        losses_empty_version = { LOSS_STATE_FILE, [0u8; 16].to_vec(), None },
+        losses_future_version = { LOSS_STATE_FILE, [FUTURE_HEADER, &[0u8; 16]].concat(), Some(1) },
+        replay_offset_empty_version = { REPLAY_OFFSET_FILE, [0u8; 8].to_vec(), None },
+        replay_offset_future_version = { REPLAY_OFFSET_FILE, [FUTURE_HEADER, &[0u8; 8]].concat(), Some(1) },
+        replay_poison_empty_version = { REPLAY_POISON_FILE, [&0u64.to_be_bytes()[..], &GOLDEN_SPOOL[6..]].concat(), None },
+        replay_poison_future_version = { REPLAY_POISON_FILE, [FUTURE_HEADER, &0u64.to_be_bytes(), &GOLDEN_SPOOL[6..]].concat(), Some(1) },
+    )]
+    fn open_refuses_a_missing_or_unknown_file_header(
+        file: &str,
+        contents: Vec<u8>,
+        found: Option<i16>,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(file), &contents).unwrap();
+        let got = match Spool::open(dir.path(), ROOMY_CAP) {
+            Err(AuditError::UnsupportedSpoolFormat { file, found }) => Some((file, found)),
+            _ => None,
         };
-        let cases: Vec<HeaderCase> = vec![
-            case(SPOOL_FILE, v0_frame.to_vec(), None),
-            case(SPOOL_FILE, Vec::new(), None),
-            case(SPOOL_FILE, b"KAU".to_vec(), None),
-            case(SPOOL_FILE, [future, v0_frame].concat(), Some(1)),
-            case(SPOOL_FILE, negative.to_vec(), Some(-1)),
-            case(LOSS_STATE_FILE, [0u8; 16].to_vec(), None),
-            case(LOSS_STATE_FILE, [future, &[0u8; 16]].concat(), Some(1)),
-            case(REPLAY_OFFSET_FILE, [0u8; 8].to_vec(), None),
-            case(REPLAY_OFFSET_FILE, [future, &[0u8; 8]].concat(), Some(1)),
-            case(
-                REPLAY_POISON_FILE,
-                [&0u64.to_be_bytes()[..], v0_frame].concat(),
-                None,
-            ),
-            case(
-                REPLAY_POISON_FILE,
-                [future, &0u64.to_be_bytes(), v0_frame].concat(),
-                Some(1),
-            ),
-        ];
-        for HeaderCase {
-            file,
-            contents,
-            found,
-        } in cases
-        {
-            let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join(file), &contents).unwrap();
-            let got = match Spool::open(dir.path(), ROOMY_CAP) {
-                Err(AuditError::UnsupportedSpoolFormat { file, found }) => Some((file, found)),
-                _ => None,
-            };
-            check!(
-                got == Some((file.to_owned(), found)),
-                "{file} {contents:x?}"
-            );
-        }
+        check!(
+            got == Some((file.to_owned(), found)),
+            "{file} {contents:x?}"
+        );
     }
 
-    #[test]
-    fn unsupported_spool_format_names_the_file_and_the_version() {
-        let cases = [
-            (
-                None,
-                "audit spool file audit.spool: has no version header; it predates krabka 1.0, \
-                 so the audit spool directory must be emptied (the node reformatted) before \
-                 this broker starts",
-            ),
-            (
-                Some(3),
-                "audit spool file audit.spool: has version 3, which this build does not read",
-            ),
-        ];
-        for (found, want) in cases {
-            let error = AuditError::UnsupportedSpoolFormat {
-                file: SPOOL_FILE.into(),
-                found,
-            };
-            check!(error.to_string() == want);
-        }
+    #[yare::parameterized(
+        no_header = {
+            None,
+            "audit spool file audit.spool: has no version header; it predates krabka 1.0, so the audit spool directory must be emptied (the node reformatted) before this broker starts",
+        },
+        future_version = {
+            Some(3),
+            "audit spool file audit.spool: has version 3, which this build does not read",
+        },
+    )]
+    fn unsupported_spool_format_names_the_file_and_the_version(found: Option<i16>, want: &str) {
+        let error = AuditError::UnsupportedSpoolFormat {
+            file: SPOOL_FILE.into(),
+            found,
+        };
+        check!(error.to_string() == want);
     }
 }

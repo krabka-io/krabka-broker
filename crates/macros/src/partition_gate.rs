@@ -45,27 +45,27 @@ pub(crate) fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
 mod tests {
     use {super::expand, crate::meta::compact, assert2::assert};
 
-    #[test]
-    fn all_actions_keep_visibility_docs_and_complete_gate_arguments() {
-        for action in ["CancelReassignment", "DeleteRecords", "UncleanElectLeaders"] {
-            let input = format!("#[doc = \"ordered approval\"] pub(super) fn approve = {action};");
-            let output = compact(&expand(&input.parse().unwrap()).unwrap());
-            assert!(output.contains("#[doc=\"orderedapproval\"]pub(super)fnapprove("));
-            assert!(output.contains(&format!("authorize_partition(image,config,krabka_metadata::BreakGlassAction::{action},topic,partition,")));
-        }
-        assert!(expand(&"fn approve = DeleteRecords;".parse().unwrap()).is_ok());
+    #[yare::parameterized(
+        cancel_reassignment = { "CancelReassignment" },
+        delete_records = { "DeleteRecords" },
+        unclean_elect_leaders = { "UncleanElectLeaders" },
+    )]
+    fn all_actions_keep_visibility_docs_and_complete_gate_arguments(action: &str) {
+        let input = format!("#[doc = \"ordered approval\"] pub(super) fn approve = {action};");
+        let output = compact(&expand(&input.parse().unwrap()).unwrap());
+        assert2::assert!(output.contains("#[doc=\"orderedapproval\"]pub(super)fnapprove("));
+        assert2::assert!(output.contains(&format!("authorize_partition(image,config,krabka_metadata::BreakGlassAction::{action},topic,partition,")));
+        assert2::assert!(expand(&"fn approve = DeleteRecords;".parse().unwrap()).is_ok());
     }
 
-    #[test]
-    fn rejects_unsupported_or_incomplete_declarations() {
-        for invalid in [
-            "",
-            "fn approve = Unknown;",
-            "fn approve() = DeleteRecords;",
-            "fn approve = DeleteRecords",
-            "fn approve = DeleteRecords; fn other = DeleteRecords;",
-        ] {
-            assert!(expand(&invalid.parse().unwrap()).is_err(), "{invalid}");
-        }
+    #[yare::parameterized(
+        empty = { "" },
+        unknown_action = { "fn approve = Unknown;" },
+        parameters = { "fn approve() = DeleteRecords;" },
+        missing_semicolon = { "fn approve = DeleteRecords" },
+        multiple_items = { "fn approve = DeleteRecords; fn other = DeleteRecords;" },
+    )]
+    fn rejects_unsupported_or_incomplete_declarations(invalid: &str) {
+        assert2::assert!(expand(&invalid.parse().unwrap()).is_err(), "{invalid}");
     }
 }

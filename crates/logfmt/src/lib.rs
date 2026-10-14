@@ -75,17 +75,25 @@ impl JsonVisitor {
 }
 
 impl Visit for JsonVisitor {
-    fn record_str(&mut self, field: &Field, value: &str) { self.insert(field, Value::from(value)); }
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.insert(field, Value::from(value));
+    }
 
     fn record_bool(&mut self, field: &Field, value: bool) {
         self.insert(field, Value::from(value));
     }
 
-    fn record_i64(&mut self, field: &Field, value: i64) { self.insert(field, Value::from(value)); }
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        self.insert(field, Value::from(value));
+    }
 
-    fn record_u64(&mut self, field: &Field, value: u64) { self.insert(field, Value::from(value)); }
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.insert(field, Value::from(value));
+    }
 
-    fn record_f64(&mut self, field: &Field, value: f64) { self.insert(field, Value::from(value)); }
+    fn record_f64(&mut self, field: &Field, value: f64) {
+        self.insert(field, Value::from(value));
+    }
 
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         // The event message is recorded here as a `fmt::Arguments`, whose
@@ -186,13 +194,17 @@ mod tests {
             Ok(bytes.len())
         }
 
-        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 
     impl<'a> MakeWriter<'a> for Buf {
         type Writer = Buf;
 
-        fn make_writer(&'a self) -> Self::Writer { self.clone() }
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
     }
 
     /// Capture the JSON emitted for a single event by `emit`.
@@ -210,8 +222,14 @@ mod tests {
         serde_json::from_str(line).expect("each log line is valid JSON")
     }
 
-    #[test]
-    fn emits_cloud_logging_json() {
+    #[yare::parameterized(
+        severity = { "severity", serde_json::json!("INFO") },
+        message = { "message", serde_json::json!("connection opened") },
+        listener = { "listener", serde_json::json!("PLAIN") },
+        sasl = { "sasl", serde_json::json!(false) },
+        port = { "port", serde_json::json!(9092) },
+    )]
+    fn emits_cloud_logging_json(field: &str, want: serde_json::Value) {
         let v = capture(|| {
             tracing::info!(
                 listener = "PLAIN",
@@ -221,15 +239,7 @@ mod tests {
             );
         });
         // Field types are preserved, not stringified.
-        for (field, want) in [
-            ("severity", serde_json::json!("INFO")),
-            ("message", serde_json::json!("connection opened")),
-            ("listener", serde_json::json!("PLAIN")),
-            ("sasl", serde_json::json!(false)),
-            ("port", serde_json::json!(9092)),
-        ] {
-            assert2::assert!(v[field] == want);
-        }
+        assert2::assert!(v[field] == want);
         check!(v["target"].is_string());
         check!(v["timestamp"].as_str().is_some_and(|t| t.ends_with('Z')));
         // `level` is replaced by Cloud Logging's `severity`.

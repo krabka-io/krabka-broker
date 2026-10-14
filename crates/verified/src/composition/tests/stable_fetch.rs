@@ -11,15 +11,18 @@ fn visibility_oracle(starts: &[i64], w: FetchWatermarks) -> Option<(i64, FetchVi
         return None;
     }
     let lso = starts.iter().copied().min().unwrap_or(w.log_end);
-    Some((lso, FetchVisibility {
-        out_of_range: w.log_start > w.log_end,
-        empty: w.log_start <= w.log_end && w.log_start >= w.hw.min(w.deliverable),
-        limit_offset: lso.min(w.hw).min(w.deliverable),
-        effective_lso: lso.min(w.hw),
-        read_committed_aborts: true,
-        response_hw: w.hw,
-        response_lso: lso.min(w.hw),
-    }))
+    Some((
+        lso,
+        FetchVisibility {
+            out_of_range: w.log_start > w.log_end,
+            empty: w.log_start <= w.log_end && w.log_start >= w.hw.min(w.deliverable),
+            limit_offset: lso.min(w.hw).min(w.deliverable),
+            effective_lso: lso.min(w.hw),
+            read_committed_aborts: true,
+            response_hw: w.hw,
+            response_lso: lso.min(w.hw),
+        },
+    ))
 }
 
 proptest! {
@@ -64,9 +67,15 @@ proptest! {
 
 #[test]
 fn stability_bounds_cover_duplicate_starts_rejection_and_signed_extremes() {
-    for starts in [&[][..], &[9, 3, 14], &[3, 3], &[20], &[21], &[-1], &[
-        i64::MIN,
-    ]] {
+    for starts in [
+        &[][..],
+        &[9, 3, 14],
+        &[3, 3],
+        &[20],
+        &[21],
+        &[-1],
+        &[i64::MIN],
+    ] {
         for deliverable in [0, 2, 20] {
             let w = FetchWatermarks {
                 log_start: 0,

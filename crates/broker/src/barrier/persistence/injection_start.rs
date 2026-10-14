@@ -92,24 +92,28 @@ mod tests {
 
     /// A target topic is a string with an `i16` length. The encoder writes one
     /// of 32767 bytes and refuses a longer one with an error.
-    #[test]
-    fn a_topic_name_of_32767_bytes_encodes_and_one_of_32768_is_refused() {
-        for (length, encodes) in [(MAX_STRING_BYTES, true), (MAX_STRING_BYTES + 1, false)] {
-            let value = InjectionStartValue {
-                targets: vec![TopicTarget {
-                    topic: "t".repeat(length),
-                    partition_count: 2,
-                }],
-                ..sample_injection_start()
-            };
-            let encoded = encode_injection_start(&value);
-            assert!(encoded.is_ok() == encodes, "{length} bytes");
-            if let Ok(bytes) = encoded {
-                assert!(
-                    decode_injection_start(&bytes).ok() == Some(value),
-                    "{length} bytes"
-                );
-            }
+    #[yare::parameterized(
+        at_limit = { MAX_STRING_BYTES, true },
+        over_limit = { MAX_STRING_BYTES + 1, false },
+    )]
+    fn a_topic_name_of_32767_bytes_encodes_and_one_of_32768_is_refused(
+        length: usize,
+        encodes: bool,
+    ) {
+        let value = InjectionStartValue {
+            targets: vec![TopicTarget {
+                topic: "t".repeat(length),
+                partition_count: 2,
+            }],
+            ..sample_injection_start()
+        };
+        let encoded = encode_injection_start(&value);
+        assert2::assert!(encoded.is_ok() == encodes, "{length} bytes");
+        if let Ok(bytes) = encoded {
+            assert2::assert!(
+                decode_injection_start(&bytes).ok() == Some(value),
+                "{length} bytes"
+            );
         }
     }
 }

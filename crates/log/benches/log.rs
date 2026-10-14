@@ -192,10 +192,13 @@ fn bench_append_direct_groups(c: &mut Criterion) {
         let batches = vec![&batch; usize::try_from(count).unwrap()];
         for coalesce in [false, true] {
             let dir = tempfile::tempdir_in(&path).unwrap();
-            let mut log = Log::open(dir.path(), LogConfig {
-                segment_allocation: SegmentAllocation::Preallocate,
-                ..LogConfig::default()
-            })
+            let mut log = Log::open(
+                dir.path(),
+                LogConfig {
+                    segment_allocation: SegmentAllocation::Preallocate,
+                    ..LogConfig::default()
+                },
+            )
             .unwrap();
             log.append_verbatim(&batch).unwrap();
             assert2::assert!(

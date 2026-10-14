@@ -401,30 +401,32 @@ fn a_leaving_member_tombstones_the_resolution_only_it_used() {
 /// `i16` length prefix. A pattern of 32767 bytes still fits and its record
 /// encodes. A longer one is rejected before it reaches persistence, just as
 /// Kafka's request reader rejects it before the coordinator sees it.
-#[test]
-fn a_regex_over_the_record_key_bound_does_not_encode() {
+#[yare::parameterized(
+    at_limit = { false, true },
+    over_limit = { true, false },
+)]
+fn a_regex_over_the_record_key_bound_does_not_encode(over_limit: bool, encodes: bool) {
     let longest = "a".repeat(usize::from(i16::MAX.unsigned_abs()));
     let too_long = format!("{longest}a");
     let resolver = FixedRegexResolver::new(&[(&longest, &["a1"]), (&too_long, &["a1"])]);
     let metadata = metadata(false);
     let regexes = RegexResolution::with(&resolver);
 
-    for (pattern, encodes) in [(&longest, true), (&too_long, false)] {
-        let mut state = GroupState::new("g");
-        let joined = heartbeat(
-            &mut state,
-            &metadata,
-            &request("m1", 0, Some(pattern)),
-            &regexes,
-        );
-        if encodes {
-            check!(joined.step.response.error_code == codes::NONE);
-            check!(joined.result.resolved_regexes.len() == 1);
-            check!(joined.result.to_batch("g", 0).is_ok());
-        } else {
-            check!(joined.step.response.error_code != codes::NONE);
-            check!(joined.result.resolved_regexes.is_empty());
-        }
+    let pattern = if over_limit { &too_long } else { &longest };
+    let mut state = GroupState::new("g");
+    let joined = heartbeat(
+        &mut state,
+        &metadata,
+        &request("m1", 0, Some(pattern)),
+        &regexes,
+    );
+    if encodes {
+        check!(joined.step.response.error_code == codes::NONE);
+        check!(joined.result.resolved_regexes.len() == 1);
+        check!(joined.result.to_batch("g", 0).is_ok());
+    } else {
+        check!(joined.step.response.error_code != codes::NONE);
+        check!(joined.result.resolved_regexes.is_empty());
     }
 }
 

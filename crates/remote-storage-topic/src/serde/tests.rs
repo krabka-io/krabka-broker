@@ -19,7 +19,9 @@ fn tp() -> TopicIdPartition {
     TopicIdPartition::new(Uuid::from_u128(0xCAFE_BABE), "orders-📦", 7)
 }
 
-fn seg_id(id: Uuid) -> RemoteLogSegmentId { RemoteLogSegmentId::new(tp(), id) }
+fn seg_id(id: Uuid) -> RemoteLogSegmentId {
+    RemoteLogSegmentId::new(tp(), id)
+}
 
 #[derive(krabka_macros::FieldDefaults)]
 struct AddSegmentSetup {
@@ -117,22 +119,20 @@ fn round_trip_update_no_custom_metadata() {
     assert!(MetadataEvent::decode(&bytes).unwrap() == event);
 }
 
-#[test]
-fn round_trip_partition_delete_each_state() {
-    for state in [
-        RemotePartitionDeleteState::DeletePartitionMarked,
-        RemotePartitionDeleteState::DeletePartitionStarted,
-        RemotePartitionDeleteState::DeletePartitionFinished,
-    ] {
-        let event = MetadataEvent::PartitionDelete(RemotePartitionDeleteMetadata {
-            topic_id_partition: tp(),
-            state,
-            event_timestamp_ms: 500,
-            broker_id: 1,
-        });
-        let bytes = event.encode();
-        assert!(MetadataEvent::decode(&bytes).unwrap() == event);
-    }
+#[yare::parameterized(
+    marked = { RemotePartitionDeleteState::DeletePartitionMarked },
+    started = { RemotePartitionDeleteState::DeletePartitionStarted },
+    finished = { RemotePartitionDeleteState::DeletePartitionFinished },
+)]
+fn round_trip_partition_delete_each_state(state: RemotePartitionDeleteState) {
+    let event = MetadataEvent::PartitionDelete(RemotePartitionDeleteMetadata {
+        topic_id_partition: tp(),
+        state,
+        event_timestamp_ms: 500,
+        broker_id: 1,
+    });
+    let bytes = event.encode();
+    assert2::assert!(MetadataEvent::decode(&bytes).unwrap() == event);
 }
 
 #[test]

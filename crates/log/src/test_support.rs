@@ -14,13 +14,18 @@ use {
     },
 };
 
-pub(crate) fn open_log(dir: &Path) -> Log { Log::open(dir, LogConfig::default()).unwrap() }
+pub(crate) fn open_log(dir: &Path) -> Log {
+    Log::open(dir, LogConfig::default()).unwrap()
+}
 
 pub(crate) fn segmented_log(dir: &Path, segment_size: krabka_units::prelude::ByteSize) -> Log {
-    Log::open(dir, LogConfig {
-        segment_size,
-        ..LogConfig::default()
-    })
+    Log::open(
+        dir,
+        LogConfig {
+            segment_size,
+            ..LogConfig::default()
+        },
+    )
     .unwrap()
 }
 
@@ -161,7 +166,9 @@ pub(crate) struct RecordedAdvice(std::sync::Mutex<Vec<AdviceCall>>);
 
 impl RecordedAdvice {
     /// The hints given since the last call, oldest first.
-    pub(crate) fn take(&self) -> Vec<AdviceCall> { std::mem::take(&mut *self.0.lock().unwrap()) }
+    pub(crate) fn take(&self) -> Vec<AdviceCall> {
+        std::mem::take(&mut *self.0.lock().unwrap())
+    }
 }
 
 impl LogIo for RecordedAdvice {

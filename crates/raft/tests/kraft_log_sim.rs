@@ -72,9 +72,13 @@ fn make_batch(epoch: Epoch, value: &[u8]) -> RecordBatch {
 }
 
 impl LogView for KraftBackedLog {
-    fn end_offset(&self) -> i64 { LogView::end_offset(&self.log) }
+    fn end_offset(&self) -> i64 {
+        LogView::end_offset(&self.log)
+    }
 
-    fn last_epoch(&self) -> Epoch { LogView::last_epoch(&self.log) }
+    fn last_epoch(&self) -> Epoch {
+        LogView::last_epoch(&self.log)
+    }
 
     fn end_offset_for_epoch(&self, epoch: Epoch) -> LogOffsetMetadata {
         LogView::end_offset_for_epoch(&self.log, epoch)

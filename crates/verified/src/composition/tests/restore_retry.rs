@@ -33,8 +33,12 @@ proptest! {
     }
 }
 
-#[test]
-fn empty_and_trailing_filtered_batches_keep_the_original_sequence_span() {
+#[yare::parameterized(
+    below_batch = { Some(8) },
+    at_batch_start = { Some(9) },
+    no_offset_bound = { None },
+)]
+fn empty_and_trailing_filtered_batches_keep_the_original_sequence_span(bound: Option<i64>) {
     let frame = RestoreBatchFrame {
         base_offset: 9,
         last_offset_delta: 2,
@@ -58,25 +62,23 @@ fn empty_and_trailing_filtered_batches_keep_the_original_sequence_span() {
             restore_exclusions(false),
         ),
     ];
-    for bound in [Some(8), Some(9), None] {
-        let result = filtered_restore_preserves_producer_retry(
-            frame,
-            &records,
-            (bound, None),
-            (7, 2, i32::MAX - 1),
-        );
-        let expected: Vec<_> = records
-            .iter()
-            .enumerate()
-            .filter_map(|(i, (record, _))| {
-                let offset = 9 + i64::from(record.offset_delta);
-                bound
-                    .is_none_or(|bound| offset <= bound)
-                    .then_some((i, offset, 100))
-            })
-            .collect();
-        assert2::assert!(result.0 == expected);
-        assert2::assert!(result.1 == 12 && result.2 == i32::MAX - 1);
-        assert2::assert!(result.3 == ProducerDecision::Duplicate { retained: 4 });
-    }
+    let result = filtered_restore_preserves_producer_retry(
+        frame,
+        &records,
+        (bound, None),
+        (7, 2, i32::MAX - 1),
+    );
+    let expected: Vec<_> = records
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (record, _))| {
+            let offset = 9 + i64::from(record.offset_delta);
+            bound
+                .is_none_or(|bound| offset <= bound)
+                .then_some((i, offset, 100))
+        })
+        .collect();
+    assert2::assert!(result.0 == expected);
+    assert2::assert!(result.1 == 12 && result.2 == i32::MAX - 1);
+    assert2::assert!(result.3 == ProducerDecision::Duplicate { retained: 4 });
 }

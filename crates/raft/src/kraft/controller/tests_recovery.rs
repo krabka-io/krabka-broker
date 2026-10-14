@@ -123,10 +123,13 @@ fn control_replay_stops_inside_a_partially_committed_batch() {
     let RestartedControl {
         state, committed, ..
     } = restart_after_control_writes(|log, committed, uncommitted| {
-        let mut batch = typed_control_batch(1, &[
-            ControlRecord::Voters(voter_set_to_wire(committed)),
-            ControlRecord::Voters(voter_set_to_wire(uncommitted)),
-        ])
+        let mut batch = typed_control_batch(
+            1,
+            &[
+                ControlRecord::Voters(voter_set_to_wire(committed)),
+                ControlRecord::Voters(voter_set_to_wire(uncommitted)),
+            ],
+        )
         .expect("mixed-commit voter batch");
         log.append(&mut batch, 0).expect("append voter batch");
         log.advance_hwm(Offset(1));
@@ -234,13 +237,16 @@ fn control_state_at_replays_version_and_voters_at_boundary_offsets() {
 
     {
         let mut log = KraftLog::open(dir.path(), &MetadataLogConfig::default()).expect("open log");
-        let mut batch0 = typed_control_batch(1, &[ControlRecord::KRaftVersion(
-            krabka_protocol::owned::k_raft_version_record::KRaftVersionRecord {
-                version: 0,
-                k_raft_version: 1,
-                ..Default::default()
-            },
-        )])
+        let mut batch0 = typed_control_batch(
+            1,
+            &[ControlRecord::KRaftVersion(
+                krabka_protocol::owned::k_raft_version_record::KRaftVersionRecord {
+                    version: 0,
+                    k_raft_version: 1,
+                    ..Default::default()
+                },
+            )],
+        )
         .expect("batch 0");
         log.append(&mut batch0, 0).expect("append 0");
         log.advance_hwm(log.log_end_offset());
@@ -251,13 +257,16 @@ fn control_state_at_replays_version_and_voters_at_boundary_offsets() {
         log.append(&mut batch1, 0).expect("append 1");
         log.advance_hwm(log.log_end_offset());
 
-        let mut batch2 = typed_control_batch(1, &[ControlRecord::KRaftVersion(
-            krabka_protocol::owned::k_raft_version_record::KRaftVersionRecord {
-                version: 0,
-                k_raft_version: -1,
-                ..Default::default()
-            },
-        )])
+        let mut batch2 = typed_control_batch(
+            1,
+            &[ControlRecord::KRaftVersion(
+                krabka_protocol::owned::k_raft_version_record::KRaftVersionRecord {
+                    version: 0,
+                    k_raft_version: -1,
+                    ..Default::default()
+                },
+            )],
+        )
         .expect("batch 2");
         log.append(&mut batch2, 0).expect("append 2");
         log.advance_hwm(log.log_end_offset());
@@ -664,24 +673,24 @@ fn load_quorum_state_refuses_an_unknown_or_missing_data_version() {
 /// A file that is not JSON at all, such as the binary quorum state a build
 /// before 1.0 once wrote, or a zero-filled file, is refused rather than read
 /// as "no vote".
-#[test]
-fn load_quorum_state_refuses_a_file_that_is_not_json() {
-    for contents in [&[0u8; 53][..], &[0u8; 54][..], b"", b"{\"leaderId\""] {
-        let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join(QUORUM_STATE_FILE), contents).expect("write state");
+#[yare::parameterized(
+    binary_size_53 = { &[0u8; 53][..] },
+    binary_size_54 = { &[0u8; 54][..] },
+    empty_file = { b"" },
+    truncated_json = { b"{\"leaderId\"" },
+)]
+fn load_quorum_state_refuses_a_file_that_is_not_json(contents: &[u8]) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join(QUORUM_STATE_FILE), contents).expect("write state");
 
-        let loaded = load_quorum_state(dir.path(), uuid::Uuid::nil(), &voter_set(&[NodeId(1)]));
+    let loaded = load_quorum_state(dir.path(), uuid::Uuid::nil(), &voter_set(&[NodeId(1)]));
 
-        check!(
-            matches!(
-                loaded,
-                Err(RaftError::PersistedFormat {
-                    artifact: QUORUM_STATE_FILE,
-                    problem: PersistedFormatError::Malformed(_),
-                    ..
-                })
-            ),
-            "{contents:?}"
-        );
-    }
+    check!(matches!(
+        loaded,
+        Err(RaftError::PersistedFormat {
+            artifact: QUORUM_STATE_FILE,
+            problem: PersistedFormatError::Malformed(_),
+            ..
+        })
+    ));
 }

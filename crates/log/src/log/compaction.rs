@@ -709,11 +709,14 @@ mod tests {
         let mut log = Log::open(dir, cfg).unwrap();
         for i in 0..batches {
             let value = format!("v{i}");
-            let mut batch = keyed_batch(i, &[KeyedRecord {
-                offset_delta: 0,
-                key: b"key",
-                value: value.as_bytes(),
-            }]);
+            let mut batch = keyed_batch(
+                i,
+                &[KeyedRecord {
+                    offset_delta: 0,
+                    key: b"key",
+                    value: value.as_bytes(),
+                }],
+            );
             batch.base_timestamp = i * 1_000;
             batch.max_timestamp = i * 1_000;
             log.append(&mut batch).unwrap();
@@ -865,23 +868,29 @@ mod tests {
         let mut log = Log::open(dir.path(), cfg).unwrap();
         // The first segment holds two records under one key, written at
         // timestamp 0. A second batch seals it.
-        let mut first = keyed_batch(0, &[
-            KeyedRecord {
+        let mut first = keyed_batch(
+            0,
+            &[
+                KeyedRecord {
+                    offset_delta: 0,
+                    key: b"key",
+                    value: b"old",
+                },
+                KeyedRecord {
+                    offset_delta: 1,
+                    key: b"key",
+                    value: b"new",
+                },
+            ],
+        );
+        let mut second = keyed_batch(
+            0,
+            &[KeyedRecord {
                 offset_delta: 0,
-                key: b"key",
-                value: b"old",
-            },
-            KeyedRecord {
-                offset_delta: 1,
-                key: b"key",
-                value: b"new",
-            },
-        ]);
-        let mut second = keyed_batch(0, &[KeyedRecord {
-            offset_delta: 0,
-            key: b"other",
-            value: b"v",
-        }]);
+                key: b"other",
+                value: b"v",
+            }],
+        );
         second.base_timestamp = 1_000;
         second.max_timestamp = 1_000;
         log.append(&mut first).unwrap();
@@ -1027,11 +1036,14 @@ mod tests {
         let mut log = Log::open(dir.path(), cfg.clone()).unwrap();
         for i in 0..3 {
             let value = format!("v{i}");
-            let mut batch = keyed_batch(i, &[KeyedRecord {
-                offset_delta: 0,
-                key: b"key",
-                value: value.as_bytes(),
-            }]);
+            let mut batch = keyed_batch(
+                i,
+                &[KeyedRecord {
+                    offset_delta: 0,
+                    key: b"key",
+                    value: value.as_bytes(),
+                }],
+            );
             log.append(&mut batch).unwrap();
         }
         assert2::check!(!log.compaction_due(std::time::SystemTime::now(), UNBOUNDED_HW));
@@ -1049,11 +1061,14 @@ mod tests {
         let TempLog { dir, mut log } = compact_test_log();
         for i in 0..3 {
             let value = format!("v{i}");
-            let mut batch = keyed_batch(0, &[KeyedRecord {
-                offset_delta: 0,
-                key: b"key",
-                value: value.as_bytes(),
-            }]);
+            let mut batch = keyed_batch(
+                0,
+                &[KeyedRecord {
+                    offset_delta: 0,
+                    key: b"key",
+                    value: value.as_bytes(),
+                }],
+            );
             log.append(&mut batch).unwrap();
         }
         assert2::assert!(!log.segments.is_empty());
@@ -1097,11 +1112,14 @@ mod tests {
 
     #[test]
     fn compact_rejects_crc_corrupt_suffix_without_replacing_originals() {
-        let batch = keyed_batch(0, &[KeyedRecord {
-            offset_delta: 0,
-            key: b"corrupt",
-            value: b"suffix",
-        }]);
+        let batch = keyed_batch(
+            0,
+            &[KeyedRecord {
+                offset_delta: 0,
+                key: b"corrupt",
+                value: b"suffix",
+            }],
+        );
         let mut encoded = BytesMut::with_capacity(batch.encoded_len());
         batch.encode(&mut encoded).unwrap();
         // The stored CRC occupies bytes 17..21. Changing it preserves framing
@@ -1123,11 +1141,14 @@ mod tests {
             (b"k1", b"new"),
             (b"tail", b"t"),
         ] {
-            let mut batch = keyed_batch(0, &[KeyedRecord {
-                offset_delta: 0,
-                key,
-                value,
-            }]);
+            let mut batch = keyed_batch(
+                0,
+                &[KeyedRecord {
+                    offset_delta: 0,
+                    key,
+                    value,
+                }],
+            );
             batch.attributes = batch.attributes.with_compression(codec);
             log.append(&mut batch).unwrap();
         }
@@ -1136,11 +1157,14 @@ mod tests {
     fn append_versions(log: &mut Log) {
         for i in 0..3 {
             let value = format!("v{i}");
-            log.append(&mut keyed_batch(0, &[KeyedRecord {
-                offset_delta: 0,
-                key: b"k1",
-                value: value.as_bytes(),
-            }]))
+            log.append(&mut keyed_batch(
+                0,
+                &[KeyedRecord {
+                    offset_delta: 0,
+                    key: b"k1",
+                    value: value.as_bytes(),
+                }],
+            ))
             .unwrap();
         }
     }
@@ -1161,81 +1185,79 @@ mod tests {
         };
         let mut log = Log::open(dir, cfg).unwrap();
         append_versions(&mut log);
-        log.append(&mut keyed_batch(0, &[KeyedRecord {
-            offset_delta: 0,
-            key: active.key,
-            value: active.value,
-        }]))
+        log.append(&mut keyed_batch(
+            0,
+            &[KeyedRecord {
+                offset_delta: 0,
+                key: active.key,
+                value: active.value,
+            }],
+        ))
         .unwrap();
         log
     }
 
-    fn sealed_sizes(log: &Log) -> Vec<ByteSize> { log.segments.iter().map(Segment::size).collect() }
+    fn sealed_sizes(log: &Log) -> Vec<ByteSize> {
+        log.segments.iter().map(Segment::size).collect()
+    }
 
-    fn append_distinct_keys(log: &mut Log) { append_keyed_samples(log, 6, |i| format!("k{i}")); }
+    fn append_distinct_keys(log: &mut Log) {
+        append_keyed_samples(log, 6, |i| format!("k{i}"));
+    }
 
-    #[test]
-    fn compact_refuses_a_compressed_record_above_the_limit_and_leaves_the_log_alone() {
-        use krabka_compression::CompressionType;
+    #[yare::parameterized(
+        compressed_oversized = { "compressed, oversized", krabka_compression::CompressionType::Gzip, Some(bytes(100)), true },
+        compressed_without_limit = { "compressed, no limit", krabka_compression::CompressionType::Gzip, None, false },
+        uncompressed_oversized = { "uncompressed, oversized", krabka_compression::CompressionType::None, Some(bytes(100)), false },
+    )]
+    fn compact_refuses_a_compressed_record_above_the_limit_and_leaves_the_log_alone(
+        name: &'static str,
+        codec: krabka_compression::CompressionType,
+        limit: Option<ByteSize>,
+        refuses: bool,
+    ) {
+        let dir = tempdir().unwrap();
+        let cfg = LogConfig {
+            cleanup_policy: CleanupPolicy::Compact,
+            max_decompressed_record: limit,
+            ..tiny_segments()
+        };
+        let mut log = Log::open(dir.path(), cfg).unwrap();
+        append_compressed_versions(&mut log, codec);
+        let files = |log: &Log| -> Vec<SegmentFile> {
+            log.segments
+                .iter()
+                .map(|segment| {
+                    let base = segment.base_offset().0;
+                    SegmentFile {
+                        base,
+                        contents: std::fs::read(name::log_path(dir.path(), base)).unwrap(),
+                    }
+                })
+                .collect()
+        };
+        let before = files(&log);
 
-        for (name, codec, limit, refuses) in [
-            (
-                "compressed, oversized",
-                CompressionType::Gzip,
-                Some(bytes(100)),
-                true,
-            ),
-            ("compressed, no limit", CompressionType::Gzip, None, false),
-            (
-                "uncompressed, oversized",
-                CompressionType::None,
-                Some(bytes(100)),
-                false,
-            ),
-        ] {
-            let dir = tempdir().unwrap();
-            let cfg = LogConfig {
-                cleanup_policy: CleanupPolicy::Compact,
-                max_decompressed_record: limit,
-                ..tiny_segments()
-            };
-            let mut log = Log::open(dir.path(), cfg).unwrap();
-            append_compressed_versions(&mut log, codec);
-            let files = |log: &Log| -> Vec<SegmentFile> {
-                log.segments
-                    .iter()
-                    .map(|segment| {
-                        let base = segment.base_offset().0;
-                        SegmentFile {
-                            base,
-                            contents: std::fs::read(name::log_path(dir.path(), base)).unwrap(),
-                        }
-                    })
-                    .collect()
-            };
-            let before = files(&log);
+        let result = log.compact(&compaction_ctx());
 
-            let result = log.compact(&compaction_ctx());
-
-            if refuses {
-                let error = result.unwrap_err();
-                assert2::check!(
-                    matches!(error, LogError::RecordTooLarge { limit: 100, .. }),
-                    "{name}: {error}"
-                );
-                assert2::check!(files(&log) == before, "{name}");
-            } else {
-                result.unwrap();
-                let out = log.read(Offset(0), mebibytes(1)).unwrap();
-                let k1: Vec<&[u8]> = out
-                    .batches
-                    .iter()
-                    .flat_map(|batch| batch.records.iter())
-                    .filter(|record| record.key.as_deref() == Some(b"k1".as_slice()))
-                    .filter_map(|record| record.value.as_deref())
-                    .collect();
-                assert2::check!(k1 == [b"new".as_slice()], "{name}");
-            }
+        if refuses {
+            let error = result.unwrap_err();
+            assert2::check!(
+                matches!(error, LogError::RecordTooLarge { limit: 100, .. }),
+                "{name}: {error}"
+            );
+            assert2::check!(files(&log) == before, "{name}");
+        } else {
+            result.unwrap();
+            let out = log.read(Offset(0), mebibytes(1)).unwrap();
+            let k1: Vec<&[u8]> = out
+                .batches
+                .iter()
+                .flat_map(|batch| batch.records.iter())
+                .filter(|record| record.key.as_deref() == Some(b"k1".as_slice()))
+                .filter_map(|record| record.value.as_deref())
+                .collect();
+            assert2::check!(k1 == [b"new".as_slice()], "{name}");
         }
     }
 
@@ -1244,37 +1266,39 @@ mod tests {
     /// record above `max.decompressed.message.bytes` refuses touches nothing on
     /// disk, and a refusal that dropped the watermark would send every later
     /// sweep of the partition through a full delivery walk.
-    #[test]
-    fn only_a_pass_that_rewrites_resets_the_delivery_watermark() {
+    #[yare::parameterized(
+        refused = { "refused", Some(bytes(100)), true },
+        rewritten = { "rewritten", None, false },
+    )]
+    fn only_a_pass_that_rewrites_resets_the_delivery_watermark(
+        name: &'static str,
+        limit: Option<ByteSize>,
+        refuses: bool,
+    ) {
         use krabka_compression::CompressionType;
 
-        for (name, limit, refuses) in [
-            ("refused", Some(bytes(100)), true),
-            ("rewritten", None, false),
-        ] {
-            let dir = tempdir().unwrap();
-            let cfg = LogConfig {
-                cleanup_policy: CleanupPolicy::Compact,
-                delivery_policy: DeliveryPolicy::Scheduled,
-                max_decompressed_record: limit,
-                ..tiny_segments()
-            };
-            let mut log = Log::open(dir.path(), cfg).unwrap();
-            append_compressed_versions(&mut log, CompressionType::Gzip);
-            // Every batch is stamped 0, long past, so the walk reads them all.
-            log.advance_delivery_watermark(1_000_000);
-            assert2::assert!(log.delivery_watermark() == log.log_end_offset(), "{name}");
+        let dir = tempdir().unwrap();
+        let cfg = LogConfig {
+            cleanup_policy: CleanupPolicy::Compact,
+            delivery_policy: DeliveryPolicy::Scheduled,
+            max_decompressed_record: limit,
+            ..tiny_segments()
+        };
+        let mut log = Log::open(dir.path(), cfg).unwrap();
+        append_compressed_versions(&mut log, CompressionType::Gzip);
+        // Every batch is stamped 0, long past, so the walk reads them all.
+        log.advance_delivery_watermark(1_000_000);
+        assert2::assert!(log.delivery_watermark() == log.log_end_offset(), "{name}");
 
-            let result = log.compact(&compaction_ctx());
+        let result = log.compact(&compaction_ctx());
 
-            assert2::check!(result.is_err() == refuses, "{name}");
-            let expected = if refuses {
-                log.log_end_offset()
-            } else {
-                log.log_start_offset()
-            };
-            assert2::check!(log.delivery_watermark() == expected, "{name}");
-        }
+        assert2::check!(result.is_err() == refuses, "{name}");
+        let expected = if refuses {
+            log.log_end_offset()
+        } else {
+            log.log_start_offset()
+        };
+        assert2::check!(log.delivery_watermark() == expected, "{name}");
     }
 
     #[test]
@@ -1285,11 +1309,14 @@ mod tests {
             ..Default::default()
         };
         let mut log = Log::open(dir.path(), cfg).unwrap();
-        let mut b = keyed_batch(0, &[KeyedRecord {
-            offset_delta: 0,
-            key: b"k1",
-            value: b"v1",
-        }]);
+        let mut b = keyed_batch(
+            0,
+            &[KeyedRecord {
+                offset_delta: 0,
+                key: b"k1",
+                value: b"v1",
+            }],
+        );
         log.append(&mut b).unwrap();
         // Only the active segment exists; sealed list is empty.
         log.compact(&compaction_ctx()).unwrap();
@@ -1301,10 +1328,13 @@ mod tests {
         let dir = tempdir().unwrap();
         // Write 3 sealed segments, each with one record under "k1", then a
         // fresh active segment outside the compaction pass.
-        let mut log = versioned_log(dir.path(), KeyValue {
-            key: b"active-key",
-            value: b"active-value",
-        });
+        let mut log = versioned_log(
+            dir.path(),
+            KeyValue {
+                key: b"active-key",
+                value: b"active-value",
+            },
+        );
 
         let active_leo_before = log.log_end_offset();
         log.compact(&compaction_ctx()).unwrap();
@@ -1335,11 +1365,14 @@ mod tests {
         // Three sealed segments, each one record under "k1" (v0, v1, v2).
         append_versions(&mut log);
         // A final append lands in a fresh active segment (untouched by compact).
-        let mut tail = keyed_batch(0, &[KeyedRecord {
-            offset_delta: 0,
-            key: b"tail",
-            value: b"t",
-        }]);
+        let mut tail = keyed_batch(
+            0,
+            &[KeyedRecord {
+                offset_delta: 0,
+                key: b"tail",
+                value: b"t",
+            }],
+        );
         log.append(&mut tail).unwrap();
 
         // Sanity: before compaction there are >= 2 sealed segments holding the
@@ -1370,10 +1403,13 @@ mod tests {
     #[test]
     fn compact_is_idempotent() {
         let dir = tempdir().unwrap();
-        let mut log = versioned_log(dir.path(), KeyValue {
-            key: b"active",
-            value: b"x",
-        });
+        let mut log = versioned_log(
+            dir.path(),
+            KeyValue {
+                key: b"active",
+                value: b"x",
+            },
+        );
         log.compact(&compaction_ctx()).unwrap();
         let leo1 = log.log_end_offset();
         log.compact(&compaction_ctx()).unwrap();

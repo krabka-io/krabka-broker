@@ -34,7 +34,9 @@ impl Node {
     /// `controller_endpoint_addr` in `controller.rs`, and it mirrors
     /// `controller_addr` in `network.rs`.
     #[must_use]
-    pub fn controller_addr(&self) -> Option<String> { controller_endpoint_addr(&self.endpoints) }
+    pub fn controller_addr(&self) -> Option<String> {
+        controller_endpoint_addr(&self.endpoints)
+    }
 }
 
 pub(crate) fn controller_endpoint_addr(endpoints: &[VoterEndpoint]) -> Option<String> {

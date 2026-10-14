@@ -189,7 +189,9 @@ fn pprof_router_unchecked(config: ProfilingConfig) -> Router {
 }
 
 /// The pprof routes with the compatible default policy.
-pub fn pprof_router() -> Router { pprof_router_unchecked(ProfilingConfig::default()) }
+pub fn pprof_router() -> Router {
+    pprof_router_unchecked(ProfilingConfig::default())
+}
 
 #[cfg(any(unix, test))]
 fn requested_duration(seconds: Option<u64>, default: Time, maximum: Time) -> Time {

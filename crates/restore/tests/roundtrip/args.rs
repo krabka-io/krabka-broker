@@ -67,10 +67,14 @@ impl ControllerListener {
         log_dir: &Path,
         extra: &[&str],
     ) -> RestoreArgs {
-        restore_args(archive_root, log_dir, RestoreOptions {
-            controller_listener: &self.addr.to_string(),
-            extra,
-        })
+        restore_args(
+            archive_root,
+            log_dir,
+            RestoreOptions {
+                controller_listener: &self.addr.to_string(),
+                extra,
+            },
+        )
     }
 
     /// Start node 1 under `config` with its controller listening here. The

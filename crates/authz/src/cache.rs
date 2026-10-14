@@ -39,10 +39,14 @@ impl AclCache {
     }
 
     #[must_use]
-    pub fn len(&self) -> usize { self.entries.len() }
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 impl AclSource for AclCache {
@@ -62,7 +66,9 @@ impl AclSource for AclCache {
         Box::new(self.entries.iter().filter(move |e| e.resource_type == rt))
     }
 
-    fn cidr_hosts_supported(&self) -> bool { self.cidr_hosts_supported }
+    fn cidr_hosts_supported(&self) -> bool {
+        self.cidr_hosts_supported
+    }
 }
 
 #[cfg(test)]
@@ -152,14 +158,20 @@ mod tests {
     /// that image supports, and both must give the answer of the row: text
     /// comparison below the level, where the range applies to no peer, and a
     /// range at or above it. A cache that is not told compares as text.
-    #[test]
-    fn a_cache_reads_a_slash_host_as_the_cluster_does() {
+    #[yare::parameterized(
+        unfinalized_version = { None, Some(false), crate::AuthorizationResult::Deny },
+        below_range_level = { Some(krabka_metadata::metadata_version::CIDR_ACL_MIN_LEVEL - 1), Some(false), crate::AuthorizationResult::Deny },
+        minimum_range_level = { Some(krabka_metadata::metadata_version::CIDR_ACL_MIN_LEVEL), Some(true), crate::AuthorizationResult::Allow },
+        unconfigured_cache = { None, None, crate::AuthorizationResult::Deny },
+    )]
+    fn a_cache_reads_a_slash_host_as_the_cluster_does(
+        level: Option<i16>,
+        cache_support: Option<bool>,
+        expected: crate::AuthorizationResult,
+    ) {
         use {
-            crate::{AuthorizationRequest, AuthorizationResult, Authorizer, SimpleAclAuthorizer},
-            krabka_metadata::{
-                FeatureLevelRecord,
-                metadata_version::{CIDR_ACL_MIN_LEVEL, METADATA_VERSION_FEATURE},
-            },
+            crate::{AuthorizationRequest, Authorizer, SimpleAclAuthorizer},
+            krabka_metadata::{FeatureLevelRecord, metadata_version::METADATA_VERSION_FEATURE},
             krabka_security::{AuthMethod, Principal},
         };
 
@@ -181,50 +193,25 @@ mod tests {
             operation: AclOperation::Read,
         };
         let auth = SimpleAclAuthorizer::new(std::collections::HashSet::new());
-        // (label, metadata.version of the cluster, whether the cache is told)
-        let cases = [
-            (
-                "an unfinalized version is below the level",
-                None,
-                false,
-                AuthorizationResult::Deny,
-            ),
-            (
-                "a level below the floor",
-                Some(CIDR_ACL_MIN_LEVEL - 1),
-                false,
-                AuthorizationResult::Deny,
-            ),
-            (
-                "the floor",
-                Some(CIDR_ACL_MIN_LEVEL),
-                true,
-                AuthorizationResult::Allow,
-            ),
-        ];
-        for (label, level, told, expected) in cases {
-            let mut image = MetadataImage::new(Uuid::nil());
-            if let Some(level) = level {
-                image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                    name: METADATA_VERSION_FEATURE.into(),
-                    level,
-                }));
-            }
-            image.apply(&MetadataRecord::V1AccessControlEntry(range_allow.clone()));
-            let cache = AclCache::new(vec![range_allow.clone()]).with_cidr_hosts_supported(told);
-
-            assert2::assert!(
-                (
-                    auth.authorize(&image, &request),
-                    auth.authorize(&cache, &request)
-                ) == (expected, expected),
-                "{label}"
-            );
+        let mut image = MetadataImage::new(Uuid::nil());
+        if let Some(level) = level {
+            image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                name: METADATA_VERSION_FEATURE.into(),
+                level,
+            }));
         }
-        // Not told: text, as Kafka 4.3.1 compares.
+        image.apply(&MetadataRecord::V1AccessControlEntry(range_allow.clone()));
+        let cache = match cache_support {
+            Some(supported) => {
+                AclCache::new(vec![range_allow.clone()]).with_cidr_hosts_supported(supported)
+            }
+            None => AclCache::new(vec![range_allow]),
+        };
         assert2::assert!(
-            auth.authorize(&AclCache::new(vec![range_allow]), &request)
-                == AuthorizationResult::Deny
+            (
+                auth.authorize(&image, &request),
+                auth.authorize(&cache, &request)
+            ) == (expected, expected)
         );
     }
 

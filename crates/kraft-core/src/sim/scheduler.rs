@@ -57,12 +57,15 @@ impl Sim {
 
     pub(super) fn fire_next_timer(&mut self) -> bool {
         let best = earliest_timer(self.nodes.values().map(|node| {
-            (node.id, [
-                node.election_deadline,
-                node.fetch_deadline,
-                node.heartbeat_deadline,
-                node.check_quorum_deadline,
-            ])
+            (
+                node.id,
+                [
+                    node.election_deadline,
+                    node.fetch_deadline,
+                    node.heartbeat_deadline,
+                    node.check_quorum_deadline,
+                ],
+            )
         }));
         let Some((deadline, id, kind)) = best else {
             return false;

@@ -202,15 +202,21 @@ mod tests {
         } = following_second_voter_with_actions();
         check!(
             (
-                matches!(m.role(), Role::Follower {
-                    leader_id: NodeId(2),
-                    ..
-                }),
+                matches!(
+                    m.role(),
+                    Role::Follower {
+                        leader_id: NodeId(2),
+                        ..
+                    }
+                ),
                 m.quorum_state().leader_epoch,
                 m.quorum_state().leader_id,
-                actions.iter().any(|a| matches!(a, Action::SendFetch {
-                    leader_id: NodeId(2)
-                })),
+                actions.iter().any(|a| matches!(
+                    a,
+                    Action::SendFetch {
+                        leader_id: NodeId(2)
+                    }
+                )),
                 actions
                     .iter()
                     .any(|a| matches!(a, Action::PersistQuorumState)),
@@ -272,11 +278,12 @@ mod tests {
                 m.quorum_state().leader_id,
                 m.quorum_state().leader_epoch,
                 matches!(m.role(), Role::Follower { .. }),
-                actions
-                    .iter()
-                    .any(|action| matches!(action, Action::SendFetch {
+                actions.iter().any(|action| matches!(
+                    action,
+                    Action::SendFetch {
                         leader_id: NodeId(99)
-                    })),
+                    }
+                )),
             ) == (Some(NodeId(99)), 4, true, true)
         );
     }
@@ -289,40 +296,48 @@ mod tests {
             actions,
             ..
         } = following_second_voter_with_actions();
-        assert2::assert!(matches!(m.role(), Role::Follower {
-            leader_id: NodeId(2),
-            ..
-        }));
+        assert2::assert!(matches!(
+            m.role(),
+            Role::Follower {
+                leader_id: NodeId(2),
+                ..
+            }
+        ));
         check!(m.quorum_state().leader_id == Some(NodeId(2)));
-        assert2::assert!(actions.iter().any(|a| matches!(a, Action::SendFetch {
-            leader_id: NodeId(2)
-        })));
+        assert2::assert!(actions.iter().any(|a| matches!(
+            a,
+            Action::SendFetch {
+                leader_id: NodeId(2)
+            }
+        )));
     }
 
     /// Kafka's `strictExponentialElectionBackoffMs` with a 1000 ms maximum.
-    #[test]
-    fn end_epoch_election_backoff_follows_the_candidate_position() {
-        for (position, successors, want) in [
-            (0, 0, 0),
-            (0, 3, 0),
-            (1, 3, 250),
-            (2, 3, 500),
-            (1, 2, 500),
-            (3, 3, 1000),
-            (2, 0, 1000),
-            (1, 11, 0),
-        ] {
-            check!(
-                end_epoch_election_backoff_ms(
-                    SuccessorRank {
-                        position,
-                        successors
-                    },
-                    1000
-                ) == want,
-                "position {position} of {successors}"
-            );
-        }
+    #[yare::parameterized(
+        no_successors = { 0, 0, 0 },
+        first_of_three = { 0, 3, 0 },
+        second_of_three = { 1, 3, 250 },
+        third_of_three = { 2, 3, 500 },
+        second_of_two = { 1, 2, 500 },
+        last_of_three = { 3, 3, 1000 },
+        missing_from_list = { 2, 0, 1000 },
+        beyond_backoff_cap = { 1, 11, 0 },
+    )]
+    fn end_epoch_election_backoff_follows_the_candidate_position(
+        position: u32,
+        successors: u32,
+        want: u64,
+    ) {
+        check!(
+            end_epoch_election_backoff_ms(
+                SuccessorRank {
+                    position,
+                    successors
+                },
+                1000
+            ) == want,
+            "position {position} of {successors}"
+        );
     }
 
     /// A voter that is not the first preferred candidate waits for the backoff

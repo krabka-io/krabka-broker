@@ -9,7 +9,9 @@ use {
 /// Match a principal or host by exact equality or its axis-specific wildcard.
 #[ensures(result == (wildcard || exact))]
 #[must_use]
-pub fn acl_identity_match(wildcard: bool, exact: bool) -> bool { wildcard || exact }
+pub fn acl_identity_match(wildcard: bool, exact: bool) -> bool {
+    wildcard || exact
+}
 
 /// Match an ACL resource type and literal or prefixed name pattern.
 ///

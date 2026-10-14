@@ -138,60 +138,63 @@ pub(crate) fn expand_function(input: NativeTokenStream) -> Result<NativeTokenStr
 mod tests {
     use {super::prefix, crate::meta::compact, assert2::assert};
 
-    #[test]
-    fn parses_request_paths_and_mutable_bindings_without_parsing_operations() {
+    #[yare::parameterized(
+        immutable = { "req" },
+        mutable = { "mut req" },
+    )]
+    fn parses_request_paths_and_mutable_bindings_without_parsing_operations(binding: &str) {
         let item = "pub(crate) async fn dispatch(broker: &Broker, version: ApiVersion, bytes: &[u8], ctx: &Context) -> DispatchResult { unrelated::complex::<Type>(&value).await?; }".parse().unwrap();
-        for binding in ["req", "mut req"] {
-            let meta = format!("request = module::Request, binding({binding})")
-                .parse()
-                .unwrap();
-            let output = prefix(&meta, &item).unwrap();
-            let output = compact(&output);
-            assert!(output.contains("decode_request::<module::Request>(bytes,version)?"));
-            assert!(output.starts_with(&format!("let{binding}=").replace(' ', "")));
-        }
-        for meta in [
-            "request = Request",
-            "binding(req)",
-            "request = 2, binding(req)",
-            "request = Request, binding(ref req)",
-            "request = Request, binding(version)",
-            "request = Request, binding = req",
-            "request = Request, binding[req]",
-            "request = Request, binding{mut req}",
-            "request = Request, binding(req, extra)",
-            "request = Request + Other, binding(req)",
-        ] {
-            assert!(prefix(&meta.parse().unwrap(), &item).is_err(), "{meta}");
-        }
+        let meta = format!("request = module::Request, binding({binding})")
+            .parse()
+            .unwrap();
+        let output = prefix(&meta, &item).unwrap();
+        let output = compact(&output);
+        assert2::assert!(output.contains("decode_request::<module::Request>(bytes,version)?"));
+        assert2::assert!(output.starts_with(&format!("let{binding}=").replace(' ', "")));
     }
 
-    #[test]
-    fn refuses_incompatible_entry_points() {
-        let meta = "request = Request, binding(req)".parse().unwrap();
-        for item in [
-            "fn dispatch(b: &Broker, v: ApiVersion, bytes: &[u8], ctx: &Context) -> DispatchResult {}",
-            "async fn other(b: &Broker, v: ApiVersion, bytes: &[u8], ctx: &Context) -> DispatchResult {}",
-            "async fn dispatch(b: &Broker) -> DispatchResult {}",
-            "async fn dispatch(b: &Broker, v: ApiVersion, bytes: &[u8], ctx: &Context) {}",
-            "async fn dispatch(b: &Broker, v: ApiVersion, bytes: &[u8], ctx: &Context) -> DispatchResult;",
-            "async fn dispatch(b: &Broker, v: ApiVersion, bytes: &[u8], ctx: &Context) -> DispatchResult {} fn extra() {}",
-            "struct Request {}",
-        ] {
-            assert!(prefix(&meta, &item.parse().unwrap()).is_err(), "{item}");
-        }
+    #[yare::parameterized(
+        missing_request = { "request = Request" },
+        missing_binding = { "binding(req)" },
+        invalid_request = { "request = 2, binding(req)" },
+        reference_binding = { "request = Request, binding(ref req)" },
+        reserved_binding = { "request = Request, binding(version)" },
+        wrong_binding_syntax = { "request = Request, binding = req" },
+        bracketed_binding = { "request = Request, binding[req]" },
+        braced_binding = { "request = Request, binding{mut req}" },
+        extra_binding = { "request = Request, binding(req, extra)" },
+        expression_request = { "request = Request + Other, binding(req)" },
+    )]
+    fn rejects_invalid_request_metadata(meta: &str) {
+        let item = "pub(crate) async fn dispatch(broker: &Broker, version: ApiVersion, bytes: &[u8], ctx: &Context) -> DispatchResult { unrelated::complex::<Type>(&value).await?; }".parse().unwrap();
+        assert2::assert!(prefix(&meta.parse().unwrap(), &item).is_err(), "{meta}");
     }
 
-    #[test]
-    fn synchronous_and_async_handles_keep_the_correlation_slot() {
+    #[yare::parameterized(
+        sync = { "fn dispatch(b: &Broker, v: ApiVersion, bytes: &[u8], ctx: &Context) -> DispatchResult {}" },
+        wrong_name = { "async fn other(b: &Broker, v: ApiVersion, bytes: &[u8], ctx: &Context) -> DispatchResult {}" },
+        wrong_arguments = { "async fn dispatch(b: &Broker) -> DispatchResult {}" },
+        missing_result = { "async fn dispatch(b: &Broker, v: ApiVersion, bytes: &[u8], ctx: &Context) {}" },
+        missing_body = { "async fn dispatch(b: &Broker, v: ApiVersion, bytes: &[u8], ctx: &Context) -> DispatchResult;" },
+        trailing_item = { "async fn dispatch(b: &Broker, v: ApiVersion, bytes: &[u8], ctx: &Context) -> DispatchResult {} fn extra() {}" },
+        non_function = { "struct Request {}" },
+    )]
+    fn refuses_incompatible_entry_points(item: &str) {
         let meta = "request = Request, binding(req)".parse().unwrap();
-        for mode in ["", "async "] {
-            for correlation in ["", "correlation: CorrelationId, "] {
-                let item = format!("{mode}fn handle(b: &Broker, v: ApiVersion, {correlation}wire: &[u8], ctx: &Context) -> DispatchResult {{}}" ).parse().unwrap();
-                let output = compact(&prefix(&meta, &item).unwrap());
-                assert!(output.contains("decode_request::<Request>(wire,v)?"));
-                assert!(!output.contains("correlation"));
-            }
-        }
+        assert2::assert!(prefix(&meta, &item.parse().unwrap()).is_err(), "{item}");
+    }
+
+    #[yare::parameterized(
+        sync_without_correlation = { "", "" },
+        sync_with_correlation = { "", "correlation: CorrelationId, " },
+        async_without_correlation = { "async ", "" },
+        async_with_correlation = { "async ", "correlation: CorrelationId, " },
+    )]
+    fn synchronous_and_async_handles_keep_the_correlation_slot(mode: &str, correlation: &str) {
+        let meta = "request = Request, binding(req)".parse().unwrap();
+        let item = format!("{mode}fn handle(b: &Broker, v: ApiVersion, {correlation}wire: &[u8], ctx: &Context) -> DispatchResult {{}}" ).parse().unwrap();
+        let output = compact(&prefix(&meta, &item).unwrap());
+        assert2::assert!(output.contains("decode_request::<Request>(wire,v)?"));
+        assert2::assert!(!output.contains("correlation"));
     }
 }

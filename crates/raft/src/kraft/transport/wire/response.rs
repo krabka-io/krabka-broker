@@ -191,7 +191,9 @@ struct NodeEndpointEntry {
 }
 
 impl QuorumLeader {
-    fn leader_id_to_wire(&self) -> i32 { self.leader_id.map_or(-1, node_to_wire) }
+    fn leader_id_to_wire(&self) -> i32 {
+        self.leader_id.map_or(-1, node_to_wire)
+    }
 
     /// The `NodeEndpoints` entry, when the leader and its endpoint are known.
     fn node_endpoint(&self) -> Option<NodeEndpointEntry> {

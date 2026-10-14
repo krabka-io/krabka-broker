@@ -97,17 +97,18 @@ fn a_candidate_at_our_own_epoch_is_not_fenced() {
 
 /// A vote or a pre-vote from a higher epoch moves us to that epoch before the
 /// grant is decided, as `KafkaRaftClient.handleVoteRequest` does for both.
-#[test]
-fn a_vote_or_pre_vote_from_a_higher_epoch_advances_our_epoch() {
-    for (pre_vote, want_epoch) in [(false, 7), (true, 7)] {
-        let mut m = three_voter_machine();
-        receive_vote(&mut m, vote_event(NodeId(2), 7, pre_vote, 1, 5));
-        check!(
-            m.quorum_state().leader_epoch == want_epoch,
-            "pre_vote={pre_vote}: epoch {}",
-            m.quorum_state().leader_epoch
-        );
-    }
+#[yare::parameterized(
+    vote = { false },
+    pre_vote = { true },
+)]
+fn a_vote_or_pre_vote_from_a_higher_epoch_advances_our_epoch(pre_vote: bool) {
+    let mut m = three_voter_machine();
+    receive_vote(&mut m, vote_event(NodeId(2), 7, pre_vote, 1, 5));
+    check!(
+        m.quorum_state().leader_epoch == 7,
+        "pre_vote={pre_vote}: epoch {}",
+        m.quorum_state().leader_epoch
+    );
 }
 
 #[test]
@@ -637,10 +638,13 @@ fn a_prospective_replica_that_followed_a_leader_grants_no_binding_vote_in_that_e
 
     check!(
         (
-            matches!(m.role(), Role::Prospective {
-                abandoned_leader: Some(NodeId(3)),
-                ..
-            }),
+            matches!(
+                m.role(),
+                Role::Prospective {
+                    abandoned_leader: Some(NodeId(3)),
+                    ..
+                }
+            ),
             m.quorum_state().leader_id,
             m.quorum_state().voted_key,
         ) == (true, None, None)
@@ -665,10 +669,13 @@ fn a_second_pre_vote_round_still_remembers_the_abandoned_leader() {
     m.on_event(Event::ElectionTimeout, &OUR_LOG, SimInstant(60));
 
     check!(
-        matches!(m.role(), Role::Prospective {
-            abandoned_leader: Some(NodeId(3)),
-            ..
-        }),
+        matches!(
+            m.role(),
+            Role::Prospective {
+                abandoned_leader: Some(NodeId(3)),
+                ..
+            }
+        ),
         "{:?}",
         m.role()
     );

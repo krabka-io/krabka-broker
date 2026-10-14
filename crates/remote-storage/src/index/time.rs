@@ -97,10 +97,14 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn parse_time_index_round_trips_known_entries() {
+    #[yare::parameterized(
+        one_entry = { vec![(1_000_i64, 0_u32)] },
+        two_entries = { vec![(1_000_i64, 0_u32), (2_000, 10)] },
+        all_known_entries = { vec![(1_000_i64, 0_u32), (2_000, 10), (3_000, 20)] },
+    )]
+    fn parse_time_index_round_trips_known_entries(specs: Vec<(i64, u32)>) {
         let mut buf = Vec::new();
-        for (ts, rel) in [(1_000_i64, 0_u32), (2_000, 10), (3_000, 20)] {
+        for (ts, rel) in &specs {
             buf.extend_from_slice(&ts.to_be_bytes());
             buf.extend_from_slice(&rel.to_be_bytes());
         }
@@ -109,30 +113,35 @@ mod tests {
             .iter()
             .map(|e| time_at(e.timestamp.get(), e.relative_offset.get()))
             .collect();
-        assert!(decoded == vec![time_at(1_000, 0), time_at(2_000, 10), time_at(3_000, 20)]);
+        assert2::assert!(
+            decoded
+                == specs
+                    .iter()
+                    .map(|(ts, rel)| time_at(*ts, *rel))
+                    .collect::<Vec<_>>()
+        );
     }
 
-    #[test]
-    fn timestamp_floor_covers_strict_predecessor_boundaries() {
+    #[yare::parameterized(
+        before_first = { 500, 0 },
+        exact_first = { 1_000, 0 },
+        between_entries = { 1_500, 0 },
+        duplicate_exact_matches = { 2_000, 0 },
+        between_duplicate_and_last = { 2_500, 20 },
+        after_last = { 4_000, 30 },
+    )]
+    fn timestamp_floor_covers_strict_predecessor_boundaries(ts: i64, want: u32) {
         let entries = time_entries(&[
             time_at(1_000, 0),
             time_at(2_000, 10),
             time_at(2_000, 20),
             time_at(3_000, 30),
         ]);
-        for (ts, want) in [
-            (500, 0),   // before first
-            (1_000, 0), // exact first match scans from the segment start
-            (1_500, 0), // between entries uses the strict predecessor
-            (2_000, 0), // duplicate exact matches are both excluded
-            (2_500, 20),
-            (4_000, 30), // after last
-        ] {
-            assert!(
-                relative_offset_floor_for_timestamp(&entries, ts) == want,
-                "ts {ts}"
-            );
-        }
+        assert2::assert!(relative_offset_floor_for_timestamp(&entries, ts) == want);
+    }
+
+    #[test]
+    fn timestamp_floor_for_empty_index_is_zero() {
         assert!(relative_offset_floor_for_timestamp(&[], 1_000) == 0);
     }
 

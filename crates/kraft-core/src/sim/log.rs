@@ -27,13 +27,17 @@ impl SimLog {
         append_epochs(&mut self.epochs, epoch, count);
     }
 
-    pub(super) fn truncate_to(&mut self, offset: i64) { truncate_epochs(&mut self.epochs, offset); }
+    pub(super) fn truncate_to(&mut self, offset: i64) {
+        truncate_epochs(&mut self.epochs, offset);
+    }
 
     pub(super) fn replicate_from(&mut self, leader: &Self) {
         replicate_epochs(&mut self.epochs, &leader.epochs);
     }
 
-    pub(super) fn record_count(&self) -> usize { self.epochs.len() }
+    pub(super) fn record_count(&self) -> usize {
+        self.epochs.len()
+    }
 
     pub(super) fn log_end(&self) -> LogEnd {
         LogEnd {

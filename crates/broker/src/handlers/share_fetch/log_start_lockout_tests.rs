@@ -398,8 +398,6 @@ enum IsolatedPartitionFailure {
 )]
 #[test_macro(tokio::test)]
 async fn a_partition_failure_does_not_affect_other_partitions(failure: IsolatedPartitionFailure) {
-    use assert2::assert;
-
     let StartedBroker { broker, dir } = start().await;
     let (topic, group) = match failure {
         IsolatedPartitionFailure::CorruptBatch => {
@@ -434,13 +432,13 @@ async fn a_partition_failure_does_not_affect_other_partitions(failure: IsolatedP
         IsolatedPartitionFailure::LogStartPastSpso => {
             // Only partition 0's log start moves past its SPSO.
             let delete_error = delete_records(&broker, topic, 0, 3).await;
-            assert!(delete_error == codes::NONE, "{delete_error}");
+            assert2::assert!(delete_error == codes::NONE, "{delete_error}");
             vec![acquired_run(0, 3, 4), acquired_run(1, 0, 4)]
         }
     };
 
     let by_partition = fetch_incremental_pair(&broker, group, topic_id).await;
-    assert!(by_partition == expected);
+    assert2::assert!(by_partition == expected);
     broker.shutdown().await;
 }
 

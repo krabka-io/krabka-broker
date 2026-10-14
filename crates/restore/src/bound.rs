@@ -310,10 +310,13 @@ pub(crate) fn record_coordinates(
     record: &RecordBorrowed<'_>,
 ) -> Result<RecordCoordinates, RestoreError> {
     let frame = batch_frame(header);
-    krabka_verified::restore_record_coordinates(frame, krabka_verified::RestoreRecordDeltas {
-        offset_delta: record.offset_delta,
-        timestamp_delta: record.timestamp_delta,
-    })
+    krabka_verified::restore_record_coordinates(
+        frame,
+        krabka_verified::RestoreRecordDeltas {
+            offset_delta: record.offset_delta,
+            timestamp_delta: record.timestamp_delta,
+        },
+    )
     .map(|(offset, timestamp_ms)| RecordCoordinates {
         offset: Offset(offset),
         timestamp_ms,

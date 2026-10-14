@@ -77,7 +77,9 @@ pub(super) struct Flusher {
 }
 
 impl Flusher {
-    pub fn check(&self) -> io::Result<()> { self.shared.state.lock().unwrap().result() }
+    pub fn check(&self) -> io::Result<()> {
+        self.shared.state.lock().unwrap().result()
+    }
 
     pub fn finish(&self) -> io::Result<()> {
         let mut state = self.shared.state.lock().unwrap();

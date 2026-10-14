@@ -25,7 +25,9 @@ pub(super) fn is_eof(e: &RaftError) -> bool {
     )
 }
 
-fn io_err(e: std::io::Error) -> RaftError { RaftError::Storage(krabka_log::LogError::Io(e)) }
+fn io_err(e: std::io::Error) -> RaftError {
+    RaftError::Storage(krabka_log::LogError::Io(e))
+}
 
 fn truncated(needed: usize) -> RaftError {
     RaftError::Protocol(krabka_protocol::ProtocolError::UnexpectedEof { needed })
@@ -311,7 +313,9 @@ mod tests {
     struct StubAdminRouter(Vec<ControllerApiVersion>);
 
     impl ControllerAdminRouter for StubAdminRouter {
-        fn api_versions(&self) -> &[ControllerApiVersion] { &self.0 }
+        fn api_versions(&self) -> &[ControllerApiVersion] {
+            &self.0
+        }
 
         fn route(&self, _request: ControllerAdminRequest) -> ControllerAdminRouteFuture<'_> {
             Box::pin(std::future::ready(Ok(None)))

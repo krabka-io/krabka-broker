@@ -90,16 +90,19 @@ impl Sim {
                 QuorumState::bootstrap(uuid::Uuid::nil(), voters.clone()),
                 election_timeout,
             );
-            nodes.insert(id, Node {
+            nodes.insert(
                 id,
-                machine,
-                log: SimLog::default(),
-                high_watermark: 0,
-                election_deadline: Some(SimInstant(deadline_millis(election_timeout))),
-                fetch_deadline: None,
-                heartbeat_deadline: None,
-                check_quorum_deadline: None,
-            });
+                Node {
+                    id,
+                    machine,
+                    log: SimLog::default(),
+                    high_watermark: 0,
+                    election_deadline: Some(SimInstant(deadline_millis(election_timeout))),
+                    fetch_deadline: None,
+                    heartbeat_deadline: None,
+                    check_quorum_deadline: None,
+                },
+            );
         }
         Self {
             nodes,

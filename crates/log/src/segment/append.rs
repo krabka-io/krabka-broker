@@ -212,12 +212,11 @@ impl Segment {
         let Some(mode) = self.direct.as_mut() else {
             return match batch {
                 BatchBytes::Whole(bytes) => write_all(&*self.io, &self.log_file, bytes),
-                BatchBytes::Split(header, body) => {
-                    write_all_vectored(&*self.io, &self.log_file, &mut [
-                        IoSlice::new(header),
-                        IoSlice::new(body),
-                    ])
-                }
+                BatchBytes::Split(header, body) => write_all_vectored(
+                    &*self.io,
+                    &self.log_file,
+                    &mut [IoSlice::new(header), IoSlice::new(body)],
+                ),
             };
         };
         let DirectParts { parts, cached } = match batch {

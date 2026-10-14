@@ -40,11 +40,15 @@ pub struct ChainState {
 
 impl ChainState {
     #[must_use]
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Resume a chain from a recovered position after a restart or a spool replay.
     #[must_use]
-    pub fn resume(next_seq: u64, head: [u8; 32]) -> Self { Self { next_seq, head } }
+    pub fn resume(next_seq: u64, head: [u8; 32]) -> Self {
+        Self { next_seq, head }
+    }
 
     /// Advance the chain for a record that holds `value`.
     ///
@@ -64,15 +68,21 @@ impl ChainState {
     }
 
     #[must_use]
-    pub fn head(&self) -> [u8; 32] { self.head }
+    pub fn head(&self) -> [u8; 32] {
+        self.head
+    }
 
     #[must_use]
-    pub fn next_seq(&self) -> u64 { self.next_seq }
+    pub fn next_seq(&self) -> u64 {
+        self.next_seq
+    }
 }
 
 /// Encode `bytes` as lowercase hex.
 #[must_use]
-pub fn to_hex(bytes: &[u8]) -> String { hex::encode(bytes) }
+pub fn to_hex(bytes: &[u8]) -> String {
+    hex::encode(bytes)
+}
 
 /// Parse exactly 32 bytes of lowercase or uppercase hex.
 #[must_use]
@@ -144,19 +154,13 @@ mod tests {
         check!(c.head() == chain_hash(&head, 5, b"r5"));
     }
 
-    #[test]
-    fn hex_round_trips() {
-        let h = chain_hash(&GENESIS_HEAD, 7, b"x");
-        let s = to_hex(&h);
-        check!(s.len() == 64);
-        let upper = s.to_uppercase();
-        for (name, input, expected) in [
-            ("round trip", s.as_str(), Some(h)),
-            ("non-hex input", "zz", None),
-            ("odd-length input", "abc", None),
-            ("uppercase input", upper.as_str(), Some(h)),
-        ] {
-            check!(from_hex32(input) == expected, "case {name}");
-        }
+    #[yare::parameterized(
+        round_trip = { to_hex(&chain_hash(&GENESIS_HEAD, 7, b"x")), Some(chain_hash(&GENESIS_HEAD, 7, b"x")) },
+        non_hex = { "zz".to_owned(), None },
+        odd_length = { "abc".to_owned(), None },
+        uppercase = { to_hex(&chain_hash(&GENESIS_HEAD, 7, b"x")).to_uppercase(), Some(chain_hash(&GENESIS_HEAD, 7, b"x")) },
+    )]
+    fn hex_round_trips(input: String, expected: Option<[u8; 32]>) {
+        check!(from_hex32(&input) == expected);
     }
 }

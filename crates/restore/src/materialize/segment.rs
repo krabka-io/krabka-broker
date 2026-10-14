@@ -206,10 +206,14 @@ fn align_log_to_segment(
 }
 
 /// Convert a header's `records_count` (or any small non-negative `i32` count) to `u64`, treating a corrupt-but-CRC-valid negative count as zero rather than panicking. [`crate::verify::verify_segment`] has already checked every batch's CRC by the time this module sees it.
-fn nonneg_u64(count: i32) -> u64 { u64::try_from(count.max(0)).unwrap_or(0) }
+fn nonneg_u64(count: i32) -> u64 {
+    u64::try_from(count.max(0)).unwrap_or(0)
+}
 
 /// Convert a byte length to `u64` for [`SegmentOutcome::bytes_written`].
-fn bytes_len(len: usize) -> u64 { u64::try_from(len).unwrap_or(u64::MAX) }
+fn bytes_len(len: usize) -> u64 {
+    u64::try_from(len).unwrap_or(u64::MAX)
+}
 
 #[cfg(test)]
 mod tests {
@@ -305,11 +309,14 @@ mod tests {
         let (_target, args, partition, predicates) =
             materialization_context(&["--exclude-key", "^drop$"]);
 
-        let batch_a = batch(0, vec![
-            record(0, "keep0"),
-            record_with_key(1, "drop"),
-            record(2, "keep2"),
-        ]);
+        let batch_a = batch(
+            0,
+            vec![
+                record(0, "keep0"),
+                record_with_key(1, "drop"),
+                record(2, "keep2"),
+            ],
+        );
         let segment = verified_segment(0, std::slice::from_ref(&batch_a));
 
         let outcome = write_segment(&args, &partition, &segment, &predicates)

@@ -23,7 +23,9 @@ fn run(args: &[&str]) -> std::process::Output {
         .expect("run krabka-restore")
 }
 
-fn code(output: &std::process::Output) -> i32 { output.status.code().expect("exit code") }
+fn code(output: &std::process::Output) -> i32 {
+    output.status.code().expect("exit code")
+}
 
 #[test]
 fn help_renders_every_flag_group() {

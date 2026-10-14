@@ -93,15 +93,20 @@ mod tests {
             .is_err()
         );
         assert!(prefix(&meta, &valid).is_ok());
-        for invalid in [
-            "fn handle(broker: &Broker, version: i16, req_bytes: &[u8], ctx: &Context) {}",
-            "async fn handle(broker: &Broker) {}",
-            "async fn handle(broker: &Broker, version: i16, body: &[u8], ctx: &Context) {}",
-            "async fn other(broker: &Broker, version: i16, req_bytes: &[u8], ctx: &Context) {}",
-            "struct Config {}",
-            "async fn handle(broker: &Broker, version: i16, req_bytes: &[u8], ctx: &Context) {} fn extra() {}",
-        ] {
-            assert!(prefix(&meta, &invalid.parse().unwrap()).is_err());
-        }
+    }
+
+    #[yare::parameterized(
+        sync = { "fn handle(broker: &Broker, version: i16, req_bytes: &[u8], ctx: &Context) {}" },
+        missing_arguments = { "async fn handle(broker: &Broker) {}" },
+        wrong_body_name = { "async fn handle(broker: &Broker, version: i16, body: &[u8], ctx: &Context) {}" },
+        wrong_method = { "async fn other(broker: &Broker, version: i16, req_bytes: &[u8], ctx: &Context) {}" },
+        non_function = { "struct Config {}" },
+        extra_item = { "async fn handle(broker: &Broker, version: i16, req_bytes: &[u8], ctx: &Context) {} fn extra() {}" },
+    )]
+    fn rejects_incorrect_handler_shapes(invalid: &str) {
+        let meta = "request = Request, api = 80, gate = gate, refusals = refusals"
+            .parse()
+            .unwrap();
+        assert2::assert!(prefix(&meta, &invalid.parse().unwrap()).is_err());
     }
 }

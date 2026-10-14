@@ -45,3 +45,4 @@ krabka-units = { workspace = true }
 [dev-dependencies]
 krabka-macros = { version = "1.0.3", path = "../macros" }
 proptest = { workspace = true }
+yare = { workspace = true }

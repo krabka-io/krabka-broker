@@ -119,7 +119,7 @@ async fn assert_rejected_change_and_shutdown(
 
 #[test]
 fn direct_single_voter_submit_applies_image_and_resolves_waiter() {
-    let (mut engine, _dir) = super::test_support::single_voter_leader_engine();
+    let (mut engine, _dir) = crate::kraft::controller::test_support::single_voter_leader_engine();
     assert2::assert!(engine.image.topic("direct").is_none());
 
     let mut rx = super::test_support::submit_on_engine(&mut engine, &topic_record("direct"));
@@ -187,10 +187,10 @@ fn guarded_config_rejects_stale_maps_and_accepts_a_fresh_merge() {
                 .collect(),
         })
     };
-    let mut updated = super::test_support::submit_on_engine(&mut engine, &[config(&[over(
-        "cleanup.policy",
-        "compact",
-    )])]);
+    let mut updated = super::test_support::submit_on_engine(
+        &mut engine,
+        &[config(&[over("cleanup.policy", "compact")])],
+    );
     assert!(matches!(updated.try_recv(), Ok(Ok(_))));
     assert_stale_submit()
         .engine(&mut engine)
@@ -304,27 +304,32 @@ fn offset_advance_submit_returns_actor_ordered_base() {
     assert!(engine.image.partition_next_offset("topic", 0) == Some(8));
 }
 
-#[test]
-fn offset_advance_submit_rejects_counts_outside_verified_domain() {
-    let (mut engine, _dir) = super::test_support::single_voter_leader_engine();
+#[yare::parameterized(
+    negative_count = { -1 },
+    zero_count = { 0 },
+    maximum_count = { i64::MAX },
+)]
+fn offset_advance_submit_rejects_counts_outside_verified_domain(count: i64) {
+    let (mut engine, _dir) = crate::kraft::controller::test_support::single_voter_leader_engine();
 
     for records in [topic_record("topic"), offset_advance("topic", 1)] {
-        let mut rx = super::test_support::submit_on_engine(&mut engine, &records);
-        assert!(matches!(rx.try_recv(), Ok(Ok(_))));
+        let mut rx =
+            crate::kraft::controller::test_support::submit_on_engine(&mut engine, &records);
+        assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
     }
     let log_end = engine.log.log_end_offset();
 
-    for count in [-1, 0, i64::MAX] {
-        let mut rx =
-            super::test_support::submit_on_engine(&mut engine, &offset_advance("topic", count));
+    let mut rx = crate::kraft::controller::test_support::submit_on_engine(
+        &mut engine,
+        &offset_advance("topic", count),
+    );
 
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(Err(RaftError::ChangeRejected(_)))
-        ));
-        assert!(engine.image.partition_next_offset("topic", 0) == Some(1));
-        assert!(engine.log.log_end_offset() == log_end);
-    }
+    assert2::assert!(matches!(
+        rx.try_recv(),
+        Ok(Err(RaftError::ChangeRejected(_)))
+    ));
+    assert2::assert!(engine.image.partition_next_offset("topic", 0) == Some(1));
+    assert2::assert!(engine.log.log_end_offset() == log_end);
 }
 
 #[tokio::test]
@@ -403,10 +408,10 @@ async fn break_glass_consume_is_exact_and_single_flight_until_commit() {
     let (ctrl, _dir) = super::test_support::three_voter_leader().await;
     let proposal = break_glass_proposal(0x271, BreakGlassAction::DeleteRecords, "orders-3", 1_000);
 
-    let create =
-        super::test_support::spawn_submit(&ctrl, vec![MetadataRecord::V1BreakGlassProposal(
-            proposal.clone(),
-        )]);
+    let create = super::test_support::spawn_submit(
+        &ctrl,
+        vec![MetadataRecord::V1BreakGlassProposal(proposal.clone())],
+    );
     acknowledge_tip(&ctrl, NodeId(2)).await;
     create.await.unwrap().unwrap();
 
@@ -434,11 +439,11 @@ async fn break_glass_consume_is_exact_and_single_flight_until_commit() {
         consumed_at_ms: i64::MAX,
         ..proposal.clone()
     };
-    let first =
-        super::test_support::pending_submission(&ctrl, vec![MetadataRecord::V1BreakGlassProposal(
-            consumed.clone(),
-        )])
-        .await;
+    let first = super::test_support::pending_submission(
+        &ctrl,
+        vec![MetadataRecord::V1BreakGlassProposal(consumed.clone())],
+    )
+    .await;
 
     let concurrent = tokio::time::timeout(
         StdDuration::from_secs(1),
@@ -477,11 +482,11 @@ async fn a_new_leader_refuses_a_consume_until_its_own_epoch_commits() {
     let (ctrl, _dir) = super::test_support::three_voter_leader().await;
     commit_pending(&ctrl, NodeId(2)).await;
     let proposal = break_glass_proposal(0x591, BreakGlassAction::DeleteTopic, "doomed", i64::MAX);
-    let create =
-        super::test_support::pending_submission(&ctrl, vec![MetadataRecord::V1BreakGlassProposal(
-            proposal.clone(),
-        )])
-        .await;
+    let create = super::test_support::pending_submission(
+        &ctrl,
+        vec![MetadataRecord::V1BreakGlassProposal(proposal.clone())],
+    )
+    .await;
     commit_pending(&ctrl, NodeId(2)).await;
     create.await.unwrap().unwrap();
 
@@ -572,11 +577,11 @@ async fn topic_freeze_replacement_is_newer_only_and_single_flight_until_commit()
     assert2::check!(ctrl.quorum_state().await.unwrap().log_end_offset == log_end);
 
     let replacement = freeze("orders", i64::MAX, true);
-    let replace =
-        super::test_support::pending_submission(&ctrl, vec![MetadataRecord::V1TopicFreeze(
-            replacement.clone(),
-        )])
-        .await;
+    let replace = super::test_support::pending_submission(
+        &ctrl,
+        vec![MetadataRecord::V1TopicFreeze(replacement.clone())],
+    )
+    .await;
 
     let concurrent = tokio::time::timeout(
         StdDuration::from_secs(1),
@@ -635,11 +640,11 @@ async fn delegation_token_mutation_is_generation_bound_and_retry_idempotent() {
     let (ctrl, _dir) = super::test_support::three_voter_leader().await;
     commit_pending(&ctrl, NodeId(2)).await;
 
-    let create =
-        super::test_support::pending_submission(&ctrl, vec![MetadataRecord::V1DelegationToken(
-            original.clone(),
-        )])
-        .await;
+    let create = super::test_support::pending_submission(
+        &ctrl,
+        vec![MetadataRecord::V1DelegationToken(original.clone())],
+    )
+    .await;
     commit_pending(&ctrl, NodeId(2)).await;
     create.await.unwrap().unwrap();
 

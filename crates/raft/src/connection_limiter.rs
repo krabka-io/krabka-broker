@@ -87,11 +87,15 @@ impl ConnectionLimiter {
 
     /// Diagnostic accessor: current global live-connection count.
     #[must_use]
-    pub fn total(&self) -> usize { self.total.load(Ordering::Acquire) }
+    pub fn total(&self) -> usize {
+        self.total.load(Ordering::Acquire)
+    }
 
     /// Test/diagnostic accessor: current per-IP live-connection count.
     #[cfg(test)]
-    fn per_ip_count(&self, ip: IpAddr) -> usize { self.per_ip.get(&ip).map_or(0, |e| *e) }
+    fn per_ip_count(&self, ip: IpAddr) -> usize {
+        self.per_ip.get(&ip).map_or(0, |e| *e)
+    }
 }
 
 /// RAII release for one accepted connection. Moved into the spawned

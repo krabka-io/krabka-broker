@@ -108,23 +108,25 @@ mod tests {
         assert!(rendered.contains("_=>false"));
     }
 
+    #[yare::parameterized(
+        empty = { "" },
+        missing_value = { "19 =>" },
+        trailing_identifier = { "19 => ForwardingEntry extra" },
+        semicolon = { "19 => ForwardingEntry;" },
+        missing_arrow = { "19 ForwardingEntry" },
+        string_key = { "\"19\" => ForwardingEntry" },
+        negative_key = { "-1 => ForwardingEntry" },
+        above_i16 = { "32768 => ForwardingEntry" },
+        wrong_suffix = { "19u32 => ForwardingEntry" },
+        repeated_key = { "19 => ForwardingEntry, 19 => Other" },
+        repeated_value = { "1 => ForwardingEntry, 0x1 => Other" },
+    )]
+    fn rejects_empty_malformed_out_of_range_and_duplicate_tables(source: &str) {
+        assert2::assert!(expand(&source.parse().unwrap()).is_err(), "{source}");
+    }
+
     #[test]
-    fn rejects_empty_malformed_out_of_range_and_duplicate_tables() {
-        for source in [
-            "",
-            "19 =>",
-            "19 => ForwardingEntry extra",
-            "19 => ForwardingEntry;",
-            "19 ForwardingEntry",
-            "\"19\" => ForwardingEntry",
-            "-1 => ForwardingEntry",
-            "32768 => ForwardingEntry",
-            "19u32 => ForwardingEntry",
-            "19 => ForwardingEntry, 19 => Other",
-            "1 => ForwardingEntry, 0x1 => Other",
-        ] {
-            assert!(expand(&source.parse().unwrap()).is_err(), "{source}");
-        }
+    fn accepts_one_explicit_i16_suffix_and_hexadecimal_keys() {
         assert!(
             expand(
                 &"19i16 => requests::Create, 0x14 => requests::Delete,"

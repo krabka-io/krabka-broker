@@ -93,7 +93,9 @@ impl SnapshotFetchState {
 
     /// The byte position to request next, that is, the bytes received so far.
     #[must_use]
-    pub fn next_position(&self) -> i64 { i64::try_from(self.buf.len()).unwrap_or(i64::MAX) }
+    pub fn next_position(&self) -> i64 {
+        i64::try_from(self.buf.len()).unwrap_or(i64::MAX)
+    }
 
     /// Feed one response chunk.
     ///
@@ -235,27 +237,41 @@ mod tests {
         assert2::assert!(s.next_position() == 0);
     }
 
-    #[test]
-    fn rejected_retries_do_not_change_progress_or_latch_size() {
+    #[yare::parameterized(
+        duplicate_chunk = { (10, 1), 6, 0, b"abc".as_slice() },
+        overlapping_chunk = { (10, 1), 6, 2, b"cde".as_slice() },
+        starts_after_gap = { (10, 1), 6, 4, b"ef".as_slice() },
+        changed_snapshot_id = { (11, 1), 6, 3, b"def".as_slice() },
+        changed_declared_size = { (10, 1), 7, 3, b"def".as_slice() },
+    )]
+    fn rejected_retries_do_not_change_progress_or_latch_size(
+        id: SnapshotId,
+        size: i64,
+        position: i64,
+        chunk: &[u8],
+    ) {
         let mut s = SnapshotFetchState::new((10, 1), NodeId(2));
         assert2::assert!(
             s.on_chunk((10, 1), 6, 0, b"abc") == SnapshotFetchStep::Continue { next_position: 3 }
         );
-        for (id, size, position, chunk) in [
-            ((10, 1), 6, 0, b"abc".as_slice()),
-            ((10, 1), 6, 2, b"cde".as_slice()),
-            ((10, 1), 6, 4, b"ef".as_slice()),
-            ((11, 1), 6, 3, b"def".as_slice()),
-            ((10, 1), 7, 3, b"def".as_slice()),
-        ] {
-            assert2::assert!(s.on_chunk(id, size, position, chunk) == SnapshotFetchStep::Restart);
-            assert2::assert!(s.next_position() == 3);
-        }
+        assert2::assert!(s.on_chunk(id, size, position, chunk) == SnapshotFetchStep::Restart);
+        assert2::assert!(s.next_position() == 3);
+    }
+
+    #[test]
+    fn accepted_chunks_complete_the_latched_snapshot() {
+        let mut s = SnapshotFetchState::new((10, 1), NodeId(2));
+        assert2::assert!(
+            s.on_chunk((10, 1), 6, 0, b"abc") == SnapshotFetchStep::Continue { next_position: 3 }
+        );
         assert2::assert!(
             s.on_chunk((10, 1), 6, 3, b"def")
                 == SnapshotFetchStep::Complete(Bytes::from_static(b"abcdef"))
         );
+    }
 
+    #[test]
+    fn fresh_transfer_can_accept_a_different_declared_size() {
         let mut fresh = SnapshotFetchState::new((10, 1), NodeId(2));
         assert2::assert!(fresh.on_chunk((10, 1), 3, 0, b"toolong") == SnapshotFetchStep::Restart);
         assert2::assert!(

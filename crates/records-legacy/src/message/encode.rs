@@ -52,7 +52,9 @@ impl Message {
     }
 }
 
-fn nullable_bytes_len(b: Option<&Bytes>) -> usize { 4 + b.map_or(0, Bytes::len) }
+fn nullable_bytes_len(b: Option<&Bytes>) -> usize {
+    4 + b.map_or(0, Bytes::len)
+}
 
 fn put_nullable_bytes(buf: &mut Vec<u8>, b: Option<&Bytes>) {
     match b {
@@ -75,13 +77,14 @@ mod tests {
         },
     };
 
-    #[test]
-    fn message_roundtrips() {
-        for (_name, message) in [("v0", fixture_v0()), ("v1", fixture_v1())] {
-            let RoundTrip { buffer, decoded } = round_trip(&message);
-            assert2::assert!(buffer.len() == message.encoded_len());
-            assert2::assert!(decoded == message);
-        }
+    #[yare::parameterized(
+        v0 = { fixture_v0() },
+        v1 = { fixture_v1() },
+    )]
+    fn message_roundtrips(message: Message) {
+        let RoundTrip { buffer, decoded } = round_trip(&message);
+        assert2::assert!(buffer.len() == message.encoded_len());
+        assert2::assert!(decoded == message);
     }
 
     #[test]

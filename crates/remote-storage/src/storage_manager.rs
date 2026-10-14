@@ -71,7 +71,9 @@ const BASE_OFFSET_LEN: usize = 20;
 
 /// Kafka renders UUIDs in URL-safe, unpadded Base64 for remote-tier paths.
 #[must_use]
-pub fn kafka_uuid(uuid: Uuid) -> String { URL_SAFE_NO_PAD.encode(uuid.as_bytes()) }
+pub fn kafka_uuid(uuid: Uuid) -> String {
+    URL_SAFE_NO_PAD.encode(uuid.as_bytes())
+}
 
 /// Reads back a UUID that [`kafka_uuid`] rendered.
 ///

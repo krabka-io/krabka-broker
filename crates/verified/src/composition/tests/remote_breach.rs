@@ -116,8 +116,13 @@ fn cleanup_requires_publication_and_stops_at_the_first_retained_range() {
         has_delivery_watermark: true,
         delivery_watermark: i64::MAX,
     };
-    check_plan(extreme, (i64::MAX, i64::MAX), None, &[], true, true, &[
-        (0, i64::MAX - 1, u64::MAX),
-        (0, i64::MAX, 0),
-    ]);
+    check_plan(
+        extreme,
+        (i64::MAX, i64::MAX),
+        None,
+        &[],
+        true,
+        true,
+        &[(0, i64::MAX - 1, u64::MAX), (0, i64::MAX, 0)],
+    );
 }

@@ -199,38 +199,38 @@ mod tests {
         assert2::assert,
     };
 
-    #[test]
-    fn keeps_native_starters_and_combined_policy_order_explicit() {
-        for valid in [
-            "bind(handle, dir, broker); boot [start::<1, 2>(authorizer)];",
-            "bind(handle, dir, broker); boot [{ start(config) }]; ready { let part = local_partition(&broker, dir.path()); };",
-            "bind(handle, dir, broker, ctx); boot [start_broker] allow_all; ready controller_leader; user [\"admin\"];",
-            "bind(handle,dir,broker); boot [start_broker] deny_all;",
-            "bind(h,d,b,p,peer); boot [start_broker] controller_peer; user [\"alice\"];",
-            "bind(h,d,b,p,peer,ctx); boot [start_broker] allow_all; user [\"admin\"]; client [native_client::<1, 2>()];",
-        ] {
-            let setup = declaration(&valid.parse().unwrap()).unwrap();
-            assert!(compact(&template(&setup)).contains("broker_arc_for_test"));
-        }
-        for invalid in [
-            "",
-            "bindings(handle,dir,broker);",
-            "bind(handle,dir); boot [start()];",
-            "bind(handle,dir,broker); boot [];",
-            "bind(handle,dir,broker); boot {};",
-            "bind(handle,dir,broker); boot [start()]",
-            "bind(handle,dir,broker); boot [start()]; ready [];",
-            "bind(handle,dir,broker); boot [start()]; extra {};",
-            "bind(h,d,b,c); boot [start()];",
-            "bind(h,d,b); boot [start] unknown;",
-            "bind(h,d,b); boot [start()]; user [\"admin\"];",
-            "bind(h,d,b,p,peer); boot [start()]; user [\"admin\"]; client [\"bad\"];",
-            "bind(h,d,b,ctx); boot [start()]; user [];",
-            "bind(h,d,b,p,peer,ctx); boot [start()]; user [\"admin\"]; client [];",
-            "bind(h,d,b,ctx); boot [start()]; client [\"bad\"];",
-            "bind(h,d,b,c); boot [start]; user [\"admin\"]; ready controller_leader;",
-        ] {
-            assert!(declaration(&invalid.parse().unwrap()).is_err(), "{invalid}");
-        }
+    #[yare::parameterized(
+        typed_starter = { "bind(handle, dir, broker); boot [start::<1, 2>(authorizer)];" },
+        ready_block = { "bind(handle, dir, broker); boot [{ start(config) }]; ready { let part = local_partition(&broker, dir.path()); };" },
+        allow_all_controller = { "bind(handle, dir, broker, ctx); boot [start_broker] allow_all; ready controller_leader; user [\"admin\"];" },
+        deny_all = { "bind(handle,dir,broker); boot [start_broker] deny_all;" },
+        controller_peer = { "bind(h,d,b,p,peer); boot [start_broker] controller_peer; user [\"alice\"];" },
+        native_client = { "bind(h,d,b,p,peer,ctx); boot [start_broker] allow_all; user [\"admin\"]; client [native_client::<1, 2>()];" },
+    )]
+    fn keeps_native_starters_and_combined_policy_order_explicit(valid: &str) {
+        let setup = declaration(&valid.parse().unwrap()).unwrap();
+        assert2::assert!(compact(&template(&setup)).contains("broker_arc_for_test"));
+    }
+
+    #[yare::parameterized(
+        empty = { "" },
+        wrong_binding_keyword = { "bindings(handle,dir,broker);" },
+        too_few_bindings = { "bind(handle,dir); boot [start()];" },
+        empty_boot_list = { "bind(handle,dir,broker); boot [];" },
+        braced_boot = { "bind(handle,dir,broker); boot {};" },
+        missing_semicolon = { "bind(handle,dir,broker); boot [start()]" },
+        invalid_ready_list = { "bind(handle,dir,broker); boot [start()]; ready [];" },
+        unexpected_clause = { "bind(handle,dir,broker); boot [start()]; extra {};" },
+        four_bindings = { "bind(h,d,b,c); boot [start()];" },
+        unknown_policy = { "bind(h,d,b); boot [start] unknown;" },
+        user_without_policy = { "bind(h,d,b); boot [start()]; user [\"admin\"];" },
+        malformed_client = { "bind(h,d,b,p,peer); boot [start()]; user [\"admin\"]; client [\"bad\"];" },
+        empty_user = { "bind(h,d,b,ctx); boot [start()]; user [];" },
+        empty_client = { "bind(h,d,b,p,peer,ctx); boot [start()]; user [\"admin\"]; client [];" },
+        client_without_peers = { "bind(h,d,b,ctx); boot [start()]; client [\"bad\"];" },
+        invalid_starter = { "bind(h,d,b,c); boot [start]; user [\"admin\"]; ready controller_leader;" },
+    )]
+    fn rejects_invalid_combined_setups(invalid: &str) {
+        assert2::assert!(declaration(&invalid.parse().unwrap()).is_err(), "{invalid}");
     }
 }

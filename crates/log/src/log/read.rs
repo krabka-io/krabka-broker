@@ -31,7 +31,9 @@ fn size_from_len(len: usize) -> ByteSize {
 /// walk that finds batch boundaries always has a header to read. This is
 /// Kafka's anti-stall rule. The value comes from [`HEADER_LEN`] rather than a
 /// restated constant, so the floor cannot drift from the protocol.
-fn batch_header() -> ByteSize { size_from_len(HEADER_LEN) }
+fn batch_header() -> ByteSize {
+    size_from_len(HEADER_LEN)
+}
 
 /// Whether a read that took a run out of `segment` can go on into the next
 /// segment.
@@ -43,7 +45,9 @@ fn batch_header() -> ByteSize { size_from_len(HEADER_LEN) }
 /// first batch of the next segment after the run, and skip every offset
 /// between them. Kafka's `LocalLog.read` never leaves the segment that it
 /// found data in.
-fn emptied(segment: &Segment, next: Offset) -> bool { next > segment.last_offset() }
+fn emptied(segment: &Segment, next: Offset) -> bool {
+    next > segment.last_offset()
+}
 
 /// Whether a run of `len` bytes fits the `remaining` budget of a read that
 /// already has its first batch.
@@ -52,7 +56,9 @@ fn emptied(segment: &Segment, next: Offset) -> bool { next > segment.last_offset
 /// That is Kafka's anti-stall rule, and KIP-74 applies it only to the first
 /// batch of a read. A later run that is larger than the remaining budget
 /// waits for the next read.
-fn fits_after_first(len: ByteSize, remaining: ByteSize) -> bool { len <= remaining }
+fn fits_after_first(len: ByteSize, remaining: ByteSize) -> bool {
+    len <= remaining
+}
 
 /// The progress of a raw read and the chunks it collected.
 struct RawChunks<T> {
@@ -78,7 +84,9 @@ impl RawReadCursor {
         }
     }
 
-    fn budget(&self) -> ByteSize { self.remaining.max(batch_header()) }
+    fn budget(&self) -> ByteSize {
+        self.remaining.max(batch_header())
+    }
 
     fn accept(&mut self, start: Offset, last: Offset, bytes: usize) -> bool {
         let len = size_from_len(bytes);

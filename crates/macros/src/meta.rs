@@ -343,8 +343,7 @@ pub(crate) fn parenthesized_list(
 
 impl moxy::ast::FromMeta for Tokens {
     fn from_meta(meta: &moxy::ast::Meta) -> Result<Self, ParseError> {
-        expression_tokens(meta, "expected `key = <expression>`")
-            .map(|tokens| Self { tokens })
+        expression_tokens(meta, "expected `key = <expression>`").map(|tokens| Self { tokens })
     }
 }
 
@@ -541,21 +540,6 @@ mod tests {
         let synchronous = function_signature(&"fn perform() {}".parse().unwrap()).unwrap();
         assert!(is_plain_sync(&synchronous));
         assert!(!is_plain_async(&synchronous));
-        for source in [
-            "const fn perform() {}",
-            "unsafe fn perform() {}",
-            "async unsafe fn perform() {}",
-            "extern \"C\" fn perform() {}",
-            "async extern \"C\" fn perform() {}",
-            "fn perform<T>() {}",
-            "async fn perform<T>() {}",
-        ] {
-            let signature = function_signature(&source.parse().unwrap()).unwrap();
-            assert!(
-                !is_plain_sync(&signature) && !is_plain_async(&signature),
-                "{source}"
-            );
-        }
         let signature = function_signature(
             &"async fn perform() where Concrete: Trait {}"
                 .parse()
@@ -563,6 +547,23 @@ mod tests {
         )
         .unwrap();
         assert!(is_plain_async(&signature));
+    }
+
+    #[yare::parameterized(
+        const_fn = { "const fn perform() {}" },
+        unsafe_fn = { "unsafe fn perform() {}" },
+        async_unsafe_fn = { "async unsafe fn perform() {}" },
+        extern_fn = { "extern \"C\" fn perform() {}" },
+        async_extern_fn = { "async extern \"C\" fn perform() {}" },
+        generic_fn = { "fn perform<T>() {}" },
+        async_generic_fn = { "async fn perform<T>() {}" },
+    )]
+    fn other_qualifiers_are_not_plain_sync_or_async(source: &str) {
+        let signature = function_signature(&source.parse().unwrap()).unwrap();
+        assert2::assert!(
+            !is_plain_sync(&signature) && !is_plain_async(&signature),
+            "{source}"
+        );
     }
 
     #[test]
@@ -579,21 +580,36 @@ mod tests {
             .err()
             .expect("empty schema table rejected");
         assert!(error.to_string().contains("response schemas"));
-        for invalid in ["Type extra", "Type;", "Type, 42"] {
-            assert!(nonempty_paths(&invalid.parse().unwrap(), "response schemas").is_err());
-        }
     }
 
-    #[test]
-    fn concrete_paths_reject_generics_and_trailing_expressions() {
-        for valid in ["Type", "crate::module::Type", "::module::VALUE"] {
-            let tokens = valid.parse().unwrap();
-            assert!(plain_path(&tokens, Span::call_site(), "concrete path").is_ok());
-        }
-        for invalid in ["", "Type<T>", "Type + Other", "Type::method()"] {
-            let tokens = invalid.parse().unwrap();
-            assert!(plain_path(&tokens, Span::call_site(), "concrete path").is_err());
-        }
+    #[yare::parameterized(
+        trailing_tokens = { "Type extra" },
+        semicolon = { "Type;" },
+        non_path_item = { "Type, 42" },
+    )]
+    fn schema_paths_reject_invalid_entries(invalid: &str) {
+        assert2::assert!(nonempty_paths(&invalid.parse().unwrap(), "response schemas").is_err());
+    }
+
+    #[yare::parameterized(
+        simple_type = { "Type" },
+        qualified_type = { "crate::module::Type" },
+        leading_colon = { "::module::VALUE" },
+    )]
+    fn concrete_paths_accept_plain_paths(valid: &str) {
+        let tokens = valid.parse().unwrap();
+        assert2::assert!(plain_path(&tokens, Span::call_site(), "concrete path").is_ok());
+    }
+
+    #[yare::parameterized(
+        empty = { "" },
+        generic = { "Type<T>" },
+        sum_type = { "Type + Other" },
+        call = { "Type::method()" },
+    )]
+    fn concrete_paths_reject_generics_and_trailing_expressions(invalid: &str) {
+        let tokens = invalid.parse().unwrap();
+        assert2::assert!(plain_path(&tokens, Span::call_site(), "concrete path").is_err());
     }
 
     #[test]

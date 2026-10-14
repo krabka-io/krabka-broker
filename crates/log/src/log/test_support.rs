@@ -61,7 +61,9 @@ pub struct TempLog {
     pub log: Log,
 }
 
-pub fn test_log() -> TempLog { configured_test_log(LogConfig::default()) }
+pub fn test_log() -> TempLog {
+    configured_test_log(LogConfig::default())
+}
 
 pub fn configured_test_log(config: LogConfig) -> TempLog {
     let dir = tempdir().unwrap();
@@ -152,20 +154,23 @@ pub fn check_stamps(log: &Log, expected: &[ExpectedStamp]) {
 /// Check the stamps of a three-batch log from `stamped_rolling_log(10, 1, 3)`
 /// after its first segment has been evicted.
 pub fn check_front_evicted_stamps(log: &Log) {
-    check_stamps(log, &[
-        ExpectedStamp {
-            offset: 0,
-            stamp: None,
-        },
-        ExpectedStamp {
-            offset: 1,
-            stamp: Some(11),
-        },
-        ExpectedStamp {
-            offset: 2,
-            stamp: Some(12),
-        },
-    ]);
+    check_stamps(
+        log,
+        &[
+            ExpectedStamp {
+                offset: 0,
+                stamp: None,
+            },
+            ExpectedStamp {
+                offset: 1,
+                stamp: Some(11),
+            },
+            ExpectedStamp {
+                offset: 2,
+                stamp: Some(12),
+            },
+        ],
+    );
 }
 
 /// Read every aborted interval from the caller's explicit sidecar filename.
@@ -204,7 +209,9 @@ pub fn compacting_segments() -> LogConfig {
     }
 }
 
-pub fn compact_test_log() -> TempLog { configured_test_log(compacting_segments()) }
+pub fn compact_test_log() -> TempLog {
+    configured_test_log(compacting_segments())
+}
 
 /// Change the roll and compaction grouping cap without changing other options.
 pub fn set_segment_size(log: &mut Log, size: ByteSize) {
@@ -217,11 +224,14 @@ pub fn set_segment_size(log: &mut Log, size: ByteSize) {
 pub fn append_keyed_samples(log: &mut Log, batches: i64, key: impl Fn(i64) -> String) {
     for i in 0..batches {
         let key = key(i);
-        log.append(&mut keyed_batch(i, &[KeyedRecord {
-            offset_delta: 0,
-            key: key.as_bytes(),
-            value: b"v",
-        }]))
+        log.append(&mut keyed_batch(
+            i,
+            &[KeyedRecord {
+                offset_delta: 0,
+                key: key.as_bytes(),
+                value: b"v",
+            }],
+        ))
         .unwrap();
     }
 }
@@ -237,16 +247,21 @@ pub fn write_with_budget(file: &File, buf: &[u8], remaining: &mut usize) -> std:
 }
 
 /// A log under `dir` opened with [`tiny_segments`].
-pub fn rolling_test_log(dir: &std::path::Path) -> Log { Log::open(dir, tiny_segments()).unwrap() }
+pub fn rolling_test_log(dir: &std::path::Path) -> Log {
+    Log::open(dir, tiny_segments()).unwrap()
+}
 
 /// A log configured the way Kafka's `message.timestamp.type=LogAppendTime`
 /// configures one, with everything else at its default.
 pub fn log_append_time_log() -> TempLog {
     let dir = tempdir().unwrap();
-    let log = Log::open(dir.path(), LogConfig {
-        message_timestamp_type: krabka_protocol::records::TimestampType::LogAppendTime,
-        ..LogConfig::default()
-    })
+    let log = Log::open(
+        dir.path(),
+        LogConfig {
+            message_timestamp_type: krabka_protocol::records::TimestampType::LogAppendTime,
+            ..LogConfig::default()
+        },
+    )
     .unwrap();
     TempLog { dir, log }
 }
@@ -546,10 +561,13 @@ pub fn compaction_ctx() -> CompactionContext {
 /// mirrors the `remote_log_manager` test helper and stays local to this
 /// module.
 pub fn rolled_log(dir: &std::path::Path, extra: &LogConfig) -> Log {
-    let mut log = Log::open(dir, LogConfig {
-        segment_size: bytes(200),
-        ..extra.clone()
-    })
+    let mut log = Log::open(
+        dir,
+        LogConfig {
+            segment_size: bytes(200),
+            ..extra.clone()
+        },
+    )
     .unwrap();
     for _ in 0..16 {
         let mut b = sample_batch(2);

@@ -57,15 +57,21 @@ impl FileEd25519Signer {
     /// Stable identifier for the key. Every checkpoint records it, so chains
     /// span key-rotation epochs verifiably.
     #[must_use]
-    pub fn key_id(&self) -> &str { &self.key_id }
+    pub fn key_id(&self) -> &str {
+        &self.key_id
+    }
 
     /// Ed25519 signature over `msg`.
     #[must_use]
-    pub fn sign(&self, msg: &[u8]) -> Vec<u8> { self.key_pair.sign(msg).as_ref().to_vec() }
+    pub fn sign(&self, msg: &[u8]) -> Vec<u8> {
+        self.key_pair.sign(msg).as_ref().to_vec()
+    }
 
     /// Raw 32-byte Ed25519 public key.
     #[must_use]
-    pub fn public_key(&self) -> Vec<u8> { self.public_key.clone() }
+    pub fn public_key(&self) -> Vec<u8> {
+        self.public_key.clone()
+    }
 }
 
 /// Canonical checkpoint signed payload.
@@ -113,8 +119,12 @@ mod tests {
         assert2::check,
     };
 
-    #[test]
-    fn sign_then_verify_roundtrips() {
+    #[yare::parameterized(
+        valid_signature = { false, false, true },
+        tampered_message = { false, true, false },
+        wrong_key = { true, false, false },
+    )]
+    fn sign_then_verify_roundtrips(use_other_key: bool, tamper_message: bool, expected: bool) {
         let TestSigner {
             signer,
             public_key: pubkey,
@@ -126,69 +136,35 @@ mod tests {
             public_key: other_pub,
             ..
         } = signer_with_key_id("k2");
-        for (name, key, message, expected) in [
-            ("valid signature", pubkey.as_slice(), msg.as_slice(), true),
-            (
-                "tampered message",
-                pubkey.as_slice(),
-                b"the quick brown FOX".as_slice(),
-                false,
-            ),
-            ("wrong key", other_pub.as_slice(), msg.as_slice(), false),
-        ] {
-            check!(
-                verify_signature(key, message, &sig) == expected,
-                "case {name}"
-            );
-        }
+        let key = if use_other_key { &other_pub } else { &pubkey };
+        let message = if tamper_message {
+            b"the quick brown FOX".as_slice()
+        } else {
+            msg.as_slice()
+        };
+        check!(verify_signature(key, message, &sig) == expected);
     }
 
-    #[test]
-    fn checkpoint_bytes_are_canonical_and_field_sensitive() {
-        let head = [9u8; 32];
-        let base = checkpoint_signing_bytes("k1", Seq(42), &head, EpochMs(1_700_000_000_000));
+    #[yare::parameterized(
+        identical_fields = { "k1", Seq(42), [9u8; 32], EpochMs(1_700_000_000_000), true },
+        different_key = { "k2", Seq(42), [9u8; 32], EpochMs(1_700_000_000_000), false },
+        different_sequence = { "k1", Seq(43), [9u8; 32], EpochMs(1_700_000_000_000), false },
+        different_head = { "k1", Seq(42), [8u8; 32], EpochMs(1_700_000_000_000), false },
+        different_time = { "k1", Seq(42), [9u8; 32], EpochMs(1), false },
+    )]
+    fn checkpoint_bytes_are_canonical_and_field_sensitive(
+        key_id: &str,
+        seq: Seq,
+        candidate_head: [u8; 32],
+        time: EpochMs,
+        expected_equal: bool,
+    ) {
+        let base = checkpoint_signing_bytes("k1", Seq(42), &[9u8; 32], EpochMs(1_700_000_000_000));
         check!(base.starts_with(CHECKPOINT_DOMAIN));
-        for (name, key_id, seq, candidate_head, time, expected_equal) in [
-            (
-                "identical fields",
-                "k1",
-                Seq(42),
-                head,
-                EpochMs(1_700_000_000_000),
-                true,
-            ),
-            (
-                "different key",
-                "k2",
-                Seq(42),
-                head,
-                EpochMs(1_700_000_000_000),
-                false,
-            ),
-            (
-                "different sequence",
-                "k1",
-                Seq(43),
-                head,
-                EpochMs(1_700_000_000_000),
-                false,
-            ),
-            (
-                "different head",
-                "k1",
-                Seq(42),
-                [8u8; 32],
-                EpochMs(1_700_000_000_000),
-                false,
-            ),
-            ("different time", "k1", Seq(42), head, EpochMs(1), false),
-        ] {
-            check!(
-                (checkpoint_signing_bytes(key_id, seq, &candidate_head, time) == base)
-                    == expected_equal,
-                "case {name}"
-            );
-        }
+        check!(
+            (checkpoint_signing_bytes(key_id, seq, &candidate_head, time) == base)
+                == expected_equal
+        );
     }
 
     #[test]

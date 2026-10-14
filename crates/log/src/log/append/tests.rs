@@ -279,10 +279,13 @@ fn append_at_uses_reconciled_frontier_floor() {
     let mut gap_batch = test_batch_at(0);
     let mut rejected = gap_batch.clone();
     let err = log.append_at(&mut rejected, Offset(1)).unwrap_err();
-    assert!(matches!(err, LogError::OffsetMismatch {
-        expected: Offset(3),
-        actual: Offset(1)
-    }));
+    assert!(matches!(
+        err,
+        LogError::OffsetMismatch {
+            expected: Offset(3),
+            actual: Offset(1)
+        }
+    ));
 
     log.append_at(&mut gap_batch, Offset(3)).unwrap();
     assert!(log.log_end_offset() == Offset(4));
@@ -472,10 +475,13 @@ fn append_at_below_the_log_end_offset_errors() {
     log.append(&mut sample_batch(3)).unwrap();
     let mut b = sample_batch(2);
     let err = log.append_at(&mut b, Offset(2)).unwrap_err();
-    assert2::assert!(matches!(err, LogError::OffsetMismatch {
-        expected: Offset(3),
-        actual: Offset(2)
-    }));
+    assert2::assert!(matches!(
+        err,
+        LogError::OffsetMismatch {
+            expected: Offset(3),
+            actual: Offset(2)
+        }
+    ));
     // Failure must not advance the log.
     assert2::assert!(log.log_end_offset() == 3);
 }
@@ -845,11 +851,14 @@ fn offset_for_timestamp_answers_in_append_time() {
 /// `delivery.schedule.monotonic=true`.
 fn scheduled_log(monotonic: ScheduleOrder) -> TempLog {
     let dir = tempdir().unwrap();
-    let log = Log::open(dir.path(), LogConfig {
-        delivery_policy: DeliveryPolicy::Scheduled,
-        schedule_order: monotonic,
-        ..LogConfig::default()
-    })
+    let log = Log::open(
+        dir.path(),
+        LogConfig {
+            delivery_policy: DeliveryPolicy::Scheduled,
+            schedule_order: monotonic,
+            ..LogConfig::default()
+        },
+    )
     .unwrap();
     TempLog { dir, log }
 }

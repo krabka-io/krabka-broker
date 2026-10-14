@@ -586,7 +586,9 @@ mod tests {
     use {super::*, assert2::check, clap::CommandFactory as _};
 
     #[test]
-    fn the_command_line_is_internally_consistent() { Cli::command().debug_assert(); }
+    fn the_command_line_is_internally_consistent() {
+        Cli::command().debug_assert();
+    }
 
     #[test]
     fn an_absent_target_is_acceptable() {

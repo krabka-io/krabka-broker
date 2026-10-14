@@ -128,7 +128,9 @@ impl LogIo for FailSegmentDeletionOnce {
 }
 
 /// The extension of `path`, if it has one.
-fn extension_of(path: &Path) -> Option<&str> { path.extension().and_then(std::ffi::OsStr::to_str) }
+fn extension_of(path: &Path) -> Option<&str> {
+    path.extension().and_then(std::ffi::OsStr::to_str)
+}
 
 /// `true` for a segment `.log`, whether it is still under its live name or has
 /// already been renamed to its `.deleted` tombstone. Both occupy the disk the

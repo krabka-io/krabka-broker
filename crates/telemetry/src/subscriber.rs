@@ -37,12 +37,16 @@ impl TelemetryGuard {
     /// level without a restart. Clone it out before the guard is parked for
     /// the process lifetime.
     #[must_use]
-    pub fn log_levels(&self) -> LogLevelController { self.log_levels.clone() }
+    pub fn log_levels(&self) -> LogLevelController {
+        self.log_levels.clone()
+    }
 
     /// Flush and shut down the OTLP exporters for traces and logs.
     ///
     /// This function does nothing when OTLP is disabled.
-    pub fn shutdown(mut self) { self.shutdown_providers(); }
+    pub fn shutdown(mut self) {
+        self.shutdown_providers();
+    }
 
     fn shutdown_providers(&mut self) {
         if let Some(task) = self.heartbeat_task.take() {
@@ -62,7 +66,9 @@ impl TelemetryGuard {
 }
 
 impl Drop for TelemetryGuard {
-    fn drop(&mut self) { self.shutdown_providers(); }
+    fn drop(&mut self) {
+        self.shutdown_providers();
+    }
 }
 
 /// Install the global `tracing` subscriber.

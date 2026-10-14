@@ -69,13 +69,18 @@ impl KraftController {
     pub fn spawn(config: KraftConfig, log: KraftLog, data_dir: PathBuf) -> Self {
         let cluster_id = config.cluster_id;
         let image = MetadataImage::new(cluster_id);
-        Self::spawn_with_image(config, log, data_dir, RecoveredMetadata {
-            image,
-            last_snapshot_end_offset: Offset(0),
-            last_snapshot_timestamp_ms: 0,
-            last_applied_record_timestamp_ms: 0,
-            downgrade_snapshot_pending: None,
-        })
+        Self::spawn_with_image(
+            config,
+            log,
+            data_dir,
+            RecoveredMetadata {
+                image,
+                last_snapshot_end_offset: Offset(0),
+                last_snapshot_timestamp_ms: 0,
+                last_applied_record_timestamp_ms: 0,
+                downgrade_snapshot_pending: None,
+            },
+        )
         .expect("fresh controller cannot have a pending downgrade checkpoint")
     }
 

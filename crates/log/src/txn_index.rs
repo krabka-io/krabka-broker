@@ -176,7 +176,9 @@ impl TxnIndex {
     }
 
     #[must_use]
-    pub fn entries(&self) -> &[AbortedTxn] { &self.entries }
+    pub fn entries(&self) -> &[AbortedTxn] {
+        &self.entries
+    }
 
     fn entry_valid(entry: AbortedTxn) -> bool {
         krabka_verified::aborted_transaction_interval(
@@ -223,7 +225,9 @@ mod tests {
     }
 
     /// The same three-offset entry seeds retry, mutation and disk-round-trip cases.
-    fn retry_entry() -> AbortedTxn { aborted_txn().bounds(Offset(5)..=Offset(7)).stable(8).call() }
+    fn retry_entry() -> AbortedTxn {
+        aborted_txn().bounds(Offset(5)..=Offset(7)).stable(8).call()
+    }
 
     #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
     struct RangedIndexSetup<'a> {
@@ -235,11 +239,14 @@ mod tests {
     #[bon::builder]
     fn ranged_index(#[builder(default = "00.txnindex")] name: &'_ str) -> IndexFixture<TxnIndex> {
         let setup = RangedIndexSetup { name };
-        populated_index(setup.name, &[aborted_txn()
-            .producer(1)
-            .bounds(Offset(10)..=Offset(20))
-            .stable(21)
-            .call()])
+        populated_index(
+            setup.name,
+            &[aborted_txn()
+                .producer(1)
+                .bounds(Offset(10)..=Offset(20))
+                .stable(21)
+                .call()],
+        )
     }
 
     /// A malformed entry and the name of what is wrong with it.

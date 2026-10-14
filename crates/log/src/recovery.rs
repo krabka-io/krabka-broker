@@ -120,7 +120,9 @@ fn canonical_base(value: &str, ext: &str) -> Option<i64> {
 mod tests {
     use {super::*, crate::io::FileIo, assert2::check, tempfile::tempdir};
 
-    fn touch(path: &std::path::Path) { std::fs::File::create(path).unwrap(); }
+    fn touch(path: &std::path::Path) {
+        std::fs::File::create(path).unwrap();
+    }
 
     /// The sweep reclaims both shapes an interrupted deletion leaves: a
     /// `.deleted` tombstone, and a sidecar whose `.log` is already gone.

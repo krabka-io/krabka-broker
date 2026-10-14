@@ -58,7 +58,9 @@ pub trait LogIo: Debug + Send + Sync {
     ///
     /// # Errors
     /// Returns the underlying write error.
-    fn write(&self, file: &File, buf: &[u8]) -> std::io::Result<usize> { (&*file).write(buf) }
+    fn write(&self, file: &File, buf: &[u8]) -> std::io::Result<usize> {
+        (&*file).write(buf)
+    }
 
     /// Write byte slices at the active `.log` file's current cursor.
     ///
@@ -72,7 +74,9 @@ pub trait LogIo: Debug + Send + Sync {
     ///
     /// # Errors
     /// Returns the underlying data-sync error.
-    fn sync_data(&self, file: &File) -> std::io::Result<()> { file.sync_data() }
+    fn sync_data(&self, file: &File) -> std::io::Result<()> {
+        file.sync_data()
+    }
 
     /// Write bytes at `file`'s current cursor on behalf of `target`.
     ///
@@ -173,7 +177,9 @@ pub trait LogIo: Debug + Send + Sync {
     ///
     /// # Errors
     /// Returns the underlying truncate error.
-    fn release(&self, file: &File, len: u64) -> std::io::Result<()> { file.set_len(len) }
+    fn release(&self, file: &File, len: u64) -> std::io::Result<()> {
+        file.set_len(len)
+    }
 
     /// Open a second handle on a `.log` file that bypasses the page cache
     /// (`O_DIRECT`), with the alignment every write through it needs.
@@ -187,7 +193,9 @@ pub trait LogIo: Debug + Send + Sync {
     /// # Errors
     /// Returns `Unsupported` where `O_DIRECT` is unavailable or its alignment
     /// unknown, or the underlying `statx` or `open` error.
-    fn open_direct(&self, path: &Path) -> std::io::Result<DirectFile> { open_direct(path) }
+    fn open_direct(&self, path: &Path) -> std::io::Result<DirectFile> {
+        open_direct(path)
+    }
 
     /// Write `buf` at `offset` through a handle [`LogIo::open_direct`]
     /// opened. `buf`, `offset` and the length are aligned as that handle
@@ -279,7 +287,9 @@ fn advise_will_need(file: &File, offset: u64, len: u64) {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn advise_will_need(file: &File, offset: u64, len: u64) { let _ = (file, offset, len); }
+fn advise_will_need(file: &File, offset: u64, len: u64) {
+    let _ = (file, offset, len);
+}
 
 /// Write the whole of `buf` to `file` through `io`, looping over short writes.
 ///
@@ -376,7 +386,9 @@ impl LogIo for FileIo {}
 
 /// The shared handle every structure defaults to before a test installs its
 /// own.
-pub(crate) fn file_io() -> std::sync::Arc<dyn LogIo> { std::sync::Arc::new(FileIo) }
+pub(crate) fn file_io() -> std::sync::Arc<dyn LogIo> {
+    std::sync::Arc::new(FileIo)
+}
 
 #[cfg(test)]
 mod tests {
@@ -484,11 +496,10 @@ mod tests {
         for (script, expected) in [
             // Three short writes finish a six-byte buffer, each offered only what
             // the last one left.
-            (vec![Ok(2), Ok(3), Ok(1)], vec![
-                b"abcdef".to_vec(),
-                b"cdef".to_vec(),
-                b"f".to_vec(),
-            ]),
+            (
+                vec![Ok(2), Ok(3), Ok(1)],
+                vec![b"abcdef".to_vec(), b"cdef".to_vec(), b"f".to_vec()],
+            ),
             // An interrupted write is retried with the same bytes, not skipped past.
             (
                 vec![

@@ -33,12 +33,18 @@ pub struct FakeLog {
     pub last_epoch: Epoch,
 }
 impl FakeLog {
-    pub const fn new(end: i64, last_epoch: Epoch) -> Self { Self { end, last_epoch } }
+    pub const fn new(end: i64, last_epoch: Epoch) -> Self {
+        Self { end, last_epoch }
+    }
 }
 impl LogView for FakeLog {
-    fn end_offset(&self) -> i64 { self.end }
+    fn end_offset(&self) -> i64 {
+        self.end
+    }
 
-    fn last_epoch(&self) -> Epoch { self.last_epoch }
+    fn last_epoch(&self) -> Epoch {
+        self.last_epoch
+    }
 
     fn end_offset_for_epoch(&self, epoch: Epoch) -> LogOffsetMetadata {
         single_epoch_end(self.end, self.last_epoch, epoch)
@@ -62,9 +68,13 @@ impl CellLog {
     }
 }
 impl LogView for CellLog {
-    fn end_offset(&self) -> i64 { self.end.get() }
+    fn end_offset(&self) -> i64 {
+        self.end.get()
+    }
 
-    fn last_epoch(&self) -> Epoch { self.last_epoch }
+    fn last_epoch(&self) -> Epoch {
+        self.last_epoch
+    }
 
     fn end_offset_for_epoch(&self, epoch: Epoch) -> LogOffsetMetadata {
         single_epoch_end(self.end.get(), self.last_epoch, epoch)

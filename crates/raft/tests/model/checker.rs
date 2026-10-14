@@ -65,11 +65,14 @@ impl Model for ConsensusModel {
                 QuorumState::bootstrap(uuid::Uuid::nil(), voters.clone()),
                 Self::election_timeout_of(id),
             );
-            nodes.insert(id, NodeModel {
-                machine,
-                log: ModelLog::default(),
-                high_watermark: 0,
-            });
+            nodes.insert(
+                id,
+                NodeModel {
+                    machine,
+                    log: ModelLog::default(),
+                    high_watermark: 0,
+                },
+            );
         }
         vec![ModelState {
             nodes,

@@ -26,7 +26,9 @@ pub struct Sha256Digest(
 impl Sha256Digest {
     /// Digest of `bytes`.
     #[must_use]
-    pub fn of(bytes: &[u8]) -> Self { Self(Sha256::digest(bytes).into()) }
+    pub fn of(bytes: &[u8]) -> Self {
+        Self(Sha256::digest(bytes).into())
+    }
 }
 
 /// Variable-length bytes that serialise as a lowercase hex string.
@@ -83,7 +85,7 @@ mod tests {
     }
 
     #[test]
-    fn hex_newtypes_reject_bad_input_without_panicking() {
+    fn hex_newtypes_round_trip_and_format() {
         let head = ChainHead([0xa1; 32]);
         let encoded = serde_json::to_string(&head).unwrap();
         check!(encoded == format!("\"{}\"", "a1".repeat(32)));
@@ -98,45 +100,34 @@ mod tests {
         );
         check!(format!("{digest:?}") == format!("Sha256Digest({digest})"));
 
-        for (name, json) in [
-            ("empty string", "\"\"".to_string()),
-            ("too short", format!("\"{}\"", "00".repeat(31))),
-            ("too long", format!("\"{}\"", "00".repeat(33))),
-            ("odd length", format!("\"{}0\"", "00".repeat(31))),
-            ("non-hex characters", format!("\"{}\"", "zz".repeat(32))),
-            ("not a string", "12345".to_string()),
-            ("null", "null".to_string()),
-            ("array", "[]".to_string()),
-        ] {
-            check!(
-                serde_json::from_str::<ChainHead>(&json).is_err(),
-                "ChainHead case {name}"
-            );
-            check!(
-                serde_json::from_str::<Sha256Digest>(&json).is_err(),
-                "Sha256Digest case {name}"
-            );
-        }
-
-        for (name, json, expected) in [
-            ("empty", "\"\"", Some(Vec::new())),
-            (
-                "even-length hex",
-                "\"00ff10\"",
-                Some(vec![0x00, 0xff, 0x10]),
-            ),
-            ("odd length", "\"abc\"", None),
-            ("non-hex characters", "\"zz\"", None),
-            ("not a string", "42", None),
-            ("null", "null", None),
-        ] {
-            check!(
-                serde_json::from_str::<HexBytes>(json).ok().map(|h| h.0) == expected,
-                "HexBytes case {name}"
-            );
-        }
-
         check!(HexBytes(vec![0xde, 0xad]).to_string() == "dead");
         check!(format!("{:?}", HexBytes(vec![0xde, 0xad])) == "HexBytes(dead)");
+    }
+
+    #[yare::parameterized(
+        empty = { "\"\"".to_owned() },
+        too_short = { format!("\"{}\"", "00".repeat(31)) },
+        too_long = { format!("\"{}\"", "00".repeat(33)) },
+        odd_length = { format!("\"{}0\"", "00".repeat(31)) },
+        non_hex = { format!("\"{}\"", "zz".repeat(32)) },
+        not_a_string = { "12345".to_owned() },
+        null = { "null".to_owned() },
+        array = { "[]".to_owned() },
+    )]
+    fn fixed_width_hex_newtypes_reject_bad_input_without_panicking(json: String) {
+        check!(serde_json::from_str::<ChainHead>(&json).is_err());
+        check!(serde_json::from_str::<Sha256Digest>(&json).is_err());
+    }
+
+    #[yare::parameterized(
+        empty = { "\"\"", Some(Vec::new()) },
+        even_length_hex = { "\"00ff10\"", Some(vec![0x00, 0xff, 0x10]) },
+        odd_length = { "\"abc\"", None },
+        non_hex = { "\"zz\"", None },
+        not_a_string = { "42", None },
+        null = { "null", None },
+    )]
+    fn hex_bytes_decode_cases_are_independent(json: &str, expected: Option<Vec<u8>>) {
+        check!(serde_json::from_str::<HexBytes>(json).ok().map(|h| h.0) == expected);
     }
 }

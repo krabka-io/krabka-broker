@@ -142,7 +142,9 @@ impl InProcessMetadataEventLog {
 
 #[async_trait]
 impl MetadataEventLog for InProcessMetadataEventLog {
-    fn partition_count(&self) -> i32 { self.inner.partition_count }
+    fn partition_count(&self) -> i32 {
+        self.inner.partition_count
+    }
 
     async fn publish(&self, partition: i32, event: Bytes) -> Result<i64, MetadataLogError> {
         self.append(partition, None, Some(event))
@@ -185,12 +187,15 @@ impl MetadataEventLog for InProcessMetadataEventLog {
             for record in records.iter().skip(begin) {
                 snapshot.push(record.clone());
             }
-            assigned.insert(ps.partition, PartitionCursor {
-                next: i64::try_from(records.len()).expect("len fits in i64"),
-                // Initially-assigned: backlog rides the chained
-                // snapshot stream, so live records can go direct.
-                via_inject: false,
-            });
+            assigned.insert(
+                ps.partition,
+                PartitionCursor {
+                    next: i64::try_from(records.len()).expect("len fits in i64"),
+                    // Initially-assigned: backlog rides the chained
+                    // snapshot stream, so live records can go direct.
+                    via_inject: false,
+                },
+            );
         }
 
         let (inject_tx, inject_rx) = mpsc::unbounded_channel::<MetadataEventRecord>();
@@ -317,13 +322,22 @@ mod tests {
             visited(&log, 0, 0, 4).await.unwrap_err().to_string()
                 == "metadata log error: partition 0 ends at 3, before 4"
         );
-        for partition in [-1, 2] {
-            check!(matches!(
-                visited(&log, partition, 0, 0).await,
-                Err(MetadataLogError::PartitionOutOfRange { partition: got, count: 2 })
-                    if got == partition
-            ));
-        }
+        check!(log.inner.subscriptions.lock().unwrap().is_empty());
+    }
+
+    #[yare::parameterized(
+        negative = { -1 },
+        upper_bound = { 2 },
+    )]
+    #[test_macro(tokio::test)]
+    async fn visit_range_rejects_out_of_range_partitions(partition: i32) {
+        let log = InProcessMetadataEventLog::new(2);
+
+        check!(matches!(
+            visited(&log, partition, 0, 0).await,
+            Err(MetadataLogError::PartitionOutOfRange { partition: got, count: 2 })
+                if got == partition
+        ));
         check!(log.inner.subscriptions.lock().unwrap().is_empty());
     }
 

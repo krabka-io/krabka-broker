@@ -151,18 +151,20 @@ mod tests {
                 < prefix.to_string().find("pending_revocation").unwrap()
         );
     }
+    #[yare::parameterized(
+        unit_struct = { "struct Projection;" },
+        extra_before_members = { "struct Projection { extra: usize, members: Vec<Member> }" },
+        optional_members = { "struct Projection { members: Option<Member> }" },
+        generic_member = { "struct Projection { members: Vec<Member<T>> }" },
+        multiple_types = { "struct Projection { members: Vec<Member, Other> }" },
+    )]
+    fn field_groups_require_named_fields_and_a_concrete_first_member_list(declaration: &str) {
+        let item = moxy::parse!({ declaration }).unwrap();
+        assert2::assert!(additions(&item, "group").is_err(), "{declaration}");
+    }
+
     #[test]
-    fn field_groups_require_named_fields_and_a_concrete_first_member_list() {
-        for declaration in [
-            "struct Projection;",
-            "struct Projection { extra: usize, members: Vec<Member> }",
-            "struct Projection { members: Option<Member> }",
-            "struct Projection { members: Vec<Member<T>> }",
-            "struct Projection { members: Vec<Member, Other> }",
-        ] {
-            let item = moxy::parse!({ declaration }).unwrap();
-            assert!(additions(&item, "group").is_err(), "{declaration}");
-        }
+    fn field_groups_reject_tuple_structs_and_keep_visibility() {
         let unnamed = moxy::parse!("struct Projection(Member);").unwrap();
         assert!(additions(&unnamed, "member").is_err());
         let visible = moxy::parse!("pub(super) struct Projection { target: Vec<i32> }").unwrap();

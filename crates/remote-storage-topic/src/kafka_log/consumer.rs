@@ -89,9 +89,13 @@ pub(super) struct KafkaAssignmentHandle {
 }
 
 impl AssignmentHandle for KafkaAssignmentHandle {
-    fn add(&self, start: PartitionStart) { self.state.spawn_partition(start); }
+    fn add(&self, start: PartitionStart) {
+        self.state.spawn_partition(start);
+    }
 
-    fn remove(&self, partition: i32) { self.state.cancel_partition(partition); }
+    fn remove(&self, partition: i32) {
+        self.state.cancel_partition(partition);
+    }
 
     fn assigned(&self) -> Vec<i32> {
         let mut v: Vec<i32> = self

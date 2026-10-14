@@ -38,7 +38,9 @@ const INVALID_REGISTRATION: i16 = 119;
 /// [`super::api_versions::table`].
 pub(super) const SUPPORTED_APIS: [i16; 1] = [controller_registration_request::API_KEY];
 
-pub(super) fn is_controller_api(api_key: i16) -> bool { SUPPORTED_APIS.contains(&api_key) }
+pub(super) fn is_controller_api(api_key: i16) -> bool {
+    SUPPORTED_APIS.contains(&api_key)
+}
 
 pub(super) async fn dispatch(
     api_key: i16,

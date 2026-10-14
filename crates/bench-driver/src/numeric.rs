@@ -30,9 +30,13 @@ pub(crate) fn saturating_u128_to_u64(value: u128) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
 }
 
-pub(crate) fn nonnegative_i64_to_u64(value: i64) -> u64 { u64::try_from(value).unwrap_or_default() }
+pub(crate) fn nonnegative_i64_to_u64(value: i64) -> u64 {
+    u64::try_from(value).unwrap_or_default()
+}
 
-pub(crate) fn saturating_u64_to_i64(value: u64) -> i64 { i64::try_from(value).unwrap_or(i64::MAX) }
+pub(crate) fn saturating_u64_to_i64(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
 
 /// The rate at which `count` events arrived over `window`.
 ///
@@ -46,11 +50,15 @@ pub(crate) fn event_rate(count: u64, window: Time) -> Frequency {
 }
 
 /// `size` counted in mebibytes, which is the unit of the report's memory axes.
-pub(crate) fn mebibytes_f64(size: ByteSize) -> f64 { (size / mebibytes(1)).as_f64() }
+pub(crate) fn mebibytes_f64(size: ByteSize) -> f64 {
+    (size / mebibytes(1)).as_f64()
+}
 
 /// `extent` counted in milliseconds, which is the unit of the report's latency
 /// columns and time-series metric keys.
-pub(crate) fn millis_f64(extent: Time) -> f64 { (extent / millis(1)).as_f64() }
+pub(crate) fn millis_f64(extent: Time) -> f64 {
+    (extent / millis(1)).as_f64()
+}
 
 #[cfg(test)]
 mod tests {
@@ -68,15 +76,13 @@ mod tests {
         check!(event_rate(5, secs(0)) == Frequency::ZERO);
     }
 
-    #[test]
-    fn quantities_count_themselves_in_a_named_unit() {
-        for (counted, want) in [
-            (mebibytes_f64(mebibytes(300)), 300.0),
-            (mebibytes_f64(kibibytes(512)), 0.5),
-            (millis_f64(secs(2)), 2000.0),
-            (millis_f64(micros(1500)), 1.5),
-        ] {
-            check!((counted - want).abs() < f64::EPSILON);
-        }
+    #[yare::parameterized(
+        full_mebibytes = { mebibytes_f64(mebibytes(300)), 300.0 },
+        kibibytes_as_fractional_mebibytes = { mebibytes_f64(kibibytes(512)), 0.5 },
+        seconds_as_milliseconds = { millis_f64(secs(2)), 2000.0 },
+        microseconds_as_fractional_milliseconds = { millis_f64(micros(1500)), 1.5 },
+    )]
+    fn quantities_count_themselves_in_a_named_unit(counted: f64, want: f64) {
+        check!((counted - want).abs() < f64::EPSILON);
     }
 }

@@ -25,10 +25,10 @@ use {
 #[tokio::test]
 async fn exclude_producer_id_drops_only_that_producers_batch() {
     let mut fixture = vec![
-        producer_batch(101, vec![
-            value_record(0, "p101-1"),
-            value_record(1, "p101-2"),
-        ]),
+        producer_batch(
+            101,
+            vec![value_record(0, "p101-1"), value_record(1, "p101-2")],
+        ),
         producer_batch(202, vec![value_record(0, "p202-1")]),
     ];
     let archive = build_archive("orders", 0, &mut fixture);

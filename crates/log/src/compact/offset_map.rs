@@ -145,16 +145,16 @@ mod tests {
     #[test]
     fn build_offset_map_across_segments_uses_newest() {
         let dir = tempdir().unwrap();
-        let first_segment = write_sealed_segment(dir.path(), 0, vec![make_record(
+        let first_segment = write_sealed_segment(
+            dir.path(),
             0,
-            Some(b"k1"),
-            Some(b"v1"),
-        )]);
-        let second_segment = write_sealed_segment(dir.path(), 10, vec![make_record(
-            0,
-            Some(b"k1"),
-            Some(b"v2"),
-        )]);
+            vec![make_record(0, Some(b"k1"), Some(b"v1"))],
+        );
+        let second_segment = write_sealed_segment(
+            dir.path(),
+            10,
+            vec![make_record(0, Some(b"k1"), Some(b"v2"))],
+        );
         let map = offset_map_for(&[&first_segment, &second_segment], vec![]);
         assert2::assert!(map == maplit::hashmap! {Bytes::from_static(b"k1") => Offset(10)});
     }
@@ -167,33 +167,36 @@ mod tests {
     #[test]
     fn an_aborted_batch_never_enters_the_map() {
         let dir = tempdir().unwrap();
-        let seg = write_sealed_batches(dir.path(), &[
-            transactional_record()
-                .offset(5)
-                .payload(KeyValue {
-                    key: b"k",
-                    value: b"committed",
-                })
-                .call(),
-            control_batch(6, 1000, 1 /* COMMIT */),
-            transactional_record()
-                .offset(10)
-                .producer(2000)
-                .payload(KeyValue {
-                    key: b"k",
-                    value: b"aborted",
-                })
-                .call(),
-            transactional_record()
-                .offset(11)
-                .producer(2000)
-                .payload(KeyValue {
-                    key: b"only-aborted",
-                    value: b"v",
-                })
-                .call(),
-            control_batch(12, 2000, 0 /* ABORT */),
-        ]);
+        let seg = write_sealed_batches(
+            dir.path(),
+            &[
+                transactional_record()
+                    .offset(5)
+                    .payload(KeyValue {
+                        key: b"k",
+                        value: b"committed",
+                    })
+                    .call(),
+                control_batch(6, 1000, 1 /* COMMIT */),
+                transactional_record()
+                    .offset(10)
+                    .producer(2000)
+                    .payload(KeyValue {
+                        key: b"k",
+                        value: b"aborted",
+                    })
+                    .call(),
+                transactional_record()
+                    .offset(11)
+                    .producer(2000)
+                    .payload(KeyValue {
+                        key: b"only-aborted",
+                        value: b"v",
+                    })
+                    .call(),
+                control_batch(12, 2000, 0 /* ABORT */),
+            ],
+        );
         let aborted = vec![
             crate::test_support::aborted_txn()
                 .producer(2000)

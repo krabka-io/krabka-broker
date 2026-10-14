@@ -72,7 +72,9 @@ pub(crate) fn producer_batch(producer_id: i64, records: Vec<Record>) -> RecordBa
 }
 
 /// A batch with no producer id (the ordinary, non-idempotent case).
-pub(crate) fn plain_batch(records: Vec<Record>) -> RecordBatch { producer_batch(-1, records) }
+pub(crate) fn plain_batch(records: Vec<Record>) -> RecordBatch {
+    producer_batch(-1, records)
+}
 
 /// A transactional (non-control) batch for `producer_id`.
 pub(crate) fn transactional_batch(producer_id: i64, records: Vec<Record>) -> RecordBatch {

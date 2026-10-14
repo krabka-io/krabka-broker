@@ -298,10 +298,13 @@ fn repeated_summaries(values: &[f64], commit: &str) -> Vec<BenchmarkSummary> {
             suite: "test".to_string(),
             commit: commit.to_string(),
             timestamp: "2026-09-09T00:00:00Z".to_string(),
-            benchmarks: BTreeMap::from([("hot/path".to_string(), BenchmarkMetric {
-                ns_per_iter: *value,
-                variance_ns: 1.0,
-            })]),
+            benchmarks: BTreeMap::from([(
+                "hot/path".to_string(),
+                BenchmarkMetric {
+                    ns_per_iter: *value,
+                    variance_ns: 1.0,
+                },
+            )]),
         })
         .collect()
 }
@@ -355,22 +358,18 @@ fn missing_repeated_samples_cannot_pass() {
 
     let error = compare_summaries(&reference, &candidate, 0.03).unwrap_err();
 
-    assert!(matches!(error, ParseBenchesError::TooFewSamples {
-        side: "reference",
-        count: 2
-    }));
+    assert!(matches!(
+        error,
+        ParseBenchesError::TooFewSamples {
+            side: "reference",
+            count: 2
+        }
+    ));
 }
 
 #[test]
 fn comparison_rejects_invalid_inputs() {
     let good = repeated_summaries(&[100.0, 101.0, 99.0], "good");
-    for tolerance in [-1.0, f64::NAN, f64::INFINITY] {
-        assert!(matches!(
-            compare_summaries(&good, &good, tolerance),
-            Err(ParseBenchesError::InvalidTolerance)
-        ));
-    }
-
     let empty = vec![
         BenchmarkSummary {
             suite: "test".into(),
@@ -388,10 +387,13 @@ fn comparison_rejects_invalid_inputs() {
     let other = repeated_summaries(&[100.0, 101.0, 99.0], "other")
         .into_iter()
         .map(|mut summary| {
-            summary.benchmarks = BTreeMap::from([("other/path".into(), BenchmarkMetric {
-                ns_per_iter: 1.0,
-                variance_ns: 0.0,
-            })]);
+            summary.benchmarks = BTreeMap::from([(
+                "other/path".into(),
+                BenchmarkMetric {
+                    ns_per_iter: 1.0,
+                    variance_ns: 0.0,
+                },
+            )]);
             summary
         })
         .collect::<Vec<_>>();
@@ -408,6 +410,19 @@ fn comparison_rejects_invalid_inputs() {
     assert!(matches!(
         compare_summaries(&good, &invalid, 0.03),
         Err(ParseBenchesError::InvalidSample(name)) if name == "hot/path"
+    ));
+}
+
+#[yare::parameterized(
+    negative = { -1.0 },
+    nan = { f64::NAN },
+    infinity = { f64::INFINITY },
+)]
+fn comparison_rejects_invalid_tolerance(tolerance: f64) {
+    let good = repeated_summaries(&[100.0, 101.0, 99.0], "good");
+    assert2::assert!(matches!(
+        compare_summaries(&good, &good, tolerance),
+        Err(ParseBenchesError::InvalidTolerance)
     ));
 }
 

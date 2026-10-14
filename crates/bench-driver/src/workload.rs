@@ -79,7 +79,9 @@ pub const DEFAULT_SAMPLE_INTERVAL: Time = secs(2);
 ///
 /// Panics if the named default is not protocol-safe.
 #[must_use]
-pub const fn default_producer_request_timeout() -> Time { DEFAULT_PRODUCER_REQUEST_TIMEOUT }
+pub const fn default_producer_request_timeout() -> Time {
+    DEFAULT_PRODUCER_REQUEST_TIMEOUT
+}
 
 /// Return the validated consumer request-timeout default for `stack`.
 ///
@@ -111,7 +113,9 @@ pub const fn default_consumer_build_initial_backoff() -> Time {
 }
 
 #[must_use]
-pub const fn default_consumer_build_max_backoff() -> Time { DEFAULT_CONSUMER_BUILD_MAX_BACKOFF }
+pub const fn default_consumer_build_max_backoff() -> Time {
+    DEFAULT_CONSUMER_BUILD_MAX_BACKOFF
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConsumerBuildRetryPolicy {
@@ -142,13 +146,19 @@ impl ConsumerBuildRetryPolicy {
     }
 
     #[must_use]
-    pub const fn attempts(self) -> u32 { self.attempts.into_value() }
+    pub const fn attempts(self) -> u32 {
+        self.attempts.into_value()
+    }
 
     #[must_use]
-    pub fn initial_backoff(self) -> Time { self.initial_backoff }
+    pub fn initial_backoff(self) -> Time {
+        self.initial_backoff
+    }
 
     #[must_use]
-    pub fn max_backoff(self) -> Time { self.max_backoff }
+    pub fn max_backoff(self) -> Time {
+        self.max_backoff
+    }
 }
 
 impl Default for ConsumerBuildRetryPolicy {
@@ -163,10 +173,14 @@ impl Default for ConsumerBuildRetryPolicy {
 }
 
 #[must_use]
-pub const fn default_consumer_poll_timeout() -> Time { DEFAULT_CONSUMER_POLL_TIMEOUT }
+pub const fn default_consumer_poll_timeout() -> Time {
+    DEFAULT_CONSUMER_POLL_TIMEOUT
+}
 
 #[must_use]
-pub const fn default_consumer_poll_error_backoff() -> Time { DEFAULT_CONSUMER_POLL_ERROR_BACKOFF }
+pub const fn default_consumer_poll_error_backoff() -> Time {
+    DEFAULT_CONSUMER_POLL_ERROR_BACKOFF
+}
 
 /// The fixed sampling grid. Every task gets a copy, so all tasks bucket into
 /// the same slices.
@@ -241,7 +255,9 @@ impl Grid {
     }
 
     /// The width of one slice, as the extent the per-slice rates divide by.
-    fn interval(&self) -> Time { Time::from_millis(saturating_u64_to_i64(self.interval_ms)) }
+    fn interval(&self) -> Time {
+        Time::from_millis(saturating_u64_to_i64(self.interval_ms))
+    }
 }
 
 /// Parameters wired in from `main` and the CLI. This struct is distinct from
@@ -1236,12 +1252,16 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
     // Counter behind each record key, so keys vary within this task. The task
     // index is folded in, so two tasks never mint the same key.
     let mut sent_records = (idx as u64) << 40;
-    let mut observations =
-        ProducerObservations::new(idx, scenario.msg_size.bytes_u64(), grid, SharedHandles {
+    let mut observations = ProducerObservations::new(
+        idx,
+        scenario.msg_size.bytes_u64(),
+        grid,
+        SharedHandles {
             stop: &stop,
             first_ack: &first_ack,
             kill_at: &kill_at,
-        });
+        },
+    );
 
     let mut pacer = match scenario.mode {
         LoadMode::Saturate => None,
@@ -1560,7 +1580,9 @@ mod tests {
         }
     }
 
-    fn scenario(rf: i16) -> Scenario { short_scenario(rf) }
+    fn scenario(rf: i16) -> Scenario {
+        short_scenario(rf)
+    }
 
     #[derive(Debug, PartialEq, Eq)]
     struct ProducerCounters {
@@ -1848,90 +1870,98 @@ mod tests {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn producer_pipeline_counts_delivery_and_admission_outcomes() {
-        for (metadata_error, delivery_error) in [(0, 0), (0, 29), (29, 0)] {
-            let ProducerBrokerFixture {
-                broker,
-                started,
-                largest_batch,
-            } = producer_broker(metadata_error, delivery_error).await;
-            let mut scenario = scenario(1);
-            scenario.linger = millis(20);
-            let stop = Arc::new(AtomicU8::new(STATE_MEASURING));
-            let first_ack = Arc::new(AtomicU64::new(0));
-            let kill_at = Arc::new(AtomicU64::new(0));
-            let cfg = DriverConfig {
-                bootstrap: broker.addr.to_string(),
-                producer_request_timeout: secs(1),
-                producer_final_drain_timeout: secs(1),
-                ..cfg(1)
-            };
-            let grid = Grid::new(Instant::now(), 0, &scenario, cfg.sample_interval);
-            let mut producers = JoinSet::new();
-            spawn_producers(
-                &mut producers,
-                &scenario,
-                &cfg,
-                None,
-                grid,
-                &SharedHandles {
-                    stop: &stop,
-                    first_ack: &first_ack,
-                    kill_at: &kill_at,
-                },
-            );
-            assert!(producers.len() == scenario.producers);
-            tokio::time::timeout(secs(10).to_std(), started)
-                .await
-                .unwrap()
-                .expect("producer reaches topic admission");
-            // A short measurement window exercises the bounded pipeline and its
-            // final drain, using the same phase signal as a benchmark run. When
-            // delivery succeeds the window opens at the first ack, so a slow
-            // runner still measures something.
-            if metadata_error == 0 && delivery_error == 0 {
-                tokio::time::timeout(secs(10).to_std(), async {
-                    while first_ack.load(Ordering::SeqCst) == 0 {
-                        tokio::time::sleep(millis(10).to_std()).await;
-                    }
-                })
-                .await
-                .expect("the first record is acknowledged");
-            }
-            tokio::time::sleep(millis(200).to_std()).await;
-            stop.store(STATE_STOP, Ordering::SeqCst);
-            let output = tokio::time::timeout(secs(10).to_std(), producers.join_next())
-                .await
-                .unwrap()
-                .expect("one producer task")
-                .unwrap();
-            assert!(producers.is_empty());
-            broker.stop();
+    #[yare::parameterized(
+        success = { 0, 0 },
+        delivery_rejected = { 0, 29 },
+        metadata_rejected = { 29, 0 },
+    )]
+    #[test_macro(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+    async fn producer_pipeline_counts_delivery_and_admission_outcomes(
+        metadata_error: i16,
+        delivery_error: i16,
+    ) {
+        let ProducerBrokerFixture {
+            broker,
+            started,
+            largest_batch,
+        } = producer_broker(metadata_error, delivery_error).await;
+        let mut scenario = scenario(1);
+        scenario.linger = millis(20);
+        let stop = Arc::new(AtomicU8::new(STATE_MEASURING));
+        let first_ack = Arc::new(AtomicU64::new(0));
+        let kill_at = Arc::new(AtomicU64::new(0));
+        let cfg = DriverConfig {
+            bootstrap: broker.addr.to_string(),
+            producer_request_timeout: secs(1),
+            producer_final_drain_timeout: secs(1),
+            ..cfg(1)
+        };
+        let grid = Grid::new(Instant::now(), 0, &scenario, cfg.sample_interval);
+        let mut producers = JoinSet::new();
+        spawn_producers(
+            &mut producers,
+            &scenario,
+            &cfg,
+            None,
+            grid,
+            &SharedHandles {
+                stop: &stop,
+                first_ack: &first_ack,
+                kill_at: &kill_at,
+            },
+        );
+        assert2::assert!(producers.len() == scenario.producers);
+        tokio::time::timeout(secs(10).to_std(), started)
+            .await
+            .unwrap()
+            .expect("producer reaches topic admission");
+        // A short measurement window exercises the bounded pipeline and its
+        // final drain, using the same phase signal as a benchmark run. When
+        // delivery succeeds the window opens at the first ack, so a slow
+        // runner still measures something.
+        if metadata_error == 0 && delivery_error == 0 {
+            tokio::time::timeout(secs(10).to_std(), async {
+                while first_ack.load(Ordering::SeqCst) == 0 {
+                    tokio::time::sleep(millis(10).to_std()).await;
+                }
+            })
+            .await
+            .expect("the first record is acknowledged");
+        }
+        tokio::time::sleep(millis(200).to_std()).await;
+        stop.store(STATE_STOP, Ordering::SeqCst);
+        let output = tokio::time::timeout(secs(10).to_std(), producers.join_next())
+            .await
+            .unwrap()
+            .expect("one producer task")
+            .unwrap();
+        assert2::assert!(producers.is_empty());
+        broker.stop();
 
-            assert!(output.interval_msgs.iter().sum::<u64>() == output.msgs);
-            assert!(output.latency.len() == output.msgs);
-            assert!(output.bytes == output.msgs * 100);
-            if metadata_error == 0 && delivery_error == 0 {
-                assert!(output.msgs > 0);
-                assert!((output.dropped, output.error.as_str()) == (0, ""));
-                assert!(first_ack.load(Ordering::SeqCst) > 0);
-            } else {
-                assert!((output.msgs, output.bytes, first_ack.load(Ordering::SeqCst)) == (0, 0, 0));
-                assert!(output.dropped > 0);
-                assert!(output.error == "producer-0-err: broker error_code 29");
-            }
-            if metadata_error == 0 {
-                assert!(
-                    largest_batch.load(Ordering::SeqCst) > 1,
-                    "records are queued before awaiting delivery"
-                );
-            } else {
-                assert!(
-                    largest_batch.load(Ordering::SeqCst) == 0,
-                    "admission failures never reach Produce"
-                );
-            }
+        assert2::assert!(output.interval_msgs.iter().sum::<u64>() == output.msgs);
+        assert2::assert!(output.latency.len() == output.msgs);
+        assert2::assert!(output.bytes == output.msgs * 100);
+        if metadata_error == 0 && delivery_error == 0 {
+            assert2::assert!(output.msgs > 0);
+            assert2::assert!((output.dropped, output.error.as_str()) == (0, ""));
+            assert2::assert!(first_ack.load(Ordering::SeqCst) > 0);
+        } else {
+            assert2::assert!(
+                (output.msgs, output.bytes, first_ack.load(Ordering::SeqCst)) == (0, 0, 0)
+            );
+            assert2::assert!(output.dropped > 0);
+            assert2::assert!(output.error == "producer-0-err: broker error_code 29");
+        }
+        if metadata_error == 0 {
+            assert2::assert!(
+                largest_batch.load(Ordering::SeqCst) > 1,
+                "records are queued before awaiting delivery"
+            );
+        } else {
+            assert2::assert!(
+                largest_batch.load(Ordering::SeqCst) == 0,
+                "admission failures never reach Produce"
+            );
         }
     }
 
@@ -2006,14 +2036,17 @@ mod tests {
         check!(policy.max_backoff() == millis(1));
     }
 
-    #[test]
-    fn consumer_build_retry_rejects_invalid_primitive_values() {
-        for invalid in ["0", "not-a-number", "-1", "4294967296"] {
-            check!(
-                invalid.parse::<ConsumerBuildAttempts>().is_err(),
-                "attempts {invalid:?} must be rejected"
-            );
-        }
+    #[yare::parameterized(
+        zero = { "0" },
+        text = { "not-a-number" },
+        negative = { "-1" },
+        overflow = { "4294967296" },
+    )]
+    fn consumer_build_retry_rejects_invalid_primitive_values(invalid: &str) {
+        check!(
+            invalid.parse::<ConsumerBuildAttempts>().is_err(),
+            "attempts {invalid:?} must be rejected"
+        );
     }
 
     #[test]

@@ -67,7 +67,9 @@ mod test_sources {
     }
 
     impl StampSource for MonotonicStampSource {
-        fn next_stamp(&self) -> u64 { self.next.fetch_add(self.step, Ordering::Relaxed) }
+        fn next_stamp(&self) -> u64 {
+            self.next.fetch_add(self.step, Ordering::Relaxed)
+        }
 
         fn observe(&self, stamp: u64) {
             let next = stamp.saturating_add(self.step);

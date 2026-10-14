@@ -100,10 +100,10 @@ pub(super) fn test_engine_with_voters(
 }
 
 pub(super) fn single_voter_engine() -> (KraftController, tempfile::TempDir) {
-    test_engine_with_voters(1, [voter(1, vec![controller_endpoint(
-        "controller-1",
-        9093,
-    )])])
+    test_engine_with_voters(
+        1,
+        [voter(1, vec![controller_endpoint("controller-1", 9093)])],
+    )
 }
 
 pub(super) async fn wait_for_leader(engine: &KraftController) {

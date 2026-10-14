@@ -71,7 +71,9 @@ impl SimNet {
         self.registry.lock().unwrap().nodes.insert(id, ctrl);
     }
 
-    pub(crate) fn remove(&self, id: NodeId) { self.registry.lock().unwrap().nodes.remove(&id); }
+    pub(crate) fn remove(&self, id: NodeId) {
+        self.registry.lock().unwrap().nodes.remove(&id);
+    }
 
     pub(crate) fn get(&self, id: NodeId) -> Option<KraftController> {
         self.registry.lock().unwrap().nodes.get(&id).cloned()
@@ -92,7 +94,9 @@ impl SimNet {
     }
 
     /// Put `id` back on the network.
-    pub(crate) fn heal(&self, id: NodeId) { self.registry.lock().unwrap().partitioned.remove(&id); }
+    pub(crate) fn heal(&self, id: NodeId) {
+        self.registry.lock().unwrap().partitioned.remove(&id);
+    }
 
     fn reachable(&self, to: NodeId) -> Option<KraftController> {
         let registry = self.registry.lock().unwrap();

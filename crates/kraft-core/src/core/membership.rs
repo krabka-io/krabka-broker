@@ -111,10 +111,14 @@ impl QuorumStateMachine {
     }
 
     /// Apply a committed `KRaftVersionRecord`.
-    pub fn set_kraft_version(&mut self, version: u16) { self.state.kraft_version = version; }
+    pub fn set_kraft_version(&mut self, version: u16) {
+        self.state.kraft_version = version;
+    }
 
     /// Forget the preceding voter view once the latest voter record commits.
-    pub fn commit_voter_set(&mut self) { self.adjacent_voters = None; }
+    pub fn commit_voter_set(&mut self) {
+        self.adjacent_voters = None;
+    }
 
     fn voter_key_matches(&self, voters: &VoterSet, key: ReplicaKey) -> bool {
         voters.get(key.id).is_some_and(|voter| {
@@ -356,9 +360,12 @@ mod tests {
         check!(matches!(m2.role(), Role::Follower { .. }));
         let actions = m2.apply_voter_set(voters(&[NodeId(2), NodeId(3)]), SimInstant(30));
         check!(matches!(m2.role(), Role::Observer { .. }));
-        check!(actions.iter().any(|a| matches!(a, Action::SendFetch {
-            leader_id: NodeId(2)
-        })));
+        check!(actions.iter().any(|a| matches!(
+            a,
+            Action::SendFetch {
+                leader_id: NodeId(2)
+            }
+        )));
 
         // Transition from observer to voter: (was_voter: false, is_voter: true)
         let mut m3 = machine(NodeId(1), &[NodeId(2), NodeId(3)]);
@@ -366,9 +373,12 @@ mod tests {
         let actions =
             m3.apply_voter_set(voters(&[NodeId(1), NodeId(2), NodeId(3)]), SimInstant(40));
         check!(matches!(m3.role(), Role::Unattached { .. }));
-        check!(actions.iter().any(|a| matches!(a, Action::ResetTimer {
-            kind: TimerKind::Election,
-            ..
-        })));
+        check!(actions.iter().any(|a| matches!(
+            a,
+            Action::ResetTimer {
+                kind: TimerKind::Election,
+                ..
+            }
+        )));
     }
 }

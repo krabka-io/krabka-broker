@@ -19,7 +19,9 @@ fn java_long_hash_model(bits: u64) -> u32 {
 }
 
 #[cfg_attr(creusot, ensures(result == java_long_hash_model(bits)))]
-fn java_long_hash(bits: u64) -> u32 { ((bits ^ (bits >> 32)) & 0xffff_ffff) as u32 }
+fn java_long_hash(bits: u64) -> u32 {
+    ((bits ^ (bits >> 32)) & 0xffff_ffff) as u32
+}
 
 /// The `u32` image of a Java `int`: the value itself, or the value plus 2^32
 /// (`u32::MAX - (-1 - value)`) when it is negative. Both casts stay in range.
@@ -141,7 +143,9 @@ fn kafka_to_positive_model(hash: u32) -> Int {
 #[cfg_attr(creusot, ensures(result@ == kafka_to_positive_model(hash)))]
 #[ensures(0 <= result@)]
 #[ensures(result@ <= i32::MAX@)]
-fn kafka_to_positive(hash: u32) -> i32 { (u64::from(hash) % 0x8000_0000) as i32 }
+fn kafka_to_positive(hash: u32) -> i32 {
+    (u64::from(hash) % 0x8000_0000) as i32
+}
 
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
@@ -225,23 +229,30 @@ pub const fn remote_metadata_resume_cursor(committed: i64) -> Option<i64> {
 mod tests {
     use {super::*, assert2::check};
 
-    #[test]
-    fn matches_jvm_remote_metadata_partitioner_goldens() {
-        let topic_id = 0x1234_5678_9abc_def0_0011_2233_4455_6677;
-        for (partition, expected) in [(0, 6), (1, 36), (3, 2), (7, 26)] {
-            check!(remote_metadata_partition(topic_id, partition, 50) == Some(expected));
-        }
+    #[yare::parameterized(
+        partition_0 = { 0, Some(6) },
+        partition_1 = { 1, Some(36) },
+        partition_3 = { 3, Some(2) },
+        partition_7 = { 7, Some(26) },
+    )]
+    fn matches_jvm_remote_metadata_partitioner_goldens(partition: i32, expected: Option<i32>) {
+        check!(
+            remote_metadata_partition(0x1234_5678_9abc_def0_0011_2233_4455_6677, partition, 50,)
+                == expected
+        );
     }
 
-    #[test]
-    fn matches_java_signed_uuid_and_partition_extremes() {
-        for (topic_id, partition, expected) in [
-            (0_u128, i32::MIN, 96),
-            (u128::MAX, i32::MAX, 5),
-            (0xffff_ffff_ffff_ffff_8000_0000_0000_0000, i32::MIN, 45),
-        ] {
-            check!(remote_metadata_partition(topic_id, partition, 97) == Some(expected));
-        }
+    #[yare::parameterized(
+        zero_uuid = { 0_u128, i32::MIN, Some(96) },
+        max_uuid = { u128::MAX, i32::MAX, Some(5) },
+        signed_boundary = { 0xffff_ffff_ffff_ffff_8000_0000_0000_0000, i32::MIN, Some(45) },
+    )]
+    fn matches_java_signed_uuid_and_partition_extremes(
+        topic_id: u128,
+        partition: i32,
+        expected: Option<i32>,
+    ) {
+        check!(remote_metadata_partition(topic_id, partition, 97) == expected);
     }
 
     #[test]

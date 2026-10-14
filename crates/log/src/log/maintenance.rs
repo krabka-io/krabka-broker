@@ -137,14 +137,18 @@ impl Log {
         if self.config.read().unwrap().file_delete_delay <= Time::ZERO {
             return retention::delete_segment_files(&*self.io, &self.dir, base);
         }
-        self.retire_files(base, now, &[
-            "log",
-            "index",
-            "timeindex",
-            "txnindex",
-            "stampindex",
-            "snapshot",
-        ])
+        self.retire_files(
+            base,
+            now,
+            &[
+                "log",
+                "index",
+                "timeindex",
+                "txnindex",
+                "stampindex",
+                "snapshot",
+            ],
+        )
     }
 
     pub(super) fn retire_files(

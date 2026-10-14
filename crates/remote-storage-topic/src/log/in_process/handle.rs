@@ -69,10 +69,13 @@ impl AssignmentHandle for InProcessAssignmentHandle {
         // order: stream::select must not interleave a live record ahead of
         // undrained backlog.
         let next_live = i64::try_from(records.len()).expect("len fits in i64");
-        assigned.insert(start.partition, PartitionCursor {
-            next: next_live,
-            via_inject: true,
-        });
+        assigned.insert(
+            start.partition,
+            PartitionCursor {
+                next: next_live,
+                via_inject: true,
+            },
+        );
     }
 
     fn remove(&self, partition: i32) {

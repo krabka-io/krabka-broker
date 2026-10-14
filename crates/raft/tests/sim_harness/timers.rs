@@ -18,7 +18,9 @@ pub(super) const HEARTBEAT_MS: u64 = 300;
 /// configured for node `id`. It is staggered by node id, so timer ties break
 /// deterministically and the lowest live id tends to win the election race.
 /// Elections therefore always converge.
-pub(super) fn election_timeout_ms_of(id: NodeId) -> u64 { 1000 + id.0 * 50 }
+pub(super) fn election_timeout_ms_of(id: NodeId) -> u64 {
+    1000 + id.0 * 50
+}
 
 /// [`election_timeout_ms_of`] as the quantity [`QuorumStateMachine::new`] takes.
 /// The simulation's own clock stays in integer logical milliseconds, because a

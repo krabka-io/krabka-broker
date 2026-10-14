@@ -60,10 +60,14 @@ async fn authenticated_object_count_covers_only_the_selected_topic() {
         .count() as u64;
     let target = tempfile::tempdir().unwrap();
     let refs = extra.iter().map(String::as_str).collect::<Vec<_>>();
-    let args = restore_args(fixture.archive_root.path(), target.path(), RestoreOptions {
-        extra: &refs,
-        ..Default::default()
-    });
+    let args = restore_args(
+        fixture.archive_root.path(),
+        target.path(),
+        RestoreOptions {
+            extra: &refs,
+            ..Default::default()
+        },
+    );
 
     let report = restore(&args).await.unwrap();
     check!(report.authentication.unwrap().objects == expected);

@@ -263,10 +263,13 @@ fn ordinary_batch() -> RecordBatch {
 #[ignore = "requires Docker, a JDK, and Maven Central"]
 fn kafka_reads_krabka_local_tiered_segment_and_producer_snapshot() {
     let local = tempfile::tempdir().expect("local log tempdir");
-    let mut log = Log::open(local.path(), LogConfig {
-        segment_size: bytes(1),
-        ..LogConfig::default()
-    })
+    let mut log = Log::open(
+        local.path(),
+        LogConfig {
+            segment_size: bytes(1),
+            ..LogConfig::default()
+        },
+    )
     .expect("open local log");
     log.append(&mut producer_batch())
         .expect("append producer batch");

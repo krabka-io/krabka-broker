@@ -78,11 +78,10 @@ fn the_snapshot_image_keeps_the_quorum_controls() {
             }]),
         }),
     ];
-    let image = MetadataImage::from_records(cid, &[
-        controls[0].clone(),
-        controls[1].clone(),
-        topic.clone(),
-    ]);
+    let image = MetadataImage::from_records(
+        cid,
+        &[controls[0].clone(), controls[1].clone(), topic.clone()],
+    );
     let bytes = serialize_metadata_snapshot(&image, 1_700_000_000_000).unwrap();
 
     let whole = deserialize_metadata_snapshot_image(&bytes).unwrap();

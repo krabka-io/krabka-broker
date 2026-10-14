@@ -39,7 +39,9 @@ const NOT_LEADER_OR_FOLLOWER_MESSAGE: &str = "For requests intended only for the
      replica, this error indicates that the broker is not a replica of the topic partition.";
 
 /// The wire form of a node id, or -1 when it does not fit.
-fn node_to_wire(id: NodeId) -> i32 { i32::try_from(id.0).unwrap_or(-1) }
+fn node_to_wire(id: NodeId) -> i32 {
+    i32::try_from(id.0).unwrap_or(-1)
+}
 
 fn not_leader_or_follower_response() -> DescribeQuorumResponse {
     DescribeQuorumResponse {

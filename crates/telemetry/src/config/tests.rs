@@ -13,11 +13,16 @@ fn disabled_when_no_env() {
     assert2::assert!(cfg.is_none());
 }
 
-#[test]
-fn env_truthy_rejects_falsy_values() {
-    for value in ["", "0", "false", "no", "off", " definitely "] {
-        assert2::assert!(!env_truthy(value));
-    }
+#[yare::parameterized(
+    empty = { "" },
+    zero = { "0" },
+    false_word = { "false" },
+    no_word = { "no" },
+    off_word = { "off" },
+    padded_value = { " definitely " },
+)]
+fn env_truthy_rejects_falsy_values(value: &str) {
+    assert2::assert!(!env_truthy(value));
 }
 
 #[test]
@@ -178,33 +183,34 @@ fn heartbeat_interval_parses_from_env() {
     assert2::assert!(cfg.heartbeat_interval == Some(secs(15)));
 }
 
-#[test]
-fn custom_otlp_times_reject_malformed_values() {
-    for name in ["KRABKA_OTLP_TIMEOUT", "KRABKA_OTLP_HEARTBEAT_INTERVAL"] {
-        for value in [
-            "5",
-            "1MiB",
-            "NaNs",
-            "-1s",
-            "999999999999999999999999999999999999999999999999999999999999s",
-        ] {
-            let error = config_from_env(
-                &[("KRABKA_OTLP_ENDPOINT", "http://c:4317"), (name, value)],
-                "1",
-            )
-            .expect_err("invalid custom OTLP time must fail startup");
-            assert2::assert!(
-                matches!(
-                    error,
-                    TelemetryError::InvalidConfig {
-                        name: actual_name,
-                        ..
-                    } if actual_name == name
-                ),
-                "{name}={value}: {error}"
-            );
-        }
-    }
+#[yare::parameterized(
+    timeout_missing_unit = { "KRABKA_OTLP_TIMEOUT", "5" },
+    timeout_size = { "KRABKA_OTLP_TIMEOUT", "1MiB" },
+    timeout_nan = { "KRABKA_OTLP_TIMEOUT", "NaNs" },
+    timeout_negative = { "KRABKA_OTLP_TIMEOUT", "-1s" },
+    timeout_overflow = { "KRABKA_OTLP_TIMEOUT", "999999999999999999999999999999999999999999999999999999999999s" },
+    heartbeat_missing_unit = { "KRABKA_OTLP_HEARTBEAT_INTERVAL", "5" },
+    heartbeat_size = { "KRABKA_OTLP_HEARTBEAT_INTERVAL", "1MiB" },
+    heartbeat_nan = { "KRABKA_OTLP_HEARTBEAT_INTERVAL", "NaNs" },
+    heartbeat_negative = { "KRABKA_OTLP_HEARTBEAT_INTERVAL", "-1s" },
+    heartbeat_overflow = { "KRABKA_OTLP_HEARTBEAT_INTERVAL", "999999999999999999999999999999999999999999999999999999999999s" },
+)]
+fn custom_otlp_times_reject_malformed_values(name: &str, value: &str) {
+    let error = config_from_env(
+        &[("KRABKA_OTLP_ENDPOINT", "http://c:4317"), (name, value)],
+        "1",
+    )
+    .expect_err("invalid custom OTLP time must fail startup");
+    assert2::assert!(
+        matches!(
+            error,
+            TelemetryError::InvalidConfig {
+                name: actual_name,
+                ..
+            } if actual_name == name
+        ),
+        "{name}={value}: {error}"
+    );
 }
 
 #[test]
@@ -223,20 +229,21 @@ fn service_name_and_timeout_overrides() {
     assert2::assert!(cfg.timeout == secs(3));
 }
 
-#[test]
-fn standard_otlp_timeout_secs_remains_compatible() {
-    for (value, expected) in [("7", 7), ("7s", 10)] {
-        let cfg = config_from_env(
-            &[
-                ("KRABKA_OTLP_ENDPOINT", "http://c:4317"),
-                ("OTEL_EXPORTER_OTLP_TIMEOUT_SECS", value),
-            ],
-            "9",
-        )
-        .expect("standard OTLP timeout remains non-failing")
-        .expect("enabled");
-        assert2::assert!(cfg.timeout == secs(expected));
-    }
+#[yare::parameterized(
+    whole_seconds = { "7", 7 },
+    unit_suffix_uses_default = { "7s", 10 },
+)]
+fn standard_otlp_timeout_secs_remains_compatible(value: &str, expected: u32) {
+    let cfg = config_from_env(
+        &[
+            ("KRABKA_OTLP_ENDPOINT", "http://c:4317"),
+            ("OTEL_EXPORTER_OTLP_TIMEOUT_SECS", value),
+        ],
+        "9",
+    )
+    .expect("standard OTLP timeout remains non-failing")
+    .expect("enabled");
+    assert2::assert!(cfg.timeout == secs(expected));
 }
 
 #[test]
@@ -255,14 +262,12 @@ fn unit_suffixed_krabka_otlp_time_names_are_not_aliases() {
     assert2::assert!(cfg.heartbeat_interval.is_none());
 }
 
-#[test]
-fn protocol_parse_variants() {
-    for (input, want) in [
-        ("grpc", OtlpProtocol::Grpc),
-        ("http/protobuf", OtlpProtocol::HttpProtobuf),
-        ("HTTP", OtlpProtocol::HttpProtobuf),
-        ("nonsense", OtlpProtocol::Grpc),
-    ] {
-        assert2::assert!(OtlpProtocol::parse(input) == want);
-    }
+#[yare::parameterized(
+    grpc = { "grpc", OtlpProtocol::Grpc },
+    http_protobuf = { "http/protobuf", OtlpProtocol::HttpProtobuf },
+    case_insensitive = { "HTTP", OtlpProtocol::HttpProtobuf },
+    unknown_defaults_to_grpc = { "nonsense", OtlpProtocol::Grpc },
+)]
+fn protocol_parse_variants(input: &str, want: OtlpProtocol) {
+    assert2::assert!(OtlpProtocol::parse(input) == want);
 }

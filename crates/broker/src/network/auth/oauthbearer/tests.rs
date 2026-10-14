@@ -63,17 +63,19 @@ fn signed_validator(cache_expiry: Option<Time>) -> krabka_security::OAuthBearerV
     krabka_security::OAuthBearerValidator::Signed(validator)
 }
 
-#[test]
-fn oauth_session_adapter_rejects_invalid_or_unrepresentable_lifetimes() {
-    for decision in [
-        oauth_session_decision(None, 100, None, false, true),
-        oauth_session_decision(Some(100), 100, None, false, true),
-        oauth_session_decision(Some(i64::MAX), -1, None, false, true),
-        oauth_session_decision(Some(200), 100, Some(secs(0)), false, true),
-        oauth_session_decision(Some(200), 100, None, true, false),
-    ] {
-        assert!(decision == krabka_verified::OAuthSessionDecision::Reject);
-    }
+#[yare::parameterized(
+    missing_expiry = { oauth_session_decision(None, 100, None, false, true) },
+    expiry_at_current_time = { oauth_session_decision(Some(100), 100, None, false, true) },
+    unrepresentable_current_time = {
+        oauth_session_decision(Some(i64::MAX), -1, None, false, true)
+    },
+    zero_lifetime = { oauth_session_decision(Some(200), 100, Some(secs(0)), false, true) },
+    reauthentication_required = { oauth_session_decision(Some(200), 100, None, true, false) },
+)]
+fn oauth_session_adapter_rejects_invalid_or_unrepresentable_lifetimes(
+    decision: krabka_verified::OAuthSessionDecision,
+) {
+    assert2::assert!(decision == krabka_verified::OAuthSessionDecision::Reject);
 }
 
 #[test]

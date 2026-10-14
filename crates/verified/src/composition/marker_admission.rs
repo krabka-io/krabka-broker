@@ -96,13 +96,16 @@ pub(super) fn admitted_marker_bounds_committed_fetch(
     other_starts: &[i64],
     bounds: (i64, i64), // observed HW and delivery cap
 ) -> AdmittedMarkerFetch {
-    let (_, other_visibility) = committed_fetch_excludes_unstable(other_starts, FetchWatermarks {
-        log_start: 0,
-        log_end: span.0,
-        hw: bounds.0,
-        lso: span.0,
-        deliverable: bounds.1,
-    })
+    let (_, other_visibility) = committed_fetch_excludes_unstable(
+        other_starts,
+        FetchWatermarks {
+            log_start: 0,
+            log_end: span.0,
+            hw: bounds.0,
+            lso: span.0,
+            deliverable: bounds.1,
+        },
+    )
     .unwrap();
     let before = other_visibility.limit_offset.min(pending_start);
     proof_assert!(before@ <= pending_start@

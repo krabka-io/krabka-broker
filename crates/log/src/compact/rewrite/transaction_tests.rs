@@ -92,13 +92,16 @@ fn an_aborted_transactions_records_are_dropped_and_the_committed_value_survives(
         })
         .call();
     let abort_marker = control_batch(12, 2000, 0 /* ABORT */);
-    let seg = write_sealed_batches(dir.path(), &[
-        committed.clone(),
-        commit_marker.clone(),
-        aborted_k,
-        aborted_j,
-        abort_marker.clone(),
-    ]);
+    let seg = write_sealed_batches(
+        dir.path(),
+        &[
+            committed.clone(),
+            commit_marker.clone(),
+            aborted_k,
+            aborted_j,
+            abort_marker.clone(),
+        ],
+    );
     let segment_refs = vec![&seg];
     let entry = aborted_entry(2000, 10, 12);
     let map = build_offset_map(&segment_refs, vec![entry], None).unwrap();
@@ -174,10 +177,8 @@ fn an_aborted_transaction_spanning_two_groups_keeps_its_marker_and_index_entry()
 ///
 /// Each case is `(label, first marker horizon, now, expected base offset and
 /// delete horizon of every output batch)`.
-#[test]
-fn a_marker_ages_out_once_its_own_transactions_data_is_gone() {
-    for (label, first_marker_horizon, now_ms, want) in [
-        (
+#[yare::parameterized(
+    no_horizon_yet = {
             "no horizon yet: stamp now + delete.retention.ms",
             None,
             100,
@@ -194,9 +195,13 @@ fn a_marker_ages_out_once_its_own_transactions_data_is_gone() {
                     base_offset: 2,
                     delete_horizon_ms: None,
                 },
-            ],
-        ),
-        ("horizon not reached: keep as it is", Some(500), 100, vec![
+            ]
+    },
+    horizon_not_reached = {
+        "horizon not reached: keep as it is",
+        Some(500),
+        100,
+        vec![
             BatchHorizon {
                 base_offset: 0,
                 delete_horizon_ms: Some(500),
@@ -209,8 +214,9 @@ fn a_marker_ages_out_once_its_own_transactions_data_is_gone() {
                 base_offset: 2,
                 delete_horizon_ms: None,
             },
-        ]),
-        (
+        ]
+    },
+    horizon_reached = {
             "horizon reached: drop the marker, keep the live data and its marker",
             Some(100),
             200,
@@ -223,36 +229,41 @@ fn a_marker_ages_out_once_its_own_transactions_data_is_gone() {
                     base_offset: 2,
                     delete_horizon_ms: None,
                 },
-            ],
-        ),
-    ] {
-        let dir = tempfile::tempdir().unwrap();
-        let mut old_marker = control_batch(0, 1000, 1 /* COMMIT */);
-        if let Some(horizon) = first_marker_horizon {
-            old_marker.base_timestamp = horizon;
-            old_marker.attributes = old_marker.attributes.with_delete_horizon(true);
-        }
-        let live = transactional_record()
-            .offset(1)
-            .payload(KeyValue {
-                key: b"k1",
-                value: b"v2",
-            })
-            .call();
-        let live_marker = control_batch(2, 1000, 1 /* COMMIT */);
-        let seg = write_sealed_batches(dir.path(), &[old_marker, live, live_marker]);
-        let mut txn = CleanedTransactionMetadata::default();
-        let out = rewrite_at(dir.path(), &[&seg], &mut txn, now_ms, &HashMap::new());
-        let batches = decode_all(&fs::read(&out.log_swap).unwrap());
-        let got: Vec<BatchHorizon> = batches
-            .iter()
-            .map(|batch| BatchHorizon {
-                base_offset: batch.base_offset,
-                delete_horizon_ms: batch.delete_horizon_ms(),
-            })
-            .collect();
-        assert2::assert!(got == want, "case {label}");
+            ]
+    },
+)]
+fn a_marker_ages_out_once_its_own_transactions_data_is_gone(
+    label: &'static str,
+    first_marker_horizon: Option<i64>,
+    now_ms: i64,
+    want: Vec<BatchHorizon>,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut old_marker = control_batch(0, 1000, 1 /* COMMIT */);
+    if let Some(horizon) = first_marker_horizon {
+        old_marker.base_timestamp = horizon;
+        old_marker.attributes = old_marker.attributes.with_delete_horizon(true);
     }
+    let live = transactional_record()
+        .offset(1)
+        .payload(KeyValue {
+            key: b"k1",
+            value: b"v2",
+        })
+        .call();
+    let live_marker = control_batch(2, 1000, 1 /* COMMIT */);
+    let seg = write_sealed_batches(dir.path(), &[old_marker, live, live_marker]);
+    let mut txn = CleanedTransactionMetadata::default();
+    let out = rewrite_at(dir.path(), &[&seg], &mut txn, now_ms, &HashMap::new());
+    let batches = decode_all(&fs::read(&out.log_swap).unwrap());
+    let got: Vec<BatchHorizon> = batches
+        .iter()
+        .map(|batch| BatchHorizon {
+            base_offset: batch.base_offset,
+            delete_horizon_ms: batch.delete_horizon_ms(),
+        })
+        .collect();
+    assert2::assert!(got == want, "case {label}");
 }
 
 /// Kafka reads a batch before it filters the batch's records, so the marker of

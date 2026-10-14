@@ -20,13 +20,16 @@ async fn truncation_restores_histories_at_the_retained_batch_end() {
         let (mut engine, _dir) = build_engine_only().ids(&[NodeId(1), NodeId(2)]).call();
         let voters = voter_set_to_wire(engine.controls.latest_voters());
         for version in [0, 1] {
-            let mut batch = typed_control_batch(2, &[
-                ControlRecord::KRaftVersion(KRaftVersionRecord {
-                    k_raft_version: version,
-                    ..Default::default()
-                }),
-                ControlRecord::Voters(voters.clone()),
-            ])
+            let mut batch = typed_control_batch(
+                2,
+                &[
+                    ControlRecord::KRaftVersion(KRaftVersionRecord {
+                        k_raft_version: version,
+                        ..Default::default()
+                    }),
+                    ControlRecord::Voters(voters.clone()),
+                ],
+            )
             .unwrap();
             engine.log.append(&mut batch, 0).unwrap();
             engine.apply_control_batch(&batch).unwrap();

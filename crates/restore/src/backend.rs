@@ -29,24 +29,34 @@ pub struct ArchiveStore {
 impl ArchiveStore {
     /// The object operations to read the archive with.
     #[must_use]
-    pub fn ops(&self) -> &dyn ObjectOps { &self.client }
+    pub fn ops(&self) -> &dyn ObjectOps {
+        &self.client
+    }
 
     /// The object-store handle used by the WORM verifier.
     #[must_use]
-    pub fn store(&self) -> &Arc<dyn object_store::ObjectStore> { &self.store }
+    pub fn store(&self) -> &Arc<dyn object_store::ObjectStore> {
+        &self.store
+    }
 
     /// The key prefix every archive key carries, absent when the archive is
     /// the whole bucket.
     #[must_use]
-    pub fn prefix(&self) -> Option<&str> { self.prefix.as_deref() }
+    pub fn prefix(&self) -> Option<&str> {
+        self.prefix.as_deref()
+    }
 
     /// The absolute object key for a path relative to the archive root.
     #[must_use]
-    pub fn key(&self, relative: &str) -> Path { prefixed_key(self.prefix.as_deref(), relative) }
+    pub fn key(&self, relative: &str) -> Path {
+        prefixed_key(self.prefix.as_deref(), relative)
+    }
 
     /// The prefix to list the archive root under.
     #[must_use]
-    pub fn root(&self) -> Option<Path> { self.prefix.as_deref().map(Path::from) }
+    pub fn root(&self) -> Option<Path> {
+        self.prefix.as_deref().map(Path::from)
+    }
 
     /// A handle onto an already-built object store, under `prefix`.
     ///

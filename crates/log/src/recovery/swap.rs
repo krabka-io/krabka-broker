@@ -72,7 +72,9 @@ fn suffixed_path(dir: &Path, base: i64, ext: &str, suffix: &str) -> PathBuf {
     dir.join(format!("{}.{ext}{suffix}", name::format_base_offset(base)))
 }
 
-fn final_path(dir: &Path, base: i64, ext: &str) -> PathBuf { suffixed_path(dir, base, ext, "") }
+fn final_path(dir: &Path, base: i64, ext: &str) -> PathBuf {
+    suffixed_path(dir, base, ext, "")
+}
 
 /// Unlink `path`, which may already be gone.
 ///
@@ -149,7 +151,9 @@ pub fn promote_sidecars(io: &dyn LogIo, dir: &Path, base: i64) -> Result<(), Log
 /// Returns an error when the directory scan or a file operation fails, when a
 /// committed `.log.swap` does not hold whole, contiguous batches, or when
 /// sidecar swaps have no log in any form.
-pub fn swap_orphan_recover(dir: &Path) -> Result<(), LogError> { recover_swaps(&FileIo, dir) }
+pub fn swap_orphan_recover(dir: &Path) -> Result<(), LogError> {
+    recover_swaps(&FileIo, dir)
+}
 
 /// [`swap_orphan_recover`] through an injectable I/O boundary.
 #[instrument(

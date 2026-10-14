@@ -60,10 +60,13 @@ pub(super) fn scheduled_stable_prefix_bounds_fetch(
 ) -> Option<ScheduledStablePrefix> {
     let (delivery, _, _) =
         scheduled_prefix_bounds_fetch(batches, activations, uncertainty, now, w)?;
-    let (lso, consumer) = committed_fetch_excludes_unstable(starts, FetchWatermarks {
-        deliverable: delivery,
-        ..w
-    })?;
+    let (lso, consumer) = committed_fetch_excludes_unstable(
+        starts,
+        FetchWatermarks {
+            deliverable: delivery,
+            ..w
+        },
+    )?;
     let follower = fetch_visibility(
         true,
         true,

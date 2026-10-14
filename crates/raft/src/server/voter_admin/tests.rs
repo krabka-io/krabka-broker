@@ -356,14 +356,24 @@ async fn adding_a_voter_needs_an_id_and_a_reachable_listener() {
             vec![good_listener()],
         ),
         ("no listeners at all", 2, directory, vec![]),
-        ("a listener on port zero", 2, directory, vec![Listener {
-            port: 0,
-            ..good_listener()
-        }]),
-        ("a listener with no host", 2, directory, vec![Listener {
-            host: String::new(),
-            ..good_listener()
-        }]),
+        (
+            "a listener on port zero",
+            2,
+            directory,
+            vec![Listener {
+                port: 0,
+                ..good_listener()
+            }],
+        ),
+        (
+            "a listener with no host",
+            2,
+            directory,
+            vec![Listener {
+                host: String::new(),
+                ..good_listener()
+            }],
+        ),
     ];
 
     for (what, voter_id, voter_directory_id, listeners) in cases {

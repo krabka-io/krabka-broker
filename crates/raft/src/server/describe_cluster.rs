@@ -441,7 +441,9 @@ mod tests {
                 operation == ClusterOperation::Alter
             }
 
-            fn cluster_authorized_operations(&self) -> i32 { 1 << 7 }
+            fn cluster_authorized_operations(&self) -> i32 {
+                1 << 7
+            }
         }
 
         let (engine, _dir) = test_engine_with_voters(1, [voter(1, Vec::new())]);
@@ -480,12 +482,15 @@ mod tests {
         use krabka_protocol::owned::api_versions_response::ApiVersionsResponse;
 
         let image = MetadataImage::new(Uuid::nil());
-        let av = api_versions_response_body(4, ApiVersionsView {
-            image: &image,
-            metadata_offset: -1,
-            admin_router: None,
-            unstable: UnstableApiVersions::Disabled,
-        });
+        let av = api_versions_response_body(
+            4,
+            ApiVersionsView {
+                image: &image,
+                metadata_offset: -1,
+                admin_router: None,
+                unstable: UnstableApiVersions::Disabled,
+            },
+        );
         let avr = decoded::<ApiVersionsResponse>(&av, 4);
         check!(avr.api_keys.iter().any(|k| k.api_key == 60));
     }

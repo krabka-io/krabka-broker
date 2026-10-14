@@ -319,4 +319,6 @@ pub(super) async fn fetch_capped(
 /// offset or timestamp is never negative in a well-formed segment; this only
 /// has to render something sensible for corrupt input, never panic, and never
 /// allocate.
-fn offset_as_u64(value: i64) -> u64 { u64::try_from(value).unwrap_or(0) }
+fn offset_as_u64(value: i64) -> u64 {
+    u64::try_from(value).unwrap_or(0)
+}

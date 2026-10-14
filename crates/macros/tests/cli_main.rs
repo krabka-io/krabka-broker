@@ -54,15 +54,27 @@ fn child_exit_code(test: &str, flavor: &str, code: i32) -> Option<i32> {
         .code()
 }
 
-#[test]
-fn main_exits_with_what_run_from_args_returns() {
+#[yare::parameterized(
+    success = { 0 },
+    ordinary_failure = { 1 },
+    usage_error = { 2 },
+)]
+fn main_exits_with_what_run_from_args_returns(code: i32) {
     if std::env::var_os(CHILD_EXIT).is_some() {
         default_runtime::run();
     }
-    let test = "main_exits_with_what_run_from_args_returns";
-    for code in [0, 1, 2] {
-        assert!(child_exit_code(test, "MultiThread", code) == Some(code));
+    let current = std::thread::current();
+    let test = current.name().expect("test thread name");
+    assert2::assert!(child_exit_code(test, "MultiThread", code) == Some(code));
+}
+
+#[test]
+fn main_panics_when_run_from_args_uses_the_wrong_runtime() {
+    if std::env::var_os(CHILD_EXIT).is_some() {
+        default_runtime::run();
     }
+    let current = std::thread::current();
+    let test = current.name().expect("test thread name");
     // The child panics, and exits with 101, when the runtime is not the one
     // it expects.
     assert!(child_exit_code(test, "CurrentThread", 0) == Some(101));

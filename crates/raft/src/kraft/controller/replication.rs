@@ -168,10 +168,13 @@ impl Engine {
             } => Some(leader_id.0),
             _ => None,
         };
-        let discovering = matches!(self.core.role(), Role::Observer {
-            leader_id: None,
-            ..
-        });
+        let discovering = matches!(
+            self.core.role(),
+            Role::Observer {
+                leader_id: None,
+                ..
+            }
+        );
         let state = self.core.quorum_state();
         let mutation = fetch_response_mutation(
             FetchFence {

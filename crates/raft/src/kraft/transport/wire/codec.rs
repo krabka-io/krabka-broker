@@ -43,14 +43,26 @@ pub fn records_payload_to_bytes(payload: &RecordsPayload) -> Bytes {
 /// `KRaft` uses an i32 `leaderEpoch`. The KIP-595 wire carries the leader
 /// epoch as a raw `int32` and stays raw here. The consensus epoch is always
 /// non-negative.
-pub fn epoch_to_wire(e: Epoch) -> i32 { i32::try_from(e).unwrap_or(i32::MAX) }
-pub fn epoch_from_wire(e: i32) -> Epoch { u32::try_from(e).unwrap_or(0) }
+pub fn epoch_to_wire(e: Epoch) -> i32 {
+    i32::try_from(e).unwrap_or(i32::MAX)
+}
+pub fn epoch_from_wire(e: i32) -> Epoch {
+    u32::try_from(e).unwrap_or(0)
+}
 /// Converts between the `NodeId` (u64) and the wire `i32` replica id.
-pub fn node_to_wire(n: NodeId) -> i32 { i32::try_from(n.0).unwrap_or(i32::MAX) }
-pub fn node_from_wire(n: i32) -> NodeId { NodeId(u64::try_from(n).unwrap_or(0)) }
+pub fn node_to_wire(n: NodeId) -> i32 {
+    i32::try_from(n.0).unwrap_or(i32::MAX)
+}
+pub fn node_from_wire(n: i32) -> NodeId {
+    NodeId(u64::try_from(n).unwrap_or(0))
+}
 /// Converts between a `uuid::Uuid` and the wire `uuid` of the generated codecs.
-pub fn uuid_to_wire(id: uuid::Uuid) -> MetaUuid { MetaUuid(id.into_bytes()) }
-pub fn uuid_from_wire(id: MetaUuid) -> uuid::Uuid { uuid::Uuid::from_bytes(id.0) }
+pub fn uuid_to_wire(id: uuid::Uuid) -> MetaUuid {
+    MetaUuid(id.into_bytes())
+}
+pub fn uuid_from_wire(id: MetaUuid) -> uuid::Uuid {
+    uuid::Uuid::from_bytes(id.0)
+}
 /// A request `ClusterId` in Kafka's base64 form.
 pub fn cluster_id_to_wire(id: Option<uuid::Uuid>) -> Option<String> {
     id.map(|id| URL_SAFE_NO_PAD.encode(id.as_bytes()))

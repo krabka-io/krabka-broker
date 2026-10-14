@@ -162,20 +162,20 @@ pub(crate) fn wal_capture_topic_fixture(input: TokenStream) -> Result<TokenStrea
 mod tests {
     use {super::segment, assert2::assert};
 
-    #[test]
-    fn timestamp_policy_is_explicit_and_bounded_to_the_supported_fixtures() {
-        for input in [
-            "started, finish, crate, end",
-            "started, finish, krabka_remote_storage, next_offset",
-        ] {
-            assert!(segment(input.parse().unwrap()).is_ok(), "{input}");
-        }
-        for input in [
-            "started, finish, crate",
-            "started, finish, crate, last",
-            "started, finish, , end",
-        ] {
-            assert!(segment(input.parse().unwrap()).is_err(), "{input}");
-        }
+    #[yare::parameterized(
+        crate_end = { "started, finish, crate, end" },
+        remote_storage_next = { "started, finish, krabka_remote_storage, next_offset" },
+    )]
+    fn timestamp_policy_accepts_supported_fixtures(input: &str) {
+        assert2::assert!(segment(input.parse().unwrap()).is_ok(), "{input}");
+    }
+
+    #[yare::parameterized(
+        missing_fourth = { "started, finish, crate" },
+        wrong_fourth = { "started, finish, crate, last" },
+        missing_third = { "started, finish, , end" },
+    )]
+    fn timestamp_policy_rejects_unsupported_fixtures(input: &str) {
+        assert2::assert!(segment(input.parse().unwrap()).is_err(), "{input}");
     }
 }

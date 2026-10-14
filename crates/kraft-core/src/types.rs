@@ -14,7 +14,9 @@ pub struct SimInstant(pub u64);
 
 impl SimInstant {
     #[must_use]
-    pub fn saturating_add_ms(self, ms: u64) -> Self { Self(self.0.saturating_add(ms)) }
+    pub fn saturating_add_ms(self, ms: u64) -> Self {
+        Self(self.0.saturating_add(ms))
+    }
 }
 
 /// Consensus epoch, always non-negative; the wire leader epoch is
@@ -140,7 +142,9 @@ impl QuorumState {
 
     /// Majority size for the current voter set: `floor(n/2) + 1`.
     #[must_use]
-    pub fn majority(&self) -> usize { krabka_verified::consensus::majority_size(self.voters.len()) }
+    pub fn majority(&self) -> usize {
+        krabka_verified::consensus::majority_size(self.voters.len())
+    }
 }
 
 #[cfg(test)]
@@ -151,13 +155,18 @@ mod tests {
     ///
     /// A remainder agrees with a halving at three voters -- the size most
     /// tests use -- so the sizes on either side of it are what separate them.
-    #[test]
-    fn majority_is_half_the_voters_plus_one() {
-        for (voters, want) in [(1usize, 1usize), (2, 2), (3, 2), (4, 3), (5, 3), (6, 4)] {
-            let ids: Vec<NodeId> = (1..=voters).map(|i| NodeId(i as u64)).collect();
-            let qs = QuorumState::bootstrap(uuid::Uuid::nil(), test_voter_set(&ids));
-            assert2::assert!(qs.majority() == want, "{voters} voters");
-        }
+    #[yare::parameterized(
+        one = { 1, 1 },
+        two = { 2, 2 },
+        three = { 3, 2 },
+        four = { 4, 3 },
+        five = { 5, 3 },
+        six = { 6, 4 },
+    )]
+    fn majority_is_half_the_voters_plus_one(voters: usize, want: usize) {
+        let ids: Vec<NodeId> = (1..=voters).map(|i| NodeId(i as u64)).collect();
+        let qs = QuorumState::bootstrap(uuid::Uuid::nil(), test_voter_set(&ids));
+        assert2::assert!(qs.majority() == want, "{voters} voters");
     }
 
     #[test]

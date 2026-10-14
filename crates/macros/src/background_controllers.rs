@@ -68,21 +68,23 @@ mod tests {
         moxy::{ast::ItemStruct, token::TokenStream},
     };
 
-    #[test]
-    fn rejects_missing_adapter_fields_and_unnamed_structs() {
-        for item in [
-            "struct Adapter;",
-            "struct Adapter(bool);",
-            "struct Adapter { handle: Handle }",
-            "struct Adapter { node_id: u64 }",
-        ] {
-            let item: ItemStruct = moxy::parse!({ item.parse::<TokenStream>().unwrap() }).unwrap();
-            assert!(expand(item).is_err());
-        }
+    #[yare::parameterized(
+        unit_struct = { "struct Adapter;" },
+        tuple_struct = { "struct Adapter(bool);" },
+        missing_node_id = { "struct Adapter { handle: Handle }" },
+        missing_handle = { "struct Adapter { node_id: u64 }" },
+    )]
+    fn rejects_missing_adapter_fields_and_unnamed_structs(source: &str) {
+        let item: ItemStruct = moxy::parse!({ source.parse::<TokenStream>().unwrap() }).unwrap();
+        assert2::assert!(expand(item).is_err());
     }
 
-    #[test]
-    fn emits_three_trait_implementations_with_original_generics() {
+    #[yare::parameterized(
+        leader_rebalance = { "crate::leader_rebalance::ControllerLike" },
+        reassignment = { "crate::reassignment::ReassignmentController" },
+        break_glass = { "crate::break_glass::sweep::BreakGlassController" },
+    )]
+    fn emits_three_trait_implementations_with_original_generics(controller: &str) {
         let item: ItemStruct = moxy::parse!({
             "struct Adapter<T> where T: Handle { handle: T, node_id: u64 }"
                 .parse::<TokenStream>()
@@ -90,20 +92,16 @@ mod tests {
         })
         .unwrap();
         let output = expand(item).unwrap().to_string();
-        assert!(output.matches("async_trait").count() == 6);
-        assert!(output.matches("submit_change").count() == 3);
-        assert!(output.matches("holds_leadership").count() == 2);
-        assert!(output.matches("watch_image").count() == 2);
+        assert2::assert!(output.matches("async_trait").count() == 6);
+        assert2::assert!(output.matches("submit_change").count() == 3);
+        assert2::assert!(output.matches("holds_leadership").count() == 2);
+        assert2::assert!(output.matches("watch_image").count() == 2);
         let output: String = output
             .chars()
             .filter(|character| !character.is_whitespace())
             .collect();
-        for controller in [
-            "crate::leader_rebalance::ControllerLike",
-            "crate::reassignment::ReassignmentController",
-            "crate::break_glass::sweep::BreakGlassController",
-        ] {
-            assert!(output.contains(&format!("impl<T>{controller}forAdapter<T>whereT:Handle")));
-        }
+        assert2::assert!(
+            output.contains(&format!("impl<T>{controller}forAdapter<T>whereT:Handle"))
+        );
     }
 }

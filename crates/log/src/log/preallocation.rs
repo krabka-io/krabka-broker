@@ -200,10 +200,13 @@ fn a_truncated_segment_takes_its_reservation_again() {
     let requests = io.requests.lock().unwrap().clone();
     assert2::assert!(
         requests
-            == [whole(), Request::Reserve {
-                offset: kept,
-                len: SEGMENT.bytes_u64() - kept,
-            },]
+            == [
+                whole(),
+                Request::Reserve {
+                    offset: kept,
+                    len: SEGMENT.bytes_u64() - kept,
+                },
+            ]
     );
 }
 

@@ -6,7 +6,9 @@ use {
 /// Majority size for a voter set: `floor(n / 2) + 1`.
 #[ensures(result@ == voter_count@ / 2 + 1)]
 #[must_use]
-pub const fn majority_size(voter_count: usize) -> usize { voter_count / 2 + 1 }
+pub const fn majority_size(voter_count: usize) -> usize {
+    voter_count / 2 + 1
+}
 
 /// Whether the unique grants from current voters reach a majority.
 #[ensures(result == (current_grants@ >= voter_count@ / 2 + 1))]

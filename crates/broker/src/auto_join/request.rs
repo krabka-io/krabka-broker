@@ -195,16 +195,18 @@ mod tests {
     }
 
     /// An endpoint the port cannot be read out of is no better than nothing.
-    #[test]
-    fn an_unparseable_advertised_endpoint_falls_back_to_the_bound_listener() {
+    #[yare::parameterized(
+        missing_port = { "controller.example" },
+        empty_port = { "controller.example:" },
+        missing_host = { ":19093" },
+    )]
+    fn an_unparseable_advertised_endpoint_falls_back_to_the_bound_listener(endpoint: &str) {
         let bound = "0.0.0.0:19093".parse().unwrap();
 
-        for endpoint in ["controller.example", "controller.example:", ":19093"] {
-            assert!(
-                advertised_controller_listener(Some(endpoint), bound) == controller_listener(bound),
-                "{endpoint}"
-            );
-        }
+        assert2::assert!(
+            advertised_controller_listener(Some(endpoint), bound) == controller_listener(bound),
+            "{endpoint}"
+        );
     }
 
     #[test]

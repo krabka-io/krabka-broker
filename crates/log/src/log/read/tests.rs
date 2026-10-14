@@ -557,10 +557,14 @@ fn configured_read_ahead_max_reaches_both_verbatim_reads() {
         log.read_raw_desc(Offset(0), end, budget).unwrap();
         actual.push((read_ahead_max, "read_raw_desc", advice.take()));
         for path in ["read_raw", "read_raw_desc"] {
-            expected.push((read_ahead_max, path, vec![AdviceCall {
-                offset: 0,
-                len: hinted,
-            }]));
+            expected.push((
+                read_ahead_max,
+                path,
+                vec![AdviceCall {
+                    offset: 0,
+                    len: hinted,
+                }],
+            ));
         }
     }
     check!(actual == expected);

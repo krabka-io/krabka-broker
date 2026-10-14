@@ -381,21 +381,24 @@ fn the_activation_sets_the_cluster_min_insync_replicas_when_the_bootstrap_enable
     // (what, bootstrap records, static `min.insync.replicas`, the records)
     let cases = [
         ("no ELR record", vec![mv.clone()], 2, vec![mv.clone()]),
-        ("ELR at level 1", vec![mv.clone(), elr(1)], 2, vec![
-            mv.clone(),
-            elr(1),
-            cluster_min_isr(2),
-        ]),
+        (
+            "ELR at level 1",
+            vec![mv.clone(), elr(1)],
+            2,
+            vec![mv.clone(), elr(1), cluster_min_isr(2)],
+        ),
         (
             "ELR at level 1 and Kafka's default",
             vec![mv.clone(), elr(1)],
             1,
             vec![mv.clone(), elr(1), cluster_min_isr(1)],
         ),
-        ("ELR at level 0", vec![mv.clone(), elr(0)], 2, vec![
-            mv.clone(),
-            elr(0),
-        ]),
+        (
+            "ELR at level 0",
+            vec![mv.clone(), elr(0)],
+            2,
+            vec![mv.clone(), elr(0)],
+        ),
         (
             "ELR enabled and then disabled",
             vec![mv.clone(), elr(1), elr(0)],

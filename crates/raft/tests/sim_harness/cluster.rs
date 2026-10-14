@@ -130,7 +130,9 @@ impl<L: SimNodeLog> Sim<L> {
     }
 
     /// Heals a partition. The node can send and receive again.
-    pub fn heal(&mut self, node: NodeId) { self.partitioned.remove(&node); }
+    pub fn heal(&mut self, node: NodeId) {
+        self.partitioned.remove(&node);
+    }
 
     /// Appends `n` data records to the log of `leader` in its current leader
     /// epoch, then re-runs the leader's HWM bookkeeping over the new end offset.
@@ -163,7 +165,9 @@ impl<L: SimNodeLog> Sim<L> {
     }
 
     /// The configured voter ids.
-    pub fn voters(&self) -> Vec<NodeId> { self.voter_ids.clone() }
+    pub fn voters(&self) -> Vec<NodeId> {
+        self.voter_ids.clone()
+    }
 
     /// The set of distinct leader epochs across all voters. It holds one epoch
     /// once the cluster has converged.
@@ -183,11 +187,15 @@ impl<L: SimNodeLog> Sim<L> {
     }
 
     /// The log end offset of `node`.
-    pub fn log_end_offset(&self, node: NodeId) -> i64 { self.nodes[&node].log.end_offset() }
+    pub fn log_end_offset(&self, node: NodeId) -> i64 {
+        self.nodes[&node].log.end_offset()
+    }
 
     /// Borrows the log of `node`, for byte-level and decoded assertions in
     /// tests.
-    pub fn node_log(&self, node: NodeId) -> &L { &self.nodes[&node].log }
+    pub fn node_log(&self, node: NodeId) -> &L {
+        &self.nodes[&node].log
+    }
 
     /// True if every voter's log end offset has reached `offset`.
     pub fn all_voters_fetched_to(&self, offset: i64) -> bool {

@@ -31,7 +31,9 @@ pub struct InmemoryRemoteLogMetadataManager {
 impl InmemoryRemoteLogMetadataManager {
     /// Constructs an empty manager.
     #[must_use]
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Dumps every partition's segment and partition-delete metadata for a
     /// snapshot. The result is order-independent. [`Self::import`] re-derives

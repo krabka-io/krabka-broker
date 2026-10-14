@@ -61,10 +61,14 @@ impl Archive {
     /// Returns [`BackupError::ObjectStore`] when the key already exists or the write fails.
     pub async fn put_new(&self, relative: &str, bytes: Vec<u8>) -> Result<(), BackupError> {
         self.client
-            .put(&self.key(relative), bytes.into(), PutRequest {
-                mode: PutMode::Create,
-                ..PutRequest::default()
-            })
+            .put(
+                &self.key(relative),
+                bytes.into(),
+                PutRequest {
+                    mode: PutMode::Create,
+                    ..PutRequest::default()
+                },
+            )
             .await?;
         Ok(())
     }
@@ -173,31 +177,27 @@ mod tests {
     }
 
     /// The shared flag checks reach the operator as a bad argument, exit 2.
-    #[test]
-    fn a_flag_set_the_archive_cannot_mean_is_a_bad_argument() {
+    #[yare::parameterized(
+        orphan_s3_region = { Some("eu-west-1"), true, "--archive-s3-region needs --archive-s3-bucket" },
+        no_backend = { None, false, "no archive backend selected: pass one of --archive-local, --archive-s3-bucket, or --archive-gcs-bucket" },
+    )]
+    fn a_flag_set_the_archive_cannot_mean_is_a_bad_argument(
+        s3_region: Option<&str>,
+        local: bool,
+        expected: &str,
+    ) {
         let root = tempfile::tempdir().expect("archive root");
-        let cases = [
-            (
-                ArchiveArgs {
-                    s3_region: Some("eu-west-1".to_owned()),
-                    ..local_args(root.path())
-                },
-                "--archive-s3-region needs --archive-s3-bucket",
-            ),
-            (
-                ArchiveArgs::default(),
-                "no archive backend selected: pass one of --archive-local, \
-                 --archive-s3-bucket, or --archive-gcs-bucket",
-            ),
-        ];
-        for (args, expected) in cases {
-            let Err(error) = Archive::open(&args) else {
-                panic!("{expected}: the archive opened")
-            };
-            check!(matches!(&error, BackupError::InvalidArgument(_)));
-            check!(error.exit_code() == EXIT_BAD_ARGUMENT);
-            check!(error.to_string() == expected);
-        }
+        let args = ArchiveArgs {
+            s3_region: s3_region.map(str::to_owned),
+            local: local.then(|| root.path().to_path_buf()),
+            ..ArchiveArgs::default()
+        };
+        let Err(error) = Archive::open(&args) else {
+            panic!("{expected}: the archive opened")
+        };
+        check!(matches!(&error, BackupError::InvalidArgument(_)));
+        check!(error.exit_code() == EXIT_BAD_ARGUMENT);
+        check!(error.to_string() == expected);
     }
 
     #[tokio::test(flavor = "multi_thread")]

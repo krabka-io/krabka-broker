@@ -202,10 +202,14 @@ async fn put_with_digest_returns_payload_sha256() {
     let payload = bytes::Bytes::from_static(b"hello");
 
     let got = c
-        .put(&Path::from("a/b"), payload.clone(), PutRequest {
-            digest: true,
-            ..Default::default()
-        })
+        .put(
+            &Path::from("a/b"),
+            payload.clone(),
+            PutRequest {
+                digest: true,
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
 
@@ -271,60 +275,70 @@ async fn put_from_path_multipart_above_threshold() {
 /// a different hash. The cases differ only in file length, which selects
 /// the path: below `threshold` is single-PUT, at or above it is multipart
 /// across several `chunk_size` reads.
-#[tokio::test]
-async fn put_from_path_digests_the_whole_file_on_both_paths() {
-    for (case, len) in [("single put", 7usize), ("multipart", 21usize)] {
-        let c = client();
-        let payload: Vec<u8> = (0..len).map(|i| u8::try_from(i % 251).unwrap()).collect();
-        let mut f = tempfile::NamedTempFile::new().unwrap();
-        f.write_all(&payload).unwrap();
+#[yare::parameterized(
+    single_put = { "single put", 7usize },
+    multipart = { "multipart", 21usize },
+)]
+#[test_macro(tokio::test)]
+async fn put_from_path_digests_the_whole_file_on_both_paths(case: &str, len: usize) {
+    let c = client();
+    let payload: Vec<u8> = (0..len).map(|i| u8::try_from(i % 251).unwrap()).collect();
+    let mut f = tempfile::NamedTempFile::new().unwrap();
+    f.write_all(&payload).unwrap();
 
-        let got = c
-            .put_from_path(&Path::from("seg/x"), f.path(), 8, 4, PutRequest {
+    let got = c
+        .put_from_path(
+            &Path::from("seg/x"),
+            f.path(),
+            8,
+            4,
+            PutRequest {
                 digest: true,
                 ..Default::default()
-            })
-            .await
-            .unwrap();
-
-        check!(
-            got == PutOutcome {
-                size_bytes: len as u64,
-                sha256: Some(sha256_of(&payload)),
-                e_tag: Some("\"0\"".to_owned()),
-                version_id: None,
-                create_precondition: false,
             },
-            "{case}"
-        );
-    }
+        )
+        .await
+        .unwrap();
+
+    check!(
+        got == PutOutcome {
+            size_bytes: len as u64,
+            sha256: Some(sha256_of(&payload)),
+            e_tag: Some("\"0\"".to_owned()),
+            version_id: None,
+            create_precondition: false,
+        },
+        "{case}"
+    );
 }
 
 /// Without `digest`, neither path pays for hashing, so the outcome carries
 /// `None` while still reporting the byte count.
-#[tokio::test]
-async fn put_from_path_omits_digest_when_not_requested() {
-    for (case, len) in [("single put", 7usize), ("multipart", 21usize)] {
-        let c = client();
-        let mut f = tempfile::NamedTempFile::new().unwrap();
-        f.write_all(&vec![3u8; len]).unwrap();
+#[yare::parameterized(
+    single_put = { "single put", 7usize },
+    multipart = { "multipart", 21usize },
+)]
+#[test_macro(tokio::test)]
+async fn put_from_path_omits_digest_when_not_requested(case: &str, len: usize) {
+    let c = client();
+    let mut f = tempfile::NamedTempFile::new().unwrap();
+    f.write_all(&vec![3u8; len]).unwrap();
 
-        let got = c
-            .put_from_path(&Path::from("seg/x"), f.path(), 8, 4, PutRequest::default())
-            .await
-            .unwrap();
+    let got = c
+        .put_from_path(&Path::from("seg/x"), f.path(), 8, 4, PutRequest::default())
+        .await
+        .unwrap();
 
-        check!(
-            got == PutOutcome {
-                size_bytes: len as u64,
-                sha256: None,
-                e_tag: Some("\"0\"".to_owned()),
-                version_id: None,
-                create_precondition: false,
-            },
-            "{case}"
-        );
-    }
+    check!(
+        got == PutOutcome {
+            size_bytes: len as u64,
+            sha256: None,
+            e_tag: Some("\"0\"".to_owned()),
+            version_id: None,
+            create_precondition: false,
+        },
+        "{case}"
+    );
 }
 
 /// A delegating spy that counts which upload path `put_from_path` takes.
@@ -472,10 +486,16 @@ async fn multipart_create_atomically_reserves_the_key() {
         file: f,
     } = counting_file(&[3u8; 8]);
 
-    c.put_from_path(&Path::from("worm/segment"), f.path(), 8, 4, PutRequest {
-        mode: PutMode::Create,
-        digest: true,
-    })
+    c.put_from_path(
+        &Path::from("worm/segment"),
+        f.path(),
+        8,
+        4,
+        PutRequest {
+            mode: PutMode::Create,
+            digest: true,
+        },
+    )
     .await
     .unwrap();
 
@@ -501,28 +521,30 @@ async fn put_from_path_rejects_zero_chunk_size() {
 
 /// A multipart `Create` cannot attach the precondition to completion, but its
 /// atomic reservation still refuses a replay before starting the upload.
-#[tokio::test]
-async fn put_from_path_create_mode_refuses_replay_on_both_paths() {
-    for (case, len) in [("single put", 7usize), ("multipart", 8usize)] {
-        let c = client();
-        let key = Path::from("seg/once");
-        let mut f = tempfile::NamedTempFile::new().unwrap();
-        f.write_all(&vec![9u8; len]).unwrap();
-        let req = PutRequest {
-            mode: PutMode::Create,
-            digest: false,
-        };
-        c.put_from_path(&key, f.path(), 8, 4, req.clone())
-            .await
-            .unwrap();
+#[yare::parameterized(
+    single_put = { "single put", 7usize },
+    multipart = { "multipart", 8usize },
+)]
+#[test_macro(tokio::test)]
+async fn put_from_path_create_mode_refuses_replay_on_both_paths(case: &str, len: usize) {
+    let c = client();
+    let key = Path::from("seg/once");
+    let mut f = tempfile::NamedTempFile::new().unwrap();
+    f.write_all(&vec![9u8; len]).unwrap();
+    let req = PutRequest {
+        mode: PutMode::Create,
+        digest: false,
+    };
+    c.put_from_path(&key, f.path(), 8, 4, req.clone())
+        .await
+        .unwrap();
 
-        let second = c.put_from_path(&key, f.path(), 8, 4, req).await;
+    let second = c.put_from_path(&key, f.path(), 8, 4, req).await;
 
-        check!(
-            matches!(second, Err(ObjectStoreError::AlreadyExists(_))),
-            "{case}"
-        );
-    }
+    check!(
+        matches!(second, Err(ObjectStoreError::AlreadyExists(_))),
+        "{case}"
+    );
 }
 
 #[derive(Debug)]

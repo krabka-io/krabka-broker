@@ -154,10 +154,13 @@ fn append_verbatim_at_refuses_a_base_below_the_log_end_offset_and_takes_one_abov
     let err = log.append_verbatim_at(&vb, Offset(0)).unwrap_err();
 
     assert!(
-        matches!(err, LogError::OffsetMismatch {
-            expected: Offset(1),
-            actual: Offset(0)
-        }),
+        matches!(
+            err,
+            LogError::OffsetMismatch {
+                expected: Offset(1),
+                actual: Offset(0)
+            }
+        ),
         "a base below the log end offset must report OffsetMismatch"
     );
     assert!(log.log_end_offset() == Offset(1));

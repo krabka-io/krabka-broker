@@ -290,7 +290,9 @@ impl Engine {
 
     /// The leader id we are actively following (Follower / attached Observer),
     /// if any.
-    pub fn following_leader(&self) -> Option<NodeId> { following_leader_for_role(self.core.role()) }
+    pub fn following_leader(&self) -> Option<NodeId> {
+        following_leader_for_role(self.core.role())
+    }
 
     /// Pick the peer for the next observer leader discovery Fetch: the voters
     /// other than this node, or the bootstrap servers when it knows no voter,

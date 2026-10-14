@@ -81,7 +81,9 @@ impl MinioContainer {
 }
 
 impl Drop for MinioContainer {
-    fn drop(&mut self) { minio_process::remove(&self.name); }
+    fn drop(&mut self) {
+        minio_process::remove(&self.name);
+    }
 }
 
 /// Create the bucket with `mc`, retrying the alias so a slow `MinIO` startup
@@ -182,9 +184,12 @@ async fn a_minio_hosted_archive_restores_the_batches_it_holds() {
     let storage =
         S3RemoteStorage::from_s3_config(&s3_config(port)).expect("open the MinIO archive");
     let archived = [
-        archive_partition(&storage, topic_id, 0, &[&["o0-0", "o0-1"], &["o0-2"], &[
-            "o0-3", "o0-4",
-        ]]),
+        archive_partition(
+            &storage,
+            topic_id,
+            0,
+            &[&["o0-0", "o0-1"], &["o0-2"], &["o0-3", "o0-4"]],
+        ),
         archive_partition(&storage, topic_id, 1, &[&["o1-0", "o1-1"], &["o1-2"]]),
     ];
 

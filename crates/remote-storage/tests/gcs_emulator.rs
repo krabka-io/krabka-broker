@@ -137,7 +137,9 @@ impl FakeGcs {
     }
 
     /// The base URL `GcsConfig::endpoint` points at.
-    fn endpoint(&self) -> String { format!("http://127.0.0.1:{}", self.port) }
+    fn endpoint(&self) -> String {
+        format!("http://127.0.0.1:{}", self.port)
+    }
 
     /// Poll the control plane until the emulator answers a real Cloud Storage
     /// request, so the first backend call does not race container startup.
@@ -163,7 +165,9 @@ impl FakeGcs {
     }
 
     /// The control-plane collection buckets are listed from and created in.
-    fn buckets_url(&self) -> String { format!("{}/storage/v1/b?project=krabka", self.endpoint()) }
+    fn buckets_url(&self) -> String {
+        format!("{}/storage/v1/b?project=krabka", self.endpoint())
+    }
 
     /// Create a bucket through the emulator's JSON control plane, which is the
     /// one operation no `object_store` API reaches. Returns the bucket name.
@@ -358,9 +362,19 @@ async fn seeded_segment(index: i32) -> SeededSegment {
 /// Multi-thread on purpose: `S3RemoteStorage`'s sync trait methods bridge to
 /// the async store with `block_in_place`, which a current-thread runtime
 /// cannot do.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[yare::parameterized(
+    offset_index = { "offset", IndexType::Offset, OFFSET_INDEX_BODY },
+    timestamp_index = { "timestamp", IndexType::Timestamp, TIME_INDEX_BODY },
+    producer_snapshot = { "producer snapshot", IndexType::ProducerSnapshot, SNAPSHOT_BODY },
+    leader_epoch = { "leader epoch", IndexType::LeaderEpoch, EPOCH_BODY },
+)]
+#[test_macro(tokio::test(flavor = "multi_thread", worker_threads = 2))]
 #[ignore = "requires Docker"]
-async fn a_segment_seeded_in_the_emulator_fetches_back_byte_for_byte() {
+async fn a_segment_seeded_in_the_emulator_fetches_back_byte_for_byte(
+    case: &'static str,
+    index_type: IndexType,
+    expected_index: &'static [u8],
+) {
     let SeededSegment {
         server: _server,
         bucket: _bucket,
@@ -381,20 +395,13 @@ async fn a_segment_seeded_in_the_emulator_fetches_back_byte_for_byte() {
                 .expect("fetch a byte range of the segment")
                 == &LOG_BODY[4..=7]
         );
-        for (index_type, expected) in [
-            (IndexType::Offset, OFFSET_INDEX_BODY),
-            (IndexType::Timestamp, TIME_INDEX_BODY),
-            (IndexType::ProducerSnapshot, SNAPSHOT_BODY),
-            (IndexType::LeaderEpoch, EPOCH_BODY),
-        ] {
-            check!(
-                storage
-                    .fetch_index(&metadata, index_type)
-                    .expect("fetch an index")
-                    == expected,
-                "{index_type:?}",
-            );
-        }
+        check!(
+            storage
+                .fetch_index(&metadata, index_type)
+                .expect("fetch an index")
+                == expected_index,
+            "{case}",
+        );
     })
     .await
     .expect("the blocking half of the test");

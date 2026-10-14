@@ -48,16 +48,22 @@ impl Drop for DirectMode {
     /// Cut the padding past the last batch once the queued writes are done,
     /// so a segment closed cleanly is exactly as long as its batches. A
     /// failure leaves it for recovery.
-    fn drop(&mut self) { let _ = self.writer.cut_padding(); }
+    fn drop(&mut self) {
+        let _ = self.writer.cut_padding();
+    }
 }
 
 impl Segment {
-    pub(crate) fn writes_direct(&self) -> bool { self.direct.is_some() }
+    pub(crate) fn writes_direct(&self) -> bool {
+        self.direct.is_some()
+    }
 
     /// Whether this segment has written through `O_DIRECT` since it was
     /// opened, sealed or not. See `wrote_direct` on [`Segment`].
     #[krabka_macros::sendfile_cfg]
-    pub(crate) fn wrote_direct(&self) -> bool { self.wrote_direct }
+    pub(crate) fn wrote_direct(&self) -> bool {
+        self.wrote_direct
+    }
 
     /// Write this segment's appends through `O_DIRECT` from here on, keeping
     /// up to `tail_cache` of the newest bytes in memory for reads.
@@ -135,7 +141,9 @@ impl Segment {
     /// Wait until no queued `O_DIRECT` write is running, whatever became of
     /// them. A truncate waits for this, so no write lands past the new end
     /// after it.
-    pub(super) fn settle_direct(&self) { let _ = self.drain_direct(); }
+    pub(super) fn settle_direct(&self) {
+        let _ = self.drain_direct();
+    }
 
     /// Bring the direct writer and the cache back in line with `log_size`
     /// after a truncate: the partial last block is now whatever the file
