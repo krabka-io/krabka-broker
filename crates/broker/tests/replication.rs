@@ -70,6 +70,13 @@ async fn create_replicated_partition(
     }
 }
 
+async fn three_replica_topic(topic: &str) -> (Cluster, ReplicatedPartition) {
+    let cluster = registered_cluster(3).await;
+    let partition =
+        create_replicated_partition(&cluster, support::topic_on(topic, &[&[1, 2, 3]])).await;
+    (cluster, partition)
+}
+
 /// A cluster and the metrics address of its first broker.
 struct MetricsCluster {
     cluster: Cluster,
@@ -109,11 +116,13 @@ async fn metrics_cluster(topic: &str) -> MetricsCluster {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn replication_factor_three_propagates_to_all_followers() {
     let _g = cluster_lock().lock().await;
-    let cluster = registered_cluster(3).await;
-    let ReplicatedPartition {
-        leader_addr,
-        topic_id,
-    } = create_replicated_partition(&cluster, support::topic_on("repl", &[&[1, 2, 3]])).await;
+    let (
+        cluster,
+        ReplicatedPartition {
+            leader_addr,
+            topic_id,
+        },
+    ) = three_replica_topic("repl").await;
 
     let producer = connect_client(leader_addr, None).await;
     let batch = support::client::value_batch().records(20).call();
@@ -130,11 +139,13 @@ async fn replication_factor_three_propagates_to_all_followers() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn out_of_range_truncates_and_recovers() {
     let _g = cluster_lock().lock().await;
-    let cluster = registered_cluster(3).await;
-    let ReplicatedPartition {
-        leader_addr,
-        topic_id,
-    } = create_replicated_partition(&cluster, support::topic_on("oor", &[&[1, 2, 3]])).await;
+    let (
+        cluster,
+        ReplicatedPartition {
+            leader_addr,
+            topic_id,
+        },
+    ) = three_replica_topic("oor").await;
 
     // Produce 50 records in 50 separate single-record batches so the
     // leader's log holds them as discrete batches. A single 50-record

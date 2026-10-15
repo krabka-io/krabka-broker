@@ -104,13 +104,11 @@ async fn start_sasl_controller() -> ControllerNode {
     let mut cfg = BrokerConfig::for_tests(dir.path().to_path_buf());
     cfg.controller_listen_addr = controller_addr;
     cfg.controller_quorum_voters = vec![(cfg.node_id, controller_addr.to_string())];
-    cfg.listeners = vec![crate::support::listeners::listener(
-        "SASL_PLAINTEXT",
+    crate::support::listeners::configure_sasl_plaintext(
+        &mut cfg,
         data_addr,
         ListenerProtocol::SaslPlaintext,
-    )];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
-    cfg.controller_listener_protocol = ListenerProtocol::SaslPlaintext;
+    );
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
         .insert("broker".to_string(), "secret".to_string());

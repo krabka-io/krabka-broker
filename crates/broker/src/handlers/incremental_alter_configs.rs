@@ -458,7 +458,9 @@ mod tests {
                 incremental_alter_configs::test_support::{
                     AlterableConfig, check, make_scoped_resource,
                 },
-                test_support::{assert_dispatch_response, ordered_rows},
+                test_support::{
+                    assert_dispatch_response, config_resource_error_response, ordered_rows,
+                },
             },
             test_support::start_broker_with_authorizer as start_broker,
         },
@@ -498,12 +500,12 @@ mod tests {
             ),
             (
                 resource(RESOURCE_TYPE_BROKER, "2"),
-                krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
-                    resource_type: RESOURCE_TYPE_BROKER,
-                    resource_name: "2".into(),
-                    error_code: codes::INVALID_REQUEST,
-                    error_message: Some("Unexpected broker id, expected 1, but received 2".into())
-                }),
+                config_resource_error_response(
+                    RESOURCE_TYPE_BROKER,
+                    "2",
+                    codes::INVALID_REQUEST,
+                    Some("Unexpected broker id, expected 1, but received 2".into()),
+                ),
             ),
             (
                 resource(RESOURCE_TYPE_TOPIC, "duplicate"),
@@ -520,12 +522,12 @@ mod tests {
             ),
             (
                 resource(RESOURCE_TYPE_TOPIC, "missing"),
-                krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
-                    resource_type: RESOURCE_TYPE_TOPIC,
-                    resource_name: "missing".into(),
-                    error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                    error_message: Some("The topic 'missing' does not exist.".into())
-                }),
+                config_resource_error_response(
+                    RESOURCE_TYPE_TOPIC,
+                    "missing",
+                    codes::UNKNOWN_TOPIC_OR_PARTITION,
+                    Some("The topic 'missing' does not exist.".into()),
+                ),
             ),
             (resource(RESOURCE_TYPE_TOPIC, "duplicate"), duplicate_topic),
             (

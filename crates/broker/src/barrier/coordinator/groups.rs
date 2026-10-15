@@ -185,11 +185,7 @@ impl BarrierCoordinator {
     ) -> Result<tokio::sync::OwnedMutexGuard<GroupEntry>, BarrierError> {
         self.require_coordinator(group).await?;
         let entry = self.live_entry(group)?.lock_owned().await;
-        if !entry.is_defined() {
-            return Err(BarrierError::UnknownGroup {
-                group: group.to_owned(),
-            });
-        }
+        ensure_group_defined(group, &entry)?;
         Ok(entry)
     }
 
@@ -302,11 +298,7 @@ impl BarrierCoordinator {
     pub(crate) async fn list_cuts(&self, group: &str) -> Result<Vec<RetainedCut>, BarrierError> {
         let handle = self.live_entry(group)?;
         let entry = handle.lock().await;
-        if !entry.is_defined() {
-            return Err(BarrierError::UnknownGroup {
-                group: group.to_owned(),
-            });
-        }
+        ensure_group_defined(group, &entry)?;
         Ok(entry
             .cuts
             .iter()
@@ -318,13 +310,23 @@ impl BarrierCoordinator {
     }
 }
 
+fn ensure_group_defined(group: &str, entry: &GroupEntry) -> Result<(), BarrierError> {
+    if entry.is_defined() {
+        Ok(())
+    } else {
+        Err(BarrierError::UnknownGroup {
+            group: group.to_owned(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use {
         super::*,
         crate::{
             barrier::{
-                coordinator::test_support::{Fixture, GROUP, spec},
+                coordinator::test_support::{Fixture, GROUP, fixture_with_coordinator, spec},
                 test_support::topic_records,
             },
             coordinator::unified::persistence::MAX_STRING_BYTES,
@@ -366,8 +368,7 @@ mod tests {
     /// and each string goes through a key, a value and a marker.
     #[tokio::test]
     async fn a_group_and_a_topic_of_32767_bytes_are_created_cut_and_recovered() {
-        let fixture = Fixture::new();
-        let coordinator = fixture.coordinator().await;
+        let (fixture, coordinator) = fixture_with_coordinator().await;
         let group = "g".repeat(MAX_STRING_BYTES);
         let topic = "t".repeat(MAX_STRING_BYTES);
         let definition = coordinator

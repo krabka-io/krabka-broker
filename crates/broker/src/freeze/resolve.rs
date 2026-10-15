@@ -89,6 +89,19 @@ pub(crate) fn resolve_freeze_mutation<'a>(
     }
 }
 
+pub(crate) fn mutation_is_frozen(
+    image: Option<&MetadataImage>,
+    topic: &str,
+    kind: FreezeMutationKind,
+) -> bool {
+    image.is_some_and(|image| {
+        matches!(
+            resolve_freeze_mutation(image, topic, true, kind),
+            FreezeMutationResolution::Frozen(_)
+        )
+    })
+}
+
 fn scope_rank(record: &TopicFreezeRecord, topic: &str) -> FreezeScopeRank {
     if topic.starts_with("__") {
         return FreezeScopeRank::NoMatch;

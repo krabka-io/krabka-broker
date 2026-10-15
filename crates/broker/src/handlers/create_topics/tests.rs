@@ -60,6 +60,24 @@ macro_rules! expected_response {
     };
 }
 
+async fn dispatch_v4_as_admin(
+    broker: &Broker,
+    request: &CreateTopicsRequest,
+) -> CreateTopicsResponse {
+    krabka_macros::request_test_identity! {
+        bind(ctx);
+        user ["admin"];
+    };
+    dispatch_wire(
+        broker,
+        krabka_protocol::api_key::ApiKey::CreateTopics as i16,
+        4,
+        request,
+        &ctx,
+    )
+    .await
+}
+
 /// A topic config key and the value it is set to.
 #[derive(Clone, Copy)]
 struct ConfigPair<'a> {
@@ -1330,26 +1348,12 @@ async fn create_without_describe_configs_withholds_the_configs_but_creates_the_t
 /// `DescribeConfigs` check there too: nothing it decides can reach the wire.
 #[tokio::test]
 async fn v4_response_encodes_without_the_kip_525_fields() {
-    const V4: i16 = 4;
-
     krabka_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [start_broker(Arc::new(DenyDescribeConfigs))];
     };
     let req = request(vec![topic_with_config("legacy")]);
-    krabka_macros::request_test_identity! {
-        bind(ctx);
-        user ["admin"];
-    };
-
-    let resp: CreateTopicsResponse = dispatch_wire(
-        &broker,
-        krabka_protocol::api_key::ApiKey::CreateTopics as i16,
-        V4,
-        &req,
-        &ctx,
-    )
-    .await;
+    let resp = dispatch_v4_as_admin(&broker, &req).await;
     let expected = krabka_macros::unthrottled_wire!(CreateTopicsResponse {
         topics: vec![expected_empty_topic("legacy", codes::NONE, None)],
     });
@@ -1534,8 +1538,6 @@ async fn handle_refuses_invalid_and_colliding_topic_names() {
 /// controller makes a broker unavailable, as a real fenced broker is.
 #[tokio::test]
 async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
-    const V4: i16 = 4;
-
     /// One row: the fenced brokers, the witness brokers, the replica list of
     /// each partition, and the expected error code, error message and
     /// `(leader, isr)` per partition.
@@ -1618,19 +1620,7 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
                 .collect(),
             ..Default::default()
         };
-        krabka_macros::request_test_identity! {
-            bind(ctx);
-            user ["admin"];
-        };
-
-        let resp: CreateTopicsResponse = dispatch_wire(
-            &broker,
-            krabka_protocol::api_key::ApiKey::CreateTopics as i16,
-            V4,
-            &request(vec![topic]),
-            &ctx,
-        )
-        .await;
+        let resp = dispatch_v4_as_admin(&broker, &request(vec![topic])).await;
 
         let expected = krabka_macros::unthrottled_wire!(CreateTopicsResponse {
             topics: vec![expected_empty_topic(

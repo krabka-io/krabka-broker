@@ -31,6 +31,22 @@ pub(super) struct AppendRoll {
 }
 
 impl Log {
+    pub(super) fn record_pending_transaction(
+        &mut self,
+        pid: ProducerId,
+        base_offset: Offset,
+        last_offset: Offset,
+    ) {
+        self.pending.entry(pid).or_insert(base_offset);
+        self.pending_stamp_ranges
+            .entry(pid)
+            .or_default()
+            .push(OffsetRange {
+                first: base_offset,
+                last: last_offset,
+            });
+    }
+
     pub(super) fn complete_append_state(
         &mut self,
         result: Result<(), LogError>,
@@ -470,14 +486,7 @@ impl Log {
                     false
                 }
                 None if is_transactional => {
-                    self.pending.entry(pid).or_insert(base_offset);
-                    self.pending_stamp_ranges
-                        .entry(pid)
-                        .or_default()
-                        .push(OffsetRange {
-                            first: base_offset,
-                            last: last_offset,
-                        });
+                    self.record_pending_transaction(pid, base_offset, last_offset);
                     self.refresh_lso()?;
                     false
                 }

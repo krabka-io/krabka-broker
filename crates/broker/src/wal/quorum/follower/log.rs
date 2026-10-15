@@ -289,6 +289,7 @@ async fn run_blocking<T: Send + 'static>(
 mod tests {
     use {
         super::*,
+        crate::wal::quorum::test_support::batch as empty_batch,
         assert2::assert,
         krabka_protocol::records::{Record, RecordBatch},
     };
@@ -429,11 +430,7 @@ mod tests {
     #[tokio::test]
     async fn follower_appends_and_syncs_a_contiguous_fetch() {
         let FreshFollower { dir, follower } = fresh_follower();
-        let batch = RecordBatch {
-            base_offset: 0,
-            records: vec![Record::default()],
-            ..RecordBatch::default()
-        };
+        let batch = empty_batch(1);
 
         let end = follower
             .append(Offset(0), Offset(1), Some(RecordsPayload::V2(vec![batch])))
@@ -473,11 +470,7 @@ mod tests {
             dir: _dir,
             follower,
         } = fresh_follower();
-        let first = RecordBatch {
-            base_offset: 0,
-            records: vec![Record::default()],
-            ..RecordBatch::default()
-        };
+        let first = empty_batch(1);
 
         let end = follower
             .append(Offset(0), Offset(2), Some(RecordsPayload::V2(vec![first])))

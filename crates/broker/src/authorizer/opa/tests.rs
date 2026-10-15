@@ -82,6 +82,13 @@ fn request_fixture(name: &str) -> RequestFixture {
     }
 }
 
+fn alice_authorization_context(mock: &MockServer) -> (OpaAuthorizer, RequestFixture) {
+    (
+        authorizer(HashSet::new(), opa_url(mock), false),
+        request_fixture("alice"),
+    )
+}
+
 fn check_alice_authorization(auth: &OpaAuthorizer, expected: AuthorizationResult) {
     let RequestFixture {
         image,
@@ -129,12 +136,14 @@ async fn cache_miss_calls_opa_and_caches_result() {
 async fn check_cached_decision(topic: &str, allow: bool, expected: AuthorizationResult) {
     let mock = MockServer::start().await;
     mount_decision().mock(&mock).allow(allow).call().await;
-    let auth = authorizer(HashSet::new(), opa_url(&mock), false);
-    let RequestFixture {
-        image,
-        principal,
-        host,
-    } = request_fixture("alice");
+    let (
+        auth,
+        RequestFixture {
+            image,
+            principal,
+            host,
+        },
+    ) = alice_authorization_context(&mock);
     // The second call must preserve the decision and use the cache: expect(1)
     // verifies that only the initial authorization reached HTTP.
     for _ in 0..2 {
@@ -164,19 +173,14 @@ async fn cache_entry_expires_after_ttl() {
         timeline.clone(),
     )
     .unwrap();
-    let RequestFixture {
-        image,
-        principal: p,
-        host: h,
-    } = request_fixture("alice");
     // Cache miss -> HTTP call #1; caches the decision with expires_at = now+10ms.
-    assert!(auth.authorize(&image, &req(&p, &h, "t")) == AuthorizationResult::Allow);
+    check_alice_authorization(&auth, AuthorizationResult::Allow);
     // The exact deadline is stale: freshness is a strict comparison.
     timeline
         .advance(Duration::from_millis(10))
         .expect("manual time moves forward");
     // Cache entry expired -> HTTP call #2 (verified by the mock's expect(2)).
-    assert!(auth.authorize(&image, &req(&p, &h, "t")) == AuthorizationResult::Allow);
+    check_alice_authorization(&auth, AuthorizationResult::Allow);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -302,12 +306,14 @@ async fn published_kafka_plugin_policy_receives_action_and_context() {
         .body(expected)
         .call()
         .await;
-    let auth = authorizer(HashSet::new(), opa_url(&mock), false);
-    let RequestFixture {
-        image,
-        principal,
-        host,
-    } = request_fixture("alice");
+    let (
+        auth,
+        RequestFixture {
+            image,
+            principal,
+            host,
+        },
+    ) = alice_authorization_context(&mock);
     assert!(
         auth.authorize(&image, &req(&principal, &host, "orders")) == AuthorizationResult::Allow
     );

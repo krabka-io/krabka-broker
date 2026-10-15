@@ -10,7 +10,7 @@
 use {
     super::{
         Engine, KraftController,
-        offsets::{leader_alone_is_majority, validate_append_result},
+        offsets::validate_append_result,
         records::{metadata_record_batch, noop_record_value},
     },
     crate::error::RaftError,
@@ -57,9 +57,7 @@ impl Engine {
             .log
             .append(&mut batch, KraftController::wall_clock_ms())?;
         validate_append_result("no-op", expected_base, base, self.log.log_end_offset())?;
-        if leader_alone_is_majority(self.core.quorum_state().majority(), self.core.is_voter()) {
-            self.advance_and_apply(self.log.log_end_offset());
-        }
+        self.advance_if_single_voter();
         Ok(())
     }
 }

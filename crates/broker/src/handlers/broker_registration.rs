@@ -393,115 +393,67 @@ mod tests {
         /// A case label, the features the broker reports, and the registration outcome.
         struct FeatureCase {
             what: &'static str,
-            features: &'static [FeatureRange],
+            features: Vec<FeatureRange>,
             expected: Result<(), i16>,
+        }
+
+        fn range(name: &'static str, min: i16, max: i16) -> FeatureRange {
+            FeatureRange { name, min, max }
         }
 
         let cases: &[FeatureCase] = &[
             FeatureCase {
                 what: "both finalized features in range",
-                features: &[
-                    FeatureRange {
-                        name: "metadata.version",
-                        min: 7,
-                        max: 25,
-                    },
-                    FeatureRange {
-                        name: "group.version",
-                        min: 0,
-                        max: 1,
-                    },
+                features: vec![
+                    range("metadata.version", 7, 25),
+                    range("group.version", 0, 1),
                 ],
                 expected: Ok(()),
             },
             FeatureCase {
                 what: "metadata.version below the finalized level",
-                features: &[
-                    FeatureRange {
-                        name: "metadata.version",
-                        min: 7,
-                        max: 24,
-                    },
-                    FeatureRange {
-                        name: "group.version",
-                        min: 0,
-                        max: 1,
-                    },
+                features: vec![
+                    range("metadata.version", 7, 24),
+                    range("group.version", 0, 1),
                 ],
                 expected: Err(codes::UNSUPPORTED_VERSION),
             },
             FeatureCase {
                 what: "a feature the cluster left at level 0 that the broker cannot run at 0",
-                features: &[
-                    FeatureRange {
-                        name: "metadata.version",
-                        min: 7,
-                        max: 25,
-                    },
-                    FeatureRange {
-                        name: "group.version",
-                        min: 0,
-                        max: 1,
-                    },
-                    FeatureRange {
-                        name: "share.version",
-                        min: 1,
-                        max: 1,
-                    },
+                features: vec![
+                    range("metadata.version", 7, 25),
+                    range("group.version", 0, 1),
+                    range("share.version", 1, 1),
                 ],
                 expected: Err(codes::UNSUPPORTED_VERSION),
             },
             FeatureCase {
                 what: "an unfinalized feature that includes level 0",
-                features: &[
-                    FeatureRange {
-                        name: "metadata.version",
-                        min: 7,
-                        max: 25,
-                    },
-                    FeatureRange {
-                        name: "group.version",
-                        min: 0,
-                        max: 1,
-                    },
-                    FeatureRange {
-                        name: "share.version",
-                        min: 0,
-                        max: 1,
-                    },
+                features: vec![
+                    range("metadata.version", 7, 25),
+                    range("group.version", 0, 1),
+                    range("share.version", 0, 1),
                 ],
                 expected: Ok(()),
             },
             FeatureCase {
                 what: "no metadata.version",
-                features: &[FeatureRange {
-                    name: "group.version",
-                    min: 0,
-                    max: 1,
-                }],
+                features: vec![range("group.version", 0, 1)],
                 expected: Err(codes::INVALID_REGISTRATION),
             },
             FeatureCase {
                 what: "no features at all",
-                features: &[],
+                features: vec![],
                 expected: Err(codes::INVALID_REGISTRATION),
             },
             FeatureCase {
                 what: "a finalized feature the broker does not name",
-                features: &[FeatureRange {
-                    name: "metadata.version",
-                    min: 7,
-                    max: 25,
-                }],
+                features: vec![range("metadata.version", 7, 25)],
                 expected: Err(codes::UNSUPPORTED_VERSION),
             },
             FeatureCase {
                 what: "an unsupported feature wins over a missing metadata.version",
-                features: &[FeatureRange {
-                    name: "group.version",
-                    min: 2,
-                    max: 3,
-                }],
+                features: vec![range("group.version", 2, 3)],
                 expected: Err(codes::UNSUPPORTED_VERSION),
             },
         ];

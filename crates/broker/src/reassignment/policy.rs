@@ -234,6 +234,14 @@ mod tests {
             .call()
     }
 
+    fn leader_in_removing_reassignment_image() -> std::sync::Arc<MetadataImage> {
+        img()
+            .adding(vec![NodeId(3)])
+            .removing(vec![NodeId(2)])
+            .leader(2)
+            .call()
+    }
+
     #[test]
     fn remap_directories_preserves_slot_alignment_on_replica_removal() {
         let da = uuid::Uuid::from_u128(0xA);
@@ -661,11 +669,7 @@ mod tests {
     #[tokio::test]
     async fn leader_handoff_when_leader_in_removing() {
         // leader=2, removing=[2]; new leader must come from target ∩ isr = {1,3} ∩ {1,2,3} = {1,3}.
-        let img = img()
-            .adding(vec![krabka_ids::NodeId(3)])
-            .removing(vec![krabka_ids::NodeId(2)])
-            .leader(2)
-            .call();
+        let img = leader_in_removing_reassignment_image();
         let live = liveness(&[1, 2, 3]).await;
         let progress = compute_reassignment_progress(&img, &live).await;
         assert!(progress.len() == 1);
@@ -685,11 +689,7 @@ mod tests {
 
     #[test]
     fn exhausted_epochs_block_reassignment_transitions() {
-        let image = img()
-            .adding(vec![krabka_ids::NodeId(3)])
-            .removing(vec![krabka_ids::NodeId(2)])
-            .leader(2)
-            .call();
+        let image = leader_in_removing_reassignment_image();
         let mut record = image.partition("foo", 0).expect("seeded partition").clone();
         let alive = std::collections::HashSet::from([NodeId(1), NodeId(2), NodeId(3)]);
 

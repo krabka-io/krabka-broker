@@ -8,12 +8,14 @@
 //! because Fetch v13 and later carry `topic_id` and not the name.
 
 use {
-    crate::{error::MetadataLogError, kafka_log::config::KafkaMetadataLogConfig},
+    crate::{
+        error::MetadataLogError,
+        kafka_log::{self, config::KafkaMetadataLogConfig},
+    },
     krabka_client_admin::{
         AdminClient, AlterConfigOp, ConfigResource, CreateTopicSpec,
         IncrementalAlterConfigsOptions, TopicMutationOptions,
     },
-    krabka_client_core::ConnectionOptions,
     krabka_protocol::primitives::uuid::Uuid as WireUuid,
     std::collections::BTreeMap,
     tracing::{debug, instrument, warn},
@@ -36,13 +38,7 @@ pub(super) async fn ensure_topic(
 ) -> Result<TopicInfo, MetadataLogError> {
     let mut admin = AdminClient::connect_with_options(
         std::slice::from_ref(&cfg.bootstrap),
-        ConnectionOptions {
-            client_id: format!("{}-admin", cfg.client_id),
-            dispatch_queue_capacity: cfg.dispatch_queue_capacity,
-            frame_max: cfg.frame_max,
-            security: cfg.security.clone().map(Box::new),
-            ..ConnectionOptions::default()
-        },
+        kafka_log::connection_options(cfg, "admin"),
     )
     .await
     .map_err(|e| MetadataLogError::Other(format!("admin connect failed: {e}")))?;

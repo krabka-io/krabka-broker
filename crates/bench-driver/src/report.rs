@@ -4,7 +4,7 @@ use {
     crate::{
         aggregate::CellKey,
         graph::{
-            TaggedRun, render_html as render_graph_html,
+            TaggedRun, push_fmt, render_html as render_graph_html,
             render_web_fragment as render_graph_web_fragment,
         },
         ids::{MessageCount, TimeOffsetMs},
@@ -15,16 +15,9 @@ use {
     krabka_units::{fmt::Human as _, prelude::*},
     std::{
         collections::BTreeMap,
-        fmt::{Arguments, Write},
         path::{Path, PathBuf},
     },
 };
-
-fn push_fmt(output: &mut String, args: Arguments<'_>) {
-    output
-        .write_fmt(args)
-        .expect("writing formatted data to a String cannot fail");
-}
 
 /// How a metric's cross-run mean is written into a table cell.
 ///

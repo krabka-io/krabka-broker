@@ -118,6 +118,21 @@ async fn drive_trim(
     drive(broker, &request, ctx).await
 }
 
+async fn drive_trim_targets(
+    broker: &Broker,
+    admin: &krabka_security::Principal,
+    peer: &std::net::SocketAddr,
+    topic: &str,
+    targets: &[TrimTarget],
+) -> DeleteRecordsResponse {
+    drive_trim(
+        broker,
+        &test_context(admin, peer),
+        request().topic(topic).partitions(targets).call(),
+    )
+    .await
+}
+
 /// Compare the entire response with independent caller-specified expected rows.
 #[bon::builder]
 async fn check_trim_response(
@@ -761,17 +776,10 @@ async fn a_compact_only_topic_refuses_a_trim() {
             .get(topic, krabka_ids::PartitionIndex(0))
             .expect("the partition is local");
 
-        let resp = drive_trim(
-            &broker,
-            &test_context(&admin, &peer),
-            request()
-                .topic(topic)
-                .partitions(&[TrimTarget {
-                    index: PartitionIndex(0),
-                    offset: Offset(2),
-                }])
-                .call(),
-        )
+        let resp = drive_trim_targets(&broker, &admin, &peer, topic, &[TrimTarget {
+            index: PartitionIndex(0),
+            offset: Offset(2),
+        }])
         .await;
 
         check!(
@@ -827,23 +835,16 @@ async fn a_partition_hosted_elsewhere_answers_not_leader_or_follower() {
         .wait_for_image(|image| image.partition(topic, 0).is_some())
         .await;
 
-    let resp = drive_trim(
-        &broker,
-        &test_context(&admin, &peer),
-        request()
-            .topic(topic)
-            .partitions(&[
-                TrimTarget {
-                    index: PartitionIndex(0),
-                    offset: Offset(1),
-                },
-                TrimTarget {
-                    index: PartitionIndex(1),
-                    offset: Offset(1),
-                },
-            ])
-            .call(),
-    )
+    let resp = drive_trim_targets(&broker, &admin, &peer, topic, &[
+        TrimTarget {
+            index: PartitionIndex(0),
+            offset: Offset(1),
+        },
+        TrimTarget {
+            index: PartitionIndex(1),
+            offset: Offset(1),
+        },
+    ])
     .await;
 
     let expected = vec![krabka_macros::tagged_wire!(DeleteRecordsTopicResult {

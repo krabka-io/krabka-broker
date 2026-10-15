@@ -12,9 +12,27 @@ use {
     },
     assert2::assert,
     krabka_protocol::owned::create_partitions_request::{
-        CreatePartitionsRequest, CreatePartitionsTopic,
+        CreatePartitionsAssignment, CreatePartitionsRequest, CreatePartitionsTopic,
     },
 };
+
+fn create_partitions_request(
+    name: &str,
+    count: i32,
+    assignments: Option<Vec<CreatePartitionsAssignment>>,
+) -> CreatePartitionsRequest {
+    CreatePartitionsRequest {
+        topics: vec![CreatePartitionsTopic {
+            name: name.into(),
+            count,
+            assignments,
+            ..Default::default()
+        }],
+        timeout_ms: 5_000,
+        validate_only: false,
+        ..Default::default()
+    }
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn automatic_placement_takes_a_fenced_broker_only_as_a_last_resort() {
@@ -53,16 +71,7 @@ async fn automatic_placement_takes_a_fenced_broker_only_as_a_last_resort() {
         .await;
 
     let expanded = client
-        .send(CreatePartitionsRequest {
-            topics: vec![CreatePartitionsTopic {
-                name: "t-usable-brokers".into(),
-                count: 3,
-                assignments: None,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_partitions_request("t-usable-brokers", 3, None))
         .await
         .unwrap();
     assert!(expanded.results[0].error_code == 0);
@@ -124,17 +133,7 @@ async fn create_partitions_extends_topic() {
 
     create_topic_helper(&client, "t-cp", 1).await;
 
-    let req = CreatePartitionsRequest {
-        topics: vec![CreatePartitionsTopic {
-            name: "t-cp".into(),
-            count: 3,
-            assignments: None,
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        validate_only: false,
-        ..Default::default()
-    };
+    let req = create_partitions_request("t-cp", 3, None);
     let resp = client.send(req).await.expect("create_partitions");
     assert!(
         resp.results[0].error_code == 0,
@@ -155,8 +154,6 @@ async fn create_partitions_extends_topic() {
 /// return `INVALID_REPLICA_ASSIGNMENT` (39).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn create_partitions_honors_explicit_assignments() {
-    use krabka_protocol::owned::create_partitions_request::CreatePartitionsAssignment;
-
     let (cluster, client) = start_n_node_client(1, "admin-handlers-test").await;
     let broker = &cluster[0].0;
 
@@ -164,20 +161,14 @@ async fn create_partitions_honors_explicit_assignments() {
 
     // Happy path: 1 existing partition → 2 partitions, explicit assignment
     // pins broker 0 (the only one available).
-    let req = CreatePartitionsRequest {
-        topics: vec![CreatePartitionsTopic {
-            name: "t-cpa".into(),
-            count: 2,
-            assignments: Some(vec![CreatePartitionsAssignment {
-                broker_ids: vec![1],
-                ..Default::default()
-            }]),
+    let req = create_partitions_request(
+        "t-cpa",
+        2,
+        Some(vec![CreatePartitionsAssignment {
+            broker_ids: vec![1],
             ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        validate_only: false,
-        ..Default::default()
-    };
+        }]),
+    );
     let resp = client
         .send(req)
         .await
@@ -194,26 +185,20 @@ async fn create_partitions_honors_explicit_assignments() {
     // Invalid path: ask for 1 more partition (total 3) but supply 2
     // assignments. Must surface INVALID_REPLICA_ASSIGNMENT and NOT add a
     // partition.
-    let bad = CreatePartitionsRequest {
-        topics: vec![CreatePartitionsTopic {
-            name: "t-cpa".into(),
-            count: 3,
-            assignments: Some(vec![
-                CreatePartitionsAssignment {
-                    broker_ids: vec![1],
-                    ..Default::default()
-                },
-                CreatePartitionsAssignment {
-                    broker_ids: vec![1],
-                    ..Default::default()
-                },
-            ]),
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        validate_only: false,
-        ..Default::default()
-    };
+    let bad = create_partitions_request(
+        "t-cpa",
+        3,
+        Some(vec![
+            CreatePartitionsAssignment {
+                broker_ids: vec![1],
+                ..Default::default()
+            },
+            CreatePartitionsAssignment {
+                broker_ids: vec![1],
+                ..Default::default()
+            },
+        ]),
+    );
     let bad_resp = client
         .send(bad)
         .await

@@ -31,9 +31,7 @@
 
 use {
     crate::{
-        freeze::resolve::{FreezeMutationResolution, resolve_freeze_mutation},
-        metrics::BrokerMetrics,
-        partition::Partition,
+        freeze::resolve::mutation_is_frozen, metrics::BrokerMetrics, partition::Partition,
         partition_registry::PartitionRegistry,
     },
     krabka_metadata::MetadataImage,
@@ -58,12 +56,7 @@ use crate::metrics::cleaner_failure_reason as failure_reason;
 /// `image` is `None` for a sweep with no metadata authority to ask, which
 /// resolves no freeze.
 fn freeze_stops_retention(image: Option<&MetadataImage>, topic: &str) -> bool {
-    image.is_some_and(|image| {
-        matches!(
-            resolve_freeze_mutation(image, topic, true, FreezeMutationKind::Retention),
-            FreezeMutationResolution::Frozen(_)
-        )
-    })
+    mutation_is_frozen(image, topic, FreezeMutationKind::Retention)
 }
 
 pub(crate) async fn tick_all(

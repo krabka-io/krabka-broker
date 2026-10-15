@@ -103,6 +103,10 @@ impl RequestedTopic {
     const fn new(name: Name, id: Id) -> Self { Self { name, id } }
 }
 
+fn duplicate_topic(name: Name, id: Id) -> Vec<RequestedTopic> {
+    vec![RequestedTopic::new(name, id); 2]
+}
+
 /// One table row.
 #[derive(Debug, Clone)]
 struct Case {
@@ -431,31 +435,13 @@ async fn topic_ids_follow_kafka_version_rules() {
         },
         Case {
             version: 13,
-            rows: vec![
-                RequestedTopic {
-                    name: Name::Null,
-                    id: Id::A,
-                },
-                RequestedTopic {
-                    name: Name::Null,
-                    id: Id::A,
-                },
-            ],
+            rows: duplicate_topic(Name::Null, Id::A),
             expect: Rows(vec![Row::Described(Id::A)]),
         },
         // A repeated name is described once (#640).
         Case {
             version: 12,
-            rows: vec![
-                RequestedTopic {
-                    name: Name::A,
-                    id: Id::Zero,
-                },
-                RequestedTopic {
-                    name: Name::A,
-                    id: Id::Zero,
-                },
-            ],
+            rows: duplicate_topic(Name::A, Id::Zero),
             expect: Rows(vec![Row::Described(Id::A)]),
         },
         // With only zero ids, the names are described, and a null name fails

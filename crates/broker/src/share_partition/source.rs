@@ -12,11 +12,7 @@ pub(crate) async fn diskless_logical_start(
     partition: &Partition,
     topic_id: uuid::Uuid,
 ) -> Result<Offset, BrokerError> {
-    if reader.index_log().is_some_and(|log| !log.is_valid()) {
-        return Err(BrokerError::Txn(
-            "diskless WAL index projection is unavailable or invalid".into(),
-        ));
-    }
+    reader.ensure_index_log_valid()?;
     let local_start = partition.log_start_offset().0;
     let index = reader.index.lock().await;
     let floor = index.delete_floor(topic_id, partition.index.0);

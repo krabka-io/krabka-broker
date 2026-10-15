@@ -52,7 +52,7 @@ mod audit;
 mod coordinators;
 mod diskless_index;
 mod endpoints;
-pub(crate) use endpoints::registered_listener_endpoint;
+pub(crate) use endpoints::{leader_listener_endpoint, registered_listener_endpoint};
 mod finish;
 mod gauges;
 mod handle;
@@ -70,6 +70,16 @@ mod runtime;
 mod startup;
 mod storage;
 mod transport;
+
+pub(crate) async fn tick_or_shutdown(
+    tick: &mut tokio::time::Interval,
+    shutdown: &CancellationToken,
+) -> bool {
+    tokio::select! {
+        _ = tick.tick() => true,
+        () = shutdown.cancelled() => false,
+    }
+}
 
 #[cfg(test)]
 mod test_support;

@@ -70,6 +70,17 @@ pub use self::config::{
     DEFAULT_METADATA_TOPIC_CREATE_TIMEOUT, DEFAULT_MIN_ISR, DEFAULT_NUM_PARTITIONS,
     DEFAULT_REPLICATION, KafkaMetadataLogConfig, METADATA_TOPIC, MetadataEventQueueCapacity,
 };
+
+fn connection_options(cfg: &KafkaMetadataLogConfig, purpose: &str) -> ConnectionOptions {
+    ConnectionOptions {
+        client_id: format!("{}-{purpose}", cfg.client_id),
+        dispatch_queue_capacity: cfg.dispatch_queue_capacity,
+        frame_max: cfg.frame_max,
+        security: cfg.security.clone().map(Box::new),
+        ..ConnectionOptions::default()
+    }
+}
+
 use {
     self::{
         consumer::{
@@ -202,13 +213,7 @@ impl KafkaMetadataEventLog {
         client.metadata_topics().set([cfg.topic.as_str()]);
 
         // 4. Leader connections for bounded range reads.
-        let reader_options = ConnectionOptions {
-            client_id: format!("{}-reader", cfg.client_id),
-            dispatch_queue_capacity: cfg.dispatch_queue_capacity,
-            frame_max: cfg.frame_max,
-            security: cfg.security.clone().map(Box::new),
-            ..ConnectionOptions::default()
-        };
+        let reader_options = connection_options(&cfg, "reader");
         let readers = BrokerPool::new_with_server_names(
             resolve_bootstrap(&cfg.bootstrap, &reader_options).await?,
             reader_options,

@@ -50,30 +50,24 @@ async fn dispatch(client: &krabka_client_core::Client, command: Command) -> i32 
             interval,
             retained_cuts,
         } => {
-            let request = api::AlterBarrierGroupsRequest {
-                groups: vec![api::AlterableBarrierGroup {
-                    group,
-                    topics,
-                    // -1 is the sentinel for "no periodic injection".
-                    interval_ms: interval.map_or(-1, Time::millis_i64),
-                    retained_cuts,
-                    delete: false,
-                    ..api::AlterableBarrierGroup::default()
-                }],
-                ..api::AlterBarrierGroupsRequest::default()
-            };
-            send_then(client, request, report_alter).await
+            send_alter(client, api::AlterableBarrierGroup {
+                group,
+                topics,
+                // -1 is the sentinel for "no periodic injection".
+                interval_ms: interval.map_or(-1, Time::millis_i64),
+                retained_cuts,
+                delete: false,
+                ..api::AlterableBarrierGroup::default()
+            })
+            .await
         }
         Command::Delete { group } => {
-            let request = api::AlterBarrierGroupsRequest {
-                groups: vec![api::AlterableBarrierGroup {
-                    group,
-                    delete: true,
-                    ..api::AlterableBarrierGroup::default()
-                }],
-                ..api::AlterBarrierGroupsRequest::default()
-            };
-            send_then(client, request, report_alter).await
+            send_alter(client, api::AlterableBarrierGroup {
+                group,
+                delete: true,
+                ..api::AlterableBarrierGroup::default()
+            })
+            .await
         }
         Command::Describe { groups } => {
             let request = api::DescribeBarrierGroupsRequest {
@@ -115,6 +109,18 @@ async fn dispatch(client: &krabka_client_core::Client, command: Command) -> i32 
             }
         },
     }
+}
+
+async fn send_alter(client: &krabka_client_core::Client, group: api::AlterableBarrierGroup) -> i32 {
+    send_then(
+        client,
+        api::AlterBarrierGroupsRequest {
+            groups: vec![group],
+            ..api::AlterBarrierGroupsRequest::default()
+        },
+        report_alter,
+    )
+    .await
 }
 
 /// Send one request and hand its response to `report`.

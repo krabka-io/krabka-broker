@@ -221,14 +221,12 @@ pub(super) fn apply_share_record(
     value_bytes: &bytes::Bytes,
 ) -> Result<(), BrokerError> {
     use crate::coordinator::unified::share::persistence as sp;
-    settle_classic_group(coordinator, acc, key.group_id(), ModernGroupType::Share)?;
+    let group_id = key.group_id().to_owned();
+    settle_classic_group(coordinator, acc, &group_id, ModernGroupType::Share)?;
     match key {
         sp::ShareGroupKey::GroupMetadata { group_id } => {
             let value = sp::ShareGroupMetadataValue::decode(value_bytes)?;
             coordinator.replay_share_group_metadata(&group_id, value)?;
-            if coordinator.cached_share_seed(&group_id).is_some() {
-                coordinator.mark_share(&group_id);
-            }
         }
         sp::ShareGroupKey::MemberMetadata {
             group_id,
@@ -236,16 +234,10 @@ pub(super) fn apply_share_record(
         } => {
             let value = sp::ShareGroupMemberMetadataValue::decode(value_bytes)?;
             coordinator.replay_share_member_metadata(&group_id, &member_id, value)?;
-            if coordinator.cached_share_seed(&group_id).is_some() {
-                coordinator.mark_share(&group_id);
-            }
         }
         sp::ShareGroupKey::TargetAssignmentMetadata { group_id } => {
             let value = sp::ShareGroupTargetAssignmentMetadataValue::decode(value_bytes)?;
             coordinator.replay_share_target_assignment_metadata(&group_id, value)?;
-            if coordinator.cached_share_seed(&group_id).is_some() {
-                coordinator.mark_share(&group_id);
-            }
         }
         sp::ShareGroupKey::TargetAssignmentMember {
             group_id,
@@ -253,9 +245,6 @@ pub(super) fn apply_share_record(
         } => {
             let value = sp::ShareGroupTargetAssignmentMemberValue::decode(value_bytes)?;
             coordinator.replay_share_target_assignment_member(&group_id, &member_id, value)?;
-            if coordinator.cached_share_seed(&group_id).is_some() {
-                coordinator.mark_share(&group_id);
-            }
         }
         sp::ShareGroupKey::CurrentMemberAssignment {
             group_id,
@@ -263,17 +252,14 @@ pub(super) fn apply_share_record(
         } => {
             let value = sp::ShareGroupCurrentMemberAssignmentValue::decode(value_bytes)?;
             coordinator.replay_share_current_member_assignment(&group_id, &member_id, value)?;
-            if coordinator.cached_share_seed(&group_id).is_some() {
-                coordinator.mark_share(&group_id);
-            }
         }
         sp::ShareGroupKey::StatePartitionMetadata { group_id } => {
             let value = sp::ShareGroupStatePartitionMetadataValue::decode(value_bytes)?;
             coordinator.replay_share_state_partition_metadata(&group_id, value)?;
-            if coordinator.cached_share_seed(&group_id).is_some() {
-                coordinator.mark_share(&group_id);
-            }
         }
+    }
+    if coordinator.cached_share_seed(&group_id).is_some() {
+        coordinator.mark_share(&group_id);
     }
     Ok(())
 }
@@ -285,14 +271,12 @@ pub(super) fn apply_streams_record(
     value_bytes: &bytes::Bytes,
 ) -> Result<(), BrokerError> {
     use crate::coordinator::unified::streams::persistence as sp;
-    settle_classic_group(coordinator, acc, key.group_id(), ModernGroupType::Streams)?;
+    let group_id = key.group_id().to_owned();
+    settle_classic_group(coordinator, acc, &group_id, ModernGroupType::Streams)?;
     match key {
         sp::StreamsGroupKey::GroupMetadata { group_id } => {
             let v = sp::StreamsGroupMetadataValue::decode(value_bytes)?;
             coordinator.replay_streams_group_metadata(&group_id, v)?;
-            if coordinator.cached_streams_seed(&group_id).is_some() {
-                coordinator.mark_streams(&group_id);
-            }
         }
         sp::StreamsGroupKey::MemberMetadata {
             group_id,
@@ -300,23 +284,14 @@ pub(super) fn apply_streams_record(
         } => {
             let value = sp::StreamsGroupMemberMetadataValue::decode(value_bytes)?;
             coordinator.replay_streams_member_metadata(&group_id, &member_id, value)?;
-            if coordinator.cached_streams_seed(&group_id).is_some() {
-                coordinator.mark_streams(&group_id);
-            }
         }
         sp::StreamsGroupKey::Topology { group_id } => {
             let value = sp::StreamsGroupTopologyValue::decode(value_bytes)?;
             coordinator.replay_streams_topology(&group_id, value)?;
-            if coordinator.cached_streams_seed(&group_id).is_some() {
-                coordinator.mark_streams(&group_id);
-            }
         }
         sp::StreamsGroupKey::TargetAssignmentMetadata { group_id } => {
             let v = sp::StreamsGroupTargetAssignmentMetadataValue::decode(value_bytes)?;
             coordinator.replay_streams_target_assignment_metadata(&group_id, v)?;
-            if coordinator.cached_streams_seed(&group_id).is_some() {
-                coordinator.mark_streams(&group_id);
-            }
         }
         sp::StreamsGroupKey::TargetAssignmentMember {
             group_id,
@@ -324,9 +299,6 @@ pub(super) fn apply_streams_record(
         } => {
             let value = sp::StreamsGroupTargetAssignmentMemberValue::decode(value_bytes)?;
             coordinator.replay_streams_target_assignment_member(&group_id, &member_id, value)?;
-            if coordinator.cached_streams_seed(&group_id).is_some() {
-                coordinator.mark_streams(&group_id);
-            }
         }
         sp::StreamsGroupKey::CurrentMemberAssignment {
             group_id,
@@ -334,10 +306,10 @@ pub(super) fn apply_streams_record(
         } => {
             let value = sp::StreamsGroupCurrentMemberAssignmentValue::decode(value_bytes)?;
             coordinator.replay_streams_current_member_assignment(&group_id, &member_id, value)?;
-            if coordinator.cached_streams_seed(&group_id).is_some() {
-                coordinator.mark_streams(&group_id);
-            }
         }
+    }
+    if coordinator.cached_streams_seed(&group_id).is_some() {
+        coordinator.mark_streams(&group_id);
     }
     Ok(())
 }

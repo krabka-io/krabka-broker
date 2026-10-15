@@ -47,9 +47,8 @@ fn spawn_liveness_ticker(
         let mut tick = tokio::time::interval(tick_interval.to_std());
         let mut state = LivenessTickState::default();
         loop {
-            tokio::select! {
-                _ = tick.tick() => {}
-                () = shutdown.cancelled() => return,
+            if !super::tick_or_shutdown(&mut tick, &shutdown).await {
+                return;
             }
             run_liveness_tick(
                 &controller,

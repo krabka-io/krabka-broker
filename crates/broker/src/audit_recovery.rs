@@ -148,6 +148,17 @@ mod tests {
             .expect("append");
     }
 
+    fn partition_with_chained_record() -> (TestPartition, &'static [u8]) {
+        let fixture = test_partition();
+        let value = b"chained";
+        append_records(&fixture.partition, vec![chained_record(
+            7,
+            &GENESIS_HEAD,
+            value,
+        )]);
+        (fixture, value)
+    }
+
     #[yare::parameterized(
         empty_log = { 0, Offset(0) },
         exactly_one_window = { 4096, Offset(0) },
@@ -253,12 +264,13 @@ mod tests {
 
     #[tokio::test]
     async fn recover_honors_configured_tail_bounds() {
-        let TestPartition {
-            partition,
-            dir: _dir,
-        } = test_partition();
-        let value = b"chained";
-        append_records(&partition, vec![chained_record(7, &GENESIS_HEAD, value)]);
+        let (
+            TestPartition {
+                partition,
+                dir: _dir,
+            },
+            value,
+        ) = partition_with_chained_record();
         append_records(&partition, vec![checkpoint_record()]);
 
         assert!(recover_from_partition_tail(&partition, 1, kibibytes(1)).is_none());
@@ -273,12 +285,13 @@ mod tests {
 
     #[tokio::test]
     async fn recover_honors_configured_tail_read_max_bytes() {
-        let TestPartition {
-            partition,
-            dir: _dir,
-        } = test_partition();
-        let value = b"chained";
-        append_records(&partition, vec![chained_record(7, &GENESIS_HEAD, value)]);
+        let (
+            TestPartition {
+                partition,
+                dir: _dir,
+            },
+            value,
+        ) = partition_with_chained_record();
 
         assert!(recover_from_partition_tail(&partition, 1, bytes(1)).is_none());
         assert!(

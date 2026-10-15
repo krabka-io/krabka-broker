@@ -18,7 +18,7 @@
 //! (`isShareGroupsEnabled`: `share.version` 1 or more in the image).
 
 use {
-    super::{LoadStatus, ShareCoordinator, Term, state_machine::StateRecord},
+    super::{Active, LoadStatus, ShareCoordinator, Term, state_machine::StateRecord},
     crate::{
         coordinator::topic_deletion::deleted_topics, features::share_groups_enabled,
         time_util::duration_millis,
@@ -96,6 +96,13 @@ impl ShareCoordinator {
         }
     }
 
+    async fn commit_appended(&self, active: Active<'_>, appended: usize, job: &str) -> usize {
+        let (term, last_written) = (active.term, self.last_written(active.term));
+        drop(active);
+        self.committed_count(term, last_written, appended, job)
+            .await
+    }
+
     /// Tombstones every key whose topic id is in `deleted`, on every active
     /// state partition, as Kafka's `maybeCleanupShareState` does. Returns the
     /// number of tombstones written and committed.
@@ -130,10 +137,8 @@ impl ShareCoordinator {
                     ),
                 }
             }
-            let (term, last_written) = (active.term, self.last_written(active.term));
-            drop(active);
             written += self
-                .committed_count(term, last_written, appended, "deleted-topic cleanup")
+                .commit_appended(active, appended, "deleted-topic cleanup")
                 .await;
         }
         if written > 0 {
@@ -204,10 +209,8 @@ impl ShareCoordinator {
                     ),
                 }
             }
-            let (term, last_written) = (active.term, self.last_written(active.term));
-            drop(active);
             written += self
-                .committed_count(term, last_written, appended, "cold-partition snapshot")
+                .commit_appended(active, appended, "cold-partition snapshot")
                 .await;
         }
         written

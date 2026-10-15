@@ -671,6 +671,25 @@ mod tests {
         }
     }
 
+    struct LocalRemoteReadSetup {
+        _object_dir: TempDir,
+        broker_handle: BrokerHandle,
+        dir: TempDir,
+        broker: Arc<Broker>,
+    }
+
+    async fn local_remote_read_setup() -> LocalRemoteReadSetup {
+        let object_dir = tempfile::tempdir().expect("object tempdir");
+        let started = handler_fixture_support::start_with_local_remote_storage(&object_dir).await;
+        let broker = started.broker.broker_arc_for_test();
+        LocalRemoteReadSetup {
+            _object_dir: object_dir,
+            broker_handle: started.broker,
+            dir: started.dir,
+            broker,
+        }
+    }
+
     /// A follower request needs this broker to lead the partition at epoch zero.
     async fn leader_read_setup(topic: &str) -> ReadSetup {
         let setup = local_read_setup(topic).await;
@@ -1094,6 +1113,17 @@ mod tests {
         ]
     }
 
+    fn empty_partition_data() -> super::PartitionData {
+        super::PartitionData {
+            partition_index: 0,
+            error_code: crate::codes::NONE,
+            high_watermark: 0,
+            last_stable_offset: 0,
+            log_start_offset: 0,
+            ..Default::default()
+        }
+    }
+
     /// A partition the response budget has no room for gets the row an
     /// empty read produces, including the aborted-transaction list: Kafka
     /// reads nothing for it, so the aborted range it looks up ends at the
@@ -1209,11 +1239,12 @@ mod tests {
         const TOPIC_A: &str = "budget-cold-a";
         const TOPIC_B: &str = "budget-cold-b";
 
-        let object_dir = tempfile::tempdir().expect("object tempdir");
-        krabka_macros::broker_test_setup! {
-            bind(broker_handle, dir, broker);
-            boot [handler_fixture_support::start_with_local_remote_storage(&object_dir)];
-        };
+        let LocalRemoteReadSetup {
+            _object_dir,
+            broker_handle,
+            dir,
+            broker,
+        } = local_remote_read_setup().await;
 
         let topic_a = uuid::Uuid::from_u128(0xA0);
         let topic_b = uuid::Uuid::from_u128(0xB0);
@@ -1350,11 +1381,12 @@ mod tests {
     /// rustdoc describes as decode, authorization and encode.
     #[tokio::test]
     async fn cold_tier_fallback_charges_the_object_store_read_to_the_remote_phase() {
-        let object_dir = tempfile::tempdir().expect("object tempdir");
-        krabka_macros::broker_test_setup! {
-            bind(broker_handle, dir, broker);
-            boot [handler_fixture_support::start_with_local_remote_storage(&object_dir)];
-        };
+        let LocalRemoteReadSetup {
+            _object_dir,
+            broker_handle,
+            dir,
+            broker,
+        } = local_remote_read_setup().await;
 
         let topic_id = uuid::Uuid::from_u128(0xC01D);
         let mut flushed = BytesMut::new();
@@ -1597,14 +1629,8 @@ mod tests {
             assert!(
                 pending[0].out
                     == super::PartitionData {
-                        partition_index: 0,
-                        error_code: crate::codes::NONE,
-                        high_watermark: 0,
-                        last_stable_offset: 0,
-                        log_start_offset: 0,
                         aborted_transactions: want_aborted,
-                        records: None,
-                        ..Default::default()
+                        ..empty_partition_data()
                     },
                 "{name}"
             );
@@ -1645,18 +1671,13 @@ mod tests {
         assert!(
             pending[0].out
                 == super::PartitionData {
-                    partition_index: 0,
-                    error_code: crate::codes::NONE,
-                    high_watermark: 0,
-                    last_stable_offset: 0,
-                    log_start_offset: 0,
                     aborted_transactions: None,
                     diverging_epoch: krabka_protocol::owned::fetch_response::EpochEndOffset {
                         epoch: 1,
                         end_offset: 4,
                         ..Default::default()
                     },
-                    ..Default::default()
+                    ..empty_partition_data()
                 }
         );
         broker_handle.shutdown().await;

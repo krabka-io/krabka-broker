@@ -185,3 +185,9 @@ impl Fixture {
         coordinator
     }
 }
+
+pub(crate) async fn fixture_with_coordinator() -> (Fixture, BarrierCoordinator) {
+    let fixture = Fixture::new();
+    let coordinator = fixture.coordinator().await;
+    (fixture, coordinator)
+}

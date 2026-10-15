@@ -152,14 +152,30 @@ pub(crate) fn duplicate_config_resource_response(
     resource_type: i8,
     resource_name: &str,
 ) -> krabka_protocol::owned::alter_configs_response::AlterConfigsResourceResponse {
-    krabka_macros::tagged_wire!(
-        krabka_protocol::owned::alter_configs_response::AlterConfigsResourceResponse {
-            resource_type,
-            resource_name: resource_name.to_owned(),
-            error_code: codes::INVALID_REQUEST,
-            error_message: Some("Each resource must appear at most once.".into()),
-        }
+    config_resource_error_response(
+        resource_type,
+        resource_name,
+        codes::INVALID_REQUEST,
+        Some("Each resource must appear at most once.".into()),
     )
+}
+
+#[cfg(test)]
+pub(crate) fn config_resource_error_response<
+    Response: crate::handlers::response_encoding::ResourceErrorRow,
+>(
+    resource_type: i8,
+    resource_name: &str,
+    error_code: i16,
+    error_message: Option<String>,
+) -> Response {
+    let mut response = Response::for_resource(resource_type, resource_name.to_owned());
+    crate::handlers::response_encoding::ErrorRow::set_error(
+        &mut response,
+        error_code,
+        error_message,
+    );
+    response
 }
 
 pub(crate) async fn assert_dispatch_response<Request, Response, Handler, HandlerFuture>(

@@ -57,17 +57,21 @@ mod tests {
         image_with_rate(entity, "producer_byte_rate", rate)
     }
 
-    /// One bucket per quota entity (#748): two charges share it, so the
-    /// second one, which fits the rate on its own, is throttled by the first.
-    #[test]
-    fn producer_quota_keeps_one_bucket_per_entity() {
-        let img = img_with_quota(
+    fn user_and_client_quota() -> krabka_metadata::MetadataImage {
+        img_with_quota(
             vec![
                 QuotaEntityInput::user(Some("alice")),
                 QuotaEntityInput::client_id(Some("app")),
             ],
             128.0,
-        );
+        )
+    }
+
+    /// One bucket per quota entity (#748): two charges share it, so the
+    /// second one, which fits the rate on its own, is throttled by the first.
+    #[test]
+    fn producer_quota_keeps_one_bucket_per_entity() {
+        let img = user_and_client_quota();
         // A one-second window keeps the burst at the configured rate, so
         // these amounts are about the overage and not about the window.
         let buckets = QuotaBuckets::with_window(secs(1));
@@ -105,13 +109,7 @@ mod tests {
 
     #[test]
     fn producer_quota_uses_client_id_entity_precedence() {
-        let img = img_with_quota(
-            vec![
-                QuotaEntityInput::user(Some("alice")),
-                QuotaEntityInput::client_id(Some("app")),
-            ],
-            128.0,
-        );
+        let img = user_and_client_quota();
         let buckets = QuotaBuckets::new();
 
         let matching = consume_producer_quota(&img, &buckets, "alice", Some("app"), 4096);

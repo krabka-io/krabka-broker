@@ -23,9 +23,16 @@ use {
         },
     },
     assert2::{assert, check},
+    krabka_broker::BrokerHandle,
     std::sync::OnceLock,
     tokio::sync::{Mutex, MutexGuard},
 };
+
+async fn shutdown_three(h1: BrokerHandle, h2: BrokerHandle, h3: BrokerHandle) {
+    h1.shutdown().await;
+    h2.shutdown().await;
+    h3.shutdown().await;
+}
 
 // Each scenario retains its own static mutex while its broker cluster is alive.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -107,9 +114,7 @@ async fn preplacement_log_dir_preference_survives_until_reassignment_materialize
     }
     assert!(target_dir.join("preplaced-0").is_dir());
 
-    h1.shutdown().await;
-    h2.shutdown().await;
-    h3.shutdown().await;
+    shutdown_three(h1, h2, h3).await;
 }
 
 /// Test 1: send `AlterPartitionReassignments`, then inject an ISR that
@@ -196,9 +201,7 @@ async fn alter_then_complete_via_isr_catchup() {
         "replicas after completion should match target; pr={pr:?}"
     );
     // Clean up.
-    h1.shutdown().await;
-    h2.shutdown().await;
-    h3.shutdown().await;
+    shutdown_three(h1, h2, h3).await;
 }
 
 /// Test 2: after `AlterPartitionReassignments` starts a reassignment, the
@@ -249,9 +252,7 @@ async fn list_in_flight_returns_pending_rows() {
     );
 
     // Clean up.
-    h1.shutdown().await;
-    h2.shutdown().await;
-    h3.shutdown().await;
+    shutdown_three(h1, h2, h3).await;
 }
 
 /// Test 3: cancel an in-flight reassignment with `target=None`, that is null

@@ -235,7 +235,10 @@ mod tests {
             codes,
             network::client::InterBrokerClient,
             test_support::broker_registration,
-            txn::handlers::end_txn::test_support::{marker_entry, plaintext_client, tps},
+            txn::handlers::{
+                end_txn::test_support::{marker_entry, plaintext_client, tps},
+                write_txn_markers::test_support::{PartitionAnswer, answer},
+            },
         },
         assert2::assert,
         krabka_metadata::{
@@ -246,20 +249,6 @@ mod tests {
         },
         krabka_security::ListenerProtocol,
     };
-
-    /// The code a marker response answers for one partition.
-    #[derive(Clone, Copy)]
-    struct PartitionAnswer {
-        partition_index: i32,
-        error_code: i16,
-    }
-
-    fn answer(partition_index: i32, error_code: i16) -> PartitionAnswer {
-        PartitionAnswer {
-            partition_index,
-            error_code,
-        }
-    }
 
     fn marker_response(codes_by_partition: &[PartitionAnswer]) -> WriteTxnMarkersResponse {
         WriteTxnMarkersResponse {

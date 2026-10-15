@@ -117,15 +117,12 @@ pub(crate) async fn validate_commit(
 mod tests {
     use {
         super::*,
-        crate::coordinator::unified::{
-            actor::{
-                GroupKindTag,
-                test_support::{
-                    bidirectional_coordinator, join_native_consumer, make_coordinator, rpc,
-                    seeded_bidirectional_coordinator, spawn_and_downgrade,
-                },
+        crate::coordinator::unified::actor::{
+            GroupKindTag,
+            test_support::{
+                bidirectional_coordinator, join_native_consumer, make_coordinator, rpc,
+                seeded_bidirectional_coordinator, spawn_and_downgrade,
             },
-            classic_state::OffsetEntry,
         },
         assert2::assert,
         krabka_log::Offset,
@@ -139,19 +136,7 @@ mod tests {
         let handle = coord.get_or_create_classic("g");
 
         // UpdateCommitted then FetchOffsets round-trips on the kind-agnostic Group.
-        let rx = rpc::begin(&handle, |tx| GroupActorMessage::UpdateCommitted {
-            entries: vec![(("t".to_string(), 0), OffsetEntry {
-                offset: Offset(42),
-                leader_epoch: 1,
-                metadata: String::new(),
-                commit_timestamp_ms: 0,
-                expire_timestamp_ms: None,
-                topic_id: None,
-            })],
-            reply: tx,
-        })
-        .await;
-        rx.await.unwrap();
+        rpc::update_committed_offset(&handle, Offset(42), 1).await;
         let committed = rpc::fetch_offsets(&handle).await.committed;
         assert!(committed.get(&("t".to_string(), 0)).unwrap().offset == 42);
 

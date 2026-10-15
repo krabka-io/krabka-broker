@@ -411,10 +411,8 @@ pub fn decode_begin(buf: &[u8]) -> Option<PeerRequest> {
         leader_endpoints: req
             .leader_endpoints
             .iter()
-            .map(|endpoint| VoterEndpoint {
-                name: endpoint.name.clone(),
-                host: endpoint.host.clone(),
-                port: endpoint.port,
+            .map(|endpoint| {
+                crate::voter_wire::endpoint(&endpoint.name, &endpoint.host, endpoint.port)
             })
             .collect(),
     })

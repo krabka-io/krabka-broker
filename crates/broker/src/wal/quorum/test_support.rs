@@ -9,7 +9,7 @@ use {
     krabka_ids::{Offset, PartitionIndex},
     krabka_kraft_core::NodeId,
     krabka_log::{Log, LogConfig},
-    krabka_protocol::records::{Record, RecordBatch},
+    krabka_protocol::records::RecordBatch,
     std::{
         path::Path,
         sync::{Arc, Mutex},
@@ -69,17 +69,9 @@ pub(super) fn distributed_engine(
 }
 
 pub(super) fn batch(records: i32) -> RecordBatch {
-    let mut batch = RecordBatch {
-        last_offset_delta: records - 1,
-        ..RecordBatch::default()
-    };
-    for offset_delta in 0..records {
-        batch.records.push(Record {
-            offset_delta,
-            ..Record::default()
-        });
-    }
-    batch
+    crate::test_support::default_records_batch()
+        .count(records)
+        .call()
 }
 
 pub(super) async fn append_source(

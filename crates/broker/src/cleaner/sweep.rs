@@ -26,11 +26,8 @@
 
 use {
     crate::{
-        error::BrokerError,
-        freeze::resolve::{FreezeMutationResolution, resolve_freeze_mutation},
-        metrics::BrokerMetrics,
-        partition::Partition,
-        partition_registry::PartitionRegistry,
+        error::BrokerError, freeze::resolve::mutation_is_frozen, metrics::BrokerMetrics,
+        partition::Partition, partition_registry::PartitionRegistry,
     },
     krabka_log::LogError,
     krabka_metadata::MetadataImage,
@@ -134,12 +131,7 @@ mod tests;
 /// `image` is `None` for a sweep with no metadata authority to ask, which
 /// resolves no freeze.
 fn freeze_stops_compaction(image: Option<&MetadataImage>, topic: &str) -> bool {
-    image.is_some_and(|image| {
-        matches!(
-            resolve_freeze_mutation(image, topic, true, FreezeMutationKind::Compaction),
-            FreezeMutationResolution::Frozen(_)
-        )
-    })
+    mutation_is_frozen(image, topic, FreezeMutationKind::Compaction)
 }
 
 pub(crate) async fn tick_all(

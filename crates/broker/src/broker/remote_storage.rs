@@ -207,9 +207,8 @@ fn spawn_remote_reader_gauges(
         let mut tick = tokio::time::interval(poll_interval.to_std());
         let mut reported = RemoteReaderTotals::default();
         loop {
-            tokio::select! {
-                _ = tick.tick() => {}
-                () = shutdown.cancelled() => return,
+            if !super::tick_or_shutdown(&mut tick, &shutdown).await {
+                return;
             }
             let stats = reader.index_cache.stats();
             let current = RemoteReaderTotals {

@@ -80,6 +80,17 @@ pub(crate) fn registered_listener_endpoint<'a>(
         )
 }
 
+pub(crate) fn leader_listener_endpoint<'a>(
+    image: &'a krabka_metadata::MetadataImage,
+    leader: krabka_metadata::NodeId,
+    listener_name: &str,
+) -> Result<(&'a str, u16), String> {
+    let broker = image
+        .broker(leader)
+        .ok_or_else(|| format!("unknown leader broker {leader}"))?;
+    Ok(registered_listener_endpoint(broker, listener_name))
+}
+
 #[cfg(test)]
 mod tests {
     use {

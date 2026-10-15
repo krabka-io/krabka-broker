@@ -80,13 +80,10 @@ pub(crate) fn acl_denied(
     resource_name: &str,
     operation: AclOperation,
 ) -> bool {
-    authorizer.authorize(image, &AuthorizationRequest {
-        principal: ctx.principal,
-        host: ctx.peer,
-        resource_type,
-        resource_name,
-        operation,
-    }) == AuthorizationResult::Deny
+    authorizer.authorize(
+        image,
+        &authorization_request(ctx, resource_type, resource_name, operation),
+    ) == AuthorizationResult::Deny
 }
 
 pub(crate) fn acl_denied_quiet(
@@ -97,13 +94,25 @@ pub(crate) fn acl_denied_quiet(
     resource_name: &str,
     operation: AclOperation,
 ) -> bool {
-    authorizer.authorize_quiet(image, &AuthorizationRequest {
+    authorizer.authorize_quiet(
+        image,
+        &authorization_request(ctx, resource_type, resource_name, operation),
+    ) == AuthorizationResult::Deny
+}
+
+fn authorization_request<'a>(
+    ctx: &RequestContext<'a>,
+    resource_type: ResourceType,
+    resource_name: &'a str,
+    operation: AclOperation,
+) -> AuthorizationRequest<'a> {
+    AuthorizationRequest {
         principal: ctx.principal,
         host: ctx.peer,
         resource_type,
         resource_name,
         operation,
-    }) == AuthorizationResult::Deny
+    }
 }
 
 krabka_macros::named_acl_gates!(
@@ -241,6 +250,19 @@ pub(crate) fn subscribed_names_refusal(
 ) -> Option<i16> {
     subscribed_names_describe_denied(broker.config.authorizer.as_ref(), image, ctx, names)
         .then_some(codes::TOPIC_AUTHORIZATION_FAILED)
+}
+
+/// Build a whole-heartbeat refusal when any subscribed topic is not
+/// `Describe`-authorized. Call before coordinator routing so that routing
+/// errors cannot mask the topic authorization failure or reveal topic data.
+pub(crate) fn subscribed_names_response<Response>(
+    broker: &Broker,
+    image: &krabka_metadata::MetadataImage,
+    ctx: &RequestContext<'_>,
+    names: Option<&[String]>,
+    make_response: impl FnOnce(i16) -> Response,
+) -> Option<Response> {
+    subscribed_names_refusal(broker, image, ctx, names).map(make_response)
 }
 
 /// Kafka's `filterByAuthorized(DESCRIBE, TOPIC, requiredTopics)` as the

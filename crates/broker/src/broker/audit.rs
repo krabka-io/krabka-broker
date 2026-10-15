@@ -66,9 +66,8 @@ fn spawn_audit_metrics(
         let mut previous = (0, 0, 0);
         let mut tick = tokio::time::interval(poll_interval.to_std());
         loop {
-            tokio::select! {
-                _ = tick.tick() => {}
-                () = shutdown.cancelled() => return,
+            if !super::tick_or_shutdown(&mut tick, &shutdown).await {
+                return;
             }
             let current = (
                 stats.spooled(),

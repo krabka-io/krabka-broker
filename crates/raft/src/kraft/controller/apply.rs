@@ -7,6 +7,7 @@ use {
         Engine, PendingDowngradeSnapshot,
         offsets::{
             batch_base_in_apply_window, expected_hwm_after_advance, hwm_advanced_as_expected,
+            leader_alone_is_majority,
         },
         records::{decode_committed_value, is_kip835_noop, next_batch_offset},
     },
@@ -16,6 +17,12 @@ use {
 };
 
 impl Engine {
+    pub(super) fn advance_if_single_voter(&mut self) {
+        if leader_alone_is_majority(self.core.quorum_state().majority(), self.core.is_voter()) {
+            self.advance_and_apply(self.log.log_end_offset());
+        }
+    }
+
     /// Advance the HWM and apply the records newly committed by it to the
     /// [`MetadataImage`], then publish and resolve any satisfied waiters.
     #[tracing::instrument(

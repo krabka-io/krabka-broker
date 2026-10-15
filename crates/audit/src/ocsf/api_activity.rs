@@ -7,7 +7,7 @@
 use {
     super::{
         ProductInfo,
-        envelope::{metadata, status_id},
+        envelope::{metadata, status_id, user},
     },
     crate::{
         chain::to_hex,
@@ -40,18 +40,11 @@ pub(super) fn ocsf_admin_operation(
         "time": time_ms,
         "status_id": status_id(outcome),
         "api": { "operation": operation, "service": { "name": "kafka" } },
-        "actor": { "user": { "name": principal.name, "type": principal.auth_method } },
+        "actor": { "user": user(principal) },
         "src_endpoint": { "ip": source.ip, "port": source.port },
         "resources": res,
         "metadata": metadata(product),
     })
-}
-
-/// One principal in the `{ "name": …, "type": … }` shape the OCSF bodies use
-/// for `actor.user`. The privileged-action body needs it for the actor and for
-/// every counterparty, so the shape lives in one place.
-fn user(principal: &AuditPrincipal) -> serde_json::Value {
-    json!({ "name": principal.name, "type": principal.auth_method })
 }
 
 /// Borrowed view of the [`AuditEvent::PrivilegedAction`] fields.

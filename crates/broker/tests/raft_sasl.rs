@@ -126,13 +126,7 @@ fn sasl_broker_config(
         .map(|ControllerVoter { id, addr }| (*id, addr.to_string()))
         .collect();
     cfg.bootstrap_mode = mode;
-    cfg.listeners = vec![crate::support::listeners::listener(
-        "SASL_PLAINTEXT",
-        data_addr,
-        ListenerProtocol::SaslPlaintext,
-    )];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
-    cfg.controller_listener_protocol = ctrl;
+    crate::support::listeners::configure_sasl_plaintext(&mut cfg, data_addr, ctrl);
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
         .insert(plain_user.to_string(), plain_pass.to_string());
