@@ -73,7 +73,7 @@ fn selector_matches(rule: &config::MatchRule, attrs: &ClientAttributes) -> bool 
         SourcePort => attrs.source_port.to_string().into(),
     };
     // `JavaPattern::matches` is Kafka's full match. A search that runs past the
-    // backtrack limit, or one that JDK 17 throws on, counts as no match.
+    // backtrack limit counts as no match.
     rule.pattern.matches(target.as_ref()).unwrap_or(false)
 }
 
