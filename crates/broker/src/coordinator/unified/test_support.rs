@@ -457,6 +457,18 @@ impl FailedHeartbeatFixture {
     pub async fn check_no_batches(&self) {
         assert2::check!(self.log.batches().await.is_empty(), "{}", self.label);
     }
+
+    /// Checks that a heartbeat whose write failed answered the whole
+    /// response that `refused` builds from the expected error code, and that
+    /// the failed write published no batch.
+    pub async fn check_refused<R: PartialEq + std::fmt::Debug>(
+        &self,
+        response: &R,
+        refused: impl FnOnce(i16) -> R,
+    ) {
+        assert2::check!(*response == refused(self.expected.0), "{}", self.label);
+        self.check_no_batches().await;
+    }
 }
 
 impl HeartbeatWriteFailure {

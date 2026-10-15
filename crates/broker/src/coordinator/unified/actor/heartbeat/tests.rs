@@ -58,16 +58,12 @@ async fn a_failed_write_answers_its_code_and_writes_no_partial_batch() {
 
         let response = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;
 
-        check!(
-            response
-                == ConsumerGroupHeartbeatResponse {
-                    error_code: fixture.expected.0,
-                    ..Default::default()
-                },
-            "{}",
-            fixture.label
-        );
-        fixture.check_no_batches().await;
+        fixture
+            .check_refused(&response, |error_code| ConsumerGroupHeartbeatResponse {
+                error_code,
+                ..Default::default()
+            })
+            .await;
     }
 }
 

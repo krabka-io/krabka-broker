@@ -359,12 +359,11 @@ async fn a_failed_write_answers_its_code_and_writes_no_partial_batch() {
 
         let response = heartbeat(&handle, member_request("m1", 0)).await;
 
-        check!(
-            response == super::response::error_resp(fixture.expected.0, None),
-            "{}",
-            fixture.label
-        );
-        fixture.check_no_batches().await;
+        fixture
+            .check_refused(&response, |error_code| {
+                super::response::error_resp(error_code, None)
+            })
+            .await;
     }
 }
 

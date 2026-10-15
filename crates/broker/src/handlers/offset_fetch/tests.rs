@@ -984,6 +984,52 @@ async fn join_consumer_group(broker: &Broker, group: &str, member_id: &str) -> i
     joined.member_epoch
 }
 
+/// A v8+ `OffsetFetch` of partition 0 of `orders` for `group_id`, naming the
+/// v9 member fields.
+fn member_offset_fetch(
+    group_id: &str,
+    member_id: Option<&str>,
+    member_epoch: i32,
+) -> OffsetFetchRequest {
+    OffsetFetchRequest {
+        groups: vec![OffsetFetchRequestGroup {
+            group_id: group_id.into(),
+            member_id: member_id.map(str::to_string),
+            member_epoch,
+            topics: Some(vec![OffsetFetchRequestTopics {
+                name: "orders".into(),
+                partition_indexes: vec![0],
+                ..Default::default()
+            }]),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+/// The `orders` topic row of an `OffsetFetch` group, holding `partition`.
+fn offsets_row(partition: OffsetFetchResponsePartitions) -> Vec<OffsetFetchResponseTopics> {
+    vec![OffsetFetchResponseTopics {
+        name: "orders".into(),
+        partitions: vec![partition],
+        ..Default::default()
+    }]
+}
+
+/// The response group row of `group_id`.
+fn group_row(
+    group_id: &str,
+    topics: Vec<OffsetFetchResponseTopics>,
+    error_code: i16,
+) -> OffsetFetchResponseGroup {
+    OffsetFetchResponseGroup {
+        group_id: group_id.into(),
+        topics,
+        error_code,
+        ..Default::default()
+    }
+}
+
 /// Kafka's `OffsetMetadataManager.fetchOffsets` reads offsets without creating
 /// a group, and `ConsumerGroup.validateOffsetFetch` checks the v9 member id
 /// and epoch of a consumer group. A refused fetch is the group row with the
@@ -1007,19 +1053,6 @@ async fn offset_fetch_creates_no_group_and_checks_the_member_epoch() {
         NoEpoch,
     }
 
-    let offsets_row = |partition: OffsetFetchResponsePartitions| {
-        vec![OffsetFetchResponseTopics {
-            name: "orders".into(),
-            partitions: vec![partition],
-            ..Default::default()
-        }]
-    };
-    let group_row = |group_id: &str, topics, error_code| OffsetFetchResponseGroup {
-        group_id: group_id.into(),
-        topics,
-        error_code,
-        ..Default::default()
-    };
     let rows = [
         Row {
             name: "unknown group at v8",
@@ -1094,24 +1127,11 @@ async fn offset_fetch_creates_no_group_and_checks_the_member_epoch() {
         let epoch = join_consumer_group(&broker, "grp", "m1").await;
         seed_committed_offset().broker(&broker).call().await;
 
-        let request = OffsetFetchRequest {
-            groups: vec![OffsetFetchRequestGroup {
-                group_id: row.group_id.into(),
-                member_id: row.member_id.map(str::to_string),
-                member_epoch: match row.member_epoch {
-                    EpochRef::Current => epoch,
-                    EpochRef::Older => epoch - 1,
-                    EpochRef::NoEpoch => -1,
-                },
-                topics: Some(vec![OffsetFetchRequestTopics {
-                    name: "orders".into(),
-                    partition_indexes: vec![0],
-                    ..Default::default()
-                }]),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
+        let request = member_offset_fetch(row.group_id, row.member_id, match row.member_epoch {
+            EpochRef::Current => epoch,
+            EpochRef::Older => epoch - 1,
+            EpochRef::NoEpoch => -1,
+        });
         let response = fetch(&broker, row.version, &request).await;
 
         let expected = OffsetFetchResponse {
@@ -1165,19 +1185,6 @@ async fn offset_fetch_checks_the_member_epoch_of_a_streams_group() {
         expected: OffsetFetchResponseGroup,
     }
 
-    let group_row = |group_id: &str, topics, error_code| OffsetFetchResponseGroup {
-        group_id: group_id.into(),
-        topics,
-        error_code,
-        ..Default::default()
-    };
-    let offsets_row = |partition: OffsetFetchResponsePartitions| {
-        vec![OffsetFetchResponseTopics {
-            name: "orders".into(),
-            partitions: vec![partition],
-            ..Default::default()
-        }]
-    };
     let rows = [
         Row {
             name: "the member at its epoch",
@@ -1224,20 +1231,7 @@ async fn offset_fetch_checks_the_member_epoch_of_a_streams_group() {
     seed_streams_member(&broker, "grp", 5).await;
     seed_streams_member(&broker, "bare", 5).await;
     for row in rows {
-        let request = OffsetFetchRequest {
-            groups: vec![OffsetFetchRequestGroup {
-                group_id: row.group_id.into(),
-                member_id: row.member_id.map(str::to_string),
-                member_epoch: row.member_epoch,
-                topics: Some(vec![OffsetFetchRequestTopics {
-                    name: "orders".into(),
-                    partition_indexes: vec![0],
-                    ..Default::default()
-                }]),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
+        let request = member_offset_fetch(row.group_id, row.member_id, row.member_epoch);
         let response = fetch(&broker, 9, &request).await;
 
         let expected = OffsetFetchResponse {
