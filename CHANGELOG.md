@@ -25,6 +25,18 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- `max.connections.per.ip.overrides`, `max.connection.creation.rate` and the
+  per-listener `listener.name.<listener>.max.connections` and
+  `listener.name.<listener>.max.connection.creation.rate` now take effect, on
+  the broker listeners and the controller listener, and a change applies to
+  the next connection without a restart. Before, the broker stored and
+  reported them and enforced none. As in Kafka, the inter-broker listener of a
+  broker with several listeners is exempt from the broker-wide cap and rate,
+  an override host is resolved when the value changes, and over a creation
+  rate the acceptor waits the throttle out, at most
+  `quota.window.size.seconds`, before it accepts. A dynamic `max.connections`
+  of 0 is no longer applied, because Kafka refuses a listener cap below 1 and
+  every listener inherits the broker-wide value (#1421).
 - A long-polling `Fetch` is no longer charged its wait to
   `request_percentage`. Kafka parks the wait in the fetch purgatory, off the
   request-handler thread, and charges only the handler's own time. Before, a

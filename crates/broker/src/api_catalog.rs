@@ -374,7 +374,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jvm_acceptance_cli/configs.rs",
             "crates/broker/tests/dynamic_broker_config.rs",
         ],
-        note: "A broker resource is checked against Kafka 4.3.1's whole `KafkaConfig` key roster: a key that is not dynamic is refused, and every dynamic key is parsed and range-checked. A running broker applies these dynamic keys without a restart, per broker and then cluster-wide: the topic-default synonyms (`log.retention.ms`, `message.max.bytes`, `compression.type` and the rest of `DynamicLogConfig`), `min.insync.replicas`, `unclean.leader.election.enable` (cluster-wide only), the three replication throttle rates, `transaction.partition.verification.enable`, `remote.list.offsets.request.timeout.ms`, `cordoned.log.dirs` (per broker only, as Kafka allows it), and the broker-wide `max.connections` and `max.connections.per.ip`, which apply to the next connection accepted on a broker listener and on the controller listener. A `max.connections.per.ip` of 0 is not applied, as Kafka allows 0 only beside `max.connections.per.ip.overrides`. A connection over `max.connections` is closed, where Kafka's acceptor waits for a slot. Other dynamic keys are stored and reported and do not change how the broker runs: thread pool sizes, the log cleaner's own keys, `max.connections.per.ip.overrides`, `max.connection.creation.rate`, every `listener.name.<listener>.` override, the SSL keystore and truststore keys (TLS material is reloaded from the `tls_config` files instead), the SASL and Kerberos keys, `principal.builder.class`, `listeners`, `listener.security.protocol.map`, the remote log manager's pools and rates, `producer.id.expiration.ms`, the group assignment intervals, `metric.reporters` and `config.providers`. A `CLASS` value is accepted without loading the class.",
+        note: "A broker resource is checked against Kafka 4.3.1's whole `KafkaConfig` key roster: a key that is not dynamic is refused, and every dynamic key is parsed and range-checked. A running broker applies these dynamic keys without a restart, per broker and then cluster-wide: the topic-default synonyms (`log.retention.ms`, `message.max.bytes`, `compression.type` and the rest of `DynamicLogConfig`), `min.insync.replicas`, `unclean.leader.election.enable` (cluster-wide only), the three replication throttle rates, `transaction.partition.verification.enable`, `remote.list.offsets.request.timeout.ms`, `cordoned.log.dirs` (per broker only, as Kafka allows it), and the connection quotas of Kafka's `ConnectionQuotas`, which apply to the next connection accepted on a broker listener and on the controller listener: `max.connections` and `listener.name.<listener>.max.connections`, `max.connections.per.ip` and `max.connections.per.ip.overrides`, and `max.connection.creation.rate` and `listener.name.<listener>.max.connection.creation.rate`. As in Kafka, a listener's value falls back to the broker-wide one, the inter-broker listener of a broker with several listeners is exempt from the broker-wide cap and rate, an override host is resolved once when the value changes, a `max.connections.per.ip` of 0 applies only beside overrides, and a cap or rate below 1 is not applied. A connection over a cap is closed, where Kafka's acceptor waits for a slot under the broker-wide and listener caps. Other dynamic keys are stored and reported and do not change how the broker runs: thread pool sizes, the log cleaner's own keys, every other `listener.name.<listener>.` override, the SSL keystore and truststore keys (TLS material is reloaded from the `tls_config` files instead), the SASL and Kerberos keys, `principal.builder.class`, `listeners`, `listener.security.protocol.map`, the remote log manager's pools and rates, `producer.id.expiration.ms`, the group assignment intervals, `metric.reporters` and `config.providers`. A `CLASS` value is accepted without loading the class.",
     },
     KipAnnotation {
         key: "KIP-227",
@@ -770,11 +770,14 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
     },
     KipAnnotation {
         key: "KIP-612",
-        claim: "Per-IP connection creation rate quotas",
+        claim: "Connection creation rate quotas per IP, per listener and per broker",
         status: KipStatus::Implemented,
         module: "crates/broker/src/broker/accept.rs",
-        tests: &["crates/broker/tests/ip_quotas.rs"],
-        note: "",
+        tests: &[
+            "crates/broker/tests/ip_quotas.rs",
+            "crates/broker/tests/dynamic_broker_config.rs",
+        ],
+        note: "A connection from an `ip` entity over its `connection_creation_rate` client quota is held for the throttle time and closed, as Kafka's acceptor closes it with `ConnectionThrottledException`. Over the broker-wide `max.connection.creation.rate` or a listener's `listener.name.<listener>.max.connection.creation.rate`, the acceptor waits the throttle out, at most `quota.window.size.seconds`, and then accepts the connection. The node and listener rates are a generic cell rate algorithm with a burst of one second's worth of connections: it spaces connections at the configured rate as Kafka's `Rate` sensor does, but does not reproduce the sensor's sample windows, so the first burst Kafka admits is larger.",
     },
     KipAnnotation {
         key: "KIP-630",

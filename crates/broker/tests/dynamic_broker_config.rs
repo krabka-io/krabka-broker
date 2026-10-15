@@ -647,3 +647,137 @@ async fn zero_per_ip_cap_without_overrides_is_stored_but_not_applied() {
     );
     drop(held);
 }
+
+/// The loopback address the override tests treat as a second client.
+const OTHER_CLIENT: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
+
+/// `max.connections.per.ip.overrides` gives 127.0.0.1 its own cap beside a
+/// default of 0, which Kafka allows only with overrides: 127.0.0.1 gets two
+/// connections and 127.0.0.2 none. Deleting both restores the static caps.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn per_ip_overrides_apply_and_lift_without_restart() {
+    let (_handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
+    let set = alter_broker()
+        .addr(addr)
+        .resource_name(String::new())
+        .configs(vec![
+            ("max.connections.per.ip", ConfigOperation::Set, Some("0")),
+            (
+                "max.connections.per.ip.overrides",
+                ConfigOperation::Set,
+                Some("127.0.0.1:2"),
+            ),
+        ])
+        .call()
+        .await;
+    assert!(set == accepted(String::new()));
+    assert!(
+        eventually_served_from(addr, Some(OTHER_CLIENT), false).await,
+        "127.0.0.2 has no override, so the default of 0 must refuse it"
+    );
+    let held = (hold_one(addr).await, hold_one(addr).await);
+    assert!(
+        eventually_served(addr, false).await,
+        "the override of 2 must refuse a third connection from 127.0.0.1"
+    );
+    drop(held);
+
+    let deleted = alter_broker()
+        .addr(addr)
+        .resource_name(String::new())
+        .configs(vec![
+            ("max.connections.per.ip", ConfigOperation::Delete, None),
+            (
+                "max.connections.per.ip.overrides",
+                ConfigOperation::Delete,
+                None,
+            ),
+        ])
+        .call()
+        .await;
+    assert!(deleted == accepted(String::new()));
+    let held = (hold_one(addr).await, hold_one(addr).await);
+    assert!(eventually_served(addr, true).await);
+    assert!(eventually_served_from(addr, Some(OTHER_CLIENT), true).await);
+    drop(held);
+}
+
+/// `listener.name.plaintext.max.connections`, which Kafka allows on the
+/// cluster default, caps the listener on its own, below an unlimited
+/// broker-wide `max.connections`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn listener_cap_applies_and_lifts_without_restart() {
+    let (_handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
+    let key = "listener.name.plaintext.max.connections";
+    let set = alter_broker()
+        .addr(addr)
+        .resource_name(String::new())
+        .configs(vec![(key, ConfigOperation::Set, Some("2"))])
+        .call()
+        .await;
+    assert!(set == accepted(String::new()));
+    let held = (hold_one(addr).await, hold_one(addr).await);
+    assert!(
+        eventually_served(addr, false).await,
+        "{key}=2 must refuse a third connection while two are held"
+    );
+    drop(held);
+
+    let deleted = alter_broker()
+        .addr(addr)
+        .resource_name(String::new())
+        .configs(vec![(key, ConfigOperation::Delete, None)])
+        .call()
+        .await;
+    assert!(deleted == accepted(String::new()));
+    let held = (hold_one(addr).await, hold_one(addr).await);
+    assert!(
+        eventually_served(addr, true).await,
+        "deleting {key} must lift the cap"
+    );
+    drop(held);
+}
+
+/// How long three connections, opened one after another, take to be served.
+async fn three_connections(addr: SocketAddr) -> Duration {
+    let start = Instant::now();
+    for _ in 0..3 {
+        drop(hold_one(addr).await);
+    }
+    start.elapsed()
+}
+
+/// A creation rate of 1 per second, broker-wide or for the listener, holds
+/// the acceptor between connections: three connections take at least a
+/// second and a half where they took milliseconds. The bound is a lower one,
+/// which a slow runner only makes easier to meet.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn creation_rate_holds_the_acceptor_without_restart() {
+    let (_handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
+    for key in [
+        "max.connection.creation.rate",
+        "listener.name.plaintext.max.connection.creation.rate",
+    ] {
+        let set = alter_broker()
+            .addr(addr)
+            .resource_name(String::new())
+            .configs(vec![(key, ConfigOperation::Set, Some("1"))])
+            .call()
+            .await;
+        assert!(set == accepted(String::new()));
+        let deadline = Instant::now() + PROPAGATION;
+        let mut throttled = false;
+        while !throttled && Instant::now() < deadline {
+            throttled = three_connections(addr).await >= Duration::from_millis(1500);
+        }
+        assert!(throttled, "{key}=1 must space connections a second apart");
+
+        let deleted = alter_broker()
+            .addr(addr)
+            .resource_name(String::new())
+            .configs(vec![(key, ConfigOperation::Delete, None)])
+            .call()
+            .await;
+        assert!(deleted == accepted(String::new()));
+    }
+}

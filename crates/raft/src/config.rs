@@ -123,6 +123,10 @@ pub struct ListenerLimits {
     /// `usize::MAX` for no ceiling.
     #[default(usize::MAX)]
     pub max_connections_per_ip: usize,
+    /// `quota.window.size.seconds`: the longest the acceptor waits out a
+    /// `max.connection.creation.rate` throttle.
+    #[default(Duration::from_secs(1))]
+    pub max_connection_throttle: Duration,
 }
 
 // Quantities render in the operator form (`1s`, `20MiB`) rather than `uom`'s

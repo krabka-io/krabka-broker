@@ -14,7 +14,7 @@
 
 use {
     krabka_units::prelude::ByteSizeExt as _,
-    std::{net::SocketAddr, sync::Arc},
+    std::{net::SocketAddr, sync::Arc, time::Instant},
     tokio::{
         io::{AsyncRead, AsyncWrite},
         net::TcpListener,
@@ -60,9 +60,9 @@ use {
         },
     },
     crate::{
-        ClusterGrants, ConnectionLimiter, ControllerAdminRouter, ControllerApiVersions,
-        ListenerLimits, RaftHandshakeError, RaftListenerHandshake, RaftShardRouter,
-        UnstableApiVersions, error::RaftError, kraft::KraftController,
+        AcceptingListener, ClusterGrants, ConnectionLimiter, ControllerAdminRouter,
+        ControllerApiVersions, ListenerLimits, RaftHandshakeError, RaftListenerHandshake,
+        RaftShardRouter, UnstableApiVersions, error::RaftError, kraft::KraftController,
     },
 };
 
@@ -139,6 +139,13 @@ struct ConnectionContext {
     limits: ListenerLimits,
 }
 
+/// The controller listener, by Kafka's default `controller.listener.names`.
+/// It is a node's only controller listener, so no listener is protected.
+const CONTROLLER_LISTENER: AcceptingListener<'static> = AcceptingListener {
+    name: CONTROLLER_LISTENER_NAME,
+    protected: false,
+};
+
 pub(crate) async fn run(
     listener: TcpListener,
     engine: KraftController,
@@ -156,23 +163,39 @@ pub(crate) async fn run(
     // `ConnectionQuotas` counts this listener's connections apart from any
     // broker listener's.
     let connections = ConnectionLimiter::new(limits.max_connections, limits.max_connections_per_ip);
-    loop {
+    'accept: loop {
         tokio::select! {
             () = shutdown.cancelled() => break,
             accept = listener.accept() => {
                 match accept {
                     Ok((stream, peer)) => {
-                        // `max.connections` and `max.connections.per.ip`: a
-                        // connection over either ceiling is closed at once.
-                        // The guard moves into the task, so the slot is
-                        // released however the connection ends.
-                        // Resolved per accept, so a dynamic cap applies
-                        // to this listener as Kafka's controller
-                        // `SocketServer` reconfigures it.
-                        let caps = connections
-                            .limits()
-                            .resolve(&engine.current_image(), engine.node_id());
-                        let connection_slot = match connections.try_acquire_within(peer.ip(), caps) {
+                        // The quotas are resolved per accept, so a dynamic
+                        // change applies to this listener as Kafka's
+                        // controller `SocketServer` reconfigures it. Over a
+                        // creation rate the acceptor waits, then accepts.
+                        let quotas = connections
+                            .quotas(&engine.current_image(), engine.node_id(), CONTROLLER_LISTENER.name)
+                            .await;
+                        let delay = connections.creation_delay(
+                            CONTROLLER_LISTENER,
+                            &quotas,
+                            Instant::now(),
+                            limits.max_connection_throttle,
+                        );
+                        if !delay.is_zero() {
+                            tokio::select! {
+                                () = tokio::time::sleep(delay) => {}
+                                () = shutdown.cancelled() => break 'accept,
+                            }
+                        }
+                        // A connection over a cap is closed at once. The
+                        // guard moves into the task, so the slot is released
+                        // however the connection ends.
+                        let connection_slot = match connections.try_acquire_within(
+                            peer.ip(),
+                            CONTROLLER_LISTENER,
+                            &quotas,
+                        ) {
                             Ok(slot) => slot,
                             Err(limit) => {
                                 tracing::debug!(
