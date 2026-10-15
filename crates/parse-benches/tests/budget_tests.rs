@@ -8,8 +8,9 @@ use {
         contract::{Budget, BudgetError, Contract, Metric, Mode, contract_digest},
         record::{
             Host, Measurement, PerformanceRecord, ProcessSample, Side, Subject, Trial,
-            TrialOutcome, assemble, parse_snapshot, resource_delta,
+            TrialOutcome, assemble, parse_env, parse_host, parse_snapshot, resource_delta,
         },
+        render::render_markdown,
         run_command,
     },
     std::{collections::BTreeMap, fmt::Write as _, fs, path::Path},
@@ -436,6 +437,11 @@ fn a_structurally_invalid_record_is_an_error(extra: Trial) {
     negative_budget = { "\"max_spread_percent\": 10.0", "\"max_spread_percent\": -1.0" },
     min_isr_above_rf = { "\"min_insync_replicas\": 2", "\"min_insync_replicas\": 4" },
     missing_mode = { "\"pinned_kafka\": {\"gate_performance\": false}", "\"other\": {}" },
+    future_format = { "\"format_version\": 1", "\"format_version\": 2" },
+    rf_above_brokers = { "\"brokers\": 3", "\"brokers\": 2" },
+    zero_partitions = { "\"partitions\": 12", "\"partitions\": 0" },
+    nothing_budgeted = { "\"budgeted\": [\"records_per_second\", \"latency_ms_p99\"]", "\"budgeted\": []" },
+    unknown_field = { "\"rounds\": 5", "\"rounds\": 5, \"extra\": true" },
 )]
 fn an_invalid_contract_is_refused(from: &str, to: &str) {
     let edited = CONTRACT.replace(from, to);
@@ -720,4 +726,123 @@ fn check_contract_prints_the_digest_the_harness_records() {
     let (valid, message) = run_command(&Command::CheckContract { contract: path }).unwrap();
     assert2::assert!(valid);
     assert2::assert!(message.ends_with(&contract_digest(CHECKED_IN_CONTRACT.as_bytes())));
+}
+
+#[test]
+fn a_duplicate_cell_is_refused() {
+    let mut contract = contract();
+    contract.cells.push(contract.cells[0].clone());
+    assert2::assert!(matches!(
+        contract.validate(),
+        Err(BudgetError::InvalidContract(_))
+    ));
+}
+
+const HOST: &str = "cpu_model=Test CPU\nlogical_cpus=16\nmemory_bytes=1\n\
+                    disk_available_bytes=1\nkernel=6.0.0\nclock_ticks_per_second=100\n";
+
+#[yare::parameterized(
+    missing_key = { "logical_cpus=16\n", "" },
+    not_a_number = { "logical_cpus=16", "logical_cpus=many" },
+    zero_clock = { "clock_ticks_per_second=100", "clock_ticks_per_second=0" },
+    no_equals = { "kernel=6.0.0", "kernel" },
+    repeated_key = { "kernel=6.0.0", "kernel=6.0.0\nkernel=6.1.0" },
+)]
+fn a_malformed_host_file_is_an_error(from: &str, to: &str) {
+    let edited = HOST.replace(from, to);
+    assert2::assert!(edited != HOST);
+    assert2::assert!(matches!(
+        parse_host(&edited),
+        Err(BudgetError::InvalidArtifact { .. })
+    ));
+}
+
+#[test]
+fn parse_env_skips_comments_and_blank_lines() {
+    let parsed = parse_env(
+        "provenance.env",
+        "# written by qualify.sh\n\nmode = before_after\n",
+    )
+    .unwrap();
+    assert2::assert!(parsed == BTreeMap::from([("mode".to_string(), "before_after".to_string())]));
+}
+
+#[test]
+fn the_report_names_every_rejection() {
+    let mut trials = rounds(STEADY, STEADY.map(|rate| rate - 20_000.0));
+    trials.extend(
+        rounds(STEADY, STEADY)
+            .into_iter()
+            .map(|trial| Trial {
+                cell: "d".to_string(),
+                order: trial.order + 100,
+                ..trial
+            })
+            .filter(|trial| !(trial.round == 2 && trial.side == Side::Reference)),
+    );
+    trials.push(
+        trial()
+            .cell("e")
+            .round(1)
+            .side(Side::Candidate)
+            .order(200)
+            .failure("broker died")
+            .call(),
+    );
+    let mut contract = contract();
+    for id in ["d", "e"] {
+        let mut cell = contract.cells[0].clone();
+        cell.id = id.to_string();
+        contract.cells.push(cell);
+    }
+    // The verdict judges the edited contract, so give the record its digest.
+    let bytes = serde_json::to_vec(&contract).unwrap();
+    let mut record = record().trials(trials).call();
+    record.contract_sha256 = contract_digest(&bytes);
+    let verdict = evaluate(&contract, &bytes, &record).unwrap();
+    let markdown = render_markdown(&contract, &record, &verdict);
+    for line in [
+        "**Verdict: reject.**",
+        "- `c` records/s is +20.0% worse; the budget allows +5.0%",
+        "- missing trial: `d` round 2 (reference)",
+        "- correctness failure in `e` round 1 (candidate): broker died",
+        "- missing trial: `e` round 1 (reference)",
+        "| `c` | records/s | 100000 | 80000 | +20.0% | 0.5% / 0.6% | +5.0% | **material regression** |",
+        "| `c` | p50 ms | 1.000 | 1.000 | +0.0% | 0.0% / 0.0% | — | recorded |",
+        "| `d` | all | — | — | — | — | — | not evaluated |",
+        "| 200 | `e` | 1 | candidate | — | — | — | — | — | — | failed: broker died |",
+    ] {
+        assert2::assert!(markdown.contains(line), "missing {line:?}");
+    }
+}
+
+#[yare::parameterized(
+    regression_against_kafka = { Mode::PinnedKafka, rounds(STEADY, STEADY.map(|rate| rate - 20_000.0)), "material difference (not gating)" },
+    excess_variance = { Mode::BeforeAfter, rounds([100_000.0, 115_000.0, 85_000.0, 115_000.0, 85_000.0], STEADY), "spread is +15.0%; the variance budget is +10.0%" },
+    improvement = { Mode::BeforeAfter, rounds(STEADY, STEADY.map(|rate| rate + 20_000.0)), "| improved |" },
+    noisy = {
+        Mode::BeforeAfter,
+        rounds([100_000.0, 103_000.0, 97_000.0, 103_000.0, 97_000.0], [92_000.0, 95_000.0, 89_000.0, 95_000.0, 89_000.0]),
+        "| noisy, not material |"
+    },
+    against_kafka = { Mode::PinnedKafka, rounds(STEADY, STEADY), "the pinned Apache Kafka image" },
+)]
+fn the_report_says_what_each_status_means(mode: Mode, trials: Vec<Trial>, expected: &str) {
+    let record = record().trials(trials).mode(mode).call();
+    let markdown = render_markdown(&contract(), &record, &verdict(&record));
+    assert2::assert!(
+        markdown.contains(expected),
+        "missing {expected:?} in {markdown}"
+    );
+}
+
+#[test]
+fn a_record_from_a_future_format_is_refused() {
+    let mut json = serde_json::to_value(record().trials(vec![]).call()).unwrap();
+    json["format_version"] = 2.into();
+    let bytes = serde_json::to_vec(&json).unwrap();
+    assert2::assert!(matches!(
+        PerformanceRecord::from_json(&bytes),
+        Err(BudgetError::FormatVersion { found: 2, .. })
+    ));
 }
