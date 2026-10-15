@@ -62,6 +62,31 @@ impl TokenBucket {
             .map_or(requested, |micros| micros / MICROS_PER_TOKEN)
     }
 
+    /// Whether the bucket has nothing left to grant: its balance, refilled up
+    /// to now, is spent or in debt. A rate-0 bucket has no limit and is never
+    /// exceeded.
+    ///
+    /// This is Kafka's `ReplicationQuotaManager.isQuotaExceeded`, which a
+    /// replication throttle asks before it reads rather than after. While it
+    /// answers `false` the read goes out whole, and the caller then charges
+    /// its size with [`Self::record_bounded`], past the balance if it must.
+    /// The overshoot is debt, and the debt makes the next ask answer `true`
+    /// until the refill has repaid it. So the long-term rate holds, and a
+    /// batch larger than the whole burst still moves.
+    ///
+    /// # Panics
+    /// Panics if the injected clock reads more than `u64::MAX` nanoseconds
+    /// since its origin, about 584 years.
+    #[must_use]
+    pub fn quota_exceeded(&self) -> bool {
+        if self.fast_path_rate() == 0 {
+            return false;
+        }
+        let state = self.lock_state();
+        let now = self.now_nanos();
+        state.refilled(now).available == 0
+    }
+
     /// Charges `tokens` whole tokens whatever the bucket holds, and returns
     /// the debt the charge leaves, in micro-tokens, [`MICROS_PER_TOKEN`] to a
     /// token. The debt is `0` while the charge fits the balance.
@@ -313,6 +338,34 @@ mod tests {
     struct ManualBucket {
         bucket: Arc<TokenBucket>,
         clock: Arc<ManualMonotonicClock>,
+    }
+
+    /// Kafka's `isQuotaExceeded`: a bucket with any balance is within its
+    /// quota, however small the balance and however large the read it is
+    /// about to let through. A spent balance or debt is over the quota until
+    /// the refill repays it, and a bucket with no rate has no quota.
+    #[yare::parameterized(
+        full = { 1_000, 0, 0, false },
+        partly_drawn = { 1_000, 999, 0, false },
+        spent = { 1_000, 1_000, 0, true },
+        spent_then_one_millisecond = { 1_000, 1_000, 1, false },
+        in_debt = { 1_000, 3_000, 0, true },
+        in_debt_until_repaid = { 1_000, 3_000, 2_000, true },
+        repaid = { 1_000, 3_000, 2_001, false },
+        unlimited = { 0, 3_000, 0, false },
+    )]
+    fn quota_exceeded_reports_a_spent_or_indebted_balance(
+        rate: u32,
+        recorded: u64,
+        later_ms: u64,
+        exceeded: bool,
+    ) {
+        let ManualBucket { bucket, clock } = manual_bucket();
+        bucket.set_byte_rate(bytes_per_sec(rate));
+        bucket.record(recorded);
+        advance_clock(&clock, Duration::from_millis(later_ms));
+
+        check!(bucket.quota_exceeded() == exceeded);
     }
 
     fn bucket_state(

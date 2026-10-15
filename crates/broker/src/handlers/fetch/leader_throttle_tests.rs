@@ -29,8 +29,7 @@ use {
     assert2::assert,
     bytes::Bytes,
     krabka_metadata::{
-        BrokerConfigRecord, MetadataRecord, NodeId, PartitionRecord, TopicConfigRecord,
-        TopicRecord,
+        BrokerConfigRecord, MetadataRecord, NodeId, PartitionRecord, TopicConfigRecord, TopicRecord,
     },
     krabka_protocol::{
         owned::{

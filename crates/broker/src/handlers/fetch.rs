@@ -269,7 +269,7 @@ pub(crate) async fn handle(
     withhold_current_leader_before_kip_951(version, &mut responses);
 
     if is_follower_fetch {
-        throttle_follower_responses(broker, &image, effective_replica_id, &mut responses);
+        throttle_follower_responses(broker, &image, &responses);
     }
 
     let metric_rows = charge_fetch_cpu(broker, &responses, &cpu_micros_by_idx);

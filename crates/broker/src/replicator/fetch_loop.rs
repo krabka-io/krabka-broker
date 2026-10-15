@@ -14,7 +14,7 @@ use {
         Config, FetcherConfig, FollowedKey, FollowedSnapshot,
         connection::{connect_with_backoff, sleep_or_cancel},
         ensure_local_partition,
-        follower_throttle::{FetchThrottleDecision, follower_partition_fetch_cap},
+        follower_throttle::{FetchThrottleDecision, follower_fetch_decision},
         raw_fetch::RawFetchRequest,
         replication_target_changed,
         response::{FollowedIndex, KeyedAction, RoundEntry, RowAction, apply_response_indexed},
@@ -26,7 +26,7 @@ use {
         fetch_response::FetchResponse,
     },
     krabka_units::{
-        ByteSize, Time,
+        Time,
         convert::{ByteSizeExt, TimeExt},
     },
     std::{collections::BTreeMap, sync::Arc},
@@ -301,19 +301,16 @@ fn plan_changed(
             continue;
         }
         wanted_a_fetch += 1;
-        let partition_max_cap = match follower_partition_fetch_cap(cfg) {
-            FetchThrottleDecision::Fetch(cap) => cap,
-            FetchThrottleDecision::Sleep => {
-                tracing::debug!(
-                    topic = %cfg.topic,
-                    partition = cfg.partition.get(),
-                    "follower throttle: skip fetch this round (bucket exhausted)"
-                );
-                throttled_out += 1;
-                continue;
-            }
-        };
-        let Some(row) = partition_row(cfg, partition_max_cap) else {
+        if follower_fetch_decision(cfg) == FetchThrottleDecision::Sleep {
+            tracing::debug!(
+                topic = %cfg.topic,
+                partition = cfg.partition.get(),
+                "follower throttle: skip fetch this round (quota exceeded)"
+            );
+            throttled_out += 1;
+            continue;
+        }
+        let Some(row) = partition_row(cfg) else {
             continue;
         };
         round.wanted.insert(session_key(cfg), row.request);
@@ -348,9 +345,10 @@ struct PartitionRow {
 /// of the follower's last appended record, so the leader can report divergence
 /// in-band.
 ///
-/// `partition_max_cap` is the KIP-73 follower-throttle budget. An unthrottled
-/// partition gets the configured fetch maximum.
-fn partition_row(cfg: &Config, partition_max_cap: ByteSize) -> Option<PartitionRow> {
+/// Every row asks for the configured fetch maximum, Kafka's
+/// `replica.fetch.max.bytes`. The KIP-73 follower throttle decides only
+/// whether a partition joins the round.
+fn partition_row(cfg: &Config) -> Option<PartitionRow> {
     let entry = cfg.partitions.get(&cfg.topic, cfg.partition)?;
     let fetch_offset = entry.log_end_offset();
     let leader_epoch = entry
@@ -373,7 +371,7 @@ fn partition_row(cfg: &Config, partition_max_cap: ByteSize) -> Option<PartitionR
             // The leader's `DeleteRecords` waits until every live follower
             // reports a log start at or above the trim point.
             log_start_offset: entry.log_start_offset().0,
-            partition_max_bytes: partition_max_cap.bytes_i32(),
+            partition_max_bytes: cfg.connection.replication.fetch_max.bytes_i32(),
             ..FetchPartition::default()
         },
         request_leader_epoch: leader_epoch,
