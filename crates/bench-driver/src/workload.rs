@@ -16,8 +16,8 @@ use {
         prom::PromClient,
         rate::Pacer,
         scenario::{
-            BrokerSample, Disturbance, LatencyPercentiles, LoadMode, ModeTag, Resource, RunOutput,
-            Sample, Scenario, Stack, Throughput, Topology,
+            Acks, BrokerSample, Disturbance, LatencyPercentiles, LoadMode, ModeTag, Resource,
+            RunOutput, Sample, Scenario, Stack, Throughput, Topology,
         },
     },
     anyhow::{Context, Result},
@@ -29,7 +29,9 @@ use {
         ClientFrameMax, ConnectionDispatchQueueCapacity,
         security::{ClientSecurity, KeyStore, TlsConnectorConfig, TrustStore},
     },
-    krabka_client_producer::{Producer, ProducerError, ProducerRecord, RecordMetadata},
+    krabka_client_producer::{
+        DEFAULT_PRODUCER_MAX_IN_FLIGHT, Producer, ProducerError, ProducerRecord, RecordMetadata,
+    },
     krabka_macros::RefinedNewtype,
     krabka_security::ListenerProtocol,
     krabka_units::prelude::*,
@@ -1185,7 +1187,7 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
     } = task;
     // Idempotence forces acks=All; turn it off whenever the scenario
     // requested something weaker.
-    let enable_idempotence = matches!(scenario.acks, crate::scenario::Acks::All);
+    let enable_idempotence = matches!(scenario.acks, Acks::All);
     let producer = match Producer::builder()
         .bootstrap(bootstrap.clone())
         .dispatch_queue_capacity(dispatch_queue_capacity.get())
@@ -1196,13 +1198,7 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
         .enable_idempotence(enable_idempotence)
         .linger(scenario.linger.to_std())
         .batch_size(scenario.batch_size.bytes_usize())
-        // The producer pipelines one in-flight request PER PARTITION and uses
-        // this value as the cross-partition fan-out cap (how many distinct
-        // partitions it services concurrently per drain cycle). The default (5)
-        // throttles topics with more partitions than that — our scenarios run 6
-        // to 100 partitions — so raise it well past the max partition count to
-        // keep every partition's pipeline busy.
-        .max_in_flight_per_connection(128)
+        .max_in_flight_per_connection(producer_max_in_flight(enable_idempotence))
         // A produce to a healthy broker completes in low single-digit ms, so a
         // 2s ceiling should not trip under normal load — but it bounds how long a
         // send to a *killed* leader blocks before the client re-routes, so the
@@ -1526,6 +1522,25 @@ async fn build_consumer_with_retry(
     unreachable!("exponential_backoff::Backoff yields a terminal attempt");
 }
 
+/// The producer's `max_in_flight_per_connection` for a scenario.
+///
+/// The producer pipelines one in-flight request per partition and uses this
+/// value as the cross-partition fan-out cap: how many distinct partitions it
+/// services concurrently per drain cycle. The default (5) throttles topics with
+/// more partitions than that, and the scenarios run 6 to 100 partitions, so a
+/// non-idempotent producer gets a cap well past the largest partition count.
+///
+/// An idempotent producer refuses more than 5, as Kafka's
+/// `ProducerConfig.postProcessAndValidateIdempotenceConfigs` does, so an
+/// `acks: all` scenario, which turns idempotence on, takes Kafka's limit.
+fn producer_max_in_flight(enable_idempotence: bool) -> usize {
+    if enable_idempotence {
+        DEFAULT_PRODUCER_MAX_IN_FLIGHT
+    } else {
+        128
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use {
@@ -1536,6 +1551,15 @@ mod tests {
         },
         assert2::{assert, check},
     };
+
+    #[test]
+    fn an_idempotent_producer_stays_within_kafka_s_in_flight_limit() {
+        // (enable_idempotence, expected cap)
+        let cases = [(true, 5), (false, 128)];
+        for (enable_idempotence, expected) in cases {
+            check!(producer_max_in_flight(enable_idempotence) == expected, "{enable_idempotence}");
+        }
+    }
 
     fn cfg(broker_count: u32) -> DriverConfig {
         DriverConfig {
