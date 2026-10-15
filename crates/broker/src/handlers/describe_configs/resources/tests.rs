@@ -1394,6 +1394,90 @@ fn a_group_lists_kafka_4_3_1s_keys_unless_unstable_api_versions_are_enabled() {
     );
 }
 
+/// #1345: Kafka 4.3.1's `GroupCoordinatorConfig` defines no
+/// `group.streams.assignors`, so a node serving Kafka 4.3.1 states it on
+/// neither a named broker nor, as the synonym of trunk's
+/// `streams.assignor.name`, on a group, even though krabka runs its `auto`
+/// assignor either way. With unstable api versions enabled the group
+/// resource reports the assignor the coordinator runs at
+/// `STATIC_BROKER_CONFIG`.
+#[test]
+fn the_streams_assignor_is_described_only_under_unstable_api_versions() {
+    const ASSIGNORS: &str = "group.streams.assignors";
+
+    let image = MetadataImage::new(Uuid::nil());
+    let (levels, _filter) = krabka_telemetry::LogLevelController::new("info");
+    let naming_assignors = |resource_type: i8, resource_name: &str, unstable| {
+        let mut config = BrokerConfig::default();
+        config.features.unstable_api_versions = unstable;
+        let settings = static_settings(&config);
+        describe_one(
+            &image,
+            &resource_request(resource_type, resource_name, None),
+            ServingBroker {
+                node: serving_node_for(resource_type, resource_name),
+                static_broker: StaticBrokerConfigs {
+                    settings: &settings,
+                    ..untuned()
+                },
+                loggers: BrokerLoggers {
+                    node_id: 1,
+                    levels: &levels,
+                },
+                unstable_api_versions: unstable,
+            },
+            300_000,
+            EVERYTHING,
+        )
+        .configs
+        .into_iter()
+        .filter(|entry| {
+            entry.name == ASSIGNORS || entry.synonyms.iter().any(|s| s.name == ASSIGNORS)
+        })
+        .collect::<Vec<_>>()
+    };
+    let group_entry = expected_config_entry()
+        .name("streams.assignor.name")
+        .value(Some("auto"))
+        .source(CONFIG_SOURCE_STATIC_BROKER)
+        .synonyms(vec![synonym(
+            ASSIGNORS,
+            "auto",
+            CONFIG_SOURCE_STATIC_BROKER,
+        )])
+        .config_type(ConfigType::String.wire())
+        .documentation(
+            "Server-side task assignor: `auto`, `sticky`, or `highly_available`.".to_owned(),
+        )
+        .call();
+
+    for (unstable, resource_type, resource_name, expected) in [
+        (
+            UnstableApiVersions::Disabled,
+            RESOURCE_TYPE_BROKER,
+            "1",
+            vec![],
+        ),
+        (
+            UnstableApiVersions::Disabled,
+            RESOURCE_TYPE_GROUP,
+            "g",
+            vec![],
+        ),
+        (
+            UnstableApiVersions::Enabled,
+            RESOURCE_TYPE_GROUP,
+            "g",
+            vec![group_entry],
+        ),
+    ] {
+        check!(
+            naming_assignors(resource_type, resource_name, unstable) == expected,
+            "{unstable:?} resource type {resource_type}"
+        );
+    }
+}
+
 /// #907's companion: with `unstable.api.versions.enable` off a topic
 /// resource carries none of Kafka trunk's four newest topic keys, and a named
 /// broker none of their broker synonyms, as Kafka 4.3.1's `LogConfig` and
