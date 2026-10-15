@@ -20,8 +20,10 @@ use {
         coordinator::{
             DeleteGroupError,
             unified::{
-                classic_ops, consumer_state::GroupState, group::CoordinatorGroup,
-                offsets_log::OffsetsLog,
+                classic_ops,
+                consumer_state::GroupState,
+                group::CoordinatorGroup,
+                offsets_log::{OffsetsLog, write_failure_code},
             },
         },
         error::BrokerError,
@@ -69,7 +71,7 @@ pub(super) async fn handle_classic_leave_message(
                 *state = previous;
                 tracing::warn!(group_id = %state.group_id, %error,
                     "classic LeaveGroup log write failed");
-                return Err(codes::COORDINATOR_LOAD_IN_PROGRESS);
+                return Err(write_failure_code(&error));
             }
         }
         settle_removed_classic_waiters(state, previous.state, &removed, parked);
@@ -99,7 +101,7 @@ pub(super) async fn handle_classic_leave_message(
         .map_err(|error| {
             tracing::warn!(group_id = %group.group_id, %error,
                 "hosted classic LeaveGroup downgrade log write failed");
-            codes::COORDINATOR_LOAD_IN_PROGRESS
+            write_failure_code(&error)
         })?;
         return Ok(responses);
     }
@@ -115,7 +117,7 @@ pub(super) async fn handle_classic_leave_message(
     .map_err(|error| {
         tracing::warn!(group_id = %state.group_id, %error,
             "hosted classic LeaveGroup log write failed");
-        codes::COORDINATOR_LOAD_IN_PROGRESS
+        write_failure_code(&error)
     })?;
     Ok(responses)
 }

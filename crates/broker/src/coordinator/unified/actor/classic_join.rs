@@ -29,6 +29,7 @@ use {
             first_join_member_id,
             group::{CoordinatorGroup, GroupKind},
             migration,
+            offsets_log::write_failure_code,
             reconciler::ReconcileInput,
             regex_resolver::TopicRegexResolver,
         },
@@ -515,7 +516,7 @@ async fn classic_join_hosted(
             "next-gen actor exiting after hosted classic-join log-write failure",
         );
         let _ = reply.send(JoinResult {
-            error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
+            error_code: write_failure_code(&e),
             member_id: req.member_id.clone(),
             ..JoinResult::default()
         });
@@ -611,7 +612,7 @@ async fn downgrade_joining(
         tracing::warn!(%group_id, %error,
             "next-gen actor exiting after classic-join downgrade log-write failure");
         let _ = reply.send(JoinResult {
-            error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
+            error_code: write_failure_code(&error),
             ..JoinResult::default()
         });
         return Err(error);

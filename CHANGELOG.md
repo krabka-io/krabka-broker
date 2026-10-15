@@ -42,6 +42,13 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   `DelayedRemoteListOffsets` does. Before, it logged the failure and answered
   from the local log, which skips every record only the tier holds.
 
+- A consumer or classic group write that does not commit answers
+  `ConsumerGroupHeartbeat`, `JoinGroup`, `SyncGroup` and `LeaveGroup` with
+  Kafka's code for it: `NOT_COORDINATOR` after the coordinator lost its
+  leadership and `COORDINATOR_NOT_AVAILABLE` after a timeout. Before, every
+  failed write answered `COORDINATOR_LOAD_IN_PROGRESS`, so a client retried
+  the old coordinator instead of looking up the new one.
+
 ## [1.0.5] - 2026-10-14
 
 1.0.5 changes no on-disk format and adds no setting, so it upgrades from any
