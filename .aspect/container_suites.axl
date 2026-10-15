@@ -746,12 +746,12 @@ def _self_test():
     )
     _check(
         _select(["packaging/BUILD.bazel"], available) ==
-        sorted([_IMAGE_SUITE_TARGET, _target("jbod_enospc"), _target("process_kill_durability")]),
+        sorted([_IMAGE_SUITE_TARGET, _target("jbod_enospc"), _target("process_kill_durability"), _target("soak_contract")]),
         "a change to the image's layer list must select the image suite and the suites that run it",
     )
     _check(
         _select(["packaging/image_binaries_test.sh"], available) ==
-        sorted([_IMAGE_SUITE_TARGET, _target("jbod_enospc"), _target("process_kill_durability")]),
+        sorted([_IMAGE_SUITE_TARGET, _target("jbod_enospc"), _target("process_kill_durability"), _target("soak_contract")]),
         "a change to what the image asserts must select the image suite and the suites that run it",
     )
     _check(
@@ -761,6 +761,7 @@ def _self_test():
             _target("jbod_enospc"),
             _target("process_kill_durability"),
             _target("jvm_barrier_markers"),
+            _target("soak_contract"),
         ]),
         "a change to both must select both",
     )
