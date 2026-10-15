@@ -3702,10 +3702,14 @@ name = "krabka-parse-benches"
 version = "1.0.5"
 dependencies = [
  "assert2",
+ "bon",
  "clap",
+ "hex",
+ "num-traits",
  "regex",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.21",
  "time",

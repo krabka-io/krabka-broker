@@ -23,6 +23,17 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ## [Unreleased]
 
+### Added
+
+- `qualify.sh budget` compares a candidate build with an earlier revision or
+  with pinned Kafka 4.3.1 over a predeclared RF=3 workload matrix, in
+  interleaved rounds. `krabka-parse-benches` assembles every raw trial into a
+  versioned results record and judges it against the materiality and variance
+  budgets of `packaging/performance/regression-contract.json`, with the same
+  median and MAD rule as the criterion lane. A lost or duplicated record
+  always rejects. See
+  [Performance regression budgets](docs/operations/performance-budgets.md).
+
 ### Fixed
 
 - A long-polling `Fetch` is no longer charged its wait to

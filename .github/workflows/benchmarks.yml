@@ -6,6 +6,7 @@ on:
       - "crates/log/**"
       - "crates/verified/**"
       - "crates/parse-benches/**"
+      - "packaging/performance/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/benchmarks.yml"
@@ -15,6 +16,7 @@ on:
       - "crates/log/**"
       - "crates/verified/**"
       - "crates/parse-benches/**"
+      - "packaging/performance/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/benchmarks.yml"
@@ -29,6 +31,28 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # The broker performance budgets are judged on a dedicated host by
+  # `packaging/performance/qualify.sh budget`; no runner here can host the
+  # Kind cluster. This lane checks the predeclared contract instead: it must
+  # parse and validate, and the digest the harness will record is printed so a
+  # published verdict can be traced back to this commit's contract. The
+  # evaluator's own tests run under `bazel test //...` in ci.yml.
+  performance-budget-contract:
+    name: broker · performance budget contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: bench-broker
+      - name: Validate regression contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run -p krabka-parse-benches -- check-contract \
+            packaging/performance/regression-contract.json | tee -a "${GITHUB_STEP_SUMMARY}"
+
   # Automated storage microbenchmarks for krabka-log.
   # Bazel's crate_bench macro compiles and lints this suite. This lane measures
   # it through Cargo using the repository's pinned toolchain.
