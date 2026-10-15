@@ -415,7 +415,7 @@ fn build_fetch_request(
         },
         max_wait_ms,
         min_bytes: replication.fetch_min.bytes_i32(),
-        max_bytes: replication.fetch_max.bytes_i32(),
+        max_bytes: replication.fetch_response_max.bytes_i32(),
         session_id: session_request.session_id,
         session_epoch: session_request.session_epoch,
         topics: session_request.topics,
@@ -507,7 +507,7 @@ mod tests {
     #[test]
     fn the_first_request_carries_every_partition_and_the_configured_envelope() {
         let (mut cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
-        cfg.connection.replication.fetch_max = bytes(2_345_678);
+        cfg.connection.replication.fetch_response_max = bytes(2_345_678);
         cfg.connection.replication.fetch_max_wait = millis(321);
         cfg.connection.replication.fetch_min = bytes(17);
         let fetcher = test_fetcher(&cfg, FollowedPartitions::default());
@@ -543,6 +543,33 @@ mod tests {
                 .map(|p| (p.partition, p.fetch_offset, p.partition_max_bytes))
                 .collect::<Vec<_>>()
                 == vec![(PARTITION, 123, 456), (PARTITION + 1, 7, 456)]
+        );
+    }
+
+    /// Kafka's `RemoteLeaderEndPoint` asks for `replica.fetch.response.max.bytes`
+    /// (10 MiB) across the response and `replica.fetch.max.bytes` (1 MiB) for
+    /// each partition. A response budget of one partition's share lets one
+    /// partition with a full batch waiting take every response, and starve the
+    /// other partitions that the fetcher follows from the same leader.
+    #[test]
+    fn the_default_envelope_asks_for_kafka_s_response_and_partition_maximums() {
+        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+        let fetcher = test_fetcher(&cfg, FollowedPartitions::default());
+        let replication = &cfg.connection.replication;
+        let req = build_fetch_request(
+            &fetcher,
+            &mut FollowerFetchSession::default(),
+            [wanted_row(PARTITION, 0, replication.fetch_max.bytes_i32())]
+                .into_iter()
+                .collect(),
+            &[],
+        );
+
+        check!(
+            (
+                req.max_bytes,
+                req.topics[0].partitions[0].partition_max_bytes
+            ) == (10 * 1024 * 1024, 1024 * 1024)
         );
     }
 

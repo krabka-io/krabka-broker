@@ -3265,6 +3265,7 @@ dependencies = [
  "futures-util",
  "hex",
  "hostname",
+ "indexmap 2.14.2",
  "jsonpath-rust",
  "jsonschema",
  "krabka-audit",

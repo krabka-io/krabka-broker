@@ -181,9 +181,9 @@ fn consumer_denied_topics(
 /// first -- and the read loop would then serve every one of those partitions
 /// out of that one topic.
 ///
-/// The topic order is the order in which the keys first appear. `HashMap`
-/// iteration order is not stable across runs, but it is stable within a single
-/// classify call.
+/// The topic order is the order in which the keys first appear, and the
+/// partitions of a topic keep the session's order: the order in which the
+/// read loop spends the response budget.
 fn group_cached_into_effective_topics(
     cached: &[(FetchSessionKey, CachedPartitionState)],
 ) -> Vec<EffectiveTopic> {

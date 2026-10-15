@@ -121,6 +121,10 @@ crc32c = { workspace = true }
 # KIP-714: decode OTLP MetricsData protobuf payloads in PushTelemetry handler.
 prost = { workspace = true }
 hex = { workspace = true }
+# A KIP-227 fetch session keeps its partitions in order, as Kafka's
+# `ImplicitLinkedHashCollection` does: the leader reads them in that order and
+# moves a partition that returned records to the end.
+indexmap = { workspace = true }
 # The host name a controller bound to a wildcard address advertises.
 # SHA-256 fingerprint of the configured break-glass approver set
 # (`operator_keys::approver_set_fingerprint`), recorded on every break-glass

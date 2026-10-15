@@ -10,7 +10,7 @@ use {
     super::{
         epoch::{FIRST_SESSION_ID, FetchSessionEpoch, FetchSessionId},
         order::SessionOrder,
-        state::{CachedPartitionState, FetchSessionKey},
+        state::{SentPartition, SessionPartitions},
     },
     qubit_clock::{MonotonicClock, StdMonotonicClock},
     std::{
@@ -33,7 +33,7 @@ pub struct FetchSession {
     /// (`Fetch` v13 and later). Kafka's `FetchSession.usesTopicIds`.
     pub uses_topic_ids: bool,
     pub creator_principal: String,
-    pub partitions: HashMap<FetchSessionKey, CachedPartitionState>,
+    pub partitions: SessionPartitions,
 }
 
 pub(super) struct Inner {
@@ -122,25 +122,36 @@ impl FetchSessionCache {
     /// handler emitted in the response that just finished. Only the partitions
     /// that the response included need an update. A filtered-out partition
     /// already matches the cache, which is why the broker filtered it.
+    ///
+    /// A partition whose row carried records moves to the end of the session,
+    /// in the order the response sent them, as Kafka's
+    /// `IncrementalFetchContext.updateAndGenerateResponseData` moves it. The
+    /// next fetch reads the partitions that had nothing to send first.
     /// # Panics
     /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
-    pub fn finalize_incremental(
-        &self,
-        session_id: FetchSessionId,
-        sent: &[(FetchSessionKey, CachedPartitionState)],
-    ) {
+    pub fn finalize_incremental(&self, session_id: FetchSessionId, sent: &[SentPartition]) {
         let mut guard = self.inner.lock().expect("poisoned");
         let Some(session) = guard.sessions.get_mut(&session_id) else {
             return;
         };
-        for (k, s) in sent {
-            if let Some(state) = session.partitions.get_mut(k) {
-                state.last_high_watermark = s.last_high_watermark;
-                state.last_last_stable_offset = s.last_last_stable_offset;
-                state.last_log_start_offset = s.last_log_start_offset;
-                state.last_preferred_read_replica = s.last_preferred_read_replica;
-                state.last_aborted_txns_hash = s.last_aborted_txns_hash;
-                state.last_error_code = s.last_error_code;
+        for SentPartition {
+            key,
+            state: s,
+            records,
+        } in sent
+        {
+            let Some((index, _, state)) = session.partitions.get_full_mut(key) else {
+                continue;
+            };
+            state.last_high_watermark = s.last_high_watermark;
+            state.last_last_stable_offset = s.last_last_stable_offset;
+            state.last_log_start_offset = s.last_log_start_offset;
+            state.last_preferred_read_replica = s.last_preferred_read_replica;
+            state.last_aborted_txns_hash = s.last_aborted_txns_hash;
+            state.last_error_code = s.last_error_code;
+            if *records {
+                let last = session.partitions.len() - 1;
+                session.partitions.move_index(index, last);
             }
         }
     }
@@ -166,7 +177,7 @@ mod tests {
     use {
         super::*,
         crate::fetch_session::{
-            SessionDecision,
+            CachedPartitionState, FetchSessionKey, SessionDecision,
             test_support::{
                 AllocatedCache, NAME_FETCH_VERSION, RequestSessionId, SessionAllocationSetup,
                 allocate_session, allocated_cache, forgotten_topic, req, session_key, topic,
@@ -229,16 +240,58 @@ mod tests {
             .principal("a".into())
             .partitions(vec![(key.clone(), CachedPartitionState::default())])
             .call();
-        let sent = vec![(key.clone(), CachedPartitionState {
-            last_high_watermark: 42,
-            last_log_start_offset: 7,
-            ..Default::default()
-        })];
+        let sent = vec![SentPartition {
+            key: key.clone(),
+            state: CachedPartitionState {
+                last_high_watermark: 42,
+                last_log_start_offset: 7,
+                ..Default::default()
+            },
+            records: false,
+        }];
         cache.finalize_incremental(id, &sent);
         let g = cache.inner.lock().unwrap();
         let s = g.sessions.get(&id).unwrap().partitions.get(&key).unwrap();
         assert!(s.last_high_watermark == 42);
         assert!(s.last_log_start_offset == 7);
+    }
+
+    /// Kafka's `IncrementalFetchContext` moves a partition whose row carried
+    /// records to the end of the session, in the order the response sent
+    /// them, and leaves a row that carried only offsets where it is.
+    #[yare::parameterized(
+        nothing_sent = { &[], &[0, 1, 2, 3] },
+        offsets_only = { &[(1, false)], &[0, 1, 2, 3] },
+        first_with_records = { &[(0, true)], &[1, 2, 3, 0] },
+        two_with_records = { &[(2, true), (0, true)], &[1, 3, 2, 0] },
+        mixed = { &[(0, true), (1, false), (3, true)], &[1, 2, 0, 3] },
+    )]
+    fn finalize_incremental_moves_partitions_that_sent_records_to_the_end(
+        sent: &[(i32, bool)],
+        expected_order: &[i32],
+    ) {
+        let cache = FetchSessionCache::new(10);
+        let id = allocate_session()
+            .cache(&cache)
+            .partitions(cached_partitions(0..=3))
+            .call();
+        let sent: Vec<SentPartition> = sent
+            .iter()
+            .map(|&(partition, records)| SentPartition {
+                key: cached_partition(krabka_ids::PartitionIndex(partition)).0,
+                state: CachedPartitionState::default(),
+                records,
+            })
+            .collect();
+
+        cache.finalize_incremental(id, &sent);
+
+        let order: Vec<i32> = cache.inner.lock().unwrap().sessions[&id]
+            .partitions
+            .keys()
+            .map(|key| key.partition)
+            .collect();
+        assert2::assert!(order == expected_order);
     }
 
     fn cached_partition(

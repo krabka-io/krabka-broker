@@ -405,7 +405,10 @@ mod tests {
                 == ReplicationRuntimeConfig {
                     // Kafka's `num.replica.fetchers` default.
                     fetchers: 1,
+                    // Kafka's `replica.fetch.max.bytes` and
+                    // `replica.fetch.response.max.bytes` defaults.
                     fetch_max: mebibytes(1),
+                    fetch_response_max: mebibytes(10),
                     fetch_max_wait: millis(500),
                     fetch_min: bytes(1),
                     throttle_exhausted_backoff: millis(100),

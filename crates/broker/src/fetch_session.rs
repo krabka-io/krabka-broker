@@ -91,7 +91,7 @@ pub use self::{
         FINAL_EPOCH, FIRST_TOPIC_ID_FETCH_VERSION, FetchSessionEpoch, FetchSessionId,
         INITIAL_EPOCH, INVALID_SESSION_ID, next_epoch,
     },
-    state::{CachedPartitionState, FetchSessionKey},
+    state::{CachedPartitionState, FetchSessionKey, SentPartition, SessionPartitions},
 };
 
 #[cfg(test)]

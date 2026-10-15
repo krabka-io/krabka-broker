@@ -9,8 +9,9 @@ use krabka_units::{ByteSize, Time, bytes, mebibytes, millis, secs};
 /// backoffs the follower loop applies between fetches.
 ///
 /// This type is not `Eq`: every value here is a quantity, and its `f64`
-/// storage is only `PartialEq`. Three of the fields reach the wire, as
-/// `FetchRequest`'s `max_bytes`, `min_bytes`, and `max_wait_ms`.
+/// storage is only `PartialEq`. Four of the fields reach the wire, as
+/// `FetchRequest`'s `max_bytes`, `min_bytes` and `max_wait_ms`, and as each
+/// partition's `partition_max_bytes`.
 #[derive(Debug, Clone, PartialEq, krabka_macros::FieldDefaults)]
 pub struct ReplicationRuntimeConfig {
     /// How many fetchers this broker runs per leader it follows.
@@ -28,9 +29,21 @@ pub struct ReplicationRuntimeConfig {
     #[default(1)]
     pub fetchers: usize,
 
-    /// Maximum bytes requested from a leader in one replication fetch.
+    /// Maximum bytes requested for one partition in a replication fetch.
+    ///
+    /// Kafka's `replica.fetch.max.bytes`. It reaches the leader as each
+    /// partition's `partition_max_bytes`.
     #[default(mebibytes(1))]
     pub fetch_max: ByteSize,
+    /// Maximum bytes requested for the whole response of a replication fetch.
+    ///
+    /// Kafka's `replica.fetch.response.max.bytes`. It reaches the leader as
+    /// the request's `max_bytes`. The leader spends it on the partitions in
+    /// the order it reads them, so a budget no larger than one partition's
+    /// share lets the first partition with data crowd out every other
+    /// partition of the fetcher.
+    #[default(mebibytes(10))]
+    pub fetch_response_max: ByteSize,
     /// Maximum leader wait for a replication fetch.
     #[default(millis(500))]
     pub fetch_max_wait: Time,
