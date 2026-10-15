@@ -84,7 +84,7 @@ impl TokenBucket {
         }
         let state = self.lock_state();
         let now = self.now_nanos();
-        state.refilled(now).available == 0
+        state.quota_exceeded(now)
     }
 
     /// Charges `tokens` whole tokens whatever the bucket holds, and returns
@@ -212,6 +212,14 @@ impl BucketState {
         self.micro_refill_fraction = refilled.fraction;
         self.micro_available = new_available;
         self.micro_debt = debt;
+    }
+
+    /// Whether the balance, refilled up to `now`, has nothing to grant. A
+    /// state with no rate has no quota: the lock-free rate read in
+    /// [`TokenBucket::quota_exceeded`] can see a rate that a concurrent reset
+    /// has already cleared, so the locked rate decides.
+    fn quota_exceeded(&self, now: u64) -> bool {
+        self.micro_rate_per_sec != 0 && self.refilled(now).available == 0
     }
 
     /// Refills the bucket for the time elapsed up to `now`, then grants up to
@@ -366,6 +374,14 @@ mod tests {
         advance_clock(&clock, Duration::from_millis(later_ms));
 
         check!(bucket.quota_exceeded() == exceeded);
+    }
+
+    /// A reset that clears the rate between the lock-free rate read and the
+    /// lock leaves a state with no rate and no balance. That is no quota, not
+    /// an exceeded one.
+    #[test]
+    fn a_state_without_a_rate_is_never_exceeded() {
+        check!(!UNLIMITED_BUCKET_STATE.quota_exceeded(SEC));
     }
 
     fn bucket_state(

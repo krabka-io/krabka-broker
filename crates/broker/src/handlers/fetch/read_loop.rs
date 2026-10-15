@@ -413,8 +413,10 @@ async fn long_poll_then_reread(
             tokio::time::timeout_at(deadline, futures_util::future::select_all(waits)).await;
         phases.add_remote(parked.elapsed());
         let Ok((woken, _fired, rest)) = outcome else {
-            // The deadline passed. Nothing more will be read, but the loop
-            // head still revalidates the epochs before the response goes out.
+            // The deadline passed. Nothing more will be read but the rows the
+            // leader throttle withheld, and the loop head still revalidates
+            // the epochs before the response goes out.
+            reread_withheld(broker, pending, state, phases).await;
             waits = Vec::new();
             continue;
         };
@@ -577,6 +579,33 @@ async fn reread_woken(
         allow_first_batch_overrun: min_one_batch,
         withheld,
     });
+}
+
+/// Read again, once the wait expires, every row the KIP-73 leader throttle
+/// withheld, if the quota now allows it.
+///
+/// Kafka's `DelayedFetch.onComplete` reads every partition again on expiry,
+/// and `readFromLog` asks the replication quota again, so records the quota
+/// allows by then go out with this response and not with the follower's next
+/// fetch. The refill wakes nothing, so expiry is where a parked fetch sees the
+/// quota recover.
+async fn reread_withheld(
+    broker: &Broker,
+    pending: &mut [PendingRead],
+    state: &mut LongPollState,
+    phases: &RequestPhases,
+) {
+    if broker.throttle_state.leader_out.quota_exceeded() {
+        return;
+    }
+    for index in 0..pending.len() {
+        let throttled = pending[index]
+            .follower_position
+            .is_some_and(|position| position.leader_throttled);
+        if throttled && state.bytes[index] == 0 {
+            reread_woken(broker, pending, index, state, phases).await;
+        }
+    }
 }
 
 /// KIP-73: whether the leader withholds this follower read's records, Kafka's

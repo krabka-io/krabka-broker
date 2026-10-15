@@ -56,12 +56,16 @@ const LEADER_RATE: u32 = 1_000;
 
 /// How long a fetch may park. A fetch that comes back sooner than
 /// [`MIN_PARK`] did not wait for its `min_bytes`.
-const MAX_WAIT_MS: i32 = 400;
-const MIN_PARK: Duration = Duration::from_millis(350);
+const MAX_WAIT_MS: i32 = 1_000;
+const MIN_PARK: Duration = Duration::from_millis(900);
 
-/// A record value three times the leader's one-second burst, so each batch
-/// is larger than anything the bucket can ever hold.
-static OVERSIZED_VALUE: [u8; 3_000] = [7; 3_000];
+/// A record value three times the leader's one-second burst: the debt its
+/// batch leaves takes about two seconds to repay, longer than a fetch waits.
+static DEEP_DEBT_VALUE: [u8; 3_000] = [7; 3_000];
+
+/// A record value a quarter over the burst: the debt its batch leaves takes
+/// about a third of a second to repay, well inside a fetch's wait.
+static SHALLOW_DEBT_VALUE: [u8; 1_250] = [7; 1_250];
 
 /// Create the topic with replicas 1 and 2 and only the leader in the ISR,
 /// throttle every replica of it on the leader at [`LEADER_RATE`], and wait
@@ -156,21 +160,22 @@ async fn answered(broker: &BrokerHandle, fetch_offset: i64) -> Answered {
     }
 }
 
-/// A batch larger than the throttle's whole burst still replicates: the
-/// quota is not exceeded when the first fetch reads, so the batch goes out
-/// whole and its size is recorded past the bound. The overshoot is paid
-/// back by throttling: the next fetch finds the quota exceeded, gets no
-/// records, and parks for its `max_wait_ms` instead of coming straight back
-/// for an immediate retry.
-#[tokio::test]
-async fn an_oversized_batch_replicates_and_the_overshoot_parks_the_next_fetch() {
+/// What two follower fetches of a throttled partition bring back: the first
+/// of a batch of `value`, the second of a second such batch.
+struct TwoFetches {
+    first: Answered,
+    second: Answered,
+    partition: Arc<Partition>,
+}
+
+async fn fetch_two_batches(value: &'static [u8]) -> TwoFetches {
     let StartedBroker { broker, dir: _dir } = start_with_idle_follower().await;
     let partition = throttled_partition(&broker).await;
     let append = async || {
         partition
-            .produce_batch(single_value_batch(&OVERSIZED_VALUE))
+            .produce_batch(single_value_batch(value))
             .await
-            .expect("append an oversized batch");
+            .expect("append a batch over the burst");
     };
 
     append().await;
@@ -178,18 +183,57 @@ async fn an_oversized_batch_replicates_and_the_overshoot_parks_the_next_fetch() 
     append().await;
     let second = answered(&broker, 1).await;
     broker.shutdown().await;
+    TwoFetches {
+        first,
+        second,
+        partition,
+    }
+}
 
-    assert!(
-        (first, second)
-            == (
-                Answered {
-                    records: Some(RecordsPayload::V2(vec![stored_batch(&partition, 0)])),
-                    parked: false,
-                },
-                Answered {
-                    records: Some(RecordsPayload::Legacy(Bytes::new())),
-                    parked: true,
-                },
-            )
-    );
+/// A batch larger than the throttle's whole burst still replicates: the
+/// quota is not exceeded when the first fetch reads, so the batch goes out
+/// whole and its size is recorded past the bound. The overshoot is paid
+/// back by throttling: the next fetch finds the quota exceeded, and its
+/// read is withheld, so it parks for its `max_wait_ms` instead of coming
+/// straight back for an immediate retry. Kafka's `DelayedFetch` reads again
+/// when the wait expires, so the second batch goes out then if the debt was
+/// repaid in the meantime, and the fetch is empty if it was not.
+#[tokio::test]
+async fn an_oversized_batch_replicates_and_the_overshoot_parks_the_next_fetch() {
+    // (label, record value, whether the debt outlasts the second fetch's wait)
+    let cases: [(&str, &'static [u8], bool); 2] = [
+        ("the debt outlasts the wait", &DEEP_DEBT_VALUE, true),
+        (
+            "the debt is repaid within the wait",
+            &SHALLOW_DEBT_VALUE,
+            false,
+        ),
+    ];
+    for (label, value, outlasts) in cases {
+        let TwoFetches {
+            first,
+            second,
+            partition,
+        } = fetch_two_batches(value).await;
+
+        let second_records = if outlasts {
+            RecordsPayload::Legacy(Bytes::new())
+        } else {
+            RecordsPayload::V2(vec![stored_batch(&partition, 1)])
+        };
+        assert!(
+            (first, second)
+                == (
+                    Answered {
+                        records: Some(RecordsPayload::V2(vec![stored_batch(&partition, 0)])),
+                        parked: false,
+                    },
+                    Answered {
+                        records: Some(second_records),
+                        parked: true,
+                    },
+                ),
+            "{label}"
+        );
+    }
 }
