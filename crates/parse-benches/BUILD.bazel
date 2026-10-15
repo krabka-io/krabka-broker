@@ -14,4 +14,8 @@ crate_binary(
     lib = ":parse-benches",
 )
 
-crate_tests(lib = "parse-benches")
+crate_tests(
+    # `budget_tests` validates the checked-in contract with `include_str!`.
+    compile_data = ["//packaging:performance/regression-contract.json"],
+    lib = "parse-benches",
+)

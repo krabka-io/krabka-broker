@@ -84,12 +84,19 @@ pub(super) struct FetchPreparation {
     pub(super) read_committed: bool,
 }
 
+/// A fetch that its fetch session refuses before any read: Kafka's
+/// `SessionErrorContext`.
+pub(super) struct SessionRefusal {
+    pub(super) code: i16,
+    pub(super) is_follower_fetch: bool,
+}
+
 pub(super) fn prepare_fetch(
     broker: &Broker,
     request: &FetchRequest,
     version: i16,
     context: &RequestContext<'_>,
-) -> Result<FetchPreparation, i16> {
+) -> Result<FetchPreparation, SessionRefusal> {
     let effective_replica_id = if request.replica_id >= 0 {
         request.replica_id
     } else {
@@ -98,7 +105,10 @@ pub(super) fn prepare_fetch(
     let is_follower_fetch = effective_replica_id >= 0;
     let decision = broker.fetch_session_cache.classify(request, version);
     if let SessionDecision::Error { code } = decision {
-        return Err(code);
+        return Err(SessionRefusal {
+            code,
+            is_follower_fetch,
+        });
     }
     let effective_topics = match &decision {
         SessionDecision::Incremental { partitions, .. } => {

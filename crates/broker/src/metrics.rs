@@ -1214,18 +1214,44 @@ pub struct BrokerMetrics {
     pub raft_voters: Gauge,
     #[metric(help = "Number of active KRaft observers")]
     pub raft_observers: Gauge,
-    #[metric(help = "Highest metadata record offset applied to the active metadata image")]
-    pub metadata_last_applied_offset: Gauge,
+    /// KIP-835 `last-applied-record-offset` and the controller's
+    /// `LastAppliedRecordOffset`: `-1` before the first applied record.
     #[metric(
-        help = "Append timestamp in Unix epoch milliseconds of the last applied metadata record"
+        help = "Highest metadata record offset applied to the active metadata image, -1 before the first"
+    )]
+    pub metadata_last_applied_offset: Gauge,
+    /// KIP-835 `LastCommittedRecordOffset`: the highest `__cluster_metadata`
+    /// offset the quorum has committed, as this node last heard it, and `-1`
+    /// before it has heard of one. Kafka exports it on controllers only; a
+    /// broker-only node reports the leader's high watermark from its fetches.
+    #[metric(
+        help = "Highest metadata record offset the quorum has committed, as this node last heard it, -1 before the first"
+    )]
+    pub metadata_last_committed_offset: Gauge,
+    /// KIP-835 `last-applied-record-timestamp`: the append timestamp of the
+    /// last applied metadata batch, `-1` before the first.
+    #[metric(
+        help = "Append timestamp in Unix epoch milliseconds of the last applied metadata record, -1 before the first"
     )]
     pub metadata_last_applied_timestamp_ms: Gauge,
-    #[metric(help = "Milliseconds since the last applied metadata record was appended")]
+    /// KIP-835 `last-applied-record-lag-ms`: the sample time minus
+    /// [`Self::metadata_last_applied_timestamp_ms`], on every role. The
+    /// leader appends a `NoOpRecord` every `metadata.max.idle.interval.ms`,
+    /// so a current node stays below that interval plus the commit delay.
+    /// Before the first record it reads `now + 1`, as Kafka's does.
+    #[metric(
+        help = "Milliseconds between the gauge sample and the append timestamp of the last applied metadata record"
+    )]
     pub metadata_last_applied_lag_ms: Gauge,
+    /// The lifetime mean of Kafka's
+    /// `BrokerMetadataListener,name=MetadataBatchProcessingTimeUs`
+    /// histogram, which Yammer exports as its `Mean` attribute: microseconds
+    /// spent applying one completed pass over newly committed records.
     #[metric(
         help = "Lifetime average microseconds to apply a completed set of pending committed metadata records"
     )]
     pub pending_record_processing_time_us_avg: Gauge,
+    /// The lifetime `Max` attribute of the same Kafka histogram.
     #[metric(
         help = "Lifetime maximum microseconds to apply a completed set of pending committed metadata records"
     )]

@@ -49,6 +49,14 @@ bytes and series count. `scale/verdict.txt` names the highest passing tier;
 failure of the 10,000-partition attempt is evidence, not permission to describe
 1,000 as a product limit.
 
+## Regression budget mode
+
+`qualify.sh budget before_after <reference-revision>` and `qualify.sh budget
+pinned_kafka` run the predeclared RF=3 workload matrix in interleaved rounds
+and judge the candidate against fixed budgets. A correctness failure always
+rejects. [Performance regression budgets](performance-budgets.md) defines the
+matrix, the results record and the decision rule.
+
 ## Sustained-load contract
 
 This qualification measures throughput and the partition envelope over runs of minutes. Correctness over days, under injected faults, is a separate contract. [`bench/soak/rf3-72h.yaml`](../../bench/soak/rf3-72h.yaml) declares the 72-hour RF=3 soak before it runs: host and disk, seed, client settings, throughput floors, p50/p99/p999 budgets for each path, recovery deadlines, and a seeded schedule of bounded pauses, restarts, slow followers and disk fills. The `soak_contract` suite of `krabka-broker` executes a contract against an isolated three-broker cluster, and `krabka-soak-check` reconciles the evidence. The [design document](../../crates/bench-driver/docs/soak-contract-design.md) gives the rules.

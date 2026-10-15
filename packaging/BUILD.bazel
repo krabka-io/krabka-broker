@@ -28,6 +28,10 @@ load("//bazel:krabka_image.bzl", "KRABKA_IMAGE_TAG")
 
 package(default_visibility = ["//visibility:public"])
 
+# The performance regression contract. `//crates/parse-benches` loads it in
+# its tests, so the checked-in budgets always parse and validate.
+exports_files(["performance/regression-contract.json"])
+
 # What `image_load` tags the image with locally, and what the Docker-driven test
 # then runs. A push supplies its own tags; see `push` below. The constant lives
 # in //bazel:krabka_image.bzl because //bazel/defs.bzl needs the same string for

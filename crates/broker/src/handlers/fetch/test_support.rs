@@ -124,20 +124,22 @@ pub(super) fn sessionless_request(
     }
 }
 
-/// A sessionless consumer fetch of partition 0 of `topic_id` from offset 0,
-/// with no byte limit.
+/// A consumer fetch of partition 0 of `topic_id` from offset 0, with no byte
+/// limit, sessionless unless it names a session.
 #[bon::builder]
 pub(super) fn consumer_fetch_request(
     topic_id: krabka_protocol::primitives::uuid::Uuid,
     #[builder(default)] max_wait_ms: i32,
     #[builder(default)] min_bytes: i32,
+    #[builder(default = INVALID_SESSION_ID)] session_id: i32,
+    #[builder(default = FINAL_EPOCH)] session_epoch: i32,
 ) -> FetchRequest {
     FetchRequest {
         max_wait_ms,
         min_bytes,
         max_bytes: i32::MAX,
-        session_id: INVALID_SESSION_ID,
-        session_epoch: FINAL_EPOCH,
+        session_id,
+        session_epoch,
         topics: vec![FetchTopic {
             topic_id,
             partitions: vec![FetchPartition {

@@ -904,8 +904,10 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/raft/src/kraft/controller/tests_apply.rs::quorum_snapshot_timestamp_tracks_applied_not_newer_committed_records",
             "crates/broker/src/metadata_observer/fetch.rs::apply_fetch_records_advances_data_batch_offset_and_publishes",
             "crates/broker/src/metadata_observer.rs::pending_record_processing_time_tracks_average_and_max",
+            "crates/broker/src/broker/gauges.rs::applied_record_gauges_follow_kafka_units_and_initial_values",
+            "crates/broker/src/broker/gauges.rs::active_controller_lag_is_sample_time_minus_the_applied_append_time",
         ],
-        note: "The NoOpRecord heartbeat is in the tree. Controller and broker metrics publish the last applied record offset and append timestamp, and time since that timestamp. Pending-record processing gauges report the process-lifetime average and maximum microseconds spent on completed apply passes that advanced across pending committed records. Gauges refresh on the broker polling interval.",
+        note: "The NoOpRecord heartbeat is in the tree. Every role exports KIP-835's applied-record series with Kafka's units and initial values: metadata_last_applied_offset (last-applied-record-offset, LastAppliedRecordOffset), metadata_last_committed_offset (LastCommittedRecordOffset), metadata_last_applied_timestamp_ms (last-applied-record-timestamp, LastAppliedRecordTimestamp) and metadata_last_applied_lag_ms (last-applied-record-lag-ms, LastAppliedRecordLagMs), whose lag is the sample time minus the applied append time on the active controller too. metadata_load_error_count is metadata-load-error-count. pending_record_processing_time_us_avg and _max are the Mean and Max of MetadataBatchProcessingTimeUs. Not exported: metadata-apply-error-count and MetadataErrorCount, because applying a decoded record to the image cannot fail and a controller stops on a replay fault instead of counting it. The gauges refresh on the broker polling interval, not at scrape.",
     },
     KipAnnotation {
         key: "KIP-841",

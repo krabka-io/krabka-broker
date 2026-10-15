@@ -203,6 +203,11 @@ pub(crate) struct JavaTranslation {
     /// How each backreference that `pattern` writes as `(?i:\1)` compares in
     /// Java, in the order they appear in it.
     pub(crate) backref_folds: Vec<BackrefFold>,
+    /// For each `\R` that `pattern` writes, in order, whether a quantifier
+    /// follows it in the Java pattern. Java binds that quantifier to the `\R`
+    /// alone, and the one after `(?:\R)` to the group, which it matches
+    /// another way. `fancy_regex` parses the two the same.
+    pub(crate) linebreak_atoms: Vec<bool>,
 }
 
 /// Rewrite a `java.util.regex.Pattern` into `fancy_regex` syntax, or `None`
@@ -220,9 +225,9 @@ pub(crate) struct JavaTranslation {
 /// `fancy_regex` lacks, becomes escaped literals before anything else is read,
 /// as Java does it.
 ///
-/// Five things read differently by default, and the rewrite gives the Java
+/// Seven things read differently by default, and the rewrite gives the Java
 /// reading, following the flags in force at each place (`(?s)`, `(?d)`,
-/// `(?U)`, `(?i)`, `(?u)` and `(?x)`, alone or scoped to a group):
+/// `(?m)`, `(?U)`, `(?i)`, `(?u)` and `(?x)`, alone or scoped to a group):
 ///
 /// - `\w`, `\d`, `\s`, `\b` and their negations are ASCII, where
 ///   `fancy_regex`'s are Unicode, until `(?U)` (`UNICODE_CHARACTER_CLASS`)
@@ -233,6 +238,13 @@ pub(crate) struct JavaTranslation {
 /// - `.` does not match `\n`, `\r`, U+0085, U+2028 or U+2029, where
 ///   `fancy_regex`'s stops at `\n` only, until `(?s)` (`DOTALL`) lets it match
 ///   any, or `(?d)` (`UNIX_LINES`) leaves `\n` the only line terminator.
+/// - `$` and `\Z` also match before a line terminator that ends the input,
+///   and under `(?m)` (`MULTILINE`) `$` and `^` match at every line
+///   terminator, where `fancy_regex`'s know `\n` only and its `\Z` skips any
+///   number of them. The rewrite writes them as look-arounds ([`dollar`] and
+///   [`caret`]).
+/// - `\h`, `\v` and their negations are Java's horizontal and vertical
+///   whitespace, where `fancy_regex` reads other chars ([`java_space`]).
 /// - `(?i)` (`CASE_INSENSITIVE`) folds ASCII case only, where `fancy_regex`'s
 ///   `i` folds Unicode case, until `(?u)` (`UNICODE_CASE`) or `(?U)` asks for
 ///   Unicode folding, and Java's Unicode folding is not `fancy_regex`'s. The
@@ -259,6 +271,7 @@ pub(crate) fn translate_java(pattern: &str) -> Option<JavaTranslation> {
         prior_run: 0,
         at: 0,
         backref_folds: Vec::new(),
+        linebreak_atoms: Vec::new(),
     };
     while translator.at < chars.len() {
         translator.step()?;
@@ -266,6 +279,7 @@ pub(crate) fn translate_java(pattern: &str) -> Option<JavaTranslation> {
     Some(JavaTranslation {
         pattern: translator.out,
         backref_folds: translator.backref_folds,
+        linebreak_atoms: translator.linebreak_atoms,
     })
 }
 
@@ -290,6 +304,8 @@ struct Translator<'a> {
     at: usize,
     /// The fold of each backreference under a case flag written so far.
     backref_folds: Vec<BackrefFold>,
+    /// See [`JavaTranslation::linebreak_atoms`].
+    linebreak_atoms: Vec<bool>,
 }
 
 impl Translator<'_> {
@@ -333,6 +349,10 @@ impl Translator<'_> {
                 self.out.push_str(JAVA_DOT);
                 self.at += 1;
             }
+            '^' if !self.in_class() && self.scope.dot.multiline => {
+                self.push_anchor(caret(self.scope.dot), 1);
+            }
+            '$' if !self.in_class() => self.push_anchor(dollar(self.scope.dot), 1),
             '{' if !self.in_class() => self.braces()?,
             '&' if self.in_class() => self.ampersand()?,
             _ => self.atom(u32::from(c), 1)?,
@@ -380,6 +400,38 @@ impl Translator<'_> {
                     }
                     None => self.copy(len),
                 }
+            }
+            // `\Z` is the `$` of no `(?m)`.
+            Escape::Other if !in_class && self.chars.get(self.at + 1) == Some(&'Z') => {
+                let dot = Dot {
+                    multiline: false,
+                    ..self.scope.dot
+                };
+                self.push_anchor(dollar(dot), len);
+            }
+            // Java reads `\v` as the char `\x0B` where it starts a range.
+            Escape::Other
+                if in_class
+                    && self.chars.get(self.at + 1) == Some(&'v')
+                    && self.chars.get(self.at + len) == Some(&'-') =>
+            {
+                self.atom(0x0B, len)?;
+            }
+            Escape::Other
+                if self
+                    .chars
+                    .get(self.at + 1)
+                    .is_some_and(|&next| java_space(next, in_class).is_some()) =>
+            {
+                let next = self.chars[self.at + 1];
+                self.out.push_str(java_space(next, in_class)?);
+                self.at += len;
+            }
+            // `\R`, whose quantifier [`JavaTranslation::linebreak_atoms`]
+            // records.
+            Escape::Other if !in_class && self.chars.get(self.at + 1) == Some(&'R') => {
+                self.linebreak_atoms.push(self.quantifier_at(self.at + len));
+                self.copy(len);
             }
             Escape::BackRef | Escape::Other => {
                 let ascii = self
@@ -470,6 +522,30 @@ impl Translator<'_> {
         } else {
             java_case::literal(code, || self.in_literal_run(after))
         }
+    }
+
+    /// Writes `anchor`, a zero-width test, for the token of `len` chars here.
+    /// `fancy_regex` takes no quantifier after a look-around, so where one
+    /// follows, the anchor is written as an alternation whose other branch
+    /// never matches. Java reads a quantified anchor as the anchor when the
+    /// quantifier's minimum is one or more, and as nothing when it is zero,
+    /// and so does that alternation.
+    fn push_anchor(&mut self, anchor: &str, len: usize) {
+        if self.quantifier_at(self.at + len) {
+            self.out.push_str("(?:");
+            self.out.push_str(anchor);
+            self.out.push_str("|(?!))");
+        } else {
+            self.out.push_str(anchor);
+        }
+        self.at += len;
+    }
+
+    /// Whether a quantifier starts at `at`, past any `(?x)` whitespace and
+    /// comment, as Java's `closure` peeks for one.
+    fn quantifier_at(&self, at: usize) -> bool {
+        let at = at + self.ignored_len(at);
+        matches!(self.chars.get(at), Some('*' | '+' | '?' | '{'))
     }
 
     /// Whether Java reads the literal char that ends before `after` in a run
@@ -657,6 +733,8 @@ struct Dot {
     dotall: bool,
     /// `d` (`UNIX_LINES`): `\n` is the only line terminator.
     unix_lines: bool,
+    /// `m` (`MULTILINE`): `^` and `$` match at the line terminators too.
+    multiline: bool,
 }
 
 /// The [`Scope`] flags for the case of letters.
@@ -674,6 +752,7 @@ impl Scope {
         match flag {
             's' => self.dot.dotall = on,
             'd' => self.dot.unix_lines = on,
+            'm' => self.dot.multiline = on,
             'i' => self.case.ignore = on,
             'u' => self.case.unicode = on,
             'x' => self.comments = on,
@@ -709,6 +788,61 @@ fn is_meta(source: &[char]) -> bool {
 /// or `UNIX_LINES`).
 const JAVA_DOT: &str = "[^\\n\\r\\x{85}\\x{2028}\\x{2029}]";
 
+/// Java's `$` (`Pattern.Dollar`, or `UnixDollar` under `(?d)`), which also
+/// stands for `\Z` with `multiline` off, written as a look-ahead.
+/// `fancy_regex`'s `$` matches at the end only, and under `(?m)` before `\n`
+/// only.
+///
+/// Without `(?m)` it matches at the end, or before a line terminator that
+/// ends the input: `\r\n`, `\n` after anything but `\r`, `\r`, U+0085,
+/// U+2028 or U+2029. With `(?m)` it matches before any line terminator, and
+/// never between `\r` and `\n`. Under `(?d)` the only line terminator is
+/// `\n`.
+fn dollar(dot: Dot) -> &'static str {
+    match (dot.multiline, dot.unix_lines) {
+        (false, false) => "(?:(?=(?:\\r\\n|(?<!\\r)\\n|[\\r\\x{85}\\x{2028}\\x{2029}])?\\z))",
+        (true, false) => "(?:(?=\\z|(?<!\\r)\\n|[\\r\\x{85}\\x{2028}\\x{2029}]))",
+        (false, true) => "(?:(?=\\n?\\z))",
+        (true, true) => "(?:(?=\\n|\\z))",
+    }
+}
+
+/// Java's `^` under `(?m)` (`Pattern.Caret`, or `UnixCaret` under `(?d)`),
+/// written as look-arounds. It matches at the start, or after a line
+/// terminator, but never between `\r` and `\n`, and never at the end of the
+/// input, even after a line terminator. Without `(?m)`, `^` is the start of
+/// the input in both, and is written as it is.
+fn caret(dot: Dot) -> &'static str {
+    if dot.unix_lines {
+        "(?:(?!\\z)(?:\\A|(?<=\\n)))"
+    } else {
+        "(?:(?!\\z)(?:\\A|(?<=[\\n\\x{85}\\x{2028}\\x{2029}])|(?<=\\r)(?!\\n)))"
+    }
+}
+
+/// Java's `\h`, `\H`, `\v` and `\V` (`HorizWS` and `VertWS`), which
+/// `fancy_regex` reads otherwise, and which `(?U)` does not change. `escape`
+/// is the character after the backslash. Inside a character class the
+/// positive forms are the bare members, and the negations are a nested
+/// negated class. `None` for anything else.
+fn java_space(escape: char, in_class: bool) -> Option<&'static str> {
+    Some(match (escape, in_class) {
+        ('h', false) => {
+            "[\\t\\x20\\xA0\\x{1680}\\x{180E}\\x{2000}-\\x{200A}\\x{202F}\\x{205F}\\x{3000}]"
+        }
+        ('h', true) => {
+            "\\t\\x20\\xA0\\x{1680}\\x{180E}\\x{2000}-\\x{200A}\\x{202F}\\x{205F}\\x{3000}"
+        }
+        ('H', _) => {
+            "[^\\t\\x20\\xA0\\x{1680}\\x{180E}\\x{2000}-\\x{200A}\\x{202F}\\x{205F}\\x{3000}]"
+        }
+        ('v', false) => "[\\n-\\r\\x{85}\\x{2028}\\x{2029}]",
+        ('v', true) => "\\n-\\r\\x{85}\\x{2028}\\x{2029}",
+        ('V', _) => "[^\\n-\\r\\x{85}\\x{2028}\\x{2029}]",
+        _ => return None,
+    })
+}
+
 /// The ASCII form of a Java shorthand class, or word boundary, which is what
 /// Java reads without `(?U)`: `\w` is `[a-zA-Z_0-9]`, `\d` is `[0-9]`, `\s` is
 /// `[ \t\n\x0B\f\r]`, and `\b` is the edge of a run of `\w` (as of JDK 19,
@@ -743,8 +877,9 @@ fn ascii_shorthand(escape: char, in_class: bool) -> Option<&'static str> {
 /// or `(?-:x)` is valid. `fancy_regex` refuses empty groups and gives `U` a
 /// different meaning, so only the flags it shares keep their letter:
 ///
-/// - `m` and `s` (`MULTILINE`, `DOTALL`) pass through, and [`Scope`] follows
-///   `s`.
+/// - `s` (`DOTALL`) passes through, and [`Scope`] follows it.
+/// - `m` (`MULTILINE`) is dropped from the output, and read by
+///   [`translate_java`] to translate `^` and `$`, which it writes out.
 /// - `x` (`COMMENTS`) is read by [`Scope`] and dropped from the output: the
 ///   rewrite removes the whitespace and the comments itself. `fancy_regex`'s
 ///   `x` would also hide the space and the `#` that the rewrite writes after
@@ -770,7 +905,7 @@ fn java_flag_group(rest: &[char]) -> Option<FlagGroup> {
     let mut clearing = false;
     for (n, &c) in rest.iter().enumerate() {
         match c {
-            'm' | 's' => {
+            's' => {
                 if clearing {
                     off.push(c);
                 } else {
@@ -781,7 +916,7 @@ fn java_flag_group(rest: &[char]) -> Option<FlagGroup> {
                     on: !clearing,
                 });
             }
-            'i' | 'u' | 'd' | 'x' | 'U' => changes.push(FlagChange {
+            'i' | 'u' | 'd' | 'm' | 'x' | 'U' => changes.push(FlagChange {
                 flag: c,
                 on: !clearing,
             }),

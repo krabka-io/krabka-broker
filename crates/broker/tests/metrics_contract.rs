@@ -295,6 +295,7 @@ fn every_family_is_accounted_for(metrics: &BrokerMetrics) {
         raft_voters: _,
         raft_observers: _,
         metadata_last_applied_offset: _,
+        metadata_last_committed_offset: _,
         metadata_last_applied_timestamp_ms: _,
         metadata_last_applied_lag_ms: _,
         pending_record_processing_time_us_avg: _,

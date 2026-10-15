@@ -35,9 +35,33 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   visibility and committed offsets, and tells permitted retries from loss. A
   five-minute self-check in the container matrix proves that the judge catches
   an injected missing record and a missed recovery deadline.
+- `qualify.sh budget` compares a candidate build with an earlier revision or
+  with pinned Kafka 4.3.1 over a predeclared RF=3 workload matrix, in
+  interleaved rounds. `krabka-parse-benches` assembles every raw trial into a
+  versioned results record and judges it against the materiality and variance
+  budgets of `packaging/performance/regression-contract.json`, with the same
+  median and MAD rule as the criterion lane. A lost or duplicated record
+  always rejects. See
+  [Performance regression budgets](docs/operations/performance-budgets.md).
 
 ### Fixed
 
+- With `preallocate=true`, a segment's `O_DIRECT` writes now align their
+  buffers, offsets and lengths to the filesystem block (up to 4 KiB). Before,
+  they used the kernel's minimum `O_DIRECT` alignment, often 512 bytes, or a
+  few bytes for a buffer on NVMe, and ext4 sent almost every write down its
+  unaligned path: an exclusive inode lock, a wait for the file's other direct
+  writes, and a separate zeroing write. On an ext4 test disk one partition's
+  direct append rate rose about threefold. The on-disk format does not
+  change: the zeros an active segment can carry past its last batch stay
+  within one block of at most 4 KiB, as `docs/persisted_formats.md` already
+  states (#1370).
+- A consumer `Fetch` that its fetch session refuses (for example
+  `FETCH_SESSION_ID_NOT_FOUND`) is now charged to the client's
+  `request_percentage` and `consumer_byte_rate` quotas, as Kafka's
+  `SessionErrorContext` is, and its error response carries the throttle.
+  Before, a client retrying a stale session was never throttled. A follower's
+  refused fetch stays exempt.
 - A long-polling `Fetch` is no longer charged its wait to
   `request_percentage`. Kafka parks the wait in the fetch purgatory, off the
   request-handler thread, and charges only the handler's own time. Before, a
