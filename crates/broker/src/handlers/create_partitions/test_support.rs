@@ -56,6 +56,18 @@ pub fn topic_req(
     }
 }
 
+pub fn assigned_topic(
+    name: &str,
+    count: i32,
+    assignments: Vec<CreatePartitionsAssignment>,
+) -> CreatePartitionsTopic {
+    topic_req()
+        .name(name)
+        .count(TopicPartitionCount(count))
+        .maybe_assignments(Some(assignments))
+        .call()
+}
+
 #[derive(Clone, Copy, Default)]
 pub enum PartitionMutation {
     #[default]

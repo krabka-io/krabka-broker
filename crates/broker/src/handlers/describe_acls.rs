@@ -343,11 +343,10 @@ mod tests {
 
         let resp = describe_alice_orders(&broker, &ctx);
 
-        let expected = krabka_macros::unthrottled_wire!(DescribeAclsResponse {
-            error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
-            error_message: Some("Request DescribeAcls needs DESCRIBE permission.".into()),
-            resources: Vec::new(),
-        });
+        let expected = DescribeAclsResponse::error(
+            codes::CLUSTER_AUTHORIZATION_FAILED,
+            Some("Request DescribeAcls needs DESCRIBE permission.".into()),
+        );
         assert!(resp == expected);
         broker_handle.shutdown().await;
     }
@@ -362,11 +361,10 @@ mod tests {
 
         let resp = describe_alice_orders(&broker, &ctx);
 
-        let expected = krabka_macros::unthrottled_wire!(DescribeAclsResponse {
-            error_code: codes::SECURITY_DISABLED,
-            error_message: Some("No Authorizer is configured on the broker".into()),
-            resources: Vec::new(),
-        });
+        let expected = DescribeAclsResponse::error(
+            codes::SECURITY_DISABLED,
+            Some("No Authorizer is configured on the broker".into()),
+        );
         assert!(resp == expected);
         broker_handle.shutdown().await;
     }

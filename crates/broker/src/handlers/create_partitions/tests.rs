@@ -10,8 +10,8 @@ use {
         handlers::{
             RequestContext,
             create_partitions::test_support::{
-                PartitionMutation, VERSION, assn, expected_response, expected_result, request,
-                seed_controller_quota, seed_topic, topic_req,
+                PartitionMutation, VERSION, assigned_topic, assn, expected_response,
+                expected_result, request, seed_controller_quota, seed_topic, topic_req,
             },
             test_support::{
                 ALL_BROKERS_FENCED_PARTITION_ERROR, LiveBrokerFixture,
@@ -246,13 +246,7 @@ async fn handle_rejects_an_unplaceable_new_diskless_partition() {
         .await
         .expect("mark topic diskless");
     let req = request(
-        vec![
-            topic_req()
-                .name("diskless-grow")
-                .count(2)
-                .maybe_assignments(Some(vec![assn(&[1])]))
-                .call(),
-        ],
+        vec![assigned_topic("diskless-grow", 2, vec![assn(&[1])])],
         PartitionMutation::Apply,
     );
 
@@ -503,13 +497,11 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
         let broker = broker_handle.broker_arc_for_test();
         let count = 1 + i32::try_from(lists.len()).expect("count");
         let req = request(
-            vec![
-                topic_req()
-                    .name("grow")
-                    .count(count)
-                    .maybe_assignments(Some(lists.iter().map(|ids| assn(ids)).collect()))
-                    .call(),
-            ],
+            vec![assigned_topic(
+                "grow",
+                count,
+                lists.iter().map(|ids| assn(ids)).collect(),
+            )],
             PartitionMutation::Apply,
         );
 

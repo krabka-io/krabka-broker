@@ -317,56 +317,48 @@ impl BrokerConfig {
         for (name, value) in [
             (
                 "self_registration_max_attempts",
-                self.self_registration_max_attempts,
+                self.self_registration_max_attempts == 0,
             ),
             (
                 "client_metrics_stale_push_intervals",
-                self.client_metrics_stale_push_intervals,
+                self.client_metrics_stale_push_intervals == 0,
             ),
-        ] {
-            if value == 0 {
-                return Err(BrokerError::InvalidRuntimeConfig(format!(
-                    "{name} must be positive"
-                )));
-            }
-        }
-        for (name, value) in [
             (
                 "client_metrics_otlp_queue_capacity",
-                self.client_metrics_otlp_queue_capacity,
+                self.client_metrics_otlp_queue_capacity == 0,
             ),
             (
                 "audit_event_queue_capacity",
-                self.audit_event_queue_capacity,
+                self.audit_event_queue_capacity == 0,
             ),
             (
                 "coordinator_actor_mailbox_capacity",
-                self.coordinator_actor_mailbox_capacity,
+                self.coordinator_actor_mailbox_capacity == 0,
             ),
             (
                 "diskless_wal_local_replica_count",
-                self.diskless_wal_local_replica_count,
+                self.diskless_wal_local_replica_count == 0,
             ),
             (
                 "unclean_recovery_queue_capacity",
-                self.unclean_recovery_queue_capacity,
+                self.unclean_recovery_queue_capacity == 0,
             ),
             (
                 "share_session_cache_max_when_unlimited",
-                self.share_session_cache_max_when_unlimited,
+                self.share_session_cache_max_when_unlimited == 0,
             ),
-            ("barrier_max_groups", self.barrier_max_groups),
+            ("barrier_max_groups", self.barrier_max_groups == 0),
             (
                 "barrier_max_topics_per_group",
-                self.barrier_max_topics_per_group,
+                self.barrier_max_topics_per_group == 0,
             ),
-            ("max_produce_group", self.max_produce_group),
+            ("max_produce_group", self.max_produce_group == 0),
             (
                 "partition_writer_queue_depth",
-                self.partition_writer_queue_depth,
+                self.partition_writer_queue_depth == 0,
             ),
         ] {
-            if value == 0 {
+            if value {
                 return Err(BrokerError::InvalidRuntimeConfig(format!(
                     "{name} must be positive"
                 )));

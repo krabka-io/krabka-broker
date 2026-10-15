@@ -17,6 +17,7 @@ use {
         },
         task_util::ask,
     },
+    krabka_log::Offset,
     krabka_protocol::{
         owned::{
             consumer_group_heartbeat_request::{ConsumerGroupHeartbeatRequest, TopicPartitions},
@@ -368,4 +369,20 @@ pub async fn fetch_offsets(handle: &GroupActorHandle) -> GroupOffsets {
     })
     .await
     .unwrap()
+}
+
+pub async fn update_committed_offset(handle: &GroupActorHandle, offset: Offset, leader_epoch: i32) {
+    ask(&handle.tx, |reply| GroupActorMessage::UpdateCommitted {
+        entries: vec![(("t".to_string(), 0), OffsetEntry {
+            offset,
+            leader_epoch,
+            metadata: String::new(),
+            commit_timestamp_ms: 0,
+            expire_timestamp_ms: None,
+            topic_id: None,
+        })],
+        reply,
+    })
+    .await
+    .unwrap();
 }

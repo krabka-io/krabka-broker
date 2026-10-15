@@ -145,9 +145,8 @@ pub(super) fn spawn_broker_gauge_updater(
         let mut tick = tokio::time::interval(poll_interval.to_std());
         let mut previous_voted_directory = None;
         loop {
-            tokio::select! {
-                _ = tick.tick() => {}
-                () = shutdown.cancelled() => return,
+            if !super::tick_or_shutdown(&mut tick, &shutdown).await {
+                return;
             }
             let led = partitions
                 .arcs()

@@ -232,28 +232,27 @@ fn decode_state_record(partition: PartitionIndex, record: &Record) -> Option<Sta
     match key.kind {
         RecordKind::Group => Some(StateRecord::Group {
             group: key.group,
-            value: match value {
-                None => None,
-                Some(bytes) => Some(keep_decoded(partition, decode_group(bytes))?),
-            },
+            value: decode_optional_value(partition, value, decode_group),
         }),
         RecordKind::InjectionStart => Some(StateRecord::InjectionStart {
             group: key.group,
             epoch: key.epoch,
-            value: match value {
-                None => None,
-                Some(bytes) => Some(keep_decoded(partition, decode_injection_start(bytes))?),
-            },
+            value: decode_optional_value(partition, value, decode_injection_start),
         }),
         RecordKind::Cut => Some(StateRecord::Cut {
             group: key.group,
             epoch: key.epoch,
-            value: match value {
-                None => None,
-                Some(bytes) => Some(keep_decoded(partition, decode_cut(bytes))?),
-            },
+            value: decode_optional_value(partition, value, decode_cut),
         }),
     }
+}
+
+fn decode_optional_value<T>(
+    partition: PartitionIndex,
+    value: Option<&[u8]>,
+    decode: impl FnOnce(&[u8]) -> Result<T, krabka_protocol::ProtocolError>,
+) -> Option<T> {
+    value.and_then(|bytes| keep_decoded(partition, decode(bytes)))
 }
 
 /// Keep a decoded value, and drop one that does not decode.

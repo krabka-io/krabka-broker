@@ -5,7 +5,7 @@
 use {
     super::{
         ProductInfo,
-        envelope::{metadata, status_id},
+        envelope::{metadata, status_id, user},
     },
     crate::event::{AuditEndpoint, AuditOutcome, AuditPrincipal},
     serde_json::json,
@@ -33,7 +33,7 @@ pub(super) fn ocsf_authentication(
         "status_id": status_id(outcome),
         "status_detail": reason,
         "auth_protocol": mechanism,
-        "actor": { "user": { "name": principal.name, "type": principal.auth_method } },
+        "actor": { "user": user(principal) },
         "src_endpoint": { "ip": source.ip, "port": source.port },
         "metadata": metadata(product),
     })

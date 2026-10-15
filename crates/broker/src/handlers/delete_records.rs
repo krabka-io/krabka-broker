@@ -102,6 +102,20 @@ use {
     },
 };
 
+fn delete_records_transition<'a>(
+    target: &'a str,
+    proposal_id: Option<Uuid>,
+    reason: &'a str,
+) -> GatedTransition<'a> {
+    GatedTransition {
+        action: BreakGlassAction::DeleteRecords,
+        target,
+        phase: PrivilegedPhase::Applied,
+        proposal_id,
+        reason,
+    }
+}
+
 pub(crate) async fn handle(
     broker: &Broker,
     req: DeleteRecordsRequest,
@@ -466,13 +480,11 @@ async fn trim_one(
         &env.broker.audit_log,
         &env.broker.config.break_glass,
         env.ctx,
-        &GatedTransition {
-            action: BreakGlassAction::DeleteRecords,
-            target: &audit_target,
-            phase: PrivilegedPhase::Applied,
-            proposal_id: consumed.as_ref().and_then(consumed_proposal_id),
-            reason: "record trim admitted",
-        },
+        &delete_records_transition(
+            &audit_target,
+            consumed.as_ref().and_then(consumed_proposal_id),
+            "record trim admitted",
+        ),
     )
     .await
     {
@@ -535,13 +547,11 @@ async fn trim_one(
                 &env.broker.audit_log,
                 &env.broker.config.break_glass,
                 env.ctx,
-                &GatedTransition {
-                    action: BreakGlassAction::DeleteRecords,
-                    target: &audit_target,
-                    phase: PrivilegedPhase::Applied,
+                &delete_records_transition(
+                    &audit_target,
                     proposal_id,
-                    reason: "records deleted below the trim point",
-                },
+                    "records deleted below the trim point",
+                ),
             );
             let code = if waiting_for.is_some() {
                 // Kafka's `DelayedDeleteRecords` starts every waiting row at

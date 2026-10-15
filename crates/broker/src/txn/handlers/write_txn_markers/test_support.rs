@@ -17,6 +17,19 @@ use {
     std::{path::Path, sync::Arc},
 };
 
+#[derive(Clone, Copy)]
+pub(crate) struct PartitionAnswer {
+    pub(crate) partition_index: i32,
+    pub(crate) error_code: i16,
+}
+
+pub(crate) fn answer(partition_index: i32, error_code: i16) -> PartitionAnswer {
+    PartitionAnswer {
+        partition_index,
+        error_code,
+    }
+}
+
 /// Open `topic-partition` under `log_dir` and register it with the broker.
 /// The partition starts with no local leader role; the caller installs one.
 pub(crate) fn open_partition(

@@ -395,9 +395,7 @@ async fn controlled_shutdown_timeout_stops_listener_and_reports_error() {
 async fn a_fatal_controller_fault_latches_self_shutdown_and_names_its_reason() {
     let dir = tempdir().unwrap();
     // The default config supports no unstable feature level.
-    let handle = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-        .await
-        .expect("broker start");
+    let handle = start_default_broker(dir.path()).await.handle;
     let mut should_shutdown = handle.should_shutdown_rx();
     check!(!*should_shutdown.borrow());
     check!(handle.fatal_fault().is_none());
@@ -477,9 +475,7 @@ async fn only_a_stop_without_a_fatal_fault_leaves_a_clean_shutdown_proof() {
         ("a stop after a fatal fault", true, false),
     ] {
         let dir = tempdir().unwrap();
-        let handle = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-            .await
-            .expect("broker start");
+        let handle = start_default_broker(dir.path()).await.handle;
         if faulted {
             let mut should_shutdown = handle.should_shutdown_rx();
             latch_unsupported_fault(&handle, &mut should_shutdown).await;

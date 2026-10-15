@@ -6,7 +6,6 @@
 use {
     super::{
         Engine, METADATA_LOG_CLEAN_INTERVAL,
-        offsets::leader_alone_is_majority,
         timing::{
             election_timeout_ms, election_timer_starts_election, following_leader_for_role,
             heartbeat_period, instant_from_clock_base, should_fail_waiters_on_leadership_change,
@@ -395,15 +394,10 @@ impl Engine {
                 // Kafka's controller activation: the first write of the
                 // epoch seeds a log that holds no `metadata.version`.
                 self.complete_activation();
-                if leader_alone_is_majority(
-                    self.core.quorum_state().majority(),
-                    self.core.is_voter(),
-                ) {
-                    // There is no follower Fetch acknowledgement to drive HWM
-                    // recomputation in a one-voter quorum. The local append is
-                    // already a majority, so commit the current-epoch barrier.
-                    self.advance_and_apply(self.log.log_end_offset());
-                }
+                // There is no follower Fetch acknowledgement to drive HWM
+                // recomputation in a one-voter quorum. The local append is
+                // already a majority, so commit the current-epoch barrier.
+                self.advance_if_single_voter();
             }
             Action::AdvanceHighWatermark(n) => {
                 // `n` is the core's raw i64 HWM target; wrap into the log domain.

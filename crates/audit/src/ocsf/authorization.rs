@@ -3,7 +3,10 @@
 //! module, so the record is always a failure.
 
 use {
-    super::{ProductInfo, envelope::metadata},
+    super::{
+        ProductInfo,
+        envelope::{metadata, user},
+    },
     crate::event::{AuditEndpoint, AuditPrincipal},
     serde_json::json,
 };
@@ -29,7 +32,7 @@ pub(super) fn ocsf_authorization_denied(
         "time": time_ms,
         "status_id": 2,
         "operation": operation,
-        "actor": { "user": { "name": principal.name, "type": principal.auth_method } },
+        "actor": { "user": user(principal) },
         "src_endpoint": { "ip": source.ip, "port": source.port },
         "resources": [ { "type": resource_type, "name": resource_name } ],
         "metadata": metadata(product),

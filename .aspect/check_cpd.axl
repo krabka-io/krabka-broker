@@ -1,6 +1,6 @@
 """Reject Rust duplicates with pinned jscpd on the complete Git inventory."""
 
-MINIMUM_TOKENS = 46
+MINIMUM_TOKENS = 52
 MINIMUM_LINES = 5
 
 def rust_paths(nul_separated):

@@ -214,7 +214,7 @@ struct HotTailEntry {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check, bytes::BytesMut, krabka_protocol::records::Record};
+    use {super::*, crate::test_support::default_records_batch, assert2::check, bytes::BytesMut};
 
     /// An offset above every cached batch, for a lookup the window does not
     /// bound.
@@ -357,17 +357,8 @@ mod tests {
     }
 
     fn batch_bytes(base_offset: i64, records: i32) -> Bytes {
-        let mut batch = RecordBatch {
-            base_offset,
-            last_offset_delta: records - 1,
-            ..RecordBatch::default()
-        };
-        for offset_delta in 0..records {
-            batch.records.push(Record {
-                offset_delta,
-                ..Record::default()
-            });
-        }
+        let mut batch = default_records_batch().count(records).call();
+        batch.base_offset = base_offset;
         let mut buf = BytesMut::new();
         batch.encode(&mut buf).unwrap();
         buf.freeze()

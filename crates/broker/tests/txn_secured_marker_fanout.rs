@@ -414,15 +414,7 @@ async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {
     // Connect to the coordinator and run the transaction control plane.
     let coord = sasl_client(&format!("{}:{}", coordinator.host, coordinator.port)).await;
 
-    let init = coord
-        .send(
-            init_producer_request()
-                .maybe_transactional_id(Some(TID.into()))
-                .call(),
-        )
-        .await
-        .expect("init producer id");
-    assert!(init.error_code == 0, "InitProducerId failed: {init:?}");
+    let init = init_producer(&coord, TID).await;
     let (pid, epoch) = (init.producer_id, init.producer_epoch);
 
     // AddPartitionsToTxn for the remote-led partition. Fill both the v4+

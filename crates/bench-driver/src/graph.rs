@@ -35,7 +35,7 @@ use {
     },
 };
 
-fn push_fmt(output: &mut String, args: Arguments<'_>) {
+pub(super) fn push_fmt(output: &mut String, args: Arguments<'_>) {
     output
         .write_fmt(args)
         .expect("writing formatted data to a String cannot fail");

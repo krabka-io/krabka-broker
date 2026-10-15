@@ -10,9 +10,12 @@ use {
         METADATA_TOPIC_ID, QUORUM_EPOCH_VERSION, VOTE_VERSION, cluster_id_to_wire, encode_body,
         epoch_from_wire, epoch_to_wire, node_from_wire, node_to_wire, uuid_from_wire, uuid_to_wire,
     },
-    crate::kraft::{
-        snapshot_fetch::SnapshotId,
-        types::{Epoch, NodeId},
+    crate::{
+        kraft::{
+            snapshot_fetch::SnapshotId,
+            types::{Epoch, NodeId},
+        },
+        voter_wire::endpoint as voter_endpoint,
     },
     base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD},
     bytes::Bytes,
@@ -411,11 +414,7 @@ pub fn decode_begin(buf: &[u8]) -> Option<PeerRequest> {
         leader_endpoints: req
             .leader_endpoints
             .iter()
-            .map(|endpoint| VoterEndpoint {
-                name: endpoint.name.clone(),
-                host: endpoint.host.clone(),
-                port: endpoint.port,
-            })
+            .map(|endpoint| voter_endpoint(&endpoint.name, &endpoint.host, endpoint.port))
             .collect(),
     })
 }

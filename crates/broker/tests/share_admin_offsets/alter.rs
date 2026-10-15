@@ -21,6 +21,22 @@ use {
     std::time::Duration,
 };
 
+fn alter_request(start_offset: i64) -> AlterShareGroupOffsetsRequest {
+    AlterShareGroupOffsetsRequest {
+        group_id: "g1".into(),
+        topics: vec![AlterShareGroupOffsetsRequestTopic {
+            topic_name: "t".into(),
+            partitions: vec![AlterShareGroupOffsetsRequestPartition {
+                partition_index: 0,
+                start_offset,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
 /// Alter resets the SPSO of an empty group.
 ///
 /// The persister re-initializes its state at the requested offset, the broker
@@ -47,19 +63,7 @@ async fn alter_resets_empty_group() {
     let mut altered = false;
     for _ in 0..40 {
         let resp = client
-            .send(AlterShareGroupOffsetsRequest {
-                group_id: "g1".into(),
-                topics: vec![AlterShareGroupOffsetsRequestTopic {
-                    topic_name: "t".into(),
-                    partitions: vec![AlterShareGroupOffsetsRequestPartition {
-                        partition_index: 0,
-                        start_offset: 5,
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
+            .send(alter_request(5))
             .await
             .expect("AlterShareGroupOffsets");
         if resp.error_code == NONE && resp.responses[0].partitions[0].error_code == NONE {
@@ -108,19 +112,7 @@ async fn alter_non_empty_group_fenced() {
     wait_for_share_init(&broker, "g1", tid, 0).await;
 
     let resp = client
-        .send(AlterShareGroupOffsetsRequest {
-            group_id: "g1".into(),
-            topics: vec![AlterShareGroupOffsetsRequestTopic {
-                topic_name: "t".into(),
-                partitions: vec![AlterShareGroupOffsetsRequestPartition {
-                    partition_index: 0,
-                    start_offset: 1,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(alter_request(1))
         .await
         .expect("AlterShareGroupOffsets");
     assert!(

@@ -58,6 +58,13 @@ fn act_as(principal_type: &str, name: &str) -> CreateDelegationTokenRequest {
     }
 }
 
+fn self_mint_request() -> CreateDelegationTokenRequest {
+    CreateDelegationTokenRequest {
+        max_lifetime_ms: -1,
+        ..Default::default()
+    }
+}
+
 /// The response a refusal carries: `code`, both principals, and `timestamp`
 /// in all three timestamp fields (`-1` on the broker, `0` from the
 /// controller).
@@ -111,10 +118,7 @@ async fn refusals_follow_kafka_order_and_name_both_principals() {
         controller,
         secret,
     } = TokenFixture::new().await;
-    let self_mint = CreateDelegationTokenRequest {
-        max_lifetime_ms: -1,
-        ..Default::default()
-    };
+    let self_mint = self_mint_request();
     let group_renewer = CreateDelegationTokenRequest {
         renewers: vec![renewer("User", "bob"), renewer("Group", "eng")],
         ..self_mint.clone()
@@ -516,10 +520,7 @@ async fn lifetime_past_i64_max_saturates() {
         controller,
         secret,
     } = TokenFixture::new().await;
-    let req = CreateDelegationTokenRequest {
-        max_lifetime_ms: -1,
-        ..Default::default()
-    };
+    let req = self_mint_request();
 
     let resp = handle(
         &req,
@@ -551,10 +552,7 @@ async fn non_positive_configured_periods_mint_nothing() {
         controller,
         secret,
     } = TokenFixture::new().await;
-    let req = CreateDelegationTokenRequest {
-        max_lifetime_ms: -1,
-        ..Default::default()
-    };
+    let req = self_mint_request();
 
     for (ceiling_ms, renew_ms) in [(0, RENEW_24H_MS), (60_000, 0)] {
         let resp = handle(

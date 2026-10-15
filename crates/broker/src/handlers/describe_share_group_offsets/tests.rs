@@ -16,8 +16,8 @@ use {
                 DescribeShareGroupOffsetsRequestGroup, DescribeShareGroupOffsetsRequestTopic,
             },
             describe_share_group_offsets_response::{
-                self, DescribeShareGroupOffsetsResponsePartition,
-                DescribeShareGroupOffsetsResponseTopic,
+                self, DescribeShareGroupOffsetsResponseGroup,
+                DescribeShareGroupOffsetsResponsePartition, DescribeShareGroupOffsetsResponseTopic,
             },
         },
         primitives::uuid::Uuid,
@@ -61,6 +61,15 @@ fn request(groups: &[RequestGroup<'_>]) -> DescribeShareGroupOffsetsRequest {
     }
 }
 
+fn group_error(group_id: &str, error_code: i16) -> DescribeShareGroupOffsetsResponseGroup {
+    krabka_macros::tagged_wire!(DescribeShareGroupOffsetsResponseGroup {
+        group_id: group_id.into(),
+        topics: Vec::new(),
+        error_code,
+        error_message: None,
+    })
+}
+
 krabka_macros::wire_codec_helpers! {
     test_context ["admin-client"];
 }
@@ -88,18 +97,8 @@ async fn handle_error_scenarios_preserve_expected_rows() {
             ],
             krabka_macros::unthrottled_wire!(DescribeShareGroupOffsetsResponse {
                 groups: vec![
-                    krabka_macros::tagged_wire!(DescribeShareGroupOffsetsResponseGroup {
-                        group_id: "g1".into(),
-                        topics: Vec::new(),
-                        error_code: codes::UNSUPPORTED_VERSION,
-                        error_message: None,
-                    }),
-                    krabka_macros::tagged_wire!(DescribeShareGroupOffsetsResponseGroup {
-                        group_id: "g2".into(),
-                        topics: Vec::new(),
-                        error_code: codes::UNSUPPORTED_VERSION,
-                        error_message: None,
-                    }),
+                    group_error("g1", codes::UNSUPPORTED_VERSION),
+                    group_error("g2", codes::UNSUPPORTED_VERSION),
                 ],
             }),
         ),
@@ -113,14 +112,7 @@ async fn handle_error_scenarios_preserve_expected_rows() {
                     }],
                 }],
                 krabka_macros::unthrottled_wire!(DescribeShareGroupOffsetsResponse {
-                    groups: vec![krabka_macros::tagged_wire!(
-                        DescribeShareGroupOffsetsResponseGroup {
-                            group_id: "g1".into(),
-                            topics: Vec::new(),
-                            error_code: codes::GROUP_AUTHORIZATION_FAILED,
-                            error_message: None,
-                        }
-                    )],
+                    groups: vec![group_error("g1", codes::GROUP_AUTHORIZATION_FAILED)],
                 }),
             ),
         ShareRefusalCase {

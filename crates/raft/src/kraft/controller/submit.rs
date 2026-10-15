@@ -6,8 +6,8 @@ use {
     super::{
         CommitWaiter, Engine, KraftController,
         offsets::{
-            assigned_record_offset, hwm_reaches_waiter, leader_alone_is_majority,
-            submit_waiter_need_offset, validate_append_result,
+            assigned_record_offset, hwm_reaches_waiter, submit_waiter_need_offset,
+            validate_append_result,
         },
         records::{decode_committed_value, metadata_record_batch, next_batch_offset},
     },
@@ -721,9 +721,7 @@ impl Engine {
         });
         // Drive a self-fetch so the core recomputes the HWM (single voter
         // commits immediately; multi-voter commits when followers fetch).
-        if leader_alone_is_majority(self.core.quorum_state().majority(), self.core.is_voter()) {
-            self.advance_and_apply(self.log.log_end_offset());
-        }
+        self.advance_if_single_voter();
         self.try_resolve_waiters();
     }
 

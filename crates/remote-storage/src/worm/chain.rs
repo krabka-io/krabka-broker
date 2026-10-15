@@ -248,6 +248,14 @@ mod tests {
 
     fn head(byte: u8) -> ChainHead { ChainHead([byte; 32]) }
 
+    fn request_stamp() -> ChainStamp {
+        ChainStamp {
+            epoch_id: epoch(),
+            seq: ManifestSeq(11),
+            prev_head: head(0x5a),
+        }
+    }
+
     fn sample_metadata(
         start_offset: i64,
         state: RemoteLogSegmentState,
@@ -456,18 +464,10 @@ mod tests {
 
     #[yare::parameterized(
         request = {
-            WormChainRecord::request(ChainStamp {
-                epoch_id: epoch(),
-                seq: ManifestSeq(11),
-                prev_head: head(0x5a),
-            }),
+            WormChainRecord::request(request_stamp()),
         },
         receipt = {
-            WormChainRecord::request(ChainStamp {
-                epoch_id: epoch(),
-                seq: ManifestSeq(11),
-                prev_head: head(0x5a),
-            })
+            WormChainRecord::request(request_stamp())
             .with_head(head(0x6b))
             .with_manifest_version(Some("3HL4kqtJlcpXroDTDmjVBH40Nrjfkd".to_string())),
         },
@@ -479,11 +479,7 @@ mod tests {
 
     #[test]
     fn chain_request_and_receipt_next_stamps_are_defined() {
-        let stamp = ChainStamp {
-            epoch_id: epoch(),
-            seq: ManifestSeq(11),
-            prev_head: head(0x5a),
-        };
+        let stamp = request_stamp();
         let request = WormChainRecord::request(stamp);
         let full = request
             .clone()
@@ -511,13 +507,9 @@ mod tests {
     }
 
     fn golden_record() -> WormChainRecord {
-        WormChainRecord::request(ChainStamp {
-            epoch_id: epoch(),
-            seq: ManifestSeq(11),
-            prev_head: head(0x5a),
-        })
-        .with_head(head(0x6b))
-        .with_manifest_version(Some("v1".to_owned()))
+        WormChainRecord::request(request_stamp())
+            .with_head(head(0x6b))
+            .with_manifest_version(Some("v1".to_owned()))
     }
 
     /// The exact custom-metadata bytes of [`golden_record`]. A change here is

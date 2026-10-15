@@ -525,12 +525,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn consume_configured_quota_returns_zero_without_mutating_bucket_for_zero_amount() {
-        let image = image_with_quota()
-            .key("request_percentage")
-            .value(100.0)
-            .call();
+    #[yare::parameterized(
+        zero_amount = { "request_percentage", 100.0, 0 },
+        negative_rate = { "producer_byte_rate", -1.0, 1 },
+        zero_rate = { "producer_byte_rate", 0.0, 1 },
+    )]
+    fn consume_configured_quota_ignores_noop_inputs(quota_key: &str, rate: f64, amount: u64) {
+        let image = image_with_quota().key(quota_key).value(rate).call();
         let buckets = QuotaBuckets::new();
         let initial_rate_called = Arc::new(AtomicBool::new(false));
         let delay_for_overage_called = Arc::new(AtomicBool::new(false));
@@ -541,15 +542,15 @@ mod tests {
                 buckets: &buckets,
                 principal: "alice",
                 client_id: Some(""),
-                quota_key: "request_percentage",
-                amount: 0,
+                quota_key,
+                amount,
                 max_debt_wait: None,
             },
             {
                 let called = Arc::clone(&initial_rate_called);
                 move |_| {
                     called.store(true, Ordering::Relaxed);
-                    100.0
+                    1.0
                 }
             },
             {
@@ -563,42 +564,8 @@ mod tests {
 
         check!(delay == <Time as TimeExt>::ZERO);
         check!(buckets.is_empty());
-        check!(!initial_rate_called.load(Ordering::Relaxed));
-        assert!(!delay_for_overage_called.load(Ordering::Relaxed));
-    }
-
-    #[yare::parameterized(
-        negative_rate = { -1.0 },
-        zero_rate = { 0.0 },
-    )]
-    fn consume_configured_quota_ignores_non_positive_rates(rate: f64) {
-        let image = image_with_quota().value(rate).call();
-        let buckets = QuotaBuckets::new();
-        let initial_rate_called = Arc::new(AtomicBool::new(false));
-
-        let delay = consume_configured_quota(
-            QuotaConsumption {
-                image: &image,
-                buckets: &buckets,
-                principal: "alice",
-                client_id: Some(""),
-                quota_key: "producer_byte_rate",
-                amount: 1,
-                max_debt_wait: None,
-            },
-            {
-                let called = Arc::clone(&initial_rate_called);
-                move |_| {
-                    called.store(true, Ordering::Relaxed);
-                    1.0
-                }
-            },
-            |_, _, _| secs(1),
-        );
-
-        check!(delay == <Time as TimeExt>::ZERO);
-        check!(buckets.is_empty());
         assert2::assert!(!initial_rate_called.load(Ordering::Relaxed));
+        assert2::assert!(!delay_for_overage_called.load(Ordering::Relaxed));
     }
 
     #[test]
