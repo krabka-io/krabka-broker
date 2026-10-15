@@ -4,7 +4,9 @@
 //! apart from the accept loop that consults it.
 
 use {
+    crate::types::NodeId,
     dashmap::DashMap,
+    krabka_metadata::MetadataImage,
     std::{
         net::IpAddr,
         sync::{
@@ -39,6 +41,53 @@ pub struct ConnectionLimits {
     pub max_connections: usize,
     /// `max.connections.per.ip`: live connections from one client IP.
     pub max_connections_per_ip: usize,
+}
+
+/// Kafka's `SocketServerConfigs.MAX_CONNECTIONS_CONFIG`, a dynamic broker
+/// config.
+pub const MAX_CONNECTIONS: &str = "max.connections";
+
+/// Kafka's `SocketServerConfigs.MAX_CONNECTIONS_PER_IP_CONFIG`, a dynamic
+/// broker config.
+pub const MAX_CONNECTIONS_PER_IP: &str = "max.connections.per.ip";
+
+/// A connection cap's dynamic value as Kafka reads it: an `INT` after
+/// `String.trim`, at least `min`.
+fn parse_cap(value: &str, min: i32) -> Option<usize> {
+    let cap: i32 = value.trim_matches(|c: char| c <= ' ').parse().ok()?;
+    if cap < min {
+        return None;
+    }
+    usize::try_from(cap).ok()
+}
+
+impl ConnectionLimits {
+    /// The caps in force for `node_id` as of `image`: the per-broker dynamic
+    /// value, else the cluster default, else `self`, the static caps. Kafka's
+    /// `ConnectionQuotas` takes both from `SocketServer.reconfigure`, for the
+    /// broker's and the controller's socket server alike, so a change
+    /// applies to the next connection accepted.
+    ///
+    /// A stored value Kafka would not apply leaves the next layer in force,
+    /// as `DynamicBrokerConfig` keeps the previous config when the new one
+    /// fails `KafkaConfig` validation. That covers a value that is not an
+    /// `INT` of at least 0, and a `max.connections.per.ip` of 0, which
+    /// `KafkaConfig.validateValues` allows only beside
+    /// `max.connections.per.ip.overrides`, a key krabka does not enforce.
+    #[must_use]
+    pub fn resolve(self, image: &MetadataImage, node_id: NodeId) -> Self {
+        let cap = |key: &str, min: i32, configured: usize| {
+            [image.broker_config(node_id), image.default_broker_config()]
+                .into_iter()
+                .filter_map(|configs| configs?.get(key))
+                .find_map(|value| parse_cap(value, min))
+                .unwrap_or(configured)
+        };
+        Self {
+            max_connections: cap(MAX_CONNECTIONS, 0, self.max_connections),
+            max_connections_per_ip: cap(MAX_CONNECTIONS_PER_IP, 1, self.max_connections_per_ip),
+        }
+    }
 }
 
 /// The connection ceiling that refused an inbound connection.
@@ -270,5 +319,59 @@ mod tests {
         assert!(limiter.per_ip_count(ip) == 1);
         drop(g);
         assert!(limiter.per_ip_count(ip) == 0);
+    }
+
+    /// Apply one dynamic broker config, for node 1 or the cluster default.
+    fn set_broker_config(image: &mut MetadataImage, node: Option<u64>, name: &str, value: &str) {
+        image.apply(&krabka_metadata::MetadataRecord::V1BrokerConfig(
+            krabka_metadata::BrokerConfigRecord {
+                node_id: node.map_or(krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID, NodeId),
+                config_name: name.into(),
+                config_value: Some(value.into()),
+            },
+        ));
+    }
+
+    #[yare::parameterized(
+        static_only = { &[], (10, 5) },
+        cluster_default = { &[(None, MAX_CONNECTIONS, "3")], (3, 5) },
+        per_broker = { &[(Some(1), MAX_CONNECTIONS_PER_IP, "2")], (10, 2) },
+        per_broker_over_default = {
+            &[(None, MAX_CONNECTIONS_PER_IP, "2"), (Some(1), MAX_CONNECTIONS_PER_IP, "4")],
+            (10, 4)
+        },
+        other_broker_ignored = { &[(Some(2), MAX_CONNECTIONS, "1")], (10, 5) },
+        zero_global = { &[(None, MAX_CONNECTIONS, "0")], (0, 5) },
+        zero_per_ip_needs_overrides = { &[(None, MAX_CONNECTIONS_PER_IP, "0")], (10, 5) },
+        zero_per_ip_falls_back_a_layer = {
+            &[(None, MAX_CONNECTIONS_PER_IP, "3"), (Some(1), MAX_CONNECTIONS_PER_IP, "0")],
+            (10, 3)
+        },
+        trimmed = { &[(None, MAX_CONNECTIONS, " 7 ")], (7, 5) },
+        unparsable_falls_back_a_layer = {
+            &[(None, MAX_CONNECTIONS, "2"), (Some(1), MAX_CONNECTIONS, "lots")],
+            (2, 5)
+        },
+        negative_falls_back = { &[(None, MAX_CONNECTIONS_PER_IP, "-1")], (10, 5) },
+    )]
+    fn resolve_layers_broker_then_default_then_static(
+        configs: &[(Option<u64>, &str, &str)],
+        want: (usize, usize),
+    ) {
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        for (node, name, value) in configs {
+            set_broker_config(&mut image, *node, name, value);
+        }
+        let configured = ConnectionLimits {
+            max_connections: 10,
+            max_connections_per_ip: 5,
+        };
+        assert2::assert!(
+            configured.resolve(&image, NodeId(1))
+                == ConnectionLimits {
+                    max_connections: want.0,
+                    max_connections_per_ip: want.1,
+                }
+        );
     }
 }

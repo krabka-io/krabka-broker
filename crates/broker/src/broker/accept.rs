@@ -6,7 +6,6 @@ use {
     crate::{
         broker::Broker,
         config::ListenerSpec,
-        config_keys::resolve_connection_limits,
         network::client::tune_socket,
         quota::{lookup_ip_quota_with_key, positive_f64_to_u64},
     },
@@ -127,11 +126,10 @@ pub(super) async fn accept_loop(
                         // The caps are resolved per accept, so a dynamic
                         // `max.connections` or `max.connections.per.ip`
                         // applies to the next connection without a restart.
-                        let limits = resolve_connection_limits(
-                            &broker.controller.current_image(),
-                            broker.config.node_id,
-                            broker.connections.limits(),
-                        );
+                        let limits = broker
+                            .connections
+                            .limits()
+                            .resolve(&broker.controller.current_image(), broker.config.node_id);
                         let conn_guard = match broker.connections.try_acquire_within(peer_ip, limits) {
                             Ok(guard) => guard,
                             Err(limit) => {

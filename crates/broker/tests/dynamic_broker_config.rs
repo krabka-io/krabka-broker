@@ -33,10 +33,10 @@ use {
         },
     },
     std::{
-        net::SocketAddr,
+        net::{IpAddr, Ipv4Addr, SocketAddr},
         time::{Duration, Instant},
     },
-    tokio::net::TcpStream,
+    tokio::net::{TcpSocket, TcpStream},
 };
 
 /// The client id every request header in this suite carries.
@@ -85,11 +85,20 @@ impl Scope {
 /// `ApiVersions` round trip. The stream is returned so the caller can hold
 /// the slot it takes.
 async fn connect_served(addr: SocketAddr) -> Option<TcpStream> {
+    connect_served_from(addr, None).await
+}
+
+/// [`connect_served`] from the loopback `source` address, or the default one.
+async fn connect_served_from(addr: SocketAddr, source: Option<IpAddr>) -> Option<TcpStream> {
     let mut body = BytesMut::new();
     ApiVersionsRequest::default()
         .encode(&mut body, 0)
         .expect("encode ApiVersions");
-    let mut stream = TcpStream::connect(addr).await.ok()?;
+    let socket = TcpSocket::new_v4().ok()?;
+    if let Some(ip) = source {
+        socket.bind(SocketAddr::new(ip, 0)).ok()?;
+    }
+    let mut stream = socket.connect(addr).await.ok()?;
     kafka_wire::round_trip()
         .stream(&mut stream)
         .client_id(CLIENT_ID)
@@ -104,9 +113,14 @@ async fn connect_served(addr: SocketAddr) -> Option<TcpStream> {
 /// report whether that state was reached within [`PROPAGATION`]. A served
 /// probe is closed at once, so it does not hold a slot.
 async fn eventually_served(addr: SocketAddr, want: bool) -> bool {
+    eventually_served_from(addr, None, want).await
+}
+
+/// [`eventually_served`] from the loopback `source` address.
+async fn eventually_served_from(addr: SocketAddr, source: Option<IpAddr>, want: bool) -> bool {
     let deadline = Instant::now() + PROPAGATION;
     loop {
-        if connect_served(addr).await.is_some() == want {
+        if connect_served_from(addr, source).await.is_some() == want {
             return true;
         }
         if Instant::now() >= deadline {
@@ -204,10 +218,13 @@ async fn describe_broker(
 }
 
 /// A served connection to hold, retried until a slot is free.
-async fn hold_one(addr: SocketAddr) -> TcpStream {
+async fn hold_one(addr: SocketAddr) -> TcpStream { hold_one_from(addr, None).await }
+
+/// [`hold_one`] from the loopback `source` address.
+async fn hold_one_from(addr: SocketAddr, source: Option<IpAddr>) -> TcpStream {
     let deadline = Instant::now() + PROPAGATION;
     loop {
-        if let Some(stream) = connect_served(addr).await {
+        if let Some(stream) = connect_served_from(addr, source).await {
             return stream;
         }
         assert!(Instant::now() < deadline, "no connection slot came free");
@@ -545,4 +562,88 @@ async fn describe_reports_dynamic_values_and_redacts_passwords() {
         let got = describe_broker(addr, resource.clone(), key).await;
         assert!(got == Some(want), "{key} on {resource:?}: {got:#?}");
     }
+}
+
+/// The controller listener of a combined node takes the same dynamic caps,
+/// as Kafka's `DynamicBrokerConfig.addReconfigurables(controller)` registers
+/// the controller's `SocketServer`. The node's own raft and forwarding
+/// connections reach that listener from 127.0.0.1, so the probes come from
+/// 127.0.0.2 and the per-IP cap counts them alone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn per_ip_cap_applies_to_the_controller_listener() {
+    let (handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
+    let controller = handle.controller_addr();
+    let source = Some(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)));
+
+    let set = alter_broker()
+        .addr(addr)
+        .resource_name(String::new())
+        .configs(vec![(
+            "max.connections.per.ip",
+            ConfigOperation::Set,
+            Some("2"),
+        )])
+        .call()
+        .await;
+    assert!(set == accepted(String::new()));
+    let held = (
+        hold_one_from(controller, source).await,
+        hold_one_from(controller, source).await,
+    );
+    assert!(
+        eventually_served_from(controller, source, false).await,
+        "max.connections.per.ip=2 must refuse a third controller connection while two are held"
+    );
+    drop(held);
+
+    let deleted = alter_broker()
+        .addr(addr)
+        .resource_name(String::new())
+        .configs(vec![(
+            "max.connections.per.ip",
+            ConfigOperation::Delete,
+            None,
+        )])
+        .call()
+        .await;
+    assert!(deleted == accepted(String::new()));
+    let held = (
+        hold_one_from(controller, source).await,
+        hold_one_from(controller, source).await,
+    );
+    assert!(
+        eventually_served_from(controller, source, true).await,
+        "deleting max.connections.per.ip must lift the controller listener's cap"
+    );
+    drop(held);
+}
+
+/// `max.connections.per.ip=0` is stored, as Kafka's controller validates
+/// only `atLeast(0)`, but not applied: `KafkaConfig.validateValues` allows 0
+/// only beside `max.connections.per.ip.overrides`, so Kafka's broker keeps
+/// its previous config. Applying it would refuse every client.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zero_per_ip_cap_without_overrides_is_stored_but_not_applied() {
+    let (_handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
+    let set = alter_broker()
+        .addr(addr)
+        .resource_name(String::new())
+        .configs(vec![(
+            "max.connections.per.ip",
+            ConfigOperation::Set,
+            Some("0"),
+        )])
+        .call()
+        .await;
+    assert!(set == accepted(String::new()));
+    let stored = describe_broker(addr, String::new(), "max.connections.per.ip")
+        .await
+        .and_then(|entry| entry.value);
+    assert!(stored.as_deref() == Some("0"));
+    let held = hold_one(addr).await;
+    assert!(
+        connect_served(addr).await.is_some(),
+        "a zero per-IP cap must not refuse clients"
+    );
+    drop(held);
 }
