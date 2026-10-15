@@ -48,3 +48,11 @@ process RSS, file descriptors, disk and network use, and metrics scrape time,
 bytes and series count. `scale/verdict.txt` names the highest passing tier;
 failure of the 10,000-partition attempt is evidence, not permission to describe
 1,000 as a product limit.
+
+## Regression budget mode
+
+`qualify.sh budget before_after <reference-revision>` and `qualify.sh budget
+pinned_kafka` run the predeclared RF=3 workload matrix in interleaved rounds
+and judge the candidate against fixed budgets. A correctness failure always
+rejects. [Performance regression budgets](performance-budgets.md) defines the
+matrix, the results record and the decision rule.

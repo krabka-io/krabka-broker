@@ -452,13 +452,16 @@ krabka_broker_raft_voters 0
 # HELP krabka_broker_raft_observers Number of active KRaft observers.
 # TYPE krabka_broker_raft_observers gauge
 krabka_broker_raft_observers 0
-# HELP krabka_broker_metadata_last_applied_offset Highest metadata record offset applied to the active metadata image.
+# HELP krabka_broker_metadata_last_applied_offset Highest metadata record offset applied to the active metadata image, -1 before the first.
 # TYPE krabka_broker_metadata_last_applied_offset gauge
 krabka_broker_metadata_last_applied_offset 0
-# HELP krabka_broker_metadata_last_applied_timestamp_ms Append timestamp in Unix epoch milliseconds of the last applied metadata record.
+# HELP krabka_broker_metadata_last_committed_offset Highest metadata record offset the quorum has committed, as this node last heard it, -1 before the first.
+# TYPE krabka_broker_metadata_last_committed_offset gauge
+krabka_broker_metadata_last_committed_offset 0
+# HELP krabka_broker_metadata_last_applied_timestamp_ms Append timestamp in Unix epoch milliseconds of the last applied metadata record, -1 before the first.
 # TYPE krabka_broker_metadata_last_applied_timestamp_ms gauge
 krabka_broker_metadata_last_applied_timestamp_ms 0
-# HELP krabka_broker_metadata_last_applied_lag_ms Milliseconds since the last applied metadata record was appended.
+# HELP krabka_broker_metadata_last_applied_lag_ms Milliseconds between the gauge sample and the append timestamp of the last applied metadata record.
 # TYPE krabka_broker_metadata_last_applied_lag_ms gauge
 krabka_broker_metadata_last_applied_lag_ms 0
 # HELP krabka_broker_pending_record_processing_time_us_avg Lifetime average microseconds to apply a completed set of pending committed metadata records.

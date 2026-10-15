@@ -66,6 +66,7 @@ impl JavaPattern {
         let JavaTranslation {
             pattern: translated,
             backref_folds,
+            linebreak_atoms,
         } = translate_java(pattern)
             .ok_or_else(|| format!("{pattern:?} is not a java.util.regex pattern"))?;
         let compile = |source: &str| Regex::new(source).map_err(|error| error.to_string());
@@ -78,8 +79,13 @@ impl JavaPattern {
             .collect();
         // A pattern `fancy_regex` reads as Java does, or one with a node the
         // matcher does not know, keeps `fancy_regex`.
-        let backtrack = Program::new(&translated, search.captures_len(), &backref_folds)
-            .filter(Program::differs_from_fancy);
+        let backtrack = Program::new(
+            &translated,
+            search.captures_len(),
+            &backref_folds,
+            &linebreak_atoms,
+        )
+        .filter(Program::differs_from_fancy);
         Ok(Self(Arc::new(Compiled {
             search,
             whole,
@@ -1689,7 +1695,8 @@ mod tests {
     /// `\R` is `\r\n` or one line terminator, and gives back the `\n` of
     /// `\r\n` when the rest of the pattern needs it, as Java's `LineEnding`
     /// does. Under a quantifier of `\R`, or of a group with no alternation and
-    /// no range of counts, Java takes the first way only. Each row is
+    /// no range of counts, Java takes the first way only, but a `?` of a group
+    /// such as `(?:\R)` backtracks into it. Each row is
     /// `Pattern.matches` on JDK 17.0.20.
     #[test]
     fn a_linebreak_gives_back_its_newline_where_java_does() {
@@ -1712,6 +1719,123 @@ mod tests {
             row("(?:a\\R){2}\\n", "a\r\na\r\n", false),
             row("(?:a\\R|b){2}\\n", "a\r\na\r\n", true),
             row("(?=\\R\\n)\\R", "\r\n", true),
+            row("(?:\\R)?\\n", "\r\n", true),
+            row("(?:\\R)??\\n", "\r\n", true),
+            row("(?:\\R){0,1}\\n", "\r\n", true),
+            row("(?:(?:\\R))?\\n", "\r\n", true),
+            row("(?x)(?:\\R) ?\\n", "\r\n", true),
+            row("(?x)\\R ?\\n", "\r\n", false),
+            row("(?x)\\R #c\n?\\n", "\r\n", false),
+            row("(?:\\R)?+\\n", "\r\n", false),
+            row("(?:\\R)*\\n", "\r\n", false),
+            row("(?:\\R)+\\n", "\r\n", false),
+            row("(?:\\R?)?\\n", "\r\n", false),
+            row("a(?:\\R)?\\n\\R?", "a\r\n\r\n", true),
+        ];
+        check_matches(cases, true);
+    }
+
+    /// `$` and `\Z` match at the end, or before a line terminator that ends
+    /// the input, and under `(?m)` `$` matches before any line terminator and
+    /// `^` after one, as Java's `Dollar` and `Caret` do: `\r\n` is one line
+    /// terminator, as are `\r`, U+0085, U+2028 and U+2029, and under `(?d)`
+    /// only `\n` is. `(?m)^` never matches at the end of the input. A
+    /// quantified anchor is the anchor, or nothing where the quantifier may
+    /// match zero times. Each row is `Pattern.matches` on JDK 17.0.20.
+    #[test]
+    fn anchors_match_at_line_terminators_as_java_does() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            row("a$\\n", "a\n", true),
+            row("a$\\r\\n", "a\r\n", true),
+            row("a\\r$\\n", "a\r\n", false),
+            row("a$\u{2028}", "a\u{2028}", true),
+            row("a$\\u0085", "a\u{85}", true),
+            row("a$\\r", "a\r", true),
+            row("a$\\nb", "a\nb", false),
+            row("a\\Z\\n", "a\n", true),
+            row("a\\Z\\n\\n", "a\n\n", false),
+            row("a$\\n\\n", "a\n\n", false),
+            row("(?d)a$\\r", "a\r", false),
+            row("(?d)a$\\n", "a\n", true),
+            row("(?d)a\\Z\\n", "a\n", true),
+            row("(?m)a$\\r\\nb", "a\r\nb", true),
+            row("(?m)a\\r$\\nb", "a\r\nb", false),
+            row("(?m)a$\u{2028}b", "a\u{2028}b", true),
+            row("(?m)a$\\rb", "a\rb", true),
+            row("(?md)a$\\rb", "a\rb", false),
+            row("(?md)a$\\nb", "a\nb", true),
+            row("(?m)a\\n^b", "a\nb", true),
+            row("(?m)a\\r^b", "a\rb", true),
+            row("(?m)a\\r^\\nb", "a\r\nb", false),
+            row("(?m)a\\n^", "a\n", false),
+            row("(?m)a\\u0085^b", "a\u{85}b", true),
+            row("(?md)a\\r^b", "a\rb", false),
+            row("(?md)a\\n^b", "a\nb", true),
+            row("(?m)^", "", false),
+            row("^", "", true),
+            row("$", "", true),
+            row("(?m)$", "", true),
+            row("a$?b", "ab", true),
+            row("(?m:a$)\\n^b", "a\nb", false),
+            row("(?m:x)a$\\nb", "a\nb", false),
+            row("a$*b", "ab", true),
+            row("a$+b", "ab", false),
+            row("a$+", "a", true),
+            row("a\\Z?b", "ab", true),
+            row("(?m)a\\n^?b", "a\nb", true),
+            row("(?m)a^+b", "ab", false),
+            row("(?m)a\\n^+b", "a\nb", true),
+            row("(?x)a$ ?b", "ab", true),
+        ];
+        check_matches(cases, true);
+    }
+
+    /// `replaceAll` finds the anchors where Java finds them. Each row is
+    /// `String.replaceAll` on JDK 17.0.20.
+    #[test]
+    fn replace_finds_anchors_at_line_terminators_as_java_does() {
+        // (pattern, input, replacement, replaceAll result)
+        let cases = [
+            replace_row("a$", "a\n", "X", "X\n"),
+            replace_row("$", "a\n", "|", "a|\n|"),
+            replace_row("(?m)$", "a\r\nb", "|", "a|\r\nb|"),
+            replace_row("(?m)^", "a\r\nb", "|", "|a\r\n|b"),
+            replace_row("(?m)^", "a\n", "|", "|a\n"),
+            replace_row("\\Z", "a\r\n", "|", "a|\r\n|"),
+            replace_row("\\h+", "a\u{a0}\u{3000}b", "_", "a_b"),
+        ];
+        check_replacements(cases, true, true);
+    }
+
+    /// `\h` and `\v` are Java's horizontal and vertical whitespace, and `\H`
+    /// and `\V` their negations, with or without `(?U)`. In a class `\v` is
+    /// the char `\x0B` where a `-` follows it, as in Java. Each row is
+    /// `Pattern.matches` on JDK 17.0.20.
+    #[test]
+    fn horizontal_and_vertical_whitespace_are_javas() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            row("\\h", "\u{a0}", true),
+            row("\\h", "\u{3000}", true),
+            row("\\h", "\u{2001}", true),
+            row("\\h", "\n", false),
+            row("\\H", "a", true),
+            row("\\H", "\t", false),
+            row("[\\h]", "\u{2000}", true),
+            row("[\\H]", "\u{2000}", false),
+            row("[\\h-a]", "-", true),
+            row("(?U)\\h", "\u{a0}", true),
+            row("\\v", "\n", true),
+            row("\\v", "\u{2028}", true),
+            row("\\v", "\u{c}", true),
+            row("\\V", "\n", false),
+            row("\\V", "a", true),
+            row("[\\v]", "\r", true),
+            row("[\\v-\\x0d]", "\u{c}", true),
+            row("[\\v-]", "-", true),
+            row("[\\v-]", "\n", false),
+            row("[^\\h]", "a", true),
         ];
         check_matches(cases, true);
     }

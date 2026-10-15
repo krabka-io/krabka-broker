@@ -172,16 +172,23 @@ enum Check {
 
 impl Program {
     /// Compiles the pattern that `translated` is, in `fancy_regex` syntax, with
-    /// `groups` groups, group 0 included, and `folds` the fold of each of its
-    /// backreferences under a case flag in order. `None` for a pattern the
-    /// machine does not know a node of.
-    pub(super) fn new(translated: &str, groups: usize, folds: &[BackrefFold]) -> Option<Self> {
+    /// `groups` groups, group 0 included, `folds` the fold of each of its
+    /// backreferences under a case flag in order, and `linebreak_atoms`
+    /// whether a quantifier binds to each of its `\R`s alone, in order. `None`
+    /// for a pattern the machine does not know a node of.
+    pub(super) fn new(
+        translated: &str,
+        groups: usize,
+        folds: &[BackrefFold],
+        linebreak_atoms: &[bool],
+    ) -> Option<Self> {
         let tree = Expr::parse_tree(translated).ok()?;
         let mut compiler = Compiler {
             blocks: vec![Vec::new()],
             slot_count: 2 * groups,
             next_group: 1,
             folds: folds.iter(),
+            linebreak_atoms: linebreak_atoms.iter(),
             nested: false,
             first_way: false,
             open_groups: Vec::new(),
@@ -191,8 +198,11 @@ impl Program {
         compiler.compile(&tree.expr, &mut main)?;
         main.push(Inst::Match);
         compiler.blocks[0] = main;
-        // Every group and every fold the rewrite wrote is in the tree.
-        if compiler.next_group != groups || compiler.folds.next().is_some() {
+        // Every group, fold and `\R` the rewrite wrote is in the tree.
+        if compiler.next_group != groups
+            || compiler.folds.next().is_some()
+            || compiler.linebreak_atoms.next().is_some()
+        {
             return None;
         }
         Some(Self {
@@ -257,6 +267,8 @@ struct Compiler<'a> {
     next_group: usize,
     /// The folds of the references under a case flag not reached yet.
     folds: Iter<'a, BackrefFold>,
+    /// For each `\R` not reached yet, whether a quantifier binds to it alone.
+    linebreak_atoms: Iter<'a, bool>,
     /// Inside a look-around or an atomic group.
     nested: bool,
     /// Inside the atom of a quantifier that Java matches the first way only.
@@ -296,6 +308,7 @@ impl Compiler<'_> {
                 crlf: false,
             } => code.push(Inst::Any { newline: *newline }),
             Expr::GeneralNewline { .. } => {
+                self.linebreak_atoms.next()?;
                 self.differs = true;
                 code.push(Inst::Linebreak {
                     give_back: !self.first_way,
@@ -415,7 +428,10 @@ impl Compiler<'_> {
         });
         code.push(Inst::Save(start));
         let outer = self.first_way;
-        self.first_way |= takes_first_way(child, lo, hi);
+        // A `\R` that the quantifier binds to alone, as against `(?:\R)`.
+        let linebreak_atom = matches!(child, Expr::GeneralNewline { .. })
+            && self.linebreak_atoms.as_slice().first() == Some(&true);
+        self.first_way |= takes_first_way(child, lo, hi, linebreak_atom);
         self.compile(child, code)?;
         self.first_way = outer;
         let exit = code.len() + 1;
@@ -440,11 +456,12 @@ impl Compiler<'_> {
 /// `Curly`. Both take the atom's first way. A quantifier of a group is a
 /// `Branch` for `?`, which backtracks into the group. For the others it is a
 /// `GroupCurly`, which takes the first way, when `TreeInfo.study` finds the
-/// group deterministic, and otherwise a `Loop`, which backtracks. In the tree
-/// the atom of `(?:\R)?` is that of `\R?`, and it is read as the latter.
-fn takes_first_way(child: &Expr, lo: usize, hi: usize) -> bool {
+/// group deterministic, and otherwise a `Loop`, which backtracks. The tree of
+/// `(?:\R)?` is that of `\R?`, so `linebreak_atom`, from the rewrite, says
+/// which one a repeat of a `\R` is.
+fn takes_first_way(child: &Expr, lo: usize, hi: usize, linebreak_atom: bool) -> bool {
     match child {
-        Expr::GeneralNewline { .. } => true,
+        _ if linebreak_atom => true,
         _ if (lo, hi) == (0, 1) => false,
         _ => deterministic(child),
     }
