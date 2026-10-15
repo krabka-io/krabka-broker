@@ -12,6 +12,8 @@
 //! `scenario_files` gives: Bazel stages runfiles as symbolic links, and
 //! `Path::is_file` follows them.
 
+mod corpus;
+
 use {
     assert2::{assert, check},
     krabka_bench_driver::soak::{
@@ -19,48 +21,8 @@ use {
         synthetic::{clean_run, inject_missing_record},
         verdict::{judge, judge_self_check},
     },
-    std::{
-        path::{Path, PathBuf},
-        process::ExitCode,
-    },
+    std::{path::Path, process::ExitCode},
 };
-
-/// Where the contracts are, under whichever runner started this test. See
-/// `scenario_files` for why Bazel's variables are read first.
-fn contract_root() -> PathBuf {
-    if let Ok(srcdir) = std::env::var("TEST_SRCDIR") {
-        let workspace =
-            std::env::var("TEST_WORKSPACE").expect("TEST_WORKSPACE accompanies TEST_SRCDIR");
-        return [srcdir.as_str(), workspace.as_str(), "bench", "soak"]
-            .iter()
-            .collect();
-    }
-    let manifest = std::env::var("CARGO_MANIFEST_DIR")
-        .expect("TEST_SRCDIR (bazel) or CARGO_MANIFEST_DIR (cargo) must be set");
-    [manifest.as_str(), "..", "..", "bench", "soak"]
-        .iter()
-        .collect()
-}
-
-/// Every `*.yaml` contract, sorted. An empty corpus is a wrong path, and fails.
-fn contract_paths() -> Vec<PathBuf> {
-    let root = contract_root();
-    let entries = std::fs::read_dir(&root)
-        .unwrap_or_else(|error| panic!("cannot read {}: {error}", root.display()));
-    let mut paths: Vec<PathBuf> = entries
-        .map(|entry| {
-            entry
-                .unwrap_or_else(|error| {
-                    panic!("cannot read an entry in {}: {error}", root.display())
-                })
-                .path()
-        })
-        .filter(|path| path.extension().is_some_and(|ext| ext == "yaml") && path.is_file())
-        .collect();
-    paths.sort();
-    assert!(!paths.is_empty(), "no contract found in {}", root.display());
-    paths
-}
 
 fn load(path: &Path) -> Result<Contract, String> {
     let yaml = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
@@ -106,7 +68,7 @@ fn synthetic_run_is_judged(path: &Path) -> Result<(), String> {
 fn main() -> ExitCode {
     let args = libtest_mimic::Arguments::from_args();
     let mut trials = Vec::new();
-    for path in contract_paths() {
+    for path in corpus::yaml_files("soak") {
         let file = path
             .file_name()
             .map_or_default(|name| name.to_string_lossy().into_owned());

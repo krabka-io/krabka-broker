@@ -1,5 +1,7 @@
 //! `krabka-soak-check` run the way an operator or CI runs it.
 
+mod corpus;
+
 use {
     assert2::{assert, check},
     krabka_bench_driver::soak::{contract::Contract, synthetic::clean_run},
@@ -9,20 +11,8 @@ use {
     },
 };
 
-/// A contract under `bench/soak/`, under whichever runner started this test.
-fn contract(name: &str) -> PathBuf {
-    if let Ok(srcdir) = std::env::var("TEST_SRCDIR") {
-        let workspace =
-            std::env::var("TEST_WORKSPACE").expect("TEST_WORKSPACE accompanies TEST_SRCDIR");
-        return [srcdir.as_str(), workspace.as_str(), "bench", "soak", name]
-            .iter()
-            .collect();
-    }
-    let manifest = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set");
-    [manifest.as_str(), "..", "..", "bench", "soak", name]
-        .iter()
-        .collect()
-}
+/// A contract under `bench/soak/`.
+fn contract(name: &str) -> PathBuf { corpus::bench_dir("soak").join(name) }
 
 fn run(args: &[&std::ffi::OsStr]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_krabka-soak-check"))
