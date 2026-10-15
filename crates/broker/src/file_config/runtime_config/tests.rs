@@ -272,7 +272,7 @@ replication_fetch_min = "1B"
 #[test]
 fn runtime_file_config_rejects_relational_conflicts() {
     let cases = [(
-        "[runtime]\nreplication_fetch_min = \"3B\"\nreplication_fetch_max = \"2B\"\n",
+        "[runtime]\nreplication_fetch_min = \"3B\"\nreplication_fetch_response_max = \"2B\"\n",
         "replication fetch minimum",
     )];
 

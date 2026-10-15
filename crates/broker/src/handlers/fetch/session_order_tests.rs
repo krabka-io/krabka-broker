@@ -17,15 +17,11 @@ use {
         fetch_session::INITIAL_EPOCH,
         handlers::test_support::{create_topic, produce_records, start_broker},
     },
-    assert2::assert,
     krabka_protocol::owned::{
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
         fetch_response::FetchResponse,
     },
-    std::collections::BTreeMap,
 };
-
-const TOPIC: &str = "orders";
 
 /// The last `Fetch` version that names topics, which keeps the request rows
 /// readable.
@@ -34,14 +30,41 @@ const VERSION: i16 = 12;
 /// The records in each batch that `produce_records` appends.
 const BATCH_RECORDS: i64 = 3;
 
-/// The batches appended to each partition: more than the fetches of a case
-/// read from it, so every partition always has a batch waiting.
-const BATCHES: usize = 4;
+/// The incremental fetches of a case, after the full fetch that opens the
+/// session.
+const INCREMENTAL_FETCHES: i32 = 4;
 
-/// A fetch that reads one partition and asks for `max_bytes` across the
-/// response. One byte fits no batch, so the first partition read takes one
-/// batch under Kafka's progress exception and leaves no budget for the rest.
-fn fetch(session_id: i32, session_epoch: i32, rows: &BTreeMap<i32, i64>) -> FetchRequest {
+/// A topic partition.
+type Row = (&'static str, i32);
+
+/// A partition that sent records, and the offset it sent them from.
+type Served = (&'static str, i32, i64);
+
+/// A fetch of `rows` that asks for one byte across the response. One byte fits
+/// no batch, so the first partition read takes one batch under Kafka's
+/// progress exception and leaves no budget for the rest. Consecutive rows of
+/// one topic share a `FetchTopic`, in the order given.
+fn fetch(session_id: i32, session_epoch: i32, rows: &[(Row, i64)]) -> FetchRequest {
+    let mut topics: Vec<FetchTopic> = Vec::new();
+    for &((topic, partition), fetch_offset) in rows {
+        let row = FetchPartition {
+            partition,
+            fetch_offset,
+            current_leader_epoch: -1,
+            last_fetched_epoch: -1,
+            log_start_offset: -1,
+            partition_max_bytes: 1_048_576,
+            ..FetchPartition::default()
+        };
+        match topics.last_mut() {
+            Some(last) if last.topic == topic => last.partitions.push(row),
+            _ => topics.push(FetchTopic {
+                topic: topic.to_owned(),
+                partitions: vec![row],
+                ..FetchTopic::default()
+            }),
+        }
+    }
     FetchRequest {
         replica_id: -1,
         max_wait_ms: 0,
@@ -49,114 +72,143 @@ fn fetch(session_id: i32, session_epoch: i32, rows: &BTreeMap<i32, i64>) -> Fetc
         max_bytes: 1,
         session_id,
         session_epoch,
-        topics: if rows.is_empty() {
-            Vec::new()
-        } else {
-            vec![FetchTopic {
-                topic: TOPIC.to_owned(),
-                partitions: rows
-                    .iter()
-                    .map(|(&partition, &fetch_offset)| FetchPartition {
-                        partition,
-                        fetch_offset,
-                        current_leader_epoch: -1,
-                        last_fetched_epoch: -1,
-                        log_start_offset: -1,
-                        partition_max_bytes: 1_048_576,
-                        ..FetchPartition::default()
-                    })
-                    .collect(),
-                ..FetchTopic::default()
-            }]
-        },
+        topics,
         ..FetchRequest::default()
     }
 }
 
-/// The partitions whose rows carried records.
-fn served(response: &FetchResponse) -> Vec<i32> {
+/// The rows whose records were not empty.
+fn served(response: &FetchResponse, rows: &[Row]) -> Vec<Row> {
     response
         .responses
         .iter()
-        .flat_map(|topic| &topic.partitions)
-        .filter(|row| {
-            row.records
-                .as_ref()
-                .is_some_and(|records| records.payload_len() > 0)
+        .flat_map(|topic| {
+            topic
+                .partitions
+                .iter()
+                .filter(|row| {
+                    row.records
+                        .as_ref()
+                        .is_some_and(|records| records.payload_len() > 0)
+                })
+                .map(|row| {
+                    *rows
+                        .iter()
+                        .find(|&&(name, partition)| {
+                            name == topic.topic && partition == row.partition_index
+                        })
+                        .expect("a requested partition")
+                })
         })
-        .map(|row| row.partition_index)
         .collect()
 }
 
-/// A consumer opens a session over two partitions that both always have a
-/// batch waiting, and then fetches incrementally, moving the fetch offset of
-/// each partition that sent a batch, as a Kafka client does. Each response has
-/// room for one batch.
+/// One case: the partitions in the order the full fetch names them, with the
+/// batches each holds, and what each fetch serves.
+struct Case {
+    partitions: &'static [(Row, usize)],
+    /// The partition served by the full fetch, then by each incremental fetch.
+    expected: [Served; 5],
+}
+
+/// A consumer opens a session and then fetches incrementally, moving the
+/// fetch offset of each partition that sent a batch, as a Kafka client does.
+/// Each response has room for one batch.
 ///
 /// Kafka's `FullFetchContext` caches the session in the order the full fetch
-/// read it, `[0, 1]`, and moves nothing. From then on each incremental fetch
-/// moves the partition that sent its batch to the end: partition 0 sends at
-/// offset 3 and leaves `[1, 0]`, partition 1 sends at offset 0 and leaves
-/// `[0, 1]`, and so on. Neither partition gets two incremental responses in a
-/// row while the other has a batch waiting.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_incremental_session_serves_its_partitions_in_turn() {
+/// read it, and moves nothing. Each incremental fetch then moves the partition
+/// that sent its batch to the end, and reads the session in its order, so a
+/// partition with a batch waiting is never passed over twice in a row.
+///
+/// - `two_partitions`: `[0, 1]` serves 0 at offset 3, leaving `[1, 0]`; 1 at
+///   offset 0, leaving `[0, 1]`; and so on.
+/// - `idle_partition_between`: `orders-1` never has records. After `orders-0`
+///   sends at offset 3 the session is `[orders-1, audit-0, orders-0]`, and
+///   `audit-0` is read before `orders-0`. Reading `orders` as one topic would
+///   put `orders-0` back ahead of `audit-0` on every fetch.
+#[yare::parameterized(
+    two_partitions = { Case {
+        partitions: &[(("orders", 0), 4), (("orders", 1), 4)],
+        expected: [
+            ("orders", 0, 0),
+            ("orders", 0, 3),
+            ("orders", 1, 0),
+            ("orders", 0, 6),
+            ("orders", 1, 3),
+        ],
+    } },
+    idle_partition_between = { Case {
+        partitions: &[(("orders", 0), 4), (("orders", 1), 0), (("audit", 0), 4)],
+        expected: [
+            ("orders", 0, 0),
+            ("orders", 0, 3),
+            ("audit", 0, 0),
+            ("orders", 0, 6),
+            ("audit", 0, 3),
+        ],
+    } },
+)]
+#[test_macro(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn an_incremental_session_serves_its_partitions_in_turn(case: Case) {
     let started = start_broker().await;
     let broker = &started.broker;
-    create_topic()
-        .broker(broker)
-        .name(TOPIC)
-        .partitions(2)
-        .call()
-        .await;
-    for partition in [0, 1] {
-        for _ in 0..BATCHES {
+    let mut topics: Vec<(&str, i32)> = Vec::new();
+    for &((topic, _), _) in case.partitions {
+        match topics.iter_mut().find(|(name, _)| *name == topic) {
+            Some((_, count)) => *count += 1,
+            None => topics.push((topic, 1)),
+        }
+    }
+    for (topic, partitions) in topics {
+        create_topic()
+            .broker(broker)
+            .name(topic)
+            .partitions(partitions)
+            .call()
+            .await;
+    }
+    for &((topic, partition), batches) in case.partitions {
+        for _ in 0..batches {
             produce_records()
                 .broker(broker)
-                .topic(TOPIC)
+                .topic(topic)
                 .partition_index(partition)
                 .call()
                 .await;
         }
     }
 
-    let mut offsets: BTreeMap<i32, i64> = [(0, 0), (1, 0)].into_iter().collect();
-    // Each round: (the partition that sent records, its fetch offset).
-    let mut rounds: Vec<Vec<(i32, i64)>> = Vec::new();
+    let rows: Vec<Row> = case.partitions.iter().map(|&(row, _)| row).collect();
+    let mut offsets: Vec<(Row, i64)> = rows.iter().map(|&row| (row, 0)).collect();
     let mut changed = offsets.clone();
     let mut session_id = 0;
-    for session_epoch in INITIAL_EPOCH..5 {
+    let mut rounds: Vec<Vec<Served>> = Vec::new();
+    for session_epoch in INITIAL_EPOCH..=INCREMENTAL_FETCHES {
         let response = fetch_wire()
             .broker(broker)
             .request(&fetch(session_id, session_epoch, &changed))
             .version(VERSION)
             .call()
             .await;
-        assert!(response.error_code == 0, "{response:?}");
+        assert2::assert!(response.error_code == 0, "{response:?}");
         if session_epoch == INITIAL_EPOCH {
             session_id = response.session_id;
-            assert!(session_id != 0, "the full fetch opened a session");
+            assert2::assert!(session_id != 0, "the full fetch opened a session");
         }
-        let round: Vec<(i32, i64)> = served(&response)
-            .into_iter()
-            .map(|partition| (partition, offsets[&partition]))
-            .collect();
-        changed = round
-            .iter()
-            .map(|&(partition, offset)| (partition, offset + BATCH_RECORDS))
-            .collect();
-        offsets.extend(&changed);
+        changed = Vec::new();
+        let mut round = Vec::new();
+        for row in served(&response, &rows) {
+            let (_, offset) = offsets
+                .iter_mut()
+                .find(|(cached, _)| *cached == row)
+                .expect("a fetched partition");
+            round.push((row.0, row.1, *offset));
+            *offset += BATCH_RECORDS;
+            changed.push((row, *offset));
+        }
         rounds.push(round);
     }
 
-    assert!(
-        rounds
-            == vec![
-                vec![(0, 0)],
-                vec![(0, 3)],
-                vec![(1, 0)],
-                vec![(0, 6)],
-                vec![(1, 3)]
-            ]
-    );
+    let expected: Vec<Vec<Served>> = case.expected.iter().map(|&row| vec![row]).collect();
+    assert2::assert!(rounds == expected);
 }
