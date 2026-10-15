@@ -166,7 +166,13 @@ pub(crate) async fn run(
                         // connection over either ceiling is closed at once.
                         // The guard moves into the task, so the slot is
                         // released however the connection ends.
-                        let connection_slot = match connections.try_acquire(peer.ip()) {
+                        // Resolved per accept, so a dynamic cap applies
+                        // to this listener as Kafka's controller
+                        // `SocketServer` reconfigures it.
+                        let caps = connections
+                            .limits()
+                            .resolve(&engine.current_image(), engine.node_id());
+                        let connection_slot = match connections.try_acquire_within(peer.ip(), caps) {
                             Ok(slot) => slot,
                             Err(limit) => {
                                 tracing::debug!(

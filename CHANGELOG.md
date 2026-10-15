@@ -40,6 +40,13 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   `\x01` is a fresh attempt, as in Kafka's `OAuthBearerSaslServer` (#1390).
 - The broker refuses to start with a `queued_max_request_bytes` below
   `socket_request_max`, as Kafka's `KafkaConfig` does (#1390).
+- A dynamic `max.connections` or `max.connections.per.ip`, set per broker or
+  cluster-wide with `IncrementalAlterConfigs` or `AlterConfigs`, now applies
+  to the next connection accepted on a broker listener and on the controller
+  listener, and deleting it restores the static cap. Before, the broker stored
+  and reported the value but kept counting against the static cap until it
+  restarted. A `max.connections.per.ip` of 0 is stored but not applied, as
+  Kafka allows 0 only beside `max.connections.per.ip.overrides` (#1391).
 - A consumer `Fetch` is now charged to `consumer_byte_rate` at Kafka's
   `FetchResponse.sizeOf`, four bytes more than the encoded response body.
   Before, every fetch was charged four bytes short.
