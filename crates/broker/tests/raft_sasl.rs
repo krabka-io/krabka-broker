@@ -27,7 +27,9 @@ fn oauth_token() -> String {
     )
 }
 
-use crate::support::{NodeIndex, controller_voters, init_tracing, node_config};
+use crate::support::{
+    NodeIndex, controller_voters, init_tracing, listeners::configure_sasl_plaintext, node_config,
+};
 
 #[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
 struct BrokerSlot(usize);
@@ -126,7 +128,7 @@ fn sasl_broker_config(
         .map(|ControllerVoter { id, addr }| (*id, addr.to_string()))
         .collect();
     cfg.bootstrap_mode = mode;
-    crate::support::listeners::configure_sasl_plaintext(&mut cfg, data_addr, ctrl);
+    configure_sasl_plaintext(&mut cfg, data_addr, ctrl);
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
         .insert(plain_user.to_string(), plain_pass.to_string());

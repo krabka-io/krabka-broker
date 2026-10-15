@@ -626,7 +626,7 @@ mod tests {
         super::super::{plan::FetchMode, response::GroupedResponses},
         crate::{
             broker::{Broker, BrokerHandle, spawn_partition},
-            codes::{NONE, OFFSET_OUT_OF_RANGE},
+            codes::{self, NONE, OFFSET_OUT_OF_RANGE},
             diskless::wal_index::WalFlushRecord,
             handlers::{
                 fetch::test_support::append_epoch_batches,
@@ -1116,7 +1116,7 @@ mod tests {
     fn empty_partition_data() -> super::PartitionData {
         super::PartitionData {
             partition_index: 0,
-            error_code: crate::codes::NONE,
+            error_code: codes::NONE,
             high_watermark: 0,
             last_stable_offset: 0,
             log_start_offset: 0,

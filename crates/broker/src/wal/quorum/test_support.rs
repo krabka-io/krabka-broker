@@ -5,6 +5,7 @@ use {
     super::{QuorumWalStore, engine::WalShardEngine},
     crate::{
         error::BrokerError, partition::AppendedBatch, partition_writer::run_produce_append_batch,
+        test_support::default_records_batch,
     },
     krabka_ids::{Offset, PartitionIndex},
     krabka_kraft_core::NodeId,
@@ -68,11 +69,7 @@ pub(super) fn distributed_engine(
     engine
 }
 
-pub(super) fn batch(records: i32) -> RecordBatch {
-    crate::test_support::default_records_batch()
-        .count(records)
-        .call()
-}
+pub(super) fn batch(records: i32) -> RecordBatch { default_records_batch().count(records).call() }
 
 pub(super) async fn append_source(
     store: &QuorumWalStore,

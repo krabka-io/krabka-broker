@@ -1,5 +1,7 @@
 //! Shared live-broker and local-partition fixtures for handler tests.
 
+use crate::handlers::response_encoding::{ErrorRow, ResourceErrorRow};
+
 macro_rules! handler_drive {
     ($request:ty => $response:ty, $handle:path, $version:expr) => {
         async fn drive(
@@ -161,20 +163,14 @@ pub(crate) fn duplicate_config_resource_response(
 }
 
 #[cfg(test)]
-pub(crate) fn config_resource_error_response<
-    Response: crate::handlers::response_encoding::ResourceErrorRow,
->(
+pub(crate) fn config_resource_error_response<Response: ResourceErrorRow>(
     resource_type: i8,
     resource_name: &str,
     error_code: i16,
     error_message: Option<String>,
 ) -> Response {
     let mut response = Response::for_resource(resource_type, resource_name.to_owned());
-    crate::handlers::response_encoding::ErrorRow::set_error(
-        &mut response,
-        error_code,
-        error_message,
-    );
+    ErrorRow::set_error(&mut response, error_code, error_message);
     response
 }
 
