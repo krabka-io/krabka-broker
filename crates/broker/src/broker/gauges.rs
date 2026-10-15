@@ -30,11 +30,85 @@ fn epoch_now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-fn metadata_applied_lag_ms(applied_timestamp_ms: i64, is_leader: bool, now_ms: i64) -> i64 {
-    if is_leader || applied_timestamp_ms <= 0 {
-        0
-    } else {
-        now_ms.saturating_sub(applied_timestamp_ms)
+/// The KIP-835 applied-record gauges one sample publishes. The fields carry
+/// Kafka's units and its values before the first applied record, as
+/// `BrokerServerMetrics` reads them from `MetadataProvenance.EMPTY`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AppliedRecordGauges {
+    /// `last-applied-record-offset`: `-1` before the first record.
+    applied_offset: i64,
+    /// `LastCommittedRecordOffset`: `-1` before this node has heard of one.
+    committed_offset: i64,
+    /// `last-applied-record-timestamp`, in Unix epoch milliseconds: `-1`
+    /// before the first record.
+    applied_timestamp_ms: i64,
+    /// `last-applied-record-lag-ms`: now minus the applied timestamp, on
+    /// every role, so `now + 1` before the first record, as in Kafka.
+    applied_lag_ms: i64,
+    /// Committed offset minus applied offset, never below zero.
+    lag_records: i64,
+}
+
+/// What a metadata source reports about its progress through the log, in
+/// the source's own conventions.
+#[derive(Debug, Clone, Copy)]
+struct ReportedProgress {
+    /// [`MetadataSource::current_metadata_offset`].
+    applied_offset: i64,
+    /// [`MetadataSource::quorum_committed_offset`].
+    committed_offset: i64,
+    /// [`MetadataSource::last_applied_record_timestamp_ms`]: zero or less
+    /// before the source has applied a record.
+    applied_timestamp_ms: i64,
+}
+
+impl ReportedProgress {
+    fn read(source: &dyn MetadataSource) -> Self {
+        Self {
+            applied_offset: source.current_metadata_offset(),
+            committed_offset: source.quorum_committed_offset(),
+            applied_timestamp_ms: source.last_applied_record_timestamp_ms(),
+        }
+    }
+}
+
+impl AppliedRecordGauges {
+    /// Derive the gauges from what a source reports, sampled at `now_ms`.
+    ///
+    /// A source reports a timestamp of zero or less before it has applied a
+    /// record; Kafka's gauge reads `-1` then, and its lag reads `now + 1`.
+    fn derive(reported: ReportedProgress, now_ms: i64) -> Self {
+        let applied_timestamp_ms = if reported.applied_timestamp_ms > 0 {
+            reported.applied_timestamp_ms
+        } else {
+            -1
+        };
+        Self {
+            applied_offset: reported.applied_offset,
+            committed_offset: reported.committed_offset,
+            applied_timestamp_ms,
+            applied_lag_ms: now_ms.saturating_sub(applied_timestamp_ms),
+            lag_records: reported
+                .committed_offset
+                .saturating_sub(reported.applied_offset)
+                .max(0),
+        }
+    }
+
+    fn publish(self, metrics: &BrokerMetrics) {
+        metrics
+            .metadata_last_applied_offset
+            .set(self.applied_offset);
+        metrics
+            .metadata_last_committed_offset
+            .set(self.committed_offset);
+        metrics
+            .metadata_last_applied_timestamp_ms
+            .set(self.applied_timestamp_ms);
+        metrics
+            .metadata_last_applied_lag_ms
+            .set(self.applied_lag_ms);
+        metrics.metadata_lag_records.set(self.lag_records);
     }
 }
 
@@ -64,9 +138,12 @@ fn leader_site_drift_partitions(
         .count()
 }
 
-fn update_metadata_health_metrics(metrics: &BrokerMetrics, controller: &dyn MetadataSource) {
-    let quorum_snapshot = controller.quorum_snapshot();
-    if let Some(snap) = &quorum_snapshot {
+fn update_metadata_health_metrics(
+    metrics: &BrokerMetrics,
+    controller: &dyn MetadataSource,
+    now_ms: i64,
+) {
+    if let Some(snap) = controller.quorum_snapshot() {
         for state_label in RaftStateLabel::ALL {
             let is_active = i64::from(state_label.state == snap.current_state);
             metrics
@@ -84,13 +161,7 @@ fn update_metadata_health_metrics(metrics: &BrokerMetrics, controller: &dyn Meta
             .raft_observers
             .set(i64::try_from(snap.observers.len()).unwrap_or(i64::MAX));
     }
-    let applied_timestamp_ms = controller.last_applied_record_timestamp_ms();
-    metrics
-        .metadata_last_applied_timestamp_ms
-        .set(applied_timestamp_ms);
-    let is_leader = quorum_snapshot.as_ref().is_some_and(|snap| snap.is_leader);
-    let applied_lag_ms = metadata_applied_lag_ms(applied_timestamp_ms, is_leader, epoch_now_ms());
-    metrics.metadata_last_applied_lag_ms.set(applied_lag_ms);
+    AppliedRecordGauges::derive(ReportedProgress::read(controller), now_ms).publish(metrics);
     let (processing_avg_us, processing_max_us) = controller.pending_record_processing_time_us();
     metrics
         .pending_record_processing_time_us_avg
@@ -98,12 +169,6 @@ fn update_metadata_health_metrics(metrics: &BrokerMetrics, controller: &dyn Meta
     metrics
         .pending_record_processing_time_us_max
         .set(i64::try_from(processing_max_us).unwrap_or(i64::MAX));
-
-    let applied_offset = controller.current_metadata_offset();
-    let committed_offset = controller.quorum_committed_offset();
-    metrics.metadata_last_applied_offset.set(applied_offset);
-    let metadata_lag = committed_offset.saturating_sub(applied_offset).max(0);
-    metrics.metadata_lag_records.set(metadata_lag);
     metrics.set_metadata_load_error_count(controller.metadata_load_error_count());
 }
 
@@ -285,7 +350,7 @@ pub(super) fn spawn_broker_gauge_updater(
                 metrics.preferred_replica_imbalance.set(0);
             }
 
-            update_metadata_health_metrics(&metrics, controller.as_ref());
+            update_metadata_health_metrics(&metrics, controller.as_ref(), epoch_now_ms());
 
             // Broker lifecycle state (#390)
             if let Some(h) = &health {
@@ -328,6 +393,7 @@ mod tests {
         crate::{
             broker::test_support::fake_source,
             handlers::test_support::replicated_partition,
+            metadata_source::test_support::{start_controller, topic_record},
             metrics::BrokerMetrics,
             test_support::{broker_registration, single_partition_topic},
         },
@@ -335,10 +401,138 @@ mod tests {
         krabka_units::{millis, secs},
     };
 
+    /// One KIP-835 sample: what the source reports, when the gauge samples
+    /// it, and the gauges Kafka would show.
+    struct AppliedRecordCase {
+        name: &'static str,
+        reported: ReportedProgress,
+        now_ms: i64,
+        expected: AppliedRecordGauges,
+    }
+
     #[test]
-    fn active_controller_applied_timestamp_lag_stays_zero() {
-        assert!(metadata_applied_lag_ms(1_700_000_000_000, true, 1_700_000_100_000) == 0);
-        assert!(metadata_applied_lag_ms(1_700_000_000_000, false, 1_700_000_100_000) == 100_000);
+    fn applied_record_gauges_follow_kafka_units_and_initial_values() {
+        const APPENDED_MS: i64 = 1_700_000_000_000;
+        let cases = [
+            AppliedRecordCase {
+                name: "nothing applied: Kafka's MetadataProvenance.EMPTY",
+                reported: ReportedProgress {
+                    applied_offset: -1,
+                    committed_offset: -1,
+                    applied_timestamp_ms: 0,
+                },
+                now_ms: APPENDED_MS,
+                expected: AppliedRecordGauges {
+                    applied_offset: -1,
+                    committed_offset: -1,
+                    applied_timestamp_ms: -1,
+                    applied_lag_ms: APPENDED_MS + 1,
+                    lag_records: 0,
+                },
+            },
+            AppliedRecordCase {
+                name: "caught up, sampled 250 ms after the last append",
+                reported: ReportedProgress {
+                    applied_offset: 41,
+                    committed_offset: 41,
+                    applied_timestamp_ms: APPENDED_MS,
+                },
+                now_ms: APPENDED_MS + 250,
+                expected: AppliedRecordGauges {
+                    applied_offset: 41,
+                    committed_offset: 41,
+                    applied_timestamp_ms: APPENDED_MS,
+                    applied_lag_ms: 250,
+                    lag_records: 0,
+                },
+            },
+            AppliedRecordCase {
+                name: "behind the quorum by seven records and a minute",
+                reported: ReportedProgress {
+                    applied_offset: 100,
+                    committed_offset: 107,
+                    applied_timestamp_ms: APPENDED_MS,
+                },
+                now_ms: APPENDED_MS + 60_000,
+                expected: AppliedRecordGauges {
+                    applied_offset: 100,
+                    committed_offset: 107,
+                    applied_timestamp_ms: APPENDED_MS,
+                    applied_lag_ms: 60_000,
+                    lag_records: 7,
+                },
+            },
+            AppliedRecordCase {
+                name: "a record stamped ahead of the local clock lags negatively, unclamped",
+                reported: ReportedProgress {
+                    applied_offset: 5,
+                    committed_offset: 5,
+                    applied_timestamp_ms: APPENDED_MS + 30,
+                },
+                now_ms: APPENDED_MS,
+                expected: AppliedRecordGauges {
+                    applied_offset: 5,
+                    committed_offset: 5,
+                    applied_timestamp_ms: APPENDED_MS + 30,
+                    applied_lag_ms: -30,
+                    lag_records: 0,
+                },
+            },
+        ];
+        for case in cases {
+            check!(
+                AppliedRecordGauges::derive(case.reported, case.now_ms) == case.expected,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    /// Reads the KIP-835 applied-record gauges back from the registry.
+    fn published_applied_record_gauges(metrics: &BrokerMetrics) -> AppliedRecordGauges {
+        AppliedRecordGauges {
+            applied_offset: metrics.metadata_last_applied_offset.get(),
+            committed_offset: metrics.metadata_last_committed_offset.get(),
+            applied_timestamp_ms: metrics.metadata_last_applied_timestamp_ms.get(),
+            applied_lag_ms: metrics.metadata_last_applied_lag_ms.get(),
+            lag_records: metrics.metadata_lag_records.get(),
+        }
+    }
+
+    /// The active controller applies its own records, and its lag is the
+    /// sample time minus their append time, as Kafka's
+    /// `LastAppliedRecordLagMs` is: a leader is not exempt.
+    #[tokio::test]
+    async fn active_controller_lag_is_sample_time_minus_the_applied_append_time() {
+        let started = start_controller().await;
+        let controller = &started.controller;
+        controller
+            .submit_change(vec![topic_record("kip835-lag")])
+            .await
+            .expect("the single voter commits the topic");
+        let applied = ReportedProgress::read(controller);
+        assert!(applied.applied_timestamp_ms > 0);
+
+        let metrics = BrokerMetrics::new();
+        for elapsed_ms in [0, 250, 60_000] {
+            update_metadata_health_metrics(
+                &metrics,
+                controller,
+                applied.applied_timestamp_ms + elapsed_ms,
+            );
+            check!(
+                published_applied_record_gauges(&metrics)
+                    == AppliedRecordGauges {
+                        applied_offset: applied.applied_offset,
+                        committed_offset: applied.applied_offset,
+                        applied_timestamp_ms: applied.applied_timestamp_ms,
+                        applied_lag_ms: elapsed_ms,
+                        lag_records: 0,
+                    },
+                "sampled {elapsed_ms} ms after the append"
+            );
+        }
+        controller.shutdown().await;
     }
 
     #[tokio::test]

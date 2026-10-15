@@ -4,7 +4,7 @@
 
 use {crate::test_support::single_partition_topic, krabka_metadata::MetadataRecord, uuid::Uuid};
 
-pub(super) fn topic_record(name: &str) -> MetadataRecord {
+pub(crate) fn topic_record(name: &str) -> MetadataRecord {
     MetadataRecord::V1Topic(single_partition_topic(name, Uuid::new_v4()))
 }
 
@@ -20,15 +20,15 @@ pub(super) async fn wait_for_controller_leader(ctrl: &krabka_raft::ControllerHan
 }
 
 /// A running controller and the data directory that it needs to stay alive.
-pub(super) struct StartedController {
+pub(crate) struct StartedController {
     /// The controller's data directory, removed when this value drops.
-    pub(super) dir: tempfile::TempDir,
+    pub(crate) dir: tempfile::TempDir,
     /// The controller.
-    pub(super) controller: krabka_raft::ControllerHandle,
+    pub(crate) controller: krabka_raft::ControllerHandle,
 }
 
 /// A fresh bootstrapped single-node controller, already elected.
-pub(super) async fn start_controller() -> StartedController {
+pub(crate) async fn start_controller() -> StartedController {
     let dir = tempfile::TempDir::new().unwrap();
     let cfg = krabka_raft::ControllerConfig {
         bootstrap_mode: krabka_raft::BootstrapMode::Bootstrap,
