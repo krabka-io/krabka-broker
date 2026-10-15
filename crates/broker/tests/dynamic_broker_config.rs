@@ -13,8 +13,8 @@ mod support;
 use {
     crate::support::{
         configs::{
-            ConfigMutation, ConfigOperation, describe_resource, incremental_config,
-            incremental_request, incremental_resource,
+            BROKER_RESOURCE, ConfigMutation, ConfigOperation, broker_alter_request,
+            describe_resource,
         },
         sasl::start_plaintext_configured,
         wire::HeaderEncoding,
@@ -41,9 +41,6 @@ use {
 
 /// The client id every request header in this suite carries.
 const CLIENT_ID: &str = "krabka-dynamic-broker-config-test";
-
-/// Kafka's `ConfigResource.Type.BROKER`.
-const BROKER_RESOURCE: i8 = 4;
 
 /// `IncrementalAlterConfigs`' API key and the flexible version this suite
 /// sends.
@@ -146,19 +143,7 @@ async fn alter_broker(
     configs: Vec<(&str, ConfigOperation, Option<&str>)>,
     #[builder(default)] mutation: ConfigMutation,
 ) -> AlterConfigsResourceResponse {
-    let request = incremental_request()
-        .resources(vec![incremental_resource(
-            BROKER_RESOURCE,
-            resource_name,
-            configs
-                .into_iter()
-                .map(|(name, operation, value)| {
-                    incremental_config(name, value.map(ToOwned::to_owned), operation)
-                })
-                .collect(),
-        )])
-        .mutation(mutation)
-        .call();
+    let request = broker_alter_request(resource_name, configs, mutation);
     let mut stream = hold_one(addr).await;
     let response: IncrementalAlterConfigsResponse = kafka_wire::exchange()
         .stream(&mut stream)

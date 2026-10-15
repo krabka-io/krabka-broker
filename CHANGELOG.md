@@ -25,6 +25,15 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- A per-broker `listener.name.<listener>.ssl.keystore.*` or
+  `listener.name.<listener>.ssl.truststore.*` change now takes effect on an
+  SSL or SASL_SSL listener: the next handshake gets the new stores, and a
+  store file is read again when it changes. The broker the alter is addressed
+  to checks the change first, as Kafka's `SslFactory` does, and answers
+  `INVALID_REQUEST` when a store does not load or a new certificate changes
+  the DN or drops a SAN. Before, the broker stored and reported the keys and
+  kept serving its static certificate. krabka reads PEM stores with an
+  unencrypted key only (#1422).
 - With `preallocate=true`, a segment's `O_DIRECT` writes now align their
   buffers, offsets and lengths to the filesystem block (up to 4 KiB). Before,
   they used the kernel's minimum `O_DIRECT` alignment, often 512 bytes, or a
