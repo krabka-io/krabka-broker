@@ -1557,7 +1557,10 @@ mod tests {
         // (enable_idempotence, expected cap)
         let cases = [(true, 5), (false, 128)];
         for (enable_idempotence, expected) in cases {
-            check!(producer_max_in_flight(enable_idempotence) == expected, "{enable_idempotence}");
+            check!(
+                producer_max_in_flight(enable_idempotence) == expected,
+                "{enable_idempotence}"
+            );
         }
     }
 
