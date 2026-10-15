@@ -91,7 +91,7 @@ pub use {
         ShardRouteFuture, UnstableApiVersions, UnstableFeatureVersions, kafka_4_3_1_api,
         kafka_4_3_1_max, metadata_partition_dir, supported_feature_range, supported_feature_ranges,
     },
-    connection_limiter::{ConnectionGuard, ConnectionLimit, ConnectionLimiter},
+    connection_limiter::{ConnectionGuard, ConnectionLimit, ConnectionLimiter, ConnectionLimits},
     controller::{
         Controller, ControllerHandle, QuorumState, QuorumStateSnapshot, SnapshotRange,
         SnapshotSlice, metadata_log_nonempty,

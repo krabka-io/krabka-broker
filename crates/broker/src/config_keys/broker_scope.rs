@@ -1,9 +1,11 @@
 //! The broker-scoped dynamic config keys: the controller-managed witness
 //! role, broker fencing state and stretch-site role that `DescribeConfigs`
-//! reports read-only, and the KIP-1075 deadline for remote `ListOffsets` work.
+//! reports read-only, the KIP-1075 deadline for remote `ListOffsets` work,
+//! and the two connection caps the accept loop reads per connection.
 
 use {
-    super::parse::{check_range, parse_long},
+    super::parse::{check_range, parse_int, parse_long},
+    krabka_raft::ConnectionLimits,
     std::time::Duration,
 };
 
@@ -224,6 +226,57 @@ pub(crate) fn resolve_remote_list_offsets_timeout(
         .unwrap_or(DEFAULT_REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT)
 }
 
+/// Kafka's `SocketServerConfigs.MAX_CONNECTIONS_CONFIG`, a dynamic broker
+/// config.
+pub(crate) const MAX_CONNECTIONS: &str = "max.connections";
+
+/// Kafka's `SocketServerConfigs.MAX_CONNECTIONS_PER_IP_CONFIG`, a dynamic
+/// broker config.
+pub(crate) const MAX_CONNECTIONS_PER_IP: &str = "max.connections.per.ip";
+
+/// The dynamic values of `key` for `node_id`, most preferred first: the
+/// per-broker config, then the cluster default, as Kafka's
+/// `DynamicBrokerConfig` layers them.
+fn dynamic_broker_values<'a>(
+    image: &'a krabka_metadata::MetadataImage,
+    node_id: krabka_metadata::NodeId,
+    key: &'a str,
+) -> impl Iterator<Item = &'a str> {
+    [image.broker_config(node_id), image.default_broker_config()]
+        .into_iter()
+        .filter_map(move |configs| configs?.get(key))
+        .map(String::as_str)
+}
+
+/// A connection cap's dynamic value: Kafka's `INT` with `atLeast(0)`.
+fn parse_connection_cap(key: &str, value: &str) -> Result<usize, String> {
+    let cap = check_range(key, parse_int(key, value)?, Some(0), None)?;
+    usize::try_from(cap).map_err(|error| error.to_string())
+}
+
+/// The `max.connections` and `max.connections.per.ip` caps in force for
+/// `node_id`: the per-broker dynamic value, else the cluster default, else
+/// the `configured` static cap. Kafka's `ConnectionQuotas` takes both from
+/// `DynamicListenerConfig.reconfigure`, so a change applies to the next
+/// connection the broker accepts. A stored value that does not parse leaves
+/// the next layer in force, as Kafka's `DynamicBrokerConfig` drops an invalid
+/// value from its layer.
+pub(crate) fn resolve_connection_limits(
+    image: &krabka_metadata::MetadataImage,
+    node_id: krabka_metadata::NodeId,
+    configured: ConnectionLimits,
+) -> ConnectionLimits {
+    let cap = |key: &str, configured: usize| {
+        dynamic_broker_values(image, node_id, key)
+            .find_map(|value| parse_connection_cap(key, value).ok())
+            .unwrap_or(configured)
+    };
+    ConnectionLimits {
+        max_connections: cap(MAX_CONNECTIONS, configured.max_connections),
+        max_connections_per_ip: cap(MAX_CONNECTIONS_PER_IP, configured.max_connections_per_ip),
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -316,5 +369,62 @@ mod tests {
         assert!(is_controller_managed_broker_config(BROKER_WITNESS));
         assert!(!is_recognized(BROKER_WITNESS));
         assert!(validate_topic_config(BROKER_WITNESS, WITNESS_TRUE).is_err());
+    }
+
+    /// Apply one dynamic broker config: `node_id` 1 or the cluster default.
+    fn set_broker_config(
+        img: &mut krabka_metadata::MetadataImage,
+        node_id: krabka_metadata::NodeId,
+        name: &str,
+        value: &str,
+    ) {
+        img.apply(&krabka_metadata::MetadataRecord::V1BrokerConfig(
+            krabka_metadata::BrokerConfigRecord {
+                node_id,
+                config_name: name.into(),
+                config_value: Some(value.into()),
+            },
+        ));
+    }
+
+    #[yare::parameterized(
+        static_only = { &[], (10, 5) },
+        cluster_default = { &[(None, MAX_CONNECTIONS, "3")], (3, 5) },
+        per_broker = { &[(Some(1), MAX_CONNECTIONS_PER_IP, "2")], (10, 2) },
+        per_broker_over_default = {
+            &[(None, MAX_CONNECTIONS_PER_IP, "2"), (Some(1), MAX_CONNECTIONS_PER_IP, "4")],
+            (10, 4)
+        },
+        other_broker_ignored = { &[(Some(2), MAX_CONNECTIONS, "1")], (10, 5) },
+        zero = { &[(None, MAX_CONNECTIONS, "0")], (0, 5) },
+        trimmed = { &[(None, MAX_CONNECTIONS, " 7 ")], (7, 5) },
+        unparsable_falls_back = {
+            &[(None, MAX_CONNECTIONS, "2"), (Some(1), MAX_CONNECTIONS, "lots")],
+            (2, 5)
+        },
+        negative_falls_back = { &[(None, MAX_CONNECTIONS_PER_IP, "-1")], (10, 5) },
+    )]
+    fn resolve_connection_limits_layers_broker_default_static(
+        configs: &[(Option<u64>, &str, &str)],
+        want: (usize, usize),
+    ) {
+        use krabka_metadata::{DEFAULT_BROKER_CONFIG_NODE_ID, NodeId};
+        let mut img = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        register_node(&mut img, 1, None);
+        for (node, name, value) in configs {
+            let node = node.map_or(DEFAULT_BROKER_CONFIG_NODE_ID, NodeId);
+            set_broker_config(&mut img, node, name, value);
+        }
+        let configured = ConnectionLimits {
+            max_connections: 10,
+            max_connections_per_ip: 5,
+        };
+        assert2::assert!(
+            resolve_connection_limits(&img, NodeId(1), configured)
+                == ConnectionLimits {
+                    max_connections: want.0,
+                    max_connections_per_ip: want.1,
+                }
+        );
     }
 }
