@@ -48,3 +48,18 @@ process RSS, file descriptors, disk and network use, and metrics scrape time,
 bytes and series count. `scale/verdict.txt` names the highest passing tier;
 failure of the 10,000-partition attempt is evidence, not permission to describe
 1,000 as a product limit.
+
+## Sustained-load contract
+
+This qualification measures throughput and the partition envelope over runs of minutes. Correctness over days, under injected faults, is a separate contract. [`bench/soak/rf3-72h.yaml`](../../bench/soak/rf3-72h.yaml) declares the 72-hour RF=3 soak before it runs: host and disk, seed, client settings, throughput floors, p50/p99/p999 budgets for each path, recovery deadlines, and a seeded schedule of bounded pauses, restarts, slow followers and disk fills. The `soak_contract` suite of `krabka-broker` executes a contract against an isolated three-broker cluster, and `krabka-soak-check` reconciles the evidence. The [design document](../../crates/bench-driver/docs/soak-contract-design.md) gives the rules.
+
+```sh
+bazel run -c opt //packaging:image_load
+KRABKA_SOAK_CONTRACT=$PWD/bench/soak/rf3-72h.yaml \
+KRABKA_SOAK_EVIDENCE_DIR=$PWD/soak-evidence \
+  cargo test -p krabka-broker --test soak_contract -- --ignored --nocapture
+krabka-soak-check judge --contract bench/soak/rf3-72h.yaml \
+  --evidence soak-evidence/evidence.json --out soak-evidence/verdict.json
+```
+
+Without `KRABKA_SOAK_CONTRACT` the suite runs `bench/soak/self-check.yaml`, a five-minute run that proves the judge reports an injected missing record and an injected missed deadline. The container matrix in CI runs it.

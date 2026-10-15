@@ -28,6 +28,13 @@ path = "src/main.rs"
 name = "krabka-bench-report"
 path = "src/report_main.rs"
 
+# The sustained-load judge. It validates a contract under `bench/soak/`, prints
+# its fault schedule, and judges a run's evidence; `self-check` proves the
+# judge catches an injected missing record and a missed recovery deadline.
+[[bin]]
+name = "krabka-soak-check"
+path = "src/soak_check_main.rs"
+
 [dependencies]
 bon = { workspace = true }
 assert2 = { workspace = true }
@@ -78,4 +85,8 @@ yare = { workspace = true }
 
 [[test]]
 name = "scenario_files"
+harness = false
+
+[[test]]
+name = "contract_files"
 harness = false

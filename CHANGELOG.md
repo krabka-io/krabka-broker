@@ -23,6 +23,19 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ## [Unreleased]
 
+### Added
+
+- A sustained-load and failure contract for RF=3 soaks (issue #1392).
+  `bench/soak/rf3-72h.yaml` declares the 72-hour M26 soak before it runs:
+  host, disk, seed, client settings, throughput floors, p50/p99/p999 budgets
+  per path, recovery deadlines and a seeded schedule of bounded pauses,
+  restarts, slow followers and disk fills. The `soak_contract` suite runs a
+  contract against the soak lane's three-broker cluster, and
+  `krabka-soak-check` reconciles acknowledged records, transactional
+  visibility and committed offsets, and tells permitted retries from loss. A
+  five-minute self-check in the container matrix proves that the judge catches
+  an injected missing record and a missed recovery deadline.
+
 ### Fixed
 
 - A long-polling `Fetch` is no longer charged its wait to
