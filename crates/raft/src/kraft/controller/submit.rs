@@ -9,7 +9,9 @@ use {
             assigned_record_offset, hwm_reaches_waiter, submit_waiter_need_offset,
             validate_append_result,
         },
-        records::{decode_committed_value, metadata_record_batch, next_batch_offset},
+        records::{
+            decode_committed_value, is_kip835_noop, metadata_record_batch, next_batch_offset,
+        },
     },
     crate::{
         DelegationTokenMutation, OffsetReservation, SubmitChangeResult, error::RaftError,
@@ -41,7 +43,7 @@ impl Engine {
                 })
             } else if !Arc::ptr_eq(expected, &self.image_tx.borrow()) {
                 Some(RaftError::StaleMetadataImage)
-            } else if self.log.hwm() < self.log.log_end_offset() {
+            } else if !self.uncommitted_tail_is_idle() {
                 Some(RaftError::UncommittedTail)
             } else {
                 None
@@ -419,6 +421,47 @@ impl Engine {
             }
         });
         names
+    }
+
+    /// Whether the log between the high watermark and the log end holds
+    /// nothing that changes the metadata image: only KIP-835 no-ops and
+    /// control batches, or nothing at all.
+    ///
+    /// An admission image is the committed image, so a plan built from it
+    /// still describes the log end when the uncommitted tail changes nothing.
+    /// The leader appends a no-op every `metadata.max.idle.interval.ms`
+    /// whatever else it does, and a check that refused every uncommitted
+    /// tail lost to it whenever the no-op landed just before the plan: the
+    /// liveness ticker's failover, which retries once a second, could then be
+    /// refused for as long as the two timers stayed in step. Kafka's
+    /// controller plans against its uncommitted state and has no such window.
+    ///
+    /// A tail that does not read counts as changing the image.
+    fn uncommitted_tail_is_idle(&self) -> bool {
+        let end = self.log.log_end_offset();
+        let mut cursor = self.log.hwm();
+        while cursor < end {
+            let Ok(batches) = self
+                .log
+                .read_decoded(cursor, self.metadata_raft_fetch_max.size())
+            else {
+                return false;
+            };
+            let Some(next) = next_batch_offset(&batches).filter(|next| *next > cursor) else {
+                return false;
+            };
+            let changes_image = batches
+                .iter()
+                .filter(|batch| !batch.attributes.is_control_batch())
+                .flat_map(|batch| &batch.records)
+                .filter_map(|record| record.value.as_ref())
+                .any(|value| !is_kip835_noop(value));
+            if changes_image {
+                return false;
+            }
+            cursor = next;
+        }
+        true
     }
 
     /// Whether a change to the registration of `node_id` must wait for the
