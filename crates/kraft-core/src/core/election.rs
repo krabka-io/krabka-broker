@@ -198,20 +198,7 @@ impl QuorumStateMachine {
         if let Some(leader_id) = *abandoned_leader {
             return self.handle_begin_quorum_epoch(leader_id, epoch, now);
         }
-        let election_deadline = self.election_deadline(now);
-        self.role = if self.state.voted_key.is_some() {
-            Role::Voted { election_deadline }
-        } else {
-            Role::Unattached { election_deadline }
-        };
-        vec![
-            Action::PersistQuorumState,
-            Action::TransitionedTo(self.role.name()),
-            Action::ResetTimer {
-                kind: TimerKind::Election,
-                deadline: election_deadline,
-            },
-        ]
+        self.await_election(self.election_deadline(now))
     }
 
     /// Whether the active election grant set contains a quorum of current voters.

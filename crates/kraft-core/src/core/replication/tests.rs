@@ -697,14 +697,10 @@ fn a_removed_leader_resigns_into_observer_discovery() {
     );
 }
 
-/// An observer whose leader stops answering looks for the current leader.
-///
-/// Node 4 observes a three-voter quorum and attached to node 1 at epoch 1.
-/// When its fetch timer fires, it forgets node 1 and arms the fetch timer
-/// again, so its next Fetch discovers whichever voter leads now.
-#[test]
-fn an_observer_whose_fetches_time_out_looks_for_the_current_leader() {
-    let mut m = machine(NodeId(4), &[NodeId(1), NodeId(2), NodeId(3)]);
+/// `me` in a three-voter quorum, following node 1 at epoch 1 since time 1000,
+/// over an empty log.
+fn following_node_one(me: NodeId) -> (QuorumStateMachine, FakeLog) {
+    let mut m = machine(me, &[NodeId(1), NodeId(2), NodeId(3)]);
     let log = FakeLog::new(0, 0);
     m.on_event(
         Event::ReceiveBeginQuorumEpoch {
@@ -714,6 +710,17 @@ fn an_observer_whose_fetches_time_out_looks_for_the_current_leader() {
         &log,
         SimInstant(1_000),
     );
+    (m, log)
+}
+
+/// An observer whose leader stops answering looks for the current leader.
+///
+/// Node 4 observes a three-voter quorum and attached to node 1 at epoch 1.
+/// When its fetch timer fires, it forgets node 1 and arms the fetch timer
+/// again, so its next Fetch discovers whichever voter leads now.
+#[test]
+fn an_observer_whose_fetches_time_out_looks_for_the_current_leader() {
+    let (mut m, log) = following_node_one(NodeId(4));
 
     let actions = m.on_event(Event::FetchTimeout, &log, SimInstant(2_000));
 
@@ -877,16 +884,7 @@ fn a_newer_epoch_without_a_leader_detaches_the_replica(
     epoch: Epoch,
     outcome: LeaderlessEpochOutcome,
 ) {
-    let mut m = machine(me, &[NodeId(1), NodeId(2), NodeId(3)]);
-    let log = FakeLog::new(0, 0);
-    m.on_event(
-        Event::ReceiveBeginQuorumEpoch {
-            leader_id: NodeId(1),
-            leader_epoch: 1,
-        },
-        &log,
-        SimInstant(1_000),
-    );
+    let (mut m, log) = following_node_one(me);
     let before = m.clone();
     let now = SimInstant(2_000);
 

@@ -308,6 +308,26 @@ impl QuorumStateMachine {
         }
     }
 
+    /// Wait in this epoch, with no leader, for an election at
+    /// `election_deadline`: `Voted` if this replica cast its vote in the
+    /// epoch, `Unattached` otherwise. Kafka keeps both in one
+    /// `UnattachedState`, with or without a voted key.
+    fn await_election(&mut self, election_deadline: SimInstant) -> Vec<Action> {
+        self.role = if self.state.voted_key.is_some() {
+            Role::Voted { election_deadline }
+        } else {
+            Role::Unattached { election_deadline }
+        };
+        vec![
+            Action::PersistQuorumState,
+            Action::TransitionedTo(self.role.name()),
+            Action::ResetTimer {
+                kind: TimerKind::Election,
+                deadline: election_deadline,
+            },
+        ]
+    }
+
     #[tracing::instrument(
         level = "info",
         skip_all,
