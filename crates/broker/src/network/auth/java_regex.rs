@@ -1604,6 +1604,12 @@ mod tests {
             row("(?i)(a){2,3}\\1", "aA", false),
             row("(?i)(a){2,3}\\1", "aaaaA", false),
             row("(?i)(a|)*\\1", "aa", true),
+            // an empty iteration counts toward the minimum of a repeat
+            row("(?i)((?=())|(?=())){2}\\2\\3", "", true),
+            row("(?i)((?=())|(?=())){2}\\2\\3", "x", false),
+            row("(?i)(a?){3}\\1", "aA", true),
+            row("(?i)(a|()){2}\\2b", "ab", true),
+            row("(?i)(?:(a)|b?){2}\\1", "bA", false),
             row("(?i)(x)?\\1", "", false),
             row("(?i)^(a)\\1$", "aA", true),
             row("(?i)(a)\\1\\z", "aA", true),

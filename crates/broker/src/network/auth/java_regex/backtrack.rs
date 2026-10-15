@@ -110,10 +110,13 @@ enum Inst {
         greedy: bool,
         exit: usize,
     },
-    /// The end of an iteration that started at the position in `start`. An
-    /// iteration that matched nothing leaves the repeat, as in Java's `Loop`.
+    /// The end of an iteration that started at the position in `start`. Once
+    /// `lo` iterations are made, one that matched nothing leaves the repeat,
+    /// so that an empty iteration cannot loop for ever. Before that it counts
+    /// toward `lo`, as in Java and `fancy_regex`.
     RepeatEnd {
         count: usize,
+        lo: usize,
         start: usize,
         head: usize,
         exit: usize,
@@ -354,6 +357,7 @@ impl Compiler<'_> {
         let exit = code.len() + 1;
         code.push(Inst::RepeatEnd {
             count,
+            lo,
             start,
             head,
             exit,
@@ -523,13 +527,14 @@ impl<'a> Machine<'a> {
                 }
                 &Inst::RepeatEnd {
                     count,
+                    lo,
                     start,
                     head,
                     exit,
                 } => {
                     let done = slots[count].unwrap_or(0) + 1;
                     set(&mut stack, slots, count, Some(done));
-                    let target = if slots[start] == Some(pos) {
+                    let target = if done >= lo && slots[start] == Some(pos) {
                         exit
                     } else {
                         head
