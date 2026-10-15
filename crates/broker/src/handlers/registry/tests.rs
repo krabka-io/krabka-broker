@@ -274,8 +274,8 @@ fn api_versions_is_a_self_accounted_context_dispatch() {
 
 /// KIP-124 (#692): Kafka charges the request quota for every request, and
 /// exempts only the apis it answers through `sendResponseExemptThrottle` and
-/// the SASL handshake, which its authenticator answers. `Produce`, `Fetch`
-/// and `ApiVersions` charge it in their handler. Kafka defines no
+/// the SASL handshake, which its authenticator answers. `Produce`, `Fetch`,
+/// `ShareFetch` and `ApiVersions` charge it in their handler. Kafka defines no
 /// krabka-private api, so the ones in the private table are exempt. Every
 /// other registered api, `GetReplicaLogInfo` included, is charged by the
 /// dispatch loop.
@@ -284,7 +284,12 @@ fn every_api_but_kafkas_exemptions_is_charged_to_the_request_quota() {
     use std::collections::BTreeMap;
 
     let registry = build_registry();
-    let self_accounted = [ApiKey::Produce, ApiKey::Fetch, ApiKey::ApiVersions];
+    let self_accounted = [
+        ApiKey::Produce,
+        ApiKey::Fetch,
+        ApiKey::ShareFetch,
+        ApiKey::ApiVersions,
+    ];
     let exempt = [
         ApiKey::SaslHandshake,
         ApiKey::SaslAuthenticate,

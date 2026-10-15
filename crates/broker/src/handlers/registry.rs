@@ -129,7 +129,7 @@ krabka_macros::dispatch_table! {
         BrokerHeartbeat,
         StreamsGroupTopologyDescriptionUpdate,
         FindCoordinator,
-        ShareFetch,
+        ShareFetch => crate::handlers::share_fetch::dispatch,
         ShareAcknowledge,
         OffsetFetch,
         EndTxn => crate::txn::handlers::end_txn::handle,
@@ -236,6 +236,10 @@ pub(crate) fn build_registry() -> DispatchRegistry {
     ));
     register_dispatch_table(&mut registry);
     register_krabka_private_context_dispatches(&mut registry);
+    // Kafka's `KafkaApis.processShareFetchResponse` charges both quotas
+    // together and answers a throttled `ShareFetch` without its records, so
+    // the handler charges the request quota beside the consumer byte rate.
+    registry.self_account_request_quota(ApiKey::ShareFetch as i16);
     // The apis Kafka answers through `sendResponseExemptThrottle`, so no
     // request quota holds them: `KafkaApis.handleWriteTxnMarkersRequest`,
     // `ControllerApis.handleAlterPartitionRequest`, and the raft rpcs of

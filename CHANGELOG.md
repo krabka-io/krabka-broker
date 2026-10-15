@@ -25,6 +25,14 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- A `ShareFetch` is now charged to the member's `consumer_byte_rate` and
+  `request_percentage` quotas, as Kafka's `processShareFetchResponse` charges
+  it. A throttled fetch reports the larger throttle in `throttle_time_ms`,
+  takes its byte charge back, and answers without its records, which stay
+  acquired until their lock runs out. Its acknowledgement results still
+  answer. A refused `ShareFetch` is charged to `request_percentage` alone.
+  Before, a `ShareFetch` was never throttled for bytes, and a request-quota
+  delay did not empty its response.
 - A `ShareFetch` is now capped at what the member's `consumer_byte_rate`
   quota allows in one quota window, as Kafka's
   `min(MaxBytes, fetch.max.bytes, maxQuotaWindowBytes)` caps it. Before, only

@@ -35,15 +35,25 @@ use {
         broker::Broker,
         error::BrokerError,
         handlers::{
-            ApiVersion, RequestContext, fetch::consumer_response_byte_budget, leader_endpoints,
+            ApiKeyCode, ApiVersion, RequestContext,
+            fetch::{apply_consumer_fetch_quota, consumer_response_byte_budget},
+            leader_endpoints,
         },
-        share_partition::session::ShareFetchSessionRequest,
+        quota::{Timed, with_active_time},
+        share_partition::{
+            group_settings::GroupShareSettings, manager::SharePartitionLeaderManager,
+            session::ShareFetchSessionRequest,
+        },
     },
+    krabka_metadata::MetadataImage,
     krabka_protocol::owned::{
         share_fetch_request::{FetchPartition, ShareFetchRequest},
         share_fetch_response::{LeaderIdAndEpoch, ShareFetchResponse},
     },
-    std::collections::{HashMap, HashSet},
+    std::{
+        collections::{HashMap, HashSet},
+        sync::Arc,
+    },
 };
 
 mod acknowledge;
@@ -70,6 +80,8 @@ mod log_start_lockout_tests;
 mod node_endpoints_tests;
 #[cfg(test)]
 mod persister_error_tests;
+#[cfg(test)]
+mod quota_tests;
 #[cfg(test)]
 mod renew_tests;
 #[cfg(test)]
@@ -130,7 +142,7 @@ use {
         records::AcquireMode,
         request::has_acknowledgements,
         resolve::{RowContext, resolve_row},
-        response::{group_responses, success_response},
+        response::{acknowledge_rows, fetch_rows_size, group_responses, success_response},
     },
     crate::{
         codes,
@@ -166,6 +178,36 @@ fn renew_fetch_fields_are_zero(req: &ShareFetchRequest) -> bool {
     req.max_bytes == 0 && req.min_bytes == 0 && req.max_records == 0 && req.max_wait_ms == 0
 }
 
+/// This handler's own wire api key, for the `api_key` label of the throttle
+/// metrics.
+const SHARE_FETCH_API_KEY: ApiKeyCode = krabka_protocol::api_key::ApiKey::ShareFetch as i16;
+
+/// The dispatch-table entry of `ShareFetch`, which charges the KIP-124
+/// request quota itself.
+///
+/// [`handle`] charges an answered fetch to both of the member's quotas
+/// before it updates the share session, as Kafka's
+/// `KafkaApis.processShareFetchResponse` does. A request that it refuses with
+/// a top-level error is charged to `request_percentage` alone here, as
+/// Kafka's `RequestHandlerHelper.sendMaybeThrottle` charges it. Only the time
+/// spent inside `poll` is charged, so a long poll's wait is not.
+pub(crate) async fn dispatch(
+    broker: &Broker,
+    req: ShareFetchRequest,
+    version: ApiVersion,
+    ctx: &RequestContext<'_>,
+) -> Result<ShareFetchResponse, BrokerError> {
+    let Timed { output, active } =
+        with_active_time(Box::pin(handle(broker, req, version, ctx))).await;
+    let mut response = output?;
+    if response.error_code != codes::NONE {
+        let image = broker.controller.current_image();
+        response.throttle_time_ms =
+            ctx.throttle_on_request_quota(broker, &image, SHARE_FETCH_API_KEY, active);
+    }
+    Ok(response)
+}
+
 #[krabka_macros::share_request_identity]
 pub(crate) async fn handle(
     broker: &Broker,
@@ -173,15 +215,162 @@ pub(crate) async fn handle(
     version: ApiVersion,
     ctx: &RequestContext<'_>,
 ) -> Result<ShareFetchResponse, BrokerError> {
+    let mgr = broker.share_partition_leaders.clone();
+    let Timed { output, active } = with_active_time(collect_rows(
+        RowsSetup {
+            broker,
+            manager: &mgr,
+            image: &image,
+            ctx,
+            group: &group,
+            member: &member,
+            settings,
+            version,
+        },
+        req,
+    ))
+    .await;
+    let FetchedRows {
+        mut pending,
+        incremental,
+        has_acknowledgements,
+    } = match output {
+        Ok(rows) => rows,
+        Err(refused) => return Ok(refused),
+    };
+
+    // An incremental response carries only the session partitions that have
+    // something to say, and every acknowledge row. Kafka's
+    // `ShareFetchContext.responseSize` selects them without updating the
+    // session, which only a response that goes out unthrottled does.
+    let session_rows: Vec<ResponseRow> = if incremental {
+        pending
+            .iter()
+            .filter(|p| p.fetchable)
+            .map(|p| ResponseRow {
+                key: (p.topic_id, p.partition_index),
+                has_records: !p.out.acquired_records.is_empty(),
+                has_error: p.out.error_code != codes::NONE,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if incremental {
+        let mut carried = mgr
+            .select_fetch_response(&group, &member, &session_rows)
+            .into_iter();
+        pending.retain_mut(|p| {
+            let carried = !p.fetchable || carried.next().unwrap_or(true);
+            // A quiet session partition that stays only for its acknowledge
+            // result is not a fetch row: Kafka merges that result in after it
+            // sizes the fetch rows for the quota.
+            p.fetchable &= carried;
+            carried || (p.in_request && has_acknowledgements)
+        });
+    }
+
+    // Kafka's `processShareFetchResponse`: every row that names another
+    // leader carries the current leader and its endpoint.
+    for p in &mut pending {
+        if names_the_leader(p.out.error_code) {
+            let (leader_id, leader_epoch) = current_leader(&mgr, p.topic_id, p.partition_index);
+            p.out.current_leader = LeaderIdAndEpoch {
+                leader_id,
+                leader_epoch,
+                ..Default::default()
+            };
+        }
+    }
+    let node_endpoints = leader_endpoints(
+        &image,
+        ctx.connection_listener_name,
+        &broker.config.inter_broker_listener_name,
+        pending
+            .iter()
+            .filter(|p| names_the_leader(p.out.error_code))
+            .map(|p| p.out.current_leader.leader_id),
+    );
+
+    // Kafka's `processShareFetchResponse` charges the fetch rows to
+    // `consumer_byte_rate` and the handler time to `request_percentage`, and
+    // throttles for the larger delay. A throttled fetch takes its byte charge
+    // back and answers no fetch rows, so its records stay acquired until
+    // their lock runs out. Its acknowledge results still answer.
+    let (throttle_time_ms, charge) = apply_consumer_fetch_quota(
+        broker,
+        &image,
+        ctx,
+        SHARE_FETCH_API_KEY,
+        active,
+        fetch_rows_size(&pending, version),
+    );
+    if throttle_time_ms > 0 {
+        charge.refund();
+        return Ok(ShareFetchResponse {
+            throttle_time_ms,
+            ..success_response(
+                lock_timeout_ms,
+                acknowledge_rows(pending, has_acknowledgements),
+                node_endpoints,
+            )
+        });
+    }
+    mgr.commit_fetch_response(&group, &member, &session_rows);
+
+    // Group pending rows back into per-topic responses, preserving first-seen
+    // topic order.
+    let responses = group_responses(pending);
+
+    Ok(success_response(lock_timeout_ms, responses, node_endpoints))
+}
+
+/// What [`collect_rows`] reads besides the request: the broker, the
+/// admitted member, and its group's settings.
+struct RowsSetup<'a> {
+    broker: &'a Broker,
+    manager: &'a Arc<SharePartitionLeaderManager>,
+    image: &'a MetadataImage,
+    ctx: &'a RequestContext<'a>,
+    group: &'a str,
+    member: &'a str,
+    settings: GroupShareSettings,
+    version: ApiVersion,
+}
+
+/// The rows a `ShareFetch` answers, before the quota check.
+struct FetchedRows {
+    pending: Vec<PendingPartition>,
+    /// The request continued a share session.
+    incremental: bool,
+    /// Some request partition carries acknowledgement batches.
+    has_acknowledgements: bool,
+}
+
+/// Updates the share session, applies the piggybacked acknowledgements, and
+/// acquires records for the session's partitions. A request that this refuses
+/// gets the top-level error response back as `Err`.
+async fn collect_rows(
+    setup: RowsSetup<'_>,
+    req: ShareFetchRequest,
+) -> Result<FetchedRows, ShareFetchResponse> {
+    let RowsSetup {
+        broker,
+        manager: mgr,
+        image,
+        ctx,
+        group,
+        member,
+        settings,
+        version,
+    } = setup;
     // KIP-1222: a renew-ack fetch renews locks and fetches no records, so
     // Kafka's `KafkaApis.handleShareFetchRequest` refuses one that asks for
     // records or a wait. The error response carries no message.
     let renew_only = version >= 2 && req.is_renew_ack;
     if renew_only && !renew_fetch_fields_are_zero(&req) {
-        return Ok(ShareFetchResponse::error(codes::INVALID_REQUEST, None));
+        return Err(ShareFetchResponse::error(codes::INVALID_REQUEST, None));
     }
-
-    let mgr = broker.share_partition_leaders.clone();
 
     let mut requested = HashSet::new();
     let mut requested_order = Vec::new();
@@ -211,7 +400,7 @@ pub(crate) async fn handle(
         .collect();
     let session = match mgr.update_fetch_session(
         ShareFetchSessionRequest::builder()
-            .identity((&group, &member))
+            .identity((group, member))
             .connection_id(ctx.connection_id)
             .epoch(req.share_session_epoch)
             .partitions(FetchPartitions {
@@ -228,12 +417,12 @@ pub(crate) async fn handle(
             // spin on the broker.
             let wait = u64::try_from(req.max_wait_ms).unwrap_or(0);
             tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
-            return Ok(ShareFetchResponse::error(
+            return Err(ShareFetchResponse::error(
                 codes::SHARE_SESSION_LIMIT_REACHED,
                 None,
             ));
         }
-        Err(code) => return Ok(ShareFetchResponse::error(code, None)),
+        Err(code) => return Err(ShareFetchResponse::error(code, None)),
     };
 
     // The session's partitions in the session's order, then the request
@@ -253,8 +442,8 @@ pub(crate) async fn handle(
     // acknowledgement rows into pending partitions.
     let row_context = RowContext {
         broker,
-        manager: &mgr,
-        image: &image,
+        manager: mgr,
+        image,
         ctx,
         has_acknowledgements,
         supports_renew: version >= 2,
@@ -273,16 +462,18 @@ pub(crate) async fn handle(
 
     let acquire = AcquireContext {
         broker,
-        manager: &mgr,
-        group: &group,
-        member: &member,
+        manager: mgr,
+        group,
+        member,
         max_records: req.max_records,
         // Kafka's `min(MaxBytes, fetch.max.bytes, maxQuotaWindowBytes)`
         // bounds the acquire passes. `acquire_pass` retains the first
         // batch progress exception if that batch itself exceeds this cap.
+        // Without the quota window, an acquisition past the byte-rate burst
+        // would be throttled, and its records dropped, on every attempt.
         max_bytes: i32::try_from(consumer_response_byte_budget(
             broker,
-            &image,
+            image,
             ctx,
             req.max_bytes,
         ))
@@ -313,7 +504,7 @@ pub(crate) async fn handle(
     // Kafka's `releaseSession` runs after the final request's response is
     // built: the member gives its records back.
     if session.final_request {
-        mgr.release_session_partitions(&group, &member, &session.released)
+        mgr.release_session_partitions(group, member, &session.released)
             .await;
     }
 
@@ -322,52 +513,11 @@ pub(crate) async fn handle(
     // request carries acknowledgements. A renew-ack fetch runs no fetch, so it
     // answers only the acknowledge rows.
     pending.retain(|p| p.fetchable || (p.in_request && has_acknowledgements));
-    // An incremental response carries only the session partitions that have
-    // something to say, and every acknowledge row.
-    if session.incremental {
-        let rows: Vec<ResponseRow> = pending
-            .iter()
-            .filter(|p| p.fetchable)
-            .map(|p| ResponseRow {
-                key: (p.topic_id, p.partition_index),
-                has_records: !p.out.acquired_records.is_empty(),
-                has_error: p.out.error_code != codes::NONE,
-            })
-            .collect();
-        let mut carried = mgr.prune_fetch_response(&group, &member, &rows).into_iter();
-        pending.retain(|p| {
-            let carried = !p.fetchable || carried.next().unwrap_or(true);
-            carried || (p.in_request && has_acknowledgements)
-        });
-    }
-
-    // Kafka's `processShareFetchResponse`: every row that names another
-    // leader carries the current leader and its endpoint.
-    for p in &mut pending {
-        if names_the_leader(p.out.error_code) {
-            let (leader_id, leader_epoch) = current_leader(&mgr, p.topic_id, p.partition_index);
-            p.out.current_leader = LeaderIdAndEpoch {
-                leader_id,
-                leader_epoch,
-                ..Default::default()
-            };
-        }
-    }
-    let node_endpoints = leader_endpoints(
-        &image,
-        ctx.connection_listener_name,
-        &broker.config.inter_broker_listener_name,
-        pending
-            .iter()
-            .filter(|p| names_the_leader(p.out.error_code))
-            .map(|p| p.out.current_leader.leader_id),
-    );
-
-    // Group pending rows back into per-topic responses, preserving first-seen
-    // topic order.
-    let responses = group_responses(pending);
-
-    Ok(success_response(lock_timeout_ms, responses, node_endpoints))
+    Ok(FetchedRows {
+        pending,
+        incremental: session.incremental,
+        has_acknowledgements,
+    })
 }
 
 #[cfg(test)]

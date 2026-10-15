@@ -20,7 +20,7 @@ use {
                 OffsetRun, ShareSessionEpoch, StartedBroker, TopicPartitionCount,
                 acknowledge_batches_request, acquired_share_records,
                 create_topic as create_topic_from_test_support, produce_partition_request,
-                share_acknowledge_wire, share_fetch_wire,
+                set_user_quota, share_acknowledge_wire, share_fetch_wire,
             },
         },
         test_support::{
@@ -31,7 +31,6 @@ use {
     bytes::Bytes,
     krabka_ids::PartitionIndex,
     krabka_log::Offset,
-    krabka_metadata::{ClientQuotaRecord, MetadataRecord, QuotaEntity},
     krabka_protocol::{
         owned::{
             produce_response::ProduceResponse,
@@ -51,7 +50,7 @@ use {
 const BATCHES: i64 = 4;
 
 /// The records in each batch.
-const RECORDS_PER_BATCH: i64 = 2;
+pub(super) const RECORDS_PER_BATCH: i64 = 2;
 
 /// Produce v12 names the topic.
 const PRODUCE_VERSION: i16 = 12;
@@ -76,7 +75,7 @@ async fn start_with_fetch_cap(cap: i32) -> StartedBroker {
     StartedBroker { broker, dir }
 }
 
-async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
+pub(super) async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
     create_topic_with_partitions(broker, name, 1).await
 }
 
@@ -102,7 +101,7 @@ async fn produce_batches(broker: &BrokerHandle, topic: &str) {
 }
 
 /// Appends one batch of [`RECORDS_PER_BATCH`] records to `partition`.
-async fn produce_batch(broker: &BrokerHandle, topic: &str, partition: i32) {
+pub(super) async fn produce_batch(broker: &BrokerHandle, topic: &str, partition: i32) {
     let shared = broker.broker_arc_for_test();
     krabka_macros::request_test_identity! {
         bind(user, address, ctx);
@@ -141,7 +140,7 @@ async fn produce_batch(broker: &BrokerHandle, topic: &str, partition: i32) {
 }
 
 /// The size in bytes of the first batch of `topic`. Every batch has this size.
-fn batch_size(broker: &BrokerHandle, topic: &str) -> i32 {
+pub(super) fn batch_size(broker: &BrokerHandle, topic: &str) -> i32 {
     let shared = broker.broker_arc_for_test();
     let partition = shared
         .partitions
@@ -224,7 +223,7 @@ fn partition(response: &ShareFetchResponse) -> PartitionData {
 }
 
 /// The first and last offsets of every acquired row.
-fn acquired(row: &PartitionData) -> Vec<OffsetRun> { acquired_share_records(row) }
+pub(super) fn acquired(row: &PartitionData) -> Vec<OffsetRun> { acquired_share_records(row) }
 
 /// The offsets of every record that the row carries.
 fn record_offsets(row: &PartitionData) -> Vec<i64> {
@@ -444,29 +443,16 @@ enum UserQuota {
     BatchesPerSecond(BatchFraction),
 }
 
-/// Sets `rate` bytes per second as the `consumer_byte_rate` quota of `user`.
-async fn set_consumer_byte_rate(broker: &BrokerHandle, user: &str, rate: f64) {
-    broker
-        .broker_arc_for_test()
-        .controller
-        .submit_change(vec![MetadataRecord::V1ClientQuota(ClientQuotaRecord {
-            entity: vec![QuotaEntity {
-                entity_type: "user".into(),
-                entity_name: Some(user.into()),
-            }],
-            config_key: "consumer_byte_rate".into(),
-            config_value: Some(rate),
-        })])
-        .await
-        .expect("set consumer_byte_rate");
-}
-
 /// Kafka's `KafkaApis.handleShareFetchRequest` caps `MaxBytes` at
 /// `min(MaxBytes, fetch.max.bytes, maxQuotaWindowBytes)`, the bytes that a
 /// member can fetch in one quota window without being throttled. The broker
 /// cap stays at its default here, and the window is one second long
 /// (`quota_window` minus `quota_throttle_max`), so the quota alone limits the
 /// fetch. The first batch still goes out when it is larger than the window.
+/// The fetch is charged to the byte rate too, and the rate's bucket holds two
+/// windows, so a window of three quarters of a batch leaves room for the
+/// batch and its response framing. Half a batch would not: that response
+/// would be throttled and answered without its records, as Kafka's is.
 #[tokio::test]
 async fn consumer_quota_window_limits_share_fetch() {
     let HandlerStartedBroker { broker, dir: _dir } = start_broker_no_audit_with(|cfg| {
@@ -485,8 +471,8 @@ async fn consumer_quota_window_limits_share_fetch() {
         (
             "window-below-one-batch",
             UserQuota::BatchesPerSecond(BatchFraction {
-                numerator: 1,
-                denominator: 2,
+                numerator: 3,
+                denominator: 4,
             }),
             one_batch_outcome(),
         ),
@@ -533,7 +519,7 @@ async fn consumer_quota_window_limits_share_fetch() {
         {
             let size = batch_size(&broker, &topic);
             let rate = f64::from(size * numerator / denominator);
-            set_consumer_byte_rate(&broker, &limited_user, rate).await;
+            set_user_quota(&broker, &limited_user, "consumer_byte_rate", rate).await;
         }
 
         let limited = share_fetch()

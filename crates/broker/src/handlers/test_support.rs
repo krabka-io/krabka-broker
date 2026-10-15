@@ -1356,28 +1356,74 @@ pub(crate) fn spawn_partition(
     )
 }
 
-pub(crate) async fn seed_controller_quota(handle: &BrokerHandle, rate: f64) {
+/// Commits one client quota `config_key = value` for `entity`.
+async fn submit_client_quota(
+    handle: &BrokerHandle,
+    entity: Vec<krabka_metadata::QuotaEntity>,
+    config_key: &str,
+    value: f64,
+) {
     handle
         .broker_arc_for_test()
         .controller
         .submit_change(vec![MetadataRecord::V1ClientQuota(
             krabka_metadata::ClientQuotaRecord {
-                entity: vec![
-                    krabka_metadata::QuotaEntity {
-                        entity_type: "user".into(),
-                        entity_name: Some("admin".into()),
-                    },
-                    krabka_metadata::QuotaEntity {
-                        entity_type: "client-id".into(),
-                        entity_name: Some("admin-client".into()),
-                    },
-                ],
-                config_key: "controller_mutation_rate".into(),
-                config_value: Some(rate),
+                entity,
+                config_key: config_key.into(),
+                config_value: Some(value),
             },
         )])
         .await
         .expect("seed quota");
+}
+
+pub(crate) async fn seed_controller_quota(handle: &BrokerHandle, rate: f64) {
+    submit_client_quota(
+        handle,
+        vec![
+            krabka_metadata::QuotaEntity {
+                entity_type: "user".into(),
+                entity_name: Some("admin".into()),
+            },
+            krabka_metadata::QuotaEntity {
+                entity_type: "client-id".into(),
+                entity_name: Some("admin-client".into()),
+            },
+        ],
+        "controller_mutation_rate",
+        rate,
+    )
+    .await;
+}
+
+/// Sets the `config_key` quota of `user` to `value`, and waits until the
+/// broker's metadata image carries it.
+pub(crate) async fn set_user_quota(
+    handle: &BrokerHandle,
+    user: &str,
+    config_key: &str,
+    value: f64,
+) {
+    submit_client_quota(
+        handle,
+        vec![krabka_metadata::QuotaEntity {
+            entity_type: "user".into(),
+            entity_name: Some(user.into()),
+        }],
+        config_key,
+        value,
+    )
+    .await;
+    let key: krabka_metadata::EntityKey = vec![("user".into(), Some(user.into()))];
+    handle
+        .wait_for_image(|image| {
+            image
+                .client_quotas()
+                .get(&key)
+                .and_then(|configs| configs.get(config_key))
+                == Some(&value)
+        })
+        .await;
 }
 
 pub(crate) async fn set_streams_version(broker: &Broker, level: i16) {

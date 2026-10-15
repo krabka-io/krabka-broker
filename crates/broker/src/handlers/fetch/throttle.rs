@@ -5,7 +5,7 @@
 use {
     crate::{
         broker::Broker,
-        handlers::RequestContext,
+        handlers::{ApiKeyCode, RequestContext},
         metrics::{BrokerMetrics, QuotaType},
         quota::{
             QuotaBuckets, QuotaDelay, debt_tokens, entity_field, lookup_quota_with_key,
@@ -157,7 +157,7 @@ pub(super) fn consumer_quota_window_bytes(
 
 /// The byte-rate charge a consumer fetch made, in bytes, which a throttled
 /// fetch gives back.
-pub(super) struct ConsumerCharge(Option<ChargedBucket>);
+pub(crate) struct ConsumerCharge(Option<ChargedBucket>);
 
 /// The bucket a consumer fetch drew from and the bytes it drew.
 struct ChargedBucket {
@@ -169,23 +169,26 @@ impl ConsumerCharge {
     /// Kafka's `quotas.fetch.unrecordQuotaSensor`: a throttled fetch sends
     /// no records, so the bytes it was charged come off the quota. The whole
     /// charge comes back, the debt it left included.
-    pub(super) fn refund(self) {
+    pub(crate) fn refund(self) {
         if let Some(ChargedBucket { bucket, bytes }) = self.0 {
             bucket.refund(bytes);
         }
     }
 }
 
-/// Charge a consumer fetch whose whole response is `response_bytes` long to
-/// its `consumer_byte_rate` and `request_percentage` quotas, as Kafka's
-/// `KafkaApis.handleFetchRequest` records both with
-/// `fetchContext.getResponseSize`. Returns the throttle the response reports,
-/// and the byte-rate charge to give back when that throttle is above zero.
-pub(super) fn apply_consumer_fetch_quota(
+/// Charge a consumer read whose whole response is `response_bytes` long to
+/// its `consumer_byte_rate` and `request_percentage` quotas, and its
+/// `handler_time` to the latter, as Kafka's `KafkaApis.handleFetchRequest`
+/// records both with `fetchContext.getResponseSize` and
+/// `KafkaApis.processShareFetchResponse` with `shareFetchContext.responseSize`.
+/// Returns the throttle the `api_key` response reports, and the byte-rate
+/// charge to give back when that throttle is above zero.
+pub(crate) fn apply_consumer_fetch_quota(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     context: &RequestContext<'_>,
-    handler_start: std::time::Instant,
+    api_key: ApiKeyCode,
+    handler_time: std::time::Duration,
     response_bytes: u64,
 ) -> (i32, ConsumerCharge) {
     let ConsumerQuotaOutcome {
@@ -198,16 +201,14 @@ pub(super) fn apply_consumer_fetch_quota(
         context.client_id,
         response_bytes,
     );
-    let request_delay = context.charge_request_quota(broker, image, handler_start);
+    let request_delay = context.charge_request_quota(broker, image, handler_time);
     // KIP-219: the connection is muted for the larger of the two delays.
     // Resolving it through the metric records the throttle phase and the quota
     // that caused it, and hands back the delay the response reports.
-    let delay = broker
-        .metrics
-        .record_applied_throttle(super::FETCH_API_KEY, &[
-            (QuotaType::Fetch, data_delay).into(),
-            (QuotaType::Request, request_delay).into(),
-        ]);
+    let delay = broker.metrics.record_applied_throttle(api_key, &[
+        (QuotaType::Fetch, data_delay).into(),
+        (QuotaType::Request, request_delay).into(),
+    ]);
     if delay <= <Time as TimeExt>::ZERO {
         return (0, charge);
     }
