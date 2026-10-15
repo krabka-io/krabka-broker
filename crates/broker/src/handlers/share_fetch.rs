@@ -35,7 +35,8 @@ use {
         broker::Broker,
         error::BrokerError,
         handlers::{
-            ApiKeyCode, ApiVersion, RequestContext, fetch::apply_consumer_fetch_quota,
+            ApiKeyCode, ApiVersion, RequestContext,
+            fetch::{apply_consumer_fetch_quota, consumer_response_byte_budget},
             leader_endpoints,
         },
         quota::{Timed, with_active_time},
@@ -49,7 +50,6 @@ use {
         share_fetch_request::{FetchPartition, ShareFetchRequest},
         share_fetch_response::{LeaderIdAndEpoch, ShareFetchResponse},
     },
-    krabka_units::convert::ByteSizeExt as _,
     std::{
         collections::{HashMap, HashSet},
         sync::Arc,
@@ -260,8 +260,12 @@ pub(crate) async fn handle(
         let mut carried = mgr
             .select_fetch_response(&group, &member, &session_rows)
             .into_iter();
-        pending.retain(|p| {
+        pending.retain_mut(|p| {
             let carried = !p.fetchable || carried.next().unwrap_or(true);
+            // A quiet session partition that stays only for its acknowledge
+            // result is not a fetch row: Kafka merges that result in after it
+            // sizes the fetch rows for the quota.
+            p.fetchable &= carried;
             carried || (p.in_request && has_acknowledgements)
         });
     }
@@ -462,10 +466,18 @@ async fn collect_rows(
         group,
         member,
         max_records: req.max_records,
-        // Kafka's broker-wide `fetch.max.bytes` and request limit both
-        // bound the acquire passes. `acquire_pass` retains the first
+        // Kafka's `min(MaxBytes, fetch.max.bytes, maxQuotaWindowBytes)`
+        // bounds the acquire passes. `acquire_pass` retains the first
         // batch progress exception if that batch itself exceeds this cap.
-        max_bytes: req.max_bytes.min(broker.config.fetch_max_bytes.bytes_i32()),
+        // Without the quota window, an acquisition past the byte-rate burst
+        // would be throttled, and its records dropped, on every attempt.
+        max_bytes: i32::try_from(consumer_response_byte_budget(
+            broker,
+            image,
+            ctx,
+            req.max_bytes,
+        ))
+        .unwrap_or(i32::MAX),
         min_bytes: req.min_bytes,
         mode: AcquireMode::of(
             if version >= 2 {

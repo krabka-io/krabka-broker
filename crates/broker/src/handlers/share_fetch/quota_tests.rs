@@ -76,7 +76,8 @@ enum MemberQuota {
     RequestPercentage(f64),
 }
 
-/// One `ShareFetch` of `MEMBER` in `group`, which asks for one batch.
+/// One `ShareFetch` of `MEMBER` in `group`, which asks for one batch unless
+/// it names `max_records`.
 #[bon::builder]
 async fn fetch(
     broker: &BrokerHandle,
@@ -84,6 +85,7 @@ async fn fetch(
     user: &str,
     topic_id: WireUuid,
     epoch: i32,
+    #[builder(default = i32::try_from(RECORDS_PER_BATCH).expect("small batch"))] max_records: i32,
     #[builder(default)] acknowledgement_batches: Vec<AcknowledgementBatch>,
 ) -> ShareFetchResponse {
     let request = super::test_fetch_request()
@@ -91,7 +93,7 @@ async fn fetch(
         .member_id(MEMBER.into())
         .topic_id(topic_id.0)
         .share_session_epoch(epoch)
-        .max_records(i32::try_from(RECORDS_PER_BATCH).expect("small batch"))
+        .max_records(max_records)
         .acknowledgement_batches(acknowledgement_batches)
         .call();
     share_fetch_wire()
@@ -120,6 +122,13 @@ async fn open_session(broker: &BrokerHandle, name: &str, group: &str, user: &str
         produce_batch(broker, name, 0).await;
     }
     topic_id
+}
+
+/// Sets the `consumer_byte_rate` of `user` so that its bucket holds `batches`
+/// batches of `topic`.
+async fn set_batches_per_window(broker: &BrokerHandle, topic: &str, user: &str, batches: f64) {
+    let rate = f64::from(batch_size(broker, topic)) * batches / f64::from(QUOTA_WINDOW_SECS);
+    set_user_quota(broker, user, "consumer_byte_rate", rate).await;
 }
 
 /// What one fetch answered.
@@ -209,9 +218,7 @@ async fn share_fetch_is_charged_to_the_member_quotas() {
         match quota {
             MemberQuota::None => {}
             MemberQuota::BatchesPerWindow(batches) => {
-                let rate =
-                    f64::from(batch_size(&broker, &topic)) * batches / f64::from(QUOTA_WINDOW_SECS);
-                set_user_quota(&broker, &user, "consumer_byte_rate", rate).await;
+                set_batches_per_window(&broker, &topic, &user, batches).await;
             }
             MemberQuota::RequestPercentage(percentage) => {
                 set_user_quota(&broker, &user, "request_percentage", percentage).await;
@@ -235,6 +242,33 @@ async fn share_fetch_is_charged_to_the_member_quotas() {
     }
 
     assert!(actual == expected);
+    broker.shutdown().await;
+}
+
+/// Kafka caps a share fetch at `maxQuotaWindowBytes`, the bytes the member's
+/// byte rate allows in one quota window, which is half of what its bucket
+/// holds. A member whose bucket holds a batch and a half asks for the whole
+/// topic. Uncapped, it would acquire both batches, overflow the bucket, and
+/// be throttled with its records dropped on every attempt. Capped, it gets the
+/// first batch, unthrottled.
+#[tokio::test]
+async fn a_share_fetch_acquires_no_more_than_the_quota_window_allows() {
+    let HandlerStartedBroker { broker, dir: _dir } = start().await;
+    let (topic, group, user) = ("quota-window", "group-window", "user-window");
+    let topic_id = open_session(&broker, topic, group, user).await;
+    set_batches_per_window(&broker, topic, user, 1.5).await;
+
+    let response = fetch()
+        .broker(&broker)
+        .group(group)
+        .user(user)
+        .topic_id(topic_id)
+        .epoch(1)
+        .max_records(500)
+        .call()
+        .await;
+
+    assert!(FetchOutcome::of(&response) == FetchOutcome::sent(0, 1));
     broker.shutdown().await;
 }
 

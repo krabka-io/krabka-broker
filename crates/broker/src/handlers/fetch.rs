@@ -99,6 +99,23 @@ const KIP_951_FETCH_VERSION: i16 = 16;
 /// `TopicId` from this version on.
 const FIRST_TOPIC_ID_VERSION: i16 = 13;
 
+/// The whole-response byte budget of a consumer read, which a `ShareFetch`
+/// shares with a consumer `Fetch`: Kafka's
+/// `min(maxBytes, fetch.max.bytes, maxQuotaWindowBytes)`.
+pub(crate) fn consumer_response_byte_budget(
+    broker: &Broker,
+    image: &krabka_metadata::MetadataImage,
+    context: &RequestContext<'_>,
+    request_max_bytes: i32,
+) -> usize {
+    fetch_response_byte_budget(
+        request_max_bytes,
+        broker.config.fetch_max_bytes.bytes_usize(),
+        consumer_quota_window_bytes(broker, image, context),
+        false,
+    )
+}
+
 /// The whole-response byte budget for one Fetch read. Follower reads use the
 /// request budget; consumers also honor the broker and client-quota ceilings.
 fn fetch_response_byte_budget(
