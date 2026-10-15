@@ -46,9 +46,10 @@
 //! `atom` does, by the literal chars up to the next token that is not one, less
 //! the last of them when a quantifier follows.
 //!
-//! One thing is left different, because `fancy_regex` has no other way to
-//! compare the text of a group. A backreference under a fold is written
-//! `(?i:\1)`, and it compares the text it refers to with the text at hand
+//! `fancy_regex` has no way to compare the text of a group other than its own,
+//! so a backreference under a fold is written `(?i:\1)`, and the rewrite
+//! records the [`BackrefFold`] of each one in the order it writes them.
+//! `fancy_regex` compares the text it refers to with the text at hand
 //! differently from Java's `CIBackRef`:
 //!
 //! - Under `(?i)` Java compares ASCII case only, and `fancy_regex`'s `i`
@@ -64,8 +65,16 @@
 //!   of bytes, such as `s` and `ſ`, `k` and the Kelvin sign, `ß` and `ẞ`, and `å`
 //!   and the angstrom sign: `(?iu)(s)\1` matches `sſ` in Java, and not in
 //!   `fancy_regex`. They agree on the other letters.
+//!
+//! The SSL principal and Kerberos rules do not take `fancy_regex`'s answer for
+//! such a pattern. `JavaPattern` runs it on a matcher of its own that compares
+//! by [`BackrefFold::chars_match`], as `CIBackRef` does. The client-metrics
+//! `match` patterns still compile with `fancy_regex`, and keep the difference.
 
-use {super::Scope, std::fmt::Write as _};
+use {
+    super::{Scope, java_case},
+    std::fmt::Write as _,
+};
 
 /// A value read from the chars of a pattern, and the number of chars it takes.
 #[derive(Debug, PartialEq, Eq)]
@@ -89,6 +98,32 @@ pub(super) enum Escape {
     Named,
     /// Any other escape, such as `\w`, `\b` or `\A`.
     Other,
+}
+
+/// How Java's `CIBackRef` compares a char of the text a backreference refers
+/// to with a char of the input, by the case flags in force at the reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackrefFold {
+    /// `(?i)`: the two agree under `ASCII.toLower`, which leaves every char
+    /// that is not an ASCII letter as it is.
+    Ascii,
+    /// `(?iu)`, or `(?iU)`: the two agree under `Character.toUpperCase`, or
+    /// under `Character.toLowerCase` of that.
+    Unicode,
+}
+
+impl BackrefFold {
+    /// Whether `CIBackRef` takes `input` for `group`, a char of the text the
+    /// reference refers to.
+    pub(crate) fn chars_match(self, group: char, input: char) -> bool {
+        group == input
+            || match self {
+                Self::Ascii => group.eq_ignore_ascii_case(&input),
+                Self::Unicode => {
+                    java_case::key(u32::from(group)) == java_case::key(u32::from(input))
+                }
+            }
+    }
 }
 
 /// Java's `Pattern.RemoveQEQuoting`, which runs over the whole pattern before

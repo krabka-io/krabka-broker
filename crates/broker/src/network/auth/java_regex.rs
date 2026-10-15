@@ -10,15 +10,21 @@
 //! `regex` crate reads a group named `1_x`. [`JavaPattern`] gives both the
 //! Java answer.
 //!
-//! The pattern itself is rewritten by `java_to_fancy` first, which also gives
+//! The pattern itself is rewritten by `translate_java` first, which also gives
 //! Java's reading of `\w`, `.`, and `(?i)`: Java folds ASCII case only, unless
 //! `(?u)` asks for Unicode case as well, so `(?i)service-` does not match
-//! `ſervice-` (long s).
+//! `ſervice-` (long s). A backreference under a case flag, `\R`, and a group
+//! inside a look-around or an atomic group match in ways `fancy_regex` cannot
+//! give, so a pattern that has one runs on the matcher in [`backtrack`]
+//! instead.
+
+mod backtrack;
 
 use {
-    crate::client_metrics::config::java_to_fancy,
-    fancy_regex::{Captures, Regex},
-    std::{collections::BTreeMap, sync::Arc},
+    self::backtrack::Program,
+    crate::client_metrics::config::{JavaTranslation, translate_java},
+    fancy_regex::Regex,
+    std::{collections::BTreeMap, fmt::Display, ops::Range, sync::Arc},
 };
 
 /// A `java.util.regex.Pattern` compiled for `matches()` and
@@ -36,6 +42,9 @@ struct Compiled {
     whole: Regex,
     /// Group name to index, for `${name}` in a replacement.
     names: BTreeMap<String, usize>,
+    /// The matcher that answers in place of `search` and `whole`, for a
+    /// pattern that `fancy_regex` does not read as Java does.
+    backtrack: Option<Program>,
 }
 
 /// A replacement string Java's `Matcher.appendReplacement` refuses, which
@@ -45,10 +54,19 @@ struct Compiled {
 #[error("{0}")]
 pub(super) struct ReplacementError(pub(super) String);
 
+impl ReplacementError {
+    /// A search that gave no answer, as the error a caller rejects the name
+    /// by.
+    fn search(error: impl Display) -> Self { Self(error.to_string()) }
+}
+
 impl JavaPattern {
     /// Compiles `pattern`, or says why Java's `Pattern.compile` would not.
     pub(super) fn compile(pattern: &str) -> Result<Self, String> {
-        let translated = java_to_fancy(pattern)
+        let JavaTranslation {
+            pattern: translated,
+            backref_folds,
+        } = translate_java(pattern)
             .ok_or_else(|| format!("{pattern:?} is not a java.util.regex pattern"))?;
         let compile = |source: &str| Regex::new(source).map_err(|error| error.to_string());
         let search = compile(&translated)?;
@@ -58,10 +76,15 @@ impl JavaPattern {
             .enumerate()
             .filter_map(|(index, name)| Some((name?.to_owned(), index)))
             .collect();
+        // A pattern `fancy_regex` reads as Java does, or one with a node the
+        // matcher does not know, keeps `fancy_regex`.
+        let backtrack = Program::new(&translated, search.captures_len(), &backref_folds)
+            .filter(Program::differs_from_fancy);
         Ok(Self(Arc::new(Compiled {
             search,
             whole,
             names,
+            backtrack,
         })))
     }
 
@@ -77,12 +100,39 @@ impl JavaPattern {
     /// reading the limit as "does not match" would let a rule that Java
     /// applies fall through to the next rule, or to `DEFAULT`, and map the
     /// principal to a name the operator never meant for it. A caller rejects
-    /// the name instead.
+    /// the name instead. So it does for a search that JDK 17 throws on.
     pub(super) fn matches(&self, input: &str) -> Result<bool, ReplacementError> {
-        self.0
-            .whole
-            .is_match(input)
-            .map_err(|error| ReplacementError(error.to_string()))
+        match &self.0.backtrack {
+            Some(program) => program.matches(input).map_err(ReplacementError::search),
+            None => self
+                .0
+                .whole
+                .is_match(input)
+                .map_err(ReplacementError::search),
+        }
+    }
+
+    /// `Matcher.find(from)`: the span of each group of the first match that
+    /// starts at `from` or after it, group 0 the whole match.
+    fn find(
+        &self,
+        input: &str,
+        from: usize,
+    ) -> Result<Option<Vec<Option<Range<usize>>>>, ReplacementError> {
+        if let Some(program) = &self.0.backtrack {
+            return program.find(input, from).map_err(ReplacementError::search);
+        }
+        let captures = self
+            .0
+            .search
+            .captures_from_pos(input, from)
+            .map_err(ReplacementError::search)?;
+        Ok(captures.map(|captures| {
+            captures
+                .iter()
+                .map(|group| group.map(|group| group.range()))
+                .collect()
+        }))
     }
 
     /// `input.replaceAll(pattern, replacement)` when `all`, and
@@ -103,26 +153,25 @@ impl JavaPattern {
         let mut copied = 0;
         let mut search_from = 0;
         while search_from <= input.len() {
-            let captures = self
-                .0
-                .search
-                .captures_from_pos(input, search_from)
-                .map_err(|error| ReplacementError(error.to_string()))?;
-            let Some(captures) = captures else { break };
-            let Some(whole) = captures.get(0) else { break };
-            out.push_str(&input[copied..whole.start()]);
-            self.append_replacement(&mut out, replacement, &captures)?;
-            copied = whole.end();
+            let Some(groups) = self.find(input, search_from)? else {
+                break;
+            };
+            let Some(whole) = groups.first().cloned().flatten() else {
+                break;
+            };
+            out.push_str(&input[copied..whole.start]);
+            self.append_replacement(&mut out, replacement, input, &groups)?;
+            copied = whole.end;
             if !all {
                 break;
             }
-            search_from = if whole.start() == whole.end() {
-                input[whole.end()..]
+            search_from = if whole.is_empty() {
+                input[whole.end..]
                     .chars()
                     .next()
-                    .map_or(input.len() + 1, |next| whole.end() + next.len_utf8())
+                    .map_or(input.len() + 1, |next| whole.end + next.len_utf8())
             } else {
-                whole.end()
+                whole.end
             };
         }
         out.push_str(&input[copied..]);
@@ -136,7 +185,8 @@ impl JavaPattern {
         &self,
         out: &mut String,
         replacement: &str,
-        captures: &Captures<'_, str>,
+        input: &str,
+        groups: &[Option<Range<usize>>],
     ) -> Result<(), ReplacementError> {
         let refuse = |message: &str| ReplacementError(message.to_owned());
         let group_count = self.group_count();
@@ -186,8 +236,8 @@ impl JavaPattern {
                         }
                         group
                     };
-                    if let Some(text) = captures.get(group) {
-                        out.push_str(text.as_str());
+                    if let Some(Some(text)) = groups.get(group) {
+                        out.push_str(&input[text.clone()]);
                     }
                 }
                 other => out.push(other),
@@ -1414,67 +1464,256 @@ mod tests {
         assert_pattern_matches(source, input, expected);
     }
 
-    /// A backreference under an ASCII fold is written `(?i:\1)`, and
-    /// `fancy_regex`'s `i` compares the text of the group Unicode-insensitively
-    /// when either text is not ASCII. So `(?i)(é)\1` matches `éÉ` here, where
-    /// Java's `CIBackRef` does not, and the two agree on every ASCII text. The
-    /// divergence is documented in `java_fold`; this test pins its extent, so
-    /// that a change to it is noticed.
-    #[yare::parameterized(
-        accented_uppercase = { "(?i)(\u{e9})\\1", "\u{e9}\u{c9}", true },
-        accented_same_case = { "(?i)(\u{e9})\\1", "\u{e9}\u{e9}", true },
-        greek_final_sigma = { "(?i)(\u{3c3})\\1", "\u{3c3}\u{3c2}", true },
-    )]
-    fn a_backreference_under_an_ascii_fold_is_unicode_insensitive_for_non_ascii_text(
-        source: &str,
-        input: &str,
-        expected: bool,
-    ) {
-        assert_pattern_matches(source, input, expected);
+    /// A backreference under a case flag compares the text of its group as
+    /// JDK 17's `CIBackRef` does: under `(?i)` by `ASCII.toLower`, so a
+    /// non-ASCII letter does not match its other case, and under `(?iu)` by
+    /// `Character.toLowerCase` of `Character.toUpperCase`, so `i` matches `İ`
+    /// and `ı`, and `s` matches `ſ`, whatever their length in bytes. Each row is
+    /// `Pattern.matches` on JDK 17.0.20.
+    #[test]
+    fn a_backreference_under_a_case_flag_compares_as_java_does() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            // (?i) folds ASCII letters only
+            row("(?i)(\u{e9})\\1", "\u{e9}\u{c9}", false),
+            row("(?i)(\u{e9})\\1", "\u{e9}\u{e9}", true),
+            row("(?i)(\u{3c3})\\1", "\u{3c3}\u{3c2}", false),
+            row("(?i)(a\u{e9})\\1", "a\u{e9}A\u{e9}", true),
+            row("(?i)(a\u{e9})\\1", "A\u{e9}a\u{c9}", false),
+            row("(?i)(k)\\1", "k\u{212a}", false),
+            row("(?i)(s)\\1", "s\u{17f}", false),
+            row("(?i)(i)\\1", "i\u{130}", false),
+            row("(?i)(ab)\\1", "abAB", true),
+            row("(?i)(\\w+)-\\1", "Ab-aB", true),
+            row("(?i)(?<n>\u{e9})\\k<n>", "\u{e9}\u{c9}", false),
+            // (?iu) compares Character.toLowerCase(Character.toUpperCase(ch))
+            row("(?iu)(i)\\1", "i\u{130}", true),
+            row("(?iu)(i)\\1", "i\u{131}", true),
+            row("(?iu)(\u{130})\\1", "\u{130}i", true),
+            row("(?iu)(\u{130})\\1", "\u{130}I", true),
+            row("(?iu)(\u{131})\\1", "\u{131}I", true),
+            row("(?iu)(\u{130})\\1", "\u{130}\u{131}", true),
+            row("(?iu)(s)\\1", "s\u{17f}", true),
+            row("(?iu)(S)\\1", "S\u{17f}", true),
+            row("(?iu)(k)\\1", "k\u{212a}", true),
+            row("(?iu)(\u{df})\\1", "\u{df}\u{1e9e}", true),
+            row("(?iu)(\u{e5})\\1", "\u{e5}\u{212b}", true),
+            row("(?iu)(a)\\1", "aA", true),
+            row("(?iu)(a)\\1", "ab", false),
+            row("(?iu)(\u{e9})\\1", "\u{e9}\u{c9}", true),
+            row("(?iu)(\u{3c3})\\1", "\u{3c3}\u{3c2}", true),
+            row("(?iu)(\u{3c3})\\1", "\u{3c3}\u{3a3}", true),
+            row("(?iu)(\u{1c6})\\1", "\u{1c6}\u{1c5}", true),
+            row("(?iu)(\u{3b8})\\1", "\u{3b8}\u{3d1}", true),
+            row("(?iu)(\u{3c9})\\1", "\u{3c9}\u{2126}", true),
+            row("(?iu)(\u{b5})\\1", "\u{b5}\u{3bc}", true),
+            row("(?iu)(\\p{L}+)\\1", "\u{e9}\u{c9}", true),
+            row("(?iu)(?<n>i)\\k<n>", "i\u{130}", true),
+            row("(?iU)(s)\\1", "s\u{17f}", true),
+            // one char for one char: no full case mapping
+            row("(?iu)(ss)\\1", "ss\u{df}", false),
+            row("(?iu)(\u{df})\\1", "\u{df}ss", false),
+            row("(?iu)(\\w+)\\1", "sS", true),
+            row("(?iu)(.+)\\1", "stra\u{df}eSTRA\u{1e9e}E", true),
+            // the flags in force at the reference decide, not those at the group
+            row("(?u)(?i:(s))\\1", "s\u{17f}", false),
+            row("(?i)(?u:(s)\\1)", "s\u{17f}", true),
+            row("(?iu)(s)(?-u)\\1", "s\u{17f}", false),
+            row("(?iu)(s)(?-i)\\1", "s\u{17f}", false),
+            // JDK 17 counts the text in UTF-16 units, and compares one more pair past both texts for each supplementary char
+            row("(?i)(.)\\1", "\u{10400}\u{10428}", false),
+            row("(?iu)(.)\\1x", "\u{10400}\u{10428}x", false),
+            row("(?iu)(.)\\1.", "\u{10400}\u{10400}\u{10400}", true),
+            row("(?iu)(.)\\1.", "\u{10400}\u{10400}b", false),
+        ];
+        check_matches(cases, true);
     }
 
-    /// Under `(?iu)` Java's `CIBackRef` compares the keys of the chars, and
-    /// `fancy_regex`'s `(?i:\1)` compares the simple case foldings, and only
-    /// when the two texts are as long in bytes. So a reference to `i` does not
-    /// match `İ` or `ı` here, and a reference to `s` does not match `ſ`, `k` the
-    /// Kelvin sign, `ß` `ẞ`, or `å` the angstrom sign, which Java's does. The
-    /// divergence is documented in `java_fold`; this test pins its extent, so
-    /// that a change to it is noticed. Each row is `Pattern.matches` on JDK 17.
+    /// Where JDK 17's `CIBackRef` reads that extra pair past the end of the
+    /// input, it throws `StringIndexOutOfBoundsException`, and the search is an
+    /// error, as one that runs past the backtrack limit is.
+    #[yare::parameterized(
+        supplementary_pair_in_other_case = { "(?iu)(.)\\1", "\u{10400}\u{10428}" },
+        supplementary_pair_in_same_case = { "(?iu)(.)\\1", "\u{10400}\u{10400}" },
+        between_two_groups = { "(?iu)(.)(.)\\1", "\u{10400}\u{10400}\u{10400}" },
+        repeated_reference = { "(?iu)(.)\\1\\1", "\u{10400}\u{10400}\u{10400}" },
+    )]
+    fn a_backreference_that_jdk_17_reads_past_the_input_with_is_an_error(
+        source: &str,
+        input: &str,
+    ) {
+        check!(
+            pattern(source).matches(input).is_err(),
+            "{source:?} against {input:?}"
+        );
+    }
+
+    /// `replaceAll` and `replaceFirst` find the matches of a pattern with a
+    /// backreference under a case flag as Java does too.
     #[test]
-    fn a_backreference_under_a_unicode_fold_compares_what_fancy_regex_does() {
-        // (pattern, input, whole input matches in Java)
-        let differs = [
-            ("(?iu)(i)\\1", "i\u{130}"),
-            ("(?iu)(i)\\1", "i\u{131}"),
-            ("(?iu)(\u{130})\\1", "\u{130}i"),
-            ("(?iu)(s)\\1", "s\u{17f}"),
-            ("(?iu)(k)\\1", "k\u{212a}"),
-            ("(?iu)(\u{df})\\1", "\u{df}\u{1e9e}"),
-            ("(?iu)(\u{e5})\\1", "\u{e5}\u{212b}"),
+    fn replace_compares_a_backreference_under_a_case_flag_as_java_does() {
+        // (pattern, input, replacement, replaceAll result)
+        let cases = [
+            replace_row(
+                "(?i)(\\w)\\1",
+                "aAbB\u{e9}\u{c9}",
+                "<$1>",
+                "<a><b>\u{e9}\u{c9}",
+            ),
+            replace_row("(?iu)(\\w)\\1", "sS", "<$1>", "<s>"),
+            replace_row("(?iu)(.)\\1", "i\u{130}s\u{17f}", "<$1>", "<i><s>"),
+            replace_row(
+                "(?iu)CN=(\\w+),OU=\\1",
+                "CN=kim,OU=KIM",
+                "$0",
+                "CN=kim,OU=KIM",
+            ),
+            replace_row("(?iu)CN=(.+),OU=\\1", "CN=\u{131},OU=I", "$1", "\u{131}"),
+            replace_row(
+                "(?i)CN=(.+),OU=\\1",
+                "CN=\u{131},OU=I",
+                "$1",
+                "CN=\u{131},OU=I",
+            ),
+            replace_row("(?i)\\G(a)\\1", "aAaAbaA", "x", "xxbaA"),
         ];
-        for (source, input) in differs {
-            check!(
-                pattern(source).matches(input).ok() == Some(false),
-                "{source:?} against {input:?}"
-            );
-        }
-        // (pattern, input, whole input matches, in Java and here)
-        let agrees = [
-            ("(?iu)(a)\\1", "aA", true),
-            ("(?iu)(a)\\1", "ab", false),
-            ("(?iu)(k)\\1", "kK", true),
-            ("(?iu)(\u{e9})\\1", "\u{e9}\u{c9}", true),
-            ("(?iu)(\u{3c3})\\1", "\u{3c3}\u{3c2}", true),
-            ("(?iu)(\u{3c3})\\1", "\u{3c3}\u{3a3}", true),
-            ("(?iu)(\u{1c6})\\1", "\u{1c6}\u{1c5}", true),
-            ("(?iu)(\\p{L}+)\\1", "\u{e9}\u{c9}", true),
+        check_replacements(cases, true, true);
+    }
+
+    /// The matcher for a backreference under a case flag reads the rest of the
+    /// pattern as `fancy_regex` does: look-around, atomic groups, possessive
+    /// and lazy repeats, alternation and anchors. Each row is
+    /// `Pattern.matches` on JDK 17.0.20.
+    #[test]
+    fn a_pattern_with_a_folded_backreference_reads_the_rest_as_java_does() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            row("(?i)(a|ab)(c|bcd)\\1(d*)", "abcdAd", true),
+            row("(?i)(a|ab)(c|bcd)\\1(d*)", "abcdAbd", false),
+            row("(?i)(a+?)\\1", "aaAA", true),
+            row("(?i)(a+)a\\1", "aaA", true),
+            row("(?i)(a++)a\\1", "aaA", false),
+            row("(?i)(?>(a+))a\\1", "aaA", false),
+            row("(?i)(a)(?=b)\\w\\1", "abA", true),
+            row("(?i)(a)(?!b)\\w\\1", "abA", false),
+            row("(?i)(a)\\w(?<=b)\\1", "abA", true),
+            row("(?i)(a)\\w(?<!b)\\1", "abA", false),
+            row("(?i)(a){2,3}\\1", "aaA", true),
+            row("(?i)(a){2,3}\\1", "aA", false),
+            row("(?i)(a){2,3}\\1", "aaaaA", false),
+            row("(?i)(a|)*\\1", "aa", true),
+            // an empty iteration counts toward the minimum of a repeat
+            row("(?i)((?=())|(?=())){2}\\2\\3", "", true),
+            row("(?i)((?=())|(?=())){2}\\2\\3", "x", false),
+            row("(?i)(a?){3}\\1", "aA", true),
+            row("(?i)(a|()){2}\\2b", "ab", true),
+            row("(?i)(?:(a)|b?){2}\\1", "bA", false),
+            row("(?i)(x)?\\1", "", false),
+            row("(?i)^(a)\\1$", "aA", true),
+            row("(?i)(a)\\1\\z", "aA", true),
+            row("(?i)(?m)(a)$\\n^\\1", "a\nA", true),
+            row("(?i)(?s)(.)\\1", "\n\n", true),
+            row("(?i)(.)\\1", "\n\n", false),
+            row("(?iU)(\\w+)\\b\\1", "ab", false),
+            row("(?iU)(\\w)\\B\\1", "aA", true),
+            row("(?i)\\G(a)\\1", "aA", true),
+            row("(?i)(a)\\R\\1", "a\r\nA", true),
+            row("(?i)(a)\\R\\1", "a\rA", true),
+            row("(?i)(a)\\R\\1", "a\n\nA", false),
+            row("(?i)(a)\\R\\1", "a\u{2028}A", true),
         ];
-        for (source, input, expected) in agrees {
-            check!(
-                pattern(source).matches(input).ok() == Some(expected),
-                "{source:?} against {input:?}"
-            );
-        }
+        check_matches(cases, true);
+    }
+
+    /// The matcher keeps its alternatives on a stack of its own, so a long
+    /// input does not overflow the thread's, and it gives up at the backtrack
+    /// limit as `fancy_regex` does.
+    #[test]
+    fn a_pattern_with_a_folded_backreference_takes_a_long_input_and_gives_up_at_the_limit() {
+        let long = format!("{}A", "a".repeat(200_000));
+        check!(pattern("(?i)(a)(a*)\\1").matches(&long).ok() == Some(true));
+        check!(pattern("(?i)(a*)*b\\1").matches(&"a".repeat(64)).is_err());
+    }
+
+    /// A group that matched inside a look-around, an atomic group or a
+    /// possessive quantifier keeps its text when the match backtracks out of
+    /// it, as Java's does, and so does one inside a negated look-around whose
+    /// condition matched. A group outside them does not. Java sets a group
+    /// when it ends, so a reference inside it sees its text from before. Each
+    /// row is `Pattern.matches` on JDK 17.0.20.
+    #[test]
+    fn a_group_keeps_its_text_where_java_keeps_it() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            row("(?:(?=(a))ax|a)\\1", "aa", true),
+            row("(?:(?!(a))|a)\\1", "aa", true),
+            row("a(?:(?<=(a))x|)\\1", "aa", true),
+            row("a(?:(?<!(a))|)\\1", "aa", true),
+            row("(?:(?>(a))x|a)\\1", "aa", true),
+            row("(?:(a)++x|a)\\1", "aa", true),
+            row("(?:(a)?+x|a)\\1", "aa", true),
+            row("(?:(?:(a))*+x|a)\\1", "aa", true),
+            row("(?:(a){1,2}+x|a)\\1", "aa", true),
+            row("(?:(a)x|a)\\1", "aa", false),
+            row("(?:(?=(a))ax|a)\\1", "a", false),
+            row("((?=())|(?=()))*\\2\\3", "", true),
+            row("((?=())|(?=())){1,2}\\2\\3", "", true),
+            row("(a|b\\1)+", "aba", true),
+            row("(a|b\\1)+", "abb", false),
+            row("(?i)(a|b\\1)+", "abA", true),
+            row("(a\\1?)+", "aaa", true),
+            row("(a\\1?){2}", "aaa", true),
+        ];
+        check_matches(cases, true);
+    }
+
+    /// `replaceAll` sees a group that kept its text, and `Matcher.find` clears
+    /// the groups once for all the start positions it tries, so a group that
+    /// kept its text at one start is still set at the next. Each row is
+    /// `String.replaceAll` on JDK 17.0.20.
+    #[test]
+    fn replace_sees_a_group_that_kept_its_text_as_java_does() {
+        // (pattern, input, replacement, replaceAll result)
+        let cases = [
+            replace_row("(?:(?=(b))bx|b)", "b", "[$1]", "[b]"),
+            replace_row("(?:(?=(b))bx|b)", "ab", "[$1]", "a[b]"),
+            replace_row("(?=(a)c)|b", "ab", "[$1]", "a[]"),
+            replace_row("(?:(?=(a))ax|b)", "ab", "[$1]", "a[a]"),
+            replace_row("(?:(?!(a))|b)", "ab", "[$1]", "a[a]b[]"),
+            replace_row("\\R", "a\r\nb", "|", "a|b"),
+            replace_row("\\R\\n", "a\r\nb", "|", "a|b"),
+        ];
+        check_replacements(cases, true, true);
+    }
+
+    /// `\R` is `\r\n` or one line terminator, and gives back the `\n` of
+    /// `\r\n` when the rest of the pattern needs it, as Java's `LineEnding`
+    /// does. Under a quantifier of `\R`, or of a group with no alternation and
+    /// no range of counts, Java takes the first way only. Each row is
+    /// `Pattern.matches` on JDK 17.0.20.
+    #[test]
+    fn a_linebreak_gives_back_its_newline_where_java_does() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            row("(a)\\R\\n\\1", "a\r\na", true),
+            row("\\R", "\r", true),
+            row("\\R\\R", "\r\n", true),
+            row("\\R", "\r\n", true),
+            row("\\R", "\n\r", false),
+            row("\\R", "\u{2028}", true),
+            row("\\R", "\u{85}", true),
+            row("(?-u)\\R", "\u{2028}", true),
+            row("\\R\\n", "\r\n", true),
+            row("(?>\\R)\\n", "\r\n", false),
+            row("\\R{2}", "\r\n", false),
+            row("\\R?\\n", "\r\n", false),
+            row("x\\R+\\n", "x\r\n\r\n", false),
+            row("(\\R)?\\n", "\r\n", true),
+            row("(?:a\\R){2}\\n", "a\r\na\r\n", false),
+            row("(?:a\\R|b){2}\\n", "a\r\na\r\n", true),
+            row("(?=\\R\\n)\\R", "\r\n", true),
+        ];
+        check_matches(cases, true);
     }
 
     /// Java reads `(?i){2}` as a repeat of the empty match, and `(?i)*` as a
