@@ -561,16 +561,9 @@ mod tests {
         }
     }
 
-    // Kafka's `NodeToControllerRequestThread` keeps one connection to the
-    // active controller. It closes it when it fails, when a request times out
-    // and when the controller answers `NOT_CONTROLLER`, and the next request
-    // goes to the controller the metadata names then.
-    #[tokio::test]
-    async fn heartbeats_share_one_connection_until_it_breaks_or_the_leader_moves() {
-        let first = FakeController::start().await;
-        let second = FakeController::start().await;
-        let dials = || (first.connections(), second.connections());
-        let source = Arc::new(
+    // Broker 7, registered at epoch 11, with voter 1 the controller leader.
+    fn registered_broker_source() -> Arc<FakeMetadataSource> {
+        Arc::new(
             FakeMetadataSource::builder()
                 .records(&[MetadataRecord::V1BrokerRegistration(
                     BrokerRegistrationRecord {
@@ -581,32 +574,68 @@ mod tests {
                 )])
                 .leader(Some(krabka_raft::NodeId(1)))
                 .build(),
-        );
+        )
+    }
+
+    // The heartbeat client of broker 7 against `controllers`, which are voters
+    // 1, 2, ... in order, with no log directories.
+    #[bon::builder]
+    fn heartbeat_config(
+        source: &Arc<FakeMetadataSource>,
+        shutdown: &CancellationToken,
+        interval: Time,
+        controllers: &[&FakeController],
+        want_shutdown: tokio::sync::watch::Receiver<bool>,
+        #[builder(default = Arc::new(tokio::sync::watch::channel(false).0))] should_shutdown: Arc<
+            tokio::sync::watch::Sender<bool>,
+        >,
+    ) -> Config {
         let no_dirs: Vec<std::path::PathBuf> = Vec::new();
-        let (_want_shutdown, want_shutdown) = tokio::sync::watch::channel(false);
-        let shutdown = CancellationToken::new();
-        let heartbeats = tokio::spawn(run(Config {
+        Config {
             broker_id: 7,
             broker_epoch: 11,
-            interval: millis(20),
-            controller: Arc::clone(&source) as Arc<dyn MetadataSource>,
+            interval,
+            controller: Arc::clone(source) as Arc<dyn MetadataSource>,
             shutdown: shutdown.clone(),
             outbound_client: Arc::new(InterBrokerClient::new(None, None)),
             controller_listener_protocol: ListenerProtocol::Plaintext,
             controller_server_name: "localhost".into(),
-            controller_quorum_voters: vec![
-                (krabka_raft::NodeId(1), first.broker.addr.to_string()),
-                (krabka_raft::NodeId(2), second.broker.addr.to_string()),
-            ],
+            controller_quorum_voters: (1..)
+                .zip(controllers)
+                .map(|(id, controller)| {
+                    (krabka_raft::NodeId(id), controller.broker.addr.to_string())
+                })
+                .collect(),
             want_shutdown,
-            should_shutdown: Arc::new(tokio::sync::watch::channel(false).0),
+            should_shutdown,
             unfenced: tokio::sync::watch::channel(InitialUnfence::Pending).0,
             log_dir_status: LogDirRegistry::probe(&no_dirs),
             log_dir_ids: LogDirIds::resolve(&no_dirs),
             all_log_dirs: no_dirs.clone(),
             supervisor_shutdown: CancellationToken::new(),
             cordoned_log_dirs: CordonedLogDirs::default(),
-        }));
+        }
+    }
+
+    // Kafka's `NodeToControllerRequestThread` keeps one connection to the
+    // active controller. It closes it when it fails, when a request times out
+    // and when the controller answers `NOT_CONTROLLER`, and the next request
+    // goes to the controller the metadata names then.
+    #[tokio::test]
+    async fn heartbeats_share_one_connection_until_it_breaks_or_the_leader_moves() {
+        let first = FakeController::start().await;
+        let second = FakeController::start().await;
+        let dials = || (first.connections(), second.connections());
+        let source = registered_broker_source();
+        let (_want_shutdown, want_shutdown) = tokio::sync::watch::channel(false);
+        let shutdown = CancellationToken::new();
+        let heartbeats = tokio::spawn(run(heartbeat_config()
+            .source(&source)
+            .shutdown(&shutdown)
+            .interval(millis(20))
+            .controllers(&[&first, &second])
+            .want_shutdown(want_shutdown)
+            .call()));
 
         // The dials each fake has taken after each step, compared at the end.
         first.wait_for_heartbeats(5).await;
@@ -649,44 +678,18 @@ mod tests {
         // The first heartbeat is the boot one; the second asks to shut down,
         // and the third is told it may.
         controller.shut_down_from(3);
-        let source = Arc::new(
-            FakeMetadataSource::builder()
-                .records(&[MetadataRecord::V1BrokerRegistration(
-                    BrokerRegistrationRecord {
-                        broker_epoch: 11,
-                        host: "localhost".into(),
-                        ..broker_registration(krabka_raft::NodeId(7))
-                    },
-                )])
-                .leader(Some(krabka_raft::NodeId(1)))
-                .build(),
-        );
-        let no_dirs: Vec<std::path::PathBuf> = Vec::new();
+        let source = registered_broker_source();
         let (want_shutdown_tx, want_shutdown) = tokio::sync::watch::channel(false);
         let should_shutdown = Arc::new(tokio::sync::watch::channel(false).0);
         let shutdown = CancellationToken::new();
-        let heartbeats = tokio::spawn(run(Config {
-            broker_id: 7,
-            broker_epoch: 11,
-            interval: secs(60),
-            controller: Arc::clone(&source) as Arc<dyn MetadataSource>,
-            shutdown: shutdown.clone(),
-            outbound_client: Arc::new(InterBrokerClient::new(None, None)),
-            controller_listener_protocol: ListenerProtocol::Plaintext,
-            controller_server_name: "localhost".into(),
-            controller_quorum_voters: vec![(
-                krabka_raft::NodeId(1),
-                controller.broker.addr.to_string(),
-            )],
-            want_shutdown,
-            should_shutdown: Arc::clone(&should_shutdown),
-            unfenced: tokio::sync::watch::channel(InitialUnfence::Pending).0,
-            log_dir_status: LogDirRegistry::probe(&no_dirs),
-            log_dir_ids: LogDirIds::resolve(&no_dirs),
-            all_log_dirs: no_dirs.clone(),
-            supervisor_shutdown: CancellationToken::new(),
-            cordoned_log_dirs: CordonedLogDirs::default(),
-        }));
+        let heartbeats = tokio::spawn(run(heartbeat_config()
+            .source(&source)
+            .shutdown(&shutdown)
+            .interval(secs(60))
+            .controllers(&[&controller])
+            .want_shutdown(want_shutdown)
+            .should_shutdown(Arc::clone(&should_shutdown))
+            .call()));
         controller.wait_for_heartbeats(1).await;
 
         let asked = Instant::now();
