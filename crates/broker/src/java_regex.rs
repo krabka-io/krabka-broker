@@ -66,6 +66,7 @@ impl JavaPattern {
         let JavaTranslation {
             pattern: translated,
             backref_folds,
+            linebreak_atoms,
         } = translate_java(pattern)
             .ok_or_else(|| format!("{pattern:?} is not a java.util.regex pattern"))?;
         let compile = |source: &str| Regex::new(source).map_err(|error| error.to_string());
@@ -78,8 +79,13 @@ impl JavaPattern {
             .collect();
         // A pattern `fancy_regex` reads as Java does, or one with a node the
         // matcher does not know, keeps `fancy_regex`.
-        let backtrack = Program::new(&translated, search.captures_len(), &backref_folds)
-            .filter(Program::differs_from_fancy);
+        let backtrack = Program::new(
+            &translated,
+            search.captures_len(),
+            &backref_folds,
+            &linebreak_atoms,
+        )
+        .filter(Program::differs_from_fancy);
         Ok(Self(Arc::new(Compiled {
             search,
             whole,
@@ -1689,7 +1695,8 @@ mod tests {
     /// `\R` is `\r\n` or one line terminator, and gives back the `\n` of
     /// `\r\n` when the rest of the pattern needs it, as Java's `LineEnding`
     /// does. Under a quantifier of `\R`, or of a group with no alternation and
-    /// no range of counts, Java takes the first way only. Each row is
+    /// no range of counts, Java takes the first way only, but a `?` of a group
+    /// such as `(?:\R)` backtracks into it. Each row is
     /// `Pattern.matches` on JDK 17.0.20.
     #[test]
     fn a_linebreak_gives_back_its_newline_where_java_does() {
@@ -1712,6 +1719,18 @@ mod tests {
             row("(?:a\\R){2}\\n", "a\r\na\r\n", false),
             row("(?:a\\R|b){2}\\n", "a\r\na\r\n", true),
             row("(?=\\R\\n)\\R", "\r\n", true),
+            row("(?:\\R)?\\n", "\r\n", true),
+            row("(?:\\R)??\\n", "\r\n", true),
+            row("(?:\\R){0,1}\\n", "\r\n", true),
+            row("(?:(?:\\R))?\\n", "\r\n", true),
+            row("(?x)(?:\\R) ?\\n", "\r\n", true),
+            row("(?x)\\R ?\\n", "\r\n", false),
+            row("(?x)\\R #c\n?\\n", "\r\n", false),
+            row("(?:\\R)?+\\n", "\r\n", false),
+            row("(?:\\R)*\\n", "\r\n", false),
+            row("(?:\\R)+\\n", "\r\n", false),
+            row("(?:\\R?)?\\n", "\r\n", false),
+            row("a(?:\\R)?\\n\\R?", "a\r\n\r\n", true),
         ];
         check_matches(cases, true);
     }

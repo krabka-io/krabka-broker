@@ -203,6 +203,11 @@ pub(crate) struct JavaTranslation {
     /// How each backreference that `pattern` writes as `(?i:\1)` compares in
     /// Java, in the order they appear in it.
     pub(crate) backref_folds: Vec<BackrefFold>,
+    /// For each `\R` that `pattern` writes, in order, whether a quantifier
+    /// follows it in the Java pattern. Java binds that quantifier to the `\R`
+    /// alone, and the one after `(?:\R)` to the group, which it matches
+    /// another way. `fancy_regex` parses the two the same.
+    pub(crate) linebreak_atoms: Vec<bool>,
 }
 
 /// Rewrite a `java.util.regex.Pattern` into `fancy_regex` syntax, or `None`
@@ -266,6 +271,7 @@ pub(crate) fn translate_java(pattern: &str) -> Option<JavaTranslation> {
         prior_run: 0,
         at: 0,
         backref_folds: Vec::new(),
+        linebreak_atoms: Vec::new(),
     };
     while translator.at < chars.len() {
         translator.step()?;
@@ -273,6 +279,7 @@ pub(crate) fn translate_java(pattern: &str) -> Option<JavaTranslation> {
     Some(JavaTranslation {
         pattern: translator.out,
         backref_folds: translator.backref_folds,
+        linebreak_atoms: translator.linebreak_atoms,
     })
 }
 
@@ -297,6 +304,8 @@ struct Translator<'a> {
     at: usize,
     /// The fold of each backreference under a case flag written so far.
     backref_folds: Vec<BackrefFold>,
+    /// See [`JavaTranslation::linebreak_atoms`].
+    linebreak_atoms: Vec<bool>,
 }
 
 impl Translator<'_> {
@@ -417,6 +426,12 @@ impl Translator<'_> {
                 let next = self.chars[self.at + 1];
                 self.out.push_str(java_space(next, in_class)?);
                 self.at += len;
+            }
+            // `\R`, whose quantifier [`JavaTranslation::linebreak_atoms`]
+            // records.
+            Escape::Other if !in_class && self.chars.get(self.at + 1) == Some(&'R') => {
+                self.linebreak_atoms.push(self.quantifier_at(self.at + len));
+                self.copy(len);
             }
             Escape::BackRef | Escape::Other => {
                 let ascii = self
