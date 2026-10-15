@@ -8,7 +8,7 @@ use {
                 three_voter_machine, voters, win_election,
             },
         },
-        event::Event,
+        event::{Event, LogEnd},
     },
     assert2::check,
 };
@@ -935,4 +935,70 @@ fn a_newer_epoch_without_a_leader_detaches_the_replica(
         ) == (None, epoch, None),
         "{outcome:?}"
     );
+}
+
+/// A Fetch answer moves a replica only when it comes from the leader the
+/// replica follows, in the replica's epoch. Kafka's
+/// `maybeHandleCommonResponse` drops an answer from an older epoch, and a
+/// replica that has since voted in a newer epoch must not fetch, and so
+/// replicate, from the leader it left. Each case follows node 1 at epoch 1
+/// first; `voted_in_epoch_two` then grants node 3 its vote in epoch 2.
+#[yare::parameterized(
+    from_the_leader_in_its_epoch = { NodeId(1), 1, false, true },
+    from_an_older_epoch = { NodeId(1), 0, false, false },
+    from_another_node = { NodeId(2), 1, false, false },
+    after_voting_in_a_newer_epoch = { NodeId(1), 1, true, false },
+)]
+fn a_fetch_answer_counts_only_from_the_followed_leader_in_its_epoch(
+    from: NodeId,
+    epoch: Epoch,
+    voted_in_epoch_two: bool,
+    fetches_again: bool,
+) {
+    let (mut m, log) = following_node_one(NodeId(2));
+    if voted_in_epoch_two {
+        m.on_event(
+            Event::ReceiveVoteRequest {
+                from: NodeId(3),
+                cluster_id: None,
+                voter_id: NodeId(2),
+                voter_directory_id: uuid::Uuid::nil(),
+                candidate_epoch: 2,
+                candidate: NodeId(3),
+                candidate_directory_id: uuid::Uuid::nil(),
+                candidate_log_end: LogEnd {
+                    last_epoch: 0,
+                    last_offset: 0,
+                },
+                pre_vote: false,
+            },
+            &log,
+            SimInstant(1_500),
+        );
+    }
+    let before = m.clone();
+    let now = SimInstant(2_000);
+
+    let actions = m.on_event(
+        Event::ReceiveFetchResponse {
+            leader_id: from,
+            leader_epoch: epoch,
+            diverging: None,
+        },
+        &log,
+        now,
+    );
+
+    if fetches_again {
+        check!(
+            actions
+                == vec![Action::SendFetch { leader_id: from }, Action::ResetTimer {
+                    kind: TimerKind::Fetch,
+                    deadline: now.saturating_add_ms(1_000),
+                },]
+        );
+    } else {
+        check!(actions.is_empty());
+        check!(m == before);
+    }
 }

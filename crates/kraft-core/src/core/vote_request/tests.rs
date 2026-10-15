@@ -657,13 +657,21 @@ fn a_prospective_replica_that_followed_a_leader_grants_no_binding_vote_in_that_e
     );
 }
 
-/// The belief is not lost when the election timer starts the round again.
+/// The belief is not lost across rounds. A round that times out returns the
+/// replica to the leader it abandoned, as Kafka's
+/// `prospectiveTransitionAfterElectionLoss` does, and the next fetch timeout
+/// starts a second round that still remembers that leader.
 #[test]
 fn a_second_pre_vote_round_still_remembers_the_abandoned_leader() {
     let mut m = follower_of_three(false);
     m.on_event(Event::FetchTimeout, &OUR_LOG, SimInstant(30));
-
     m.on_event(Event::ElectionTimeout, &OUR_LOG, SimInstant(60));
+    check!(
+        !grants_vote_to(&mut m, NodeId(2), 4),
+        "binding vote while following"
+    );
+
+    m.on_event(Event::FetchTimeout, &OUR_LOG, SimInstant(90));
 
     check!(
         matches!(m.role(), Role::Prospective {
