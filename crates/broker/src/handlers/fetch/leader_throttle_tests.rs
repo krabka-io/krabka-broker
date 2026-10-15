@@ -102,14 +102,13 @@ async fn throttled_partition(broker: &BrokerHandle) -> Arc<Partition> {
             .expect("submit metadata record");
     }
     let shared = broker.broker_arc_for_test();
-    let partition = wait_for_bound_partition(
+    wait_for_bound_partition(
         &shared,
         TOPIC,
         async |_| shared.throttle_state.leader_out.byte_rate() == bytes_per_sec(LEADER_RATE),
         "the broker leads the partition and throttles it",
     )
-    .await;
-    partition
+    .await
 }
 
 /// A sessionless follower fetch of partition 0 from `fetch_offset` that
