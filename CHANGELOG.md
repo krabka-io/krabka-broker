@@ -23,6 +23,15 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ## [Unreleased]
 
+### Fixed
+
+- `OffsetFetch` v9 and later checks the member id and epoch it names against a
+  streams group, as Kafka's `StreamsGroup.validateOffsetFetch` does: an
+  unknown member answers `UNKNOWN_MEMBER_ID` and any other epoch than the
+  member's own answers `STALE_MEMBER_EPOCH`. Before, a streams group's
+  offsets were served to any member id at any epoch, and the check ran for
+  consumer groups only.
+
 ## [1.0.5] - 2026-10-14
 
 1.0.5 changes no on-disk format and adds no setting, so it upgrades from any

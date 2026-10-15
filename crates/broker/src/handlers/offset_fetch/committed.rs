@@ -19,6 +19,7 @@ use {
         coordinator::unified::{
             actor::GroupActorMessage,
             group::{GroupOffsets, OffsetEntry, OffsetFetchMember},
+            streams::actor::validate_streams_group_offset_fetch,
         },
         task_util::ask,
     },
@@ -29,14 +30,23 @@ use {
 /// together with the keys its open transactions have not resolved yet.
 ///
 /// `member_id` and `member_epoch` are the v9+ request fields (`None` and -1
-/// before v9). A consumer group checks them first, and a refusal is the group
-/// error code Kafka's `ConsumerGroup.validateOffsetFetch` answers.
+/// before v9). A consumer or streams group checks them first, and a refusal is
+/// the group error code Kafka's `ConsumerGroup.validateOffsetFetch` or
+/// `StreamsGroup.validateOffsetFetch` answers. A streams group's members live
+/// in its streams actor, so it is checked there, before and whether or not
+/// the group has committed an offset.
 pub(super) async fn fetch_offsets(
     broker: &Broker,
     group_id: &str,
     member_id: Option<&str>,
     member_epoch: i32,
 ) -> Result<GroupOffsets, i16> {
+    if let Some(streams) = broker.group_coordinator.find_streams(group_id)
+        && let Some(error_code) =
+            validate_streams_group_offset_fetch(&streams, member_id, member_epoch).await
+    {
+        return Err(error_code);
+    }
     let Some(handle) = broker.group_coordinator.find(group_id) else {
         return Ok(GroupOffsets::default());
     };

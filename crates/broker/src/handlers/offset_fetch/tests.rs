@@ -14,9 +14,15 @@ use {
         broker::{Broker, BrokerHandle},
         codes,
         coordinator::unified::{
+            StreamsGroupSeed,
             actor::{GroupActorMessage, GroupKindTag, test_support::rpc},
             classic_state::OffsetEntry,
             regex_resolver::no_topic_regex_resolver,
+            streams::{
+                actor::StreamsGroupActorMessage,
+                persistence::StreamsGroupCurrentMemberAssignmentValue,
+            },
+            test_support::plain_streams_member,
         },
         handlers::test_support::{
             LiveBrokerFixture, StartedBroker as HandlerStartedBroker, allow_all_authorizer,
@@ -1120,6 +1126,127 @@ async fn offset_fetch_creates_no_group_and_checks_the_member_epoch() {
         );
         broker_handle.shutdown().await;
     }
+}
+
+/// Seeds the streams group `group_id` with member `m1` at `member_epoch`, the
+/// way the bootstrap replayer hydrates one from `__consumer_offsets` records.
+async fn seed_streams_member(broker: &Broker, group_id: &str, member_epoch: i32) {
+    broker.group_coordinator.mark_streams(group_id);
+    let handle = broker.group_coordinator.get_or_create_streams(group_id);
+    handle
+        .tx
+        .send(StreamsGroupActorMessage::Seed(StreamsGroupSeed {
+            members: [("m1".to_string(), plain_streams_member(1))].into(),
+            current_per_member: [
+                ("m1".to_string(), StreamsGroupCurrentMemberAssignmentValue {
+                    member_epoch,
+                    ..Default::default()
+                }),
+            ]
+            .into(),
+            ..Default::default()
+        }))
+        .await
+        .expect("seed streams group");
+}
+
+/// Kafka's `StreamsGroup.validateOffsetFetch` checks the v9 member id and
+/// epoch of a streams group, whose members live in the streams actor and not
+/// beside its committed offsets. A refused fetch is the group row with the
+/// error code and no topics; a group with no committed offset is checked all
+/// the same.
+#[tokio::test]
+async fn offset_fetch_checks_the_member_epoch_of_a_streams_group() {
+    struct Row {
+        name: &'static str,
+        group_id: &'static str,
+        member_id: Option<&'static str>,
+        member_epoch: i32,
+        expected: OffsetFetchResponseGroup,
+    }
+
+    let group_row = |group_id: &str, topics, error_code| OffsetFetchResponseGroup {
+        group_id: group_id.into(),
+        topics,
+        error_code,
+        ..Default::default()
+    };
+    let offsets_row = |partition: OffsetFetchResponsePartitions| {
+        vec![OffsetFetchResponseTopics {
+            name: "orders".into(),
+            partitions: vec![partition],
+            ..Default::default()
+        }]
+    };
+    let rows = [
+        Row {
+            name: "the member at its epoch",
+            group_id: "grp",
+            member_id: Some("m1"),
+            member_epoch: 5,
+            expected: group_row("grp", offsets_row(seeded_row()), codes::NONE),
+        },
+        Row {
+            name: "no member id and epoch -1 (admin client)",
+            group_id: "grp",
+            member_id: None,
+            member_epoch: -1,
+            expected: group_row("grp", offsets_row(seeded_row()), codes::NONE),
+        },
+        Row {
+            name: "the member at an older epoch",
+            group_id: "grp",
+            member_id: Some("m1"),
+            member_epoch: 4,
+            expected: group_row("grp", vec![], codes::STALE_MEMBER_EPOCH),
+        },
+        Row {
+            name: "an unknown member",
+            group_id: "grp",
+            member_id: Some("ghost"),
+            member_epoch: 5,
+            expected: group_row("grp", vec![], codes::UNKNOWN_MEMBER_ID),
+        },
+        Row {
+            name: "the member at an older epoch of a group with no offsets",
+            group_id: "bare",
+            member_id: Some("m1"),
+            member_epoch: 4,
+            expected: group_row("bare", vec![], codes::STALE_MEMBER_EPOCH),
+        },
+    ];
+
+    krabka_macros::broker_test_setup! {
+        bind(broker_handle, _dir, broker);
+        boot [broker_fixture_support::start_group_broker_no_audit] allow_all;
+    };
+    seed_committed_offset().broker(&broker).call().await;
+    seed_streams_member(&broker, "grp", 5).await;
+    seed_streams_member(&broker, "bare", 5).await;
+    for row in rows {
+        let request = OffsetFetchRequest {
+            groups: vec![OffsetFetchRequestGroup {
+                group_id: row.group_id.into(),
+                member_id: row.member_id.map(str::to_string),
+                member_epoch: row.member_epoch,
+                topics: Some(vec![OffsetFetchRequestTopics {
+                    name: "orders".into(),
+                    partition_indexes: vec![0],
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let response = fetch(&broker, 9, &request).await;
+
+        let expected = OffsetFetchResponse {
+            groups: vec![row.expected],
+            ..Default::default()
+        };
+        assert2::check!(response == expected, "{}", row.name);
+    }
+    broker_handle.shutdown().await;
 }
 
 /// The legacy single-group shape (v0-v7) creates no group for an unknown id.

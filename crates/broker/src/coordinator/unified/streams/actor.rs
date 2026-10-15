@@ -106,6 +106,14 @@ pub enum StreamsGroupActorMessage {
         partitions: Vec<(String, i32)>,
         reply: oneshot::Sender<Result<(), i16>>,
     },
+    /// Validates the v9+ member fields of an `OffsetFetch` against the streams
+    /// group's membership, as Kafka's `StreamsGroup.validateOffsetFetch`
+    /// does. `Ok(())` allows the fetch, and `Err(code)` is the group error.
+    ValidateFetch {
+        member_id: Option<String>,
+        member_epoch: i32,
+        reply: oneshot::Sender<Result<(), i16>>,
+    },
     /// KIP-1331: a member's `StreamsGroupTopologyDescriptionUpdate`, past the
     /// handler's protocol gate, group `Read` grant and request checks.
     PushDescription {
@@ -268,6 +276,66 @@ async fn send_validate_commit(
     }
     let result = rx.await;
     commit_validation_reply(&result)
+}
+
+/// Validates the v9+ member fields of an `OffsetFetch` against a streams
+/// group's membership by sending a message to its actor, as
+/// [`validate_offset_fetch`] does.
+///
+/// It returns `Some(error_code)` to refuse the fetch, and `None` to allow it.
+///
+/// A streams group keeps its members in the streams actor, while its
+/// committed offsets live in the offsets-home actor, which knows no streams
+/// member. Without this check a stale or unknown member would read the
+/// group's offsets.
+pub(crate) async fn validate_streams_group_offset_fetch(
+    handle: &StreamsGroupActorHandle,
+    member_id: Option<&str>,
+    member_epoch: i32,
+) -> Option<i16> {
+    let (tx, rx) = oneshot::channel();
+    if handle
+        .tx
+        .send(StreamsGroupActorMessage::ValidateFetch {
+            member_id: member_id.map(str::to_string),
+            member_epoch,
+            reply: tx,
+        })
+        .await
+        .is_err()
+    {
+        return Some(codes::UNKNOWN_SERVER_ERROR);
+    }
+    let result = rx.await;
+    commit_validation_reply(&result)
+}
+
+/// Kafka's `StreamsGroup.validateOffsetFetch`.
+///
+/// A fetch with no member id and a negative epoch is the admin client or a
+/// client that sends neither, and it is allowed. Otherwise the member must
+/// exist (`UNKNOWN_MEMBER_ID`) and the epoch must be its member epoch
+/// (`STALE_MEMBER_EPOCH`, for an older epoch as for a newer one).
+///
+/// # Errors
+///
+/// Returns the group error code of a refused fetch.
+pub(crate) fn validate_offset_fetch(
+    state: &StreamsGroupState,
+    member_id: Option<&str>,
+    member_epoch: i32,
+) -> Result<(), i16> {
+    if member_id.is_none() && member_epoch < 0 {
+        return Ok(());
+    }
+    let member = member_id
+        .and_then(|id| state.members.get(id))
+        .ok_or(codes::UNKNOWN_MEMBER_ID)?;
+    if member.member_epoch == member_epoch {
+        Ok(())
+    } else {
+        Err(codes::STALE_MEMBER_EPOCH)
+    }
 }
 
 /// The first `OffsetCommit` version that a member of the streams protocol may
@@ -840,6 +908,17 @@ async fn handle_message(
                 member_epoch,
                 fence,
                 &partitions,
+            ));
+        }
+        StreamsGroupActorMessage::ValidateFetch {
+            member_id,
+            member_epoch,
+            reply,
+        } => {
+            let _ = reply.send(validate_offset_fetch(
+                &actor.state,
+                member_id.as_deref(),
+                member_epoch,
             ));
         }
         StreamsGroupActorMessage::Seed(seed) => {

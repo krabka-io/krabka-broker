@@ -1993,6 +1993,51 @@ fn validate_offset_commit_follows_kafka_streams_group() {
     }
 }
 
+/// Kafka's `StreamsGroup.validateOffsetFetch`. Each row is the v9+ member
+/// fields of an `OffsetFetch` against a group whose member `m1` is at epoch 5,
+/// and the expected answer.
+#[test]
+fn validate_offset_fetch_follows_kafka_streams_group() {
+    let mut group = StreamsGroupState::new("g");
+    group.members.insert("m1".into(), epoch_five_member());
+
+    // (row, member id, member epoch, expected)
+    let rows = [
+        ("no member id and epoch -1 (admin client)", None, -1, Ok(())),
+        ("the member at its epoch", Some("m1"), 5, Ok(())),
+        (
+            "the member at an older epoch",
+            Some("m1"),
+            4,
+            Err(codes::STALE_MEMBER_EPOCH),
+        ),
+        (
+            "the member at a newer epoch",
+            Some("m1"),
+            6,
+            Err(codes::STALE_MEMBER_EPOCH),
+        ),
+        (
+            "an unknown member",
+            Some("ghost"),
+            5,
+            Err(codes::UNKNOWN_MEMBER_ID),
+        ),
+        (
+            "no member id with an epoch",
+            None,
+            5,
+            Err(codes::UNKNOWN_MEMBER_ID),
+        ),
+    ];
+    for (row, member_id, member_epoch, expected) in rows {
+        check!(
+            validate_offset_fetch(&group, member_id, member_epoch) == expected,
+            "{row}"
+        );
+    }
+}
+
 /// KIP-1251: Kafka 4.3.1's `StreamsGroup.createAssignmentEpochValidator`.
 /// Member `m1` is at epoch 5. It holds active tasks 0 and 1 of subtopology
 /// `0`, assigned at epochs 3 and 5, task 2 pending revocation from epoch 4,
