@@ -25,6 +25,9 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- A consumer `Fetch` is now charged to `consumer_byte_rate` at Kafka's
+  `FetchResponse.sizeOf`, four bytes more than the encoded response body.
+  Before, every fetch was charged four bytes short.
 - A `ShareFetch` is now charged to the member's `consumer_byte_rate` and
   `request_percentage` quotas, as Kafka's `processShareFetchResponse` charges
   it. A throttled fetch reports the larger throttle in `throttle_time_ms`,
