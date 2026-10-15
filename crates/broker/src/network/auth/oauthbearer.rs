@@ -38,9 +38,11 @@ use {
 ///     `error_code = 0`, keeps the connection open, and moves to
 ///     `OAuthBearerFailed`.
 ///
-/// Round 2 runs only after a failure. The JVM client replies to the error JSON
-/// with a single `\x01`. The handler returns `SASL_AUTHENTICATION_FAILED`
-/// (58), and the dispatcher closes the connection.
+/// Round 2 runs only after the error challenge. The JVM client replies to the
+/// error JSON with a single `\x01`, for which the handler returns
+/// `SASL_AUTHENTICATION_FAILED` (58) carrying that JSON, and the dispatcher
+/// closes the connection. Any other reply clears the failure and runs as a
+/// fresh round 1, as Kafka's `OAuthBearerSaslServer` does.
 #[cfg(test)]
 pub async fn handle_authenticate_oauthbearer(
     req: &SaslAuthenticateRequest,
@@ -92,25 +94,29 @@ async fn handle_authenticate_oauthbearer_inner(
     max_session_lifetime: Option<Time>,
 ) -> SaslAuthenticateResponse {
     let (mechanism, previous_name) = match auth {
+        // The client's lone `\x01` completes the RFC 7628 failure handshake.
         ConnectionAuth::Negotiating {
-            exchange: SaslExchange::OAuthBearer,
+            exchange: SaslExchange::OAuthBearerFailed,
+            ..
+        }
+        | ConnectionAuth::Reauthenticating {
+            exchange: SaslExchange::OAuthBearerFailed,
+            ..
+        } if req.auth_bytes[..] == [CONTROL_A] => {
+            return fail_exchange(auth, oauthbearer_failure());
+        }
+        // Any other reply after the challenge is a fresh client initial
+        // response, as Kafka clears the stored error for it.
+        ConnectionAuth::Negotiating {
+            exchange: SaslExchange::OAuthBearer | SaslExchange::OAuthBearerFailed,
             mechanism,
             ..
         } => (*mechanism, None),
         ConnectionAuth::Reauthenticating {
             previous,
-            exchange: SaslExchange::OAuthBearer,
+            exchange: SaslExchange::OAuthBearer | SaslExchange::OAuthBearerFailed,
             ..
         } => (previous.mechanism, Some(previous.principal.name.clone())),
-        // The client's final message completes the RFC 7628 failure handshake.
-        ConnectionAuth::Negotiating {
-            exchange: SaslExchange::OAuthBearerFailed,
-            ..
-        } => return oauthbearer_failure(),
-        ConnectionAuth::Reauthenticating {
-            exchange: SaslExchange::OAuthBearerFailed,
-            ..
-        } => return fail_exchange(auth, oauthbearer_failure()),
         _ => return fail_authenticate("not in oauthbearer negotiation"),
     };
     let ValidatedBearer {
@@ -243,6 +249,10 @@ fn fail_exchange(
         None => failure,
     }
 }
+
+/// The RFC 7628 client's final message after an error challenge: a lone
+/// control-A.
+const CONTROL_A: u8 = 0x01;
 
 /// `OAuthBearerSaslServer` throws `SaslAuthenticationException(errorMessage)`
 /// on the client's `\x01` after an error challenge, so the failure text is the

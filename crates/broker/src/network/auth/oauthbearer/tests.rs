@@ -341,6 +341,51 @@ async fn a_rejected_reauth_token_gets_the_error_challenge_then_fails_with_its_js
     assert!(auth.principal().map(|p| p.name.as_str()) == Some("alice"));
 }
 
+/// Kafka's `OAuthBearerSaslServer` throws its stored error only for a lone
+/// `\x01` after a challenge. Any other reply clears the error and runs as a
+/// fresh client initial response, so a valid token then authenticates.
+#[yare::parameterized(
+    initial = { oauth_pending() },
+    reauth = { oauth_reauthenticating("alice", 1_000_000_001_000) },
+)]
+#[test_macro(tokio::test)]
+async fn a_client_response_after_the_error_challenge_runs_as_a_fresh_attempt(auth: ConnectionAuth) {
+    let mut auth = auth;
+    let validator = krabka_security::OAuthBearerValidator::default();
+    let now_ms = 1_000_000_000_000;
+    // exp far in the past → expired.
+    let expired = oauthbearer_client_response(&unsecured_token("alice", 1_000_000));
+    let challenge = authenticate(&expired, &mut auth, &validator, now_ms, None).await;
+    assert_invalid_token_challenge(&challenge);
+
+    let valid = oauthbearer_client_response(&unsecured_token("alice", 1_000_000_900));
+    let resp = authenticate(&valid, &mut auth, &validator, now_ms, None).await;
+    assert_success_authenticate_response(&resp, b"", 900_000);
+    let ConnectionAuth::Authenticated {
+        principal,
+        mechanism,
+        expires_at_ms,
+        authenticated_via_token,
+    } = auth
+    else {
+        panic!("expected Authenticated, got {auth:?}");
+    };
+    let alice = Principal {
+        name: "alice".into(),
+        auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
+        groups: vec![],
+    };
+    assert2::assert!(
+        (principal, mechanism, expires_at_ms, authenticated_via_token)
+            == (
+                alice,
+                SaslMechanism::OAuthBearer,
+                Some(1_000_000_900_000),
+                false
+            )
+    );
+}
+
 // KIP-368 ceiling: the server-side
 // `connections.max.reauth.ms` cap clamps both the response field and
 // the `Authenticated.expires_at_ms` stored on the connection.
