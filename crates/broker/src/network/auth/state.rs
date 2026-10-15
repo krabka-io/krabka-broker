@@ -8,9 +8,11 @@
 //! apart from any one mechanism.
 
 use {
-    super::response::fail_authenticate_with,
+    super::{handshake::begins_reauthentication, response::fail_authenticate_with},
     crate::handlers::ApiKeyCode,
-    krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse,
+    krabka_protocol::{
+        api_key::ApiKey, owned::sasl_authenticate_response::SaslAuthenticateResponse,
+    },
     krabka_security::{AuthMethod, Principal, SaslMechanism, ScramServerExchange},
     krabka_verified::{
         authz::{
@@ -20,6 +22,9 @@ use {
         delegation_token::{TokenApi, TokenApiAdmission, token_api_admission},
     },
 };
+
+const SASL_HANDSHAKE_KEY: ApiKeyCode = ApiKey::SaslHandshake as i16;
+const SASL_AUTHENTICATE_KEY: ApiKeyCode = ApiKey::SaslAuthenticate as i16;
 
 // Several variants and the `principal` accessor are exercised by the PLAIN,
 // SCRAM, and admin paths — keep the surface in one place.
@@ -393,15 +398,38 @@ impl ConnectionAuth {
     /// broker that closed on the deadline itself would cut those clients off
     /// mid-re-authentication.
     ///
-    /// `SaslHandshake` and `SaslAuthenticate` therefore pass whatever the
-    /// clock says; every other API on an expired session does not.
+    /// The grace covers one frame only: a `SaslHandshake` that begins the
+    /// re-authentication, which `last_reauth_start_ms` and Kafka's one-second
+    /// interval decide. Kafka checks `maybeBeginServerReauthentication` first
+    /// and the deadline second, so every other frame on an expired session
+    /// closes the connection with no response: a `SaslAuthenticate` with no
+    /// handshake before it, and a handshake the interval refuses. Once the
+    /// handshake has begun the exchange the connection is `Reauthenticating`,
+    /// which has no deadline here.
+    ///
+    /// `krabka_verified::authz::session_expired_for_request` exempts both
+    /// SASL api keys, so those two are held to the same `at <= now_ms`
+    /// deadline here.
     #[must_use]
-    pub(crate) fn expired_for_request(&self, api_key: ApiKeyCode, now_ms: i64) -> bool {
-        match self {
-            Self::Authenticated { expires_at_ms, .. } => {
-                session_expired_for_request(*expires_at_ms, api_key, now_ms)
+    pub(crate) fn expired_for_request(
+        &self,
+        api_key: ApiKeyCode,
+        now_ms: i64,
+        last_reauth_start_ms: Option<i64>,
+    ) -> bool {
+        let Self::Authenticated { expires_at_ms, .. } = self else {
+            return false;
+        };
+        match api_key {
+            SASL_HANDSHAKE_KEY
+                if begins_reauthentication(*expires_at_ms, now_ms, last_reauth_start_ms) =>
+            {
+                false
             }
-            _ => false,
+            SASL_HANDSHAKE_KEY | SASL_AUTHENTICATE_KEY => {
+                expires_at_ms.is_some_and(|at| at <= now_ms)
+            }
+            _ => session_expired_for_request(*expires_at_ms, api_key, now_ms),
         }
     }
 
@@ -697,9 +725,13 @@ mod tests {
     }
 
     /// KIP-368: the deadline ends a connection only through a request, and
-    /// never through one of the two frames a re-authentication is made of.
-    /// That is what lets a client whose window has already closed start its
-    /// exchange and be served, the way Apache Kafka serves one.
+    /// never through a `SaslHandshake` that begins a re-authentication. That
+    /// is what lets a client whose window has already closed start its
+    /// exchange and be served, the way Apache Kafka serves one. Every other
+    /// frame on an expired session closes it, as Kafka's
+    /// `Processor.processCompletedReceives` does: a `SaslAuthenticate` with no
+    /// handshake before it, and a handshake the one-second re-authentication
+    /// interval refuses.
     #[test]
     fn an_expired_session_admits_a_re_authentication_and_nothing_else() {
         let now_ms = 1_000_i64;
@@ -741,32 +773,72 @@ mod tests {
 
         let cases = [
             (
-                "expired: SaslHandshake opens the re-auth",
+                "expired: a SaslHandshake that begins the re-auth passes",
                 &expired,
                 17,
+                None,
                 false,
             ),
-            ("expired: SaslAuthenticate runs it", &expired, 36, false),
-            ("expired: Produce closes", &expired, 0, true),
-            ("expired: Metadata closes", &expired, 3, true),
-            ("expired: ApiVersions closes", &expired, 18, true),
-            ("live session serves Produce", &live, 0, false),
-            ("uncapped session serves Produce", &uncapped, 0, false),
+            (
+                "expired: a SaslHandshake a second after the last re-auth passes",
+                &expired,
+                17,
+                Some(now_ms - 1_000),
+                false,
+            ),
+            (
+                "expired: a SaslHandshake inside the one-second interval closes",
+                &expired,
+                17,
+                Some(now_ms - 999),
+                true,
+            ),
+            (
+                "expired: a SaslAuthenticate with no handshake closes",
+                &expired,
+                36,
+                None,
+                true,
+            ),
+            ("expired: Produce closes", &expired, 0, None, true),
+            ("expired: Metadata closes", &expired, 3, None, true),
+            ("expired: ApiVersions closes", &expired, 18, None, true),
+            ("live session serves Produce", &live, 0, None, false),
+            (
+                "live: a SaslAuthenticate reaches its handler",
+                &live,
+                36,
+                None,
+                false,
+            ),
+            (
+                "live: a SaslHandshake inside the interval reaches its handler",
+                &live,
+                17,
+                Some(now_ms - 1),
+                false,
+            ),
+            ("uncapped session serves Produce", &uncapped, 0, None, false),
             (
                 "an exchange in flight is never expired",
                 &reauthenticating,
-                0,
+                36,
+                Some(now_ms),
                 false,
             ),
             (
                 "anonymous has no deadline",
                 &ConnectionAuth::Anonymous,
                 0,
+                None,
                 false,
             ),
         ];
-        for (case, auth, api_key, want) in cases {
-            check!(auth.expired_for_request(api_key, now_ms) == want, "{case}");
+        for (case, auth, api_key, last_reauth_start_ms, want) in cases {
+            check!(
+                auth.expired_for_request(api_key, now_ms, last_reauth_start_ms) == want,
+                "{case}"
+            );
         }
     }
 

@@ -486,9 +486,10 @@ async fn serve_connection_stream<S>(
         // request that arrives past the deadline, not on a timer racing the
         // read. A client re-authenticates only when it next has something to
         // send, so it routinely opens the exchange after its window closed;
-        // `expired_for_request` lets the two SASL api_keys through so that
-        // exchange runs, and ends the connection on anything else.
-        if is_sasl_listener && auth.expired_for_request(parsed.api_key, now_ms()) {
+        // a `SaslHandshake` that begins the re-authentication passes, and any
+        // other frame ends the connection with no response.
+        if is_sasl_listener && sasl_session.closes_expired_session(&auth, parsed.api_key, now_ms())
+        {
             // Kafka's `Processor.processCompletedReceives` logs this at DEBUG.
             tracing::debug!(
                 api_key = parsed.api_key,

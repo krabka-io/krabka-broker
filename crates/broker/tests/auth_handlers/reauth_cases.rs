@@ -4,11 +4,18 @@ use {
     crate::{
         harness,
         harness::common_imports::*,
-        kafka_wire::{PlainAuthenticationSetup, ScramAuthenticationSetup, exchange},
+        kafka_wire::{
+            PlainAuthenticationSetup, ScramAuthenticationSetup, exchange, plain_payload,
+            sasl_authenticate_on,
+        },
         plain, scram,
         support::wire::{
             CorrelationId as WireCorrelationId, HeaderEncoding as RequestHeaderEncoding,
         },
+    },
+    krabka_protocol::owned::{
+        sasl_handshake_request::SaslHandshakeRequest,
+        sasl_handshake_response::SaslHandshakeResponse,
     },
     std::ops::RangeInclusive,
 };
@@ -71,6 +78,35 @@ impl Session {
         }
     }
 
+    /// One `SaslHandshake` v1 for this session's mechanism.
+    async fn handshake(&mut self) -> std::io::Result<SaslHandshakeResponse> {
+        self.correlation.0 += 1;
+        exchange()
+            .stream(&mut self.stream)
+            .request(&SaslHandshakeRequest {
+                mechanism: self.mechanism.wire_name().to_string(),
+                ..Default::default()
+            })
+            .api_key(17)
+            .version(1)
+            .correlation(self.correlation.0)
+            .client_id("krabka-sasl-test")
+            .call()
+            .await
+    }
+
+    /// One PLAIN `SaslAuthenticate` v2 with no handshake before it.
+    async fn bare_authenticate(&mut self, user: &str) -> std::io::Result<SaslAuthenticateResponse> {
+        self.correlation.0 += 1;
+        sasl_authenticate_on()
+            .stream(&mut self.stream)
+            .auth_bytes(plain_payload(user, harness::alice_password().as_bytes()))
+            .client_id("krabka-sasl-test")
+            .correlation(self.correlation.0)
+            .call()
+            .await
+    }
+
     async fn metadata(
         &mut self,
     ) -> std::io::Result<krabka_protocol::owned::metadata_response::MetadataResponse> {
@@ -111,6 +147,53 @@ pub async fn capped_session_closes(mechanism: SaslMechanism) {
     session.broker.shutdown().await;
 }
 
+/// KIP-368: a `SaslAuthenticate` that arrives on an expired session with no
+/// handshake before it closes the connection with no response, as Kafka's
+/// `Processor.processCompletedReceives` closes on any frame past the deadline
+/// that does not begin a re-authentication.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plain_expired_session_closes_on_a_bare_sasl_authenticate() {
+    let mut session = Session::start(SaslMechanism::Plain, krabka_units::millis(300)).await;
+    let initial = session.authenticate("alice").await.expect("authenticate");
+    check!(initial.error_code == 0);
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let response = session.bare_authenticate("alice").await;
+    check!(
+        response.is_err(),
+        "an expired session must close with no response, got {response:?}"
+    );
+    check!(harness::read_after_auth(&mut session.stream).await == 0);
+    session.broker.shutdown().await;
+}
+
+/// KIP-368: a `SaslHandshake` on an expired session that Kafka's one-second
+/// re-authentication interval refuses does not begin a re-authentication, so
+/// it closes the connection with no response rather than answering
+/// `ILLEGAL_SASL_STATE`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plain_expired_session_closes_on_a_handshake_inside_the_reauth_interval() {
+    let mut session = Session::start(SaslMechanism::Plain, krabka_units::millis(300)).await;
+    let initial = session.authenticate("alice").await.expect("authenticate");
+    check!(initial.error_code == 0);
+    // Past the first window, so this re-authentication starts expired and
+    // records its start.
+    tokio::time::sleep(std::time::Duration::from_millis(1_050)).await;
+    let reauth = session
+        .authenticate("alice")
+        .await
+        .expect("re-authenticate");
+    check!(reauth.error_code == 0);
+    // Past the renewed 300 ms window, still inside a second of its start.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let response = session.handshake().await;
+    check!(
+        response.is_err(),
+        "an expired session must close with no response, got {response:?}"
+    );
+    check!(harness::read_after_auth(&mut session.stream).await == 0);
+    session.broker.shutdown().await;
+}
+
 pub async fn same_principal_reopens(mechanism: SaslMechanism) {
     let mut session = Session::authenticated(mechanism).await;
     let reauth = session
@@ -138,9 +221,16 @@ pub async fn different_principal_closes(mechanism: SaslMechanism) {
         .await
         .expect("re-auth round-trip completes");
     check!(
-        reauth.error_code == 58,
-        "expected SASL_AUTHENTICATION_FAILED, got {}",
-        reauth.error_code
+        reauth
+            == SaslAuthenticateResponse {
+                error_code: 58,
+                error_message: Some(
+                    "Cannot change principals during re-authentication from User.alice: \
+                     User.bob"
+                        .to_string()
+                ),
+                ..Default::default()
+            }
     );
     let n = harness::read_after_auth(&mut session.stream).await;
     check!(n == 0, "expected EOF after a refused re-auth");
