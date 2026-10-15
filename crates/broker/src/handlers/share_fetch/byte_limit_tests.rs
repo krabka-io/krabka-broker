@@ -254,6 +254,29 @@ struct Outcome {
     remainder: Vec<OffsetRun>,
 }
 
+/// The outcome of the `limited` fetch, after the `unlimited` member of the
+/// same group fetches what the limited one left.
+async fn outcome_after_unlimited_fetch(
+    broker: &BrokerHandle,
+    group: &str,
+    topic_id: WireUuid,
+    limited: &ShareFetchResponse,
+) -> Outcome {
+    let rest = share_fetch()
+        .broker(broker)
+        .group(group)
+        .member("unlimited")
+        .topic_id(topic_id.0)
+        .epoch(1)
+        .call()
+        .await;
+    Outcome {
+        acquired: acquired(&partition(limited)),
+        records: record_offsets(&partition(limited)),
+        remainder: acquired(&partition(&rest)),
+    }
+}
+
 /// A fraction of one batch size.
 #[derive(Clone, Copy)]
 struct BatchFraction {
@@ -370,20 +393,10 @@ async fn every_acquired_offset_has_its_record_in_the_response() {
             .max_bytes(size * numerator / denominator)
             .call()
             .await;
-        let rest = share_fetch()
-            .broker(&broker)
-            .group(&group)
-            .member("unlimited")
-            .topic_id(topic_id.0)
-            .epoch(1)
-            .call()
-            .await;
-
-        actual.push((case.name, Outcome {
-            acquired: acquired(&partition(&limited)),
-            records: record_offsets(&partition(&limited)),
-            remainder: acquired(&partition(&rest)),
-        }));
+        actual.push((
+            case.name,
+            outcome_after_unlimited_fetch(&broker, &group, topic_id, &limited).await,
+        ));
         expected.push((case.name, case.expected));
     }
 
@@ -532,20 +545,10 @@ async fn consumer_quota_window_limits_share_fetch() {
             .user(&limited_user)
             .call()
             .await;
-        let rest = share_fetch()
-            .broker(&broker)
-            .group(&group)
-            .member("unlimited")
-            .topic_id(topic_id.0)
-            .epoch(1)
-            .call()
-            .await;
-
-        actual.push((name, Outcome {
-            acquired: acquired(&partition(&limited)),
-            records: record_offsets(&partition(&limited)),
-            remainder: acquired(&partition(&rest)),
-        }));
+        actual.push((
+            name,
+            outcome_after_unlimited_fetch(&broker, &group, topic_id, &limited).await,
+        ));
         expected.push((name, want));
     }
 
