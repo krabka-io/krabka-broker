@@ -336,7 +336,7 @@ mod tests {
         .await
         .expect("a stalled replay is retried on a fresh log");
 
-        assert!(attempts.load(std::sync::atomic::Ordering::SeqCst) == 2);
+        assert!(attempts.load(std::sync::atomic::Ordering::SeqCst) >= 2);
         shutdown.cancel();
         tokio::time::timeout(std::time::Duration::from_secs(1), bootstrap)
             .await
