@@ -379,7 +379,11 @@ impl KraftController {
         )?;
         let last_applied_record_timestamp_ms =
             replayed_timestamp_ms.unwrap_or(last_snapshot_timestamp_ms);
-        let features_epoch = replayed_features_epoch.unwrap_or(features_epoch);
+        // The replay starts at the log start, which can sit below a checkpoint
+        // whose prefix is not yet cleaned. A feature batch met there is older
+        // than the checkpoint's epoch and must not move it back.
+        let features_epoch =
+            replayed_features_epoch.map_or(features_epoch, |replayed| replayed.max(features_epoch));
 
         let mut boundary_state = QuorumState::bootstrap(cluster_id, bootstrap_voters.clone());
         if let Some(control) = &snapshot_control {

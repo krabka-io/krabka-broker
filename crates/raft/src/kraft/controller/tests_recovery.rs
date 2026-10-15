@@ -8,6 +8,7 @@ use {
         MetadataLogConfig,
         error::{MetadataReplayError, PersistedFormatError},
         kraft::controller::{
+            checkpoint::latest_checkpoint_id,
             control_state::voter_set_to_wire,
             quorum_state_file::{load_quorum_state, save_quorum_state},
             records::typed_control_batch,
@@ -328,6 +329,59 @@ async fn snapshot_then_restart_recovers_image() {
     let ctrl2 = open_test_controller(data_dir.clone(), cluster_id, voters).expect("reopen");
     assert2::assert!(ctrl2.current_image().topic("recovered").is_some());
     ctrl2.shutdown().await;
+}
+
+/// A restart loads the checkpoint, which is a features delta at its last
+/// contained offset, and then replays the log from its start. While the
+/// prefix below the checkpoint is not yet cleaned, the replay meets the
+/// feature record again. That older offset must not move the epoch back.
+#[tokio::test]
+async fn restart_keeps_the_checkpoint_finalized_features_epoch() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data_dir = dir.path().to_path_buf();
+    let cluster_id = uuid::Uuid::from_u128(7);
+    let voters = voter_set(&[NodeId(1)]);
+    let feature = MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
+        name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+        level: 25,
+    });
+
+    let feature_epoch = {
+        let log = KraftLog::open(&data_dir, &MetadataLogConfig::default()).expect("open log");
+        let ctrl = KraftController::spawn(
+            test_kraft_config(
+                NodeId(1),
+                cluster_id,
+                QuorumState::bootstrap(cluster_id, voters.clone()),
+            ),
+            log,
+            data_dir.clone(),
+        );
+        ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
+        await_leader(&ctrl, Some(NodeId(1))).await;
+        submit_change_with_timeout(&ctrl, vec![feature], "feature")
+            .await
+            .unwrap();
+        let feature_epoch = ctrl.finalized_features_epoch();
+        submit_change_with_timeout(&ctrl, topic_record("after"), "topic")
+            .await
+            .unwrap();
+        ctrl.trigger_snapshot().await.unwrap();
+        ctrl.shutdown().await;
+        tokio::time::sleep(StdDuration::from_millis(50)).await;
+        feature_epoch
+    };
+    let (checkpoint_end, _) = latest_checkpoint_id(&data_dir).expect("checkpoint");
+
+    let ctrl = open_test_controller(data_dir, cluster_id, voters).expect("reopen");
+    check!(
+        (
+            ctrl.quorum_snapshot().log_start_offset,
+            ctrl.finalized_features_epoch(),
+        ) == (0, checkpoint_end - 1)
+    );
+    check!(feature_epoch < checkpoint_end - 1);
+    ctrl.shutdown().await;
 }
 
 #[tokio::test]
