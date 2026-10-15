@@ -111,16 +111,16 @@ fn answer_api_versions(
     request_version: i16,
     request_body: &[u8],
 ) -> Result<bytes::Bytes, RaftError> {
-    // The offset is read before the image, so the epoch never runs ahead of
-    // the features it stamps.
-    let metadata_offset = api_versions::applied_metadata_offset(engine);
+    // The epoch is read before the image, so it never runs ahead of the
+    // features it stamps.
+    let finalized_features_epoch = engine.finalized_features_epoch();
     let image = engine.current_image();
     api_versions_response(
         request_version,
         request_body,
         api_versions::ApiVersionsView {
             image: &image,
-            metadata_offset,
+            finalized_features_epoch,
             admin_router,
             unstable: unstable.api_versions,
         },

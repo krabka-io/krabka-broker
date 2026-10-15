@@ -7,7 +7,7 @@ use {
         Engine, KraftControlState, Role,
         checkpoint::{retain_recent_checkpoints, write_checkpoint},
         offsets::fetch_offset_has_records,
-        records::{decode_batches, encode_batches},
+        records::{decode_batches, encode_batches, features_epoch_after_snapshot},
     },
     crate::{
         error::RaftError,
@@ -409,6 +409,11 @@ impl Engine {
         }
         write_checkpoint(&self.data_dir, end_offset, epoch, bytes)?;
         self.image = new_image;
+        self.features_epoch = features_epoch_after_snapshot(
+            &contents.metadata_records,
+            end_offset,
+            self.features_epoch,
+        );
         if let Some(control) = contents.control_state {
             self.controls = KraftControlState::new(control.voters.clone(), control.kraft_version);
             self.core.set_kraft_version(control.kraft_version);
@@ -426,7 +431,7 @@ impl Engine {
         self.installed_snapshot_epoch = Some(
             u32::try_from(epoch).expect("snapshot install admission requires a nonnegative epoch"),
         );
-        let _ = self.image_tx.send(Arc::new(self.image.clone()));
+        self.publish_image();
         retain_recent_checkpoints(&self.data_dir);
         Ok(())
     }

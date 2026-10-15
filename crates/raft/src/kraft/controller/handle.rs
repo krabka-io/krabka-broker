@@ -66,6 +66,17 @@ impl KraftController {
     #[must_use]
     pub fn current_image(&self) -> Arc<MetadataImage> { self.image_rx.borrow().clone() }
 
+    /// The finalized-features epoch of the published [`MetadataImage`]: the
+    /// offset of the last record of the newest batch or snapshot that carried
+    /// a `FeatureLevelRecord`, or `-1` before the first. Kafka's controller
+    /// listener answers `ApiVersions` with it, from `FeaturesPublisher`.
+    ///
+    /// The engine publishes it after the image, so a caller that reads it
+    /// before [`Self::current_image`] never gets an epoch ahead of the
+    /// features.
+    #[must_use]
+    pub fn finalized_features_epoch(&self) -> i64 { *self.features_epoch_rx.borrow() }
+
     /// Watch the published [`MetadataImage`].
     #[must_use]
     pub fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> { self.image_rx.clone() }

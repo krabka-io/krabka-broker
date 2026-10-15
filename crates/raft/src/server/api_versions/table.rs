@@ -212,7 +212,7 @@ mod tests {
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         let body = api_versions_response_body(4, ApiVersionsView {
             image: &image,
-            metadata_offset: -1,
+            finalized_features_epoch: -1,
             admin_router: None,
             unstable,
         });

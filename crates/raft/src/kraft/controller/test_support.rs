@@ -300,6 +300,8 @@ pub fn build_engine_only(
             image,
             peers: Arc::new(NullPeerSender),
             image_tx,
+            features_epoch: -1,
+            features_epoch_tx: watch::channel(-1).0,
             leader_tx,
             quorum_tx,
             cmd_tx,

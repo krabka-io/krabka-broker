@@ -172,7 +172,7 @@ impl Engine {
         self.image = reloaded;
         self.downgrade_snapshot_pending = next_pending;
         if self.downgrade_snapshot_pending.is_none() {
-            let _ = self.image_tx.send(Arc::new(self.image.clone()));
+            self.publish_image();
         }
         Ok(())
     }

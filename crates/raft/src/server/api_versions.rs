@@ -10,7 +10,7 @@ use {
     self::table::CONTROLLER_LISTENER_APIS,
     crate::{
         ControllerAdminRouter, ControllerApiVersion, UnstableApiVersions, UnstableFeatureVersions,
-        error::RaftError, kafka_4_3_1_max, kraft::KraftController,
+        error::RaftError, kafka_4_3_1_max,
     },
     bytes::{Bytes, BytesMut},
     krabka_protocol::{
@@ -63,10 +63,12 @@ const API_VERSIONS_INVALID_REQUEST: i16 = 42;
 pub(crate) struct ApiVersionsView<'a> {
     /// The applied metadata image: its finalized features.
     pub(crate) image: &'a krabka_metadata::MetadataImage,
-    /// The offset of the last record `image` contains, or `-1` before the
-    /// first. It is the finalized-features epoch, as Kafka's
-    /// `FeaturesPublisher` takes it from `image.provenance().lastContainedOffset()`.
-    pub(crate) metadata_offset: i64,
+    /// The finalized-features epoch: the last contained offset of the newest
+    /// applied batch or snapshot that carried a `FeatureLevelRecord`, or `-1`
+    /// before the first. Kafka's `FeaturesPublisher` takes
+    /// `image.provenance().lastContainedOffset()` only from a delta with a
+    /// features delta, so topic records do not move it.
+    pub(crate) finalized_features_epoch: i64,
     /// The KIP-919 Admin surface the broker attaches, if any.
     pub(crate) admin_router: Option<&'a dyn ControllerAdminRouter>,
     /// Kafka's `unstable.api.versions.enable`. It caps both the API table and
@@ -74,12 +76,6 @@ pub(crate) struct ApiVersionsView<'a> {
     /// `SimpleApiVersionManager` is built with it and takes no
     /// `unstable.feature.versions.enable`.
     pub(crate) unstable: UnstableApiVersions,
-}
-
-/// The offset of the last record `engine`'s image contains, or `-1` before
-/// the first: one below the engine's applied high watermark.
-pub(crate) fn applied_metadata_offset(engine: &KraftController) -> i64 {
-    engine.quorum_snapshot().high_watermark.saturating_sub(1)
 }
 
 /// Answers one controller-listener `ApiVersions` request with the response
@@ -249,7 +245,7 @@ pub(super) fn api_versions_response_body(req_version: i16, view: ApiVersionsView
             req_version,
             UnstableFeatureVersions::from(view.unstable == UnstableApiVersions::Enabled),
         ),
-        finalized_features_epoch: view.metadata_offset,
+        finalized_features_epoch: view.finalized_features_epoch,
         finalized_features: finalized_feature_keys(view.image),
         ..Default::default()
     };
@@ -280,11 +276,15 @@ mod tests {
     };
 
     /// The view a listener with no Admin router and the default unstable
-    /// setting answers from, at metadata offset `metadata_offset`.
-    fn view(image: &krabka_metadata::MetadataImage, metadata_offset: i64) -> ApiVersionsView<'_> {
+    /// setting answers from, at finalized-features epoch
+    /// `finalized_features_epoch`.
+    fn view(
+        image: &krabka_metadata::MetadataImage,
+        finalized_features_epoch: i64,
+    ) -> ApiVersionsView<'_> {
         ApiVersionsView {
             image,
-            metadata_offset,
+            finalized_features_epoch,
             admin_router: None,
             unstable: UnstableApiVersions::Disabled,
         }
