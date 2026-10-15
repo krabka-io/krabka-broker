@@ -14,7 +14,7 @@
 //! capture groups as `$1`, and the trailing `L` or `U` lowercases or
 //! uppercases the result. The first rule that matches wins.
 
-use super::java_regex::{JavaPattern, ReplacementError};
+use crate::java_regex::{JavaPattern, ReplacementError};
 
 /// Why a rule spec is not a rule.
 #[derive(Debug, thiserror::Error)]
