@@ -17,12 +17,28 @@ use {
         RaftError,
         reconfig::{ReconfigOutcome, RemoveVoter},
     },
+    krabka_units::Time,
     std::{
         collections::BTreeSet,
         time::{Duration, Instant},
     },
     tempfile::TempDir,
 };
+
+/// The controller election timeout of every node, pinned here rather than
+/// inherited from `BrokerConfig::for_tests` because the tests depend on it.
+///
+/// Every node runs in this one process, so a stall of the process, from a
+/// loaded runner or a `SIGSTOP`, stalls the whole quorum at once. The leader
+/// resigns when a majority has not fetched within its check-quorum window,
+/// 1.5 times this timeout as Kafka's `LeaderState.CHECK_QUORUM_TIMEOUT_FACTOR`
+/// sets it. A stall at least that long expires the window while the
+/// followers are frozen too, so the leader resigns at every resume and the
+/// quorum never keeps a leader long enough to add or remove a voter (#621).
+/// At 200 ms, the window was 300 ms, and the 400 ms freezes of #621 stalled
+/// every run. At 500 ms, the window is 750 ms: a stall of 400 ms, or of 600
+/// ms, still lets the quorum converge.
+const ELECTION_TIMEOUT: Time = krabka_units::millis(500);
 
 /// A started node, and the directory that backs it.
 struct DynamicNode {
@@ -49,6 +65,7 @@ async fn start_dynamic_cluster(n: u64) -> Vec<DynamicNode> {
         config.listen_addr = data_addr;
         config.advertised_listener = data_addr.to_string();
         config.controller_listen_addr = controller_addr;
+        config.controller_election_timeout = ELECTION_TIMEOUT;
         config.auto_join_retry_backoff = krabka_units::millis(20);
         config.startup_leader_wait_timeout = krabka_units::secs(10);
 
