@@ -25,6 +25,11 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- A long-polling `Fetch` is no longer charged its wait to
+  `request_percentage`. Kafka parks the wait in the fetch purgatory, off the
+  request-handler thread, and charges only the handler's own time. Before, a
+  consumer whose fetches waited out `MaxWaitMs` was throttled for time it
+  spent idle.
 - A consumer `Fetch` is now charged to `consumer_byte_rate` at Kafka's
   `FetchResponse.sizeOf`, four bytes more than the encoded response body.
   Before, every fetch was charged four bytes short.

@@ -15,7 +15,10 @@ use {
     krabka_log::Log,
     krabka_protocol::{
         Decode,
-        owned::{fetch_request::FetchRequest, fetch_response::FetchResponse},
+        owned::{
+            fetch_request::{FetchPartition, FetchRequest, FetchTopic},
+            fetch_response::FetchResponse,
+        },
         records::{Record, RecordBatch},
     },
 };
@@ -117,6 +120,34 @@ pub(super) fn sessionless_request(
         max_bytes: 1_048_576,
         session_id: INVALID_SESSION_ID,
         session_epoch: FINAL_EPOCH,
+        ..Default::default()
+    }
+}
+
+/// A sessionless consumer fetch of partition 0 of `topic_id` from offset 0,
+/// with no byte limit.
+#[bon::builder]
+pub(super) fn consumer_fetch_request(
+    topic_id: krabka_protocol::primitives::uuid::Uuid,
+    #[builder(default)] max_wait_ms: i32,
+    #[builder(default)] min_bytes: i32,
+) -> FetchRequest {
+    FetchRequest {
+        max_wait_ms,
+        min_bytes,
+        max_bytes: i32::MAX,
+        session_id: INVALID_SESSION_ID,
+        session_epoch: FINAL_EPOCH,
+        topics: vec![FetchTopic {
+            topic_id,
+            partitions: vec![FetchPartition {
+                partition: 0,
+                fetch_offset: 0,
+                partition_max_bytes: i32::MAX,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
         ..Default::default()
     }
 }

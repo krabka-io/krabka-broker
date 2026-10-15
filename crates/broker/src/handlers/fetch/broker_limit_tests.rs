@@ -1,16 +1,13 @@
 #[cfg(test)]
 use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
+    super::test_support::consumer_fetch_request,
     crate::{
         authorizer::AllowAllAuthorizer,
-        fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
         handlers::test_support::{create_topic, produce_records, start_broker_with},
     },
     assert2::assert,
-    krabka_protocol::{
-        owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        records::RecordsPayload,
-    },
+    krabka_protocol::records::RecordsPayload,
     krabka_units::bytes,
 };
 
@@ -39,24 +36,7 @@ async fn broker_fetch_cap_bounds_consumer_fetch_and_keeps_first_batch_progress()
 
     let response = super::test_support::fetch_wire()
         .broker(&broker)
-        .request(&FetchRequest {
-            max_wait_ms: 0,
-            min_bytes: 0,
-            max_bytes: i32::MAX,
-            session_id: INVALID_SESSION_ID,
-            session_epoch: FINAL_EPOCH,
-            topics: vec![FetchTopic {
-                topic_id,
-                partitions: vec![FetchPartition {
-                    partition: 0,
-                    fetch_offset: 0,
-                    partition_max_bytes: i32::MAX,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .request(&consumer_fetch_request().topic_id(topic_id).call())
         .user("consumer")
         .client_id("consumer-client")
         .call()
