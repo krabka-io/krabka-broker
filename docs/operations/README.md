@@ -17,6 +17,10 @@ fails the build when the series drift.
   Kafka comparison and the 1,000/10,000-partition operating-envelope run.
 - [Broker performance results](performance-results.md): the measured
   comparison and highest passing partition tier, with exact provenance.
+- [Performance regression budgets](performance-budgets.md): the RF=3
+  workload matrix, the results record, and the budgets that reject a
+  candidate before or after a change, or report its limits against pinned
+  Kafka 4.3.1.
 - [Scale a cluster](scaling.md): add capacity, move replicas with a throttle,
   and drain and unregister a broker, including the operator-managed path.
 - [Metrics](metrics.md): every exported series with its labels and the JMX
