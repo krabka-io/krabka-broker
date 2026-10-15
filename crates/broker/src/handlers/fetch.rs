@@ -53,6 +53,8 @@ mod response_budget_tests;
 #[cfg(test)]
 mod leader_read_tests;
 #[cfg(test)]
+mod leader_throttle_tests;
+#[cfg(test)]
 mod topic_resolution_tests;
 
 pub(crate) use self::{plan::PendingRead, read::LiveOffsets};

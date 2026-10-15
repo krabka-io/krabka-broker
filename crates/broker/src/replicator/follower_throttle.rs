@@ -331,6 +331,31 @@ mod tests {
         check!((10_900..=11_000).contains(&debt_tokens), "{debt_tokens}");
     }
 
+    /// A batch larger than the bucket arrives whole, because the leader serves
+    /// the first batch of a fetch whatever `partition_max_bytes` says. Kafka
+    /// records what arrived (`ReplicaFetcherThread.processPartitionData`), so
+    /// the overshoot is paid back by the rounds after it. A follower that keeps
+    /// asking gets one oversized batch and then sits out its debt. It does not
+    /// pull a whole batch every round for the few bytes the refill left
+    /// (#1340).
+    #[test]
+    fn an_oversized_batch_is_charged_in_full_and_throttles_the_rounds_after_it() {
+        // 1000 B/s with a one-second burst, and a 5000-byte batch: the debt
+        // takes four seconds to repay, far longer than the rounds below.
+        let ConfigWithDir { cfg, dir: _log_dir } = throttled_follower_at(10, 4);
+
+        let mut fetched_rounds = 0;
+        for _ in 0..20 {
+            if let FetchThrottleDecision::Fetch(_) = follower_partition_fetch_cap(&cfg) {
+                fetched_rounds += 1;
+                record_replicated(&cfg, 5_000);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        check!(fetched_rounds == 1);
+    }
+
     /// A partition that is not in sync drew its budget when the round was
     /// planned, so its bytes are not charged a second time as they arrive.
     #[test]
