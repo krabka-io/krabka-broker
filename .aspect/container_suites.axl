@@ -30,7 +30,7 @@ _IMAGE_PATH_PREFIXES = ["packaging/"]
 # suite is. `//crates/broker:BUILD.bazel` names them in `krabka_image`; they are
 # named here too because the rdeps query cannot see the image's layer list from
 # a broker source file any better than it can from `packaging/`.
-_IMAGE_SUITES = ["jbod_enospc", "process_kill_durability"]
+_IMAGE_SUITES = ["jbod_enospc", "process_kill_durability", "soak_contract"]
 
 # Suites that are not `jvm_acceptance_*` but are built out of that harness --
 # they `mod jvm_acceptance` for `start_host_broker` and `broker0_advertised` --
@@ -170,6 +170,15 @@ _FEATURE_RULES = [
         "crates/log/src/segment",
         "crates/log/src/log/open.rs",
     ], ["process_kill_durability"]),
+    # The sustained-load contract's executor borrows the four-hour soak's
+    # cluster fixture, and grades its run with the judge in bench-driver against
+    # a contract under bench/soak/. A change to any of the three changes what
+    # its self-check proves, so each selects it -- and never `soak` itself.
+    ([
+        "crates/broker/tests/soak/",
+        "crates/bench-driver/",
+        "bench/soak/",
+    ], ["soak_contract"]),
     ([
         "crates/broker/src/handlers/describe_configs/resources/broker_logger",
         "crates/broker/src/handlers/incremental_alter_configs/broker_logger_scope",
@@ -589,6 +598,14 @@ def _self_test():
         "crate documentation and broker feature changes stay out of the non-broker rdeps query",
     )
     _check(
+        _non_broker_packages(["crates/bench-driver/src/workload.rs"]) == [],
+        "a bench-driver change stays out of the rdeps query that would select every broker suite",
+    )
+    _check(
+        _select(["crates/bench-driver/src/workload.rs"], available) == [_target("soak_contract")],
+        "a bench-driver change selects only the contract suite whose judge it carries",
+    )
+    _check(
         _requires_full_matrix(
             ["crates/removed/BUILD.bazel", "crates/removed/README.md"],
             ["crates/removed/BUILD.bazel", "crates/removed/README.md"],
@@ -617,8 +634,16 @@ def _self_test():
         "the soak suite must not be selected by its own sources",
     )
     _check(
-        _select(["crates/broker/tests/soak/drift.rs"], with_soak) == [],
-        "the soak suite must not be selected by its helper modules",
+        _select(["crates/broker/tests/soak/drift.rs"], with_soak) == [_target("soak_contract")],
+        "the soak helper modules select the contract suite that borrows them, never the soak suite",
+    )
+    _check(
+        _select(["crates/broker/tests/soak_contract/faults.rs"], with_soak) == [_target("soak_contract")],
+        "the contract suite is selected by its own sources",
+    )
+    _check(
+        _select(["bench/soak/self-check.yaml", "crates/bench-driver/src/soak/reconcile.rs"], with_soak) == [_target("soak_contract")],
+        "a contract or a judge change selects the contract suite",
     )
     _check(
         _target("soak") not in _select(["crates/broker/BUILD.bazel"], with_soak),
@@ -983,6 +1008,13 @@ def _requires_full_matrix(changed, deleted):
             return True
     return False
 
+# Non-broker crates whose changes do not go through the rdeps query. Every broker
+# integration test links every broker dev-dependency, so rdeps would turn any
+# change to one of these into every broker container suite. `krabka-bench-driver`
+# is a broker dev-dependency only for the `soak_contract` judge, and the feature
+# rule above already selects that suite for any change under it.
+_RDEPS_EXEMPT_PREFIXES = ["crates/bench-driver/"]
+
 def _non_broker_packages(paths):
     """Owning crate target patterns for non-broker changes.
 
@@ -997,6 +1029,7 @@ def _non_broker_packages(paths):
         if (
             path.startswith("crates/") and
             not path.startswith("crates/broker/") and
+            not _starts_with_any(path, _RDEPS_EXEMPT_PREFIXES) and
             not path.endswith(".md")
         ):
             parts = path.split("/")

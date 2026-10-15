@@ -38,7 +38,7 @@ fn the_synthetic_self_check_reports_both_injections() {
         text(&output.stderr)
     );
     check!(stdout.contains("detected: reconciler: 1 injected missing record(s)"));
-    check!(stdout.contains("detected: deadline checker: leader-restart#0 isr_rejoin"));
+    check!(stdout.contains("detected: deadline checker: follower-restart#0 isr_rejoin"));
     check!(stdout.contains("self-check: self-check PASS"));
 }
 

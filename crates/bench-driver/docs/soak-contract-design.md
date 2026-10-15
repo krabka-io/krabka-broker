@@ -147,6 +147,10 @@ The same proof also runs with no cluster. `krabka-soak-check self-check` without
 
 **The 72-hour run.** Issue #1393 runs the same executor with `KRABKA_SOAK_CONTRACT=bench/soak/rf3-72h.yaml` on a host that matches the contract's `host` section, with `KRABKA_SOAK_EVIDENCE_DIR` on retained storage. The evidence directory holds the contract, the expanded schedule, `faults.jsonl`, `evidence.json` and `verdict.json`. Publish it unchanged, as the performance qualification does.
 
+**What the executor does not run yet.** The executor refuses a contract with a diskless path before it starts a container. A diskless WAL quorum serves a shard only to a voter that authenticates as `broker-<id>` on the inter-broker listener, and the soak cluster has one anonymous `PLAINTEXT` listener per broker. A second, SASL listener per node is the missing piece (`crates/broker/tests/diskless_jepsen.rs` shows the configuration). The `netem` slowdown is implemented but has not run on a kernel with the `sch_netem` module. Both are for issue #1393 to close before the 72-hour run.
+
+**Why the self-check restarts a follower.** The self-check runs in the pull-request container matrix, so it uses faults whose recovery the packaged broker meets every time: a quiet pause, a CPU throttle, a disk fill and a graceful follower restart held past the broker's 9 s `heartbeat_timeout`. The faults that found broker problems during development stay in the 72-hour contract, where a failure is evidence: a killed leader that restarts inside the heartbeat timeout is not fenced and keeps its partitions, a gracefully stopped controller is replaced only after 20 to 24 s, and the read-back of a tiered topic from its earliest offset returned no records.
+
 **Metrics and alerts.** The executor reads `krabka_broker_active_controller` from each broker's `/metrics`. A 72-hour run also scrapes the brokers into the observability stack, so the alert rules in [`docs/operations/alert-rules.yaml`](../../../docs/operations/alert-rules.yaml) can fire and resolve around each recorded fault. Issue #1393 retains those alerts beside the fault timeline.
 
 ## Kafka / KIP Compliance

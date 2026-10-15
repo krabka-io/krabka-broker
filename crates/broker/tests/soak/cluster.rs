@@ -81,7 +81,7 @@ pub(crate) fn image() -> String {
 pub(crate) struct SoakBroker {
     /// Container name, and the label its samples are reported under.
     pub(crate) name: String,
-    node_id: u32,
+    pub(crate) node_id: u32,
     /// Published host port for the container's 9092.
     client_port: u16,
     /// Published host port for the container's 9093.
@@ -89,7 +89,7 @@ pub(crate) struct SoakBroker {
     /// Published host port for the container's 9404.
     metrics_port: u16,
     /// Host side of the `/var/lib/krabka` mount.
-    root: tempfile::TempDir,
+    pub(crate) root: tempfile::TempDir,
 }
 
 impl SoakBroker {
@@ -170,11 +170,15 @@ impl SoakBroker {
     /// themselves and never form a quorum. The file is also where the
     /// advertised listener has to go, because `--advertised-listener` describes
     /// the flag-built listener that a file replaces.
-    fn write_config(&self, voters: &str) {
+    ///
+    /// `extras` adds top-level keys after the voter list and whole tables at
+    /// the end, where TOML allows each.
+    fn write_config(&self, voters: &str, extras: &NodeExtras) {
         let toml = format!(
             "broker_id = {id}\n\
              log_dir = \"{CONTAINER_LOG_DIR}\"\n\
              controller_quorum_voters = [{voters}]\n\
+             {root}\
              \n\
              [[listeners]]\n\
              name = \"PLAINTEXT\"\n\
@@ -183,9 +187,12 @@ impl SoakBroker {
              protocol = \"Plaintext\"\n\
              \n\
              [process]\n\
-             roles = [\"controller\", \"broker\"]\n",
+             roles = [\"controller\", \"broker\"]\n\
+             {tables}",
             id = self.node_id,
             client = self.client_port,
+            root = extras.root_toml,
+            tables = extras.tables_toml,
         );
         std::fs::write(self.host_root().join(CONFIG_FILE), toml)
             .expect("write the broker configuration file");
@@ -197,7 +204,10 @@ impl SoakBroker {
     /// the node id the raft peer identifies itself by is taken from the flag
     /// before the file is read, so a node configured by file alone answers as
     /// node 1 and its peers discard its votes.
-    fn run(&self, cluster_id: &str) {
+    ///
+    /// `extras.shared_mount`, when set, is bind-mounted into the container as
+    /// well, at the same container path on every node.
+    fn run(&self, cluster_id: &str, extras: &NodeExtras) {
         let mount = format!("{}:{CONTAINER_ROOT}", self.host_root().display());
         let user = self.user();
         let img = image();
@@ -206,7 +216,11 @@ impl SoakBroker {
         let publish_client = format!("{}:9092", self.client_port);
         let publish_controller = format!("{}:9093", self.controller_port);
         let publish_metrics = format!("{}:9404", self.metrics_port);
-        docker(&[
+        let shared = extras
+            .shared_mount
+            .as_ref()
+            .map(|(host, container)| format!("{}:{container}", host.display()));
+        let mut args = vec![
             "run",
             "--detach",
             "--name",
@@ -217,6 +231,16 @@ impl SoakBroker {
             "host.docker.internal:host-gateway",
             "--volume",
             &mount,
+        ];
+        if let Some(shared) = &shared {
+            args.extend(["--volume", shared.as_str()]);
+        }
+        let config = format!("--config-file={CONTAINER_ROOT}/{CONFIG_FILE}");
+        let broker_id = format!("--broker-id={}", self.node_id);
+        let cluster = format!("--cluster-id={cluster_id}");
+        let cleaner = format!("--cleaner-interval={CLEANER_INTERVAL}");
+        let retention = format!("--log-retention-check-interval={RETENTION_CHECK_INTERVAL}");
+        args.extend([
             "--publish",
             &publish_client,
             "--publish",
@@ -224,14 +248,15 @@ impl SoakBroker {
             "--publish",
             &publish_metrics,
             &img,
-            &format!("--config-file={CONTAINER_ROOT}/{CONFIG_FILE}"),
-            &format!("--broker-id={}", self.node_id),
-            &format!("--cluster-id={cluster_id}"),
+            &config,
+            &broker_id,
+            &cluster,
             "--metrics-listen-addr=0.0.0.0:9404",
             "--health-listen-addr=none",
-            &format!("--cleaner-interval={CLEANER_INTERVAL}"),
-            &format!("--log-retention-check-interval={RETENTION_CHECK_INTERVAL}"),
+            &cleaner,
+            &retention,
         ]);
+        docker(&args);
     }
 
     /// This broker's container log, for a failure message.
@@ -267,14 +292,41 @@ impl Drop for SoakBroker {
 /// Kafka reserves and the broker refuses at startup.
 fn directory_id(n: u32) -> uuid::Uuid { uuid::Uuid::from_u64_pair(1, u64::from(n)) }
 
+/// What every node of one cluster adds to the fixture's configuration and
+/// container. See [`SoakCluster::configured`].
+struct NodeExtras {
+    root_toml: String,
+    tables_toml: String,
+    shared_mount: Option<(PathBuf, String)>,
+}
+
 /// Three brokers, formatted into one quorum and running.
 pub(crate) struct SoakCluster {
     pub(crate) brokers: Vec<SoakBroker>,
 }
 
+#[bon::bon]
 impl SoakCluster {
     /// Format and boot three nodes.
-    pub(crate) fn start() -> Self {
+    pub(crate) fn start() -> Self { Self::configured().call() }
+
+    /// Format and boot three nodes, each with the same additions.
+    ///
+    /// `root_toml` is top-level keys for every node's configuration file and
+    /// `tables_toml` is whole tables appended after it. `shared_mount` is a
+    /// host directory and the container path every node mounts it on, for a
+    /// store that the three brokers share, such as a local remote tier.
+    #[builder(finish_fn = call)]
+    pub(crate) fn configured(
+        #[builder(default)] root_toml: String,
+        #[builder(default)] tables_toml: String,
+        shared_mount: Option<(PathBuf, String)>,
+    ) -> Self {
+        let extras = NodeExtras {
+            root_toml,
+            tables_toml,
+            shared_mount,
+        };
         let cluster_id = uuid::Uuid::new_v4().to_string();
         let brokers: Vec<SoakBroker> = (1..=3)
             .map(|node_id| SoakBroker {
@@ -303,10 +355,10 @@ impl SoakCluster {
             .join(",");
         for broker in &brokers {
             broker.format(&cluster_id, &voters);
-            broker.write_config(&quorum);
+            broker.write_config(&quorum, &extras);
         }
         for broker in &brokers {
-            broker.run(&cluster_id);
+            broker.run(&cluster_id, &extras);
         }
         Self { brokers }
     }

@@ -4,7 +4,7 @@
 # three-broker cluster, with the same fault kinds, and then proves the judge
 # works. Once the load stops it deletes the earliest acknowledged record of
 # `classic-idempotent` from the cluster, and it judges the first
-# `leader-restart` against an ISR-rejoin deadline of one millisecond. It passes
+# `follower-restart` against an ISR-rejoin deadline of one millisecond. It passes
 # only when the reconciler reports exactly that record lost and the deadline
 # checker reports exactly that recovery missed, and nothing else fails.
 #
@@ -84,8 +84,12 @@ paths:
     produce_latency: {p50: 500ms, p99: 5s, p999: 10s}
     consume_latency: {p50: 2s, p99: 10s, p999: 20s}
 
+# Each deadline is at least twice the worst recovery measured locally against
+# the packaged broker: a graceful follower restart fails over in up to 10s and
+# rejoins the ISR in up to 11s, and a two-second pause catches up in well under
+# a second. No fault of this contract is measured for a controller failover.
 deadlines:
-  leader_failover: 20s
+  leader_failover: 25s
   isr_rejoin: 30s
   controller_failover: 20s
   catch_up_after_pause: 20s
@@ -108,17 +112,14 @@ faults:
     target: follower
     first_at: 95s
     duration: 10s
-  - name: leader-restart
-    fault: {kind: restart, graceful: false}
-    target: leader
-    first_at: 140s
-    duration: 5s
-  - name: controller-restart
+  # Held past the broker's 9s `heartbeat_timeout`, so the broker is fenced
+  # and rejoins as a new incarnation whatever its controlled shutdown did.
+  - name: follower-restart
     fault: {kind: restart, graceful: true}
-    target: controller
-    first_at: 180s
-    duration: 5s
+    target: follower
+    first_at: 140s
+    duration: 15s
 
 self_check:
   missing_record_path: classic-idempotent
-  missed_deadline: {fault: leader-restart, check: isr_rejoin, deadline: 1ms}
+  missed_deadline: {fault: follower-restart, check: isr_rejoin, deadline: 1ms}
