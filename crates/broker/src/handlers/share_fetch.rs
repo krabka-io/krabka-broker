@@ -34,14 +34,15 @@ use {
     crate::{
         broker::Broker,
         error::BrokerError,
-        handlers::{ApiVersion, RequestContext, leader_endpoints},
+        handlers::{
+            ApiVersion, RequestContext, fetch::consumer_response_byte_budget, leader_endpoints,
+        },
         share_partition::session::ShareFetchSessionRequest,
     },
     krabka_protocol::owned::{
         share_fetch_request::{FetchPartition, ShareFetchRequest},
         share_fetch_response::{LeaderIdAndEpoch, ShareFetchResponse},
     },
-    krabka_units::convert::ByteSizeExt as _,
     std::collections::{HashMap, HashSet},
 };
 
@@ -276,10 +277,16 @@ pub(crate) async fn handle(
         group: &group,
         member: &member,
         max_records: req.max_records,
-        // Kafka's broker-wide `fetch.max.bytes` and request limit both
-        // bound the acquire passes. `acquire_pass` retains the first
+        // Kafka's `min(MaxBytes, fetch.max.bytes, maxQuotaWindowBytes)`
+        // bounds the acquire passes. `acquire_pass` retains the first
         // batch progress exception if that batch itself exceeds this cap.
-        max_bytes: req.max_bytes.min(broker.config.fetch_max_bytes.bytes_i32()),
+        max_bytes: i32::try_from(consumer_response_byte_budget(
+            broker,
+            &image,
+            ctx,
+            req.max_bytes,
+        ))
+        .unwrap_or(i32::MAX),
         min_bytes: req.min_bytes,
         mode: AcquireMode::of(
             if version >= 2 {
