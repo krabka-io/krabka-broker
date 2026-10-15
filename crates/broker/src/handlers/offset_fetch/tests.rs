@@ -1170,6 +1170,13 @@ async fn seed_streams_member(broker: &Broker, group_id: &str, member_epoch: i32)
         .expect("seed streams group");
 }
 
+/// Seeds the streams group `grp`, whose member `m1` is at epoch 5, with the
+/// committed offset of partition 0 of `orders`.
+async fn seed_streams_group_offsets(broker: &Broker) {
+    seed_committed_offset().broker(broker).call().await;
+    seed_streams_member(broker, "grp", 5).await;
+}
+
 /// Kafka's `StreamsGroup.validateOffsetFetch` checks the v9 member id and
 /// epoch of a streams group, whose members live in the streams actor and not
 /// beside its committed offsets. A refused fetch is the group row with the
@@ -1227,8 +1234,7 @@ async fn offset_fetch_checks_the_member_epoch_of_a_streams_group() {
         bind(broker_handle, _dir, broker);
         boot [broker_fixture_support::start_group_broker_no_audit] allow_all;
     };
-    seed_committed_offset().broker(&broker).call().await;
-    seed_streams_member(&broker, "grp", 5).await;
+    seed_streams_group_offsets(&broker).await;
     seed_streams_member(&broker, "bare", 5).await;
     for row in rows {
         let request = member_offset_fetch(row.group_id, row.member_id, row.member_epoch);
@@ -1239,6 +1245,64 @@ async fn offset_fetch_checks_the_member_epoch_of_a_streams_group() {
             ..Default::default()
         };
         assert2::check!(response == expected, "{}", row.name);
+    }
+    broker_handle.shutdown().await;
+}
+
+/// A streams actor that exited, as one does after a failed write, does not
+/// refuse a fetch: the admin client's fetch reads the offsets without asking
+/// it, and a member's fetch is checked by an actor respawned in its place,
+/// which here holds no member.
+#[tokio::test]
+async fn offset_fetch_of_a_streams_group_outlives_its_stopped_actor() {
+    krabka_macros::broker_test_setup! {
+        bind(broker_handle, _dir, broker);
+        boot [broker_fixture_support::start_group_broker_no_audit] allow_all;
+    };
+    seed_streams_group_offsets(&broker).await;
+    let stopped = broker
+        .group_coordinator
+        .find_streams("grp")
+        .expect("the seeded streams actor");
+    let (reply, stopping) = oneshot::channel();
+    stopped
+        .tx
+        .send(StreamsGroupActorMessage::Shutdown(reply))
+        .await
+        .expect("send Shutdown");
+    stopping.await.expect("the actor stops");
+    stopped.tx.closed().await;
+
+    // (row, member id, member epoch, expected group)
+    let rows = [
+        (
+            "no member id and epoch -1 (admin client)",
+            None,
+            -1,
+            group_row("grp", offsets_row(seeded_row()), codes::NONE),
+        ),
+        (
+            "a member of the respawned actor",
+            Some("m1"),
+            5,
+            group_row("grp", vec![], codes::UNKNOWN_MEMBER_ID),
+        ),
+    ];
+    for (row, member_id, member_epoch, expected) in rows {
+        let response = fetch(
+            &broker,
+            9,
+            &member_offset_fetch("grp", member_id, member_epoch),
+        )
+        .await;
+        assert2::check!(
+            response
+                == OffsetFetchResponse {
+                    groups: vec![expected],
+                    ..Default::default()
+                },
+            "{row}"
+        );
     }
     broker_handle.shutdown().await;
 }

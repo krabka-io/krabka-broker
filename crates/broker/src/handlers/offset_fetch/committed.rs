@@ -34,18 +34,24 @@ use {
 /// the group error code Kafka's `ConsumerGroup.validateOffsetFetch` or
 /// `StreamsGroup.validateOffsetFetch` answers. A streams group's members live
 /// in its streams actor, so it is checked there, before and whether or not
-/// the group has committed an offset.
+/// the group has committed an offset. A fetch with no member id and a
+/// negative epoch is allowed without asking, and an actor that exited after a
+/// failed write is respawned from the group's replayed state first, so a
+/// stopped actor never refuses a fetch with `UNKNOWN_SERVER_ERROR`.
 pub(super) async fn fetch_offsets(
     broker: &Broker,
     group_id: &str,
     member_id: Option<&str>,
     member_epoch: i32,
 ) -> Result<GroupOffsets, i16> {
-    if let Some(streams) = broker.group_coordinator.find_streams(group_id)
-        && let Some(error_code) =
+    let names_member = member_id.is_some() || member_epoch >= 0;
+    if names_member && broker.group_coordinator.find_streams(group_id).is_some() {
+        let streams = broker.group_coordinator.get_or_create_streams(group_id);
+        if let Some(error_code) =
             validate_streams_group_offset_fetch(&streams, member_id, member_epoch).await
-    {
-        return Err(error_code);
+        {
+            return Err(error_code);
+        }
     }
     let Some(handle) = broker.group_coordinator.find(group_id) else {
         return Ok(GroupOffsets::default());

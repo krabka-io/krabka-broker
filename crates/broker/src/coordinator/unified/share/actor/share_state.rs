@@ -298,11 +298,13 @@ fn spawn_initialize(
 }
 
 /// Apply the outcome of the `Initialize` calls that [`initialize`] started.
-/// The calls are one persister request, and Kafka's
-/// `GroupCoordinatorService.handlePersisterInitializeResponse` takes its
-/// outcome whole: when every partition initialized, they all move to the
-/// initialized set; when any one failed, they all leave the initializing set,
-/// so a later heartbeat retries every one of them. Then write the group's
+/// The calls are the partitions of what Kafka sends as one
+/// `InitializeShareGroupStateParameters` request (`buildInitializeShareGroupStateRequest`),
+/// which krabka sends one partition at a time, concurrently. Kafka's
+/// `GroupCoordinatorService.handlePersisterInitializeResponse` takes that
+/// request's outcome whole: when every partition initialized, they all move
+/// to the initialized set; when any one failed, they all leave the
+/// initializing set, so a later heartbeat retries every one of them. Then write the group's
 /// `ShareGroupStatePartitionMetadata`, as Kafka's `initializeShareGroupState`
 /// and `uninitializeShareGroupState` write it.
 pub(super) async fn apply_initialized(
