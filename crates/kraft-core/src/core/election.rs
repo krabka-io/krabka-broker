@@ -23,6 +23,16 @@ impl QuorumStateMachine {
     ///
     /// A voter starts a KIP-996 pre-vote round and becomes `Prospective`. An
     /// observer never elects.
+    ///
+    /// A `Prospective` whose round timed out, neither won nor lost, ends it as
+    /// Kafka's `pollProspective` does, through
+    /// `prospectiveTransitionAfterElectionLoss`. If it gave up on a leader of
+    /// its epoch, it follows that leader again: no majority answered the round,
+    /// so nothing says that the leader is gone, and the fetch timer decides
+    /// that again. Otherwise it starts another round at once, as Kafka's
+    /// replica does through an `Unattached` state whose election timeout has
+    /// already run out. It also starts one if `handle_begin_quorum_epoch`
+    /// refuses the leader, which is no longer a current or adjacent voter.
     #[tracing::instrument(
         level = "info",
         skip_all,
@@ -35,6 +45,16 @@ impl QuorumStateMachine {
     ) -> Vec<Action> {
         if !self.is_voter() {
             return Vec::new();
+        }
+        if let Role::Prospective {
+            abandoned_leader: Some(leader_id),
+            ..
+        } = self.role
+        {
+            let actions = self.handle_begin_quorum_epoch(leader_id, self.state.leader_epoch, now);
+            if !actions.is_empty() {
+                return actions;
+            }
         }
         self.start_election(log, now)
     }
