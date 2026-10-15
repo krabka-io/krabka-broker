@@ -1,13 +1,31 @@
 //! Parses Criterion benchmark output in bencher format into structured JSON
-//! summaries.
+//! summaries, and judges repeated reference/candidate measurements against
+//! variance-calibrated budgets.
+//!
+//! Two lanes share one set of statistics. The criterion lane compares
+//! [`BenchmarkSummary`] files with [`compare_summaries`]. The broker
+//! performance lane judges a [`record::PerformanceRecord`] against a
+//! [`contract::Contract`] with [`budget::evaluate`]. Both take medians over
+//! repeated runs and allow the larger of a fixed floor and a multiple of the
+//! relative median absolute deviation: [`calibrated_tolerance`].
 //!
 //! Note: If a shared `krabka-tools` repository is established across the
 //! `krabka-io` organization, this crate can be migrated there as a common
 //! benchmark utility for `krabka-broker`, `krabka-protocol`, and `krabka-client-rs`.
 
+pub mod budget;
+pub mod contract;
+mod num;
+pub mod record;
+pub mod render;
+
 use {
-    clap::Parser,
+    budget::evaluate,
+    clap::{Parser, Subcommand},
+    contract::{BudgetError, Contract, contract_digest},
+    record::{PerformanceRecord, assemble},
     regex::Regex,
+    render::render_markdown,
     serde::{Deserialize, Serialize},
     std::{
         collections::BTreeMap,
@@ -150,7 +168,10 @@ pub struct BenchmarkVerdict {
     pub passed: bool,
 }
 
-fn median(mut values: Vec<f64>) -> f64 {
+/// The median of `values`, which must not be empty; an even count averages
+/// the middle two.
+#[must_use]
+pub fn median(mut values: Vec<f64>) -> f64 {
     values.sort_by(f64::total_cmp);
     let middle = values.len() / 2;
     if values.len().is_multiple_of(2) {
@@ -160,8 +181,23 @@ fn median(mut values: Vec<f64>) -> f64 {
     }
 }
 
-fn relative_mad(values: &[f64], center: f64) -> f64 {
+/// The median absolute deviation of `values` around `center`, as a ratio of
+/// `center`.
+#[must_use]
+pub fn relative_mad(values: &[f64], center: f64) -> f64 {
     median(values.iter().map(|value| (value - center).abs()).collect()) / center
+}
+
+/// The relative change a comparison allows: `multiplier` times the larger of
+/// the two sides' spreads, but never less than `floor`.
+#[must_use]
+pub fn calibrated_tolerance(
+    floor: f64,
+    multiplier: f64,
+    reference_spread: f64,
+    candidate_spread: f64,
+) -> f64 {
+    floor.max(multiplier * reference_spread.max(candidate_spread))
 }
 
 /// Compare at least three repeated reference and candidate summaries.
@@ -235,9 +271,11 @@ pub fn compare_summaries(
         }
         let reference_median_ns = median(reference_values.clone());
         let candidate_median_ns = median(candidate_values.clone());
-        let tolerance = minimum_tolerance.max(
-            3.0 * relative_mad(&reference_values, reference_median_ns)
-                .max(relative_mad(&candidate_values, candidate_median_ns)),
+        let tolerance = calibrated_tolerance(
+            minimum_tolerance,
+            3.0,
+            relative_mad(&reference_values, reference_median_ns),
+            relative_mad(&candidate_values, candidate_median_ns),
         );
         let ratio = candidate_median_ns / reference_median_ns;
         benchmarks.insert(name.clone(), BenchmarkComparison {
@@ -332,6 +370,42 @@ pub struct Args {
     /// Minimum allowed slowdown percentage for comparison mode.
     #[arg(long, default_value_t = 3.0)]
     pub minimum_tolerance_percent: f64,
+
+    /// The broker performance lane; without one, the criterion lane runs.
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+/// The broker performance lane's commands.
+#[derive(Subcommand, Debug, Clone)]
+pub enum Command {
+    /// Validate a regression contract and print its digest.
+    CheckContract {
+        /// The contract JSON.
+        contract: PathBuf,
+    },
+    /// Assemble a `qualify.sh budget` artifact directory into a record.
+    Assemble {
+        /// The artifact directory.
+        artifact_dir: PathBuf,
+        /// Where to write the record JSON.
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Judge a record against its contract; a rejection exits 1.
+    Evaluate {
+        /// The record JSON.
+        record: PathBuf,
+        /// The contract the record was measured under.
+        #[arg(long)]
+        contract: PathBuf,
+        /// Where to write the verdict JSON.
+        #[arg(long)]
+        output: PathBuf,
+        /// Where to write the published Markdown.
+        #[arg(long)]
+        markdown: Option<PathBuf>,
+    },
 }
 
 /// Parses a single line of Criterion bencher output.
@@ -518,4 +592,85 @@ pub fn run_from_args(args: &Args) -> Result<BenchmarkSummary, ParseBenchesError>
     file.write_all(b"\n")?;
 
     Ok(summary)
+}
+
+fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), BudgetError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut bytes = serde_json::to_vec_pretty(value)?;
+    bytes.push(b'\n');
+    fs::write(path, bytes)?;
+    Ok(())
+}
+
+/// Run one broker performance lane command and say what it found.
+///
+/// The returned message is printed on success. `Ok(false)` means the command
+/// ran and the comparison was rejected; the verdict and Markdown are written
+/// either way, so a rejection is published with its evidence.
+///
+/// # Errors
+///
+/// Returns [`BudgetError`] when an input cannot be read, parsed or judged.
+pub fn run_command(command: &Command) -> Result<(bool, String), BudgetError> {
+    match command {
+        Command::CheckContract { contract } => {
+            let bytes = fs::read(contract)?;
+            let parsed = Contract::from_json(&bytes)?;
+            Ok((
+                true,
+                format!(
+                    "{}: {} cells, {} rounds, sha256 {}",
+                    parsed.name,
+                    parsed.cells.len(),
+                    parsed.rounds,
+                    contract_digest(&bytes)
+                ),
+            ))
+        }
+        Command::Assemble {
+            artifact_dir,
+            output,
+        } => {
+            let record = assemble(artifact_dir)?;
+            write_json(output, &record)?;
+            Ok((
+                true,
+                format!(
+                    "{} trials written to {}",
+                    record.trials.len(),
+                    output.display()
+                ),
+            ))
+        }
+        Command::Evaluate {
+            record,
+            contract,
+            output,
+            markdown,
+        } => {
+            let contract_bytes = fs::read(contract)?;
+            let parsed = Contract::from_json(&contract_bytes)?;
+            let record = PerformanceRecord::from_json(&fs::read(record)?)?;
+            let verdict = evaluate(&parsed, &contract_bytes, &record)?;
+            write_json(output, &verdict)?;
+            if let Some(markdown) = markdown {
+                if let Some(parent) = markdown.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(markdown, render_markdown(&parsed, &record, &verdict))?;
+            }
+            let summary = if verdict.passed {
+                format!("performance budget passed: {}", output.display())
+            } else {
+                format!(
+                    "performance budget rejected ({} reasons): {}",
+                    verdict.rejections.len(),
+                    output.display()
+                )
+            };
+            Ok((verdict.passed, summary))
+        }
+    }
 }

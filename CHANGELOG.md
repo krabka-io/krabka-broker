@@ -33,9 +33,27 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   and `controller_event_queue_idle_seconds_total`, whose rate is
   `AvgIdleRatio`. A write's processing time runs to its commit reply, as in
   Kafka.
+- `qualify.sh budget` compares a candidate build with an earlier revision or
+  with pinned Kafka 4.3.1 over a predeclared RF=3 workload matrix, in
+  interleaved rounds. `krabka-parse-benches` assembles every raw trial into a
+  versioned results record and judges it against the materiality and variance
+  budgets of `packaging/performance/regression-contract.json`, with the same
+  median and MAD rule as the criterion lane. A lost or duplicated record
+  always rejects. See
+  [Performance regression budgets](docs/operations/performance-budgets.md).
 
 ### Fixed
 
+- With `preallocate=true`, a segment's `O_DIRECT` writes now align their
+  buffers, offsets and lengths to the filesystem block (up to 4 KiB). Before,
+  they used the kernel's minimum `O_DIRECT` alignment, often 512 bytes, or a
+  few bytes for a buffer on NVMe, and ext4 sent almost every write down its
+  unaligned path: an exclusive inode lock, a wait for the file's other direct
+  writes, and a separate zeroing write. On an ext4 test disk one partition's
+  direct append rate rose about threefold. The on-disk format does not
+  change: the zeros an active segment can carry past its last batch stay
+  within one block of at most 4 KiB, as `docs/persisted_formats.md` already
+  states (#1370).
 - A consumer `Fetch` that its fetch session refuses (for example
   `FETCH_SESSION_ID_NOT_FOUND`) is now charged to the client's
   `request_percentage` and `consumer_byte_rate` quotas, as Kafka's
@@ -47,6 +65,10 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   request-handler thread, and charges only the handler's own time. Before, a
   consumer whose fetches waited out `MaxWaitMs` was throttled for time it
   spent idle.
+- A long-polling `Fetch` is no longer charged to `request_percentage` for the
+  reads it makes after a wake or its deadline. Kafka completes a parked fetch,
+  re-reads included, off the request-handler thread, so the handler's time
+  ends where the fetch parks.
 - `connections.max.idle.ms` now measures silence on the client and controller
   listeners, as Kafka's `Selector` does: every read that brings bytes starts a
   fresh window, so a request that arrives steadily but takes longer than the

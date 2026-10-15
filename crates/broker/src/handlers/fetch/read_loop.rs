@@ -16,8 +16,12 @@ use {
         throttle::leader_withholds,
     },
     crate::{
-        broker::Broker, codes, diskless::read::try_diskless_read, metrics::RequestPhases,
+        broker::Broker,
+        codes,
+        diskless::read::try_diskless_read,
+        metrics::RequestPhases,
         partition::Partition,
+        quota::{Timed, with_active_time},
     },
     krabka_log::Offset,
     krabka_protocol::owned::fetch_response::PartitionData,
@@ -362,13 +366,28 @@ pub(super) async fn execute_pending_reads(
     let has_preferred_read_replica = pending
         .iter()
         .any(|read| read.out.preferred_read_replica >= 0);
+    let mut long_poll_active = Duration::ZERO;
     if state.total() < state.min_bytes && max_wait_ms > 0 && !has_preferred_read_replica {
         let mut waits = waits;
         waits.extend(arm_leadership_waits(&pending));
         refresh_follower_bounds(&mut pending, &state).await;
-        long_poll_then_reread(broker, &mut pending, waits, &mut state, phases).await;
+        // Kafka's `DelayedFetch` completes off the request-handler thread:
+        // the reads after a wake or the deadline run on the thread that
+        // completes it, so the handler does not charge them to the fetch.
+        let Timed { active, .. } = with_active_time(Box::pin(long_poll_then_reread(
+            broker,
+            &mut pending,
+            waits,
+            &mut state,
+            phases,
+        )))
+        .await;
+        long_poll_active = active;
     }
-    group_into_topic_responses(pending)
+    GroupedResponses {
+        long_poll_active,
+        ..group_into_topic_responses(pending)
+    }
 }
 
 /// Park on the armed waiters until the fetch has `min_bytes` to answer with,
@@ -1038,8 +1057,13 @@ mod tests {
         };
         let phases = RequestPhases::default();
         let GroupedResponses {
-            responses: topics, ..
+            responses: topics,
+            long_poll_active,
+            ..
         } = super::execute_pending_reads(&broker, pending(), 0, 150, 0, false, &phases).await;
+        // A fetch that does not wait is all handler work, none of it a long
+        // poll.
+        assert!(long_poll_active == std::time::Duration::ZERO);
         let first_bytes = topics[0].partitions[0]
             .records
             .as_ref()
@@ -1838,6 +1862,9 @@ mod tests {
     /// `fetch.min.bytes` is a floor and not a hint. A wake that does not carry
     /// enough bytes parks again, and the response the fetch finally sends
     /// holds every append that arrived up to the one that cleared the floor.
+    /// The fetch reports the time its long poll spent polling, which the
+    /// handler leaves out of the request quota as Kafka completes a parked
+    /// fetch off the request-handler thread.
     #[tokio::test]
     async fn min_bytes_holds_the_long_poll_until_three_appends_add_up() {
         const TOPIC: &str = "min-bytes-floor";
@@ -1882,7 +1909,9 @@ mod tests {
         let pending = vec![planned_follower(TOPIC, &part, &request, crate::codes::NONE)];
         let phases = RequestPhases::default();
         let GroupedResponses {
-            responses: topics, ..
+            responses: topics,
+            long_poll_active,
+            ..
         } = super::execute_pending_reads(
             &broker,
             pending,
@@ -1896,7 +1925,12 @@ mod tests {
 
         appends.await.expect("producer task");
         let served = &topics[0].partitions[0];
-        assert!(served_base_offsets(served) == vec![0, 1, 2]);
+        assert!(
+            (
+                served_base_offsets(served),
+                long_poll_active > std::time::Duration::ZERO
+            ) == (vec![0, 1, 2], true)
+        );
         broker_handle.shutdown().await;
     }
 
