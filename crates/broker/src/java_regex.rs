@@ -1,9 +1,9 @@
-//! `java.util.regex` behaviour for the two rule grammars that hand a
-//! user-written regular expression to Java: `ssl.principal.mapping.rules`
-//! and the Kerberos `auth_to_local` rules.
+//! `java.util.regex` behaviour for the three configs that hand a user-written
+//! regular expression to Java: `ssl.principal.mapping.rules`, the Kerberos
+//! `auth_to_local` rules, and the `match` patterns of a KIP-714
+//! `CLIENT_METRICS` subscription.
 //!
-//! The `regex` crate differs from Java in the two places these grammars lean
-//! on. `Matcher.matches()` succeeds when *some* way of matching spans the
+//! The `regex` crate differs from Java in the two places these lean on. `Matcher.matches()` succeeds when *some* way of matching spans the
 //! whole input, including through backtracking and lazy quantifiers, where a
 //! leftmost-first search stops at the first match it finds. And
 //! `Matcher.replaceAll` reads `$1_x` as group 1 followed by `_x`, where the
@@ -30,7 +30,7 @@ use {
 /// A `java.util.regex.Pattern` compiled for `matches()` and
 /// `replaceAll`/`replaceFirst`.
 #[derive(Debug, Clone)]
-pub(super) struct JavaPattern(Arc<Compiled>);
+pub(crate) struct JavaPattern(Arc<Compiled>);
 
 /// The engines behind a [`JavaPattern`], shared so that a rule holding one is
 /// small.
@@ -52,7 +52,7 @@ struct Compiled {
 /// or a search the engine gave up on at its backtrack limit.
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
-pub(super) struct ReplacementError(pub(super) String);
+pub(crate) struct ReplacementError(pub(crate) String);
 
 impl ReplacementError {
     /// A search that gave no answer, as the error a caller rejects the name
@@ -62,7 +62,7 @@ impl ReplacementError {
 
 impl JavaPattern {
     /// Compiles `pattern`, or says why Java's `Pattern.compile` would not.
-    pub(super) fn compile(pattern: &str) -> Result<Self, String> {
+    pub(crate) fn compile(pattern: &str) -> Result<Self, String> {
         let JavaTranslation {
             pattern: translated,
             backref_folds,
@@ -89,7 +89,7 @@ impl JavaPattern {
     }
 
     /// The number of capturing groups, `Matcher.groupCount()`.
-    pub(super) fn group_count(&self) -> usize { self.0.search.captures_len() - 1 }
+    pub(crate) fn group_count(&self) -> usize { self.0.search.captures_len() - 1 }
 
     /// `Matcher.matches()`.
     ///
@@ -101,7 +101,7 @@ impl JavaPattern {
     /// applies fall through to the next rule, or to `DEFAULT`, and map the
     /// principal to a name the operator never meant for it. A caller rejects
     /// the name instead. So it does for a search that JDK 17 throws on.
-    pub(super) fn matches(&self, input: &str) -> Result<bool, ReplacementError> {
+    pub(crate) fn matches(&self, input: &str) -> Result<bool, ReplacementError> {
         match &self.0.backtrack {
             Some(program) => program.matches(input).map_err(ReplacementError::search),
             None => self
@@ -143,7 +143,7 @@ impl JavaPattern {
     /// the very position the match ended, and the crate's iterator does not:
     /// `"alice".replaceAll("(.*)", "$1x")` is `alicexx` in Java. After an empty
     /// match `find` starts one character on.
-    pub(super) fn replace(
+    pub(crate) fn replace(
         &self,
         input: &str,
         replacement: &str,

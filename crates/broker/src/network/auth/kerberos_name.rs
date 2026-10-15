@@ -11,7 +11,7 @@
 //! rather than a fall-through, and a trailing `L` or `U` changes the case of
 //! the result.
 
-use super::java_regex::JavaPattern;
+use crate::java_regex::JavaPattern;
 
 /// Why a rule is not a rule, or why a principal did not map.
 #[derive(Debug, thiserror::Error)]

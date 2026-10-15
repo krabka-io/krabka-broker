@@ -1,4 +1,4 @@
-//! Java's case folding, for [`java_to_fancy`](super::java_to_fancy).
+//! Java's case folding, for [`translate_java`](super::translate_java).
 //!
 //! Java's `CASE_INSENSITIVE` (`(?i)`) folds ASCII case only. It folds Unicode
 //! case as well when `UNICODE_CASE` (`(?u)`) is on, and `(?U)`
@@ -66,10 +66,11 @@
 //!   and the angstrom sign: `(?iu)(s)\1` matches `sſ` in Java, and not in
 //!   `fancy_regex`. They agree on the other letters.
 //!
-//! The SSL principal and Kerberos rules do not take `fancy_regex`'s answer for
-//! such a pattern. `JavaPattern` runs it on a matcher of its own that compares
-//! by [`BackrefFold::chars_match`], as `CIBackRef` does. The client-metrics
-//! `match` patterns still compile with `fancy_regex`, and keep the difference.
+//! So no pattern takes `fancy_regex`'s answer for such a reference. The
+//! client-metrics `match` patterns, the SSL principal rules and the Kerberos
+//! rules all compile to a `JavaPattern`, which runs a pattern that has one on
+//! a matcher of its own that compares by [`BackrefFold::chars_match`], as
+//! `CIBackRef` does.
 
 use {
     super::{Scope, java_case},

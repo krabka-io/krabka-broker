@@ -17,7 +17,6 @@
 #[cfg_attr(target_family = "wasm", path = "auth/gssapi/wasm.rs")]
 mod gssapi;
 mod handshake;
-mod java_regex;
 // The Kerberos `auth_to_local` rules belong to the GSSAPI stack, so the
 // wasm stand-in has no use for them.
 #[cfg(not(target_family = "wasm"))]
