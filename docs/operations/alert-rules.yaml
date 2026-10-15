@@ -42,6 +42,16 @@ groups:
           description: "The node's applied __cluster_metadata offset is behind the quorum's committed offset. 100 records is DEFAULT_READINESS_MAX_METADATA_LAG in crates/broker/src/config.rs, the same bound /readyz reports metadata_lag against."
           runbook: docs/operations/runbooks/metadata-quorum-loss.md
 
+      - alert: KrabkaMetadataStale
+        expr: krabka_broker_metadata_last_applied_lag_ms > 30000 and krabka_broker_metadata_last_applied_timestamp_ms > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} last applied a metadata record {{ $value }} ms ago"
+          description: "KIP-835: the leader appends a NoOpRecord every metadata.max.idle.interval.ms (500 ms by default), so a node that keeps applying the log stays near that interval. 30 s is a starting point for the operator to tune; the metric comment names no threshold. The lag grows on every node when the leader stops appending, and on one node when that node stops applying. It also grows on an idle cluster whose metadata.max.idle.interval.ms is 0. The timestamp guard skips a node that has applied nothing yet, whose lag reads the Unix time."
+          runbook: docs/operations/runbooks/metadata-quorum-loss.md
+
   - name: krabka-broker-availability
     rules:
       - alert: KrabkaUnderReplicatedPartitions

@@ -96,6 +96,38 @@ families. The metric comments name no threshold for any of them.
 | `krabka_broker_ignored_static_voters` | gauge | - | `raft-metrics,name=ignored-static-voters` | Static voters in the configuration that the quorum ignores at `kraft.version` 1. |
 | `krabka_broker_voted_directory` | gauge | `directory_id` | `raft-metrics,name=current-vote-directory-id` | One-hot series for the directory identity voted for in this epoch. |
 
+## Metadata quorum health
+
+KIP-835's quorum-health series and the raft state beside them. One series
+serves every role: a broker-only node reads its observer's progress, and a
+controller or combined node reads its voter's. Kafka splits the same values
+between `broker-metadata-metrics` and `KafkaController`; the **Replaces**
+column names both where both exist.
+
+The sampler refreshes these every `--gauge-poll-interval` (1 s by default), so
+`metadata_last_applied_lag_ms` is computed at the sample, not at the scrape,
+and can read up to one interval low. Before the node applies its first record,
+the offsets read `-1`, the timestamp reads `-1` and the lag reads the current
+Unix time plus 1, as Kafka's `MetadataProvenance.EMPTY` makes them. Alert on
+the lag only where the timestamp is above zero.
+
+| Series | Type | Labels | Replaces | Meaning |
+| :--- | :--- | :--- | :--- | :--- |
+| `krabka_broker_metadata_last_applied_offset` | gauge | - | `broker-metadata-metrics,name=last-applied-record-offset`, `KafkaController,name=LastAppliedRecordOffset` | Highest `__cluster_metadata` offset applied to the node's metadata image. |
+| `krabka_broker_metadata_last_committed_offset` | gauge | - | `KafkaController,name=LastCommittedRecordOffset` | Highest offset the quorum has committed, as this node last heard it. Kafka exports it on controllers only; a broker-only node reports the leader's high watermark from its fetches. |
+| `krabka_broker_metadata_last_applied_timestamp_ms` | gauge | - | `broker-metadata-metrics,name=last-applied-record-timestamp`, `KafkaController,name=LastAppliedRecordTimestamp` | Append timestamp, in Unix epoch milliseconds, of the last applied metadata batch. |
+| `krabka_broker_metadata_last_applied_lag_ms` | gauge | - | `broker-metadata-metrics,name=last-applied-record-lag-ms`, `KafkaController,name=LastAppliedRecordLagMs` | Sample time minus `metadata_last_applied_timestamp_ms`, on every role, the active controller included. The leader appends a `NoOpRecord` every `metadata.max.idle.interval.ms` (500 ms by default), so a current node stays near that interval; a value that keeps growing means the node stopped applying or the leader stopped appending. With the interval set to `0` an idle cluster's lag grows without a fault. Clocks that disagree can make it negative. |
+| `krabka_broker_metadata_lag_records` | gauge | - | - | `metadata_last_committed_offset` minus `metadata_last_applied_offset`, never below zero. `/readyz` bounds the same value. |
+| `krabka_broker_pending_record_processing_time_us_avg` | gauge | - | `BrokerMetadataListener,name=MetadataBatchProcessingTimeUs` (`Mean`) | Process-lifetime mean microseconds to apply one completed pass over newly committed records. |
+| `krabka_broker_pending_record_processing_time_us_max` | gauge | - | `BrokerMetadataListener,name=MetadataBatchProcessingTimeUs` (`Max`) | Process-lifetime maximum of the same. |
+| `krabka_broker_metadata_load_error_count` | gauge | - | `broker-metadata-metrics,name=metadata-load-error-count` | Committed metadata records a broker-only node could not decode and skipped. A controller stops on such a record instead. |
+| `krabka_broker_raft_current_state` | gauge | `state` | `raft-metrics,name=current-state` | One-hot consensus state. Controller and combined nodes only. |
+| `krabka_broker_raft_current_epoch` | gauge | - | `raft-metrics,name=current-epoch` | Current leader epoch. Controller and combined nodes only. |
+| `krabka_broker_raft_high_watermark` | gauge | - | `raft-metrics,name=high-watermark` | High watermark of the local metadata log. Controller and combined nodes only. |
+| `krabka_broker_raft_log_end_offset` | gauge | - | `raft-metrics,name=log-end-offset` | Log end offset of the local metadata log. Controller and combined nodes only. |
+| `krabka_broker_raft_voters` | gauge | - | `raft-metrics,name=number-of-voters` | Active voters. Controller and combined nodes only. |
+| `krabka_broker_raft_observers` | gauge | - | `raft-metrics,name=number-of-observers` | Active observers, as the leader sees them. Controller and combined nodes only. |
+
 ## Requests
 
 The `api_key` label is the `ApiKey` variant name: `Produce`, `Fetch`,

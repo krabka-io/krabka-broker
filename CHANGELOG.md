@@ -35,6 +35,12 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   change: the zeros an active segment can carry past its last batch stay
   within one block of at most 4 KiB, as `docs/persisted_formats.md` already
   states (#1370).
+- A consumer `Fetch` that its fetch session refuses (for example
+  `FETCH_SESSION_ID_NOT_FOUND`) is now charged to the client's
+  `request_percentage` and `consumer_byte_rate` quotas, as Kafka's
+  `SessionErrorContext` is, and its error response carries the throttle.
+  Before, a client retrying a stale session was never throttled. A follower's
+  refused fetch stays exempt.
 - A long-polling `Fetch` is no longer charged its wait to
   `request_percentage`. Kafka parks the wait in the fetch purgatory, off the
   request-handler thread, and charges only the handler's own time. Before, a

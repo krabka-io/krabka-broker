@@ -65,7 +65,7 @@ use {
         node_endpoints::fetch_node_endpoints,
         plan::{FetchMode, PendingPlanContext, build_pending_reads},
         read_loop::execute_pending_reads,
-        request::{FetchPreparation, prepare_fetch},
+        request::{FetchPreparation, SessionRefusal, prepare_fetch},
         response::{
             GroupedResponses, charge_fetch_cpu, downconvert_legacy_responses, record_fetch_metrics,
             withhold_current_leader_before_kip_951,
@@ -172,9 +172,11 @@ pub(crate) async fn handle(
     // and the cold-tier round trip to the remote one. Every path that reaches
     // a read observes all three phases exactly once, the failed read and the
     // routed KIP-595 answer included, so the three `_count`s stay equal to one
-    // another; the rejection arms below answer before any read happens and
-    // observe nothing, so the gap to `request_duration_seconds` is exactly the
-    // fetches this handler refused.
+    // another. A consumer fetch its session refuses is charged like a read, so
+    // it observes all three too; the follower and KIP-595 rejection arms below
+    // answer before any read happens and observe nothing, so the gap to
+    // `request_duration_seconds` is exactly the replica fetches this handler
+    // refused.
     let phases = RequestPhases::default();
     let mut cur: &[u8] = req_bytes;
     let req: FetchRequest = if version < 4 {
@@ -186,13 +188,38 @@ pub(crate) async fn handle(
 
     let preparation = match prepare_fetch(broker, &req, version, ctx) {
         Ok(preparation) => preparation,
-        Err(code) => {
-            let resp = FetchResponse {
+        Err(SessionRefusal {
+            code,
+            is_follower_fetch,
+        }) => {
+            let mut resp = FetchResponse {
                 error_code: code,
                 session_id: INVALID_SESSION_ID,
                 responses: Vec::new(),
                 ..Default::default()
             };
+            if !is_follower_fetch {
+                // Kafka's `SessionErrorContext` answers through
+                // `processResponseCallback` like any consumer fetch: the
+                // error response is charged to both quotas, and a throttled
+                // one is the same error with the throttle in it. A follower's
+                // refusal is exempt, as its fetch is.
+                broker
+                    .metrics
+                    .observe_request_phases(FETCH_API_KEY, &phases);
+                let (throttle_time_ms, charge) = apply_consumer_fetch_quota(
+                    broker,
+                    &broker.controller.current_image(),
+                    ctx,
+                    FETCH_API_KEY,
+                    handler_clock.active(),
+                    fetch_response_size(&resp, version),
+                );
+                if throttle_time_ms > 0 {
+                    charge.refund();
+                }
+                resp.throttle_time_ms = throttle_time_ms;
+            }
             return Ok((resp, version));
         }
     };

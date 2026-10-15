@@ -203,6 +203,11 @@ pub(crate) struct JavaTranslation {
     /// How each backreference that `pattern` writes as `(?i:\1)` compares in
     /// Java, in the order they appear in it.
     pub(crate) backref_folds: Vec<BackrefFold>,
+    /// For each `\R` that `pattern` writes, in order, whether a quantifier
+    /// follows it in the Java pattern. Java binds that quantifier to the `\R`
+    /// alone, and the one after `(?:\R)` to the group, which it matches
+    /// another way. `fancy_regex` parses the two the same.
+    pub(crate) linebreak_atoms: Vec<bool>,
 }
 
 /// Rewrite a `java.util.regex.Pattern` into `fancy_regex` syntax, or `None`
@@ -259,6 +264,7 @@ pub(crate) fn translate_java(pattern: &str) -> Option<JavaTranslation> {
         prior_run: 0,
         at: 0,
         backref_folds: Vec::new(),
+        linebreak_atoms: Vec::new(),
     };
     while translator.at < chars.len() {
         translator.step()?;
@@ -266,6 +272,7 @@ pub(crate) fn translate_java(pattern: &str) -> Option<JavaTranslation> {
     Some(JavaTranslation {
         pattern: translator.out,
         backref_folds: translator.backref_folds,
+        linebreak_atoms: translator.linebreak_atoms,
     })
 }
 
@@ -290,6 +297,8 @@ struct Translator<'a> {
     at: usize,
     /// The fold of each backreference under a case flag written so far.
     backref_folds: Vec<BackrefFold>,
+    /// See [`JavaTranslation::linebreak_atoms`].
+    linebreak_atoms: Vec<bool>,
 }
 
 impl Translator<'_> {
@@ -381,6 +390,12 @@ impl Translator<'_> {
                     None => self.copy(len),
                 }
             }
+            // `\R`, whose quantifier [`JavaTranslation::linebreak_atoms`]
+            // records.
+            Escape::Other if !in_class && self.chars.get(self.at + 1) == Some(&'R') => {
+                self.linebreak_atoms.push(self.quantifier_at(self.at + len));
+                self.copy(len);
+            }
             Escape::BackRef | Escape::Other => {
                 let ascii = self
                     .chars
@@ -470,6 +485,13 @@ impl Translator<'_> {
         } else {
             java_case::literal(code, || self.in_literal_run(after))
         }
+    }
+
+    /// Whether a quantifier starts at `at`, past any `(?x)` whitespace and
+    /// comment, as Java's `closure` peeks for one.
+    fn quantifier_at(&self, at: usize) -> bool {
+        let at = at + self.ignored_len(at);
+        matches!(self.chars.get(at), Some('*' | '+' | '?' | '{'))
     }
 
     /// Whether Java reads the literal char that ends before `after` in a run
