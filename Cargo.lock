@@ -3607,6 +3607,7 @@ dependencies = [
  "assert2",
  "bytes",
  "codspeed-criterion-compat",
+ "krabka-ids",
  "krabka-log",
  "krabka-macros",
  "krabka-protocol",

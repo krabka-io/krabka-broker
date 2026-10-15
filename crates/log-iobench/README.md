@@ -1,12 +1,15 @@
 # krabka-log-iobench
 
-Bench-only crate that answers two questions:
+Bench-only crate that answers three questions:
 
 - **Does a memory map of the log segments, through `memmap2`/`memmapix`, make
   the fetch read path faster?** `benches/mmap_read.rs`, below.
 - **What does bypassing the page cache cost, Redpanda-style with `O_DIRECT` or
   with Linux 6.14's `RWF_DONTCACHE`?** `benches/uncached_io.rs`, in
   [Uncached I/O](#uncached-io).
+- **How fast does one partition append under `preallocate`, where the active
+  segment writes through `O_DIRECT`?** `benches/direct_append.rs`, in
+  [Direct append](#direct-append).
 
 It exists as a separate crate because the workspace sets
 `unsafe_code = "forbid"`, and `Mmap::map` is `unsafe` by contract. This crate
@@ -143,3 +146,47 @@ the file stays resident.
 What this bench does not measure is the point of `RWF_DONTCACHE`: that a cold
 read or a bulk append leaves the rest of the page cache alone. It times one I/O
 at a time, with nothing else competing for the cache.
+
+## Direct append
+
+`benches/direct_append.rs` appends one 1 KB-record verbatim batch after another
+to a `preallocate` log, as the partition writer does for one producer with one
+request in flight, syncs, and prints the rate over the whole run. An append
+returns once its `O_DIRECT` write is queued, so the rate is how fast the
+segment's write threads put the bytes on the disk. It is the single-partition
+write path of krabka-io/krabka-broker#1370 without the network and the client.
+
+```sh
+KRABKA_IOBENCH_DIR=/path/on/the/disk/under/test \
+  KRABKA_DIRECT_BATCH_KIB=1024 KRABKA_DIRECT_TOTAL_MIB=1024 \
+  cargo bench --bench direct_append -p krabka-log-iobench
+```
+
+It is not a criterion bench: one run writes far more than a disk's write
+cache, so the run is the sample. To compare two builds, copy each one's
+`target/release/deps/direct_append-*` binary aside and run them in turn, five
+or more rounds, on the same disk. A filesystem without `O_DIRECT`, such as
+tmpfs, prints a `skipping` line instead of a rate.
+
+### Results (ext4 on a virtio disk, cloud VM, 2026-10)
+
+The two columns are the same build with and without aligning direct writes to
+the filesystem block (#1370), interleaved, six rounds each, 1 GiB per run. The
+figures are median MB/s, with the range in brackets. This VM's disk is not the
+benchmark host's NVMe RAID1, and raw 1 MiB `O_DIRECT` writes reach about
+600-700 MB/s on it.
+
+| Batch | 512-byte alignment | 4 KiB alignment |
+|---|---:|---:|
+| 1 MiB | 110 [104-116] | 430 [373-498] |
+| 256 KiB | 98.5 [95-105] | 336 [317-393] |
+| 64 KiB | 78 [77-82] | 287 [274-304] |
+
+ext4 counts a direct write as unaligned when its offset, its length or its
+buffer address falls inside one of its 4 KiB blocks, whatever smaller
+alignment the device accepts. It then takes the inode lock exclusively, waits
+for the file's other direct writes, and zeroes the rest of a new partial block
+with a write of its own. One, two, four or eight of a segment's writes in
+flight made no consistent difference here. Every write extends the file, which
+ext4 serializes under the same lock.
+
