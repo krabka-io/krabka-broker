@@ -26,6 +26,9 @@ use {
 pub struct Evidence {
     /// The contract's `name`, so evidence cannot be judged against another.
     pub contract: String,
+    /// [`Contract::digest`](super::contract::Contract::digest) of the contract
+    /// the run executed, so evidence cannot be judged against an edited copy.
+    pub contract_digest: String,
     pub seed: u64,
     /// The broker image the run exercised, by digest where the runner has one.
     pub broker_image: String,

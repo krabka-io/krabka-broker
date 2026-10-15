@@ -33,6 +33,7 @@ const EPOCH_MS: i64 = 1_792_022_400_000;
 pub fn clean_run(contract: &Contract) -> Evidence {
     let mut evidence = Evidence {
         contract: contract.name.clone(),
+        contract_digest: contract.digest(),
         seed: contract.seed,
         broker_image: "synthetic".to_owned(),
         started_unix_ms: EPOCH_MS,

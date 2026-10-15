@@ -94,6 +94,14 @@ pub fn judge(contract: &Contract, evidence: &Evidence) -> Verdict {
             evidence.contract, contract.name
         ));
     }
+    if evidence.contract_digest != contract.digest() {
+        contract_errors.push(format!(
+            "the evidence was recorded under contract digest {}, but this contract's is {}: \
+             it was edited after the run",
+            evidence.contract_digest,
+            contract.digest()
+        ));
+    }
     if evidence.seed != contract.seed {
         contract_errors.push(format!(
             "the evidence was recorded with seed {}, not the contract's {}",
@@ -278,6 +286,7 @@ mod tests {
             synthetic::{clean_run, inject_missing_record},
         },
         assert2::{assert, check},
+        krabka_units::prelude::*,
     };
 
     #[test]
@@ -350,6 +359,21 @@ mod tests {
         let report = judge_self_check(&contract, &evidence);
         check!(!report.passed);
         check!(report.problems == ["fault: short-pause#0 injected but never cleared"]);
+    }
+
+    #[test]
+    fn evidence_judged_against_an_edited_contract_is_refused() {
+        let contract = fixture::self_check();
+        let evidence = clean_run(&contract);
+        let mut edited = fixture::self_check();
+        edited.paths[0].produce_latency.p99 = secs(9);
+        let verdict = judge(&edited, &evidence);
+        check!(
+            verdict
+                .contract_errors
+                .iter()
+                .any(|error| error.contains("edited after the run"))
+        );
     }
 
     #[test]

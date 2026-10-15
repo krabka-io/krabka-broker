@@ -14,6 +14,7 @@ use {
     crate::scenario::{Acks, Compression, bounded},
     krabka_units::{fmt::Human as _, prelude::*, serde_units},
     serde::{Deserialize, Serialize},
+    sha2::{Digest as _, Sha256},
     std::{collections::BTreeSet, fmt},
 };
 
@@ -472,6 +473,17 @@ impl Contract {
         serde_saphyr::from_str(text)
     }
 
+    /// The SHA-256 of the contract's canonical JSON encoding, as lowercase hex.
+    ///
+    /// Evidence records this, and the judge refuses evidence whose digest
+    /// differs. A name and a seed do not change when a budget or a deadline is
+    /// edited after a run; this does.
+    #[must_use]
+    pub fn digest(&self) -> String {
+        let canonical = serde_json::to_vec(self).unwrap_or_default();
+        hex::encode(Sha256::digest(canonical))
+    }
+
     /// The path named `name`.
     #[must_use]
     pub fn path(&self, name: &str) -> Option<&LoadPath> {
@@ -907,6 +919,16 @@ mod tests {
     #[test]
     fn the_fixture_is_valid() {
         check!(messages(&fixture::self_check()).is_empty());
+    }
+
+    #[test]
+    fn the_digest_changes_with_any_declared_limit() {
+        let contract = fixture::self_check();
+        check!(contract.digest() == fixture::self_check().digest());
+        check!(contract.digest().len() == 64);
+        let mut edited = fixture::self_check();
+        edited.deadlines.isr_rejoin = secs(61);
+        check!(edited.digest() != contract.digest());
     }
 
     #[test]
