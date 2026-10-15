@@ -28,6 +28,7 @@ isr_scan_interval = "800ms"
 opa_http_timeout = "2500ms"
 fetch_max_bytes = "2MiB"
 replication_fetch_max = "2MiB"
+replication_fetch_response_max = "20MiB"
 replication_fetch_max_wait = "750ms"
 replication_fetch_min = "2B"
 diskless_wal_flush_interval = "125ms"
@@ -55,6 +56,7 @@ streams_group_max_size = 19
             cfg.isr_scan_interval,
             cfg.opa_http_timeout,
             cfg.replication.fetch_max,
+            cfg.replication.fetch_response_max,
             cfg.replication.fetch_max_wait,
             cfg.replication.fetch_min,
             cfg.fetch_max_bytes,
@@ -63,6 +65,7 @@ streams_group_max_size = 19
             millis(800),
             millis(2_500),
             mebibytes(2),
+            mebibytes(20),
             millis(750),
             bytes(2),
             mebibytes(2),
@@ -269,7 +272,7 @@ replication_fetch_min = "1B"
 #[test]
 fn runtime_file_config_rejects_relational_conflicts() {
     let cases = [(
-        "[runtime]\nreplication_fetch_min = \"3B\"\nreplication_fetch_max = \"2B\"\n",
+        "[runtime]\nreplication_fetch_min = \"3B\"\nreplication_fetch_response_max = \"2B\"\n",
         "replication fetch minimum",
     )];
 

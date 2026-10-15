@@ -466,6 +466,16 @@ pub(crate) const KAFKA_STATIC_KEYS: &[KafkaStaticKey] = &[
         int(c.replication.fetchers)
     }),
     KafkaStaticKey::new(
+        "replica.fetch.max.bytes",
+        Some("replication_fetch_max"),
+        |c| size(c.replication.fetch_max),
+    ),
+    KafkaStaticKey::new(
+        "replica.fetch.response.max.bytes",
+        Some("replication_fetch_response_max"),
+        |c| size(c.replication.fetch_response_max),
+    ),
+    KafkaStaticKey::new(
         "replica.lag.time.max.ms",
         Some("replica_lag_time_max"),
         |c| time_ms(c.replica_lag_time_max),
@@ -890,5 +900,52 @@ mod tests {
                 .collect();
             check!(stated(metadata_log) == expected, "{label}");
         }
+    }
+
+    /// The follower fetch's two byte maximums state what the follower sends:
+    /// `replica.fetch.max.bytes` for each partition and
+    /// `replica.fetch.response.max.bytes` for the response.
+    #[test]
+    fn the_replica_fetch_keys_state_what_the_follower_requests() {
+        use krabka_units::mebibytes;
+
+        const REPLICA_FETCH_KEYS: [&str; 2] = [
+            "replica.fetch.max.bytes",
+            "replica.fetch.response.max.bytes",
+        ];
+        let stated = |fetch_max, fetch_response_max| -> Vec<Stated> {
+            let mut config = BrokerConfig::default();
+            config.replication.fetch_max = fetch_max;
+            config.replication.fetch_response_max = fetch_response_max;
+            KAFKA_STATIC_KEYS
+                .iter()
+                .filter(|key| REPLICA_FETCH_KEYS.contains(&key.name))
+                .filter_map(|key| {
+                    key.static_value(&config).map(|value| Stated {
+                        name: key.name,
+                        value,
+                    })
+                })
+                .collect()
+        };
+
+        check!(
+            stated(mebibytes(1), mebibytes(10)) == vec![],
+            "Kafka's defaults"
+        );
+        check!(
+            stated(mebibytes(2), mebibytes(20))
+                == vec![
+                    Stated {
+                        name: "replica.fetch.max.bytes",
+                        value: "2097152".to_owned(),
+                    },
+                    Stated {
+                        name: "replica.fetch.response.max.bytes",
+                        value: "20971520".to_owned(),
+                    },
+                ],
+            "both changed"
+        );
     }
 }

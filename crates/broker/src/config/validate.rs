@@ -310,9 +310,11 @@ impl BrokerConfig {
                 "RLMM bootstrap initial backoff exceeds maximum".into(),
             ));
         }
-        if self.replication.fetch_min > self.replication.fetch_max {
+        // `min_bytes` counts across the response, so its ceiling is the
+        // response's maximum and not one partition's.
+        if self.replication.fetch_min > self.replication.fetch_response_max {
             return Err(BrokerError::InvalidRuntimeConfig(
-                "replication fetch minimum bytes exceeds maximum".into(),
+                "replication fetch minimum bytes exceeds response maximum".into(),
             ));
         }
         if self.replication.reconnect_initial_delay > self.replication.reconnect_delay_cap {
@@ -544,6 +546,16 @@ mod tests {
         assert!(config.validate_platform(true).is_ok());
     }
 
+    /// A replication fetch's `min_bytes` can add up across partitions, so a
+    /// minimum above one partition's maximum and within the response's is
+    /// valid.
+    #[test]
+    fn accepts_a_replication_fetch_minimum_above_one_partition_s_maximum() {
+        let mut config = BrokerConfig::default();
+        config.replication.fetch_min = config.replication.fetch_max + bytes(1);
+        assert!(config.validate().is_ok());
+    }
+
     #[test]
     fn rejects_invalid_runtime_relations() {
         let mut config = BrokerConfig::default();
@@ -555,8 +567,11 @@ mod tests {
         assert_invalid_runtime(&config, "RLMM bootstrap initial backoff exceeds maximum");
 
         let mut config = BrokerConfig::default();
-        config.replication.fetch_min = config.replication.fetch_max + bytes(1);
-        assert_invalid_runtime(&config, "replication fetch minimum bytes exceeds maximum");
+        config.replication.fetch_min = config.replication.fetch_response_max + bytes(1);
+        assert_invalid_runtime(
+            &config,
+            "replication fetch minimum bytes exceeds response maximum",
+        );
 
         let mut config = BrokerConfig::default();
         config.replication.reconnect_initial_delay = config.replication.reconnect_delay_cap * 2.0;

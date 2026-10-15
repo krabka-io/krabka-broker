@@ -171,60 +171,47 @@ fn consumer_denied_topics(
 }
 
 /// Re-group the flat `(key, state)` list that `FetchSessionCache::classify`
-/// returns into per-topic chunks.
+/// returns into per-topic chunks, keeping the session's partition order.
+///
+/// Only consecutive partitions of one topic share a chunk, as Kafka's
+/// `FetchResponse.toMessage` groups them, so a topic whose partitions are not
+/// adjacent in the session appears once per run. The read loop spends the
+/// response budget in this order, and the session moves a partition that sent
+/// records to the end. Folding every partition of a topic into its first run
+/// would undo that move: in `[A1, B0, A0]`, `A0` would be read ahead of `B0`
+/// again, and a busy `A0` would starve `B0` for good.
 ///
 /// The grouping key is the topic's whole identity, not its name. KIP-516 moved
 /// a Fetch's topic identity to `topic_id` at v13, and a v13 request carries no
 /// names at all, so a cache holding several id-only topics holds several keys
 /// whose `topic_name` is the empty string. Grouping by name alone would fold
-/// every one of them into a single entry under whichever `topic_id` arrived
-/// first -- and the read loop would then serve every one of those partitions
-/// out of that one topic.
-///
-/// The topic order is the order in which the keys first appear. `HashMap`
-/// iteration order is not stable across runs, but it is stable within a single
-/// classify call.
+/// them into one entry, and the read loop would then serve every one of those
+/// partitions out of that one topic.
 fn group_cached_into_effective_topics(
     cached: &[(FetchSessionKey, CachedPartitionState)],
 ) -> Vec<EffectiveTopic> {
-    use std::collections::HashMap;
-    /// A topic's whole identity: the KIP-516 id, and the name that older
-    /// versions key on.
-    #[derive(Clone, PartialEq, Eq, Hash)]
-    struct TopicIdentity {
-        topic_id: WireUuid,
-        topic_name: String,
-    }
-    let mut order: Vec<TopicIdentity> = Vec::new();
-    let mut by_topic: HashMap<TopicIdentity, EffectiveTopic> = HashMap::new();
+    let mut topics: Vec<EffectiveTopic> = Vec::new();
     for (k, s) in cached {
-        let identity = TopicIdentity {
-            topic_id: k.topic_id,
-            topic_name: k.topic_name.clone(),
-        };
-        let entry = by_topic
-            .entry(identity.clone())
-            .or_insert_with(|| EffectiveTopic {
-                topic: k.topic_name.clone(),
-                topic_id: k.topic_id,
-                partitions: Vec::new(),
-            });
-        entry.partitions.push(EffectivePartition {
+        let partition = EffectivePartition {
             partition: k.partition,
             current_leader_epoch: s.current_leader_epoch,
             last_fetched_epoch: s.last_fetched_epoch,
             fetch_offset: s.fetch_offset,
             log_start_offset: s.log_start_offset,
             partition_max_bytes: s.max_bytes,
-        });
-        if !order.contains(&identity) {
-            order.push(identity);
+        };
+        match topics.last_mut() {
+            Some(topic) if topic.topic_id == k.topic_id && topic.topic == k.topic_name => {
+                topic.partitions.push(partition);
+            }
+            _ => topics.push(EffectiveTopic {
+                topic: k.topic_name.clone(),
+                topic_id: k.topic_id,
+                partitions: vec![partition],
+            }),
         }
     }
-    order
-        .into_iter()
-        .map(|identity| by_topic.remove(&identity).expect("populated above"))
-        .collect()
+    topics
 }
 
 #[cfg(test)]
@@ -314,28 +301,55 @@ mod tests {
         );
     }
 
-    /// One topic's partitions still group together, in first-seen order.
-    #[test]
-    fn one_topic_s_partitions_group_under_it() {
-        /// A topic's name and the partition indexes it groups.
-        #[derive(Debug, PartialEq, Eq)]
-        struct NameShape {
-            topic: String,
-            partitions: Vec<i32>,
-        }
+    /// A topic's name and the partition indexes one chunk groups.
+    #[derive(Debug, PartialEq, Eq)]
+    struct NameShape {
+        topic: &'static str,
+        partitions: Vec<i32>,
+    }
 
-        let cached = vec![
-            (key(1, "orders", 2), state(10)),
-            (key(2, "", 0), state(20)),
-            (key(1, "orders", 0), state(30)),
-        ];
+    /// Consecutive partitions of one topic share a chunk, and a topic whose
+    /// partitions the session does not keep together appears once per run,
+    /// so the read order is the session's order.
+    #[yare::parameterized(
+        adjacent = {
+            &[("orders", 2), ("orders", 0), ("", 0)],
+            vec![
+                NameShape { topic: "orders", partitions: vec![2, 0] },
+                NameShape { topic: "", partitions: vec![0] },
+            ],
+        },
+        split_by_another_topic = {
+            &[("orders", 1), ("", 0), ("orders", 0)],
+            vec![
+                NameShape { topic: "orders", partitions: vec![1] },
+                NameShape { topic: "", partitions: vec![0] },
+                NameShape { topic: "orders", partitions: vec![0] },
+            ],
+        },
+    )]
+    fn cached_partitions_keep_the_session_order(
+        rows: &[(&'static str, i32)],
+        expected: Vec<NameShape>,
+    ) {
+        let cached: Vec<_> = rows
+            .iter()
+            .map(|&(name, partition)| {
+                let id = if name.is_empty() { 2 } else { 1 };
+                (key(id, name, partition), state(0))
+            })
+            .collect();
 
         let grouped = group_cached_into_effective_topics(&cached);
 
         let shape: Vec<NameShape> = grouped
             .iter()
             .map(|topic| NameShape {
-                topic: topic.topic.clone(),
+                topic: rows
+                    .iter()
+                    .map(|&(name, _)| name)
+                    .find(|name| *name == topic.topic)
+                    .expect("a requested topic"),
                 partitions: topic
                     .partitions
                     .iter()
@@ -343,18 +357,6 @@ mod tests {
                     .collect(),
             })
             .collect();
-        assert!(
-            shape
-                == vec![
-                    NameShape {
-                        topic: "orders".to_owned(),
-                        partitions: vec![2, 0]
-                    },
-                    NameShape {
-                        topic: String::new(),
-                        partitions: vec![0]
-                    },
-                ]
-        );
+        assert2::assert!(shape == expected);
     }
 }
