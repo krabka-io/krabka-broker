@@ -393,7 +393,7 @@ mod tests {
         crate::{
             broker::test_support::fake_source,
             handlers::test_support::replicated_partition,
-            metadata_source::test_support::{start_controller, topic_record},
+            metadata_source::test_support::{StartedController, start_controller, topic_record},
             metrics::BrokerMetrics,
             test_support::{broker_registration, single_partition_topic},
         },
@@ -504,20 +504,22 @@ mod tests {
     /// `LastAppliedRecordLagMs` is: a leader is not exempt.
     #[tokio::test]
     async fn active_controller_lag_is_sample_time_minus_the_applied_append_time() {
-        let started = start_controller().await;
-        let controller = &started.controller;
+        let StartedController {
+            dir: _dir,
+            controller,
+        } = start_controller().await;
         controller
             .submit_change(vec![topic_record("kip835-lag")])
             .await
             .expect("the single voter commits the topic");
-        let applied = ReportedProgress::read(controller);
+        let applied = ReportedProgress::read(&controller);
         assert!(applied.applied_timestamp_ms > 0);
 
         let metrics = BrokerMetrics::new();
         for elapsed_ms in [0, 250, 60_000] {
             update_metadata_health_metrics(
                 &metrics,
-                controller,
+                &controller,
                 applied.applied_timestamp_ms + elapsed_ms,
             );
             check!(
