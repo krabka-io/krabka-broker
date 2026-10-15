@@ -13,9 +13,10 @@
 //! The pattern itself is rewritten by `translate_java` first, which also gives
 //! Java's reading of `\w`, `.`, and `(?i)`: Java folds ASCII case only, unless
 //! `(?u)` asks for Unicode case as well, so `(?i)service-` does not match
-//! `ſervice-` (long s). A backreference under a case flag compares the text of
-//! its group by a fold that `fancy_regex` cannot give, so a pattern that has
-//! one runs on the matcher in [`backtrack`] instead.
+//! `ſervice-` (long s). A backreference under a case flag, `\R`, and a group
+//! inside a look-around or an atomic group match in ways `fancy_regex` cannot
+//! give, so a pattern that has one runs on the matcher in [`backtrack`]
+//! instead.
 
 mod backtrack;
 
@@ -42,7 +43,7 @@ struct Compiled {
     /// Group name to index, for `${name}` in a replacement.
     names: BTreeMap<String, usize>,
     /// The matcher that answers in place of `search` and `whole`, for a
-    /// pattern that has a backreference under a case flag.
+    /// pattern that `fancy_regex` does not read as Java does.
     backtrack: Option<Program>,
 }
 
@@ -75,13 +76,10 @@ impl JavaPattern {
             .enumerate()
             .filter_map(|(index, name)| Some((name?.to_owned(), index)))
             .collect();
-        // A tree the matcher does not know a node of keeps the answer of
-        // `fancy_regex`.
-        let backtrack = if backref_folds.is_empty() {
-            None
-        } else {
-            Program::new(&translated, search.captures_len(), &backref_folds)
-        };
+        // A pattern `fancy_regex` reads as Java does, or one with a node the
+        // matcher does not know, keeps `fancy_regex`.
+        let backtrack = Program::new(&translated, search.captures_len(), &backref_folds)
+            .filter(Program::differs_from_fancy);
         Ok(Self(Arc::new(Compiled {
             search,
             whole,
@@ -1635,6 +1633,87 @@ mod tests {
         let long = format!("{}A", "a".repeat(200_000));
         check!(pattern("(?i)(a)(a*)\\1").matches(&long).ok() == Some(true));
         check!(pattern("(?i)(a*)*b\\1").matches(&"a".repeat(64)).is_err());
+    }
+
+    /// A group that matched inside a look-around, an atomic group or a
+    /// possessive quantifier keeps its text when the match backtracks out of
+    /// it, as Java's does, and so does one inside a negated look-around whose
+    /// condition matched. A group outside them does not. Java sets a group
+    /// when it ends, so a reference inside it sees its text from before. Each
+    /// row is `Pattern.matches` on JDK 17.0.20.
+    #[test]
+    fn a_group_keeps_its_text_where_java_keeps_it() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            row("(?:(?=(a))ax|a)\\1", "aa", true),
+            row("(?:(?!(a))|a)\\1", "aa", true),
+            row("a(?:(?<=(a))x|)\\1", "aa", true),
+            row("a(?:(?<!(a))|)\\1", "aa", true),
+            row("(?:(?>(a))x|a)\\1", "aa", true),
+            row("(?:(a)++x|a)\\1", "aa", true),
+            row("(?:(a)?+x|a)\\1", "aa", true),
+            row("(?:(?:(a))*+x|a)\\1", "aa", true),
+            row("(?:(a){1,2}+x|a)\\1", "aa", true),
+            row("(?:(a)x|a)\\1", "aa", false),
+            row("(?:(?=(a))ax|a)\\1", "a", false),
+            row("((?=())|(?=()))*\\2\\3", "", true),
+            row("((?=())|(?=())){1,2}\\2\\3", "", true),
+            row("(a|b\\1)+", "aba", true),
+            row("(a|b\\1)+", "abb", false),
+            row("(?i)(a|b\\1)+", "abA", true),
+            row("(a\\1?)+", "aaa", true),
+            row("(a\\1?){2}", "aaa", true),
+        ];
+        check_matches(cases, true);
+    }
+
+    /// `replaceAll` sees a group that kept its text, and `Matcher.find` clears
+    /// the groups once for all the start positions it tries, so a group that
+    /// kept its text at one start is still set at the next. Each row is
+    /// `String.replaceAll` on JDK 17.0.20.
+    #[test]
+    fn replace_sees_a_group_that_kept_its_text_as_java_does() {
+        // (pattern, input, replacement, replaceAll result)
+        let cases = [
+            replace_row("(?:(?=(b))bx|b)", "b", "[$1]", "[b]"),
+            replace_row("(?:(?=(b))bx|b)", "ab", "[$1]", "a[b]"),
+            replace_row("(?=(a)c)|b", "ab", "[$1]", "a[]"),
+            replace_row("(?:(?=(a))ax|b)", "ab", "[$1]", "a[a]"),
+            replace_row("(?:(?!(a))|b)", "ab", "[$1]", "a[a]b[]"),
+            replace_row("\\R", "a\r\nb", "|", "a|b"),
+            replace_row("\\R\\n", "a\r\nb", "|", "a|b"),
+        ];
+        check_replacements(cases, true, true);
+    }
+
+    /// `\R` is `\r\n` or one line terminator, and gives back the `\n` of
+    /// `\r\n` when the rest of the pattern needs it, as Java's `LineEnding`
+    /// does. Under a quantifier of `\R`, or of a group with no alternation and
+    /// no range of counts, Java takes the first way only. Each row is
+    /// `Pattern.matches` on JDK 17.0.20.
+    #[test]
+    fn a_linebreak_gives_back_its_newline_where_java_does() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            row("(a)\\R\\n\\1", "a\r\na", true),
+            row("\\R", "\r", true),
+            row("\\R\\R", "\r\n", true),
+            row("\\R", "\r\n", true),
+            row("\\R", "\n\r", false),
+            row("\\R", "\u{2028}", true),
+            row("\\R", "\u{85}", true),
+            row("(?-u)\\R", "\u{2028}", true),
+            row("\\R\\n", "\r\n", true),
+            row("(?>\\R)\\n", "\r\n", false),
+            row("\\R{2}", "\r\n", false),
+            row("\\R?\\n", "\r\n", false),
+            row("x\\R+\\n", "x\r\n\r\n", false),
+            row("(\\R)?\\n", "\r\n", true),
+            row("(?:a\\R){2}\\n", "a\r\na\r\n", false),
+            row("(?:a\\R|b){2}\\n", "a\r\na\r\n", true),
+            row("(?=\\R\\n)\\R", "\r\n", true),
+        ];
+        check_matches(cases, true);
     }
 
     /// Java reads `(?i){2}` as a repeat of the empty match, and `(?i)*` as a

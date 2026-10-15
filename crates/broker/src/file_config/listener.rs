@@ -48,7 +48,9 @@ pub struct FileTlsConfig {
     /// `(?iu)` by Java's simple case mapping, so `i` matches `İ` and `ı`, and
     /// `s` matches `ſ`. Where such a reference to text that holds a character
     /// outside the Basic Multilingual Plane makes JDK 17 throw, the DN is
-    /// rejected.
+    /// rejected. `\R` gives back the `\n` of `\r\n` where JDK 17 does, and a
+    /// group that matched inside a look-around keeps its text after the match
+    /// backtracks out of it, as in Java.
     #[serde(default = "default_principal_mapping_rules")]
     pub principal_mapping_rules: Vec<String>,
 }

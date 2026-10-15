@@ -1,17 +1,33 @@
-//! A backtracking matcher for a pattern that has a backreference under a case
-//! flag, which compares the text of the group as Java does.
+//! A backtracking matcher for the patterns that `fancy_regex` cannot match as
+//! JDK 17's `java.util.regex` does.
 //!
-//! The rewrite writes such a reference as `(?i:\1)`, and `fancy_regex`
-//! compares the text it refers to by its own fold, which is not Java's
-//! `CIBackRef` (`java_fold` in `client_metrics::config` lists where they
-//! differ). Nothing in `fancy_regex` can be told to compare another way. So
 //! [`Program`] takes the tree that `fancy_regex` parses from the rewritten
-//! pattern and runs it on a backtracking machine of its own. Every node but
-//! the reference matches as `fancy_regex` matches it, and the reference
-//! compares as JDK 17's `CIBackRef.match` does, by
-//! [`BackrefFold::chars_match`]. A tree with a node the machine does not
-//! know is not compiled, and the pattern keeps `fancy_regex`'s answer. The
-//! rewrite of a pattern that `Pattern.compile` takes writes none.
+//! pattern and runs it on a backtracking machine of its own. It reads four
+//! things as Java does and `fancy_regex` does not:
+//!
+//! - A backreference under a case flag, which the rewrite writes as
+//!   `(?i:\1)`, compares as `CIBackRef.match` does, by
+//!   [`BackrefFold::chars_match`]. `fancy_regex` compares by its own fold
+//!   (`java_fold` in `client_metrics::config` lists where they differ).
+//! - `\R` is Java's `LineEnding`, which gives back the `\n` of `\r\n` when the
+//!   rest of the pattern needs it: `\R\n` matches `\r\n`. `fancy_regex`'s
+//!   `\R` is atomic. Under a quantifier Java takes the first way only, as
+//!   its `Ques`, `Curly` and `GroupCurly` take each iteration's atom, so
+//!   `\R?\n` and `\R{2}` do not match `\r\n` there either.
+//! - A group that matched inside a look-around or an atomic group, which a
+//!   possessive quantifier is, keeps its text when the match backtracks out
+//!   of it: Java's `GroupTail` restores a group only when the nodes after it
+//!   fail, and those of a look-around end at its condition. So
+//!   `(?:(?=(a))ax|a)\1` matches `aa`. `Matcher.search` clears the groups
+//!   once, so such a group also stays set for the next start position.
+//! - Java sets a group when it ends, so a backreference inside the group it
+//!   refers to sees the text the group had before: `(a|b\1)+` does not
+//!   match `abb`. `fancy_regex` sets the start when the group opens.
+//!
+//! Every other node matches as `fancy_regex` matches it, and a pattern that
+//! has none of the four keeps `fancy_regex`. A tree with a node the machine
+//! does not know is not compiled, and the pattern keeps `fancy_regex`'s
+//! answer. The rewrite of a pattern that `Pattern.compile` takes writes none.
 //!
 //! The machine keeps its alternatives on a stack of its own, so a long input
 //! cannot overflow the stack of the thread, and it gives up after as many
@@ -51,10 +67,13 @@ pub(super) struct Program {
     /// The instructions of the pattern, then those of each look-around and
     /// atomic group. Each block ends in [`Inst::Match`].
     blocks: Vec<Vec<Inst>>,
-    /// Two slots for each group, group 0 first, then two for each repeat.
+    /// Two slots for each group, group 0 first, then the private slots of
+    /// the groups and repeats.
     slot_count: usize,
     /// The groups, group 0 included.
     groups: usize,
+    /// Whether the pattern has a node that `fancy_regex` reads otherwise.
+    differs: bool,
 }
 
 /// One instruction of the machine. A jump target is an index into the block
@@ -69,11 +88,10 @@ enum Inst {
     Any {
         newline: bool,
     },
-    /// `\R`: `\r\n`, or else one line terminator, with no backtracking from
-    /// `\r\n` to `\r`. Under Unicode, U+0085, U+2028 and U+2029 are
-    /// terminators too.
+    /// `\R`: `\r\n`, or one of `\n`, `\x0B`, `\x0C`, `\r`, U+0085, U+2028 and
+    /// U+2029. With `give_back`, `\r\n` backtracks to `\r`.
     Linebreak {
-        unicode: bool,
+        give_back: bool,
     },
     /// Go on at `first`, and at `second` when that fails.
     Split {
@@ -83,6 +101,13 @@ enum Inst {
     Jump(usize),
     /// Record the position in the slot.
     Save(usize),
+    /// `group` ends here, and started at the position in `open`. Java sets a
+    /// group only when it ends, so a reference inside it sees the text it
+    /// had before.
+    Close {
+        group: usize,
+        open: usize,
+    },
     /// The text that `group` matched: as it is, or under `fold`.
     Backref {
         group: usize,
@@ -157,6 +182,10 @@ impl Program {
             slot_count: 2 * groups,
             next_group: 1,
             folds: folds.iter(),
+            nested: false,
+            first_way: false,
+            open_groups: Vec::new(),
+            differs: false,
         };
         let mut main = Vec::new();
         compiler.compile(&tree.expr, &mut main)?;
@@ -170,8 +199,14 @@ impl Program {
             blocks: compiler.blocks,
             slot_count: compiler.slot_count,
             groups,
+            differs: compiler.differs,
         })
     }
+
+    /// Whether the pattern has a backreference under a case flag or inside the
+    /// group it refers to, a `\R`, or a group inside a look-around or an
+    /// atomic group, which `fancy_regex` does not read as Java does.
+    pub(super) fn differs_from_fancy(&self) -> bool { self.differs }
 
     /// `Matcher.matches()`: whether some way of matching from the start spans
     /// the whole input.
@@ -193,8 +228,11 @@ impl Program {
             .char_indices()
             .map(|(offset, _)| from + offset)
             .chain([input.len()]);
+        // One set of slots for every start, as `Matcher.search` clears the
+        // groups once: a group that kept its text when an earlier start
+        // failed still has it.
+        let mut slots = vec![None; self.slot_count];
         for start in starts {
-            let mut slots = vec![None; self.slot_count];
             if let Some(end) = machine.run(0, start, None, &mut slots)? {
                 slots[0] = Some(start);
                 slots[1] = Some(end);
@@ -219,6 +257,14 @@ struct Compiler<'a> {
     next_group: usize,
     /// The folds of the references under a case flag not reached yet.
     folds: Iter<'a, BackrefFold>,
+    /// Inside a look-around or an atomic group.
+    nested: bool,
+    /// Inside the atom of a quantifier that Java matches the first way only.
+    first_way: bool,
+    /// The groups that the node being compiled is inside.
+    open_groups: Vec<usize>,
+    /// See [`Program::differs_from_fancy`].
+    differs: bool,
 }
 
 impl Compiler<'_> {
@@ -228,10 +274,15 @@ impl Compiler<'_> {
         self.slot_count - 1
     }
 
-    /// Compiles `expr` into a block of its own, and gives its index.
+    /// Compiles `expr` into a block of its own, a look-around or an atomic
+    /// group, and gives its index. A block backtracks inside itself, as the
+    /// condition of a Java look-around does, whatever quantifier it is under.
     fn block(&mut self, expr: &Expr) -> Option<usize> {
+        let outer = (self.nested, self.first_way);
+        (self.nested, self.first_way) = (true, false);
         let mut code = Vec::new();
         self.compile(expr, &mut code)?;
+        (self.nested, self.first_way) = outer;
         code.push(Inst::Match);
         self.blocks.push(code);
         Some(self.blocks.len() - 1)
@@ -244,7 +295,12 @@ impl Compiler<'_> {
                 newline,
                 crlf: false,
             } => code.push(Inst::Any { newline: *newline }),
-            Expr::GeneralNewline { unicode } => code.push(Inst::Linebreak { unicode: *unicode }),
+            Expr::GeneralNewline { .. } => {
+                self.differs = true;
+                code.push(Inst::Linebreak {
+                    give_back: !self.first_way,
+                });
+            }
             Expr::ContinueFromPreviousMatchEnd => code.push(Inst::Assert(Check::SearchStart)),
             Expr::Assertion(assertion) => code.push(Inst::Assert(check(*assertion)?)),
             Expr::Literal { val, casei: false } => code.extend(val.chars().map(Inst::Char)),
@@ -257,9 +313,13 @@ impl Compiler<'_> {
             Expr::Group(child) => {
                 let group = self.next_group;
                 self.next_group += 1;
-                code.push(Inst::Save(2 * group));
+                self.differs |= self.nested;
+                let open = self.slot();
+                code.push(Inst::Save(open));
+                self.open_groups.push(group);
                 self.compile(child, code)?;
-                code.push(Inst::Save(2 * group + 1));
+                self.open_groups.pop();
+                code.push(Inst::Close { group, open });
             }
             Expr::LookAround(child, kind) => {
                 let block = self.block(child)?;
@@ -288,6 +348,7 @@ impl Compiler<'_> {
                 code.push(Inst::Class(Regex::new(&format!("\\A(?:{inner})\\z")).ok()?));
             }
             Expr::Backref { group, casei } => {
+                self.differs |= *casei || self.open_groups.contains(group);
                 let fold = if *casei {
                     Some(*self.folds.next()?)
                 } else {
@@ -353,7 +414,10 @@ impl Compiler<'_> {
             exit: 0,
         });
         code.push(Inst::Save(start));
+        let outer = self.first_way;
+        self.first_way |= takes_first_way(child, lo, hi);
         self.compile(child, code)?;
+        self.first_way = outer;
         let exit = code.len() + 1;
         code.push(Inst::RepeatEnd {
             count,
@@ -366,6 +430,36 @@ impl Compiler<'_> {
             *target = exit;
         }
         Some(())
+    }
+}
+
+/// Whether Java matches each iteration of a repeat of `child` the first way
+/// only, which matters for a `\R` in it and nothing else.
+///
+/// A `?` of a lone atom is Java's `Ques`, and any other quantifier of one is
+/// `Curly`. Both take the atom's first way. A quantifier of a group is a
+/// `Branch` for `?`, which backtracks into the group. For the others it is a
+/// `GroupCurly`, which takes the first way, when `TreeInfo.study` finds the
+/// group deterministic, and otherwise a `Loop`, which backtracks. In the tree
+/// the atom of `(?:\R)?` is that of `\R?`, and it is read as the latter.
+fn takes_first_way(child: &Expr, lo: usize, hi: usize) -> bool {
+    match child {
+        Expr::GeneralNewline { .. } => true,
+        _ if (lo, hi) == (0, 1) => false,
+        _ => deterministic(child),
+    }
+}
+
+/// `TreeInfo.deterministic` after Java studies `expr`: no alternation, and
+/// no quantifier with a range of counts. A look-around is not studied.
+fn deterministic(expr: &Expr) -> bool {
+    match expr {
+        Expr::Alt(_) => false,
+        Expr::Repeat { child, lo, hi, .. } => lo == hi && deterministic(child),
+        Expr::Concat(children) => children.iter().all(deterministic),
+        Expr::Group(child) => deterministic(child),
+        Expr::AtomicGroup(child) => deterministic(child),
+        _ => true,
     }
 }
 
@@ -442,16 +536,28 @@ impl<'a> Machine<'a> {
                     .next_char(pos)
                     .filter(|&actual| *newline || actual != '\n')
                     .map(|actual| (pc + 1, pos + actual.len_utf8())),
-                &Inst::Linebreak { unicode } => {
-                    let terminator = |c: char| {
-                        matches!(c, '\n' | '\x0B' | '\x0C' | '\r')
-                            || unicode && matches!(c, '\u{85}' | '\u{2028}' | '\u{2029}')
-                    };
+                &Inst::Linebreak { give_back } => {
                     if self.input[pos..].starts_with("\r\n") {
+                        if give_back {
+                            stack.push(Frame::Alternative {
+                                pc: pc + 1,
+                                pos: pos + 1,
+                            });
+                        }
                         Some((pc + 1, pos + 2))
                     } else {
                         self.next_char(pos)
-                            .filter(|&actual| terminator(actual))
+                            .filter(|actual| {
+                                matches!(
+                                    actual,
+                                    '\n' | '\x0B'
+                                        | '\x0C'
+                                        | '\r'
+                                        | '\u{85}'
+                                        | '\u{2028}'
+                                        | '\u{2029}'
+                                )
+                            })
                             .map(|actual| (pc + 1, pos + actual.len_utf8()))
                     }
                 }
@@ -462,6 +568,11 @@ impl<'a> Machine<'a> {
                 &Inst::Jump(target) => Some((target, pos)),
                 &Inst::Save(slot) => {
                     set(&mut stack, slots, slot, Some(pos));
+                    Some((pc + 1, pos))
+                }
+                &Inst::Close { group, open } => {
+                    set(&mut stack, slots, 2 * group, slots[open]);
+                    set(&mut stack, slots, 2 * group + 1, Some(pos));
                     Some((pc + 1, pos))
                 }
                 &Inst::Backref { group, fold } => {
@@ -488,17 +599,13 @@ impl<'a> Machine<'a> {
                     } else {
                         self.run(block, pos, None, slots)?.is_some()
                     };
-                    if negated {
-                        slots.copy_from_slice(&before);
-                    } else {
-                        keep(&mut stack, slots, &before);
-                    }
+                    self.keep(&mut stack, slots, &before);
                     (found != negated).then_some((pc + 1, pos))
                 }
                 &Inst::Atomic(block) => {
                     let before = slots.to_vec();
                     let after = self.run(block, pos, None, slots)?;
-                    keep(&mut stack, slots, &before);
+                    self.keep(&mut stack, slots, &before);
                     after.map(|after| (pc + 1, after))
                 }
                 &Inst::RepeatStart { count } => {
@@ -605,6 +712,20 @@ impl<'a> Machine<'a> {
         Ok(false)
     }
 
+    /// After a nested run that matched, a look-around or an atomic group:
+    /// records on the stack the old value of each private slot it changed, so
+    /// that backtracking past it undoes the change. The groups it set keep
+    /// their text, as Java's do; it matched whether or not a negated
+    /// look-around then fails.
+    fn keep(&self, stack: &mut Vec<Frame>, slots: &[Option<usize>], before: &[Option<usize>]) {
+        let changed = slots.iter().zip(before).enumerate();
+        for (slot, (&now, &value)) in changed.skip(2 * self.program.groups) {
+            if now != value {
+                stack.push(Frame::Undo { slot, value });
+            }
+        }
+    }
+
     fn next_char(&self, pos: usize) -> Option<char> { self.input[pos..].chars().next() }
 
     fn holds(&self, check: &Check, pos: usize) -> bool {
@@ -632,16 +753,6 @@ fn set(stack: &mut Vec<Frame>, slots: &mut [Option<usize>], slot: usize, value: 
         value: slots[slot],
     });
     slots[slot] = value;
-}
-
-/// Records on the stack the old value of each slot that a nested run changed,
-/// so that backtracking past it undoes the change.
-fn keep(stack: &mut Vec<Frame>, slots: &[Option<usize>], before: &[Option<usize>]) {
-    for (slot, (&now, &value)) in slots.iter().zip(before).enumerate() {
-        if now != value {
-            stack.push(Frame::Undo { slot, value });
-        }
-    }
 }
 
 /// JDK 17's `CIBackRef.match` at `at`, for the text in `group`: the position
