@@ -122,6 +122,12 @@ fn all_log_dirs_offline(cfg: &Config) -> bool {
     all_dirs_offline(&cfg.all_log_dirs, &cfg.log_dir_status)
 }
 
+/// How soon a broker in controlled shutdown asks again after the controller's
+/// first answer that it may not stop yet: Kafka's `BrokerLifecycleManager`
+/// schedules that heartbeat 50 ms out, rather than one interval, because the
+/// controller has usually moved the broker's leaderships by then.
+const CONTROLLED_SHUTDOWN_RECHECK: std::time::Duration = std::time::Duration::from_millis(50);
+
 fn heartbeat_rpc_timeout(interval: Time) -> Time { (interval * 2.0).max(millis(500)).min(secs(1)) }
 
 fn heartbeat_connection_options(broker_id: i32, interval: Time) -> ConnectionOptions {
@@ -271,9 +277,16 @@ pub(crate) async fn run(mut cfg: Config) {
     // Kafka's `initialCatchUpFuture`: set by the first answer that says the
     // broker has caught up, and never cleared.
     let mut caught_up = false;
+    // Kafka's `gotControlledShutdownResponse`: whether the controller has
+    // answered a heartbeat that asked to shut down.
+    let mut controlled_shutdown_answered = false;
     loop {
         tokio::select! {
             _ = tick.tick() => {},
+            // Kafka's `BeginControlledShutdownEvent` heartbeats at once rather
+            // than at the next tick, so the drain starts without waiting out an
+            // interval.
+            Ok(()) = cfg.want_shutdown.changed() => tick.reset(),
             () = cfg.shutdown.cancelled() => return,
         }
         // KIP-112 check: even if we cannot reach the controller, self-shutdown
@@ -372,6 +385,9 @@ pub(crate) async fn run(mut cfg: Config) {
                     // `BrokerHandle::controlled_shutdown` waiter is
                     // single-shot.
                     let _ = cfg.should_shutdown.send(true);
+                } else if want_shut_down && !controlled_shutdown_answered {
+                    controlled_shutdown_answered = true;
+                    tick.reset_after(CONTROLLED_SHUTDOWN_RECHECK);
                 }
             }
             Ok(Err(e)) => {
@@ -452,6 +468,9 @@ mod tests {
         connections: usize,
         heartbeats: usize,
         next_answer: Answer,
+        // The heartbeat, counted from one, from which every answer says
+        // `should_shut_down`, or `None` when none does.
+        shut_down_from: Option<usize>,
     }
 
     // A controller listener that answers `ApiVersions` and `BrokerHeartbeat`.
@@ -466,6 +485,7 @@ mod tests {
                 connections: 0,
                 heartbeats: 0,
                 next_answer: Answer::Accept,
+                shut_down_from: None,
             }));
             let handled = Arc::clone(&seen);
             let broker = MockBroker::start_with_replies(move |api_key, version, _, _| {
@@ -506,6 +526,9 @@ mod tests {
                 body.extend_from_slice(&[0]);
                 BrokerHeartbeatResponse {
                     error_code,
+                    should_shut_down: seen
+                        .shut_down_from
+                        .is_some_and(|from| seen.heartbeats >= from),
                     ..Default::default()
                 }
                 .encode(&mut body, version)
@@ -521,6 +544,10 @@ mod tests {
         fn heartbeats(&self) -> usize { self.seen.lock().unwrap().heartbeats }
 
         fn answer_next(&self, answer: Answer) { self.seen.lock().unwrap().next_answer = answer; }
+
+        fn shut_down_from(&self, heartbeat: usize) {
+            self.seen.lock().unwrap().shut_down_from = Some(heartbeat);
+        }
 
         // Waits until the fake has seen `more` heartbeats after the ones it
         // has seen already.
@@ -609,6 +636,71 @@ mod tests {
                     ("a new leader", (4, 1)),
                 ]
         );
+    }
+
+    /// Kafka's `BrokerLifecycleManager`: `beginControlledShutdown` heartbeats
+    /// at once, and the first answer that says the broker may not stop yet is
+    /// followed 50 ms later by the next heartbeat. The interval here is a
+    /// minute, so only those two heartbeats can reach the controller's
+    /// `should_shut_down` in time.
+    #[tokio::test]
+    async fn a_controlled_shutdown_heartbeats_at_once_and_asks_again_soon() {
+        let controller = FakeController::start().await;
+        // The first heartbeat is the boot one; the second asks to shut down,
+        // and the third is told it may.
+        controller.shut_down_from(3);
+        let source = Arc::new(
+            FakeMetadataSource::builder()
+                .records(&[MetadataRecord::V1BrokerRegistration(
+                    BrokerRegistrationRecord {
+                        broker_epoch: 11,
+                        host: "localhost".into(),
+                        ..broker_registration(krabka_raft::NodeId(7))
+                    },
+                )])
+                .leader(Some(krabka_raft::NodeId(1)))
+                .build(),
+        );
+        let no_dirs: Vec<std::path::PathBuf> = Vec::new();
+        let (want_shutdown_tx, want_shutdown) = tokio::sync::watch::channel(false);
+        let should_shutdown = Arc::new(tokio::sync::watch::channel(false).0);
+        let shutdown = CancellationToken::new();
+        let heartbeats = tokio::spawn(run(Config {
+            broker_id: 7,
+            broker_epoch: 11,
+            interval: secs(60),
+            controller: Arc::clone(&source) as Arc<dyn MetadataSource>,
+            shutdown: shutdown.clone(),
+            outbound_client: Arc::new(InterBrokerClient::new(None, None)),
+            controller_listener_protocol: ListenerProtocol::Plaintext,
+            controller_server_name: "localhost".into(),
+            controller_quorum_voters: vec![(
+                krabka_raft::NodeId(1),
+                controller.broker.addr.to_string(),
+            )],
+            want_shutdown,
+            should_shutdown: Arc::clone(&should_shutdown),
+            unfenced: tokio::sync::watch::channel(InitialUnfence::Pending).0,
+            log_dir_status: LogDirRegistry::probe(&no_dirs),
+            log_dir_ids: LogDirIds::resolve(&no_dirs),
+            all_log_dirs: no_dirs.clone(),
+            supervisor_shutdown: CancellationToken::new(),
+            cordoned_log_dirs: CordonedLogDirs::default(),
+        }));
+        controller.wait_for_heartbeats(1).await;
+
+        let asked = Instant::now();
+        want_shutdown_tx.send_replace(true);
+        let mut told = should_shutdown.subscribe();
+        let answered = tokio::time::timeout(Duration::from_secs(10), told.wait_for(|stop| *stop))
+            .await
+            .is_ok();
+        let took = asked.elapsed();
+        shutdown.cancel();
+        heartbeats.await.unwrap();
+
+        check!((answered, controller.heartbeats()) == (true, 3));
+        check!(took < Duration::from_secs(5), "{took:?}");
     }
 
     #[test]

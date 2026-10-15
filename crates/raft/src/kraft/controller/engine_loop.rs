@@ -6,6 +6,7 @@
 use {
     super::{
         Engine, METADATA_LOG_CLEAN_INTERVAL,
+        graceful_shutdown::graceful_shutdown_window,
         timing::{
             election_timeout_ms, election_timer_starts_election, following_leader_for_role,
             heartbeat_period, instant_from_clock_base, should_fail_waiters_on_leadership_change,
@@ -51,6 +52,9 @@ impl Engine {
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let mut faulted = false;
+        // Set by a graceful `Shutdown`: when the engine stops waiting for the
+        // quorum to elect a successor.
+        let mut shutdown_at: Option<Instant> = None;
         loop {
             // Build the timer futures fresh each turn from the current deadlines.
             let election_sleep = sleep_until_opt(self.election_at);
@@ -59,31 +63,56 @@ impl Engine {
             let parked_fetch_sleep = sleep_until_opt(self.next_parked_fetch_deadline());
             let noop_sleep = sleep_until_opt(self.noop_at);
             let clean_sleep = tokio::time::sleep_until(self.clean_at);
+            let shutdown_sleep = sleep_until_opt(shutdown_at);
             tokio::pin!(election_sleep);
             tokio::pin!(fetch_sleep);
             tokio::pin!(check_quorum_sleep);
             tokio::pin!(parked_fetch_sleep);
             tokio::pin!(noop_sleep);
             tokio::pin!(clean_sleep);
+            tokio::pin!(shutdown_sleep);
 
+            // A shutting-down replica starts no election of its own: Kafka's
+            // poll loop keeps a resigned or unattached voter where it is, and
+            // lets a candidate finish only the election it already runs.
+            let shutting_down = shutdown_at.is_some();
             tokio::select! {
                 cmd = cmd_rx.recv() => {
                     match cmd {
-                        None | Some(Command::Shutdown) => break,
+                        None | Some(Command::Halt) => break,
+                        Some(Command::Shutdown) => {
+                            shutdown_at.get_or_insert_with(|| {
+                                Instant::now() + graceful_shutdown_window(self.election_timeout)
+                            });
+                        }
                         Some(c) => self.on_command(c),
                     }
                 }
                 () = &mut election_sleep => {
                     self.election_at = None;
-                    self.on_timer(TimerTick::Election);
+                    if !shutting_down {
+                        self.on_timer(TimerTick::Election);
+                    }
                 }
                 () = &mut fetch_sleep => {
                     self.fetch_at = None;
-                    self.on_timer(TimerTick::Fetch);
+                    if !shutting_down {
+                        self.on_timer(TimerTick::Fetch);
+                    }
                 }
                 () = &mut check_quorum_sleep => {
                     self.check_quorum_at = None;
-                    self.on_timer(TimerTick::CheckQuorum);
+                    if !shutting_down {
+                        self.on_timer(TimerTick::CheckQuorum);
+                    }
+                }
+                () = &mut shutdown_sleep => {
+                    tracing::warn!(
+                        node = self.me.0,
+                        role = self.core.role().name(),
+                        "kraft: graceful shutdown timed out before a successor was elected"
+                    );
+                    break;
                 }
                 _ = heartbeat.tick() => {
                     self.on_timer(TimerTick::Heartbeat);
@@ -117,6 +146,11 @@ impl Engine {
             // that advances the HWM already retriggers this check, but an
             // idle voter only ticks the loop on its timers.
             self.maybe_snapshot();
+            // A graceful shutdown resigns a leadership this replica holds, or
+            // wins while it waits, and ends once a successor is known.
+            if shutdown_at.is_some() && self.step_graceful_shutdown() {
+                break;
+            }
         }
         if faulted {
             // The engine takes part in nothing more, but it keeps its watch
@@ -126,7 +160,7 @@ impl Engine {
             // also sees the fatal fault and not a bare shutdown.
             let mut held = Vec::new();
             while let Some(command) = cmd_rx.recv().await {
-                if matches!(command, Command::Shutdown) {
+                if matches!(command, Command::Shutdown | Command::Halt) {
                     break;
                 }
                 held.push(command);
@@ -175,7 +209,7 @@ impl Engine {
 
     pub fn on_command(&mut self, cmd: Command) {
         match cmd {
-            Command::Shutdown => {}
+            Command::Shutdown | Command::Halt => {}
             Command::Event(event) => self.on_event(event),
             Command::FetchResponse { from, body } => self.on_fetch_response(from, &body),
             Command::VoteResponse { from, body } => self.on_vote_response(from, &body),

@@ -25,6 +25,17 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- A gracefully stopped active controller now hands the metadata quorum over
+  before it exits, as Kafka's `KafkaRaftClient.shutdown` does: it resigns,
+  sends `EndQuorumEpoch` naming the other voters by how far they have fetched,
+  and waits up to five seconds (or one `controller_election_timeout`, when that
+  is shorter) for a successor. Before, it stopped without a word, and the other
+  voters noticed only after three missed five-second fetch timeouts and then an
+  election, 18–26 s after `SIGTERM` in a three-node cluster with the default
+  timings. A new controller now serves within about half a second. A broker in
+  controlled shutdown also sends its first heartbeat at once and asks again 50
+  ms after the controller's first answer, as Kafka's `BrokerLifecycleManager`
+  does, instead of waiting a `heartbeat_interval` for each (#1446).
 - With `preallocate=true`, a segment's `O_DIRECT` writes now align their
   buffers, offsets and lengths to the filesystem block (up to 4 KiB). Before,
   they used the kernel's minimum `O_DIRECT` alignment, often 512 bytes, or a
