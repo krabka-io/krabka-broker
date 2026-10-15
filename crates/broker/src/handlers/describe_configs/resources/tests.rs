@@ -1440,7 +1440,11 @@ fn the_streams_assignor_is_described_only_under_unstable_api_versions() {
         .name("streams.assignor.name")
         .value(Some("auto"))
         .source(CONFIG_SOURCE_STATIC_BROKER)
-        .synonyms(vec![synonym(ASSIGNORS, "auto", CONFIG_SOURCE_STATIC_BROKER)])
+        .synonyms(vec![synonym(
+            ASSIGNORS,
+            "auto",
+            CONFIG_SOURCE_STATIC_BROKER,
+        )])
         .config_type(ConfigType::String.wire())
         .documentation(
             "Server-side task assignor: `auto`, `sticky`, or `highly_available`.".to_owned(),
@@ -1448,11 +1452,24 @@ fn the_streams_assignor_is_described_only_under_unstable_api_versions() {
         .call();
 
     for (unstable, resource_type, resource_name, expected) in [
-        (UnstableApiVersions::Disabled, RESOURCE_TYPE_BROKER, "1", vec![]),
-        (UnstableApiVersions::Disabled, RESOURCE_TYPE_GROUP, "g", vec![]),
-        (UnstableApiVersions::Enabled, RESOURCE_TYPE_GROUP, "g", vec![
-            group_entry,
-        ]),
+        (
+            UnstableApiVersions::Disabled,
+            RESOURCE_TYPE_BROKER,
+            "1",
+            vec![],
+        ),
+        (
+            UnstableApiVersions::Disabled,
+            RESOURCE_TYPE_GROUP,
+            "g",
+            vec![],
+        ),
+        (
+            UnstableApiVersions::Enabled,
+            RESOURCE_TYPE_GROUP,
+            "g",
+            vec![group_entry],
+        ),
     ] {
         check!(
             naming_assignors(resource_type, resource_name, unstable) == expected,
