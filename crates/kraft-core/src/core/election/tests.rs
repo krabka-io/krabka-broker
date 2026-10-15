@@ -417,6 +417,7 @@ fn a_candidate_that_times_out_pre_votes_again_with_a_fresh_timeout() {
         *m.role()
             == Role::Prospective {
                 granted: BTreeSet::from([NodeId(1)]),
+                rejected: BTreeSet::new(),
                 election_deadline: fresh,
                 abandoned_leader: None,
             }
@@ -456,5 +457,160 @@ fn every_election_timer_lies_in_kafkas_jittered_window() {
         deadlines.len() > 64,
         "{} distinct deadlines",
         deadlines.len()
+    );
+}
+
+/// How a pre-vote round began: from following a leader whose fetches stopped,
+/// or with no leader to abandon.
+#[derive(Clone, Copy, Debug)]
+enum PreVoteStart {
+    AbandonedLeader,
+    NoLeader,
+}
+
+/// A Prospective at epoch 1 among `ids`, started as `start` at time 2000.
+///
+/// With an abandoned leader it followed voter 2 and timed out fetching from
+/// it; without one it first voted for voter 3 in epoch 1, so that losing keeps
+/// a vote to show.
+fn prospective_at_epoch_one(ids: &[NodeId], start: PreVoteStart) -> MachineAndLog {
+    let mut m = machine(NodeId(1), ids);
+    let log = FakeLog::new(5, 1);
+    match start {
+        PreVoteStart::AbandonedLeader => {
+            m.on_event(
+                Event::ReceiveBeginQuorumEpoch {
+                    leader_id: NodeId(2),
+                    leader_epoch: 1,
+                },
+                &log,
+                SimInstant(1_000),
+            );
+            m.on_event(Event::FetchTimeout, &log, SimInstant(2_000));
+        }
+        PreVoteStart::NoLeader => {
+            m.on_event(
+                Event::ReceiveVoteRequest {
+                    from: NodeId(3),
+                    cluster_id: None,
+                    voter_id: NodeId(1),
+                    voter_directory_id: uuid::Uuid::nil(),
+                    candidate_epoch: 1,
+                    candidate: NodeId(3),
+                    candidate_directory_id: uuid::Uuid::nil(),
+                    candidate_log_end: LogEnd {
+                        last_epoch: 1,
+                        last_offset: 5,
+                    },
+                    pre_vote: false,
+                },
+                &log,
+                SimInstant(1_000),
+            );
+            m.on_event(Event::ElectionTimeout, &log, SimInstant(2_000));
+        }
+    }
+    assert2::assert!(matches!(m.role(), Role::Prospective { .. }));
+    MachineAndLog { machine: m, log }
+}
+
+/// A Prospective whose pre-vote can no longer reach a majority ends the round
+/// at once, as Kafka's `EpochElection.isVoteRejected` and
+/// `prospectiveTransitionAfterElectionLoss` do. It follows the leader it
+/// abandoned again, since the voters that refused it still follow that
+/// leader, or becomes Unattached in the same epoch, keeping its vote, when it
+/// abandoned none. A refusal that still leaves a majority possible changes
+/// nothing.
+#[yare::parameterized(
+    three_voters_first_refusal = { 3, &[2], PreVoteStart::AbandonedLeader, None },
+    three_voters_lost_to_a_leader = { 3, &[2, 3], PreVoteStart::AbandonedLeader, Some("Follower") },
+    three_voters_lost_without_a_leader = { 3, &[2, 3], PreVoteStart::NoLeader, Some("Voted") },
+    five_voters_two_refusals = { 5, &[2, 3], PreVoteStart::AbandonedLeader, None },
+    five_voters_lost = { 5, &[2, 3, 4], PreVoteStart::AbandonedLeader, Some("Follower") },
+    a_refusal_repeated = { 3, &[3, 3], PreVoteStart::NoLeader, None },
+)]
+fn a_prospective_that_can_no_longer_win_ends_its_round(
+    voter_count: u64,
+    refusers: &[u64],
+    start: PreVoteStart,
+    ends_as: Option<&'static str>,
+) {
+    let ids: Vec<NodeId> = (1..=voter_count).map(NodeId).collect();
+    let MachineAndLog {
+        machine: mut m,
+        log,
+    } = prospective_at_epoch_one(&ids, start);
+    let before = m.clone();
+
+    let mut actions = Vec::new();
+    for &from in refusers {
+        actions = vote_response()
+            .m(&mut m)
+            .log(&log)
+            .from(from)
+            .epoch(1)
+            .decision(VoteDecision::Rejected)
+            .now(2_100)
+            .call();
+    }
+
+    let Some(role) = ends_as else {
+        check!(actions.is_empty());
+        check!(m.quorum_state() == before.quorum_state());
+        return;
+    };
+    let now = SimInstant(2_100);
+    let expected = match start {
+        PreVoteStart::AbandonedLeader => {
+            let fetch_deadline = now.saturating_add_ms(1_000);
+            (
+                vec![
+                    Action::PersistQuorumState,
+                    Action::TransitionedTo("Follower"),
+                    Action::SendFetch {
+                        leader_id: NodeId(2),
+                    },
+                    Action::ResetTimer {
+                        kind: TimerKind::Fetch,
+                        deadline: fetch_deadline,
+                    },
+                ],
+                Role::Follower {
+                    leader_id: NodeId(2),
+                    fetch_deadline,
+                    has_fetched_from_leader: false,
+                },
+                Some(NodeId(2)),
+                None,
+            )
+        }
+        PreVoteStart::NoLeader => {
+            let election_deadline =
+                now.saturating_add_ms(1_000 + election_jitter_ms(NodeId(1), 1, 1_000));
+            (
+                vec![
+                    Action::PersistQuorumState,
+                    Action::TransitionedTo("Voted"),
+                    Action::ResetTimer {
+                        kind: TimerKind::Election,
+                        deadline: election_deadline,
+                    },
+                ],
+                Role::Voted { election_deadline },
+                None,
+                Some(NodeId(3)),
+            )
+        }
+    };
+    let (expected_actions, expected_role, leader_id, voted_for) = expected;
+    check!(m.role().name() == role);
+    check!(actions == expected_actions);
+    check!(*m.role() == expected_role);
+    check!(
+        (
+            m.quorum_state().leader_epoch,
+            m.quorum_state().leader_id,
+            m.quorum_state().voted_key.map(|key| key.id),
+        ) == (1, leader_id, voted_for)
     );
 }

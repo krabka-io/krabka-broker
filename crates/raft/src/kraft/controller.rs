@@ -109,6 +109,7 @@ mod snapshotting;
 mod startup;
 mod submit;
 mod timing;
+mod vote_response;
 
 pub use self::{
     activation::Activation,

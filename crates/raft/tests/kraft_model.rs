@@ -30,7 +30,7 @@ use {krabka_ids::NodeId, model::ConsensusModel, stateright::Checker};
 /// true bounded count of each config, so it never truncates a real check. Such
 /// a truncation would spuriously fail a `sometimes` witness, or leave an
 /// `always` only partially verified.
-const MAX_STATES: usize = 8_000_000;
+const MAX_STATES: usize = 18_000_000;
 /// Depth backstop. It must exceed the reachable-graph diameter of each config,
 /// or the search is depth-truncated and therefore incomplete. The configs below
 /// are bounded, so their diameter sits well under this value.
@@ -87,14 +87,21 @@ const MAX_DEPTH: usize = 60;
 // `QuorumState.transitionToUnattached` keeps a candidate's remaining timeout
 // (#621). It used to arm its election timer at the instant of the response,
 // so the states in which it starts its next pre-vote at once are gone, and a
-// fenced nominee now carries the deadline it drew into the new epoch. The
-// election-safety config gained 30 states and the others lost some. The
-// `always` properties still hold.
-const PINNED_UNIQUE_STATES_THREE_VOTERS_ELECTION_SAFETY: usize = 10_780;
-const PINNED_UNIQUE_STATES_TWO_VOTERS_LINEARIZABLE: usize = 46_471;
-const PINNED_UNIQUE_STATES_THREE_VOTERS_FAULTS: usize = 1_049_288;
-const PINNED_UNIQUE_STATES_THREE_VOTERS_APPEND: usize = 796_007;
-const PINNED_UNIQUE_STATES_TWO_VOTERS_APPEND_VIA: usize = 256_923;
+// fenced nominee now carries the deadline it drew into the new epoch.
+//
+// Every count grew, and the generated count of `three_voters_faults` passed
+// the old 8M cap (the cap rose to 18M with it), when a `Prospective` began to
+// record the voters that refuse its pre-vote and to end a round it can no
+// longer win, as Kafka's `EpochElection.isVoteRejected` and
+// `prospectiveTransitionAfterElectionLoss` do (#621). The refusals are new
+// state, and a lost round now leads back to the abandoned leader or to
+// Unattached instead of waiting for the election timer. The `always`
+// properties, election safety among them, still hold.
+const PINNED_UNIQUE_STATES_THREE_VOTERS_ELECTION_SAFETY: usize = 11_998;
+const PINNED_UNIQUE_STATES_TWO_VOTERS_LINEARIZABLE: usize = 71_413;
+const PINNED_UNIQUE_STATES_THREE_VOTERS_FAULTS: usize = 2_257_358;
+const PINNED_UNIQUE_STATES_THREE_VOTERS_APPEND: usize = 1_624_877;
+const PINNED_UNIQUE_STATES_TWO_VOTERS_APPEND_VIA: usize = 350_697;
 
 krabka_macros::bounded_bfs!(bounded_bfs);
 

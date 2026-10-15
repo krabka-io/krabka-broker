@@ -124,6 +124,22 @@ impl QuorumStateMachine {
     #[must_use]
     pub fn role(&self) -> &Role { &self.role }
 
+    /// The leader this replica knows for its epoch: the one it follows, or the
+    /// one a prospective gave up on when it began its pre-vote.
+    ///
+    /// This is Kafka's `QuorumState.hasLeader`, which counts a
+    /// `ProspectiveState`'s retained leader. A response that names the leader
+    /// of the current epoch moves a replica to it only while this is `None`.
+    #[must_use]
+    pub fn known_leader(&self) -> Option<NodeId> {
+        match &self.role {
+            Role::Prospective {
+                abandoned_leader, ..
+            } => self.state.leader_id.or(*abandoned_leader),
+            _ => self.state.leader_id,
+        }
+    }
+
     #[must_use]
     pub fn is_voter(&self) -> bool { self.state.voters.contains(self.me) }
 

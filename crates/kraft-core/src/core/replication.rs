@@ -383,7 +383,8 @@ impl QuorumStateMachine {
         }
     }
 
-    /// A Fetch response came from a newer epoch that names no leader yet.
+    /// A Fetch or Vote response came from a newer epoch that names no leader
+    /// yet.
     ///
     /// Kafka's `KafkaRaftClient.maybeTransition` moves the replica to
     /// Unattached in that epoch. A voter arms its election timer as

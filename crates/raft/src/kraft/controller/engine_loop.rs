@@ -178,6 +178,7 @@ impl Engine {
             Command::Shutdown => {}
             Command::Event(event) => self.on_event(event),
             Command::FetchResponse { from, body } => self.on_fetch_response(from, &body),
+            Command::VoteResponse { from, body } => self.on_vote_response(from, &body),
             Command::FetchSnapshotResponse { from, body } => {
                 self.on_fetch_snapshot_response(from, &body);
             }
@@ -540,27 +541,6 @@ impl Engine {
         // the watch's stored value current even with no active receiver.
         let snapshot = self.quorum_state_snapshot();
         self.quorum_tx.send_replace(snapshot);
-    }
-}
-
-/// Decode a non-Fetch peer response body into the matching `Receive*Response`
-/// event. `peer` is the responder, used to fill `from`. Returns `None` for
-/// `Ack` (Begin/End acks produce no core event), `Fetch` (handled by the
-/// dedicated [`Engine::on_fetch_response`] path, which must touch the log before
-/// the core sees the event), and undecodable bodies.
-pub fn response_to_event(peer: NodeId, api_key: i16, body: &[u8]) -> Option<Event> {
-    match api_key {
-        self::api_key::VOTE => match wire::PeerResponse::decode_vote(body)? {
-            wire::PeerResponse::Vote { epoch, granted } => Some(Event::ReceiveVoteResponse {
-                from: peer,
-                epoch,
-                vote_granted: granted,
-            }),
-            _ => None,
-        },
-        // Begin/End acks produce no core event; Fetch is handled by the
-        // dedicated `FetchResponse` command path before reaching here.
-        _ => None,
     }
 }
 

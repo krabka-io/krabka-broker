@@ -103,8 +103,8 @@ pub enum Event {
         /// Holds a value when the leader signalled log divergence.
         diverging: Option<LogOffsetMetadata>,
     },
-    /// Follower or observer side: a Fetch response came from a newer epoch
-    /// that names no leader yet.
+    /// A Fetch or Vote response came from a newer epoch that names no leader
+    /// yet.
     ///
     /// Kafka's `KafkaRaftClient.maybeTransition` moves the replica to
     /// Unattached in that epoch, and an observer then looks for the leader at
