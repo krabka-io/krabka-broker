@@ -25,6 +25,21 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- `connections.max.idle.ms` now measures silence on the client and controller
+  listeners, as Kafka's `Selector` does: every read that brings bytes starts a
+  fresh window, so a request that arrives steadily but takes longer than the
+  window in all is no longer closed part-way through (#1390).
+- An expired KIP-368 session now closes on any frame that does not begin a
+  re-authentication, as Kafka's `SocketServer` does. A `SaslAuthenticate`, or
+  a `SaslHandshake` inside the one-second re-authentication interval, used to
+  get error 34 and keep the connection (#1390).
+- OAUTHBEARER answers a malformed client initial response with error 58 and
+  Kafka's generic message at once, and an authorization id that differs from
+  the token's principal with Kafka's own message, instead of the
+  `invalid_token` challenge. After a challenge, a reply other than a lone
+  `\x01` is a fresh attempt, as in Kafka's `OAuthBearerSaslServer` (#1390).
+- The broker refuses to start with a `queued_max_request_bytes` below
+  `socket_request_max`, as Kafka's `KafkaConfig` does (#1390).
 - A `ShareFetch` is now charged to the member's `consumer_byte_rate` and
   `request_percentage` quotas, as Kafka's `processShareFetchResponse` charges
   it. A throttled fetch reports the larger throttle in `throttle_time_ms`,
