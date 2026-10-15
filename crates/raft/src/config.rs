@@ -34,8 +34,9 @@ pub use self::{
     routing::{
         ControllerAdminRequest, ControllerAdminResponse, ControllerAdminRouteFuture,
         ControllerAdminRouter, ControllerApiVersion, LATEST_PRODUCTION_METADATA_VERSION,
-        RaftShardRouter, ShardRouteFuture, UnstableApiVersions, UnstableFeatureVersions,
-        supported_feature_range, supported_feature_ranges,
+        RaftShardRouter, RegistrationAdmission, RegistrationAdmissionFuture, ShardRouteFuture,
+        UnstableApiVersions, UnstableFeatureVersions, supported_feature_range,
+        supported_feature_ranges,
     },
 };
 

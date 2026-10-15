@@ -306,10 +306,10 @@ async fn advance_broker_state(
 /// `BrokerHeartbeatManager.register`, whose `touch` with `fenced = true` also
 /// takes the broker out of controlled shutdown, so a fenced registration
 /// always starts its next heartbeat from `FENCED`. krabka's registry does not
-/// replay the log: a broker's self-registration does not pass through
-/// `BrokerRegistration` and its `replace_incarnation`, so the registry can
-/// still hold the unfenced session, or the controlled shutdown, of the
-/// registration a restart replaced. The registration's fence decides.
+/// replay the log: a registration that an earlier controller leader admitted
+/// never reached this node's `replace_incarnation`, so the registry can still
+/// hold the unfenced session, or the controlled shutdown, of the registration
+/// a restart replaced. The registration's fence decides.
 fn current_broker_state(
     registry: BrokerControlState,
     image: &krabka_metadata::MetadataImage,

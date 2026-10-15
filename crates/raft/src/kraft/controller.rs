@@ -31,7 +31,7 @@
 
 use {
     crate::{
-        OffsetReservation, SubmitChangeResult,
+        OffsetReservation, RegistrationAdmission, SubmitChangeResult,
         config::{
             ControllerFetchMissLimit, DEFAULT_METADATA_RAFT_FETCH_MAX, MetadataLogConfig,
             MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax,
@@ -389,6 +389,9 @@ pub struct KraftController {
     quorum_rx: watch::Receiver<QuorumStateSnapshot>,
     peers: Arc<dyn PeerSender>,
     me: NodeId,
+    /// The broker crate's hook for batches that register a broker anew, once
+    /// it is installed. Every clone of the handle shares it.
+    registration_admission: Arc<std::sync::OnceLock<Arc<dyn RegistrationAdmission>>>,
 }
 
 /// Configuration to build a [`KraftController`].
