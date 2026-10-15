@@ -57,8 +57,8 @@ paths:
     payload: 1KiB
     consumers: [read_uncommitted, read_committed]
     commit_offsets: true
-    produce_latency: { p50: 20ms, p99: 250ms, p999: 1s }
-    consume_latency: { p50: 50ms, p99: 500ms, p999: 2s }
+    produce_latency: {p50: 20ms, p99: 250ms, p999: 1s}
+    consume_latency: {p50: 50ms, p99: 500ms, p999: 2s}
   - name: classic-transactional
     semantics: transactional
     storage: classic
@@ -68,8 +68,8 @@ paths:
     payload: 1KiB
     consumers: [read_committed, read_uncommitted]
     commit_offsets: true
-    produce_latency: { p50: 30ms, p99: 300ms, p999: 1500ms }
-    consume_latency: { p50: 100ms, p99: 750ms, p999: 3s }
+    produce_latency: {p50: 30ms, p99: 300ms, p999: 1500ms}
+    consume_latency: {p50: 100ms, p99: 750ms, p999: 3s}
   - name: classic-compacted
     semantics: compacted
     storage: classic
@@ -79,8 +79,8 @@ paths:
     payload: 256B
     key_space: 10000
     consumers: [read_uncommitted]
-    produce_latency: { p50: 20ms, p99: 250ms, p999: 1s }
-    consume_latency: { p50: 50ms, p99: 500ms, p999: 2s }
+    produce_latency: {p50: 20ms, p99: 250ms, p999: 1s}
+    consume_latency: {p50: 50ms, p99: 500ms, p999: 2s}
   - name: tiered-idempotent
     semantics: idempotent
     storage: tiered
@@ -90,8 +90,8 @@ paths:
     payload: 1KiB
     consumers: [read_uncommitted, read_committed]
     commit_offsets: true
-    produce_latency: { p50: 20ms, p99: 250ms, p999: 1s }
-    consume_latency: { p50: 50ms, p99: 750ms, p999: 3s }
+    produce_latency: {p50: 20ms, p99: 250ms, p999: 1s}
+    consume_latency: {p50: 50ms, p99: 750ms, p999: 3s}
   - name: diskless-idempotent
     semantics: idempotent
     storage: diskless
@@ -101,8 +101,8 @@ paths:
     payload: 1KiB
     consumers: [read_uncommitted]
     commit_offsets: true
-    produce_latency: { p50: 150ms, p99: 750ms, p999: 2s }
-    consume_latency: { p50: 250ms, p99: 1500ms, p999: 4s }
+    produce_latency: {p50: 150ms, p99: 750ms, p999: 2s}
+    consume_latency: {p50: 250ms, p99: 1500ms, p999: 4s}
 
 deadlines:
   leader_failover: 15s
@@ -114,21 +114,21 @@ deadlines:
 # the two-hour cycle, so no two faults can overlap whatever the jitter draws.
 faults:
   - name: quiet-pause
-    fault: { kind: pause }
+    fault: {kind: pause}
     target: follower
     first_at: 10min
     every: 2h
     jitter: 10min
     duration: 2s
   - name: leader-pause
-    fault: { kind: pause, intends_failover: true }
+    fault: {kind: pause, intends_failover: true}
     target: leader
     first_at: 30min
     every: 6h
     jitter: 10min
     duration: 12s
   - name: controller-pause
-    fault: { kind: pause, intends_failover: true }
+    fault: {kind: pause, intends_failover: true}
     target: controller
     first_at: 50min
     every: 12h
@@ -148,21 +148,21 @@ faults:
     jitter: 5min
     duration: 10min
   - name: disk-pressure
-    fault: { kind: disk_pressure, watermark: 80% }
+    fault: {kind: disk_pressure, watermark: 80%}
     target: any
     first_at: 85min
     every: 8h
     jitter: 5min
     duration: 15min
   - name: graceful-restart
-    fault: { kind: restart, graceful: true }
+    fault: {kind: restart, graceful: true}
     target: any
     first_at: 110min
     every: 12h
     jitter: 5min
     duration: 30s
   - name: controller-kill
-    fault: { kind: restart, graceful: false }
+    fault: {kind: restart, graceful: false}
     target: controller
     first_at: 470min
     every: 12h
