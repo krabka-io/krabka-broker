@@ -370,8 +370,11 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         claim: "DescribeConfigs reports the source of every value",
         status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/describe_configs.rs",
-        tests: &["crates/broker/tests/jvm_acceptance_cli/configs.rs"],
-        note: "A broker resource is checked against Kafka 4.3.1's whole `KafkaConfig` key roster: a key that is not dynamic is refused, and every dynamic key is parsed and range-checked. Dynamic keys with no krabka behaviour behind them (thread pool sizes, the log cleaner, connection limits, SSL and SASL listener settings, `listeners`) are stored and reported and do not change how the broker runs, and a `CLASS` value is accepted without loading the class.",
+        tests: &[
+            "crates/broker/tests/jvm_acceptance_cli/configs.rs",
+            "crates/broker/tests/dynamic_broker_config.rs",
+        ],
+        note: "A broker resource is checked against Kafka 4.3.1's whole `KafkaConfig` key roster: a key that is not dynamic is refused, and every dynamic key is parsed and range-checked. A running broker applies these dynamic keys without a restart, per broker and then cluster-wide: the topic-default synonyms (`log.retention.ms`, `message.max.bytes`, `compression.type` and the rest of `DynamicLogConfig`), `min.insync.replicas`, `unclean.leader.election.enable` (cluster-wide only), the three replication throttle rates, `transaction.partition.verification.enable`, `remote.list.offsets.request.timeout.ms`, `cordoned.log.dirs`, and the broker-wide `max.connections` and `max.connections.per.ip`, which apply to the next connection accepted. A connection over `max.connections` is closed, where Kafka's acceptor waits for a slot. Other dynamic keys are stored and reported and do not change how the broker runs: thread pool sizes, the log cleaner's own keys, `max.connections.per.ip.overrides`, `max.connection.creation.rate`, every `listener.name.<listener>.` override, the SSL keystore and truststore keys (TLS material is reloaded from the `tls_config` files instead), the SASL and Kerberos keys, `principal.builder.class`, `listeners`, `listener.security.protocol.map`, the remote log manager's pools and rates, `producer.id.expiration.ms`, the group assignment intervals, `metric.reporters` and `config.providers`. A `CLASS` value is accepted without loading the class.",
     },
     KipAnnotation {
         key: "KIP-227",
