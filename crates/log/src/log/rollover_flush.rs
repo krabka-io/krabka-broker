@@ -7,12 +7,9 @@ use crate::{
 };
 #[cfg(not(target_os = "wasi"))]
 use std::{collections::VecDeque, fs::File};
-use {
-    krabka_ids::Offset,
-    std::{
-        io,
-        sync::{Arc, Condvar, Mutex},
-    },
+use std::{
+    io,
+    sync::{Arc, Condvar, Mutex},
 };
 
 #[cfg(not(target_os = "wasi"))]
@@ -45,9 +42,6 @@ impl Flush {
 struct State {
     #[cfg(not(target_os = "wasi"))]
     jobs: VecDeque<Flush>,
-    /// The boundary-snapshot offset of the job a worker is running now.
-    #[cfg(not(target_os = "wasi"))]
-    in_progress: Option<Offset>,
     running: bool,
     error: Option<FlushError>,
 }
@@ -60,17 +54,6 @@ struct FlushError {
 }
 
 impl State {
-    /// Whether a queued or running job will still write a boundary snapshot
-    /// at or below `offset`.
-    #[cfg(not(target_os = "wasi"))]
-    fn writes_snapshot_through(&self, offset: Offset) -> bool {
-        self.in_progress.is_some_and(|pending| pending <= offset)
-            || self.jobs.iter().any(|job| job.snapshot.offset() <= offset)
-    }
-
-    #[cfg(target_os = "wasi")]
-    fn writes_snapshot_through(&self, _offset: Offset) -> bool { false }
-
     fn result(&self) -> io::Result<()> {
         self.error.as_ref().map_or(Ok(()), |error| {
             Err(io::Error::new(error.kind, error.message.clone()))
@@ -104,22 +87,6 @@ impl Flusher {
         state.result()
     }
 
-    /// Wait only for the jobs that still write a boundary snapshot at or below
-    /// `offset`, then report a failed flush.
-    ///
-    /// Retention calls this before it deletes the segments up to `offset`, so
-    /// that no job writes a snapshot at a deleted base afterwards. A job for a
-    /// newer boundary does not touch what retention deletes, and waiting for
-    /// its disk sync would hold the log mutex, and every append and read of
-    /// the partition, for that long.
-    pub fn finish_through(&self, offset: Offset) -> io::Result<()> {
-        let mut state = self.shared.state.lock().unwrap();
-        while state.writes_snapshot_through(offset) {
-            state = self.shared.changed.wait(state).unwrap();
-        }
-        state.result()
-    }
-
     #[cfg(not(target_os = "wasi"))]
     pub fn reserve(&mut self, bytes: usize) -> io::Result<executor::Permit> {
         self.check()?;
@@ -147,17 +114,11 @@ impl Flusher {
 
 #[cfg(not(target_os = "wasi"))]
 fn run(shared: &Shared) -> bool {
-    let job = {
-        let mut state = shared.state.lock().unwrap();
-        let job = state.jobs.pop_front().unwrap();
-        state.in_progress = Some(job.snapshot.offset());
-        job
-    };
+    let job = shared.state.lock().unwrap().jobs.pop_front().unwrap();
     // An injected I/O panic must wake waiters just like an I/O error.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job.run()))
         .unwrap_or_else(|_| Err(io::Error::other("rollover flush panicked")));
     let mut state = shared.state.lock().unwrap();
-    state.in_progress = None;
     if let Err(error) = result {
         tracing::error!(%error, "rollover flush failed");
         state.error = Some(FlushError {
@@ -166,10 +127,9 @@ fn run(shared: &Shared) -> bool {
         });
         state.jobs.clear();
     }
-    // A `finish_through` waiter may be waiting for this job alone.
-    shared.changed.notify_all();
     if state.jobs.is_empty() {
         state.running = false;
+        shared.changed.notify_all();
         false
     } else {
         true

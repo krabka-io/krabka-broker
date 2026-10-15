@@ -13,10 +13,7 @@ use {
     },
     assert2::assert,
     krabka_ids::{Offset, ProducerId},
-    krabka_units::{
-        ByteSize, Time, bytes,
-        prelude::{ByteSizeExt as _, TimeExt as _},
-    },
+    krabka_units::bytes,
     std::{
         collections::HashSet,
         fs::File,
@@ -374,74 +371,6 @@ fn reset_and_truncation_wait_and_cannot_recreate_stale_snapshots() {
         drop(log);
         let recovered = open_log(dir.path());
         assert!(recovered.producer_state_snapshot().is_empty());
-    }
-}
-
-/// Retention waits for a rollover flush only when the flush would write its
-/// boundary snapshot at a segment base that retention deletes.
-///
-/// Retention runs under the log mutex. Waiting there for the disk sync of a
-/// newer segment holds every append and read of the partition for that long:
-/// the acks=all stalls of #1394.
-#[test]
-fn retention_waits_only_for_flushes_that_write_a_deleted_snapshot() {
-    // (sealed segments retention deletes, whether `tick` waits for the flush
-    // that the gate holds)
-    let cases = [(1_i64, false), (3, false), (4, true)];
-    for (evicted, waits) in cases {
-        let dir = tempdir().unwrap();
-        let mut log = first_append(dir.path(), false);
-        log.append(&mut sample_batch(1)).unwrap();
-        log.append(&mut sample_batch(1)).unwrap();
-        log.sync().unwrap();
-        // Sealing base 2 queues the flush that writes the snapshot at 3, and
-        // the gate holds it. Sealing base 3 queues the snapshot at 4 behind it.
-        let GatedRollover { gate, began } = begin_gated_rollover(&mut log);
-        log.append(&mut sample_batch(1)).unwrap();
-        // Five one-batch segments, bases 0 to 4. Retention takes the oldest
-        // `evicted` of them.
-        let segment = log.size().bytes_i64() / 5;
-        {
-            let mut config = log.config.write().unwrap();
-            config.retention_size = Some(ByteSize::from_bytes_i64((5 - evicted) * segment));
-            config.file_delete_delay = Time::ZERO;
-        }
-        let SpawnedWriter {
-            writer,
-            received: rx,
-        } = spawn_writer(log, |log| log.tick(std::time::SystemTime::now(), Offset(5)));
-        let returned = if waits {
-            observe_pending(&rx)
-        } else {
-            await_progress(&rx)
-        };
-        gate.release();
-        let mut log = writer.join().unwrap();
-        began.unwrap();
-        if waits {
-            assert!(
-                matches!(returned, Err(mpsc::RecvTimeoutError::Timeout)),
-                "{evicted}"
-            );
-            rx.recv().unwrap().unwrap();
-        } else {
-            assert!(matches!(returned, Ok(Ok(()))), "{evicted}");
-        }
-        log.sync().unwrap();
-        let first_kept = Offset(evicted);
-        assert!(log.log_start_offset() == first_kept, "{evicted}");
-        // No flush wrote a snapshot at a base retention deleted.
-        let snapshots = producer_snapshot::list(dir.path()).unwrap();
-        assert!(
-            snapshots
-                .iter()
-                .all(|snapshot| snapshot.offset >= first_kept),
-            "{evicted}: {:?}",
-            snapshots
-                .iter()
-                .map(|snapshot| snapshot.offset)
-                .collect::<Vec<_>>()
-        );
     }
 }
 
