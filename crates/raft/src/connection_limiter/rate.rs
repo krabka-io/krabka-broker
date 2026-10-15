@@ -39,6 +39,15 @@ impl Gate {
     }
 }
 
+impl Gate {
+    /// Take back one connection recorded against `rate`, as Kafka's
+    /// `record(-1.0)` un-records it.
+    fn refund(&mut self, rate: u32) {
+        let interval = Duration::from_secs(1) / rate.max(1);
+        self.next = self.next.and_then(|next| next.checked_sub(interval));
+    }
+}
+
 /// The node-wide gate and one gate per listener.
 #[derive(Debug, Default)]
 pub(super) struct CreationRates {
@@ -70,6 +79,28 @@ impl CreationRates {
                 .admit(now, rate, max_delay)
         });
         node.max(listener)
+    }
+
+    /// Take back a connection [`Self::admit`] recorded on `listener`, for a
+    /// connection the peer's `ip` quota throttles: Kafka's
+    /// `updateListenerMetrics` un-records it from the broker-wide and the
+    /// listener rate, so a throttled address does not spend them.
+    pub(super) fn refund(
+        &mut self,
+        listener: &str,
+        protected: bool,
+        (node_rate, listener_rate): (Option<u32>, Option<u32>),
+    ) {
+        if let Some(rate) = node_rate
+            && !protected
+        {
+            self.node.refund(rate);
+        }
+        if let Some(rate) = listener_rate
+            && let Some(gate) = self.listeners.get_mut(&listener.to_ascii_uppercase())
+        {
+            gate.refund(rate);
+        }
     }
 }
 
@@ -103,6 +134,27 @@ mod tests {
         let mut gate = Gate::default();
         assert2::assert!(gate.admit(start, 1, SECOND) == Duration::ZERO);
         assert2::assert!(gate.admit(start + SECOND, 1, SECOND) == Duration::ZERO);
+    }
+
+    /// A refunded connection frees its place: with no refund the third of
+    /// three simultaneous connections at one a second waits two seconds, with
+    /// the second refunded it waits one.
+    #[yare::parameterized(
+        kept = { false, 2000 },
+        refunded = { true, 1000 },
+    )]
+    fn a_refund_frees_the_connections_place(refund: bool, third_delay_ms: u64) {
+        let now = Instant::now();
+        let rates = (Some(1), Some(1));
+        let mut gates = CreationRates::default();
+        let ten_seconds = Duration::from_secs(10);
+        let _first = gates.admit("PLAINTEXT", false, rates, now, ten_seconds);
+        let _second = gates.admit("PLAINTEXT", false, rates, now, ten_seconds);
+        if refund {
+            gates.refund("PLAINTEXT", false, rates);
+        }
+        let third = gates.admit("PLAINTEXT", false, rates, now, ten_seconds);
+        assert2::assert!(third == Duration::from_millis(third_delay_ms));
     }
 
     /// The node-wide and listener gates, with and without protection.

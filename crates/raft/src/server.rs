@@ -174,8 +174,7 @@ pub(crate) async fn run(
                         // controller `SocketServer` reconfigures it. Over a
                         // creation rate the acceptor waits, then accepts.
                         let quotas = connections
-                            .quotas(&engine.current_image(), engine.node_id(), CONTROLLER_LISTENER.name)
-                            .await;
+                            .quotas(&engine.current_image(), engine.node_id(), CONTROLLER_LISTENER.name);
                         let delay = connections.creation_delay(
                             CONTROLLER_LISTENER,
                             &quotas,

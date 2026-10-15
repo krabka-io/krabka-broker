@@ -4,9 +4,12 @@
 //! Kafka layers a node's own dynamic config over the cluster default, and a
 //! listener's `listener.name.<listener>.` value over the broker-wide one
 //! (`KafkaConfig.valuesWithPrefixOverride`). A value Kafka would not apply
-//! leaves the next layer in force: `DynamicBrokerConfig` keeps its previous
-//! config when the new one fails `KafkaConfig` validation or a
-//! reconfigurable's `validateReconfiguration`.
+//! leaves the value in force before it: `DynamicBrokerConfig` keeps its
+//! previous config when the new one fails `KafkaConfig` validation or a
+//! reconfigurable's `validateReconfiguration`. Kafka drops the whole update;
+//! krabka keeps the previous value of the refused key alone. With no previous
+//! value, at startup, the refused value is skipped for the next layer, as
+//! `DynamicBrokerConfig.initialize` drops an invalid value from its layer.
 
 use {crate::types::NodeId, krabka_metadata::MetadataImage, std::collections::BTreeMap};
 
@@ -115,15 +118,35 @@ pub(super) fn parse_overrides(value: &str) -> Option<BTreeMap<String, usize>> {
         .collect()
 }
 
+/// The value of a key in force: the most preferred layer's value when it
+/// parses, else the `previous` value, else the next layer that parses, else
+/// `fallback`.
+fn pick<T>(
+    values: &[&str],
+    parse: impl Fn(&str) -> Option<T>,
+    previous: Option<T>,
+    fallback: T,
+) -> T {
+    let Some((first, rest)) = values.split_first() else {
+        return fallback;
+    };
+    parse(first)
+        .or(previous)
+        .or_else(|| rest.iter().find_map(|value| parse(value)))
+        .unwrap_or(fallback)
+}
+
 impl ConnectionQuotaSettings {
     /// The quotas in force on `listener` of `node_id` as of `image`, over the
-    /// caps the node was started with.
+    /// caps the node was started with and the `previous` settings of the
+    /// listener, which a refused value leaves in force.
     #[must_use]
     pub fn resolve(
         image: &MetadataImage,
         node_id: NodeId,
         listener: &str,
         configured: ConnectionLimits,
+        previous: Option<&Self>,
     ) -> Self {
         let layers = [image.broker_config(node_id), image.default_broker_config()];
         // The values of `key`, most preferred layer first.
@@ -136,34 +159,45 @@ impl ConnectionQuotaSettings {
         };
         // Every listener inherits `max.connections`, and Kafka refuses a
         // listener cap below 1, so the broker-wide value needs 1 as well.
-        let max_connections = value(MAX_CONNECTIONS)
-            .into_iter()
-            .find_map(|v| parse_cap(v, 1))
-            .unwrap_or(configured.max_connections);
-        let per_ip_overrides = value(MAX_CONNECTIONS_PER_IP_OVERRIDES)
-            .into_iter()
-            .find_map(parse_overrides)
-            .unwrap_or_default();
+        let max_connections = pick(
+            &value(MAX_CONNECTIONS),
+            |v| parse_cap(v, 1),
+            previous.map(|p| p.max_connections),
+            configured.max_connections,
+        );
+        let per_ip_overrides = pick(
+            &value(MAX_CONNECTIONS_PER_IP_OVERRIDES),
+            parse_overrides,
+            previous.map(|p| p.per_ip_overrides.clone()),
+            BTreeMap::new(),
+        );
         // `KafkaConfig.validateValues` allows a per-IP cap of 0 only beside
         // overrides.
         let per_ip_min = i32::from(per_ip_overrides.is_empty());
-        let max_connections_per_ip = value(MAX_CONNECTIONS_PER_IP)
-            .into_iter()
-            .find_map(|v| parse_cap(v, per_ip_min))
-            .unwrap_or(configured.max_connections_per_ip);
-        let listener_max_connections = value(&listener_key(listener, MAX_CONNECTIONS))
-            .into_iter()
-            .find_map(|v| parse_cap(v, 1))
-            .unwrap_or(max_connections);
-        let max_connection_creation_rate = value(MAX_CONNECTION_CREATION_RATE)
-            .into_iter()
-            .find_map(parse_rate)
-            .and_then(limited);
-        let listener_max_connection_creation_rate =
-            value(&listener_key(listener, MAX_CONNECTION_CREATION_RATE))
-                .into_iter()
-                .find_map(parse_rate)
-                .map_or(max_connection_creation_rate, limited);
+        let max_connections_per_ip = pick(
+            &value(MAX_CONNECTIONS_PER_IP),
+            |v| parse_cap(v, per_ip_min),
+            previous.map(|p| p.max_connections_per_ip),
+            configured.max_connections_per_ip,
+        );
+        let listener_max_connections = pick(
+            &value(&listener_key(listener, MAX_CONNECTIONS)),
+            |v| parse_cap(v, 1),
+            previous.map(|p| p.listener_max_connections),
+            max_connections,
+        );
+        let max_connection_creation_rate = pick(
+            &value(MAX_CONNECTION_CREATION_RATE),
+            |v| parse_rate(v).map(limited),
+            previous.map(|p| p.max_connection_creation_rate),
+            None,
+        );
+        let listener_max_connection_creation_rate = pick(
+            &value(&listener_key(listener, MAX_CONNECTION_CREATION_RATE)),
+            |v| parse_rate(v).map(limited),
+            previous.map(|p| p.listener_max_connection_creation_rate),
+            max_connection_creation_rate,
+        );
         Self {
             max_connections,
             max_connections_per_ip,
@@ -289,8 +323,37 @@ mod tests {
             set_broker_config(&mut image, *node, name, value);
         }
         assert2::assert!(
-            ConnectionQuotaSettings::resolve(&image, NodeId(1), "PLAINTEXT", CONFIGURED) == want
+            ConnectionQuotaSettings::resolve(&image, NodeId(1), "PLAINTEXT", CONFIGURED, None)
+                == want
         );
+    }
+
+    /// A refused value keeps the value in force before it, which an unset
+    /// key does not: after `max.connections=2`, a stored 0 keeps 2, and a
+    /// deleted key returns to the static cap.
+    #[yare::parameterized(
+        refused_keeps_previous = { Some("0"), 2 },
+        unparsable_keeps_previous = { Some("lots"), 2 },
+        deleted_returns_to_static = { None, 10 },
+        valid_replaces_previous = { Some("4"), 4 },
+    )]
+    fn a_refused_value_keeps_the_previous_one(next: Option<&str>, want: usize) {
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        set_broker_config(&mut image, None, MAX_CONNECTIONS, "2");
+        let previous =
+            ConnectionQuotaSettings::resolve(&image, NodeId(1), "PLAINTEXT", CONFIGURED, None);
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        if let Some(value) = next {
+            set_broker_config(&mut image, None, MAX_CONNECTIONS, value);
+        }
+        let got = ConnectionQuotaSettings::resolve(
+            &image,
+            NodeId(1),
+            "PLAINTEXT",
+            CONFIGURED,
+            Some(&previous),
+        );
+        assert2::assert!((got.max_connections, got.listener_max_connections) == (want, want));
     }
 
     #[yare::parameterized(

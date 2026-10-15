@@ -83,6 +83,9 @@ pub struct ConnectionLimiter {
     counts: Arc<Mutex<Counts>>,
     rates: Arc<Mutex<CreationRates>>,
     overrides: Arc<OverrideAddresses>,
+    /// The settings last resolved for each listener, which a refused value
+    /// leaves in force.
+    applied: Arc<Mutex<HashMap<String, ConnectionQuotaSettings>>>,
 }
 
 /// The connection ceiling that refused an inbound connection.
@@ -115,6 +118,7 @@ impl ConnectionLimiter {
             counts: Arc::default(),
             rates: Arc::default(),
             overrides: Arc::default(),
+            applied: Arc::default(),
         }
     }
 
@@ -122,17 +126,30 @@ impl ConnectionLimiter {
     #[must_use]
     pub const fn limits(&self) -> ConnectionLimits { self.configured }
 
-    /// The quotas in force on `listener` of `node_id` as of `image`. A new
-    /// `max.connections.per.ip.overrides` value has its hosts resolved here,
-    /// once.
-    pub async fn quotas(
+    /// The quotas in force on `listener` of `node_id` as of `image`. A value
+    /// Kafka would refuse leaves the listener's previous value in force. A new
+    /// `max.connections.per.ip.overrides` set that names a host is resolved in
+    /// the background, so this never waits on DNS. It must be called within a
+    /// Tokio runtime.
+    #[must_use]
+    pub fn quotas(
         &self,
         image: &MetadataImage,
         node_id: NodeId,
         listener: &str,
     ) -> ConnectionQuotas {
-        let settings = ConnectionQuotaSettings::resolve(image, node_id, listener, self.configured);
-        let per_ip_overrides = self.overrides.addresses(&settings.per_ip_overrides).await;
+        let name = listener.to_ascii_uppercase();
+        let mut applied = lock(&self.applied);
+        let settings = ConnectionQuotaSettings::resolve(
+            image,
+            node_id,
+            listener,
+            self.configured,
+            applied.get(&name),
+        );
+        applied.insert(name, settings.clone());
+        drop(applied);
+        let per_ip_overrides = self.overrides.addresses(&settings.per_ip_overrides);
         ConnectionQuotas {
             settings,
             per_ip_overrides,
@@ -162,6 +179,20 @@ impl ConnectionLimiter {
             now,
             max_delay,
         )
+    }
+
+    /// Take back a connection [`Self::creation_delay`] recorded, for one the
+    /// peer's `ip` quota throttles, as Kafka's `updateListenerMetrics`
+    /// un-records it from the broker-wide and listener rates.
+    pub fn refund_creation(&self, listener: AcceptingListener<'_>, quotas: &ConnectionQuotas) {
+        lock(&self.rates).refund(
+            listener.name,
+            listener.protected,
+            (
+                quotas.settings.max_connection_creation_rate,
+                quotas.settings.listener_max_connection_creation_rate,
+            ),
+        );
     }
 
     /// Try to reserve a slot for a connection from `ip` on `listener` under

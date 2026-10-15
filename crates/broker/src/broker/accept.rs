@@ -110,8 +110,7 @@ pub(super) async fn accept_loop(
                         // does.
                         let quotas = broker
                             .connections
-                            .quotas(&broker.controller.current_image(), broker.config.node_id, &spec.name)
-                            .await;
+                            .quotas(&broker.controller.current_image(), broker.config.node_id, &spec.name);
                         let delay = broker.connections.creation_delay(
                             accepting,
                             &quotas,
@@ -136,6 +135,9 @@ pub(super) async fn accept_loop(
                         // accepting other connections meanwhile, as Kafka's
                         // acceptor does with `throttledSockets`.
                         if let Some(delay) = connection_creation_throttle(&broker, peer_ip) {
+                            // Kafka un-records a throttled connection from
+                            // the broker-wide and listener rates.
+                            broker.connections.refund_creation(accepting, &quotas);
                             broker.metrics.observe_quota_throttle(
                                 crate::metrics::QuotaType::ConnectionCreation,
                                 delay.secs_f64(),
