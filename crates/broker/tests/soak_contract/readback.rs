@@ -77,25 +77,23 @@ async fn groupless(bootstrap: &str, isolation: Isolation) -> Result<Consumer, Co
         .await
 }
 
-/// The end offset of every partition at `isolation`.
-async fn end_offsets(
-    bootstrap: &str,
-    isolation: Isolation,
-    partitions: &[(String, i32)],
-) -> Result<BTreeMap<i32, i64>, String> {
+/// Build a consumer, ask it one question, and close it, retrying the whole
+/// round up to [`LOOKUP_ATTEMPTS`] times a second apart. A cluster that is
+/// still recovering from the last fault answers the first attempts with a
+/// connection error or a coordinator move.
+async fn ask_consumer<T, B, Q>(build: B, query: Q) -> Result<T, String>
+where
+    B: AsyncFn() -> Result<Consumer, ConsumerError>,
+    Q: AsyncFn(&Consumer) -> Result<T, ConsumerError>,
+{
     let mut last = String::new();
     for _ in 0..LOOKUP_ATTEMPTS {
-        match groupless(bootstrap, isolation).await {
+        match build().await {
             Ok(consumer) => {
-                let ends = consumer.end_offsets(partitions).await;
+                let answer = query(&consumer).await;
                 let _ = consumer.close().await;
-                match ends {
-                    Ok(ends) => {
-                        return Ok(ends
-                            .into_iter()
-                            .map(|((_, partition), end)| (partition, end))
-                            .collect());
-                    }
+                match answer {
+                    Ok(answer) => return Ok(answer),
                     Err(error) => last = error.to_string(),
                 }
             }
@@ -104,6 +102,23 @@ async fn end_offsets(
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
     Err(last)
+}
+
+/// The end offset of every partition at `isolation`.
+async fn end_offsets(
+    bootstrap: &str,
+    isolation: Isolation,
+    partitions: &[(String, i32)],
+) -> Result<BTreeMap<i32, i64>, String> {
+    let ends = ask_consumer(
+        async || groupless(bootstrap, isolation).await,
+        async |consumer: &Consumer| consumer.end_offsets(partitions).await,
+    )
+    .await?;
+    Ok(ends
+        .into_iter()
+        .map(|((_, partition), end)| (partition, end))
+        .collect())
 }
 
 /// Wait until no transaction is open on `path`, so a `read_committed`
@@ -392,39 +407,26 @@ async fn committed(
     group: &str,
     partitions: &[(String, i32)],
 ) -> Result<BTreeMap<i32, i64>, String> {
-    let mut last = String::new();
-    for _ in 0..LOOKUP_ATTEMPTS {
-        // A consumer with a group id that never subscribes never joins, so
-        // it reads the group's offsets without becoming a member of it.
-        let consumer = Consumer::builder()
+    // A consumer with a group id that never subscribes never joins, so it
+    // reads the group's offsets without becoming a member of it.
+    let build = async || {
+        Consumer::builder()
             .bootstrap(bootstrap.to_owned())
             .client_id(format!("{group}-checker"))
             .group_id(group.to_owned())
             .enable_auto_commit(false)
             .default_api_timeout(secs(15))
             .build()
-            .await;
-        match consumer {
-            Ok(consumer) => {
-                let fetched = consumer.committed(partitions).await;
-                let _ = consumer.close().await;
-                match fetched {
-                    Ok(fetched) => {
-                        return Ok(fetched
-                            .into_iter()
-                            .filter_map(|((_, partition), offset)| {
-                                offset.map(|offset| (partition, offset.offset))
-                            })
-                            .collect());
-                    }
-                    Err(error) => last = error.to_string(),
-                }
-            }
-            Err(error) => last = error.to_string(),
-        }
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
-    Err(last)
+            .await
+    };
+    let fetched = ask_consumer(build, async |consumer: &Consumer| {
+        consumer.committed(partitions).await
+    })
+    .await?;
+    Ok(fetched
+        .into_iter()
+        .filter_map(|((_, partition), offset)| offset.map(|offset| (partition, offset.offset)))
+        .collect())
 }
 
 /// One [`CommitCheck`] per partition of `acknowledged`: the last commit the

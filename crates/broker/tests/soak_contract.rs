@@ -111,21 +111,16 @@ use {
         schedule::{ScheduledFault, expand},
         verdict::{judge, judge_self_check},
     },
-    krabka_client_core::Client,
-    krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest},
+    krabka_protocol::owned::create_topics_request::CreatableTopic,
     krabka_units::prelude::*,
     std::{
         collections::BTreeMap,
         path::{Path, PathBuf},
         sync::Arc,
-        time::{Duration, Instant},
+        time::Duration,
     },
     tokio::task::JoinHandle,
 };
-
-/// `TOPIC_ALREADY_EXISTS`: a retried `CreateTopics` whose first attempt
-/// landed.
-const TOPIC_ALREADY_EXISTS: i16 = 36;
 
 /// The contract this run executes.
 fn contract_source() -> PathBuf {
@@ -154,32 +149,9 @@ async fn create_topics(bootstrap: &str, contract: &Contract) {
             }
         })
         .collect();
-    let deadline = Instant::now() + Duration::from_secs(180);
-    let mut last = String::new();
-    while Instant::now() < deadline {
-        if let Ok(admin) = Client::builder().bootstrap(bootstrap).build().await {
-            match admin
-                .send(CreateTopicsRequest {
-                    topics: topics.clone(),
-                    timeout_ms: 30_000,
-                    ..Default::default()
-                })
-                .await
-            {
-                Ok(response)
-                    if response.topics.iter().all(|topic| {
-                        topic.error_code == 0 || topic.error_code == TOPIC_ALREADY_EXISTS
-                    }) =>
-                {
-                    return;
-                }
-                Ok(response) => last = format!("{:?}", response.topics),
-                Err(error) => last = format!("{error}"),
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+    if let Err(last) = cluster::create_topics(bootstrap, &topics).await {
+        panic!("could not create the contract's topics on {bootstrap}: {last}");
     }
-    panic!("could not create the contract's topics on {bootstrap}: {last}");
 }
 
 /// Sleep until `at`, Unix milliseconds.

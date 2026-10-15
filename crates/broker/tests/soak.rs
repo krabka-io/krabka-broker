@@ -322,28 +322,9 @@ async fn create_topics(bootstrap: &str) {
         ]),
     ];
 
-    // A cluster that has just booted is still electing; the first attempts are
-    // expected to fail on the connection or on a missing controller.
-    let deadline = Instant::now() + Duration::from_secs(180);
-    let mut last = String::new();
-    while Instant::now() < deadline {
-        if let Ok(admin) = Client::builder().bootstrap(bootstrap).build().await {
-            match admin
-                .send(CreateTopicsRequest {
-                    topics: topics.clone(),
-                    timeout_ms: 30_000,
-                    ..Default::default()
-                })
-                .await
-            {
-                Ok(response) if response.topics.iter().all(|t| t.error_code == 0) => return,
-                Ok(response) => last = format!("{:?}", response.topics),
-                Err(error) => last = format!("{error}"),
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+    if let Err(last) = cluster::create_topics(bootstrap, &topics).await {
+        panic!("could not create the soak topics on {bootstrap}: {last}");
     }
-    panic!("could not create the soak topics on {bootstrap}: {last}");
 }
 
 /// One topic config name and the value it is set to.

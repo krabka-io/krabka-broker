@@ -32,7 +32,12 @@
 
 pub(crate) use crate::support::docker;
 use {
-    crate::support::{free_port, remove_container_with_volumes, storage::host_directory_user},
+    crate::support::{
+        free_port,
+        load_test::{Client, CreatableTopic, CreateTopicsRequest},
+        remove_container_with_volumes,
+        storage::host_directory_user,
+    },
     assert2::assert,
     std::{
         path::{Path, PathBuf},
@@ -398,4 +403,50 @@ impl SoakCluster {
             }
         }
     }
+}
+
+/// `TOPIC_ALREADY_EXISTS`: what a retried `CreateTopics` gets when its first
+/// attempt landed and only the answer was lost.
+const TOPIC_ALREADY_EXISTS: i16 = 36;
+
+/// How long a freshly booted cluster gets to accept its topics.
+const CREATE_TOPICS_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// Create `topics` through `bootstrap`, retrying while a cluster that has just
+/// booted is still electing: the first attempts are expected to fail on the
+/// connection or on a missing controller. A topic that already exists counts
+/// as created.
+///
+/// Returns the last answer when the cluster has not accepted every topic
+/// within [`CREATE_TOPICS_TIMEOUT`].
+pub(crate) async fn create_topics(
+    bootstrap: &str,
+    topics: &[CreatableTopic],
+) -> Result<(), String> {
+    let deadline = Instant::now() + CREATE_TOPICS_TIMEOUT;
+    let mut last = String::new();
+    while Instant::now() < deadline {
+        if let Ok(admin) = Client::builder().bootstrap(bootstrap).build().await {
+            match admin
+                .send(CreateTopicsRequest {
+                    topics: topics.to_vec(),
+                    timeout_ms: 30_000,
+                    ..Default::default()
+                })
+                .await
+            {
+                Ok(response)
+                    if response.topics.iter().all(|topic| {
+                        topic.error_code == 0 || topic.error_code == TOPIC_ALREADY_EXISTS
+                    }) =>
+                {
+                    return Ok(());
+                }
+                Ok(response) => last = format!("{:?}", response.topics),
+                Err(error) => last = format!("{error}"),
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    Err(last)
 }

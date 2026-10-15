@@ -13,7 +13,9 @@
 //! to recover.
 
 use {
-    super::contract::{Contract, ContractError, FaultKind, RecoveryCheck, Target, human},
+    super::contract::{
+        Contract, ContractError, FaultKind, RecoveryCheck, RecoveryDeadlines, Target, human,
+    },
     krabka_units::prelude::*,
     serde::{Deserialize, Serialize},
 };
@@ -39,6 +41,27 @@ impl ScheduledFault {
     /// When the fault's cleanup runs, from the start of the load.
     #[must_use]
     pub fn end(&self) -> Time { self.start + self.duration }
+
+    /// The longest of the contract's deadlines among the recoveries this
+    /// fault is measured for: how long after [`Self::end`] the cluster may
+    /// still be recovering from it.
+    ///
+    /// It is the contract's own deadline, never a self-check override: the
+    /// override is a judging device, and the cluster is given its real
+    /// deadline to recover.
+    #[must_use]
+    pub fn recovery_budget(&self, deadlines: &RecoveryDeadlines) -> Time {
+        self.checks
+            .iter()
+            .map(|check| check.deadline(deadlines))
+            .fold(Time::ZERO, |longest, deadline| {
+                if deadline > longest {
+                    deadline
+                } else {
+                    longest
+                }
+            })
+    }
 }
 
 /// `SplitMix64`, the generator `java.util.SplittableRandom` uses: one 64-bit
@@ -129,19 +152,19 @@ pub fn expand(contract: &Contract) -> Result<Vec<ScheduledFault>, Vec<ContractEr
     });
 
     for fault in &schedule {
-        if fault.end() + recovery_budget(contract, fault) > quiet_from {
+        if fault.end() + fault.recovery_budget(&contract.deadlines) > quiet_from {
             errors.push(ContractError(format!(
                 "fault `{}` ends at {} and may recover until {}, inside the settle window that starts at {}",
                 fault.id,
                 human(fault.end()),
-                human(fault.end() + recovery_budget(contract, fault)),
+                human(fault.end() + fault.recovery_budget(&contract.deadlines)),
                 human(quiet_from)
             )));
         }
     }
     for pair in schedule.windows(2) {
         let [earlier, later] = pair else { continue };
-        let free_at = earlier.end() + recovery_budget(contract, earlier);
+        let free_at = earlier.end() + earlier.recovery_budget(&contract.deadlines);
         if later.start < free_at {
             errors.push(ContractError(format!(
                 "fault `{}` starts at {} and overlaps `{}`, which with its recovery deadlines runs until {}",
@@ -157,21 +180,6 @@ pub fn expand(contract: &Contract) -> Result<Vec<ScheduledFault>, Vec<ContractEr
     } else {
         Err(errors)
     }
-}
-
-/// The longest deadline among the recoveries `fault` is measured for.
-fn recovery_budget(contract: &Contract, fault: &ScheduledFault) -> Time {
-    fault
-        .checks
-        .iter()
-        .map(|check| check.deadline(&contract.deadlines))
-        .fold(Time::ZERO, |longest, deadline| {
-            if deadline > longest {
-                deadline
-            } else {
-                longest
-            }
-        })
 }
 
 fn u64_to_f64(n: u64) -> f64 { f64::from(u32::try_from(n).unwrap_or(u32::MAX)) }

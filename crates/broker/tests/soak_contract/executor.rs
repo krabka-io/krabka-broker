@@ -17,7 +17,7 @@ use {
         topology::{
             Nodes, TopicPartition, isr_complete, led_by, not_failed_over, resolve_target, role_of,
         },
-        windows::{Span, Windows, recovery_budget},
+        windows::{Span, Windows},
     },
     krabka_bench_driver::soak::{
         contract::{Contract, FaultKind, RecoveryCheck},
@@ -179,7 +179,7 @@ impl Executor {
                 record.cleanup_error = Some(format!("not injected: {error}"));
                 self.windows.cleared(Span {
                     start: injected,
-                    end: now_ms() + recovery_budget(&self.contract, fault).millis_i64(),
+                    end: now_ms() + fault.recovery_budget(&self.contract.deadlines).millis_i64(),
                 });
                 self.log.append(&record);
                 return (record, Vec::new());
@@ -216,7 +216,7 @@ impl Executor {
         }
         self.windows.cleared(Span {
             start: injected,
-            end: cleared + recovery_budget(&self.contract, fault).millis_i64(),
+            end: cleared + fault.recovery_budget(&self.contract.deadlines).millis_i64(),
         });
         self.log.append(&record);
         eprintln!(

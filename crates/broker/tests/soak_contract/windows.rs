@@ -37,24 +37,6 @@ impl Span {
     fn contains(self, at: i64) -> bool { self.start <= at && at < self.end }
 }
 
-/// The longest contract deadline among the recoveries `fault` is measured for.
-///
-/// The contract's own deadline, not a self-check override: the override is a
-/// judging device, and the cluster is given its real deadline to recover.
-pub(crate) fn recovery_budget(contract: &Contract, fault: &ScheduledFault) -> Time {
-    fault
-        .checks
-        .iter()
-        .map(|check| check.deadline(&contract.deadlines))
-        .fold(Time::ZERO, |longest, deadline| {
-            if deadline > longest {
-                deadline
-            } else {
-                longest
-            }
-        })
-}
-
 /// The disturbed span the schedule plans for `fault`, for a load that
 /// started at `load_start_ms`.
 pub(crate) fn planned_span(
@@ -64,7 +46,8 @@ pub(crate) fn planned_span(
 ) -> Span {
     Span {
         start: load_start_ms + fault.start.millis_i64(),
-        end: load_start_ms + (fault.end() + recovery_budget(contract, fault)).millis_i64(),
+        end: load_start_ms
+            + (fault.end() + fault.recovery_budget(&contract.deadlines)).millis_i64(),
     }
 }
 
