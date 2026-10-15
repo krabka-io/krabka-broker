@@ -9,10 +9,10 @@
 //! The two grammars are not identical. [`translate`] rewrites a pattern as
 //! RE2J 1.8's `Parser` reads it before `regex` compiles it: `\Q...\E` quoting,
 //! escapes RE2J reads as literals (`\<`, `\_`, octal), and character classes,
-//! where RE2J has no set operations or nested classes. Counted repetition is
-//! not translated: RE2J reads a `{` that does not open a valid count, and
-//! `{,n}`, as literal text, and refuses counts over 1000, where `regex` differs.
-//! `regex`'s compiled-size limit is the other known acceptance difference.
+//! where RE2J has no set operations or nested classes, and counted
+//! repetition, where RE2J reads a `{` that opens no count as a literal and
+//! refuses a count over 1000. `regex`'s compiled-size limit is the one known
+//! acceptance difference left.
 //!
 //! The inline flags are screened, because that is the divergence a client is
 //! likely to hit: `regex` takes `x`, `u` and `R`, and RE2J refuses them.
@@ -78,7 +78,8 @@ pub(crate) fn unsupported_inline_flag(pattern: &str) -> Option<char> {
     None
 }
 
-/// RE2J's `ERR_INVALID_REPEAT_OP`, its message for a possessive quantifier.
+/// RE2J's `ERR_INVALID_REPEAT_OP`, its message for a repetition of a
+/// repetition, a possessive quantifier among them.
 pub(crate) const INVALID_REPEAT_OP: &str = "invalid nested repetition operator";
 
 /// RE2J's `ERR_INVALID_CHAR_RANGE`.
@@ -90,8 +91,14 @@ const INVALID_ESCAPE: &str = "invalid escape sequence";
 /// RE2J's `ERR_MISSING_BRACKET`.
 const MISSING_BRACKET: &str = "missing closing ]";
 
+/// RE2J's `ERR_INVALID_REPEAT_SIZE`.
+const INVALID_REPEAT_SIZE: &str = "invalid repeat count";
+
 /// RE2J's `ERR_TRAILING_BACKSLASH`.
 const TRAILING_BACKSLASH: &str = "trailing backslash at end of expression";
+
+/// The largest count RE2J's `Parser.parseRepeat` takes.
+const MAX_REPEAT: u32 = 1000;
 
 /// Kafka's `String` protocol type is bounded by a signed 16-bit byte length.
 const MAX_PATTERN_BYTES: usize = i16::MAX as usize;
@@ -111,8 +118,8 @@ const PERL_CLASSES: [char; 6] = ['d', 'D', 's', 'S', 'w', 'W'];
 /// It follows RE2J 1.8's `Parser`: `\Q...\E` becomes escaped literals, an
 /// escape that RE2J reads as a literal becomes that literal, and a character
 /// class is rebuilt member by member, so `&&`, `--`, `~~` and a nested `[`
-/// stay the plain members RE2J reads rather than Rust's set operations.
-/// Assertions and Perl and Unicode classes pass through as written.
+/// stay the plain members RE2J reads rather than Rust's set operations. A
+/// `{` that opens no count becomes a literal. Assertions and Perl and Unicode classes pass through as written.
 fn translate(pattern: &str) -> Result<String, String> {
     let chars: Vec<char> = pattern.chars().collect();
     let mut out = String::with_capacity(pattern.len());
@@ -121,6 +128,7 @@ fn translate(pattern: &str) -> Result<String, String> {
         index = match current {
             '[' => translate_class(&chars, index, &mut out)?,
             '\\' => translate_escape(&chars, index, &mut out)?,
+            '{' => translate_count(&chars, index, &mut out)?,
             _ => {
                 out.push(current);
                 index + 1
@@ -128,6 +136,60 @@ fn translate(pattern: &str) -> Result<String, String> {
         };
     }
     Ok(out)
+}
+
+/// Translates the `{` at `chars[start]`, outside a class, as RE2J's
+/// `Parser.parseRepeat` reads it, and returns the index after it.
+///
+/// Only `{n}`, `{n,}` and `{n,m}` are counts. Any other `{` is a literal, `{,n}`
+/// and a count with a leading zero among them, where Rust's `regex` either
+/// refuses the pattern or reads a count. RE2J refuses a count over 1000 that
+/// `regex` would take.
+fn translate_count(chars: &[char], start: usize, out: &mut String) -> Result<usize, String> {
+    let Some((min, max, close)) = counted_repeat(chars, start) else {
+        out.push_str(r"\{");
+        return Ok(start + 1);
+    };
+    if min > MAX_REPEAT || max.is_some_and(|max| max > MAX_REPEAT || max < min) {
+        return Err(INVALID_REPEAT_SIZE.to_owned());
+    }
+    out.extend(&chars[start..=close]);
+    Ok(close + 1)
+}
+
+/// Reads the count `{n}`, `{n,}` or `{n,m}` at `chars[start]`, returning its
+/// minimum, its maximum (`None` when open) and the index of its `}`.
+fn counted_repeat(chars: &[char], start: usize) -> Option<(u32, Option<u32>, usize)> {
+    let (min, after_min) = decimal(chars, start + 1)?;
+    let (max, close) = if chars.get(after_min) != Some(&',') {
+        (Some(min), after_min)
+    } else if chars.get(after_min + 1) == Some(&'}') {
+        (None, after_min + 1)
+    } else {
+        let (max, after_max) = decimal(chars, after_min + 1)?;
+        (Some(max), after_max)
+    };
+    (chars.get(close) == Some(&'}')).then_some((min, max, close))
+}
+
+/// Reads the decimal at `chars[start]` as RE2J's `Parser.parseInt` does,
+/// returning its value and the index after it. An empty number and one with a
+/// leading zero are not numbers.
+fn decimal(chars: &[char], start: usize) -> Option<(u32, usize)> {
+    let digits: Vec<u32> = chars
+        .get(start..)?
+        .iter()
+        .map_while(|digit| digit.to_digit(10))
+        .collect();
+    if digits.is_empty() || (digits.len() > 1 && digits[0] == 0) {
+        return None;
+    }
+    // Nine digits fit a `u32`, and any count past them is refused all the same.
+    let value = digits
+        .iter()
+        .take(9)
+        .fold(0, |value, digit| value * 10 + digit);
+    Some((value, start + digits.len()))
 }
 
 /// Translates the escape at `chars[start]`, outside a class, and returns the
@@ -351,46 +413,56 @@ fn push_literal(out: &mut String, literal: char) {
     out.push_str(&regex::escape(literal.encode_utf8(&mut [0; 4])));
 }
 
-/// Whether `pattern` carries a possessive quantifier (`a*+`, `a++`, `a?+`,
-/// `a{2,3}+`).
+/// Whether `pattern` stacks one repetition on another (`a**`, `a{2}{3}`,
+/// `a*??`), possessive quantifiers (`a*+`, `a{2,3}+`) among them.
 ///
-/// RE2 has no possessive quantifiers and refuses them. Rust's `regex` reads
-/// `a*+` as a repetition of a repetition and compiles it, so the scan is what
-/// keeps the two engines on the same answer. It tracks escapes and character
+/// RE2J's `Parser.repeat` refuses a repetition operator right after another,
+/// past the one `?` that makes it lazy. Rust's `regex` reads `a**` as a
+/// repetition of a repetition and compiles it, so the scan is what keeps the
+/// two engines on the same answer. It runs on the translated pattern, where an
+/// unescaped `{` always opens a count, and it tracks escapes and character
 /// classes, so a literal `+` is left alone.
-pub(crate) fn possessive_quantifier(pattern: &str) -> bool {
+pub(crate) fn stacked_repetition(pattern: &str) -> bool {
     let chars: Vec<char> = pattern.chars().collect();
     let mut index = 0;
     let mut in_class = false;
     let mut after_repeat = false;
-    while index < chars.len() {
-        let current = chars[index];
+    let mut lazy = false;
+    while let Some(&current) = chars.get(index) {
+        index += 1;
         if current == '\\' {
-            index += 2;
+            index += 1;
             after_repeat = false;
             continue;
         }
         if in_class {
             in_class = current != ']';
-            index += 1;
             after_repeat = false;
             continue;
         }
         match current {
-            '[' => {
-                in_class = true;
-                after_repeat = false;
-            }
-            '*' | '?' | '}' => after_repeat = true,
-            '+' => {
+            '*' | '+' | '?' | '{' => {
                 if after_repeat {
+                    if current == '?' && !lazy {
+                        lazy = true;
+                        continue;
+                    }
                     return true;
                 }
                 after_repeat = true;
+                lazy = false;
+                if current == '{' {
+                    index += chars[index..]
+                        .iter()
+                        .position(|&candidate| candidate == '}')
+                        .map_or(chars.len() - index, |offset| offset + 1);
+                }
             }
-            _ => after_repeat = false,
+            _ => {
+                in_class = current == '[';
+                after_repeat = false;
+            }
         }
-        index += 1;
     }
     false
 }
@@ -435,7 +507,7 @@ pub(crate) fn compile_full_match(pattern: &str) -> Result<regex::Regex, String> 
     if unsupported_inline_flag(&translated).is_some() {
         return Err(INVALID_PERL_OP.to_owned());
     }
-    if possessive_quantifier(&translated) {
+    if stacked_repetition(&translated) {
         return Err(INVALID_REPEAT_OP.to_owned());
     }
     // Compile the pattern on its own first, so the error text names what the
@@ -513,6 +585,17 @@ mod tests {
         repeated_unicode_class = { r"\p{Greek}+", &["αβ"], &["a"] },
         repeated_one_letter_unicode_class = { r"\pL{2}", &["ab"], &["a"] },
         case_folded_class = { "(?i)[a-c]+", &["aBC"], &["d"] },
+        exact_count = { "a{2}", &["aa"], &["a", "aaa"] },
+        open_count = { "a{2,}", &["aa", "aaaa"], &["a"] },
+        lazy_bounded_count = { "a{2,3}?", &["aa", "aaa"], &["a"] },
+        largest_count = { "a{1000}", &[], &["a"] },
+        missing_minimum_is_literal = { "a{,5}", &["a{,5}"], &["a", "aaa"] },
+        unclosed_brace_is_literal = { "a{", &["a{"], &["a"] },
+        word_in_braces_is_literal = { "a{x}", &["a{x}"], &["a"] },
+        leading_zero_is_literal = { "a{01}", &["a{01}"], &["a"] },
+        malformed_maximum_is_literal = { "a{2,1x}", &["a{2,1x}"], &["aa"] },
+        lone_braces_are_literal = { "{}", &["{}"], &[""] },
+        repeated_group_of_count = { "(a{2})*", &["", "aaaa"], &["a"] },
     )]
     fn accepted_patterns_match_like_re2j(pattern: &str, matches: &[&str], misses: &[&str]) {
         let compiled = compile_full_match(pattern)
@@ -543,6 +626,15 @@ mod tests {
         unknown_letter_escape = { r"\q", INVALID_ESCAPE },
         bad_hex_escape = { r"\x{}", INVALID_ESCAPE },
         trailing_backslash = { "a\\", TRAILING_BACKSLASH },
+        count_over_limit = { "a{1001}", INVALID_REPEAT_SIZE },
+        maximum_over_limit = { "a{2,1001}", INVALID_REPEAT_SIZE },
+        descending_count = { "a{3,2}", INVALID_REPEAT_SIZE },
+        overflowing_count = { "a{123456789}", INVALID_REPEAT_SIZE },
+        stacked_counts = { "a{2}{3}", INVALID_REPEAT_OP },
+        stacked_stars = { "a**", INVALID_REPEAT_OP },
+        count_after_star = { "a*{2}", INVALID_REPEAT_OP },
+        star_after_count = { "a{2}*", INVALID_REPEAT_OP },
+        stacked_lazy_markers = { "a*??", INVALID_REPEAT_OP },
     )]
     fn refused_patterns_carry_re2j_messages(pattern: &str, message: &str) {
         check!(compile_full_match(pattern).err().as_deref() == Some(message));
