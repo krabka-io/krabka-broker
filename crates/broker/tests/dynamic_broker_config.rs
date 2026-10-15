@@ -564,6 +564,33 @@ async fn describe_reports_dynamic_values_and_redacts_passwords() {
     }
 }
 
+/// Alter the cluster-default `BROKER` resource and check the alter was
+/// accepted.
+async fn alter_cluster_default(
+    addr: SocketAddr,
+    configs: Vec<(&str, ConfigOperation, Option<&str>)>,
+) {
+    let row = alter_broker()
+        .addr(addr)
+        .resource_name(String::new())
+        .configs(configs)
+        .call()
+        .await;
+    assert!(row == accepted(String::new()));
+}
+
+/// Hold two connections from `source`, and report whether a third reaches
+/// the `served` state within [`PROPAGATION`].
+async fn third_served_after_two(addr: SocketAddr, source: Option<IpAddr>, served: bool) -> bool {
+    let held = (
+        hold_one_from(addr, source).await,
+        hold_one_from(addr, source).await,
+    );
+    let reached = eventually_served_from(addr, source, served).await;
+    drop(held);
+    reached
+}
+
 /// The controller listener of a combined node takes the same dynamic caps,
 /// as Kafka's `DynamicBrokerConfig.addReconfigurables(controller)` registers
 /// the controller's `SocketServer`. The node's own raft and forwarding
@@ -575,47 +602,27 @@ async fn per_ip_cap_applies_to_the_controller_listener() {
     let controller = handle.controller_addr();
     let source = Some(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)));
 
-    let set = alter_broker()
-        .addr(addr)
-        .resource_name(String::new())
-        .configs(vec![(
-            "max.connections.per.ip",
-            ConfigOperation::Set,
-            Some("2"),
-        )])
-        .call()
-        .await;
-    assert!(set == accepted(String::new()));
-    let held = (
-        hold_one_from(controller, source).await,
-        hold_one_from(controller, source).await,
-    );
+    alter_cluster_default(addr, vec![(
+        "max.connections.per.ip",
+        ConfigOperation::Set,
+        Some("2"),
+    )])
+    .await;
     assert!(
-        eventually_served_from(controller, source, false).await,
+        third_served_after_two(controller, source, false).await,
         "max.connections.per.ip=2 must refuse a third controller connection while two are held"
     );
-    drop(held);
 
-    let deleted = alter_broker()
-        .addr(addr)
-        .resource_name(String::new())
-        .configs(vec![(
-            "max.connections.per.ip",
-            ConfigOperation::Delete,
-            None,
-        )])
-        .call()
-        .await;
-    assert!(deleted == accepted(String::new()));
-    let held = (
-        hold_one_from(controller, source).await,
-        hold_one_from(controller, source).await,
-    );
+    alter_cluster_default(addr, vec![(
+        "max.connections.per.ip",
+        ConfigOperation::Delete,
+        None,
+    )])
+    .await;
     assert!(
-        eventually_served_from(controller, source, true).await,
+        third_served_after_two(controller, source, true).await,
         "deleting max.connections.per.ip must lift the controller listener's cap"
     );
-    drop(held);
 }
 
 /// `max.connections.per.ip=0` is stored, as Kafka's controller validates
@@ -625,17 +632,12 @@ async fn per_ip_cap_applies_to_the_controller_listener() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn zero_per_ip_cap_without_overrides_is_stored_but_not_applied() {
     let (_handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
-    let set = alter_broker()
-        .addr(addr)
-        .resource_name(String::new())
-        .configs(vec![(
-            "max.connections.per.ip",
-            ConfigOperation::Set,
-            Some("0"),
-        )])
-        .call()
-        .await;
-    assert!(set == accepted(String::new()));
+    alter_cluster_default(addr, vec![(
+        "max.connections.per.ip",
+        ConfigOperation::Set,
+        Some("0"),
+    )])
+    .await;
     let stored = describe_broker(addr, String::new(), "max.connections.per.ip")
         .await
         .and_then(|entry| entry.value);
@@ -657,45 +659,33 @@ const OTHER_CLIENT: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn per_ip_overrides_apply_and_lift_without_restart() {
     let (_handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
-    let set = alter_broker()
-        .addr(addr)
-        .resource_name(String::new())
-        .configs(vec![
-            ("max.connections.per.ip", ConfigOperation::Set, Some("0")),
-            (
-                "max.connections.per.ip.overrides",
-                ConfigOperation::Set,
-                Some("127.0.0.1:2"),
-            ),
-        ])
-        .call()
-        .await;
-    assert!(set == accepted(String::new()));
+    alter_cluster_default(addr, vec![
+        ("max.connections.per.ip", ConfigOperation::Set, Some("0")),
+        (
+            "max.connections.per.ip.overrides",
+            ConfigOperation::Set,
+            Some("127.0.0.1:2"),
+        ),
+    ])
+    .await;
     assert!(
         eventually_served_from(addr, Some(OTHER_CLIENT), false).await,
         "127.0.0.2 has no override, so the default of 0 must refuse it"
     );
-    let held = (hold_one(addr).await, hold_one(addr).await);
     assert!(
-        eventually_served(addr, false).await,
+        third_served_after_two(addr, None, false).await,
         "the override of 2 must refuse a third connection from 127.0.0.1"
     );
-    drop(held);
 
-    let deleted = alter_broker()
-        .addr(addr)
-        .resource_name(String::new())
-        .configs(vec![
-            ("max.connections.per.ip", ConfigOperation::Delete, None),
-            (
-                "max.connections.per.ip.overrides",
-                ConfigOperation::Delete,
-                None,
-            ),
-        ])
-        .call()
-        .await;
-    assert!(deleted == accepted(String::new()));
+    alter_cluster_default(addr, vec![
+        ("max.connections.per.ip", ConfigOperation::Delete, None),
+        (
+            "max.connections.per.ip.overrides",
+            ConfigOperation::Delete,
+            None,
+        ),
+    ])
+    .await;
     let held = (hold_one(addr).await, hold_one(addr).await);
     assert!(eventually_served(addr, true).await);
     assert!(eventually_served_from(addr, Some(OTHER_CLIENT), true).await);
@@ -709,33 +699,17 @@ async fn per_ip_overrides_apply_and_lift_without_restart() {
 async fn listener_cap_applies_and_lifts_without_restart() {
     let (_handle, _dir, addr) = start_plaintext_configured(|_| {}).await;
     let key = "listener.name.plaintext.max.connections";
-    let set = alter_broker()
-        .addr(addr)
-        .resource_name(String::new())
-        .configs(vec![(key, ConfigOperation::Set, Some("2"))])
-        .call()
-        .await;
-    assert!(set == accepted(String::new()));
-    let held = (hold_one(addr).await, hold_one(addr).await);
+    alter_cluster_default(addr, vec![(key, ConfigOperation::Set, Some("2"))]).await;
     assert!(
-        eventually_served(addr, false).await,
+        third_served_after_two(addr, None, false).await,
         "{key}=2 must refuse a third connection while two are held"
     );
-    drop(held);
 
-    let deleted = alter_broker()
-        .addr(addr)
-        .resource_name(String::new())
-        .configs(vec![(key, ConfigOperation::Delete, None)])
-        .call()
-        .await;
-    assert!(deleted == accepted(String::new()));
-    let held = (hold_one(addr).await, hold_one(addr).await);
+    alter_cluster_default(addr, vec![(key, ConfigOperation::Delete, None)]).await;
     assert!(
-        eventually_served(addr, true).await,
+        third_served_after_two(addr, None, true).await,
         "deleting {key} must lift the cap"
     );
-    drop(held);
 }
 
 /// How long three connections, opened one after another, take to be served.
@@ -758,13 +732,7 @@ async fn creation_rate_holds_the_acceptor_without_restart() {
         "max.connection.creation.rate",
         "listener.name.plaintext.max.connection.creation.rate",
     ] {
-        let set = alter_broker()
-            .addr(addr)
-            .resource_name(String::new())
-            .configs(vec![(key, ConfigOperation::Set, Some("1"))])
-            .call()
-            .await;
-        assert!(set == accepted(String::new()));
+        alter_cluster_default(addr, vec![(key, ConfigOperation::Set, Some("1"))]).await;
         let deadline = Instant::now() + PROPAGATION;
         let mut throttled = false;
         while !throttled && Instant::now() < deadline {
@@ -772,12 +740,6 @@ async fn creation_rate_holds_the_acceptor_without_restart() {
         }
         assert!(throttled, "{key}=1 must space connections a second apart");
 
-        let deleted = alter_broker()
-            .addr(addr)
-            .resource_name(String::new())
-            .configs(vec![(key, ConfigOperation::Delete, None)])
-            .call()
-            .await;
-        assert!(deleted == accepted(String::new()));
+        alter_cluster_default(addr, vec![(key, ConfigOperation::Delete, None)]).await;
     }
 }
