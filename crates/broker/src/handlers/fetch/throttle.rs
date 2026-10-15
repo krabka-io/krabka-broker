@@ -218,8 +218,8 @@ pub(crate) fn apply_consumer_fetch_quota(
     (throttle_time_ms(delay), charge)
 }
 
-/// The encoded size of a whole Fetch response at `version`, which is what
-/// Kafka's `FetchContext.getResponseSize` charges to the consumer byte rate.
+/// What Kafka's `FetchContext.getResponseSize` charges a whole Fetch response
+/// to the consumer byte rate: four bytes and the encoded `version` body.
 pub(super) fn fetch_response_size(response: &FetchResponse, version: i16) -> u64 {
     let size = if version < 4 {
         let legacy: krabka_protocol::kafka_3_6_2::owned::fetch_response::FetchResponse =
@@ -228,7 +228,8 @@ pub(super) fn fetch_response_size(response: &FetchResponse, version: i16) -> u64
     } else {
         response.encoded_len(version)
     };
-    u64::try_from(size).unwrap_or(u64::MAX)
+    // Kafka's `FetchResponse.sizeOf` is `4 + data.size(version)`.
+    u64::try_from(size).unwrap_or(u64::MAX).saturating_add(4)
 }
 
 /// The throttle a consumer fetch earned from its byte-rate quota, with the
@@ -296,7 +297,7 @@ fn consume_consumer_quota(
 #[cfg(test)]
 mod tests {
     use {
-        super::ConsumerQuotaOutcome,
+        super::{ConsumerQuotaOutcome, fetch_response_size},
         crate::{
             handlers::test_support::replicated_partition,
             metrics::BrokerMetrics,
@@ -309,6 +310,23 @@ mod tests {
         assert2::{assert, check},
         krabka_units::{Time, convert::TimeExt, millis, secs},
     };
+
+    /// Kafka's `FetchResponse.sizeOf`, which `FetchContext.getResponseSize`
+    /// charges to the consumer byte rate, is `4 + data.size(version)`. An
+    /// empty response's body is the response array (4 bytes at v0), then
+    /// `ThrottleTimeMs` from v1, `ErrorCode` and `SessionId` from v7, and the
+    /// compact encoding with its tagged-field byte from v12.
+    #[yare::parameterized(
+        v0 = { 0, 8 },
+        v1 = { 1, 12 },
+        v4 = { 4, 12 },
+        v7 = { 7, 18 },
+        v12 = { 12, 16 },
+    )]
+    fn an_empty_fetch_response_is_charged_kafkas_size(version: i16, size: u64) {
+        let response = krabka_protocol::owned::fetch_response::FetchResponse::default();
+        assert2::assert!(fetch_response_size(&response, version) == size);
+    }
 
     #[test]
     fn consume_consumer_quota_tuple_match_overage_throttles() {
