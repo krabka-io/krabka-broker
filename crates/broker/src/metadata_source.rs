@@ -26,7 +26,7 @@ mod image_watch;
 mod observer_source;
 mod quorum_forwarder;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub(crate) use self::{
     fatal_fault::or_fatal_fault,
