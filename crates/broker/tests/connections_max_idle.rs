@@ -248,6 +248,60 @@ async fn a_connection_speaking_each_half_window_is_never_closed() {
     fixture.handle.shutdown().await;
 }
 
+/// Scenario 5: the window measures silence, not how long a frame takes.
+///
+/// Kafka's `Selector` refreshes a channel's idle clock on every read it
+/// serves, so a peer that trickles one request across two idle windows, a
+/// chunk each half-window, is served rather than closed part-way through.
+#[tokio::test(flavor = "current_thread")]
+async fn a_request_trickled_across_two_windows_is_served() {
+    let IdleWindowConfig { cfg, log_dir } = config_with_idle_window(krabka_units::secs(60));
+    let fixture = Box::pin(Fixture::start(cfg, log_dir, "PLAINTEXT")).await;
+
+    let mut body = BytesMut::new();
+    ApiVersionsRequest::default()
+        .encode(&mut body, 0)
+        .expect("ApiVersions encode");
+    let mut frame = BytesMut::new();
+    frame.put_i16(18);
+    frame.put_i16(0);
+    frame.put_i32(7);
+    frame.put_i16(-1); // null client_id
+    frame.put_slice(&body);
+    let mut wire = u32::try_from(frame.len())
+        .expect("frame length fits u32")
+        .to_be_bytes()
+        .to_vec();
+    wire.extend_from_slice(&frame);
+
+    let mut stream = fixture.connect().await;
+    // The size prefix, then the 10-byte header in three pieces: four
+    // half-windows between the first byte and the last.
+    for chunk in [&wire[..4], &wire[4..7], &wire[7..10], &wire[10..]] {
+        stream.write_all(chunk).await.expect("write a chunk");
+        stream.flush().await.expect("flush a chunk");
+        // Lets the serve loop take the chunk before the clock moves on.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        advance(Duration::from_secs(30)).await;
+    }
+
+    let len = stream
+        .read_u32()
+        .await
+        .expect("the trickled request is answered");
+    let mut response = vec![0_u8; len as usize];
+    stream
+        .read_exact(&mut response)
+        .await
+        .expect("response body");
+    let mut cur: &[u8] = &response;
+    assert!(cur.get_i32() == 7);
+    let response = ApiVersionsResponse::decode(&mut cur, 0).expect("ApiVersions decode");
+    assert!(response.error_code == 0);
+    assert!(fixture.idle_closes() == 0);
+    fixture.handle.shutdown().await;
+}
+
 /// Scenario 4: a TLS listener holds the handshake to the same window.
 ///
 /// `apache/kafka:4.3.1` run with `connections.max.idle.ms=20000` and an SSL

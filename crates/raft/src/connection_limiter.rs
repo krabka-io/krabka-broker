@@ -4,7 +4,9 @@
 //! apart from the accept loop that consults it.
 
 use {
+    crate::types::NodeId,
     dashmap::DashMap,
+    krabka_metadata::MetadataImage,
     std::{
         net::IpAddr,
         sync::{
@@ -31,6 +33,63 @@ pub struct ConnectionLimiter {
     per_ip: Arc<DashMap<IpAddr, usize>>,
 }
 
+/// The two ceilings an accept is checked against. `usize::MAX` means
+/// unlimited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConnectionLimits {
+    /// `max.connections`: live connections across all listeners.
+    pub max_connections: usize,
+    /// `max.connections.per.ip`: live connections from one client IP.
+    pub max_connections_per_ip: usize,
+}
+
+/// Kafka's `SocketServerConfigs.MAX_CONNECTIONS_CONFIG`, a dynamic broker
+/// config.
+pub const MAX_CONNECTIONS: &str = "max.connections";
+
+/// Kafka's `SocketServerConfigs.MAX_CONNECTIONS_PER_IP_CONFIG`, a dynamic
+/// broker config.
+pub const MAX_CONNECTIONS_PER_IP: &str = "max.connections.per.ip";
+
+/// A connection cap's dynamic value as Kafka reads it: an `INT` after
+/// `String.trim`, at least `min`.
+fn parse_cap(value: &str, min: i32) -> Option<usize> {
+    let cap: i32 = value.trim_matches(|c: char| c <= ' ').parse().ok()?;
+    if cap < min {
+        return None;
+    }
+    usize::try_from(cap).ok()
+}
+
+impl ConnectionLimits {
+    /// The caps in force for `node_id` as of `image`: the per-broker dynamic
+    /// value, else the cluster default, else `self`, the static caps. Kafka's
+    /// `ConnectionQuotas` takes both from `SocketServer.reconfigure`, for the
+    /// broker's and the controller's socket server alike, so a change
+    /// applies to the next connection accepted.
+    ///
+    /// A stored value Kafka would not apply leaves the next layer in force,
+    /// as `DynamicBrokerConfig` keeps the previous config when the new one
+    /// fails `KafkaConfig` validation. That covers a value that is not an
+    /// `INT` of at least 0, and a `max.connections.per.ip` of 0, which
+    /// `KafkaConfig.validateValues` allows only beside
+    /// `max.connections.per.ip.overrides`, a key krabka does not enforce.
+    #[must_use]
+    pub fn resolve(self, image: &MetadataImage, node_id: NodeId) -> Self {
+        let cap = |key: &str, min: i32, configured: usize| {
+            [image.broker_config(node_id), image.default_broker_config()]
+                .into_iter()
+                .filter_map(|configs| configs?.get(key))
+                .find_map(|value| parse_cap(value, min))
+                .unwrap_or(configured)
+        };
+        Self {
+            max_connections: cap(MAX_CONNECTIONS, 0, self.max_connections),
+            max_connections_per_ip: cap(MAX_CONNECTIONS_PER_IP, 1, self.max_connections_per_ip),
+        }
+    }
+}
+
 /// The connection ceiling that refused an inbound connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionLimit {
@@ -49,21 +108,46 @@ impl ConnectionLimiter {
         }
     }
 
-    /// Try to reserve a connection slot for `ip`. On success returns a
-    /// [`ConnectionGuard`] that releases both the global and per-IP slot
-    /// on drop.
+    /// The ceilings this limiter was built with.
+    #[must_use]
+    pub const fn limits(&self) -> ConnectionLimits {
+        ConnectionLimits {
+            max_connections: self.max_connections,
+            max_connections_per_ip: self.max_connections_per_ip,
+        }
+    }
+
+    /// Try to reserve a connection slot for `ip` under the ceilings this
+    /// limiter was built with. See [`Self::try_acquire_within`].
+    ///
+    /// # Errors
+    /// Returns the [`ConnectionLimit`] that refused the connection.
+    pub fn try_acquire(&self, ip: IpAddr) -> Result<ConnectionGuard, ConnectionLimit> {
+        self.try_acquire_within(ip, self.limits())
+    }
+
+    /// Try to reserve a connection slot for `ip` under `limits`, which a
+    /// caller resolves per accept so that a dynamic `max.connections` or
+    /// `max.connections.per.ip` applies to the next connection. On success
+    /// returns a [`ConnectionGuard`] that releases both the global and per-IP
+    /// slot on drop. Lowering a ceiling closes no connection that is already
+    /// counted, as in Kafka's `ConnectionQuotas`.
     ///
     /// # Errors
     /// Returns the [`ConnectionLimit`] that refused the connection, and
     /// reserves nothing, when either the global or the per-IP cap is already
     /// reached.
-    pub fn try_acquire(&self, ip: IpAddr) -> Result<ConnectionGuard, ConnectionLimit> {
+    pub fn try_acquire_within(
+        &self,
+        ip: IpAddr,
+        limits: ConnectionLimits,
+    ) -> Result<ConnectionGuard, ConnectionLimit> {
         // Global cap. `fetch_update` keeps the increment atomic so two
         // concurrent accepts can't both slip past the ceiling.
         let global_ok = self
             .total
             .try_update(Ordering::AcqRel, Ordering::Acquire, |cur| {
-                (cur < self.max_connections).then_some(cur + 1)
+                (cur < limits.max_connections).then_some(cur + 1)
             })
             .is_ok();
         if !global_ok {
@@ -72,7 +156,7 @@ impl ConnectionLimiter {
         // Per-IP cap. The DashMap entry lock serializes the read-modify
         // on a single IP. On rejection we must undo the global reserve.
         let mut entry = self.per_ip.entry(ip).or_insert(0);
-        if *entry >= self.max_connections_per_ip {
+        if *entry >= limits.max_connections_per_ip {
             drop(entry);
             self.total.fetch_sub(1, Ordering::AcqRel);
             return Err(ConnectionLimit::PerIp);
@@ -185,6 +269,48 @@ mod tests {
         assert!(limiter.per_ip_count(b) == 1);
     }
 
+    /// Limits passed per accept apply to the next connection: lowering one
+    /// below the live count keeps the counted connections and refuses the
+    /// next, and raising it again admits one.
+    #[test]
+    fn limits_resolved_per_accept_apply_to_the_next_connection() {
+        let limiter = ConnectionLimiter::new(usize::MAX, usize::MAX);
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        let unlimited = limiter.limits();
+        let held = [
+            limiter.try_acquire_within(ip, unlimited).expect("first"),
+            limiter.try_acquire_within(ip, unlimited).expect("second"),
+        ];
+        let cases = [
+            (
+                ConnectionLimits {
+                    max_connections: 1,
+                    ..unlimited
+                },
+                Some(ConnectionLimit::Global),
+            ),
+            (
+                ConnectionLimits {
+                    max_connections_per_ip: 2,
+                    ..unlimited
+                },
+                Some(ConnectionLimit::PerIp),
+            ),
+            (
+                ConnectionLimits {
+                    max_connections: 3,
+                    max_connections_per_ip: 3,
+                },
+                None,
+            ),
+        ];
+        for (limits, refused) in cases {
+            let outcome = limiter.try_acquire_within(ip, limits);
+            check!(outcome.as_ref().err().copied() == refused, "{limits:?}");
+        }
+        check!(limiter.total() == held.len());
+    }
+
     #[test]
     fn ipv6_peer_acquires_and_releases() {
         let limiter = Arc::new(ConnectionLimiter::new(usize::MAX, usize::MAX));
@@ -193,5 +319,59 @@ mod tests {
         assert!(limiter.per_ip_count(ip) == 1);
         drop(g);
         assert!(limiter.per_ip_count(ip) == 0);
+    }
+
+    /// Apply one dynamic broker config, for node 1 or the cluster default.
+    fn set_broker_config(image: &mut MetadataImage, node: Option<u64>, name: &str, value: &str) {
+        image.apply(&krabka_metadata::MetadataRecord::V1BrokerConfig(
+            krabka_metadata::BrokerConfigRecord {
+                node_id: node.map_or(krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID, NodeId),
+                config_name: name.into(),
+                config_value: Some(value.into()),
+            },
+        ));
+    }
+
+    #[yare::parameterized(
+        static_only = { &[], (10, 5) },
+        cluster_default = { &[(None, MAX_CONNECTIONS, "3")], (3, 5) },
+        per_broker = { &[(Some(1), MAX_CONNECTIONS_PER_IP, "2")], (10, 2) },
+        per_broker_over_default = {
+            &[(None, MAX_CONNECTIONS_PER_IP, "2"), (Some(1), MAX_CONNECTIONS_PER_IP, "4")],
+            (10, 4)
+        },
+        other_broker_ignored = { &[(Some(2), MAX_CONNECTIONS, "1")], (10, 5) },
+        zero_global = { &[(None, MAX_CONNECTIONS, "0")], (0, 5) },
+        zero_per_ip_needs_overrides = { &[(None, MAX_CONNECTIONS_PER_IP, "0")], (10, 5) },
+        zero_per_ip_falls_back_a_layer = {
+            &[(None, MAX_CONNECTIONS_PER_IP, "3"), (Some(1), MAX_CONNECTIONS_PER_IP, "0")],
+            (10, 3)
+        },
+        trimmed = { &[(None, MAX_CONNECTIONS, " 7 ")], (7, 5) },
+        unparsable_falls_back_a_layer = {
+            &[(None, MAX_CONNECTIONS, "2"), (Some(1), MAX_CONNECTIONS, "lots")],
+            (2, 5)
+        },
+        negative_falls_back = { &[(None, MAX_CONNECTIONS_PER_IP, "-1")], (10, 5) },
+    )]
+    fn resolve_layers_broker_then_default_then_static(
+        configs: &[(Option<u64>, &str, &str)],
+        want: (usize, usize),
+    ) {
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        for (node, name, value) in configs {
+            set_broker_config(&mut image, *node, name, value);
+        }
+        let configured = ConnectionLimits {
+            max_connections: 10,
+            max_connections_per_ip: 5,
+        };
+        assert2::assert!(
+            configured.resolve(&image, NodeId(1))
+                == ConnectionLimits {
+                    max_connections: want.0,
+                    max_connections_per_ip: want.1,
+                }
+        );
     }
 }

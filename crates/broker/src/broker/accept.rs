@@ -123,7 +123,14 @@ pub(super) async fn accept_loop(
                         // connections past either ceiling). The returned guard
                         // is moved into the spawned task so both counters are
                         // released however the connection ends.
-                        let conn_guard = match broker.connections.try_acquire(peer_ip) {
+                        // The caps are resolved per accept, so a dynamic
+                        // `max.connections` or `max.connections.per.ip`
+                        // applies to the next connection without a restart.
+                        let limits = broker
+                            .connections
+                            .limits()
+                            .resolve(&broker.controller.current_image(), broker.config.node_id);
+                        let conn_guard = match broker.connections.try_acquire_within(peer_ip, limits) {
                             Ok(guard) => guard,
                             Err(limit) => {
                                 let reason = match limit {

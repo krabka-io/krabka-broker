@@ -121,6 +121,7 @@ async fn stalled_connection_returns_broker_queue_permits_and_other_requests_proc
     } = start_broker_with(|config| {
         config.connections_max_idle = Some(krabka_units::millis(100));
         config.queued_max_requests = 1;
+        config.socket_request_max = krabka_units::bytes(65_536);
         config.queued_max_request_bytes = Some(krabka_units::bytes(65_536));
     })
     .await;

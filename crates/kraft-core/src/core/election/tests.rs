@@ -514,6 +514,30 @@ fn prospective_at_epoch_one(ids: &[NodeId], start: PreVoteStart) -> MachineAndLo
     MachineAndLog { machine: m, log }
 }
 
+/// The actions and role of a replica that, at `now`, goes back to following
+/// node 2, the leader it abandoned when its pre-vote round began.
+fn following_node_two_again(now: SimInstant) -> (Vec<Action>, Role) {
+    let fetch_deadline = now.saturating_add_ms(1_000);
+    (
+        vec![
+            Action::PersistQuorumState,
+            Action::TransitionedTo("Follower"),
+            Action::SendFetch {
+                leader_id: NodeId(2),
+            },
+            Action::ResetTimer {
+                kind: TimerKind::Fetch,
+                deadline: fetch_deadline,
+            },
+        ],
+        Role::Follower {
+            leader_id: NodeId(2),
+            fetch_deadline,
+            has_fetched_from_leader: false,
+        },
+    )
+}
+
 /// A Prospective whose pre-vote can no longer reach a majority ends the round
 /// at once, as Kafka's `EpochElection.isVoteRejected` and
 /// `prospectiveTransitionAfterElectionLoss` do. It follows the leader it
@@ -562,27 +586,8 @@ fn a_prospective_that_can_no_longer_win_ends_its_round(
     let now = SimInstant(2_100);
     let expected = match start {
         PreVoteStart::AbandonedLeader => {
-            let fetch_deadline = now.saturating_add_ms(1_000);
-            (
-                vec![
-                    Action::PersistQuorumState,
-                    Action::TransitionedTo("Follower"),
-                    Action::SendFetch {
-                        leader_id: NodeId(2),
-                    },
-                    Action::ResetTimer {
-                        kind: TimerKind::Fetch,
-                        deadline: fetch_deadline,
-                    },
-                ],
-                Role::Follower {
-                    leader_id: NodeId(2),
-                    fetch_deadline,
-                    has_fetched_from_leader: false,
-                },
-                Some(NodeId(2)),
-                None,
-            )
+            let (actions, role) = following_node_two_again(now);
+            (actions, role, Some(NodeId(2)), None)
         }
         PreVoteStart::NoLeader => {
             let election_deadline =
@@ -612,5 +617,77 @@ fn a_prospective_that_can_no_longer_win_ends_its_round(
             m.quorum_state().leader_id,
             m.quorum_state().voted_key.map(|key| key.id),
         ) == (1, leader_id, voted_for)
+    );
+}
+
+/// Who leads after a pre-vote round timed out, neither won nor lost.
+#[derive(Clone, Copy, Debug)]
+enum AfterTimedOutRound {
+    /// The replica follows the leader it abandoned again.
+    FollowsNodeTwo,
+    /// The replica starts another pre-vote round in the same epoch.
+    PreVotesAgain,
+}
+
+/// A Prospective whose round timed out, neither won nor lost, ends it as
+/// Kafka's `pollProspective` does, through
+/// `prospectiveTransitionAfterElectionLoss`.
+///
+/// It follows the leader it abandoned again, and fetches from it at once.
+/// Without one, it pre-votes again at once, as Kafka's replica does through
+/// an Unattached state whose election timeout has already run out.
+#[yare::parameterized(
+    abandoned_leader = { PreVoteStart::AbandonedLeader, AfterTimedOutRound::FollowsNodeTwo },
+    no_leader = { PreVoteStart::NoLeader, AfterTimedOutRound::PreVotesAgain },
+)]
+fn a_prospective_whose_round_times_out_ends_it(start: PreVoteStart, after: AfterTimedOutRound) {
+    let MachineAndLog {
+        machine: mut m,
+        log,
+    } = prospective_at_epoch_one(&[NodeId(1), NodeId(2), NodeId(3)], start);
+    let deadline = nominee_deadline(&m);
+    let voted_key = m.quorum_state().voted_key;
+
+    let actions = m.on_event(Event::ElectionTimeout, &log, deadline);
+
+    let (expected_actions, expected_role, leader_id) = match after {
+        AfterTimedOutRound::FollowsNodeTwo => {
+            let (actions, role) = following_node_two_again(deadline);
+            (actions, role, Some(NodeId(2)))
+        }
+        AfterTimedOutRound::PreVotesAgain => {
+            let election_deadline =
+                deadline.saturating_add_ms(1_000 + election_jitter_ms(NodeId(1), 1, 1_000));
+            (
+                vec![
+                    Action::TransitionedTo("Prospective"),
+                    Action::SendVoteRequest {
+                        epoch: 1,
+                        pre_vote: true,
+                    },
+                    Action::ResetTimer {
+                        kind: TimerKind::Election,
+                        deadline: election_deadline,
+                    },
+                ],
+                Role::Prospective {
+                    granted: BTreeSet::from([NodeId(1)]),
+                    rejected: BTreeSet::new(),
+                    election_deadline,
+                    abandoned_leader: None,
+                },
+                None,
+            )
+        }
+    };
+    check!(actions == expected_actions, "{after:?}");
+    check!(*m.role() == expected_role, "{after:?}");
+    check!(
+        (
+            m.quorum_state().leader_epoch,
+            m.quorum_state().leader_id,
+            m.quorum_state().voted_key,
+        ) == (1, leader_id, voted_key),
+        "{after:?}"
     );
 }

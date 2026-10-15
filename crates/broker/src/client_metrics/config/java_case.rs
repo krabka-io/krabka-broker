@@ -98,7 +98,7 @@ fn simple_lower(code: u32) -> u32 {
 }
 
 /// The value that Java compares under `(?iu)`.
-fn key(code: u32) -> u32 { simple_lower(simple_upper(code)) }
+pub(super) fn key(code: u32) -> u32 { simple_lower(simple_upper(code)) }
 
 /// Every code point that the mapping changes, or that `key` sends to another
 /// one, in order.

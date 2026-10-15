@@ -30,6 +30,28 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   request-handler thread, and charges only the handler's own time. Before, a
   consumer whose fetches waited out `MaxWaitMs` was throttled for time it
   spent idle.
+- `connections.max.idle.ms` now measures silence on the client and controller
+  listeners, as Kafka's `Selector` does: every read that brings bytes starts a
+  fresh window, so a request that arrives steadily but takes longer than the
+  window in all is no longer closed part-way through (#1390).
+- An expired KIP-368 session now closes on any frame that does not begin a
+  re-authentication, as Kafka's `SocketServer` does. A `SaslAuthenticate`, or
+  a `SaslHandshake` inside the one-second re-authentication interval, used to
+  get error 34 and keep the connection (#1390).
+- OAUTHBEARER answers a malformed client initial response with error 58 and
+  Kafka's generic message at once, and an authorization id that differs from
+  the token's principal with Kafka's own message, instead of the
+  `invalid_token` challenge. After a challenge, a reply other than a lone
+  `\x01` is a fresh attempt, as in Kafka's `OAuthBearerSaslServer` (#1390).
+- The broker refuses to start with a `queued_max_request_bytes` below
+  `socket_request_max`, as Kafka's `KafkaConfig` does (#1390).
+- A dynamic `max.connections` or `max.connections.per.ip`, set per broker or
+  cluster-wide with `IncrementalAlterConfigs` or `AlterConfigs`, now applies
+  to the next connection accepted on a broker listener and on the controller
+  listener, and deleting it restores the static cap. Before, the broker stored
+  and reported the value but kept counting against the static cap until it
+  restarted. A `max.connections.per.ip` of 0 is stored but not applied, as
+  Kafka allows 0 only beside `max.connections.per.ip.overrides` (#1391).
 - A consumer `Fetch` is now charged to `consumer_byte_rate` at Kafka's
   `FetchResponse.sizeOf`, four bytes more than the encoded response body.
   Before, every fetch was charged four bytes short.

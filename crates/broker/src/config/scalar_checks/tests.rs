@@ -586,3 +586,29 @@ fn a_negative_classic_group_initial_rebalance_delay_is_rejected() {
         "classic_group_initial_rebalance_delay must be finite and nonnegative",
     );
 }
+
+/// Kafka's `KafkaConfig` requires `queued.max.request.bytes` to be disabled or
+/// at least `socket.request.max.bytes`, so the size check always refuses an
+/// oversize frame before the budget could.
+#[test]
+fn the_request_byte_budget_must_hold_one_whole_request() {
+    assert_invalid_runtime_cases([RuntimeInvalidator {
+        expected: "queued_max_request_bytes must be larger or equal to socket_request_max",
+        invalidate: |c| {
+            c.socket_request_max = krabka_units::mebibytes(2);
+            c.queued_max_request_bytes = Some(krabka_units::mebibytes(1));
+        },
+    }]);
+    for budget in [
+        None,
+        Some(krabka_units::mebibytes(2)),
+        Some(krabka_units::mebibytes(3)),
+    ] {
+        let config = BrokerConfig {
+            socket_request_max: krabka_units::mebibytes(2),
+            queued_max_request_bytes: budget,
+            ..base()
+        };
+        assert!(config.validate().is_ok(), "{budget:?}");
+    }
+}

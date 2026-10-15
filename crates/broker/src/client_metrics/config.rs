@@ -9,13 +9,14 @@
 mod java_case;
 mod java_fold;
 
+pub(crate) use self::java_fold::BackrefFold;
 use {
     self::java_fold::{Consumed, Escape},
     crate::{
         codes::{INVALID_CONFIG, INVALID_REQUEST},
         config_keys::parse::{check_valid_list, int_value, java_trim, list_value, parse_int},
+        java_regex::JavaPattern,
     },
-    fancy_regex::Regex,
     std::collections::BTreeMap,
 };
 
@@ -85,7 +86,7 @@ impl MatchSelector {
 #[derive(Debug, Clone)]
 pub(crate) struct MatchRule {
     pub selector: MatchSelector,
-    pub pattern: Regex,
+    pub pattern: JavaPattern,
 }
 
 /// Kafka's `ClientMetricsConfigs.validate(subscriptionName, configs)`, run on
@@ -183,17 +184,25 @@ fn parse_match_patterns(patterns: &[&str]) -> Result<Vec<MatchRule>, ConfigError
             return Err(illegal());
         };
         let selector = MatchSelector::parse(java_trim(name)).ok_or_else(illegal)?;
-        let pattern = java_to_fancy(java_trim(pattern)).ok_or_else(illegal)?;
-        // Kafka tests a selector with `Matcher.matches()`, a full match. The
-        // anchored group gives the same answer for an alternation such as
-        // `app|app-1`, where a leftmost-first search would stop at `app`.
-        let pattern = Regex::new(&format!("^(?:{pattern})$")).map_err(|_| illegal())?;
+        // Kafka tests a selector with `Matcher.matches()`, a full match, which
+        // `JavaPattern::matches` gives.
+        let pattern = JavaPattern::compile(java_trim(pattern)).map_err(|_| illegal())?;
         // Kafka's `parseMatchingPatterns` puts each entry into a map by
         // selector, so a repeated selector keeps its last pattern.
         rules.retain(|rule: &MatchRule| rule.selector != selector);
         rules.push(MatchRule { selector, pattern });
     }
     Ok(rules)
+}
+
+/// A pattern that [`translate_java`] rewrote.
+#[derive(Debug)]
+pub(crate) struct JavaTranslation {
+    /// The pattern in `fancy_regex` syntax.
+    pub(crate) pattern: String,
+    /// How each backreference that `pattern` writes as `(?i:\1)` compares in
+    /// Java, in the order they appear in it.
+    pub(crate) backref_folds: Vec<BackrefFold>,
 }
 
 /// Rewrite a `java.util.regex.Pattern` into `fancy_regex` syntax, or `None`
@@ -231,12 +240,13 @@ fn parse_match_patterns(patterns: &[&str]) -> Result<Vec<MatchRule>, ConfigError
 ///   cases of each ASCII letter under an ASCII fold, and under a Unicode fold
 ///   the code points that Java accepts for a letter, a class member and a class
 ///   range, in a class and out of one ([`java_case`]). A backreference is
-///   written `(?i:\1)`, and differs from Java's for some letters, which
-///   [`java_fold`] describes.
+///   written `(?i:\1)`, which `fancy_regex` compares differently from Java
+///   for some letters ([`java_fold`]), so the translation also gives the
+///   [`BackrefFold`] of each one, for a matcher that compares as Java does.
 /// - Under `(?x)` (`COMMENTS`) the rewrite drops the whitespace and the `#`
 ///   comments Java ignores, so that the text of a comment is never read as
 ///   pattern.
-pub(crate) fn java_to_fancy(pattern: &str) -> Option<String> {
+pub(crate) fn translate_java(pattern: &str) -> Option<JavaTranslation> {
     let chars = java_fold::remove_qe_quoting(&pattern.chars().collect::<Vec<char>>());
     let mut translator = Translator {
         chars: &chars,
@@ -248,14 +258,18 @@ pub(crate) fn java_to_fancy(pattern: &str) -> Option<String> {
         run: 0,
         prior_run: 0,
         at: 0,
+        backref_folds: Vec::new(),
     };
     while translator.at < chars.len() {
         translator.step()?;
     }
-    Some(translator.out)
+    Some(JavaTranslation {
+        pattern: translator.out,
+        backref_folds: translator.backref_folds,
+    })
 }
 
-/// The state of one [`java_to_fancy`] pass over a pattern.
+/// The state of one [`translate_java`] pass over a pattern.
 struct Translator<'a> {
     chars: &'a [char],
     out: String,
@@ -274,6 +288,8 @@ struct Translator<'a> {
     prior_run: usize,
     /// The index of the next char to read.
     at: usize,
+    /// The fold of each backreference under a case flag written so far.
+    backref_folds: Vec<BackrefFold>,
 }
 
 impl Translator<'_> {
@@ -346,6 +362,11 @@ impl Translator<'_> {
             // `fancy_regex` can do only for a whole reference. See
             // [`java_fold`] for what that leaves different.
             Escape::BackRef if self.scope.case.ignore => {
+                self.backref_folds.push(if self.scope.case.unicode {
+                    BackrefFold::Unicode
+                } else {
+                    BackrefFold::Ascii
+                });
                 self.out.push_str("(?i:");
                 self.copy(len);
                 self.out.push(')');
@@ -616,7 +637,7 @@ enum RangeEnd {
     Illegal,
 }
 
-/// The Java flags that change what [`java_to_fancy`] writes for a construct.
+/// The Java flags that change what [`translate_java`] writes for a construct.
 #[derive(Debug, Clone, Copy, Default)]
 struct Scope {
     /// `s` and `d`: what `.` matches.
@@ -734,9 +755,9 @@ fn ascii_shorthand(escape: char, in_class: bool) -> Option<&'static str> {
 ///   case by another relation than Java's, with or without `u`, so
 ///   [`Translator`] writes the folding out. See [`java_fold`].
 /// - `d` (`UNIX_LINES`) is dropped from the output, and read by
-///   [`java_to_fancy`] to translate `.`.
+///   [`translate_java`] to translate `.`.
 /// - `U` (`UNICODE_CHARACTER_CLASS`) is dropped from the output, and read by
-///   [`java_to_fancy`] to keep `\w`, `\d`, `\s` and `\b` Unicode where it
+///   [`translate_java`] to keep `\w`, `\d`, `\s` and `\b` Unicode where it
 ///   otherwise makes them ASCII, and to fold Unicode case, which Java's `U`
 ///   turns on. Passing it through would swap greediness in `fancy_regex`.
 /// - `c` (`CANON_EQ`) is dropped: canonical-equivalence matching has no
@@ -851,7 +872,7 @@ mod tests {
         {
             let rules = parse_match_rules(&format!("client_id={pattern}")).unwrap();
             check!(
-                rules[0].pattern.is_match(input).unwrap() == expected,
+                rules[0].pattern.matches(input).unwrap() == expected,
                 "{pattern:?} on {input:?}"
             );
         }
@@ -1017,15 +1038,15 @@ mod tests {
         check!(selectors == vec![MatchSelector::Id, MatchSelector::SoftwareName]);
         for (input, expected) in [("app", true), ("test-app", false), ("", true)] {
             check!(
-                rules[0].pattern.is_match(input).unwrap() == expected,
+                rules[0].pattern.matches(input).unwrap() == expected,
                 "{input}"
             );
         }
-        assert!(!rules[1].pattern.is_match("java-1").unwrap());
+        assert!(!rules[1].pattern.matches("java-1").unwrap());
         let quoted = parse_match_rules("client_id=\\Qa.b\\E").unwrap();
         for (input, expected) in [("a.b", true), ("axb", false)] {
             check!(
-                quoted[0].pattern.is_match(input).unwrap() == expected,
+                quoted[0].pattern.matches(input).unwrap() == expected,
                 "{input}"
             );
         }
@@ -1245,6 +1266,43 @@ mod tests {
             },
         ];
         check_client_id_patterns(&cases);
+    }
+
+    /// A selector reads the constructs `fancy_regex` reads differently from
+    /// Java as `java.util.regex` does: a backreference under a case flag
+    /// compares by Java's fold, `\R` gives back the `\n` of `\r\n` where Java's
+    /// does, and a group keeps the text it matched in a look-around or a
+    /// possessive quantifier. Where JDK 17 throws, the match is an error, which
+    /// a subscription reads as no match. Each row is `Matcher.matches` on JDK
+    /// 17.0.20.
+    #[test]
+    fn match_patterns_read_references_and_linebreaks_as_java_does() {
+        // (pattern, input, whole input matches, or None where JDK 17 throws)
+        let cases = [
+            ("(?i)(\u{e9})\\1", "\u{e9}\u{c9}", Some(false)),
+            ("(?i)(a\u{e9})\\1", "a\u{e9}A\u{e9}", Some(true)),
+            ("(?iu)(i)\\1", "i\u{130}", Some(true)),
+            ("(?iu)(s)\\1", "s\u{17f}", Some(true)),
+            ("(?iu)(k)\\1", "k\u{212a}", Some(true)),
+            ("(?iu)(.)\\1", "\u{10400}\u{10428}", None),
+            ("(a)\\R\\n\\1", "a\r\na", Some(true)),
+            ("\\R\\n", "\r\n", Some(true)),
+            ("\\R{2}", "\r\n", Some(false)),
+            // `(?=` and `(?<=` hold the `=` the entry splits on, so a selector
+            // has only the negated look-arounds
+            ("(?:(?!(a))|a)\\1", "aa", Some(true)),
+            ("(?:(?>(a))x|a)\\1", "aa", Some(true)),
+            ("(?:(a)++x|a)\\1", "aa", Some(true)),
+            ("(?:(a)x|a)\\1", "aa", Some(false)),
+            ("(a|b\\1)+", "abb", Some(false)),
+        ];
+        for (pattern, input, expected) in cases {
+            let rules = parse_match_rules(&format!("client_id={pattern}")).unwrap();
+            check!(
+                rules[0].pattern.matches(input).ok() == expected,
+                "{pattern:?} on {input:?}"
+            );
+        }
     }
 
     /// `(?iu)` in a selector folds Unicode case as Java does, by
@@ -1569,7 +1627,7 @@ mod tests {
                     } in inputs
                     {
                         check!(
-                            rules[0].pattern.is_match(input).unwrap() == matches,
+                            rules[0].pattern.matches(input).unwrap() == matches,
                             "{pattern} on {input:?}"
                         );
                     }

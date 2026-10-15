@@ -124,14 +124,19 @@ async fn signed_validator_fails_closed_for_stale_or_changing_jwks_cache(
     fixture
         .last_successful
         .store(last_successful_fetch_ms, Ordering::Release);
-    assert2::assert!(fixture.validate().await == Err("JWKS cache is stale or changing"));
+    assert2::assert!(
+        fixture.validate().await
+            == Err(BearerRejection::InvalidToken(
+                "JWKS cache is stale or changing"
+            ))
+    );
 }
 
 #[tokio::test]
 async fn signed_validator_uses_a_fresh_stable_jwks_cache() {
     let fixture = signed_cache_fixture(2);
     let result = fixture.validate().await;
-    assert!(result == Err("token validation failed"));
+    assert!(result == Err(BearerRejection::InvalidToken("token validation failed")));
 }
 
 #[tokio::test]
@@ -184,34 +189,83 @@ async fn oauthbearer_invalid_token_returns_error_json_then_fails_on_dummy() {
     assert!(!auth.is_authenticated());
 }
 
-#[tokio::test]
-async fn oauthbearer_malformed_response_returns_error_json() {
+/// Kafka's `OAuthBearerClientInitialResponse` throws a plain `SaslException`
+/// for a response it cannot parse, so the exchange fails at once with the
+/// generic message and no RFC 7628 challenge. A re-authentication that fails
+/// this way leaves the previous session in place while the dispatcher closes
+/// the connection.
+#[yare::parameterized(
+    initial_garbage = { oauth_pending(), b"not-a-valid-gs2-message", None },
+    initial_lone_control_a = { oauth_pending(), b"\x01", None },
+    reauth_garbage = {
+        oauth_reauthenticating("alice", 1_000_000_001_000),
+        b"not-a-valid-gs2-message",
+        Some("alice"),
+    },
+    reauth_lone_control_a = {
+        oauth_reauthenticating("alice", 1_000_000_001_000),
+        b"\x01",
+        Some("alice"),
+    },
+)]
+#[test_macro(tokio::test)]
+async fn a_malformed_client_response_fails_at_once_with_the_generic_failure(
+    auth: ConnectionAuth,
+    auth_bytes: &'static [u8],
+    principal_after: Option<&str>,
+) {
+    let mut auth = auth;
     let validator = krabka_security::OAuthBearerValidator::default();
-    let mut auth = oauth_pending();
     let req = SaslAuthenticateRequest {
-        auth_bytes: bytes::Bytes::from_static(b"not-a-valid-gs2-message"),
+        auth_bytes: bytes::Bytes::from_static(auth_bytes),
         ..Default::default()
     };
     let resp = authenticate(&req, &mut auth, &validator, 1_000_000_000_000, None).await;
-    assert_invalid_token_challenge(&resp);
+    assert_failed_authenticate_response(&resp, None);
+    assert2::assert!(auth.principal().map(|p| p.name.as_str()) == principal_after);
 }
 
+fn oauthbearer_client_response_for(authzid: &str, token: &str) -> SaslAuthenticateRequest {
+    SaslAuthenticateRequest {
+        auth_bytes: bytes::Bytes::from(
+            format!("n,a={authzid},\u{1}auth=Bearer {token}\u{1}\u{1}").into_bytes(),
+        ),
+        ..Default::default()
+    }
+}
+
+/// Kafka's `OAuthBearerSaslServer.process` throws a
+/// `SaslAuthenticationException` for an authzid that differs from the token
+/// principal, so the exchange fails at once with its message and no RFC 7628
+/// challenge.
 #[tokio::test]
 async fn oauthbearer_authzid_mismatch_fails() {
     let validator = krabka_security::OAuthBearerValidator::default();
     let now_ms = 1_000_000_000_000;
     let token = unsecured_token("alice", 1_000_000_900);
     let mut auth = oauth_pending();
-    // authzid "bob" != token principal "alice".
-    let req = SaslAuthenticateRequest {
-        auth_bytes: bytes::Bytes::from(
-            format!("n,a=bob,\u{1}auth=Bearer {token}\u{1}\u{1}").into_bytes(),
-        ),
-        ..Default::default()
-    };
+    let req = oauthbearer_client_response_for("bob", &token);
     let resp = authenticate(&req, &mut auth, &validator, now_ms, None).await;
-    assert_invalid_token_challenge(&resp);
+    assert_failed_authenticate_response(
+        &resp,
+        Some(
+            "Authentication failed: Client requested an authorization id (bob) that is \
+             different from the token's principal name (alice)",
+        ),
+    );
     assert!(!auth.is_authenticated());
+}
+
+#[tokio::test]
+async fn oauthbearer_matching_authzid_authenticates() {
+    let validator = krabka_security::OAuthBearerValidator::default();
+    let now_ms = 1_000_000_000_000;
+    let token = unsecured_token("alice", 1_000_000_900);
+    let mut auth = oauth_pending();
+    let req = oauthbearer_client_response_for("alice", &token);
+    let resp = authenticate(&req, &mut auth, &validator, now_ms, None).await;
+    assert_success_authenticate_response(&resp, b"", 900_000);
+    assert!(auth.principal().map(|p| p.name.as_str()) == Some("alice"));
 }
 
 #[tokio::test]
@@ -273,11 +327,9 @@ async fn a_rejected_reauth_token_gets_the_error_challenge_then_fails_with_its_js
     let validator = krabka_security::OAuthBearerValidator::default();
     let now_ms = 1_000_000_000_000;
     let mut auth = oauth_reauthenticating("alice", now_ms + 1_000);
-    let garbage = SaslAuthenticateRequest {
-        auth_bytes: bytes::Bytes::from_static(b"not a client response"),
-        ..Default::default()
-    };
-    let challenge = authenticate(&garbage, &mut auth, &validator, now_ms, None).await;
+    // exp far in the past → expired.
+    let expired = oauthbearer_client_response(&unsecured_token("alice", 1_000_000));
+    let challenge = authenticate(&expired, &mut auth, &validator, now_ms, None).await;
     assert_success_authenticate_response(&challenge, br#"{"status":"invalid_token"}"#, 0);
 
     let dummy = SaslAuthenticateRequest {
@@ -287,6 +339,51 @@ async fn a_rejected_reauth_token_gets_the_error_challenge_then_fails_with_its_js
     let failure = authenticate(&dummy, &mut auth, &validator, now_ms, None).await;
     assert_failed_authenticate_response(&failure, Some(r#"{"status":"invalid_token"}"#));
     assert!(auth.principal().map(|p| p.name.as_str()) == Some("alice"));
+}
+
+/// Kafka's `OAuthBearerSaslServer` throws its stored error only for a lone
+/// `\x01` after a challenge. Any other reply clears the error and runs as a
+/// fresh client initial response, so a valid token then authenticates.
+#[yare::parameterized(
+    initial = { oauth_pending() },
+    reauth = { oauth_reauthenticating("alice", 1_000_000_001_000) },
+)]
+#[test_macro(tokio::test)]
+async fn a_client_response_after_the_error_challenge_runs_as_a_fresh_attempt(auth: ConnectionAuth) {
+    let mut auth = auth;
+    let validator = krabka_security::OAuthBearerValidator::default();
+    let now_ms = 1_000_000_000_000;
+    // exp far in the past → expired.
+    let expired = oauthbearer_client_response(&unsecured_token("alice", 1_000_000));
+    let challenge = authenticate(&expired, &mut auth, &validator, now_ms, None).await;
+    assert_invalid_token_challenge(&challenge);
+
+    let valid = oauthbearer_client_response(&unsecured_token("alice", 1_000_000_900));
+    let resp = authenticate(&valid, &mut auth, &validator, now_ms, None).await;
+    assert_success_authenticate_response(&resp, b"", 900_000);
+    let ConnectionAuth::Authenticated {
+        principal,
+        mechanism,
+        expires_at_ms,
+        authenticated_via_token,
+    } = auth
+    else {
+        panic!("expected Authenticated, got {auth:?}");
+    };
+    let alice = Principal {
+        name: "alice".into(),
+        auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
+        groups: vec![],
+    };
+    assert2::assert!(
+        (principal, mechanism, expires_at_ms, authenticated_via_token)
+            == (
+                alice,
+                SaslMechanism::OAuthBearer,
+                Some(1_000_000_900_000),
+                false
+            )
+    );
 }
 
 // KIP-368 ceiling: the server-side
@@ -387,7 +484,7 @@ struct SignedCacheFixture {
 }
 
 impl SignedCacheFixture {
-    async fn validate(&self) -> Result<ValidatedBearer, &'static str> {
+    async fn validate(&self) -> Result<ValidatedBearer, BearerRejection> {
         validate_bearer(
             &self.request.auth_bytes,
             &self.validator,

@@ -322,10 +322,30 @@ impl QuorumStateMachine {
         &mut self,
         log: &dyn LogView,
         leader_id: NodeId,
-        _leader_epoch: Epoch,
+        leader_epoch: Epoch,
         diverging: Option<LogOffsetMetadata>,
         now: SimInstant,
     ) -> Vec<Action> {
+        // Only an answer from the leader this replica follows, in its epoch,
+        // is a fetch it still waits on. Kafka's `maybeHandleCommonResponse`
+        // drops an answer from an older epoch, and the engine's leader fence
+        // (`fetch_response_mutation`) holds every other answer back before
+        // it reaches this method. A replica that has since voted in a newer
+        // epoch must not fetch, and so replicate, from the leader it left.
+        let following = match &self.role {
+            Role::Follower {
+                leader_id: following,
+                ..
+            }
+            | Role::Observer {
+                leader_id: Some(following),
+                ..
+            } => *following == leader_id,
+            _ => false,
+        };
+        if !following || leader_epoch != self.state.leader_epoch {
+            return Vec::new();
+        }
         // Kafka's `resetFetchTimeoutForSuccessfulFetch` also records that this
         // follower has now heard from its leader.
         if let Role::Follower {

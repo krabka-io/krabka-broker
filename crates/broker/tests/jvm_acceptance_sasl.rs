@@ -5,8 +5,10 @@
 //! networking these suites depend on.
 //!
 //! The binary root carries only the module tree. One child covers each SASL
-//! mechanism -- [`plain`], [`scram`] and [`oauthbearer`] -- and the remaining
-//! children cover authorization on top of an authenticated broker:
+//! mechanism -- [`plain`], [`scram`] and [`oauthbearer`] --
+//! [`kafka_4_3_1_client`] runs every mechanism's acceptance and refusal through
+//! the Kafka 4.3.1 client against krabka and a stock 4.3.1 broker, and the
+//! remaining children cover authorization on top of an authenticated broker:
 //! [`acl_cli`] for the `kafka-acls` administration round-trip,
 //! [`acl_authorized`] and [`acl_denied`] for what a literal binding permits and
 //! refuses, [`acl_prefixed`] for the `PREFIXED` pattern, and
@@ -32,6 +34,8 @@ mod acl_prefixed;
 #[path = "jvm_acceptance_sasl/acl_security_disabled.rs"]
 mod acl_security_disabled;
 mod jvm_acceptance;
+#[path = "jvm_acceptance_sasl/kafka_4_3_1_client.rs"]
+mod kafka_4_3_1_client;
 #[path = "jvm_acceptance_sasl/oauthbearer.rs"]
 mod oauthbearer;
 // The oracle harness `acl_cli` compares against. It is `jvm_acceptance_cli`'s
