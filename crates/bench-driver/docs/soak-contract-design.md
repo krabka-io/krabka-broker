@@ -98,7 +98,9 @@ The reconciler does not ask "did every record arrive". It asks what each observa
 
 The verdict reports the permitted cases as counts (`maybe_delivered`, `permitted_duplicates`), so a reader can see them, but they do not fail the run.
 
-Committed offsets get their own check. Before each fault, the executor records the last commit that the coordinator acknowledged for each partition of each committing group. After the fault's recoveries, it fetches the committed offset again. The fetched offset must be at least the acknowledged one and at most the log end. A `final` check repeats this after the load.
+The contract's semantics decide which rules apply, not the label in the ledger. A ledger labelled with other semantics fails. A transactional ledger fails when an acknowledged record is outside every recorded transaction: otherwise an empty transaction list would check `read_committed` against nothing.
+
+Committed offsets get their own check. Before each fault, the executor records the last commit that the coordinator acknowledged for each partition of each committing group. After the fault's recoveries, it fetches the committed offset again. The fetched offset must be at least the acknowledged one and at most the log end. A `final` check repeats this after the load. The judge derives the checks it expects from the contract and the schedule, and a missing check fails the run.
 
 ### Faults are bounded, one at a time, and always cleaned up
 
@@ -110,7 +112,7 @@ The schedule refuses a contract whose occurrences overlap. An occurrence can sta
 
 Every injection has a cleanup that runs when the fault ends, and again from a drop guard if the test panics. The guard removes the ballast file, removes the qdisc, restores the CPU quota and sends `SIGCONT`. A failed run must not leave a broker stopped on a shared runner. The executor appends each fault to `faults.jsonl` when it injects the fault and again when it clears it, so a run that stops early still leaves its fault timeline.
 
-The judge fails a fault that the schedule names but the evidence does not record. It also fails a recovery that the fault kind implies but nobody measured. A judge that grades only what the executor recorded passes a run whose injector did nothing.
+The judge fails a fault that the schedule names but the evidence does not record. It also fails a recovery that the fault kind implies but nobody measured. A judge that grades only what the executor recorded passes a run whose injector did nothing. A fault record must also match its schedule: the same kind, the role that the plan targets, and a start no earlier than its offset and at most 30 s after it. When a fault that moves leadership lands on the active controller, the judge requires a controller-failover measurement, whatever selector the plan used.
 
 ### Recovery is measured from the cluster's own view
 

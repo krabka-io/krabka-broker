@@ -8,8 +8,8 @@
 
 use {
     super::{
-        contract::{Contract, RecoveryCheck, human},
-        evidence::{Evidence, LatencySummary, RecoveryRecord},
+        contract::{Contract, RecoveryCheck, Target, human},
+        evidence::{Evidence, FaultRecord, LatencySummary, RecoveryRecord},
         schedule::ScheduledFault,
     },
     krabka_units::{prelude::*, serde_units},
@@ -71,10 +71,87 @@ pub struct BudgetVerdict {
     pub within: bool,
 }
 
+/// How late a fault may start against its scheduled offset. The executor
+/// resolves the target and the cluster state first, so it never starts early,
+/// but it may start a few seconds late.
+pub const START_SLACK: Time = secs(30);
+
+/// The role a fault record must carry for a plan that targets by role.
+fn expected_role(target: Target) -> Option<&'static str> {
+    match target {
+        Target::Controller => Some("controller"),
+        Target::Leader => Some("leader"),
+        Target::Follower => Some("follower"),
+        Target::Any | Target::Broker(_) => None,
+    }
+}
+
+/// Every way `record` fails to be the execution of `fault`.
+fn execution_problems(
+    fault: &ScheduledFault,
+    record: &FaultRecord,
+    started_unix_ms: i64,
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    if record.kind != fault.kind.name() {
+        problems.push(format!(
+            "recorded as a `{}` fault, but the schedule names `{}`",
+            record.kind,
+            fault.kind.name()
+        ));
+    }
+    // A role is recorded with the controller taking precedence, so a leader
+    // that also held the controller is recorded as the controller.
+    if let Some(role) = expected_role(fault.target)
+        && record.role != role
+        && !(role == "leader" && record.role == "controller")
+    {
+        problems.push(format!(
+            "landed on a {} ({}), but the plan targets the {role}",
+            record.role, record.target
+        ));
+    }
+    let offset = Time::from_millis(record.injected_unix_ms.saturating_sub(started_unix_ms));
+    // Records carry whole milliseconds and a jittered start does not, so the
+    // early bound allows one millisecond of rounding.
+    if offset + millis(1) < fault.start || offset > fault.start + START_SLACK {
+        problems.push(format!(
+            "injected at {} into the load, but scheduled at {} (at most {} late)",
+            human(offset),
+            human(fault.start),
+            human(START_SLACK)
+        ));
+    }
+    if let Some(error) = &record.cleanup_error {
+        problems.push(format!("cleanup failed: {error}"));
+    } else if record.cleared_unix_ms.is_none() {
+        problems.push("injected but never cleared".to_owned());
+    }
+    problems
+}
+
+/// The recoveries `fault` is judged on: the ones its plan names, plus a
+/// controller failover when it moved leadership away from a broker that was
+/// recorded as the active controller, whatever the plan's selector said.
+fn required_checks(fault: &ScheduledFault, record: Option<&FaultRecord>) -> Vec<RecoveryCheck> {
+    let mut checks = fault.checks.clone();
+    let hit_controller = record.is_some_and(|record| record.role == "controller");
+    if hit_controller
+        && fault.kind.moves_leadership()
+        && !checks.contains(&RecoveryCheck::ControllerFailover)
+    {
+        checks.push(RecoveryCheck::ControllerFailover);
+    }
+    checks
+}
+
 /// Check every scheduled fault's execution and recoveries.
 ///
-/// A self-check contract's `missed_deadline` replaces the deadline of its one
-/// named check on the first occurrence of its fault.
+/// A fault record must match its schedule: the same kind, the role the plan
+/// targets, and a start no earlier than its offset and at most
+/// [`START_SLACK`] after it. A self-check contract's `missed_deadline`
+/// replaces the deadline of its one named check on the first occurrence of
+/// its fault.
 #[must_use]
 pub fn check_recoveries(
     contract: &Contract,
@@ -84,26 +161,22 @@ pub fn check_recoveries(
     let mut verdicts = Vec::new();
     let mut problems = Vec::new();
     for fault in schedule {
-        match evidence.faults.iter().find(|record| record.id == fault.id) {
+        let record = evidence.faults.iter().find(|record| record.id == fault.id);
+        match record {
             None => problems.push(FaultProblem {
                 fault: fault.id.clone(),
                 problem: "scheduled but never injected".to_owned(),
             }),
-            Some(record) => {
-                if let Some(error) = &record.cleanup_error {
-                    problems.push(FaultProblem {
+            Some(record) => problems.extend(
+                execution_problems(fault, record, evidence.started_unix_ms)
+                    .into_iter()
+                    .map(|problem| FaultProblem {
                         fault: fault.id.clone(),
-                        problem: format!("cleanup failed: {error}"),
-                    });
-                } else if record.cleared_unix_ms.is_none() {
-                    problems.push(FaultProblem {
-                        fault: fault.id.clone(),
-                        problem: "injected but never cleared".to_owned(),
-                    });
-                }
-            }
+                        problem,
+                    }),
+            ),
         }
-        for &check in &fault.checks {
+        for check in required_checks(fault, record) {
             let deadline = deadline_for(contract, fault, check);
             let took = evidence
                 .recoveries
@@ -228,14 +301,18 @@ mod tests {
         krabka_units::prelude::*,
     };
 
-    fn record(id: &str) -> FaultRecord {
+    /// The load starts here; the fixture schedules `short-pause#0` at 30s
+    /// and `leader-restart#0` at 90s from it.
+    const STARTED_MS: i64 = 1_000_000;
+
+    fn record(id: &str, kind: &str, role: &str, offset_ms: i64) -> FaultRecord {
         FaultRecord {
             id: id.to_owned(),
-            kind: "pause".to_owned(),
+            kind: kind.to_owned(),
             target: "broker-1".to_owned(),
-            role: "follower".to_owned(),
-            injected_unix_ms: 0,
-            cleared_unix_ms: Some(1_000),
+            role: role.to_owned(),
+            injected_unix_ms: STARTED_MS + offset_ms,
+            cleared_unix_ms: Some(STARTED_MS + offset_ms + 1_000),
             cleanup_error: None,
             detail: String::new(),
         }
@@ -253,7 +330,11 @@ mod tests {
     /// Every fault of the fixture executed and recovered in two seconds.
     fn recovered() -> Evidence {
         Evidence {
-            faults: vec![record("short-pause#0"), record("leader-restart#0")],
+            started_unix_ms: STARTED_MS,
+            faults: vec![
+                record("short-pause#0", "pause", "follower", 30_200),
+                record("leader-restart#0", "restart", "leader", 90_500),
+            ],
             recoveries: vec![
                 recovery(
                     "short-pause#0",
@@ -285,6 +366,24 @@ mod tests {
         check!(missed == ["leader-restart#0 isr_rejoin"]);
     }
 
+    #[test]
+    fn a_fault_that_lands_on_the_controller_is_judged_on_controller_failover() {
+        let mut contract = fixture::self_check();
+        contract.self_check = None;
+        let schedule = expand(&contract).unwrap();
+        let mut evidence = recovered();
+        // `leader-restart` targets the leader, which turned out to be the
+        // active controller as well.
+        evidence.faults[1].role = "controller".into();
+        let (verdicts, _) = check_recoveries(&contract, &schedule, &evidence);
+        let unmeasured: Vec<String> = verdicts
+            .iter()
+            .filter(|verdict| verdict.outcome == DeadlineOutcome::NotObserved)
+            .map(|verdict| format!("{} {}", verdict.fault, verdict.check))
+            .collect();
+        check!(unmeasured == ["leader-restart#0 controller_failover"]);
+    }
+
     type Edit = fn(&mut Evidence);
 
     #[yare::parameterized(
@@ -311,6 +410,10 @@ mod tests {
         never_injected = { |e: &mut Evidence| { e.faults.remove(0); }, "scheduled but never injected" },
         never_cleared = { |e: &mut Evidence| e.faults[0].cleared_unix_ms = None, "injected but never cleared" },
         cleanup_failed = { |e: &mut Evidence| e.faults[0].cleanup_error = Some("SIGCONT refused".into()), "cleanup failed: SIGCONT refused" },
+        wrong_kind = { |e: &mut Evidence| e.faults[0].kind = "restart".into(), "recorded as a `restart` fault, but the schedule names `pause`" },
+        wrong_role = { |e: &mut Evidence| e.faults[0].role = "leader".into(), "landed on a leader (broker-1), but the plan targets the follower" },
+        early = { |e: &mut Evidence| e.faults[0].injected_unix_ms = STARTED_MS + 10_000, "injected at 10s into the load, but scheduled at 30s (at most 30s late)" },
+        late = { |e: &mut Evidence| e.faults[0].injected_unix_ms = STARTED_MS + 61_000, "injected at 61s into the load, but scheduled at 30s (at most 30s late)" },
     )]
     fn a_fault_that_did_not_run_cleanly_is_a_problem(edit: Edit, expected: &str) {
         let contract = fixture::self_check();

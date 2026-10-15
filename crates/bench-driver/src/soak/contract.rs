@@ -361,6 +361,20 @@ impl FaultKind {
         }
     }
 
+    /// Whether the fault takes its target out of the quorum long enough to
+    /// move leadership, and so a controller failover when the target is the
+    /// active controller.
+    #[must_use]
+    pub fn moves_leadership(&self) -> bool {
+        matches!(
+            self,
+            FaultKind::Restart { .. }
+                | FaultKind::Pause {
+                    intends_failover: true
+                }
+        )
+    }
+
     /// The recoveries the harness measures after a fault of this kind on
     /// `target`.
     #[must_use]
@@ -382,14 +396,7 @@ impl FaultKind {
                 vec![RecoveryCheck::IsrRejoin]
             }
         };
-        let moves_leadership = matches!(
-            self,
-            FaultKind::Restart { .. }
-                | FaultKind::Pause {
-                    intends_failover: true
-                }
-        );
-        if moves_leadership && target == Target::Controller {
+        if self.moves_leadership() && target == Target::Controller {
             checks.push(RecoveryCheck::ControllerFailover);
         }
         checks
@@ -741,6 +748,12 @@ impl Contract {
                 );
             }
             (Profile::Soak, None) => {
+                if self.faults.is_empty() {
+                    fail(
+                        "a soak needs at least one fault plan, or it proves nothing about recovery"
+                            .to_owned(),
+                    );
+                }
                 for missing in self.missing_coverage() {
                     fail(format!("a soak must cover {missing}"));
                 }
@@ -968,6 +981,15 @@ mod tests {
                 .iter()
                 .all(|path| path.storage == Storage::Classic)
         );
+    }
+
+    #[test]
+    fn a_soak_without_faults_is_refused() {
+        let mut contract = fixture::self_check();
+        contract.profile = Profile::Soak;
+        contract.self_check = None;
+        contract.faults.clear();
+        assert_refused(&contract, "at least one fault plan");
     }
 
     #[yare::parameterized(

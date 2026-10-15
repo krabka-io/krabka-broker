@@ -79,7 +79,17 @@ fn unit_fraction(draw: u64) -> f64 {
 pub fn expand(contract: &Contract) -> Result<Vec<ScheduledFault>, Vec<ContractError>> {
     let quiet_from = contract.duration - contract.settle;
     let mut schedule = Vec::new();
+    let mut errors = Vec::new();
     for plan in &contract.faults {
+        // A period that does not advance would expand to the same slot forever.
+        if plan.every.is_some_and(|every| every <= Time::ZERO) {
+            errors.push(ContractError(format!(
+                "fault `{}` repeats every {}; a period must be positive",
+                plan.name,
+                human(plan.every.unwrap_or(Time::ZERO))
+            )));
+            continue;
+        }
         for n in 0_u64.. {
             let slot = match plan.every {
                 Some(every) => plan.first_at + every * u64_to_f64(n),
@@ -118,7 +128,6 @@ pub fn expand(contract: &Contract) -> Result<Vec<ScheduledFault>, Vec<ContractEr
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let mut errors = Vec::new();
     for fault in &schedule {
         if fault.end() + recovery_budget(contract, fault) > quiet_from {
             errors.push(ContractError(format!(
@@ -241,6 +250,16 @@ mod tests {
             .map(|fault| format!("{:?}", fault.target))
             .collect();
         check!(targets.len() > 1);
+    }
+
+    #[test]
+    fn a_zero_period_is_refused_rather_than_expanded_forever() {
+        let mut contract = periodic(1392);
+        contract.faults[0].every = Some(Time::ZERO);
+        contract.faults[0].jitter = Time::ZERO;
+        let errors = expand(&contract).unwrap_err();
+        check!(errors.len() == 1);
+        check!(errors[0].0.contains("a period must be positive"));
     }
 
     #[test]

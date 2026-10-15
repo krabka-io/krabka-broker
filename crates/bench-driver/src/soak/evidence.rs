@@ -114,6 +114,9 @@ pub struct DuplicateRead {
     pub positions: Vec<(i32, i64)>,
 }
 
+/// The `fault` of the committed-offset check taken after the load stops.
+pub const FINAL_COMMIT_CHECK: &str = "final";
+
 /// A committed offset checked across a fault.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommitCheck {
@@ -167,10 +170,15 @@ pub struct RecoveryRecord {
 
 impl RecoveryRecord {
     /// How long recovery took, when it was observed.
+    ///
+    /// A recovery stamped before the instant it is measured from was not
+    /// observed: a wall-clock step or a broken ledger must not read as an
+    /// instant recovery that meets every deadline.
     #[must_use]
     pub fn took(&self) -> Option<Time> {
-        self.recovered_unix_ms
-            .map(|recovered| Time::from_millis(recovered.saturating_sub(self.from_unix_ms).max(0)))
+        let recovered = self.recovered_unix_ms?;
+        (recovered >= self.from_unix_ms)
+            .then(|| Time::from_millis(recovered.saturating_sub(self.from_unix_ms)))
     }
 }
 
@@ -258,7 +266,8 @@ mod tests {
     #[yare::parameterized(
         observed = { Some(2_500), Some(millis(1_500)) },
         never = { None, None },
-        clock_step_back = { Some(900), Some(Time::ZERO) },
+        clock_step_back = { Some(900), None },
+        same_instant = { Some(1_000), Some(Time::ZERO) },
     )]
     fn a_recovery_reports_how_long_it_took(recovered: Option<i64>, took: Option<Time>) {
         let record = RecoveryRecord {

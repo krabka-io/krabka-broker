@@ -25,8 +25,9 @@
 use {
     super::{
         contract::{Contract, Isolation, Semantics},
-        evidence::{Evidence, ProducerLedger, ReaderLedger, TxnOutcome},
+        evidence::{Evidence, FINAL_COMMIT_CHECK, ProducerLedger, ReaderLedger, TxnOutcome},
         ledger::SeqSet,
+        schedule::expand,
     },
     serde::{Deserialize, Serialize},
     std::{collections::BTreeMap, fmt},
@@ -59,6 +60,12 @@ pub enum FindingKind {
     NoReadback,
     /// A path whose producer acknowledged nothing.
     NothingAcknowledged,
+    /// A producer ledger that cannot be judged as its path declares: labelled
+    /// with other semantics, or a transactional ledger with acknowledged
+    /// records outside every transaction.
+    IncompleteLedger,
+    /// A committed-offset check the contract implies but the evidence lacks.
+    CommitCheckMissing,
 }
 
 impl fmt::Display for FindingKind {
@@ -154,6 +161,7 @@ pub fn reconcile(contract: &Contract, evidence: &Evidence) -> Reconciliation {
             });
         }
         for producer in producers {
+            check_ledger(path.semantics, producer, &mut out);
             for &isolation in &path.consumers {
                 let Some(reader) = readers.get(&(producer.producer.as_str(), isolation)) else {
                     out.findings.push(Finding {
@@ -166,11 +174,12 @@ pub fn reconcile(contract: &Contract, evidence: &Evidence) -> Reconciliation {
                     });
                     continue;
                 };
-                reconcile_reader(path.key_space, producer, reader, &mut out);
+                reconcile_reader(path.semantics, path.key_space, producer, reader, &mut out);
             }
         }
     }
 
+    check_commit_coverage(contract, evidence, &mut out);
     for check in &evidence.commits {
         let path = contract
             .paths
@@ -215,7 +224,80 @@ pub fn reconcile(contract: &Contract, evidence: &Evidence) -> Reconciliation {
     out
 }
 
+/// Refuse a ledger that cannot be judged as its path declares.
+///
+/// The path's semantics, not the ledger's label, decide every rule below. A
+/// mislabelled ledger is a finding of its own, and a transactional ledger must
+/// place every acknowledged record in a transaction: with no transactions, the
+/// committed and aborted sets would both be empty and `read_committed` would
+/// be checked against nothing.
+fn check_ledger(declared: Semantics, producer: &ProducerLedger, out: &mut Reconciliation) {
+    let mut fail = |seqs: SeqSet, detail: String| {
+        out.findings.push(Finding {
+            kind: FindingKind::IncompleteLedger,
+            path: producer.path.clone(),
+            subject: producer.producer.clone(),
+            isolation: None,
+            seqs,
+            detail,
+        });
+    };
+    if producer.semantics != declared {
+        fail(
+            SeqSet::new(),
+            format!(
+                "the ledger says {:?}, the contract declares {declared:?}",
+                producer.semantics
+            ),
+        );
+    }
+    if declared == Semantics::Transactional {
+        let in_transactions = producer
+            .transactions
+            .iter()
+            .fold(SeqSet::new(), |all, txn| all.union(&txn.seqs));
+        let outside = producer.acked.difference(&in_transactions);
+        if !outside.is_empty() {
+            fail(
+                outside,
+                "acknowledged records outside every recorded transaction".to_owned(),
+            );
+        }
+    }
+}
+
+/// Every committed-offset check the contract implies is in the evidence: for
+/// each path that commits offsets, at least one check across every scheduled
+/// fault and one `final` check.
+fn check_commit_coverage(contract: &Contract, evidence: &Evidence, out: &mut Reconciliation) {
+    let mut wanted: Vec<String> = expand(contract)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|fault| fault.id)
+        .collect();
+    wanted.push(FINAL_COMMIT_CHECK.to_owned());
+    for path in contract.paths.iter().filter(|path| path.commit_offsets) {
+        for fault in &wanted {
+            let present = evidence
+                .commits
+                .iter()
+                .any(|check| check.topic == path.name && check.fault == *fault);
+            if !present {
+                out.findings.push(Finding {
+                    kind: FindingKind::CommitCheckMissing,
+                    path: path.name.clone(),
+                    subject: "-".to_owned(),
+                    isolation: None,
+                    seqs: SeqSet::new(),
+                    detail: format!("no committed offset was checked across {fault}"),
+                });
+            }
+        }
+    }
+}
+
 fn reconcile_reader(
+    semantics: Semantics,
     key_space: Option<u64>,
     producer: &ProducerLedger,
     reader: &ReaderLedger,
@@ -267,7 +349,7 @@ fn reconcile_reader(
         }
     }
 
-    let must_read = match (producer.semantics, reader.isolation) {
+    let must_read = match (semantics, reader.isolation) {
         (Semantics::Transactional, Isolation::ReadCommitted) => {
             producer.acked.intersection(&committed)
         }
@@ -279,9 +361,7 @@ fn reconcile_reader(
         must_read.difference(&reader.seen),
         String::new(),
     );
-    if producer.semantics == Semantics::Transactional
-        && reader.isolation == Isolation::ReadCommitted
-    {
+    if semantics == Semantics::Transactional && reader.isolation == Isolation::ReadCommitted {
         emit(
             FindingKind::AbortedVisible,
             aborted.intersection(&reader.seen),
@@ -299,11 +379,11 @@ fn reconcile_reader(
             unexpected.insert(duplicate.seq);
         }
     }
-    if producer.semantics != Semantics::Compacted {
+    if semantics != Semantics::Compacted {
         emit(FindingKind::UnexpectedDuplicate, unexpected, String::new());
     }
 
-    if let (Semantics::Compacted, Some(space)) = (producer.semantics, key_space) {
+    if let (Semantics::Compacted, Some(space)) = (semantics, key_space) {
         let mut latest_acked: BTreeMap<u64, u64> = BTreeMap::new();
         for seq in producer.acked.iter() {
             latest_acked.insert(seq % space, seq);
@@ -409,15 +489,20 @@ mod tests {
                     SeqSet::range(0, 10),
                 ),
             ],
-            commits: vec![CommitCheck {
-                group: "g".into(),
-                topic: IDEMPOTENT.into(),
-                partition: 0,
-                fault: "leader-restart#0".into(),
-                acknowledged: 4,
-                fetched: Some(4),
-                log_end: 6,
-            }],
+            // The fixture schedules two faults, and the idempotent path
+            // commits offsets: one check across each, and the final one.
+            commits: ["leader-restart#0", "short-pause#0", "final"]
+                .into_iter()
+                .map(|fault| CommitCheck {
+                    group: "g".into(),
+                    topic: IDEMPOTENT.into(),
+                    partition: 0,
+                    fault: fault.into(),
+                    acknowledged: 4,
+                    fetched: Some(4),
+                    log_end: 6,
+                })
+                .collect(),
             ..Evidence::default()
         };
         (contract, evidence)
@@ -462,6 +547,10 @@ mod tests {
         commit_gone = { |e: &mut Evidence| e.commits[0].fetched = None, &[FindingKind::CommittedOffsetMissing] },
         reader_absent = { |e: &mut Evidence| { e.readers.remove(2); }, &[FindingKind::NoReadback] },
         nothing_acked = { |e: &mut Evidence| e.producers[0].acked = SeqSet::new(), &[FindingKind::NothingAcknowledged] },
+        mislabelled_ledger = { |e: &mut Evidence| e.producers[1].semantics = Semantics::Idempotent, &[FindingKind::IncompleteLedger] },
+        no_transactions_recorded = { |e: &mut Evidence| { e.producers[1].transactions.clear(); e.readers[1].seen = SeqSet::range(0, 10); }, &[FindingKind::IncompleteLedger] },
+        commit_check_absent = { |e: &mut Evidence| { e.commits.pop(); }, &[FindingKind::CommitCheckMissing] },
+        all_commit_checks_absent = { |e: &mut Evidence| e.commits.clear(), &[FindingKind::CommitCheckMissing, FindingKind::CommitCheckMissing, FindingKind::CommitCheckMissing] },
     )]
     fn each_violation_is_classified(edit: Edit, expected: &[FindingKind]) {
         let (contract, mut evidence) = clean();
@@ -508,6 +597,7 @@ mod tests {
         let mut contract = fixture::self_check();
         contract.paths[0].semantics = Semantics::Compacted;
         contract.paths[0].key_space = Some(4);
+        contract.paths[0].commit_offsets = false;
         contract.paths.truncate(1);
         let mut compacted = producer(IDEMPOTENT, Semantics::Compacted, 10);
         compacted.semantics = Semantics::Compacted;

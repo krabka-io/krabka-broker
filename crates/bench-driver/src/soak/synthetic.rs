@@ -10,10 +10,10 @@
 
 use {
     super::{
-        contract::{Contract, Isolation, LatencyBudget, Semantics},
+        contract::{Contract, Isolation, LatencyBudget, Semantics, Target},
         evidence::{
-            CommitCheck, Evidence, FaultRecord, InjectedLoss, LatencySummary, PathMeasurement,
-            ProducerLedger, ReaderLedger, RecoveryRecord, TxnLedger, TxnOutcome,
+            CommitCheck, Evidence, FINAL_COMMIT_CHECK, FaultRecord, InjectedLoss, LatencySummary,
+            PathMeasurement, ProducerLedger, ReaderLedger, RecoveryRecord, TxnLedger, TxnOutcome,
         },
         ledger::SeqSet,
         schedule::expand,
@@ -93,12 +93,16 @@ pub fn clean_run(contract: &Contract) -> Evidence {
             });
         }
         if path.commit_offsets {
-            for fault in &schedule {
+            let checkpoints = schedule
+                .iter()
+                .map(|fault| fault.id.clone())
+                .chain([FINAL_COMMIT_CHECK.to_owned()]);
+            for fault in checkpoints {
                 evidence.commits.push(CommitCheck {
                     group: format!("{}-committer", path.name),
                     topic: path.name.clone(),
                     partition: 0,
-                    fault: fault.id.clone(),
+                    fault,
                     acknowledged: 10,
                     fetched: Some(10),
                     log_end: 20,
@@ -128,7 +132,13 @@ pub fn clean_run(contract: &Contract) -> Evidence {
             id: fault.id.clone(),
             kind: fault.kind.name().to_owned(),
             target: "synthetic-broker".to_owned(),
-            role: "broker".to_owned(),
+            role: match fault.target {
+                Target::Controller => "controller",
+                Target::Leader => "leader",
+                Target::Follower => "follower",
+                Target::Any | Target::Broker(_) => "broker",
+            }
+            .to_owned(),
             injected_unix_ms: injected,
             cleared_unix_ms: Some(cleared),
             cleanup_error: None,
