@@ -9,6 +9,7 @@
 mod java_case;
 mod java_fold;
 
+pub(crate) use self::java_fold::BackrefFold;
 use {
     self::java_fold::{Consumed, Escape},
     crate::{
@@ -232,11 +233,28 @@ fn parse_match_patterns(patterns: &[&str]) -> Result<Vec<MatchRule>, ConfigError
 ///   the code points that Java accepts for a letter, a class member and a class
 ///   range, in a class and out of one ([`java_case`]). A backreference is
 ///   written `(?i:\1)`, and differs from Java's for some letters, which
-///   [`java_fold`] describes.
+///   [`java_fold`] describes. [`translate_java`] also gives the
+///   [`BackrefFold`] of each one, for a matcher that compares as Java does.
 /// - Under `(?x)` (`COMMENTS`) the rewrite drops the whitespace and the `#`
 ///   comments Java ignores, so that the text of a comment is never read as
 ///   pattern.
 pub(crate) fn java_to_fancy(pattern: &str) -> Option<String> {
+    translate_java(pattern).map(|translation| translation.pattern)
+}
+
+/// A pattern that [`translate_java`] rewrote.
+#[derive(Debug)]
+pub(crate) struct JavaTranslation {
+    /// The pattern in `fancy_regex` syntax, as [`java_to_fancy`] writes it.
+    pub(crate) pattern: String,
+    /// How each backreference that `pattern` writes as `(?i:\1)` compares in
+    /// Java, in the order they appear in it.
+    pub(crate) backref_folds: Vec<BackrefFold>,
+}
+
+/// [`java_to_fancy`], with the [`BackrefFold`] of each backreference under a
+/// case flag.
+pub(crate) fn translate_java(pattern: &str) -> Option<JavaTranslation> {
     let chars = java_fold::remove_qe_quoting(&pattern.chars().collect::<Vec<char>>());
     let mut translator = Translator {
         chars: &chars,
@@ -248,11 +266,15 @@ pub(crate) fn java_to_fancy(pattern: &str) -> Option<String> {
         run: 0,
         prior_run: 0,
         at: 0,
+        backref_folds: Vec::new(),
     };
     while translator.at < chars.len() {
         translator.step()?;
     }
-    Some(translator.out)
+    Some(JavaTranslation {
+        pattern: translator.out,
+        backref_folds: translator.backref_folds,
+    })
 }
 
 /// The state of one [`java_to_fancy`] pass over a pattern.
@@ -274,6 +296,8 @@ struct Translator<'a> {
     prior_run: usize,
     /// The index of the next char to read.
     at: usize,
+    /// The fold of each backreference under a case flag written so far.
+    backref_folds: Vec<BackrefFold>,
 }
 
 impl Translator<'_> {
@@ -346,6 +370,11 @@ impl Translator<'_> {
             // `fancy_regex` can do only for a whole reference. See
             // [`java_fold`] for what that leaves different.
             Escape::BackRef if self.scope.case.ignore => {
+                self.backref_folds.push(if self.scope.case.unicode {
+                    BackrefFold::Unicode
+                } else {
+                    BackrefFold::Ascii
+                });
                 self.out.push_str("(?i:");
                 self.copy(len);
                 self.out.push(')');
