@@ -25,13 +25,14 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
-- Retention no longer holds a partition's log lock while it waits for the
-  disk sync of newer rolled segments. When it deleted a segment it waited for
-  every queued segment-roll flush, so appends and follower fetches of a busy
-  partition stalled for as long as those syncs took. Under RF3 `acks=all`
-  saturation with size retention this showed up as produce stalls of up to
-  about a second (#1394). It now waits only for a flush that would write a
-  producer snapshot for a segment it deletes.
+- A partition no longer stalls its appends and fetches while it deletes
+  segment files that retention retired. When their `file.delete.delay.ms`
+  passed, the partition writer unlinked them one after another under the log
+  lock, and an unlink drops the file's page cache, which takes tens of
+  milliseconds a segment on a loaded disk. Under RF3 `acks=all` saturation
+  with size retention this held produce acks for up to about a second
+  (#1394). The writer now deletes them on the blocking pool, outside the log
+  lock and off its own loop, as Kafka deletes them from its scheduler.
 - The bench driver's `acks: all` scenarios run again. They turn idempotence on,
   and the driver asked for more in-flight requests than an idempotent producer
   allows, so each one failed at start.

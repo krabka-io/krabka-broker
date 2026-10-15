@@ -156,19 +156,23 @@ pub async fn run_with_sequencer(
             let result = storage::run_log_mutation(
                 move || {
                     lock_log(&maintenance_log)
-                        .maintain(std::time::SystemTime::now())
+                        .maintain_deferring_deletions(std::time::SystemTime::now())
                         .map_err(BrokerError::from)
                 },
                 "log maintenance task panicked",
                 storage_status,
             )
             .await;
-            if let Err(error) = result {
-                tracing::warn!(%error, "log maintenance failed");
-                // Back off retries while still accepting control messages.
-                delay = Some(std::time::Duration::from_millis(100));
-            } else {
-                continue;
+            match result {
+                Ok(due) => {
+                    storage::delete_retired_files(due, &log, &log_dir, &log_dir_status);
+                    continue;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "log maintenance failed");
+                    // Back off retries while still accepting control messages.
+                    delay = Some(storage::MAINTENANCE_RETRY);
+                }
             }
         }
         let msg = match pending.take() {
