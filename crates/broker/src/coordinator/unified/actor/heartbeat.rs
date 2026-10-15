@@ -32,7 +32,9 @@ use {
             consumer_state::GroupState,
             first_join_member_id,
             group::{CoordinatorGroup, GroupKind},
-            migration, reconciler,
+            migration,
+            offsets_log::write_failure_code,
+            reconciler,
             regex_resolver::TopicRegexResolver,
             registry::consumer_group_not_found,
         },
@@ -173,7 +175,7 @@ pub(super) async fn handle_actor_heartbeat(
                 tracing::warn!(group_id = %group.group_id, %error,
                     "next-gen actor exiting after downgrade log-write failure");
                 let _ = reply.send(ConsumerGroupHeartbeatResponse {
-                    error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
+                    error_code: write_failure_code(&error),
                     ..Default::default()
                 });
                 return false;
@@ -198,7 +200,7 @@ pub(super) async fn handle_actor_heartbeat(
             tracing::warn!(group_id = %group.group_id, %error,
                 "next-gen actor exiting after log-write failure");
             let _ = reply.send(ConsumerGroupHeartbeatResponse {
-                error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
+                error_code: write_failure_code(&error),
                 ..Default::default()
             });
             return false;

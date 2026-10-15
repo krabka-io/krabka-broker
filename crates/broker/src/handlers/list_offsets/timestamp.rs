@@ -195,8 +195,16 @@ where
                     error = %error, "list_offsets: remote offset_for_timestamp refused a record");
                 return Err(codes::INVALID_RECORD);
             }
-            Some(Err(error)) => tracing::warn!(topic = topic_name, partition = partition_index,
-                error = %error, "list_offsets: remote offset_for_timestamp failed"),
+            Some(Err(error)) => {
+                // Kafka's `RemoteLogOffsetReader` hands any remote failure to
+                // `DelayedRemoteListOffsets`, which answers the row with
+                // `Errors.forException`: `UNKNOWN_SERVER_ERROR` for a
+                // `RemoteStorageException`. The local log is no answer here,
+                // because the records the tier holds alone may precede it.
+                tracing::warn!(topic = topic_name, partition = partition_index,
+                    error = %error, "list_offsets: remote offset_for_timestamp failed");
+                return Err(codes::UNKNOWN_SERVER_ERROR);
+            }
         }
     }
     let log = partition.log.lock().expect("log mutex poisoned");
@@ -292,11 +300,14 @@ mod tests {
     }
 
     /// The remote tier answers first, and what it answers decides the row: a
-    /// hit competes with any earlier local match; a miss or a failure reads the local log,
-    /// and a record it refused for `max.decompressed.message.bytes` is the
-    /// row's `INVALID_RECORD`, as `InvalidRecordException` is in Kafka. The
-    /// local log holds a match for the timestamp, so a refusal that fell
-    /// through would come back as that match.
+    /// hit competes with any earlier local match; a miss reads the local log;
+    /// a record it refused for `max.decompressed.message.bytes` is the row's
+    /// `INVALID_RECORD`, as `InvalidRecordException` is in Kafka; and any
+    /// other failure is the row's `UNKNOWN_SERVER_ERROR`, as
+    /// `DelayedRemoteListOffsets` answers `Errors.forException` for a
+    /// `RemoteStorageException`. The local log holds a match for the
+    /// timestamp, so a failure that fell through would come back as that
+    /// match.
     #[tokio::test]
     async fn a_record_the_remote_tier_refuses_answers_invalid_record_and_not_the_local_match() {
         use {
@@ -335,9 +346,14 @@ mod tests {
                 Err(codes::INVALID_RECORD),
             ),
             (
-                "any other remote failure falls back to the local log",
+                "an I/O failure of the remote tier answers unknown server error",
                 Some(Err(RemoteStorageError::Io(std::io::Error::other("boom")))),
-                local,
+                Err(codes::UNKNOWN_SERVER_ERROR),
+            ),
+            (
+                "a metadata partition still catching up answers unknown server error",
+                Some(Err(RemoteStorageError::NotReady { partition: 3 })),
+                Err(codes::UNKNOWN_SERVER_ERROR),
             ),
             (
                 "a remote miss falls back to the local log",

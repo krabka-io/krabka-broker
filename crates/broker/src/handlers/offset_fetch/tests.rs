@@ -14,9 +14,15 @@ use {
         broker::{Broker, BrokerHandle},
         codes,
         coordinator::unified::{
+            StreamsGroupSeed,
             actor::{GroupActorMessage, GroupKindTag, test_support::rpc},
             classic_state::OffsetEntry,
             regex_resolver::no_topic_regex_resolver,
+            streams::{
+                actor::StreamsGroupActorMessage,
+                persistence::StreamsGroupCurrentMemberAssignmentValue,
+            },
+            test_support::plain_streams_member,
         },
         handlers::test_support::{
             LiveBrokerFixture, StartedBroker as HandlerStartedBroker, allow_all_authorizer,
@@ -978,6 +984,52 @@ async fn join_consumer_group(broker: &Broker, group: &str, member_id: &str) -> i
     joined.member_epoch
 }
 
+/// A v8+ `OffsetFetch` of partition 0 of `orders` for `group_id`, naming the
+/// v9 member fields.
+fn member_offset_fetch(
+    group_id: &str,
+    member_id: Option<&str>,
+    member_epoch: i32,
+) -> OffsetFetchRequest {
+    OffsetFetchRequest {
+        groups: vec![OffsetFetchRequestGroup {
+            group_id: group_id.into(),
+            member_id: member_id.map(str::to_string),
+            member_epoch,
+            topics: Some(vec![OffsetFetchRequestTopics {
+                name: "orders".into(),
+                partition_indexes: vec![0],
+                ..Default::default()
+            }]),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+/// The `orders` topic row of an `OffsetFetch` group, holding `partition`.
+fn offsets_row(partition: OffsetFetchResponsePartitions) -> Vec<OffsetFetchResponseTopics> {
+    vec![OffsetFetchResponseTopics {
+        name: "orders".into(),
+        partitions: vec![partition],
+        ..Default::default()
+    }]
+}
+
+/// The response group row of `group_id`.
+fn group_row(
+    group_id: &str,
+    topics: Vec<OffsetFetchResponseTopics>,
+    error_code: i16,
+) -> OffsetFetchResponseGroup {
+    OffsetFetchResponseGroup {
+        group_id: group_id.into(),
+        topics,
+        error_code,
+        ..Default::default()
+    }
+}
+
 /// Kafka's `OffsetMetadataManager.fetchOffsets` reads offsets without creating
 /// a group, and `ConsumerGroup.validateOffsetFetch` checks the v9 member id
 /// and epoch of a consumer group. A refused fetch is the group row with the
@@ -1001,19 +1053,6 @@ async fn offset_fetch_creates_no_group_and_checks_the_member_epoch() {
         NoEpoch,
     }
 
-    let offsets_row = |partition: OffsetFetchResponsePartitions| {
-        vec![OffsetFetchResponseTopics {
-            name: "orders".into(),
-            partitions: vec![partition],
-            ..Default::default()
-        }]
-    };
-    let group_row = |group_id: &str, topics, error_code| OffsetFetchResponseGroup {
-        group_id: group_id.into(),
-        topics,
-        error_code,
-        ..Default::default()
-    };
     let rows = [
         Row {
             name: "unknown group at v8",
@@ -1088,24 +1127,11 @@ async fn offset_fetch_creates_no_group_and_checks_the_member_epoch() {
         let epoch = join_consumer_group(&broker, "grp", "m1").await;
         seed_committed_offset().broker(&broker).call().await;
 
-        let request = OffsetFetchRequest {
-            groups: vec![OffsetFetchRequestGroup {
-                group_id: row.group_id.into(),
-                member_id: row.member_id.map(str::to_string),
-                member_epoch: match row.member_epoch {
-                    EpochRef::Current => epoch,
-                    EpochRef::Older => epoch - 1,
-                    EpochRef::NoEpoch => -1,
-                },
-                topics: Some(vec![OffsetFetchRequestTopics {
-                    name: "orders".into(),
-                    partition_indexes: vec![0],
-                    ..Default::default()
-                }]),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
+        let request = member_offset_fetch(row.group_id, row.member_id, match row.member_epoch {
+            EpochRef::Current => epoch,
+            EpochRef::Older => epoch - 1,
+            EpochRef::NoEpoch => -1,
+        });
         let response = fetch(&broker, row.version, &request).await;
 
         let expected = OffsetFetchResponse {
@@ -1120,6 +1146,165 @@ async fn offset_fetch_creates_no_group_and_checks_the_member_epoch() {
         );
         broker_handle.shutdown().await;
     }
+}
+
+/// Seeds the streams group `group_id` with member `m1` at `member_epoch`, the
+/// way the bootstrap replayer hydrates one from `__consumer_offsets` records.
+async fn seed_streams_member(broker: &Broker, group_id: &str, member_epoch: i32) {
+    broker.group_coordinator.mark_streams(group_id);
+    let handle = broker.group_coordinator.get_or_create_streams(group_id);
+    handle
+        .tx
+        .send(StreamsGroupActorMessage::Seed(StreamsGroupSeed {
+            members: [("m1".to_string(), plain_streams_member(1))].into(),
+            current_per_member: [
+                ("m1".to_string(), StreamsGroupCurrentMemberAssignmentValue {
+                    member_epoch,
+                    ..Default::default()
+                }),
+            ]
+            .into(),
+            ..Default::default()
+        }))
+        .await
+        .expect("seed streams group");
+}
+
+/// Seeds the streams group `grp`, whose member `m1` is at epoch 5, with the
+/// committed offset of partition 0 of `orders`.
+async fn seed_streams_group_offsets(broker: &Broker) {
+    seed_committed_offset().broker(broker).call().await;
+    seed_streams_member(broker, "grp", 5).await;
+}
+
+/// Kafka's `StreamsGroup.validateOffsetFetch` checks the v9 member id and
+/// epoch of a streams group, whose members live in the streams actor and not
+/// beside its committed offsets. A refused fetch is the group row with the
+/// error code and no topics; a group with no committed offset is checked all
+/// the same.
+#[tokio::test]
+async fn offset_fetch_checks_the_member_epoch_of_a_streams_group() {
+    struct Row {
+        name: &'static str,
+        group_id: &'static str,
+        member_id: Option<&'static str>,
+        member_epoch: i32,
+        expected: OffsetFetchResponseGroup,
+    }
+
+    let rows = [
+        Row {
+            name: "the member at its epoch",
+            group_id: "grp",
+            member_id: Some("m1"),
+            member_epoch: 5,
+            expected: group_row("grp", offsets_row(seeded_row()), codes::NONE),
+        },
+        Row {
+            name: "no member id and epoch -1 (admin client)",
+            group_id: "grp",
+            member_id: None,
+            member_epoch: -1,
+            expected: group_row("grp", offsets_row(seeded_row()), codes::NONE),
+        },
+        Row {
+            name: "the member at an older epoch",
+            group_id: "grp",
+            member_id: Some("m1"),
+            member_epoch: 4,
+            expected: group_row("grp", vec![], codes::STALE_MEMBER_EPOCH),
+        },
+        Row {
+            name: "an unknown member",
+            group_id: "grp",
+            member_id: Some("ghost"),
+            member_epoch: 5,
+            expected: group_row("grp", vec![], codes::UNKNOWN_MEMBER_ID),
+        },
+        Row {
+            name: "the member at an older epoch of a group with no offsets",
+            group_id: "bare",
+            member_id: Some("m1"),
+            member_epoch: 4,
+            expected: group_row("bare", vec![], codes::STALE_MEMBER_EPOCH),
+        },
+    ];
+
+    krabka_macros::broker_test_setup! {
+        bind(broker_handle, _dir, broker);
+        boot [broker_fixture_support::start_group_broker_no_audit] allow_all;
+    };
+    seed_streams_group_offsets(&broker).await;
+    seed_streams_member(&broker, "bare", 5).await;
+    for row in rows {
+        let request = member_offset_fetch(row.group_id, row.member_id, row.member_epoch);
+        let response = fetch(&broker, 9, &request).await;
+
+        let expected = OffsetFetchResponse {
+            groups: vec![row.expected],
+            ..Default::default()
+        };
+        assert2::check!(response == expected, "{}", row.name);
+    }
+    broker_handle.shutdown().await;
+}
+
+/// A streams actor that exited, as one does after a failed write, does not
+/// refuse a fetch: the admin client's fetch reads the offsets without asking
+/// it, and a member's fetch is checked by an actor respawned in its place,
+/// which here holds no member.
+#[tokio::test]
+async fn offset_fetch_of_a_streams_group_outlives_its_stopped_actor() {
+    krabka_macros::broker_test_setup! {
+        bind(broker_handle, _dir, broker);
+        boot [broker_fixture_support::start_group_broker_no_audit] allow_all;
+    };
+    seed_streams_group_offsets(&broker).await;
+    let stopped = broker
+        .group_coordinator
+        .find_streams("grp")
+        .expect("the seeded streams actor");
+    let (reply, stopping) = oneshot::channel();
+    stopped
+        .tx
+        .send(StreamsGroupActorMessage::Shutdown(reply))
+        .await
+        .expect("send Shutdown");
+    stopping.await.expect("the actor stops");
+    stopped.tx.closed().await;
+
+    // (row, member id, member epoch, expected group)
+    let rows = [
+        (
+            "no member id and epoch -1 (admin client)",
+            None,
+            -1,
+            group_row("grp", offsets_row(seeded_row()), codes::NONE),
+        ),
+        (
+            "a member of the respawned actor",
+            Some("m1"),
+            5,
+            group_row("grp", vec![], codes::UNKNOWN_MEMBER_ID),
+        ),
+    ];
+    for (row, member_id, member_epoch, expected) in rows {
+        let response = fetch(
+            &broker,
+            9,
+            &member_offset_fetch("grp", member_id, member_epoch),
+        )
+        .await;
+        assert2::check!(
+            response
+                == OffsetFetchResponse {
+                    groups: vec![expected],
+                    ..Default::default()
+                },
+            "{row}"
+        );
+    }
+    broker_handle.shutdown().await;
 }
 
 /// The legacy single-group shape (v0-v7) creates no group for an unknown id.

@@ -31,6 +31,30 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   the request limit and `fetch.max.bytes` bounded it. The first batch still
   goes out when it is larger than the cap.
 
+- `OffsetFetch` v9 and later checks the member id and epoch it names against a
+  streams group, as Kafka's `StreamsGroup.validateOffsetFetch` does: an
+  unknown member answers `UNKNOWN_MEMBER_ID` and any other epoch than the
+  member's own answers `STALE_MEMBER_EPOCH`. Before, a streams group's
+  offsets were served to any member id at any epoch, and the check ran for
+  consumer groups only.
+
+- A share group takes the outcome of one share-state initialize request
+  whole, as Kafka's `handlePersisterInitializeResponse` does: when any
+  partition of the request fails, every partition of it goes back for a
+  retry. Before, the partitions that succeeded became assignable at once.
+
+- A by-timestamp `ListOffsets` on a tiered topic answers
+  `UNKNOWN_SERVER_ERROR` when the remote tier fails, as Kafka's
+  `DelayedRemoteListOffsets` does. Before, it logged the failure and answered
+  from the local log, which skips every record only the tier holds.
+
+- A consumer or classic group write that does not commit answers
+  `ConsumerGroupHeartbeat`, `JoinGroup`, `SyncGroup` and `LeaveGroup` with
+  Kafka's code for it: `NOT_COORDINATOR` after the coordinator lost its
+  leadership and `COORDINATOR_NOT_AVAILABLE` after a timeout. Before, every
+  failed write answered `COORDINATOR_LOAD_IN_PROGRESS`, so a client retried
+  the old coordinator instead of looking up the new one.
+
 ## [1.0.5] - 2026-10-14
 
 1.0.5 changes no on-disk format and adds no setting, so it upgrades from any

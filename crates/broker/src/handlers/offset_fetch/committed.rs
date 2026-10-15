@@ -19,6 +19,7 @@ use {
         coordinator::unified::{
             actor::GroupActorMessage,
             group::{GroupOffsets, OffsetEntry, OffsetFetchMember},
+            streams::actor::validate_streams_group_offset_fetch,
         },
         task_util::ask,
     },
@@ -29,14 +30,29 @@ use {
 /// together with the keys its open transactions have not resolved yet.
 ///
 /// `member_id` and `member_epoch` are the v9+ request fields (`None` and -1
-/// before v9). A consumer group checks them first, and a refusal is the group
-/// error code Kafka's `ConsumerGroup.validateOffsetFetch` answers.
+/// before v9). A consumer or streams group checks them first, and a refusal is
+/// the group error code Kafka's `ConsumerGroup.validateOffsetFetch` or
+/// `StreamsGroup.validateOffsetFetch` answers. A streams group's members live
+/// in its streams actor, so it is checked there, before and whether or not
+/// the group has committed an offset. A fetch with no member id and a
+/// negative epoch is allowed without asking, and an actor that exited after a
+/// failed write is respawned from the group's replayed state first, so a
+/// stopped actor never refuses a fetch with `UNKNOWN_SERVER_ERROR`.
 pub(super) async fn fetch_offsets(
     broker: &Broker,
     group_id: &str,
     member_id: Option<&str>,
     member_epoch: i32,
 ) -> Result<GroupOffsets, i16> {
+    let names_member = member_id.is_some() || member_epoch >= 0;
+    if names_member && broker.group_coordinator.find_streams(group_id).is_some() {
+        let streams = broker.group_coordinator.get_or_create_streams(group_id);
+        if let Some(error_code) =
+            validate_streams_group_offset_fetch(&streams, member_id, member_epoch).await
+        {
+            return Err(error_code);
+        }
+    }
     let Some(handle) = broker.group_coordinator.find(group_id) else {
         return Ok(GroupOffsets::default());
     };

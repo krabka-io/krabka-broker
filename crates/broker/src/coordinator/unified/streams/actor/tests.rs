@@ -359,12 +359,11 @@ async fn a_failed_write_answers_its_code_and_writes_no_partial_batch() {
 
         let response = heartbeat(&handle, member_request("m1", 0)).await;
 
-        check!(
-            response == super::response::error_resp(fixture.expected.0, None),
-            "{}",
-            fixture.label
-        );
-        fixture.check_no_batches().await;
+        fixture
+            .check_refused(&response, |error_code| {
+                super::response::error_resp(error_code, None)
+            })
+            .await;
     }
 }
 
@@ -1988,6 +1987,51 @@ fn validate_offset_commit_follows_kafka_streams_group() {
         check!(
             validate_offset_commit(state, None, member_id, member_epoch, fence, &partitions)
                 == expected,
+            "{row}"
+        );
+    }
+}
+
+/// Kafka's `StreamsGroup.validateOffsetFetch`. Each row is the v9+ member
+/// fields of an `OffsetFetch` against a group whose member `m1` is at epoch 5,
+/// and the expected answer.
+#[test]
+fn validate_offset_fetch_follows_kafka_streams_group() {
+    let mut group = StreamsGroupState::new("g");
+    group.members.insert("m1".into(), epoch_five_member());
+
+    // (row, member id, member epoch, expected)
+    let rows = [
+        ("no member id and epoch -1 (admin client)", None, -1, Ok(())),
+        ("the member at its epoch", Some("m1"), 5, Ok(())),
+        (
+            "the member at an older epoch",
+            Some("m1"),
+            4,
+            Err(codes::STALE_MEMBER_EPOCH),
+        ),
+        (
+            "the member at a newer epoch",
+            Some("m1"),
+            6,
+            Err(codes::STALE_MEMBER_EPOCH),
+        ),
+        (
+            "an unknown member",
+            Some("ghost"),
+            5,
+            Err(codes::UNKNOWN_MEMBER_ID),
+        ),
+        (
+            "no member id with an epoch",
+            None,
+            5,
+            Err(codes::UNKNOWN_MEMBER_ID),
+        ),
+    ];
+    for (row, member_id, member_epoch, expected) in rows {
+        check!(
+            validate_offset_fetch(&group, member_id, member_epoch) == expected,
             "{row}"
         );
     }
