@@ -6,24 +6,48 @@ use {
 /// Kafka's `NOT_LEADER_OR_FOLLOWER`.
 const NOT_LEADER_OR_FOLLOWER: i16 = 6;
 
-#[test]
-fn vote_response_round_trips() {
-    let resp = PeerResponse::Vote {
-        epoch: 3,
-        granted: true,
-    };
+/// A Vote answer that names a leader and its endpoint.
+fn vote_naming_leader_two() -> PeerResponse {
+    PeerResponse::Vote {
+        error_code: 0,
+        granted: false,
+        leader: QuorumLeader {
+            leader_id: Some(NodeId(2)),
+            epoch: 3,
+            endpoint: Some(LeaderEndpoint {
+                host: "127.0.0.1".to_string(),
+                port: 9_093,
+            }),
+        },
+    }
+}
+
+#[yare::parameterized(
+    grant_without_a_leader = {
+        PeerResponse::Vote {
+            error_code: 0,
+            granted: true,
+            leader: QuorumLeader { leader_id: None, epoch: 3, endpoint: None },
+        }
+    },
+    refusal_naming_a_leader = { vote_naming_leader_two() },
+    refusal_with_an_error = {
+        PeerResponse::Vote {
+            error_code: NOT_LEADER_OR_FOLLOWER,
+            granted: false,
+            leader: QuorumLeader { leader_id: None, epoch: 3, endpoint: None },
+        }
+    },
+)]
+fn vote_response_round_trips(resp: PeerResponse) {
     assert2::assert!(PeerResponse::decode_vote(&resp.encode()) == Some(resp));
 }
 
 #[test]
-fn encoded_vote_response_carries_success_error_codes() {
+fn encoded_vote_response_carries_the_leader_and_its_endpoint() {
     use krabka_protocol::Decode;
 
-    let resp = PeerResponse::Vote {
-        epoch: 3,
-        granted: true,
-    };
-    let mut cur = &resp.encode()[..];
+    let mut cur = &vote_naming_leader_two().encode()[..];
     let raw = VoteResponse::decode(&mut cur, VOTE_VERSION).expect("decode vote response");
     let partition = &raw.topics[0].partitions[0];
     check!(
@@ -31,19 +55,27 @@ fn encoded_vote_response_carries_success_error_codes() {
             raw.error_code,
             partition.partition_index,
             partition.error_code,
+            partition.leader_id,
             partition.leader_epoch,
             partition.vote_granted,
-        ) == (0, METADATA_PARTITION, 0, 3, true)
+        ) == (0, METADATA_PARTITION, 0, 2, 3, false)
+    );
+    check!(
+        raw.node_endpoints
+            .iter()
+            .map(|endpoint| (endpoint.node_id, endpoint.host.as_str(), endpoint.port))
+            .collect::<Vec<_>>()
+            == vec![(2, "127.0.0.1", 9_093)]
     );
 }
 
+/// A real JVM `VoteResponse` is byte-faithful Kafka with no krabka echo tag.
+/// It is built straight from the generated protocol type, bypassing
+/// `PeerResponse::encode`, so `decode_vote` is checked against Kafka's own
+/// layout: the leader the voter names comes from `LeaderId`, and its endpoint
+/// from the `NodeEndpoints` entry for that node alone.
 #[test]
-fn decodes_jvm_style_response_without_echo_tag() {
-    // A real JVM `VoteResponse` is byte-faithful Kafka v2 with no Krabka
-    // echo tag. Build one straight from the generated protocol type
-    // (bypassing `PeerResponse::Vote::encode`) and confirm `decode_vote`
-    // tolerates it — the regression guard for the removed
-    // `PRE_VOTE_ECHO_TAG`.
+fn decodes_a_jvm_vote_response() {
     let resp = VoteResponse {
         error_code: 0,
         topics: vec![vote_resp::TopicData {
@@ -51,23 +83,44 @@ fn decodes_jvm_style_response_without_echo_tag() {
             partitions: vec![vote_resp::PartitionData {
                 partition_index: METADATA_PARTITION,
                 error_code: 0,
-                leader_id: -1,
+                leader_id: 4,
                 leader_epoch: epoch_to_wire(7),
-                vote_granted: true,
+                vote_granted: false,
                 ..Default::default()
             }],
             ..Default::default()
         }],
+        node_endpoints: vec![
+            vote_resp::NodeEndpoint {
+                node_id: 5,
+                host: "other".to_string(),
+                port: 1,
+                ..Default::default()
+            },
+            vote_resp::NodeEndpoint {
+                node_id: 4,
+                host: "leader".to_string(),
+                port: 9_094,
+                ..Default::default()
+            },
+        ],
         ..Default::default()
     };
     let bytes = encode_body(&resp, VOTE_VERSION);
-    let decoded = PeerResponse::decode_vote(&bytes).unwrap();
     assert2::assert!(
-        decoded
-            == PeerResponse::Vote {
-                epoch: 7,
-                granted: true
-            }
+        PeerResponse::decode_vote(&bytes)
+            == Some(PeerResponse::Vote {
+                error_code: 0,
+                granted: false,
+                leader: QuorumLeader {
+                    leader_id: Some(NodeId(4)),
+                    epoch: 7,
+                    endpoint: Some(LeaderEndpoint {
+                        host: "leader".to_string(),
+                        port: 9_094,
+                    }),
+                },
+            })
     );
 }
 

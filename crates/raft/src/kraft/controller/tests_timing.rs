@@ -255,32 +255,6 @@ async fn fetch_misses_increment_and_trigger_timeout_at_limit() {
     check!(follower.following_leader().is_none());
 }
 
-#[test]
-fn response_to_event_maps_vote_response() {
-    use crate::kraft::{
-        controller::engine_loop::response_to_event,
-        transport::{api_key, wire::PeerResponse},
-    };
-
-    let vote = PeerResponse::Vote {
-        epoch: 5,
-        granted: true,
-    };
-    let encoded = vote.encode();
-    let event = response_to_event(NodeId(3), api_key::VOTE, &encoded);
-    check!(
-        event
-            == Some(Event::ReceiveVoteResponse {
-                from: NodeId(3),
-                epoch: 5,
-                vote_granted: true,
-            })
-    );
-
-    check!(response_to_event(NodeId(3), 999, &encoded).is_none());
-    check!(response_to_event(NodeId(3), api_key::VOTE, b"invalid").is_none());
-}
-
 #[tokio::test]
 async fn sleep_until_opt_completes_for_past_deadline() {
     use crate::kraft::controller::engine_loop::sleep_until_opt;

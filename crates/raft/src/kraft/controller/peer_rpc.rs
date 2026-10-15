@@ -3,10 +3,7 @@
 //! from ever awaiting a peer inline.
 
 use {
-    super::{
-        Engine, engine_loop::response_to_event, replication::fetch_epoch_for_request,
-        timing::election_timeout_ms,
-    },
+    super::{Engine, replication::fetch_epoch_for_request, timing::election_timeout_ms},
     crate::kraft::{
         snapshot_fetch::SnapshotId,
         transport::{Command, api_key, wire},
@@ -224,8 +221,10 @@ impl Engine {
                 Ok(resp_body) => {
                     // A Fetch response carries log records the follower must
                     // truncate/append/apply before the core sees it, so it goes
-                    // through the dedicated `FetchResponse` command. Every other
-                    // response decodes to a pure `Receive*Response` event.
+                    // through the dedicated `FetchResponse` command. A Vote
+                    // response names the voter's leader, which the engine acts
+                    // on before the core counts the grant. Begin/End acks
+                    // produce nothing.
                     if api_key == self::api_key::FETCH {
                         let _ = cmd_tx
                             .send(Command::FetchResponse {
@@ -243,8 +242,13 @@ impl Engine {
                                 body: resp_body,
                             })
                             .await;
-                    } else if let Some(event) = response_to_event(peer, api_key, &resp_body) {
-                        let _ = cmd_tx.send(Command::Event(event)).await;
+                    } else if api_key == self::api_key::VOTE {
+                        let _ = cmd_tx
+                            .send(Command::VoteResponse {
+                                from: peer,
+                                body: resp_body,
+                            })
+                            .await;
                     }
                 }
                 Err(e) => tracing::debug!(peer = peer.0, ?e, "kraft: peer send failed"),
