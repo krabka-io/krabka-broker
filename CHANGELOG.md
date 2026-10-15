@@ -25,6 +25,16 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- Retention no longer holds a partition's log lock while it waits for the
+  disk sync of newer rolled segments. When it deleted a segment it waited for
+  every queued segment-roll flush, so appends and follower fetches of a busy
+  partition stalled for as long as those syncs took. Under RF3 `acks=all`
+  saturation with size retention this showed up as produce stalls of up to
+  about a second (#1394). It now waits only for a flush that would write a
+  producer snapshot for a segment it deletes.
+- The bench driver's `acks: all` scenarios run again. They turn idempotence on,
+  and the driver asked for more in-flight requests than an idempotent producer
+  allows, so each one failed at start.
 - A long-polling `Fetch` is no longer charged its wait to
   `request_percentage`. Kafka parks the wait in the fetch purgatory, off the
   request-handler thread, and charges only the handler's own time. Before, a
