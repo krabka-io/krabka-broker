@@ -1,0 +1,151 @@
+{
+  "format_version": 1,
+  "name": "rf3-regression-v1",
+  "rounds": 5,
+  "cluster": {
+    "brokers": 3,
+    "replication_factor": 3,
+    "min_insync_replicas": 2
+  },
+  "kafka_image": "apache/kafka:4.3.1@sha256:77e3df9054047a88b520d0cc46e16696d3b22022e1d580aeccd2632df6532837",
+  "cells": [
+    {
+      "id": "1k-random-lz4-p12-saturate",
+      "record_bytes": 1024,
+      "payload": "random",
+      "compression": "lz4",
+      "partitions": 12,
+      "records": 3000000,
+      "rate": null,
+      "idle_seconds": 0,
+      "timeout_seconds": 600,
+      "budgeted": ["records_per_second", "cpu_micros_per_record", "peak_rss_mib"]
+    },
+    {
+      "id": "100b-random-lz4-p12-saturate",
+      "record_bytes": 100,
+      "payload": "random",
+      "compression": "lz4",
+      "partitions": 12,
+      "records": 10000000,
+      "rate": null,
+      "idle_seconds": 0,
+      "timeout_seconds": 600,
+      "budgeted": ["records_per_second", "cpu_micros_per_record", "peak_rss_mib"]
+    },
+    {
+      "id": "1k-zeros-lz4-p12-saturate",
+      "record_bytes": 1024,
+      "payload": "zeros",
+      "compression": "lz4",
+      "partitions": 12,
+      "records": 3000000,
+      "rate": null,
+      "idle_seconds": 0,
+      "timeout_seconds": 600,
+      "budgeted": ["records_per_second", "cpu_micros_per_record", "peak_rss_mib"]
+    },
+    {
+      "id": "1k-random-none-p12-saturate",
+      "record_bytes": 1024,
+      "payload": "random",
+      "compression": "none",
+      "partitions": 12,
+      "records": 3000000,
+      "rate": null,
+      "idle_seconds": 0,
+      "timeout_seconds": 600,
+      "budgeted": ["records_per_second", "cpu_micros_per_record", "peak_rss_mib"]
+    },
+    {
+      "id": "100k-random-lz4-p12-saturate",
+      "record_bytes": 102400,
+      "payload": "random",
+      "compression": "lz4",
+      "partitions": 12,
+      "records": 30000,
+      "rate": null,
+      "idle_seconds": 0,
+      "timeout_seconds": 600,
+      "budgeted": ["records_per_second", "cpu_micros_per_record", "peak_rss_mib"]
+    },
+    {
+      "id": "1k-random-lz4-p1-saturate",
+      "record_bytes": 1024,
+      "payload": "random",
+      "compression": "lz4",
+      "partitions": 1,
+      "records": 1000000,
+      "rate": null,
+      "idle_seconds": 0,
+      "timeout_seconds": 600,
+      "budgeted": ["records_per_second", "cpu_micros_per_record", "peak_rss_mib"]
+    },
+    {
+      "id": "1k-random-lz4-p12-fixed-20k",
+      "record_bytes": 1024,
+      "payload": "random",
+      "compression": "lz4",
+      "partitions": 12,
+      "records": 600000,
+      "rate": 20000,
+      "idle_seconds": 0,
+      "timeout_seconds": 300,
+      "budgeted": ["records_per_second", "latency_ms_p99", "cpu_micros_per_record", "peak_rss_mib"]
+    },
+    {
+      "id": "1k-random-lz4-p1000-fixed-5k",
+      "record_bytes": 1024,
+      "payload": "random",
+      "compression": "lz4",
+      "partitions": 1000,
+      "records": 300000,
+      "rate": 5000,
+      "idle_seconds": 0,
+      "timeout_seconds": 300,
+      "budgeted": ["records_per_second", "latency_ms_p99", "cpu_micros_per_record", "peak_rss_mib"]
+    },
+    {
+      "id": "1k-random-lz4-p12-idle-burst",
+      "record_bytes": 1024,
+      "payload": "random",
+      "compression": "lz4",
+      "partitions": 12,
+      "records": 500000,
+      "rate": 50000,
+      "idle_seconds": 120,
+      "timeout_seconds": 300,
+      "budgeted": ["records_per_second", "latency_ms_p99", "cpu_micros_per_record", "peak_rss_mib"]
+    }
+  ],
+  "budgets": {
+    "records_per_second": {
+      "materiality_percent": 5.0,
+      "spread_multiplier": 3.0,
+      "max_spread_percent": 10.0
+    },
+    "latency_ms_p99": {
+      "materiality_percent": 10.0,
+      "spread_multiplier": 3.0,
+      "max_spread_percent": 25.0
+    },
+    "cpu_micros_per_record": {
+      "materiality_percent": 5.0,
+      "spread_multiplier": 3.0,
+      "max_spread_percent": 10.0
+    },
+    "peak_rss_mib": {
+      "materiality_percent": 10.0,
+      "spread_multiplier": 3.0,
+      "max_spread_percent": 10.0
+    }
+  },
+  "modes": {
+    "before_after": {
+      "gate_performance": true
+    },
+    "pinned_kafka": {
+      "gate_performance": false
+    }
+  }
+}
