@@ -106,10 +106,13 @@ impl QuorumStateMachine {
         vote_granted: bool,
         now: SimInstant,
     ) -> Vec<Action> {
-        // A higher-epoch rejection fences us: step down to that epoch.
+        // A higher-epoch rejection fences us: step down to that epoch. The
+        // election timer keeps the time it has left, as Kafka's
+        // `transitionToUnattached` keeps a candidate's remaining timeout.
         if !vote_granted && epoch > self.state.leader_epoch {
             let mut actions = Vec::new();
-            self.transition_to_unattached(epoch, now, &mut actions);
+            let deadline = self.unattached_election_deadline(epoch, now);
+            self.transition_to_unattached(epoch, deadline, &mut actions);
             return actions;
         }
         if !vote_granted {

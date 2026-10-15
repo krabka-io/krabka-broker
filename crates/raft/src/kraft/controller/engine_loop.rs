@@ -325,7 +325,7 @@ impl Engine {
     /// Send the next observer leader discovery Fetch, if this node is a
     /// leaderless observer with a peer to ask, and arm the fetch timer that
     /// retries it.
-    fn send_discovery_fetch(&mut self) {
+    pub(super) fn send_discovery_fetch(&mut self) {
         if let Some(peer) = self.discovery_peer() {
             self.discovery_attempts = self.discovery_attempts.wrapping_add(1);
             self.send_fetch(peer);

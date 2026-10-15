@@ -1,8 +1,11 @@
 use {
     super::*,
     crate::{
-        core::test_support::{
-            FakeLog, MachineAndLog, check_prevote_started, machine, three_voter_machine, voters,
+        core::{
+            election_jitter_ms,
+            test_support::{
+                FakeLog, MachineAndLog, check_prevote_started, machine, three_voter_machine, voters,
+            },
         },
         event::{Event, LogEnd},
     },
@@ -308,4 +311,150 @@ fn prospective_ignores_grant_from_different_epoch() {
     let actions = vote_response().m(&mut m).log(&log).epoch(5).call();
     assert2::assert!(matches!(m.role(), Role::Prospective { .. }));
     assert2::assert!(actions.is_empty());
+}
+
+/// The election deadline a nominee holds, whatever its round.
+fn nominee_deadline(m: &QuorumStateMachine) -> SimInstant {
+    match m.role() {
+        Role::Prospective {
+            election_deadline, ..
+        }
+        | Role::Candidate {
+            election_deadline, ..
+        } => *election_deadline,
+        other => panic!("expected a nominee, found {other:?}"),
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum NomineeRound {
+    PreVote,
+    Vote,
+}
+
+/// A rejection from a newer epoch moves a prospective or a candidate to
+/// Unattached in that epoch with the election deadline it already had, as
+/// Kafka's `QuorumState.transitionToUnattached` keeps a nominee's remaining
+/// election timeout.
+///
+/// A nominee that started its next election at once would run it at the same
+/// instant as every other voter that the same epoch fenced, and two voters
+/// that lost an election together would split the next vote too.
+#[yare::parameterized(
+    prospective = { NomineeRound::PreVote },
+    candidate = { NomineeRound::Vote },
+)]
+fn a_nominee_fenced_by_a_newer_epoch_keeps_its_election_deadline(round: NomineeRound) {
+    let MachineAndLog {
+        machine: mut m,
+        log,
+    } = match round {
+        NomineeRound::PreVote => prospective_three_voter(),
+        NomineeRound::Vote => pre_vote_promoted_candidate(),
+    };
+    let deadline = nominee_deadline(&m);
+
+    let actions = vote_response()
+        .m(&mut m)
+        .log(&log)
+        .epoch(9)
+        .decision(VoteDecision::Rejected)
+        .now(2_100)
+        .call();
+
+    check!(
+        actions
+            == vec![
+                Action::PersistQuorumState,
+                Action::TransitionedTo("Unattached"),
+                Action::ResetTimer {
+                    kind: TimerKind::Election,
+                    deadline,
+                },
+            ],
+        "{round:?}"
+    );
+    check!(
+        *m.role()
+            == Role::Unattached {
+                election_deadline: deadline,
+            },
+        "{round:?}"
+    );
+    check!(m.quorum_state().leader_epoch == 9, "{round:?}");
+}
+
+/// A candidate that has not won by its election deadline goes back to a
+/// pre-vote round in the same epoch, with an election timeout drawn afresh, as
+/// Kafka's `pollCandidate` calls `transitionToProspective` and
+/// `QuorumState.transitionToProspective` draws `randomElectionTimeoutMs`.
+#[test]
+fn a_candidate_that_times_out_pre_votes_again_with_a_fresh_timeout() {
+    let MachineAndLog {
+        machine: mut m,
+        log,
+    } = pre_vote_promoted_candidate();
+    let deadline = nominee_deadline(&m);
+
+    let actions = m.on_event(Event::ElectionTimeout, &log, deadline);
+
+    let fresh = deadline.saturating_add_ms(1_000 + election_jitter_ms(NodeId(1), 1, 1_000));
+    check!(
+        actions
+            == vec![
+                Action::TransitionedTo("Prospective"),
+                Action::SendVoteRequest {
+                    epoch: 1,
+                    pre_vote: true,
+                },
+                Action::ResetTimer {
+                    kind: TimerKind::Election,
+                    deadline: fresh,
+                },
+            ]
+    );
+    check!(
+        *m.role()
+            == Role::Prospective {
+                granted: BTreeSet::from([NodeId(1)]),
+                election_deadline: fresh,
+                abandoned_leader: None,
+            }
+    );
+}
+
+/// Every election timer a voter arms runs for Kafka's
+/// `electionTimeoutMs + random.nextInt(electionTimeoutMs)`: at least the
+/// configured timeout and less than twice it. The draw also differs between
+/// voters, so two voters that time out together in one epoch do not keep
+/// timing out together.
+#[test]
+fn every_election_timer_lies_in_kafkas_jittered_window() {
+    let log = FakeLog::new(5, 1);
+    let now = SimInstant(10_000);
+    let mut deadlines = BTreeSet::new();
+    for id in 1..=5 {
+        for epoch in 0..64 {
+            let mut m = machine(NodeId(id), &[
+                NodeId(1),
+                NodeId(2),
+                NodeId(3),
+                NodeId(4),
+                NodeId(5),
+            ]);
+            m.force_epoch(epoch);
+            m.on_event(Event::ElectionTimeout, &log, now);
+            let deadline = nominee_deadline(&m);
+            check!(
+                (now.saturating_add_ms(1_000)..now.saturating_add_ms(2_000)).contains(&deadline),
+                "node {id} epoch {epoch}: {deadline:?}"
+            );
+            deadlines.insert(deadline);
+        }
+    }
+    check!(
+        deadlines.len() > 64,
+        "{} distinct deadlines",
+        deadlines.len()
+    );
 }

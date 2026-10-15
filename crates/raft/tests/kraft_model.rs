@@ -81,11 +81,20 @@ const MAX_DEPTH: usize = 60;
 // cap rose from 6M to 8M with them). The two-voter configs never split a vote
 // from a leader, and did not move. The `always` properties, election safety
 // among them, still hold.
-const PINNED_UNIQUE_STATES_THREE_VOTERS_ELECTION_SAFETY: usize = 10_750;
-const PINNED_UNIQUE_STATES_TWO_VOTERS_LINEARIZABLE: usize = 46_521;
-const PINNED_UNIQUE_STATES_THREE_VOTERS_FAULTS: usize = 1_128_704;
-const PINNED_UNIQUE_STATES_THREE_VOTERS_APPEND: usize = 839_339;
-const PINNED_UNIQUE_STATES_TWO_VOTERS_APPEND_VIA: usize = 256_973;
+//
+// Every count moved again when a nominee fenced by a newer epoch in a Vote
+// response began to keep its election deadline, as Kafka's
+// `QuorumState.transitionToUnattached` keeps a candidate's remaining timeout
+// (#621). It used to arm its election timer at the instant of the response,
+// so the states in which it starts its next pre-vote at once are gone, and a
+// fenced nominee now carries the deadline it drew into the new epoch. The
+// election-safety config gained 30 states and the others lost some. The
+// `always` properties still hold.
+const PINNED_UNIQUE_STATES_THREE_VOTERS_ELECTION_SAFETY: usize = 10_780;
+const PINNED_UNIQUE_STATES_TWO_VOTERS_LINEARIZABLE: usize = 46_471;
+const PINNED_UNIQUE_STATES_THREE_VOTERS_FAULTS: usize = 1_049_288;
+const PINNED_UNIQUE_STATES_THREE_VOTERS_APPEND: usize = 796_007;
+const PINNED_UNIQUE_STATES_TWO_VOTERS_APPEND_VIA: usize = 256_923;
 
 krabka_macros::bounded_bfs!(bounded_bfs);
 

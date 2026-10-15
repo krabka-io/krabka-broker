@@ -1,9 +1,12 @@
 use {
     super::*,
     crate::{
-        core::test_support::{
-            CellLog, EpochRun, FakeLog, MachineLogAndActions, RunsLog, machine,
-            three_voter_machine, voters, win_election,
+        core::{
+            election_jitter_ms,
+            test_support::{
+                CellLog, EpochRun, FakeLog, MachineLogAndActions, RunsLog, machine,
+                three_voter_machine, voters, win_election,
+            },
         },
         event::Event,
     },
@@ -843,4 +846,95 @@ fn fetch_caught_up_updates_last_caught_up_and_observer_does_not_reset_check_quor
         kind: TimerKind::CheckQuorum,
         ..
     })));
+}
+
+#[derive(Clone, Copy, Debug)]
+enum LeaderlessEpochOutcome {
+    /// A voter moves to Unattached and arms an election timer.
+    Unattached,
+    /// An observer forgets its leader and arms the discovery fetch timer.
+    DiscoveringObserver,
+    /// The response is not newer than the replica's epoch.
+    Unchanged,
+}
+
+/// A Fetch response from a newer epoch that names no leader moves the replica
+/// to that epoch, as Kafka's `KafkaRaftClient.maybeTransition` moves it to
+/// Unattached there.
+///
+/// A voter arms an election timer drawn in the new epoch, because it followed
+/// a leader and so had no election timer of its own. An observer forgets the
+/// leader that lost the epoch and looks for the current one. A response from
+/// the replica's own epoch or an older one changes nothing.
+#[yare::parameterized(
+    voter = { NodeId(2), 7, LeaderlessEpochOutcome::Unattached },
+    observer = { NodeId(4), 7, LeaderlessEpochOutcome::DiscoveringObserver },
+    voter_in_its_own_epoch = { NodeId(2), 1, LeaderlessEpochOutcome::Unchanged },
+    observer_in_an_older_epoch = { NodeId(4), 0, LeaderlessEpochOutcome::Unchanged },
+)]
+fn a_newer_epoch_without_a_leader_detaches_the_replica(
+    me: NodeId,
+    epoch: Epoch,
+    outcome: LeaderlessEpochOutcome,
+) {
+    let mut m = machine(me, &[NodeId(1), NodeId(2), NodeId(3)]);
+    let log = FakeLog::new(0, 0);
+    m.on_event(
+        Event::ReceiveBeginQuorumEpoch {
+            leader_id: NodeId(1),
+            leader_epoch: 1,
+        },
+        &log,
+        SimInstant(1_000),
+    );
+    let before = m.clone();
+    let now = SimInstant(2_000);
+
+    let actions = m.on_event(Event::ReceiveLeaderlessEpoch { epoch }, &log, now);
+
+    let (role, kind, deadline) = match outcome {
+        LeaderlessEpochOutcome::Unchanged => {
+            check!(actions.is_empty(), "{outcome:?}");
+            check!(m == before, "{outcome:?}");
+            return;
+        }
+        LeaderlessEpochOutcome::Unattached => {
+            let election_deadline =
+                now.saturating_add_ms(1_000 + election_jitter_ms(me, epoch, 1_000));
+            (
+                Role::Unattached { election_deadline },
+                TimerKind::Election,
+                election_deadline,
+            )
+        }
+        LeaderlessEpochOutcome::DiscoveringObserver => {
+            let fetch_deadline = now.saturating_add_ms(1_000);
+            (
+                Role::Observer {
+                    leader_id: None,
+                    fetch_deadline,
+                },
+                TimerKind::Fetch,
+                fetch_deadline,
+            )
+        }
+    };
+    check!(
+        actions
+            == vec![
+                Action::PersistQuorumState,
+                Action::TransitionedTo(role.name()),
+                Action::ResetTimer { kind, deadline },
+            ],
+        "{outcome:?}"
+    );
+    check!(*m.role() == role, "{outcome:?}");
+    check!(
+        (
+            m.quorum_state().leader_id,
+            m.quorum_state().leader_epoch,
+            m.quorum_state().voted_key
+        ) == (None, epoch, None),
+        "{outcome:?}"
+    );
 }

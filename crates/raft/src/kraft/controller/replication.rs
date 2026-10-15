@@ -144,8 +144,9 @@ impl Engine {
         // the epoch keeps fetching from it, rejects every answer, and stops
         // replicating. A voter learns the new leader from `BeginQuorumEpoch`
         // too, but an observer learns it only here. A newer epoch that names
-        // no leader is left to that epoch's Vote or `BeginQuorumEpoch`;
-        // Kafka moves to Unattached in it instead.
+        // no leader moves the node to Unattached in it, as Kafka's
+        // `maybeTransition` does, and an observer then asks a voter for the
+        // leader at once instead of waiting for its fetch timer.
         if leader_epoch > self.core.quorum_state().leader_epoch {
             if let Some(leader_id) = leader.leader_id {
                 self.remember_leader_endpoint(&leader);
@@ -153,6 +154,11 @@ impl Engine {
                     leader_id,
                     leader_epoch,
                 });
+            } else {
+                self.on_event(Event::ReceiveLeaderlessEpoch {
+                    epoch: leader_epoch,
+                });
+                self.send_discovery_fetch();
             }
             return;
         }

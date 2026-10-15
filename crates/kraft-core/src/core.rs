@@ -144,10 +144,44 @@ impl QuorumStateMachine {
     /// integer kernel, and [`SimInstant`] is a coordinate on a millisecond
     /// timeline and not an extent.
     fn election_deadline(&self, now: SimInstant) -> SimInstant {
+        self.election_deadline_in(self.state.leader_epoch, now)
+    }
+
+    /// [`Self::election_deadline`] for a timer armed in `epoch`, which may be
+    /// newer than the epoch this replica holds.
+    fn election_deadline_in(&self, epoch: Epoch, now: SimInstant) -> SimInstant {
         now.saturating_add_ms(
-            self.election_timeout_ms
-                + election_jitter_ms(self.me, self.state.leader_epoch, self.election_timeout_ms),
+            self.election_timeout_ms + election_jitter_ms(self.me, epoch, self.election_timeout_ms),
         )
+    }
+
+    /// The election deadline of a voter that a newer `epoch` moves to
+    /// `Unattached`: Kafka's `QuorumState.transitionToUnattached`.
+    ///
+    /// A replica that is already counting down to an election keeps the time
+    /// it has left. That is a candidate, a prospective, or an unattached or
+    /// voted replica. Any other replica draws a fresh election timeout in the
+    /// new epoch. A resigned replica draws one too, because krabka's
+    /// `Role::Resigned` carries no deadline of its own.
+    ///
+    /// A candidate that a newer epoch fences therefore does not start its next
+    /// election at once. It waits out the timeout it drew, so two voters that
+    /// lost the same election do not both run again at the same instant.
+    fn unattached_election_deadline(&self, epoch: Epoch, now: SimInstant) -> SimInstant {
+        match self.role {
+            Role::Unattached { election_deadline }
+            | Role::Voted { election_deadline }
+            | Role::Prospective {
+                election_deadline, ..
+            }
+            | Role::Candidate {
+                election_deadline, ..
+            } => election_deadline,
+            Role::Follower { .. }
+            | Role::Observer { .. }
+            | Role::Leader { .. }
+            | Role::Resigned => self.election_deadline_in(epoch, now),
+        }
     }
 
     /// The deadline for a check-quorum timer armed at `now`.
@@ -254,6 +288,7 @@ impl QuorumStateMachine {
                 diverging,
             } => self.handle_fetch_response(log, leader_id, leader_epoch, diverging, now),
             Event::FetchTimeout => self.handle_fetch_timeout(log, now),
+            Event::ReceiveLeaderlessEpoch { epoch } => self.handle_leaderless_epoch(epoch, now),
         }
     }
 
