@@ -25,6 +25,11 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- A dynamic `max.connections` or `max.connections.per.ip`, set per broker or
+  cluster-wide with `IncrementalAlterConfigs` or `AlterConfigs`, now applies
+  to the next connection the broker accepts, and deleting it restores the
+  static cap. Before, the broker stored and reported the value but kept
+  counting against the static cap until it restarted (#1391).
 - A `ShareFetch` is now charged to the member's `consumer_byte_rate` and
   `request_percentage` quotas, as Kafka's `processShareFetchResponse` charges
   it. A throttled fetch reports the larger throttle in `throttle_time_ms`,
