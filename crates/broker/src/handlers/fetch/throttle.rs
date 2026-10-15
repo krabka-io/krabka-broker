@@ -25,124 +25,106 @@ use {
 pub(super) fn throttle_follower_responses(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
-    follower_id: i32,
-    responses: &mut [FetchableTopicResponse],
+    responses: &[FetchableTopicResponse],
 ) {
-    let Ok(follower) = u64::try_from(follower_id) else {
-        return;
-    };
-    throttle_replica_traffic(
+    record_throttled_replication(
         &broker.throttle_state.leader_out,
         &broker.metrics,
         image,
-        ReplicaPair {
-            leader: broker.config.node_id,
-            follower: krabka_metadata::NodeId(follower),
-        },
+        broker.config.node_id,
         responses,
     );
 }
 
-/// The leader and the follower of one replica fetch.
-#[derive(Clone, Copy)]
-struct ReplicaPair {
-    leader: krabka_metadata::NodeId,
-    follower: krabka_metadata::NodeId,
-}
-
-/// The KIP-73 leader-side throttle of one follower fetch, run by the leader
-/// `leader` for the replica `follower`.
+/// Kafka's `ReplicaManager.shouldLeaderThrottle`, less its quota check: the
+/// leader `leader` throttles the read of `partition` of `topic` by the
+/// replica `follower_id`.
 ///
 /// A partition is throttled when the leader's own id is on its
 /// `leader.replication.throttled.replicas` list, whichever follower fetches it
 /// (`ConfigHandler.parseThrottledPartitions` keeps the entries that name the
 /// broker itself, and `ReplicationQuotaManager.isThrottled` is per partition,
 /// #1210). A follower that is in the partition's ISR is never throttled, to
-/// avoid ISR thrashing (`ReplicaManager.shouldLeaderThrottle`, #1211), but its
-/// bytes still count against the quota, as `KafkaApis.sizeOfThrottledPartitions`
-/// records the size of every throttled partition, in sync or not.
+/// avoid ISR thrashing (#1211).
 ///
-/// The out-of-sync partitions share what the bucket holds, and a partition
-/// past it is answered without records. The in-sync bytes are recorded after
-/// that, so a burst of them leaves the bucket in debt and the next fetch of an
-/// out-of-sync replica finds nothing to draw. The debt is kept for one
-/// replication quota window at most ([`REPLICATION_QUOTA_WINDOW`]), as Kafka's
-/// quota forgets a sample that leaves its window, so the replica is starved for
-/// that long and not for as long as the burst was big.
+/// The quota check is the read loop's to make, right before it hands the
+/// read's records out, as Kafka's `readFromLog` makes it: a row read while
+/// the leader-out bucket reports [`TokenBucket::quota_exceeded`] carries no
+/// records.
+pub(super) fn leader_throttles_replica(
+    image: &krabka_metadata::MetadataImage,
+    leader: krabka_metadata::NodeId,
+    follower_id: i32,
+    topic: &str,
+    partition: i32,
+) -> bool {
+    let Ok(follower) = u64::try_from(follower_id) else {
+        return false;
+    };
+    TopicThrottle::for_topic(image, topic, leader)
+        .leader
+        .contains(partition)
+        && !image
+            .partition(topic, partition)
+            .is_some_and(|record| record.isr.contains(&krabka_metadata::NodeId(follower)))
+}
+
+/// Whether the leader withholds the records of a follower read: the leader
+/// throttles the replica ([`leader_throttles_replica`]) and `leader_out`
+/// reports its quota exceeded right now, Kafka's `isQuotaExceeded`. The read
+/// loop asks this of every read it makes, so a fetch that parks finds the
+/// quota as it is when it wakes.
+pub(super) fn leader_withholds(leader_out: &TokenBucket, replica_throttled: bool) -> bool {
+    replica_throttled && leader_out.quota_exceeded()
+}
+
+/// Records the bytes a follower fetch sends of every partition that the leader
+/// `leader` throttles, in sync or not, as Kafka's `KafkaApis` records
+/// `sizeOfThrottledPartitions` once the response is built.
+///
+/// The read loop has already withheld the records of every out-of-sync
+/// partition that it read while the quota was exceeded. The partitions it
+/// read within the quota go out whole, so the charge may overshoot the
+/// balance: an indivisible batch larger than the whole burst still
+/// replicates, and the debt it leaves makes the quota report itself exceeded
+/// until the refill repays it. The debt is kept for one replication quota
+/// window at most ([`REPLICATION_QUOTA_WINDOW`]), as Kafka's quota forgets a
+/// sample that leaves its window. So a burst stalls the throttled replicas for
+/// that long at most, and not for as long as the burst was big.
 ///
 /// [`REPLICATION_QUOTA_WINDOW`]: crate::throttle::REPLICATION_QUOTA_WINDOW
-fn throttle_replica_traffic(
+fn record_throttled_replication(
     leader_out: &TokenBucket,
     metrics: &BrokerMetrics,
     image: &krabka_metadata::MetadataImage,
-    ReplicaPair { leader, follower }: ReplicaPair,
-    responses: &mut [FetchableTopicResponse],
+    leader: krabka_metadata::NodeId,
+    responses: &[FetchableTopicResponse],
 ) {
-    let mut in_sync_bytes = 0_u64;
-    let mut out_of_sync_bytes = 0_u64;
-    let mut out_of_sync = Vec::new();
-    for (topic_index, topic) in responses.iter().enumerate() {
+    let mut sent = 0_u64;
+    for topic in responses {
         let throttle = TopicThrottle::for_topic(image, &topic.topic, leader);
-        for (partition_index, partition) in topic.partitions.iter().enumerate() {
-            if !throttle.leader.contains(partition.partition_index) {
-                continue;
-            }
-            let bytes = partition
-                .records
-                .as_ref()
-                .map_or(0, RecordsPayload::payload_len) as u64;
-            let in_sync = image
-                .partition(&topic.topic, partition.partition_index)
-                .is_some_and(|record| record.isr.contains(&follower));
-            if in_sync {
-                in_sync_bytes += bytes;
-            } else {
-                out_of_sync_bytes += bytes;
-                out_of_sync.push(ResponseSlot {
-                    topic_index,
-                    partition_index,
-                });
-            }
-        }
+        sent += topic
+            .partitions
+            .iter()
+            .filter(|partition| throttle.leader.contains(partition.partition_index))
+            .map(|partition| {
+                partition
+                    .records
+                    .as_ref()
+                    .map_or(0, RecordsPayload::payload_len) as u64
+            })
+            .sum::<u64>();
     }
-    let mut sent_out_of_sync = out_of_sync_bytes;
-    if out_of_sync_bytes > 0 {
-        let granted = leader_out.try_consume(out_of_sync_bytes);
-        if granted < out_of_sync_bytes {
-            sent_out_of_sync = truncate_throttled_responses(
-                responses,
-                &out_of_sync,
-                granted,
-                leader_out.token_burst(),
-            );
-            // Whole partitions are dropped, so the budget a dropped partition
-            // did not fit goes back to the bucket. A partition larger than
-            // the bucket's burst is the exception: Kafka must make progress
-            // on an oversized partition payload, so one such partition may pass
-            // once this round had positive credit. Charge its overage as
-            // bounded debt, which keeps later fetches throttled without
-            // allowing the same oversized response to spin through for free.
-            if sent_out_of_sync < granted {
-                leader_out.refund(granted - sent_out_of_sync);
-            } else if sent_out_of_sync > granted {
-                leader_out.record_bounded(sent_out_of_sync - granted, REPLICATION_QUOTA_WINDOW);
-            }
-            // The bucket had less than the round asked for, so some of what
-            // this follower was owed is held back. Kafka delays the fetch;
-            // krabka truncates it and the follower re-asks next round.
-            metrics.record_replication_throttle_sleep();
-        }
+    if sent == 0 {
+        return;
     }
-    leader_out.record_bounded(in_sync_bytes, REPLICATION_QUOTA_WINDOW);
+    leader_out.record_bounded(sent, REPLICATION_QUOTA_WINDOW);
     // KIP-73: the measured leader-side throttled-replication rate, which
     // Kafka publishes as
     // `kafka.server:type=LeaderReplication,name=byte-rate`. It is what
     // tells an operator whose reassignment is not moving whether the
     // throttle is biting or something else is wrong.
-    let sent = in_sync_bytes + sent_out_of_sync;
-    if sent > 0 {
-        metrics.record_replication_throttled_out(sent);
-    }
+    metrics.record_replication_throttled_out(sent);
 }
 
 /// The bytes a consumer may read in one fetch without a throttle: Kafka's
@@ -246,56 +228,6 @@ pub(super) fn fetch_response_size(response: &FetchResponse, version: i16) -> u64
         response.encoded_len(version)
     };
     u64::try_from(size).unwrap_or(u64::MAX)
-}
-
-/// The position of one partition within a fetch response's topics.
-#[derive(Clone, Copy)]
-struct ResponseSlot {
-    topic_index: usize,
-    partition_index: usize,
-}
-
-/// KIP-73 leader-side throttle: walk `throttled_idxs` in order and drop
-/// whole-partition chunks until the remaining throttled bytes fit in
-/// `budget`, allowing one over-burst partition through when this round had credit.
-///
-/// The function drops a partition completely and sets its records to `None`.
-/// It never truncates a partition payload in the middle of its record batches.
-/// It returns the bytes it left in place.
-fn truncate_throttled_responses(
-    responses: &mut [FetchableTopicResponse],
-    throttled_idxs: &[ResponseSlot],
-    budget: u64,
-    burst: u64,
-) -> u64 {
-    let mut remaining = budget;
-    let mut kept = 0;
-    let mut sent_oversized_partition = false;
-    for &ResponseSlot {
-        topic_index,
-        partition_index,
-    } in throttled_idxs
-    {
-        let part = &mut responses[topic_index].partitions[partition_index];
-        let chunk_size = part.records.as_ref().map_or(0, RecordsPayload::payload_len) as u64;
-        if chunk_size <= remaining {
-            remaining -= chunk_size;
-            kept += chunk_size;
-        } else if budget > 0 && burst < chunk_size && !sent_oversized_partition {
-            // Kafka permits a fetch to return an indivisible record batch
-            // larger than the entire burst. Since this throttle drops whole
-            // partition payloads, give one such payload a chance to advance;
-            // the caller records its excess as debt.
-            kept += chunk_size;
-            sent_oversized_partition = true;
-            remaining = 0;
-        } else {
-            // Budget exhausted — drop this chunk and all subsequent throttled ones.
-            part.records = None;
-            remaining = 0;
-        }
-    }
-    kept
 }
 
 /// The throttle a consumer fetch earned from its byte-rate quota, with the
@@ -509,8 +441,9 @@ mod tests {
 
     /// Runs the leader-side throttle of the follower fetch of broker 2 over
     /// one partition per entry of `partitions`, each with that many bytes of
-    /// records and with the follower in its ISR or not, and returns the bytes
-    /// each row still carries.
+    /// records and with the follower in its ISR or not: the quota check each
+    /// read makes, and the charge the response makes. Returns the bytes each
+    /// row still carries.
     fn throttle_leader_fetch(
         leader_out: &TokenBucket,
         list: &str,
@@ -522,31 +455,32 @@ mod tests {
         };
         let in_isr: Vec<bool> = partitions.iter().map(|row| row.in_sync).collect();
         let image = leader_image(list, &in_isr);
-        let mut responses = vec![FetchableTopicResponse {
+        let leader = krabka_metadata::NodeId(1);
+        // The read loop's half: each read asks the quota before its records
+        // go out, so every row of one fetch sees the same answer.
+        let responses = vec![FetchableTopicResponse {
             topic: "t".into(),
             partitions: (0..)
                 .zip(partitions)
                 .map(|(partition_index, row)| PartitionData {
                     partition_index,
-                    records: Some(RecordsPayload::Raw(bytes::Bytes::from(vec![
-                        0_u8;
-                        row.bytes
-                    ]))),
+                    records: (!super::leader_withholds(
+                        leader_out,
+                        super::leader_throttles_replica(&image, leader, 2, "t", partition_index),
+                    ))
+                    .then(|| RecordsPayload::Raw(bytes::Bytes::from(vec![0_u8; row.bytes]))),
                     ..Default::default()
                 })
                 .collect(),
             ..Default::default()
         }];
 
-        super::throttle_replica_traffic(
+        super::record_throttled_replication(
             leader_out,
             &BrokerMetrics::new(),
             &image,
-            super::ReplicaPair {
-                leader: krabka_metadata::NodeId(1),
-                follower: krabka_metadata::NodeId(2),
-            },
-            &mut responses,
+            leader,
+            &responses,
         );
 
         responses[0]
@@ -567,79 +501,95 @@ mod tests {
         bucket
     }
 
+    /// A bucket of `rate` that has recorded its one-second burst and one
+    /// second more, so its quota is exceeded for the second the refill takes
+    /// to repay the debt.
+    fn spent_bucket(rate: u32) -> TokenBucket {
+        let bucket = leader_bucket(rate);
+        bucket.record(2 * u64::from(rate));
+        bucket
+    }
+
     /// A partition is throttled on the leader when the leader's own id is on
     /// its `leader.replication.throttled.replicas` list, whichever follower
     /// fetches it (#1210): the list `kafka-reassign-partitions --throttle`
     /// writes names the source replicas, and never the destination that
     /// fetches. Each row is one fetch by broker 2, an out-of-sync follower,
-    /// against a bucket that holds 500 bytes.
+    /// while the quota is exceeded.
     #[test]
     fn a_leader_throttles_the_partitions_that_name_its_own_id() {
-        // (label, list, bytes of each partition, bytes each keeps)
+        // (label, list, bytes each partition keeps)
         let cases = [
-            (
-                "the leader's id is listed: over the budget is dropped",
-                "0:1,1:1",
-                vec![300, 300],
-                vec![300, 0],
-            ),
+            ("the leader's id is listed", "0:1,1:1", vec![0, 0]),
             (
                 "the follower's id is listed, which is the inverted reading: no throttle",
                 "0:2,1:2",
                 vec![300, 300],
-                vec![300, 300],
             ),
-            (
-                "only the listed partition is throttled and an oversized payload progresses",
-                "1:1",
-                vec![800, 800],
-                vec![800, 800],
-            ),
-            (
-                "the wildcard throttles every partition",
-                "*",
-                vec![300, 300],
-                vec![300, 0],
-            ),
-            ("no list throttles nothing", "", vec![800, 800], vec![
-                800, 800,
+            ("only the listed partition is throttled", "1:1", vec![
+                300, 0,
             ]),
+            ("the wildcard throttles every partition", "*", vec![0, 0]),
+            ("no list throttles nothing", "", vec![300, 300]),
         ];
-        for (label, list, bytes, want) in cases {
-            let partitions: Vec<FetchedPartition> = bytes.iter().map(|b| unsynced(*b)).collect();
+        for (label, list, want) in cases {
             check!(
-                throttle_leader_fetch(&leader_bucket(500), list, &partitions) == want,
+                throttle_leader_fetch(&spent_bucket(500), list, &[unsynced(300), unsynced(300)])
+                    == want,
                 "{label}"
             );
         }
     }
 
-    /// An indivisible partition payload larger than the one-second burst
-    /// must eventually pass, and its overage leaves bounded debt so the next
-    /// out-of-sync fetch cannot immediately pass as well (#1340).
+    /// A replica id below zero is no broker, so no list names it.
     #[test]
-    fn an_over_burst_replication_payload_progresses_and_is_charged() {
-        let bucket = leader_bucket(500);
+    fn a_fetch_without_a_broker_id_is_not_throttled() {
+        let image = leader_image("*", &[false]);
 
-        let first = throttle_leader_fetch(&bucket, "*", &[unsynced(800)]);
-        let second = throttle_leader_fetch(&bucket, "*", &[unsynced(800)]);
-
-        check!((first, second) == (vec![800], vec![0]));
+        check!(!super::leader_throttles_replica(
+            &image,
+            krabka_metadata::NodeId(1),
+            -1,
+            "t",
+            0
+        ));
     }
 
-    /// A follower in the ISR is never throttled, however far over the budget
-    /// it is (#1211). An over-burst out-of-sync payload now progresses once,
-    /// and its charge leaves the bucket with no immediate follow-up credit.
+    /// An indivisible batch larger than the whole one-second burst replicates
+    /// once the quota is not exceeded, as Kafka checks the quota before the
+    /// read and records the read's size after it. The overshoot is debt, and
+    /// the replica is held back until the refill has repaid it, so the
+    /// long-term rate holds (#1340).
+    #[test]
+    fn an_oversized_batch_replicates_and_its_overshoot_is_paid_back() {
+        let clock = qubit_clock::ManualMonotonicClock::new_shared();
+        let bucket = TokenBucket::with_clock(clock.clone());
+        bucket.set_byte_rate(krabka_units::bytes_per_sec(500));
+        let fetch_after = |millis| {
+            clock
+                .advance(std::time::Duration::from_millis(millis))
+                .expect("manual time moves forward");
+            throttle_leader_fetch(&bucket, "*", &[unsynced(800)])
+        };
+
+        // 800 bytes leave 300 bytes of debt, which 500 B/s repays in 600 ms.
+        let rounds = [
+            fetch_after(0),
+            fetch_after(0),
+            fetch_after(599),
+            fetch_after(2),
+        ];
+
+        check!(rounds == [vec![800], vec![0], vec![0], vec![800]]);
+    }
+
+    /// A follower in the ISR is never throttled, however far over the quota
+    /// the leader is (#1211).
     #[test]
     fn an_in_sync_follower_is_never_throttled() {
-        let kept = throttle_leader_fetch(&leader_bucket(100), "*", &[synced(5_000), synced(300)]);
-        let bucket = leader_bucket(100);
-        let first_out_of_sync = throttle_leader_fetch(&bucket, "*", &[unsynced(300)]);
-        let next_out_of_sync = throttle_leader_fetch(&bucket, "*", &[unsynced(300)]);
+        let kept = throttle_leader_fetch(&spent_bucket(100), "*", &[synced(5_000), synced(300)]);
 
-        check!(
-            (kept, first_out_of_sync, next_out_of_sync) == (vec![5_000, 300], vec![300], vec![0])
-        );
+        check!(kept == vec![5_000, 300]);
     }
 
     /// The bytes an in-sync follower reads still count against the quota
@@ -650,8 +600,8 @@ mod tests {
     fn in_sync_bytes_are_charged_against_the_leader_quota() {
         let bucket = leader_bucket(1_000);
 
-        // The out-of-sync partition draws first and fits the 1000 bytes the
-        // bucket holds; the in-sync partition's 4000 bytes are then recorded.
+        // The quota is not exceeded when the fetch reads, so both partitions
+        // go out, and their 4600 bytes are then recorded.
         let mixed = throttle_leader_fetch(&bucket, "*", &[synced(4_000), unsynced(600)]);
         let next = throttle_leader_fetch(&bucket, "*", &[unsynced(600)]);
 
@@ -680,18 +630,17 @@ mod tests {
         check!((during, after) == (vec![0], vec![600]));
     }
 
-    /// A partition that does not fit the budget goes back to the bucket
-    /// unspent, so the next fetch still has it to draw. Both chunks are below
-    /// the burst; the first partition consumes part of this round's grant and
-    /// the second partition is dropped without incurring oversized-batch debt.
+    /// The quota is one answer for the whole fetch: within it, every throttled
+    /// partition goes out whole, even past what the bucket holds, and none is
+    /// cut to fit. The next fetch pays for the overshoot.
     #[test]
-    fn the_budget_of_a_dropped_partition_goes_back_to_the_bucket() {
+    fn a_fetch_within_the_quota_goes_out_whole() {
         let bucket = leader_bucket(500);
 
         let first = throttle_leader_fetch(&bucket, "*", &[unsynced(400), unsynced(400)]);
         let second = throttle_leader_fetch(&bucket, "*", &[unsynced(100)]);
 
-        check!((first, second) == (vec![400, 0], vec![100]));
+        check!((first, second) == (vec![400, 400], vec![0]));
     }
 
     /// A rate of zero is no throttle, in sync or not.

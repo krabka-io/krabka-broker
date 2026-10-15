@@ -128,7 +128,7 @@ async fn partition(broker: &BrokerHandle, topic: &str, topic_id: u128) -> Arc<Pa
 }
 
 /// The batch that the log stores at `offset`.
-fn stored_batch(partition: &Partition, offset: i64) -> RecordBatch {
+pub(super) fn stored_batch(partition: &Partition, offset: i64) -> RecordBatch {
     let read = partition
         .log
         .lock()
@@ -164,7 +164,7 @@ fn request(topic: &str, case: Case) -> FetchRequest {
     }
 }
 
-async fn fetch(broker: &BrokerHandle, request: &FetchRequest) -> FetchResponse {
+pub(super) async fn fetch(broker: &BrokerHandle, request: &FetchRequest) -> FetchResponse {
     let shared = broker.broker_arc_for_test();
     krabka_macros::request_test_identity! {
         bind(user, address, ctx);

@@ -1,25 +1,26 @@
 //! KIP-73 follower-side fetch throttling.
 //!
-//! The module decides whether a fetch round may run at all, and with how large
-//! a `partition_max_bytes` budget, by reading the topic's
-//! `follower.replication.throttled.replicas` list and drawing from the
-//! broker-wide follower-in token bucket.
+//! The module decides whether a partition may join a fetch round at all, by
+//! reading the topic's `follower.replication.throttled.replicas` list and
+//! asking the broker-wide follower-in token bucket whether its quota is
+//! exceeded, as Kafka's `RemoteLeaderEndPoint.shouldFollowerThrottle` asks
+//! `ReplicationQuotaManager.isQuotaExceeded`. A partition that joins asks for
+//! the whole `replica.fetch.max.bytes`, and [`record_replicated`] charges what
+//! arrives (`ReplicaFetcherThread.processPartitionData` records every
+//! throttled partition). A batch larger than the whole quota burst thus
+//! arrives whole, and the debt it leaves keeps the partition out of the rounds
+//! after it until the refill has repaid it.
 //!
 //! A follower that has caught up is never held back: Kafka's
-//! `RemoteLeaderEndPoint.shouldFollowerThrottle` throttles a replica only while
-//! it is not in sync, and a replica is in sync when its lag is zero
+//! `shouldFollowerThrottle` throttles a replica only while it is not in sync,
+//! and a replica is in sync when its lag is zero
 //! (`PartitionFetchState.isReplicaInSync`), to avoid ISR thrashing. What such a
-//! follower fetches still counts against the quota
-//! (`ReplicaFetcherThread.processPartitionData` records every throttled
-//! partition), so [`record_replicated`] charges it as it arrives.
+//! follower fetches still counts against the quota.
 
 use {
     super::Config,
     crate::throttle::{REPLICATION_QUOTA_WINDOW, TopicThrottle},
-    krabka_units::{
-        ByteRate, ByteSize,
-        convert::{ByteRateExt, ByteSizeExt},
-    },
+    krabka_units::{ByteRate, convert::ByteRateExt},
     std::sync::atomic::{
         AtomicI64, AtomicU64,
         Ordering::{Acquire, Relaxed, Release},
@@ -75,17 +76,17 @@ fn follower_partition_throttled(cfg: &Config) -> bool {
 }
 
 /// Accounts `bytes` of one appended batch: the replication-in metric, the lag
-/// bookkeeping, and, for a throttled partition that is in sync, the follower
-/// quota.
+/// bookkeeping, and, for a throttled partition, the follower quota, in sync or
+/// not.
 ///
-/// A partition that is not in sync drew its budget when the round was planned
-/// ([`follower_partition_fetch_cap`]), so it is not charged twice.
+/// The charge may overshoot the balance. The debt it leaves is kept for one
+/// replication quota window at most, as Kafka's quota forgets a sample that
+/// leaves its window.
 pub(super) fn record_replicated(cfg: &Config, bytes: u64) {
     cfg.metrics
         .record_replication_in(&cfg.topic, cfg.partition.get(), bytes);
     cfg.lag.note_appended(bytes);
-    if cfg.lag.in_sync()
-        && cfg.throttle_state.follower_in.byte_rate() != <ByteRate as ByteRateExt>::ZERO
+    if cfg.throttle_state.follower_in.byte_rate() != <ByteRate as ByteRateExt>::ZERO
         && follower_partition_throttled(cfg)
     {
         cfg.throttle_state
@@ -95,45 +96,30 @@ pub(super) fn record_replicated(cfg: &Config, bytes: u64) {
     }
 }
 
-/// Whether this round may fetch, and with how large a per-partition budget.
-///
-/// This enum is not `Eq`. The budget is a [`ByteSize`], and its `f64` storage
-/// is only `PartialEq`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// Whether a partition joins this fetch round.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FetchThrottleDecision {
-    Fetch(ByteSize),
+    Fetch,
     Sleep,
 }
 
-pub(super) fn follower_partition_fetch_cap(cfg: &Config) -> FetchThrottleDecision {
+/// Kafka's `RemoteLeaderEndPoint.shouldFollowerThrottle`: a partition sits the
+/// round out while it is throttled on this follower, is not in sync, and the
+/// follower-in quota is exceeded.
+pub(super) fn follower_fetch_decision(cfg: &Config) -> FetchThrottleDecision {
     // Kafka throttles a follower only while it is not in sync, so the cheap
     // checks come before the image lookup.
     if cfg.throttle_state.follower_in.byte_rate() == <ByteRate as ByteRateExt>::ZERO
         || cfg.lag.in_sync()
         || !follower_partition_throttled(cfg)
+        || !cfg.throttle_state.follower_in.quota_exceeded()
     {
-        return FetchThrottleDecision::Fetch(cfg.connection.replication.fetch_max);
+        return FetchThrottleDecision::Fetch;
     }
-
-    // The bucket seam counts raw bytes, so the budget crosses into `u64` here
-    // and back on the granted amount. `try_consume` never grants more than it
-    // was asked for, so the result is bounded by the configured maximum.
-    let granted = cfg
-        .throttle_state
-        .follower_in
-        .try_consume(cfg.connection.replication.fetch_max.bytes_u64());
-    // KIP-73: the measured follower-side throttled-replication rate, Kafka's
-    // `kafka.server:type=FollowerReplication,name=byte-rate`.
-    cfg.metrics.record_replication_throttled_in(granted);
-    if granted == 0 {
-        // Nothing was left to grant, so this partition sits the round out
-        // entirely rather than fetching a capped amount. That refusal is what
-        // this counter records; there is no delay to observe.
-        cfg.metrics.record_replication_throttle_sleep();
-        FetchThrottleDecision::Sleep
-    } else {
-        FetchThrottleDecision::Fetch(ByteSize::from_bytes(granted))
-    }
+    // The partition sits the round out entirely. That refusal is what this
+    // counter records; there is no delay to observe.
+    cfg.metrics.record_replication_throttle_sleep();
+    FetchThrottleDecision::Sleep
 }
 
 #[cfg(test)]
@@ -152,53 +138,50 @@ mod tests {
     };
 
     #[test]
-    fn follower_partition_fetch_cap_ignores_unthrottled_partitions() {
+    fn follower_fetch_decision_ignores_unthrottled_partitions() {
         let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
         cfg.throttle_state
             .follower_in
             .set_byte_rate_with_burst(bytes_per_sec(1234), bytes(0));
 
-        assert!(
-            follower_partition_fetch_cap(&cfg)
-                == FetchThrottleDecision::Fetch(cfg.connection.replication.fetch_max)
-        );
+        assert!(follower_fetch_decision(&cfg) == FetchThrottleDecision::Fetch);
     }
 
     #[test]
-    fn follower_partition_fetch_cap_ignores_zero_rate_throttle() {
+    fn follower_fetch_decision_ignores_zero_rate_throttle() {
         let (cfg, _log_dir) = test_config(image_with_follower_throttle("*"));
 
-        assert!(
-            follower_partition_fetch_cap(&cfg)
-                == FetchThrottleDecision::Fetch(cfg.connection.replication.fetch_max)
-        );
+        assert!(follower_fetch_decision(&cfg) == FetchThrottleDecision::Fetch);
     }
 
     #[test]
-    fn follower_partition_fetch_cap_sleeps_when_throttled_bucket_is_empty() {
+    fn follower_fetch_decision_sleeps_when_throttled_bucket_is_empty() {
         let (cfg, _log_dir) = test_config(image_with_follower_throttle("*"));
         cfg.throttle_state
             .follower_in
             .set_byte_rate_with_burst(bytes_per_sec(1024), bytes(0));
 
-        assert!(follower_partition_fetch_cap(&cfg) == FetchThrottleDecision::Sleep);
+        assert!(follower_fetch_decision(&cfg) == FetchThrottleDecision::Sleep);
     }
 
+    /// While the quota has any credit the partition joins the round, and the
+    /// leader may answer with as much as `replica.fetch.max.bytes` allows: the
+    /// bucket gates the round and does not cap what the round asks for.
     #[test]
-    fn follower_partition_fetch_cap_uses_granted_bucket_size() {
+    fn follower_fetch_decision_fetches_while_the_quota_has_credit() {
         let (cfg, _log_dir) = test_config(image_with_follower_throttle("*"));
         cfg.throttle_state
             .follower_in
-            .set_byte_rate_with_burst(bytes_per_sec(1234), bytes(1234));
+            .set_byte_rate_with_burst(bytes_per_sec(1234), bytes(1));
 
-        assert!(follower_partition_fetch_cap(&cfg) == FetchThrottleDecision::Fetch(bytes(1234)));
+        assert!(follower_fetch_decision(&cfg) == FetchThrottleDecision::Fetch);
     }
 
     /// The follower list names the destination replica, which is the broker
     /// that reads it, so a list that names another broker throttles nothing
     /// here, and one that names this broker throttles the partition (#1210).
     #[test]
-    fn follower_partition_fetch_cap_reads_only_the_entries_naming_this_broker() {
+    fn follower_fetch_decision_reads_only_the_entries_naming_this_broker() {
         // (list, whether the partition is throttled on the follower, broker 2)
         for (list, throttled) in [
             (format!("0:{}", NODE_ID.0), true),
@@ -213,9 +196,9 @@ mod tests {
             let want = if throttled {
                 FetchThrottleDecision::Sleep
             } else {
-                FetchThrottleDecision::Fetch(cfg.connection.replication.fetch_max)
+                FetchThrottleDecision::Fetch
             };
-            check!(follower_partition_fetch_cap(&cfg) == want, "{list}");
+            check!(follower_fetch_decision(&cfg) == want, "{list}");
         }
     }
 
@@ -273,9 +256,9 @@ mod tests {
             let want = if throttled {
                 FetchThrottleDecision::Sleep
             } else {
-                FetchThrottleDecision::Fetch(cfg.connection.replication.fetch_max)
+                FetchThrottleDecision::Fetch
             };
-            check!(follower_partition_fetch_cap(&cfg) == want, "{label}");
+            check!(follower_fetch_decision(&cfg) == want, "{label}");
         }
     }
 
@@ -299,20 +282,14 @@ mod tests {
 
         // Caught up: the round is not throttled, and the batch that arrives
         // is recorded in full, past the 1000 bytes the bucket holds.
-        let fetching = follower_partition_fetch_cap(&cfg);
+        let fetching = follower_fetch_decision(&cfg);
         record_replicated(&cfg, 4_000);
         // Behind again: the bucket is in debt, so there is no budget.
         cfg.lag.note_appended(1);
         cfg.lag.update(20, 10);
-        let behind = follower_partition_fetch_cap(&cfg);
+        let behind = follower_fetch_decision(&cfg);
 
-        check!(
-            (fetching, behind)
-                == (
-                    FetchThrottleDecision::Fetch(cfg.connection.replication.fetch_max),
-                    FetchThrottleDecision::Sleep
-                )
-        );
+        check!((fetching, behind) == (FetchThrottleDecision::Fetch, FetchThrottleDecision::Sleep));
     }
 
     /// The debt a caught-up follower's bytes leave is kept for one
@@ -331,14 +308,28 @@ mod tests {
         check!((10_900..=11_000).contains(&debt_tokens), "{debt_tokens}");
     }
 
-    /// A partition that is not in sync drew its budget when the round was
-    /// planned, so its bytes are not charged a second time as they arrive.
+    /// A batch larger than the bucket arrives whole, because the leader serves
+    /// the first batch of a fetch whatever `partition_max_bytes` says. Kafka
+    /// records what arrived (`ReplicaFetcherThread.processPartitionData`), so
+    /// the overshoot is paid back by the rounds after it. A follower that keeps
+    /// asking gets one oversized batch and then sits out its debt. It does not
+    /// pull a whole batch every round for the few bytes the refill left
+    /// (#1340).
     #[test]
-    fn a_follower_that_is_behind_is_not_charged_twice() {
+    fn an_oversized_batch_is_charged_in_full_and_throttles_the_rounds_after_it() {
+        // 1000 B/s with a one-second burst, and a 5000-byte batch: the debt
+        // takes four seconds to repay, far longer than the rounds below.
         let ConfigWithDir { cfg, dir: _log_dir } = throttled_follower_at(10, 4);
 
-        record_replicated(&cfg, 4_000);
+        let mut fetched_rounds = 0;
+        for _ in 0..20 {
+            if follower_fetch_decision(&cfg) == FetchThrottleDecision::Fetch {
+                fetched_rounds += 1;
+                record_replicated(&cfg, 5_000);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
 
-        check!(follower_partition_fetch_cap(&cfg) == FetchThrottleDecision::Fetch(bytes(1000)));
+        check!(fetched_rounds == 1);
     }
 }

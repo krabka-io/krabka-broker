@@ -13,6 +13,7 @@ use {
         remote::try_remote_read,
         request::EffectivePartition,
         response::{GroupedResponses, group_into_topic_responses},
+        throttle::leader_withholds,
     },
     crate::{
         broker::Broker, codes, diskless::read::try_diskless_read, metrics::RequestPhases,
@@ -94,6 +95,9 @@ struct ReadAccounting {
     cold_bytes: usize,
     budget: i32,
     allow_first_batch_overrun: bool,
+    /// The KIP-73 leader throttle withholds this read's records
+    /// ([`withheld_by_leader_throttle`]).
+    withheld: bool,
 }
 
 impl LongPollState {
@@ -117,8 +121,12 @@ impl LongPollState {
     fn record_read(&mut self, index: usize, read: &mut PendingRead, result: ReadAccounting) {
         self.cold_served[index] = result.cold_bytes > 0;
         self.bytes[index] = result.local_bytes + result.cold_bytes;
-        if !result.allow_first_batch_overrun
-            && self.bytes[index] > usize::try_from(result.budget.max(0)).unwrap_or(0)
+        // A withheld read is Kafka's `MemoryRecords.EMPTY` row: it adds
+        // nothing toward `min_bytes`, so a fetch with nothing else to send
+        // parks for its `max_wait_ms` rather than answering at once.
+        if result.withheld
+            || (!result.allow_first_batch_overrun
+                && self.bytes[index] > usize::try_from(result.budget.max(0)).unwrap_or(0))
         {
             discard_to_metadata_only(read);
             self.bytes[index] = 0;
@@ -328,11 +336,13 @@ pub(super) async fn execute_pending_reads(
         read.max_bytes = budget;
         let cold = serve_from_cold_tier(broker, read, &partition, phases).await;
         read.max_bytes = requested_max_bytes;
+        let withheld = withheld_by_leader_throttle(broker, read);
         state.record_read(index, read, ReadAccounting {
             local_bytes,
             cold_bytes: cold,
             budget,
             allow_first_batch_overrun: min_one_batch,
+            withheld,
         });
         // Kafka's `Partition.fetchRecords` records the follower's position
         // only after its read succeeded, so the row this read just filled
@@ -403,8 +413,10 @@ async fn long_poll_then_reread(
             tokio::time::timeout_at(deadline, futures_util::future::select_all(waits)).await;
         phases.add_remote(parked.elapsed());
         let Ok((woken, _fired, rest)) = outcome else {
-            // The deadline passed. Nothing more will be read, but the loop
-            // head still revalidates the epochs before the response goes out.
+            // The deadline passed. Nothing more will be read but the rows the
+            // leader throttle withheld, and the loop head still revalidates
+            // the epochs before the response goes out.
+            reread_withheld(broker, pending, state, phases).await;
             waits = Vec::new();
             continue;
         };
@@ -559,12 +571,60 @@ async fn reread_woken(
     read.max_bytes = read_budget;
     let cold = serve_from_cold_tier(broker, read, &part, phases).await;
     read.max_bytes = requested_max_bytes;
+    let withheld = withheld_by_leader_throttle(broker, read);
     state.record_read(index, read, ReadAccounting {
         local_bytes: bytes,
         cold_bytes: cold,
         budget: read_budget,
         allow_first_batch_overrun: min_one_batch,
+        withheld,
     });
+}
+
+/// Read again, once the wait expires, every row the KIP-73 leader throttle
+/// withheld, if the quota now allows it.
+///
+/// Kafka's `DelayedFetch.onComplete` reads every partition again on expiry,
+/// and `readFromLog` asks the replication quota again, so records the quota
+/// allows by then go out with this response and not with the follower's next
+/// fetch. The refill wakes nothing, so expiry is where a parked fetch sees the
+/// quota recover.
+async fn reread_withheld(
+    broker: &Broker,
+    pending: &mut [PendingRead],
+    state: &mut LongPollState,
+    phases: &RequestPhases,
+) {
+    if broker.throttle_state.leader_out.quota_exceeded() {
+        return;
+    }
+    for index in 0..pending.len() {
+        let throttled = pending[index]
+            .follower_position
+            .is_some_and(|position| position.leader_throttled);
+        if throttled && state.bytes[index] == 0 {
+            reread_woken(broker, pending, index, state, phases).await;
+        }
+    }
+}
+
+/// KIP-73: whether the leader withholds this follower read's records, Kafka's
+/// `ReplicaManager.shouldLeaderThrottle` as `readFromLog` asks it of every
+/// read: the leader throttles the follower's replica and its leader-out quota
+/// is exceeded right now.
+///
+/// The read still runs, so the row carries the offsets and watermarks the
+/// follower needs, and the leader still records the follower's position.
+fn withheld_by_leader_throttle(broker: &Broker, read: &PendingRead) -> bool {
+    let withheld = leader_withholds(
+        &broker.throttle_state.leader_out,
+        read.follower_position
+            .is_some_and(|position| position.leader_throttled),
+    );
+    if withheld {
+        broker.metrics.record_replication_throttle_sleep();
+    }
+    withheld
 }
 
 /// Serve `read`'s offset out of the cold tier when the local log no longer
