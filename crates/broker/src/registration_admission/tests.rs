@@ -40,6 +40,24 @@ fn without_broker_3(leader: u64, leader_epoch: i32) -> MetadataRecord {
     )
 }
 
+/// The batch the leader appends, registering broker 3's restarted
+/// incarnation.
+fn retiring(records: Vec<MetadataRecord>) -> Admitted {
+    Admitted {
+        records,
+        new_incarnations: vec![(NodeId(3), Uuid::from_u128(RESTARTED))],
+        recoveries: vec![],
+    }
+}
+
+/// The batch the leader appends when it registers no new incarnation.
+fn unchanged(records: Vec<MetadataRecord>) -> Admitted {
+    Admitted {
+        records,
+        ..Admitted::default()
+    }
+}
+
 /// One submitted batch and what the leader appends for it.
 struct Case {
     what: &'static str,
@@ -65,55 +83,35 @@ async fn a_new_incarnation_leaves_its_isrs_and_leaderships_in_its_registration_b
             leader: 3,
             registered: &[1, 2, 3],
             submitted: vec![registration(RESTARTED)],
-            expected: Admitted {
-                records: vec![without_broker_3(1, 6), registration(RESTARTED)],
-                new_incarnations: vec![(NodeId(3), Uuid::from_u128(RESTARTED))],
-                recoveries: vec![],
-            },
+            expected: retiring(vec![without_broker_3(1, 6), registration(RESTARTED)]),
         },
         Case {
             what: "a restarted follower",
             leader: 1,
             registered: &[1, 2, 3],
             submitted: vec![registration(RESTARTED)],
-            expected: Admitted {
-                records: vec![without_broker_3(1, 5), registration(RESTARTED)],
-                new_incarnations: vec![(NodeId(3), Uuid::from_u128(RESTARTED))],
-                recoveries: vec![],
-            },
+            expected: retiring(vec![without_broker_3(1, 5), registration(RESTARTED)]),
         },
         Case {
             what: "a first registration",
             leader: 3,
             registered: &[1, 2],
             submitted: vec![registration(RESTARTED)],
-            expected: Admitted {
-                records: vec![registration(RESTARTED)],
-                new_incarnations: vec![],
-                recoveries: vec![],
-            },
+            expected: unchanged(vec![registration(RESTARTED)]),
         },
         Case {
             what: "the same process registering again",
             leader: 3,
             registered: &[1, 2, 3],
             submitted: vec![registration(REGISTERED)],
-            expected: Admitted {
-                records: vec![registration(REGISTERED)],
-                new_incarnations: vec![],
-                recoveries: vec![],
-            },
+            expected: unchanged(vec![registration(REGISTERED)]),
         },
         Case {
             what: "a batch whose earlier records already retired the broker",
             leader: 3,
             registered: &[1, 2, 3],
             submitted: vec![without_broker_3(1, 6), registration(RESTARTED)],
-            expected: Admitted {
-                records: vec![without_broker_3(1, 6), registration(RESTARTED)],
-                new_incarnations: vec![(NodeId(3), Uuid::from_u128(RESTARTED))],
-                recoveries: vec![],
-            },
+            expected: retiring(vec![without_broker_3(1, 6), registration(RESTARTED)]),
         },
     ];
     for case in cases {
