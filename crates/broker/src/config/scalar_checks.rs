@@ -312,6 +312,14 @@ impl BrokerConfig {
         }
         if let Some(bytes) = self.queued_max_request_bytes {
             require_positive_size("queued_max_request_bytes", bytes)?;
+            // Kafka's `KafkaConfig` refuses a budget that one whole request
+            // could not fit, so a frame `socket.request.max.bytes` admits is
+            // never refused by the budget it is charged against.
+            if bytes < self.socket_request_max {
+                return Err(BrokerError::InvalidRuntimeConfig(
+                    "queued_max_request_bytes must be larger or equal to socket_request_max".into(),
+                ));
+            }
         }
         if self.queued_max_requests == 0 {
             return Err(BrokerError::InvalidRuntimeConfig(
