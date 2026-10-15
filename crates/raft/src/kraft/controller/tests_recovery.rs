@@ -295,38 +295,49 @@ fn control_state_at_replays_version_and_voters_at_boundary_offsets() {
     );
 }
 
+/// A single-voter controller over `data_dir`, elected leader.
+async fn elected_controller(
+    data_dir: &std::path::Path,
+    cluster_id: uuid::Uuid,
+    voters: &VoterSet,
+) -> KraftController {
+    let log = KraftLog::open(data_dir, &MetadataLogConfig::default()).expect("open log");
+    let ctrl = KraftController::spawn(
+        test_kraft_config(
+            NodeId(1),
+            cluster_id,
+            QuorumState::bootstrap(cluster_id, voters.clone()),
+        ),
+        log,
+        data_dir.to_path_buf(),
+    );
+    ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
+    await_leader(&ctrl, Some(NodeId(1))).await;
+    ctrl
+}
+
+/// Write a checkpoint of `ctrl`'s image, then stop it and let its loop drain.
+async fn snapshot_and_shut_down(ctrl: KraftController) {
+    ctrl.trigger_snapshot().await.unwrap();
+    ctrl.shutdown().await;
+    tokio::time::sleep(StdDuration::from_millis(50)).await;
+}
+
 #[tokio::test]
 async fn snapshot_then_restart_recovers_image() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let data_dir = dir.path().to_path_buf();
     let cluster_id = uuid::Uuid::from_u128(7);
     let voters = voter_set(&[NodeId(1)]);
 
-    {
-        let log = KraftLog::open(&data_dir, &MetadataLogConfig::default()).expect("open log");
-        let ctrl = KraftController::spawn(
-            test_kraft_config(
-                NodeId(1),
-                cluster_id,
-                QuorumState::bootstrap(cluster_id, voters.clone()),
-            ),
-            log,
-            data_dir.clone(),
-        );
-        ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
-        await_leader(&ctrl, Some(NodeId(1))).await;
-        submit_change_with_timeout(&ctrl, topic_record("recovered"), "recovery seed")
-            .await
-            .unwrap();
-        assert2::assert!(ctrl.current_image().topic("recovered").is_some());
-        ctrl.trigger_snapshot().await.unwrap();
-        ctrl.shutdown().await;
-        // Give the loop a moment to fully drain.
-        tokio::time::sleep(StdDuration::from_millis(50)).await;
-    }
+    let ctrl = elected_controller(dir.path(), cluster_id, &voters).await;
+    submit_change_with_timeout(&ctrl, topic_record("recovered"), "recovery seed")
+        .await
+        .unwrap();
+    assert2::assert!(ctrl.current_image().topic("recovered").is_some());
+    snapshot_and_shut_down(ctrl).await;
 
     // Reopen over the same dir: the image is rebuilt from checkpoint+log.
-    let ctrl2 = open_test_controller(data_dir.clone(), cluster_id, voters).expect("reopen");
+    let ctrl2 = open_test_controller(dir.path().to_path_buf(), cluster_id, voters).expect("reopen");
     assert2::assert!(ctrl2.current_image().topic("recovered").is_some());
     ctrl2.shutdown().await;
 }
@@ -338,7 +349,6 @@ async fn snapshot_then_restart_recovers_image() {
 #[tokio::test]
 async fn restart_keeps_the_checkpoint_finalized_features_epoch() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let data_dir = dir.path().to_path_buf();
     let cluster_id = uuid::Uuid::from_u128(7);
     let voters = voter_set(&[NodeId(1)]);
     let feature = MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
@@ -346,34 +356,18 @@ async fn restart_keeps_the_checkpoint_finalized_features_epoch() {
         level: 25,
     });
 
-    let feature_epoch = {
-        let log = KraftLog::open(&data_dir, &MetadataLogConfig::default()).expect("open log");
-        let ctrl = KraftController::spawn(
-            test_kraft_config(
-                NodeId(1),
-                cluster_id,
-                QuorumState::bootstrap(cluster_id, voters.clone()),
-            ),
-            log,
-            data_dir.clone(),
-        );
-        ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
-        await_leader(&ctrl, Some(NodeId(1))).await;
-        submit_change_with_timeout(&ctrl, vec![feature], "feature")
-            .await
-            .unwrap();
-        let feature_epoch = ctrl.finalized_features_epoch();
-        submit_change_with_timeout(&ctrl, topic_record("after"), "topic")
-            .await
-            .unwrap();
-        ctrl.trigger_snapshot().await.unwrap();
-        ctrl.shutdown().await;
-        tokio::time::sleep(StdDuration::from_millis(50)).await;
-        feature_epoch
-    };
-    let (checkpoint_end, _) = latest_checkpoint_id(&data_dir).expect("checkpoint");
+    let ctrl = elected_controller(dir.path(), cluster_id, &voters).await;
+    submit_change_with_timeout(&ctrl, vec![feature], "feature")
+        .await
+        .unwrap();
+    let feature_epoch = ctrl.finalized_features_epoch();
+    submit_change_with_timeout(&ctrl, topic_record("after"), "topic")
+        .await
+        .unwrap();
+    snapshot_and_shut_down(ctrl).await;
+    let (checkpoint_end, _) = latest_checkpoint_id(dir.path()).expect("checkpoint");
 
-    let ctrl = open_test_controller(data_dir, cluster_id, voters).expect("reopen");
+    let ctrl = open_test_controller(dir.path().to_path_buf(), cluster_id, voters).expect("reopen");
     check!(
         (
             ctrl.quorum_snapshot().log_start_offset,
