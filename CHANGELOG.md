@@ -36,6 +36,10 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   request-handler thread, and charges only the handler's own time. Before, a
   consumer whose fetches waited out `MaxWaitMs` was throttled for time it
   spent idle.
+- A long-polling `Fetch` is no longer charged to `request_percentage` for the
+  reads it makes after a wake or its deadline. Kafka completes a parked fetch,
+  re-reads included, off the request-handler thread, so the handler's time
+  ends where the fetch parks.
 - `connections.max.idle.ms` now measures silence on the client and controller
   listeners, as Kafka's `Selector` does: every read that brings bytes starts a
   fresh window, so a request that arrives steadily but takes longer than the
