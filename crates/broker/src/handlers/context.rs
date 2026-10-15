@@ -2,13 +2,14 @@
 //! handler.
 
 use {
-    super::CorrelationId,
+    super::{ApiKeyCode, CorrelationId},
     crate::{
         broker::Broker,
         client_metrics::manager::ClientAttributes,
-        metrics::QuotaCharge,
+        metrics::{QuotaCharge, QuotaType},
         quota::{
             ControllerMutationQuota, QuotaDelay, QuotaRequest, ThrottleSlot, consume_request_quota,
+            throttle_time_ms,
         },
     },
     krabka_security::Principal,
@@ -158,14 +159,15 @@ impl<'a> RequestContext<'a> {
         })
     }
 
-    /// Charges the request's elapsed handler time against its request quota.
+    /// Charges `handler_time`, the time the request held the handler, against
+    /// its request quota.
     pub(crate) fn charge_request_quota(
         &self,
         broker: &Broker,
         image: &krabka_metadata::MetadataImage,
-        start: std::time::Instant,
+        handler_time: std::time::Duration,
     ) -> QuotaDelay {
-        let elapsed_micros = u64::try_from(start.elapsed().as_micros().min(u128::from(u64::MAX)))
+        let elapsed_micros = u64::try_from(handler_time.as_micros().min(u128::from(u64::MAX)))
             .expect("elapsed microseconds clamped to u64");
         consume_request_quota(
             image,
@@ -175,6 +177,28 @@ impl<'a> RequestContext<'a> {
             elapsed_micros,
             broker.config.quota_throttle_max,
         )
+    }
+
+    /// Kafka's `RequestHandlerHelper.sendMaybeThrottle`: charges
+    /// `handler_time` to the request quota alone, records the KIP-219 window
+    /// for the dispatch loop to mute the connection by, and returns the
+    /// throttle the `api_key` response reports.
+    pub(crate) fn throttle_on_request_quota(
+        &self,
+        broker: &Broker,
+        image: &krabka_metadata::MetadataImage,
+        api_key: ApiKeyCode,
+        handler_time: std::time::Duration,
+    ) -> i32 {
+        let request_delay = self.charge_request_quota(broker, image, handler_time);
+        let delay =
+            broker
+                .metrics
+                .record_applied_throttle(api_key, &[(QuotaType::Request, request_delay).into()]);
+        // KIP-219: the response goes out now and the connection is muted for
+        // the window afterwards.
+        self.record_throttle(delay);
+        throttle_time_ms(delay)
     }
 
     /// Records the KIP-219 window this request must be throttled for. The

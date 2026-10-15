@@ -55,7 +55,7 @@ mod leader_read_tests;
 #[cfg(test)]
 mod topic_resolution_tests;
 
-pub(crate) use self::{plan::PendingRead, read::LiveOffsets};
+pub(crate) use self::{plan::PendingRead, read::LiveOffsets, throttle::apply_consumer_fetch_quota};
 use {
     self::{
         node_endpoints::fetch_node_endpoints,
@@ -69,10 +69,7 @@ use {
         session::{
             FetchKind, commit_fetch_session, prepare_fetch_session, refresh_fetch_session_metrics,
         },
-        throttle::{
-            apply_consumer_fetch_quota, consumer_quota_window_bytes, fetch_response_size,
-            throttle_follower_responses,
-        },
+        throttle::{consumer_quota_window_bytes, fetch_response_size, throttle_follower_responses},
     },
     crate::{
         broker::Broker,
@@ -310,7 +307,8 @@ pub(crate) async fn handle(
             broker,
             &image,
             ctx,
-            handler_start,
+            FETCH_API_KEY,
+            handler_start.elapsed(),
             fetch_response_size(&resp, version),
         );
         if throttle_time_ms > 0 {

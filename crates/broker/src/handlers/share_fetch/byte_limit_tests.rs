@@ -50,7 +50,7 @@ use {
 const BATCHES: i64 = 4;
 
 /// The records in each batch.
-const RECORDS_PER_BATCH: i64 = 2;
+pub(super) const RECORDS_PER_BATCH: i64 = 2;
 
 /// Produce v12 names the topic.
 const PRODUCE_VERSION: i16 = 12;
@@ -75,7 +75,7 @@ async fn start_with_fetch_cap(cap: i32) -> StartedBroker {
     StartedBroker { broker, dir }
 }
 
-async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
+pub(super) async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
     create_topic_with_partitions(broker, name, 1).await
 }
 
@@ -101,7 +101,7 @@ async fn produce_batches(broker: &BrokerHandle, topic: &str) {
 }
 
 /// Appends one batch of [`RECORDS_PER_BATCH`] records to `partition`.
-async fn produce_batch(broker: &BrokerHandle, topic: &str, partition: i32) {
+pub(super) async fn produce_batch(broker: &BrokerHandle, topic: &str, partition: i32) {
     let shared = broker.broker_arc_for_test();
     krabka_macros::request_test_identity! {
         bind(user, address, ctx);
@@ -140,7 +140,7 @@ async fn produce_batch(broker: &BrokerHandle, topic: &str, partition: i32) {
 }
 
 /// The size in bytes of the first batch of `topic`. Every batch has this size.
-fn batch_size(broker: &BrokerHandle, topic: &str) -> i32 {
+pub(super) fn batch_size(broker: &BrokerHandle, topic: &str) -> i32 {
     let shared = broker.broker_arc_for_test();
     let partition = shared
         .partitions
@@ -216,7 +216,7 @@ fn partition(response: &ShareFetchResponse) -> PartitionData {
 }
 
 /// The first and last offsets of every acquired row.
-fn acquired(row: &PartitionData) -> Vec<OffsetRun> { acquired_share_records(row) }
+pub(super) fn acquired(row: &PartitionData) -> Vec<OffsetRun> { acquired_share_records(row) }
 
 /// The offsets of every record that the row carries.
 fn record_offsets(row: &PartitionData) -> Vec<i64> {

@@ -90,7 +90,7 @@ pub(crate) struct ShareFetchSessionUpdate {
 }
 
 /// One partition row of an incremental response, as
-/// [`ShareSessionCache::prune_response`] judges it.
+/// [`ShareSessionCache::select_response`] judges it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ResponseRow {
     pub(crate) key: SharePartitionKey,
@@ -239,41 +239,60 @@ impl ShareSessionCache {
         })
     }
 
-    /// Kafka's `ShareSessionContext.updateAndGenerateResponseData` for an
-    /// incremental response: returns, for each row, whether the response
-    /// carries it, and updates the session.
+    /// Which rows of an incremental response the response carries, without
+    /// changing the session: the selection Kafka's
+    /// `ShareSessionContext.responseSize` sizes a response by before it knows
+    /// whether a quota throttles it.
     ///
     /// A row with records or an error is always carried, and so is a
-    /// partition that the session flagged. An error flags the partition for
-    /// the next response too, so the client learns when it clears. A
-    /// partition that returned records moves to the end of the session's
-    /// order. A row of a partition that the session does not hold is carried.
-    pub(crate) fn prune_response(
+    /// partition that the session flagged. A row of a partition that the
+    /// session does not hold is carried.
+    pub(crate) fn select_response(
         &self,
         group: &str,
         member: &str,
         rows: &[ResponseRow],
     ) -> Vec<bool> {
         let key = SessionKey::new(group, member);
-        let mut inner = self.inner.lock().expect("share-session mutex poisoned");
-        let Some(session) = inner.sessions.get_mut(&key) else {
+        let inner = self.inner.lock().expect("share-session mutex poisoned");
+        let Some(session) = inner.sessions.get(&key) else {
             return vec![true; rows.len()];
         };
         rows.iter()
             .map(|row| {
-                let Some(index) = session.partitions.iter().position(|p| p.key == row.key) else {
-                    return true;
-                };
-                let cached = &mut session.partitions[index];
-                let must_respond = row.has_records || row.has_error || cached.requires_update;
-                cached.requires_update = row.has_error;
-                if row.has_records {
-                    let moved = session.partitions.remove(index);
-                    session.partitions.push(moved);
-                }
-                must_respond
+                session
+                    .partitions
+                    .iter()
+                    .find(|p| p.key == row.key)
+                    .is_none_or(|cached| row.has_records || row.has_error || cached.requires_update)
             })
             .collect()
+    }
+
+    /// Kafka's `ShareSessionContext.updateAndGenerateResponseData` for an
+    /// incremental response that goes out: updates the session for the rows
+    /// that [`Self::select_response`] judged. A throttled response, which
+    /// carries no rows, leaves the session as it was.
+    ///
+    /// An error flags the partition for the next response too, so the client
+    /// learns when it clears. A partition that returned records moves to the
+    /// end of the session's order.
+    pub(crate) fn commit_response(&self, group: &str, member: &str, rows: &[ResponseRow]) {
+        let key = SessionKey::new(group, member);
+        let mut inner = self.inner.lock().expect("share-session mutex poisoned");
+        let Some(session) = inner.sessions.get_mut(&key) else {
+            return;
+        };
+        for row in rows {
+            let Some(index) = session.partitions.iter().position(|p| p.key == row.key) else {
+                continue;
+            };
+            session.partitions[index].requires_update = row.has_error;
+            if row.has_records {
+                let moved = session.partitions.remove(index);
+                session.partitions.push(moved);
+            }
+        }
     }
 
     /// Validate a `ShareAcknowledge` epoch and advance or close its session.
@@ -500,10 +519,37 @@ mod tests {
         assert!(reopened.released.is_empty());
     }
 
+    /// Selects the rows an incremental response carries, and updates the
+    /// session for them when the response goes out unthrottled.
+    fn respond(cache: &ShareSessionCache, rows: &[ResponseRow], sent: bool) -> Vec<bool> {
+        let carried = cache.select_response("g", "m", rows);
+        if sent {
+            cache.commit_response("g", "m", rows);
+        }
+        carried
+    }
+
+    /// What three incremental responses carry, and the session's order after
+    /// them.
+    #[derive(Debug, PartialEq, Eq)]
+    struct Responses {
+        carried: [Vec<bool>; 3],
+        order: Vec<SharePartitionKey>,
+    }
+
     /// Kafka's `CachedSharePartition.maybeUpdateResponseData` over three
-    /// incremental responses.
-    #[test]
-    fn incremental_responses_carry_only_partitions_with_news() {
+    /// incremental responses. A throttled first response carries no rows, so
+    /// Kafka never calls `updateAndGenerateResponseData` for it and the session
+    /// keeps its flags and its order.
+    #[yare::parameterized(
+        sent = { true, [vec![true, true, true], vec![false, true, false], vec![false, false, false]], &[1, 2, 0] },
+        throttled = { false, [vec![true, true, true], vec![false, false, true], vec![false, false, false]], &[0, 1, 2] },
+    )]
+    fn incremental_responses_carry_only_partitions_with_news(
+        first_sent: bool,
+        carried: [Vec<bool>; 3],
+        order: &[i32],
+    ) {
         let cache = ShareSessionCache::new(8);
         let (p0, p1, p2) = (partition(1, 0), partition(1, 1), partition(1, 2));
         let row = |key, has_records, has_error| ResponseRow {
@@ -511,34 +557,40 @@ mod tests {
             has_records,
             has_error,
         };
+        let quiet = [
+            row(p0, false, false),
+            row(p1, false, false),
+            row(p2, false, false),
+        ];
         fetch(&cache, "m", 0, &[p0, p1], &[]).expect("open");
         // p2 joins at epoch 1, so its first incremental row is carried.
-        let joined = fetch(&cache, "m", 1, &[p2], &[]).expect("add");
-        let first = cache.prune_response("g", "m", &[
-            row(p0, true, false),
-            row(p1, false, true),
-            row(p2, false, false),
-        ]);
-        // p1 had an error, so it is carried once more after it clears.
+        fetch(&cache, "m", 1, &[p2], &[]).expect("add");
+        let first = respond(
+            &cache,
+            &[
+                row(p0, true, false),
+                row(p1, false, true),
+                row(p2, false, false),
+            ],
+            first_sent,
+        );
+        // p1 had an error, so a sent response carries it once more after it
+        // clears.
         fetch(&cache, "m", 2, &[], &[]).expect("continue");
-        let second = cache.prune_response("g", "m", &[
-            row(p0, false, false),
-            row(p1, false, false),
-            row(p2, false, false),
-        ]);
+        let second = respond(&cache, &quiet, true);
         let after = fetch(&cache, "m", 3, &[], &[]).expect("continue");
-        let third = cache.prune_response("g", "m", &[
-            row(p0, false, false),
-            row(p1, false, false),
-            row(p2, false, false),
-        ]);
+        let third = respond(&cache, &quiet, true);
 
-        assert!(joined.partitions == vec![p0, p1, p2]);
-        assert!(first == vec![true, true, true]);
-        assert!(second == vec![false, true, false]);
-        assert!(third == vec![false, false, false]);
-        // p0 returned records, so it moved to the end of the order.
-        assert!(after.partitions == vec![p1, p2, p0]);
+        // A partition that returned records moves to the end of the order.
+        assert2::assert!(
+            Responses {
+                carried: [first, second, third],
+                order: after.partitions,
+            } == Responses {
+                carried,
+                order: order.iter().map(|&index| partition(1, index)).collect(),
+            }
+        );
     }
 
     #[test]

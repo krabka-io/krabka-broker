@@ -29,6 +29,7 @@ pub use {
 pub(crate) use {
     controller_mutation::{ControllerMutationQuota, QuotaRequest},
     lookup::entity_field,
+    request::{Timed, with_active_time},
     throttle_slot::ThrottleSlot,
 };
 
