@@ -88,6 +88,10 @@ pub enum Role {
     /// KIP-996 pre-vote candidate that collects non-binding grants.
     Prospective {
         granted: BTreeSet<NodeId>,
+        /// The voters that refused the pre-vote. Kafka's `EpochElection`
+        /// records them so that the round ends as soon as it can no longer
+        /// win.
+        rejected: BTreeSet<NodeId>,
         election_deadline: SimInstant,
         /// The leader of this epoch that the replica gave up on when it began
         /// the round, if it had one. Kafka's `ProspectiveState` keeps the

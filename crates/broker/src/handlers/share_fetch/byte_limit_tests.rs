@@ -20,7 +20,7 @@ use {
                 OffsetRun, ShareSessionEpoch, StartedBroker, TopicPartitionCount,
                 acknowledge_batches_request, acquired_share_records,
                 create_topic as create_topic_from_test_support, produce_partition_request,
-                share_acknowledge_wire, share_fetch_wire,
+                set_user_quota, share_acknowledge_wire, share_fetch_wire,
             },
         },
         test_support::{
@@ -42,7 +42,7 @@ use {
         primitives::uuid::Uuid as WireUuid,
         records::{Record, RecordBatch, RecordsPayload},
     },
-    krabka_units::{ByteSize, convert::ByteSizeExt as _},
+    krabka_units::{ByteSize, convert::ByteSizeExt as _, secs},
     std::sync::Arc,
 };
 
@@ -170,6 +170,7 @@ async fn share_fetch(
     #[builder(default = 500)] max_records: i32,
     #[builder(default = 1 << 20)] max_bytes: i32,
     #[builder(default)] acknowledgements: Vec<FetchAcknowledgement>,
+    #[builder(default = "share-consumer")] user: &str,
 ) -> ShareFetchResponse {
     let acknowledgement_batches = acknowledgements
         .into_iter()
@@ -189,7 +190,13 @@ async fn share_fetch(
         .max_bytes(max_bytes)
         .acknowledgement_batches(acknowledgement_batches)
         .call();
-    send_share_fetch(broker, &request).await
+    share_fetch_wire()
+        .broker(broker)
+        .request(&request)
+        .version(krabka_protocol::owned::share_fetch_request::MAX_VERSION)
+        .user(user)
+        .call()
+        .await
 }
 
 async fn send_share_fetch(
@@ -244,6 +251,29 @@ struct Outcome {
     acquired: Vec<OffsetRun>,
     records: Vec<i64>,
     remainder: Vec<OffsetRun>,
+}
+
+/// The outcome of the `limited` fetch, after the `unlimited` member of the
+/// same group fetches what the limited one left.
+async fn outcome_after_unlimited_fetch(
+    broker: &BrokerHandle,
+    group: &str,
+    topic_id: WireUuid,
+    limited: &ShareFetchResponse,
+) -> Outcome {
+    let rest = share_fetch()
+        .broker(broker)
+        .group(group)
+        .member("unlimited")
+        .topic_id(topic_id.0)
+        .epoch(1)
+        .call()
+        .await;
+    Outcome {
+        acquired: acquired(&partition(limited)),
+        records: record_offsets(&partition(limited)),
+        remainder: acquired(&partition(&rest)),
+    }
 }
 
 /// A fraction of one batch size.
@@ -362,20 +392,10 @@ async fn every_acquired_offset_has_its_record_in_the_response() {
             .max_bytes(size * numerator / denominator)
             .call()
             .await;
-        let rest = share_fetch()
-            .broker(&broker)
-            .group(&group)
-            .member("unlimited")
-            .topic_id(topic_id.0)
-            .epoch(1)
-            .call()
-            .await;
-
-        actual.push((case.name, Outcome {
-            acquired: acquired(&partition(&limited)),
-            records: record_offsets(&partition(&limited)),
-            remainder: acquired(&partition(&rest)),
-        }));
+        actual.push((
+            case.name,
+            outcome_after_unlimited_fetch(&broker, &group, topic_id, &limited).await,
+        ));
         expected.push((case.name, case.expected));
     }
 
@@ -413,6 +433,112 @@ async fn broker_fetch_cap_limits_share_fetch_and_keeps_first_batch_progress() {
     let row = partition(&response);
     assert!(acquired(&row) == vec![OffsetRun::new(0, 1)]);
     assert!(record_offsets(&row) == vec![0, 1]);
+    broker.shutdown().await;
+}
+
+/// A `consumer_byte_rate` quota on one user, in batch sizes per second.
+#[derive(Clone, Copy)]
+enum UserQuota {
+    None,
+    BatchesPerSecond(BatchFraction),
+}
+
+/// Kafka's `KafkaApis.handleShareFetchRequest` caps `MaxBytes` at
+/// `min(MaxBytes, fetch.max.bytes, maxQuotaWindowBytes)`, the bytes that a
+/// member can fetch in one quota window without being throttled. The broker
+/// cap stays at its default here, and the window is one second long
+/// (`quota_window` minus `quota_throttle_max`), so the quota alone limits the
+/// fetch. The first batch still goes out when it is larger than the window.
+/// The fetch is charged to the byte rate too, and the rate's bucket holds two
+/// windows, so a window of three quarters of a batch leaves room for the
+/// batch and its response framing. Half a batch would not: that response
+/// would be throttled and answered without its records, as Kafka's is.
+#[tokio::test]
+async fn consumer_quota_window_limits_share_fetch() {
+    let HandlerStartedBroker { broker, dir: _dir } = start_broker_no_audit_with(|cfg| {
+        cfg.authorizer = Arc::new(AllowAllAuthorizer);
+        cfg.quota_window = secs(2);
+        cfg.quota_throttle_max = secs(1);
+    })
+    .await;
+
+    let cases = [
+        ("no-quota", UserQuota::None, Outcome {
+            acquired: vec![OffsetRun::new(0, 7)],
+            records: (0..=7).collect(),
+            remainder: Vec::new(),
+        }),
+        (
+            "window-below-one-batch",
+            UserQuota::BatchesPerSecond(BatchFraction {
+                numerator: 3,
+                denominator: 4,
+            }),
+            one_batch_outcome(),
+        ),
+        (
+            "window-of-two-batches",
+            UserQuota::BatchesPerSecond(BatchFraction {
+                numerator: 2,
+                denominator: 1,
+            }),
+            Outcome {
+                acquired: vec![OffsetRun::new(0, 3)],
+                records: (0..=3).collect(),
+                remainder: vec![OffsetRun::new(4, 7)],
+            },
+        ),
+    ];
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (name, quota, want) in cases {
+        let topic = format!("quota-window-{name}");
+        let group = format!("group-{name}");
+        let limited_user = format!("limited-{name}");
+        let topic_id = create_topic(&broker, &topic).await;
+        initialize_share_state(&broker, &group, uuid::Uuid::from_bytes(topic_id.0), 0).await;
+        for (member, user) in [
+            ("limited", limited_user.as_str()),
+            ("unlimited", "share-consumer"),
+        ] {
+            let opened = share_fetch()
+                .broker(&broker)
+                .group(&group)
+                .member(member)
+                .topic_id(topic_id.0)
+                .user(user)
+                .call()
+                .await;
+            assert!(partition(&opened).error_code == codes::NONE, "{opened:?}");
+        }
+        produce_batches(&broker, &topic).await;
+        if let UserQuota::BatchesPerSecond(BatchFraction {
+            numerator,
+            denominator,
+        }) = quota
+        {
+            let size = batch_size(&broker, &topic);
+            let rate = f64::from(size * numerator / denominator);
+            set_user_quota(&broker, &limited_user, "consumer_byte_rate", rate).await;
+        }
+
+        let limited = share_fetch()
+            .broker(&broker)
+            .group(&group)
+            .member("limited")
+            .topic_id(topic_id.0)
+            .epoch(1)
+            .user(&limited_user)
+            .call()
+            .await;
+        actual.push((
+            name,
+            outcome_after_unlimited_fetch(&broker, &group, topic_id, &limited).await,
+        ));
+        expected.push((name, want));
+    }
+
+    assert!(actual == expected);
     broker.shutdown().await;
 }
 

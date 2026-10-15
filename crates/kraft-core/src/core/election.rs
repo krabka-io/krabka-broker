@@ -72,6 +72,7 @@ impl QuorumStateMachine {
         let deadline = self.election_deadline(now);
         self.role = Role::Prospective {
             granted,
+            rejected: BTreeSet::new(),
             election_deadline: deadline,
             abandoned_leader,
         };
@@ -106,14 +107,17 @@ impl QuorumStateMachine {
         vote_granted: bool,
         now: SimInstant,
     ) -> Vec<Action> {
-        // A higher-epoch rejection fences us: step down to that epoch.
+        // A higher-epoch rejection fences us: step down to that epoch. The
+        // election timer keeps the time it has left, as Kafka's
+        // `transitionToUnattached` keeps a candidate's remaining timeout.
         if !vote_granted && epoch > self.state.leader_epoch {
             let mut actions = Vec::new();
-            self.transition_to_unattached(epoch, now, &mut actions);
+            let deadline = self.unattached_election_deadline(epoch, now);
+            self.transition_to_unattached(epoch, deadline, &mut actions);
             return actions;
         }
         if !vote_granted {
-            return Vec::new();
+            return self.record_pre_vote_rejection(from, epoch, now);
         }
         // A response is tied locally to the peer we contacted, but membership
         // may have changed while that RPC was in flight. Removed voters cannot
@@ -126,9 +130,12 @@ impl QuorumStateMachine {
         // guard drops a stale grant from a superseded round (e.g. a late pre-vote
         // grant at epoch E arriving after we bumped to E+1 and became Candidate).
         match &mut self.role {
-            Role::Prospective { granted, .. } if epoch == self.state.leader_epoch => {
+            Role::Prospective {
+                granted, rejected, ..
+            } if epoch == self.state.leader_epoch => {
                 if current_voter {
                     granted.insert(from);
+                    rejected.remove(&from);
                 }
                 if self.tally_reached_majority() {
                     self.promote_to_candidate(log, now)
@@ -148,6 +155,50 @@ impl QuorumStateMachine {
             }
             _ => Vec::new(),
         }
+    }
+
+    /// A voter refused our pre-vote in our epoch.
+    ///
+    /// Kafka's `EpochElection.isVoteRejected`: once the grants and the voters
+    /// that have not answered can no longer make a majority, the round is
+    /// lost, and `KafkaRaftClient.prospectiveTransitionAfterElectionLoss`
+    /// ends it at once. A replica that abandoned a leader of this epoch
+    /// follows that leader again: the voters that refused it still follow the
+    /// leader. A replica that had none becomes Unattached in the same epoch,
+    /// keeps the vote it cast in it, and draws a fresh election timeout. A
+    /// candidate that loses its round waits out its election timeout instead,
+    /// as Kafka's does, so a refused real vote changes nothing here.
+    fn record_pre_vote_rejection(
+        &mut self,
+        from: NodeId,
+        epoch: Epoch,
+        now: SimInstant,
+    ) -> Vec<Action> {
+        if epoch != self.state.leader_epoch || !self.state.voters.contains(from) {
+            return Vec::new();
+        }
+        let Role::Prospective {
+            granted,
+            rejected,
+            abandoned_leader,
+            ..
+        } = &mut self.role
+        else {
+            return Vec::new();
+        };
+        granted.remove(&from);
+        rejected.insert(from);
+        let voters = &self.state.voters;
+        let granting = granted.iter().filter(|id| voters.contains(**id)).count();
+        let refusing = rejected.iter().filter(|id| voters.contains(**id)).count();
+        let unanswered = voters.len().saturating_sub(granting + refusing);
+        if granting + unanswered >= self.state.majority() {
+            return Vec::new();
+        }
+        if let Some(leader_id) = *abandoned_leader {
+            return self.handle_begin_quorum_epoch(leader_id, epoch, now);
+        }
+        self.await_election(self.election_deadline(now))
     }
 
     /// Whether the active election grant set contains a quorum of current voters.

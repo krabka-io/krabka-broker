@@ -136,16 +136,12 @@ pub enum Command {
     /// An inbound peer RPC with a oneshot to reply on.
     Inbound(Inbound),
     /// Injects a core [`Event`] directly. This is the test and driver entry
-    /// point. The loop also uses it to feed peer-RPC responses back to itself
-    /// as the matching `Receive*Response` event, which is the fire-and-forget
-    /// feedback path.
+    /// point.
     Event(Event),
-    /// A Fetch RESPONSE the follower received from the leader. Other peer
-    /// responses decode to a pure core event, but a Fetch response carries log
-    /// records. The follower must truncate, append, and apply those records
-    /// BEFORE it feeds the `ReceiveFetchResponse` event to the core. This
-    /// response therefore gets its own command instead of the pure `Event`
-    /// feedback path.
+    /// A Fetch RESPONSE the follower received from the leader. A Fetch
+    /// response carries log records. The follower must truncate, append, and
+    /// apply those records BEFORE it feeds the `ReceiveFetchResponse` event to
+    /// the core, so this response gets its own command.
     FetchResponse {
         /// The leader that answered, which is the responder peer.
         from: NodeId,
@@ -153,6 +149,11 @@ pub enum Command {
         /// body.
         body: Bytes,
     },
+    /// A Vote RESPONSE a nominee received from a voter. Beside the grant it
+    /// names the voter's epoch, the leader it knows and that leader's
+    /// endpoint, which the engine acts on before the core counts the grant,
+    /// as Kafka's `maybeHandleCommonResponse` does.
+    VoteResponse { from: NodeId, body: Bytes },
     /// A `FetchSnapshot` RESPONSE the follower received from the leader. It
     /// carries snapshot bytes that the follower reassembles before it resumes.
     /// This mirrors the dedicated command path of `FetchResponse`.

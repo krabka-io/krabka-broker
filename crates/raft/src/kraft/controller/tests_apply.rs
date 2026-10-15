@@ -8,10 +8,12 @@ use {
         records::{decode_batches, metadata_record_batch},
         recovery::replay_committed_with_timestamp,
         test_support::{
-            EngineSetup, build_engine_only, one_offset_batch, topic_record, topic_record_named,
+            self, EngineSetup, await_leader, build_engine_only, one_offset_batch,
+            submit_change_with_timeout, topic_record, topic_record_named,
         },
     },
     assert2::{assert, check},
+    krabka_metadata::metadata_version::METADATA_VERSION_FEATURE,
 };
 
 #[test]
@@ -59,9 +61,10 @@ fn tiny_fetch_budget_does_not_skip_apply_or_replay_records() {
     assert2::assert!(engine.image.topic("second").is_some());
 
     let mut recovered = MetadataImage::new(uuid::Uuid::nil());
-    let (_, recovered_timestamp) =
+    let recovered_timestamp =
         replay_committed_with_timestamp(&engine.log, &mut recovered, Offset(0), tiny)
-            .expect("replay");
+            .expect("replay")
+            .last_applied_timestamp_ms;
     assert2::assert!(recovered.topic("first").is_some());
     assert2::assert!(recovered.topic("second").is_some());
     assert2::assert!(recovered_timestamp == Some(1_700_000_000_123));
@@ -196,4 +199,159 @@ async fn duplicate_committed_record_rejected_on_apply() {
         .unwrap();
     assert2::assert!(ctrl.current_image().topic("t").is_some());
     ctrl.shutdown().await;
+}
+
+/// One record of a batch in a finalized-features epoch scenario.
+#[derive(Clone, Copy)]
+enum EpochRecord {
+    /// A `FeatureLevelRecord` for `name` at `level`.
+    Feature(&'static str, i16),
+    /// A topic and its one partition: two records.
+    Topic(&'static str, u128),
+}
+
+impl EpochRecord {
+    fn records(self) -> Vec<MetadataRecord> {
+        match self {
+            Self::Feature(name, level) => {
+                vec![MetadataRecord::V1FeatureLevel(
+                    krabka_metadata::FeatureLevelRecord {
+                        name: name.into(),
+                        level,
+                    },
+                )]
+            }
+            Self::Topic(name, id) => topic_record_named(name, id),
+        }
+    }
+}
+
+/// Kafka's `FeaturesPublisher` takes the finalized-features epoch from
+/// `newImage.provenance().lastContainedOffset()` only when the delta has a
+/// features delta. Each row appends and commits one batch per entry of
+/// `batches` and expects, after each, the epoch the engine holds and the one
+/// it publishes. A restart replay of the same log must reach the last one.
+#[test]
+fn the_finalized_features_epoch_moves_only_on_a_features_delta() {
+    struct Row {
+        name: &'static str,
+        batches: &'static [&'static [EpochRecord]],
+        want: &'static [i64],
+    }
+    use EpochRecord::{Feature, Topic};
+    const MV: &str = METADATA_VERSION_FEATURE;
+    let rows = [
+        Row {
+            name: "topic records before any feature record",
+            batches: &[&[Topic("a", 1)]],
+            // Offsets 0-1.
+            want: &[-1],
+        },
+        Row {
+            name: "topic records after a feature record",
+            batches: &[&[Feature(MV, 25)], &[Topic("a", 1)], &[Topic("b", 2)]],
+            // Offsets 0, 1-2, 3-4.
+            want: &[0, 0, 0],
+        },
+        Row {
+            name: "a later feature record at the same level",
+            batches: &[&[Feature(MV, 25)], &[Topic("a", 1)], &[Feature(MV, 25)]],
+            // Offsets 0, 1-2, 3.
+            want: &[0, 0, 3],
+        },
+        Row {
+            name: "a later feature record for another feature",
+            batches: &[
+                &[Feature(MV, 25)],
+                &[Topic("a", 1)],
+                &[Feature("group.version", 1)],
+                &[Topic("b", 2)],
+            ],
+            // Offsets 0, 1-2, 3, 4-5.
+            want: &[0, 0, 3, 3],
+        },
+        Row {
+            name: "a batch whose feature record precedes topic records",
+            batches: &[&[Feature(MV, 25)], &[Feature(MV, 25), Topic("a", 1)]],
+            // Offsets 0, 1-3: the epoch is the batch's last offset.
+            want: &[0, 3],
+        },
+    ];
+    for Row {
+        name,
+        batches,
+        want,
+    } in rows
+    {
+        let (mut engine, _dir) = build_engine_only().ids(&[NodeId(1)]).call();
+        let published = engine.features_epoch_tx.subscribe();
+        let mut scratch = engine.image.clone();
+        let mut held = Vec::new();
+        let mut seen = Vec::new();
+        for entries in batches {
+            let mut blobs = Vec::new();
+            for record in entries.iter().flat_map(|entry| entry.records()) {
+                blobs.extend(to_kraft_values(&record, &scratch).expect("encode metadata"));
+                scratch.apply(&record);
+            }
+            let mut batch = metadata_record_batch(1, &blobs).expect("metadata batch");
+            engine
+                .log
+                .append(&mut batch, 1_700_000_000_000)
+                .expect("append metadata");
+            engine.advance_and_apply(engine.log.log_end_offset());
+            held.push(engine.features_epoch);
+            seen.push(*published.borrow());
+        }
+        let mut recovered = MetadataImage::new(uuid::Uuid::nil());
+        let replayed = replay_committed_with_timestamp(
+            &engine.log,
+            &mut recovered,
+            Offset(0),
+            MetadataRaftFetchMax::default(),
+        )
+        .expect("replay")
+        .features_epoch
+        .unwrap_or(-1);
+
+        check!(
+            (held, seen, replayed) == (want.to_vec(), want.to_vec(), want[want.len() - 1]),
+            "{name}"
+        );
+    }
+}
+
+/// The handle the controller listener reads: -1 before anything applies, the
+/// committed offset of a feature record after it, unchanged by topic records,
+/// and moved again by a feature record at the same level.
+#[tokio::test]
+async fn the_controller_handle_publishes_the_finalized_features_epoch() {
+    let (controller, _dir) = test_support::build().ids(&[NodeId(1)]).call();
+    let fresh = controller.finalized_features_epoch();
+    controller
+        .inject_event(Event::ElectionTimeout)
+        .await
+        .unwrap();
+    await_leader(&controller, Some(NodeId(1))).await;
+    let feature = || EpochRecord::Feature(METADATA_VERSION_FEATURE, 25).records();
+    // Each answer is the epoch and the offset of the last committed record.
+    let answer = async |records, context| {
+        submit_change_with_timeout(&controller, records, context)
+            .await
+            .unwrap();
+        (
+            controller.finalized_features_epoch(),
+            controller.quorum_snapshot().high_watermark - 1,
+        )
+    };
+    let (after_feature, feature_offset) = answer(feature(), "feature").await;
+    let (after_topic, topic_offset) = answer(topic_record("a"), "topic").await;
+    let (after_refinalize, refinalize_offset) = answer(feature(), "same level").await;
+
+    check!(
+        (fresh, after_feature, after_topic, after_refinalize)
+            == (-1, feature_offset, feature_offset, refinalize_offset)
+    );
+    check!(topic_offset > feature_offset);
+    controller.shutdown().await;
 }

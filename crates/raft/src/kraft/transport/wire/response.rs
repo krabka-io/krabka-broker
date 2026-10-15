@@ -36,9 +36,13 @@ mod tests;
 /// matching `Receive*Response` event, or applies it directly for Fetch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerResponse {
+    /// A Vote answer: the partition error, the grant, and the responder's
+    /// view of the leader and epoch, which Kafka's `handleVoteResponse` hands
+    /// to `maybeHandleCommonResponse`.
     Vote {
-        epoch: Epoch,
+        error_code: i16,
         granted: bool,
+        leader: QuorumLeader,
     },
     /// `BeginQuorumEpoch` and `EndQuorumEpoch` acks carry the responder's
     /// epoch. They produce no core event.
@@ -192,6 +196,35 @@ struct NodeEndpointEntry {
 
 impl QuorumLeader {
     fn leader_id_to_wire(&self) -> i32 { self.leader_id.map_or(-1, node_to_wire) }
+
+    /// The leader a response names on the wire. Its endpoint is the
+    /// `NodeEndpoints` entry, given as `(node id, host, port)`, whose node id
+    /// is the leader's, as Kafka's `Endpoints.fromFetchResponse` and
+    /// `Endpoints.fromVoteResponse` select it; an entry for any other node is
+    /// ignored.
+    fn from_wire<'a>(
+        wire_leader: i32,
+        wire_epoch: i32,
+        endpoints: impl IntoIterator<Item = (i32, &'a str, i32)>,
+    ) -> Self {
+        let leader_id = (wire_leader >= 0).then(|| node_from_wire(wire_leader));
+        let endpoint = leader_id.and_then(|_| {
+            endpoints
+                .into_iter()
+                .find(|(node_id, ..)| *node_id == wire_leader)
+                .and_then(|(_, host, port)| {
+                    u16::try_from(port).ok().map(|port| LeaderEndpoint {
+                        host: host.to_string(),
+                        port,
+                    })
+                })
+        });
+        Self {
+            leader_id,
+            epoch: epoch_from_wire(wire_epoch),
+            endpoint,
+        }
+    }
 
     /// The `NodeEndpoints` entry, when the leader and its endpoint are known.
     fn node_endpoint(&self) -> Option<NodeEndpointEntry> {
@@ -430,23 +463,11 @@ impl PeerResponse {
     #[must_use]
     pub fn encode(&self) -> Bytes {
         match self {
-            PeerResponse::Vote { epoch, granted } => {
-                let resp = VoteResponse {
-                    topics: vec![vote_resp::TopicData {
-                        topic_name: METADATA_TOPIC.to_string(),
-                        partitions: vec![vote_resp::PartitionData {
-                            partition_index: METADATA_PARTITION,
-                            leader_id: -1,
-                            leader_epoch: epoch_to_wire(*epoch),
-                            vote_granted: *granted,
-                            ..Default::default()
-                        }],
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                };
-                encode_body(&resp, VOTE_VERSION)
-            }
+            PeerResponse::Vote {
+                error_code,
+                granted,
+                leader,
+            } => encode_vote_response(0, *error_code, *granted, leader, VOTE_VERSION),
             PeerResponse::Ack { epoch } => {
                 // A Begin/End ack is encoded as the corresponding
                 // BeginQuorumEpochResponse with the responder's leader_epoch.
@@ -489,8 +510,19 @@ impl PeerResponse {
         let resp = VoteResponse::decode(&mut cur, VOTE_VERSION).ok()?;
         let p = resp.topics.first()?.partitions.first()?;
         Some(PeerResponse::Vote {
-            epoch: epoch_from_wire(p.leader_epoch),
+            error_code: p.error_code,
             granted: p.vote_granted,
+            leader: QuorumLeader::from_wire(
+                p.leader_id,
+                p.leader_epoch,
+                resp.node_endpoints.iter().map(|endpoint| {
+                    (
+                        endpoint.node_id,
+                        endpoint.host.as_str(),
+                        i32::from(endpoint.port),
+                    )
+                }),
+            ),
         })
     }
 
@@ -516,26 +548,13 @@ impl PeerResponse {
         let mut cur = buf;
         let resp = FetchResponse::decode(&mut cur, FETCH_VERSION).ok()?;
         let p = resp.responses.first()?.partitions.first()?;
-        let wire_leader = p.current_leader.leader_id;
-        let leader_id = (wire_leader >= 0).then(|| node_from_wire(wire_leader));
-        let endpoint = leader_id.and_then(|_| {
+        let leader = QuorumLeader::from_wire(
+            p.current_leader.leader_id,
+            p.current_leader.leader_epoch,
             resp.node_endpoints
                 .iter()
-                .find(|endpoint| endpoint.node_id == wire_leader)
-                .and_then(|endpoint| {
-                    u16::try_from(endpoint.port)
-                        .ok()
-                        .map(|port| LeaderEndpoint {
-                            host: endpoint.host.clone(),
-                            port,
-                        })
-                })
-        });
-        let leader = QuorumLeader {
-            leader_id,
-            epoch: epoch_from_wire(p.current_leader.leader_epoch),
-            endpoint,
-        };
+                .map(|endpoint| (endpoint.node_id, endpoint.host.as_str(), endpoint.port)),
+        );
         // diverging_epoch defaults to (-1, -1); a real divergence carries a
         // non-negative end_offset.
         let diverging = if p.diverging_epoch.end_offset >= 0 {

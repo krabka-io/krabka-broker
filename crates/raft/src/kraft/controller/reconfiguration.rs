@@ -496,7 +496,7 @@ impl Engine {
             voters: self.controls.committed_voters.clone(),
         }));
         if self.downgrade_snapshot_pending.is_none() {
-            let _ = self.image_tx.send(Arc::new(self.image.clone()));
+            self.publish_image();
         }
     }
 

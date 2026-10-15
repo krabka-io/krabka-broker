@@ -10,7 +10,7 @@ use {
     self::table::CONTROLLER_LISTENER_APIS,
     crate::{
         ControllerAdminRouter, ControllerApiVersion, UnstableApiVersions, UnstableFeatureVersions,
-        error::RaftError, kafka_4_3_1_max, kraft::KraftController,
+        error::RaftError, kafka_4_3_1_max,
     },
     bytes::{Bytes, BytesMut},
     krabka_protocol::{
@@ -63,10 +63,12 @@ const API_VERSIONS_INVALID_REQUEST: i16 = 42;
 pub(crate) struct ApiVersionsView<'a> {
     /// The applied metadata image: its finalized features.
     pub(crate) image: &'a krabka_metadata::MetadataImage,
-    /// The offset of the last record `image` contains, or `-1` before the
-    /// first. It is the finalized-features epoch, as Kafka's
-    /// `FeaturesPublisher` takes it from `image.provenance().lastContainedOffset()`.
-    pub(crate) metadata_offset: i64,
+    /// The finalized-features epoch: the last contained offset of the newest
+    /// applied batch or snapshot that carried a `FeatureLevelRecord`, or `-1`
+    /// before the first. Kafka's `FeaturesPublisher` takes
+    /// `image.provenance().lastContainedOffset()` only from a delta with a
+    /// features delta, so topic records do not move it.
+    pub(crate) finalized_features_epoch: i64,
     /// The KIP-919 Admin surface the broker attaches, if any.
     pub(crate) admin_router: Option<&'a dyn ControllerAdminRouter>,
     /// Kafka's `unstable.api.versions.enable`. It caps both the API table and
@@ -74,12 +76,6 @@ pub(crate) struct ApiVersionsView<'a> {
     /// `SimpleApiVersionManager` is built with it and takes no
     /// `unstable.feature.versions.enable`.
     pub(crate) unstable: UnstableApiVersions,
-}
-
-/// The offset of the last record `engine`'s image contains, or `-1` before
-/// the first: one below the engine's applied high watermark.
-pub(crate) fn applied_metadata_offset(engine: &KraftController) -> i64 {
-    engine.quorum_snapshot().high_watermark.saturating_sub(1)
 }
 
 /// Answers one controller-listener `ApiVersions` request with the response
@@ -249,7 +245,7 @@ pub(super) fn api_versions_response_body(req_version: i16, view: ApiVersionsView
             req_version,
             UnstableFeatureVersions::from(view.unstable == UnstableApiVersions::Enabled),
         ),
-        finalized_features_epoch: view.metadata_offset,
+        finalized_features_epoch: view.finalized_features_epoch,
         finalized_features: finalized_feature_keys(view.image),
         ..Default::default()
     };
@@ -272,17 +268,23 @@ mod tests {
             ControllerAdminRequest, ControllerAdminRouteFuture, ControllerAdminRouter,
             ControllerApiVersion, LATEST_PRODUCTION_METADATA_VERSION, test_support::feature_image,
         },
-        krabka_metadata::{FeatureLevelRecord, MetadataRecord},
+        krabka_metadata::{
+            FeatureLevelRecord, MetadataRecord, metadata_version::METADATA_VERSION_MIN,
+        },
         krabka_protocol::Decode,
         uuid::Uuid,
     };
 
     /// The view a listener with no Admin router and the default unstable
-    /// setting answers from, at metadata offset `metadata_offset`.
-    fn view(image: &krabka_metadata::MetadataImage, metadata_offset: i64) -> ApiVersionsView<'_> {
+    /// setting answers from, at finalized-features epoch
+    /// `finalized_features_epoch`.
+    fn view(
+        image: &krabka_metadata::MetadataImage,
+        finalized_features_epoch: i64,
+    ) -> ApiVersionsView<'_> {
         ApiVersionsView {
             image,
-            metadata_offset,
+            finalized_features_epoch,
             admin_router: None,
             unstable: UnstableApiVersions::Disabled,
         }
@@ -689,11 +691,8 @@ mod tests {
     /// epoch is the metadata offset the view carries.
     #[test]
     fn feature_fields_match_kafka_on_the_controller_listener() {
-        use {
-            krabka_metadata::metadata_version::METADATA_VERSION_MIN,
-            krabka_protocol::owned::api_versions_response::{
-                FinalizedFeatureKey, SupportedFeatureKey,
-            },
+        use krabka_protocol::owned::api_versions_response::{
+            FinalizedFeatureKey, SupportedFeatureKey,
         };
 
         struct Row<'a> {
@@ -779,6 +778,35 @@ mod tests {
                 "v{version}, kraft.version {kraft_version}"
             );
         }
+    }
+
+    /// #1344: before the first feature delta Kafka's controller answers from
+    /// the initial state of `FeaturesPublisher`,
+    /// `FinalizedFeatures.fromKRaftVersion(MINIMUM_VERSION)`, which finalizes
+    /// `metadata.version` at its minimum with epoch -1. `ControllerServer`
+    /// adds `kraft.version` through `setFinalizedLevel`, which drops level 0.
+    #[yare::parameterized(
+        kraft_version_0 = { 0, &[("metadata.version", METADATA_VERSION_MIN)] },
+        kraft_version_1 = {
+            1,
+            &[("kraft.version", 1), ("metadata.version", METADATA_VERSION_MIN)],
+        },
+    )]
+    fn a_fresh_controller_advertises_kafkas_minimum_metadata_version(
+        kraft_version: u16,
+        want: &[(&str, i16)],
+    ) {
+        krabka_macros::finalized_feature_fixture!(finalized);
+        let image = feature_image(kraft_version, &[]);
+        let body = super::api_versions_response_body(4, view(&image, -1));
+        let resp = ApiVersionsResponse::decode(&mut &body[..], 4).expect("decode");
+        let want_finalized: Vec<_> = want
+            .iter()
+            .map(|(name, level)| finalized(name, *level))
+            .collect();
+        assert2::check!(
+            (resp.finalized_features, resp.finalized_features_epoch) == (want_finalized, -1)
+        );
     }
 
     /// Kafka's `ControllerServer` builds the listener's

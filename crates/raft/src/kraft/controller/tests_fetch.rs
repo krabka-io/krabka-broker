@@ -9,6 +9,7 @@ use {
         kraft::{
             controller::{
                 offsets::metadata_fetch_offset_below_log_start,
+                quorum_requests::NOT_LEADER_OR_FOLLOWER,
                 records::{decode_batches, encode_batches},
                 replication::{
                     FetchBatchDisposition, classify_fetch_batch, fetch_epoch_for_request,
@@ -362,29 +363,57 @@ fn two_voter_engine(role: TwoVoterRole) -> EngineInDir {
     EngineInDir { engine, dir }
 }
 
+/// A node that follows node 1 at epoch 1, with its peer sends recorded.
+fn following_node_one(
+    me: NodeId,
+) -> (
+    EngineInDir,
+    tokio::sync::mpsc::UnboundedReceiver<CapturedPeerSend>,
+) {
+    let (mut engine, dir) = build_engine_only().me(me).call();
+    engine.on_event(Event::ReceiveBeginQuorumEpoch {
+        leader_id: NodeId(1),
+        leader_epoch: 1,
+    });
+    let sends = record_peer_sends(&mut engine, bytes::Bytes::new());
+    (EngineInDir { engine, dir }, sends)
+}
+
+/// Node 1's answer to a Fetch after it lost epoch 1: epoch 7, with `leader_id`
+/// as the leader it knows.
+fn answer_from_epoch_seven(leader_id: Option<NodeId>) -> bytes::Bytes {
+    wire::PeerResponse::Fetch(wire::FetchAnswer {
+        error_code: NOT_LEADER_OR_FOLLOWER,
+        leader: wire::QuorumLeader {
+            leader_id,
+            epoch: 7,
+            endpoint: None,
+        },
+        hwm: -1,
+        ..leader_answer(NodeId(1), 7)
+    })
+    .encode()
+}
+
+/// A Fetch response from a newer epoch moves a follower or an observer to the
+/// leader it names, and the node fetches from that leader at once, as
+/// `KafkaRaftClient.maybeHandleCommonResponse` calls `transitionToFollower`
+/// and the next `pollFollower` sends the Fetch with no backoff.
 #[yare::parameterized(
     observer_that_joins_later = { NodeId(4) },
     voter_that_follows = { NodeId(2) },
 )]
 #[test_macro(tokio::test)]
 async fn a_fetch_response_from_a_newer_epoch_moves_the_node_to_that_leader(me: NodeId) {
-    let (mut engine, _dir) = build_engine_only().me(me).call();
-    engine.on_event(Event::ReceiveBeginQuorumEpoch {
-        leader_id: NodeId(1),
-        leader_epoch: 1,
-    });
+    let (
+        EngineInDir {
+            mut engine,
+            dir: _dir,
+        },
+        mut sends,
+    ) = following_node_one(me);
 
-    engine.on_fetch_response(
-        NodeId(1),
-        &wire::PeerResponse::Fetch(wire::FetchAnswer {
-            diverging: None,
-            snapshot_id: None,
-            hwm: 0,
-            records: bytes::Bytes::new(),
-            ..leader_answer(NodeId(3), 7)
-        })
-        .encode(),
-    );
+    engine.on_fetch_response(NodeId(1), &answer_from_epoch_seven(Some(NodeId(3))));
 
     let state = engine.core.quorum_state();
     assert2::assert!((state.leader_id, state.leader_epoch) == (Some(NodeId(3)), 7));
@@ -398,6 +427,50 @@ async fn a_fetch_response_from_a_newer_epoch_moves_the_node_to_that_leader(me: N
             ..
         }
     ));
+    let sent = recv_peer_send(&mut sends).await;
+    assert2::assert!((sent.peer, sent.api_key) == (NodeId(3), api_key::FETCH));
+}
+
+/// A Fetch response from a newer epoch that names no leader yet moves the
+/// node to that epoch, as `KafkaRaftClient.maybeTransition` moves it to
+/// Unattached.
+///
+/// An observer has no other way to hear of the epoch, so it also asks a voter
+/// for the leader at once, as Kafka's observer does through
+/// `maybeSendFetchToAnyBootstrap`. Without that it would keep its old leader
+/// until its fetch timer had fired the configured number of times. A voter
+/// waits for the Vote or the `BeginQuorumEpoch` of the new epoch instead.
+#[yare::parameterized(
+    observer = { NodeId(4), Some(NodeId(1)) },
+    voter = { NodeId(2), None },
+)]
+#[test_macro(tokio::test)]
+async fn a_newer_epoch_without_a_leader_detaches_the_node_from_its_old_leader(
+    me: NodeId,
+    discovery_fetch_to: Option<NodeId>,
+) {
+    let (
+        EngineInDir {
+            mut engine,
+            dir: _dir,
+        },
+        mut sends,
+    ) = following_node_one(me);
+
+    engine.on_fetch_response(NodeId(1), &answer_from_epoch_seven(None));
+
+    let state = engine.core.quorum_state();
+    assert2::assert!((state.leader_id, state.leader_epoch) == (None, 7));
+    assert2::assert!(engine.following_leader().is_none());
+    tokio::time::sleep(StdDuration::from_millis(50)).await;
+    let sent = std::iter::from_fn(|| sends.try_recv().ok())
+        .map(|send| (send.peer, send.api_key))
+        .collect::<Vec<_>>();
+    let expected = discovery_fetch_to
+        .map(|peer| (peer, api_key::FETCH))
+        .into_iter()
+        .collect::<Vec<_>>();
+    assert2::assert!(sent == expected);
 }
 
 /// A replica answers a Fetch as Kafka's `tryCompleteFetchRequest` does:

@@ -6,7 +6,10 @@ use {
     super::{
         PendingDowngradeSnapshot,
         control_state::voter_set_from_wire,
-        records::{decode_committed_value, decode_control_record, next_batch_offset},
+        records::{
+            batch_last_offset, decode_committed_value, decode_control_record, is_features_delta,
+            next_batch_offset,
+        },
     },
     crate::{
         config::MetadataRaftFetchMax,
@@ -57,24 +60,38 @@ pub fn replay_committed(
     from: Offset,
     max: MetadataRaftFetchMax,
 ) -> Result<Option<PendingDowngradeSnapshot>, RaftError> {
-    replay_committed_with_timestamp(log, image, from, max).map(|(pending, _)| pending)
+    replay_committed_with_timestamp(log, image, from, max).map(|replay| replay.pending)
 }
 
-/// Replay committed log batches and return the timestamp of the last batch
-/// covered by the replay, matching the controller's live apply timestamp.
+/// What a replay of the committed log learned beyond the image it rebuilt.
+#[derive(Default)]
+pub struct CommittedReplay {
+    /// The first `metadata.version` downgrade the replay met, which KIP-1155
+    /// must checkpoint at.
+    pub pending: Option<PendingDowngradeSnapshot>,
+    /// The timestamp of the last batch the replay covered, matching the
+    /// controller's live apply timestamp.
+    pub last_applied_timestamp_ms: Option<i64>,
+    /// The last offset of the newest replayed batch that applied a
+    /// `FeatureLevelRecord`: the finalized-features epoch live apply would
+    /// have reached.
+    pub features_epoch: Option<i64>,
+}
+
+/// Replay committed log batches and return, with the downgrade boundary, the
+/// timestamp of the last batch covered and the finalized-features epoch.
 pub fn replay_committed_with_timestamp(
     log: &KraftLog,
     image: &mut MetadataImage,
     from: Offset,
     max: MetadataRaftFetchMax,
-) -> Result<(Option<PendingDowngradeSnapshot>, Option<i64>), RaftError> {
+) -> Result<CommittedReplay, RaftError> {
     let target = log.hwm();
-    let mut pending = None;
-    let mut last_applied_timestamp_ms = None;
+    let mut replay = CommittedReplay::default();
     visit_decoded_batches(log, from, target, max, |batches, from, target| {
         for batch in batches {
             if batch.base_offset >= from.0 && batch.base_offset < target.0 {
-                last_applied_timestamp_ms = Some(batch.max_timestamp);
+                replay.last_applied_timestamp_ms = Some(batch.max_timestamp);
             }
             for rec in &batch.records {
                 let ReplayRecordDecision::Apply(record_offset) = replay_record_decision(
@@ -106,12 +123,15 @@ pub fn replay_committed_with_timestamp(
                                     .finalized_metadata_version()
                                     .is_some_and(|current| feature.level < current)
                     );
+                    if is_features_delta(&meta) {
+                        replay.features_epoch = Some(batch_last_offset(batch));
+                    }
                     image.apply(&meta);
                     if should_capture_first_downgrade(
-                        pending.is_some(),
+                        replay.pending.is_some(),
                         is_metadata_version_downgrade,
                     ) {
-                        pending = Some(PendingDowngradeSnapshot {
+                        replay.pending = Some(PendingDowngradeSnapshot {
                             image: image.clone(),
                             end_offset: record_offset + 1,
                             epoch: batch.partition_leader_epoch,
@@ -122,7 +142,7 @@ pub fn replay_committed_with_timestamp(
         }
         Ok(())
     })?;
-    Ok((pending, last_applied_timestamp_ms))
+    Ok(replay)
 }
 
 /// Replays the KIP-853 control records of the committed log into `state`.

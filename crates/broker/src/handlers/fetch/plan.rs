@@ -4,7 +4,10 @@
 //! resolves to.
 
 use {
-    super::request::{EffectivePartition, EffectiveTopic, FetchAuthorization},
+    super::{
+        request::{EffectivePartition, EffectiveTopic, FetchAuthorization},
+        throttle::leader_throttles_replica,
+    },
     crate::{
         broker::Broker,
         codes,
@@ -118,6 +121,11 @@ pub(crate) struct FollowerPosition {
     /// under. The leader records the position only while this target is
     /// still installed.
     pub(crate) target: ReplicationTarget,
+    /// Whether the leader throttles this follower's replica of the partition
+    /// (KIP-73): the partition is on the leader's throttled list and the
+    /// follower is not in its ISR. Each read of the row asks the leader-out
+    /// quota whether to withhold its records.
+    pub(crate) leader_throttled: bool,
 }
 
 /// Kafka's `Partition.updateFollowerFetchState`: record that `position`'s
@@ -699,6 +707,13 @@ pub(super) async fn plan_partition_read(
         broker_epoch: context.follower_broker_epoch,
         log_start_offset: request.log_start_offset,
         target: *target,
+        leader_throttled: leader_throttles_replica(
+            context.image,
+            context.broker.config.node_id,
+            context.follower_id,
+            topic_name,
+            request.partition,
+        ),
     });
     if let Some(partition) = partition.as_ref()
         && apply_epoch_checks(
@@ -1611,6 +1626,7 @@ mod tests {
                 broker_epoch: -1,
                 log_start_offset: 0,
                 target: *partition.replication_target.read().await,
+                leader_throttled: false,
             };
             if epoch_moved {
                 partition.install_replication_target(None, 1, 1).await;

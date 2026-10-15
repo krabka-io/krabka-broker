@@ -7,7 +7,7 @@ use {
         Engine, KraftControlState, Role,
         checkpoint::{retain_recent_checkpoints, write_checkpoint},
         offsets::fetch_offset_has_records,
-        records::{decode_batches, encode_batches},
+        records::{decode_batches, encode_batches, features_epoch_after_snapshot},
     },
     crate::{
         error::RaftError,
@@ -144,8 +144,9 @@ impl Engine {
         // the epoch keeps fetching from it, rejects every answer, and stops
         // replicating. A voter learns the new leader from `BeginQuorumEpoch`
         // too, but an observer learns it only here. A newer epoch that names
-        // no leader is left to that epoch's Vote or `BeginQuorumEpoch`;
-        // Kafka moves to Unattached in it instead.
+        // no leader moves the node to Unattached in it, as Kafka's
+        // `maybeTransition` does, and an observer then asks a voter for the
+        // leader at once instead of waiting for its fetch timer.
         if leader_epoch > self.core.quorum_state().leader_epoch {
             if let Some(leader_id) = leader.leader_id {
                 self.remember_leader_endpoint(&leader);
@@ -153,6 +154,11 @@ impl Engine {
                     leader_id,
                     leader_epoch,
                 });
+            } else {
+                self.on_event(Event::ReceiveLeaderlessEpoch {
+                    epoch: leader_epoch,
+                });
+                self.send_discovery_fetch();
             }
             return;
         }
@@ -308,7 +314,7 @@ impl Engine {
     /// announced in `NodeEndpoints`, as Kafka's `transitionToFollower` takes
     /// the response's leader endpoints. Without one, the transport keeps
     /// using the leader's voter-set listener.
-    fn remember_leader_endpoint(&self, leader: &wire::QuorumLeader) {
+    pub(super) fn remember_leader_endpoint(&self, leader: &wire::QuorumLeader) {
         if let (Some(leader_id), Some(wire::LeaderEndpoint { host, port })) =
             (leader.leader_id, &leader.endpoint)
         {
@@ -409,6 +415,11 @@ impl Engine {
         }
         write_checkpoint(&self.data_dir, end_offset, epoch, bytes)?;
         self.image = new_image;
+        self.features_epoch = features_epoch_after_snapshot(
+            &contents.metadata_records,
+            end_offset,
+            self.features_epoch,
+        );
         if let Some(control) = contents.control_state {
             self.controls = KraftControlState::new(control.voters.clone(), control.kraft_version);
             self.core.set_kraft_version(control.kraft_version);
@@ -426,7 +437,7 @@ impl Engine {
         self.installed_snapshot_epoch = Some(
             u32::try_from(epoch).expect("snapshot install admission requires a nonnegative epoch"),
         );
-        let _ = self.image_tx.send(Arc::new(self.image.clone()));
+        self.publish_image();
         retain_recent_checkpoints(&self.data_dir);
         Ok(())
     }
