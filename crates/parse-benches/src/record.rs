@@ -281,6 +281,9 @@ pub fn parse_host(text: &str) -> Result<Host, BudgetError> {
 pub struct ProcessSample {
     /// `utime + stime` from `/proc/<pid>/stat`, in clock ticks.
     pub cpu_ticks: u64,
+    /// `starttime` from `/proc/<pid>/stat`, in clock ticks since boot. A
+    /// container restart keeps the pod name but changes this.
+    pub process_start_ticks: u64,
     /// `VmHWM` from `/proc/<pid>/status`: peak RSS since the process started.
     pub rss_hwm_kib: u64,
 }
@@ -293,7 +296,8 @@ pub struct ProcessSample {
 /// # Errors
 ///
 /// Returns [`BudgetError::InvalidArtifact`] for a key outside a pod block, a
-/// pod named twice, or a pod without `cpu_ticks` or `rss_hwm_kib`.
+/// pod named twice, or a pod without `cpu_ticks`, `process_start_ticks` or
+/// `rss_hwm_kib`.
 pub fn parse_snapshot(
     path: &str,
     text: &str,
@@ -332,6 +336,7 @@ pub fn parse_snapshot(
         .map(|(pod, mut block)| {
             let sample = ProcessSample {
                 cpu_ticks: take_number(path, &mut block, "cpu_ticks")?,
+                process_start_ticks: take_number(path, &mut block, "process_start_ticks")?,
                 rss_hwm_kib: take_number(path, &mut block, "rss_hwm_kib")?,
             };
             Ok((pod, sample))
@@ -343,9 +348,11 @@ pub fn parse_snapshot(
 ///
 /// # Errors
 ///
-/// Returns the failure reason when the two snapshots name different pods or a
-/// CPU counter went backwards, both of which mean a broker process was
-/// replaced during the trial and its numbers describe no single process.
+/// Returns the failure reason when the two snapshots name different pods, or a
+/// pod's process start time or CPU counter differs in a way one process cannot
+/// produce. Each means a broker process was replaced during the trial, so its
+/// numbers describe no single process. A restarted container keeps its pod
+/// name, so the start time is what catches it.
 pub fn resource_delta(
     before: &BTreeMap<String, ProcessSample>,
     after: &BTreeMap<String, ProcessSample>,
@@ -358,6 +365,11 @@ pub fn resource_delta(
     let mut rss_bytes = 0_u64;
     for (pod, start) in before {
         let end = after[pod];
+        if end.process_start_ticks != start.process_start_ticks {
+            return Err(format!(
+                "{pod}'s broker process started again during the trial"
+            ));
+        }
         let Some(used) = end.cpu_ticks.checked_sub(start.cpu_ticks) else {
             return Err(format!(
                 "{pod}'s CPU counter went backwards: its broker process restarted"

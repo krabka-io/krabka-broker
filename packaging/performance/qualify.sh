@@ -212,7 +212,7 @@ snapshot() {
       pid=$(pidof '"${process}"' | awk "{print \$1}")
       test -n "${pid}"
       echo pod='"${pod}"'
-      awk "{print \"cpu_ticks=\" \$14 + \$15}" "/proc/${pid}/stat"
+      awk "{print \"cpu_ticks=\" \$14 + \$15; print \"process_start_ticks=\" \$22}" "/proc/${pid}/stat"
       awk "/^VmRSS:/ {print \"rss_kib=\" \$2}" "/proc/${pid}/status"
       awk "/^VmHWM:/ {print \"rss_hwm_kib=\" \$2}" "/proc/${pid}/status"
       echo fd_count=$(ls "/proc/${pid}/fd" 2>/dev/null | wc -l)
@@ -250,7 +250,7 @@ budget_snapshot() {
   if ! snapshot "${selector}" "${process}" "${destination}" \
       || ! awk -F= -v brokers="${brokers}" '{seen[$1]++}
           END {exit !(seen["pod"] == brokers && seen["cpu_ticks"] == brokers &&
-            seen["rss_hwm_kib"] == brokers)}' "${destination}"; then
+            seen["process_start_ticks"] == brokers && seen["rss_hwm_kib"] == brokers)}' "${destination}"; then
     echo "resource snapshot failed: ${destination}" >&2
     rm -f -- "${destination}"
   fi

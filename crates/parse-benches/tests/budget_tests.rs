@@ -451,16 +451,21 @@ fn the_checked_in_contract_is_valid() {
 }
 
 fn sample(cpu_ticks: u64, rss_hwm_kib: u64) -> ProcessSample {
+    started(cpu_ticks, rss_hwm_kib, 5_000)
+}
+
+fn started(cpu_ticks: u64, rss_hwm_kib: u64, process_start_ticks: u64) -> ProcessSample {
     ProcessSample {
         cpu_ticks,
+        process_start_ticks,
         rss_hwm_kib,
     }
 }
 
 #[test]
 fn a_snapshot_parses_into_per_pod_samples() {
-    let text = "pod=krabka-0\ncpu_ticks=100\nrss_kib=900\nrss_hwm_kib=1024\nfd_count=40\n\
-                pod=krabka-1\ncpu_ticks=250\nrss_hwm_kib=2048\n";
+    let text = "pod=krabka-0\ncpu_ticks=100\nprocess_start_ticks=5000\nrss_kib=900\nrss_hwm_kib=1024\nfd_count=40\n\
+                pod=krabka-1\ncpu_ticks=250\nprocess_start_ticks=5000\nrss_hwm_kib=2048\n";
     let parsed = parse_snapshot("resources-before.txt", text).unwrap();
     let expected = BTreeMap::from([
         ("krabka-0".to_string(), sample(100, 1024)),
@@ -470,9 +475,10 @@ fn a_snapshot_parses_into_per_pod_samples() {
 }
 
 #[yare::parameterized(
-    key_before_pod = { "cpu_ticks=1\npod=a\ncpu_ticks=1\nrss_hwm_kib=1\n" },
-    pod_twice = { "pod=a\ncpu_ticks=1\nrss_hwm_kib=1\npod=a\ncpu_ticks=1\nrss_hwm_kib=1\n" },
-    missing_hwm = { "pod=a\ncpu_ticks=1\n" },
+    key_before_pod = { "cpu_ticks=1\npod=a\ncpu_ticks=1\nprocess_start_ticks=1\nrss_hwm_kib=1\n" },
+    pod_twice = { "pod=a\ncpu_ticks=1\nprocess_start_ticks=1\nrss_hwm_kib=1\npod=a\ncpu_ticks=1\nprocess_start_ticks=1\nrss_hwm_kib=1\n" },
+    missing_hwm = { "pod=a\ncpu_ticks=1\nprocess_start_ticks=1\n" },
+    missing_start = { "pod=a\ncpu_ticks=1\nrss_hwm_kib=1\n" },
     empty = { "" },
 )]
 fn a_malformed_snapshot_is_an_error(text: &str) {
@@ -494,6 +500,9 @@ fn resource_delta_sums_cpu_and_peak_memory_over_brokers() {
 
 #[yare::parameterized(
     restarted = { BTreeMap::from([("a".to_string(), sample(10, 1))]) },
+    // The container restarted under the same pod name, and the new process
+    // has already used more CPU than the old one had.
+    restarted_with_more_cpu = { BTreeMap::from([("a".to_string(), started(500, 1, 9_000))]) },
     pod_replaced = { BTreeMap::from([("z".to_string(), sample(500, 1))]) },
 )]
 fn resource_delta_refuses_a_replaced_broker(after: BTreeMap<String, ProcessSample>) {
@@ -513,7 +522,7 @@ fn write_trial(dir: &Path, round: usize, side: Side, order: usize, rate: Option<
         for pod in 0..3 {
             let _ = write!(
                 text,
-                "pod=krabka-{pod}\ncpu_ticks={ticks}\nrss_kib=90000\nrss_hwm_kib=102400\n"
+                "pod=krabka-{pod}\ncpu_ticks={ticks}\nprocess_start_ticks=5000\nrss_kib=90000\nrss_hwm_kib=102400\n"
             );
         }
         text
