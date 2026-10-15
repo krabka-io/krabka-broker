@@ -60,6 +60,7 @@ mod config;
 mod connection_limiter;
 mod controller;
 mod error;
+pub mod event_queue;
 pub mod handshake;
 pub mod kraft;
 mod network;
@@ -100,6 +101,7 @@ pub use {
         SnapshotSlice, metadata_log_nonempty,
     },
     error::{MetadataReplayError, PersistedFormatError, RaftError},
+    event_queue::{EventQueueRecorder, NoEventQueueRecorder},
     handshake::{
         AllowAllGrants, ClusterGrants, ClusterOperation, ControllerApiVersions, RaftConnection,
         RaftHandshakeError, RaftListenerHandshake,

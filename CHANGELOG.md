@@ -23,6 +23,17 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ## [Unreleased]
 
+### Added
+
+- The controller exports Kafka's event-queue metrics:
+  `controller_event_queue_time_seconds` and
+  `controller_event_queue_processing_time_seconds` (`EventQueueTimeMs`,
+  `EventQueueProcessingTimeMs`), the started and timed-out operation counters
+  (`EventQueueOperationsStartedCount`, `EventQueueOperationsTimedOutCount`),
+  and `controller_event_queue_idle_seconds_total`, whose rate is
+  `AvgIdleRatio`. A write's processing time runs to its commit reply, as in
+  Kafka.
+
 ### Fixed
 
 - A consumer `Fetch` that its fetch session refuses (for example

@@ -105,6 +105,7 @@ fn park_waiter(
         creates: Vec::new(),
         result: SubmitChangeResult::default(),
         reply,
+        _processing: None,
     });
     receiver
 }

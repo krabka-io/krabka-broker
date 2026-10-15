@@ -28,6 +28,7 @@ mod auth;
 mod break_glass;
 mod delivery;
 mod diskless;
+mod event_queue;
 mod eviction;
 mod fetch_drain;
 mod labels;
@@ -261,6 +262,44 @@ pub struct BrokerMetrics {
         the fencing state it decided on is applied rather than in \
         flight.")]
     pub controller_fencing_publications_total: Counter,
+    /// Seconds a command waited on the controller engine's queue before the
+    /// loop started it. Mirrors Kafka's
+    /// `ControllerEventManager.EventQueueTimeMs`. A timer has no queue time,
+    /// as a Kafka deferred event has none. Controller and combined nodes
+    /// only; a broker-only node exports the family empty.
+    #[metric(help = "Seconds a command waited on the controller engine's queue \
+        before the loop started it. Mirrors Kafka's \
+        ControllerEventManager.EventQueueTimeMs. Controller and combined \
+        nodes only.", buckets = registration::EVENT_QUEUE_DURATION_BUCKETS)]
+    pub controller_event_queue_time_seconds: Histogram,
+    /// Seconds one controller event ran, from the start of its turn to its
+    /// commit reply for a write. Mirrors Kafka's
+    /// `ControllerEventManager.EventQueueProcessingTimeMs`.
+    #[metric(help = "Seconds one controller event ran, to its commit reply for a \
+        write. Mirrors Kafka's \
+        ControllerEventManager.EventQueueProcessingTimeMs. Controller and \
+        combined nodes only.", buckets = registration::EVENT_QUEUE_DURATION_BUCKETS)]
+    pub controller_event_queue_processing_time_seconds: Histogram,
+    /// Events the controller engine loop started: one per turn, a command
+    /// or a timer. Mirrors Kafka's
+    /// `KafkaController.EventQueueOperationsStartedCount`.
+    #[metric(help = "Events the controller engine loop started, one per turn. \
+        Mirrors Kafka's KafkaController.EventQueueOperationsStartedCount.")]
+    pub controller_event_queue_operations_started_total: Counter,
+    /// Commands the controller engine reached after their caller had
+    /// stopped waiting. Mirrors Kafka's
+    /// `KafkaController.EventQueueOperationsTimedOutCount`. Kafka drops such
+    /// an event; the engine still runs it, so it counts as started too.
+    #[metric(help = "Commands the controller engine reached after their caller \
+        had stopped waiting for the reply. Mirrors Kafka's \
+        KafkaController.EventQueueOperationsTimedOutCount; the engine still \
+        runs them.")]
+    pub controller_event_queue_operations_timed_out_total: Counter,
+    /// Seconds the controller engine loop waited for its next event.
+    /// `rate(...)` is Kafka's `ControllerEventManager.AvgIdleRatio`.
+    #[metric(help = "Seconds the controller engine loop waited for its next \
+        event. rate() is Kafka's ControllerEventManager.AvgIdleRatio.")]
+    pub controller_event_queue_idle_seconds_total: Counter<f64, AtomicU64>,
     #[metric(help = "Cumulative count of ISR shrinks proposed by this broker's \
         ISR-maintenance loop.")]
     pub isr_shrinks_total: Counter,

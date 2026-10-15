@@ -42,6 +42,17 @@ pub(super) const DELIVERY_ACTIVATION_LATENESS_BUCKETS: [f64; 12] = [
     0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 10.0, 30.0,
 ];
 
+/// Latency buckets (seconds) for the controller event-queue histograms,
+/// `controller_event_queue_time_seconds` and
+/// `controller_event_queue_processing_time_seconds`. A read or a timer turn
+/// takes tens of microseconds, and a write's processing runs to its commit,
+/// which takes a follower fetch round trip: the span opens at 50µs and runs
+/// to 10s, past the 2s default `request.timeout.ms` of an admin client that
+/// gives up on a stalled controller.
+pub(super) const EVENT_QUEUE_DURATION_BUCKETS: [f64; 12] = [
+    0.000_05, 0.0001, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.1, 0.5, 2.0, 10.0,
+];
+
 impl BrokerMetrics {
     /// Build and register every broker metric.
     ///
