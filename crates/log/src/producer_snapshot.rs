@@ -273,6 +273,10 @@ pub(crate) fn prepare(
 }
 
 impl PreparedSnapshot {
+    /// The offset the snapshot is named for: the base of the segment after
+    /// the boundary.
+    pub(crate) fn offset(&self) -> Offset { self.offset }
+
     pub(crate) fn write(&self, io: &dyn LogIo) -> std::io::Result<PathBuf> {
         let destination = path(&self.dir, self.offset);
         if destination.exists() {

@@ -139,8 +139,11 @@ impl Log {
             .take(evict_len)
             .map(Segment::base_offset)
             .collect();
-        if !to_evict.is_empty() {
-            self.rollover_flusher.finish()?;
+        // A rollover flush still queued for one of these segments would write
+        // its boundary snapshot after the deletion. Flushes of newer segments
+        // keep running, and the log mutex is not held while they sync.
+        if let Some(&last) = to_evict.last() {
+            self.rollover_flusher.finish_through(last)?;
         }
 
         // Unlink first, and forget only what actually left the disk. A failed
