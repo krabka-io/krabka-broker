@@ -53,7 +53,7 @@ use {
             API_KEY_DESCRIBE_CLUSTER, CONTROLLER_LISTENER_NAME, describe_cluster_response_body,
         },
         dispatch::{dispatch_with_router, is_native_raft_api},
-        framing::{RequestFrame, is_eof, read_one_request, write_response},
+        framing::{RequestFrame, is_eof, is_idle, read_one_request, write_response},
         kip853::{
             API_KEY_ADD_RAFT_VOTER, API_KEY_DESCRIBE_QUORUM, API_KEY_REMOVE_RAFT_VOTER,
             API_KEY_UPDATE_RAFT_VOTER, kip853_admin_response,
@@ -279,25 +279,21 @@ where
 {
     // Kafka's `SocketServer` hands `socket.request.max.bytes` to each
     // `Processor`, and its `Selector` closes a channel that goes
-    // `connections.max.idle.ms` without a request. The window restarts for
-    // every request, since each pass through the loop arms a fresh timer.
+    // `connections.max.idle.ms` without a read. The window restarts on every
+    // read that brings bytes, so it measures silence, not how long a frame
+    // takes to arrive.
     let max_request_bytes =
         usize::try_from(context.limits.max_request_size.bytes_u64()).unwrap_or(usize::MAX);
     loop {
-        let request = within_idle_window(
+        let request = read_one_request(
+            &mut stream,
+            admin_router.as_deref(),
+            max_request_bytes,
             context.limits.max_idle,
-            read_one_request(&mut stream, admin_router.as_deref(), max_request_bytes),
         );
         tokio::select! {
             () = shutdown.cancelled() => return Ok(()),
             res = request => {
-                let Some(res) = res else {
-                    tracing::debug!(
-                        peer = %context.peer,
-                        "controller connection idle past connections.max.idle.ms, closing"
-                    );
-                    return Ok(());
-                };
                 let RequestFrame {
                     api_key: api_key_n,
                     api_version,
@@ -308,6 +304,13 @@ where
                 } = match res {
                     Ok(v) => v,
                     Err(e) => {
+                        if is_idle(&e) {
+                            tracing::debug!(
+                                peer = %context.peer,
+                                "controller connection idle past connections.max.idle.ms, closing"
+                            );
+                            return Ok(());
+                        }
                         // Treat peer EOF as a clean shutdown of this conn.
                         if is_eof(&e) {
                             return Ok(());
