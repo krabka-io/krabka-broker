@@ -292,9 +292,10 @@ pub enum SaslExchange {
     /// in the first `SaslAuthenticate`, which on success is the only one.
     OAuthBearer,
     /// OAUTHBEARER token validation failed. The broker returned the RFC 7628
-    /// error JSON with `error_code = 0` and kept the connection open. It now
-    /// waits for the client's single-`\x01` final message before it fails the
-    /// connection with `SASL_AUTHENTICATION_FAILED`.
+    /// error JSON with `error_code = 0` and kept the connection open. A
+    /// single-`\x01` reply then fails the connection with
+    /// `SASL_AUTHENTICATION_FAILED`; any other reply is a fresh client
+    /// initial response, as in Kafka's `OAuthBearerSaslServer`.
     OAuthBearerFailed,
     /// GSSAPI post-handshake and pre-first-token. The broker builds the
     /// acceptor, and with it the live `GssapiServerExchange`, lazily on the
