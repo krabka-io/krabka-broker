@@ -48,6 +48,8 @@ mod follower_authorization_tests;
 #[cfg(test)]
 mod follower_watermark_tests;
 #[cfg(test)]
+mod request_quota_tests;
+#[cfg(test)]
 mod response_budget_tests;
 
 #[cfg(test)]
@@ -81,6 +83,7 @@ use {
         handlers::{ApiKeyCode, RequestContext},
         metrics::RequestPhases,
         network::fetch_writer::records_to_serve,
+        quota::ActiveClock,
         wal::quorum::wire::{KIP_595_FETCH_VERSION, decode_fetch_request},
     },
 };
@@ -158,10 +161,12 @@ pub(crate) async fn handle(
     req_bytes: &[u8],
     ctx: &RequestContext<'_>,
 ) -> Result<(FetchResponse, i16), BrokerError> {
-    // KIP-124 request_percentage meters server-side handler time; capture the
-    // start so the request throttle can be combined with the consumer
-    // byte-rate throttle below (KIP-219).
-    let handler_start = std::time::Instant::now();
+    // KIP-124 request_percentage meters the time the request holds a handler
+    // thread, which the request throttle combines with the consumer byte-rate
+    // throttle below (KIP-219). Every await before the charge runs through
+    // the clock, so a long poll's wait is not charged: Kafka parks that wait
+    // in the fetch purgatory, off the handler thread.
+    let mut handler_clock = ActiveClock::start();
     // Phase accounting for `request_{local,remote}_duration_seconds`. The read
     // loop charges every partition read to the local phase, and the long poll
     // and the cold-tier round trip to the remote one. Every path that reaches
@@ -244,7 +249,9 @@ pub(crate) async fn handle(
         follower_id: effective_replica_id,
         follower_broker_epoch: req.replica_state.replica_epoch,
     };
-    let pending = build_pending_reads(&plan_context, &effective_topics).await;
+    let pending = handler_clock
+        .run(build_pending_reads(&plan_context, &effective_topics))
+        .await;
 
     // Kafka's `KafkaApis.handleFetchRequest`: consumer responses use
     // `min(request.maxBytes, config.fetchMaxBytes, quota window bytes)`.
@@ -265,16 +272,17 @@ pub(crate) async fn handle(
     let GroupedResponses {
         mut responses,
         cpu_micros: cpu_micros_by_idx,
-    } = execute_pending_reads(
-        broker,
-        pending,
-        req.min_bytes,
-        response_max_bytes,
-        req.max_wait_ms,
-        ctx.sendfile_capable,
-        &phases,
-    )
-    .await;
+    } = handler_clock
+        .run(execute_pending_reads(
+            broker,
+            pending,
+            req.min_bytes,
+            response_max_bytes,
+            req.max_wait_ms,
+            ctx.sendfile_capable,
+            &phases,
+        ))
+        .await;
     broker
         .metrics
         .observe_request_phases(FETCH_API_KEY, &phases);
@@ -327,7 +335,7 @@ pub(crate) async fn handle(
             &image,
             ctx,
             FETCH_API_KEY,
-            handler_start.elapsed(),
+            handler_clock.active(),
             fetch_response_size(&resp, version),
         );
         if throttle_time_ms > 0 {

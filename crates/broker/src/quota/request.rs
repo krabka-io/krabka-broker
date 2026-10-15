@@ -83,6 +83,37 @@ pub(crate) async fn with_active_time<F: std::future::Future>(future: F) -> Timed
     Timed { output, active }
 }
 
+/// The handler time KIP-124 charges, for a handler whose every await goes
+/// through [`Self::run`]: the time since [`Self::start`], less the time those
+/// awaits spent parked between polls. A long poll's wait is therefore not
+/// charged, as Kafka parks such a request off the handler thread.
+pub(crate) struct ActiveClock {
+    started: std::time::Instant,
+    parked: std::time::Duration,
+}
+
+impl ActiveClock {
+    pub(crate) fn start() -> Self {
+        Self {
+            started: std::time::Instant::now(),
+            parked: std::time::Duration::ZERO,
+        }
+    }
+
+    /// Awaits `future`, and counts the time it spent parked.
+    pub(crate) async fn run<F: std::future::Future>(&mut self, future: F) -> F::Output {
+        let awaited_at = std::time::Instant::now();
+        let Timed { output, active } = with_active_time(future).await;
+        self.parked += awaited_at.elapsed().saturating_sub(active);
+        output
+    }
+
+    /// The handler time so far, parked time excluded.
+    pub(crate) fn active(&self) -> std::time::Duration {
+        self.started.elapsed().saturating_sub(self.parked)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use {
@@ -257,5 +288,27 @@ mod tests {
         })
         .await;
         check!(working >= Duration::from_millis(60), "{working:?}");
+    }
+
+    /// An `ActiveClock` charges the work between and inside its awaits, and
+    /// not the time an await spent parked.
+    #[tokio::test]
+    async fn active_clock_charges_work_and_not_a_parked_await() {
+        use {assert2::check, std::time::Duration};
+
+        let mut clock = ActiveClock::start();
+        std::thread::sleep(Duration::from_millis(40));
+        let value = clock
+            .run(async {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                std::thread::sleep(Duration::from_millis(20));
+                7
+            })
+            .await;
+        let active = clock.active();
+
+        check!(value == 7);
+        check!(active >= Duration::from_millis(60), "{active:?}");
+        check!(active < Duration::from_millis(200), "{active:?}");
     }
 }
