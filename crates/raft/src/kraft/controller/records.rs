@@ -326,6 +326,40 @@ pub fn decode_batches(mut buf: &[u8]) -> Result<Vec<RecordBatch>, RaftError> {
     Ok(out)
 }
 
+/// The offset of the last record `batch` contains: Kafka's
+/// `lastContainedOffset` for the image that applies it.
+#[must_use]
+pub fn batch_last_offset(batch: &RecordBatch) -> i64 {
+    batch
+        .base_offset
+        .saturating_add(i64::from(batch.last_offset_delta))
+}
+
+/// Whether applying `record` gives the image a features delta, which moves
+/// the finalized-features epoch of Kafka's `FeaturesPublisher` even when the
+/// level is unchanged.
+#[must_use]
+pub fn is_features_delta(record: &MetadataRecord) -> bool {
+    matches!(record, MetadataRecord::V1FeatureLevel(_))
+}
+
+/// The finalized-features epoch after loading a snapshot whose records are
+/// `records` and whose end offset is `end_offset`: the snapshot's last
+/// contained offset when it carries a `FeatureLevelRecord`, and `previous`
+/// otherwise.
+#[must_use]
+pub fn features_epoch_after_snapshot(
+    records: &[MetadataRecord],
+    end_offset: i64,
+    previous: i64,
+) -> i64 {
+    if records.iter().any(is_features_delta) {
+        end_offset.saturating_sub(1)
+    } else {
+        previous
+    }
+}
+
 pub fn next_batch_offset(batches: &[RecordBatch]) -> Option<Offset> {
     batches.last().map(|batch| {
         Offset(
@@ -377,5 +411,45 @@ mod metadata_record_batch_tests {
         )])
         .expect("control batch");
         check!(control.partition_leader_epoch == 7);
+    }
+}
+
+#[cfg(test)]
+mod features_epoch_tests {
+    use {
+        super::*,
+        crate::test_support::single_partition_topic,
+        assert2::check,
+        krabka_metadata::{FeatureLevelRecord, metadata_version::METADATA_VERSION_FEATURE},
+    };
+
+    fn feature() -> MetadataRecord {
+        MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+            name: METADATA_VERSION_FEATURE.into(),
+            level: 25,
+        })
+    }
+
+    fn topic() -> MetadataRecord {
+        MetadataRecord::V1Topic(single_partition_topic("a", uuid::Uuid::from_u128(1)))
+    }
+
+    /// A snapshot load is a features delta when it carries a
+    /// `FeatureLevelRecord`. The epoch is then the snapshot's last contained
+    /// offset, one below its end offset; otherwise it stays where it was.
+    #[yare::parameterized(
+        features_from_initial = { vec![feature(), topic()], 10, -1, 9 },
+        features_replace_earlier = { vec![topic(), feature()], 10, 4, 9 },
+        no_features_keep_initial = { vec![topic()], 10, -1, -1 },
+        no_features_keep_earlier = { vec![topic()], 10, 4, 4 },
+        empty_keeps_earlier = { Vec::new(), 10, 4, 4 },
+    )]
+    fn snapshot_load_moves_the_epoch_only_with_feature_records(
+        records: Vec<MetadataRecord>,
+        end_offset: i64,
+        previous: i64,
+        want: i64,
+    ) {
+        check!(features_epoch_after_snapshot(&records, end_offset, previous) == want);
     }
 }
