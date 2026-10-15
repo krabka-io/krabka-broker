@@ -23,6 +23,14 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ## [Unreleased]
 
+### Fixed
+
+- A `ShareFetch` is now capped at what the member's `consumer_byte_rate`
+  quota allows in one quota window, as Kafka's
+  `min(MaxBytes, fetch.max.bytes, maxQuotaWindowBytes)` caps it. Before, only
+  the request limit and `fetch.max.bytes` bounded it. The first batch still
+  goes out when it is larger than the cap.
+
 ## [1.0.5] - 2026-10-14
 
 1.0.5 changes no on-disk format and adds no setting, so it upgrades from any
