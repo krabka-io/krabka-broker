@@ -248,11 +248,18 @@ impl Engine {
                 }
             }
             TimerTick::Fetch => {
-                // A fetch-timer expiry while we still believe in a reachable
-                // leader RE-POLLS rather than electing; only a sustained loss
-                // (the configured consecutive-miss limit) feeds FetchTimeout.
-                let leader = self.following_leader();
-                if let Some(leader_id) = leader {
+                // A voter elects on the first expiry, as Kafka's
+                // `KafkaRaftClient.pollFollowerAsVoter` moves to Prospective
+                // once `FollowerState.hasFetchTimeoutExpired`. Only a
+                // successful Fetch re-arms the timer, so an expiry already
+                // means a whole fetch timeout without one. An observer has no
+                // election to start: it re-polls the leader it follows, and
+                // only the configured run of consecutive misses sends it back
+                // to discovery.
+                if self.core.is_voter() {
+                    self.fetch_misses = 0;
+                    self.on_event(Event::FetchTimeout);
+                } else if let Some(leader_id) = self.following_leader() {
                     self.fetch_misses += 1;
                     if self.fetch_misses >= self.controller_fetch_miss_limit.get() {
                         self.fetch_misses = 0;
@@ -262,9 +269,6 @@ impl Engine {
                         self.send_fetch(leader_id);
                         self.arm_fetch_timer();
                     }
-                } else if self.core.is_voter() {
-                    // No leader to poll but the fetch watchdog fired: elect.
-                    self.on_event(Event::FetchTimeout);
                 } else {
                     // An observer has no election timeout. Retry discovery
                     // until a bootstrap voter redirects it to the leader.
