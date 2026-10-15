@@ -32,6 +32,11 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   offsets were served to any member id at any epoch, and the check ran for
   consumer groups only.
 
+- A share group takes the outcome of one share-state initialize request
+  whole, as Kafka's `handlePersisterInitializeResponse` does: when any
+  partition of the request fails, every partition of it goes back for a
+  retry. Before, the partitions that succeeded became assignable at once.
+
 ## [1.0.5] - 2026-10-14
 
 1.0.5 changes no on-disk format and adds no setting, so it upgrades from any
