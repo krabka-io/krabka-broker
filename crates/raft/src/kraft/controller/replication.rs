@@ -5,6 +5,7 @@
 use {
     super::{
         Engine, KraftControlState, Role,
+        apply::features_epoch_after_delta,
         checkpoint::{retain_recent_checkpoints, write_checkpoint},
         offsets::fetch_offset_has_records,
         records::{decode_batches, encode_batches},
@@ -29,7 +30,6 @@ use {
         },
         snapshot_install_decision,
     },
-    std::sync::Arc,
 };
 
 pub fn should_serve_fetch_records(
@@ -409,6 +409,13 @@ impl Engine {
         }
         write_checkpoint(&self.data_dir, end_offset, epoch, bytes)?;
         self.image = new_image;
+        // A snapshot load is a features delta whatever records it holds.
+        self.features_epoch = features_epoch_after_delta(
+            self.features_epoch,
+            true,
+            &self.image,
+            end_offset.saturating_sub(1),
+        );
         if let Some(control) = contents.control_state {
             self.controls = KraftControlState::new(control.voters.clone(), control.kraft_version);
             self.core.set_kraft_version(control.kraft_version);
@@ -426,7 +433,7 @@ impl Engine {
         self.installed_snapshot_epoch = Some(
             u32::try_from(epoch).expect("snapshot install admission requires a nonnegative epoch"),
         );
-        let _ = self.image_tx.send(Arc::new(self.image.clone()));
+        self.publish_image();
         retain_recent_checkpoints(&self.data_dir);
         Ok(())
     }

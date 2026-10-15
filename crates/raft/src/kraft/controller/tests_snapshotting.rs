@@ -404,6 +404,44 @@ fn an_installed_snapshot_hands_its_header_timestamp_to_the_next_checkpoint() {
     assert2::assert!(latest_header_timestamp(dir.path()) == stamp);
 }
 
+/// A follower that installs a fetched snapshot takes a features delta, as
+/// Kafka's `MetadataLoader.handleLoadSnapshot` does through
+/// `MetadataDelta.finishSnapshot`: the finalized-features epoch moves to the
+/// snapshot's last contained offset when the snapshot finalizes
+/// `metadata.version`, whether or not its levels differ from the image's.
+/// One that finalizes none keeps the epoch, as Kafka's `FeaturesPublisher`
+/// cannot read a `metadata.version` from it.
+#[yare::parameterized(
+    with_metadata_version = { Some(krabka_metadata::metadata_version::METADATA_VERSION_MIN), 6 },
+    without_metadata_version = { None, -1 },
+)]
+fn an_installed_snapshot_is_a_features_delta(metadata_version: Option<i16>, want_epoch: i64) {
+    let (mut engine, _dir) = build_engine_only()
+        .me(2)
+        .ids(&[NodeId(1), NodeId(2)])
+        .call();
+    let published = engine.features_epoch_tx.subscribe();
+    let mut image = engine.image.clone();
+    if let Some(level) = metadata_version {
+        image.apply(&MetadataRecord::V1FeatureLevel(
+            krabka_metadata::FeatureLevelRecord {
+                name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+                level,
+            },
+        ));
+    }
+    image.apply(&MetadataRecord::V1Voters(VotersRecord {
+        voters: voter_set(&[NodeId(1), NodeId(2)]),
+    }));
+    let bytes = SnapshotWriter::serialize(&image, 0).expect("serialize");
+
+    engine
+        .install_fetched_snapshot((7, 0), &bytes)
+        .expect("install the fetched snapshot");
+
+    assert2::assert!((engine.features_epoch, *published.borrow()) == (want_epoch, want_epoch));
+}
+
 /// The same across a restart: the recovered checkpoint's header is the only
 /// surviving record of the create-time, and a checkpoint written before any
 /// new records commit must not drop it.

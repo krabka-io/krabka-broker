@@ -38,6 +38,8 @@ mod test_support;
 #[cfg(test)]
 mod tests_api_versions;
 #[cfg(test)]
+mod tests_features_epoch;
+#[cfg(test)]
 mod tests_listener_limits;
 mod voter_admin;
 
@@ -111,9 +113,9 @@ fn answer_api_versions(
     request_version: i16,
     request_body: &[u8],
 ) -> Result<bytes::Bytes, RaftError> {
-    // The offset is read before the image, so the epoch never runs ahead of
-    // the features it stamps.
-    let metadata_offset = api_versions::applied_metadata_offset(engine);
+    // The epoch is read before the image, so it never runs ahead of the
+    // features it stamps.
+    let metadata_offset = engine.finalized_features_epoch();
     let image = engine.current_image();
     api_versions_response(
         request_version,

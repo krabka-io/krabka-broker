@@ -1,6 +1,7 @@
 //! The high-watermark advance and the apply of the records it newly commits
 //! into the published [`MetadataImage`], including the capture of a
-//! `metadata.version` downgrade boundary that KIP-1155 must checkpoint at.
+//! `metadata.version` downgrade boundary that KIP-1155 must checkpoint at, and
+//! the finalized-features epoch published beside the image.
 
 use {
     super::{
@@ -16,7 +17,42 @@ use {
     std::sync::Arc,
 };
 
+/// The finalized-features epoch after a metadata delta that left `image`
+/// containing the records up to `last_contained_offset`.
+///
+/// Kafka 4.3.1's `FeaturesPublisher.onMetadataUpdate` builds a new
+/// `FinalizedFeatures` with `newImage.provenance().lastContainedOffset()` as
+/// its epoch only when `delta.featuresDelta()` is not null. A delta has one
+/// when it replays a `FeatureLevelRecord`, and when it loads a snapshot or
+/// initializes the publisher with a whole image, whose `finishSnapshot` always
+/// creates one. `KRaftVersionRecord` and `VotersRecord` are control records,
+/// which `MetadataLoader` does not replay into the delta, and a `NoOpRecord`
+/// replays to nothing. A `FinalizedFeatures` is a Java record, so its `equals`
+/// counts the epoch, and a features delta that leaves every level unchanged
+/// still moves it. The publisher calls `metadataVersionOrThrow`, so an image
+/// that finalizes no `metadata.version` keeps the epoch it had.
+pub(super) fn features_epoch_after_delta(
+    current: i64,
+    features_delta: bool,
+    image: &MetadataImage,
+    last_contained_offset: i64,
+) -> i64 {
+    if features_delta && image.finalized_metadata_version().is_some() {
+        last_contained_offset
+    } else {
+        current
+    }
+}
+
 impl Engine {
+    /// Publish the applied image, then its finalized-features epoch. A reader
+    /// that takes the epoch before the image never sees an epoch ahead of the
+    /// features it stamps.
+    pub(super) fn publish_image(&self) {
+        let _ = self.image_tx.send(Arc::new(self.image.clone()));
+        self.features_epoch_tx.send_replace(self.features_epoch);
+    }
+
     pub(super) fn advance_if_single_voter(&mut self) {
         if leader_alone_is_majority(self.core.quorum_state().majority(), self.core.is_voter()) {
             self.advance_and_apply(self.log.log_end_offset());
@@ -65,6 +101,8 @@ impl Engine {
         let processing_started = std::time::Instant::now();
         let mut cursor = prev_hwm;
         let mut changed = false;
+        let mut features_delta = false;
+        let mut last_contained_offset = prev_hwm.0.saturating_sub(1);
         let mut metadata_version_downgraded = false;
         while cursor < applied_hwm {
             match self
@@ -87,6 +125,9 @@ impl Engine {
                         self.bytes_since_snapshot = self
                             .bytes_since_snapshot
                             .saturating_add(u64::try_from(batch.encoded_len()).unwrap_or(u64::MAX));
+                        last_contained_offset = batch
+                            .base_offset
+                            .saturating_add(i64::from(batch.last_offset_delta));
                         // The LeaderChange control batch carries no metadata records;
                         // never feed it to the metadata decoder.
                         if batch.attributes.is_control_batch() {
@@ -154,6 +195,8 @@ impl Engine {
                                             });
                                     }
                                     metadata_version_downgraded |= is_metadata_version_downgrade;
+                                    features_delta |=
+                                        matches!(meta, MetadataRecord::V1FeatureLevel(_));
                                     changed = true;
                                 }
                                 Err(e) => {
@@ -184,8 +227,14 @@ impl Engine {
                 }
             }
         }
+        self.features_epoch = features_epoch_after_delta(
+            self.features_epoch,
+            features_delta,
+            &self.image,
+            last_contained_offset,
+        );
         if changed && !metadata_version_downgraded && self.downgrade_snapshot_pending.is_none() {
-            let _ = self.image_tx.send(Arc::new(self.image.clone()));
+            self.publish_image();
         }
         // KIP-835 measures the time to consume a set of pending committed
         // records, not the age of the records (reported separately by the

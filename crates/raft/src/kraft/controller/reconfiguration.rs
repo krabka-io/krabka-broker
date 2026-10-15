@@ -28,7 +28,6 @@ use {
         CurrentVoterSet, ReconfigurationLeadership, TargetMembership, TargetVoter, VoterChangeKind,
         VoterChangeRequest, VoterReconfigurationDecision, voter_reconfiguration_decision,
     },
-    std::sync::Arc,
     tokio::sync::oneshot,
 };
 
@@ -496,7 +495,7 @@ impl Engine {
             voters: self.controls.committed_voters.clone(),
         }));
         if self.downgrade_snapshot_pending.is_none() {
-            let _ = self.image_tx.send(Arc::new(self.image.clone()));
+            self.publish_image();
         }
     }
 

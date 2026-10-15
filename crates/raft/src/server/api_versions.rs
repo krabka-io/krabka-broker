@@ -10,7 +10,7 @@ use {
     self::table::CONTROLLER_LISTENER_APIS,
     crate::{
         ControllerAdminRouter, ControllerApiVersion, UnstableApiVersions, UnstableFeatureVersions,
-        error::RaftError, kafka_4_3_1_max, kraft::KraftController,
+        error::RaftError, kafka_4_3_1_max,
     },
     bytes::{Bytes, BytesMut},
     krabka_protocol::{
@@ -63,9 +63,12 @@ const API_VERSIONS_INVALID_REQUEST: i16 = 42;
 pub(crate) struct ApiVersionsView<'a> {
     /// The applied metadata image: its finalized features.
     pub(crate) image: &'a krabka_metadata::MetadataImage,
-    /// The offset of the last record `image` contains, or `-1` before the
-    /// first. It is the finalized-features epoch, as Kafka's
-    /// `FeaturesPublisher` takes it from `image.provenance().lastContainedOffset()`.
+    /// The finalized-features epoch of `image`: the offset of the last record
+    /// `image` contained when it last took a features delta, or `-1` before
+    /// the first. Kafka's `FeaturesPublisher` takes it from
+    /// `newImage.provenance().lastContainedOffset()` only for a delta that
+    /// has a `featuresDelta`, so records that change no feature leave it
+    /// alone. The listener reads it from `KraftController::finalized_features_epoch`.
     pub(crate) metadata_offset: i64,
     /// The KIP-919 Admin surface the broker attaches, if any.
     pub(crate) admin_router: Option<&'a dyn ControllerAdminRouter>,
@@ -74,12 +77,6 @@ pub(crate) struct ApiVersionsView<'a> {
     /// `SimpleApiVersionManager` is built with it and takes no
     /// `unstable.feature.versions.enable`.
     pub(crate) unstable: UnstableApiVersions,
-}
-
-/// The offset of the last record `engine`'s image contains, or `-1` before
-/// the first: one below the engine's applied high watermark.
-pub(crate) fn applied_metadata_offset(engine: &KraftController) -> i64 {
-    engine.quorum_snapshot().high_watermark.saturating_sub(1)
 }
 
 /// Answers one controller-listener `ApiVersions` request with the response

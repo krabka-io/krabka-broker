@@ -24,7 +24,6 @@ use {
     krabka_ids::Offset,
     krabka_metadata::{MetadataImage, MetadataRecord, VotersRecord},
     krabka_units::prelude::{ByteSizeExt as _, TimeExt as _},
-    std::sync::Arc,
 };
 
 impl Engine {
@@ -172,7 +171,7 @@ impl Engine {
         self.image = reloaded;
         self.downgrade_snapshot_pending = next_pending;
         if self.downgrade_snapshot_pending.is_none() {
-            let _ = self.image_tx.send(Arc::new(self.image.clone()));
+            self.publish_image();
         }
         Ok(())
     }

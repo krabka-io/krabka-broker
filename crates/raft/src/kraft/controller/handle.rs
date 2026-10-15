@@ -66,6 +66,14 @@ impl KraftController {
     #[must_use]
     pub fn current_image(&self) -> Arc<MetadataImage> { self.image_rx.borrow().clone() }
 
+    /// The KIP-584 finalized-features epoch of [`Self::current_image`]: the
+    /// last offset the image contained when it last took a features delta,
+    /// or `-1` before the first. It is Kafka's `FeaturesPublisher` epoch,
+    /// which the controller listener answers `ApiVersions` with. Read it
+    /// before the image, and it is never ahead of the image's features.
+    #[must_use]
+    pub fn finalized_features_epoch(&self) -> i64 { *self.features_epoch_rx.borrow() }
+
     /// Watch the published [`MetadataImage`].
     #[must_use]
     pub fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> { self.image_rx.clone() }

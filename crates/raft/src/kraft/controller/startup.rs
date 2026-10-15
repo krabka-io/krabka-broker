@@ -7,6 +7,7 @@ use {
         Engine, KraftConfig, KraftControlState, KraftController, METADATA_LOG_CLEAN_INTERVAL,
         PendingDowngradeSnapshot,
         activation::{Activation, check_bootstrap_records},
+        apply::features_epoch_after_delta,
         checkpoint::{BOOTSTRAP_SNAPSHOT_ID, latest_checkpoint_id, load_latest_checkpoint},
         quorum_state_file::load_quorum_state,
         recovery::{control_state_at, replay_committed_with_timestamp, replay_control_records},
@@ -147,6 +148,13 @@ impl KraftController {
         // published snapshot and the engine's `leader_reported_hwm`, which a
         // node that has heard from no leader yet answers from.
         let initial_hwm = log.hwm().0;
+        // The image holds every committed record below the high watermark.
+        // Kafka's `MetadataLoader.initializeNewPublishers` hands it to the
+        // `FeaturesPublisher` whole once it has caught up: a features delta
+        // whose last contained offset is the recovered image's.
+        let features_epoch =
+            features_epoch_after_delta(-1, true, &image, initial_hwm.saturating_sub(1));
+        let (features_epoch_tx, features_epoch_rx) = watch::channel(features_epoch);
         let initial_snapshot = super::queries::initial_quorum_snapshot(
             &core,
             &log,
@@ -177,6 +185,8 @@ impl KraftController {
             image,
             peers,
             image_tx,
+            features_epoch,
+            features_epoch_tx,
             leader_tx,
             quorum_tx,
             cmd_tx: cmd_tx.clone(),
@@ -240,6 +250,7 @@ impl KraftController {
         Ok(Self {
             cmd_tx,
             image_rx,
+            features_epoch_rx,
             fault_rx,
             leader_rx,
             quorum_rx,

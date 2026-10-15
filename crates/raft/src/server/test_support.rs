@@ -73,8 +73,19 @@ pub(super) fn test_engine_with_voters(
     voters: impl IntoIterator<Item = krabka_metadata::Voter>,
 ) -> (KraftController, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().unwrap();
-    let ctrl = KraftController::open(
-        dir.path().to_path_buf(),
+    let ctrl = open_engine_in(dir.path(), me, voters);
+    (ctrl, dir)
+}
+
+/// Open the controller over `dir`, which may hold an earlier controller's
+/// metadata log and checkpoints.
+pub(super) fn open_engine_in(
+    dir: &std::path::Path,
+    me: u64,
+    voters: impl IntoIterator<Item = krabka_metadata::Voter>,
+) -> KraftController {
+    KraftController::open(
+        dir.to_path_buf(),
         NodeId(me),
         Uuid::nil(),
         Uuid::nil(),
@@ -95,15 +106,16 @@ pub(super) fn test_engine_with_voters(
         },
         Activation::default(),
     )
-    .expect("open engine");
-    (ctrl, dir)
+    .expect("open engine")
 }
 
 pub(super) fn single_voter_engine() -> (KraftController, tempfile::TempDir) {
-    test_engine_with_voters(1, [voter(1, vec![controller_endpoint(
-        "controller-1",
-        9093,
-    )])])
+    test_engine_with_voters(1, single_voter())
+}
+
+/// The voter set of [`single_voter_engine`].
+pub(super) fn single_voter() -> [krabka_metadata::Voter; 1] {
+    [voter(1, vec![controller_endpoint("controller-1", 9093)])]
 }
 
 pub(super) async fn wait_for_leader(engine: &KraftController) {

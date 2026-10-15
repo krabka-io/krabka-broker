@@ -169,6 +169,16 @@ struct Engine {
     peers: Arc<dyn PeerSender>,
     /// Publishes the latest applied [`MetadataImage`] to readers.
     image_tx: watch::Sender<Arc<MetadataImage>>,
+    /// The finalized-features epoch of `image`: the last offset `image`
+    /// contained when it last took a features delta, or `-1` before the
+    /// first. Kafka's `FeaturesPublisher` takes it from
+    /// `newImage.provenance().lastContainedOffset()` for a delta that has a
+    /// `featuresDelta` and keeps it for every other delta. See
+    /// [`apply::features_epoch_after_delta`].
+    features_epoch: i64,
+    /// Publishes `features_epoch` beside the image it stamps. See
+    /// [`Engine::publish_image`].
+    features_epoch_tx: watch::Sender<i64>,
     /// Publishes the current leader id (None while unknown / election running).
     leader_tx: watch::Sender<Option<NodeId>>,
     /// Publishes a structured consensus snapshot for the handle's synchronous
@@ -374,6 +384,7 @@ struct CommitWaiter {
 pub struct KraftController {
     cmd_tx: mpsc::Sender<Command>,
     image_rx: watch::Receiver<Arc<MetadataImage>>,
+    features_epoch_rx: watch::Receiver<i64>,
     fault_rx: watch::Receiver<Option<String>>,
     leader_rx: watch::Receiver<Option<NodeId>>,
     quorum_rx: watch::Receiver<QuorumStateSnapshot>,
