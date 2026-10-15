@@ -6,9 +6,13 @@
 //! time in the input. Rust's `regex` gives the same guarantee and the same
 //! refusals for lookaround, backreferences and possessive quantifiers.
 //!
-//! The two grammars are not identical. We translate RE2J's `\Q...\E` quoting
-//! and character-class syntax before compiling, and leave only `regex`'s
-//! compiled-size limit as a known acceptance difference.
+//! The two grammars are not identical. [`translate`] rewrites a pattern as
+//! RE2J 1.8's `Parser` reads it before `regex` compiles it: `\Q...\E` quoting,
+//! escapes RE2J reads as literals (`\<`, `\_`, octal), and character classes,
+//! where RE2J has no set operations or nested classes. Counted repetition is
+//! not translated: RE2J reads a `{` that does not open a valid count, and
+//! `{,n}`, as literal text, and refuses counts over 1000, where `regex` differs.
+//! `regex`'s compiled-size limit is the other known acceptance difference.
 //!
 //! The inline flags are screened, because that is the divergence a client is
 //! likely to hit: `regex` takes `x`, `u` and `R`, and RE2J refuses them.
@@ -80,123 +84,271 @@ pub(crate) const INVALID_REPEAT_OP: &str = "invalid nested repetition operator";
 /// RE2J's `ERR_INVALID_CHAR_RANGE`.
 const INVALID_CHAR_RANGE: &str = "invalid character class range";
 
+/// RE2J's `ERR_INVALID_ESCAPE`.
+const INVALID_ESCAPE: &str = "invalid escape sequence";
+
+/// RE2J's `ERR_MISSING_BRACKET`.
+const MISSING_BRACKET: &str = "missing closing ]";
+
+/// RE2J's `ERR_TRAILING_BACKSLASH`.
+const TRAILING_BACKSLASH: &str = "trailing backslash at end of expression";
+
 /// Kafka's `String` protocol type is bounded by a signed 16-bit byte length.
 const MAX_PATTERN_BYTES: usize = i16::MAX as usize;
 
-/// Translate RE2J's literal quoting and character-class behavior to syntax
-/// accepted by Rust's non-backtracking `regex` engine.
+/// The POSIX class names in RE2J's `CharGroup.POSIX_GROUPS`. RE2J also takes
+/// each one negated, as `[:^name:]`, and Rust's `regex` reads the same names.
+const POSIX_CLASSES: [&str; 14] = [
+    "alnum", "alpha", "ascii", "blank", "cntrl", "digit", "graph", "lower", "print", "punct",
+    "space", "upper", "word", "xdigit",
+];
+
+/// The Perl class escapes in RE2J's `CharGroup.PERL_GROUPS`.
+const PERL_CLASSES: [char; 6] = ['d', 'D', 's', 'S', 'w', 'W'];
+
+/// Translates an RE2J pattern into one Rust's `regex` reads the same way.
+///
+/// It follows RE2J 1.8's `Parser`: `\Q...\E` becomes escaped literals, an
+/// escape that RE2J reads as a literal becomes that literal, and a character
+/// class is rebuilt member by member, so `&&`, `--`, `~~` and a nested `[`
+/// stay the plain members RE2J reads rather than Rust's set operations.
+/// Assertions and Perl and Unicode classes pass through as written.
 fn translate(pattern: &str) -> Result<String, String> {
     let chars: Vec<char> = pattern.chars().collect();
     let mut out = String::with_capacity(pattern.len());
     let mut index = 0;
-    let mut in_class = false;
-    let mut class_first = false;
-    let mut class_first_member = false;
-
-    while index < chars.len() {
-        let current = chars[index];
-        if !in_class && current == '\\' && chars.get(index + 1) == Some(&'Q') {
-            index += 2;
-            let start = index;
-            while index + 1 < chars.len() && !(chars[index] == '\\' && chars[index + 1] == 'E') {
-                index += 1;
-            }
-            let has_terminator = index + 1 < chars.len();
-            let end = if has_terminator { index } else { chars.len() };
-            let quoted: String = chars[start..end].iter().collect();
-            out.push_str(&regex::escape(&quoted));
-            if has_terminator {
-                index += 2; // closing \\E
-            } else {
-                index = chars.len(); // RE2J quotes through end of input
-            }
-            continue;
-        }
-
-        if current == '\\' {
-            out.push(current);
-            if let Some(&escaped) = chars.get(index + 1) {
-                out.push(escaped);
-                index += 2;
-            } else {
-                index += 1;
-            }
-            if in_class && class_first {
-                class_first = false;
-            }
-            if in_class {
-                class_first_member = false;
-            }
-            continue;
-        }
-
-        if in_class {
-            if current == ']' && class_first_member {
+    while let Some(&current) = chars.get(index) {
+        index = match current {
+            '[' => translate_class(&chars, index, &mut out)?,
+            '\\' => translate_escape(&chars, index, &mut out)?,
+            _ => {
                 out.push(current);
-                class_first = false;
-                class_first_member = false;
-                index += 1;
-                continue;
+                index + 1
             }
-            if current == ']' && !class_first {
-                in_class = false;
-                class_first_member = false;
-                out.push(current);
-                index += 1;
-                continue;
-            }
-            if current == '^' && class_first {
-                out.push(current);
-                class_first = false;
-                index += 1;
-                continue;
-            }
-            if current == '[' {
-                // RE2J treats an unescaped '[' as a class member. Escaping it
-                // keeps Rust from interpreting it as a nested set.
-                out.push_str(r"\[");
-            } else if current == '&' && chars.get(index + 1) == Some(&'&') {
-                // RE2J's class grammar treats both ampersands literally.
-                out.push_str(r"\&\&");
-                index += 2;
-                class_first = false;
-                continue;
-            } else if current == '-' && chars.get(index + 1) == Some(&'-') {
-                if class_first_member {
-                    // At the beginning RE2J accepts `--a` as the range `-` to
-                    // `a`, and `[---]` as the range `-` to `-`.
-                    out.push_str(r"\x2d-");
-                    if chars.get(index + 2) == Some(&'-') && chars.get(index + 3) == Some(&']') {
-                        out.push_str(r"\x2d");
-                        index += 3;
-                    } else {
-                        index += 2;
-                    }
-                    class_first = false;
-                    class_first_member = false;
-                    continue;
-                }
-                // Rust accepts this as set subtraction; RE2J parses it as a
-                // descending range and refuses it.
-                return Err(INVALID_CHAR_RANGE.to_owned());
-            } else {
-                out.push(current);
-            }
-            class_first = false;
-            class_first_member = false;
-            index += 1;
-            continue;
-        }
-
-        if current == '[' {
-            in_class = true;
-            class_first = true;
-            class_first_member = true;
-        }
-        out.push(current);
-        index += 1;
+        };
     }
     Ok(out)
+}
+
+/// Translates the escape at `chars[start]`, outside a class, and returns the
+/// index after it.
+fn translate_escape(chars: &[char], start: usize, out: &mut String) -> Result<usize, String> {
+    let Some(&kind) = chars.get(start + 1) else {
+        return Err(TRAILING_BACKSLASH.to_owned());
+    };
+    let end = match kind {
+        'Q' => {
+            // Quoting ends at the first `\E`, or runs to the end of the pattern.
+            let body = start + 2;
+            let close = chars[body..]
+                .windows(2)
+                .position(|pair| pair == ['\\', 'E'])
+                .map(|offset| body + offset);
+            let quoted: String = chars[body..close.unwrap_or(chars.len())].iter().collect();
+            out.push_str(&regex::escape(&quoted));
+            return Ok(close.map_or(chars.len(), |close| close + 2));
+        }
+        'C' => return Err(INVALID_ESCAPE.to_owned()),
+        'A' | 'b' | 'B' | 'z' => start + 2,
+        'p' | 'P' => {
+            // A bracketed Unicode class keeps the scans for inline flags and
+            // possessive quantifiers from reading `{Greek}` as a repetition.
+            let end = unicode_class_end(chars, start);
+            out.push('[');
+            out.extend(&chars[start..end]);
+            out.push(']');
+            return Ok(end);
+        }
+        _ if PERL_CLASSES.contains(&kind) => start + 2,
+        _ => {
+            let (literal, end) = literal_escape(chars, start)?;
+            push_literal(out, literal);
+            return Ok(end);
+        }
+    };
+    out.extend(&chars[start..end]);
+    Ok(end)
+}
+
+/// The index after the Unicode class `\p...` or `\P...` at `chars[start]`.
+///
+/// The name is one letter or runs to the next `}`. A malformed name is left
+/// for the regex parser, which refuses it as RE2J does.
+fn unicode_class_end(chars: &[char], start: usize) -> usize {
+    let name = start + 2;
+    if chars.get(name) != Some(&'{') {
+        return (name + 1).min(chars.len());
+    }
+    chars[name..]
+        .iter()
+        .position(|&candidate| candidate == '}')
+        .map_or(chars.len(), |offset| name + offset + 1)
+}
+
+/// Reads the escape at `chars[start]` as RE2J's `Parser.parseEscape` does,
+/// returning the character it stands for and the index after it.
+fn literal_escape(chars: &[char], start: usize) -> Result<(char, usize), String> {
+    let Some(&kind) = chars.get(start + 1) else {
+        return Err(TRAILING_BACKSLASH.to_owned());
+    };
+    if !kind.is_ascii_alphanumeric() {
+        // RE2J reads every escaped non-word character as itself, `\<`, `\_`
+        // and `\é` among them.
+        return Ok((kind, start + 2));
+    }
+    let mut end = start + 2;
+    let value = match kind {
+        '0'..='7' => {
+            // Up to three octal digits. A lone `\1` to `\7` is a backreference.
+            let mut value = u32::from(kind) - u32::from('0');
+            let mut digits = 1;
+            while digits < 3 {
+                let Some(digit) = chars.get(end).and_then(|next| next.to_digit(8)) else {
+                    break;
+                };
+                value = value * 8 + digit;
+                digits += 1;
+                end += 1;
+            }
+            (kind == '0' || digits > 1).then_some(value)
+        }
+        'x' => hex_escape(chars, &mut end),
+        'a' => Some(7),
+        'f' => Some(12),
+        'n' => Some(10),
+        'r' => Some(13),
+        't' => Some(9),
+        'v' => Some(11),
+        _ => None,
+    };
+    value
+        .and_then(char::from_u32)
+        .map(|literal| (literal, end))
+        .ok_or_else(|| INVALID_ESCAPE.to_owned())
+}
+
+/// Reads the digits of a `\x` escape, `\xHH` or `\x{H...}`, starting at
+/// `chars[*end]` and moving `end` past them.
+fn hex_escape(chars: &[char], end: &mut usize) -> Option<u32> {
+    let first = *chars.get(*end)?;
+    *end += 1;
+    if first != '{' {
+        let second = chars.get(*end)?.to_digit(16)?;
+        *end += 1;
+        return Some(first.to_digit(16)? * 16 + second);
+    }
+    let close = *end
+        + chars[*end..]
+            .iter()
+            .position(|&candidate| candidate == '}')?;
+    let digits: String = chars[*end..close].iter().collect();
+    *end = close + 1;
+    if digits.is_empty() || !digits.chars().all(|digit| digit.is_ascii_hexdigit()) {
+        return None;
+    }
+    u32::from_str_radix(&digits, 16)
+        .ok()
+        .filter(|&value| value <= u32::from(char::MAX))
+}
+
+/// Translates the character class that opens at `chars[start]`, as RE2J's
+/// `Parser.parseClass` reads it, and returns the index after its `]`.
+fn translate_class(chars: &[char], start: usize, out: &mut String) -> Result<usize, String> {
+    let mut index = start + 1;
+    out.push('[');
+    if chars.get(index) == Some(&'^') {
+        out.push('^');
+        index += 1;
+    }
+    // A `]` right after the `[` or `[^` is a member.
+    let mut first = true;
+    loop {
+        let Some(&current) = chars.get(index) else {
+            return Err(MISSING_BRACKET.to_owned());
+        };
+        if current == ']' && !first {
+            out.push(']');
+            return Ok(index + 1);
+        }
+        first = false;
+
+        if let Some(end) = posix_class_end(chars, index)? {
+            out.extend(&chars[index..end]);
+            index = end;
+            continue;
+        }
+        if current == '\\' {
+            let end = match chars.get(index + 1) {
+                Some('p' | 'P') => Some(unicode_class_end(chars, index)),
+                Some(kind) if PERL_CLASSES.contains(kind) => Some(index + 2),
+                _ => None,
+            };
+            if let Some(end) = end {
+                out.extend(&chars[index..end]);
+                index = end;
+                continue;
+            }
+        }
+
+        let (low, end) = class_char(chars, index)?;
+        index = end;
+        push_literal(out, low);
+        // `a-` before the closing `]` is the two members `a` and `-`.
+        if chars.get(index) == Some(&'-') && chars.get(index + 1).is_some_and(|&next| next != ']') {
+            let (high, end) = class_char(chars, index + 1)?;
+            if high < low {
+                return Err(INVALID_CHAR_RANGE.to_owned());
+            }
+            out.push('-');
+            push_literal(out, high);
+            index = end;
+        }
+    }
+}
+
+/// The index after the POSIX class `[:name:]` at `chars[start]`, if one
+/// starts there.
+///
+/// RE2J takes the text up to the first `:]` as the name, wherever that is,
+/// and refuses a name it does not know.
+fn posix_class_end(chars: &[char], start: usize) -> Result<Option<usize>, String> {
+    if chars.get(start..start + 2) != Some(&['[', ':']) {
+        return Ok(None);
+    }
+    let Some(offset) = chars[start + 1..]
+        .windows(2)
+        .position(|pair| pair == [':', ']'])
+    else {
+        return Ok(None);
+    };
+    let end = start + 1 + offset + 2;
+    let name: String = chars[start..end].iter().collect();
+    let known = name
+        .strip_prefix("[:")
+        .and_then(|name| name.strip_suffix(":]"))
+        .map(|name| name.strip_prefix('^').unwrap_or(name))
+        .is_some_and(|name| POSIX_CLASSES.contains(&name));
+    if known {
+        Ok(Some(end))
+    } else {
+        Err(INVALID_CHAR_RANGE.to_owned())
+    }
+}
+
+/// Reads one class member or range end at `chars[start]`, as RE2J's
+/// `Parser.parseClassChar` does.
+fn class_char(chars: &[char], start: usize) -> Result<(char, usize), String> {
+    match chars.get(start) {
+        Some('\\') => literal_escape(chars, start),
+        Some(&member) => Ok((member, start + 1)),
+        None => Err(MISSING_BRACKET.to_owned()),
+    }
+}
+
+/// Appends `literal` escaped, so Rust's `regex` reads it as itself both
+/// inside and outside a class.
+fn push_literal(out: &mut String, literal: char) {
+    out.push_str(&regex::escape(literal.encode_utf8(&mut [0; 4])));
 }
 
 /// Whether `pattern` carries a possessive quantifier (`a*+`, `a++`, `a?+`,
@@ -326,75 +478,74 @@ mod tests {
         );
     }
 
-    #[test]
-    fn literal_quoting_matches_re2j() {
-        let quoted = compile_full_match(r"\Q[a.*]\E").expect("quoted literal compiles");
-        check!(quoted.is_match("[a.*]"));
-        check!(!quoted.is_match("aaa"));
-
-        let through_end = compile_full_match(r"prefix\Q.+[").expect("unterminated quote compiles");
-        check!(through_end.is_match("prefix.+["));
-
-        // The first `\\E` ends quoting, and the trailing expression is parsed
-        // normally.
-        let ended = compile_full_match(r"\Q.\E+").expect("quote terminator compiles");
-        check!(ended.is_match("."));
-        check!(ended.is_match("..."));
-        check!(!ended.is_match("+"));
-    }
-
+    /// Patterns RE2J 1.8 (Kafka 4.3.1's `com.google.re2j`) compiles, with
+    /// inputs `Matcher.matches()` accepts and refuses.
     #[yare::parameterized(
-        literal_ampersand_class_a = { "[a&&b]", "a" },
-        literal_ampersand_class_ampersand = { "[a&&b]", "&" },
-        literal_ampersand_class_b = { "[a&&b]", "b" },
-        unioned_group_class_word = { r"[\w&&\d]", "x" },
-        unioned_group_class_digit = { r"[\w&&\d]", "7" },
-        unioned_group_class_ampersand = { r"[\w&&\d]", "&" },
+        quoted_dot = { r"txn\Q.\E1", &["txn.1"], &["txnx1"] },
+        quoted_metacharacters = { r"\Q[a.*]\E", &["[a.*]"], &["a"] },
+        quote_runs_to_end = { r"prefix\Q.+[", &["prefix.+["], &["prefixx+["] },
+        quote_ends_at_first_terminator = { r"\Q.\E+", &[".", "..."], &["+", "x"] },
+        quoted_backslash = { r"\Q\d\E", &[r"\d"], &["1"] },
+        empty_quote = { r"a\Q\Eb", &["ab"], &["a\\Eb"] },
+        posix_class = { "[[:alpha:]]+", &["abc"], &[":", "a1"] },
+        negated_posix_class = { "[[:^digit:]]", &["a"], &["1"] },
+        posix_class_beside_members = { "[x[:digit:]-]+", &["x1-"], &["a"] },
+        ampersands_are_members = { "[a&&b]", &["a", "&", "b"], &["c"] },
+        perl_classes_beside_ampersands = { r"[\w&&\d]", &["x", "7", "&"], &["-"] },
+        tildes_are_members = { "[a~~b]", &["a", "~", "b"], &["c"] },
+        open_bracket_is_member = { "[[a]", &["[", "a"], &["]"] },
+        nested_class_is_member_then_literal = { "[a[b]]", &["a]", "[]", "b]"], &["a", "]"] },
+        hyphen_range_after_range = { "[a-z--b]", &["q", "-", "0", "b"], &["~"] },
+        leading_hyphen_range = { "[--a]", &["-", "0", "a"], &["b"] },
+        negated_leading_hyphen_range = { "[^--a]", &["z"], &["-", "0", "a"] },
+        hyphen_to_hyphen = { "[---]", &["-"], &["a"] },
+        trailing_hyphen = { "[a-]", &["a", "-"], &["b"] },
+        escaped_hyphen = { r"[a\-z]", &["a", "-", "z"], &["b"] },
+        initial_close_bracket = { "[]a]", &["]", "a"], &["b"] },
+        negated_initial_close_bracket = { "[^]]", &["a"], &["]"] },
+        caret_after_negation = { "[^^][a]", &["xa"], &["^a"] },
+        hex_range = { r"[\x41-\x{43}]+", &["ABC"], &["D"] },
+        octal_escape = { r"a\101\0", &["aA\0"], &["a"] },
+        escaped_angle_brackets = { r"\<txn\>", &["<txn>"], &["txn"] },
+        escaped_non_ascii = { "\\é", &["é"], &["e"] },
+        escaped_underscore = { r"a\_b", &["a_b"], &["ab"] },
+        perl_class_in_class = { r"[\d_]+", &["1_2"], &["a"] },
+        repeated_unicode_class = { r"\p{Greek}+", &["αβ"], &["a"] },
+        repeated_one_letter_unicode_class = { r"\pL{2}", &["ab"], &["a"] },
+        case_folded_class = { "(?i)[a-c]+", &["aBC"], &["d"] },
     )]
-    fn character_class_union_members_keep_re2j_meaning(pattern: &str, character: &str) {
-        let class = compile_full_match(pattern).expect("class compiles");
-        check!(class.is_match(character), "{pattern} includes {character}");
+    fn accepted_patterns_match_like_re2j(pattern: &str, matches: &[&str], misses: &[&str]) {
+        let compiled = compile_full_match(pattern)
+            .unwrap_or_else(|error| panic!("{pattern:?} compiles in RE2J: {error}"));
+        for input in matches {
+            check!(compiled.is_match(input), "{pattern:?} matches {input:?}");
+        }
+        for input in misses {
+            check!(
+                !compiled.is_match(input),
+                "{pattern:?} does not match {input:?}"
+            );
+        }
     }
 
-    #[test]
-    fn character_class_ranges_keep_re2j_meaning() {
-        let literal_ampersands = compile_full_match("[a&&b]").expect("literal class compiles");
-        check!(!literal_ampersands.is_match("c"));
-
-        // RE2J reads the leading pair as a range from '-' to 'a', not set
-        // subtraction.
-        let leading_hyphens = compile_full_match("[--a]").expect("leading range compiles");
-        check!(leading_hyphens.is_match("-"));
-        check!(leading_hyphens.is_match("0"));
-        check!(leading_hyphens.is_match("a"));
-
-        let negated_leading_hyphens =
-            compile_full_match("[^--a]").expect("negated leading range compiles");
-        check!(!negated_leading_hyphens.is_match("-"));
-        check!(!negated_leading_hyphens.is_match("0"));
-        check!(!negated_leading_hyphens.is_match("a"));
-        check!(negated_leading_hyphens.is_match("z"));
-
-        let hyphen_to_hyphen = compile_full_match("[---]").expect("hyphen range compiles");
-        check!(hyphen_to_hyphen.is_match("-"));
-        check!(!hyphen_to_hyphen.is_match("a"));
-
-        check!(compile_full_match("[a-z--b]").err() == Some(INVALID_CHAR_RANGE.to_owned()));
-        // An unescaped '[' inside a class is a member, not a nested set.
-        let literal_open_bracket = compile_full_match("[[a]").expect("class compiles");
-        check!(literal_open_bracket.is_match("["));
-        check!(literal_open_bracket.is_match("a"));
-    }
-
-    #[test]
-    fn negated_class_prefix_and_initial_close_bracket_are_preserved() {
-        let pattern = compile_full_match("[^^][a]").expect("classes compile");
-        check!(pattern.is_match("xa"));
-        check!(!pattern.is_match("^a"));
-
-        let initial_close = compile_full_match("[^]]").expect("initial close bracket compiles");
-        check!(!initial_close.is_match("]"));
-        check!(initial_close.is_match("a"));
+    /// Patterns RE2J 1.8 refuses, with its message.
+    #[yare::parameterized(
+        descending_range = { "[z-a]", INVALID_CHAR_RANGE },
+        descending_hyphen_range = { "[a-z--,]", INVALID_CHAR_RANGE },
+        unknown_posix_class = { "[[:foo:]]", INVALID_CHAR_RANGE },
+        unterminated_class = { "[a", MISSING_BRACKET },
+        empty_class = { "[]", MISSING_BRACKET },
+        quote_inside_class = { r"[\Qa\E]", INVALID_ESCAPE },
+        perl_class_as_range_end = { r"[a-\d]", INVALID_ESCAPE },
+        word_boundary_in_class = { r"[\b]", INVALID_ESCAPE },
+        any_byte = { r"\C", INVALID_ESCAPE },
+        backreference = { r"(a)\1", INVALID_ESCAPE },
+        unknown_letter_escape = { r"\q", INVALID_ESCAPE },
+        bad_hex_escape = { r"\x{}", INVALID_ESCAPE },
+        trailing_backslash = { "a\\", TRAILING_BACKSLASH },
+    )]
+    fn refused_patterns_carry_re2j_messages(pattern: &str, message: &str) {
+        check!(compile_full_match(pattern).err().as_deref() == Some(message));
     }
 
     #[test]
