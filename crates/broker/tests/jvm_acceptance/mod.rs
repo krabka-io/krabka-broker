@@ -86,10 +86,10 @@ pub(crate) use self::{
         controller_addr_2, host_port, minio_port, ports, rlmm_broker0_advertised,
     },
     sasl::{
-        ADMIN, ADMIN_PASS, ALICE, ALICE_PASS, oauthbearer_jaas, plain_jaas, scram_jaas,
-        start_dual_mech_broker, start_dual_mech_broker_with_reauth, start_oauthbearer_broker,
-        start_plain_acl_topic, start_plain_acl_topic_with_ops, start_sasl_plaintext_broker,
-        start_sasl_plaintext_broker_with_super_user,
+        ADMIN, ADMIN_PASS, ALICE, ALICE_PASS, configure_sasl, oauthbearer_jaas, plain_jaas,
+        scram_jaas, start_dual_mech_broker, start_dual_mech_broker_with_reauth,
+        start_oauthbearer_broker, start_plain_acl_topic, start_plain_acl_topic_with_ops,
+        start_sasl_plaintext_broker, start_sasl_plaintext_broker_with_super_user,
     },
     three_broker_cluster::{
         SaslCluster, SaslClusterSetup, start_three_broker_sasl_plaintext_jvm_cluster,
