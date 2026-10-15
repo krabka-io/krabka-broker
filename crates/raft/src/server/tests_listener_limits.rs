@@ -215,3 +215,47 @@ async fn the_accept_loop_closes_connections_over_the_ceiling(
     shutdown.cancel();
     listener_task.await.unwrap();
 }
+
+/// `connections.max.idle.ms` measures silence, not how long a frame takes:
+/// Kafka's `Selector` refreshes a channel's idle clock on every read, so a
+/// request whose bytes each arrive inside the window is served however long
+/// the whole frame takes, and a peer that stops mid-frame is closed one
+/// window after its last byte.
+#[tokio::test(start_paused = true)]
+async fn the_idle_window_restarts_on_every_byte_of_a_request() {
+    let (engine, _dir) = single_voter_engine();
+    let window = Duration::from_millis(10);
+    let gap = Duration::from_millis(6);
+    let limits = ListenerLimits {
+        max_idle: Some(window),
+        ..ListenerLimits::default()
+    };
+    let DuplexConnection {
+        mut client,
+        mut connection,
+    } = duplex_connection(engine, limits);
+
+    // Seventeen bytes six milliseconds apart: about a tenth of a second for
+    // the frame, ten times the window.
+    let request = api_versions_request(1);
+    for byte in &request {
+        tokio::time::sleep(gap).await;
+        client.write_all(std::slice::from_ref(byte)).await.unwrap();
+    }
+    check!(read_correlation_id(&mut client).await == 1);
+    check!(!connection.is_finished());
+
+    // Half a frame, then silence.
+    let request = api_versions_request(2);
+    for byte in &request[..request.len() / 2] {
+        tokio::time::sleep(gap).await;
+        client.write_all(std::slice::from_ref(byte)).await.unwrap();
+    }
+    let last_byte = tokio::time::Instant::now();
+    let outcome = tokio::time::timeout(Duration::from_secs(5), &mut connection)
+        .await
+        .expect("the listener closes the stalled connection")
+        .expect("the connection task does not panic");
+    check!(outcome.is_ok());
+    check!(last_byte.elapsed() == window);
+}

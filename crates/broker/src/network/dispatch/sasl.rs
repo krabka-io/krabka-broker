@@ -96,6 +96,18 @@ impl SaslSession {
         self.raw_tokens && auth.negotiated_mechanism().is_some()
     }
 
+    /// KIP-368: whether a request of `api_key` must end the connection
+    /// because the session expired and the request does not begin a
+    /// re-authentication. See [`ConnectionAuth::expired_for_request`].
+    pub(super) fn closes_expired_session(
+        &self,
+        auth: &ConnectionAuth,
+        api_key: ApiKeyCode,
+        now_ms: i64,
+    ) -> bool {
+        auth.expired_for_request(api_key, now_ms, self.last_reauth_start_ms)
+    }
+
     /// Whether a request of `api_key` is a second `ApiVersions` before the
     /// handshake. The per-state gate admits `ApiVersions` there, but Kafka's
     /// `SaslServerAuthenticator.handleApiVersionsRequest` throws

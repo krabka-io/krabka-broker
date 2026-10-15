@@ -194,3 +194,84 @@ async fn pipelined_frames_are_read_one_body_at_a_time() {
             .is_none()
     );
 }
+
+/// How a peer feeds one frame to `receive_request` under paused time.
+#[derive(Debug)]
+struct Trickle {
+    /// What the case describes.
+    what: &'static str,
+    /// Bytes of the frame, size prefix included, written one at a time.
+    sent: usize,
+    /// The pause before each byte.
+    gap: Duration,
+}
+
+/// Feeds the first `sent` bytes of a 4-byte frame one at a time, `gap` apart,
+/// and reports how the read ended and when, counted from the first byte.
+async fn trickle(case: &Trickle, idle: Duration) -> (Result<Bytes, String>, Duration) {
+    use tokio::io::AsyncWriteExt as _;
+
+    let (mut client, mut server) = tokio::io::duplex(64);
+    let mut frame = 4_i32.to_be_bytes().to_vec();
+    frame.extend_from_slice(b"body");
+    let bytes = frame[..case.sent].to_vec();
+    let gap = case.gap;
+    let writer = tokio::spawn(async move {
+        for byte in bytes {
+            client.write_all(&[byte]).await.unwrap();
+            tokio::time::sleep(gap).await;
+        }
+        // Holds the socket open: a peer that goes quiet, not one that hangs up.
+        std::future::pending::<()>().await;
+    });
+    let started = tokio::time::Instant::now();
+    let outcome = receive_request(&mut server, 8, None, Some(idle))
+        .await
+        .map(|frame| frame.expect("a frame").bytes)
+        .map_err(|error| format!("{error:?}"));
+    let elapsed = started.elapsed();
+    writer.abort();
+    (outcome, elapsed)
+}
+
+/// Kafka's `Selector` refreshes a channel's idle clock on every read it serves
+/// (`IdleExpiryManager.update` for each selected key), so
+/// `connections.max.idle.ms` measures silence, not how long one frame takes
+/// to arrive. A frame trickled a byte at a time, each byte inside the window,
+/// is served however long the whole frame takes; a peer that stops part-way
+/// is closed one window after its last byte, not one window after the frame
+/// began.
+#[tokio::test(start_paused = true)]
+async fn the_idle_window_measures_silence_not_frame_duration() {
+    let idle = Duration::from_millis(10);
+    let gap = Duration::from_millis(6);
+    let served = Trickle {
+        what: "a whole frame, 8 bytes 6 ms apart",
+        sent: 8,
+        gap,
+    };
+    assert!(trickle(&served, idle).await.0 == Ok(Bytes::from_static(b"body")));
+    for (case, expected_close) in [
+        (
+            Trickle {
+                what: "stops after 3 prefix bytes",
+                sent: 3,
+                gap,
+            },
+            // The third byte lands at 12 ms; the window runs from there.
+            Duration::from_millis(22),
+        ),
+        (
+            Trickle {
+                what: "stops after the prefix and 2 body bytes",
+                sent: 6,
+                gap,
+            },
+            Duration::from_millis(40),
+        ),
+    ] {
+        let (outcome, elapsed) = trickle(&case, idle).await;
+        assert!(outcome == Err("Idle".to_string()), "{case:?}");
+        assert!(elapsed == expected_close, "{}", case.what);
+    }
+}
