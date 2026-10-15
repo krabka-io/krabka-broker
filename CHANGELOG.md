@@ -37,6 +37,11 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   partition of the request fails, every partition of it goes back for a
   retry. Before, the partitions that succeeded became assignable at once.
 
+- A by-timestamp `ListOffsets` on a tiered topic answers
+  `UNKNOWN_SERVER_ERROR` when the remote tier fails, as Kafka's
+  `DelayedRemoteListOffsets` does. Before, it logged the failure and answered
+  from the local log, which skips every record only the tier holds.
+
 ## [1.0.5] - 2026-10-14
 
 1.0.5 changes no on-disk format and adds no setting, so it upgrades from any
