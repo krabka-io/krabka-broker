@@ -27,6 +27,12 @@ bind_addr = "0.0.0.0:9092"
 advertised = "krabka-upgrade-old:9092"
 protocol = "Plaintext"
 
+# Kafka's offsets.topic.replication.factor defaults to 3, which one broker
+# cannot place: FindCoordinator would answer COORDINATOR_NOT_AVAILABLE and the
+# console consumers would time out with nothing read.
+[runtime]
+offsets_topic_replication_factor = 1
+
 [remote_storage]
 storage_dir = "/var/lib/krabka/objects"
 
@@ -96,9 +102,11 @@ docker exec "${tools_container}" /opt/kafka/bin/kafka-topics.sh \
 printf 'survives-upgrade\n' | docker exec -i "${tools_container}" \
   /opt/kafka/bin/kafka-console-producer.sh \
   --bootstrap-server krabka-upgrade-old:9092 --topic upgrade-smoke
-docker exec "${tools_container}" /opt/kafka/bin/kafka-console-consumer.sh \
+# The console consumer exits 0 when it times out, so check what it read.
+consumed=$(docker exec "${tools_container}" /opt/kafka/bin/kafka-console-consumer.sh \
   --bootstrap-server krabka-upgrade-old:9092 --topic upgrade-smoke \
-  --group upgrade-smoke --from-beginning --max-messages 1 --timeout-ms 30000
+  --group upgrade-smoke --from-beginning --max-messages 1 --timeout-ms 30000)
+test "${consumed}" = survives-upgrade
 docker exec "${tools_container}" java -cp '/tmp:/opt/kafka/libs/*' CreateTopic \
   krabka-upgrade-old:9092 upgrade-diskless krabka.diskless true
 printf 'diskless-before-upgrade\n' | docker exec -i "${tools_container}" \
@@ -119,7 +127,7 @@ docker exec "${tools_container}" /opt/kafka/bin/kafka-delete-records.sh \
 surfaces_ready=false
 for _ in $(seq 1 30); do
   if docker run --rm -v "${volume}:/data" alpine:3.22 sh -c '
-      test -n "$(find /data/__cluster_metadata/@metadata-0 -name "*.checkpoint" ! -name "00000000000000000000-0000000000.checkpoint" -print -quit)" &&
+      test -n "$(find /data/__cluster_metadata-0 -name "*.checkpoint" ! -name "00000000000000000000-0000000000.checkpoint" -print -quit)" &&
       test -n "$(find /data -path "*/__diskless_wal_index-*" -print -quit)" &&
       test -n "$(find /data -path "*/upgrade-retention-0/log-start-offset-checkpoint" -print -quit)"
     '; then

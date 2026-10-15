@@ -272,7 +272,9 @@ mod tests {
             ControllerAdminRequest, ControllerAdminRouteFuture, ControllerAdminRouter,
             ControllerApiVersion, LATEST_PRODUCTION_METADATA_VERSION, test_support::feature_image,
         },
-        krabka_metadata::{FeatureLevelRecord, MetadataRecord},
+        krabka_metadata::{
+            FeatureLevelRecord, MetadataRecord, metadata_version::METADATA_VERSION_MIN,
+        },
         krabka_protocol::Decode,
         uuid::Uuid,
     };
@@ -689,11 +691,8 @@ mod tests {
     /// epoch is the metadata offset the view carries.
     #[test]
     fn feature_fields_match_kafka_on_the_controller_listener() {
-        use {
-            krabka_metadata::metadata_version::METADATA_VERSION_MIN,
-            krabka_protocol::owned::api_versions_response::{
-                FinalizedFeatureKey, SupportedFeatureKey,
-            },
+        use krabka_protocol::owned::api_versions_response::{
+            FinalizedFeatureKey, SupportedFeatureKey,
         };
 
         struct Row<'a> {
@@ -779,6 +778,35 @@ mod tests {
                 "v{version}, kraft.version {kraft_version}"
             );
         }
+    }
+
+    /// #1344: before the first feature delta Kafka's controller answers from
+    /// the initial state of `FeaturesPublisher`,
+    /// `FinalizedFeatures.fromKRaftVersion(MINIMUM_VERSION)`, which finalizes
+    /// `metadata.version` at its minimum with epoch -1. `ControllerServer`
+    /// adds `kraft.version` through `setFinalizedLevel`, which drops level 0.
+    #[yare::parameterized(
+        kraft_version_0 = { 0, &[("metadata.version", METADATA_VERSION_MIN)] },
+        kraft_version_1 = {
+            1,
+            &[("kraft.version", 1), ("metadata.version", METADATA_VERSION_MIN)],
+        },
+    )]
+    fn a_fresh_controller_advertises_kafkas_minimum_metadata_version(
+        kraft_version: u16,
+        want: &[(&str, i16)],
+    ) {
+        krabka_macros::finalized_feature_fixture!(finalized);
+        let image = feature_image(kraft_version, &[]);
+        let body = super::api_versions_response_body(4, view(&image, -1));
+        let resp = ApiVersionsResponse::decode(&mut &body[..], 4).expect("decode");
+        let want_finalized: Vec<_> = want
+            .iter()
+            .map(|(name, level)| finalized(name, *level))
+            .collect();
+        assert2::check!(
+            (resp.finalized_features, resp.finalized_features_epoch) == (want_finalized, -1)
+        );
     }
 
     /// Kafka's `ControllerServer` builds the listener's

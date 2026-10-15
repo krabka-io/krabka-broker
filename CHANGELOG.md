@@ -25,6 +25,12 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- A `ShareFetch` is now capped at what the member's `consumer_byte_rate`
+  quota allows in one quota window, as Kafka's
+  `min(MaxBytes, fetch.max.bytes, maxQuotaWindowBytes)` caps it. Before, only
+  the request limit and `fetch.max.bytes` bounded it. The first batch still
+  goes out when it is larger than the cap.
+
 - `OffsetFetch` v9 and later checks the member id and epoch it names against a
   streams group, as Kafka's `StreamsGroup.validateOffsetFetch` does: an
   unknown member answers `UNKNOWN_MEMBER_ID` and any other epoch than the
