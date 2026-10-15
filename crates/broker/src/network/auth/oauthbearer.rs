@@ -30,6 +30,9 @@ use {
 ///   - A response that does not parse fails the exchange at once with
 ///     `SASL_AUTHENTICATION_FAILED` (58) and the generic message, as Kafka's
 ///     plain `SaslException` does.
+///   - A valid token whose principal differs from a requested authzid fails
+///     the exchange at once with 58 and Kafka's
+///     `SaslAuthenticationException` message.
 ///   - On a validation failure, the handler returns the RFC 7628
 ///     `{"status":"invalid_token"}` JSON in `auth_bytes` with
 ///     `error_code = 0`, keeps the connection open, and moves to
@@ -123,6 +126,15 @@ async fn handle_authenticate_oauthbearer_inner(
         }
         Err(BearerRejection::InvalidToken(reason)) => {
             return reject_oauthbearer(auth, mechanism, reason);
+        }
+        Err(BearerRejection::AuthorizationIdMismatch { authzid, principal }) => {
+            return fail_exchange(
+                auth,
+                fail_authenticate_with(format!(
+                    "Authentication failed: Client requested an authorization id ({authzid}) \
+                     that is different from the token's principal name ({principal})"
+                )),
+            );
         }
     };
     let principal_matches = previous_name
@@ -266,6 +278,10 @@ enum BearerRejection {
     /// The token did not validate. Kafka answers with the RFC 7628 error
     /// challenge and waits for the client's final message.
     InvalidToken(&'static str),
+    /// The token validated, but the client asked for a different
+    /// authorization id. Kafka throws a `SaslAuthenticationException`, which
+    /// fails the exchange with its message.
+    AuthorizationIdMismatch { authzid: String, principal: String },
 }
 
 /// Parses and validates an OAUTHBEARER client initial response. The authzid,
@@ -340,9 +356,10 @@ async fn validate_bearer(
     if let Some(authzid) = parsed.authzid
         && authzid != outcome.principal.name
     {
-        return Err(BearerRejection::InvalidToken(
-            "authzid does not match token principal",
-        ));
+        return Err(BearerRejection::AuthorizationIdMismatch {
+            authzid,
+            principal: outcome.principal.name,
+        });
     }
     Ok(ValidatedBearer {
         outcome,

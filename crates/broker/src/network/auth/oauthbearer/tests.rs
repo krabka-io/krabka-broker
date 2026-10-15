@@ -225,22 +225,47 @@ async fn a_malformed_client_response_fails_at_once_with_the_generic_failure(
     assert2::assert!(auth.principal().map(|p| p.name.as_str()) == principal_after);
 }
 
+fn oauthbearer_client_response_for(authzid: &str, token: &str) -> SaslAuthenticateRequest {
+    SaslAuthenticateRequest {
+        auth_bytes: bytes::Bytes::from(
+            format!("n,a={authzid},\u{1}auth=Bearer {token}\u{1}\u{1}").into_bytes(),
+        ),
+        ..Default::default()
+    }
+}
+
+/// Kafka's `OAuthBearerSaslServer.process` throws a
+/// `SaslAuthenticationException` for an authzid that differs from the token
+/// principal, so the exchange fails at once with its message and no RFC 7628
+/// challenge.
 #[tokio::test]
 async fn oauthbearer_authzid_mismatch_fails() {
     let validator = krabka_security::OAuthBearerValidator::default();
     let now_ms = 1_000_000_000_000;
     let token = unsecured_token("alice", 1_000_000_900);
     let mut auth = oauth_pending();
-    // authzid "bob" != token principal "alice".
-    let req = SaslAuthenticateRequest {
-        auth_bytes: bytes::Bytes::from(
-            format!("n,a=bob,\u{1}auth=Bearer {token}\u{1}\u{1}").into_bytes(),
-        ),
-        ..Default::default()
-    };
+    let req = oauthbearer_client_response_for("bob", &token);
     let resp = authenticate(&req, &mut auth, &validator, now_ms, None).await;
-    assert_invalid_token_challenge(&resp);
+    assert_failed_authenticate_response(
+        &resp,
+        Some(
+            "Authentication failed: Client requested an authorization id (bob) that is \
+             different from the token's principal name (alice)",
+        ),
+    );
     assert!(!auth.is_authenticated());
+}
+
+#[tokio::test]
+async fn oauthbearer_matching_authzid_authenticates() {
+    let validator = krabka_security::OAuthBearerValidator::default();
+    let now_ms = 1_000_000_000_000;
+    let token = unsecured_token("alice", 1_000_000_900);
+    let mut auth = oauth_pending();
+    let req = oauthbearer_client_response_for("alice", &token);
+    let resp = authenticate(&req, &mut auth, &validator, now_ms, None).await;
+    assert_success_authenticate_response(&resp, b"", 900_000);
+    assert!(auth.principal().map(|p| p.name.as_str()) == Some("alice"));
 }
 
 #[tokio::test]
