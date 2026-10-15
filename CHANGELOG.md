@@ -25,6 +25,16 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- A controller voter that stops hearing from the controller leader now
+  starts an election after one fetch timeout (`controller_election_timeout`),
+  as Kafka's `KafkaRaftClient.pollFollowerAsVoter` does. Before, it re-polled
+  the silent leader until `controller_fetch_miss_limit` timeouts had passed
+  (three by default, 15 s), so a killed or paused controller leader was
+  replaced only after 20 s or more. A partition leader on the same node then
+  kept its leadership through an outage of 15 s: the new controller gives
+  every broker a fresh heartbeat session, as Kafka's does, and the node came
+  back inside it. `controller_fetch_miss_limit` now applies to observers only
+  (#1449).
 - With `preallocate=true`, a segment's `O_DIRECT` writes now align their
   buffers, offsets and lengths to the filesystem block (up to 4 KiB). Before,
   they used the kernel's minimum `O_DIRECT` alignment, often 512 bytes, or a
