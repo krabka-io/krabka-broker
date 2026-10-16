@@ -440,28 +440,23 @@ impl Engine {
     fn uncommitted_tail_is_idle(&self) -> bool {
         let end = self.log.log_end_offset();
         let mut cursor = self.log.hwm();
-        while cursor < end {
-            let Ok(batches) = self
+        let mut idle = true;
+        while idle && cursor < end {
+            let batches = self
                 .log
                 .read_decoded(cursor, self.metadata_raft_fetch_max.size())
-            else {
-                return false;
-            };
-            let Some(next) = next_batch_offset(&batches).filter(|next| *next > cursor) else {
-                return false;
-            };
-            let changes_image = batches
-                .iter()
-                .filter(|batch| !batch.attributes.is_control_batch())
-                .flat_map(|batch| &batch.records)
-                .filter_map(|record| record.value.as_ref())
-                .any(|value| !is_kip835_noop(value));
-            if changes_image {
-                return false;
-            }
-            cursor = next;
+                .unwrap_or_default();
+            let next = next_batch_offset(&batches).filter(|next| *next > cursor);
+            idle = next.is_some()
+                && batches
+                    .iter()
+                    .filter(|batch| !batch.attributes.is_control_batch())
+                    .flat_map(|batch| &batch.records)
+                    .filter_map(|record| record.value.as_ref())
+                    .all(|value| is_kip835_noop(value));
+            cursor = next.unwrap_or(end);
         }
-        true
+        idle
     }
 
     /// Whether a change to the registration of `node_id` must wait for the
