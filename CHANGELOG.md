@@ -36,6 +36,19 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- `max.connections.per.ip.overrides`, `max.connection.creation.rate` and the
+  per-listener `listener.name.<listener>.max.connections` and
+  `listener.name.<listener>.max.connection.creation.rate` now take effect, on
+  the broker listeners and the controller listener, and a change applies to
+  the next connection without a restart. Before, the broker stored and
+  reported them and enforced none. As in Kafka, the inter-broker listener of a
+  broker with several listeners is exempt from the broker-wide cap and rate,
+  an override host is resolved in the background when the value changes, and
+  over a creation rate the acceptor waits the throttle out, at most
+  `quota.window.size.seconds`, before it accepts. A dynamic `max.connections`
+  of 0 is no longer applied, because Kafka refuses a listener cap below 1 and
+  every listener inherits the broker-wide value; a refused value leaves the
+  value in force before it (#1421).
 - With `preallocate=true`, a segment's `O_DIRECT` writes now align their
   buffers, offsets and lengths to the filesystem block (up to 4 KiB). Before,
   they used the kernel's minimum `O_DIRECT` alignment, often 512 bytes, or a
