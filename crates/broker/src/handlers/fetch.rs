@@ -164,8 +164,10 @@ pub(crate) async fn handle(
     // KIP-124 request_percentage meters the time the request holds a handler
     // thread, which the request throttle combines with the consumer byte-rate
     // throttle below (KIP-219). Every await before the charge runs through
-    // the clock, so a long poll's wait is not charged: Kafka parks that wait
-    // in the fetch purgatory, off the handler thread.
+    // the clock, so a long poll's wait is not charged, and the read loop
+    // reports the time its long poll spent polling, which is not charged
+    // either: Kafka parks such a fetch in the fetch purgatory and completes
+    // it, re-reads included, off the handler thread.
     let mut handler_clock = ActiveClock::start();
     // Phase accounting for `request_{local,remote}_duration_seconds`. The read
     // loop charges every partition read to the local phase, and the long poll
@@ -299,6 +301,7 @@ pub(crate) async fn handle(
     let GroupedResponses {
         mut responses,
         cpu_micros: cpu_micros_by_idx,
+        long_poll_active,
     } = handler_clock
         .run(execute_pending_reads(
             broker,
@@ -362,7 +365,7 @@ pub(crate) async fn handle(
             &image,
             ctx,
             FETCH_API_KEY,
-            handler_clock.active(),
+            handler_clock.active().saturating_sub(long_poll_active),
             fetch_response_size(&resp, version),
         );
         if throttle_time_ms > 0 {

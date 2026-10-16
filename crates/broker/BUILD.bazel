@@ -155,6 +155,10 @@ crate_tests(
         # the checked-in `/metrics` body; `support::manifest_dir()` resolves
         # them under `$TEST_SRCDIR/$TEST_WORKSPACE/docs/operations`.
         "//docs/operations:contract",
+        # `soak_contract` executes one of the sustained-load contracts, by
+        # default `bench/soak/self-check.yaml`, resolved under
+        # `support::manifest_dir()`.
+        "//bench:soak_contracts",
     ],
     # The runnable example only needs normal dependencies. Keeping the live
     # Schema Registry dev dependency out also avoids loading its older
@@ -317,10 +321,18 @@ crate_tests(
     # selection -- the `soak` job in `.github/workflows/ci.yml` is the one place
     # that names it, and it passes a `--test_timeout` because Bazel's longest
     # built-in timeout is an hour.
+    #
+    # `soak_contract` runs the self-check of the sustained-load contract by
+    # default: about five minutes against three containers, with its faults
+    # injected through the Docker CLI. Unlike `soak` it stays in the container
+    # matrix, so every change that reaches it proves the judge still catches an
+    # injected loss and a missed deadline on a live cluster. The 72-hour soak
+    # is the same suite with `KRABKA_SOAK_CONTRACT` naming its contract.
     krabka_image = [
         "jbod_enospc",
         "process_kill_durability",
         "soak",
+        "soak_contract",
     ],
     lib = "broker",
     # Suites whose `#[ignore]`d cases drive real containers, and the images

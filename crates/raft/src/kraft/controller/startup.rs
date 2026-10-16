@@ -22,11 +22,12 @@ use {
             MetadataRaftFetchMax,
         },
         error::RaftError,
+        event_queue::{EventQueueMeter, EventQueueRecorder},
         kraft::{
             core::QuorumStateMachine,
             log::KraftLog,
             snapshot_fetch::MetadataSnapshotFetchMax,
-            transport::PeerSender,
+            transport::{CommandSender, PeerSender},
             types::{NodeId, QuorumState},
         },
         snapshot::SnapshotReader,
@@ -121,6 +122,7 @@ impl KraftController {
             metadata_snapshot_fetch_max,
             metadata_log,
             activation,
+            event_queue_recorder,
         } = config;
 
         // Every record in a cleanly reopened log is committed. Recover the
@@ -165,7 +167,7 @@ impl KraftController {
         );
         let (quorum_tx, quorum_rx) = watch::channel(initial_snapshot);
         let (fault_tx, fault_rx) = watch::channel(None);
-        let (cmd_tx, cmd_rx) = mpsc::channel(metadata_raft_command_queue_capacity.get());
+        let (cmd_tx, cmd_rx) = CommandSender::channel(metadata_raft_command_queue_capacity.get());
 
         let clock_base = Instant::now();
         // A fresh voter arms its election timer so a bootstrap cluster elects
@@ -192,6 +194,8 @@ impl KraftController {
             leader_tx,
             quorum_tx,
             cmd_tx: cmd_tx.clone(),
+            event_queue: EventQueueMeter::new(event_queue_recorder),
+            turn: None,
             fault_tx,
             data_dir,
             clock_base,
@@ -304,6 +308,7 @@ impl KraftController {
         metadata_snapshot_fetch_max: MetadataSnapshotFetchMax,
         metadata_log: MetadataLogConfig,
         mut activation: Activation,
+        event_queue_recorder: Arc<dyn EventQueueRecorder>,
     ) -> Result<Self, RaftError> {
         std::fs::create_dir_all(&data_dir).map_err(krabka_log::LogError::Io)?;
         let log = KraftLog::open(&data_dir, &metadata_log)?;
@@ -443,6 +448,7 @@ impl KraftController {
                 metadata_snapshot_fetch_max,
                 metadata_log,
                 activation,
+                event_queue_recorder,
             },
             log,
             data_dir,

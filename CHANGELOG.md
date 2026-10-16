@@ -23,6 +23,35 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ## [Unreleased]
 
+### Added
+
+- The controller exports Kafka's event-queue metrics:
+  `controller_event_queue_time_seconds` and
+  `controller_event_queue_processing_time_seconds` (`EventQueueTimeMs`,
+  `EventQueueProcessingTimeMs`), the started and timed-out operation counters
+  (`EventQueueOperationsStartedCount`, `EventQueueOperationsTimedOutCount`),
+  and `controller_event_queue_idle_seconds_total`, whose rate is
+  `AvgIdleRatio`. A write's processing time runs to its commit reply, as in
+  Kafka.
+- A sustained-load and failure contract for RF=3 soaks (issue #1392).
+  `bench/soak/rf3-72h.yaml` declares the 72-hour M26 soak before it runs:
+  host, disk, seed, client settings, throughput floors, p50/p99/p999 budgets
+  per path, recovery deadlines and a seeded schedule of bounded pauses,
+  restarts, slow followers and disk fills. The `soak_contract` suite runs a
+  contract against the soak lane's three-broker cluster, and
+  `krabka-soak-check` reconciles acknowledged records, transactional
+  visibility and committed offsets, and tells permitted retries from loss. A
+  five-minute self-check in the container matrix proves that the judge catches
+  an injected missing record and a missed recovery deadline.
+- `qualify.sh budget` compares a candidate build with an earlier revision or
+  with pinned Kafka 4.3.1 over a predeclared RF=3 workload matrix, in
+  interleaved rounds. `krabka-parse-benches` assembles every raw trial into a
+  versioned results record and judges it against the materiality and variance
+  budgets of `packaging/performance/regression-contract.json`, with the same
+  median and MAD rule as the criterion lane. A lost or duplicated record
+  always rejects. See
+  [Performance regression budgets](docs/operations/performance-budgets.md).
+
 ### Fixed
 
 - A gracefully stopped active controller now hands the metadata quorum over
@@ -36,6 +65,19 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   controlled shutdown also sends its first heartbeat at once and asks again 50
   ms after the controller's first answer, as Kafka's `BrokerLifecycleManager`
   does, instead of waiting a `heartbeat_interval` for each (#1446).
+- `max.connections.per.ip.overrides`, `max.connection.creation.rate` and the
+  per-listener `listener.name.<listener>.max.connections` and
+  `listener.name.<listener>.max.connection.creation.rate` now take effect, on
+  the broker listeners and the controller listener, and a change applies to
+  the next connection without a restart. Before, the broker stored and
+  reported them and enforced none. As in Kafka, the inter-broker listener of a
+  broker with several listeners is exempt from the broker-wide cap and rate,
+  an override host is resolved in the background when the value changes, and
+  over a creation rate the acceptor waits the throttle out, at most
+  `quota.window.size.seconds`, before it accepts. A dynamic `max.connections`
+  of 0 is no longer applied, because Kafka refuses a listener cap below 1 and
+  every listener inherits the broker-wide value; a refused value leaves the
+  value in force before it (#1421).
 - With `preallocate=true`, a segment's `O_DIRECT` writes now align their
   buffers, offsets and lengths to the filesystem block (up to 4 KiB). Before,
   they used the kernel's minimum `O_DIRECT` alignment, often 512 bytes, or a
@@ -57,6 +99,10 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   request-handler thread, and charges only the handler's own time. Before, a
   consumer whose fetches waited out `MaxWaitMs` was throttled for time it
   spent idle.
+- A long-polling `Fetch` is no longer charged to `request_percentage` for the
+  reads it makes after a wake or its deadline. Kafka completes a parked fetch,
+  re-reads included, off the request-handler thread, so the handler's time
+  ends where the fetch parks.
 - `connections.max.idle.ms` now measures silence on the client and controller
   listeners, as Kafka's `Selector` does: every read that brings bytes starts a
   fresh window, so a request that arrives steadily but takes longer than the

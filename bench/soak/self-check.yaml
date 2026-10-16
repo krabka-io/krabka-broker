@@ -1,0 +1,125 @@
+# The self-check of the sustained-load contract: minutes, not hours.
+#
+# It runs the same executor as the 72-hour soak against the same isolated
+# three-broker cluster, with the same fault kinds, and then proves the judge
+# works. Once the load stops it deletes the earliest acknowledged record of
+# `classic-idempotent` from the cluster, and it judges the first
+# `follower-restart` against an ISR-rejoin deadline of one millisecond. It passes
+# only when the reconciler reports exactly that record lost and the deadline
+# checker reports exactly that recovery missed, and nothing else fails.
+#
+# The budgets are loose on purpose: this runs on a shared CI runner, and what
+# it measures is the harness, not the broker's latency.
+name: self-check
+profile: self_check
+seed: 1392
+duration: 270s
+settle: 40s
+
+host:
+  cpus: 4
+  memory: 16GiB
+  disk_capacity: 2GiB
+  disk_reserve: 4GiB
+
+cluster:
+  brokers: 3
+  replication_factor: 3
+  min_insync_replicas: 2
+  # The broker's `controller_election_timeout` default: the follower fetch
+  # watchdog after which a silent controller leader is replaced.
+  check_quorum_window: 5s
+  replica_lag_time_max: 30s
+
+clients:
+  producer:
+    acks: all
+    compression: lz4
+    linger: 5ms
+    batch_size: 16KiB
+    request_timeout: 10s
+    delivery_timeout: 30s
+    max_send_attempts: 3
+  transactions:
+    timeout: 30s
+    records_per_transaction: 10
+    abort_every: 4
+  consumer:
+    session_timeout: 10s
+    commit_interval: 2s
+    poll_timeout: 200ms
+
+paths:
+  - name: classic-idempotent
+    semantics: idempotent
+    storage: classic
+    partitions: 3
+    rate: 40/s
+    throughput_floor: 20/s
+    payload: 512B
+    consumers: [read_uncommitted, read_committed]
+    commit_offsets: true
+    produce_latency: {p50: 500ms, p99: 5s, p999: 10s}
+    consume_latency: {p50: 2s, p99: 10s, p999: 20s}
+  - name: classic-transactional
+    semantics: transactional
+    storage: classic
+    partitions: 3
+    rate: 40/s
+    throughput_floor: 20/s
+    payload: 512B
+    consumers: [read_committed, read_uncommitted]
+    commit_offsets: true
+    produce_latency: {p50: 500ms, p99: 5s, p999: 10s}
+    consume_latency: {p50: 2s, p99: 10s, p999: 20s}
+  - name: classic-compacted
+    semantics: compacted
+    storage: classic
+    partitions: 3
+    rate: 40/s
+    throughput_floor: 20/s
+    payload: 256B
+    key_space: 64
+    consumers: [read_uncommitted]
+    produce_latency: {p50: 500ms, p99: 5s, p999: 10s}
+    consume_latency: {p50: 2s, p99: 10s, p999: 20s}
+
+# Each deadline is at least twice the worst recovery measured locally against
+# the packaged broker: a graceful follower restart fails over in up to 10s and
+# rejoins the ISR in up to 11s, and a two-second pause catches up in well under
+# a second. No fault of this contract is measured for a controller failover.
+deadlines:
+  leader_failover: 25s
+  isr_rejoin: 30s
+  controller_failover: 20s
+  catch_up_after_pause: 20s
+
+faults:
+  - name: quiet-pause
+    fault: {kind: pause}
+    target: follower
+    first_at: 20s
+    duration: 2s
+  - name: slow-follower
+    fault:
+      kind: slow_follower
+      slowdown: {method: cpu_throttle, cpus: 0.2}
+    target: follower
+    first_at: 45s
+    duration: 15s
+  - name: disk-pressure
+    fault: {kind: disk_pressure, watermark: 25%}
+    target: follower
+    first_at: 95s
+    duration: 10s
+  # Held past the broker's 9s `heartbeat_timeout`, so the broker is fenced
+  # and rejoins as a new incarnation whatever its controlled shutdown did.
+  - name: follower-restart
+    fault: {kind: restart, graceful: true}
+    target: follower
+    first_at: 140s
+    duration: 15s
+
+self_check:
+  missing_record_path: classic-idempotent
+  missed_deadline: {fault: follower-restart, check: isr_rejoin, deadline: 1ms}

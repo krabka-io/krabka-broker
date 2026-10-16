@@ -52,6 +52,18 @@ mode:
 
 The `RunOutput` JSON that the driver writes encodes its measurements as exact integers instead. Latencies are in nanoseconds and sizes are in bytes. The report aggregator can then compare and plot them without rounding.
 
+## Sustained-load contract
+
+The crate also ships `krabka-soak-check`, the judge of the sustained-load contract. A contract under `bench/soak/` declares the load, the limits and the faults of a long RF=3 run before it starts. The `soak_contract` suite of `krabka-broker` executes the contract and records evidence, and this binary grades the evidence:
+
+```bash
+krabka-soak-check plan --contract bench/soak/rf3-72h.yaml
+krabka-soak-check judge --contract bench/soak/rf3-72h.yaml --evidence run/evidence.json
+krabka-soak-check self-check --contract bench/soak/self-check.yaml
+```
+
+`self-check` without `--evidence` judges a synthetic run with one record removed, and passes only when the judge reports that record lost and the one impossible deadline missed. The [design document](docs/soak-contract-design.md) explains the contract, the fault schedule and the reconciliation rules.
+
 ## Documentation
 
 Generate the API documentation with `cargo doc -p krabka-bench-driver --open`.

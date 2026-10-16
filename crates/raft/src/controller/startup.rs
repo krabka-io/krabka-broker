@@ -153,6 +153,7 @@ impl Controller {
                 bootstrap_records: config.bootstrap_records.clone(),
                 default_min_insync_replicas: config.default_min_insync_replicas,
             },
+            Arc::clone(&config.event_queue_recorder),
         )?;
 
         // Kafka's `FeatureControlManager.replay(FeatureLevelRecord)` throws

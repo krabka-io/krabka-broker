@@ -278,6 +278,22 @@ async fn metrics_endpoint_serves_openmetrics_and_counters_tick() {
         body.contains("krabka_broker_active_controller 1"),
         "active_controller should be 1 on single-node, body:\n{body}"
     );
+    // The CreateTopics above went through this combined node's controller,
+    // so its event queue has started events and timed their processing.
+    for series in [
+        "krabka_broker_controller_event_queue_operations_started_total",
+        "krabka_broker_controller_event_queue_processing_time_seconds_count",
+        "krabka_broker_controller_event_queue_time_seconds_count",
+    ] {
+        let sample = body
+            .lines()
+            .find_map(|line| line.strip_prefix(series)?.strip_prefix(' '))
+            .and_then(|value| value.parse::<f64>().ok());
+        check!(
+            sample.is_some_and(|value| value >= 1.0),
+            "{series} should count the controller's events, body:\n{body}"
+        );
+    }
 
     handle.shutdown().await;
 }
