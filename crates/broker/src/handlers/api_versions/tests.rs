@@ -435,7 +435,7 @@ async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
 async fn handle_applies_kip1242_routing_checks() {
     krabka_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, principal, peer, context);
-        boot [broker_fixture_support::start_broker_with(|cfg| cfg.broker_id = 42)];
+        boot [broker_fixture_support::start_broker_with(|_| {})];
         user ["ANONYMOUS"];
         client ["krabka-test"];
     };
@@ -446,7 +446,6 @@ async fn handle_applies_kip1242_routing_checks() {
     let cluster_id = encode(raw_cluster_id);
     let hyphenated_cluster_id = raw_cluster_id.to_string();
     let node_id = i32::try_from(broker.config.node_id.0).expect("node id fits Kafka wire");
-    assert!(node_id != broker.config.broker_id);
 
     for (request_cluster_id, request_node_id, expected_error) in [
         (None, -1, codes::NONE),

@@ -236,6 +236,16 @@ pub enum BrokerError {
     #[error("process.roles must list at least one role")]
     EmptyRoles,
 
+    /// `node_id` and `broker_id` name two different ids. Kafka's
+    /// `KafkaConfig.validateValues` refuses `node.id` and `broker.id` that
+    /// differ, and every krabka path that names this node to the controller
+    /// assumes they are one.
+    #[error("You must set `node_id` ({node_id}) to the same value as `broker_id` ({broker_id})")]
+    NodeIdMismatch {
+        node_id: krabka_raft::NodeId,
+        broker_id: i32,
+    },
+
     /// A non-controller node lists itself in `controller_quorum_voters`.
     #[error("node {node_id} is not a controller but appears in its own controller_quorum_voters")]
     NonControllerIsVoter { node_id: krabka_raft::NodeId },

@@ -324,7 +324,9 @@ krabka_macros::broker_config! {
         pub barrier_max_topics_per_group: usize,
 
         // identity.
-        /// Broker id reported in `Metadata` responses. Default: 1.
+        /// Broker id reported in `Metadata` responses. Default: 1. It must
+        /// equal [`Self::node_id`], as Kafka's `broker.id` must equal its
+        /// `node.id`; [`Self::validate`] refuses a config where they differ.
         pub broker_id: i32,
 
         /// `KRaft` `process.roles`. It controls whether this node is a metadata
@@ -383,7 +385,7 @@ krabka_macros::broker_config! {
         pub stamp_source: Option<Arc<dyn krabka_log::StampSource>>,
 
         // quorum.
-        /// Raft node id. Conventionally equal to `broker_id as NodeId`.
+        /// Raft node id. It must equal [`Self::broker_id`].
         pub node_id: NodeId,
 
         /// Address the controller listener binds on. `KRaft` convention: same

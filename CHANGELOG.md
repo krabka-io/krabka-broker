@@ -54,6 +54,12 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- The broker refuses to start when `broker_id` and `node_id` differ, as
+  Kafka's `KafkaConfig` refuses a `broker.id` that is not the `node.id`.
+  Before, such a broker registered under its node id but heartbeated under
+  its broker id, so the controller never unfenced it, and `Broker::start`
+  waited out `startup_leader_wait_timeout` (two minutes) before going on
+  fenced.
 - `max.connections.per.ip.overrides`, `max.connection.creation.rate` and the
   per-listener `listener.name.<listener>.max.connections` and
   `listener.name.<listener>.max.connection.creation.rate` now take effect, on

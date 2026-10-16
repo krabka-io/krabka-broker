@@ -694,6 +694,7 @@ pub fn from_broker_error(err: &BrokerError) -> i16 {
         | BrokerError::ListenerConflict { .. }
         | BrokerError::InvalidInterBrokerListener { .. }
         | BrokerError::EmptyRoles
+        | BrokerError::NodeIdMismatch { .. }
         | BrokerError::NonControllerIsVoter { .. }
         | BrokerError::ControllerOnlyNodeListeners { .. }
         | BrokerError::WitnessRequiresBrokerRole
