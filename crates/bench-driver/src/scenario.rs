@@ -40,7 +40,7 @@ use {
 /// adapter that matches it. A keyless record (`key_size: 0`) and an unbuffered
 /// producer (`linger: 0`) are runnable. A zero-length measurement window or a
 /// zero-byte record is not.
-mod bounded {
+pub(crate) mod bounded {
 
     krabka_macros::bounded_unit_modules! {
     /// A size that must be positive: a record or a producer batch.

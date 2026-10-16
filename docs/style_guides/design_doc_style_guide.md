@@ -17,6 +17,7 @@ A design document lives inside the crate it describes, under that crate's `docs/
 | [`crates/broker/docs/replication-isr-design.md`](../../crates/broker/docs/replication-isr-design.md) | Follower replication, the high watermark, ISR maintenance, and leader failover. |
 | [`crates/log/docs/design.md`](../../crates/log/docs/design.md) | The on-disk log and segment format. |
 | [`crates/broker/docs/transaction-coordinator-design.md`](../../crates/broker/docs/transaction-coordinator-design.md) | The transaction coordinator and exactly-once semantics. |
+| [`crates/bench-driver/docs/soak-contract-design.md`](../../crates/bench-driver/docs/soak-contract-design.md) | The sustained-load contract: what a soak declares before it runs, the fault schedule, and the judge that reconciles its evidence. |
 
 Add a row here when you add a design document.
 

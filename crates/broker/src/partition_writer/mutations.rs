@@ -216,6 +216,29 @@ pub(super) async fn handle_trim(
     let _ = ack.send(result);
 }
 
+/// Take the leader's global log start as this follower's own. A diskless
+/// partition never gets here: its delete floor travels through the WAL index,
+/// so the replicator leaves it alone.
+pub(super) async fn handle_follow_leader_log_start(
+    log: &Arc<Mutex<Log>>,
+    storage_status: StorageStatus<'_>,
+    leader_start: Offset,
+    ack: tokio::sync::oneshot::Sender<Result<Offset, BrokerError>>,
+) {
+    let log_for_blocking = Arc::clone(log);
+    let result = run_log_mutation(
+        move || {
+            lock_log(&log_for_blocking)
+                .follow_leader_log_start(leader_start)
+                .map_err(BrokerError::from)
+        },
+        "follow_leader_log_start task panicked",
+        storage_status,
+    )
+    .await;
+    let _ = ack.send(result);
+}
+
 async fn reconcile_trim_frontiers(
     log: &Arc<Mutex<Log>>,
     storage_status: StorageStatus<'_>,

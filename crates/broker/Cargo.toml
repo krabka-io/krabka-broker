@@ -223,6 +223,13 @@ bytes = { workspace = true }
 rustls.workspace = true
 rustls-pki-types.workspace = true
 tempfile = { workspace = true }
+# `soak_contract` executes a sustained-load contract and grades what it
+# recorded with the judge in this crate: the contract, its fault schedule, the
+# evidence types and the verdict. Not on crates.io, so no `version`.
+krabka-bench-driver = { path = "../bench-driver" }
+# The steady and disturbed latency histograms `soak_contract` keeps per path,
+# built with the bounds `krabka_bench_driver::hist` sets.
+hdrhistogram = { version = "7.6", default-features = false }
 # `process`: `diskless_jepsen` runs the JVM console consumer under a deadline,
 # and `tokio::process` is what gives the wait one. A blocking
 # `std::process::Command::output` has no deadline, so a stalled image pull would

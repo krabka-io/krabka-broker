@@ -5,7 +5,7 @@
 use {
     super::*,
     crate::{
-        MetadataLogConfig,
+        MetadataLogConfig, NoEventQueueRecorder,
         kraft::{Activation, transport::NullPeerSender},
     },
     krabka_units::prelude::{TimeExt as _, secs},
@@ -108,6 +108,9 @@ pub fn build(
     metadata_raft_fetch_max: MetadataRaftFetchMax,
     #[builder(default = ControllerSetup::default().max_bytes_between_snapshots)]
     max_bytes_between_snapshots: krabka_units::ByteSize,
+    #[builder(default = Arc::new(NoEventQueueRecorder))] event_queue_recorder: Arc<
+        dyn EventQueueRecorder,
+    >,
 ) -> (KraftController, tempfile::TempDir) {
     let setup = ControllerSetup {
         me,
@@ -128,6 +131,7 @@ pub fn build(
         config.metadata_raft_command_queue_capacity = setup.metadata_raft_command_queue_capacity;
         config.metadata_raft_fetch_max = setup.metadata_raft_fetch_max;
         config.max_bytes_between_snapshots = setup.max_bytes_between_snapshots;
+        config.event_queue_recorder = event_queue_recorder;
     })
 }
 
@@ -149,6 +153,7 @@ pub fn test_kraft_config(me: NodeId, cluster_id: uuid::Uuid, state: QuorumState)
         metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
         metadata_log: test_metadata_log(),
         activation: Activation::default(),
+        event_queue_recorder: Arc::new(NoEventQueueRecorder),
     }
 }
 
@@ -212,6 +217,7 @@ pub fn open_test_controller_with(
         MetadataSnapshotFetchMax::default(),
         test_metadata_log(),
         activation,
+        Arc::new(NoEventQueueRecorder),
     )
 }
 
@@ -287,7 +293,7 @@ pub fn build_engine_only(
     let log_hwm_at_open = log.hwm().0;
     let initial_snapshot = super::queries::initial_quorum_snapshot(&core, &log, log_hwm_at_open, 0);
     let (quorum_tx, _quorum_rx) = watch::channel(initial_snapshot);
-    let (cmd_tx, _cmd_rx) = mpsc::channel(1);
+    let (cmd_tx, _cmd_rx) = CommandSender::channel(1);
     let held_epoch = core.quorum_state().leader_epoch;
     let was_leader = core.role().is_leader();
     let controls = KraftControlState::new(core.quorum_state().voters.clone(), 0);
@@ -305,6 +311,8 @@ pub fn build_engine_only(
             leader_tx,
             quorum_tx,
             cmd_tx,
+            event_queue: EventQueueMeter::new(Arc::new(NoEventQueueRecorder)),
+            turn: None,
             fault_tx: watch::channel(None).0,
             data_dir: dir.path().to_path_buf(),
             clock_base,

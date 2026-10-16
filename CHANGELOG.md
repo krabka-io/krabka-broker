@@ -25,6 +25,24 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Added
 
+- The controller exports Kafka's event-queue metrics:
+  `controller_event_queue_time_seconds` and
+  `controller_event_queue_processing_time_seconds` (`EventQueueTimeMs`,
+  `EventQueueProcessingTimeMs`), the started and timed-out operation counters
+  (`EventQueueOperationsStartedCount`, `EventQueueOperationsTimedOutCount`),
+  and `controller_event_queue_idle_seconds_total`, whose rate is
+  `AvgIdleRatio`. A write's processing time runs to its commit reply, as in
+  Kafka.
+- A sustained-load and failure contract for RF=3 soaks (issue #1392).
+  `bench/soak/rf3-72h.yaml` declares the 72-hour M26 soak before it runs:
+  host, disk, seed, client settings, throughput floors, p50/p99/p999 budgets
+  per path, recovery deadlines and a seeded schedule of bounded pauses,
+  restarts, slow followers and disk fills. The `soak_contract` suite runs a
+  contract against the soak lane's three-broker cluster, and
+  `krabka-soak-check` reconciles acknowledged records, transactional
+  visibility and committed offsets, and tells permitted retries from loss. A
+  five-minute self-check in the container matrix proves that the judge catches
+  an injected missing record and a missed recovery deadline.
 - `qualify.sh budget` compares a candidate build with an earlier revision or
   with pinned Kafka 4.3.1 over a predeclared RF=3 workload matrix, in
   interleaved rounds. `krabka-parse-benches` assembles every raw trial into a
@@ -47,6 +65,28 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 - The bench driver's `acks: all` scenarios run again. They turn idempotence on,
   and the driver asked for more in-flight requests than an idempotent producer
   allows, so each one failed at start.
+- A per-broker `listener.name.<listener>.ssl.keystore.*` or
+  `listener.name.<listener>.ssl.truststore.*` change now takes effect on an
+  SSL or SASL_SSL listener: the next handshake gets the new stores, and a
+  store file is read again when it changes. The broker the alter is addressed
+  to checks the change first, as Kafka's `SslFactory` does, and answers
+  `INVALID_REQUEST` when a store does not load or a new certificate changes
+  the DN or drops a SAN. Before, the broker stored and reported the keys and
+  kept serving its static certificate. krabka reads PEM stores with an
+  unencrypted key only (#1422).
+- `max.connections.per.ip.overrides`, `max.connection.creation.rate` and the
+  per-listener `listener.name.<listener>.max.connections` and
+  `listener.name.<listener>.max.connection.creation.rate` now take effect, on
+  the broker listeners and the controller listener, and a change applies to
+  the next connection without a restart. Before, the broker stored and
+  reported them and enforced none. As in Kafka, the inter-broker listener of a
+  broker with several listeners is exempt from the broker-wide cap and rate,
+  an override host is resolved in the background when the value changes, and
+  over a creation rate the acceptor waits the throttle out, at most
+  `quota.window.size.seconds`, before it accepts. A dynamic `max.connections`
+  of 0 is no longer applied, because Kafka refuses a listener cap below 1 and
+  every listener inherits the broker-wide value; a refused value leaves the
+  value in force before it (#1421).
 - With `preallocate=true`, a segment's `O_DIRECT` writes now align their
   buffers, offsets and lengths to the filesystem block (up to 4 KiB). Before,
   they used the kernel's minimum `O_DIRECT` alignment, often 512 bytes, or a

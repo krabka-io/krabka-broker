@@ -106,7 +106,7 @@ impl JavaPattern {
     /// reading the limit as "does not match" would let a rule that Java
     /// applies fall through to the next rule, or to `DEFAULT`, and map the
     /// principal to a name the operator never meant for it. A caller rejects
-    /// the name instead. So it does for a search that JDK 17 throws on.
+    /// the name instead.
     pub(crate) fn matches(&self, input: &str) -> Result<bool, ReplacementError> {
         match &self.0.backtrack {
             Some(program) => program.matches(input).map_err(ReplacementError::search),
@@ -1471,11 +1471,11 @@ mod tests {
     }
 
     /// A backreference under a case flag compares the text of its group as
-    /// JDK 17's `CIBackRef` does: under `(?i)` by `ASCII.toLower`, so a
+    /// Java's `CIBackRef` does: under `(?i)` by `ASCII.toLower`, so a
     /// non-ASCII letter does not match its other case, and under `(?iu)` by
     /// `Character.toLowerCase` of `Character.toUpperCase`, so `i` matches `İ`
     /// and `ı`, and `s` matches `ſ`, whatever their length in bytes. Each row is
-    /// `Pattern.matches` on JDK 17.0.20.
+    /// `Pattern.matches` on JDK 25.0.4.
     #[test]
     fn a_backreference_under_a_case_flag_compares_as_java_does() {
         // (pattern, input, whole input matches)
@@ -1526,32 +1526,21 @@ mod tests {
             row("(?i)(?u:(s)\\1)", "s\u{17f}", true),
             row("(?iu)(s)(?-u)\\1", "s\u{17f}", false),
             row("(?iu)(s)(?-i)\\1", "s\u{17f}", false),
-            // JDK 17 counts the text in UTF-16 units, and compares one more pair past both texts for each supplementary char
+            // one code point for one outside the BMP too, where JDK 17 counted
+            // UTF-16 units and threw past the input
             row("(?i)(.)\\1", "\u{10400}\u{10428}", false),
-            row("(?iu)(.)\\1x", "\u{10400}\u{10428}x", false),
+            row("(?iu)(.)\\1", "\u{10400}\u{10428}", true),
+            row("(?iu)(.)\\1", "\u{10400}\u{10400}", true),
+            row("(?iu)(.)\\1x", "\u{10400}\u{10428}x", true),
             row("(?iu)(.)\\1.", "\u{10400}\u{10400}\u{10400}", true),
-            row("(?iu)(.)\\1.", "\u{10400}\u{10400}b", false),
+            row("(?iu)(.)\\1.", "\u{10400}\u{10400}b", true),
+            row("(?iu)(.)(.)\\1", "\u{10400}\u{10400}\u{10400}", true),
+            row("(?iu)(.)\\1\\1", "\u{10400}\u{10400}\u{10400}", true),
+            row("(?iu)(.)\\1", "\u{10400}a", false),
+            row("(?iu)(a)\\1", "a\u{10400}", false),
+            row("(?iu)(.\u{10428})\\1", "a\u{10400}A\u{10400}", true),
         ];
         check_matches(cases, true);
-    }
-
-    /// Where JDK 17's `CIBackRef` reads that extra pair past the end of the
-    /// input, it throws `StringIndexOutOfBoundsException`, and the search is an
-    /// error, as one that runs past the backtrack limit is.
-    #[yare::parameterized(
-        supplementary_pair_in_other_case = { "(?iu)(.)\\1", "\u{10400}\u{10428}" },
-        supplementary_pair_in_same_case = { "(?iu)(.)\\1", "\u{10400}\u{10400}" },
-        between_two_groups = { "(?iu)(.)(.)\\1", "\u{10400}\u{10400}\u{10400}" },
-        repeated_reference = { "(?iu)(.)\\1\\1", "\u{10400}\u{10400}\u{10400}" },
-    )]
-    fn a_backreference_that_jdk_17_reads_past_the_input_with_is_an_error(
-        source: &str,
-        input: &str,
-    ) {
-        check!(
-            pattern(source).matches(input).is_err(),
-            "{source:?} against {input:?}"
-        );
     }
 
     /// `replaceAll` and `replaceFirst` find the matches of a pattern with a

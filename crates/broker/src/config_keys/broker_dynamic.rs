@@ -200,6 +200,21 @@ pub(crate) fn broker_key_row(
         .or_else(|| kafka_broker::resolve(name).map(kafka_broker::KafkaBrokerConfig::row))
 }
 
+/// The dynamic configs `node_id`'s resource stores, less the
+/// controller-managed keys the alter paths stand outside.
+pub(crate) fn stored_dynamic_configs(
+    image: &krabka_metadata::MetadataImage,
+    node_id: NodeId,
+) -> BTreeMap<String, String> {
+    image
+        .broker_config(node_id)
+        .into_iter()
+        .flatten()
+        .filter(|(name, _)| !super::is_controller_managed_broker_config(name))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect()
+}
+
 /// The three KIP-73 replication quotas, which Kafka's
 /// `QuotaConfig.brokerQuotaConfigs` defines as `LONG` with `atLeast(0)`.
 const THROTTLE_RATES: [&str; 3] = [

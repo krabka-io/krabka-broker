@@ -227,6 +227,7 @@ impl Broker {
             transport.tls_dynamic.as_ref(),
             &transport.inter_broker_client,
             Arc::clone(&diskless_runtime.wal_shards),
+            &metrics,
         )
         .await?;
 

@@ -28,6 +28,14 @@ filegroup(
     srcs = glob(["scenarios/*.yaml"]),
 )
 
+# The sustained-load contracts. `crates/bench-driver`'s `contract_files` suite
+# judges a synthetic run of each, and `crates/broker`'s `soak_contract` suite
+# executes one against a live cluster.
+filegroup(
+    name = "soak_contracts",
+    srcs = glob(["soak/*.yaml"]),
+)
+
 apko_image(
     name = "driver_base_oci",
     config = "driver.apko.yaml",

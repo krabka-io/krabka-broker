@@ -260,7 +260,7 @@ struct OffsetSnapshot {
 async fn preferred_replica_snapshot(partition: &Partition) -> OffsetSnapshot {
     let hw = partition.high_watermark().await;
     let mut log = partition.log.lock().expect("log mutex poisoned");
-    let log_start = log.log_start_offset();
+    let log_start = log.reported_log_start();
     let last_stable_offset = log.last_stable_offset(hw);
     OffsetSnapshot {
         high_watermark: hw.0,

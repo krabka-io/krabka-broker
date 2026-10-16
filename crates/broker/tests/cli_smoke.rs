@@ -77,25 +77,15 @@ fn version_returns_zero() {
 }
 
 /// Boot `krabka-broker` with `--config-file` set to a minimal TOML, and
-/// assert that the process binds the listener declared in the file. The port
-/// comes from the file, not from a CLI flag.
+/// assert that the process binds the listener declared in the file. The
+/// address comes from the file, not from a CLI flag. The file binds port 0, so
+/// no other process can take the port first, and the startup line names the
+/// port the listener got. The controller listener takes a [`free_port`].
 #[test]
 fn boots_with_config_file_listener() {
     use std::io::Write as _;
 
     let tmp = tempfile::tempdir().expect("tempdir");
-    let log_dir = tmp.path().join("data");
-
-    // KIP-853: the broker refuses to boot an unformatted log dir, so seed
-    // it first. `krabka format` creates the directory itself (it must be
-    // empty or non-existent), so don't pre-create it.
-    run_krabka_format(&log_dir, 1, "127.0.0.1:9093");
-
-    // Pick an ephemeral port by binding briefly, then release it.
-    let port = {
-        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        l.local_addr().unwrap().port()
-    };
 
     let cfg_path = tmp.path().join("broker.toml");
     let mut f = std::fs::File::create(&cfg_path).unwrap();
@@ -106,41 +96,36 @@ inter_broker_listener_name = "PLAIN"
 
 [[listeners]]
 name = "PLAIN"
-bind_addr = "127.0.0.1:{port}"
-advertised = "127.0.0.1:{port}"
+bind_addr = "127.0.0.1:0"
+advertised = "127.0.0.1:0"
 protocol = "Plaintext"
 "#
     )
     .unwrap();
 
-    let mut child = Command::new(broker_bin())
-        .arg(format!("--config-file={}", cfg_path.display()))
-        .arg(format!("--log-dir={}", log_dir.display()))
-        .arg("--broker-id=1")
-        .arg("--metrics-listen-addr=none")
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("spawn krabka-broker");
+    let running = start_retrying("the config-file node", |attempt| {
+        // KIP-853: the broker refuses to boot an unformatted log dir, so seed
+        // it first. `krabka format` creates the directory itself (it must be
+        // empty or non-existent), so don't pre-create it. The controller
+        // listener goes into the voter set, so it needs its port up front.
+        let log_dir = tmp.path().join(format!("data-{attempt}"));
+        let controller = free_port();
+        run_krabka_format(&log_dir, 1, &controller.to_string());
+        Process::spawn(&[
+            format!("--config-file={}", cfg_path.display()),
+            format!("--log-dir={}", log_dir.display()),
+            "--broker-id=1".to_owned(),
+            format!("--controller-listen-addr={controller}"),
+        ])
+        .wait_until_started()
+    });
+    let addr = running
+        .started
+        .listen_addr
+        .expect("the startup line names the listener");
 
-    // Poll for the port to accept connections within 10 seconds.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    let mut connected = false;
-    while std::time::Instant::now() < deadline {
-        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            connected = true;
-            break;
-        }
-        // intentional: waiting on a spawned krabka-broker subprocess to bind its
-        // TCP listener; no in-process BrokerHandle, image, or metric to await here.
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-
-    // Tear down before assertions so a hang doesn't leave a stray process.
-    let _ = child.kill();
-    let _ = child.wait();
-
-    assert!(connected, "broker never opened TCP listener on port {port}");
+    assert!(addr.port() != 0);
+    assert!(std::net::TcpStream::connect(addr).is_ok());
 }
 
 #[test]
@@ -220,12 +205,67 @@ const STARTUP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(90)
 /// The line that a node logs when its start is complete.
 const STARTED: &str = "krabka-broker started";
 
-/// A free loopback port. Something else can take it between this call and
-/// the broker's bind, as in [`boots_with_config_file_listener`].
+/// A loopback port that nothing listens on and nothing else can bind while
+/// the reservation lives: a socket bound to it that never listens. A
+/// connection to the port is refused, as to a port nobody holds, and a node
+/// that tried to open it would fail to bind it.
+struct Reserved {
+    socket: socket2::Socket,
+    addr: std::net::SocketAddr,
+}
+
+fn reserve_port() -> Reserved {
+    let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)
+        .expect("create a socket");
+    let any: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+    socket
+        .bind(&any.into())
+        .expect("bind an ephemeral loopback port");
+    let addr = socket
+        .local_addr()
+        .ok()
+        .and_then(|addr| addr.as_socket())
+        .expect("a bound IPv4 socket has an address");
+    Reserved { socket, addr }
+}
+
+/// A free loopback port for a listener that must be known before the node
+/// starts, such as a controller listener that `krabka-format` writes into the
+/// voter set. The reservation is released when the node binds the port, so
+/// another process can take it first; [`start_node`] retries a node that
+/// fails to bind.
 fn free_port() -> std::net::SocketAddr {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .and_then(|listener| listener.local_addr())
-        .expect("bind an ephemeral loopback port")
+    let Reserved { socket, addr } = reserve_port();
+    drop(socket);
+    addr
+}
+
+/// How many times [`start_node`] tries a node whose listener another process
+/// took between [`free_port`] and the node's bind.
+const START_ATTEMPTS: usize = 5;
+
+/// The message a node exits with when its listener's port is taken.
+const ADDR_IN_USE: &str = "Address already in use";
+
+/// Run `start`, which formats and starts a node on fresh ports in a fresh log
+/// directory for each attempt it is given, until the node starts. A node that
+/// exits with [`ADDR_IN_USE`] is tried again, up to [`START_ATTEMPTS`] times:
+/// another process took a [`free_port`] before the node bound it. Any other
+/// exit fails the test.
+fn start_retrying<T>(node: &str, mut start: impl FnMut(usize) -> Result<T, Exited>) -> T {
+    let mut last = None;
+    for attempt in 0..START_ATTEMPTS {
+        match start(attempt) {
+            Ok(started) => return started,
+            Err(exit) if exit.stderr.contains(ADDR_IN_USE) => last = Some(exit),
+            Err(exit) => panic!("{node}: {exit}"),
+        }
+    }
+    panic!(
+        "{node} could not bind its listeners in {START_ATTEMPTS} attempts: another process took \
+         a free port each time, or the node opened a port it must leave closed; last: {}",
+        last.expect("at least one attempt ran")
+    );
 }
 
 /// A running `krabka-broker` process. Dropping it kills the process, so a
@@ -234,6 +274,27 @@ struct Process {
     child: std::process::Child,
     /// The stdout lines of the process, one JSON object each.
     lines: std::sync::mpsc::Receiver<String>,
+    /// The stderr of the process, once it closes.
+    stderr: Option<std::thread::JoinHandle<String>>,
+}
+
+/// A process that exited before it logged its startup line.
+#[derive(Debug)]
+struct Exited {
+    /// Its stdout lines.
+    logged: Vec<String>,
+    stderr: String,
+}
+
+impl std::fmt::Display for Exited {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the process exited before `{STARTED}`; stderr:\n{}\nstdout:\n{}",
+            self.stderr,
+            self.logged.join("\n")
+        )
+    }
 }
 
 impl Process {
@@ -246,13 +307,14 @@ impl Process {
             // explicitly for each child, independent of the test runner's filter.
             .env("RUST_LOG", krabka_broker::config::DEFAULT_LOG_FILTER)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("spawn krabka-broker");
         let stdout = child.stdout.take().expect("piped stdout");
+        let stderr = child.stderr.take().expect("piped stderr");
         let (sender, lines) = std::sync::mpsc::channel();
-        // The reader drains stdout for the whole life of the process, so the
-        // broker never blocks on a full pipe.
+        // The readers drain both pipes for the whole life of the process, so
+        // the broker never blocks on a full pipe.
         std::thread::spawn(move || {
             use std::io::BufRead as _;
             for line in std::io::BufReader::new(stdout).lines() {
@@ -262,21 +324,44 @@ impl Process {
                 }
             }
         });
-        Self { child, lines }
+        let stderr = std::thread::spawn(move || {
+            use std::io::Read as _;
+            let mut text = String::new();
+            let _ = std::io::BufReader::new(stderr).read_to_string(&mut text);
+            // Pass it on, as an inherited stderr would.
+            eprint!("{text}");
+            text
+        });
+        Self {
+            child,
+            lines,
+            stderr: Some(stderr),
+        }
     }
 
-    /// The fields of the startup line. Fails the test when the process does
-    /// not log it within [`STARTUP_DEADLINE`], with the lines it did log.
-    fn wait_until_started(&self) -> Started {
+    /// The fields of the startup line, or what the process printed when it
+    /// exited without it. Fails the test when the process neither logs the
+    /// line nor exits within [`STARTUP_DEADLINE`].
+    fn wait_until_started(mut self) -> Result<Running, Exited> {
         let deadline = std::time::Instant::now() + STARTUP_DEADLINE;
         let mut logged = Vec::new();
         loop {
             let left = deadline.saturating_duration_since(std::time::Instant::now());
-            let Ok(line) = self.lines.recv_timeout(left) else {
-                panic!(
+            let line = match self.lines.recv_timeout(left) {
+                Ok(line) => line,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    let _ = self.child.wait();
+                    let stderr = self
+                        .stderr
+                        .take()
+                        .and_then(|reader| reader.join().ok())
+                        .unwrap_or_default();
+                    return Err(Exited { logged, stderr });
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!(
                     "no `{STARTED}` line within {STARTUP_DEADLINE:?}; the process logged:\n{}",
                     logged.join("\n")
-                );
+                ),
             };
             if let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line)
                 && entry.get("message").and_then(serde_json::Value::as_str) == Some(STARTED)
@@ -285,12 +370,19 @@ impl Process {
                     entry
                         .get(name)
                         .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned)
+                        .map(|addr| {
+                            addr.parse()
+                                .expect("the startup line names a socket address")
+                        })
                 };
-                return Started {
+                let started = Started {
                     listen_addr: field("listen_addr"),
                     controller_listen_addr: field("controller_listen_addr"),
                 };
+                return Ok(Running {
+                    _process: self,
+                    started,
+                });
             }
             logged.push(line);
         }
@@ -304,11 +396,18 @@ impl Drop for Process {
     }
 }
 
+/// A process that logged its startup line, and the fields of that line.
+struct Running {
+    /// Kept so the process runs until this is dropped.
+    _process: Process,
+    started: Started,
+}
+
 /// The listener addresses that the startup line names.
 #[derive(Debug, PartialEq, Eq)]
 struct Started {
-    listen_addr: Option<String>,
-    controller_listen_addr: Option<String>,
+    listen_addr: Option<std::net::SocketAddr>,
+    controller_listen_addr: Option<std::net::SocketAddr>,
 }
 
 /// What a port answers.
@@ -353,7 +452,10 @@ fn probe(runtime: &tokio::runtime::Runtime, addr: std::net::SocketAddr) -> Liste
 #[derive(Debug, PartialEq, Eq)]
 struct Observed {
     roles: &'static str,
-    started: Started,
+    /// Whether the startup line names a client listener.
+    names_client: bool,
+    /// The controller listener that the startup line names.
+    controller_listen_addr: Option<std::net::SocketAddr>,
     client_port: Listener,
     controller_port: Listener,
 }
@@ -363,11 +465,9 @@ struct Case {
     /// `--process-roles`.
     roles: &'static str,
     node_id: u32,
-    /// `--controller-listen-addr`.
-    controller: std::net::SocketAddr,
-    /// `--controller-quorum-voters` of a node that is not a voter. A node
-    /// without it is formatted as the standalone voter of its own quorum.
-    voters: Option<String>,
+    /// Whether the node is an observer of the quorum of the node before it,
+    /// rather than the standalone voter of its own quorum.
+    joins_quorum: bool,
     /// Whether the startup line names the client listener and the controller
     /// listener.
     names: NamedListeners,
@@ -375,7 +475,8 @@ struct Case {
     ports: PortAnswers,
 }
 
-/// Which listeners a node's startup line names.
+/// Which listeners a node's startup line names, which are the listeners it
+/// opens.
 struct NamedListeners {
     client: bool,
     controller: bool,
@@ -387,6 +488,73 @@ struct PortAnswers {
     controller: Listener,
 }
 
+/// A node that [`start_node`] started, and the ports it was given.
+struct Node {
+    running: Running,
+    /// The client port to probe: the one the node bound, or the reserved
+    /// port of a client listener the node must not open.
+    client: std::net::SocketAddr,
+    controller: std::net::SocketAddr,
+    /// The ports the node must leave closed, held until the node is dropped.
+    _reserved: Vec<Reserved>,
+}
+
+/// Format and start the node of `case`. `quorum` is the controller listener
+/// of the quorum that a joining node observes.
+///
+/// A listener the node opens binds port 0 where nothing needs its address in
+/// advance, which is the client listener. The controller listener of a voter
+/// goes into the formatted voter set, so it takes a [`free_port`], under
+/// [`start_retrying`]. A listener the node must not open gets a [`Reserved`]
+/// port.
+fn start_node(dir: &std::path::Path, case: &Case, quorum: Option<std::net::SocketAddr>) -> Node {
+    start_retrying(&format!("{} ({})", case.roles, case.node_id), |attempt| {
+        let mut reserved = Vec::new();
+        let mut closed_port = || {
+            let port = reserve_port();
+            let addr = port.addr;
+            reserved.push(port);
+            addr
+        };
+        let client = if case.names.client {
+            "127.0.0.1:0".parse().unwrap()
+        } else {
+            closed_port()
+        };
+        let controller = if case.names.controller {
+            free_port()
+        } else {
+            closed_port()
+        };
+        let log_dir = dir.join(format!("node-{}-{attempt}", case.node_id));
+        let controller_text = controller.to_string();
+        let mut quorum_flags = vec!["--cluster-id", CLUSTER_ID];
+        if !case.joins_quorum {
+            quorum_flags.extend(["--standalone", "--controller-listener", &controller_text]);
+        }
+        format_log_dir(&log_dir, case.node_id, &quorum_flags);
+        let mut args = vec![
+            format!("--log-dir={}", log_dir.display()),
+            format!("--broker-id={}", case.node_id),
+            format!("--process-roles={}", case.roles),
+            format!("--listen-addr={client}"),
+            format!("--controller-listen-addr={controller}"),
+        ];
+        if case.joins_quorum {
+            let quorum = quorum.expect("a joining node has a quorum to join");
+            args.push(format!("--controller-quorum-voters=1@{quorum}"));
+        }
+        let running = Process::spawn(&args).wait_until_started()?;
+        let client = running.started.listen_addr.unwrap_or(client);
+        Ok(Node {
+            running,
+            client,
+            controller,
+            _reserved: reserved,
+        })
+    })
+}
+
 /// Every `process.roles` value opens the listeners of its roles and no other,
 /// as Kafka does. Kafka's `ControllerServer` opens only the listeners that
 /// `controller.listener.names` names, and `KafkaConfig` refuses a
@@ -395,7 +563,8 @@ struct PortAnswers {
 /// nodes on one host do not compete for that port.
 ///
 /// Each node gets a `--listen-addr` and a `--controller-listen-addr` of its
-/// own. The startup line names the listeners that the node opened.
+/// own. The startup line names the listeners that the node opened. A port the
+/// node must leave closed is held by the test, so nothing else answers on it.
 ///
 /// The controller-only node is the quorum of the broker-only node, which
 /// cannot start without one, so the cases run in order and every node runs
@@ -404,13 +573,11 @@ struct PortAnswers {
 fn each_role_opens_only_its_own_listeners() {
     let runtime = current_thread_runtime();
     let tmp = tempfile::tempdir().expect("tempdir");
-    let quorum = free_port();
     let cases = [
         Case {
             roles: "controller",
             node_id: 1,
-            controller: quorum,
-            voters: None,
+            joins_quorum: false,
             names: NamedListeners {
                 client: false,
                 controller: true,
@@ -423,8 +590,7 @@ fn each_role_opens_only_its_own_listeners() {
         Case {
             roles: "broker",
             node_id: 2,
-            controller: free_port(),
-            voters: Some(format!("1@{quorum}")),
+            joins_quorum: true,
             names: NamedListeners {
                 client: true,
                 controller: false,
@@ -437,8 +603,7 @@ fn each_role_opens_only_its_own_listeners() {
         Case {
             roles: "broker,controller",
             node_id: 3,
-            controller: free_port(),
-            voters: None,
+            joins_quorum: false,
             names: NamedListeners {
                 client: true,
                 controller: true,
@@ -453,43 +618,25 @@ fn each_role_opens_only_its_own_listeners() {
     let mut running = Vec::new();
     let mut observed = Vec::new();
     let mut expected = Vec::new();
+    let mut quorum = None;
     for case in cases {
-        let log_dir = tmp.path().join(format!("node-{}", case.node_id));
-        let controller = case.controller.to_string();
-        let mut quorum_flags = vec!["--cluster-id", CLUSTER_ID];
-        if case.voters.is_none() {
-            quorum_flags.extend(["--standalone", "--controller-listener", controller.as_str()]);
-        }
-        format_log_dir(&log_dir, case.node_id, &quorum_flags);
-        let client = free_port();
-        let mut args = vec![
-            format!("--log-dir={}", log_dir.display()),
-            format!("--broker-id={}", case.node_id),
-            format!("--process-roles={}", case.roles),
-            format!("--listen-addr={client}"),
-            format!("--controller-listen-addr={controller}"),
-        ];
-        args.extend(
-            case.voters
-                .map(|voters| format!("--controller-quorum-voters={voters}")),
-        );
-        let process = Process::spawn(&args);
+        let node = start_node(tmp.path(), &case, quorum);
+        quorum = quorum.or(Some(node.controller));
         observed.push(Observed {
             roles: case.roles,
-            started: process.wait_until_started(),
-            client_port: probe(&runtime, client),
-            controller_port: probe(&runtime, case.controller),
+            names_client: node.running.started.listen_addr.is_some(),
+            controller_listen_addr: node.running.started.controller_listen_addr,
+            client_port: probe(&runtime, node.client),
+            controller_port: probe(&runtime, node.controller),
         });
         expected.push(Observed {
             roles: case.roles,
-            started: Started {
-                listen_addr: case.names.client.then(|| client.to_string()),
-                controller_listen_addr: case.names.controller.then(|| controller.clone()),
-            },
+            names_client: case.names.client,
+            controller_listen_addr: case.names.controller.then_some(node.controller),
             client_port: case.ports.client,
             controller_port: case.ports.controller,
         });
-        running.push(process);
+        running.push(node);
     }
     drop(running);
 
