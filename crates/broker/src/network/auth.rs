@@ -47,5 +47,5 @@ pub use self::{
     scram::handle_authenticate_scram,
     ssl_principal_mapper::{SslPrincipalMapper, SslPrincipalRuleError},
     state::ConnectionAuth,
-    subject_dn::subject_dn_rfc2253,
+    subject_dn::{subject_alt_names, subject_dn_rfc2253},
 };

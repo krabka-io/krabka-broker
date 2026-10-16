@@ -521,7 +521,7 @@ impl LiveOffsets {
         let high_watermark = part.high_watermark().await;
         let mut log = part.log.lock().expect("log mutex poisoned");
         Self {
-            log_start: log.log_start_offset(),
+            log_start: log.reported_log_start(),
             high_watermark,
             last_stable_offset: log.last_stable_offset(high_watermark),
         }
@@ -593,7 +593,9 @@ fn plan_read(
     response: &mut PartitionData,
 ) -> PlannedWindow {
     let mut log = partition.log.lock().expect("log mutex poisoned");
-    let log_start = log.log_start_offset();
+    // The global floor as Kafka reports it, which a follower raises its own
+    // start to: see `Log::reported_log_start`.
+    let log_start = log.reported_log_start();
     // KIP-405 keeps two floors, and this one is the floor of the *local* read:
     // on a tiered partition the offsets in `[log_start, local_log_start)` are
     // in the remote tier, so the window has to call them out of range for the

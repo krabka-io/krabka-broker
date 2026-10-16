@@ -108,6 +108,31 @@ pub fn incremental_request(
     }
 }
 
+/// Kafka's `ConfigResource.Type.BROKER`.
+pub const BROKER_RESOURCE: i8 = 4;
+
+/// An `IncrementalAlterConfigs` of one `BROKER` resource, each config a
+/// name, an operation and a value.
+pub fn broker_alter_request(
+    resource_name: String,
+    configs: Vec<(&str, ConfigOperation, Option<&str>)>,
+    mutation: ConfigMutation,
+) -> IncrementalAlterConfigsRequest {
+    incremental_request()
+        .resources(vec![incremental_resource(
+            BROKER_RESOURCE,
+            resource_name,
+            configs
+                .into_iter()
+                .map(|(name, operation, value)| {
+                    incremental_config(name, value.map(ToOwned::to_owned), operation)
+                })
+                .collect(),
+        )])
+        .mutation(mutation)
+        .call()
+}
+
 pub fn describe_resource(
     resource_type: i8,
     resource_name: impl Into<String>,
