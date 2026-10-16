@@ -23,10 +23,17 @@ crate_tests(
     # concurrent runs and passed at six. Declaring the cores keeps Bazel from
     # creating that starvation.
     cpu_heavy = ["kraft_engine_sim"],
+    # The exhaustive model runs far longer under profiling instrumentation than
+    # it does uninstrumented, and it ran past its timeout in `bazel coverage`
+    # (1200s, on main at 8b3d6e6e). It gates in the daemon-free test step; the
+    # state machine it explores is covered by the unit and simulation suites.
+    coverage_excluded = ["kraft_model"],
     docker = {"kraft_checkpoint_jvm": ["apache_kafka_4_0_0"]},
-    # The exhaustive fault model grew to 1.13M unique states. Its five cases
-    # share one Bazel process, which exceeded the default 300s CI timeout.
-    integration_timeouts = {"kraft_model": "long"},
+    # The exhaustive fault model grew to 3.22M unique states (19.6M generated),
+    # about ten minutes uninstrumented on four cores. Its five cases share one
+    # Bazel process, so `long` (900s) leaves too little headroom; `eternal`
+    # gives the daemon-free test step room on a loaded runner.
+    integration_timeouts = {"kraft_model": "eternal"},
     lib = "raft",
     # The consensus engine is the highest-value mutation target here: its
     # decision logic is pure and almost entirely unit-tested, so a survivor is a

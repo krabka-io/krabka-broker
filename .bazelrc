@@ -81,7 +81,13 @@ coverage --instrument_test_targets
 # Both exclusions, because `--test_tag_filters` is last-wins rather than
 # additive: naming only `-timing-sensitive` here replaced the `-docker` set for
 # `test` above, and the coverage run started trying to drive containers.
-coverage --test_tag_filters=-docker,-timing-sensitive
+#
+# `coverage-excluded` marks a suite too slow to finish under instrumentation,
+# such as //crates/raft's exhaustive `kraft_model`: its fault config generates
+# 19.6M states, about ten minutes uninstrumented, and it ran past its timeout
+# here. It still gates in the `ci` job's daemon-free test step, and the code
+# it drives is covered by the crate's own unit and simulation suites.
+coverage --test_tag_filters=-docker,-timing-sensitive,-coverage-excluded
 # `--test_tag_filters` excludes a test from the *run*, not from the build, so
 # without this the excluded suites are still linked. That is not free here: each
 # one is a separately linked, instrumented copy of the whole broker, and the 22

@@ -313,6 +313,7 @@ def crate_tests(
         data = None,
         compile_data = None,
         cpu_heavy = [],
+        coverage_excluded = [],
         docker = {},
         krabka_image = [],
         env = {},
@@ -349,6 +350,10 @@ def crate_tests(
         a suite that needs the broker image and no Kafka one.
       manual: test stems to tag `manual` — Docker-driven or otherwise
         non-hermetic suites, the Bazel equivalent of their `#[ignore]`.
+      coverage_excluded: test stems to tag `coverage-excluded`. `.bazelrc`
+        leaves them out of `bazel coverage`, and the `ci` job's daemon-free
+        test step still runs them. For a suite too slow to finish under
+        profiling instrumentation, whose code the other suites cover.
       no_harness: test stems declared `harness = false` in Cargo.toml.
       integration_timeouts: Bazel timeout overrides keyed by integration-test stem.
       doc_tests: whether to emit a `rust_doc_test`. `cargo test` runs rustdoc
@@ -451,7 +456,8 @@ def crate_tests(
             flaky = stem in cpu_heavy,
             timeout = integration_timeouts.get(stem),
             tags = (["manual"] if stem in manual or stem in docker_stems else []) +
-                   (["cpu:4", "timing-sensitive"] if stem in cpu_heavy else []),
+                   (["cpu:4", "timing-sensitive"] if stem in cpu_heavy else []) +
+                   (["coverage-excluded"] if stem in coverage_excluded else []),
             use_libtest_harness = stem not in no_harness,
             # One call, not two concatenated: an integration test links the
             # crate's normal *and* dev dependencies, and several crates list the
