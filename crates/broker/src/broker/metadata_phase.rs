@@ -243,6 +243,7 @@ async fn start_metadata_source(
                 max_idle: config.connections_max_idle_for(CONTROLLER_LISTENER_NAME),
                 max_connections: config.max_connections,
                 max_connections_per_ip: config.max_connections_per_ip,
+                max_connection_throttle: config.connection_creation_throttle_max.to_std(),
             },
             max_bytes_between_snapshots: config.metadata_max_bytes_between_snapshots,
             max_snapshot_interval: config.metadata_max_snapshot_interval,
