@@ -34,11 +34,12 @@
 
 use {
     crate::{
-        broker::Broker, config_keys::RecoveryStrategy,
+        config_keys::RecoveryStrategy,
         controller_admin::BrokerControllerAdminRouter,
         heartbeat::controller_state::ControllerLivenessState,
-        leader_election::compute_reregistration_changes, metrics::BrokerMetrics,
-        unclean_recovery::RecoveryJob,
+        leader_election::compute_reregistration_changes,
+        metrics::BrokerMetrics,
+        unclean_recovery::{RecoveryJob, UncleanRecoveryHandle},
     },
     krabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord, NodeId},
     krabka_raft::{RaftError, RegistrationAdmission, RegistrationAdmissionFuture},
@@ -187,20 +188,20 @@ fn retires_another_broker(
     })
 }
 
-/// Hand `recoveries` to the Unclean Recovery Manager once `image` shows
+/// Hand `recoveries` to the Unclean Recovery Manager once `images` shows
 /// `incarnation` registered as `node`, which is when the batch that decided
-/// them has committed.
+/// them has committed. The returned task ends once it has handed them over, or
+/// given them up.
 fn hand_off_recoveries(
-    broker: &Arc<Broker>,
+    mut images: tokio::sync::watch::Receiver<Arc<MetadataImage>>,
+    recovery: UncleanRecoveryHandle,
     (node, incarnation): (NodeId, Uuid),
     recoveries: Vec<(String, i32, RecoveryStrategy)>,
-) {
+) -> Option<tokio::task::JoinHandle<()>> {
     if recoveries.is_empty() {
-        return;
+        return None;
     }
-    let mut images = broker.controller.watch_image();
-    let recovery = broker.unclean_recovery.clone();
-    tokio::spawn(async move {
+    Some(tokio::spawn(async move {
         let committed = tokio::time::timeout(RECOVERY_HANDOFF_TIMEOUT, async {
             loop {
                 if images
@@ -232,7 +233,7 @@ fn hand_off_recoveries(
                 })
                 .await;
         }
-    });
+    }))
 }
 
 impl RegistrationAdmission for BrokerRegistrationAdmission {
@@ -253,7 +254,12 @@ impl RegistrationAdmission for BrokerRegistrationAdmission {
                 broker.liveness.replace_incarnation(node.0).await;
             }
             if let Some(first) = new_incarnations.first() {
-                hand_off_recoveries(&broker, *first, recoveries);
+                hand_off_recoveries(
+                    broker.controller.watch_image(),
+                    broker.unclean_recovery.clone(),
+                    *first,
+                    recoveries,
+                );
             }
             Ok(records)
         })
