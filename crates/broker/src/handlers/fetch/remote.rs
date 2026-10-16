@@ -305,11 +305,31 @@ pub(super) async fn try_remote_read(
     // stored locally still resolve to their copy-time epoch.  Fall back to
     // the current leader epoch when the checkpoint has no entries (empty /
     // fresh log) so behavior is at least as good as before.
-    let leader_epoch = {
+    //
+    // An offset below the checkpoint's first entry is one a floor established
+    // too high cut out of it, and that a follower later took back from its
+    // leader (`Log::follow_leader_log_start`). The archive is the record of
+    // which epoch owned it.
+    let (cached_epoch, earliest_cached_epoch) = {
         let log = part.log.lock().expect("log mutex poisoned");
-        log.epoch_checkpoint()
-            .epoch_for_offset(Offset(p.fetch_offset))
-            .unwrap_or(current_leader_epoch)
+        let checkpoint = log.epoch_checkpoint();
+        (
+            checkpoint.epoch_for_offset(Offset(p.fetch_offset)),
+            checkpoint.entries().first().map(|entry| entry.epoch),
+        )
+    };
+    let leader_epoch = match (cached_epoch, earliest_cached_epoch) {
+        (Some(epoch), _) => epoch,
+        (None, Some(ceiling)) => {
+            match reader
+                .archived_epoch_for_offset(&tp, p.fetch_offset, ceiling)
+                .await
+            {
+                Ok(found) => found.unwrap_or(current_leader_epoch),
+                Err(e) => return Some(fail_remote_read(&broker.metrics, p, &e)),
+            }
+        }
+        (None, None) => current_leader_epoch,
     };
     let max_bytes = usize::try_from(p.max_bytes.max(0)).unwrap_or(0);
 
@@ -812,6 +832,40 @@ mod tests {
         check!(served == None, "nothing serves an offset below the floor");
         check!(deleted.out == super::refused_read(0, codes::OFFSET_OUT_OF_RANGE));
 
+        tiered.owners.handle.shutdown().await;
+    }
+
+    /// A floor established too high cut the leader-epoch cache with it, and a
+    /// follower that takes its leader's lower start back
+    /// (`Log::follow_leader_log_start`) has no cache entry for the archived
+    /// offsets beneath the cut. The read takes the epoch that owned the offset
+    /// from the archive rather than the current one, which no archived
+    /// segment carries and which would answer `OFFSET_OUT_OF_RANGE`.
+    #[tokio::test]
+    async fn a_read_below_a_cut_epoch_cache_takes_the_epoch_from_the_archive() {
+        use {crate::codes, krabka_log::Offset};
+
+        let tiered = committed_tiered_fixture().await;
+        {
+            let mut log = tiered.part.log.lock().expect("log mutex poisoned");
+            log.set_log_start_offset(Offset(5))
+                .expect("raise the floor too high");
+            log.follow_leader_log_start(Offset(0))
+                .expect("take the leader's start back");
+            assert!(log.epoch_checkpoint().epoch_for_offset(Offset(0)) == None);
+        }
+        tiered
+            .part
+            .current_leader_epoch
+            .store(7, std::sync::atomic::Ordering::Release);
+
+        let mut served = out_of_range_at(&tiered.part, 0);
+        let bytes_served = super::try_remote_read(&tiered.broker, &mut served, &tiered.part).await;
+        check!(
+            bytes_served.is_some_and(|n| n > 0),
+            "the archive answers offset 0"
+        );
+        check!(served.out.error_code == codes::NONE);
         tiered.owners.handle.shutdown().await;
     }
 
