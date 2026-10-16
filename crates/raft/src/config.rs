@@ -7,7 +7,12 @@
 //! in `routing`.
 
 use {
-    crate::{RaftListenerHandshake, network::OutboundDialer, types::NodeId},
+    crate::{
+        RaftListenerHandshake,
+        event_queue::{EventQueueRecorder, NoEventQueueRecorder},
+        network::OutboundDialer,
+        types::NodeId,
+    },
     krabka_kraft_core::snapshot_fetch::METADATA_SNAPSHOT_FETCH_HARD_MAX,
     krabka_units::{
         fmt::Human as _,
@@ -240,6 +245,10 @@ pub struct ControllerConfig {
     /// How the metadata log rolls, how long it keeps the prefix a snapshot
     /// covers, and how often an idle leader appends to it.
     pub metadata_log: MetadataLogConfig,
+    /// Where the engine loop reports Kafka's controller event-queue
+    /// measurements. The broker passes its metrics registry.
+    #[debug(skip)]
+    pub event_queue_recorder: Arc<dyn EventQueueRecorder>,
 }
 
 impl ControllerConfig {
@@ -299,6 +308,7 @@ impl ControllerConfig {
                 max_idle_interval: secs(0),
                 ..MetadataLogConfig::default()
             },
+            event_queue_recorder: Arc::new(NoEventQueueRecorder),
         }
     }
 }

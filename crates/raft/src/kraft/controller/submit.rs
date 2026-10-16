@@ -718,6 +718,7 @@ impl Engine {
             creates,
             result,
             reply,
+            _processing: self.turn.take(),
         });
         // Drive a self-fetch so the core recomputes the HWM (single voter
         // commits immediately; multi-voter commits when followers fetch).

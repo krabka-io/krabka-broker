@@ -87,11 +87,22 @@ families. The metric comments name no threshold for any of them.
 
 ## Controller
 
+Kafka's `QuorumController` runs every operation as an event on one queue
+thread. Krabka's controller engine loop is that thread: each turn handles one
+command from its queue or one timer. The `controller_event_queue_*` series
+measure it on controller and combined nodes, and a broker-only node exports
+them at zero.
+
 | Series | Type | Labels | Replaces | Meaning |
 | :--- | :--- | :--- | :--- | :--- |
 | `krabka_broker_active_controller` | gauge | - | `KafkaController,name=ActiveControllerCount` | 1 on the raft leader, 0 elsewhere. |
 | `krabka_broker_controller_leader_changes_total` | counter | - | `KafkaController,name=LeaderElectionRateAndTimeMs` | Controller-leader transitions this broker observed. Alert on a sustained `rate(...) > 0`. [Runbook](runbooks/controller-leader-flapping.md). |
 | `krabka_broker_controller_fencing_publications_total` | counter | - | - | Completed broker-fencing publication passes on the controller leader, one per liveness tick. |
+| `krabka_broker_controller_event_queue_time_seconds` | histogram | - | `ControllerEventManager,name=EventQueueTimeMs` | Seconds a command waited on the controller engine's queue before the loop started it. A timer has none, as a Kafka deferred event has none. |
+| `krabka_broker_controller_event_queue_processing_time_seconds` | histogram | - | `ControllerEventManager,name=EventQueueProcessingTimeMs` | Seconds one controller event ran. A write runs to its commit reply, so a slow follower shows up here, as it does in Kafka. |
+| `krabka_broker_controller_event_queue_operations_started_total` | counter | - | `KafkaController,name=EventQueueOperationsStartedCount` | Events the engine loop started, one per turn: a command or a timer. |
+| `krabka_broker_controller_event_queue_operations_timed_out_total` | counter | - | `KafkaController,name=EventQueueOperationsTimedOutCount` | Commands the engine reached after their caller had stopped waiting. Kafka drops such an event; the engine still runs it, so it also counts as started. |
+| `krabka_broker_controller_event_queue_idle_seconds_total` | counter | - | `ControllerEventManager,name=AvgIdleRatio` | Seconds the engine loop waited for its next event. `rate(...[5m])` is the idle ratio: near 1 on a quiet controller, falling toward 0 as the loop saturates. |
 | `krabka_broker_unclean_leader_elections_total` | counter | - | `ControllerStats,name=UncleanLeaderElectionsPerSec` | KIP-841 unclean elections this controller drove. A KIP-966 recovery from an eligible leader replica is not counted. Alert on `rate(...) > 0`. [Runbook](runbooks/unclean-leader-election.md). |
 | `krabka_broker_ignored_static_voters` | gauge | - | `raft-metrics,name=ignored-static-voters` | Static voters in the configuration that the quorum ignores at `kraft.version` 1. |
 | `krabka_broker_voted_directory` | gauge | `directory_id` | `raft-metrics,name=current-vote-directory-id` | One-hot series for the directory identity voted for in this epoch. |
