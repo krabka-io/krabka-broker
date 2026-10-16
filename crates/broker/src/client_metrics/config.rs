@@ -1407,34 +1407,32 @@ mod tests {
     /// Java as `java.util.regex` does: a backreference under a case flag
     /// compares by Java's fold, `\R` gives back the `\n` of `\r\n` where Java's
     /// does, and a group keeps the text it matched in a look-around or a
-    /// possessive quantifier. Where JDK 17 throws, the match is an error, which
-    /// a subscription reads as no match. Each row is `Matcher.matches` on JDK
-    /// 17.0.20.
+    /// possessive quantifier. Each row is `Matcher.matches` on JDK 25.0.4.
     #[test]
     fn match_patterns_read_references_and_linebreaks_as_java_does() {
-        // (pattern, input, whole input matches, or None where JDK 17 throws)
+        // (pattern, input, whole input matches)
         let cases = [
-            ("(?i)(\u{e9})\\1", "\u{e9}\u{c9}", Some(false)),
-            ("(?i)(a\u{e9})\\1", "a\u{e9}A\u{e9}", Some(true)),
-            ("(?iu)(i)\\1", "i\u{130}", Some(true)),
-            ("(?iu)(s)\\1", "s\u{17f}", Some(true)),
-            ("(?iu)(k)\\1", "k\u{212a}", Some(true)),
-            ("(?iu)(.)\\1", "\u{10400}\u{10428}", None),
-            ("(a)\\R\\n\\1", "a\r\na", Some(true)),
-            ("\\R\\n", "\r\n", Some(true)),
-            ("\\R{2}", "\r\n", Some(false)),
+            ("(?i)(\u{e9})\\1", "\u{e9}\u{c9}", false),
+            ("(?i)(a\u{e9})\\1", "a\u{e9}A\u{e9}", true),
+            ("(?iu)(i)\\1", "i\u{130}", true),
+            ("(?iu)(s)\\1", "s\u{17f}", true),
+            ("(?iu)(k)\\1", "k\u{212a}", true),
+            ("(?iu)(.)\\1", "\u{10400}\u{10428}", true),
+            ("(a)\\R\\n\\1", "a\r\na", true),
+            ("\\R\\n", "\r\n", true),
+            ("\\R{2}", "\r\n", false),
             // `(?=` and `(?<=` hold the `=` the entry splits on, so a selector
             // has only the negated look-arounds
-            ("(?:(?!(a))|a)\\1", "aa", Some(true)),
-            ("(?:(?>(a))x|a)\\1", "aa", Some(true)),
-            ("(?:(a)++x|a)\\1", "aa", Some(true)),
-            ("(?:(a)x|a)\\1", "aa", Some(false)),
-            ("(a|b\\1)+", "abb", Some(false)),
+            ("(?:(?!(a))|a)\\1", "aa", true),
+            ("(?:(?>(a))x|a)\\1", "aa", true),
+            ("(?:(a)++x|a)\\1", "aa", true),
+            ("(?:(a)x|a)\\1", "aa", false),
+            ("(a|b\\1)+", "abb", false),
         ];
         for (pattern, input, expected) in cases {
             let rules = parse_match_rules(&format!("client_id={pattern}")).unwrap();
             check!(
-                rules[0].pattern.matches(input).ok() == expected,
+                rules[0].pattern.matches(input).ok() == Some(expected),
                 "{pattern:?} on {input:?}"
             );
         }

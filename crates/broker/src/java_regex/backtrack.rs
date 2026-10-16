@@ -1,5 +1,5 @@
 //! A backtracking matcher for the patterns that `fancy_regex` cannot match as
-//! JDK 17's `java.util.regex` does.
+//! `java.util.regex` does.
 //!
 //! [`Program`] takes the tree that `fancy_regex` parses from the rewritten
 //! pattern and runs it on a backtracking machine of its own. It reads four
@@ -50,15 +50,6 @@ const BACKTRACK_LIMIT: usize = 1_000_000;
 pub(super) enum SearchError {
     #[error("the search ran past the backtrack limit of {BACKTRACK_LIMIT} steps")]
     BacktrackLimit,
-    /// JDK 17's `CIBackRef` compares one more pair of chars, past both texts,
-    /// for each supplementary char in the text it refers to, and throws
-    /// `StringIndexOutOfBoundsException` when that pair is past the end of
-    /// the input.
-    #[error(
-        "a case-insensitive backreference read past the end of the input, where JDK 17 throws \
-         StringIndexOutOfBoundsException"
-    )]
-    PastEnd,
 }
 
 /// A pattern compiled for the machine.
@@ -599,7 +590,7 @@ impl<'a> Machine<'a> {
                             .starts_with(&self.input[start..stop])
                             .then_some((pc + 1, pos + stop - start)),
                         (Some((start, stop)), Some(fold)) => {
-                            folded_backref(self.input, pos, start..stop, fold)?
+                            folded_backref(self.input, pos, start..stop, fold)
                                 .map(|after| (pc + 1, after))
                         }
                     }
@@ -772,48 +763,25 @@ fn set(stack: &mut Vec<Frame>, slots: &mut [Option<usize>], slot: usize, value: 
     slots[slot] = value;
 }
 
-/// JDK 17's `CIBackRef.match` at `at`, for the text in `group`: the position
-/// after the text it matches, or `None`.
+/// `CIBackRef.match` at `at`, for the text in `group`: the position after the
+/// text it matches, or `None`.
 ///
-/// Java counts the text in UTF-16 units. It needs that many units of input
-/// left, and goes on after that many. It compares one code point of each side
-/// for each unit, so for each supplementary char in the group it compares one
-/// more pair, past both texts, and throws when that pair is past the input.
-/// JDK 21 counts the code points instead. This follows JDK 17, as the rest of
-/// the rewrite does.
-fn folded_backref(
-    input: &str,
-    at: usize,
-    group: Range<usize>,
-    fold: BackrefFold,
-) -> Result<Option<usize>, SearchError> {
-    let units: usize = input[group.clone()].chars().map(char::len_utf16).sum();
-    // `i + groupSize > matcher.to`: not enough input left. Where the units end
-    // inside a surrogate pair, the code points of the two sides fall out of
-    // step before that, one supplementary where the other is not, and no fold
-    // takes one for the other, so the comparison below fails first.
-    let mut left = units;
+/// Java compares the two texts one code point for one, as JDK 21 and later
+/// do, the JDK the cp-kafka images run. JDK 17 counted the text in UTF-16
+/// units, compared one more pair past both texts for each supplementary char
+/// in it, and threw where that pair was past the input. No case mapping
+/// takes a supplementary char to one that is not, so the texts that match are
+/// as long in UTF-16 units as in code points, and Java's `i + groupSizeChars`
+/// is the end of the last pair.
+fn folded_backref(input: &str, at: usize, group: Range<usize>, fold: BackrefFold) -> Option<usize> {
+    let mut rest = input[at..].chars();
     let mut after = at;
-    for c in input[at..].chars() {
-        if left == 0 {
-            break;
-        }
-        left = left.saturating_sub(c.len_utf16());
-        after += c.len_utf8();
-    }
-    if left > 0 {
-        return Ok(None);
-    }
-    let (mut x, mut j) = (at, group.start);
-    for _ in 0..units {
-        let (Some(c1), Some(c2)) = (input[x..].chars().next(), input[j..].chars().next()) else {
-            return Err(SearchError::PastEnd);
-        };
+    for c2 in input[group].chars() {
+        let c1 = rest.next()?;
         if !fold.chars_match(c2, c1) {
-            return Ok(None);
+            return None;
         }
-        x += c1.len_utf8();
-        j += c2.len_utf8();
+        after += c1.len_utf8();
     }
-    Ok(Some(after))
+    Some(after)
 }
