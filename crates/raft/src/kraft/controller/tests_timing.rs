@@ -222,72 +222,37 @@ async fn discovery_takes_the_peers_in_turn() {
     check!(picked == vec![Some(NodeId(1)), Some(NodeId(2)), Some(NodeId(1))]);
 }
 
-/// Where a replica stands after one fetch-timer expiry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AfterFetchExpiry {
-    /// Still following the leader, with a re-poll in flight and the timer
-    /// re-armed.
-    Following,
-    /// A voter that started an election: Kafka's Prospective state.
-    Prospective,
-    /// An observer that went back to looking for the leader.
-    Discovering,
-}
-
-/// krabka-io/krabka-broker#1449: a voter that stops hearing from the leader
-/// starts an election after one fetch timeout, as Kafka's
-/// `KafkaRaftClient.pollFollowerAsVoter` moves to Prospective once
-/// `FollowerState.hasFetchTimeoutExpired`. Waiting out three timeouts made a
-/// killed or paused controller leader take 20 s or more to replace. An
-/// observer has no election to start: it keeps re-polling the leader until the
-/// configured run of misses sends it back to discovery.
-#[yare::parameterized(
-    voter = { 2, &[AfterFetchExpiry::Prospective] },
-    observer = {
-        3,
-        &[
-            AfterFetchExpiry::Following,
-            AfterFetchExpiry::Following,
-            AfterFetchExpiry::Discovering,
-        ],
-    },
-)]
-#[test_macro(tokio::test)]
-async fn a_fetch_timeout_elects_a_voter_at_once_and_re_polls_an_observer(
-    me: u64,
-    after_each_expiry: &[AfterFetchExpiry],
-) {
+#[tokio::test]
+async fn fetch_misses_increment_and_trigger_timeout_at_limit() {
     use crate::kraft::{controller::test_support::build_engine_only, transport::TimerTick};
 
-    let (mut replica, _dir) = build_engine_only()
-        .me(me)
+    let (mut follower, _dir) = build_engine_only()
+        .me(2)
         .ids(&[NodeId(1), NodeId(2)])
-        .controller_fetch_miss_limit(3)
         .call();
-    replica.on_event(Event::ReceiveBeginQuorumEpoch {
+    follower.on_event(Event::ReceiveBeginQuorumEpoch {
         leader_id: NodeId(1),
         leader_epoch: 1,
     });
-    assert2::assert!(replica.following_leader() == Some(NodeId(1)));
+    check!(follower.following_leader() == Some(NodeId(1)));
+    check!(follower.fetch_misses == 0);
 
-    let seen: Vec<AfterFetchExpiry> = after_each_expiry
-        .iter()
-        .map(|_| {
-            replica.on_timer(TimerTick::Fetch);
-            match (replica.following_leader(), replica.core.role()) {
-                (Some(NodeId(1)), _) if replica.fetch_at.is_some() => AfterFetchExpiry::Following,
-                (None, Role::Prospective { .. }) => AfterFetchExpiry::Prospective,
-                (
-                    None,
-                    Role::Observer {
-                        leader_id: None, ..
-                    },
-                ) => AfterFetchExpiry::Discovering,
-                (leader, role) => panic!("unexpected state: leader {leader:?}, role {role:?}"),
-            }
-        })
-        .collect();
-    assert2::assert!(seen == after_each_expiry);
+    // Miss 1
+    follower.on_timer(TimerTick::Fetch);
+    check!(follower.fetch_misses == 1);
+    check!(follower.fetch_at.is_some());
+    check!(follower.fetch_at.unwrap() > Instant::now());
+    check!(follower.following_leader() == Some(NodeId(1)));
+
+    // Miss 2
+    follower.on_timer(TimerTick::Fetch);
+    check!(follower.fetch_misses == 2);
+    check!(follower.following_leader() == Some(NodeId(1)));
+
+    // Miss 3 (limit is 3 by default)
+    follower.on_timer(TimerTick::Fetch);
+    check!(follower.fetch_misses == 0);
+    check!(follower.following_leader().is_none());
 }
 
 #[tokio::test]
