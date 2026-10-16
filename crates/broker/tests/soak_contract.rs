@@ -73,6 +73,8 @@ mod cluster;
 #[path = "soak/probe.rs"]
 mod probe;
 
+#[path = "soak_contract/alerts.rs"]
+mod alerts;
 #[path = "soak_contract/executor.rs"]
 mod executor;
 #[path = "soak_contract/faults.rs"]
@@ -85,6 +87,8 @@ mod load;
 mod plan;
 #[path = "soak_contract/readback.rs"]
 mod readback;
+#[path = "soak_contract/telemetry.rs"]
+mod telemetry;
 #[path = "soak_contract/topology.rs"]
 mod topology;
 #[path = "soak_contract/windows.rs"]
