@@ -15,7 +15,8 @@ use {
         load::CommitTracker,
         readback::commit_checks,
         topology::{
-            Nodes, TopicPartition, isr_complete, led_by, not_failed_over, resolve_target, role_of,
+            Nodes, PartitionState, TopicPartition, isr_complete, led_by, not_failed_over,
+            resolve_target, role_of,
         },
         windows::{Span, Windows},
     },
@@ -154,12 +155,19 @@ impl Executor {
         };
         record.target = node.container.clone();
         role_of(target, roles).clone_into(&mut record.role);
+        // `None` when no node answered: what the target led is then unknown,
+        // not empty, and a leader failover cannot be measured.
         let led = self
             .nodes
             .metadata_from_any(Some(target))
             .await
-            .map(|(_, states)| led_by(&states, target))
-            .unwrap_or_default();
+            .map(|(_, states)| led_by(&states, target));
+        if led.is_none() {
+            eprintln!(
+                "soak-contract: {}: no node answered Metadata before the injection, so what node {target} led is unknown",
+                fault.id
+            );
+        }
         let checks = checks_for(fault, &record.role);
 
         let injected = now_ms();
@@ -261,7 +269,7 @@ impl Executor {
         fault: &str,
         check: RecoveryCheck,
         target: i32,
-        led: BTreeSet<TopicPartition>,
+        led: Option<BTreeSet<TopicPartition>>,
         from: i64,
     ) -> JoinHandle<RecoveryRecord> {
         let nodes = Arc::clone(&self.nodes);
@@ -270,9 +278,13 @@ impl Executor {
         let fault = fault.to_owned();
         tokio::spawn(async move {
             let recovered = loop {
-                let waiting = match recovered(&nodes, check, target, &led, &topics).await {
+                let waiting = match recovered(&nodes, check, target, led.as_ref(), &topics).await {
                     Ok(()) => break Some(now_ms()),
-                    Err(waiting) => waiting,
+                    Err(Waiting::Unmeasurable(why)) => {
+                        eprintln!("soak-contract: {fault} {check}: gave up: {why}");
+                        break None;
+                    }
+                    Err(Waiting::For(waiting)) => waiting,
                 };
                 if now_ms() >= give_up {
                     eprintln!("soak-contract: {fault} {check}: gave up; last seen: {waiting}");
@@ -290,6 +302,45 @@ impl Executor {
     }
 }
 
+/// Why a recovery has not been observed yet.
+#[derive(Debug)]
+enum Waiting {
+    /// Still waiting, for what the message says.
+    For(String),
+    /// It can never be observed, for the reason the message gives.
+    Unmeasurable(String),
+}
+
+/// Whether leadership has failed over off `target`, given what it `led` when
+/// the fault was injected (`None` when that is unknown) and the `answer` of
+/// the node that served `Metadata` (`None` when none did).
+///
+/// An unknown `led` is never failed over: an empty set would pass at once,
+/// and record a failover that was never seen.
+fn leader_failover(
+    led: Option<&BTreeSet<TopicPartition>>,
+    answer: Option<(i32, &[PartitionState])>,
+    target: i32,
+) -> Result<(), Waiting> {
+    let Some(led) = led else {
+        return Err(Waiting::Unmeasurable(format!(
+            "what node {target} led before the injection is unknown"
+        )));
+    };
+    match answer {
+        Some((from, states)) if from != target => {
+            let waiting = not_failed_over(states, led, target);
+            if waiting.is_empty() {
+                Ok(())
+            } else {
+                Err(Waiting::For(format!("node {from} reports {waiting:?}")))
+            }
+        }
+        Some(_) => Err(Waiting::For(format!("only node {target} answers Metadata"))),
+        None => Err(Waiting::For("no node answers Metadata".to_owned())),
+    }
+}
+
 /// Whether the cluster has recovered as `check` asks, after a fault on
 /// `target` that led `led` when it was injected, or what it is still waiting
 /// for.
@@ -302,35 +353,40 @@ async fn recovered(
     nodes: &Nodes,
     check: RecoveryCheck,
     target: i32,
-    led: &BTreeSet<TopicPartition>,
+    led: Option<&BTreeSet<TopicPartition>>,
     topics: &[(String, i32)],
-) -> Result<(), String> {
+) -> Result<(), Waiting> {
     match check {
-        RecoveryCheck::LeaderFailover => match nodes.metadata_from_any(Some(target)).await {
-            Some((from, states)) if from != target => {
-                let waiting = not_failed_over(&states, led, target);
-                if waiting.is_empty() {
-                    Ok(())
-                } else {
-                    Err(format!("node {from} reports {waiting:?}"))
-                }
-            }
-            Some(_) => Err(format!("only node {target} answers Metadata")),
-            None => Err("no node answers Metadata".to_owned()),
-        },
+        RecoveryCheck::LeaderFailover => {
+            let answer = match led {
+                Some(_) => nodes.metadata_from_any(Some(target)).await,
+                None => None,
+            };
+            leader_failover(
+                led,
+                answer
+                    .as_ref()
+                    .map(|(from, states)| (*from, states.as_slice())),
+                target,
+            )
+        }
         RecoveryCheck::ControllerFailover => match nodes.controller(Some(target)).await {
             Some(controller) if controller != target => Ok(()),
-            other => Err(format!("active controller among the others: {other:?}")),
+            other => Err(Waiting::For(format!(
+                "active controller among the others: {other:?}"
+            ))),
         },
         RecoveryCheck::IsrRejoin | RecoveryCheck::CatchUpAfterPause => {
             nodes
                 .metadata(target)
                 .await
-                .map_err(|error| format!("node {target} does not answer: {error}"))?;
+                .map_err(|error| Waiting::For(format!("node {target} does not answer: {error}")))?;
             match nodes.metadata_from_any(Some(target)).await {
                 Some((_, states)) if isr_complete(&states, topics) => Ok(()),
-                Some((from, _)) => Err(format!("node {from} reports an incomplete ISR")),
-                None => Err("no node answers Metadata".to_owned()),
+                Some((from, _)) => Err(Waiting::For(format!(
+                    "node {from} reports an incomplete ISR"
+                ))),
+                None => Err(Waiting::For("no node answers Metadata".to_owned())),
             }
         }
     }
@@ -362,13 +418,17 @@ pub(crate) async fn await_full_isr(
 #[cfg(test)]
 mod tests {
     use {
-        super::{checks_for, measured_from_injection},
+        super::{
+            PartitionState, TopicPartition, Waiting, checks_for, leader_failover,
+            measured_from_injection,
+        },
         assert2::check,
         krabka_bench_driver::soak::{
             contract::{FaultKind, RecoveryCheck, Target},
             schedule::ScheduledFault,
         },
         krabka_units::prelude::*,
+        std::collections::BTreeSet,
     };
 
     fn fault(kind: FaultKind, target: Target) -> ScheduledFault {
@@ -415,5 +475,60 @@ mod tests {
         from_injection: bool,
     ) {
         check!(measured_from_injection(check) == from_injection);
+    }
+
+    /// Partition 0 of `t`, led by `leader`.
+    fn leading(leader: i32) -> Vec<PartitionState> {
+        vec![PartitionState {
+            topic: "t".to_owned(),
+            partition: 0,
+            leader,
+            replicas: vec![1, 2, 3],
+            isr: vec![1, 2, 3],
+        }]
+    }
+
+    fn partitions(led: &[i32]) -> BTreeSet<TopicPartition> {
+        led.iter()
+            .map(|partition| ("t".to_owned(), *partition))
+            .collect()
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum Seen {
+        FailedOver,
+        Waiting,
+        Unmeasurable,
+    }
+
+    #[yare::parameterized(
+        unknown_led_is_never_failed_over = { None, Some((2, 2)), Seen::Unmeasurable },
+        unknown_led_with_no_answer = { None, None, Seen::Unmeasurable },
+        nothing_led_has_nothing_to_move = { Some(&[]), Some((2, 1)), Seen::FailedOver },
+        led_partition_moved = { Some(&[0]), Some((2, 2)), Seen::FailedOver },
+        led_partition_still_on_the_target = { Some(&[0]), Some((2, 1)), Seen::Waiting },
+        only_the_target_answers = { Some(&[0]), Some((1, 2)), Seen::Waiting },
+        nobody_answers = { Some(&[0]), None, Seen::Waiting },
+    )]
+    fn a_leader_failover_is_seen_only_against_what_the_target_is_known_to_have_led(
+        led: Option<&[i32]>,
+        answer: Option<(i32, i32)>,
+        seen: Seen,
+    ) {
+        let led = led.map(partitions);
+        let states = answer.map(|(from, leader)| (from, leading(leader)));
+        let outcome = leader_failover(
+            led.as_ref(),
+            states
+                .as_ref()
+                .map(|(from, states)| (*from, states.as_slice())),
+            1,
+        );
+        let outcome = match outcome {
+            Ok(()) => Seen::FailedOver,
+            Err(Waiting::For(_)) => Seen::Waiting,
+            Err(Waiting::Unmeasurable(_)) => Seen::Unmeasurable,
+        };
+        check!(outcome == seen);
     }
 }
