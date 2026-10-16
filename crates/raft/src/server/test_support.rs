@@ -5,7 +5,7 @@
 use {
     crate::{
         ControllerFetchMissLimit, MetadataLogConfig, MetadataRaftCommandQueueCapacity,
-        MetadataRaftFetchMax,
+        MetadataRaftFetchMax, NoEventQueueRecorder,
         error::RaftError,
         kraft::{Activation, KraftController, NullPeerSender, transport::wire::PeerRequest},
         test_support::{encode, single_partition_topic},
@@ -94,6 +94,7 @@ pub(super) fn test_engine_with_voters(
             ..MetadataLogConfig::default()
         },
         Activation::default(),
+        std::sync::Arc::new(NoEventQueueRecorder),
     )
     .expect("open engine");
     (ctrl, dir)

@@ -7,7 +7,12 @@
 //! in `routing`.
 
 use {
-    crate::{RaftListenerHandshake, network::OutboundDialer, types::NodeId},
+    crate::{
+        RaftListenerHandshake,
+        event_queue::{EventQueueRecorder, NoEventQueueRecorder},
+        network::OutboundDialer,
+        types::NodeId,
+    },
     krabka_kraft_core::snapshot_fetch::METADATA_SNAPSHOT_FETCH_HARD_MAX,
     krabka_units::{
         fmt::Human as _,
@@ -124,6 +129,10 @@ pub struct ListenerLimits {
     /// `usize::MAX` for no ceiling.
     #[default(usize::MAX)]
     pub max_connections_per_ip: usize,
+    /// `quota.window.size.seconds`: the longest the acceptor waits out a
+    /// `max.connection.creation.rate` throttle.
+    #[default(Duration::from_secs(1))]
+    pub max_connection_throttle: Duration,
 }
 
 // Quantities render in the operator form (`1s`, `20MiB`) rather than `uom`'s
@@ -237,6 +246,10 @@ pub struct ControllerConfig {
     /// How the metadata log rolls, how long it keeps the prefix a snapshot
     /// covers, and how often an idle leader appends to it.
     pub metadata_log: MetadataLogConfig,
+    /// Where the engine loop reports Kafka's controller event-queue
+    /// measurements. The broker passes its metrics registry.
+    #[debug(skip)]
+    pub event_queue_recorder: Arc<dyn EventQueueRecorder>,
 }
 
 impl ControllerConfig {
@@ -296,6 +309,7 @@ impl ControllerConfig {
                 max_idle_interval: secs(0),
                 ..MetadataLogConfig::default()
             },
+            event_queue_recorder: Arc::new(NoEventQueueRecorder),
         }
     }
 }

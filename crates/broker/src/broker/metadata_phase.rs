@@ -23,6 +23,7 @@ use {
         host_port::{HostPort, parse_host_port},
         metadata_observer::{MetadataObserver, ObserverConfig},
         metadata_source::{MetadataSource, ObserverSource, QuorumForwarder, or_fatal_fault},
+        metrics::BrokerMetrics,
         network::client::{InterBrokerClient, InterBrokerDialer},
         platform::{Sockets, bind_listener},
         raft_handshake::{AuditLogArc, BrokerRaftHandshake},
@@ -191,6 +192,7 @@ async fn start_metadata_source(
     controller_listener: Option<tokio::net::TcpListener>,
     transport: RaftTransport,
     wal_shards: Arc<WalShardRegistry>,
+    metrics: &BrokerMetrics,
 ) -> Result<MetadataControlPlane, BrokerError> {
     let RaftTransport {
         controller_cell,
@@ -241,12 +243,14 @@ async fn start_metadata_source(
                 max_idle: config.connections_max_idle_for(CONTROLLER_LISTENER_NAME),
                 max_connections: config.max_connections,
                 max_connections_per_ip: config.max_connections_per_ip,
+                max_connection_throttle: config.connection_creation_throttle_max.to_std(),
             },
             max_bytes_between_snapshots: config.metadata_max_bytes_between_snapshots,
             max_snapshot_interval: config.metadata_max_snapshot_interval,
             snapshot_interval_records: config.metadata_snapshot_interval_records,
             metadata_snapshot_fetch_max: config.metadata_snapshot_fetch_max,
             metadata_log: config.metadata_log,
+            event_queue_recorder: Arc::new(metrics.clone()),
         };
         let controller = Arc::new(
             krabka_raft::Controller::start_with_listener(controller_config, controller_listener)
@@ -450,6 +454,7 @@ pub(super) async fn start_metadata_phase(
     tls_dynamic: Option<&Arc<krabka_security::DynamicServerConfig>>,
     inter_broker_client: &Arc<InterBrokerClient>,
     wal_shards: Arc<WalShardRegistry>,
+    metrics: &BrokerMetrics,
 ) -> Result<MetadataPhase, BrokerError> {
     let controller_listener =
         bind_ephemeral_controller_listener(config, controller_listener).await?;
@@ -470,6 +475,7 @@ pub(super) async fn start_metadata_phase(
         controller_listener,
         transport,
         wal_shards,
+        metrics,
     )
     .await?;
     spawn_auto_join(config, &controller.source, inter_broker_client);

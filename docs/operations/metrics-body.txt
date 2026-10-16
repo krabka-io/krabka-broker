@@ -55,6 +55,49 @@ krabka_broker_controller_leader_changes_total 0
 # HELP krabka_broker_controller_fencing_publications Cumulative count of completed broker-fencing publication passes run by this broker while it holds the controller leadership, whether or not the pass had a difference to write. The pass awaits its own commit, so an increment means the fencing state it decided on is applied rather than in flight..
 # TYPE krabka_broker_controller_fencing_publications counter
 krabka_broker_controller_fencing_publications_total 0
+# HELP krabka_broker_controller_event_queue_time_seconds Seconds a command waited on the controller engine's queue before the loop started it. Mirrors Kafka's ControllerEventManager.EventQueueTimeMs. Controller and combined nodes only..
+# TYPE krabka_broker_controller_event_queue_time_seconds histogram
+krabka_broker_controller_event_queue_time_seconds_sum 0.0
+krabka_broker_controller_event_queue_time_seconds_count 0
+krabka_broker_controller_event_queue_time_seconds_bucket{le="0.00005"} 0
+krabka_broker_controller_event_queue_time_seconds_bucket{le="0.0001"} 0
+krabka_broker_controller_event_queue_time_seconds_bucket{le="0.0005"} 0
+krabka_broker_controller_event_queue_time_seconds_bucket{le="0.001"} 0
+krabka_broker_controller_event_queue_time_seconds_bucket{le="0.0025"} 0
+krabka_broker_controller_event_queue_time_seconds_bucket{le="0.005"} 0
+krabka_broker_controller_event_queue_time_seconds_bucket{le="0.01"} 0
+krabka_broker_controller_event_queue_time_seconds_bucket{le="0.025"} 0
+krabka_broker_controller_event_queue_time_seconds_bucket{le="0.1"} 0
+krabka_broker_controller_event_queue_time_seconds_bucket{le="0.5"} 0
+krabka_broker_controller_event_queue_time_seconds_bucket{le="2.0"} 0
+krabka_broker_controller_event_queue_time_seconds_bucket{le="10.0"} 0
+krabka_broker_controller_event_queue_time_seconds_bucket{le="+Inf"} 0
+# HELP krabka_broker_controller_event_queue_processing_time_seconds Seconds one controller event ran, to its commit reply for a write. Mirrors Kafka's ControllerEventManager.EventQueueProcessingTimeMs. Controller and combined nodes only..
+# TYPE krabka_broker_controller_event_queue_processing_time_seconds histogram
+krabka_broker_controller_event_queue_processing_time_seconds_sum 0.0
+krabka_broker_controller_event_queue_processing_time_seconds_count 0
+krabka_broker_controller_event_queue_processing_time_seconds_bucket{le="0.00005"} 0
+krabka_broker_controller_event_queue_processing_time_seconds_bucket{le="0.0001"} 0
+krabka_broker_controller_event_queue_processing_time_seconds_bucket{le="0.0005"} 0
+krabka_broker_controller_event_queue_processing_time_seconds_bucket{le="0.001"} 0
+krabka_broker_controller_event_queue_processing_time_seconds_bucket{le="0.0025"} 0
+krabka_broker_controller_event_queue_processing_time_seconds_bucket{le="0.005"} 0
+krabka_broker_controller_event_queue_processing_time_seconds_bucket{le="0.01"} 0
+krabka_broker_controller_event_queue_processing_time_seconds_bucket{le="0.025"} 0
+krabka_broker_controller_event_queue_processing_time_seconds_bucket{le="0.1"} 0
+krabka_broker_controller_event_queue_processing_time_seconds_bucket{le="0.5"} 0
+krabka_broker_controller_event_queue_processing_time_seconds_bucket{le="2.0"} 0
+krabka_broker_controller_event_queue_processing_time_seconds_bucket{le="10.0"} 0
+krabka_broker_controller_event_queue_processing_time_seconds_bucket{le="+Inf"} 0
+# HELP krabka_broker_controller_event_queue_operations_started Events the controller engine loop started, one per turn. Mirrors Kafka's KafkaController.EventQueueOperationsStartedCount..
+# TYPE krabka_broker_controller_event_queue_operations_started counter
+krabka_broker_controller_event_queue_operations_started_total 0
+# HELP krabka_broker_controller_event_queue_operations_timed_out Commands the controller engine reached after their caller had stopped waiting for the reply. Mirrors Kafka's KafkaController.EventQueueOperationsTimedOutCount; the engine still runs them..
+# TYPE krabka_broker_controller_event_queue_operations_timed_out counter
+krabka_broker_controller_event_queue_operations_timed_out_total 0
+# HELP krabka_broker_controller_event_queue_idle_seconds Seconds the controller engine loop waited for its next event. rate() is Kafka's ControllerEventManager.AvgIdleRatio..
+# TYPE krabka_broker_controller_event_queue_idle_seconds counter
+krabka_broker_controller_event_queue_idle_seconds_total 0.0
 # HELP krabka_broker_isr_shrinks Cumulative count of ISR shrinks proposed by this broker's ISR-maintenance loop..
 # TYPE krabka_broker_isr_shrinks counter
 krabka_broker_isr_shrinks_total 0
