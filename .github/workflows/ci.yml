@@ -143,7 +143,7 @@ jobs:
       - name: daemon-free tests
         run: bazel test --test_tag_filters=-docker,-timing-sensitive //crates/...
 
-      # The eight suites tagged timing-sensitive, plus
+      # The suites tagged timing-sensitive, plus
       # `//packaging:image_binaries_test`, which sits outside `//crates`. They
       # run in an invocation of their own so that the ~140 suites above do not
       # compete with them for the runner's four cores.
@@ -195,7 +195,7 @@ jobs:
   # keeps this to the tests it actually runs. `//crates/...` reaches the 22
   # `*_docker_test` wrappers, each of which links its suite a second time as a
   # `*_docker_bin`, and `--test_tag_filters` alone excludes a test from the run
-  # but still builds it. Those 22 plus the 5 timing-sensitive suites are 27
+  # but still builds it. Those 22 plus the timing-sensitive suites are
   # instrumented broker binaries this job would otherwise link and discard.
   #
   # This job used to carry `disk-cache: false`, alone among the Bazel jobs, and

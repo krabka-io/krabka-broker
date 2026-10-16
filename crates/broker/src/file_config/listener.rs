@@ -43,14 +43,12 @@ pub struct FileTlsConfig {
     /// rules are tried in order and the first match wins. Defaults to
     /// `["DEFAULT"]`, so a listener that says nothing keeps Kafka's behaviour
     /// of using the full DN. A malformed entry is rejected at startup.
-    /// A case-insensitive backreference compares as JDK 17 does: under
-    /// `(?i)` by ASCII case only, so `é` does not match `É`, and under
-    /// `(?iu)` by Java's simple case mapping, so `i` matches `İ` and `ı`, and
-    /// `s` matches `ſ`. Where such a reference to text that holds a character
-    /// outside the Basic Multilingual Plane makes JDK 17 throw, the DN is
-    /// rejected. `\R` gives back the `\n` of `\r\n` where JDK 17 does, and a
-    /// group that matched inside a look-around keeps its text after the match
-    /// backtracks out of it, as in Java.
+    /// A case-insensitive backreference compares as Java does: under `(?i)`
+    /// by ASCII case only, so `é` does not match `É`, and under `(?iu)` by
+    /// Java's simple case mapping, one code point for one, so `i` matches `İ`
+    /// and `ı`, and `s` matches `ſ`. `\R` gives back the `\n` of `\r\n` where
+    /// Java does, and a group that matched inside a look-around keeps its
+    /// text after the match backtracks out of it, as in Java.
     #[serde(default = "default_principal_mapping_rules")]
     pub principal_mapping_rules: Vec<String>,
 }

@@ -71,6 +71,15 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   with `the controller leader has uncommitted metadata records` until the
   broker came back, so its partitions kept their leader. A tail that holds a
   metadata record is still waited for (#1453).
+- A per-broker `listener.name.<listener>.ssl.keystore.*` or
+  `listener.name.<listener>.ssl.truststore.*` change now takes effect on an
+  SSL or SASL_SSL listener: the next handshake gets the new stores, and a
+  store file is read again when it changes. The broker the alter is addressed
+  to checks the change first, as Kafka's `SslFactory` does, and answers
+  `INVALID_REQUEST` when a store does not load or a new certificate changes
+  the DN or drops a SAN. Before, the broker stored and reported the keys and
+  kept serving its static certificate. krabka reads PEM stores with an
+  unencrypted key only (#1422).
 - `max.connections.per.ip.overrides`, `max.connection.creation.rate` and the
   per-listener `listener.name.<listener>.max.connections` and
   `listener.name.<listener>.max.connection.creation.rate` now take effect, on

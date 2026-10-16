@@ -49,7 +49,10 @@ pub(crate) use self::append::run_produce_append_batch;
 pub(crate) use self::storage::{flag_storage_failure, storage_failure_error};
 use self::{
     compaction::handle_compact,
-    mutations::{ReplicationState, ResetMutation, handle_log_reset, handle_replicate, handle_trim},
+    mutations::{
+        ReplicationState, ResetMutation, handle_follow_leader_log_start, handle_log_reset,
+        handle_replicate, handle_trim,
+    },
     produce::{DisklessParts, ProduceGroup, ProduceSignals, ProduceStorage, handle_produce},
     retention::handle_retention,
     storage::{StorageStatus, lock_log},
@@ -287,6 +290,9 @@ pub async fn run_with_sequencer(
             }
             WriterMessage::TrimToOffset { new_start, ack } => {
                 handle_trim(&log, storage_status, wal.as_ref(), new_start, ack).await;
+            }
+            WriterMessage::FollowLeaderLogStart { leader_start, ack } => {
+                handle_follow_leader_log_start(&log, storage_status, leader_start, ack).await;
             }
             WriterMessage::SetLogConfig { config, ack } => {
                 lock_log(&log).set_config(config);
