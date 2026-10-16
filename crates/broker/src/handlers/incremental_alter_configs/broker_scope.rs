@@ -19,6 +19,7 @@ use {
                 cordoned_log_dirs_disabled_error, cordoned_log_dirs_error, elr_min_isr_error,
                 stored_dynamic_configs, validate_dynamic_broker_configs,
             },
+            listener_reconfig::ListenerChange,
         },
         cordoned_log_dirs::CORDONED_LOG_DIRS,
         listener_tls::ListenerTlsInputs,
@@ -179,14 +180,16 @@ fn broker_records(
 /// again against its authoritative image.
 ///
 /// For this node's own resource that includes Kafka's reconfigurable checks,
-/// which only the addressed node can make: the TLS listeners' new keystores
-/// and truststores (`listener_tls`), checked over the stored dynamic configs
+/// which only the addressed node can make, over the stored dynamic configs
 /// with the operations applied, after the key rules those configs must pass
-/// first.
+/// first: the listener values of the config the node would run with, over its
+/// `static_config`, then the TLS listeners' new keystores and truststores
+/// (`listener_tls`), then the listeners it keeps.
 pub(super) fn preprocess_broker_resource(
     resource: &AlterConfigsResource,
     context: BrokerConfigContext<'_>,
     listener_tls: ListenerTlsInputs<'_>,
+    static_config: &BTreeMap<String, String>,
 ) -> Result<(), (i16, String)> {
     if context.is_cluster_default_resource(&resource.resource_name)? {
         return Ok(());
@@ -207,7 +210,10 @@ pub(super) fn preprocess_broker_resource(
     let mut proposed = current.clone();
     apply_operations(resource, &mut proposed, context.unstable)?;
     validate_dynamic_broker_configs(&proposed, true, context.unstable)?;
-    listener_tls.check_reconfiguration(&current, &proposed)
+    let listeners = ListenerChange::new(static_config, context.image, &current, &proposed);
+    listeners.check_values()?;
+    listener_tls.check_reconfiguration(&current, &proposed)?;
+    listeners.check_reconfiguration()
 }
 
 pub(super) fn handle_broker_scoped(

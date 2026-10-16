@@ -91,6 +91,8 @@ mod diskless;
 mod docs;
 pub(crate) mod group;
 pub(crate) mod kafka_broker;
+pub(crate) mod listener_endpoints;
+pub(crate) mod listener_reconfig;
 #[cfg(test)]
 mod kafka_parity;
 mod log_config;

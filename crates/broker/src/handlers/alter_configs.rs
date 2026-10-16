@@ -46,7 +46,7 @@ use {
         codes::{INVALID_CONFIG, INVALID_REQUEST},
         config_keys::{
             MIN_INSYNC_REPLICAS, broker_dynamic::BrokerConfigContext,
-            is_controller_managed_topic_config,
+            is_controller_managed_topic_config, listener_endpoints::static_originals,
         },
         handlers::{
             RequestContext, audit_resource, config_resource_refusal,
@@ -200,6 +200,7 @@ fn preprocess_resource(
                 unstable: broker.config.features.unstable_api_versions,
             },
             broker.listener_tls_inputs(),
+            &static_originals(&broker.config),
         )
     });
     let (code, message) = result.err()?;

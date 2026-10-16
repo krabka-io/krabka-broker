@@ -20,6 +20,7 @@ use {
                 cordoned_log_dirs_error, elr_min_isr_error, stored_dynamic_configs,
                 validate_dynamic_broker_configs,
             },
+            listener_reconfig::ListenerChange,
         },
         cordoned_log_dirs::CORDONED_LOG_DIRS,
         listener_tls::ListenerTlsInputs,
@@ -30,13 +31,15 @@ use {
 };
 
 /// Check broker identity, directory membership and, for this node's own
-/// resource, the TLS listeners' new keystores and truststores on the
-/// client-addressed node. `AlterConfigs` replaces the whole set, so the
+/// resource on the client-addressed node, its listener values over its
+/// `static_config`, the TLS listeners' new keystores and truststores, and the
+/// listeners it keeps. `AlterConfigs` replaces the whole set, so the
 /// replacement is the proposed config.
 pub(super) fn preprocess_broker_resource(
     resource: &AlterConfigsResource,
     context: BrokerConfigContext<'_>,
     listener_tls: ListenerTlsInputs<'_>,
+    static_config: &BTreeMap<String, String>,
 ) -> Result<(), (i16, String)> {
     let node_id = context.resource_node(&resource.resource_name)?;
     if node_id == krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID {
@@ -55,7 +58,11 @@ pub(super) fn preprocess_broker_resource(
         .map(|c| (c.name.clone(), c.value.clone().unwrap_or_default()))
         .collect();
     validate_dynamic_broker_configs(&proposed, true, context.unstable)?;
-    listener_tls.check_reconfiguration(&stored_dynamic_configs(context.image, node_id), &proposed)
+    let current = stored_dynamic_configs(context.image, node_id);
+    let listeners = ListenerChange::new(static_config, context.image, &current, &proposed);
+    listeners.check_values()?;
+    listener_tls.check_reconfiguration(&current, &proposed)?;
+    listeners.check_reconfiguration()
 }
 
 /// The records one `AlterConfigs` `BROKER` resource stages. `log_dirs` are
