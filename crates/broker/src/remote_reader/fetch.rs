@@ -23,6 +23,30 @@ use {
 };
 
 impl RemoteReader {
+    /// The leader epoch that owned `offset`, read off the archive, for an
+    /// offset below everything the local leader-epoch cache holds. See
+    /// [`archived_epoch_for_offset`] for how `ceiling` keeps the answer on
+    /// this log's lineage.
+    ///
+    /// Kafka never needs this: its cache is cut only up to the log start,
+    /// and a remote read never goes below that. A floor an older broker
+    /// established too high cut the cache with it, and once the follower takes
+    /// its leader's lower start back, the archive is the one record left of
+    /// the epochs below the cut.
+    ///
+    /// # Errors
+    /// Returns the RLMM's error when it cannot list the partition's segments,
+    /// among them `NotReady` while its metadata partition catches up.
+    pub(crate) async fn archived_epoch_for_offset(
+        &self,
+        tp: &TopicIdPartition,
+        offset: LogOffset,
+        ceiling: LeaderEpoch,
+    ) -> Result<Option<LeaderEpoch>, RemoteStorageError> {
+        let segments = self.list_remote_log_segments_blocking(tp).await?;
+        Ok(archived_epoch_for_offset(&segments, offset, ceiling))
+    }
+
     /// Finds the finished segment in the RLMM that covers
     /// `(leader_epoch, offset)`, fetches its offset index, positions into the
     /// `.log` data, and returns the first batch whose last offset is
@@ -275,6 +299,39 @@ fn whole_batches_from(data: &[u8], offset: LogOffset) -> RawScan {
         at += len;
     }
     found(first, at).unwrap_or(RawScan::Missing)
+}
+
+/// The leader epoch the archive says owned `offset`, among the finished
+/// segments that cover it and no later than `ceiling`.
+///
+/// A segment's `segment_leader_epochs` maps each epoch to the first offset it
+/// wrote there, so the epoch that owned `offset` is the latest one starting at
+/// or before it. `ceiling` is the earliest epoch the local leader-epoch cache
+/// still holds: every offset below that entry was written in it or an earlier
+/// epoch on this log's lineage, so a segment that names a later epoch for
+/// `offset` belongs to a different history and is passed over.
+fn archived_epoch_for_offset(
+    segments: &[RemoteLogSegmentMetadata],
+    offset: LogOffset,
+    ceiling: LeaderEpoch,
+) -> Option<LeaderEpoch> {
+    segments
+        .iter()
+        .filter(|segment| {
+            segment.state() == RemoteLogSegmentState::CopySegmentFinished
+                && segment.start_offset() <= offset
+                && offset <= segment.end_offset()
+        })
+        .filter_map(|segment| {
+            segment
+                .segment_leader_epochs()
+                .iter()
+                .rev()
+                .find(|(_, start)| **start <= offset)
+                .map(|(epoch, _)| *epoch)
+        })
+        .filter(|epoch| *epoch <= ceiling)
+        .max()
 }
 
 fn relative_offset(
@@ -644,6 +701,67 @@ mod tests {
             relative_offset(&metadata, epoch, offset) == expected,
             "epoch={epoch:?} offset={offset}"
         );
+    }
+
+    /// One archived segment over `[start, end]` in `state`, whose epochs
+    /// begin at the given offsets.
+    fn archived_segment(
+        start: i64,
+        end: i64,
+        state: RemoteLogSegmentState,
+        epochs: std::collections::BTreeMap<LeaderEpoch, i64>,
+    ) -> RemoteLogSegmentMetadata {
+        RemoteLogSegmentMetadata::new(
+            krabka_remote_storage::RemoteLogSegmentId::new(tp(), Uuid::new_v4()),
+            start,
+            end,
+            0,
+            1,
+            0,
+            krabka_remote_storage::RemoteLogSegmentDetails::new(1024, state, epochs),
+        )
+        .unwrap()
+    }
+
+    /// The archive names the epoch that owned an offset the local
+    /// leader-epoch cache no longer covers: the latest epoch of the covering
+    /// segment that starts at or before the offset. A segment that is not
+    /// finished does not count, and one that names an epoch past `ceiling`
+    /// (the cache's earliest epoch) belongs to another history.
+    #[yare::parameterized(
+        first_epoch = { 10, LeaderEpoch(5), Some(LeaderEpoch(0)) },
+        second_epoch = { 60, LeaderEpoch(5), Some(LeaderEpoch(1)) },
+        second_segment = { 120, LeaderEpoch(5), Some(LeaderEpoch(2)) },
+        later_history_passed_over = { 120, LeaderEpoch(1), None },
+        unfinished_segment_ignored = { 250, LeaderEpoch(5), None },
+        not_archived = { 400, LeaderEpoch(5), None },
+    )]
+    fn the_archive_names_the_epoch_that_owned_an_offset(
+        offset: i64,
+        ceiling: LeaderEpoch,
+        expected: Option<LeaderEpoch>,
+    ) {
+        let segments = [
+            archived_segment(
+                0,
+                99,
+                RemoteLogSegmentState::CopySegmentFinished,
+                maplit::btreemap! { LeaderEpoch(0) => 0, LeaderEpoch(1) => 50 },
+            ),
+            archived_segment(
+                100,
+                199,
+                RemoteLogSegmentState::CopySegmentFinished,
+                maplit::btreemap! { LeaderEpoch(2) => 100 },
+            ),
+            archived_segment(
+                200,
+                299,
+                RemoteLogSegmentState::CopySegmentStarted,
+                maplit::btreemap! { LeaderEpoch(2) => 200 },
+            ),
+        ];
+        assert2::assert!(archived_epoch_for_offset(&segments, offset, ceiling) == expected);
     }
 
     /// The broker tiers segments under the leader epoch that was active at

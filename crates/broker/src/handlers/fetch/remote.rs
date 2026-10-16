@@ -305,11 +305,31 @@ pub(super) async fn try_remote_read(
     // stored locally still resolve to their copy-time epoch.  Fall back to
     // the current leader epoch when the checkpoint has no entries (empty /
     // fresh log) so behavior is at least as good as before.
-    let leader_epoch = {
+    //
+    // An offset below the checkpoint's first entry is one a floor established
+    // too high cut out of it, and that a follower later took back from its
+    // leader (`Log::follow_leader_log_start`). The archive is the record of
+    // which epoch owned it.
+    let (cached_epoch, earliest_cached_epoch) = {
         let log = part.log.lock().expect("log mutex poisoned");
-        log.epoch_checkpoint()
-            .epoch_for_offset(Offset(p.fetch_offset))
-            .unwrap_or(current_leader_epoch)
+        let checkpoint = log.epoch_checkpoint();
+        (
+            checkpoint.epoch_for_offset(Offset(p.fetch_offset)),
+            checkpoint.entries().first().map(|entry| entry.epoch),
+        )
+    };
+    let leader_epoch = match (cached_epoch, earliest_cached_epoch) {
+        (Some(epoch), _) => epoch,
+        (None, Some(ceiling)) => {
+            match reader
+                .archived_epoch_for_offset(&tp, p.fetch_offset, ceiling)
+                .await
+            {
+                Ok(found) => found.unwrap_or(current_leader_epoch),
+                Err(e) => return Some(fail_remote_read(&broker.metrics, p, &e)),
+            }
+        }
+        (None, None) => current_leader_epoch,
     };
     let max_bytes = usize::try_from(p.max_bytes.max(0)).unwrap_or(0);
 
