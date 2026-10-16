@@ -1,0 +1,308 @@
+//! What a contract asks of the cluster: the broker configuration, the topic
+//! each path writes to, and the contracts this executor cannot run.
+//!
+//! All of it is pure, so the hermetic tests below check it without a cluster.
+
+use {
+    krabka_bench_driver::soak::contract::{Contract, LoadPath, Semantics, Storage},
+    krabka_units::prelude::*,
+};
+
+/// Where every node mounts the shared host directory that is the local remote
+/// tier of a tiered path.
+pub(crate) const REMOTE_TIER: &str = "/var/lib/krabka-remote";
+
+/// Segment size of a compacted topic. The default 1 GiB segment would never
+/// roll in a short run, and the cleaner only compacts sealed segments.
+const COMPACTED_SEGMENT_BYTES: &str = "65536";
+
+/// Segment size and age of a tiered topic. Only sealed segments are copied to
+/// the remote tier, so a segment must seal well inside the run; 4 MiB and 15s
+/// keep the remote object count of a 72-hour run near a hundred thousand.
+const TIERED_SEGMENT_BYTES: &str = "4194304";
+const TIERED_SEGMENT_MS: &str = "15000";
+
+/// Every reason this executor cannot run `contract`, one line each.
+///
+/// A diskless path needs an authenticated inter-broker listener -- the WAL
+/// leader serves a shard only to a voter that authenticates as
+/// `broker-<id>` on that listener -- and the three-container fixture runs one
+/// anonymous plaintext listener, so it refuses one rather than run a path that
+/// can never form its quorum.
+pub(crate) fn unsupported(contract: &Contract) -> Vec<String> {
+    let mut reasons = Vec::new();
+    for path in &contract.paths {
+        match (path.storage, path.semantics) {
+            (Storage::Diskless, _) => reasons.push(format!(
+                "path `{}` is diskless: the soak executor's three-container cluster has no \
+                 authenticated inter-broker listener, which a diskless WAL quorum needs \
+                 (krabka-io/krabka-broker#1393)",
+                path.name
+            )),
+            (Storage::Tiered, Semantics::Compacted) => reasons.push(format!(
+                "path `{}` is compacted and tiered: Kafka refuses remote.storage.enable on a \
+                 compacted topic",
+                path.name
+            )),
+            _ => {}
+        }
+    }
+    if contract.cluster.brokers != 3 {
+        reasons.push(format!(
+            "the cluster has {} brokers; the soak fixture boots three",
+            contract.cluster.brokers
+        ));
+    }
+    reasons
+}
+
+/// The configuration every node adds to the fixture's file: top-level keys,
+/// then whole tables.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NodeToml {
+    pub(crate) root: String,
+    pub(crate) tables: String,
+}
+
+/// The node configuration `contract` declares.
+///
+/// The check-quorum window and the replica lag are set from the contract
+/// rather than left at the broker's defaults, so the limits the contract's
+/// pause plans were validated against are the ones the cluster runs with.
+pub(crate) fn node_toml(contract: &Contract) -> NodeToml {
+    let cluster = &contract.cluster;
+    let root = format!(
+        "controller_election_timeout = \"{}ms\"\n\
+         replica_lag_time_max = \"{}ms\"\n",
+        cluster.check_quorum_window.millis_i64(),
+        cluster.replica_lag_time_max.millis_i64(),
+    );
+    // The remote-log manager's pass runs every second rather than every
+    // thirty, so a sealed segment reaches the remote tier inside a short run
+    // as well as a long one.
+    let remote = if tiered(contract) {
+        format!(
+            "remote_log_manager_interval = \"1s\"\n\
+             \n\
+             [remote_storage]\n\
+             storage_dir = \"{REMOTE_TIER}\"\n\
+             \n\
+             [remote_storage.kafka_metadata]\n\
+             replication = {rf}\n\
+             min_isr = {min_isr}\n\
+             num_partitions = 3\n",
+            rf = cluster.replication_factor,
+            min_isr = cluster.min_insync_replicas,
+        )
+    } else {
+        String::new()
+    };
+    let tables = format!(
+        "\n[runtime]\n\
+         default_min_insync_replicas = {min_isr}\n\
+         offsets_topic_replication_factor = {rf}\n\
+         transaction_state_replication_factor = {rf}\n\
+         {remote}",
+        min_isr = cluster.min_insync_replicas,
+        rf = cluster.replication_factor,
+    );
+    NodeToml { root, tables }
+}
+
+/// Whether any path of `contract` is tiered.
+pub(crate) fn tiered(contract: &Contract) -> bool {
+    contract
+        .paths
+        .iter()
+        .any(|path| path.storage == Storage::Tiered)
+}
+
+/// The topic configuration of `path`, in the order it is sent.
+///
+/// Every unbounded topic keeps all it is given, because reconciliation reads
+/// every acknowledged record back from the earliest offset. A tiered topic
+/// keeps one byte locally, so that read is served from the remote tier.
+pub(crate) fn topic_configs(
+    path: &LoadPath,
+    min_insync_replicas: i16,
+) -> Vec<(&'static str, String)> {
+    let mut configs = vec![("min.insync.replicas", min_insync_replicas.to_string())];
+    let owned = |pairs: &[(&'static str, &str)]| -> Vec<(&'static str, String)> {
+        pairs
+            .iter()
+            .map(|(name, value)| (*name, (*value).to_owned()))
+            .collect()
+    };
+    if path.semantics == Semantics::Compacted {
+        configs.extend(owned(&[
+            ("cleanup.policy", "compact"),
+            ("internal.segment.bytes", COMPACTED_SEGMENT_BYTES),
+            ("segment.ms", "5000"),
+            ("min.cleanable.dirty.ratio", "0.01"),
+            ("min.compaction.lag.ms", "0"),
+        ]));
+    } else {
+        configs.extend(owned(&[
+            ("cleanup.policy", "delete"),
+            ("retention.ms", "-1"),
+            ("retention.bytes", "-1"),
+        ]));
+    }
+    if path.storage == Storage::Tiered {
+        configs.extend(owned(&[
+            ("remote.storage.enable", "true"),
+            ("internal.segment.bytes", TIERED_SEGMENT_BYTES),
+            ("segment.ms", TIERED_SEGMENT_MS),
+            ("local.retention.bytes", "1"),
+        ]));
+    }
+    configs
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::{REMOTE_TIER, node_toml, topic_configs, unsupported},
+        crate::support::manifest_dir,
+        assert2::check,
+        krabka_bench_driver::soak::contract::{Contract, Semantics, Storage},
+        krabka_broker::{
+            config::{BrokerConfig, RemoteStorageBackend, RlmmKind},
+            file_config::FileConfig,
+        },
+        krabka_units::prelude::*,
+    };
+
+    fn checked_in(name: &str) -> Contract {
+        let path = manifest_dir().join("../../bench/soak").join(name);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        Contract::from_yaml(&text).unwrap_or_else(|error| panic!("{name}: {error}"))
+    }
+
+    fn with_tiered_path(mut contract: Contract) -> Contract {
+        let mut path = contract.paths[0].clone();
+        path.name = "tiered-idempotent".to_owned();
+        path.storage = Storage::Tiered;
+        contract.paths.push(path);
+        contract
+    }
+
+    /// The node file the fixture writes, with the parts the fixture owns kept
+    /// to the minimum that parses.
+    fn applied(contract: &Contract) -> BrokerConfig {
+        let toml = node_toml(contract);
+        let text = format!(
+            "broker_id = 1\n{}\n[process]\nroles = [\"controller\", \"broker\"]\n{}",
+            toml.root, toml.tables
+        );
+        let file: FileConfig =
+            toml::from_str(&text).unwrap_or_else(|error| panic!("{text}\n{error}"));
+        let mut config = BrokerConfig::default();
+        file.apply_to(&mut config)
+            .unwrap_or_else(|error| panic!("{text}\n{error}"));
+        config
+    }
+
+    #[yare::parameterized(
+        self_check = { "self-check.yaml", &[] },
+        soak = { "rf3-72h.yaml", &["path `diskless-idempotent` is diskless"] },
+    )]
+    fn only_a_diskless_path_is_refused(file: &str, refused: &[&str]) {
+        let reasons = unsupported(&checked_in(file));
+        check!(reasons.len() == refused.len(), "{reasons:?}");
+        for (reason, fragment) in reasons.iter().zip(refused) {
+            check!(reason.starts_with(fragment));
+            check!(reason.contains("#1393"));
+        }
+    }
+
+    #[test]
+    fn a_compacted_tiered_path_is_refused() {
+        let mut contract = with_tiered_path(checked_in("self-check.yaml"));
+        let last = contract.paths.len() - 1;
+        contract.paths[last].semantics = Semantics::Compacted;
+        contract.paths[last].key_space = Some(8);
+        check!(
+            unsupported(&contract)
+                == [
+                    "path `tiered-idempotent` is compacted and tiered: Kafka refuses remote.storage.enable \
+             on a compacted topic"
+                ]
+        );
+    }
+
+    // `OpaAuthorizer::new` captures the current tokio runtime handle, so the
+    // apply step runs inside one, as it does in the binary.
+    #[tokio::test]
+    async fn the_node_file_carries_the_contracts_cluster_limits() {
+        let contract = checked_in("self-check.yaml");
+        let config = applied(&contract);
+        check!(config.controller_election_timeout == contract.cluster.check_quorum_window);
+        check!(config.replica_lag_time_max == contract.cluster.replica_lag_time_max);
+        check!(config.default_min_insync_replicas == 2);
+        check!(config.offsets_topic_replication_factor == 3);
+        check!(config.transaction_state_replication_factor == 3);
+        check!(config.remote_storage_backend.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_tiered_contract_shares_one_local_remote_tier() {
+        let config = applied(&with_tiered_path(checked_in("self-check.yaml")));
+        check!(matches!(
+            &config.remote_storage_backend,
+            Some(RemoteStorageBackend::Local { dir }) if dir.as_path() == std::path::Path::new(REMOTE_TIER)
+        ));
+        check!(config.remote_log_manager_interval == secs(1));
+        let RlmmKind::TopicBacked(rlmm) = &config.remote_log_metadata else {
+            panic!(
+                "expected the topic-backed RLMM: {:?}",
+                config.remote_log_metadata
+            );
+        };
+        check!(rlmm.replication == 3);
+        check!(rlmm.num_partitions == 3);
+    }
+
+    #[yare::parameterized(
+        idempotent = { 0, Storage::Classic, &[
+            ("min.insync.replicas", "2"),
+            ("cleanup.policy", "delete"),
+            ("retention.ms", "-1"),
+            ("retention.bytes", "-1"),
+        ] },
+        compacted = { 2, Storage::Classic, &[
+            ("min.insync.replicas", "2"),
+            ("cleanup.policy", "compact"),
+            ("internal.segment.bytes", "65536"),
+            ("segment.ms", "5000"),
+            ("min.cleanable.dirty.ratio", "0.01"),
+            ("min.compaction.lag.ms", "0"),
+        ] },
+        tiered = { 0, Storage::Tiered, &[
+            ("min.insync.replicas", "2"),
+            ("cleanup.policy", "delete"),
+            ("retention.ms", "-1"),
+            ("retention.bytes", "-1"),
+            ("remote.storage.enable", "true"),
+            ("internal.segment.bytes", "4194304"),
+            ("segment.ms", "15000"),
+            ("local.retention.bytes", "1"),
+        ] },
+    )]
+    fn each_path_gets_the_topic_its_semantics_need(
+        index: usize,
+        storage: Storage,
+        expected: &[(&str, &str)],
+    ) {
+        let contract = checked_in("self-check.yaml");
+        let mut path = contract.paths[index].clone();
+        path.storage = storage;
+        let configs = topic_configs(&path, contract.cluster.min_insync_replicas);
+        let configs: Vec<(&str, &str)> = configs
+            .iter()
+            .map(|(name, value)| (*name, value.as_str()))
+            .collect();
+        check!(configs == expected);
+    }
+}
