@@ -38,7 +38,24 @@ pub async fn serve_connection_on_listener(
     // non-matching host.
     let peer = Sockets::TARGET.peer_address(&stream);
     if spec.protocol.requires_tls() {
-        let acceptor = if let Some(per_tls) = spec.tls_config.as_ref() {
+        // A listener's dynamic `listener.name.<listener>.ssl.*` keys, set
+        // for this node, win over its static `tls_config` while set: Kafka's
+        // `SslFactory.reconfigure` serves new handshakes from the new stores.
+        let dynamic = spec
+            .tls_config
+            .as_ref()
+            .or(broker.config.tls_config.as_ref())
+            .and_then(|static_tls| {
+                broker.listener_tls.server_config(
+                    &broker.controller.current_image(),
+                    broker.config.node_id,
+                    &spec.name,
+                    static_tls,
+                )
+            });
+        let acceptor = if let Some(config) = dynamic {
+            tokio_rustls::TlsAcceptor::from(config)
+        } else if let Some(per_tls) = spec.tls_config.as_ref() {
             match per_tls.build_server_config() {
                 Ok(sc) => tokio_rustls::TlsAcceptor::from(sc),
                 Err(e) => {
