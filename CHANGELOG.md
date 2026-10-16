@@ -64,13 +64,6 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   every broker a fresh heartbeat session, as Kafka's does, and the node came
   back inside it. `controller_fetch_miss_limit` now applies to observers only
   (#1449).
-- The controller no longer refuses a dead broker's failover while the only
-  uncommitted record in its log is the KIP-835 no-op it appends every
-  `metadata.max.idle.interval.ms`. A failover the liveness ticker retried
-  once a second could land behind that no-op on every retry and be refused
-  with `the controller leader has uncommitted metadata records` until the
-  broker came back, so its partitions kept their leader. A tail that holds a
-  metadata record is still waited for (#1453).
 - `max.connections.per.ip.overrides`, `max.connection.creation.rate` and the
   per-listener `listener.name.<listener>.max.connections` and
   `listener.name.<listener>.max.connection.creation.rate` now take effect, on
