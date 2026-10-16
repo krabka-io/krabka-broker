@@ -58,6 +58,30 @@ pub(crate) async fn start_three_tiered_brokers_with_segment_sizes(
     Vec<TempDir>,
     TempDir,
 ) {
+    let TieredCluster {
+        brokers: [b1, b2, b3],
+        log_dirs,
+        remote_dir,
+        ..
+    } = start_tiered_cluster(segment_sizes).await;
+    (b1, b2, b3, log_dirs, remote_dir)
+}
+
+/// The three brokers of [`start_three_tiered_brokers_with_segment_sizes`], with
+/// the configuration each one booted from, so a test can stop one and start it
+/// again on the same log directory and addresses.
+pub(crate) struct TieredCluster {
+    pub(crate) brokers: [BrokerHandle; 3],
+    pub(crate) configs: [BrokerConfig; 3],
+    pub(crate) log_dirs: Vec<TempDir>,
+    pub(crate) remote_dir: TempDir,
+}
+
+/// Boots the three brokers of [`start_three_tiered_brokers_with_segment_sizes`]
+/// and keeps their configurations.
+pub(crate) async fn start_tiered_cluster(
+    segment_sizes: [krabka_units::ByteSize; 3],
+) -> TieredCluster {
     support::init_tracing();
 
     // Pre-bind concrete client + controller ports for all 3 brokers.
@@ -78,45 +102,44 @@ pub(crate) async fn start_three_tiered_brokers_with_segment_sizes(
         .collect();
 
     // Build a config for broker `i` (1-indexed broker_id/node_id).
-    let broker_configs: Vec<BrokerConfig> = (0..3)
-        .map(|i| {
-            let mut cfg = node_config(NodeIndex(i), log_dirs[i].path());
-            cfg.log_config.segment_size = segment_sizes[i];
-            cfg.directory_id = uuid::Uuid::from_u128(u128::try_from(i + 1).unwrap());
-            cfg.listen_addr = client_addrs[i];
-            cfg.advertised_listener = format!("127.0.0.1:{}", client_addrs[i].port());
-            cfg.controller_listen_addr = controller_addrs[i];
-            cfg.controller_quorum_voters = controller_voters(&voters);
-            cfg.bootstrap_mode = BootstrapMode::Bootstrap;
-            cfg.auto_join = false;
-            cfg.bootstrap_servers = vec![];
-            cfg.remote_storage_backend = Some(RemoteStorageBackend::Local {
-                dir: remote_dir.path().to_path_buf(),
-            });
-            cfg.remote_log_manager_interval = krabka_units::secs(1);
-            // RLMM: all 3 brokers bootstrap into broker 1's loopback.
-            // num_partitions=1 keeps all metadata on a single partition.
-            // replication=3 prevents the topic from being created before all
-            // brokers are registered; sorted placement makes broker 1 leader.
-            // Broker 2's RLMM consumer reads CopySegment events from broker 1
-            // before broker 1 dies; the cached metadata is then used for remote
-            // reads from the survivor.
-            cfg.remote_log_metadata = RlmmKind::TopicBacked(KafkaRlmmConfig {
-                bootstrap: format!("127.0.0.1:{}", client_addrs[0].port()),
-                num_partitions: 1,
-                replication: 3,
-                snapshot_interval: krabka_units::hours(1),
-                snapshot_dir: std::path::PathBuf::new(), // derived from log_dir
-                security: None,
-                ..KafkaRlmmConfig::default()
-            });
-            cfg
-        })
-        .collect();
+    let configs: [BrokerConfig; 3] = std::array::from_fn(|i| {
+        let mut cfg = node_config(NodeIndex(i), log_dirs[i].path());
+        cfg.log_config.segment_size = segment_sizes[i];
+        cfg.directory_id = uuid::Uuid::from_u128(u128::try_from(i + 1).unwrap());
+        cfg.listen_addr = client_addrs[i];
+        cfg.advertised_listener = format!("127.0.0.1:{}", client_addrs[i].port());
+        cfg.controller_listen_addr = controller_addrs[i];
+        cfg.controller_quorum_voters = controller_voters(&voters);
+        cfg.bootstrap_mode = BootstrapMode::Bootstrap;
+        cfg.auto_join = false;
+        cfg.bootstrap_servers = vec![];
+        cfg.remote_storage_backend = Some(RemoteStorageBackend::Local {
+            dir: remote_dir.path().to_path_buf(),
+        });
+        cfg.remote_log_manager_interval = krabka_units::secs(1);
+        // RLMM: all 3 brokers bootstrap into broker 1's loopback.
+        // num_partitions=1 keeps all metadata on a single partition.
+        // replication=3 prevents the topic from being created before all
+        // brokers are registered; sorted placement makes broker 1 leader.
+        // Broker 2's RLMM consumer reads CopySegment events from broker 1
+        // before broker 1 dies; the cached metadata is then used for remote
+        // reads from the survivor.
+        cfg.remote_log_metadata = RlmmKind::TopicBacked(KafkaRlmmConfig {
+            bootstrap: format!("127.0.0.1:{}", client_addrs[0].port()),
+            num_partitions: 1,
+            replication: 3,
+            snapshot_interval: krabka_units::hours(1),
+            snapshot_dir: std::path::PathBuf::new(), // derived from log_dir
+            security: None,
+            ..KafkaRlmmConfig::default()
+        });
+        cfg
+    });
 
     // Static cold-boot: all 3 start concurrently (sequential would deadlock —
     // a leader needs a majority of the static voter set up).
-    let starts: Vec<_> = broker_configs
+    let starts: Vec<_> = configs
+        .clone()
         .into_iter()
         .zip(controller_listeners)
         .zip(client_listeners)
@@ -146,7 +169,12 @@ pub(crate) async fn start_three_tiered_brokers_with_segment_sizes(
         .expect("b3 spawn join")
         .expect("b3 start");
 
-    (b1, b2, b3, log_dirs, remote_dir)
+    TieredCluster {
+        brokers: [b1, b2, b3],
+        configs,
+        log_dirs,
+        remote_dir,
+    }
 }
 
 /// Waits until all three brokers see each other registered, that is, until

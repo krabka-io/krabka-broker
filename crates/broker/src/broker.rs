@@ -18,6 +18,7 @@ use {
         future_log::FutureLogState,
         handlers::DispatchRegistry,
         heartbeat::controller_state::ControllerLivenessState,
+        listener_tls::{ListenerTlsCache, ListenerTlsInputs},
         log_dir_status::LogDirRegistry,
         metadata_source::MetadataSource,
         metrics::BrokerMetrics,
@@ -151,6 +152,10 @@ pub struct Broker {
     /// `current()` and wrap it in a fresh `TlsAcceptor`. The TLS
     /// hot-reload path swaps the inner config without restart.
     pub(crate) tls_dynamic: Option<Arc<krabka_security::DynamicServerConfig>>,
+    /// The server config each TLS listener builds from its dynamic
+    /// `listener.name.<listener>.ssl.*` keys, which win over the static
+    /// `tls_config` while set.
+    pub(crate) listener_tls: ListenerTlsCache,
     /// Linux kTLS (Increment F): `true` when the startup probe confirmed the
     /// kernel supports kTLS TX (kernel ≥ 4.13 + the `tls` module loadable) and
     /// rustls is configured to export secrets. Set ONCE at startup.
@@ -288,6 +293,15 @@ impl DisklessRuntime {
 }
 
 impl Broker {
+    /// This node's listeners and broker-wide `tls_config`, for the listener
+    /// SSL checks of an alter addressed to it.
+    pub(crate) fn listener_tls_inputs(&self) -> ListenerTlsInputs<'_> {
+        ListenerTlsInputs {
+            listeners: &self.config.listeners,
+            tls_config: self.config.tls_config.as_ref(),
+        }
+    }
+
     pub(crate) fn handlers(&self) -> &DispatchRegistry { &self.handlers }
 
     pub(crate) fn audit_product() -> krabka_audit::ProductInfo {

@@ -17,31 +17,45 @@ use {
             self,
             broker_dynamic::{
                 BrokerConfigContext, CLUSTER_DEFAULT_ONLY, cordoned_log_dirs_disabled_error,
-                cordoned_log_dirs_error, elr_min_isr_error, validate_dynamic_broker_configs,
+                cordoned_log_dirs_error, elr_min_isr_error, stored_dynamic_configs,
+                validate_dynamic_broker_configs,
             },
         },
         cordoned_log_dirs::CORDONED_LOG_DIRS,
+        listener_tls::ListenerTlsInputs,
     },
     krabka_metadata::{BrokerConfigRecord, MetadataRecord},
     krabka_protocol::owned::alter_configs_request::AlterConfigsResource,
     std::collections::BTreeMap,
 };
 
-/// Check broker identity and directory membership on the client-addressed node.
+/// Check broker identity, directory membership and, for this node's own
+/// resource, the TLS listeners' new keystores and truststores on the
+/// client-addressed node. `AlterConfigs` replaces the whole set, so the
+/// replacement is the proposed config.
 pub(super) fn preprocess_broker_resource(
     resource: &AlterConfigsResource,
     context: BrokerConfigContext<'_>,
+    listener_tls: ListenerTlsInputs<'_>,
 ) -> Result<(), (i16, String)> {
-    if !context.is_cluster_default_resource(&resource.resource_name)? {
-        let values = resource
-            .configs
-            .iter()
-            .filter(|c| c.name == CORDONED_LOG_DIRS)
-            .map(|c| (c.name.clone(), c.value.clone().unwrap_or_default()))
-            .collect();
-        cordoned_log_dirs_error(&values, context.log_dirs)?;
+    let node_id = context.resource_node(&resource.resource_name)?;
+    if node_id == krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID {
+        return Ok(());
     }
-    Ok(())
+    let values = resource
+        .configs
+        .iter()
+        .filter(|c| c.name == CORDONED_LOG_DIRS)
+        .map(|c| (c.name.clone(), c.value.clone().unwrap_or_default()))
+        .collect();
+    cordoned_log_dirs_error(&values, context.log_dirs)?;
+    let proposed: BTreeMap<String, String> = resource
+        .configs
+        .iter()
+        .map(|c| (c.name.clone(), c.value.clone().unwrap_or_default()))
+        .collect();
+    validate_dynamic_broker_configs(&proposed, true, context.unstable)?;
+    listener_tls.check_reconfiguration(&stored_dynamic_configs(context.image, node_id), &proposed)
 }
 
 /// The records one `AlterConfigs` `BROKER` resource stages. `log_dirs` are

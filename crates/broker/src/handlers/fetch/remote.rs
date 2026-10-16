@@ -822,9 +822,17 @@ mod tests {
     /// reading sits above every offset the archive holds. Refusing a remote
     /// read against it would answer `OFFSET_OUT_OF_RANGE` for the whole tier
     /// after every restart, so only a floor this process moved refuses one.
+    ///
+    /// Nor may the restart report that reading as the log start. A follower
+    /// raises its own start to the one its leader reports, and once it leads
+    /// it refuses reads below that start and answers `ListOffsets(EARLIEST)`
+    /// with it, so a consumer reading from the beginning would skip the whole
+    /// archive. Kafka's `LogLoader.load` never infers a remote-storage-enabled
+    /// log's start from its segments, so the restarted leader still reports
+    /// 0, to a consumer it serves and to a follower it redirects alike.
     #[tokio::test]
     async fn a_restart_does_not_put_the_archive_out_of_range() {
-        use crate::codes;
+        use {crate::codes, krabka_protocol::owned::fetch_response::PartitionData};
 
         let TieredBroker {
             handle: broker_handle,
@@ -833,6 +841,7 @@ mod tests {
         } = tiered_broker().await;
         let broker = broker_handle.broker_arc_for_test();
         let part = tiered_partition(&broker, dir.path(), true).await;
+        commit_everything(&part).await;
 
         let mut served = out_of_range_at(&part, 0);
         let bytes_served = super::try_remote_read(&broker, &mut served, &part).await;
@@ -841,6 +850,21 @@ mod tests {
             "the tier still answers offset 0 after a restart"
         );
         check!(served.out.error_code == codes::NONE);
+        check!(bounds(&served.out) == served_bounds(0));
+
+        let mut follower = super::PendingRead {
+            is_follower_fetch: true,
+            ..out_of_range_at(&part, 0)
+        };
+        check!(super::try_remote_read(&broker, &mut follower, &part).await == Some(0));
+        check!(
+            follower.out
+                == PartitionData {
+                    high_watermark: TIERED_HIGH_WATERMARK,
+                    log_start_offset: 0,
+                    ..super::refused_read(0, codes::OFFSET_MOVED_TO_TIERED_STORAGE)
+                }
+        );
 
         broker_handle.shutdown().await;
     }

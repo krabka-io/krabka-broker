@@ -194,6 +194,7 @@ pub(crate) mod kafka_hash;
 pub(crate) mod lag;
 pub(crate) mod leader_election;
 pub mod leader_rebalance;
+pub(crate) mod listener_tls;
 mod log_dir;
 pub mod log_dir_id;
 mod log_dir_status;
