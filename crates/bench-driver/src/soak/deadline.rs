@@ -130,19 +130,29 @@ fn execution_problems(
     problems
 }
 
-/// The recoveries `fault` is judged on: the ones its plan names, plus a
-/// controller failover when it moved leadership away from a broker that was
-/// recorded as the active controller, whatever the plan's selector said.
-fn required_checks(fault: &ScheduledFault, record: Option<&FaultRecord>) -> Vec<RecoveryCheck> {
+/// The recoveries `fault` is judged on when it landed on a broker with `role`.
+///
+/// They are the recoveries that its plan names. A fault that moves leadership
+/// away from the active controller (`role` is `controller`) also needs a
+/// controller failover, whatever the plan's target selector said. The executor
+/// calls this with the role it recorded, so that it measures the same
+/// recoveries that the judge checks.
+#[must_use]
+pub fn checks_for(fault: &ScheduledFault, role: &str) -> Vec<RecoveryCheck> {
     let mut checks = fault.checks.clone();
-    let hit_controller = record.is_some_and(|record| record.role == "controller");
-    if hit_controller
+    if role == "controller"
         && fault.kind.moves_leadership()
         && !checks.contains(&RecoveryCheck::ControllerFailover)
     {
         checks.push(RecoveryCheck::ControllerFailover);
     }
     checks
+}
+
+/// The recoveries `fault` is judged on, given its fault record. A fault with
+/// no record is judged on the recoveries its plan names.
+fn required_checks(fault: &ScheduledFault, record: Option<&FaultRecord>) -> Vec<RecoveryCheck> {
+    checks_for(fault, record.map_or("", |record| record.role.as_str()))
 }
 
 /// Check every scheduled fault's execution and recoveries.
@@ -291,11 +301,17 @@ fn rate(frequency: Frequency) -> String {
 #[cfg(test)]
 mod tests {
     use {
-        super::{DeadlineOutcome, check_budgets, check_recoveries},
+        super::{DeadlineOutcome, check_budgets, check_recoveries, checks_for},
         crate::soak::{
-            contract::{RecoveryCheck, fixture},
+            contract::{
+                FaultKind,
+                RecoveryCheck::{
+                    self, CatchUpAfterPause, ControllerFailover, IsrRejoin, LeaderFailover,
+                },
+                Target, fixture,
+            },
             evidence::{Evidence, FaultRecord, LatencySummary, PathMeasurement, RecoveryRecord},
-            schedule::expand,
+            schedule::{ScheduledFault, expand},
         },
         assert2::check,
         krabka_units::prelude::*,
@@ -471,5 +487,31 @@ mod tests {
         let verdicts = check_budgets(&contract, &Evidence::default());
         check!(verdicts.iter().all(|verdict| !verdict.within));
         check!(verdicts.len() == contract.paths.len());
+    }
+
+    #[yare::parameterized(
+        restart_on_the_controller = { FaultKind::Restart { graceful: false }, Target::Leader, "controller", &[LeaderFailover, IsrRejoin, ControllerFailover] },
+        restart_on_a_leader = { FaultKind::Restart { graceful: false }, Target::Leader, "leader", &[LeaderFailover, IsrRejoin] },
+        failover_pause_on_the_controller = { FaultKind::Pause { intends_failover: true }, Target::Any, "controller", &[LeaderFailover, CatchUpAfterPause, ControllerFailover] },
+        short_pause_on_the_controller = { FaultKind::Pause { intends_failover: false }, Target::Any, "controller", &[CatchUpAfterPause] },
+        controller_plan_on_the_controller = { FaultKind::Restart { graceful: true }, Target::Controller, "controller", &[LeaderFailover, IsrRejoin, ControllerFailover] },
+        no_record = { FaultKind::Restart { graceful: true }, Target::Any, "", &[LeaderFailover, IsrRejoin] },
+    )]
+    fn checks_for_adds_controller_failover_only_when_leadership_left_the_controller(
+        kind: FaultKind,
+        target: Target,
+        role: &str,
+        expected: &[RecoveryCheck],
+    ) {
+        let fault = ScheduledFault {
+            id: "f#0".to_owned(),
+            plan: "f".to_owned(),
+            checks: kind.checks(target),
+            kind,
+            target,
+            start: secs(10),
+            duration: secs(5),
+        };
+        check!(checks_for(&fault, role) == expected);
     }
 }

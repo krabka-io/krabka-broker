@@ -21,7 +21,8 @@ use {
         windows::{Span, Windows},
     },
     krabka_bench_driver::soak::{
-        contract::{Contract, FaultKind, RecoveryCheck},
+        contract::{Contract, RecoveryCheck},
+        deadline::checks_for,
         evidence::{CommitCheck, FaultRecord, RecoveryRecord},
         schedule::ScheduledFault,
     },
@@ -36,29 +37,6 @@ use {
 
 /// How often a recovery is polled.
 const POLL: Duration = Duration::from_millis(250);
-
-/// The recoveries `fault` is measured for, once its target's `role` is known.
-///
-/// A fault that moves leadership off the active controller is measured for a
-/// controller failover too, whatever its plan targeted: a `leader` or an
-/// `any` plan can land on the controller.
-pub(crate) fn checks_for(fault: &ScheduledFault, role: &str) -> Vec<RecoveryCheck> {
-    let mut checks = fault.checks.clone();
-    let moves_leadership = matches!(
-        fault.kind,
-        FaultKind::Restart { .. }
-            | FaultKind::Pause {
-                intends_failover: true
-            }
-    );
-    if role == "controller"
-        && moves_leadership
-        && !checks.contains(&RecoveryCheck::ControllerFailover)
-    {
-        checks.push(RecoveryCheck::ControllerFailover);
-    }
-    checks
-}
 
 /// Whether `check` is measured from the injection rather than the cleanup.
 pub(crate) fn measured_from_injection(check: RecoveryCheck) -> bool {

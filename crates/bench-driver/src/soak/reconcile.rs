@@ -27,7 +27,7 @@ use {
         contract::{Contract, Isolation, Semantics},
         evidence::{Evidence, FINAL_COMMIT_CHECK, ProducerLedger, ReaderLedger, TxnOutcome},
         ledger::SeqSet,
-        schedule::expand,
+        schedule::ScheduledFault,
     },
     serde::{Deserialize, Serialize},
     std::{collections::BTreeMap, fmt},
@@ -136,8 +136,15 @@ pub struct Reconciliation {
 }
 
 /// Reconcile `evidence` against the semantics `contract` declares.
+///
+/// `schedule` is the contract's expanded fault schedule. Every fault in it
+/// needs a committed-offset check on each path that commits offsets.
 #[must_use]
-pub fn reconcile(contract: &Contract, evidence: &Evidence) -> Reconciliation {
+pub fn reconcile(
+    contract: &Contract,
+    schedule: &[ScheduledFault],
+    evidence: &Evidence,
+) -> Reconciliation {
     let mut out = Reconciliation::default();
     let mut readers: BTreeMap<(&str, Isolation), &ReaderLedger> = BTreeMap::new();
     for reader in &evidence.readers {
@@ -179,17 +186,12 @@ pub fn reconcile(contract: &Contract, evidence: &Evidence) -> Reconciliation {
         }
     }
 
-    check_commit_coverage(contract, evidence, &mut out);
+    check_commit_coverage(contract, schedule, evidence, &mut out);
     for check in &evidence.commits {
-        let path = contract
-            .paths
-            .iter()
-            .find(|path| path.name == check.topic)
-            .map_or_else(|| check.topic.clone(), |path| path.name.clone());
         let mut fail = |kind, detail: String| {
             out.findings.push(Finding {
                 kind,
-                path: path.clone(),
+                path: check.topic.clone(),
                 subject: check.group.clone(),
                 isolation: None,
                 seqs: SeqSet::new(),
@@ -208,6 +210,13 @@ pub fn reconcile(contract: &Contract, evidence: &Evidence) -> Reconciliation {
                     "{place}: fetched {fetched}, below the acknowledged commit {}",
                     check.acknowledged
                 ),
+            ),
+            // The executor writes a negative log end when its end-offset
+            // lookup failed. That is a check the evidence lacks, not a
+            // committed offset past the log.
+            Some(_) if check.log_end < 0 => fail(
+                FindingKind::CommitCheckMissing,
+                format!("{place}: the log end could not be read, so the commit was not checked"),
             ),
             Some(fetched) if fetched > check.log_end => fail(
                 FindingKind::CommittedOffsetBeyondLog,
@@ -252,10 +261,7 @@ fn check_ledger(declared: Semantics, producer: &ProducerLedger, out: &mut Reconc
         );
     }
     if declared == Semantics::Transactional {
-        let in_transactions = producer
-            .transactions
-            .iter()
-            .fold(SeqSet::new(), |all, txn| all.union(&txn.seqs));
+        let in_transactions = SeqSet::union_all(producer.transactions.iter().map(|txn| &txn.seqs));
         let outside = producer.acked.difference(&in_transactions);
         if !outside.is_empty() {
             fail(
@@ -269,19 +275,23 @@ fn check_ledger(declared: Semantics, producer: &ProducerLedger, out: &mut Reconc
 /// Every committed-offset check the contract implies is in the evidence: for
 /// each path that commits offsets, at least one check across every scheduled
 /// fault and one `final` check.
-fn check_commit_coverage(contract: &Contract, evidence: &Evidence, out: &mut Reconciliation) {
-    let mut wanted: Vec<String> = expand(contract)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|fault| fault.id)
+fn check_commit_coverage(
+    contract: &Contract,
+    schedule: &[ScheduledFault],
+    evidence: &Evidence,
+    out: &mut Reconciliation,
+) {
+    let wanted: Vec<&str> = schedule
+        .iter()
+        .map(|fault| fault.id.as_str())
+        .chain([FINAL_COMMIT_CHECK])
         .collect();
-    wanted.push(FINAL_COMMIT_CHECK.to_owned());
     for path in contract.paths.iter().filter(|path| path.commit_offsets) {
         for fault in &wanted {
             let present = evidence
                 .commits
                 .iter()
-                .any(|check| check.topic == path.name && check.fault == *fault);
+                .any(|check| check.topic == path.name && check.fault == **fault);
             if !present {
                 out.findings.push(Finding {
                     kind: FindingKind::CommitCheckMissing,
@@ -322,29 +332,37 @@ fn reconcile_reader(
         String::new(),
     );
 
-    let mut aborted = SeqSet::new();
-    let mut committed = SeqSet::new();
-    for txn in &producer.transactions {
-        match txn.outcome {
-            TxnOutcome::Committed => committed = committed.union(&txn.seqs),
-            TxnOutcome::Aborted => aborted = aborted.union(&txn.seqs),
-            TxnOutcome::Unknown => {
-                let visible = reader.seen.intersection(&txn.seqs);
-                if reader.isolation == Isolation::ReadCommitted
-                    && !visible.is_empty()
-                    && visible.len() < txn.seqs.len()
-                {
-                    emit(
-                        FindingKind::PartialTransaction,
-                        txn.seqs.difference(&visible),
-                        format!(
-                            "transaction {} shows {} of its {} records",
-                            txn.id,
-                            visible.len(),
-                            txn.seqs.len()
-                        ),
-                    );
-                }
+    let with_outcome = |outcome| {
+        SeqSet::union_all(
+            producer
+                .transactions
+                .iter()
+                .filter(move |txn| txn.outcome == outcome)
+                .map(|txn| &txn.seqs),
+        )
+    };
+    let committed = with_outcome(TxnOutcome::Committed);
+    let aborted = with_outcome(TxnOutcome::Aborted);
+    // Only `read_committed` can see part of a transaction whose outcome is
+    // unknown; `read_uncommitted` may see any part of it.
+    if reader.isolation == Isolation::ReadCommitted {
+        let unknown = producer
+            .transactions
+            .iter()
+            .filter(|txn| txn.outcome == TxnOutcome::Unknown);
+        for txn in unknown {
+            let visible = reader.seen.intersection(&txn.seqs);
+            if !visible.is_empty() && visible.len() < txn.seqs.len() {
+                emit(
+                    FindingKind::PartialTransaction,
+                    txn.seqs.difference(&visible),
+                    format!(
+                        "transaction {} shows {} of its {} records",
+                        txn.id,
+                        visible.len(),
+                        txn.seqs.len()
+                    ),
+                );
             }
         }
     }
@@ -384,11 +402,7 @@ fn reconcile_reader(
     }
 
     if let (Semantics::Compacted, Some(space)) = (semantics, key_space) {
-        let mut latest_acked: BTreeMap<u64, u64> = BTreeMap::new();
-        for seq in producer.acked.iter() {
-            latest_acked.insert(seq % space, seq);
-        }
-        let regressed: SeqSet = latest_acked
+        let regressed: SeqSet = latest_by_key(&producer.acked, space)
             .iter()
             .filter(|(key, seq)| {
                 reader
@@ -417,10 +431,27 @@ fn reconcile_reader(
     });
 }
 
+/// The largest member of `acked` for each key, where the record numbered `seq`
+/// carries key `seq % space`.
+///
+/// It walks down from the largest member and stops once every one of the
+/// `space` keys has its latest value, so a ledger of many records per key
+/// costs about `space` steps, not one step per record.
+fn latest_by_key(acked: &SeqSet, space: u64) -> BTreeMap<u64, u64> {
+    let mut latest = BTreeMap::new();
+    for seq in acked.iter().rev() {
+        if u64::try_from(latest.len()).is_ok_and(|found| found >= space) {
+            break;
+        }
+        latest.entry(seq % space).or_insert(seq);
+    }
+    latest
+}
+
 #[cfg(test)]
 mod tests {
     use {
-        super::{FindingKind, reconcile},
+        super::{FindingKind, latest_by_key, reconcile},
         crate::soak::{
             contract::{Contract, Isolation, Semantics, fixture},
             evidence::{
@@ -428,6 +459,7 @@ mod tests {
                 TxnOutcome,
             },
             ledger::SeqSet,
+            schedule::expand,
         },
         assert2::check,
         std::collections::BTreeMap,
@@ -509,7 +541,7 @@ mod tests {
     }
 
     fn kinds(contract: &Contract, evidence: &Evidence) -> Vec<FindingKind> {
-        reconcile(contract, evidence)
+        reconcile(contract, &expand(contract).unwrap(), evidence)
             .findings
             .iter()
             .map(|finding| finding.kind)
@@ -519,7 +551,7 @@ mod tests {
     #[test]
     fn a_clean_run_has_no_findings() {
         let (contract, evidence) = clean();
-        let outcome = reconcile(&contract, &evidence);
+        let outcome = reconcile(&contract, &expand(&contract).unwrap(), &evidence);
         check!(outcome.findings.is_empty(), "{:?}", outcome.findings);
         check!(outcome.tallies.len() == 3);
     }
@@ -528,7 +560,7 @@ mod tests {
     fn a_missing_acknowledged_record_is_lost_and_named() {
         let (contract, mut evidence) = clean();
         evidence.readers[0].seen.remove(3);
-        let outcome = reconcile(&contract, &evidence);
+        let outcome = reconcile(&contract, &expand(&contract).unwrap(), &evidence);
         check!(outcome.findings.len() == 1);
         check!(outcome.findings[0].kind == FindingKind::Lost);
         check!(outcome.findings[0].seqs == [3].into_iter().collect());
@@ -545,6 +577,7 @@ mod tests {
         commit_regressed = { |e: &mut Evidence| e.commits[0].fetched = Some(2), &[FindingKind::CommittedOffsetRegressed] },
         commit_beyond_log = { |e: &mut Evidence| e.commits[0].fetched = Some(7), &[FindingKind::CommittedOffsetBeyondLog] },
         commit_gone = { |e: &mut Evidence| e.commits[0].fetched = None, &[FindingKind::CommittedOffsetMissing] },
+        log_end_unknown = { |e: &mut Evidence| { e.commits[0].fetched = Some(7); e.commits[0].log_end = -1; }, &[FindingKind::CommitCheckMissing] },
         reader_absent = { |e: &mut Evidence| { e.readers.remove(2); }, &[FindingKind::NoReadback] },
         nothing_acked = { |e: &mut Evidence| e.producers[0].acked = SeqSet::new(), &[FindingKind::NothingAcknowledged] },
         mislabelled_ledger = { |e: &mut Evidence| e.producers[1].semantics = Semantics::Idempotent, &[FindingKind::IncompleteLedger] },
@@ -588,7 +621,7 @@ mod tests {
         evidence.producers[0].attempted = 12;
         evidence.producers[0].failed = SeqSet::range(10, 12);
         evidence.readers[0].seen.insert(11);
-        let outcome = reconcile(&contract, &evidence);
+        let outcome = reconcile(&contract, &expand(&contract).unwrap(), &evidence);
         check!(outcome.tallies[0].maybe_delivered == 1);
     }
 
@@ -617,9 +650,27 @@ mod tests {
 
         // Key 2's latest value was compacted away in favour of an older one.
         evidence.readers[0].latest_by_key.insert(2, 2);
-        let outcome = reconcile(&contract, &evidence);
+        let outcome = reconcile(&contract, &expand(&contract).unwrap(), &evidence);
         check!(outcome.findings.len() == 1);
         check!(outcome.findings[0].kind == FindingKind::CompactionRegression);
         check!(outcome.findings[0].seqs == [6].into_iter().collect());
+    }
+
+    /// The latest acknowledged record of each key, one record at a time: the
+    /// walk over every member that [`latest_by_key`] replaces.
+    fn latest_by_key_model(acked: &SeqSet, space: u64) -> BTreeMap<u64, u64> {
+        acked.iter().map(|seq| (seq % space, seq)).collect()
+    }
+
+    #[yare::parameterized(
+        empty = { SeqSet::new(), 4 },
+        fewer_records_than_keys = { SeqSet::range(0, 3), 4 },
+        one_run = { SeqSet::range(0, 1_000), 7 },
+        gaps = { SeqSet::from(vec![[0, 10], [13, 14], [20, 23]]), 4 },
+        a_key_never_written = { (0..100).filter(|seq| seq % 5 != 2).collect(), 5 },
+        one_key = { SeqSet::range(3, 9), 1 },
+    )]
+    fn latest_by_key_matches_a_walk_over_every_record(acked: SeqSet, space: u64) {
+        check!(latest_by_key(&acked, space) == latest_by_key_model(&acked, space));
     }
 }
