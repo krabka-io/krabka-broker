@@ -77,6 +77,11 @@ fn offline_after_failed_append(part: &Partition, cfg: &Config) -> Option<RowActi
 /// follower's high watermark, which is the bound Kafka's
 /// `UnifiedLog.maybeIncrementLogStartOffset` enforces.
 ///
+/// On a tiered partition the follower takes the leader's start in either
+/// direction, which repairs a floor no deletion put there and gives a rebuilt
+/// follower the leader's global start: see
+/// [`krabka_log::Log::follow_leader_log_start`].
+///
 /// A diskless partition's local log start is the flusher's trim frontier, and
 /// its delete floor travels through the WAL index instead, so it is left
 /// alone here.
@@ -85,12 +90,17 @@ async fn follow_leader_log_start(part: &Partition, cfg: &Config, leader_log_star
         return;
     }
     let target = Offset(leader_log_start).min(part.high_watermark().await);
-    if target <= part.log_start_offset() {
+    let differs = part
+        .log
+        .lock()
+        .expect("log mutex poisoned")
+        .differs_from_leader_log_start(target);
+    if !differs {
         return;
     }
-    if let Err(error) = part.trim_to_offset(target).await {
+    if let Err(error) = part.follow_leader_log_start(target).await {
         warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
-            leader_log_start, "replicator: raising the log start to the leader's failed");
+            leader_log_start, "replicator: following the leader's log start failed");
     }
 }
 
