@@ -1,0 +1,170 @@
+# The M26 sustained-load contract: 72 hours at RF=3 with injected faults.
+#
+# This file is the declaration issue #1393 executes. Every number the verdict
+# is judged against is here, fixed before the run: change it in a reviewed
+# commit, never after looking at a result.
+#
+# Rates are sized so that every acknowledged record of every unbounded topic is
+# still on disk at the end, where the reconciler reads it back: about 100 GiB per
+# broker over 72 hours on the local paths, and 50 GiB on the remote tier, against
+# a 500 GiB data volume that the disk-pressure fault fills to 80%.
+name: rf3-72h
+profile: soak
+seed: 1392
+duration: 72h
+settle: 30min
+
+host:
+  cpus: 16
+  memory: 64GiB
+  disk_capacity: 500GiB
+  disk_reserve: 50GiB
+
+cluster:
+  brokers: 3
+  replication_factor: 3
+  min_insync_replicas: 2
+  # The broker's `controller_election_timeout` default: the follower fetch
+  # watchdog after which a silent controller leader is replaced.
+  check_quorum_window: 5s
+  replica_lag_time_max: 30s
+
+clients:
+  producer:
+    acks: all
+    compression: lz4
+    linger: 5ms
+    batch_size: 64KiB
+    request_timeout: 30s
+    delivery_timeout: 120s
+    max_send_attempts: 5
+  transactions:
+    timeout: 60s
+    records_per_transaction: 20
+    abort_every: 5
+  consumer:
+    session_timeout: 45s
+    commit_interval: 5s
+    poll_timeout: 500ms
+
+paths:
+  - name: classic-idempotent
+    semantics: idempotent
+    storage: classic
+    partitions: 12
+    rate: 200/s
+    throughput_floor: 190/s
+    payload: 1KiB
+    consumers: [read_uncommitted, read_committed]
+    commit_offsets: true
+    produce_latency: {p50: 20ms, p99: 250ms, p999: 1s}
+    consume_latency: {p50: 50ms, p99: 500ms, p999: 2s}
+  - name: classic-transactional
+    semantics: transactional
+    storage: classic
+    partitions: 12
+    rate: 100/s
+    throughput_floor: 95/s
+    payload: 1KiB
+    consumers: [read_committed, read_uncommitted]
+    commit_offsets: true
+    produce_latency: {p50: 30ms, p99: 300ms, p999: 1500ms}
+    consume_latency: {p50: 100ms, p99: 750ms, p999: 3s}
+  - name: classic-compacted
+    semantics: compacted
+    storage: classic
+    partitions: 6
+    rate: 200/s
+    throughput_floor: 190/s
+    payload: 256B
+    key_space: 10000
+    consumers: [read_uncommitted]
+    produce_latency: {p50: 20ms, p99: 250ms, p999: 1s}
+    consume_latency: {p50: 50ms, p99: 500ms, p999: 2s}
+  - name: tiered-idempotent
+    semantics: idempotent
+    storage: tiered
+    partitions: 6
+    rate: 200/s
+    throughput_floor: 190/s
+    payload: 1KiB
+    consumers: [read_uncommitted, read_committed]
+    commit_offsets: true
+    produce_latency: {p50: 20ms, p99: 250ms, p999: 1s}
+    consume_latency: {p50: 50ms, p99: 750ms, p999: 3s}
+  - name: diskless-idempotent
+    semantics: idempotent
+    storage: diskless
+    partitions: 6
+    rate: 100/s
+    throughput_floor: 95/s
+    payload: 1KiB
+    consumers: [read_uncommitted]
+    commit_offsets: true
+    produce_latency: {p50: 150ms, p99: 750ms, p999: 2s}
+    consume_latency: {p50: 250ms, p99: 1500ms, p999: 4s}
+
+deadlines:
+  leader_failover: 15s
+  isr_rejoin: 2min
+  controller_failover: 15s
+  catch_up_after_pause: 1min
+
+# Every period is a multiple of two hours, and each plan owns its own slice of
+# the two-hour cycle, so no two faults can overlap whatever the jitter draws.
+faults:
+  - name: quiet-pause
+    fault: {kind: pause}
+    target: follower
+    first_at: 10min
+    every: 2h
+    jitter: 10min
+    duration: 2s
+  - name: leader-pause
+    fault: {kind: pause, intends_failover: true}
+    target: leader
+    first_at: 30min
+    every: 6h
+    jitter: 10min
+    duration: 12s
+  - name: controller-pause
+    fault: {kind: pause, intends_failover: true}
+    target: controller
+    first_at: 50min
+    every: 12h
+    jitter: 10min
+    duration: 12s
+  - name: slow-follower
+    fault:
+      kind: slow_follower
+      slowdown:
+        method: netem
+        delay: 200ms
+        jitter: 50ms
+        image: nicolaka/netshoot@sha256:a20c2531bf35436ed3766cd6cfe89d352b050ccc4d7005ce6400adf97503da1b
+    target: follower
+    first_at: 65min
+    every: 4h
+    jitter: 5min
+    duration: 10min
+  - name: disk-pressure
+    fault: {kind: disk_pressure, watermark: 80%}
+    target: any
+    first_at: 85min
+    every: 8h
+    jitter: 5min
+    duration: 15min
+  - name: graceful-restart
+    fault: {kind: restart, graceful: true}
+    target: any
+    first_at: 110min
+    every: 12h
+    jitter: 5min
+    duration: 30s
+  - name: controller-kill
+    fault: {kind: restart, graceful: false}
+    target: controller
+    first_at: 470min
+    every: 12h
+    jitter: 5min
+    duration: 30s

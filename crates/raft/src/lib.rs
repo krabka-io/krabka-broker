@@ -60,6 +60,7 @@ mod config;
 mod connection_limiter;
 mod controller;
 mod error;
+pub mod event_queue;
 pub mod handshake;
 pub mod kraft;
 mod network;
@@ -92,14 +93,16 @@ pub use {
         kafka_4_3_1_max, metadata_partition_dir, supported_feature_range, supported_feature_ranges,
     },
     connection_limiter::{
-        ConnectionGuard, ConnectionLimit, ConnectionLimiter, ConnectionLimits, MAX_CONNECTIONS,
-        MAX_CONNECTIONS_PER_IP,
+        AcceptingListener, ConnectionGuard, ConnectionLimit, ConnectionLimiter, ConnectionLimits,
+        ConnectionQuotaSettings, ConnectionQuotas, IpOverrides, MAX_CONNECTION_CREATION_RATE,
+        MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP, MAX_CONNECTIONS_PER_IP_OVERRIDES,
     },
     controller::{
         Controller, ControllerHandle, QuorumState, QuorumStateSnapshot, SnapshotRange,
         SnapshotSlice, metadata_log_nonempty,
     },
     error::{MetadataReplayError, PersistedFormatError, RaftError},
+    event_queue::{EventQueueRecorder, NoEventQueueRecorder},
     handshake::{
         AllowAllGrants, ClusterGrants, ClusterOperation, ControllerApiVersions, RaftConnection,
         RaftHandshakeError, RaftListenerHandshake,

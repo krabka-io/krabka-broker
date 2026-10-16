@@ -63,4 +63,5 @@ pub mod prom;
 pub mod rate;
 pub mod report;
 pub mod scenario;
+pub mod soak;
 pub mod workload;

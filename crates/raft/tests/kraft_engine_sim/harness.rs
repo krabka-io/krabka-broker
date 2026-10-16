@@ -182,6 +182,7 @@ pub(crate) fn build_engine(
             metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
             metadata_log: metadata_log(),
             activation: krabka_raft::kraft::Activation::default(),
+            event_queue_recorder: Arc::new(krabka_raft::NoEventQueueRecorder),
         },
         log,
         dir.path().to_path_buf(),
@@ -214,6 +215,7 @@ pub(crate) fn reopen_controller(
         MetadataSnapshotFetchMax::default(),
         metadata_log(),
         krabka_raft::kraft::Activation::default(),
+        Arc::new(krabka_raft::NoEventQueueRecorder),
     )
     .expect("reopen")
 }

@@ -13,11 +13,12 @@ use {
     },
     crate::{
         error::RaftError,
+        event_queue::Arrival,
         kraft::{
             action::{Action, TimerKind},
             event::Event,
             role::Role,
-            transport::{Command, TimerTick, api_key, wire},
+            transport::{Command, QueuedCommand, TimerTick, api_key, wire},
             types::{NodeId, SimInstant},
         },
     },
@@ -30,13 +31,30 @@ use {
     },
 };
 
+/// What woke one turn of the loop.
+enum Wake {
+    /// A command arrived on the mpsc.
+    Command {
+        command: Command,
+        arrival: Arrival,
+    },
+    Election,
+    Fetch,
+    CheckQuorum,
+    Heartbeat,
+    /// A parked fetch's wait ran out; the turn's end answers it.
+    ParkedFetch,
+    Noop,
+    Clean,
+}
+
 impl Engine {
     /// The event loop. `select!`s the command mpsc against the election/fetch
     /// timers and the leader heartbeat interval, turning each into core input
     /// and executing the resulting [`Action`]s. Single-threaded over all
     /// consensus state, so no locking is needed inside; peer sends are
     /// fire-and-forget (see the module docs).
-    pub async fn run(mut self, mut cmd_rx: mpsc::Receiver<Command>) {
+    pub async fn run(mut self, mut cmd_rx: mpsc::Receiver<QueuedCommand>) {
         // A dynamically formatted controller starts as an observer with no
         // known leader.  It still has one or more discovery voters from the
         // bootstrap configuration, so poll one immediately.  The Fetch reply
@@ -66,40 +84,27 @@ impl Engine {
             tokio::pin!(noop_sleep);
             tokio::pin!(clean_sleep);
 
-            tokio::select! {
-                cmd = cmd_rx.recv() => {
-                    match cmd {
-                        None | Some(Command::Shutdown) => break,
-                        Some(c) => self.on_command(c),
-                    }
-                }
-                () = &mut election_sleep => {
-                    self.election_at = None;
-                    self.on_timer(TimerTick::Election);
-                }
-                () = &mut fetch_sleep => {
-                    self.fetch_at = None;
-                    self.on_timer(TimerTick::Fetch);
-                }
-                () = &mut check_quorum_sleep => {
-                    self.check_quorum_at = None;
-                    self.on_timer(TimerTick::CheckQuorum);
-                }
-                _ = heartbeat.tick() => {
-                    self.on_timer(TimerTick::Heartbeat);
-                }
+            let wake = tokio::select! {
+                queued = cmd_rx.recv() => match queued {
+                    None | Some(QueuedCommand { command: Command::Shutdown, .. }) => break,
+                    Some(QueuedCommand { command, enqueued_at }) => Wake::Command {
+                        arrival: Arrival {
+                            enqueued_at,
+                            caller_gone: command.caller_gone(),
+                        },
+                        command,
+                    },
+                },
+                () = &mut election_sleep => Wake::Election,
+                () = &mut fetch_sleep => Wake::Fetch,
+                () = &mut check_quorum_sleep => Wake::CheckQuorum,
+                _ = heartbeat.tick() => Wake::Heartbeat,
                 // A parked fetch whose wait ran out is answered below.
-                () = &mut parked_fetch_sleep => {}
-                () = &mut noop_sleep => {
-                    self.on_noop_timer();
-                }
-                () = &mut clean_sleep => {
-                    self.clean_at = Instant::now() + METADATA_LOG_CLEAN_INTERVAL;
-                    if let Err(error) = self.maybe_clean() {
-                        tracing::error!(?error, "kraft: metadata log cleaning failed");
-                    }
-                }
-            }
+                () = &mut parked_fetch_sleep => Wake::ParkedFetch,
+                () = &mut noop_sleep => Wake::Noop,
+                () = &mut clean_sleep => Wake::Clean,
+            };
+            self.run_turn(wake);
             // A write to the metadata log directory that failed this turn
             // ends the controller (KIP-858), and so does a failed controller
             // activation. The engine stops taking part in the quorum at once,
@@ -117,6 +122,10 @@ impl Engine {
             // that advances the HWM already retriggers this check, but an
             // idle voter only ticks the loop on its timers.
             self.maybe_snapshot();
+            // The event is done, unless a write parked its timer in a commit
+            // waiter.
+            self.turn = None;
+            self.event_queue.finish_turn();
         }
         if faulted {
             // The engine takes part in nothing more, but it keeps its watch
@@ -126,7 +135,7 @@ impl Engine {
             // also sees the fatal fault and not a bare shutdown.
             let mut held = Vec::new();
             while let Some(command) = cmd_rx.recv().await {
-                if matches!(command, Command::Shutdown) {
+                if matches!(command.command, Command::Shutdown) {
                     break;
                 }
                 held.push(command);
@@ -135,6 +144,40 @@ impl Engine {
         // Fail any parked submitters so callers don't hang on shutdown.
         for w in self.commit_waiters.drain(..) {
             let _ = w.reply.send(Err(RaftError::Shutdown));
+        }
+    }
+
+    /// Run the event the loop woke for, metered as one Kafka controller
+    /// event: a command with its queue time, a timer without one.
+    fn run_turn(&mut self, wake: Wake) {
+        let arrival = match &wake {
+            Wake::Command { arrival, .. } => Some(*arrival),
+            _ => None,
+        };
+        self.turn = Some(self.event_queue.start(arrival));
+        match wake {
+            Wake::Command { command, .. } => self.on_command(command),
+            Wake::Election => {
+                self.election_at = None;
+                self.on_timer(TimerTick::Election);
+            }
+            Wake::Fetch => {
+                self.fetch_at = None;
+                self.on_timer(TimerTick::Fetch);
+            }
+            Wake::CheckQuorum => {
+                self.check_quorum_at = None;
+                self.on_timer(TimerTick::CheckQuorum);
+            }
+            Wake::Heartbeat => self.on_timer(TimerTick::Heartbeat),
+            Wake::ParkedFetch => {}
+            Wake::Noop => self.on_noop_timer(),
+            Wake::Clean => {
+                self.clean_at = Instant::now() + METADATA_LOG_CLEAN_INTERVAL;
+                if let Err(error) = self.maybe_clean() {
+                    tracing::error!(?error, "kraft: metadata log cleaning failed");
+                }
+            }
         }
     }
 

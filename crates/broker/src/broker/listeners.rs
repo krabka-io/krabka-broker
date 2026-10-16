@@ -210,13 +210,19 @@ pub(super) fn spawn_listener_tasks(
     bound: Vec<BoundListener>,
 ) -> ListenerTasks {
     let shutdown = CancellationToken::new();
+    let several = bound.len() > 1;
     let tasks = bound
         .into_iter()
         .map(|BoundListener { spec, listener, .. }| {
+            let protected = several
+                && spec
+                    .name
+                    .eq_ignore_ascii_case(&broker.config.inter_broker_listener_name);
             tokio::spawn(accept_loop(
                 Arc::clone(broker),
                 listener,
                 spec,
+                protected,
                 shutdown.clone(),
             ))
         })
