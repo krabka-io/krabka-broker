@@ -835,6 +835,40 @@ mod tests {
         tiered.owners.handle.shutdown().await;
     }
 
+    /// A floor established too high cut the leader-epoch cache with it, and a
+    /// follower that takes its leader's lower start back
+    /// (`Log::follow_leader_log_start`) has no cache entry for the archived
+    /// offsets beneath the cut. The read takes the epoch that owned the offset
+    /// from the archive rather than the current one, which no archived
+    /// segment carries and which would answer `OFFSET_OUT_OF_RANGE`.
+    #[tokio::test]
+    async fn a_read_below_a_cut_epoch_cache_takes_the_epoch_from_the_archive() {
+        use {crate::codes, krabka_log::Offset};
+
+        let tiered = committed_tiered_fixture().await;
+        {
+            let mut log = tiered.part.log.lock().expect("log mutex poisoned");
+            log.set_log_start_offset(Offset(5))
+                .expect("raise the floor too high");
+            log.follow_leader_log_start(Offset(0))
+                .expect("take the leader's start back");
+            assert!(log.epoch_checkpoint().epoch_for_offset(Offset(0)) == None);
+        }
+        tiered
+            .part
+            .current_leader_epoch
+            .store(7, std::sync::atomic::Ordering::Release);
+
+        let mut served = out_of_range_at(&tiered.part, 0);
+        let bytes_served = super::try_remote_read(&tiered.broker, &mut served, &tiered.part).await;
+        check!(
+            bytes_served.is_some_and(|n| n > 0),
+            "the archive answers offset 0"
+        );
+        check!(served.out.error_code == codes::NONE);
+        tiered.owners.handle.shutdown().await;
+    }
+
     /// A restart must not hide the archive.
     ///
     /// `Log::open` reads a global floor off the segments that survived on

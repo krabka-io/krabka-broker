@@ -876,6 +876,20 @@ mod tests {
         check!(reopened.log_start_offset() == followed, "{prior:?}");
     }
 
+    /// A leader start below zero names no offset, and following it is refused
+    /// on a log with a remote tier as on one without.
+    #[yare::parameterized(tiered = { true }, local_only = { false })]
+    fn a_negative_leader_start_is_refused(remote_storage_enable: bool) {
+        let ThreeSegments {
+            dir: _dir, mut log, ..
+        } = three_segments(remote_storage_enable);
+        check!(matches!(
+            log.follow_leader_log_start(Offset(-1)),
+            Err(LogError::InvalidArgument(_))
+        ));
+        check!(log.log_start_offset() == Offset(0));
+    }
+
     /// The log's size is every segment's size added up, the sealed ones as
     /// well as the active one.
     #[test]
