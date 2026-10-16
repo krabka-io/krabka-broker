@@ -71,6 +71,12 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   with `the controller leader has uncommitted metadata records` until the
   broker came back, so its partitions kept their leader. A tail that holds a
   metadata record is still waited for (#1453).
+- A broker whose self-registration was retried across a controller leader
+  change now names its newest registration in heartbeats, producer-id
+  allocations and its clean-shutdown proof. The first attempt could commit
+  although its submit failed, and the broker kept that attempt's epoch: the
+  controller refused every heartbeat with `STALE_BROKER_EPOCH` and the broker
+  was never unfenced (#1458).
 - `max.connections.per.ip.overrides`, `max.connection.creation.rate` and the
   per-listener `listener.name.<listener>.max.connections` and
   `listener.name.<listener>.max.connection.creation.rate` now take effect, on
