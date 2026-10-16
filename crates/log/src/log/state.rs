@@ -753,6 +753,28 @@ mod tests {
         check!(log.log_start_epoch() == Some(LeaderEpoch(2)));
     }
 
+    /// A log in its own directory holding three segments, at offsets 0, 3
+    /// and 6 and in epochs 1, 2 and 4, and the configuration that opens it
+    /// again.
+    struct ThreeSegments {
+        dir: tempfile::TempDir,
+        log: Log,
+        config: LogConfig,
+    }
+
+    fn three_segments(remote_storage_enable: bool) -> ThreeSegments {
+        let config = LogConfig {
+            remote_storage_enable,
+            ..tiny_segments()
+        };
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(dir.path(), config.clone()).unwrap();
+        for epoch in [1, 2, 4] {
+            log.append(&mut sample_batch_with_epoch(3, epoch)).unwrap();
+        }
+        ThreeSegments { dir, log, config }
+    }
+
     /// A leader reports Kafka's `logStartOffset` to its followers, and they
     /// raise their own start to it. A remote-storage-enabled log reopened over
     /// the segments local retention left infers a start above the whole
@@ -774,15 +796,11 @@ mod tests {
         log_start: i64,
         reported: i64,
     ) {
-        let config = LogConfig {
-            remote_storage_enable,
-            ..tiny_segments()
-        };
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), config.clone()).unwrap();
-        for epoch in [1, 2, 4] {
-            log.append(&mut sample_batch_with_epoch(3, epoch)).unwrap();
-        }
+        let ThreeSegments {
+            dir,
+            mut log,
+            config,
+        } = three_segments(remote_storage_enable);
         if let Some(start) = moved_to {
             log.set_log_start_offset(Offset(start)).unwrap();
         }
@@ -833,15 +851,11 @@ mod tests {
         differs: bool,
         followed: i64,
     ) {
-        let config = LogConfig {
-            remote_storage_enable,
-            ..tiny_segments()
-        };
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), config.clone()).unwrap();
-        for epoch in [1, 2, 4] {
-            log.append(&mut sample_batch_with_epoch(3, epoch)).unwrap();
-        }
+        let ThreeSegments {
+            dir,
+            mut log,
+            config,
+        } = three_segments(remote_storage_enable);
         match prior {
             Prior::Untouched => {}
             Prior::Moved(start) => log.set_log_start_offset(Offset(start)).unwrap(),

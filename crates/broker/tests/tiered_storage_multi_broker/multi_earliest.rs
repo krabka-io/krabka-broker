@@ -161,6 +161,15 @@ impl Archived {
         end
     }
 
+    /// Stop broker 2 so that broker 3 leads, check that every record up to
+    /// `end` reads back from the earliest offset, and shut the cluster down.
+    async fn read_back_from_the_follower(mut self, end: i64) {
+        self.stop(LEADER).await;
+        await_leader(self.anchor(), 3).await;
+        self.reads_back_everything(end).await;
+        Box::pin(self.shutdown()).await;
+    }
+
     /// Every record up to `end` reads back from the earliest offset, at both
     /// isolation levels.
     async fn reads_back_everything(&self, end: i64) {
@@ -206,11 +215,7 @@ async fn a_tiered_partition_reads_back_from_earliest_after_its_leader_restarts()
         .await;
 
     // Move leadership off the restarted broker again.
-    cluster.stop(LEADER).await;
-    await_leader(cluster.anchor(), 3).await;
-
-    cluster.reads_back_everything(end).await;
-    Box::pin(cluster.shutdown()).await;
+    Box::pin(cluster.read_back_from_the_follower(end)).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -244,12 +249,7 @@ async fn a_follower_left_with_a_raised_floor_takes_its_leaders_back() {
         .produce_and_replicate(ARCHIVED..ARCHIVED + LATER)
         .await;
 
-    // Make the follower the leader.
-    cluster.stop(LEADER).await;
-    await_leader(cluster.anchor(), 3).await;
-
-    cluster.reads_back_everything(end).await;
-    Box::pin(cluster.shutdown()).await;
+    Box::pin(cluster.read_back_from_the_follower(end)).await;
 }
 
 /// Produce one acknowledged record per index, each its own batch.
