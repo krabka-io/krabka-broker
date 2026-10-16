@@ -270,37 +270,24 @@ async fn a_fetch_timeout_elects_a_voter_at_once_and_re_polls_an_observer(
     });
     assert2::assert!(replica.following_leader() == Some(NodeId(1)));
 
-    // Every state that holds after each expiry: exactly one should.
-    let seen: Vec<Vec<AfterFetchExpiry>> = after_each_expiry
+    let seen: Vec<AfterFetchExpiry> = after_each_expiry
         .iter()
         .map(|_| {
             replica.on_timer(TimerTick::Fetch);
-            let role = replica.core.role();
-            [
+            match (replica.following_leader(), replica.core.role()) {
+                (Some(NodeId(1)), _) if replica.fetch_at.is_some() => AfterFetchExpiry::Following,
+                (None, Role::Prospective { .. }) => AfterFetchExpiry::Prospective,
                 (
-                    replica.following_leader() == Some(NodeId(1)) && replica.fetch_at.is_some(),
-                    AfterFetchExpiry::Following,
-                ),
-                (
-                    matches!(role, Role::Prospective { .. }),
-                    AfterFetchExpiry::Prospective,
-                ),
-                (
-                    matches!(role, Role::Observer {
-                        leader_id: None,
-                        ..
-                    }),
-                    AfterFetchExpiry::Discovering,
-                ),
-            ]
-            .into_iter()
-            .filter_map(|(holds, state)| holds.then_some(state))
-            .collect()
+                    None,
+                    Role::Observer {
+                        leader_id: None, ..
+                    },
+                ) => AfterFetchExpiry::Discovering,
+                (leader, role) => panic!("unexpected state: leader {leader:?}, role {role:?}"),
+            }
         })
         .collect();
-    let want: Vec<Vec<AfterFetchExpiry>> =
-        after_each_expiry.iter().map(|state| vec![*state]).collect();
-    assert2::assert!(seen == want);
+    assert2::assert!(seen == after_each_expiry);
 }
 
 #[tokio::test]
