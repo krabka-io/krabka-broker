@@ -70,6 +70,31 @@ impl Log {
         self.start_offset_established.then_some(self.start_offset)
     }
 
+    /// The global floor as a leader reports it to the replicas that follow
+    /// it: Kafka's `UnifiedLog.logStartOffset` in a `Fetch` response.
+    ///
+    /// This is [`Log::log_start_offset`] except on a remote-storage-enabled
+    /// log whose floor nobody established. Such a log reopened over the
+    /// segments local retention left, so its inferred start sits above
+    /// everything the archive holds. Kafka's `LogLoader.load` never infers a
+    /// remote-storage-enabled log's start from its segments: it takes the
+    /// log-start checkpoint, which is 0 when nobody moved it. A follower
+    /// raises its own start to what its leader reports, and a follower's start
+    /// is a floor it refuses reads below and deletes the archive below once it
+    /// leads, so reporting the inferred start would hide and then destroy
+    /// every archived record under it.
+    ///
+    /// # Panics
+    /// Panics if the configuration lock is poisoned.
+    #[must_use]
+    pub fn reported_log_start(&self) -> Offset {
+        match self.established_log_start() {
+            Some(start) => start,
+            None if self.config.read().unwrap().remote_storage_enable => Offset(0),
+            None => self.start_offset,
+        }
+    }
+
     /// The epoch of the earliest leader-epoch entry, when a log start that
     /// somebody established truncated the cache to it: Kafka's
     /// `leaderEpochCache.earliestEntry` after `truncateFromStart(logStartOffset)`.
@@ -664,6 +689,49 @@ mod tests {
         drop(log);
         let log = Log::open(moved.path(), config).unwrap();
         check!(log.log_start_epoch() == Some(LeaderEpoch(2)));
+    }
+
+    /// A leader reports Kafka's `logStartOffset` to its followers, and they
+    /// raise their own start to it. A remote-storage-enabled log reopened over
+    /// the segments local retention left infers a start above the whole
+    /// archive, and Kafka's `LogLoader.load` never takes that one: it reports
+    /// the checkpointed start, 0 when nobody moved it. A start somebody moved
+    /// is reported as it is, and a log with no remote tier reports the start
+    /// its segments witness.
+    ///
+    /// Each case fills three segments (offsets 0, 3 and 6), optionally moves
+    /// the start, drops the two sealed segments from disk, and reopens.
+    #[yare::parameterized(
+        tiered_nobody_moved_it = { true, None, 6, 0 },
+        tiered_moved = { true, Some(4), 4, 4 },
+        local_only = { false, None, 6, 6 },
+    )]
+    fn a_reopened_log_reports_the_start_kafka_reports(
+        remote_storage_enable: bool,
+        moved_to: Option<i64>,
+        log_start: i64,
+        reported: i64,
+    ) {
+        let config = LogConfig {
+            remote_storage_enable,
+            ..tiny_segments()
+        };
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(dir.path(), config.clone()).unwrap();
+        for epoch in [1, 2, 4] {
+            log.append(&mut sample_batch_with_epoch(3, epoch)).unwrap();
+        }
+        if let Some(start) = moved_to {
+            log.set_log_start_offset(Offset(start)).unwrap();
+        }
+        check!(log.delete_local_segments_through(Offset(6)).unwrap() == 2);
+        drop(log);
+
+        let log = Log::open(dir.path(), config).unwrap();
+        check!(
+            (log.log_start_offset(), log.reported_log_start())
+                == (Offset(log_start), Offset(reported))
+        );
     }
 
     /// The log's size is every segment's size added up, the sealed ones as
