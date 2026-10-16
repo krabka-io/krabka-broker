@@ -10,6 +10,13 @@ Part of [Krabka](../../README.md), a Rust implementation of Apache Kafka.
 more reference and candidate summaries, it also emits a regression verdict
 whose tolerance is derived from their median absolute deviation.
 
+The same statistics judge the broker performance lane. `check-contract`
+validates a regression contract, `assemble` reads a `qualify.sh budget`
+artifact directory into a results record, and `evaluate` judges the record
+against its contract and renders the published Markdown.
+[Performance regression budgets](../../docs/operations/performance-budgets.md)
+is the design.
+
 > [!NOTE]
 > This crate currently lives in `krabka-broker` to service `krabka-log` microbenchmarks. If a shared `krabka-tools` repository is established across `krabka-io`, this utility can be migrated there as a common benchmark utility for `krabka-broker`, `krabka-protocol`, and `krabka-client-rs`.
 
@@ -34,12 +41,27 @@ cargo run -p krabka-parse-benches -- \
   --output bench-results/verdict.json
 ```
 
+Judge a broker performance record (a rejection exits 1 after writing the
+verdict and the Markdown):
+
+```sh
+cargo run -p krabka-parse-benches -- check-contract \
+  packaging/performance/regression-contract.json
+cargo run -p krabka-parse-benches -- assemble performance-artifacts \
+  --output performance-artifacts/performance-record.json
+cargo run -p krabka-parse-benches -- evaluate \
+  performance-artifacts/performance-record.json \
+  --contract packaging/performance/regression-contract.json \
+  --output performance-artifacts/verdict.json \
+  --markdown performance-artifacts/performance-budget.md
+```
+
 ## Exit Codes
 
 | Code | Meaning |
 |---|---|
 | `0` | Success: benchmark metrics successfully parsed and written to output JSON. |
-| `1` | Failure: invalid or missing input, duplicate metrics, I/O error, or a measured regression. |
+| `1` | Failure: invalid or missing input, duplicate metrics, I/O error, a measured regression, or a rejected performance budget. |
 
 ## License
 

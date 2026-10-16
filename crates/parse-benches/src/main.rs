@@ -2,12 +2,28 @@
 
 use {
     clap::Parser,
-    krabka_parse_benches::{Args, compare_summaries, read_summaries, run_from_args},
+    krabka_parse_benches::{Args, compare_summaries, read_summaries, run_command, run_from_args},
     std::process::ExitCode,
 };
 
 fn main() -> ExitCode {
     let args = Args::parse();
+    if let Some(command) = &args.command {
+        return match run_command(command) {
+            Ok((true, message)) => {
+                println!("{message}");
+                ExitCode::SUCCESS
+            }
+            Ok((false, message)) => {
+                eprintln!("{message}");
+                ExitCode::FAILURE
+            }
+            Err(error) => {
+                eprintln!("Error: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let out_path = args
         .output
         .clone()

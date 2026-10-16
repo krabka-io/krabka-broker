@@ -30,6 +30,12 @@ use {
 pub(super) struct GroupedResponses {
     pub(super) responses: Vec<FetchableTopicResponse>,
     pub(super) cpu_micros: Vec<Vec<u64>>,
+    /// The time the fetch's long poll spent inside `poll`: its wait and the
+    /// reads after a wake or the deadline. Kafka parks such a fetch in its
+    /// purgatory and completes it off the request-handler thread, so KIP-124
+    /// charges none of it to `request_percentage`. Zero for a fetch that did
+    /// not park.
+    pub(super) long_poll_active: std::time::Duration,
 }
 
 pub(super) fn group_into_topic_responses(pending: Vec<PendingRead>) -> GroupedResponses {
@@ -61,6 +67,7 @@ pub(super) fn group_into_topic_responses(pending: Vec<PendingRead>) -> GroupedRe
     GroupedResponses {
         responses,
         cpu_micros,
+        long_poll_active: std::time::Duration::ZERO,
     }
 }
 
@@ -286,6 +293,7 @@ mod tests {
         let GroupedResponses {
             responses,
             cpu_micros,
+            ..
         } = group_into_topic_responses(vec![
             row("t1", 1, read(0)),
             row("t1", 1, read(1)),

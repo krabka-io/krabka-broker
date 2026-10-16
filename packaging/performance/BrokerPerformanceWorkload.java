@@ -26,10 +26,10 @@ final class BrokerPerformanceWorkload {
     }
 
     public static void main(String[] args) throws Exception {
-        if (args.length < 7 || args.length > 9) {
+        if (args.length < 7 || args.length > 10) {
             throw new IllegalArgumentException(
                     "bootstrap topic group records bytes records_per_second timeout_seconds"
-                            + " [compression] [zeros|random]");
+                            + " [compression] [zeros|random] [idle_seconds]");
         }
         String bootstrap = args[0];
         String topic = args[1];
@@ -43,6 +43,10 @@ final class BrokerPerformanceWorkload {
         }
         String compression = args.length > 7 ? args[7] : "lz4";
         String payload = args.length > 8 ? args[8] : "zeros";
+        long idleSeconds = args.length > 9 ? Long.parseLong(args[9]) : 0;
+        if (idleSeconds < 0) {
+            throw new IllegalArgumentException("idle_seconds must not be negative");
+        }
         if (!payload.equals("zeros") && !payload.equals("random")) {
             throw new IllegalArgumentException("payload must be zeros or random");
         }
@@ -76,6 +80,18 @@ final class BrokerPerformanceWorkload {
             consumer.subscribe(Collections.singleton(topic));
             while (consumer.assignment().isEmpty()) {
                 consumer.poll(Duration.ofMillis(100));
+            }
+            // Idle-to-burst: the consumer long-polls the empty topic before the
+            // first record is sent. The topic is fresh, so anything polled here
+            // is a harness fault.
+            if (idleSeconds > 0) {
+                long idleUntil = System.nanoTime() + Duration.ofSeconds(idleSeconds).toNanos();
+                while (System.nanoTime() < idleUntil) {
+                    int polled = consumer.poll(Duration.ofMillis(250)).count();
+                    if (polled != 0) {
+                        throw new IllegalStateException(polled + " records arrived while idle");
+                    }
+                }
             }
             long started = System.nanoTime();
             CompletableFuture<Void> producing = CompletableFuture.runAsync(() -> {

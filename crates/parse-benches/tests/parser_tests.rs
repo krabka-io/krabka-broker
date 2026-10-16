@@ -278,6 +278,7 @@ fn runs_end_to_end_writing_valid_json() {
         reference_dir: None,
         candidate_dir: None,
         minimum_tolerance_percent: 3.0,
+        command: None,
     };
 
     let summary = run_from_args(&args).unwrap();
