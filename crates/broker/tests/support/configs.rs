@@ -1,12 +1,25 @@
 //! Configuration and feature update request fixtures.
 
-use krabka_protocol::owned::{
-    describe_configs_request::DescribeConfigsResource,
-    incremental_alter_configs_request::{
-        AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
+use {
+    krabka_broker::{config::BrokerConfig, file_config::FileConfig},
+    krabka_protocol::owned::{
+        describe_configs_request::DescribeConfigsResource,
+        incremental_alter_configs_request::{
+            AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
+        },
+        update_features_request::FeatureUpdateKey,
     },
-    update_features_request::FeatureUpdateKey,
 };
+
+/// The [`BrokerConfig`] a broker's TOML node file `text` applies to,
+/// panicking with the text on a parse or apply error.
+pub fn apply_node_file(text: &str) -> BrokerConfig {
+    let file: FileConfig = toml::from_str(text).unwrap_or_else(|error| panic!("{text}\n{error}"));
+    let mut config = BrokerConfig::default();
+    file.apply_to(&mut config)
+        .unwrap_or_else(|error| panic!("{text}\n{error}"));
+    config
+}
 
 #[derive(Clone, Copy, Default)]
 pub enum ConfigOperation {
@@ -106,6 +119,31 @@ pub fn incremental_request(
         validate_only: matches!(setup.mutation, ConfigMutation::Validate),
         ..Default::default()
     }
+}
+
+/// Kafka's `ConfigResource.Type.BROKER`.
+pub const BROKER_RESOURCE: i8 = 4;
+
+/// An `IncrementalAlterConfigs` of one `BROKER` resource, each config a
+/// name, an operation and a value.
+pub fn broker_alter_request(
+    resource_name: String,
+    configs: Vec<(&str, ConfigOperation, Option<&str>)>,
+    mutation: ConfigMutation,
+) -> IncrementalAlterConfigsRequest {
+    incremental_request()
+        .resources(vec![incremental_resource(
+            BROKER_RESOURCE,
+            resource_name,
+            configs
+                .into_iter()
+                .map(|(name, operation, value)| {
+                    incremental_config(name, value.map(ToOwned::to_owned), operation)
+                })
+                .collect(),
+        )])
+        .mutation(mutation)
+        .call()
 }
 
 pub fn describe_resource(

@@ -166,7 +166,14 @@ pub trait MetadataSource: Send + Sync {
     ) -> Option<Result<bytes::Bytes, RaftError>> {
         None
     }
+    /// Stop gracefully. A controller that leads the metadata quorum resigns
+    /// and waits, within a bound, for a successor, as Kafka's
+    /// `KafkaRaftClient.shutdown` does.
     async fn cancel(&self);
+    /// Stop at once, handing nothing over, as a halted process does. Only a
+    /// controller has anything to hand over, so every other source stops as
+    /// [`Self::cancel`] stops it.
+    async fn halt(&self) { self.cancel().await; }
 }
 
 fn unsupported_token_mutations(component: &str) -> RaftError {

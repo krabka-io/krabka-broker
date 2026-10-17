@@ -63,11 +63,12 @@ pub fn clean_run(contract: &Contract) -> Evidence {
                 .enumerate()
             {
                 let id = u64::try_from(id).unwrap_or(u64::MAX);
-                let seqs = SeqSet::range(start, (start + size).min(RECORDS));
+                let end = (start + size).min(RECORDS);
+                let seqs = SeqSet::range(start, end);
                 let outcome = if (id + 1) % abort_every == 0 {
                     TxnOutcome::Aborted
                 } else {
-                    committed = committed.union(&seqs);
+                    committed.insert_range(start, end);
                     TxnOutcome::Committed
                 };
                 ledger.transactions.push(TxnLedger { id, seqs, outcome });

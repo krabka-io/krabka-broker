@@ -62,42 +62,70 @@ struct ResolvedOffset {
     leader_epoch: i32,
 }
 
+/// The remote tier's candidate for EARLIEST, from what the tier answered:
+/// `None` when it did not answer within the remote timeout.
+///
+/// KIP-405: the global log start bounds the archive too. A `DeleteRecords`
+/// moves the floor at once and the expiration pass removes the breached
+/// segments on its own tick, so in between the RLMM still lists a segment that
+/// starts below the floor. Reporting its start as EARLIEST would name an offset
+/// the fetch path refuses.
+///
+/// Only a floor someone deleted up to bounds it. The one `Log::open` infers
+/// from the segments left on disk sits above the whole archive on a partition
+/// whose local segments were evicted, and clamping to that would report an
+/// EARLIEST past every record the tier still holds -- a `--from-beginning`
+/// consumer would skip them all.
+///
+/// A tier that failed, or a metadata partition still catching up after a
+/// restart, gives `reported_start` (`Log::reported_log_start`), because Kafka
+/// never asks the tier for EARLIEST: it answers `UnifiedLog.logStartOffset`,
+/// which is that value. The local start would be the inferred one, above the
+/// whole archive on that same evicted partition.
+fn remote_earliest_candidate(
+    answer: Option<&Result<Option<i64>, krabka_remote_storage::RemoteStorageError>>,
+    deleted_below: Option<krabka_log::Offset>,
+    reported_start: i64,
+) -> Result<Option<i64>, i16> {
+    match answer {
+        None => Err(codes::REQUEST_TIMED_OUT),
+        Some(Ok(Some(remote_start))) => Ok(Some(match deleted_below {
+            Some(floor) => (*remote_start).max(floor.0),
+            None => *remote_start,
+        })),
+        Some(Ok(None)) => Ok(None),
+        Some(Err(_)) => Ok(Some(reported_start)),
+    }
+}
+
 /// Resolve the EARLIEST sentinel's offset across the local log, the remote
 /// tier and the diskless index, and the leader epoch that goes with it.
 ///
 /// Split out of [`resolve_partition`] purely to keep that function's line
 /// count down.
 async fn resolve_earliest(ctx: EarliestContext<'_>) -> Result<ResolvedOffset, i16> {
-    let mut remote_candidate = None;
-    if let (Some(reader), Some(id)) = (ctx.broker.remote_reader.as_ref(), ctx.remote_topic_id) {
+    let remote_candidate = if let (Some(reader), Some(id)) =
+        (ctx.broker.remote_reader.as_ref(), ctx.remote_topic_id)
+    {
         let topic_partition =
             krabka_remote_storage::TopicIdPartition::new(id, ctx.topic_name.to_string(), ctx.index);
-        match await_remote(ctx.remote_timeout, reader.earliest_offset(&topic_partition)).await {
-            None => return Err(codes::REQUEST_TIMED_OUT),
-            // KIP-405: the global log start bounds the archive too. A
-            // `DeleteRecords` moves the floor at once and the expiration
-            // pass removes the breached segments on its own tick, so in
-            // between the RLMM still lists a segment that starts below the
-            // floor. Reporting its start as EARLIEST would name an offset
-            // the fetch path refuses.
-            //
-            // Only a floor someone deleted up to bounds it. The one
-            // `Log::open` infers from the segments left on disk sits above
-            // the whole archive on a partition whose local segments were
-            // evicted, and clamping to that would report an EARLIEST past
-            // every record the tier still holds -- a `--from-beginning`
-            // consumer would skip them all.
-            Some(Ok(Some(remote_start))) => {
-                remote_candidate = Some(match ctx.deleted_below {
-                    Some(floor) => remote_start.max(floor.0),
-                    None => remote_start,
-                });
-            }
-            Some(Ok(None)) => {}
-            Some(Err(error)) => tracing::warn!(topic = ctx.topic_name, partition = ctx.index,
-                error = %error, "list_offsets: remote earliest_offset failed"),
+        let answer =
+            await_remote(ctx.remote_timeout, reader.earliest_offset(&topic_partition)).await;
+        if let Some(Err(error)) = &answer {
+            tracing::warn!(topic = ctx.topic_name, partition = ctx.index, error = %error,
+                "list_offsets: remote earliest_offset failed; answering the log start");
         }
-    }
+        let reported_start = ctx
+            .partition
+            .log
+            .lock()
+            .expect("log mutex poisoned")
+            .reported_log_start()
+            .0;
+        remote_earliest_candidate(answer.as_ref(), ctx.deleted_below, reported_start)?
+    } else {
+        None
+    };
     let diskless_candidate =
         diskless_earliest_candidate(ctx.broker.diskless_read.as_deref(), ctx.topic_id, ctx.index)
             .await;
@@ -698,6 +726,51 @@ mod tests {
         assert2::assert,
         krabka_protocol::owned::create_topics_request::CreatableTopicConfig,
     };
+
+    /// What the remote tier's answer makes of EARLIEST. A tier that cannot
+    /// answer, a metadata partition still catching up after a restart among
+    /// them, gives the log start Kafka reports rather than the local start a
+    /// restart inferred above the archive. A deleted floor bounds a tier
+    /// answer, and a tier that holds nothing leaves EARLIEST to the local log.
+    #[test]
+    fn the_remote_tier_answer_decides_the_earliest_candidate() {
+        use krabka_remote_storage::RemoteStorageError;
+
+        let floor = Some(krabka_log::Offset(5));
+        for (name, answer, deleted_below, expected) in [
+            ("the tier answers", Some(Ok(Some(2))), None, Ok(Some(2))),
+            (
+                "a deleted floor bounds the tier",
+                Some(Ok(Some(2))),
+                floor,
+                Ok(Some(5)),
+            ),
+            ("the tier holds nothing", Some(Ok(None)), None, Ok(None)),
+            (
+                "the metadata partition is catching up",
+                Some(Err(RemoteStorageError::NotReady { partition: 3 })),
+                None,
+                Ok(Some(0)),
+            ),
+            (
+                "the tier fails",
+                Some(Err(RemoteStorageError::Io(std::io::Error::other("boom")))),
+                None,
+                Ok(Some(0)),
+            ),
+            (
+                "the tier times out",
+                None,
+                None,
+                Err(codes::REQUEST_TIMED_OUT),
+            ),
+        ] {
+            assert!(
+                remote_earliest_candidate(answer.as_ref(), deleted_below, 0) == expected,
+                "{name}"
+            );
+        }
+    }
 
     #[test]
     fn pending_upload_offset_rejects_overflow() {

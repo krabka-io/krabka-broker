@@ -12,12 +12,20 @@
 //! own start to it (`ReplicaFetcherThread.processPartitionData` →
 //! `maybeIncrementLogStartOffset`) raises it to nothing.
 //!
-//! This suite restarts the preferred leader of an RF=3 tiered partition, moves
-//! leadership back to it, then away from it again, and reads the partition back
-//! the way a consumer started with `auto.offset.reset=earliest` or
-//! `seekToBeginning` does: `ListOffsets(EARLIEST)`, then `Fetch` from there. It
-//! is the read-back of the sustained-load contract's tiered path. Every record
-//! acknowledged must come back, at both isolation levels.
+//! Both cases read the partition back the way a consumer started with
+//! `auto.offset.reset=earliest` or `seekToBeginning` does:
+//! `ListOffsets(EARLIEST)`, then `Fetch` from there. It is the read-back of the
+//! sustained-load contract's tiered path. Every record acknowledged must come
+//! back, at both isolation levels.
+//!
+//! - [`a_tiered_partition_reads_back_from_earliest_after_its_leader_restarts`]
+//!   restarts the preferred leader of an RF=3 tiered partition, moves
+//!   leadership back to it, then away from it again.
+//! - [`a_follower_left_with_a_raised_floor_takes_its_leaders_back`] starts a
+//!   follower on the floor a broker without the fix for #1444 left behind, a
+//!   restarted leader's local start established as the global one, and then
+//!   makes it the leader. The leader it followed reported the real start, and
+//!   a tiered follower takes it even when it is lower.
 
 use {
     crate::{
@@ -32,7 +40,7 @@ use {
         topic_fixture::{await_tiered_replicas, create_assigned_topic},
     },
     assert2::assert,
-    krabka_broker::{BootstrapMode, BrokerHandle},
+    krabka_broker::{BootstrapMode, BrokerConfig, BrokerHandle},
     krabka_client_consumer::{Consumer, IsolationLevel},
     krabka_client_core::Client,
     krabka_metadata::NodeId,
@@ -46,114 +54,202 @@ use {
 /// Records produced before the restart. Each is its own batch, so the 1 KiB
 /// segments roll many times and local retention evicts most of them.
 const ARCHIVED: usize = 120;
-/// Records produced while the restarted broker leads again. Producing them with
-/// `acks=all` is what makes both followers fetch from it.
-const LED_BY_RESTARTED: usize = 20;
+/// Records produced once the case has set its cluster up. Producing them with
+/// `acks=all` is what makes every follower fetch from the leader.
+const LATER: usize = 20;
 /// The payload each record carries.
 const PAYLOAD: usize = 200;
 /// Kafka's `ElectionType.PREFERRED`.
 const PREFERRED: i8 = 0;
 
-/// Broker indexes into [`TieredCluster`]: broker 2 is the preferred leader
-/// that restarts, broker 3 the follower that leads while it is away. Broker 1
-/// stays up throughout, because every broker's RLMM client bootstraps against
-/// it.
-const RESTARTED: usize = 1;
-const STAND_IN: usize = 2;
+/// Broker index of the preferred leader, broker 2.
+const LEADER: usize = 1;
+/// Broker index of the follower that leads once broker 2 stops, broker 3.
+const FOLLOWER: usize = 2;
+
+/// The three brokers, the tiered partition every case reads back, and the
+/// records it already archived and evicted from `evicted`'s disk.
+struct Archived {
+    brokers: [Option<BrokerHandle>; 3],
+    configs: [BrokerConfig; 3],
+    log_dirs: Vec<tempfile::TempDir>,
+    _remote_dir: tempfile::TempDir,
+    admin: Client,
+    bootstrap: String,
+}
+
+impl Archived {
+    /// Boot the cluster, create the partition on replicas 2, 3 and 1 (broker
+    /// 2 leads), produce [`ARCHIVED`] records, and wait until local retention
+    /// has evicted the first of them from broker index `evicted`.
+    async fn start(evicted: usize) -> Self {
+        let TieredCluster {
+            brokers,
+            configs,
+            log_dirs,
+            remote_dir,
+        } = start_tiered_cluster([krabka_units::kibibytes(1); 3]).await;
+        let [b1, b2, b3] = brokers;
+        let admin = ready_admin([&b1, &b2, &b3], "tiered-earliest-admin").await;
+        create_assigned_topic()
+            .client(&admin)
+            .topic(AssignedTopicSetup::on_replicas(TOPIC, vec![
+                NodeId(2),
+                NodeId(3),
+                NodeId(1),
+            ]))
+            .maybe_segment_bytes(Some("1024"))
+            .call()
+            .await;
+        await_tiered_replicas(
+            &[&b1, &b2, &b3],
+            TOPIC,
+            Some(krabka_units::kibibytes(1)),
+            "tiered config did not propagate",
+        )
+        .await;
+        await_leader(&b1, 2).await;
+        let bootstrap = format!("127.0.0.1:{}", b1.listen_addr().port());
+        produce(&bootstrap, 0..ARCHIVED).await;
+        await_local_eviction(log_dirs[evicted].path()).await;
+        Self {
+            brokers: [Some(b1), Some(b2), Some(b3)],
+            configs,
+            log_dirs,
+            _remote_dir: remote_dir,
+            admin,
+            bootstrap,
+        }
+    }
+
+    /// Broker 1, which stays up throughout because every broker's RLMM
+    /// client bootstraps against it.
+    fn anchor(&self) -> &BrokerHandle { self.brokers[0].as_ref().expect("broker 1 runs") }
+
+    async fn stop(&mut self, index: usize) {
+        self.brokers[index]
+            .take()
+            .expect("the broker runs")
+            .shutdown()
+            .await;
+    }
+
+    /// Start broker index `index` again on the log directory and addresses
+    /// it left, and wait until it is back in the ISR.
+    async fn restart(&mut self, index: usize) {
+        let mut config = self.configs[index].clone();
+        config.bootstrap_mode = BootstrapMode::Rejoin;
+        self.brokers[index] = Some(support::start_reusing_addrs(&config, "restart a broker").await);
+        let node = krabka_raft::NodeId(u64::try_from(index + 1).expect("small index"));
+        self.anchor()
+            .wait_for_image(move |image| {
+                image
+                    .partition(TOPIC, 0)
+                    .is_some_and(|partition| partition.isr.contains(&node))
+            })
+            .await;
+    }
+
+    /// Produce `indexes` and wait until every running replica's high
+    /// watermark covers them, so each has fetched from the leader since.
+    async fn produce_and_replicate(&self, indexes: std::ops::Range<usize>) -> i64 {
+        produce(&self.bootstrap, indexes.clone()).await;
+        let end = i64::try_from(indexes.end).expect("small count");
+        for broker in self.brokers.iter().flatten() {
+            broker.wait_until_high_watermark(TOPIC, 0, end).await;
+        }
+        end
+    }
+
+    /// Stop broker 2 so that broker 3 leads, check that every record up to
+    /// `end` reads back from the earliest offset, and shut the cluster down.
+    async fn read_back_from_the_follower(mut self, end: i64) {
+        self.stop(LEADER).await;
+        await_leader(self.anchor(), 3).await;
+        self.reads_back_everything(end).await;
+        Box::pin(self.shutdown()).await;
+    }
+
+    /// Every record up to `end` reads back from the earliest offset, at both
+    /// isolation levels.
+    async fn reads_back_everything(&self, end: i64) {
+        let expected: Vec<i64> = (0..end).collect();
+        for isolation in [
+            IsolationLevel::ReadUncommitted,
+            IsolationLevel::ReadCommitted,
+        ] {
+            let offsets = read_from_earliest(&self.bootstrap, isolation, end).await;
+            assert!(
+                offsets == expected,
+                "{isolation:?} read {} of {end} acknowledged records back from the earliest \
+                 offset, starting at {:?}",
+                offsets.len(),
+                offsets.first()
+            );
+        }
+    }
+
+    async fn shutdown(self) {
+        drop(self.admin);
+        for broker in self.brokers.into_iter().flatten() {
+            broker.shutdown().await;
+        }
+    }
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_tiered_partition_reads_back_from_earliest_after_its_leader_restarts() {
-    let TieredCluster {
-        brokers,
-        configs,
-        log_dirs,
-        remote_dir: _remote_dir,
-    } = start_tiered_cluster([krabka_units::kibibytes(1); 3]).await;
-    let [b1, b2, b3] = brokers;
-    let admin = ready_admin([&b1, &b2, &b3], "tiered-earliest-admin").await;
-    create_assigned_topic()
-        .client(&admin)
-        .topic(AssignedTopicSetup::on_replicas(TOPIC, vec![
-            NodeId(2),
-            NodeId(3),
-            NodeId(1),
-        ]))
-        .maybe_segment_bytes(Some("1024"))
-        .call()
-        .await;
-    await_tiered_replicas(
-        &[&b1, &b2, &b3],
-        TOPIC,
-        Some(krabka_units::kibibytes(1)),
-        "tiered config did not propagate",
-    )
-    .await;
-    await_leader(&b1, 2).await;
-    let bootstrap = format!("127.0.0.1:{}", b1.listen_addr().port());
-
-    produce(&bootstrap, 0..ARCHIVED).await;
-    await_local_eviction(log_dirs[RESTARTED].path()).await;
+    let mut cluster = Box::pin(Archived::start(LEADER)).await;
 
     // Restart the preferred leader on the log it left: it opens a log whose
     // first local segment sits above everything the archive holds.
-    let mut brokers = [Some(b1), Some(b2), Some(b3)];
-    brokers[RESTARTED]
-        .take()
-        .expect("broker 2 runs")
-        .shutdown()
-        .await;
-    let b1 = brokers[0].as_ref().expect("broker 1 runs");
-    await_leader(b1, 3).await;
-    let mut config = configs[RESTARTED].clone();
-    config.bootstrap_mode = BootstrapMode::Rejoin;
-    brokers[RESTARTED] = Some(support::start_reusing_addrs(&config, "restart broker 2").await);
-    let b1 = brokers[0].as_ref().expect("broker 1 runs");
-    b1.wait_for_image(|image| {
-        image
-            .partition(TOPIC, 0)
-            .is_some_and(|partition| partition.isr.contains(&krabka_raft::NodeId(2)))
-    })
-    .await;
+    cluster.stop(LEADER).await;
+    await_leader(cluster.anchor(), 3).await;
+    cluster.restart(LEADER).await;
 
     // Lead from the restarted broker, and make both followers fetch from it.
-    elect_preferred(&admin).await;
-    await_leader(b1, 2).await;
-    produce(&bootstrap, ARCHIVED..ARCHIVED + LED_BY_RESTARTED).await;
-    let end = i64::try_from(ARCHIVED + LED_BY_RESTARTED).expect("small count");
-    for broker in brokers.iter().flatten() {
-        broker.wait_until_high_watermark(TOPIC, 0, end).await;
-    }
+    elect_preferred(&cluster.admin).await;
+    await_leader(cluster.anchor(), 2).await;
+    let end = cluster
+        .produce_and_replicate(ARCHIVED..ARCHIVED + LATER)
+        .await;
 
     // Move leadership off the restarted broker again.
-    brokers[RESTARTED]
-        .take()
-        .expect("broker 2 runs")
-        .shutdown()
+    Box::pin(cluster.read_back_from_the_follower(end)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_follower_left_with_a_raised_floor_takes_its_leaders_back() {
+    let mut cluster = Box::pin(Archived::start(FOLLOWER)).await;
+
+    // Leave the follower's log on the floor an older broker established: the
+    // first segment its disk still holds, which every archived offset below
+    // it is under.
+    cluster.stop(FOLLOWER).await;
+    let partition_dir = cluster.log_dirs[FOLLOWER].path().join(format!("{TOPIC}-0"));
+    let raised = *local_segment_bases(&partition_dir)
+        .first()
+        .expect("the follower holds its active segment");
+    let config = krabka_log::LogConfig {
+        remote_storage_enable: true,
+        ..cluster.configs[FOLLOWER].log_config.clone()
+    };
+    let mut log = krabka_log::Log::open(&partition_dir, config.clone()).expect("open the log");
+    log.set_log_start_offset(krabka_log::Offset(raised))
+        .expect("raise the floor");
+    drop(log);
+    let reopened = krabka_log::Log::open(&partition_dir, config).expect("reopen the log");
+    assert!(reopened.established_log_start() == Some(krabka_log::Offset(raised)));
+    drop(reopened);
+
+    // The follower comes back and fetches from broker 2, which reports the
+    // real global start.
+    cluster.restart(FOLLOWER).await;
+    let end = cluster
+        .produce_and_replicate(ARCHIVED..ARCHIVED + LATER)
         .await;
-    let b1 = brokers[0].as_ref().expect("broker 1 runs");
-    await_leader(b1, 3).await;
-    let stand_in = brokers[STAND_IN].as_ref().expect("broker 3 runs");
-    stand_in.wait_until_high_watermark(TOPIC, 0, end).await;
 
-    let expected: Vec<i64> = (0..end).collect();
-    for isolation in [
-        IsolationLevel::ReadUncommitted,
-        IsolationLevel::ReadCommitted,
-    ] {
-        let offsets = read_from_earliest(&bootstrap, isolation, end).await;
-        assert!(
-            offsets == expected,
-            "{isolation:?} read {} of {end} acknowledged records back from the earliest offset, \
-             starting at {:?}",
-            offsets.len(),
-            offsets.first()
-        );
-    }
-
-    drop(admin);
-    for broker in brokers.into_iter().flatten() {
-        broker.shutdown().await;
-    }
+    Box::pin(cluster.read_back_from_the_follower(end)).await;
 }
 
 /// Produce one acknowledged record per index, each its own batch.
@@ -235,8 +331,8 @@ async fn elect_preferred(admin: &Client) {
 
 /// Every offset a fresh, groupless consumer at `isolation` reads from the
 /// earliest offset, as the soak contract's read-back reads: assign, seek to
-/// the beginning, and poll until the high watermark `end` is reached or the
-/// read stops making progress.
+/// the beginning, and poll until the high watermark `end` is reached or a
+/// minute passes.
 async fn read_from_earliest(bootstrap: &str, isolation: IsolationLevel, end: i64) -> Vec<i64> {
     let partitions = [(TOPIC.to_owned(), 0)];
     let mut consumer = Consumer::builder()
@@ -252,13 +348,18 @@ async fn read_from_earliest(bootstrap: &str, isolation: IsolationLevel, end: i64
         .await
         .expect("seek to beginning");
     let mut offsets = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_mins(1);
     while offsets.last().is_none_or(|last| last + 1 < end) && Instant::now() < deadline {
-        let records = consumer
-            .poll(krabka_units::millis(500))
-            .await
-            .expect("poll");
-        offsets.extend(records.iter().map(|record| record.offset));
+        // A broker that just restarted answers a cold read with a retriable
+        // error until its remote-log metadata has caught up, and the
+        // consumer keeps its position across it, as the soak read-back does.
+        match consumer.poll(krabka_units::millis(500)).await {
+            Ok(records) => offsets.extend(records.iter().map(|record| record.offset)),
+            Err(error) => {
+                eprintln!("read-back at {isolation:?}: {error}");
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        }
     }
     consumer.close().await.expect("consumer close");
     offsets

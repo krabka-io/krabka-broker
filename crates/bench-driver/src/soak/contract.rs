@@ -490,25 +490,6 @@ impl Contract {
         self.paths.iter().find(|path| path.name == name)
     }
 
-    /// The longest recovery deadline any fault may be measured against.
-    #[must_use]
-    pub fn longest_deadline(&self) -> Time {
-        [
-            self.deadlines.leader_failover,
-            self.deadlines.isr_rejoin,
-            self.deadlines.controller_failover,
-            self.deadlines.catch_up_after_pause,
-        ]
-        .into_iter()
-        .fold(Time::ZERO, |longest, deadline| {
-            if deadline > longest {
-                deadline
-            } else {
-                longest
-            }
-        })
-    }
-
     /// The load paths, storage kinds and isolation levels the milestone names
     /// that this contract does not cover.
     #[must_use]
