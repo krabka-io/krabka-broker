@@ -58,7 +58,7 @@ impl FromStr for ConsumerGroupMigrationPolicy {
 /// The broker value of `group.consumer.assignment.interval.ms` is dynamic, as
 /// it is in Kafka's `GroupCoordinatorConfig.RECONFIGURABLE_CONFIGS`: the
 /// broker's dynamic value, else the cluster-wide one, else this static one
-/// ([`Self::for_broker`]).
+/// (`NextGenConfig::for_broker`).
 ///
 /// This is Kafka's `GroupMetadataManager.consumerGroupSessionTimeoutMs`,
 /// `consumerGroupHeartbeatIntervalMs` and
