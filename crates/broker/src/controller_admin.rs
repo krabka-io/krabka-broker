@@ -151,6 +151,9 @@ impl BrokerControllerAdminRouter {
             .set(Arc::downgrade(broker))
             .map_err(|_| "controller Admin router already bound")
     }
+
+    /// The broker this router serves, once it is bound and while it runs.
+    pub(crate) fn broker(&self) -> Option<Arc<Broker>> { self.broker.get().and_then(Weak::upgrade) }
 }
 
 impl ControllerAdminRouter for BrokerControllerAdminRouter {

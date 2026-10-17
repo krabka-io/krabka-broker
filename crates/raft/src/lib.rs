@@ -89,9 +89,10 @@ pub use {
         DEFAULT_METADATA_MAX_IDLE_INTERVAL, DEFAULT_METADATA_MAX_RETENTION,
         DEFAULT_METADATA_MAX_RETENTION_SIZE, KAFKA_4_3_1_APIS, LATEST_PRODUCTION_METADATA_VERSION,
         ListenerLimits, METADATA_PARTITION_DIR, MIN_METADATA_LOG_SEGMENT_SIZE, MetadataLogConfig,
-        MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax, RaftShardRouter, ReleasedApi,
-        ShardRouteFuture, UnstableApiVersions, UnstableFeatureVersions, kafka_4_3_1_api,
-        kafka_4_3_1_max, metadata_partition_dir, supported_feature_range, supported_feature_ranges,
+        MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax, RaftShardRouter,
+        RegistrationAdmission, RegistrationAdmissionFuture, ReleasedApi, ShardRouteFuture,
+        UnstableApiVersions, UnstableFeatureVersions, kafka_4_3_1_api, kafka_4_3_1_max,
+        metadata_partition_dir, supported_feature_range, supported_feature_ranges,
     },
     connection_limiter::{
         AcceptingListener, ConnectionGuard, ConnectionLimit, ConnectionLimiter, ConnectionLimits,

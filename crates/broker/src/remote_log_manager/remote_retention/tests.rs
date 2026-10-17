@@ -122,6 +122,39 @@ fn synth_remote_md(
     .unwrap()
 }
 
+/// A floor is enforced when no finished segment lies wholly below it, which
+/// is what the log-start breach leaves once it has deleted up to the floor. A
+/// segment still being copied is not the archive yet.
+#[yare::parameterized(
+    at_the_first_segment = { 0, true },
+    inside_the_first_segment = { 50, true },
+    at_the_first_segments_last_offset = { 99, true },
+    past_the_first_segment = { 100, false },
+    past_every_finished_segment = { 250, false },
+)]
+fn the_archive_enforces_a_floor_nothing_finished_lies_below(floor: i64, enforced: bool) {
+    let copying = RemoteLogSegmentMetadata::new(
+        RemoteLogSegmentId::new(tp(), Uuid::from_u128(3)),
+        200,
+        299,
+        0,
+        1,
+        0,
+        krabka_remote_storage::RemoteLogSegmentDetails::new(
+            1024,
+            RemoteLogSegmentState::CopySegmentStarted,
+            maplit::btreemap! {LeaderEpoch(0) => 200},
+        ),
+    )
+    .unwrap();
+    let segments = [
+        synth_remote_md(1, 0, 99, 0, 1024),
+        synth_remote_md(2, 100, 199, 0, 1024),
+        copying,
+    ];
+    assert2::assert!(archive_enforces_floor(&segments, Offset(floor)) == enforced);
+}
+
 #[test]
 fn remote_retention_eviction_set_returns_empty_when_no_segments() {
     let out = remote_retention_eviction_set(

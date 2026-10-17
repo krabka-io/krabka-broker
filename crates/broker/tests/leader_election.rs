@@ -10,7 +10,7 @@ use {
         client::{BatchProduceSetup, connect_client},
         discovery::named_topic_metadata,
         durability::replicated_topic_fixture,
-        produce::ProduceTimeoutMillis,
+        produce::{ProduceAcknowledgements, ProduceTimeoutMillis},
         shutdown_cluster,
     },
     assert2::assert,
@@ -319,5 +319,206 @@ async fn produce_during_leader_failover() {
         let _ = res;
     }
 
+    shutdown_cluster(cluster).await;
+}
+
+/// The heartbeat session of the soak cluster and of Kafka's default
+/// `broker.session.timeout.ms`.
+const RESTART_SESSION_TIMEOUT: krabka_units::Time = krabka_units::secs(9);
+
+/// How long after the kill the cluster has to move the partition and take an
+/// `acks=all` write again: the session timeout, then one fencing.
+const RESTART_FAILOVER_DEADLINE: Duration = Duration::from_secs(25);
+
+/// Kafka's `LEADER_NOT_AVAILABLE`: the image names no leader with a known address.
+const LEADER_NOT_AVAILABLE: i16 = 5;
+
+/// One `acks=all` write of `value` to whichever broker `observer`'s image names
+/// as the leader of `topic`-0, or the error code that write got.
+async fn produce_to_current_leader(
+    observer: &BrokerHandle,
+    addresses: &[(krabka_broker::NodeId, std::net::SocketAddr)],
+    topic: &str,
+    value: &str,
+) -> Result<i64, i16> {
+    let leader = observer
+        .partition_record_for_test(topic, 0)
+        .map(|partition| partition.leader)
+        .ok_or(LEADER_NOT_AVAILABLE)?;
+    let (_, address) = addresses
+        .iter()
+        .find(|(node, _)| *node == leader)
+        .ok_or(LEADER_NOT_AVAILABLE)?;
+    produce_acks(&address.to_string(), &[value], BatchProduceSetup {
+        topic,
+        acknowledgements: ProduceAcknowledgements::AllReplicas,
+        timeout: ProduceTimeoutMillis(2_000),
+        ..Default::default()
+    })
+    .await
+}
+
+/// krabka-io/krabka-broker#1450: a partition leader that is killed and comes
+/// back inside its heartbeat session is a new process, and Kafka treats it as
+/// one.
+///
+/// A Kafka broker draws a new incarnation id at every start.
+/// `ClusterControlManager.registerBroker` refuses that incarnation with
+/// `DUPLICATE_BROKER_REGISTRATION` while the previous one still holds a
+/// session. Once the session expires, either the expiry fences the old
+/// registration (`ReplicationControlManager.handleBrokerFenced`) or the new
+/// registration runs `handleBrokerShutdown` first. Both take the broker out of
+/// its ISRs and elect another leader at a new leader epoch, so the restarted
+/// process does not resume a leadership whose log it may not hold. The
+/// restarted broker then catches up and is unfenced as a follower. A krabka
+/// broker's self-registration takes the second path at once, so the deadline
+/// is Kafka's worst case, not krabka's.
+///
+/// The victim is not the controller leader, so nothing here waits on a
+/// controller failover.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_leader_restarted_inside_its_session_is_fenced_and_loses_leadership() {
+    const TOPIC: &str = "restart-fencing";
+    let _g = cluster_lock().lock().await;
+    let mut cluster = support::start_n_node_with(3, |_, config| {
+        config.heartbeat_timeout = RESTART_SESSION_TIMEOUT;
+    })
+    .await
+    .expect("start the cluster");
+    support::wait_for_all_brokers_registered(&cluster, 3).await;
+    let controller = find_controller_leader(&cluster).await;
+    let victim_idx = (controller + 1) % cluster.len();
+    let victim = cluster[victim_idx].1.node_id;
+    let mut replicas = vec![i32::try_from(victim.0).expect("node id")];
+    replicas.extend(
+        cluster
+            .iter()
+            .map(|(_, config, _)| config.node_id)
+            .filter(|node| *node != victim)
+            .map(|node| i32::try_from(node.0).expect("node id")),
+    );
+    let addresses: Vec<_> = cluster
+        .iter()
+        .map(|(_, config, _)| (config.node_id, config.listen_addr))
+        .collect();
+    let client = connect_client(cluster[controller].1.listen_addr.to_string(), None).await;
+    let created = client
+        .send(support::topics::create_topic_request(support::topic_on(
+            TOPIC,
+            &[&replicas],
+        )))
+        .await
+        .expect("CreateTopics");
+    assert!(created.topics[0].error_code == 0, "{created:?}");
+    for (handle, _, _) in &cluster {
+        handle
+            .wait_for_image(|image| {
+                image
+                    .partition(TOPIC, 0)
+                    .is_some_and(|partition| partition.leader == victim && partition.isr.len() == 3)
+            })
+            .await;
+    }
+    let observer = &cluster[controller].0;
+
+    let mut acked = Vec::new();
+    for value in ["a", "b", "c", "d", "e"] {
+        produce_to_current_leader(observer, &addresses, TOPIC, value)
+            .await
+            .expect("acks=all before the kill");
+        acked.push(value.to_owned());
+    }
+    let before = observer
+        .partition_record_for_test(TOPIC, 0)
+        .expect("partition");
+
+    let (victim_handle, mut victim_config, victim_dir) = cluster.remove(victim_idx);
+    let observer_idx = if controller > victim_idx {
+        controller - 1
+    } else {
+        controller
+    };
+    let killed_at = std::time::Instant::now();
+    victim_handle.crash_for_test().await;
+    victim_config.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
+    let observer = &cluster[observer_idx].0;
+
+    let restart = support::start_reusing_addrs(&victim_config, "restart the killed leader");
+    let failover = async {
+        let moved = tokio::time::timeout(
+            RESTART_FAILOVER_DEADLINE,
+            observer.wait_for_image(|image| {
+                image.partition(TOPIC, 0).is_some_and(|partition| {
+                    partition.leader != victim
+                        && partition.leader != krabka_broker::NodeId(0)
+                        && partition.leader_epoch > before.leader_epoch
+                })
+            }),
+        )
+        .await;
+        assert!(
+            moved.is_ok(),
+            "leadership did not move off the restarted broker within {RESTART_FAILOVER_DEADLINE:?}; before the kill {before:?}, now {:?}, victim registration {:?}",
+            observer.partition_record_for_test(TOPIC, 0),
+            observer.controller_image_for_test().broker(victim),
+        );
+        let elected = killed_at.elapsed();
+        let deadline = killed_at + RESTART_FAILOVER_DEADLINE;
+        let offset = loop {
+            match produce_to_current_leader(observer, &addresses, TOPIC, "after").await {
+                Ok(offset) => break offset,
+                Err(code) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "acks=all still failing with {code} {RESTART_FAILOVER_DEADLINE:?} after the kill; partition {:?}",
+                        observer.partition_record_for_test(TOPIC, 0)
+                    );
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+        };
+        (elected, offset)
+    };
+    let (reborn, (elected, after_offset)) = tokio::join!(restart, failover);
+    acked.push("after".to_owned());
+    tracing::info!(
+        ?elected,
+        after_offset,
+        "leadership moved off the restarted broker"
+    );
+
+    let partition = observer
+        .partition_record_for_test(TOPIC, 0)
+        .expect("partition");
+    let leader = cluster
+        .iter()
+        .find(|(_, config, _)| config.node_id == partition.leader)
+        .map(|(handle, _, _)| handle)
+        .expect("a survivor leads");
+    let held: Vec<String> = leader
+        .local_batches_for_test(TOPIC, 0)
+        .expect("leader log")
+        .iter()
+        .flat_map(|batch| batch.records.iter())
+        .filter_map(|record| record.value.as_ref())
+        .map(|value| String::from_utf8_lossy(value).into_owned())
+        .collect();
+    assert!(
+        held == acked,
+        "every acknowledged record survives the failover"
+    );
+
+    // The restarted broker catches up and rejoins the ISR as a follower.
+    observer
+        .wait_for_image(|image| {
+            image
+                .partition(TOPIC, 0)
+                .is_some_and(|partition| partition.isr.contains(&victim))
+                && image.broker(victim).is_some_and(|broker| !broker.fenced)
+        })
+        .await;
+
+    reborn.shutdown().await;
+    drop(victim_dir);
     shutdown_cluster(cluster).await;
 }
