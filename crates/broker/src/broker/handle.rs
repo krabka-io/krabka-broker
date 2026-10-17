@@ -11,6 +11,7 @@ use {
         clean_shutdown::write,
         error::BrokerError,
         future_log::{abort_moves, shutdown_moves},
+        incarnation::own_broker_epoch,
         partition::Partition,
         partition_registry::PartitionRegistry,
         time_util::now_ms,
@@ -465,7 +466,9 @@ impl BrokerHandle {
             task.abort();
             let _ = task.await;
         }
-        self.broker.controller.cancel().await;
+        // A dead process hands no leadership over: the quorum finds out
+        // through its fetch watchdog, as it does after a kill.
+        self.broker.controller.halt().await;
     }
 
     /// Record the broker epoch this node is stopping on, so its next start can
@@ -491,7 +494,15 @@ impl BrokerHandle {
         if !config.is_broker() || config.broker_epoch < 0 || self.fatal_fault().is_some() {
             return;
         }
-        write(&config.log_dir, config.broker_epoch);
+        write(
+            &config.log_dir,
+            own_broker_epoch(
+                &self.broker.controller.current_image(),
+                config.node_id,
+                config.incarnation_id,
+                config.broker_epoch,
+            ),
+        );
     }
 
     /// Cancel the listener and drain in-flight connections. The returned
@@ -547,7 +558,10 @@ impl BrokerHandle {
         // participating in elections after the broker is logically dead.
         // Without this, a killed broker's in-process raft engine keeps ticking
         // and re-elects itself, preventing the surviving nodes from detecting
-        // the leader failure and electing a replacement.
+        // the leader failure and electing a replacement. A controller that
+        // leads the quorum resigns first and sends `EndQuorumEpoch`, as Kafka's
+        // `KafkaRaftClient.shutdown` does, so its successor elects at once
+        // rather than after the followers' fetch watchdog.
         self.broker.controller.cancel().await;
     }
 }

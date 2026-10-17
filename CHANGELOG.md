@@ -43,6 +43,11 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   visibility and committed offsets, and tells permitted retries from loss. A
   five-minute self-check in the container matrix proves that the judge catches
   an injected missing record and a missed recovery deadline.
+- The sustained-load executor keeps the evidence a 72-hour run needs (issue
+  #1393): resource and controller-progress telemetry for every node every
+  10 s, and the firing history of the shipped alert rules from a pinned
+  Prometheus sidecar, both written as the run goes. It also runs diskless
+  paths, on a SASL inter-broker listener.
 - `qualify.sh budget` compares a candidate build with an earlier revision or
   with pinned Kafka 4.3.1 over a predeclared RF=3 workload matrix, in
   interleaved rounds. `krabka-parse-benches` assembles every raw trial into a
@@ -54,6 +59,40 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- A gracefully stopped active controller now hands the metadata quorum over
+  before it exits, as Kafka's `KafkaRaftClient.shutdown` does: it resigns,
+  sends `EndQuorumEpoch` naming the other voters by how far they have fetched,
+  and waits up to five seconds (or one `controller_election_timeout`, when that
+  is shorter) for a successor. Before, it stopped without a word, and the other
+  voters noticed only after three missed five-second fetch timeouts and then an
+  election, 18–26 s after `SIGTERM` in a three-node cluster with the default
+  timings. A new controller now serves within about half a second. A broker in
+  controlled shutdown also sends its first heartbeat at once and asks again 50
+  ms after the controller's first answer, as Kafka's `BrokerLifecycleManager`
+  does, instead of waiting a `heartbeat_interval` for each (#1446).
+- A controller voter that stops hearing from the controller leader now
+  starts an election after one fetch timeout (`controller_election_timeout`),
+  as Kafka's `KafkaRaftClient.pollFollowerAsVoter` does. Before, it re-polled
+  the silent leader until `controller_fetch_miss_limit` timeouts had passed
+  (three by default, 15 s), so a killed or paused controller leader was
+  replaced only after 20 s or more. A partition leader on the same node then
+  kept its leadership through an outage of 15 s: the new controller gives
+  every broker a fresh heartbeat session, as Kafka's does, and the node came
+  back inside it. `controller_fetch_miss_limit` now applies to observers only
+  (#1449).
+- The controller no longer refuses a dead broker's failover while the only
+  uncommitted record in its log is the KIP-835 no-op it appends every
+  `metadata.max.idle.interval.ms`. A failover the liveness ticker retried
+  once a second could land behind that no-op on every retry and be refused
+  with `the controller leader has uncommitted metadata records` until the
+  broker came back, so its partitions kept their leader. A tail that holds a
+  metadata record is still waited for (#1453).
+- A broker whose self-registration was retried across a controller leader
+  change now names its newest registration in heartbeats, producer-id
+  allocations and its clean-shutdown proof. The first attempt could commit
+  although its submit failed, and the broker kept that attempt's epoch: the
+  controller refused every heartbeat with `STALE_BROKER_EPOCH` and the broker
+  was never unfenced (#1458).
 - A per-broker `listener.name.<listener>.ssl.keystore.*` or
   `listener.name.<listener>.ssl.truststore.*` change now takes effect on an
   SSL or SASL_SSL listener: the next handshake gets the new stores, and a
@@ -68,7 +107,7 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   Before, such a broker registered under its node id but heartbeated under
   its broker id, so the controller never unfenced it, and `Broker::start`
   waited out `startup_leader_wait_timeout` (two minutes) before going on
-  fenced.
+  fenced (#1471).
 - `max.connections.per.ip.overrides`, `max.connection.creation.rate` and the
   per-listener `listener.name.<listener>.max.connections` and
   `listener.name.<listener>.max.connection.creation.rate` now take effect, on

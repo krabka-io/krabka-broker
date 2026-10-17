@@ -26,8 +26,8 @@ impl BrokerConfig {
     /// # Errors
     ///
     /// Returns `Err` when:
-    /// - `node_id` and `broker_id` differ, which Kafka's `KafkaConfig`
-    ///   refuses of `node.id` and `broker.id`.
+    /// - `broker_id` and `node_id` differ, which Kafka's `KafkaConfig` refuses
+    ///   in `KRaft` mode.
     /// - Two listeners share the same `bind_addr`.
     /// - `inter_broker_listener_name` does not match any listener name.
     /// - A SASL listener is declared while `enabled_sasl_mechanisms` is empty.
@@ -39,7 +39,12 @@ impl BrokerConfig {
     ///   configured: the metrics server, the OTLP forwarding of client
     ///   metrics, or the OAUTHBEARER JWKS refresher.
     pub fn validate(&self) -> Result<(), BrokerError> {
-        self.validate_node_identity()?;
+        if u64::try_from(self.broker_id).ok() != Some(self.node_id.0) {
+            return Err(BrokerError::BrokerIdNodeIdMismatch {
+                broker_id: self.broker_id,
+                node_id: self.node_id,
+            });
+        }
         self.validate_log_io_policy()?;
         validate_audit_topic_name(&self.audit_topic)?;
         if self.roles.is_empty() {
@@ -375,24 +380,6 @@ impl BrokerConfig {
     }
 }
 
-impl BrokerConfig {
-    /// Refuse a `broker_id` that is not the `node_id`, as Kafka's
-    /// `KafkaConfig.validateValues` refuses a `broker.id` that is not the
-    /// `node.id`. The broker registers under its node id and heartbeats
-    /// under its broker id; with two ids the controller never matches the
-    /// heartbeat to the registration, and the broker never unfences.
-    fn validate_node_identity(&self) -> Result<(), BrokerError> {
-        if u64::try_from(self.broker_id).ok() == Some(self.node_id.0) {
-            Ok(())
-        } else {
-            Err(BrokerError::NodeIdMismatch {
-                node_id: self.node_id,
-                broker_id: self.broker_id,
-            })
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use {
@@ -406,60 +393,35 @@ mod tests {
         krabka_units::{Time, bytes, millis},
     };
 
-    /// Kafka's `KafkaConfig.validateValues` refuses a `node.id` that is not
-    /// the `broker.id`. A broker that started anyway would heartbeat under
-    /// one id and register under the other, and never unfence.
+    /// Kafka's `KafkaConfig` requires `broker.id == node.id` in `KRaft` mode. A
+    /// broker whose ids differ would register under one and heartbeat under
+    /// the other, so the controller never unfences it.
     #[test]
-    fn refuses_a_broker_id_that_is_not_the_node_id() {
-        struct Case {
-            broker_id: i32,
-            node_id: u64,
-            refused: bool,
-        }
+    fn requires_broker_id_to_equal_node_id() {
         let cases = [
-            Case {
-                broker_id: 1,
-                node_id: 1,
-                refused: false,
-            },
-            Case {
-                broker_id: 42,
-                node_id: 42,
-                refused: false,
-            },
-            Case {
-                broker_id: 42,
-                node_id: 1,
-                refused: true,
-            },
-            Case {
-                broker_id: -1,
-                node_id: 1,
-                refused: true,
-            },
+            ("equal", 7, 7, None),
+            ("broker id differs", 42, 1, Some((42, 1))),
+            ("negative broker id", -1, 1, Some((-1, 1))),
+            (
+                "node id past i32",
+                1,
+                u64::from(u32::MAX),
+                Some((1, u64::from(u32::MAX))),
+            ),
         ];
-        for case in cases {
-            let config = BrokerConfig {
-                broker_id: case.broker_id,
-                node_id: krabka_raft::NodeId(case.node_id),
-                controller_quorum_voters: vec![(
-                    krabka_raft::NodeId(case.node_id),
-                    "127.0.0.1:9093".to_string(),
-                )],
-                ..BrokerConfig::default()
+        for (name, broker_id, node_id, want) in cases {
+            let mut config = BrokerConfig::default();
+            config.broker_id = broker_id;
+            config.node_id = krabka_raft::NodeId(node_id);
+            config.controller_quorum_voters = vec![(config.node_id, "127.0.0.1:9093".to_string())];
+            let got = match config.validate() {
+                Ok(()) => None,
+                Err(BrokerError::BrokerIdNodeIdMismatch { broker_id, node_id }) => {
+                    Some((broker_id, node_id.0))
+                }
+                Err(other) => panic!("{name}: unexpected error {other}"),
             };
-            let refused = matches!(
-                config.validate(),
-                Err(BrokerError::NodeIdMismatch { node_id, broker_id })
-                    if node_id.0 == case.node_id && broker_id == case.broker_id
-            );
-            assert!(
-                refused == case.refused,
-                "broker_id {} node_id {}: {:?}",
-                case.broker_id,
-                case.node_id,
-                config.validate()
-            );
+            assert!(got == want, "{name}");
         }
     }
 

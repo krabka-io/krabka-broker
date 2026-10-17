@@ -29,6 +29,7 @@ IMAGES = {
     "cp_kafka_7_8_8": "mirror.gcr.io/confluentinc/cp-kafka:7.8.8",
     "fake_gcs_server": "mirror.gcr.io/fsouza/fake-gcs-server:1.56.1",
     "kcat_1_7_1": "mirror.gcr.io/edenhill/kcat:1.7.1",
+    "prometheus_3_5_0": "mirror.gcr.io/prom/prometheus:v3.5.0",
 }
 
 [

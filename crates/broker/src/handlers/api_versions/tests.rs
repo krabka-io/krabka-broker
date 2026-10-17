@@ -18,7 +18,7 @@ use {
         broker::Broker,
         cluster_id::encode,
         codes,
-        config::ListenerSpec,
+        config::{DEFAULT_BROKER_ID, ListenerSpec},
         handlers::RequestContext,
         test_support::{
             self as broker_fixture_support, decode_response as decode_wire_response, peer,
@@ -431,11 +431,22 @@ async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
     broker_handle.shutdown().await;
 }
 
+/// The id the KIP-1242 routing test boots its broker with: not the
+/// `for_tests` default, so a check that compared against a fixed id would fail.
+const ROUTED_NODE_ID: i32 = 42;
+
+/// KIP-1242: a v5 request that names the wrong cluster or node gets
+/// `REBOOTSTRAP_REQUIRED`, compared against this broker's `node_id`.
 #[tokio::test]
 async fn handle_applies_kip1242_routing_checks() {
     krabka_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, principal, peer, context);
-        boot [broker_fixture_support::start_broker_with(|_| {})];
+        boot [broker_fixture_support::start_broker_with(|cfg| {
+            cfg.broker_id = ROUTED_NODE_ID;
+            cfg.node_id = krabka_raft::NodeId(ROUTED_NODE_ID.unsigned_abs().into());
+            cfg.controller_quorum_voters =
+                vec![(cfg.node_id, cfg.controller_listen_addr.to_string())];
+        })];
         user ["ANONYMOUS"];
         client ["krabka-test"];
     };
@@ -446,6 +457,7 @@ async fn handle_applies_kip1242_routing_checks() {
     let cluster_id = encode(raw_cluster_id);
     let hyphenated_cluster_id = raw_cluster_id.to_string();
     let node_id = i32::try_from(broker.config.node_id.0).expect("node id fits Kafka wire");
+    assert!(node_id == ROUTED_NODE_ID);
 
     for (request_cluster_id, request_node_id, expected_error) in [
         (None, -1, codes::NONE),
@@ -462,6 +474,12 @@ async fn handle_applies_kip1242_routing_checks() {
         (
             Some(cluster_id.clone()),
             node_id + 1,
+            codes::REBOOTSTRAP_REQUIRED,
+        ),
+        // The `for_tests` default id, which this broker does not carry.
+        (
+            Some(cluster_id.clone()),
+            DEFAULT_BROKER_ID,
             codes::REBOOTSTRAP_REQUIRED,
         ),
     ] {

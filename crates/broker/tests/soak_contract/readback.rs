@@ -460,7 +460,10 @@ pub(crate) async fn commit_checks(
     }
     let ends = end_offsets(bootstrap, Isolation::ReadUncommitted, &partitions)
         .await
-        .unwrap_or_default();
+        .unwrap_or_else(|error| {
+            eprintln!("soak-contract: end offsets of {topic} after {fault}: {error}");
+            BTreeMap::new()
+        });
     acknowledged
         .iter()
         .map(|(partition, acked)| CommitCheck {
