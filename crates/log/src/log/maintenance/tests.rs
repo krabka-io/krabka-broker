@@ -176,6 +176,44 @@ fn a_failed_deferred_unlink_is_reported_and_retried() {
     check!(log.pending_deletes.is_empty());
 }
 
+/// A deferred deletion takes the due files out of the log without touching
+/// the disk, and the files go only when the caller deletes them.
+#[test]
+fn deferred_deletions_leave_the_files_until_the_caller_deletes_them() {
+    let TempLog { dir: _dir, mut log } = trimmed_two_segment_log(millis(1000));
+    let PendingDelete { deadline, paths } = log.pending_deletes[0].clone();
+    assert!(
+        log.maintain_deferring_deletions(deadline - Duration::from_millis(1))
+            .unwrap()
+            .is_empty()
+    );
+    let due = log.maintain_deferring_deletions(deadline).unwrap();
+    check!(!due.is_empty());
+    check!(log.maintenance_delay(deadline).is_none());
+    check!(paths.iter().all(|p| p.exists()));
+    due.delete().unwrap();
+    check!(paths.iter().all(|p| !p.exists()));
+}
+
+/// A deferred deletion that fails hands its files back, due again from the
+/// time the caller names, and the retry deletes them.
+#[test]
+fn a_failed_deferred_deletion_is_retried_from_the_time_the_caller_names() {
+    let TempLog { dir: _dir, mut log } = trimmed_two_segment_log(millis(1000));
+    let PendingDelete { deadline, paths } = log.pending_deletes[0].clone();
+    log.test_set_io(Arc::new(FailUnlink));
+    let failed = log.take_due_deletions(deadline).delete().unwrap_err();
+    check!(matches!(failed.error, LogError::Io(_)));
+    let backoff = Duration::from_millis(100);
+    log.restore_deletions(failed.remaining, deadline + backoff);
+    check!(log.maintenance_delay(deadline) == Some(backoff));
+    check!(paths.iter().all(|p| p.exists()));
+    log.test_set_io(file_io());
+    log.take_due_deletions(deadline + backoff).delete().unwrap();
+    check!(paths.iter().all(|p| !p.exists()));
+    check!(log.maintenance_delay(deadline + backoff).is_none());
+}
+
 #[test]
 fn owned_gzip_batches_use_the_live_level_and_verbatim_keeps_producer_bytes() {
     for allocation in [SegmentAllocation::OnWrite, SegmentAllocation::Preallocate] {
