@@ -24,7 +24,7 @@ use {
         error::RaftError,
         event_queue::{EventQueueMeter, EventQueueRecorder},
         kraft::{
-            core::QuorumStateMachine,
+            core::{QuorumStateMachine, QuorumTimeouts},
             log::KraftLog,
             snapshot_fetch::MetadataSnapshotFetchMax,
             transport::{CommandSender, PeerSender},
@@ -110,7 +110,7 @@ impl KraftController {
             cluster_id: _,
             directory_id,
             mut initial_state,
-            election_timeout,
+            timeouts,
             heartbeat_interval,
             controller_fetch_miss_limit,
             metadata_raft_command_queue_capacity,
@@ -131,7 +131,7 @@ impl KraftController {
         replay_control_records(&log, &mut initial_state, metadata_raft_fetch_max)?;
         let controls =
             KraftControlState::new(initial_state.voters.clone(), initial_state.kraft_version);
-        let core = QuorumStateMachine::new(me, initial_state, election_timeout);
+        let core = QuorumStateMachine::new(me, initial_state, timeouts);
         let initial_leader = core.quorum_state().leader_id;
         let initial_was_leader = core.role().is_leader();
         let initial_epoch = core.quorum_state().leader_epoch;
@@ -178,7 +178,7 @@ impl KraftController {
             clock_base,
             me,
             initial_epoch,
-            election_timeout,
+            timeouts.election,
         );
 
         let engine_peers = Arc::clone(&peers);
@@ -199,7 +199,7 @@ impl KraftController {
             fault_tx,
             data_dir,
             clock_base,
-            election_timeout,
+            timeouts,
             heartbeat_interval,
             controller_fetch_miss_limit,
             metadata_raft_fetch_max,
@@ -284,7 +284,7 @@ impl KraftController {
     #[tracing::instrument(
         level = "info",
         skip_all,
-        fields(node = me.0, %cluster_id, election_timeout = %election_timeout.human()),
+        fields(node = me.0, %cluster_id, election_timeout = %timeouts.election.human(), fetch_timeout = %timeouts.fetch.human()),
         err
     )]
     #[allow(
@@ -297,7 +297,7 @@ impl KraftController {
         cluster_id: Uuid,
         directory_id: Uuid,
         bootstrap_voters: krabka_metadata::voters::VoterSet,
-        election_timeout: Time,
+        timeouts: QuorumTimeouts,
         heartbeat_interval: Option<Time>,
         controller_fetch_miss_limit: ControllerFetchMissLimit,
         metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity,
@@ -437,7 +437,7 @@ impl KraftController {
                 cluster_id,
                 directory_id,
                 initial_state,
-                election_timeout,
+                timeouts,
                 heartbeat_interval,
                 controller_fetch_miss_limit,
                 metadata_raft_command_queue_capacity,

@@ -180,7 +180,7 @@ fn engine_with_local_directory() -> EngineInDir {
     engine.core = QuorumStateMachine::new(
         NodeId(1),
         QuorumState::bootstrap(Uuid::nil(), voters),
-        engine.election_timeout,
+        engine.timeouts,
     );
     EngineInDir { engine, dir }
 }

@@ -10,10 +10,8 @@ use {
         broker::{
             Broker, BrokerHandle, DisklessRuntime,
             diskless_index::{DisklessFlusherStartup, bootstrap_diskless_index_log},
-            listeners::{
-                ListenerStartup, ListenerTasks, bind_listeners_and_recover_moves,
-                spawn_listener_tasks,
-            },
+            dynamic_listeners::{DataPlaneListeners, spawn_watcher},
+            listeners::{ListenerStartup, bind_listeners_and_recover_moves, start_listeners},
             rlmm::{KafkaSwapKickoff, bootstrap_topic_rlmm},
             runtime::BrokerRuntimeStartup,
             transport::StartupTransport,
@@ -105,7 +103,9 @@ pub(super) async fn finish_broker_startup(
     let queued_request_bytes = config
         .queued_max_request_bytes
         .map(|budget| RequestByteBudget::of(budget.bytes_usize()));
+    let shutdown = CancellationToken::new();
     let broker = Arc::new(Broker {
+        data_plane: DataPlaneListeners::new(shutdown.clone()),
         config,
         controller,
         partitions,
@@ -179,10 +179,8 @@ pub(super) async fn finish_broker_startup(
             ));
         }
     };
-    let ListenerTasks {
-        shutdown,
-        tasks: listener_tasks,
-    } = spawn_listener_tasks(&broker, bound);
+    start_listeners(&broker, bound);
+    let listener_watcher = spawn_watcher(&broker, shutdown.clone());
     emit_broker_started(&broker, runtime.audit_led_partition).await;
     let topic_rlmm_task = spawn_rlmm_bootstrap(
         &broker,
@@ -201,7 +199,7 @@ pub(super) async fn finish_broker_startup(
     Ok(BrokerHandle {
         listen_addr,
         shutdown,
-        listener_tasks,
+        listener_watcher,
         topic_rlmm_task,
         diskless_task,
         diskless_flusher_ready,

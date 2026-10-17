@@ -93,6 +93,8 @@ pub(crate) mod group;
 pub(crate) mod kafka_broker;
 #[cfg(test)]
 mod kafka_parity;
+pub(crate) mod listener_endpoints;
+pub(crate) mod listener_reconfig;
 mod log_config;
 mod lookup;
 mod message_size;

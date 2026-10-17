@@ -52,12 +52,13 @@ fn end_quorum_epochs(
 )]
 #[test_macro(tokio::test)]
 async fn a_stopping_leader(stop: Stop, resigns: bool, waits_out_the_window: bool) {
-    let election_timeout = secs(5);
-    let window = graceful_shutdown_window(election_timeout);
-    let (ctrl, _dir, mut sends) = spawn_recording_controller(
-        election_timeout,
-        wire::PeerResponse::Ack { epoch: 1 }.encode(),
-    );
+    let timeouts = QuorumTimeouts {
+        election: secs(5),
+        fetch: secs(5),
+    };
+    let window = graceful_shutdown_window(timeouts.fetch);
+    let (ctrl, _dir, mut sends) =
+        spawn_recording_controller(timeouts, wire::PeerResponse::Ack { epoch: 1 }.encode());
     elect_leader_with_helper(&ctrl, NodeId(1), NodeId(2)).await;
     let _ = end_quorum_epochs(&mut sends);
 
@@ -116,11 +117,12 @@ async fn a_stopping_leader(stop: Stop, resigns: bool, waits_out_the_window: bool
 /// at once, as Kafka's `pollFollowerAsVoter` does.
 #[tokio::test]
 async fn a_following_engine_stops_at_once() {
-    let election_timeout = secs(5);
-    let (ctrl, _dir, mut sends) = spawn_recording_controller(
-        election_timeout,
-        wire::PeerResponse::Ack { epoch: 1 }.encode(),
-    );
+    let timeouts = QuorumTimeouts {
+        election: secs(5),
+        fetch: secs(5),
+    };
+    let (ctrl, _dir, mut sends) =
+        spawn_recording_controller(timeouts, wire::PeerResponse::Ack { epoch: 1 }.encode());
     ctrl.inject_event(Event::ReceiveBeginQuorumEpoch {
         leader_id: NodeId(2),
         leader_epoch: 1,
@@ -133,5 +135,5 @@ async fn a_following_engine_stops_at_once() {
     ctrl.shutdown().await;
 
     check!(end_quorum_epochs(&mut sends) == Vec::new());
-    check!(started.elapsed() < graceful_shutdown_window(election_timeout));
+    check!(started.elapsed() < graceful_shutdown_window(timeouts.fetch));
 }

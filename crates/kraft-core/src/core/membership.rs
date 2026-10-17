@@ -63,7 +63,7 @@ impl QuorumStateMachine {
 
         match (was_voter, self.is_voter()) {
             (true, false) => {
-                let fetch_deadline = now.saturating_add_ms(self.election_timeout_ms);
+                let fetch_deadline = now.saturating_add_ms(self.fetch_timeout_ms);
                 self.role = Role::Observer {
                     leader_id,
                     fetch_deadline,
@@ -80,7 +80,7 @@ impl QuorumStateMachine {
             }
             (false, true) => {
                 if let Some(leader_id) = leader_id {
-                    let fetch_deadline = now.saturating_add_ms(self.election_timeout_ms);
+                    let fetch_deadline = now.saturating_add_ms(self.fetch_timeout_ms);
                     self.role = Role::Follower {
                         leader_id,
                         fetch_deadline,
@@ -178,7 +178,7 @@ impl QuorumStateMachine {
         let epoch = self.state.leader_epoch;
         let preferred_successors = self.preferred_successors();
         self.state.leader_id = None;
-        let fetch_deadline = now.saturating_add_ms(self.election_timeout_ms);
+        let fetch_deadline = now.saturating_add_ms(self.fetch_timeout_ms);
         self.role = Role::Observer {
             leader_id: None,
             fetch_deadline,
@@ -291,7 +291,7 @@ mod tests {
         let epoch = m.quorum_state().leader_epoch;
         let preferred_successors = m.preferred_successors();
         let actions = m.finish_local_leader_removal(SimInstant(50));
-        let fetch_deadline = SimInstant(50).saturating_add_ms(m.election_timeout_ms);
+        let fetch_deadline = SimInstant(50).saturating_add_ms(m.fetch_timeout_ms);
         check!(
             (m.role().clone(), m.quorum_state().leader_id, actions)
                 == (

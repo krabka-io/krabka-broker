@@ -10,8 +10,10 @@ use {
     crate::{
         auto_topic_creation::AutoTopicCreation,
         barrier::coordinator::BarrierCoordinator,
+        broker::dynamic_listeners::DataPlaneListeners,
         client_metrics::ClientMetrics,
         config::BrokerConfig,
+        config_keys::{listener_endpoints::static_originals, listener_reconfig::OwnBrokerChecks},
         coordinator::GroupCoordinator,
         diskless::{hot_tail::HotTailCache, read::DisklessReadHandle},
         fetch_session::FetchSessionCache,
@@ -53,6 +55,7 @@ mod adapters;
 mod audit;
 mod coordinators;
 mod diskless_index;
+mod dynamic_listeners;
 mod endpoints;
 pub(crate) use endpoints::{leader_listener_endpoint, registered_listener_endpoint};
 mod finish;
@@ -110,6 +113,10 @@ const DISKLESS_FLUSHER_READY_TIMEOUT: std::time::Duration = std::time::Duration:
 /// [`Broker::start`]; this struct is the shared internal state.
 pub struct Broker {
     pub(crate) config: BrokerConfig,
+    /// The data-plane listeners this node runs: the static ones and the ones
+    /// a dynamic `listeners` added. `accept_loop` reads how many run to tell
+    /// whether the inter-broker listener is protected.
+    pub(crate) data_plane: DataPlaneListeners,
     /// Metadata authority for this broker. For combined/controller nodes
     /// this is a live `KRaft` `ControllerHandle`; for broker-only nodes it
     /// is an observer-backed source that fetches `__cluster_metadata` and
@@ -305,10 +312,19 @@ impl DisklessRuntime {
 impl Broker {
     /// This node's listeners and broker-wide `tls_config`, for the listener
     /// SSL checks of an alter addressed to it.
-    pub(crate) fn listener_tls_inputs(&self) -> ListenerTlsInputs<'_> {
+    fn listener_tls_inputs(&self) -> ListenerTlsInputs<'_> {
         ListenerTlsInputs {
-            listeners: &self.config.listeners,
+            listeners: self.data_plane.specs().into(),
             tls_config: self.config.tls_config.as_ref(),
+        }
+    }
+
+    /// What the reconfiguration checks of an alter of this node's own
+    /// `BROKER` resource need of it.
+    pub(crate) fn own_config_checks(&self) -> OwnBrokerChecks<'_> {
+        OwnBrokerChecks {
+            listener_tls: self.listener_tls_inputs(),
+            static_config: static_originals(&self.config),
         }
     }
 
@@ -343,9 +359,11 @@ pub struct BrokerHandle {
     /// data-plane listener.
     listen_addr: Option<SocketAddr>,
     shutdown: CancellationToken,
-    /// One task per `ListenerSpec` bound during `Broker::start`. `shutdown()`
-    /// awaits every task after it stops all active connections.
-    listener_tasks: Vec<JoinHandle<()>>,
+    /// The task that opens and closes data-plane listeners as this node's
+    /// dynamic `listeners` changes. `None` on a node without the broker role.
+    /// The accept loops themselves are in `Broker::data_plane`, and
+    /// `shutdown()` awaits every one of them after this task.
+    listener_watcher: Option<JoinHandle<()>>,
     /// Topic-backed RLMM bootstrap and assignment task. Retained so shutdown
     /// can join it before the Tokio runtime drops.
     topic_rlmm_task: Option<JoinHandle<()>>,

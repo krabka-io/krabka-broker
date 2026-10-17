@@ -226,7 +226,7 @@ const THROTTLE_RATES: [&str; 3] = [
 
 /// Kafka's `SslConfigs.RECONFIGURABLE_CONFIGS`: dynamic only per listener,
 /// under a `listener.name.<listener>.` prefix.
-const DYNAMIC_SECURITY_CONFIGS: &[&str] = &[
+pub(crate) const DYNAMIC_SECURITY_CONFIGS: &[&str] = &[
     "ssl.keystore.type",
     "ssl.keystore.location",
     "ssl.keystore.password",
