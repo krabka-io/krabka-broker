@@ -4,7 +4,8 @@
 //! exchange, `Metadata` is not and the broker closes the connection instead,
 //! a `SaslHandshake` for a mechanism the listener does not enable comes back
 //! with the enabled list and then closes, a v0 handshake runs the exchange as
-//! raw tokens, and anything but `SaslAuthenticate` after a handshake closes.
+//! raw tokens, and anything but `SaslAuthenticate` after a handshake gets
+//! its own `ILLEGAL_SASL_STATE` response, when Kafka can parse it, and closes.
 
 use {
     crate::{
@@ -24,12 +25,27 @@ use {
     krabka_protocol::{
         Decode, Encode,
         owned::{
-            api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
-            metadata_request::MetadataRequest, sasl_handshake_request::SaslHandshakeRequest,
+            api_versions_request::ApiVersionsRequest,
+            api_versions_response::ApiVersionsResponse,
+            create_topics_request::{CreatableTopic, CreateTopicsRequest},
+            create_topics_response::{CreatableTopicResult, CreateTopicsResponse},
+            list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
+            list_offsets_response::{
+                ListOffsetsPartitionResponse, ListOffsetsResponse, ListOffsetsTopicResponse,
+            },
+            metadata_request::{MetadataRequest, MetadataRequestTopic},
+            metadata_response::{MetadataResponse, MetadataResponseTopic},
+            produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+            produce_response::{PartitionProduceResponse, ProduceResponse, TopicProduceResponse},
+            sasl_handshake_request::SaslHandshakeRequest,
             sasl_handshake_response::SaslHandshakeResponse,
         },
     },
     krabka_security::SaslMechanism,
+    std::{
+        fmt::Debug,
+        time::{Duration, Instant},
+    },
     tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpStream,
@@ -375,4 +391,291 @@ async fn plain_handshake_fixture(version: i16) -> PlainHandshake {
         handle,
         stream,
     }
+}
+
+/// The failed-authentication delay, in milliseconds, of the broker that
+/// [`a_request_after_the_handshake_answers_illegal_sasl_state_when_kafka_can_parse_it`]
+/// runs.
+const MID_EXCHANGE_DELAY_MS: u32 = 500;
+
+/// Checks, for the named case, the response bytes the broker wrote.
+type ResponseCheck = Box<dyn Fn(&str, &[u8])>;
+
+/// What the broker does with a request that arrives after the handshake.
+enum MidExchange {
+    /// Writes the decoded response that the check accepts, after the
+    /// failed-authentication delay, and closes.
+    Answers(ResponseCheck),
+    /// Closes at once, with no response.
+    Closes,
+}
+
+/// A response that decodes at `version` to `expected`, whole.
+fn answers<R>(version: i16, expected: R) -> MidExchange
+where
+    R: for<'de> Decode<'de> + PartialEq + Debug + 'static,
+{
+    MidExchange::Answers(Box::new(move |name, bytes| {
+        let mut cursor = bytes;
+        let response = R::decode(&mut cursor, version).expect("the response decodes");
+        assert!(response == expected, "{name}");
+        check!(cursor.is_empty(), "{name}: no bytes after the response");
+    }))
+}
+
+/// One request sent after a v1 PLAIN handshake.
+struct MidExchangeCase {
+    name: &'static str,
+    api_key: i16,
+    version: i16,
+    body: Vec<u8>,
+    outcome: MidExchange,
+}
+
+/// `request` encoded at `version`.
+fn encoded(request: &impl Encode, version: i16) -> Vec<u8> {
+    let mut body = BytesMut::new();
+    request
+        .encode(&mut body, version)
+        .expect("the request encodes");
+    body.to_vec()
+}
+
+/// A `Produce` for `orders` partition 0 with `acks`.
+fn produce(acks: i16) -> ProduceRequest {
+    ProduceRequest {
+        acks,
+        topic_data: vec![TopicProduceData {
+            name: "orders".to_owned(),
+            partition_data: vec![PartitionProduceData {
+                index: 0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+/// The message of the `IllegalSaslStateException` Kafka's authenticator
+/// throws for a request of `api`.
+fn unexpected_request(api: &str) -> String {
+    format!("Unexpected Kafka request of type {api} during SASL authentication.")
+}
+
+fn mid_exchange_cases() -> Vec<MidExchangeCase> {
+    let metadata = MetadataRequest {
+        topics: Some(vec![MetadataRequestTopic {
+            name: Some("orders".to_owned()),
+            ..Default::default()
+        }]),
+        ..Default::default()
+    };
+    let list_offsets = ListOffsetsRequest {
+        topics: vec![ListOffsetsTopic {
+            name: "orders".to_owned(),
+            partitions: vec![ListOffsetsPartition {
+                partition_index: 0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let create_topics = CreateTopicsRequest {
+        topics: vec![CreatableTopic {
+            name: "orders".to_owned(),
+            num_partitions: 1,
+            replication_factor: 1,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    vec![
+        // v12 has no top-level error code; the topic row carries it.
+        MidExchangeCase {
+            name: "Metadata v12",
+            api_key: 3,
+            version: 12,
+            body: encoded(&metadata, 12),
+            outcome: answers(12, MetadataResponse {
+                topics: vec![MetadataResponseTopic {
+                    error_code: 34,
+                    name: Some("orders".to_owned()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        },
+        MidExchangeCase {
+            name: "Produce v9",
+            api_key: 0,
+            version: 9,
+            body: encoded(&produce(1), 9),
+            outcome: answers(9, ProduceResponse {
+                responses: vec![TopicProduceResponse {
+                    name: "orders".to_owned(),
+                    partition_responses: vec![PartitionProduceResponse {
+                        index: 0,
+                        error_code: 34,
+                        base_offset: -1,
+                        log_append_time_ms: -1,
+                        log_start_offset: -1,
+                        error_message: Some(unexpected_request("PRODUCE")),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        },
+        MidExchangeCase {
+            name: "ListOffsets v7",
+            api_key: 2,
+            version: 7,
+            body: encoded(&list_offsets, 7),
+            outcome: answers(7, ListOffsetsResponse {
+                topics: vec![ListOffsetsTopicResponse {
+                    name: "orders".to_owned(),
+                    partitions: vec![ListOffsetsPartitionResponse {
+                        partition_index: 0,
+                        error_code: 34,
+                        timestamp: -1,
+                        offset: -1,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        },
+        MidExchangeCase {
+            name: "CreateTopics v7",
+            api_key: 19,
+            version: 7,
+            body: encoded(&create_topics, 7),
+            outcome: answers(7, CreateTopicsResponse {
+                topics: vec![CreatableTopicResult {
+                    name: "orders".to_owned(),
+                    error_code: 34,
+                    error_message: Some(unexpected_request("CREATE_TOPICS")),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        },
+        // `RequestContext.parseRequest` reads an unsupported `ApiVersions`
+        // as an empty v0 request.
+        MidExchangeCase {
+            name: "ApiVersions at an unsupported version",
+            api_key: 18,
+            version: i16::MAX,
+            body: vec![0xff],
+            outcome: answers(0, ApiVersionsResponse {
+                error_code: 34,
+                ..Default::default()
+            }),
+        },
+        // `ProduceRequest.getErrorResponse` returns null for `acks = 0`.
+        MidExchangeCase {
+            name: "Produce with acks 0",
+            api_key: 0,
+            version: 9,
+            body: encoded(&produce(0), 9),
+            outcome: MidExchange::Closes,
+        },
+        MidExchangeCase {
+            name: "Metadata at an unsupported version",
+            api_key: 3,
+            version: i16::MAX,
+            body: encoded(&MetadataRequest::default(), 13),
+            outcome: MidExchange::Closes,
+        },
+        MidExchangeCase {
+            name: "Metadata with a truncated body",
+            api_key: 3,
+            version: 12,
+            body: vec![0xff],
+            outcome: MidExchange::Closes,
+        },
+        // `UnregisterController` (94) is past Kafka 4.3.1's last api key.
+        MidExchangeCase {
+            name: "an api key Kafka 4.3.1 lacks",
+            api_key: 94,
+            version: 0,
+            body: vec![0, 0, 0, 0, 0],
+            outcome: MidExchange::Closes,
+        },
+    ]
+}
+
+/// After a handshake chose a mechanism, Kafka's
+/// `SaslServerAuthenticator.handleSaslToken` parses any request but
+/// `SaslAuthenticate` and answers it with that request's own
+/// `getErrorResponse` for `IllegalSaslStateException`: `ILLEGAL_SASL_STATE`
+/// (34) in the request's own response shape and version. The answer and the
+/// close wait out the failed-authentication delay. A request it cannot parse,
+/// or whose error response is null, closes at once with no answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_request_after_the_handshake_answers_illegal_sasl_state_when_kafka_can_parse_it() {
+    let log_dir = tempfile::tempdir().unwrap();
+    let mut cfg =
+        sasl_plaintext_mechanisms(log_dir.path().to_path_buf(), vec![SaslMechanism::Plain]);
+    cfg.plain_credentials
+        .insert("alice".to_string(), alice_password());
+    cfg.connection_failed_authentication_delay = krabka_units::millis(MID_EXCHANGE_DELAY_MS);
+    let delay = Duration::from_millis(u64::from(MID_EXCHANGE_DELAY_MS));
+    let handle = krabka_broker::Broker::start(cfg)
+        .await
+        .expect("broker must start");
+
+    for case in mid_exchange_cases() {
+        let mut stream = TcpStream::connect(handle.listen_addr()).await.unwrap();
+        check!(
+            plain_handshake(&mut stream, 1).await.error_code == 0,
+            "{}",
+            case.name
+        );
+        let started = Instant::now();
+        let response = round_trip(
+            &mut stream,
+            SocketExchangeSetup {
+                api_key: WireApiKey(case.api_key),
+                version: WireApiVersion(case.version),
+                correlation: WireCorrelationId(2),
+                header: RequestHeaderEncoding::Flexible,
+            },
+            &case.body,
+        )
+        .await;
+        let elapsed = started.elapsed();
+        match case.outcome {
+            MidExchange::Answers(check_response) => {
+                let response = response.unwrap_or_else(|error| {
+                    panic!("{}: expected a response, got {error}", case.name)
+                });
+                check_response(case.name, &response);
+                check!(
+                    elapsed >= delay,
+                    "{}: answered after {elapsed:?}, before the delay",
+                    case.name
+                );
+                check!(
+                    stream.read_u32().await.is_err(),
+                    "{}: then the connection closes",
+                    case.name
+                );
+            }
+            MidExchange::Closes => {
+                check!(response.is_err(), "{}: expected no response", case.name);
+                check!(
+                    elapsed < delay,
+                    "{}: closed after {elapsed:?}, not at once",
+                    case.name
+                );
+            }
+        }
+    }
+
+    handle.shutdown().await;
 }
