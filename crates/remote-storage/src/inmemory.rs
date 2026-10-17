@@ -174,6 +174,14 @@ impl RemoteLogMetadataManager for InmemoryRemoteLogMetadataManager {
         cache.set_delete_state(metadata.state);
         Ok(())
     }
+
+    // The cache is the store, so every committed event is already applied.
+    fn caught_up(
+        &self,
+        _topic_id_partition: &TopicIdPartition,
+    ) -> Result<bool, RemoteStorageError> {
+        Ok(true)
+    }
 }
 
 #[cfg(test)]
@@ -207,6 +215,15 @@ mod tests {
         let m = manager_with_finished_segment();
 
         check_finished_segment(&m, &tp());
+    }
+
+    #[test]
+    fn caught_up_is_always_true() {
+        assert!(
+            InmemoryRemoteLogMetadataManager::new()
+                .caught_up(&tp())
+                .unwrap()
+        );
     }
 
     #[test]

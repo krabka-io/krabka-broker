@@ -43,6 +43,7 @@
 use {
     crate::{
         api_catalog::UnstableApiVersions,
+        blocking::spawn_blocking,
         config_keys::resolve_remote_copy_lag,
         freeze::resolve::{FreezeMutationResolution, resolve_freeze_mutation},
         metadata_source::MetadataSource,
@@ -53,7 +54,10 @@ use {
     },
     futures_util::future::join_all,
     krabka_metadata::NodeId,
-    krabka_remote_storage::{RemoteLogMetadataManager, RemoteStorageManager, TopicIdPartition},
+    krabka_remote_storage::{
+        RemoteLogMetadataManager, RemoteLogSegmentMetadata, RemoteStorageError,
+        RemoteStorageManager, TopicIdPartition,
+    },
     krabka_units::{
         ByteSize, Time, bytes,
         convert::{ByteSizeExt as _, TimeExt as _},
@@ -143,7 +147,7 @@ pub(crate) use self::copy::copy_eligible;
 pub(crate) use self::{
     archive::ArchiveMode,
     copy::{CopyBound, CopyDelay, CopyFence, CopyIdentity, copy_eligible_delayed},
-    delete::cascade_remote_partition_delete,
+    delete::{cascade_remote_partition_delete, mark_segments_below},
     local_retention::{LocalRetentionBounds, local_retention_pass},
     remote_retention::{LocalLogFootprint, RemoteRetentionBounds, remote_retention_pass},
 };
@@ -383,6 +387,14 @@ impl CopyFence for LeaderFence<'_> {
         !self.shutdown.is_cancelled()
             && self.partition.current_leader.load(Ordering::Acquire) == self.node_id
             && self.partition.current_leader_epoch.load(Ordering::Acquire) == self.leader_epoch
+    }
+
+    fn established_log_start(&self) -> Option<krabka_log::Offset> {
+        self.partition
+            .log
+            .lock()
+            .expect("log mutex poisoned")
+            .established_log_start()
     }
 }
 
@@ -672,7 +684,7 @@ async fn retention_passes(pass: RetentionPasses<'_>, tier: &RemoteTier<'_>) {
         tier.unstable_api_versions,
     );
     if !is_leader {
-        follow_unenforced_floor(partition, tp, deleted_below, tier.rlmm);
+        follow_unenforced_floor(partition, tp, deleted_below, tier.rlmm).await;
         return;
     }
     let outcome = remote_retention_pass(
@@ -725,10 +737,20 @@ async fn retention_passes(pass: RetentionPasses<'_>, tier: &RemoteTier<'_>) {
 /// fix for #1444 reported, and it hides every archived record under it. See
 /// [`remote_retention::archive_enforces_floor`].
 ///
-/// An RLMM that cannot list the partition yet leaves the floor for the next
-/// tick, which is why this runs here rather than on a fetch response: an idle
-/// partition stops appearing in incremental fetch responses.
-fn follow_unenforced_floor(
+/// The archive is read only once this broker's RLMM has applied everything
+/// the metadata store had committed when the check began
+/// ([`RemoteLogMetadataManager::caught_up`]). A leader marks the segments
+/// under a `DeleteRecords` floor `DeleteSegmentStarted`, and waits for those
+/// marks to be acknowledged, before it raises the floor, so a caught-up
+/// listing taken after this follower took the floor holds the marks. A stale
+/// listing could still show the segments finished and lower a floor somebody
+/// deleted up to.
+///
+/// An RLMM that is behind, or cannot list the partition yet, leaves the floor
+/// for the next tick, which is why this runs here rather than on a fetch
+/// response: an idle partition stops appearing in incremental fetch
+/// responses.
+async fn follow_unenforced_floor(
     partition: &Partition,
     tp: &TopicIdPartition,
     deleted_below: Option<krabka_log::Offset>,
@@ -738,8 +760,13 @@ fn follow_unenforced_floor(
     let Some(floor) = deleted_below.filter(|floor| (0..floor.0).contains(&reported)) else {
         return;
     };
-    let segments = match rlmm.list_remote_log_segments(tp) {
-        Ok(segments) => segments,
+    let segments = match current_listing(tp, rlmm).await {
+        Ok(Some(segments)) => segments,
+        Ok(None) => {
+            debug!(topic = %partition.topic, partition = tp.partition,
+                   "remote-log-manager: the RLMM is behind the metadata store; the log start stays");
+            return;
+        }
         Err(error) => {
             debug!(topic = %partition.topic, partition = tp.partition, %error,
                    "remote-log-manager: the archive cannot say whether it enforces the log start yet");
@@ -754,6 +781,28 @@ fn follow_unenforced_floor(
         debug!(topic = %partition.topic, partition = tp.partition, %error,
                "remote-log-manager: could not take the leader's log start");
     }
+}
+
+/// The partition's remote segments as of now, or `None` while this broker's
+/// RLMM has not applied everything the metadata store holds for them. Both
+/// calls may block, so they run on the blocking pool.
+async fn current_listing(
+    tp: &TopicIdPartition,
+    rlmm: &Arc<dyn RemoteLogMetadataManager>,
+) -> Result<Option<Vec<RemoteLogSegmentMetadata>>, RemoteStorageError> {
+    let (tp, rlmm) = (tp.clone(), Arc::clone(rlmm));
+    spawn_blocking(move || {
+        if !rlmm.caught_up(&tp)? {
+            return Ok(None);
+        }
+        rlmm.list_remote_log_segments(&tp).map(Some)
+    })
+    .await
+    .unwrap_or_else(|error| {
+        Err(RemoteStorageError::Backend(format!(
+            "RLMM listing task panicked: {error}"
+        )))
+    })
 }
 
 fn topic_partition(
@@ -789,7 +838,7 @@ mod tests {
                 local_retention::{OffsetRange, finished_segment_ranges},
                 test_support as fixtures,
             },
-            remote_reader::test_support::NotReadyRlmm,
+            remote_reader::test_support::{LaggingRlmm, NotReadyRlmm},
         },
         assert2::{assert, check},
         fixtures::{local_backends, partition_log, sweep_counts},
@@ -817,6 +866,8 @@ mod tests {
     enum Metadata {
         /// One finished segment over offsets 0 to 9.
         OneSegment,
+        /// The same segment, from a cache that lags the metadata store.
+        Lagging,
         /// Its metadata partition has not caught up.
         NotReady,
     }
@@ -824,13 +875,15 @@ mod tests {
     /// A follower lowers a floor it established to the start its leader
     /// reported only when the archive does not enforce that floor: a finished
     /// segment lies wholly below it, so nobody deleted up to it. A floor the
-    /// archive enforces is a deletion and is kept. Nothing reported, or an
-    /// RLMM that cannot list yet, keeps the floor for a later tick.
+    /// archive enforces is a deletion and is kept. Nothing reported, an RLMM
+    /// that cannot list yet, or one behind the metadata store keeps the floor
+    /// for a later tick.
     #[yare::parameterized(
         an_unenforced_floor_takes_the_reported_start = { Metadata::OneSegment, 10, 0, 0 },
         an_enforced_floor_is_kept = { Metadata::OneSegment, 5, 0, 5 },
         nothing_reported_keeps_the_floor = { Metadata::OneSegment, 10, -1, 10 },
         an_rlmm_catching_up_keeps_the_floor = { Metadata::NotReady, 10, 0, 10 },
+        a_lagging_rlmm_keeps_the_floor = { Metadata::Lagging, 10, 0, 10 },
     )]
     #[test_macro(tokio::test)]
     async fn a_follower_lowers_only_a_floor_the_archive_does_not_enforce(
@@ -841,13 +894,15 @@ mod tests {
     ) {
         let dir = tempfile::tempdir().unwrap();
         let partition = rolled_tiered_partition(dir.path());
+        let one_segment = || {
+            let rlmm: Arc<dyn RemoteLogMetadataManager> =
+                Arc::new(krabka_remote_storage::InmemoryRemoteLogMetadataManager::new());
+            fixtures::seed_finished_segments(&rlmm, 1);
+            rlmm
+        };
         let rlmm: Arc<dyn RemoteLogMetadataManager> = match metadata {
-            Metadata::OneSegment => {
-                let rlmm: Arc<dyn RemoteLogMetadataManager> =
-                    Arc::new(krabka_remote_storage::InmemoryRemoteLogMetadataManager::new());
-                fixtures::seed_finished_segments(&rlmm, 1);
-                rlmm
-            }
+            Metadata::OneSegment => one_segment(),
+            Metadata::Lagging => Arc::new(LaggingRlmm(one_segment())),
             Metadata::NotReady => Arc::new(NotReadyRlmm),
         };
         let deleted_below = {
@@ -859,7 +914,7 @@ mod tests {
             .reported_leader_log_start
             .store(reported, Ordering::Release);
 
-        follow_unenforced_floor(&partition, &tp(), deleted_below, &rlmm);
+        follow_unenforced_floor(&partition, &tp(), deleted_below, &rlmm).await;
 
         assert2::assert!(
             partition.log_start_offset() == Offset(start),
