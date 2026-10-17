@@ -59,6 +59,19 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- A broker that stops leading a tiered partition stops copying it to the
+  remote tier at its next segment, as Kafka's `RLMCopyTask` does once it is
+  cancelled. Before, the copy pass checked leadership only at the start of
+  each tick and then uploaded every segment it had planned, and a shutdown
+  never stopped a tick that was already running. The new leader, which had
+  seen the old leader's unfinished copy, copied the same offsets again under
+  its own segment boundaries, so the tier held two copies of them. The pass
+  now re-checks the leader and the leader epoch before each segment and
+  again before it uploads. On a mutable tier it checks once more before it
+  publishes `CopySegmentFinished`, and an upload that outlived the broker's
+  leadership is withdrawn, not published. A write-once archive has already
+  sealed that upload's manifest, so the copy is published.
+  `BrokerHandle::shutdown` now waits for the copy task to stop.
 - A gracefully stopped active controller now hands the metadata quorum over
   before it exits, as Kafka's `KafkaRaftClient.shutdown` does: it resigns,
   sends `EndQuorumEpoch` naming the other voters by how far they have fetched,
