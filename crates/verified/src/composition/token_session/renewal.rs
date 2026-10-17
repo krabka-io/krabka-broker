@@ -32,6 +32,9 @@ pub struct RenewalTrace {
 /// One identity and its immutable fields stay fixed; only expiry changes.
 /// Commit ordering, faithful metadata projection and cryptographic success
 /// remain host obligations. Delays model nondecreasing clock observations.
+/// The request clock saturates at `i64::MAX`, so a session whose deadline is
+/// `i64::MAX` is never past it. No re-authentication has started on the
+/// connection, so past the deadline only a `SaslHandshake` (17) is admitted.
 #[requires(issued_ms@ >= 0 && periods.1@ > 0 && periods.2@ > 0 && periods.4@ > 0)]
 #[requires(0 <= delays.0@ && delays.0@ <= delays.1@ && delays.1@ <= delays.2@)]
 #[ensures(!result.boundary_authenticated)]
@@ -56,8 +59,8 @@ pub struct RenewalTrace {
         && (cap_ms@ > 0 ==> at@ <= result.original_expiry@ + delays.1@ + cap_ms@)
         && (at == result.renewed_expiry || (cap_ms@ > 0
             && (at@ == result.original_expiry@ + delays.1@ + cap_ms@ || at@ == i64::MAX@)))
-        && admitted == (api_key@ == 17 || api_key@ == 36
-            || result.original_expiry@ + delays.2@ < at@),
+        && admitted == (api_key@ == 17
+            || result.original_expiry@ + delays.2@ <= at@ || at@ == i64::MAX@),
 })]
 pub(super) fn renewed_token_survives_captured_cleanup(
     issued_ms: i64,
@@ -135,7 +138,7 @@ pub(super) fn renewed_token_survives_captured_cleanup(
     };
     let request = old.saturating_add(delays.2);
     let admitted = request_auth_admission(RequestAuthState::Authenticated, api_key)
-        && !session_expired_for_request(Some(at), api_key, request);
+        && !session_expired_for_request(Some(at), api_key, request, None);
     trace.session = Some((at, lifetime, admitted));
     trace
 }

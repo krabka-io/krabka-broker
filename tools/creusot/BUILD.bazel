@@ -65,7 +65,7 @@ image_manifest(
 image_load(
     name = "builder_load",
     image = ":builder_image",
-    tag = "docker.io/krabka-io/creusot-builder:0.13.0",
+    tag = "docker.io/krabka-io/creusot-builder:0.14.0",
     tags = ["manual"],
 )
 
@@ -127,7 +127,7 @@ image_manifest(
 image_load(
     name = "image_load",
     image = ":image",
-    tag = "docker.io/krabka-io/creusot:0.13.0",
+    tag = "docker.io/krabka-io/creusot:0.14.0",
     tags = ["manual"],
 )
 

@@ -17,6 +17,7 @@ use {
     },
     krabka_security::{
         Principal, SaslMechanism, ScramServerExchange, SecretBytes, compute_token_hmac,
+        scram::MIN_SCRAM_ITERATIONS,
     },
     krabka_units::Time,
     krabka_verified::delegation_token::{ScramCredentialSource, scram_credential_source},
@@ -150,6 +151,15 @@ pub fn handle_authenticate_scram(
                 .is_some_and(|authzid| authzid != username)
             {
                 return fail_authenticate_with(AUTHORIZATION_ID_MISMATCH.to_owned());
+            }
+
+            // Next, after the authorization id, Kafka refuses a stored
+            // credential with fewer than `ScramMechanism.minIterations`
+            // (4096) iterations. It throws a `SaslException`, so the client
+            // gets the generic text. `AlterUserScramCredentials` never writes
+            // such a credential, but a bootstrap record can carry one.
+            if i64::from(cred.iterations) < i64::from(MIN_SCRAM_ITERATIONS) {
+                return fail_authenticate("SCRAM credential iterations below the minimum");
             }
 
             // The exchange decodes the `n=` value and checks it against its

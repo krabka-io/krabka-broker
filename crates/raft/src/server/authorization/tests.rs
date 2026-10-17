@@ -35,6 +35,7 @@ use {
             vote_response::VoteResponse,
         },
         primitives::uuid::Uuid as WireUuid,
+        records::RecordsPayload,
     },
     std::{collections::BTreeSet, sync::Arc},
     tokio::io::{AsyncReadExt as _, AsyncWriteExt as _},
@@ -201,10 +202,13 @@ fn fetch_request(version: i16) -> Bytes {
 /// their own response.
 #[test]
 fn fetch_and_quorum_refusals_are_kafka_error_responses() {
+    // `FetchResponse.partitionResponse`: its empty, non-null records decode
+    // as an empty pre-v2 payload.
     let fetch_row = |partition_index| fetch_response::PartitionData {
         partition_index,
         error_code: 31,
         high_watermark: -1,
+        records: Some(RecordsPayload::Legacy(Bytes::new())),
         ..Default::default()
     };
     let cases = [

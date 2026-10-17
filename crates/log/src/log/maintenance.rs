@@ -2,15 +2,71 @@
 
 use {
     super::{Log, PendingDelete, RollJitter},
-    crate::{error::LogError, retention},
+    crate::{error::LogError, io::LogIo, retention},
     krabka_ids::Offset,
     krabka_units::{Time, prelude::TimeExt as _},
     std::{
         collections::hash_map::RandomState,
         hash::BuildHasher,
+        sync::Arc,
         time::{Duration, Instant, SystemTime},
     },
 };
+
+/// Retired segment files whose deletion delay has passed, taken out of the
+/// log by [`Log::maintain_deferring_deletions`].
+///
+/// Unlinking a large segment file drops its page cache, which takes tens of
+/// milliseconds a file on a loaded disk. Holding the files here lets the
+/// caller delete them without holding the log, so the appends and reads of
+/// the partition do not wait for it.
+#[derive(Debug, Default)]
+#[must_use = "the retired files stay on disk until `delete` runs"]
+pub struct DueDeletions {
+    io: Option<Arc<dyn LogIo>>,
+    pending: Vec<PendingDelete>,
+}
+
+/// A [`DueDeletions::delete`] that stopped at a failure.
+#[derive(Debug)]
+pub struct FailedDeletion {
+    /// The failure that stopped the deletion.
+    pub error: LogError,
+    /// The files not yet deleted. [`Log::restore_deletions`] hands them back
+    /// to the log for a later pass.
+    pub remaining: DueDeletions,
+}
+
+impl DueDeletions {
+    /// Whether there is nothing to delete.
+    #[must_use]
+    pub fn is_empty(&self) -> bool { self.pending.is_empty() }
+
+    /// Delete the files, newest name first within each retired segment, as
+    /// [`Log::maintain`] does.
+    ///
+    /// # Errors
+    /// Stops at the first file that fails to delete and returns the error with
+    /// every file not yet deleted.
+    pub fn delete(mut self) -> Result<(), FailedDeletion> {
+        let Some(io) = self.io.clone() else {
+            return Ok(());
+        };
+        while let Some(pending) = self.pending.first_mut() {
+            while let Some(path) = pending.paths.last() {
+                if let Err(error) = retention::remove_optional(&*io, path) {
+                    return Err(FailedDeletion {
+                        error,
+                        remaining: self,
+                    });
+                }
+                pending.paths.pop();
+            }
+            self.pending.remove(0);
+        }
+        Ok(())
+    }
+}
 
 impl Log {
     /// Flush dirty data and reclaim retired files whose deadlines have passed.
@@ -24,6 +80,47 @@ impl Log {
         self.rollover_flusher.check()?;
         self.flush_if_due(Instant::now())?;
         self.reap_deleted_files(now)
+    }
+
+    /// [`Self::maintain`], except that the retired files whose deadlines have
+    /// passed are handed back rather than deleted under `&mut self`.
+    ///
+    /// # Errors
+    /// Returns the first flush failure. The retired files then stay with the
+    /// log.
+    ///
+    /// # Panics
+    /// Panics when the configuration lock is poisoned.
+    pub fn maintain_deferring_deletions(
+        &mut self,
+        now: SystemTime,
+    ) -> Result<DueDeletions, LogError> {
+        self.rollover_flusher.check()?;
+        self.flush_if_due(Instant::now())?;
+        Ok(self.take_due_deletions(now))
+    }
+
+    /// Take the retired files whose deadlines have passed, leaving the rest.
+    pub fn take_due_deletions(&mut self, now: SystemTime) -> DueDeletions {
+        let (due, waiting) = std::mem::take(&mut self.pending_deletes)
+            .into_iter()
+            .partition(|pending| pending.deadline <= now);
+        self.pending_deletes = waiting;
+        DueDeletions {
+            io: Some(self.io.clone()),
+            pending: due,
+        }
+    }
+
+    /// Hand back the files a [`DueDeletions::delete`] did not delete. They
+    /// become due again at `not_before`, so a caller retrying a failing disk
+    /// can space its attempts.
+    pub fn restore_deletions(&mut self, remaining: DueDeletions, not_before: SystemTime) {
+        self.pending_deletes
+            .extend(remaining.pending.into_iter().map(|pending| PendingDelete {
+                deadline: pending.deadline.max(not_before),
+                paths: pending.paths,
+            }));
     }
 
     /// Time until the next flush or retired-file deadline, or `None` when idle.
@@ -168,18 +265,12 @@ impl Log {
     }
 
     pub(super) fn reap_deleted_files(&mut self, now: SystemTime) -> Result<(), LogError> {
-        for PendingDelete { deadline, paths } in &mut self.pending_deletes {
-            if *deadline > now {
-                continue;
-            }
-            while let Some(path) = paths.last() {
-                retention::remove_optional(&*self.io, path)?;
-                paths.pop();
-            }
-        }
-        self.pending_deletes
-            .retain(|pending| !pending.paths.is_empty());
-        Ok(())
+        self.take_due_deletions(now)
+            .delete()
+            .map_err(|FailedDeletion { error, remaining }| {
+                self.restore_deletions(remaining, now);
+                error
+            })
     }
 }
 
