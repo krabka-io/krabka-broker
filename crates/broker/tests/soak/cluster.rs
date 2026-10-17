@@ -574,11 +574,9 @@ pub(crate) async fn create_topics(
 mod tests {
     use {
         super::{INTER_BROKER_LISTENER, diskless_quorum_toml, inter_broker_token},
+        crate::support::configs::apply_node_file,
         assert2::check,
-        krabka_broker::{
-            config::{BrokerConfig, InterBrokerCredentials},
-            file_config::FileConfig,
-        },
+        krabka_broker::config::{BrokerConfig, InterBrokerCredentials},
         krabka_security::{ListenerProtocol, SaslMechanism, UnsecuredJwsValidator},
     };
 
@@ -604,12 +602,7 @@ mod tests {
             listener = toml.listener,
             tables = toml.tables,
         );
-        let file: FileConfig =
-            toml::from_str(&text).unwrap_or_else(|error| panic!("{text}\n{error}"));
-        let mut config = BrokerConfig::default();
-        file.apply_to(&mut config)
-            .unwrap_or_else(|error| panic!("{text}\n{error}"));
-        config
+        apply_node_file(&text)
     }
 
     // `OpaAuthorizer::new` captures the current tokio runtime handle, so the

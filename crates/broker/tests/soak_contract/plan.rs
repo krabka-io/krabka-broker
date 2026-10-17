@@ -173,13 +173,10 @@ pub(crate) fn topic_configs(
 mod tests {
     use {
         super::{REMOTE_TIER, diskless, node_toml, topic_configs, unsupported},
-        crate::support::manifest_dir,
+        crate::support::{configs::apply_node_file, manifest_dir},
         assert2::check,
         krabka_bench_driver::soak::contract::{Contract, Semantics, Storage},
-        krabka_broker::{
-            config::{BrokerConfig, RemoteStorageBackend, RlmmKind},
-            file_config::FileConfig,
-        },
+        krabka_broker::config::{BrokerConfig, RemoteStorageBackend, RlmmKind},
         krabka_units::prelude::*,
     };
 
@@ -208,12 +205,7 @@ mod tests {
             "broker_id = 1\n{}\n[process]\nroles = [\"controller\", \"broker\"]\n{}",
             toml.root, toml.tables
         );
-        let file: FileConfig =
-            toml::from_str(&text).unwrap_or_else(|error| panic!("{text}\n{error}"));
-        let mut config = BrokerConfig::default();
-        file.apply_to(&mut config)
-            .unwrap_or_else(|error| panic!("{text}\n{error}"));
-        config
+        apply_node_file(&text)
     }
 
     #[yare::parameterized(
