@@ -92,6 +92,23 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   OAUTHBEARER validator refuses what Kafka's does: an `exp` not after `iat`,
   a non-numeric `iat`, a blank principal and a numeric scope claim
   (krabka-io/krabka-protocol#65, #66).
+- A partition no longer stalls its appends and fetches while it deletes
+  segment files that retention retired. When their `file.delete.delay.ms`
+  passed, the partition writer unlinked them one after another under the log
+  lock, and an unlink drops the file's page cache, which takes tens of
+  milliseconds a segment on a loaded disk. Under RF3 `acks=all` saturation
+  with size retention this held produce acks for up to about a second
+  (#1394). The writer now deletes them on the blocking pool, outside the log
+  lock and off its own loop, as Kafka deletes them from its scheduler.
+- The bench driver's consumer no longer stalls each `poll` for up to
+  `fetch.max.wait.ms`. The krabka-client-rs pin moves to 29dac7a5
+  (krabka-io/krabka-client-rs#186), whose consumer refreshes metadata only
+  when it is due rather than on every poll, behind a parked `Fetch`. RF3
+  multi-partition end-to-end latencies from `krabka-bench-driver` were set by
+  that stall (#1394).
+- The bench driver's `acks: all` scenarios run again. They turn idempotence on,
+  and the driver asked for more in-flight requests than an idempotent producer
+  allows, so each one failed at start.
 - A broker that stops leading a tiered partition stops copying it to the
   remote tier at its next segment, as Kafka's `RLMCopyTask` does once it is
   cancelled. Before, the copy pass checked leadership only at the start of

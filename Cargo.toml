@@ -200,11 +200,11 @@ krabka-bench-driver = { path = "crates/bench-driver" }
 krabka-blockstore = { git = "https://github.com/krabka-io/krabka-o11y", rev = "c6643b232c4ead91079fc649b98fa9fa72f2d288" }
 krabka-broker = { path = "crates/broker" }
 krabka-cli = { git = "https://github.com/krabka-io/krabka-cli", rev = "b39dc88d0da3792db02ad62469b45f4fe312ea75" }
-krabka-client-admin = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "ee411691e39a05f3ed4e4ed8adc1e8939fd111b4" }
-krabka-client-consumer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "ee411691e39a05f3ed4e4ed8adc1e8939fd111b4" }
-krabka-client-coordination = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "ee411691e39a05f3ed4e4ed8adc1e8939fd111b4" }
-krabka-client-core = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "ee411691e39a05f3ed4e4ed8adc1e8939fd111b4" }
-krabka-client-producer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "ee411691e39a05f3ed4e4ed8adc1e8939fd111b4" }
+krabka-client-admin = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "29dac7a590a8ccab2e88205987d3c28fe3c9f669" }
+krabka-client-consumer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "29dac7a590a8ccab2e88205987d3c28fe3c9f669" }
+krabka-client-coordination = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "29dac7a590a8ccab2e88205987d3c28fe3c9f669" }
+krabka-client-core = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "29dac7a590a8ccab2e88205987d3c28fe3c9f669" }
+krabka-client-producer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "29dac7a590a8ccab2e88205987d3c28fe3c9f669" }
 krabka-client-streams = { git = "https://github.com/krabka-io/krabka-streams-rs", rev = "44afe9b6936eddaaef9eff85f22c9f11fa9056b5" }
 krabka-compression = { git = "https://github.com/krabka-io/krabka-protocol", rev = "af4dc00a1f6502c5f67280f356c90768dabcf4c4" }
 krabka-connect = { git = "https://github.com/krabka-io/krabka-connect", rev = "ecd5fd77656bc24addb087e714477b9201053a28" }
