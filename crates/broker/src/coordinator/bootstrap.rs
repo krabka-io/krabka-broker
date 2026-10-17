@@ -48,8 +48,11 @@ mod unknown_record_tests;
 mod upgrade_downgrade_tests;
 
 pub use self::audit::bootstrap_audit_topic;
-pub(crate) use self::replay::replay_partition;
 use self::replay::{Replayed, finalize, replay_records};
+pub(crate) use self::{
+    audit::{hosted_audit_partition, spawn_audit_placement},
+    replay::replay_partition,
+};
 
 pub const OFFSETS_TOPIC: &str = "__consumer_offsets";
 /// First offsets partition, used by focused compatibility tests.
