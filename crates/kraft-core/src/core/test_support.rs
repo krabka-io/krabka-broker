@@ -6,13 +6,13 @@
 //! needs these builders, so they sit here rather than in any single family.
 
 use {
-    super::QuorumStateMachine,
+    super::{QuorumStateMachine, QuorumTimeouts},
     crate::{
         action::Action,
         event::Event,
         types::{Epoch, LogOffsetMetadata, LogView, NodeId, QuorumState, SimInstant},
     },
-    krabka_units::prelude::{Time, secs},
+    krabka_units::prelude::secs,
 };
 
 /// The end of `epoch` in a fake log of `end` records that all carry
@@ -126,12 +126,17 @@ pub fn machine(me: NodeId, ids: &[NodeId]) -> QuorumStateMachine {
     QuorumStateMachine::new(
         me,
         QuorumState::bootstrap(uuid::Uuid::nil(), voters(ids)),
-        TEST_ELECTION_TIMEOUT,
+        TEST_TIMEOUTS,
     )
 }
 
-/// The base election timeout for every test machine.
-pub const TEST_ELECTION_TIMEOUT: Time = secs(1);
+/// The timeouts of every test machine: Kafka's defaults, a one-second
+/// election timeout and a two-second fetch timeout. They differ, so a deadline
+/// drawn from the wrong one shows.
+pub const TEST_TIMEOUTS: QuorumTimeouts = QuorumTimeouts {
+    election: secs(1),
+    fetch: secs(2),
+};
 
 pub fn win_election(
     m: &mut QuorumStateMachine,

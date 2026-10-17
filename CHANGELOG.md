@@ -63,6 +63,25 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   the RFC 6749 scope-token grammar fails config validation, as Kafka's
   handler fails its configuration (#1390).
 
+### Changed
+
+- The controller quorum's fetch timeout and election timeout are two keys
+  now, as in Kafka. The new `controller_fetch_timeout`, Kafka's
+  `controller.quorum.fetch.timeout.ms`, is the follower and observer fetch
+  watchdog, and 1.5 times it is the leader's check-quorum window. Its default
+  is Kafka's 2 s, down from the 5 s the single key had, so the survivors of a
+  crashed controller leader start their election after 2 s rather than 5 s.
+  `controller_election_timeout` is now Kafka's
+  `controller.quorum.election.timeout.ms` only, with Kafka's default of 1 s:
+  it is the base of the randomized election timer, so a vote that splits
+  after a controller leader is killed is retried within one to two election
+  timeouts rather than 5 to 10 s. The derived controller heartbeat cadence is
+  `controller_fetch_timeout / 3`, and validation now requires
+  `controller_heartbeat_interval` to be below `controller_fetch_timeout`. An
+  operator who tuned `controller_election_timeout` as the fetch watchdog
+  should move that value to `controller_fetch_timeout`, and one whose
+  controller links need more than 2 s should raise it (#1477).
+
 ### Fixed
 
 - A per-broker `listeners` and `listener.security.protocol.map` change now
@@ -138,16 +157,17 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 - A gracefully stopped active controller now hands the metadata quorum over
   before it exits, as Kafka's `KafkaRaftClient.shutdown` does: it resigns,
   sends `EndQuorumEpoch` naming the other voters by how far they have fetched,
-  and waits up to five seconds (or one `controller_election_timeout`, when that
-  is shorter) for a successor. Before, it stopped without a word, and the other
-  voters noticed only after three missed five-second fetch timeouts and then an
-  election, 18–26 s after `SIGTERM` in a three-node cluster with the default
-  timings. A new controller now serves within about half a second. A broker in
-  controlled shutdown also sends its first heartbeat at once and asks again 50
-  ms after the controller's first answer, as Kafka's `BrokerLifecycleManager`
-  does, instead of waiting a `heartbeat_interval` for each (#1446).
+  and waits up to five seconds (or two and a half `controller_fetch_timeout`s,
+  when that is shorter) for a successor. Before, it stopped without a word,
+  and the other voters noticed only after three missed five-second fetch
+  timeouts and then an election, 18–26 s after `SIGTERM` in a three-node
+  cluster with the default timings. A new controller now serves within about
+  half a second. A broker in controlled shutdown also sends its first
+  heartbeat at once and asks again 50 ms after the controller's first answer,
+  as Kafka's `BrokerLifecycleManager` does, instead of waiting a
+  `heartbeat_interval` for each (#1446).
 - A controller voter that stops hearing from the controller leader now
-  starts an election after one fetch timeout (`controller_election_timeout`),
+  starts an election after one fetch timeout (`controller_fetch_timeout`),
   as Kafka's `KafkaRaftClient.pollFollowerAsVoter` does. Before, it re-polled
   the silent leader until `controller_fetch_miss_limit` timeouts had passed
   (three by default, 15 s), so a killed or paused controller leader was

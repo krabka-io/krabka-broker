@@ -15,7 +15,7 @@ use {
         },
     },
     krabka_raft::kraft::{
-        QuorumStateMachine,
+        QuorumStateMachine, QuorumTimeouts,
         action::TimerKind,
         event::Event,
         role::Role,
@@ -63,7 +63,10 @@ impl Model for ConsensusModel {
             let machine = QuorumStateMachine::new(
                 id,
                 QuorumState::bootstrap(uuid::Uuid::nil(), voters.clone()),
-                Self::election_timeout_of(id),
+                QuorumTimeouts {
+                    election: Self::election_timeout_of(id),
+                    fetch: Self::election_timeout_of(id),
+                },
             );
             nodes.insert(id, NodeModel {
                 machine,

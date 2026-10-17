@@ -390,9 +390,9 @@ impl BrokerConfig {
                 "broker heartbeat interval must be below timeout".into(),
             ));
         }
-        if self.controller_heartbeat_interval >= self.controller_election_timeout {
+        if self.controller_heartbeat_interval >= self.controller_fetch_timeout {
             return Err(BrokerError::InvalidRuntimeConfig(
-                "controller heartbeat interval must be below election timeout".into(),
+                "controller heartbeat interval must be below fetch timeout".into(),
             ));
         }
         if self.delegation_token_default_renew_period > self.delegation_token_max_lifetime {
@@ -737,10 +737,10 @@ mod tests {
         assert_invalid_runtime(&config, "broker heartbeat interval must be below timeout");
 
         let mut config = BrokerConfig::default();
-        config.controller_heartbeat_interval = config.controller_election_timeout;
+        config.controller_heartbeat_interval = config.controller_fetch_timeout;
         assert_invalid_runtime(
             &config,
-            "controller heartbeat interval must be below election timeout",
+            "controller heartbeat interval must be below fetch timeout",
         );
 
         let mut config = BrokerConfig::default();

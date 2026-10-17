@@ -59,7 +59,7 @@ impl QuorumStateMachine {
         }
         self.state.leader_epoch = leader_epoch;
         self.state.leader_id = Some(leader_id);
-        let fetch_deadline = now.saturating_add_ms(self.election_timeout_ms);
+        let fetch_deadline = now.saturating_add_ms(self.fetch_timeout_ms);
         self.role = if self.is_voter() {
             Role::Follower {
                 leader_id,
