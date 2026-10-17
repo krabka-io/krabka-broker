@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/authz/controller_session.rs" 12 0 12 94 *)
+(* #"/workspace/crates/verified/src/authz/controller_session.rs" 16 0 16 94 *)
 
-let%span sacl_decision = "/workspace/crates/verified/src/authz/acl_decision.rs" 99 10 99 61
-let%span sacl_decision'0 = "/workspace/crates/verified/src/authz/acl_decision.rs" 100 10 100 55
-let%span sacl_decision'1 = "/workspace/crates/verified/src/authz/acl_decision.rs" 101 10 102 30
-let%span sacl_decision'2 = "/workspace/crates/verified/src/authz/acl_decision.rs" 103 10 104 48
-let%span scontroller_session = "/workspace/crates/verified/src/authz/controller_session.rs" 17 4 17 42
-let%span scontroller_session'0 = "/workspace/crates/verified/src/authz/controller_session.rs" 7 10 10 1
+let%span sacl_decision = "/workspace/crates/verified/src/authz/acl_decision.rs" 98 10 98 61
+let%span sacl_decision'0 = "/workspace/crates/verified/src/authz/acl_decision.rs" 99 10 99 55
+let%span sacl_decision'1 = "/workspace/crates/verified/src/authz/acl_decision.rs" 100 10 101 30
+let%span sacl_decision'2 = "/workspace/crates/verified/src/authz/acl_decision.rs" 102 10 103 48
+let%span scontroller_session = "/workspace/crates/verified/src/authz/controller_session.rs" 21 4 21 42
+let%span scontroller_session'0 = "/workspace/crates/verified/src/authz/controller_session.rs" 11 10 14 1
 
 use creusot.int.Int64
 use creusot.int.Int16
@@ -39,12 +39,12 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let controller_request_admission [#"/workspace/crates/verified/src/authz/controller_session.rs" 12 0 12 94]
+let controller_request_admission [#"/workspace/crates/verified/src/authz/controller_session.rs" 16 0 16 94]
   (expiry_ms: t_Option_i64) (api_key: Int16.t) (now_ms: Int64.t) (return (x: bool)) = (! bb0
   [ bb0 = any [ br0 -> {expiry_ms = None} (! bb1) | br1 (x0: Int64.t) -> {expiry_ms = Some x0} (! bb3) ]
   | bb3 = s0
     [ s0 = elim_Some {expiry_ms} (fun (r0: Int64.t) -> [ &at''0 <- r0 ] s1)
-    | s1 = [ &_12 <- Int64.le at''0 now_ms ] s2
+    | s1 = [ &_12 <- Int64.gt now_ms at''0 ] s2
     | s2 = any [ br0 -> {_12 = false} (! bb1) | br1 -> {_12} (! bb4) ] ]
   | bb4 = s0
     [ s0 = elim_Some {expiry_ms} (fun (r0: Int64.t) -> [ &at' <- r0 ] s1) | s1 = [ &state <- Failed ] s2 | s2 = bb6 ]
@@ -64,6 +64,6 @@ let controller_request_admission [#"/workspace/crates/verified/src/authz/control
   {[@stop_split] [@expl:controller_request_admission ensures] [%#scontroller_session'0] result
     = match expiry_ms with
       | None -> true
-      | Some at' -> Int64.to_int now_ms < Int64.to_int at'
+      | Some at' -> Int64.to_int now_ms <= Int64.to_int at'
       end}
     (! return {result}) ]
