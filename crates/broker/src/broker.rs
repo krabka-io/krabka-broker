@@ -153,6 +153,10 @@ pub struct Broker {
     /// cancelling `supervisor_shutdown`. `None` when the scanner is
     /// disabled (interval = 0, typical in tests).
     pub(crate) disk_scanner_handle: tokio::sync::Mutex<Option<JoinHandle<()>>>,
+    /// The remote-log-manager sweep, when the broker has a remote tier. It
+    /// stops on `supervisor_shutdown`, and [`BrokerHandle::shutdown`] joins it
+    /// so no copy this broker started is published after it has stopped.
+    pub(crate) remote_log_manager_handle: tokio::sync::Mutex<Option<JoinHandle<()>>>,
     pub(crate) liveness: Arc<ControllerLivenessState>,
     /// `Some` when `BrokerConfig::tls_config` is set. Per-listener
     /// accept loops snapshot the current `Arc<ServerConfig>` with

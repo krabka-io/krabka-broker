@@ -121,6 +121,7 @@ pub(super) async fn finish_broker_startup(
         supervisor_shutdown: runtime.supervisor_shutdown,
         supervisor_handle: tokio::sync::Mutex::new(Some(runtime.supervisor_handle)),
         disk_scanner_handle: tokio::sync::Mutex::new(runtime.disk_scanner_handle),
+        remote_log_manager_handle: tokio::sync::Mutex::new(runtime.remote_log_manager_handle),
         liveness: runtime.liveness_services.liveness,
         tls_dynamic: transport.tls_dynamic,
         listener_tls: ListenerTlsCache::default(),

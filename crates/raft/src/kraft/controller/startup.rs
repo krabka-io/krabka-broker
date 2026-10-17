@@ -262,6 +262,7 @@ impl KraftController {
             quorum_rx,
             peers: engine_peers,
             me,
+            registration_admission: Arc::default(),
         })
     }
 

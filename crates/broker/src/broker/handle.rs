@@ -457,6 +457,11 @@ impl BrokerHandle {
         if let Some(task) = self.broker.disk_scanner_handle.lock().await.take() {
             let _ = task.await;
         }
+        // A crash does not wait for a copy to stop; it stops mid-copy.
+        if let Some(task) = self.broker.remote_log_manager_handle.lock().await.take() {
+            task.abort();
+            let _ = task.await;
+        }
 
         shutdown_moves(&self.broker.future_logs).await;
         shutdown_partition_writers(&self.broker.partitions).await;
@@ -533,6 +538,16 @@ impl BrokerHandle {
         if let Some(h) = self.broker.disk_scanner_handle.lock().await.take() {
             let _ = h.await;
         }
+        // The remote-log-manager sweep observes `supervisor_shutdown` too: its
+        // copy pass stops at the next segment and withdraws a copy in flight
+        // rather than publishing it. Join it while the listeners still serve,
+        // because a copy's metadata write may be waiting on a metadata
+        // partition this broker leads. A broker that returned from here with
+        // a copy still running would go on writing to a tier its partitions'
+        // new leaders are copying into.
+        if let Some(h) = self.broker.remote_log_manager_handle.lock().await.take() {
+            let _ = h.await;
+        }
         self.shutdown.cancel();
         if let Some(task) = self.topic_rlmm_task.take() {
             let _ = task.await;
@@ -594,6 +609,11 @@ impl Drop for BrokerHandle {
             task.abort();
         }
         if let Some(task) = self.diskless_task.take() {
+            task.abort();
+        }
+        if let Ok(mut handle) = self.broker.remote_log_manager_handle.try_lock()
+            && let Some(task) = handle.take()
+        {
             task.abort();
         }
         abort_moves(&self.broker.future_logs);

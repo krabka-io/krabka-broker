@@ -13,7 +13,7 @@ use {
         partition::Partition,
         partition_registry::PartitionRegistry,
         producer_state::ProducerState,
-        remote_log_manager::{ArchiveMode, RemoteTier},
+        remote_log_manager::{ArchiveMode, RemoteTier, SweepingBroker},
         test_support::{
             FakeMetadataSource, KeyedBatchSetup, KeyedRecordCount, UnixMillis, keyed_records_batch,
         },
@@ -35,6 +35,7 @@ use {
         ops::RangeInclusive,
         sync::{Arc, Mutex, atomic::Ordering},
     },
+    tokio_util::sync::CancellationToken,
     uuid::Uuid,
 };
 
@@ -171,6 +172,15 @@ pub async fn copy_all_exports(tier: &RemoteTier<'_>, exports: &[SegmentExport]) 
     assert2::assert!(copied == exports.len());
 }
 
+/// The fixture broker (node and broker ID 1), stopped by `shutdown`.
+pub(crate) fn serving_broker(shutdown: &CancellationToken) -> SweepingBroker<'_> {
+    SweepingBroker {
+        node_id: NodeId(1),
+        broker_id: 1,
+        shutdown,
+    }
+}
+
 /// One default-concurrency sweep by the fixture broker (node and broker ID 1).
 pub async fn sweep_once(
     partitions: &PartitionRegistry,
@@ -181,8 +191,7 @@ pub async fn sweep_once(
         partitions,
         controller,
         tier,
-        NodeId(1),
-        1,
+        serving_broker(&CancellationToken::new()),
         super::SweepConcurrency::default(),
     )
     .await;
