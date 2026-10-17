@@ -264,9 +264,18 @@ pub(crate) struct RemoteRetentionOutcome {
 /// its `log_start_offset`. For each deletable segment, it runs the lifecycle
 /// `CopySegmentFinished` → `DeleteSegmentStarted` → RSM delete →
 /// `DeleteSegmentFinished`. A failure logs at WARN and ends the
-/// partition's pass early. Leftover `DeleteSegmentStarted` metadata is
-/// invisible to the read path's finished-only filter, and the next tick
-/// retries it.
+/// partition's pass early.
+///
+/// A segment left in `DeleteSegmentStarted` wholly below `deleted_below` is
+/// finished here too: the RSM delete, then `DeleteSegmentFinished`. The
+/// `DeleteRecords` handler marks the archive below a floor it raises that way,
+/// and a pass a failure ended leaves the same state behind. Either is
+/// invisible to the read path's finished-only filter, so without this its
+/// bytes would stay in the store for good. These run last, once every
+/// finished delete has gone, and count in [`RemoteRetentionOutcome::deleted`]
+/// without moving [`RemoteRetentionOutcome::log_start`]: they lie below a
+/// floor that is already established. A `DeleteSegmentStarted` segment above
+/// the floor is left alone; a rolled-back copy finishes its own deletion.
 ///
 /// The pass runs even when neither retention setting is set, because the
 /// log-start breach is an axis of its own: a `DeleteRecords` that moved the
@@ -301,11 +310,8 @@ pub(crate) async fn remote_retention_pass(
     let retention = log_config.retention;
     let retention_size = log_config.retention_size;
 
-    let mut finished: Vec<RemoteLogSegmentMetadata> = match rlmm.list_remote_log_segments(tp) {
-        Ok(list) => list
-            .into_iter()
-            .filter(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
-            .collect(),
+    let (finished, abandoned) = match rlmm.list_remote_log_segments(tp) {
+        Ok(list) => finished_and_abandoned(list, deleted_below),
         Err(e) => {
             warn!(topic = %tp.topic, partition = tp.partition, error = %e,
                   "remote-log-manager: failed to list remote segments for retention");
@@ -320,7 +326,6 @@ pub(crate) async fn remote_retention_pass(
             return RemoteRetentionOutcome::default();
         }
     };
-    finished.sort_by_key(RemoteLogSegmentMetadata::start_offset);
     // Kafka's `highestOffsetInRemoteStorage`: the last offset the finished
     // copies reach.
     let highest_offset_in_remote_storage = finished
@@ -366,10 +371,11 @@ pub(crate) async fn remote_retention_pass(
     // deletes are failing shows a lag that climbs.
     tier.metrics.set_remote_delete_lag(
         &tp.topic,
-        u64::try_from(scheduled + outside_lineage.len()).unwrap_or(u64::MAX),
+        u64::try_from(scheduled + outside_lineage.len() + abandoned.len()).unwrap_or(u64::MAX),
         evict
             .iter()
             .chain(&outside_lineage)
+            .chain(&abandoned)
             .map(|md| u64::try_from(md.segment_size_in_bytes().max(0)).unwrap_or(0))
             .sum(),
     );
@@ -403,15 +409,51 @@ pub(crate) async fn remote_retention_pass(
     // A failed retention delete ends the pass, as it always did. These
     // segments hold offsets in no lineage the log serves, so Kafka does not
     // move the log start for them either.
+    // The abandoned deletes go last, under the same rule: they hold no
+    // offset the log serves, so they never move the floor.
     if outcome.deleted == scheduled {
-        outcome.deleted += delete_outside_lineage(tp, broker_id, &outside_lineage, tier).await;
+        let lineage = delete_in_order(tp, broker_id, &outside_lineage, tier).await;
+        outcome.deleted += lineage;
+        if lineage == outside_lineage.len() {
+            outcome.deleted += delete_in_order(tp, broker_id, &abandoned, tier).await;
+        }
     }
     outcome
 }
 
+/// Splits a listing into its `CopySegmentFinished` segments and the
+/// `DeleteSegmentStarted` segments wholly below `deleted_below`, both sorted
+/// by `start_offset`.
+///
+/// The second list is the deletes somebody started under an established
+/// floor and nobody finished. A `DeleteSegmentStarted` segment at or above
+/// the floor is not in it: that is a failed copy's rollback in flight, and
+/// the rollback finishes it.
+fn finished_and_abandoned(
+    listed: Vec<RemoteLogSegmentMetadata>,
+    deleted_below: Option<Offset>,
+) -> (Vec<RemoteLogSegmentMetadata>, Vec<RemoteLogSegmentMetadata>) {
+    let mut finished = Vec::new();
+    let mut abandoned = Vec::new();
+    for md in listed {
+        match md.state() {
+            RemoteLogSegmentState::CopySegmentFinished => finished.push(md),
+            RemoteLogSegmentState::DeleteSegmentStarted
+                if deleted_below.is_some_and(|floor| md.end_offset() < floor.0) =>
+            {
+                abandoned.push(md);
+            }
+            _ => {}
+        }
+    }
+    finished.sort_by_key(RemoteLogSegmentMetadata::start_offset);
+    abandoned.sort_by_key(RemoteLogSegmentMetadata::start_offset);
+    (finished, abandoned)
+}
+
 /// Deletes `segments`, oldest first, until one fails, and returns how many
 /// went. The lifecycle and the metrics are the retention loop's.
-async fn delete_outside_lineage(
+async fn delete_in_order(
     tp: &TopicIdPartition,
     broker_id: i32,
     segments: &[RemoteLogSegmentMetadata],

@@ -336,6 +336,17 @@ A rise in `krabka_broker_unsupported_api_requests_total` during the roll is
 a client that learned a new version range from an upgraded broker and sent it
 to an old one. It clears when the roll completes.
 
+On a cluster with tiered topics, do not run `DeleteRecords` against a tiered
+topic while the roll is in progress, until every broker runs a build with the
+fix for #1481. A broker before that fix enforces a `DeleteRecords` floor in the
+remote tier only on its next remote-log-manager pass, after
+`remote_log_manager_interval`. If leadership moves before that pass to a
+replica that reports a lower log start, the followers lower the floor and the
+deleted records become readable again. A broker cannot tell such a floor from
+one that an older broker raised by mistake, so it cannot repair this itself.
+A trim made before the roll is safe once one interval has passed with its
+leader in place.
+
 Within 1.x, a roll is always enough. Any 1.x broker reads every on-disk and
 object-store artifact that an earlier 1.x broker wrote, and
 [Persisted formats](../persisted_formats.md) lists them. A release that

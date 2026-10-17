@@ -578,6 +578,71 @@ impl RemoteLogMetadataManager for NotReadyRlmm {
     ) -> Result<(), RemoteStorageError> {
         Ok(())
     }
+
+    fn caught_up(&self, _tp: &TopicIdPartition) -> Result<bool, RemoteStorageError> {
+        Err(RemoteStorageError::NotReady { partition: 3 })
+    }
+}
+
+/// A metadata manager whose cache lags the store: it serves `inner`'s
+/// answers, but [`RemoteLogMetadataManager::caught_up`] says `false`, so a
+/// caller that needs a current view must not trust them.
+pub struct LaggingRlmm(pub Arc<dyn RemoteLogMetadataManager>);
+impl RemoteLogMetadataManager for LaggingRlmm {
+    fn add_remote_log_segment_metadata(
+        &self,
+        metadata: RemoteLogSegmentMetadata,
+    ) -> Result<(), RemoteStorageError> {
+        self.0.add_remote_log_segment_metadata(metadata)
+    }
+
+    fn update_remote_log_segment_metadata(
+        &self,
+        update: krabka_remote_storage::RemoteLogSegmentMetadataUpdate,
+    ) -> Result<(), RemoteStorageError> {
+        self.0.update_remote_log_segment_metadata(update)
+    }
+
+    fn remote_log_segment_metadata(
+        &self,
+        tp: &TopicIdPartition,
+        epoch: LeaderEpoch,
+        offset: i64,
+    ) -> Result<Option<RemoteLogSegmentMetadata>, RemoteStorageError> {
+        self.0.remote_log_segment_metadata(tp, epoch, offset)
+    }
+
+    fn highest_offset_for_epoch(
+        &self,
+        tp: &TopicIdPartition,
+        epoch: LeaderEpoch,
+    ) -> Result<Option<i64>, RemoteStorageError> {
+        self.0.highest_offset_for_epoch(tp, epoch)
+    }
+
+    fn list_remote_log_segments(
+        &self,
+        tp: &TopicIdPartition,
+    ) -> Result<Vec<RemoteLogSegmentMetadata>, RemoteStorageError> {
+        self.0.list_remote_log_segments(tp)
+    }
+
+    fn list_remote_log_segments_by_epoch(
+        &self,
+        tp: &TopicIdPartition,
+        epoch: LeaderEpoch,
+    ) -> Result<Vec<RemoteLogSegmentMetadata>, RemoteStorageError> {
+        self.0.list_remote_log_segments_by_epoch(tp, epoch)
+    }
+
+    fn put_remote_partition_delete_metadata(
+        &self,
+        metadata: krabka_remote_storage::RemotePartitionDeleteMetadata,
+    ) -> Result<(), RemoteStorageError> {
+        self.0.put_remote_partition_delete_metadata(metadata)
+    }
+
+    fn caught_up(&self, _tp: &TopicIdPartition) -> Result<bool, RemoteStorageError> { Ok(false) }
 }
 
 pub fn reader_with_metadata(

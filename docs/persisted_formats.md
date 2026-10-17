@@ -179,6 +179,20 @@ Kafka 4.3.1 builds each group record that it writes from its in-memory group, no
 
 Kafka keeps two nested structs of a replayed record as the generated objects, with their unknown tagged fields: `ConsumerGroupMemberMetadataValue.ClassicMemberMetadata`, with each of its `ClassicProtocol` entries, and `StreamsGroupMemberMetadataValue.Endpoint`. A member record that Kafka writes from a copy of the member, such as the record of a static member's replacement, carries those fields again. And because the generated `equals` compares them, a classic rejoin or a streams heartbeat that sends the same values as the replayed record still writes the member record again, and for the streams heartbeat also bumps the group epoch. krabka decodes these structs into its own types and drops their unknown tagged fields, so it writes the member record without them, and it writes no record and bumps no epoch for such a heartbeat. Kafka 4.3.1 defines no tagged field in these structs, so only a record from a later Kafka version can carry one.
 
+### Tiered `DeleteRecords` floors from before #1481
+
+The log-start checkpoint does not say who raised a floor. A follower of a
+tiered partition lowers an established floor to a lower start its leader
+reports only while the archive does not enforce it, that is while a finished
+segment still lies wholly below it. A broker with the fix for #1481 marks those
+segments `DeleteSegmentStarted` before it raises a `DeleteRecords` floor, so
+its floors are enforced from the start. An earlier broker left them finished
+until its next remote-retention pass. Such a floor, in that window, is
+indistinguishable from the restarted leader's local start that a broker without
+the fix for #1444 reported, which is the floor the lowering exists to repair.
+[Deploying](operations/deploy.md#rolling-upgrade) gives the procedure that keeps
+a roll out of the window.
+
 ## Integration
 
 - [`CLAUDE.md`](../CLAUDE.md) gives the rules above as instructions to a contributor.

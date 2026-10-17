@@ -1132,3 +1132,105 @@ async fn archived_prefix_fixture() -> ArchivedPrefix {
         rlmm,
     }
 }
+
+/// An RSM that accepts every copy and every delete, for passes whose
+/// outcome lives in the metadata alone.
+struct AcceptingRsm;
+
+#[krabka_macros::missing_remote_reads(delete_ok)]
+impl RemoteStorageManager for AcceptingRsm {
+    fn copy_log_segment_data(
+        &self,
+        _metadata: &RemoteLogSegmentMetadata,
+        _data: &LogSegmentData,
+    ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
+        Ok(None)
+    }
+}
+
+const FINISHED: RemoteLogSegmentState = RemoteLogSegmentState::CopySegmentFinished;
+const DELETING: RemoteLogSegmentState = RemoteLogSegmentState::DeleteSegmentStarted;
+
+/// Moves the [`seed_finished_segments`] segments at `indexes` to
+/// `DeleteSegmentStarted`, as the `DeleteRecords` handler does with the
+/// archive under a floor it raises.
+fn mark_delete_started(rlmm: &Arc<dyn RemoteLogMetadataManager>, indexes: &[u128]) {
+    for index in indexes {
+        rlmm.update_remote_log_segment_metadata(RemoteLogSegmentMetadataUpdate {
+            remote_log_segment_id: RemoteLogSegmentId::new(tp(), Uuid::from_u128(0x5000 + index)),
+            event_timestamp_ms: 100,
+            custom_metadata: None,
+            state: DELETING,
+            broker_id: 1,
+        })
+        .unwrap();
+    }
+}
+
+/// Every segment the metadata manager still lists, as its start offset and
+/// state.
+fn segment_states(rlmm: &Arc<dyn RemoteLogMetadataManager>) -> Vec<(i64, RemoteLogSegmentState)> {
+    rlmm.list_remote_log_segments(&tp())
+        .unwrap()
+        .iter()
+        .map(|md| (md.start_offset(), md.state()))
+        .collect()
+}
+
+/// A delete somebody started under an established floor and nobody finished
+/// is finished by the next pass, and counts as deleted without moving the
+/// floor: it lies below one already. A `DeleteSegmentStarted` segment that is
+/// not wholly below the floor is a rolled-back copy's to finish, and stays.
+///
+/// The four seeded segments start at 0, 10, 20 and 30, ten offsets each, and
+/// no retention setting is on, so the floor is the only axis in play.
+#[yare::parameterized(
+    every_mark_below_the_floor = { &[0, 1], Some(20), 2, &[(20, FINISHED), (30, FINISHED)] },
+    a_mark_above_the_floor_stays = {
+        &[0, 2], Some(10), 1, &[(10, FINISHED), (20, DELETING), (30, FINISHED)]
+    },
+    a_mark_the_floor_falls_inside_stays = {
+        &[1], Some(15), 1, &[(10, DELETING), (20, FINISHED), (30, FINISHED)]
+    },
+    beside_a_breached_finished_segment = { &[0], Some(20), 2, &[(20, FINISHED), (30, FINISHED)] },
+    no_established_floor = {
+        &[0], None, 0, &[(0, DELETING), (10, FINISHED), (20, FINISHED), (30, FINISHED)]
+    },
+)]
+#[test_macro(tokio::test)]
+async fn a_retention_pass_finishes_the_deletes_started_below_the_floor(
+    marked: &[u128],
+    deleted_below: Option<i64>,
+    deleted: usize,
+    remaining: &[(i64, RemoteLogSegmentState)],
+) {
+    let rlmm = fixtures::in_memory_metadata();
+    seed_finished_segments(&rlmm, 4);
+    mark_delete_started(&rlmm, marked);
+    let rsm: Arc<dyn RemoteStorageManager> = Arc::new(AcceptingRsm);
+    let cfg = LogConfig {
+        retention: None,
+        retention_size: None,
+        ..LogConfig::default()
+    };
+    let floor = deleted_below.map(Offset);
+
+    let outcome = empty_retention_pass(
+        &cfg,
+        floors(floor.unwrap_or(NO_FLOOR), floor),
+        now_ms(),
+        ArchiveMode::Mutable,
+        &rsm,
+        &rlmm,
+    )
+    .await;
+
+    check!(
+        outcome
+            == RemoteRetentionOutcome {
+                deleted,
+                log_start: None,
+            }
+    );
+    check!(segment_states(&rlmm) == remaining);
+}
