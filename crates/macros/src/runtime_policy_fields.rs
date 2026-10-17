@@ -395,7 +395,7 @@ fn controller_fields(
             "Maximum follower lag before the leader proposes an ISR shrink. Kafka's\n`replica.lag.time.max.ms`.",
             "Controller election timeout, Kafka's\n`controller.quorum.fetch.timeout.ms`. It is the follower fetch\nwatchdog, and 1.5x of it is the leader's check-quorum window: a leader\nthat a majority of the voters has not fetched from within that window\nresigns its epoch.",
             "Raft heartbeat interval on the controller quorum. It should stay at or\nbelow `controller_election_timeout / 3`.",
-            "Consecutive follower fetch misses tolerated before a new election.",
+            "Consecutive fetch misses an observer tolerates before it looks for the\nleader again. A voter starts an election after one fetch timeout, as\nKafka does.",
         ]
     }.map(|doc| LitStr::new(doc, Span::call_site()));
     let observer_arg = if cli {
