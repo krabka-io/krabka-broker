@@ -12,21 +12,19 @@ use {
     tokio::time::{Duration, Instant},
 };
 
-/// Leader heartbeat interval as a fraction of the election timeout. The leader
+/// Leader heartbeat interval as a fraction of the fetch timeout. The leader
 /// re-broadcasts `BeginQuorumEpoch` this often so followers that lost the
 /// initial announcement (or a rejoining old leader) re-attach without waiting
 /// for an election.
 const HEARTBEAT_DIVISOR: u64 = 3;
 
-/// The configured election timeout as whole milliseconds.
+/// A configured timeout as whole milliseconds.
 ///
 /// Every deadline derived from the timeout crosses into integers here. The
 /// core's per-(node, epoch) jitter is defined over integer milliseconds
 /// (`election_jitter_ms`), so keeping the base in the same domain leaves every
 /// election deadline bit-identical to the raw-integer arithmetic it replaces.
-pub fn election_timeout_ms(election_timeout: Time) -> u64 {
-    u64::try_from(election_timeout.millis_i64()).unwrap_or(0)
-}
+pub fn whole_millis(timeout: Time) -> u64 { u64::try_from(timeout.millis_i64()).unwrap_or(0) }
 
 pub fn initial_election_at(
     core: &QuorumStateMachine,
@@ -51,7 +49,7 @@ pub fn initial_election_at(
             // Same deterministic per-(node, epoch) jitter the core applies to
             // re-election timers, so the first election round is staggered
             // across closely-synchronized voters.
-            let base_ms = election_timeout_ms(election_timeout);
+            let base_ms = whole_millis(election_timeout);
             let jitter = election_jitter_ms(me, initial_epoch, base_ms);
             let delay_ms = base_ms.saturating_add(jitter);
             Some(
@@ -64,11 +62,11 @@ pub fn initial_election_at(
     }
 }
 
-pub fn heartbeat_period(election_timeout: Time, configured: Option<Time>) -> Time {
+pub fn heartbeat_period(fetch_timeout: Time, configured: Option<Time>) -> Time {
     if let Some(configured) = configured {
         return configured;
     }
-    let period_ms = election_timeout_ms(election_timeout)
+    let period_ms = whole_millis(fetch_timeout)
         .div_euclid(HEARTBEAT_DIVISOR)
         .max(1);
     Time::from_millis(i64::try_from(period_ms).unwrap_or(i64::MAX))

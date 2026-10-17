@@ -481,7 +481,7 @@ fn takes_first_way(child: &Expr, lo: usize, hi: usize, linebreak_atom: bool) -> 
 
 /// `TreeInfo.deterministic` after Java studies `expr`: no alternation, and
 /// no quantifier with a range of counts. A look-around is not studied.
-fn deterministic(expr: &Expr) -> bool {
+pub(super) fn deterministic(expr: &Expr) -> bool {
     match expr {
         Expr::Alt(_) => false,
         Expr::Repeat { child, lo, hi, .. } => lo == hi && deterministic(child),

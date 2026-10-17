@@ -2,8 +2,7 @@ use {
     super::*,
     crate::{
         core::test_support::{
-            FakeLog, TEST_ELECTION_TIMEOUT, adjacent_voter_machine, machine, three_voter_machine,
-            voters,
+            FakeLog, TEST_TIMEOUTS, adjacent_voter_machine, machine, three_voter_machine, voters,
         },
         event::{Event, SuccessorRank},
         types::{NodeId, QuorumState},
@@ -40,7 +39,7 @@ fn dynamic_machine() -> DynamicMachine {
     let mut state = QuorumState::bootstrap(cluster_id, voters);
     state.kraft_version = 1;
     DynamicMachine {
-        machine: QuorumStateMachine::new(NodeId(1), state, TEST_ELECTION_TIMEOUT),
+        machine: QuorumStateMachine::new(NodeId(1), state, TEST_TIMEOUTS),
         cluster_id,
         voter_directory_id,
         candidate_directory_id,

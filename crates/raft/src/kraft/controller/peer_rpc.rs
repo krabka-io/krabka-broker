@@ -3,7 +3,7 @@
 //! from ever awaiting a peer inline.
 
 use {
-    super::{Engine, replication::fetch_epoch_for_request, timing::election_timeout_ms},
+    super::{Engine, replication::fetch_epoch_for_request, timing::whole_millis},
     crate::kraft::{
         snapshot_fetch::SnapshotId,
         transport::{Command, api_key, wire},
@@ -19,10 +19,10 @@ const MAX_FETCH_WAIT_MS: u64 = 500;
 /// The `MaxWaitMs` of this replica's Fetch: Kafka's 500 ms, or a quarter of
 /// the fetch timer when that is shorter. Kafka holds a Fetch for a quarter of
 /// its default fetch timeout (500 ms of 2 s), so a held Fetch is answered well
-/// before the timer counts it as a miss; a krabka replica runs its fetch timer
-/// on the election timeout, which can be far shorter.
-fn fetch_max_wait_ms(election_timeout: krabka_units::prelude::Time) -> i32 {
-    let quarter_timer = election_timeout_ms(election_timeout) / 4;
+/// before the timer counts it as a miss, and a krabka fetch timeout can be far
+/// shorter than Kafka's default.
+fn fetch_max_wait_ms(fetch_timeout: krabka_units::prelude::Time) -> i32 {
+    let quarter_timer = whole_millis(fetch_timeout) / 4;
     i32::try_from(MAX_FETCH_WAIT_MS.min(quarter_timer)).unwrap_or(0)
 }
 
@@ -178,7 +178,7 @@ impl Engine {
         let body = wire::PeerRequest::Fetch {
             cluster_id: Some(self.core.quorum_state().cluster_id),
             from: self.me,
-            max_wait_ms: fetch_max_wait_ms(self.election_timeout),
+            max_wait_ms: fetch_max_wait_ms(self.timeouts.fetch),
             current_leader_epoch: i32::try_from(self.core.quorum_state().leader_epoch)
                 .unwrap_or(i32::MAX),
             fetch_epoch,
