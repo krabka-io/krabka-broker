@@ -1,0 +1,10 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.012 },
+      "vc_reauthentication_begins": { "prover": "alt-ergo", "time": 0.029 },
+      "vc_saturating_sub": { "prover": "alt-ergo", "time": 0.017 }
+    }
+  }
+}

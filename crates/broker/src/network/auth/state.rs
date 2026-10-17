@@ -8,11 +8,9 @@
 //! apart from any one mechanism.
 
 use {
-    super::{handshake::begins_reauthentication, response::fail_authenticate_with},
+    super::response::fail_authenticate_with,
     crate::handlers::ApiKeyCode,
-    krabka_protocol::{
-        api_key::ApiKey, owned::sasl_authenticate_response::SaslAuthenticateResponse,
-    },
+    krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse,
     krabka_security::{AuthMethod, Principal, SaslMechanism, ScramServerExchange},
     krabka_verified::{
         authz::{
@@ -22,9 +20,6 @@ use {
         delegation_token::{TokenApi, TokenApiAdmission, token_api_admission},
     },
 };
-
-const SASL_HANDSHAKE_KEY: ApiKeyCode = ApiKey::SaslHandshake as i16;
-const SASL_AUTHENTICATE_KEY: ApiKeyCode = ApiKey::SaslAuthenticate as i16;
 
 // Several variants and the `principal` accessor are exercised by the PLAIN,
 // SCRAM, and admin paths — keep the surface in one place.
@@ -408,9 +403,10 @@ impl ConnectionAuth {
     /// handshake has begun the exchange the connection is `Reauthenticating`,
     /// which has no deadline here.
     ///
-    /// `krabka_verified::authz::session_expired_for_request` exempts both
-    /// SASL api keys, so those two are held to the same `at <= now_ms`
-    /// deadline here.
+    /// A session expires only strictly after its deadline, as Kafka's
+    /// `KafkaChannel.serverAuthenticationSessionExpired` decides, so a request
+    /// at exactly `expires_at_ms` is served. The whole rule is
+    /// `krabka_verified::authz::session_expired_for_request`.
     #[must_use]
     pub(crate) fn expired_for_request(
         &self,
@@ -421,17 +417,7 @@ impl ConnectionAuth {
         let Self::Authenticated { expires_at_ms, .. } = self else {
             return false;
         };
-        match api_key {
-            SASL_HANDSHAKE_KEY
-                if begins_reauthentication(*expires_at_ms, now_ms, last_reauth_start_ms) =>
-            {
-                false
-            }
-            SASL_HANDSHAKE_KEY | SASL_AUTHENTICATE_KEY => {
-                expires_at_ms.is_some_and(|at| at <= now_ms)
-            }
-            _ => session_expired_for_request(*expires_at_ms, api_key, now_ms),
-        }
+        session_expired_for_request(*expires_at_ms, api_key, now_ms, last_reauth_start_ms)
     }
 
     /// The mechanism a `SaslHandshake` named for the exchange now in flight,
@@ -838,6 +824,73 @@ mod tests {
         for (case, auth, api_key, last_reauth_start_ms, want) in cases {
             check!(
                 auth.expired_for_request(api_key, now_ms, last_reauth_start_ms) == want,
+                "{case}"
+            );
+        }
+    }
+
+    /// KIP-368: Kafka's `KafkaChannel.serverAuthenticationSessionExpired`
+    /// expires a session only strictly after its deadline, so a request at
+    /// exactly `expires_at_ms` is still served and one a millisecond later
+    /// closes the connection.
+    #[test]
+    fn a_session_expires_strictly_after_its_deadline() {
+        let deadline_ms = 1_000_i64;
+        let session = authenticated(
+            "alice",
+            krabka_security::AuthMethod::SaslScramSha512,
+            SaslMechanism::ScramSha512,
+            Some(deadline_ms),
+            false,
+        );
+        let cases = [
+            (
+                "Produce before the deadline",
+                0,
+                deadline_ms - 1,
+                None,
+                false,
+            ),
+            ("Produce at the deadline", 0, deadline_ms, None, false),
+            (
+                "Produce a ms after the deadline",
+                0,
+                deadline_ms + 1,
+                None,
+                true,
+            ),
+            (
+                "SaslAuthenticate at the deadline",
+                36,
+                deadline_ms,
+                None,
+                false,
+            ),
+            (
+                "SaslAuthenticate a ms after the deadline",
+                36,
+                deadline_ms + 1,
+                None,
+                true,
+            ),
+            (
+                "a SaslHandshake inside the interval at the deadline",
+                17,
+                deadline_ms,
+                Some(deadline_ms - 1),
+                false,
+            ),
+            (
+                "a SaslHandshake inside the interval a ms after the deadline",
+                17,
+                deadline_ms + 1,
+                Some(deadline_ms),
+                true,
+            ),
+        ];
+        for (case, api_key, now_ms, last_reauth_start_ms, want) in cases {
+            check!(
+                session.expired_for_request(api_key, now_ms, last_reauth_start_ms) == want,
                 "{case}"
             );
         }

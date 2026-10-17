@@ -1,11 +1,16 @@
-(* #"/workspace/crates/verified/src/authz/session.rs" 57 0 57 93 *)
+(* #"/workspace/crates/verified/src/authz/session.rs" 95 0 100 9 *)
 
-let%span ssession = "/workspace/crates/verified/src/authz/session.rs" 59 15 59 20
-let%span ssession'0 = "/workspace/crates/verified/src/authz/session.rs" 63 16 63 21
-let%span ssession'1 = "/workspace/crates/verified/src/authz/session.rs" 52 10 55 2
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span ssession = "/workspace/crates/verified/src/authz/session.rs" 103 25 103 27
+let%span ssession'0 = "/workspace/crates/verified/src/authz/session.rs" 103 31 103 95
+let%span ssession'1 = "/workspace/crates/verified/src/authz/session.rs" 103 13 103 96
+let%span ssession'2 = "/workspace/crates/verified/src/authz/session.rs" 105 13 105 18
+let%span ssession'3 = "/workspace/crates/verified/src/authz/session.rs" 87 10 93 3
+let%span ssession'4 = "/workspace/crates/verified/src/authz/session.rs" 58 10 61 2
 
-use creusot.int.Int16
 use creusot.int.Int64
+use creusot.int.Int16
 use creusot.prelude.Any
 use int.Int
 
@@ -19,37 +24,65 @@ let elim_Some (_x: t_Option_i64) (return (f0: Int64.t)) = any
       end}
     any) ]
 
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+let reauthentication_begins (expiry_ms: t_Option_i64) (now_ms: Int64.t) (last_start_ms: t_Option_i64)
+  (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:reauthentication_begins ensures] [%#ssession'4] result
+    = (expiry_ms <> None
+    /\ match last_start_ms with
+      | None -> true
+      | Some last -> ge_log_Int (Int64.to_int now_ms - Int64.to_int last) 1000
+      end)}
+    (! return {result}) ]
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let session_expired_for_request [#"/workspace/crates/verified/src/authz/session.rs" 57 0 57 93]
-  (expiry_ms: t_Option_i64) (api_key: Int16.t) (now_ms: Int64.t) (return (x: bool)) = (! bb0
-  [ bb0 = any
-    [ br0 -> {api_key = (17: Int16.t)} (! bb3)
-    | br1 -> {api_key = (36: Int16.t)} (! bb3)
-    | default -> -{api_key <> (17: Int16.t) /\ api_key <> (36: Int16.t)}- (! bb1) ]
-  | bb1 = s0 [ s0 = [ &_9 <- false ] s1 | s1 = bb4 ]
-  | bb3 = s0 [ s0 = [ &_9 <- true ] s1 | s1 = bb4 ]
-  | bb4 = any [ br0 -> {_9 = false} (! bb6) | br1 -> {_9} (! bb5) ]
-  | bb5 = s0 [ s0 = [ &_ret <- [%#ssession] false ] s1 | s1 = return {_ret} ]
-  | bb6 = any [ br0 -> {expiry_ms = None} (! bb9) | br1 (x0: Int64.t) -> {expiry_ms = Some x0} (! bb10) ]
-  | bb10 = s0
+let session_expired_for_request [#"/workspace/crates/verified/src/authz/session.rs" 95 0 100 9]
+  (expiry_ms: t_Option_i64) (api_key: Int16.t) (now_ms: Int64.t) (last_reauth_start_ms: t_Option_i64)
+  (return (x: bool)) = (! bb0
+  [ bb0 = any [ br0 -> {expiry_ms = None} (! bb1) | br1 (x0: Int64.t) -> {expiry_ms = Some x0} (! bb3) ]
+  | bb3 = s0
+    [ s0 = elim_Some {expiry_ms} (fun (r0: Int64.t) -> [ &at''0 <- r0 ] s1)
+    | s1 = [ &_14 <- Int64.gt now_ms at''0 ] s2
+    | s2 = any [ br0 -> {_14 = false} (! bb1) | br1 -> {_14} (! bb4) ] ]
+  | bb4 = s0
     [ s0 = elim_Some {expiry_ms} (fun (r0: Int64.t) -> [ &at' <- r0 ] s1)
-    | s1 = [ &_ret <- Int64.le at' now_ms ] s2
-    | s2 = return {_ret} ]
-  | bb9 = s0 [ s0 = [ &_ret <- [%#ssession'0] false ] s1 | s1 = return {_ret} ] ]
+    | s1 = [ &_18 <- api_key = ([%#ssession] (17: Int16.t)) ] s2
+    | s2 = any [ br0 -> {_18 = false} (! bb7) | br1 -> {_18} (! bb6) ] ]
+  | bb6 = s0
+    [ s0 = reauthentication_begins [%#ssession'0] {expiry_ms} {now_ms} {last_reauth_start_ms}
+        (fun (_x: bool) -> [ &_17 <- _x ] s1)
+    | s1 = bb9 ]
+  | bb7 = s0 [ s0 = [ &_17 <- [%#ssession'1] false ] s1 | s1 = bb9 ]
+  | bb9 = s0 [ s0 = [ &_ret <- not _17 ] s1 | s1 = return {_ret} ]
+  | bb1 = s0 [ s0 = [ &_ret <- [%#ssession'2] false ] s1 | s1 = return {_ret} ] ]
   [ & _ret: bool = Any.any_l ()
   | & expiry_ms: t_Option_i64 = expiry_ms
   | & api_key: Int16.t = api_key
   | & now_ms: Int64.t = now_ms
-  | & _9: bool = Any.any_l ()
-  | & at': Int64.t = Any.any_l () ])
-  [ return (result: bool) -> {[@stop_split] [@expl:session_expired_for_request ensures] [%#ssession'1] result
-    = (Int16.to_int api_key <> 17
-    /\ Int16.to_int api_key <> 36
-    /\ match expiry_ms with
-      | None -> false
-      | Some at' -> Int64.to_int at' <= Int64.to_int now_ms
-      end)}
+  | & last_reauth_start_ms: t_Option_i64 = last_reauth_start_ms
+  | & at': Int64.t = Any.any_l ()
+  | & at''0: Int64.t = Any.any_l ()
+  | & _14: bool = Any.any_l ()
+  | & _17: bool = Any.any_l ()
+  | & _18: bool = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:session_expired_for_request ensures] [%#ssession'3] result
+    = (match expiry_ms with
+        | None -> false
+        | Some at' -> gt_log_Int (Int64.to_int now_ms) (Int64.to_int at')
+        end
+    /\ not (Int16.to_int api_key = 17
+    /\ match last_reauth_start_ms with
+      | None -> true
+      | Some last -> ge_log_Int (Int64.to_int now_ms - Int64.to_int last) 1000
+      end))}
     (! return {result}) ]
