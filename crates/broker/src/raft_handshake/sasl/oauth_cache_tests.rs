@@ -137,26 +137,8 @@ async fn controller_signed_oauth_requires_a_fresh_published_cache() {
             .store(generation, Ordering::Release);
         cfg.oauthbearer_jwks_last_successful_fetch_ms
             .store(fetched, Ordering::Release);
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let mut client = TcpStream::connect(listener.local_addr().unwrap())
-            .await
-            .unwrap();
-        let (server, _) = listener.accept().await.unwrap();
-        let task = tokio::spawn(async move { cfg.upgrade(server.into(), &NoApiVersions).await });
+        let ControllerExchange { mut client, task } = start_oauthbearer_exchange(cfg).await;
         let mut body = bytes::BytesMut::new();
-        SaslHandshakeRequest {
-            mechanism: "OAUTHBEARER".into(),
-            ..Default::default()
-        }
-        .encode(&mut body, 1)
-        .unwrap();
-        client
-            .write_all(&request_frame().maybe_client_id(None).body(&body).call())
-            .await
-            .unwrap();
-        let handshake = read_response_frame(&mut client).await;
-        assert!(&handshake[4..6] == &0_i16.to_be_bytes());
-        body.clear();
         SaslAuthenticateRequest {
             auth_bytes: bytes::Bytes::from(format!("n,,\x01auth=Bearer {token}\x01\x01")),
             ..Default::default()
@@ -189,10 +171,99 @@ async fn controller_signed_oauth_requires_a_fresh_published_cache() {
             .encode(&mut body, 2)
             .unwrap();
             let response = authenticate_round_trip(&mut client, 3, &body).await;
-            assert!(response.error_code == crate::codes::SASL_AUTHENTICATION_FAILED);
+            assert!(response.error_code == SASL_AUTHENTICATION_FAILED);
             assert!(task.await.unwrap().is_err());
         }
     }
+}
+
+/// The controller listener's OAUTHBEARER challenge and the failure on the
+/// client's `\x01` both carry Kafka's `insufficient_scope` JSON for a token
+/// that lacks a required scope item.
+#[tokio::test]
+async fn controller_listener_challenges_a_token_without_the_required_scope() {
+    let expected_json = r#"{"status":"insufficient_scope", "scope":"[a, b]"}"#;
+    let mut cfg = sasl_test_config();
+    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::OAuthBearer];
+    cfg.oauthbearer_validator =
+        OAuthBearerValidator::Unsecured(krabka_security::UnsecuredJwsValidator {
+            required_scope: vec!["a".to_owned(), "b".to_owned()],
+            ..Default::default()
+        });
+    let ControllerExchange { mut client, task } = start_oauthbearer_exchange(cfg).await;
+    let header = B64.encode(br#"{"alg":"none"}"#);
+    let payload = B64.encode(
+        serde_json::json!({"sub": "controller-peer", "exp": now_ms() / 1000 + 3600, "scope": ["a"]})
+            .to_string(),
+    );
+    let mut body = bytes::BytesMut::new();
+    SaslAuthenticateRequest {
+        auth_bytes: bytes::Bytes::from(format!("n,,\x01auth=Bearer {header}.{payload}.\x01\x01")),
+        ..Default::default()
+    }
+    .encode(&mut body, 2)
+    .unwrap();
+    let challenge = authenticate_round_trip(&mut client, 2, &body).await;
+    assert!(
+        challenge
+            == SaslAuthenticateResponse {
+                error_code: 0,
+                error_message: None,
+                auth_bytes: bytes::Bytes::from_static(expected_json.as_bytes()),
+                session_lifetime_ms: 0,
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+            }
+    );
+
+    body.clear();
+    SaslAuthenticateRequest {
+        auth_bytes: bytes::Bytes::from_static(b"\x01"),
+        ..Default::default()
+    }
+    .encode(&mut body, 2)
+    .unwrap();
+    let failure = authenticate_round_trip(&mut client, 3, &body).await;
+    assert!(
+        failure
+            == SaslAuthenticateResponse {
+                error_code: SASL_AUTHENTICATION_FAILED,
+                error_message: Some(expected_json.to_owned()),
+                auth_bytes: bytes::Bytes::new(),
+                session_lifetime_ms: 0,
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+            }
+    );
+    assert!(task.await.unwrap().is_err());
+}
+
+/// A controller-listener connection past its OAUTHBEARER `SaslHandshake`, and
+/// the task that runs the listener's side.
+struct ControllerExchange {
+    client: TcpStream,
+    task: tokio::task::JoinHandle<Result<krabka_raft::RaftConnection, RaftHandshakeError>>,
+}
+
+async fn start_oauthbearer_exchange(cfg: BrokerRaftHandshake) -> ControllerExchange {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut client = TcpStream::connect(listener.local_addr().unwrap())
+        .await
+        .unwrap();
+    let (server, _) = listener.accept().await.unwrap();
+    let task = tokio::spawn(async move { cfg.upgrade(server.into(), &NoApiVersions).await });
+    let mut body = bytes::BytesMut::new();
+    SaslHandshakeRequest {
+        mechanism: "OAUTHBEARER".into(),
+        ..Default::default()
+    }
+    .encode(&mut body, 1)
+    .unwrap();
+    client
+        .write_all(&request_frame().maybe_client_id(None).body(&body).call())
+        .await
+        .unwrap();
+    let handshake = read_response_frame(&mut client).await;
+    assert!(&handshake[4..6] == &0_i16.to_be_bytes());
+    ControllerExchange { client, task }
 }
 
 async fn authenticate_round_trip(

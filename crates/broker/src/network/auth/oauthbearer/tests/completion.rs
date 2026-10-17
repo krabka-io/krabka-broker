@@ -96,10 +96,10 @@ async fn oauth_completion_uses_the_current_clock_for_lifetime_and_expiry() {
                 assert!(matches!(
                     auth,
                     ConnectionAuth::Negotiating {
-                        exchange: SaslExchange::OAuthBearerFailed,
+                        exchange: SaslExchange::OAuthBearerFailed { .. },
                         ..
                     } | ConnectionAuth::Reauthenticating {
-                        exchange: SaslExchange::OAuthBearerFailed,
+                        exchange: SaslExchange::OAuthBearerFailed { .. },
                         ..
                     }
                 ));

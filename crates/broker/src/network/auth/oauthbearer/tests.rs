@@ -126,9 +126,10 @@ async fn signed_validator_fails_closed_for_stale_or_changing_jwks_cache(
         .store(last_successful_fetch_ms, Ordering::Release);
     assert2::assert!(
         fixture.validate().await
-            == Err(BearerRejection::InvalidToken(
-                "JWKS cache is stale or changing"
-            ))
+            == Err(BearerRejection::InvalidToken {
+                reason: "JWKS cache is stale or changing",
+                error: krabka_security::AuthError::InvalidToken,
+            })
     );
 }
 
@@ -136,7 +137,13 @@ async fn signed_validator_fails_closed_for_stale_or_changing_jwks_cache(
 async fn signed_validator_uses_a_fresh_stable_jwks_cache() {
     let fixture = signed_cache_fixture(2);
     let result = fixture.validate().await;
-    assert!(result == Err(BearerRejection::InvalidToken("token validation failed")));
+    assert!(
+        result
+            == Err(BearerRejection::InvalidToken {
+                reason: "token validation failed",
+                error: krabka_security::AuthError::InvalidToken,
+            })
+    );
 }
 
 #[tokio::test]
@@ -176,7 +183,7 @@ async fn oauthbearer_invalid_token_returns_error_json_then_fails_on_dummy() {
     // Round 1: rejected → error JSON, error_code 0, connection stays open.
     assert_invalid_token_challenge(&resp);
     assert!(matches!(auth, ConnectionAuth::Negotiating {
-        exchange: SaslExchange::OAuthBearerFailed,
+        exchange: SaslExchange::OAuthBearerFailed { .. },
         ..
     }));
     // Round 2: the client's `\x01` dummy → SASL_AUTHENTICATION_FAILED (58).
@@ -341,6 +348,116 @@ async fn a_rejected_reauth_token_gets_the_error_challenge_then_fails_with_its_js
     assert!(auth.principal().map(|p| p.name.as_str()) == Some("alice"));
 }
 
+/// An unsecured token for `alice`, valid until 1 000 000 900 s, whose `scope`
+/// claim is the JSON `scope`.
+fn scoped_token(scope: &str) -> String {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
+    format!(
+        "{}.{}.",
+        B64.encode(b"{\"alg\":\"none\"}"),
+        B64.encode(
+            format!("{{\"sub\":\"alice\",\"exp\":1000000900,\"scope\":{scope}}}").as_bytes()
+        )
+    )
+}
+
+/// Kafka's `OAuthBearerSaslServer` answers a failed validation with
+/// `jsonErrorResponse` for that failure and stores it as `errorMessage`, which
+/// it throws on the client's `\x01`. So the challenge and the final failure
+/// both carry `insufficient_scope` and the required scope for a token that
+/// lacks a required scope item, and `invalid_token` for any other failure.
+#[yare::parameterized(
+    initial_missing_scope_item = {
+        oauth_pending(),
+        scoped_token(r#"["a"]"#),
+        r#"{"status":"insufficient_scope", "scope":"[a, b]"}"#,
+        None,
+    },
+    initial_no_scope = {
+        oauth_pending(),
+        scoped_token(r#""""#),
+        r#"{"status":"insufficient_scope", "scope":"[a, b]"}"#,
+        None,
+    },
+    initial_numeric_scope_claim = {
+        oauth_pending(),
+        scoped_token("7"),
+        r#"{"status":"invalid_token"}"#,
+        None,
+    },
+    initial_expired = {
+        oauth_pending(),
+        unsecured_token("alice", 1_000_000),
+        r#"{"status":"invalid_token"}"#,
+        None,
+    },
+    reauth_missing_scope_item = {
+        oauth_reauthenticating("alice", 1_000_000_001_000),
+        scoped_token(r#"["b"]"#),
+        r#"{"status":"insufficient_scope", "scope":"[a, b]"}"#,
+        Some("alice"),
+    },
+    reauth_expired = {
+        oauth_reauthenticating("alice", 1_000_000_001_000),
+        unsecured_token("alice", 1_000_000),
+        r#"{"status":"invalid_token"}"#,
+        Some("alice"),
+    },
+)]
+#[test_macro(tokio::test)]
+async fn the_error_challenge_and_the_final_failure_carry_the_validation_error_json(
+    auth: ConnectionAuth,
+    token: String,
+    expected_json: &str,
+    principal_after: Option<&str>,
+) {
+    let mut auth = auth;
+    let validator =
+        krabka_security::OAuthBearerValidator::Unsecured(krabka_security::UnsecuredJwsValidator {
+            required_scope: vec!["a".to_owned(), "b".to_owned()],
+            ..Default::default()
+        });
+    let now_ms = 1_000_000_000_000;
+    let challenge = authenticate(
+        &oauthbearer_client_response(&token),
+        &mut auth,
+        &validator,
+        now_ms,
+        None,
+    )
+    .await;
+    assert_success_authenticate_response(&challenge, expected_json.as_bytes(), 0);
+
+    let dummy = SaslAuthenticateRequest {
+        auth_bytes: bytes::Bytes::from_static(&[1u8]),
+        ..Default::default()
+    };
+    let failure = authenticate(&dummy, &mut auth, &validator, now_ms, None).await;
+    assert_failed_authenticate_response(&failure, Some(expected_json));
+    assert2::assert!(auth.principal().map(|p| p.name.as_str()) == principal_after);
+}
+
+/// A token that carries every required scope item authenticates.
+#[tokio::test]
+async fn a_token_with_every_required_scope_item_authenticates() {
+    let validator =
+        krabka_security::OAuthBearerValidator::Unsecured(krabka_security::UnsecuredJwsValidator {
+            required_scope: vec!["a".to_owned(), "b".to_owned()],
+            ..Default::default()
+        });
+    let mut auth = oauth_pending();
+    let resp = authenticate(
+        &oauthbearer_client_response(&scoped_token(r#"["b","a","c"]"#)),
+        &mut auth,
+        &validator,
+        1_000_000_000_000,
+        None,
+    )
+    .await;
+    assert_success_authenticate_response(&resp, b"", 900_000);
+    assert!(auth.principal().map(|p| p.name.as_str()) == Some("alice"));
+}
+
 /// Kafka's `OAuthBearerSaslServer` throws its stored error only for a lone
 /// `\x01` after a challenge. Any other reply clears the error and runs as a
 /// fresh client initial response, so a valid token then authenticates.
@@ -447,7 +564,7 @@ async fn handle_authenticate_oauthbearer_rejects_a_zero_session_cap() {
     assert!(response.session_lifetime_ms == 0);
     assert!(response.auth_bytes == bytes::Bytes::from_static(br#"{"status":"invalid_token"}"#));
     assert!(matches!(auth, ConnectionAuth::Negotiating {
-        exchange: SaslExchange::OAuthBearerFailed,
+        exchange: SaslExchange::OAuthBearerFailed { .. },
         ..
     }));
 }

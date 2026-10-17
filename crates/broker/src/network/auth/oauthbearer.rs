@@ -33,14 +33,16 @@ use {
 ///   - A valid token whose principal differs from a requested authzid fails
 ///     the exchange at once with 58 and Kafka's
 ///     `SaslAuthenticationException` message.
-///   - On a validation failure, the handler returns the RFC 7628
-///     `{"status":"invalid_token"}` JSON in `auth_bytes` with
-///     `error_code = 0`, keeps the connection open, and moves to
-///     `OAuthBearerFailed`.
+///   - On a validation failure, the handler returns the RFC 7628 error JSON
+///     that [`krabka_security::oauth_error_json`] renders for the failure in
+///     `auth_bytes` with `error_code = 0`, keeps the connection open, and
+///     moves to `OAuthBearerFailed`, which keeps that JSON. A token that
+///     lacks a required scope item gets `insufficient_scope` and the
+///     required scope, and any other failure gets `invalid_token`.
 ///
 /// Round 2 runs only after the error challenge. The JVM client replies to the
 /// error JSON with a single `\x01`, for which the handler returns
-/// `SASL_AUTHENTICATION_FAILED` (58) carrying that JSON, and the dispatcher
+/// `SASL_AUTHENTICATION_FAILED` (58) carrying the kept JSON, and the dispatcher
 /// closes the connection. Any other reply clears the failure and runs as a
 /// fresh round 1, as Kafka's `OAuthBearerSaslServer` does.
 #[cfg(test)]
@@ -96,25 +98,26 @@ async fn handle_authenticate_oauthbearer_inner(
     let (mechanism, previous_name) = match auth {
         // The client's lone `\x01` completes the RFC 7628 failure handshake.
         ConnectionAuth::Negotiating {
-            exchange: SaslExchange::OAuthBearerFailed,
+            exchange: SaslExchange::OAuthBearerFailed { error_json },
             ..
         }
         | ConnectionAuth::Reauthenticating {
-            exchange: SaslExchange::OAuthBearerFailed,
+            exchange: SaslExchange::OAuthBearerFailed { error_json },
             ..
         } if req.auth_bytes[..] == [CONTROL_A] => {
-            return fail_exchange(auth, oauthbearer_failure());
+            let failure = oauthbearer_failure(std::mem::take(error_json));
+            return fail_exchange(auth, failure);
         }
         // Any other reply after the challenge is a fresh client initial
         // response, as Kafka clears the stored error for it.
         ConnectionAuth::Negotiating {
-            exchange: SaslExchange::OAuthBearer | SaslExchange::OAuthBearerFailed,
+            exchange: SaslExchange::OAuthBearer | SaslExchange::OAuthBearerFailed { .. },
             mechanism,
             ..
         } => (*mechanism, None),
         ConnectionAuth::Reauthenticating {
             previous,
-            exchange: SaslExchange::OAuthBearer | SaslExchange::OAuthBearerFailed,
+            exchange: SaslExchange::OAuthBearer | SaslExchange::OAuthBearerFailed { .. },
             ..
         } => (previous.mechanism, Some(previous.principal.name.clone())),
         _ => return fail_authenticate("not in oauthbearer negotiation"),
@@ -130,8 +133,8 @@ async fn handle_authenticate_oauthbearer_inner(
                 fail_authenticate("malformed OAUTHBEARER client response"),
             );
         }
-        Err(BearerRejection::InvalidToken(reason)) => {
-            return reject_oauthbearer(auth, mechanism, reason);
+        Err(BearerRejection::InvalidToken { reason, error }) => {
+            return reject_oauthbearer(auth, mechanism, reason, &error);
         }
         Err(BearerRejection::AuthorizationIdMismatch { authzid, principal }) => {
             return fail_exchange(
@@ -171,7 +174,12 @@ async fn handle_authenticate_oauthbearer_inner(
             }
             return fail_authenticate("OAUTHBEARER re-auth rejected an invalid session lifetime");
         }
-        return reject_oauthbearer(auth, mechanism, "invalid OAuth session lifetime");
+        return reject_oauthbearer(
+            auth,
+            mechanism,
+            "invalid OAuth session lifetime",
+            &krabka_security::AuthError::InvalidToken,
+        );
     };
     // Anchor expiry to the clamped lifetime reported to the client, so the
     // dispatcher's deadline also respects the broker's session cap.
@@ -218,26 +226,30 @@ fn oauth_session_decision(
     })
 }
 
+/// Sends the RFC 7628 error challenge for `error` and keeps its JSON for the
+/// client's final message, as Kafka's `OAuthBearerSaslServer` keeps
+/// `errorMessage`.
 fn reject_oauthbearer(
     auth: &mut ConnectionAuth,
     mechanism: krabka_security::SaslMechanism,
     reason: &'static str,
+    error: &krabka_security::AuthError,
 ) -> SaslAuthenticateResponse {
+    let error_json = krabka_security::oauth_error_json(error);
+    let challenge = sasl_ok(error_json.clone().into_bytes(), 0);
+    let failed = SaslExchange::OAuthBearerFailed { error_json };
     if let ConnectionAuth::Reauthenticating { exchange, .. } = auth {
-        tracing::debug!(reason, "OAUTHBEARER re-auth token rejected");
-        *exchange = SaslExchange::OAuthBearerFailed;
+        tracing::debug!(reason, %error, "OAUTHBEARER re-auth token rejected");
+        *exchange = failed;
     } else {
-        tracing::debug!(reason, "OAUTHBEARER token rejected");
+        tracing::debug!(reason, %error, "OAUTHBEARER token rejected");
         *auth = ConnectionAuth::Negotiating {
             mechanism,
-            exchange: SaslExchange::OAuthBearerFailed,
+            exchange: failed,
             pending_token_expiry_ms: None,
         };
     }
-    sasl_ok(
-        krabka_security::oauth_error_json(&krabka_security::AuthError::InvalidToken).into_bytes(),
-        0,
-    )
+    challenge
 }
 
 /// Fails the exchange with `failure`. A re-authentication restores the
@@ -258,12 +270,10 @@ fn fail_exchange(
 const CONTROL_A: u8 = 0x01;
 
 /// `OAuthBearerSaslServer` throws `SaslAuthenticationException(errorMessage)`
-/// on the client's `\x01` after an error challenge, so the failure text is the
-/// same JSON the challenge carried.
-fn oauthbearer_failure() -> SaslAuthenticateResponse {
-    fail_authenticate_with(krabka_security::oauth_error_json(
-        &krabka_security::AuthError::InvalidToken,
-    ))
+/// on the client's `\x01` after an error challenge, so the failure text is
+/// `error_json`, the JSON the challenge carried.
+fn oauthbearer_failure(error_json: String) -> SaslAuthenticateResponse {
+    fail_authenticate_with(error_json)
 }
 
 /// The JWKS refresher's state that a signed validation is checked against.
@@ -291,12 +301,27 @@ enum BearerRejection {
     /// which fails the exchange with the generic message.
     Malformed,
     /// The token did not validate. Kafka answers with the RFC 7628 error
-    /// challenge and waits for the client's final message.
-    InvalidToken(&'static str),
+    /// challenge for `error` and waits for the client's final message.
+    /// `reason` names the check that refused it, for the log.
+    InvalidToken {
+        reason: &'static str,
+        error: krabka_security::AuthError,
+    },
     /// The token validated, but the client asked for a different
     /// authorization id. Kafka throws a `SaslAuthenticationException`, which
     /// fails the exchange with its message.
     AuthorizationIdMismatch { authzid: String, principal: String },
+}
+
+impl BearerRejection {
+    /// A broker-side check refused the token for `reason`, which Kafka's
+    /// challenge reports as `invalid_token`.
+    fn invalid_token(reason: &'static str) -> Self {
+        Self::InvalidToken {
+            reason,
+            error: krabka_security::AuthError::InvalidToken,
+        }
+    }
 }
 
 /// Parses and validates an OAUTHBEARER client initial response. The authzid,
@@ -336,7 +361,7 @@ async fn validate_bearer(
             if krabka_verified::jwks_cache_admission(facts)
                 != krabka_verified::JwksCacheDecision::Admit
             {
-                return Err(BearerRejection::InvalidToken(
+                return Err(BearerRejection::invalid_token(
                     "JWKS cache is stale or changing",
                 ));
             }
@@ -347,14 +372,17 @@ async fn validate_bearer(
     let outcome = validator
         .validate(&parsed.token, now_ms)
         .await
-        .map_err(|_| BearerRejection::InvalidToken("token validation failed"))?;
+        .map_err(|error| BearerRejection::InvalidToken {
+            reason: "token validation failed",
+            error,
+        })?;
     let completed_ms = clock_ms();
     let completed_cache = cache_guard.map(|(generation, mut facts)| {
         facts.generation_after = generation.load(Ordering::Acquire);
         facts
     });
     if !krabka_verified::oauth::oauth_validation_admission(now_ms, completed_ms, completed_cache) {
-        return Err(BearerRejection::InvalidToken(
+        return Err(BearerRejection::invalid_token(
             "validation snapshot is stale or clock moved backwards",
         ));
     }
@@ -364,7 +392,7 @@ async fn validate_bearer(
         .expires_at_ms
         .is_some_and(|expiry| expiry <= completed_ms)
     {
-        return Err(BearerRejection::InvalidToken(
+        return Err(BearerRejection::invalid_token(
             "OAuth credential expired during validation",
         ));
     }

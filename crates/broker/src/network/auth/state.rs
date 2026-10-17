@@ -289,9 +289,13 @@ pub enum SaslExchange {
     /// OAUTHBEARER token validation failed. The broker returned the RFC 7628
     /// error JSON with `error_code = 0` and kept the connection open. A
     /// single-`\x01` reply then fails the connection with
-    /// `SASL_AUTHENTICATION_FAILED`; any other reply is a fresh client
-    /// initial response, as in Kafka's `OAuthBearerSaslServer`.
-    OAuthBearerFailed,
+    /// `SASL_AUTHENTICATION_FAILED` and `error_json` as the message; any
+    /// other reply is a fresh client initial response, as in Kafka's
+    /// `OAuthBearerSaslServer`.
+    OAuthBearerFailed {
+        /// The error JSON the challenge carried, Kafka's `errorMessage`.
+        error_json: String,
+    },
     /// GSSAPI post-handshake and pre-first-token. The broker builds the
     /// acceptor, and with it the live `GssapiServerExchange`, lazily on the
     /// first `SaslAuthenticate` round, once the client's AP-REQ arrives. This
@@ -314,7 +318,7 @@ impl SaslExchange {
     #[must_use]
     pub fn awaits_client_round(&self) -> bool {
         match self {
-            Self::Scram(_) | Self::OAuthBearerFailed => true,
+            Self::Scram(_) | Self::OAuthBearerFailed { .. } => true,
             #[cfg(not(target_family = "wasm"))]
             Self::Gssapi(_) => true,
             Self::Plain | Self::ScramPending | Self::OAuthBearer | Self::GssapiPending => false,
