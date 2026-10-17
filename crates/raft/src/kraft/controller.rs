@@ -24,9 +24,10 @@
 //! election timer, a fetch timer, and a leader heartbeat interval:
 //! - on a role transition the now-irrelevant timer is cancelled (a follower has
 //!   no election timer; a leader has no fetch timer and runs the heartbeat);
-//! - a fetch-timer expiry while the leader is still reachable RE-POLLS
-//!   (`SendFetch`), it does not elect; only the configured consecutive
-//!   misses feed `Event::FetchTimeout` to start an election;
+//! - a voter's fetch-timer expiry feeds `Event::FetchTimeout` and starts an
+//!   election, as Kafka's `pollFollowerAsVoter` does; an observer's RE-POLLS
+//!   (`SendFetch`), and only the configured consecutive misses send it back
+//!   to leader discovery;
 //! - the leader re-broadcasts `BeginQuorumEpoch` to voters each heartbeat tick.
 
 use {
@@ -218,7 +219,7 @@ struct Engine {
     /// Leader-side check-quorum deadline. Only a leader over a multi-voter
     /// quorum arms it; every other role runs with it disarmed.
     check_quorum_at: Option<Instant>,
-    /// Consecutive fetch misses while still believing in a leader.
+    /// Consecutive fetch misses of an observer still following a leader.
     fetch_misses: u32,
     /// Discovery Fetches sent while no leader is known. The next one goes to
     /// the discovery peer this count selects, so a dead peer, or this node's
