@@ -457,8 +457,9 @@ impl BrokerHandle {
         if let Some(task) = self.broker.disk_scanner_handle.lock().await.take() {
             let _ = task.await;
         }
-        // A crash does not wait for a copy to stop; it stops mid-copy.
-        if let Some(task) = self.broker.remote_log_manager_handle.lock().await.take() {
+        // A crash does not wait for a copy to stop; it stops mid-copy. The
+        // handle stays on the broker, finished, so a test can see it stopped.
+        if let Some(task) = self.broker.remote_log_manager_handle.lock().await.as_mut() {
             task.abort();
             let _ = task.await;
         }
@@ -544,8 +545,9 @@ impl BrokerHandle {
         // because a copy's metadata write may be waiting on a metadata
         // partition this broker leads. A broker that returned from here with
         // a copy still running would go on writing to a tier its partitions'
-        // new leaders are copying into.
-        if let Some(h) = self.broker.remote_log_manager_handle.lock().await.take() {
+        // new leaders are copying into. The handle stays on the broker,
+        // finished, so a test can see it stopped.
+        if let Some(h) = self.broker.remote_log_manager_handle.lock().await.as_mut() {
             let _ = h.await;
         }
         self.shutdown.cancel();
@@ -611,8 +613,10 @@ impl Drop for BrokerHandle {
         if let Some(task) = self.diskless_task.take() {
             task.abort();
         }
-        if let Ok(mut handle) = self.broker.remote_log_manager_handle.try_lock()
-            && let Some(task) = handle.take()
+        // Abort in place: aborting a task that `shutdown` already joined does
+        // nothing, and the handle shows a test that the task stopped.
+        if let Ok(handle) = self.broker.remote_log_manager_handle.try_lock()
+            && let Some(task) = handle.as_ref()
         {
             task.abort();
         }
