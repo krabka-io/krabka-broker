@@ -10,7 +10,7 @@ use {
         quota::RlmQuotaManager,
     },
     crate::config_keys::RemoteCopyLag,
-    krabka_log::SegmentExport,
+    krabka_log::{Offset, SegmentExport},
     krabka_remote_storage::{RemoteLogSegmentState, TopicIdPartition},
     krabka_units::convert::{ByteSizeExt, TimeExt},
     tracing::{debug, warn},
@@ -246,6 +246,16 @@ pub(crate) trait CopyFence: Sync {
     /// `true` while this broker still leads the partition in the leader epoch
     /// the pass started under, and the broker is not shutting down.
     fn holds(&self) -> bool;
+
+    /// The partition's established log start as it reads now
+    /// (`Log::established_log_start`): the floor a `DeleteRecords` or a
+    /// remote deletion moved, or `None` when nobody moved one.
+    ///
+    /// A copy asks this once it has recorded `CopySegmentFinished`, and
+    /// deletes the segment at once when it lies wholly below the floor. The
+    /// `DeleteRecords` handler marks the archive below a floor it raises, but
+    /// a copy that finishes after that marking was never there to be marked.
+    fn established_log_start(&self) -> Option<Offset>;
 }
 
 /// A fence that always holds, for tests that drive the copy pass directly.
@@ -255,6 +265,8 @@ pub(crate) struct Unfenced;
 #[cfg(test)]
 impl CopyFence for Unfenced {
     fn holds(&self) -> bool { true }
+
+    fn established_log_start(&self) -> Option<Offset> { None }
 }
 
 /// The broker and leader epoch a copy pass uploads under, and the fence that
@@ -491,6 +503,9 @@ pub(crate) async fn copy_eligible_delayed(
                 copied += 1;
                 chain = next;
             }
+            // The tier no longer holds the segment, but a write-once copy
+            // sealed its manifest all the same, and the chain runs through it.
+            CopyOutcome::Withdrawn { next } => chain = next,
             CopyOutcome::Failed => {}
             CopyOutcome::Fenced => break,
         }
@@ -769,6 +784,8 @@ mod tests {
 
     impl CopyFence for Leadership {
         fn holds(&self) -> bool { !self.lost.load(Ordering::SeqCst) }
+
+        fn established_log_start(&self) -> Option<Offset> { None }
     }
 
     /// A backend that holds every object it is given until it is told to
@@ -913,6 +930,8 @@ mod tests {
 
     impl CopyFence for AnsweredLeadership {
         fn holds(&self) -> bool { self.asked.fetch_add(1, Ordering::SeqCst) < self.answers }
+
+        fn established_log_start(&self) -> Option<Offset> { None }
     }
 
     /// The fence `copy_one` asks between recording `CopySegmentStarted` and

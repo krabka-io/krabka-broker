@@ -121,13 +121,20 @@ impl RemoteLogMetadataManager for SwappableRlmm {
         self.current()
             .put_remote_partition_delete_metadata(metadata)
     }
+
+    fn caught_up(&self, topic_id_partition: &TopicIdPartition) -> Result<bool, RemoteStorageError> {
+        self.current().caught_up(topic_id_partition)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use {
         super::*,
-        crate::manager::test_support::{started, tp},
+        crate::{
+            NotReadyRlmm,
+            manager::test_support::{started, tp},
+        },
         assert2::assert,
         krabka_remote_storage::InmemoryRemoteLogMetadataManager,
     };
@@ -158,5 +165,13 @@ mod tests {
             .unwrap();
         assert!(second.list_remote_log_segments(&tp()).unwrap().len() == 1);
         assert!(first.list_remote_log_segments(&tp()).unwrap().len() == 1);
+    }
+
+    #[test]
+    fn caught_up_delegates_to_the_current_inner() {
+        let swap = SwappableRlmm::new(Arc::new(NotReadyRlmm::new()));
+        assert!(let Err(RemoteStorageError::NotReady { .. }) = swap.caught_up(&tp()));
+        swap.swap(Arc::new(InmemoryRemoteLogMetadataManager::new()));
+        assert!(let Ok(true) = swap.caught_up(&tp()));
     }
 }

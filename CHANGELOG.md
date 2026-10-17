@@ -96,6 +96,17 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   `Partition.appendRecordsToFollowerOrFutureReplica` does, then raises its log
   start to the leader's from the next fetch response. The diskless WAL
   follower shares the same check (`Log::restarts_at_batch_base`).
+- A `DeleteRecords` on a tiered topic can no longer be undone by a leadership
+  move. Its floor was enforced only when the leader's next remote-retention
+  pass deleted the archived segments below it. If leadership moved first to a
+  replica that reports a log start of 0, its followers saw an archive that did
+  not enforce the floor and lowered to 0, and the deleted records were readable
+  again. The leader now marks every archived segment below the trim point
+  `DeleteSegmentStarted` before it trims, and the row fails if it cannot. A
+  follower judges the archive only once its remote-log metadata has caught up
+  with the metadata topic. A floor that a broker before this release set is
+  not covered: see the rolling-upgrade note in
+  [Deploying](docs/operations/deploy.md#rolling-upgrade).
 - Every broker now leads its own `__krabka_audit` partition, and the audit
   topic no longer counts in `under_min_isr_partition_count`. Before, the
   quorum leader created the topic once, with a partition only for the brokers

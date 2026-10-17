@@ -5,10 +5,11 @@
 use {
     super::{archive::ArchiveMode, now_ms, rlmm::rlmm_mutate},
     crate::blocking::spawn_blocking,
+    krabka_log::Offset,
     krabka_remote_storage::{
-        RemoteLogMetadataManager, RemoteLogSegmentMetadata, RemoteLogSegmentState,
-        RemotePartitionDeleteMetadata, RemotePartitionDeleteState, RemoteStorageManager,
-        TopicIdPartition,
+        RemoteIndexCache, RemoteLogMetadataManager, RemoteLogSegmentMetadata,
+        RemoteLogSegmentState, RemotePartitionDeleteMetadata, RemotePartitionDeleteState,
+        RemoteStorageError, RemoteStorageManager, TopicIdPartition,
     },
     std::sync::Arc,
     tracing::{debug, warn},
@@ -204,14 +205,83 @@ pub(super) async fn delete_one_segment(
     true
 }
 
+/// Mark every segment of `tp` that lies wholly below `floor` as
+/// `DeleteSegmentStarted`, and drop its entries from `index_cache`. Answers
+/// how many segments this call marked.
+///
+/// A `DeleteRecords` trim raises the log start, and the follower rule that
+/// lets a tiered replica lower an established floor (issue #1481) asks the
+/// archive whether it still holds a finished segment below it. Remote
+/// retention deletes those segments, but only on the leader's next pass, so
+/// a leadership move before that pass would let a legacy leader's lower start
+/// win and serve the deleted records again. Marking the segments here closes
+/// that window: from this call on, the archive holds no finished segment
+/// below the floor, so it enforces the floor, and readers, which serve only
+/// finished segments, stop serving the deleted records. Retention completes
+/// the deletion later.
+///
+/// Both `CopySegmentFinished` and `CopySegmentStarted` segments are marked:
+/// a copy still in flight below the floor must not finish into a readable
+/// segment, and `CopySegmentStarted` → `DeleteSegmentStarted` is a legal
+/// lifecycle edge. A segment that ends at or above the floor still holds live
+/// records and is left alone.
+///
+/// The listing and every mark run on the blocking pool, since the
+/// topic-backed manager's synchronous SPI blocks.
+///
+/// # Errors
+///
+/// Returns the first listing or mark failure, such as a manager that is not
+/// ready yet. Segments marked before the failure stay marked.
+pub(crate) async fn mark_segments_below(
+    tp: &TopicIdPartition,
+    floor: Offset,
+    broker_id: i32,
+    rlmm: &Arc<dyn RemoteLogMetadataManager>,
+    index_cache: &RemoteIndexCache,
+) -> Result<usize, RemoteStorageError> {
+    let listing = Arc::clone(rlmm);
+    let listed_tp = tp.clone();
+    let segments = spawn_blocking(move || listing.list_remote_log_segments(&listed_tp))
+        .await
+        .map_err(|e| RemoteStorageError::Backend(format!("RLMM listing task panicked: {e}")))??;
+    let mut marked = 0;
+    for md in segments.iter().filter(|md| {
+        md.end_offset() < floor.0
+            && matches!(
+                md.state(),
+                RemoteLogSegmentState::CopySegmentStarted
+                    | RemoteLogSegmentState::CopySegmentFinished
+            )
+    }) {
+        let id = md.remote_log_segment_id().clone();
+        index_cache.remove_segment(id.id);
+        super::rlmm::update_segment(
+            rlmm,
+            id,
+            None,
+            RemoteLogSegmentState::DeleteSegmentStarted,
+            broker_id,
+        )
+        .await?;
+        marked += 1;
+    }
+    Ok(marked)
+}
+
 #[cfg(test)]
 mod tests {
     use {
         super::*,
-        crate::remote_log_manager::test_support as fixtures,
+        crate::{
+            handlers::delete_records::test_support, remote_log_manager::test_support as fixtures,
+            remote_reader::test_support::NotReadyRlmm,
+        },
         assert2::{assert, check},
         fixtures::{copy_all_exports, copy_exports, local_backends},
         krabka_remote_storage::{InmemoryRemoteLogMetadataManager, LocalTieredStorage},
+        std::ops::RangeInclusive,
+        test_support::{ArchivedSegment, archived_segments, seed_segment},
     };
 
     fn dumped_delete_state(
@@ -232,6 +302,105 @@ mod tests {
         Arc::new(krabka_remote_storage::RemoteIndexCache::disabled())
     }
     use fixtures::{FakeWormArchive, tier, tp};
+
+    /// One `mark_segments_below` case: the archive before, the floor, and the
+    /// archive and count after.
+    struct MarkCase {
+        name: &'static str,
+        before: Vec<ArchivedSegment>,
+        floor: i64,
+        after: Vec<ArchivedSegment>,
+        marked: usize,
+    }
+
+    fn segment(
+        id: u128,
+        offsets: RangeInclusive<i64>,
+        state: RemoteLogSegmentState,
+    ) -> ArchivedSegment {
+        ArchivedSegment { id, offsets, state }
+    }
+
+    #[tokio::test]
+    async fn mark_segments_below_marks_only_segments_wholly_below_the_floor() {
+        use RemoteLogSegmentState::{
+            CopySegmentFinished, CopySegmentStarted, DeleteSegmentStarted,
+        };
+        let cases = [
+            MarkCase {
+                name: "finished segments below are marked, straddling and above are not",
+                before: vec![
+                    segment(1, 0..=9, CopySegmentFinished),
+                    segment(2, 10..=19, CopySegmentFinished),
+                    segment(3, 20..=29, CopySegmentFinished),
+                ],
+                floor: 15,
+                after: vec![
+                    segment(1, 0..=9, DeleteSegmentStarted),
+                    segment(2, 10..=19, CopySegmentFinished),
+                    segment(3, 20..=29, CopySegmentFinished),
+                ],
+                marked: 1,
+            },
+            MarkCase {
+                name: "a segment ending just below the floor is marked",
+                before: vec![segment(1, 0..=9, CopySegmentFinished)],
+                floor: 10,
+                after: vec![segment(1, 0..=9, DeleteSegmentStarted)],
+                marked: 1,
+            },
+            MarkCase {
+                name: "a segment ending at the floor still holds it",
+                before: vec![segment(1, 0..=10, CopySegmentFinished)],
+                floor: 10,
+                after: vec![segment(1, 0..=10, CopySegmentFinished)],
+                marked: 0,
+            },
+            MarkCase {
+                name: "an in-flight copy below is marked, one above is not",
+                before: vec![
+                    segment(1, 0..=9, CopySegmentStarted),
+                    segment(2, 30..=39, CopySegmentStarted),
+                ],
+                floor: 20,
+                after: vec![
+                    segment(1, 0..=9, DeleteSegmentStarted),
+                    segment(2, 30..=39, CopySegmentStarted),
+                ],
+                marked: 1,
+            },
+            MarkCase {
+                name: "an already marked segment is not counted again",
+                before: vec![segment(1, 0..=9, DeleteSegmentStarted)],
+                floor: 20,
+                after: vec![segment(1, 0..=9, DeleteSegmentStarted)],
+                marked: 0,
+            },
+        ];
+        for case in cases {
+            let rlmm = fixtures::in_memory_metadata();
+            for archived in &case.before {
+                seed_segment(&rlmm, &tp(), archived);
+            }
+            let marked =
+                mark_segments_below(&tp(), Offset(case.floor), 1, &rlmm, &disabled_index_cache())
+                    .await;
+            check!(marked.ok() == Some(case.marked), "{}", case.name);
+            check!(
+                archived_segments(&rlmm, &tp()) == case.after,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mark_segments_below_fails_on_a_manager_that_is_not_ready() {
+        let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(NotReadyRlmm);
+        let marked =
+            mark_segments_below(&tp(), Offset(10), 1, &rlmm, &disabled_index_cache()).await;
+        check!(let Err(RemoteStorageError::NotReady { .. }) = marked);
+    }
 
     #[tokio::test]
     async fn cascade_remote_partition_delete_drops_every_segment() {

@@ -105,6 +105,12 @@ impl RemoteLogMetadataManager for NotReadyRlmm {
         let partition = metadata.topic_id_partition.partition;
         Err(RemoteStorageError::NotReady { partition })
     }
+
+    fn caught_up(&self, topic_id_partition: &TopicIdPartition) -> Result<bool, RemoteStorageError> {
+        Err(RemoteStorageError::NotReady {
+            partition: topic_id_partition.partition,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -143,6 +149,9 @@ mod tests {
         let err = m
             .highest_offset_for_epoch(&tp(), LeaderEpoch(0))
             .unwrap_err();
+        assert!(matches!(err, RemoteStorageError::NotReady { partition: 3 }));
+
+        let err = m.caught_up(&tp()).unwrap_err();
         assert!(matches!(err, RemoteStorageError::NotReady { partition: 3 }));
     }
 
