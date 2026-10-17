@@ -229,7 +229,7 @@ TOML shape of `[oauthbearer]`. Maps to [`krabka_security::OAuthBearerValidator`]
 | Key | Type | Default | Units | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `allow_unsecured` | boolean | broker default |  | Opt-in for the unsecured-JWS (`alg:none`) development validator. Default false. With neither `jwks_endpoint_uri` nor `introspection_endpoint_uri` set and a listener enabling `OAUTHBEARER`, the broker refuses to start rather than silently trusting unsigned tokens; set this to true to accept that fallback in development. Never set it in production. |
-| `allowable_clock_skew_ms` | integer (int64) | broker default | milliseconds | Clock-skew tolerance, in milliseconds, for `exp` / `iat` / `nbf`. Default 30000. |
+| `allowable_clock_skew_ms` | integer (int64) | broker default | milliseconds | Clock-skew tolerance, in milliseconds, for `exp` / `iat` / `nbf`. Default 0 for the unsecured-JWS validator, as Kafka's `unsecuredValidatorAllowableClockSkewMs`, and 30000 for the signed-JWT and introspection validators, as Kafka's `sasl.oauthbearer.clock.skew.seconds`. |
 | `custom_claim_check` | string | broker default |  | Optional `JsonPath` expression (RFC 9535, via jsonpath-rust) evaluated against the token claim set. Token is rejected when the expression yields empty/null/false. Compiled once at broker startup; malformed expressions panic with a descriptive error. |
 | `expected_audience` | string | broker default |  | When set, the token `aud` claim must contain this. Signed validator only. |
 | `fallback_user_name_claim` | string | broker default |  | Alternate claim name for principal-name fallback. |

@@ -7,26 +7,36 @@
 //! configuration.
 
 #[cfg(not(target_family = "wasm"))]
-use super::oauthbearer::{DEFAULT_ALLOWABLE_CLOCK_SKEW, DEFAULT_INTROSPECTION_HTTP_TIMEOUT};
+use super::oauthbearer::DEFAULT_INTROSPECTION_HTTP_TIMEOUT;
 #[cfg(not(target_family = "wasm"))]
 use crate::oauth_introspection::ReqwestIntrospectionClient;
 use {
-    super::{FileConfigError, oauthbearer::FileOAuthBearerConfig},
+    super::{
+        FileConfigError,
+        oauthbearer::{
+            DEFAULT_ALLOWABLE_CLOCK_SKEW, DEFAULT_UNSECURED_ALLOWABLE_CLOCK_SKEW,
+            FileOAuthBearerConfig,
+        },
+    },
     crate::config::{BrokerConfig, DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE},
     krabka_units::{Time, convert::TimeExt as _},
 };
 
+/// Set the principal claim and the clock skew of a JWS validator from
+/// `[oauthbearer]`. An unset `allowable_clock_skew_ms` takes `default_skew`,
+/// which differs between the unsecured and the signed validator in Kafka.
 fn apply_jws_claim_options(
     principal_claim_name: &mut String,
     allowable_clock_skew: &mut Time,
+    default_skew: Time,
     oauth: &FileOAuthBearerConfig,
 ) {
     if let Some(name) = oauth.principal_claim_name.clone() {
         *principal_claim_name = name;
     }
-    if let Some(skew) = oauth.allowable_clock_skew_ms {
-        *allowable_clock_skew = Time::from_millis(skew);
-    }
+    *allowable_clock_skew = oauth
+        .allowable_clock_skew_ms
+        .map_or(default_skew, Time::from_millis);
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -190,6 +200,7 @@ pub(super) fn apply_oauthbearer(
             apply_jws_claim_options(
                 &mut v.principal_claim_name,
                 &mut v.allowable_clock_skew,
+                DEFAULT_ALLOWABLE_CLOCK_SKEW,
                 &oauth,
             );
             v.valid_issuer = oauth.valid_issuer_uri;
@@ -264,6 +275,7 @@ pub(super) fn apply_oauthbearer(
             apply_jws_claim_options(
                 &mut v.principal_claim_name,
                 &mut v.allowable_clock_skew,
+                DEFAULT_UNSECURED_ALLOWABLE_CLOCK_SKEW,
                 &oauth,
             );
             // JsonPath custom_claim_check + JWT typ check.
@@ -291,8 +303,90 @@ mod tests {
             },
         },
         assert2::{assert, check},
+        base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64},
+        krabka_security::{Jwks, OAuthBearerValidator},
         krabka_units::{minutes, secs},
+        ring::{
+            rand::SystemRandom,
+            signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair as _},
+        },
     };
+
+    /// The instant every clock-skew case validates at, in epoch milliseconds.
+    const NOW_MS: i64 = 2_000_000_000_000;
+
+    /// An unsecured (`alg:none`) token for `sub = "alice"` with the given
+    /// `exp`, in epoch seconds.
+    fn unsecured_token(exp_s: i64) -> String {
+        let header = B64.encode(br#"{"alg":"none"}"#);
+        let payload = B64.encode(serde_json::json!({"sub": "alice", "exp": exp_s}).to_string());
+        format!("{header}.{payload}.")
+    }
+
+    /// Install a fresh ES256 key in `validator`'s key set and return a token
+    /// it signs for `sub = "alice"` with the given `exp`, in epoch seconds.
+    fn signed_token(validator: &krabka_security::SignedJwsValidator, exp_s: i64) -> String {
+        let rng = SystemRandom::new();
+        let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).unwrap();
+        let key = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8.as_ref(), &rng)
+            .unwrap();
+        let point = key.public_key().as_ref();
+        let jwks = serde_json::json!({"keys": [{"kty": "EC", "crv": "P-256", "kid": "skew",
+            "x": B64.encode(&point[1..33]), "y": B64.encode(&point[33..65])}]});
+        validator
+            .key_handle()
+            .store(Jwks::from_json(&jwks.to_string(), false).unwrap());
+        let header = B64.encode(br#"{"alg":"ES256","kid":"skew"}"#);
+        let payload = B64.encode(serde_json::json!({"sub": "alice", "exp": exp_s}).to_string());
+        let input = format!("{header}.{payload}");
+        let signature = key.sign(&rng, input.as_bytes()).unwrap();
+        format!("{input}.{}", B64.encode(signature.as_ref()))
+    }
+
+    /// Kafka's `OAuthBearerUnsecuredValidatorCallbackHandler` defaults
+    /// `unsecuredValidatorAllowableClockSkewMs` to 0, while the signed path's
+    /// `sasl.oauthbearer.clock.skew.seconds` defaults to 30. Each case builds
+    /// the validator from `[oauthbearer]` and offers it a token whose `exp`
+    /// lies `expired_by_s` seconds before now.
+    #[yare::parameterized(
+        unsecured_default_refuses_one_second_past_exp = {
+            "allow_unsecured = true", 1, false
+        },
+        unsecured_explicit_skew_admits_one_second_past_exp = {
+            "allow_unsecured = true\nallowable_clock_skew_ms = 5000", 1, true
+        },
+        unsecured_explicit_skew_refuses_past_the_skew = {
+            "allow_unsecured = true\nallowable_clock_skew_ms = 5000", 6, false
+        },
+        signed_default_admits_one_second_past_exp = {
+            "jwks_endpoint_uri = \"https://idp.example/jwks\"", 1, true
+        },
+        signed_default_admits_just_inside_thirty_seconds = {
+            "jwks_endpoint_uri = \"https://idp.example/jwks\"", 29, true
+        },
+        signed_default_refuses_past_thirty_seconds = {
+            "jwks_endpoint_uri = \"https://idp.example/jwks\"", 31, false
+        },
+        signed_explicit_zero_skew_refuses_one_second_past_exp = {
+            "jwks_endpoint_uri = \"https://idp.example/jwks\"\nallowable_clock_skew_ms = 0",
+            1,
+            false
+        },
+    )]
+    fn file_config_validator_applies_the_kafka_clock_skew_default(
+        table: &str,
+        expired_by_s: i64,
+        admitted: bool,
+    ) {
+        let cfg = configured_unwrap_parse(&format!("[oauthbearer]\n{table}\n")).unwrap();
+        let exp_s = NOW_MS / 1000 - expired_by_s;
+        let outcome = match &cfg.oauthbearer_validator {
+            OAuthBearerValidator::Unsecured(v) => v.validate(&unsecured_token(exp_s), NOW_MS),
+            OAuthBearerValidator::Signed(v) => v.validate(&signed_token(v, exp_s), NOW_MS),
+            other => panic!("expected an unsecured or signed validator; got {other:?}"),
+        };
+        assert2::assert!(outcome.is_ok() == admitted, "{table:?}: {outcome:?}");
+    }
 
     fn check_unsecured(cfg: &BrokerConfig) {
         assert!(cfg.oauthbearer_jwks_endpoint.is_none());

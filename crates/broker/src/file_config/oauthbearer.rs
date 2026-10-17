@@ -5,7 +5,6 @@
 //! broker builds. The sibling `oauthbearer_apply` module reads this table and
 //! constructs the validator.
 
-#[cfg(not(target_family = "wasm"))]
 use krabka_units::{Time, secs};
 
 /// TOML shape of `[oauthbearer]`. Maps to
@@ -32,7 +31,10 @@ pub struct FileOAuthBearerConfig {
     /// (no JWT header). Ignored when unset.
     pub valid_token_type: Option<String>,
     /// Clock-skew tolerance, in milliseconds, for `exp` / `iat` / `nbf`.
-    /// Default 30000.
+    /// Default 0 for the unsecured-JWS validator, as Kafka's
+    /// `unsecuredValidatorAllowableClockSkewMs`, and 30000 for the signed-JWT
+    /// and introspection validators, as Kafka's
+    /// `sasl.oauthbearer.clock.skew.seconds`.
     pub allowable_clock_skew_ms: Option<i64>,
 
     /// JWKS endpoint URL. When set, tokens are validated as signed
@@ -130,7 +132,12 @@ pub struct FileOAuthBearerConfig {
 #[cfg(not(target_family = "wasm"))]
 pub(super) const DEFAULT_INTROSPECTION_HTTP_TIMEOUT: Time = secs(10);
 
-/// Default clock-skew tolerance for `exp` / `iat` / `nbf` checks. Matches the
-/// `krabka_security` validators' built-in default.
-#[cfg(not(target_family = "wasm"))]
+/// Default clock-skew tolerance for the signed-JWT and introspection
+/// validators' `exp` / `iat` / `nbf` checks: Kafka's
+/// `sasl.oauthbearer.clock.skew.seconds` default of 30 s.
 pub(super) const DEFAULT_ALLOWABLE_CLOCK_SKEW: Time = secs(30);
+
+/// Default clock-skew tolerance for the unsecured-JWS validator's `exp` /
+/// `iat` checks: Kafka's `OAuthBearerUnsecuredValidatorCallbackHandler`
+/// reads an unset `unsecuredValidatorAllowableClockSkewMs` as 0.
+pub(super) const DEFAULT_UNSECURED_ALLOWABLE_CLOCK_SKEW: Time = secs(0);
