@@ -11,6 +11,7 @@ use {
         clean_shutdown::write,
         error::BrokerError,
         future_log::{abort_moves, shutdown_moves},
+        incarnation::own_broker_epoch,
         partition::Partition,
         partition_registry::PartitionRegistry,
         time_util::now_ms,
@@ -489,7 +490,15 @@ impl BrokerHandle {
         if !config.is_broker() || config.broker_epoch < 0 || self.fatal_fault().is_some() {
             return;
         }
-        write(&config.log_dir, config.broker_epoch);
+        write(
+            &config.log_dir,
+            own_broker_epoch(
+                &self.broker.controller.current_image(),
+                config.node_id,
+                config.incarnation_id,
+                config.broker_epoch,
+            ),
+        );
     }
 
     /// Await the listener watcher, so that it opens no listener after this,
