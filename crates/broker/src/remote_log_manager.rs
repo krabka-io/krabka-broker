@@ -922,6 +922,42 @@ mod tests {
         );
     }
 
+    /// The lagging fake the follower test uses answers every read the way the
+    /// manager it wraps does, and differs only in never being caught up.
+    #[test]
+    fn a_lagging_rlmm_serves_its_inner_answers_but_is_never_caught_up() {
+        let inner: Arc<dyn RemoteLogMetadataManager> =
+            Arc::new(krabka_remote_storage::InmemoryRemoteLogMetadataManager::new());
+        let lagging: Arc<dyn RemoteLogMetadataManager> = Arc::new(LaggingRlmm(Arc::clone(&inner)));
+        fixtures::seed_finished_segments(&lagging, 2);
+        let delete = krabka_remote_storage::RemotePartitionDeleteMetadata {
+            topic_id_partition: tp(),
+            state: krabka_remote_storage::RemotePartitionDeleteState::DeletePartitionMarked,
+            event_timestamp_ms: 100,
+            broker_id: 1,
+        };
+        let reads = |rlmm: &Arc<dyn RemoteLogMetadataManager>| {
+            let epoch = krabka_ids::LeaderEpoch(0);
+            (
+                rlmm.remote_log_segment_metadata(&tp(), epoch, 5).unwrap(),
+                rlmm.highest_offset_for_epoch(&tp(), epoch).unwrap(),
+                rlmm.list_remote_log_segments(&tp()).unwrap(),
+                rlmm.list_remote_log_segments_by_epoch(&tp(), epoch)
+                    .unwrap(),
+            )
+        };
+
+        check!(reads(&lagging) == reads(&inner));
+        check!(lagging.list_remote_log_segments(&tp()).unwrap().len() == 2);
+        check!(lagging.put_remote_partition_delete_metadata(delete).is_ok());
+        check!(
+            (
+                lagging.caught_up(&tp()).unwrap(),
+                inner.caught_up(&tp()).unwrap()
+            ) == (false, true)
+        );
+    }
+
     async fn wait_for_remote_segments(rlmm: &Arc<dyn RemoteLogMetadataManager>, expected: usize) {
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
