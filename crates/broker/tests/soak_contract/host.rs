@@ -51,13 +51,16 @@ pub(crate) fn docker_try(args: &[&str]) -> Result<String, String> {
 /// Where the run's evidence goes: `KRABKA_SOAK_EVIDENCE_DIR` when set, else
 /// Bazel's undeclared-outputs directory, else nothing and the caller makes a
 /// directory of its own.
+///
+/// A variable exported empty counts as unset, so it does not hide the one
+/// below it.
 pub(crate) fn chosen_evidence_dir(
     explicit: Option<String>,
     bazel_outputs: Option<String>,
 ) -> Option<PathBuf> {
-    explicit
-        .or(bazel_outputs)
-        .filter(|dir| !dir.is_empty())
+    let set = |dir: Option<String>| dir.filter(|dir| !dir.is_empty());
+    set(explicit)
+        .or_else(|| set(bazel_outputs))
         .map(PathBuf::from)
 }
 
@@ -197,6 +200,8 @@ mod tests {
         bazel_outputs = { None, Some("/b"), Some("/b") },
         neither = { None, None, None },
         empty_is_unset = { Some(""), None, None },
+        empty_does_not_hide_bazel_outputs = { Some(""), Some("/b"), Some("/b") },
+        empty_bazel_outputs_is_unset = { None, Some(""), None },
     )]
     fn the_evidence_goes_where_the_runner_asks(
         explicit: Option<&str>,

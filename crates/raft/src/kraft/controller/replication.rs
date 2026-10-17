@@ -7,6 +7,7 @@ use {
         Engine, KraftControlState, Role,
         checkpoint::{retain_recent_checkpoints, write_checkpoint},
         offsets::fetch_offset_has_records,
+        quorum_requests::{FENCED_LEADER_EPOCH, NOT_LEADER_OR_FOLLOWER, UNKNOWN_LEADER_EPOCH},
         records::{decode_batches, encode_batches, features_epoch_after_snapshot},
     },
     crate::{
@@ -31,6 +32,33 @@ use {
     },
     std::sync::Arc,
 };
+
+/// Whether a Fetch answer that the leader fence refused still sends this
+/// replica straight back to the leader it follows.
+///
+/// Kafka's `maybeHandleCommonResponse` handles four answers from the followed
+/// leader: one from an older epoch, an `UNKNOWN_LEADER_EPOCH`, and a
+/// `FENCED_LEADER_EPOCH` or `NOT_LEADER_OR_FOLLOWER` in the replica's own
+/// epoch, which leaves it on that leader. `RequestManager.onResponseResult`
+/// then marks the leader ready, and the next poll fetches from it again with
+/// no backoff. The fetch timeout is not reset, so a leader that keeps refusing
+/// still ends in an election or a discovery. Any other refused answer waits
+/// for the fetch timer. A newer epoch never reaches this point: it moves the
+/// replica first.
+#[must_use]
+pub fn refetches_after_refusal(
+    following: Option<NodeId>,
+    current_epoch: Epoch,
+    from: NodeId,
+    answer_epoch: Epoch,
+    error_code: i16,
+) -> bool {
+    following == Some(from)
+        && (answer_epoch < current_epoch
+            || error_code == UNKNOWN_LEADER_EPOCH
+            || (answer_epoch == current_epoch
+                && matches!(error_code, FENCED_LEADER_EPOCH | NOT_LEADER_OR_FOLLOWER)))
+}
 
 pub fn should_serve_fetch_records(
     has_snapshot: bool,
@@ -179,6 +207,7 @@ impl Engine {
             ..
         });
         let state = self.core.quorum_state();
+        let current_epoch = state.leader_epoch;
         let mutation = fetch_response_mutation(
             FetchFence {
                 discovering,
@@ -216,7 +245,18 @@ impl Engine {
         }
 
         match mutation {
-            FetchResponseMutation::Reject => return,
+            FetchResponseMutation::Reject => {
+                if refetches_after_refusal(
+                    role_leader.map(NodeId),
+                    current_epoch,
+                    from,
+                    leader_epoch,
+                    error_code,
+                ) {
+                    self.send_fetch(from);
+                }
+                return;
+            }
             FetchResponseMutation::Discover => {
                 // A leaderless observer uses a discovery response only to
                 // attach to the advertised leader, as Kafka's

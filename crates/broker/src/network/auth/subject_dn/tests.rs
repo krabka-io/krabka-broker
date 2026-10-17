@@ -2,7 +2,7 @@
 //! `X500Principal.getName()` gives for the same DER.
 
 use {
-    super::{name_rfc2253, subject_dn_rfc2253},
+    super::{name_rfc2253, subject_alt_names, subject_dn_rfc2253},
     assert2::check,
     rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair},
 };
@@ -211,4 +211,38 @@ fn refuses_bytes_that_are_not_a_certificate() {
     for input in [&b""[..], b"not-a-cert", &[0x30, 0x05, 0x02]] {
         check!(subject_dn_rfc2253(input) == None, "{input:?}");
     }
+}
+
+/// The subject alternative names come back as each `GeneralName`'s DER: a
+/// `dNSName` is `[2]` and an `iPAddress` is `[7]` over the address octets.
+#[test]
+fn reads_the_subject_alternative_names_of_a_certificate() {
+    let dns = |name: &str| {
+        [
+            &[0x82, u8::try_from(name.len()).unwrap()][..],
+            name.as_bytes(),
+        ]
+        .concat()
+    };
+    let cases: [(&[&str], Vec<Vec<u8>>); 3] = [
+        (&[], vec![]),
+        (&["localhost"], vec![dns("localhost")]),
+        (&["localhost", "127.0.0.1", "broker-0.example"], vec![
+            dns("localhost"),
+            vec![0x87, 0x04, 127, 0, 0, 1],
+            dns("broker-0.example"),
+        ]),
+    ];
+    let key = KeyPair::generate().expect("key pair");
+    for (names, expected) in cases {
+        let params =
+            CertificateParams::new(names.iter().map(|n| (*n).to_owned()).collect::<Vec<_>>())
+                .expect("params");
+        let certificate = params.self_signed(&key).expect("self-signed certificate");
+        check!(
+            subject_alt_names(certificate.der()) == Some(expected.into_iter().collect()),
+            "{names:?}"
+        );
+    }
+    check!(subject_alt_names(b"not-a-cert") == None);
 }

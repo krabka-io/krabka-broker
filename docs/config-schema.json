@@ -1761,7 +1761,7 @@
           ]
         },
         "controller_fetch_miss_limit": {
-          "description": "Consecutive follower fetch misses tolerated before a new election.",
+          "description": "Consecutive fetch misses an observer tolerates before it looks for the\nleader again. A voter starts an election after one fetch timeout, as\nKafka does.",
           "format": "uint32",
           "minimum": 0,
           "type": [

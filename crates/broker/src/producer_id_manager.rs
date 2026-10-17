@@ -6,7 +6,7 @@
 //! block, so broker restarts and controller failover cannot reuse IDs.
 
 use {
-    crate::{error::BrokerError, metadata_source::MetadataSource},
+    crate::{error::BrokerError, incarnation::own_broker_epoch, metadata_source::MetadataSource},
     krabka_log::ProducerId,
     krabka_metadata::{MetadataRecord, NodeId, ProducerIdsRecord},
     krabka_verified::{
@@ -129,6 +129,9 @@ pub struct ProducerIdManager {
     /// registered as a broker.
     #[debug(skip)]
     broker_epoch: i64,
+    /// This process's incarnation; see [`own_broker_epoch`].
+    #[debug(skip)]
+    incarnation_id: uuid::Uuid,
     next: AtomicI64,
     end_exclusive: AtomicI64,
     #[debug(skip)]
@@ -140,12 +143,14 @@ impl ProducerIdManager {
     pub(crate) fn clustered(
         node_id: NodeId,
         broker_epoch: i64,
+        incarnation_id: uuid::Uuid,
         controller: Arc<dyn MetadataSource>,
     ) -> Self {
         Self {
             controller: Some(controller),
             node_id,
             broker_epoch,
+            incarnation_id,
             next: AtomicI64::new(0),
             end_exclusive: AtomicI64::new(0),
             refill: Mutex::new(()),
@@ -171,7 +176,13 @@ impl ProducerIdManager {
             if self.broker_epoch < 0 {
                 return Err(ProducerIdAllocationError::BrokerNotRegistered(self.node_id));
             }
-            let block = allocate_block(controller, self.node_id, self.broker_epoch).await?;
+            let broker_epoch = own_broker_epoch(
+                &controller.current_image(),
+                self.node_id,
+                self.incarnation_id,
+                self.broker_epoch,
+            );
+            let block = allocate_block(controller, self.node_id, broker_epoch).await?;
             self.next.store(block.first, Ordering::Release);
             self.end_exclusive.store(block.next, Ordering::Release);
         }
@@ -200,6 +211,7 @@ impl ProducerIdManager {
             controller: None,
             node_id: NodeId(0),
             broker_epoch: -1,
+            incarnation_id: uuid::Uuid::nil(),
             next: AtomicI64::new(0),
             end_exclusive: AtomicI64::new(i64::MAX),
             refill: Mutex::new(()),
@@ -256,6 +268,7 @@ mod tests {
             controller: None,
             node_id: NodeId(0),
             broker_epoch: -1,
+            incarnation_id: uuid::Uuid::nil(),
             next: AtomicI64::new(10),
             end_exclusive: AtomicI64::new(12),
             refill: Mutex::new(()),
