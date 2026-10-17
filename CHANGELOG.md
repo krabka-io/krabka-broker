@@ -59,6 +59,24 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- Every broker now leads its own `__krabka_audit` partition, and the audit
+  topic no longer counts in `under_min_isr_partition_count`. Before, the
+  quorum leader created the topic once, with a partition only for the brokers
+  registered at that moment, which in a fresh cluster was often the leader
+  alone. A broker that registered later got no partition and dropped every
+  audit record it emitted, or refused the request under a fail-closed
+  `failure_mode`. The active controller now adds one RF=1 partition for each
+  registered broker that holds none, as a `CreatePartitions` does, and a
+  broker waits at startup for its partition to arrive. The topic now declares
+  `min.insync.replicas=1`, because each partition has one replica: with a
+  cluster default of 2, every audit partition was under min ISR, and
+  `KrabkaUnderMinIsrPartitions` fired on a healthy cluster. A topic that an
+  earlier release created gets its missing partitions and the override once
+  the upgraded controller leads; a `min.insync.replicas` that an operator set
+  on the topic is kept. Both are existing metadata records, so the change
+  needs no feature level and rolls back in place. A restarted broker also finds
+  its partition by replica: it used to read the image while still fenced, see
+  no partition it led, and drop audit records until its next restart.
 - A broker that stops leading a tiered partition stops copying it to the
   remote tier at its next segment, as Kafka's `RLMCopyTask` does once it is
   cancelled. Before, the copy pass checked leadership only at the start of

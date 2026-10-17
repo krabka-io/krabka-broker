@@ -31,6 +31,7 @@ use {
         },
         client_metrics::ClientMetrics,
         config::BrokerConfig,
+        coordinator::bootstrap::spawn_audit_placement,
         cordoned_log_dirs::spawn_watcher,
         delegation_token_cleanup::{
             DelegationTokenController, run as run_delegation_token_cleanup,
@@ -280,6 +281,9 @@ pub(super) async fn start_broker_runtime(
         &metrics,
         &supervisor_shutdown,
     );
+    // The quorum leader gives each broker that registers after the audit topic
+    // exists its own audit partition.
+    spawn_audit_placement(config, controller, supervisor_shutdown.child_token());
     let supervisor_handle = spawn_replicator_supervisor(
         config,
         controller,

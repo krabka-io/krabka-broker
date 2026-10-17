@@ -16,6 +16,8 @@
 //!   that the KFC-9 cases read back.
 //! - [`freeze_evidence`] — that workflow, recovered from the audit topic alone.
 //! - [`freeze_metrics`] — the KFC-9 gauges and counters under a real request.
+//! - [`placement`] — one audit partition on every broker of a combined
+//!   cluster, none of them under min ISR.
 
 mod support;
 
@@ -37,3 +39,5 @@ mod freeze_metrics;
 mod freeze_signing;
 #[path = "audit/freeze_workflow.rs"]
 mod freeze_workflow;
+#[path = "audit/placement.rs"]
+mod placement;
