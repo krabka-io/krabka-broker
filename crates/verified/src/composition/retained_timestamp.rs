@@ -55,6 +55,8 @@ pub(super) fn constructed_index_retained_candidate(
         ==> retained_timestamps@[j]@ <= entries@[i].key@);
     proof_assert!(forall<i: Int, j: Int> 0 <= i && i < j && j < retained_offsets@.len()
         ==> retained_offsets@[i]@ < retained_offsets@[j]@);
+    proof_assert!(forall<i: Int> start@ <= i && i < timestamps@.len()
+        ==> timestamps@[i] == retained_timestamps@[i - start@]);
     // Map each outcome on the suffix back to the original record indexes.
     match indexed_timestamp_scan_finds_first(
         &entries,
@@ -65,6 +67,8 @@ pub(super) fn constructed_index_retained_candidate(
         None => {
             proof_assert!(forall<i: Int> start@ <= i && i < timestamps@.len()
                 ==> timestamps@[i]@ < target@);
+            proof_assert!(forall<i: Int> 0 <= i && i < offsets@.len()
+                ==> base@ + offsets@[i]@ < minimum@ || timestamps@[i]@ < target@);
             None
         }
         Some(selected) => {
@@ -72,6 +76,9 @@ pub(super) fn constructed_index_retained_candidate(
                 && timestamps@[start@ + selected@]@ >= target@);
             proof_assert!(forall<i: Int> start@ <= i && i < start@ + selected@
                 ==> timestamps@[i]@ < target@);
+            proof_assert!(minimum@ <= base@ + offsets@[start@ + selected@]@);
+            proof_assert!(forall<i: Int> 0 <= i && i < start@ + selected@
+                ==> base@ + offsets@[i]@ < minimum@ || timestamps@[i]@ < target@);
             Some(start + selected)
         }
     }
