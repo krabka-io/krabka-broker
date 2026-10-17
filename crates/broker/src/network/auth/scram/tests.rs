@@ -579,9 +579,11 @@ fn token_round_one_threads_the_token_expiry() {
         expiry - after <= round2.session_lifetime_ms
             && round2.session_lifetime_ms <= expiry - before
     );
-    assert!(!auth.expired_for_request(0, expiry - 1, None));
-    assert!(auth.expired_for_request(0, expiry, None));
-    assert!(!auth.expired_for_request(17, expiry, None));
+    // Kafka expires the session strictly after its deadline, and a
+    // `SaslHandshake` that begins re-authentication is still admitted.
+    assert!(!auth.expired_for_request(0, expiry, None));
+    assert!(auth.expired_for_request(0, expiry + 1, None));
+    assert!(!auth.expired_for_request(17, expiry + 1, None));
     assert!(
         auth.token_api_admission(krabka_verified::delegation_token::TokenApi::Describe)
             == krabka_verified::delegation_token::TokenApiAdmission::Reject
