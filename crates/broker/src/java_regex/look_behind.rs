@@ -65,7 +65,7 @@ pub(super) fn look_behinds_bounded(expr: &Expr) -> bool {
 
 /// Java's `Node.study` of `chain`, the nodes from here to the end of the
 /// look-behind, into `info`.
-fn study<'a>(chain: &[&'a Expr], info: &mut TreeInfo) {
+fn study(chain: &[&Expr], info: &mut TreeInfo) {
     let Some((&first, rest)) = chain.split_first() else {
         return;
     };
