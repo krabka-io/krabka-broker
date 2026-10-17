@@ -340,7 +340,7 @@ fn push_distinct(names: &mut Vec<String>, name: &str) {
 /// Every requested topic gets a row with `error_code`, its requested name (an
 /// empty name for a null one) and its requested id. The response carries no
 /// broker, no cluster id and no controller.
-fn error_response(request: &MetadataRequest, error_code: i16) -> MetadataResponse {
+pub(crate) fn error_response(request: &MetadataRequest, error_code: i16) -> MetadataResponse {
     MetadataResponse {
         topics: request
             .topics

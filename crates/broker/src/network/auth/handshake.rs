@@ -13,26 +13,8 @@ use {
         sasl_handshake_response::SaslHandshakeResponse,
     },
     krabka_security::SaslMechanism,
+    krabka_verified::authz::reauthentication_begins,
 };
-
-/// Kafka's `KafkaChannel.MIN_REAUTH_INTERVAL_ONE_SECOND_NANOS`, in ms: a
-/// connection may not start a re-authentication more than once a second.
-const MIN_REAUTH_INTERVAL_MS: i64 = 1_000;
-
-/// Whether a `SaslHandshake` on a session that expires at `expires_at_ms`
-/// begins a KIP-368 re-authentication, as Kafka's
-/// `KafkaChannel.maybeBeginServerReauthentication` decides: the session must
-/// have an expiry, and the last re-authentication on the connection, if any,
-/// must have started a second or more before `now_ms`.
-#[must_use]
-pub(super) fn begins_reauthentication(
-    expires_at_ms: Option<i64>,
-    now_ms: i64,
-    last_start_ms: Option<i64>,
-) -> bool {
-    expires_at_ms.is_some()
-        && last_start_ms.is_none_or(|last| now_ms.saturating_sub(last) >= MIN_REAUTH_INTERVAL_MS)
-}
 
 /// What the dispatcher does with a `SaslHandshake`: the response to send, and
 /// whether to close the connection once it is written.
@@ -91,7 +73,7 @@ pub fn handle_handshake(
             expires_at_ms,
             ..
         } => {
-            if !begins_reauthentication(*expires_at_ms, clock.now_ms, *clock.last_start_ms) {
+            if !reauthentication_begins(*expires_at_ms, clock.now_ms, *clock.last_start_ms) {
                 tracing::debug!(
                     requested = %req.mechanism,
                     "SaslHandshake on an authenticated connection that cannot re-authenticate now"

@@ -6,12 +6,16 @@
 #[cfg(test)]
 use crate::BrokerConfig;
 use {
-    super::response::encode_response,
+    super::{is_served_version, response::encode_response},
     crate::{
         broker::Broker,
         codes,
         error::BrokerError,
-        handlers::{ApiKeyCode, api_versions::is_valid_request_body},
+        handlers::{
+            ApiKeyCode, ApiVersion,
+            api_versions::is_valid_request_body,
+            request_error::{RequestFailure, error_response_body},
+        },
         metrics::{BrokerMetrics, UNKNOWN_LABEL},
         network::{
             auth::{
@@ -196,13 +200,16 @@ pub(super) fn record_refused_authentication(
 /// did, so a peer that opens a SASL connection and immediately sends Produce
 /// is not closed uncounted.
 ///
-/// Once a handshake has run, Kafka fails the refusal with an
-/// `AuthenticationException` (`IllegalSaslStateException`, or the
-/// `SaslAuthenticationException` of a re-authentication that named another
-/// mechanism), and its `Selector` delays the answer and the close. This waits
-/// that delay out before it returns. Before a handshake the refusal is an
-/// `InvalidRequestException` or an `IllegalStateException` (a second
-/// `ApiVersions`), and Kafka closes at once.
+/// Once a handshake has run, Kafka's `SaslServerAuthenticator.handleSaslToken`
+/// parses the request, and answers one it can parse with that request's own
+/// `getErrorResponse` for an `IllegalSaslStateException`. Its `Selector` then
+/// delays the answer and the close by the failed-authentication delay, as it
+/// does for the `SaslAuthenticationException` of a re-authentication that
+/// named another mechanism, which gets no answer. A request it cannot parse
+/// throws `InvalidRequestException` instead, and the connection closes at
+/// once with no answer. This waits the delay out before it returns. Before a
+/// handshake the refusal is an `InvalidRequestException` or an
+/// `IllegalStateException` (a second `ApiVersions`), and Kafka closes at once.
 pub(super) async fn refuse_gated_request(
     broker: &Broker,
     parsed: &ParsedRequest<'_>,
@@ -224,47 +231,74 @@ pub(super) async fn refuse_gated_request(
         peer,
         "request blocked by per-state auth gate",
     );
-    if !matches!(auth, ConnectionAuth::Anonymous) {
-        delay_failed_authentication(broker).await;
+    if auth.negotiated_mechanism().is_none() {
+        if !matches!(auth, ConnectionAuth::Anonymous) {
+            delay_failed_authentication(broker).await;
+        }
+        return None;
     }
-    // Only mid-exchange does Kafka answer before closing.
-    auth.negotiated_mechanism()
-        .and_then(|_| unexpected_request_during_exchange(parsed))
+    let response = unexpected_request_during_exchange(broker, parsed)?;
+    delay_failed_authentication(broker).await;
+    Some(response)
 }
 
-/// The typed `ILLEGAL_SASL_STATE` answer Kafka's `SaslServerAuthenticator`
-/// writes, before it closes the connection, for a `SaslHandshake` or
-/// `ApiVersions` that arrives after a handshake chose a mechanism
-/// (`Unexpected Kafka request of type ... during SASL authentication.`).
-///
-/// Kafka builds that answer with the request's own `getErrorResponse`, which
-/// krabka has no generic equivalent of; any other `api_key` gets `None` and
-/// the connection closes with no response.
-fn unexpected_request_during_exchange(parsed: &ParsedRequest<'_>) -> Option<Bytes> {
-    use krabka_protocol::Encode;
+/// `Errors.ILLEGAL_SASL_STATE.message()`.
+const ILLEGAL_SASL_STATE_MESSAGE: &str = "Request is not valid given the current SASL state.";
 
-    let mut body = BytesMut::new();
-    let encoded = match parsed.api_key {
-        SASL_HANDSHAKE_KEY => SaslHandshakeResponse {
-            error_code: codes::ILLEGAL_SASL_STATE,
-            ..Default::default()
-        }
-        .encode(&mut body, parsed.api_version),
-        API_VERSIONS_KEY => krabka_protocol::owned::api_versions_response::ApiVersionsResponse {
-            error_code: codes::ILLEGAL_SASL_STATE,
-            ..Default::default()
-        }
-        .encode(&mut body, parsed.api_version),
-        _ => return None,
+/// The `ILLEGAL_SASL_STATE` answer Kafka's `SaslServerAuthenticator` writes
+/// for a request other than `SaslAuthenticate` that arrives after a handshake
+/// chose a mechanism: the request's own `getErrorResponse` for
+/// `IllegalSaslStateException("Unexpected Kafka request of type ... during
+/// SASL authentication.")`, at the request's version.
+///
+/// `RequestContext.parseRequest` reads an `ApiVersions` at a version it does
+/// not support as an empty v0 request, so that one is answered at v0. Any
+/// other request that the broker would not serve at its version, or whose
+/// body does not decode, gets `None`: Kafka fails to parse it and closes the
+/// connection without an answer. So does a `Produce` with `acks = 0`, whose
+/// `getErrorResponse` returns `null`.
+fn unexpected_request_during_exchange(
+    broker: &Broker,
+    parsed: &ParsedRequest<'_>,
+) -> Option<Bytes> {
+    let entry = broker.handlers().get(parsed.api_key)?;
+    let (version, body, body_flexible) = if is_served_version(broker, entry, parsed) {
+        (parsed.api_version, parsed.body, parsed.body_flexible)
+    } else if parsed.api_key == API_VERSIONS_KEY {
+        const UNSUPPORTED_API_VERSIONS_VERSION: ApiVersion = 0;
+        (
+            UNSUPPORTED_API_VERSIONS_VERSION,
+            &[][..],
+            entry.body_flexible(UNSUPPORTED_API_VERSIONS_VERSION),
+        )
+    } else {
+        return None;
     };
-    encoded.ok()?;
-    encode_response(
-        parsed.api_key,
-        parsed.correlation_id,
-        parsed.body_flexible,
-        &body,
-    )
-    .ok()
+    let exception_message = format!(
+        "Unexpected Kafka request of type {} during SASL authentication.",
+        kafka_api_name(ApiKey::from_i16(parsed.api_key)?)
+    );
+    let failure = RequestFailure {
+        error_code: codes::ILLEGAL_SASL_STATE,
+        default_message: ILLEGAL_SASL_STATE_MESSAGE,
+        exception_message: &exception_message,
+    };
+    let body = error_response_body(parsed.api_key, version, body, &failure).ok()??;
+    encode_response(parsed.api_key, parsed.correlation_id, body_flexible, &body).ok()
+}
+
+/// The name of `api` in Kafka's `ApiKeys` enum, which its exception messages
+/// print: `OffsetForLeaderEpoch` is `OFFSET_FOR_LEADER_EPOCH`.
+fn kafka_api_name(api: ApiKey) -> String {
+    let name: &'static str = api.into();
+    let mut kafka_name = String::with_capacity(2 * name.len());
+    for (index, letter) in name.char_indices() {
+        if index > 0 && letter.is_ascii_uppercase() {
+            kafka_name.push('_');
+        }
+        kafka_name.push(letter.to_ascii_uppercase());
+    }
+    kafka_name
 }
 
 /// Runs one raw SASL token of a `SaslHandshake` v0 exchange, as Kafka's
@@ -652,6 +686,23 @@ mod tests {
         krabka_protocol::owned::sasl_authenticate_request::SaslAuthenticateRequest {
             auth_bytes: Bytes::copy_from_slice(auth_bytes),
             ..Default::default()
+        }
+    }
+
+    /// The exception message names the api as Kafka's `ApiKeys` enum does.
+    #[test]
+    fn kafka_api_name_is_the_api_keys_constant() {
+        let cases = [
+            (ApiKey::Produce, "PRODUCE"),
+            (ApiKey::ListOffsets, "LIST_OFFSETS"),
+            (ApiKey::OffsetForLeaderEpoch, "OFFSET_FOR_LEADER_EPOCH"),
+            (
+                ApiKey::DescribeUserScramCredentials,
+                "DESCRIBE_USER_SCRAM_CREDENTIALS",
+            ),
+        ];
+        for (api, name) in cases {
+            assert!(kafka_api_name(api) == name);
         }
     }
 
