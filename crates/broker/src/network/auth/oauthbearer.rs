@@ -234,7 +234,10 @@ fn reject_oauthbearer(
             pending_token_expiry_ms: None,
         };
     }
-    sasl_ok(krabka_security::invalid_token_json().into_bytes(), 0)
+    sasl_ok(
+        krabka_security::oauth_error_json(&krabka_security::AuthError::InvalidToken).into_bytes(),
+        0,
+    )
 }
 
 /// Fails the exchange with `failure`. A re-authentication restores the
@@ -258,7 +261,9 @@ const CONTROL_A: u8 = 0x01;
 /// on the client's `\x01` after an error challenge, so the failure text is the
 /// same JSON the challenge carried.
 fn oauthbearer_failure() -> SaslAuthenticateResponse {
-    fail_authenticate_with(krabka_security::invalid_token_json())
+    fail_authenticate_with(krabka_security::oauth_error_json(
+        &krabka_security::AuthError::InvalidToken,
+    ))
 }
 
 /// The JWKS refresher's state that a signed validation is checked against.

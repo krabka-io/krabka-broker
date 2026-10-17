@@ -176,7 +176,11 @@ async fn controller_signed_oauth_requires_a_fresh_published_cache() {
             assert!(!connection.authenticated_via_token);
             assert!(connection.expires_at_ms == expected_expiry);
         } else {
-            assert!(response.auth_bytes == krabka_security::invalid_token_json().as_bytes());
+            assert!(
+                response.auth_bytes
+                    == krabka_security::oauth_error_json(&krabka_security::AuthError::InvalidToken)
+                        .as_bytes()
+            );
             body.clear();
             SaslAuthenticateRequest {
                 auth_bytes: bytes::Bytes::from_static(b"\x01"),
