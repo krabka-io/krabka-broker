@@ -19,11 +19,12 @@
 //! instead.
 
 mod backtrack;
+mod look_behind;
 
 use {
-    self::backtrack::Program,
+    self::{backtrack::Program, look_behind::look_behinds_bounded},
     crate::client_metrics::config::{JavaTranslation, translate_java},
-    fancy_regex::Regex,
+    fancy_regex::{Expr, Regex},
     std::{collections::BTreeMap, fmt::Display, ops::Range, sync::Arc},
 };
 
@@ -69,6 +70,11 @@ impl JavaPattern {
             linebreak_atoms,
         } = translate_java(pattern)
             .ok_or_else(|| format!("{pattern:?} is not a java.util.regex pattern"))?;
+        if Expr::parse_tree(&translated).is_ok_and(|tree| !look_behinds_bounded(&tree.expr)) {
+            return Err(format!(
+                "{pattern:?} has a look-behind group with no obvious maximum length"
+            ));
+        }
         let compile = |source: &str| Regex::new(source).map_err(|error| error.to_string());
         let search = compile(&translated)?;
         let whole = compile(&format!("\\A(?:{translated})\\z"))?;
@@ -1910,5 +1916,238 @@ mod tests {
     )]
     fn a_pattern_java_refuses_does_not_compile(source: &str) {
         check!(JavaPattern::compile(source).is_err(), "{source}");
+    }
+
+    /// What `fancy_regex` takes and Java's `Pattern.compile` refuses is refused:
+    /// a group name already defined, a `\k<name>` of no named group before it,
+    /// a quantifier after a quantifier and its `?` or `+`, a repeat range that
+    /// is backwards or past `i32::MAX`, a boundary, anchor, `\R`, `\X` or
+    /// reference in a class, a look-behind with no obvious maximum length, and
+    /// a property name `Pattern.family` does not take. Each row is refused by
+    /// `Pattern.compile` on JDK 25.0.4.
+    #[test]
+    fn a_pattern_java_refuses_where_fancy_regex_takes_it_does_not_compile() {
+        let sources = [
+            "(?<a>x)(?<a>y)",
+            "(?<a>x)|(?<a>y)",
+            "\\k<1>",
+            "(x)\\k<1>",
+            "\\k<a>(?<a>x)",
+            "(?<a>x)\\k<b>",
+            "(?<a>x)\\k<a",
+            "(?<a>x)\\k<>",
+            "(?<a>x)\\k",
+            "(?<_a>x)",
+            "(?<a_b>x)",
+            "a*?+",
+            "a**",
+            "a*+*",
+            "a*??",
+            "a+?+",
+            "a?*",
+            "a??+",
+            "a{2}++",
+            "a{2}*",
+            "a{2}?+",
+            "(?x)a*? +",
+            "(?x)a* * ",
+            "a*(?i)+",
+            "*a",
+            "(*a)",
+            "a|*",
+            "x{2,1}",
+            "x{3,2}",
+            "x{,2}",
+            "x{2147483648}",
+            "x{1,2147483648}",
+            "[\\R]",
+            "[\\X]",
+            "[\\b]",
+            "[\\B]",
+            "[\\A]",
+            "[\\G]",
+            "[\\z]",
+            "[\\Z]",
+            "[\\k<a>]",
+            "[\\1]",
+            "(a)(?<=\\1)",
+            "(?<=(a)\\1)b",
+            "(?<=(?:ab)*)c",
+            "(?<=(ab)*)c",
+            "(?<!(a)\\1)b",
+            "\\p{IsHyphen}",
+            "\\p{Greek}",
+            "\\p{lu}",
+            "\\p{LU}",
+            "\\p{isLu}",
+            "\\p{Islu}",
+            "\\p{IsOldItalic}",
+            "\\p{IsOld Italic}",
+            "\\p{sc=OldItalic}",
+            "\\p{gc=lu}",
+            "\\p{gc=Uppercase_Letter}",
+            "\\p{Uppercase_Letter}",
+            "\\p{Letter}",
+            "\\p{Alphabetic}",
+            "\\p{IsWhite Space}",
+            "\\p{White_Space}",
+            "\\p{Emoji}",
+            "\\p{Any}",
+            "\\p{IsAny}",
+            "\\p{Ascii}",
+            "\\p{alpha}",
+            "\\p{Hex_Digit}",
+            "\\p{Ideographic}",
+            "\\p{Han}",
+            "\\p{Common}",
+            "\\p{Decimal_Number}",
+            "\\p{Math}",
+            "\\p{IsMath}",
+            "\\p{Dash}",
+            "\\p{IsDash}",
+            "\\p{Cased}",
+            "\\p{IsCased}",
+            "\\pl",
+            "\\pX",
+            "\\p{L&}",
+            "\\p{IsL&}",
+            "(?i)\\p{lu}",
+            "(?<=a{0,1073741824}b{0,1073741824})c",
+            "(?<=(?:ab){0,1073741824})c",
+            "(?<=(?:a|b){1,2})c",
+            "(?<=(a|b)*)c",
+            "(?<=\\R*)c",
+            "(?<=\\R{0,1073741824})c",
+            "(?<=(?>ab)*)c",
+        ];
+        for source in sources {
+            check!(JavaPattern::compile(source).is_err(), "{source:?}");
+        }
+    }
+
+    /// The patterns next to those Java refuses, which it takes, still compile
+    /// and match as Java matches them: a second group of another name, a
+    /// reference to a group opened before it, one `?` or `+` after a
+    /// quantifier, a zero-width node under a quantifier, `\h`, `\v` and a
+    /// property in a class, a look-behind whose maximum Java's study finds,
+    /// and the property names `Pattern.family` takes in each spelling it
+    /// takes. Each row is `Pattern.matches` on JDK 25.0.4.
+    #[test]
+    fn a_pattern_next_to_one_java_refuses_compiles_and_matches_as_java_does() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            row("(?<a>x)(?<b>y)", "xy", true),
+            row("(?<ab>x)(?<a>y)", "xy", true),
+            row("(?<a1>x)\\k<a1>", "xx", true),
+            row("(?<a>\\k<a>x)", "x", false),
+            row("(?<a>x)\\k<a>?", "x", true),
+            row("a{2}+", "aa", true),
+            row("a{2}{3}", "aaaaaa", false),
+            row("(?x)a* +", "aa", true),
+            row("^*", "", true),
+            row("$*", "", true),
+            row("\\b*", "", true),
+            row("x{1,1}", "x", true),
+            row("x{0,0}", "", true),
+            row("[\\h]", " ", true),
+            row("[\\v]", "\u{b}", true),
+            row("[\\p{L}]", "a", true),
+            row("(?<=a*)b", "b", true),
+            row("(?<=a+)b", "ab", false),
+            row("(?<=a{2,})b", "aab", false),
+            row("(?<=a{0,1000})b", "b", true),
+            row("(?<=.*)b", "b", true),
+            row("(?<=a|bc)d", "bcd", false),
+            row("(?<=(?:ab){1,2})c", "abc", false),
+            row("(?<=\\b)a", "a", true),
+            row("(?<=(?=a*)a)b", "ab", false),
+            row("(?<=(?!a*)x)b", "xb", false),
+            row("(?<!a*)b", "b", false),
+            row("(?<=a*?)b", "b", true),
+            row("(?<=a?)b", "b", true),
+            row("(?<=\\w+)b", "ab", false),
+            row("(?<=\\Ga*)b", "b", true),
+            row("\\p{Lu}", "A", true),
+            row("\\p{IsLu}", "A", true),
+            row("\\p{IsLatin}", "a", true),
+            row("\\p{Islatin}", "a", true),
+            row("\\p{IsLATIN}", "a", true),
+            row("\\p{IsLatn}", "a", true),
+            row("\\p{Isold_italic}", "a", false),
+            row("\\p{IsOld_Italic}", "\u{10300}", true),
+            row("\\p{sc=Latin}", "a", true),
+            row("\\p{SC=Latin}", "a", true),
+            row("\\p{sc=latin}", "a", true),
+            row("\\p{sc=Latn}", "a", true),
+            row("\\p{Script=Latin}", "a", true),
+            row("\\p{gc=Lu}", "A", true),
+            row("\\p{general_category=Lu}", "A", true),
+            row("\\p{gc=L}", "A", true),
+            row("\\p{gc=LC}", "A", true),
+            row("\\p{L}", "A", true),
+            row("\\p{IsL}", "A", true),
+            row("\\p{IsLetter}", "A", true),
+            row("\\p{Isletter}", "A", true),
+            row("\\p{IsAlphabetic}", "A", true),
+            row("\\p{IsWhite_Space}", " ", true),
+            row("\\p{IsWhiteSpace}", " ", true),
+            row("\\p{IsEmoji}", "\u{1f600}", true),
+            row("\\p{IsAssigned}", "a", true),
+            row("\\p{ASCII}", "a", true),
+            row("\\p{IsASCII}", "a", true),
+            row("\\p{Alpha}", "a", true),
+            row("(?U)\\p{alpha}", "a", true),
+            row("(?U)\\p{ALPHA}", "a", true),
+            row("\\p{IsAlpha}", "a", true),
+            row("\\p{Isalpha}", "a", true),
+            row("\\p{IsDigit}", "1", true),
+            row("\\p{IsPunct}", "!", true),
+            row("\\p{IsSpace}", " ", true),
+            row("\\p{IsCntrl}", "\u{1}", true),
+            row("\\p{IsLower}", "a", true),
+            row("\\p{IsUpper}", "A", true),
+            row("\\p{XDigit}", "F", true),
+            row("\\p{IsHex_Digit}", "F", true),
+            row("\\p{IsHexDigit}", "F", true),
+            row("\\p{IsIdeographic}", "\u{4e00}", true),
+            row("\\p{IsHan}", "\u{4e00}", true),
+            row("\\p{IsHani}", "\u{4e00}", true),
+            row("\\p{IsCommon}", "!", true),
+            row("\\p{IsZyyy}", "!", true),
+            row("\\p{IsInherited}", "\u{301}", true),
+            row("\\p{Nd}", "1", true),
+            row("\\p{IsNd}", "1", true),
+            row("\\p{N}", "1", true),
+            row("\\pL", "a", true),
+            row("\\pN", "1", true),
+            row("\\pZ", " ", true),
+            row("\\pS", "+", true),
+            row("\\pC", "\u{1}", true),
+            row("\\pM", "\u{301}", true),
+            row("\\pP", "!", true),
+            row("\\p{Ll}", "a", true),
+            row("\\p{Lo}", "\u{4e00}", true),
+            row("\\p{Cn}", "\u{378}", true),
+            row("\\p{Co}", "\u{e000}", true),
+            row("\\p{Cs}", "a", false),
+            row("\\p{Lm}", "\u{2b0}", true),
+            row("(?<=ab*)c", "ac", false),
+            row("(?<=a*b)c", "bc", false),
+            row("(?<=(?:a){1,2})c", "ac", false),
+            row("(?<=(?:a)*)c", "c", true),
+            row("(?<=(a)*)c", "c", true),
+            row("(?<=a|b*)c", "c", true),
+            row("(?<=(?=b*)a*)c", "c", true),
+            row("(?<=(?<=a*)b*)c", "c", true),
+            row("(?<=[ab]*)c", "c", true),
+            row("(?<=\\x{1F600}*)c", "c", true),
+            row("(?<=(?i)a*)c", "c", true),
+            row("(?<=(?iu)\\u00df*)c", "c", true),
+            row("(?<=a*?b)c", "bc", false),
+            row("(?<=a??b*)c", "c", true),
+            row("(?<=a?b?)c", "c", true),
+            row("(?<=(ab)?)c", "c", true),
+        ];
+        check_matches(cases, true);
     }
 }
