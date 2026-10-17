@@ -8,6 +8,7 @@
 
 mod java_case;
 mod java_fold;
+mod java_property;
 
 pub(crate) use self::java_fold::BackrefFold;
 use {
@@ -279,6 +280,8 @@ pub(crate) fn translate_java(pattern: &str) -> Option<JavaTranslation> {
         at: 0,
         backref_folds: Vec::new(),
         linebreak_atoms: Vec::new(),
+        group_names: Vec::new(),
+        quantified: Quantified::No,
     };
     while translator.at < chars.len() {
         translator.step()?;
@@ -313,6 +316,23 @@ struct Translator<'a> {
     backref_folds: Vec<BackrefFold>,
     /// See [`JavaTranslation::linebreak_atoms`].
     linebreak_atoms: Vec<bool>,
+    /// The names of the named groups opened so far.
+    group_names: Vec<String>,
+    /// Whether the token before this one was a quantifier.
+    quantified: Quantified,
+}
+
+/// Where a quantifier leaves the next token. Java's `closure` reads one
+/// quantifier and then one `?` or `+` that makes it lazy or possessive, and a
+/// `*`, `+` or `?` after that is `Dangling meta character`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Quantified {
+    /// The token before was no quantifier.
+    No,
+    /// A quantifier, which a `?` or `+` may still make lazy or possessive.
+    Open,
+    /// A quantifier and its `?` or `+`.
+    Closed,
 }
 
 impl Translator<'_> {
@@ -336,6 +356,14 @@ impl Translator<'_> {
             return Some(());
         }
         self.prior_run = std::mem::take(&mut self.run);
+        let quantified = std::mem::replace(&mut self.quantified, Quantified::No);
+        if !self.in_class() && matches!(c, '*' | '+' | '?') {
+            self.quantified = match (quantified, c) {
+                (Quantified::No, _) => Quantified::Open,
+                (Quantified::Open, '?' | '+') => Quantified::Closed,
+                _ => return None,
+            };
+        }
         // A member of the innermost class: not one that opens or closes a
         // class, nor a `&`, which [`Self::ampersand`] reads.
         let closes = c == ']' && !first_in_class;
@@ -385,6 +413,28 @@ impl Translator<'_> {
     fn escape(&mut self) -> Option<()> {
         let in_class = self.in_class();
         let Consumed { value: escape, len } = java_fold::read_escape(self.chars, self.at, in_class);
+        let kind = self.chars.get(self.at + 1).copied();
+        // Java's `escape` refuses a boundary, an anchor, `\R`, `\X` and a
+        // reference in a class.
+        if in_class
+            && matches!(
+                kind,
+                Some('b' | 'B' | 'A' | 'G' | 'z' | 'Z' | 'R' | 'X' | 'k')
+            )
+        {
+            return None;
+        }
+        // Java reads `\k<name>` against the named groups opened before it,
+        // which `fancy_regex` would also take a group number for.
+        if kind == Some('k') {
+            if escape != Escape::BackRef {
+                return None;
+            }
+            let name: String = self.chars[self.at + 3..self.at + len - 1].iter().collect();
+            if !self.group_names.contains(&name) {
+                return None;
+            }
+        }
         match escape {
             // `fancy_regex` reads `\N{name}` as `\N` and the text of the name,
             // and the rewrite has no table of Unicode names to write the char.
@@ -403,6 +453,13 @@ impl Translator<'_> {
                 self.out.push(')');
             }
             Escape::Char(code) => self.atom(code, len)?,
+            // `Unknown character property name`, where `fancy_regex` would
+            // read the name another way.
+            Escape::Property { name, .. }
+                if !java_property::java_knows(&name, self.scope.unicode_classes) =>
+            {
+                return None;
+            }
             Escape::Property { name, negated } => {
                 match java_fold::property_class(&name, negated, in_class, self.scope) {
                     Some(class) => {
@@ -614,7 +671,22 @@ impl Translator<'_> {
         if bounds.first().is_some_and(char::is_ascii_digit)
             && bounds.iter().all(|&c| c.is_ascii_digit() || c == ',')
         {
+            // Java's `Illegal repetition range`: a bound past `i32::MAX`, or
+            // a maximum below the minimum.
+            let text: String = bounds.iter().collect();
+            let count = |digits: &str| digits.parse::<i32>().ok();
+            let legal = match text.split_once(',') {
+                Some((min, "")) => count(min).is_some(),
+                Some((min, max)) => count(min)
+                    .zip(count(max))
+                    .is_some_and(|(min, max)| min <= max),
+                None => count(&text).is_some(),
+            };
+            if !legal {
+                return None;
+            }
             self.copy(end + 1);
+            self.quantified = Quantified::Open;
             Some(())
         } else {
             None
@@ -743,6 +815,12 @@ impl Translator<'_> {
                     if rest[2 + name] != '>' {
                         return None;
                     }
+                    // `Named capturing group <name> is already defined`.
+                    let text: String = rest[1..2 + name].iter().collect();
+                    if self.group_names.contains(&text) {
+                        return None;
+                    }
+                    self.group_names.push(text);
                     name + 5
                 }
                 _ => return None,
