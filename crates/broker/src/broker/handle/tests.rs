@@ -413,6 +413,29 @@ async fn a_fatal_controller_fault_latches_self_shutdown_and_names_its_reason() {
     .expect("controlled shutdown");
 }
 
+/// A broker whose `broker_id` differs from its `node_id` is refused before it
+/// touches the quorum, as Kafka's `KafkaConfig` refuses it. Started, it would
+/// register under one id and heartbeat under the other, and wait out
+/// `startup_leader_wait_timeout` for an unfence that never comes.
+#[tokio::test]
+async fn a_broker_whose_broker_id_differs_from_its_node_id_is_refused_at_startup() {
+    let dir = tempdir().unwrap();
+    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+    config.broker_id = 42;
+
+    let started = tokio::time::timeout(std::time::Duration::from_secs(10), Broker::start(config))
+        .await
+        .expect("the start waited instead of refusing the config");
+
+    let Err(refused) = started else {
+        panic!("a broker whose broker_id differs from its node_id started");
+    };
+    check!(matches!(refused, BrokerError::BrokerIdNodeIdMismatch {
+        broker_id: 42,
+        node_id: krabka_raft::NodeId(1),
+    }));
+}
+
 /// A node whose log finalized a level above its range never starts. The
 /// refusal is the error of `Broker::start`, so the binary exits non-zero with
 /// Kafka's message.
