@@ -81,15 +81,19 @@ async fn eventually_served(addr: SocketAddr) -> Option<TcpStream> {
     }
 }
 
-/// Poll until a connect to `addr` fails, and return how it failed.
-async fn eventually_refused(addr: SocketAddr) -> Option<ErrorKind> {
+/// Whether a connect to `addr` is refused within [`PROPAGATION`]: no socket
+/// listens there any more. A connect that the closing listener's accept
+/// queue took and then reset is not yet that, so polling goes on.
+async fn eventually_refused(addr: SocketAddr) -> bool {
     let deadline = Instant::now() + PROPAGATION;
     loop {
-        if let Err(error) = TcpStream::connect(addr).await {
-            return Some(error.kind());
+        if let Err(error) = TcpStream::connect(addr).await
+            && error.kind() == ErrorKind::ConnectionRefused
+        {
+            return true;
         }
         if Instant::now() >= deadline {
-            return None;
+            return false;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -232,7 +236,7 @@ async fn an_added_listener_serves_until_it_is_removed() {
     let removed = broker.delete_listeners().await;
     assert!(removed == accepted(broker.resource()));
     assert!(closed_by_peer(&mut held).await);
-    assert!(eventually_refused(extra).await == Some(ErrorKind::ConnectionRefused));
+    assert!(eventually_refused(extra).await);
     // The static listener keeps serving.
     assert!(connect_served(broker.admin).await.is_some());
 }
@@ -289,7 +293,7 @@ async fn a_stored_listener_opens_after_a_restart() {
             .await,
     );
     broker.handle.shutdown().await;
-    assert!(eventually_refused(extra).await == Some(ErrorKind::ConnectionRefused));
+    assert!(eventually_refused(extra).await);
 
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
     config.bootstrap_mode = BootstrapMode::Rejoin;
