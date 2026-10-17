@@ -51,10 +51,13 @@ impl BrokerConfig {
             // isn't a risk; multi-broker tests use these (via the shared
             // `support::start_n_node_with_retry` helper) so failover from a
             // dead controller leader completes well under the producer's
-            // 10s timeout. The factor of ~10× vs. production defaults
-            // is what makes `acks_all_completes_via_isr_shrink_when_follower_dead`
-            // pass within its 5s assertion window.
-            controller_election_timeout: millis(500),
+            // 10s timeout. A voter elects after one of these without a
+            // successful Fetch, as Kafka's does, and a leader resigns after
+            // 1.5 of them without hearing from a majority, so the value must
+            // also outlast a scheduling stall on a loaded CI runner: at 500 ms
+            // one stall deposed a test cluster's controller in the middle of a
+            // `CreateTopics` or a broker registration.
+            controller_election_timeout: millis(1_500),
             controller_heartbeat_interval: millis(100),
             // A test counts the metadata offsets its own writes land at, so the
             // controller appends no KIP-835 `NoOpRecord` between them.
@@ -243,10 +246,11 @@ mod tests {
     #[test]
     fn for_tests_uses_short_raft_timings_for_fast_failover() {
         let c = BrokerConfig::for_tests(std::path::PathBuf::from("/tmp"));
-        // Short enough that a 3-broker test can detect a dead leader and
-        // re-elect within a few hundred ms — the failover tests
-        // need failover well under their 10s producer timeout.
-        assert!(c.controller_election_timeout <= millis(750));
+        // Short enough that a 3-broker test detects a dead leader and
+        // re-elects within a few seconds -- the failover tests need failover
+        // well under their 10s producer timeout -- and long enough that a
+        // scheduling stall on a loaded runner does not start an election.
+        assert!(c.controller_election_timeout <= secs(2));
         assert!(c.controller_heartbeat_interval <= millis(200));
     }
 

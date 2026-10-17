@@ -487,7 +487,9 @@ krabka_macros::broker_config! {
         /// `controller_election_timeout / 3`, with a floor of one
         /// millisecond.
         pub controller_heartbeat_interval_explicit: bool,
-        /// Consecutive follower fetch misses tolerated before a new election.
+        /// Consecutive fetch misses an observer tolerates before it looks for the
+        /// leader again. A voter starts an election after one fetch timeout, as
+        /// Kafka does.
         pub controller_fetch_miss_limit: ControllerFetchMissLimit,
         /// Capacity of the metadata Raft engine command queue.
         pub metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity,

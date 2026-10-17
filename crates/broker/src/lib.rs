@@ -187,6 +187,7 @@ pub(crate) mod heartbeat;
 pub(crate) mod host_port;
 #[cfg(not(target_family = "wasm"))]
 mod http_server;
+pub(crate) mod incarnation;
 pub(crate) mod internal_topics;
 pub(crate) mod isr_maintenance;
 pub(crate) mod java_regex;

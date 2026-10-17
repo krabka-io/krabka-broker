@@ -205,6 +205,7 @@ pub(super) fn start_liveness_services(
     tokio::spawn(run(Config {
         broker_id: config.broker_id,
         broker_epoch: config.broker_epoch,
+        incarnation_id: config.incarnation_id,
         interval: config.heartbeat_interval,
         controller: Arc::clone(controller),
         shutdown: shutdown.child_token(),
