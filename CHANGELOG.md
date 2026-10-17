@@ -65,6 +65,29 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   controlled shutdown also sends its first heartbeat at once and asks again 50
   ms after the controller's first answer, as Kafka's `BrokerLifecycleManager`
   does, instead of waiting a `heartbeat_interval` for each (#1446).
+- A controller voter that stops hearing from the controller leader now
+  starts an election after one fetch timeout (`controller_election_timeout`),
+  as Kafka's `KafkaRaftClient.pollFollowerAsVoter` does. Before, it re-polled
+  the silent leader until `controller_fetch_miss_limit` timeouts had passed
+  (three by default, 15 s), so a killed or paused controller leader was
+  replaced only after 20 s or more. A partition leader on the same node then
+  kept its leadership through an outage of 15 s: the new controller gives
+  every broker a fresh heartbeat session, as Kafka's does, and the node came
+  back inside it. `controller_fetch_miss_limit` now applies to observers only
+  (#1449).
+- The controller no longer refuses a dead broker's failover while the only
+  uncommitted record in its log is the KIP-835 no-op it appends every
+  `metadata.max.idle.interval.ms`. A failover the liveness ticker retried
+  once a second could land behind that no-op on every retry and be refused
+  with `the controller leader has uncommitted metadata records` until the
+  broker came back, so its partitions kept their leader. A tail that holds a
+  metadata record is still waited for (#1453).
+- A broker whose self-registration was retried across a controller leader
+  change now names its newest registration in heartbeats, producer-id
+  allocations and its clean-shutdown proof. The first attempt could commit
+  although its submit failed, and the broker kept that attempt's epoch: the
+  controller refused every heartbeat with `STALE_BROKER_EPOCH` and the broker
+  was never unfenced (#1458).
 - A per-broker `listener.name.<listener>.ssl.keystore.*` or
   `listener.name.<listener>.ssl.truststore.*` change now takes effect on an
   SSL or SASL_SSL listener: the next handshake gets the new stores, and a

@@ -16,6 +16,7 @@ use {
         codes::{CLUSTER_AUTHORIZATION_FAILED, NONE, NOT_CONTROLLER},
         controller_endpoint::leader_endpoint,
         cordoned_log_dirs::CordonedLogDirs,
+        incarnation::own_broker_epoch,
         log_dir_id::LogDirIds,
         log_dir_status::LogDirRegistry,
         metadata_source::MetadataSource,
@@ -53,6 +54,9 @@ pub(crate) struct Config {
     /// after a restart, and a heartbeat that named its epoch would be refused
     /// as `STALE_BROKER_EPOCH`.
     pub broker_epoch: i64,
+    /// This process's incarnation, which picks its own registrations out of
+    /// the image; see [`own_broker_epoch`].
+    pub incarnation_id: uuid::Uuid,
     pub interval: Time,
     pub controller: Arc<dyn MetadataSource>,
     pub shutdown: CancellationToken,
@@ -206,6 +210,19 @@ fn trigger_all_dirs_offline_shutdown(cfg: &mut Config, reason: &str) {
     cfg.supervisor_shutdown.cancel();
 }
 
+/// The broker epoch a heartbeat names: the newest registration of this
+/// process, as [`own_broker_epoch`] reads it from `image`.
+fn registered_epoch(cfg: &Config, image: &krabka_metadata::MetadataImage) -> i64 {
+    u64::try_from(cfg.broker_id).map_or(cfg.broker_epoch, |node_id| {
+        own_broker_epoch(
+            image,
+            krabka_metadata::NodeId(node_id),
+            cfg.incarnation_id,
+            cfg.broker_epoch,
+        )
+    })
+}
+
 /// The controller leader, and the controller-listener endpoint the metadata
 /// names for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -346,7 +363,7 @@ pub(crate) async fn run(mut cfg: Config) {
             rpc_timeout.to_std(),
             open.connection.send(heartbeat_request(
                 cfg.broker_id,
-                cfg.broker_epoch,
+                registered_epoch(&cfg, &image),
                 cfg.controller.current_metadata_offset(),
                 want_shut_down,
                 log_dirs,
@@ -594,6 +611,7 @@ mod tests {
         Config {
             broker_id: 7,
             broker_epoch: 11,
+            incarnation_id: uuid::Uuid::nil(),
             interval,
             controller: Arc::clone(source) as Arc<dyn MetadataSource>,
             shutdown: shutdown.clone(),

@@ -10,9 +10,9 @@
 //! Kafka's `KafkaRaftClient` resigns on a graceful shutdown: the leader moves
 //! to `Resigned` and sends `EndQuorumEpoch` to the voters, ordered by fetch
 //! offset, so the first preferred successor elects at once instead of waiting
-//! out its fetch timeout. A krabka leader that stopped without resigning left
-//! the survivors to notice it through the fetch watchdog (three misses of a
-//! five-second timer) and then an election timeout, about 20 s in all.
+//! out its fetch timeout. A leader that stopped without resigning would leave
+//! the survivors to notice it only when their five-second fetch timer expired,
+//! and then to win an election.
 
 use {
     crate::support::{
@@ -35,12 +35,12 @@ mod support;
 /// How long the survivors may take, from the start of the graceful stop, to
 /// elect a new controller and serve a mutation through it.
 ///
-/// It covers the leadership drain (a few broker heartbeats), the resignation
-/// and one election. It is below the soak contract's 15 s
-/// `controller_failover` deadline, and below the fetch-watchdog failover that a
-/// stop without a resignation takes (three five-second fetch timeouts before
-/// the survivors start electing).
-const FAILOVER_BOUND: Duration = Duration::from_secs(10);
+/// It covers the leadership drain (a broker heartbeat and its 50 ms re-ask),
+/// the resignation and one election, about half a second in all. It is below
+/// one five-second `controller_election_timeout`, which is the least a stop
+/// without a resignation takes: the survivors elect only once their fetch
+/// timer expires.
+const FAILOVER_BOUND: Duration = Duration::from_secs(4);
 
 /// Give `config` the production controller and broker heartbeat timings.
 fn production_timings(config: &mut BrokerConfig) {

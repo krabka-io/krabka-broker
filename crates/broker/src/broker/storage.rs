@@ -201,6 +201,7 @@ pub(super) async fn recover_storage_and_groups(
     let producer_ids = Arc::new(ProducerIdManager::clustered(
         config.node_id,
         config.broker_epoch,
+        config.incarnation_id,
         Arc::clone(controller),
     ));
     bootstrap(
