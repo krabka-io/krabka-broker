@@ -10,7 +10,7 @@
 
 use {
     crate::{
-        broker::{Broker, accept::accept_loop},
+        broker::{Broker, dynamic_listeners::DataPlaneListeners},
         config::{BrokerConfig, ListenerSpec},
         error::BrokerError,
         future_log::{FutureLogState, MovePolicy, resume_move},
@@ -22,8 +22,7 @@ use {
     dashmap::DashMap,
     krabka_ids::PartitionIndex,
     std::{net::SocketAddr, sync::Arc},
-    tokio::{net::TcpListener, task::JoinHandle},
-    tokio_util::sync::CancellationToken,
+    tokio::net::TcpListener,
 };
 
 /// A data-plane listener spec with the socket that serves it.
@@ -33,13 +32,6 @@ pub(super) struct BoundListener {
     /// The address the broker records for the listener, which is not the
     /// socket's own address for a preopened listener.
     pub(super) address: SocketAddr,
-}
-
-/// What the accept loops of the data plane run under.
-pub(super) struct ListenerTasks {
-    /// Stops the accept loops.
-    pub(super) shutdown: CancellationToken,
-    pub(super) tasks: Vec<JoinHandle<()>>,
 }
 
 pub(super) struct ListenerStartup {
@@ -205,29 +197,12 @@ async fn adopt_or_bind_listeners(
     Ok(bound)
 }
 
-pub(super) fn spawn_listener_tasks(
-    broker: &Arc<Broker>,
-    bound: Vec<BoundListener>,
-) -> ListenerTasks {
-    let shutdown = CancellationToken::new();
-    let several = bound.len() > 1;
-    let tasks = bound
-        .into_iter()
-        .map(|BoundListener { spec, listener, .. }| {
-            let protected = several
-                && spec
-                    .name
-                    .eq_ignore_ascii_case(&broker.config.inter_broker_listener_name);
-            tokio::spawn(accept_loop(
-                Arc::clone(broker),
-                listener,
-                spec,
-                protected,
-                shutdown.clone(),
-            ))
-        })
-        .collect();
-    ListenerTasks { shutdown, tasks }
+/// Start the accept loop of every bound listener, each in the broker's
+/// [`DataPlaneListeners`], where a dynamic `listeners` can later close it.
+pub(super) fn start_listeners(broker: &Arc<Broker>, bound: Vec<BoundListener>) {
+    for BoundListener { spec, listener, .. } in bound {
+        DataPlaneListeners::start(broker, spec, listener);
+    }
 }
 
 #[cfg(test)]

@@ -121,7 +121,7 @@ krabka_macros::decoded_dispatch! {
                         serving: broker.config.node_id,
                         log_dirs: &broker.config.broker_log_dirs(),
                         unstable: broker.config.features.unstable_api_versions,
-                    }, broker.listener_tls_inputs())
+                    }, broker.own_config_checks())
                 });
                 if let Err((code, message)) = preprocessed {
                     let (code, message) = if validate_resource_shape(&resource, duplicate).is_err() {

@@ -65,6 +65,19 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- A per-broker `listeners` and `listener.security.protocol.map` change now
+  opens and closes data-plane listeners without a restart, as Kafka's
+  `DynamicListenerConfig` does: a new listener name is bound and served with
+  its own `listener.name.<listener>.sasl.enabled.mechanisms`, a dropped one
+  closes with its connections, and a stored `listeners` opens again after a
+  restart. The broker the alter is addressed to first refuses, with
+  `INVALID_REQUEST` and Kafka's message, a change Kafka refuses: a listener
+  without a protocol, a repeated name or port, a dropped advertised listener
+  or controller mapping, a disabled inter-broker SASL mechanism, or a new
+  protocol or own key for a listener that stays. Before, both keys were
+  stored and reported and changed nothing. As in Kafka, the SASL and Kerberos
+  keys and `principal.builder.class` reach only listeners added later
+  (#1423).
 - The controller listener's TLS and SASL handshake is now held to
   `connections.max.idle.ms` of silence, as Kafka's `Selector` does, instead
   of to that long in total (#1426).

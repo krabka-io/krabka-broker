@@ -79,7 +79,7 @@ impl Fixture {
 
     fn inputs(&self) -> ListenerTlsInputs<'_> {
         ListenerTlsInputs {
-            listeners: &self.listeners,
+            listeners: self.listeners.as_slice().into(),
             tls_config: Some(&self.tls),
         }
     }
