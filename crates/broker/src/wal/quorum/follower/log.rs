@@ -231,14 +231,12 @@ impl FollowerLog {
         let bytes: Bytes = encoded.freeze();
         let batches = split_batches(&bytes)?;
         let mut expected = requested;
-        if let Some(first) = batches.first()
-            && restarts_at_batch_base(
-                self.start_offset(),
-                requested,
-                first.base_offset,
-                first.last_offset,
-            )
-        {
+        let restart = batches.first().filter(|first| {
+            self.log
+                .lock()
+                .restarts_at_batch_base(first.base_offset, first.last_offset)
+        });
+        if let Some(first) = restart {
             self.reset_to(first.base_offset).await?;
             expected = first.base_offset;
         }
@@ -286,27 +284,6 @@ impl FollowerLog {
         .await?;
         Ok(actual)
     }
-}
-
-/// Whether an empty follower log must restart at the base of the leader's
-/// first batch before it can take that batch, Kafka's
-/// `Partition.appendRecordsToFollowerOrFutureReplica` recovery from
-/// `UnexpectedAppendOffsetException`.
-///
-/// A leader serves the whole batch that holds the fetch offset, so a follower
-/// that restarted at a leader log start inside a batch -- the flusher trims to
-/// the high watermark less the safety lag, which a batch of many records
-/// straddles -- receives a batch that begins below its own log end. The log
-/// holds nothing yet (`log_start == requested`), so restarting it at the
-/// batch's base loses nothing, and the batch then appends where it begins. A
-/// log that holds records keeps the contiguity check, as Kafka rethrows there.
-fn restarts_at_batch_base(
-    log_start: Offset,
-    requested: Offset,
-    batch_base: Offset,
-    batch_last: Offset,
-) -> bool {
-    log_start == requested && batch_base < requested && requested <= batch_last
 }
 
 pub(super) fn voter_dir(root: &Path, topic: &str, shard: ShardId, node_id: NodeId) -> PathBuf {

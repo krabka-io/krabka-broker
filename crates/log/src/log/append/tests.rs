@@ -289,6 +289,96 @@ fn append_at_uses_reconciled_frontier_floor() {
     drop(dir);
 }
 
+/// Kafka's `Partition.appendRecordsToFollowerOrFutureReplica`: only an empty
+/// log restarts at the base of a leader batch, and only for a batch that begins
+/// below its end and spans it. After the restart the batch appends where it
+/// begins; every other case keeps the log as it is.
+#[test]
+fn an_empty_log_restarts_at_the_base_of_a_batch_that_spans_its_end() {
+    struct Case {
+        name: &'static str,
+        /// Records the log holds from offset 0, or `None` for an empty log
+        /// reset to `end`.
+        held: Option<i32>,
+        end: i64,
+        batch_base: i64,
+        batch_last: i64,
+        restarts: bool,
+    }
+    let cases = [
+        Case {
+            name: "empty inside the batch",
+            held: None,
+            end: 25,
+            batch_base: 20,
+            batch_last: 29,
+            restarts: true,
+        },
+        Case {
+            name: "empty at the batch base",
+            held: None,
+            end: 20,
+            batch_base: 20,
+            batch_last: 29,
+            restarts: false,
+        },
+        Case {
+            name: "empty past the batch",
+            held: None,
+            end: 30,
+            batch_base: 20,
+            batch_last: 29,
+            restarts: false,
+        },
+        Case {
+            name: "empty before a hole",
+            held: None,
+            end: 25,
+            batch_base: 26,
+            batch_last: 30,
+            restarts: false,
+        },
+        Case {
+            name: "holding records the batch overlaps",
+            held: Some(25),
+            end: 25,
+            batch_base: 20,
+            batch_last: 29,
+            restarts: false,
+        },
+    ];
+    for case in cases {
+        let TempLog { dir: _dir, mut log } = test_log();
+        match case.held {
+            Some(records) => {
+                log.append(&mut sample_batch(records)).unwrap();
+            }
+            None => log.reset_to(Offset(case.end)).unwrap(),
+        }
+        assert!(log.log_end_offset() == Offset(case.end), "{}", case.name);
+
+        check!(
+            log.restarts_at_batch_base(Offset(case.batch_base), Offset(case.batch_last))
+                == case.restarts,
+            "{}",
+            case.name
+        );
+
+        if case.restarts {
+            let records = i32::try_from(case.batch_last - case.batch_base + 1).unwrap();
+            log.reset_to(Offset(case.batch_base)).unwrap();
+            log.append_at(&mut sample_batch(records), Offset(case.batch_base))
+                .unwrap();
+            check!(
+                (log.log_start_offset(), log.log_end_offset())
+                    == (Offset(case.batch_base), Offset(case.batch_last + 1)),
+                "{}",
+                case.name
+            );
+        }
+    }
+}
+
 /// Kafka trunk's `UnifiedLog.appendAsFollower` skips `LogValidator`, the one
 /// place an append reads `max.decompressed.message.bytes`, so a replicated
 /// record that got past the leader's limit lands as it is. The limit governs the

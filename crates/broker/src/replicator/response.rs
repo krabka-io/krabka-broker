@@ -121,6 +121,56 @@ async fn follow_leader_log_start(part: &Partition, cfg: &Config, leader_log_star
     }
 }
 
+/// The base and last offset of the first batch in `records`.
+fn first_batch_span(records: &RecordsPayload) -> Option<(Offset, Offset)> {
+    let (base, last_delta) = match records {
+        RecordsPayload::Raw(bytes) => {
+            let header = validate_one_v2_batch(bytes).ok()?.header;
+            (header.base_offset.get(), header.last_offset_delta.get())
+        }
+        RecordsPayload::V2(batches) => {
+            let first = batches.first()?;
+            (first.base_offset, first.last_offset_delta)
+        }
+        _ => return None,
+    };
+    Some((
+        Offset(base),
+        Offset(base.checked_add(i64::from(last_delta))?),
+    ))
+}
+
+/// Restarts an empty follower log at the base of the leader's first batch
+/// when that batch begins below the log end and spans it, as Kafka's
+/// `Partition.appendRecordsToFollowerOrFutureReplica` truncates fully to the
+/// batch's base offset on `UnexpectedAppendOffsetException`; see
+/// [`krabka_log::Log::restarts_at_batch_base`].
+///
+/// The leader serves the whole batch that holds the fetch offset, so after an
+/// `OFFSET_OUT_OF_RANGE` reset to a leader log start that `DeleteRecords` or
+/// retention put inside a batch, every fetch returns a batch that starts
+/// below this log's end, and without the restart the append refuses it on
+/// every round and the follower never catches up.
+async fn restart_at_first_batch_base(part: &Partition, cfg: &Config, records: &RecordsPayload) {
+    let Some((base, last)) = first_batch_span(records) else {
+        return;
+    };
+    let (restarts, end) = {
+        let log = part.log.lock().expect("log mutex poisoned");
+        (log.restarts_at_batch_base(base, last), log.log_end_offset())
+    };
+    if !restarts {
+        return;
+    }
+    info!(topic = %cfg.topic, partition = cfg.partition.get(), end = end.0,
+        batch_base = base.0, "replicator: restarting the empty log at the base of the leader's batch");
+    match part.reset_to(base).await {
+        Ok(()) => super::truncate_producer_state(cfg, base.0).await,
+        Err(error) => warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
+            batch_base = base.0, "replicator: restarting at the leader's batch base failed"),
+    }
+}
+
 /// Applies one partition row of a response against the partition it names.
 ///
 /// `part_resp` is taken by *mutable* reference so the record batches can be
@@ -231,6 +281,9 @@ pub(super) async fn handle_partition_response(
                 cfg,
                 "replicator: discarding response for stale local target"
             );
+            if let Some(records) = &part_resp.records {
+                restart_at_first_batch_base(&part, cfg, records).await;
+            }
             match part_resp.records.take() {
                 Some(RecordsPayload::Raw(bytes)) => {
                     let action = replicate_raw_batches(&part, cfg, bytes).await;
@@ -1107,7 +1160,12 @@ mod tests {
     }
 
     fn one_batch_response(cfg: &Config, offset: i64, raw: bool) -> FetchResponse {
-        let mut batch = one_record_batch(offset);
+        batch_response(cfg, one_record_batch(offset), raw)
+    }
+
+    /// A response row that carries `batch` under `cfg`'s leader epoch, decoded
+    /// or as raw bytes.
+    fn batch_response(cfg: &Config, mut batch: RecordBatch, raw: bool) -> FetchResponse {
         batch.partition_leader_epoch = cfg.leader_epoch.0;
         let records = if raw {
             let mut encoded = BytesMut::new();
@@ -1206,6 +1264,61 @@ mod tests {
 
             assert!(part.log_end_offset() == Offset(6), "raw: {raw}");
         }
+    }
+
+    /// Kafka's `Partition.appendRecordsToFollowerOrFutureReplica`: the leader
+    /// serves the whole batch that holds the fetch offset, so a follower that
+    /// reset to a leader log start inside a batch is served a batch that
+    /// begins below its log end. An empty follower restarts at that batch's
+    /// base and takes it; one that holds records still refuses the overlap.
+    /// Decoded and raw records take the same path.
+    #[yare::parameterized(
+        decoded_empty_inside_the_batch = { false, None, (0, 5) },
+        raw_empty_inside_the_batch = { true, None, (0, 5) },
+        decoded_holding_records_it_overlaps = { false, Some(3), (0, 3) },
+        raw_holding_records_it_overlaps = { true, Some(3), (0, 3) },
+    )]
+    #[test_macro(tokio::test)]
+    async fn an_empty_follower_restarts_at_the_base_of_the_batch_it_is_served(
+        raw: bool,
+        held: Option<i64>,
+        want: (i64, i64),
+    ) {
+        let LocalPartitionFixture {
+            cfg,
+            dir: _dir,
+            part,
+        } = local_partition_fixture();
+        match held {
+            Some(count) => {
+                for base_offset in 0..count {
+                    part.log
+                        .lock()
+                        .unwrap()
+                        .append(&mut one_record_batch(base_offset))
+                        .unwrap();
+                }
+            }
+            None => part.reset_to(Offset(3)).await.unwrap(),
+        }
+        let served = RecordBatch {
+            last_offset_delta: 4,
+            records: (0..5)
+                .map(|offset_delta| Record {
+                    offset_delta,
+                    ..Record::default()
+                })
+                .collect(),
+            ..one_record_batch(0)
+        };
+
+        let action =
+            handle_response(batch_response(&cfg, served, raw), &cfg, cfg.leader_epoch.0).await;
+
+        assert2::assert!(action == RowAction::Continue);
+        assert2::assert!(
+            (part.log_start_offset(), part.log_end_offset()) == (Offset(want.0), Offset(want.1))
+        );
     }
 
     #[tokio::test]
