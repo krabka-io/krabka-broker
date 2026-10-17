@@ -23,6 +23,11 @@
 //! tests and the [`RemoteReader`]-equivalent unbounded path use: every lookup
 //! is a miss and nothing is written.
 //!
+//! [`RemoteIndexCache::resize`] changes the budget of a live cache, as Kafka's
+//! `RemoteIndexCache.resizeCacheSize` does when an operator alters
+//! `remote.log.index.file.cache.total.size.bytes`: a shrink evicts the
+//! least-recently-used entries until the held bytes fit the new budget.
+//!
 //! Eviction is also driven from the segment lifecycle:
 //! [`RemoteIndexCache::remove_segment`] drops every index of one segment when
 //! the `RemoteLogManager` moves it to
@@ -37,7 +42,7 @@ use {
         collections::{BTreeMap, HashMap},
         path::{Path, PathBuf},
         sync::{
-            Mutex,
+            Mutex, MutexGuard,
             atomic::{AtomicU64, Ordering},
         },
     },
@@ -129,6 +134,18 @@ impl CacheState {
 
     /// The least-recently-used key, or `None` when the cache is empty.
     fn lru(&self) -> Option<CacheKey> { self.order.first_key_value().map(|(_, key)| *key) }
+
+    /// Forget least-recently-used entries while `over` holds for the bytes
+    /// still held, and hand back the keys forgotten.
+    fn evict_while(&mut self, over: impl Fn(u64) -> bool) -> Vec<CacheKey> {
+        let mut evicted = Vec::new();
+        while over(self.total_bytes) {
+            let Some(victim) = self.lru() else { break };
+            self.forget(victim);
+            evicted.push(victim);
+        }
+        evicted
+    }
 }
 
 /// A bounded on-disk cache of remote segment index objects.
@@ -136,8 +153,9 @@ impl CacheState {
 pub struct RemoteIndexCache {
     /// The cache directory, or `None` when the cache is disabled.
     root: Option<PathBuf>,
-    /// The total-byte budget the entries must fit inside.
-    max_bytes: u64,
+    /// The total-byte budget the entries must fit inside. It is only changed
+    /// under the `state` lock, by [`Self::resize`].
+    max_bytes: AtomicU64,
     state: Mutex<CacheState>,
     hits: AtomicU64,
     misses: AtomicU64,
@@ -171,7 +189,7 @@ impl RemoteIndexCache {
     fn empty(root: Option<PathBuf>, max_bytes: u64) -> Self {
         Self {
             root,
-            max_bytes,
+            max_bytes: AtomicU64::new(max_bytes),
             state: Mutex::new(CacheState::default()),
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
@@ -182,6 +200,42 @@ impl RemoteIndexCache {
     /// Whether this cache stores anything.
     #[must_use]
     pub fn is_enabled(&self) -> bool { self.root.is_some() }
+
+    /// The current total-byte budget.
+    #[must_use]
+    pub fn max_bytes(&self) -> u64 { self.max_bytes.load(Ordering::Relaxed) }
+
+    /// Sets the total-byte budget to `max_bytes`, evicting the
+    /// least-recently-used entries until the held bytes fit it.
+    ///
+    /// This is Kafka's `RemoteIndexCache.resizeCacheSize`, which sets the
+    /// Caffeine maximum weight and so evicts down to the new size at once. A
+    /// grow evicts nothing. A disabled cache only records the new budget.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cache lock was poisoned by a panic inside the cache.
+    pub fn resize(&self, max_bytes: u64) {
+        let mut state = self.state.lock().expect("remote index cache lock poisoned");
+        self.max_bytes.store(max_bytes, Ordering::Relaxed);
+        let evicted = state.evict_while(|held| held > max_bytes);
+        self.discard(state, &evicted);
+    }
+
+    /// Delete the files of the `evicted` entries while `state` is still
+    /// held, so no new entry can take a path being deleted, then count them.
+    fn discard(&self, state: MutexGuard<'_, CacheState>, evicted: &[CacheKey]) {
+        if let Some(root) = self.root.as_ref() {
+            for victim in evicted {
+                remove_quietly(&entry_path(root, *victim));
+            }
+        }
+        drop(state);
+        self.evictions.fetch_add(
+            u64::try_from(evicted.len()).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+    }
 
     /// The counters the broker publishes.
     ///
@@ -308,7 +362,7 @@ impl RemoteIndexCache {
     /// stored: caching it would evict everything else and then evict itself.
     fn store(&self, key: CacheKey, path: &Path, bytes: &[u8]) {
         let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-        if size > self.max_bytes {
+        if size > self.max_bytes() {
             return;
         }
         // Publish a completed file, never truncate a path that a cache hit
@@ -332,14 +386,18 @@ impl RemoteIndexCache {
             );
             return;
         }
+        // Re-read the budget under the lock: a concurrent `resize` may have
+        // shrunk it since the unlocked check above.
+        let max_bytes = self.max_bytes();
+        if size > max_bytes {
+            state.forget(key);
+            remove_quietly(path);
+            drop(state);
+            return;
+        }
         let evicted = {
             state.forget(key);
-            let mut evicted = Vec::new();
-            while state.total_bytes + size > self.max_bytes {
-                let Some(victim) = state.lru() else { break };
-                state.forget(victim);
-                evicted.push(victim);
-            }
+            let evicted = state.evict_while(|held| held + size > max_bytes);
             state.clock += 1;
             let clock = state.clock;
             state.entries.insert(key, CacheEntry {
@@ -350,16 +408,7 @@ impl RemoteIndexCache {
             state.total_bytes += size;
             evicted
         };
-        if let Some(root) = self.root.as_ref() {
-            for victim in &evicted {
-                remove_quietly(&entry_path(root, *victim));
-            }
-        }
-        drop(state);
-        self.evictions.fetch_add(
-            u64::try_from(evicted.len()).unwrap_or(u64::MAX),
-            Ordering::Relaxed,
-        );
+        self.discard(state, &evicted);
     }
 }
 

@@ -7,6 +7,25 @@
 //! exactly that -- the two unclean-recovery keys and `min.insync.replicas` --
 //! so the walk lives here rather than once per key.
 
+/// The value of the broker key `key` as `node` sees it: `node`'s own dynamic
+/// broker config, else the cluster-wide default broker config, else `None`,
+/// as Kafka layers a dynamic broker config over its static one.
+///
+/// A key that a running broker applies reads it here on each use, parses it,
+/// and falls back to its static value when this gives none or a value that
+/// does not parse.
+pub(crate) fn node_or_cluster_default<'a>(
+    image: &'a krabka_metadata::MetadataImage,
+    node: krabka_metadata::NodeId,
+    key: &str,
+) -> Option<&'a str> {
+    image
+        .broker_config(node)
+        .and_then(|configs| configs.get(key))
+        .or_else(|| image.default_broker_config()?.get(key))
+        .map(String::as_str)
+}
+
 /// The value of `key` for `topic`: the topic override if it has one, else the
 /// cluster-wide default broker config, else `None`.
 ///

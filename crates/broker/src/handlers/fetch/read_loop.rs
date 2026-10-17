@@ -10,7 +10,7 @@ use {
             record_follower_position, required_leader,
         },
         read::{LiveOffsets, ReadRequest, do_read},
-        remote::try_remote_read,
+        remote::{RemoteFetchWait, try_remote_read},
         request::EffectivePartition,
         response::{GroupedResponses, group_into_topic_responses},
         throttle::leader_withholds,
@@ -91,6 +91,9 @@ struct LongPollState {
     /// Original response budget, used to recompute the remaining budget when
     /// a long-poll read replaces an earlier oversized first batch.
     response_max_bytes: usize,
+    /// The request's `remote.fetch.max.wait.ms` deadline, shared by every
+    /// cold-tier read it makes.
+    remote_wait: RemoteFetchWait,
 }
 
 #[derive(Clone, Copy)]
@@ -273,6 +276,7 @@ pub(super) async fn execute_pending_reads(
         cold_served: vec![false; pending.len()],
         remaining_response_bytes: response_max_bytes,
         response_max_bytes,
+        remote_wait: RemoteFetchWait::default(),
     };
     // Arm the long poll's waiters before the first read pass, so that an
     // append landing between a partition's read and the park cannot be lost.
@@ -338,7 +342,8 @@ pub(super) async fn execute_pending_reads(
         // long-poll re-read of this partition (or an epoch recheck) must
         // still see.
         read.max_bytes = budget;
-        let cold = serve_from_cold_tier(broker, read, &partition, phases).await;
+        let cold =
+            serve_from_cold_tier(broker, read, &partition, phases, &mut state.remote_wait).await;
         read.max_bytes = requested_max_bytes;
         let withheld = withheld_by_leader_throttle(broker, read);
         state.record_read(index, read, ReadAccounting {
@@ -366,8 +371,17 @@ pub(super) async fn execute_pending_reads(
     let has_preferred_read_replica = pending
         .iter()
         .any(|read| read.out.preferred_read_replica >= 0);
+    // Kafka parks a fetch that handed any read to the remote tier as a
+    // `DelayedRemoteFetch`, not a `DelayedFetch`: it answers once the remote
+    // reads finish or `remote.fetch.max.wait.ms` passes, and neither
+    // `min.bytes` nor the request's `max.wait.ms` holds it any longer.
+    let remote_fetch = state.remote_wait.dispatched();
     let mut long_poll_active = Duration::ZERO;
-    if state.total() < state.min_bytes && max_wait_ms > 0 && !has_preferred_read_replica {
+    if state.total() < state.min_bytes
+        && max_wait_ms > 0
+        && !has_preferred_read_replica
+        && !remote_fetch
+    {
         let mut waits = waits;
         waits.extend(arm_leadership_waits(&pending));
         refresh_follower_bounds(&mut pending, &state).await;
@@ -588,7 +602,7 @@ async fn reread_woken(
     // capped budget to it the same way the first pass does, and give the
     // original per-partition request back afterward.
     read.max_bytes = read_budget;
-    let cold = serve_from_cold_tier(broker, read, &part, phases).await;
+    let cold = serve_from_cold_tier(broker, read, &part, phases, &mut state.remote_wait).await;
     read.max_bytes = requested_max_bytes;
     let withheld = withheld_by_leader_throttle(broker, read);
     state.record_read(index, read, ReadAccounting {
@@ -686,12 +700,16 @@ async fn serve_from_cold_tier(
     read: &mut PendingRead,
     part: &Partition,
     phases: &RequestPhases,
+    remote_wait: &mut RemoteFetchWait,
 ) -> usize {
     if read.out.error_code != codes::OFFSET_OUT_OF_RANGE {
         return 0;
     }
     let started = std::time::Instant::now();
-    let served = match try_remote_read(broker, read, part).await {
+    // Boxed: the cold read holds the remote-wait deadline and the reader
+    // permit across several awaits, and inline it would make every fetch
+    // future, local or cold, carry its whole state.
+    let served = match Box::pin(try_remote_read(broker, read, part, remote_wait)).await {
         Some(remote_bytes) => remote_bytes,
         None => try_diskless_read(broker, read, part).await.unwrap_or(0),
     };
@@ -888,6 +906,7 @@ mod tests {
                 cold_served: Vec::new(),
                 remaining_response_bytes: case.response_budget,
                 response_max_bytes: case.response_budget,
+                remote_wait: super::RemoteFetchWait::default(),
             };
             for (i, step) in case.steps.iter().enumerate() {
                 let given = state.partition_read_budget(step.partition_max_bytes);
@@ -1080,6 +1099,7 @@ mod tests {
             cold_served: vec![false; 2],
             remaining_response_bytes: 150 - first_bytes,
             response_max_bytes: 150,
+            remote_wait: super::RemoteFetchWait::default(),
         };
         super::reread_woken(&broker, &mut pending, 1, &mut state, &phases).await;
         assert!(pending[1].out.records.is_none());
@@ -1536,7 +1556,14 @@ mod tests {
         };
 
         let phases = RequestPhases::default();
-        let served = super::serve_from_cold_tier(&broker, &mut pending, &part, &phases).await;
+        let served = super::serve_from_cold_tier(
+            &broker,
+            &mut pending,
+            &part,
+            &phases,
+            &mut super::RemoteFetchWait::default(),
+        )
+        .await;
 
         assert!(served == flushed.len());
         assert!(pending.out.error_code == crate::codes::NONE);
@@ -1549,7 +1576,14 @@ mod tests {
         // cluster with no cold tier sees an unchanged remote phase.
         pending.out.error_code = NONE;
         let local_only = RequestPhases::default();
-        let served = super::serve_from_cold_tier(&broker, &mut pending, &part, &local_only).await;
+        let served = super::serve_from_cold_tier(
+            &broker,
+            &mut pending,
+            &part,
+            &local_only,
+            &mut super::RemoteFetchWait::default(),
+        )
+        .await;
 
         assert!(served == 0);
         assert!(local_only.remote_seconds() < 1.0e-9);
@@ -1832,6 +1866,7 @@ mod tests {
             cold_served: vec![false; pending.len()],
             remaining_response_bytes: usize::MAX,
             response_max_bytes: usize::MAX,
+            remote_wait: super::RemoteFetchWait::default(),
         }
     }
 

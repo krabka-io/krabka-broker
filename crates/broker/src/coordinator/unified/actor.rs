@@ -383,7 +383,9 @@ async fn run_actor(
 }
 
 /// The settings `group_id` runs with: the `consumer.*` overrides of its group
-/// config in the current metadata image over the broker's `config`.
+/// config in the current metadata image over the broker's `config`, whose
+/// assignment interval is the dynamic broker value of that image when one
+/// applies.
 ///
 /// A classic group and a classic member ignore them: Kafka's classic groups
 /// read only the broker-wide `group.min.session.timeout.ms` and
@@ -394,7 +396,13 @@ fn effective_config<'a>(
     coordinator: &GroupCoordinator,
     group_id: &str,
 ) -> Cow<'a, NextGenConfig> {
-    resolve_group_config(config, coordinator, group_id, NextGenConfig::for_group)
+    resolve_group_config(
+        config,
+        coordinator,
+        group_id,
+        NextGenConfig::for_broker,
+        NextGenConfig::for_group,
+    )
 }
 
 /// The classic rebalance-completion deadline, if a rebalance is open.

@@ -107,9 +107,14 @@ async fn remote_fetch_reports_an_abort_in_a_later_segment_or_the_local_tail() {
         let mut pending = out_of_range_at(&part, 0);
         pending.read_committed = true;
         assert!(
-            super::super::try_remote_read(&broker, &mut pending, &part)
-                .await
-                .is_some_and(|n| n > 0)
+            super::super::try_remote_read(
+                &broker,
+                &mut pending,
+                &part,
+                &mut super::super::RemoteFetchWait::default()
+            )
+            .await
+            .is_some_and(|n| n > 0)
         );
         assert!(
             pending.out.aborted_transactions
