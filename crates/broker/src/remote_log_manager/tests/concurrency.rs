@@ -224,8 +224,7 @@ async fn the_copier_bound_caps_the_copies_in_flight() {
         &partitions,
         &controller,
         &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-        NodeId(1),
-        1,
+        fixtures::serving_broker(&CancellationToken::new()),
         SweepConcurrency {
             copier: 2,
             expiration: 2,

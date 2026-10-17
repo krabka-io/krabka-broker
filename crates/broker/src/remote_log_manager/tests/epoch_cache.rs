@@ -132,8 +132,7 @@ async fn survivors_of_a_tick(log_dir: &std::path::Path, log: Log) -> Vec<u128> {
         &partitions,
         &fixed_source(image_with_orders_topic()),
         &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-        NodeId(1),
-        1,
+        fixtures::serving_broker(&CancellationToken::new()),
         SweepConcurrency::default(),
     )
     .await;
