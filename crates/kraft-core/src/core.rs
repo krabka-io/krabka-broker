@@ -74,7 +74,28 @@ pub struct QuorumStateMachine {
     /// explores. Whole milliseconds is also the domain of the verified jitter
     /// kernel. [`QuorumStateMachine::new`] converts at that boundary.
     election_timeout_ms: u64,
+    /// Follower and observer fetch timeout, in whole milliseconds, for the same
+    /// reason. It is apart from the election timeout because Kafka keeps the
+    /// two apart: a lost leader goes unnoticed for one fetch timeout, and a
+    /// split vote after that is retried one election timeout later.
+    fetch_timeout_ms: u64,
 }
+
+/// The two timer extents of a [`QuorumStateMachine`], as Kafka's `QuorumConfig`
+/// holds them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct QuorumTimeouts {
+    /// Kafka's `controller.quorum.election.timeout.ms`: the base of a
+    /// prospective's, a candidate's and an unattached voter's election timer,
+    /// before the per-(node, epoch) jitter.
+    pub election: Time,
+    /// Kafka's `controller.quorum.fetch.timeout.ms`: the follower and observer
+    /// fetch watchdog, and the base of the leader's check-quorum window.
+    pub fetch: Time,
+}
+
+/// An extent as the whole milliseconds the deadline timeline is kept in.
+fn whole_millis(extent: Time) -> u64 { u64::try_from(extent.millis_i64()).unwrap_or(0) }
 
 #[derive(Clone, Copy)]
 struct VoteRequest {
@@ -90,13 +111,14 @@ struct VoteRequest {
 }
 
 impl QuorumStateMachine {
-    /// `election_timeout` is the base extent of an election timer, before
-    /// jitter; callers vary it per node for liveness.
+    /// `timeouts.election` is the base extent of an election timer, before
+    /// jitter, and callers vary it per node for liveness. `timeouts.fetch` is
+    /// the fetch watchdog.
     ///
-    /// This constructor rounds the value to whole milliseconds. That is the
+    /// This constructor rounds both values to whole milliseconds. That is the
     /// domain of both the verified jitter kernel and the [`SimInstant`] clock.
     #[must_use]
-    pub fn new(me: NodeId, state: QuorumState, election_timeout: Time) -> Self {
+    pub fn new(me: NodeId, state: QuorumState, timeouts: QuorumTimeouts) -> Self {
         let observer = !state.voters.contains(me);
         let role = if observer {
             Role::Observer {
@@ -111,7 +133,8 @@ impl QuorumStateMachine {
             state,
             adjacent_voters: None,
             role,
-            election_timeout_ms: u64::try_from(election_timeout.millis_i64()).unwrap_or(0),
+            election_timeout_ms: whole_millis(timeouts.election),
+            fetch_timeout_ms: whole_millis(timeouts.fetch),
         }
     }
 
@@ -203,13 +226,10 @@ impl QuorumStateMachine {
 
     /// The deadline for a check-quorum timer armed at `now`.
     ///
-    /// The extent is Kafka's 1.5x the fetch timeout. Krabka derives the
-    /// follower fetch deadline from the same configured election timeout (see
-    /// [`QuorumStateMachine::handle_fetch_response`]), so that one extent is
-    /// the fetch timeout this factor multiplies.
+    /// The extent is Kafka's 1.5x the fetch timeout.
     pub(super) fn check_quorum_deadline(&self, now: SimInstant) -> SimInstant {
         now.saturating_add_ms(
-            self.election_timeout_ms
+            self.fetch_timeout_ms
                 .saturating_mul(CHECK_QUORUM_FACTOR_NUM)
                 .div_euclid(CHECK_QUORUM_FACTOR_DEN),
         )
@@ -381,7 +401,12 @@ mod tests {
                 uuid::Uuid::nil(),
                 voters(&[NodeId(1), NodeId(2), NodeId(3)]),
             ),
-            timeout,
+            // A fetch timeout unlike the election timeout shows which one the
+            // election timer is drawn from.
+            QuorumTimeouts {
+                election: timeout,
+                fetch: secs(7),
+            },
         );
         let log = FakeLog {
             end: 5,

@@ -42,7 +42,8 @@ async fn acks_all_survives_leader_crash() {
         config.heartbeat_interval = krabka_units::millis(200);
         config.heartbeat_timeout = krabka_units::millis(2_000);
         config.replica_lag_time_max = krabka_units::millis(2_000);
-        config.controller_election_timeout = krabka_units::millis(500);
+        config.controller_fetch_timeout = krabka_units::millis(500);
+        config.controller_election_timeout = krabka_units::millis(150);
         config.controller_heartbeat_interval = krabka_units::millis(100);
     })
     .await;

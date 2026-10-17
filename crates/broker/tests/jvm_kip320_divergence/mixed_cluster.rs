@@ -101,7 +101,8 @@ fn krabka_mixed_config(log_dir: &std::path::Path, setup: JvmStaticVoterSetup) ->
     // of the ISR, and breaks the tests that make it leader.
     cfg.heartbeat_timeout = krabka_units::millis(9_000);
     cfg.replica_lag_time_max = krabka_units::millis(10_000);
-    cfg.controller_election_timeout = krabka_units::secs(3);
+    cfg.controller_fetch_timeout = krabka_units::secs(3);
+    cfg.controller_election_timeout = krabka_units::secs(1);
     cfg.controller_heartbeat_interval = krabka_units::millis(250);
     cfg
 }

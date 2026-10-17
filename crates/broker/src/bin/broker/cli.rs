@@ -603,6 +603,7 @@ mod tests {
         heartbeat-interval KRABKA_HEARTBEAT_INTERVAL [] --------+--------\n\
         heartbeat-timeout KRABKA_HEARTBEAT_TIMEOUT [] --------+--------\n\
         replica-lag-time-max KRABKA_REPLICA_LAG_TIME_MAX [] --------+--------\n\
+        controller-fetch-timeout KRABKA_CONTROLLER_FETCH_TIMEOUT [] --------+--------\n\
         controller-election-timeout KRABKA_CONTROLLER_ELECTION_TIMEOUT [] --------+--------\n\
         controller-heartbeat-interval KRABKA_CONTROLLER_HEARTBEAT_INTERVAL [] --------+--------\n\
         controller-fetch-miss-limit KRABKA_CONTROLLER_FETCH_MISS_LIMIT [] -+--++-----------\n\

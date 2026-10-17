@@ -41,7 +41,7 @@ use {
         event_queue::{EventQueueMeter, EventQueueRecorder, EventTimer},
         kraft::{
             action::{Action, TimerKind},
-            core::QuorumStateMachine,
+            core::{QuorumStateMachine, QuorumTimeouts},
             event::{Event, LogEnd},
             log::KraftLog,
             role::{ReplicaProgress, Role},
@@ -211,8 +211,9 @@ struct Engine {
     data_dir: PathBuf,
     /// Monotonic clock base: `SimInstant(ms)` is `(now - base).as_millis()`.
     clock_base: Instant,
-    /// Base election timeout (varied per node by the caller for liveness).
-    election_timeout: Time,
+    /// The election timeout, varied per node by the caller for liveness, and
+    /// the fetch timeout.
+    timeouts: QuorumTimeouts,
     heartbeat_interval: Option<Time>,
     controller_fetch_miss_limit: ControllerFetchMissLimit,
     metadata_raft_fetch_max: MetadataRaftFetchMax,
@@ -417,7 +418,9 @@ pub struct KraftConfig {
     /// This replica's directory id, from its `meta.properties`.
     pub directory_id: Uuid,
     pub initial_state: QuorumState,
-    pub election_timeout: Time,
+    /// Kafka's `controller.quorum.election.timeout.ms` and
+    /// `controller.quorum.fetch.timeout.ms`.
+    pub timeouts: QuorumTimeouts,
     pub heartbeat_interval: Option<Time>,
     pub controller_fetch_miss_limit: ControllerFetchMissLimit,
     pub metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity,

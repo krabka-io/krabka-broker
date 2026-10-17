@@ -18,10 +18,10 @@ and each voter's lag.
 
 ## Diagnose
 
-1. Compare `controller_election_timeout` (default 5s) and
-   `controller_heartbeat_interval` with the round-trip time between the
-   controller listeners. A stretch cluster with a slow site link needs a
-   longer timeout.
+1. Compare `controller_fetch_timeout` (default 2s), `controller_election_timeout`
+   (default 1s) and `controller_heartbeat_interval` with the round-trip time
+   between the controller listeners. A stretch cluster with a slow site link
+   needs a longer fetch timeout.
 2. Check the controller listener from each voter to each other voter. A voter
    that cannot reach the leader starts an election on its own.
 3. Check the broker logs at the moments `krabka_broker_active_controller`
@@ -36,8 +36,9 @@ and each voter's lag.
 
 ## Fix
 
-- Raise `controller_election_timeout` on every controller when the cause is
-  link latency. Roll the change one controller at a time.
+- Raise `controller_fetch_timeout` on every controller when the cause is link
+  latency. Raise `controller_election_timeout` as well when vote round trips
+  take a large share of it. Roll the change one controller at a time.
 - Fix the network path or the TLS material when the cause is an unreachable
   voter.
 - Remove a voter that restarts in a loop with `kafka-metadata-quorum

@@ -14,7 +14,8 @@ Produce and fetch on existing leaders continue until a leader fails, and then
 that partition goes offline with no controller to replace it.
 
 A sum above one means two brokers each believe they lead. In a healthy quorum
-this cannot last past one election timeout. A sustained value above one means
+this cannot last past one check-quorum window, 1.5 times
+`controller_fetch_timeout`. A sustained value above one means
 the scrape covers two clusters, or two nodes formatted with the same node id
 and different directory ids.
 

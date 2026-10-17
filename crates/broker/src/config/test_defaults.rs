@@ -51,13 +51,17 @@ impl BrokerConfig {
             // isn't a risk; multi-broker tests use these (via the shared
             // `support::start_n_node_with_retry` helper) so failover from a
             // dead controller leader completes well under the producer's
-            // 10s timeout. A voter elects after one of these without a
+            // 10s timeout. A voter elects after one fetch timeout without a
             // successful Fetch, as Kafka's does, and a leader resigns after
             // 1.5 of them without hearing from a majority, so the value must
             // also outlast a scheduling stall on a loaded CI runner: at 500 ms
             // one stall deposed a test cluster's controller in the middle of a
             // `CreateTopics` or a broker registration.
-            controller_election_timeout: millis(1_500),
+            controller_fetch_timeout: millis(1_500),
+            // The election timer only runs once a voter has already lost its
+            // leader, so it can be short: a split vote after a leader kill is
+            // retried within 0.5-1 s rather than a full fetch timeout.
+            controller_election_timeout: millis(500),
             controller_heartbeat_interval: millis(100),
             // A test counts the metadata offsets its own writes land at, so the
             // controller appends no KIP-835 `NoOpRecord` between them.
@@ -250,7 +254,9 @@ mod tests {
         // re-elects within a few seconds -- the failover tests need failover
         // well under their 10s producer timeout -- and long enough that a
         // scheduling stall on a loaded runner does not start an election.
-        assert!(c.controller_election_timeout <= secs(2));
+        assert!(c.controller_fetch_timeout == millis(1_500));
+        // A split vote is retried well inside one fetch timeout.
+        assert!(c.controller_election_timeout == millis(500));
         assert!(c.controller_heartbeat_interval <= millis(200));
     }
 

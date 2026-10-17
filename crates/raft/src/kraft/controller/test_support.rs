@@ -18,6 +18,17 @@ pub const TEST_RECV_TIMEOUT: Time = secs(1);
 /// Default election timeout for engines built by [`build`].
 pub const TEST_ELECTION_TIMEOUT: Time = secs(1);
 
+/// Default fetch timeout for engines built by [`build`]. It differs from
+/// [`TEST_ELECTION_TIMEOUT`], as Kafka's defaults do, so a timer drawn from the
+/// wrong one shows.
+pub const TEST_FETCH_TIMEOUT: Time = secs(2);
+
+/// [`TEST_ELECTION_TIMEOUT`] and [`TEST_FETCH_TIMEOUT`] together.
+pub const TEST_TIMEOUTS: QuorumTimeouts = QuorumTimeouts {
+    election: TEST_ELECTION_TIMEOUT,
+    fetch: TEST_FETCH_TIMEOUT,
+};
+
 /// The metadata log configuration of an engine under test: Kafka's segment
 /// defaults, no KIP-835 no-op records, so a test sees only the offsets its own
 /// writes land at, and no size allowance, so every cleaning keeps only the
@@ -68,6 +79,7 @@ pub struct ControllerSetup<'a> {
     pub me: NodeId,
     pub ids: &'a [NodeId],
     pub election_timeout: Time,
+    pub fetch_timeout: Time,
     pub snapshot_interval_records: SnapshotRecordCount,
     pub heartbeat_interval: Option<Time>,
     pub controller_fetch_miss_limit: ControllerFetchMissLimit,
@@ -82,6 +94,7 @@ impl Default for ControllerSetup<'_> {
             me: NodeId(1),
             ids: &[NodeId(1), NodeId(2), NodeId(3)],
             election_timeout: TEST_ELECTION_TIMEOUT,
+            fetch_timeout: TEST_FETCH_TIMEOUT,
             snapshot_interval_records: SnapshotRecordCount(0),
             heartbeat_interval: None,
             controller_fetch_miss_limit: ControllerFetchMissLimit::default(),
@@ -97,6 +110,7 @@ pub fn build(
     #[builder(into, default = ControllerSetup::default().me)] me: NodeId,
     #[builder(default = ControllerSetup::default().ids)] ids: &'_ [NodeId],
     #[builder(default = ControllerSetup::default().election_timeout)] election_timeout: Time,
+    #[builder(default = ControllerSetup::default().fetch_timeout)] fetch_timeout: Time,
     #[builder(into, default = ControllerSetup::default().snapshot_interval_records)]
     snapshot_interval_records: SnapshotRecordCount,
     heartbeat_interval: Option<Time>,
@@ -116,6 +130,7 @@ pub fn build(
         me,
         ids,
         election_timeout,
+        fetch_timeout,
         snapshot_interval_records,
         heartbeat_interval,
         controller_fetch_miss_limit,
@@ -124,7 +139,10 @@ pub fn build(
         max_bytes_between_snapshots,
     };
     spawn_test_controller(setup.me, setup.ids, |config| {
-        config.election_timeout = setup.election_timeout;
+        config.timeouts = QuorumTimeouts {
+            election: setup.election_timeout,
+            fetch: setup.fetch_timeout,
+        };
         config.snapshot_interval_records = setup.snapshot_interval_records.0;
         config.heartbeat_interval = setup.heartbeat_interval;
         config.controller_fetch_miss_limit = setup.controller_fetch_miss_limit;
@@ -141,7 +159,7 @@ pub fn test_kraft_config(me: NodeId, cluster_id: uuid::Uuid, state: QuorumState)
         cluster_id,
         directory_id: uuid::Uuid::nil(),
         initial_state: state,
-        election_timeout: TEST_ELECTION_TIMEOUT,
+        timeouts: TEST_TIMEOUTS,
         heartbeat_interval: None,
         controller_fetch_miss_limit: ControllerFetchMissLimit::default(),
         metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity::default(),
@@ -205,7 +223,10 @@ pub fn open_test_controller_with(
         cluster_id,
         uuid::Uuid::nil(),
         voters,
-        election_timeout,
+        QuorumTimeouts {
+            election: election_timeout,
+            fetch: TEST_FETCH_TIMEOUT,
+        },
         None,
         ControllerFetchMissLimit::default(),
         MetadataRaftCommandQueueCapacity::default(),
@@ -285,7 +306,7 @@ pub fn build_engine_only(
     let core = QuorumStateMachine::new(
         me,
         QuorumState::bootstrap(uuid::Uuid::nil(), voter_set(ids)),
-        TEST_ELECTION_TIMEOUT,
+        TEST_TIMEOUTS,
     );
     let image = MetadataImage::new(uuid::Uuid::nil());
     let (image_tx, _image_rx) = watch::channel(Arc::new(image.clone()));
@@ -316,7 +337,7 @@ pub fn build_engine_only(
             fault_tx: watch::channel(None).0,
             data_dir: dir.path().to_path_buf(),
             clock_base,
-            election_timeout: TEST_ELECTION_TIMEOUT,
+            timeouts: TEST_TIMEOUTS,
             heartbeat_interval: None,
             controller_fetch_miss_limit,
             metadata_raft_fetch_max,
@@ -397,7 +418,7 @@ impl PeerSender for RecordingPeerSender {
 /// A spawned three-voter controller, voter 1, whose peer sends are captured and
 /// answered with `response`, under `election_timeout`.
 pub fn spawn_recording_controller(
-    election_timeout: Time,
+    timeouts: QuorumTimeouts,
     response: bytes::Bytes,
 ) -> (
     KraftController,
@@ -407,7 +428,7 @@ pub fn spawn_recording_controller(
     let (sends, rx) = mpsc::unbounded_channel();
     let (controller, dir) =
         spawn_test_controller(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)], |config| {
-            config.election_timeout = election_timeout;
+            config.timeouts = timeouts;
             config.peers = Arc::new(RecordingPeerSender { sends, response });
         });
     (controller, dir, rx)

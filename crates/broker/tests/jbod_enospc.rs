@@ -21,6 +21,7 @@ use {
     },
     assert2::assert,
     bytes::Bytes,
+    krabka_broker::codes::NOT_CONTROLLER,
     krabka_client_core::Client,
     krabka_client_producer::{Producer, ProducerRecord},
     krabka_protocol::owned::{
@@ -489,7 +490,6 @@ async fn assign_node1_dirs(cluster: &Cluster, primary: &[i32], extra: &[i32]) {
         .send(named_topic_metadata(TOPIC))
         .await
         .expect("assignment Metadata");
-    let controller = usize::try_from(metadata.controller_id - 1).expect("positive controller id");
     let topic_id = metadata.topics[0].topic_id;
     let directory = |id: uuid::Uuid, partitions: &[i32]| DirectoryData {
         id: krabka_protocol::primitives::uuid::Uuid(id.into_bytes()),
@@ -506,13 +506,7 @@ async fn assign_node1_dirs(cluster: &Cluster, primary: &[i32], extra: &[i32]) {
         }],
         ..Default::default()
     };
-    let response = connect_with_context(
-        cluster.brokers[controller].bootstrap(),
-        None,
-        "assignment controller client",
-    )
-    .await
-    .send(AssignReplicasToDirsRequest {
+    let request = AssignReplicasToDirsRequest {
         broker_id: 1,
         // -1 means "not provided" (KIP-903) and matches any
         // registration; the controller still checks that broker 1 is
@@ -523,9 +517,29 @@ async fn assign_node1_dirs(cluster: &Cluster, primary: &[i32], extra: &[i32]) {
             directory(directory_id(&cluster.extra), extra),
         ],
         ..Default::default()
-    })
-    .await
-    .expect("AssignReplicasToDirs");
+    };
+    // Only the active controller answers, and Metadata's `controller_id` does
+    // not name it: as Kafka's broker does, it names a live broker in rotation.
+    // Ask each broker in turn until the active controller answers.
+    let deadline = Instant::now() + READY;
+    let response = 'ask: loop {
+        for broker in &cluster.brokers {
+            let response =
+                connect_with_context(broker.bootstrap(), None, "assignment controller client")
+                    .await
+                    .send(request.clone())
+                    .await
+                    .expect("AssignReplicasToDirs");
+            if response.error_code != NOT_CONTROLLER {
+                break 'ask response;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no broker answered as the active controller"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    };
     assert!(
         response.error_code == 0
             && response.directories.iter().all(|directory| {

@@ -39,10 +39,18 @@ use {
     krabka_protocol::{
         Decode, Encode,
         owned::{
-            api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
-            create_topics_request::CreatableTopic, elect_leaders_request::ElectLeadersRequest,
-            elect_leaders_response::ElectLeadersResponse, produce_request::ProduceRequest,
-            produce_response::ProduceResponse, sasl_authenticate_request::SaslAuthenticateRequest,
+            api_versions_request::ApiVersionsRequest,
+            api_versions_response::ApiVersionsResponse,
+            create_topics_request::CreatableTopic,
+            elect_leaders_request::ElectLeadersRequest,
+            elect_leaders_response::ElectLeadersResponse,
+            incremental_alter_configs_request::IncrementalAlterConfigsRequest,
+            incremental_alter_configs_response::{
+                AlterConfigsResourceResponse, IncrementalAlterConfigsResponse,
+            },
+            produce_request::ProduceRequest,
+            produce_response::ProduceResponse,
+            sasl_authenticate_request::SaslAuthenticateRequest,
             sasl_authenticate_response::SaslAuthenticateResponse,
             sasl_handshake_request::SaslHandshakeRequest,
             sasl_handshake_response::SaslHandshakeResponse,
@@ -1163,4 +1171,51 @@ pub async fn create_configured_topic_plaintext(
 ) {
     let setup = AutomaticTopicSetup { client_id, topic };
     create_topic_plaintext(addr, setup.client_id, configured_topic_row(setup.topic)).await;
+}
+
+/// Whether `stream` answers an `ApiVersions` v0 round trip: a connection the
+/// broker serves, rather than one it closed or never accepted.
+pub async fn api_versions_answered<S>(stream: &mut S, client_id: &str) -> bool
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let mut body = BytesMut::new();
+    ApiVersionsRequest::default()
+        .encode(&mut body, 0)
+        .expect("encode ApiVersions");
+    round_trip()
+        .stream(stream)
+        .client_id(client_id)
+        .body(&body)
+        .call()
+        .await
+        .is_ok()
+}
+
+/// One `IncrementalAlterConfigs` v1 of a single resource, on a fresh
+/// connection to `addr`, and the response row of that resource.
+///
+/// # Panics
+/// Panics when the exchange fails or the response has no row.
+pub async fn alter_one_resource(
+    addr: SocketAddr,
+    request: &IncrementalAlterConfigsRequest,
+    client_id: &str,
+) -> AlterConfigsResourceResponse {
+    let mut stream = TcpStream::connect(addr).await.expect("connect");
+    let response: IncrementalAlterConfigsResponse = exchange()
+        .stream(&mut stream)
+        .request(request)
+        .api_key(44)
+        .version(1)
+        .client_id(client_id)
+        .header(frames::HeaderEncoding::Flexible)
+        .call()
+        .await
+        .expect("IncrementalAlterConfigs round trip");
+    response
+        .responses
+        .into_iter()
+        .next()
+        .expect("one resource row")
 }
