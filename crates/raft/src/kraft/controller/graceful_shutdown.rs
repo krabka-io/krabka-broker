@@ -19,16 +19,27 @@ use {
 /// gives `KafkaRaftClient.shutdown` 5000 ms.
 const KAFKA_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Numerator of the fetch timeouts a graceful shutdown waits: two and a half,
+/// the ratio of Kafka's 5000 ms bound to its 2000 ms default fetch timeout.
+const WINDOW_FETCH_TIMEOUTS_NUM: u64 = 5;
+/// Denominator of [`WINDOW_FETCH_TIMEOUTS_NUM`].
+const WINDOW_FETCH_TIMEOUTS_DEN: u64 = 2;
+
 /// How long a graceful shutdown waits for a successor.
 ///
-/// Kafka's five seconds, or one fetch timeout when that is shorter. A
-/// successor named first in `EndQuorumEpoch` elects at once, so one fetch
-/// timeout is room enough for it, and a stop that hands nothing over is noticed
-/// within one fetch timeout anyway. The default fetch timeout is five seconds,
-/// which keeps Kafka's bound. A quorum configured with a short timeout does not
-/// hold every stop of its last voter for five seconds.
+/// Kafka's five seconds, or two and a half fetch timeouts when that is
+/// shorter. Kafka's five seconds are two and a half of its default two-second
+/// fetch timeouts, so the default fetch timeout keeps Kafka's bound exactly. A
+/// successor named first in `EndQuorumEpoch` elects at once, well inside that
+/// room. A quorum configured with a short fetch timeout does not hold every stop
+/// of its last voter for five seconds.
 pub fn graceful_shutdown_window(fetch_timeout: Time) -> Duration {
-    Duration::from_millis(whole_millis(fetch_timeout)).min(KAFKA_GRACEFUL_SHUTDOWN_TIMEOUT)
+    Duration::from_millis(
+        whole_millis(fetch_timeout)
+            .saturating_mul(WINDOW_FETCH_TIMEOUTS_NUM)
+            .div_euclid(WINDOW_FETCH_TIMEOUTS_DEN),
+    )
+    .min(KAFKA_GRACEFUL_SHUTDOWN_TIMEOUT)
 }
 
 impl Engine {
@@ -68,11 +79,11 @@ mod tests {
     use {super::*, assert2::check, krabka_units::prelude::millis};
 
     #[yare::parameterized(
-        short_test_timeout = { millis(500), Duration::from_millis(500) },
-        default_timeout = { millis(5_000), Duration::from_secs(5) },
+        short_test_timeout = { millis(500), Duration::from_millis(1_250) },
+        kafka_default = { millis(2_000), Duration::from_secs(5) },
         longer_than_kafka = { millis(20_000), Duration::from_secs(5) },
     )]
-    fn the_window_is_kafkas_five_seconds_or_one_fetch_timeout(
+    fn the_window_is_kafkas_five_seconds_or_two_and_a_half_fetch_timeouts(
         fetch_timeout: Time,
         window: Duration,
     ) {

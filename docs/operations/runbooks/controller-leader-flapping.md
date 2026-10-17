@@ -18,7 +18,7 @@ and each voter's lag.
 
 ## Diagnose
 
-1. Compare `controller_fetch_timeout` (default 5s), `controller_election_timeout`
+1. Compare `controller_fetch_timeout` (default 2s), `controller_election_timeout`
    (default 1s) and `controller_heartbeat_interval` with the round-trip time
    between the controller listeners. A stretch cluster with a slow site link
    needs a longer fetch timeout.

@@ -61,9 +61,11 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 - The controller quorum's fetch timeout and election timeout are two keys
   now, as in Kafka. The new `controller_fetch_timeout`, Kafka's
-  `controller.quorum.fetch.timeout.ms` (default 5 s), is the follower and
-  observer fetch watchdog, and 1.5 times it is the leader's check-quorum
-  window. `controller_election_timeout` is now Kafka's
+  `controller.quorum.fetch.timeout.ms`, is the follower and observer fetch
+  watchdog, and 1.5 times it is the leader's check-quorum window. Its default
+  is Kafka's 2 s, down from the 5 s the single key had, so the survivors of a
+  crashed controller leader start their election after 2 s rather than 5 s.
+  `controller_election_timeout` is now Kafka's
   `controller.quorum.election.timeout.ms` only, with Kafka's default of 1 s:
   it is the base of the randomized election timer, so a vote that splits
   after a controller leader is killed is retried within one to two election
@@ -71,16 +73,17 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   `controller_fetch_timeout / 3`, and validation now requires
   `controller_heartbeat_interval` to be below `controller_fetch_timeout`. An
   operator who tuned `controller_election_timeout` as the fetch watchdog
-  should move that value to `controller_fetch_timeout` (#1477).
+  should move that value to `controller_fetch_timeout`, and one whose
+  controller links need more than 2 s should raise it (#1477).
 
 ### Fixed
 
 - A gracefully stopped active controller now hands the metadata quorum over
   before it exits, as Kafka's `KafkaRaftClient.shutdown` does: it resigns,
   sends `EndQuorumEpoch` naming the other voters by how far they have fetched,
-  and waits up to five seconds (or one `controller_fetch_timeout`, when that
-  is shorter) for a successor. Before, it stopped without a word, and the other
-  voters noticed only after three missed five-second fetch timeouts and then an
+  and waits up to five seconds (or two and a half `controller_fetch_timeout`s,
+  when that is shorter) for a successor. Before, it stopped without a word,
+  and the other voters noticed only after three missed five-second fetch timeouts and then an
   election, 18–26 s after `SIGTERM` in a three-node cluster with the default
   timings. A new controller now serves within about half a second. A broker in
   controlled shutdown also sends its first heartbeat at once and asks again 50

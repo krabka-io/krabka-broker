@@ -461,7 +461,7 @@ krabka_macros::broker_config! {
         pub replica_lag_time_max: Time,
 
         /// Controller quorum fetch timeout, Kafka's
-        /// `controller.quorum.fetch.timeout.ms`. Default 5s.
+        /// `controller.quorum.fetch.timeout.ms`. Default 2s, as in Kafka.
         ///
         /// It is the follower and observer fetch watchdog in the `KRaft`
         /// engine, so it bounds how long a lost leader goes unnoticed before
@@ -470,9 +470,6 @@ krabka_macros::broker_config! {
         /// check-quorum window: a leader that a majority of the voters has
         /// not fetched from within that window resigns rather than keep
         /// answering as the leader of an epoch the quorum has replaced.
-        ///
-        /// The default is above Kafka's 2s so that a slow runner does not
-        /// mistake a busy leader for a lost one.
         pub controller_fetch_timeout: Time,
 
         /// Controller election timeout, Kafka's

@@ -708,10 +708,6 @@ mod tests {
             value: "1048576",
         },
         KeyValue {
-            name: "controller.quorum.fetch.timeout.ms",
-            value: "5000",
-        },
-        KeyValue {
             name: "broker.heartbeat.interval.ms",
             value: "3000",
         },

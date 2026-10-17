@@ -470,7 +470,7 @@ mod tests {
     #[test]
     fn defaults_use_conservative_raft_timings() {
         let c = BrokerConfig::default();
-        assert!(c.controller_fetch_timeout == secs(5));
+        assert!(c.controller_fetch_timeout == secs(2));
         assert!(c.controller_election_timeout == secs(1));
         assert!(c.controller_heartbeat_interval == DEFAULT_CONTROLLER_HEARTBEAT_INTERVAL);
     }

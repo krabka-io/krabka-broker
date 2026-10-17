@@ -106,10 +106,9 @@ pub const DEFAULT_OBSERVER_LAG_BOUND: u64 = 100;
 /// `controller.quorum.election.timeout.ms` default.
 pub const DEFAULT_CONTROLLER_ELECTION_TIMEOUT: Time = secs(1);
 
-/// Default controller quorum fetch timeout. Kafka's
-/// `controller.quorum.fetch.timeout.ms` defaults to 2s; krabka keeps 5s so a
-/// slow runner does not mistake a busy leader for a lost one.
-pub const DEFAULT_CONTROLLER_FETCH_TIMEOUT: Time = secs(5);
+/// Default controller quorum fetch timeout, Kafka's
+/// `controller.quorum.fetch.timeout.ms` default.
+pub const DEFAULT_CONTROLLER_FETCH_TIMEOUT: Time = secs(2);
 
 /// Default controller heartbeat interval.
 pub const DEFAULT_CONTROLLER_HEARTBEAT_INTERVAL: Time = millis(500);
