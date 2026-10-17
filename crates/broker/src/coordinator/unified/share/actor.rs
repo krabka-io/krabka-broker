@@ -125,7 +125,9 @@ impl ShareGroupActorHandle {
 }
 
 /// The settings `group_id` runs with: the `share.*` overrides of its group
-/// config in the current metadata image over the broker's `config`. A
+/// config in the current metadata image over the broker's `config`, whose
+/// assignment interval is the dynamic broker value of that image when one
+/// applies. A
 /// coordinator with no metadata source runs every group with the broker
 /// values.
 fn effective_config<'a>(
@@ -133,7 +135,13 @@ fn effective_config<'a>(
     coordinator: &GroupCoordinator,
     group_id: &str,
 ) -> Cow<'a, ShareGroupConfig> {
-    resolve_group_config(config, coordinator, group_id, ShareGroupConfig::for_group)
+    resolve_group_config(
+        config,
+        coordinator,
+        group_id,
+        ShareGroupConfig::for_broker,
+        ShareGroupConfig::for_group,
+    )
 }
 
 async fn actor_loop(

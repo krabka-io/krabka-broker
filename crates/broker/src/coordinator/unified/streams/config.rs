@@ -4,10 +4,12 @@ use {
     crate::{
         api_catalog::UnstableApiVersions,
         coordinator::unified::config::{
-            MAX_ASSIGNMENT_INTERVAL, MIN_ASSIGNMENT_INTERVAL, clamp_to_range,
+            MAX_ASSIGNMENT_INTERVAL, MIN_ASSIGNMENT_INTERVAL, broker_assignment_interval,
+            clamp_to_range,
         },
     },
-    std::{collections::BTreeMap, time::Duration},
+    krabka_metadata::{MetadataImage, NodeId},
+    std::{borrow::Cow, collections::BTreeMap, time::Duration},
 };
 
 /// Kafka's `group.streams.max.standby.replicas` default, which krabka does not
@@ -26,6 +28,11 @@ pub const KEY_RACK_AWARE_ASSIGNMENT_TAGS: &str = "streams.rack.aware.assignment.
 pub const KEY_INITIAL_REBALANCE_DELAY_MS: &str = "streams.initial.rebalance.delay.ms";
 pub const KEY_ASSIGNMENT_INTERVAL_MS: &str = "streams.assignment.interval.ms";
 pub const KEY_SHARE_AUTO_OFFSET_RESET: &str = "share.auto.offset.reset";
+
+/// Kafka's `GroupCoordinatorConfig.STREAMS_GROUP_ASSIGNMENT_INTERVAL_MS_CONFIG`,
+/// a dynamic broker config.
+pub(crate) const STREAMS_GROUP_ASSIGNMENT_INTERVAL_MS: &str =
+    "group.streams.assignment.interval.ms";
 
 /// The `streams.assignor.name` value of a streams group.
 ///
@@ -359,6 +366,29 @@ pub struct StreamsGroupConfig {
 const MAX_SIZE_DEFAULT: usize = 2_147_483_647;
 
 impl StreamsGroupConfig {
+    /// The broker streams settings as `node` applies them as of `image`: the
+    /// dynamic `group.streams.assignment.interval.ms` over the static one,
+    /// as Kafka's `GroupCoordinatorConfig.RECONFIGURABLE_CONFIGS` makes it
+    /// dynamic. A broker with no dynamic value that applies borrows the
+    /// static values.
+    #[must_use]
+    pub(crate) fn for_broker(&self, image: &MetadataImage, node: Option<NodeId>) -> Cow<'_, Self> {
+        let assignment = broker_assignment_interval(
+            image,
+            node,
+            STREAMS_GROUP_ASSIGNMENT_INTERVAL_MS,
+            self.assignment_interval,
+        );
+        if assignment == self.assignment_interval {
+            Cow::Borrowed(self)
+        } else {
+            Cow::Owned(Self {
+                assignment_interval: assignment,
+                ..self.clone()
+            })
+        }
+    }
+
     /// Apply a persisted GROUP resource override map to these broker defaults.
     ///
     /// A key this coordinator does not apply is left alone: the map holds

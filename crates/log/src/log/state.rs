@@ -580,6 +580,18 @@ impl Log {
     pub fn reconcile_next_offset(&mut self, frontier: Offset) {
         self.reconciled_frontier = self.reconciled_frontier.max(frontier);
     }
+
+    /// Drop the frontier [`Log::reconcile_next_offset`] set, so append-at
+    /// bases are held only to the log end offset again.
+    ///
+    /// The frontier binds the broker that assigns this log's offsets. A
+    /// follower assigns none: it appends its leader's batches at the leader's
+    /// offsets, and Kafka's `UnifiedLog.appendAsFollower` refuses only a batch
+    /// below the log end. A diskless replica that reopened behind the
+    /// committed frontier -- it was down while its leader appended -- must
+    /// take the batches between its log end and that frontier from the
+    /// leader, and the frontier would refuse every one of them.
+    pub fn clear_reconciled_next_offset(&mut self) { self.reconciled_frontier = Offset(0); }
 }
 
 #[cfg(test)]

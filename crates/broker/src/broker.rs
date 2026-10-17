@@ -29,6 +29,7 @@ use {
         producer_id_manager::ProducerIdManager,
         producer_state::ProducerState,
         quota::QuotaBuckets,
+        remote_log_manager::quota::RemoteLogQuotas,
         remote_reader::RemoteReader,
         share_coordinator::coordinator::ShareCoordinator,
         share_partition::manager::SharePartitionLeaderManager,
@@ -244,6 +245,11 @@ pub struct Broker {
     /// the remote-log-manager copy task and the Fetch/ListOffsets
     /// handlers share the same instance through this handle.
     pub(crate) remote_reader: Option<Arc<RemoteReader>>,
+    /// KIP-956's remote-log copy and fetch quotas, which the dynamic
+    /// `remote.log.manager.{copy,fetch}.max.bytes.per.second` configs change
+    /// on a running broker. The fetch path asks the fetch quota before every
+    /// cold read.
+    pub(crate) remote_log_quotas: Arc<RemoteLogQuotas>,
     /// Diskless WAL cold-read handle. `Some` once object-store + committed
     /// index-log wiring is active; fetch/list-offset handlers are fail-closed
     /// when this is absent.

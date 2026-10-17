@@ -235,3 +235,36 @@ pub(crate) async fn ready_admin(
     let bootstrap = format!("127.0.0.1:{}", b1.listen_addr().port());
     support::client::connect_owned(&bootstrap, client_id, "admin client").await
 }
+
+/// The base offset and size of every `*.log` file in one replica's partition
+/// directory, by ascending base offset. The highest is the active segment's;
+/// everything below it is sealed.
+pub(crate) fn local_log_files(partition_dir: &std::path::Path) -> Vec<(i64, u64)> {
+    let Ok(entries) = std::fs::read_dir(partition_dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<(i64, u64)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("log") {
+                return None;
+            }
+            let base = path.file_stem()?.to_str()?.parse().ok()?;
+            Some((base, entry.metadata().ok()?.len()))
+        })
+        .collect();
+    files.sort_unstable();
+    files
+}
+
+/// The client address of the controller leader among `brokers`, where
+/// `kafka-reassign-partitions` sends a reassignment.
+pub(crate) async fn controller_leader_addr(brokers: [&BrokerHandle; 3]) -> String {
+    let controller_leader = brokers[0].wait_until_controller_leader().await;
+    brokers
+        .iter()
+        .find(|handle| handle.node_id() == controller_leader.0)
+        .map(|handle| format!("127.0.0.1:{}", handle.listen_addr().port()))
+        .expect("the controller leader is one of the three brokers")
+}

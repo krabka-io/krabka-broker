@@ -10,7 +10,9 @@ use {
         codes,
         error::BrokerError,
         partition::{Partition, ProducerAppendCheck},
-        producer_state::{Checked, Decision, ProducerState, SequenceContext},
+        producer_state::{
+            Checked, Decision, ProducerState, SequenceContext, producer_id_expiration,
+        },
         time_util::now_ms,
         txn::{
             coordinator::{
@@ -78,8 +80,8 @@ pub(super) struct TransactionRequest<'a> {
     pub(super) transactional_id: Option<&'a str>,
     /// The negotiated `Produce` version.
     pub(super) version: i16,
-    /// `producer.id.expiration.ms`, which also bounds unused verification
-    /// state.
+    /// `producer.id.expiration.ms` as this broker applies it to the request,
+    /// which also bounds unused verification state.
     pub(super) producer_id_expiration_ms: i64,
     /// `transaction.partition.verification.enable` on this broker. When it is
     /// off, a `Produce` below v12 is appended without the coordinator's check.
@@ -97,7 +99,12 @@ impl<'a> TransactionRequest<'a> {
         Self {
             transactional_id,
             version,
-            producer_id_expiration_ms: broker.config.producer_id_expiration.millis_i64(),
+            producer_id_expiration_ms: producer_id_expiration(
+                image,
+                broker.config.node_id,
+                broker.config.producer_id_expiration,
+            )
+            .millis_i64(),
             verification_enabled: partition_verification_enabled(image, &broker.config),
         }
     }

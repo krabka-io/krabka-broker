@@ -22,6 +22,7 @@ use {
         coordinator::bootstrap::OFFSETS_TOPIC,
         error::BrokerError,
         partition::ProducerAppendCheck,
+        producer_state::producer_id_expiration,
         time_util::now_ms,
         txn::{
             coordinator::produce_verification::{
@@ -87,6 +88,13 @@ pub(super) async fn verify_producer(
     };
     let supports_epoch_bump = version >= FIRST_ADD_PARTITION_VERSION;
     let batch = offset_batch(req);
+    // `producer.id.expiration.ms` is dynamic: Kafka's
+    // `DynamicProducerStateManagerConfig` updates the config every log reads.
+    let expiration = producer_id_expiration(
+        &broker.controller.current_image(),
+        broker.config.node_id,
+        broker.config.producer_id_expiration,
+    );
     // A producer that already has an open transaction on the partition at this
     // epoch needs no coordinator call and gets the sentinel guard. A stale
     // epoch is refused here.
@@ -94,7 +102,7 @@ pub(super) async fn verify_producer(
         .start_transaction_verification(
             batch,
             supports_epoch_bump,
-            (now_ms(), broker.config.producer_id_expiration.millis_i64()),
+            (now_ms(), expiration.millis_i64()),
         )
         .await
         .map_err(|refusal| {

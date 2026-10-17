@@ -9,11 +9,40 @@
 use crate::producer_state::test_support::commit_fixture;
 use {
     super::{PartitionMap, PartitionProducerState, ProducerState},
+    crate::config_keys::node_or_cluster_default,
     krabka_ids::PartitionIndex,
-    krabka_units::{Time, convert::TimeExt as _},
+    krabka_metadata::{MetadataImage, NodeId},
+    krabka_units::{Time, convert::TimeExt},
     std::sync::Arc,
     tokio::sync::Mutex,
 };
+
+/// Kafka's `TransactionLogConfig.PRODUCER_ID_EXPIRATION_MS_CONFIG`, a dynamic
+/// broker config.
+pub(crate) const PRODUCER_ID_EXPIRATION_MS: &str = "producer.id.expiration.ms";
+
+/// The `producer.id.expiration.ms` that `node` applies as of `image`: its own
+/// dynamic value, else the cluster-wide one, else `static_value`.
+///
+/// Kafka's `DynamicProducerStateManagerConfig` writes the effective value into
+/// the `ProducerStateManagerConfig` that every log shares, so the expiry sweep
+/// and the transaction checks of the next request both read it. Kafka defines
+/// the key as a `LONG` of at least 1 and refuses any other value at alter
+/// time, so when the dynamic value that is set does not parse as one,
+/// `static_value` applies.
+///
+/// This is read on each use, so a dynamic change takes effect for the next
+/// request and the next sweep.
+pub(crate) fn producer_id_expiration(
+    image: &MetadataImage,
+    node: NodeId,
+    static_value: Time,
+) -> Time {
+    node_or_cluster_default(image, node, PRODUCER_ID_EXPIRATION_MS)
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .filter(|millis| *millis >= 1)
+        .map_or(static_value, <Time as TimeExt>::from_millis)
+}
 
 /// A topic and its partition map, copied out so no `DashMap` guard is held.
 struct TopicSlot {
@@ -206,5 +235,65 @@ mod tests {
         check!(evicted == 1);
         check!(s.by_topic.get("t").is_none());
         check!(s.check("t", PartitionIndex(0), 1, 0, 0, 0).await == Decision::Append);
+    }
+
+    /// A dynamic `producer.id.expiration.ms` of one broker, or of the cluster.
+    #[derive(Clone, Copy, Debug)]
+    struct DynamicValue {
+        node: NodeId,
+        value: &'static str,
+    }
+
+    /// This node, whose effective value the rows resolve.
+    const NODE: NodeId = NodeId(1);
+
+    fn cluster(value: &'static str) -> DynamicValue {
+        DynamicValue {
+            node: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+            value,
+        }
+    }
+
+    fn broker(node: NodeId, value: &'static str) -> DynamicValue { DynamicValue { node, value } }
+
+    /// Kafka's `DynamicProducerStateManagerConfig`: this broker's dynamic
+    /// `producer.id.expiration.ms` beats the cluster-wide one, which beats the
+    /// static value. A value that is not a `LONG` of at least 1, which Kafka
+    /// refuses at alter time, does not apply: the static value does, as for
+    /// `transaction.partition.verification.enable`. Another broker's value is
+    /// not this broker's.
+    #[yare::parameterized(
+        static_only = { &[], 86_400_000 },
+        cluster_default = { &[cluster("60000")], 60_000 },
+        cluster_default_blanks = { &[cluster(" 60000 ")], 60_000 },
+        per_broker = { &[broker(NODE, "1000")], 1_000 },
+        per_broker_over_cluster = { &[cluster("60000"), broker(NODE, "1000")], 1_000 },
+        another_broker = { &[broker(NodeId(2), "1000")], 86_400_000 },
+        unparsable_per_broker_falls_to_static = {
+            &[cluster("60000"), broker(NODE, "soon")], 86_400_000
+        },
+        unparsable_cluster = { &[cluster("soon")], 86_400_000 },
+        zero = { &[cluster("0")], 86_400_000 },
+        negative = { &[broker(NODE, "-5")], 86_400_000 },
+        one = { &[broker(NODE, "1")], 1 },
+    )]
+    fn the_expiration_reads_the_broker_then_the_cluster_then_the_static_value(
+        records: &[DynamicValue],
+        want_ms: i64,
+    ) {
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        for DynamicValue { node, value } in records {
+            image.apply(&krabka_metadata::MetadataRecord::V1BrokerConfig(
+                krabka_metadata::BrokerConfigRecord {
+                    node_id: *node,
+                    config_name: PRODUCER_ID_EXPIRATION_MS.to_owned(),
+                    config_value: Some((*value).to_owned()),
+                },
+            ));
+        }
+
+        let got = producer_id_expiration(&image, NODE, millis(86_400_000));
+
+        check!(got.millis_i64() == want_ms);
     }
 }

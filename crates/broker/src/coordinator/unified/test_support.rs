@@ -263,6 +263,32 @@ pub(crate) fn group_config_image(
     image
 }
 
+/// One dynamic broker config value: of a node, or of the cluster when `node`
+/// is [`krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BrokerValue {
+    pub node: krabka_metadata::NodeId,
+    pub key: &'static str,
+    pub value: &'static str,
+}
+
+/// `image` with each dynamic broker config of `values` applied on top.
+pub(crate) fn with_broker_values(
+    mut image: krabka_metadata::MetadataImage,
+    values: &[BrokerValue],
+) -> krabka_metadata::MetadataImage {
+    for BrokerValue { node, key, value } in values {
+        image.apply(&krabka_metadata::MetadataRecord::V1BrokerConfig(
+            krabka_metadata::BrokerConfigRecord {
+                node_id: *node,
+                config_name: (*key).to_owned(),
+                config_value: Some((*value).to_owned()),
+            },
+        ));
+    }
+    image
+}
+
 /// The response fields observed by the capacity and timing contracts.
 pub(crate) struct HeartbeatReply {
     pub error_code: i16,

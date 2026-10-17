@@ -95,6 +95,30 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   with the metadata topic. A floor that a broker before this release set is
   not covered: see the rolling-upgrade note in
   [Deploying](docs/operations/deploy.md#rolling-upgrade).
+- A diskless topic now serves its whole log to a consumer that sends
+  `last_fetched_epoch`, as the krabka Rust consumer does on Fetch v12 and
+  later. Before, a fetch below the leader's local log start answered
+  `OFFSET_OUT_OF_RANGE` before the WAL objects were consulted, because the
+  epoch check measured it against the flusher's trim frontier rather than the
+  partition's real floor. Such a consumer reset to the latest offset each
+  time it fell behind a trim, and read only a few dozen of thousands of
+  records. A replica of a diskless partition that fell behind the trim was
+  refused the same way.
+- A diskless WAL follower now takes the batch it is served when its log is
+  empty at an offset inside that batch, as Kafka's
+  `Partition.appendRecordsToFollowerOrFutureReplica` does: it restarts at the
+  batch's base. The flusher trims to the high watermark less the safety lag,
+  which a batch of many records straddles, so a voter that fell behind the
+  trim reset into a batch and then failed every fetch with `WAL fetch is not
+  contiguous`. The follower also keeps a hole in the leader's WAL, where the
+  controller reserved offsets that no batch was written at, instead of
+  refusing the batch after it, which stalled the quorum after a leader change.
+- A broker restarted while a diskless partition took writes rejoins that
+  partition's ISR. It reopened the partition with the committed `KRaft` next
+  offset as its append frontier, and its replicator then refused every leader
+  batch below that frontier with `offset mismatch`. A follower now appends the
+  leader's batches from its own log end, as Kafka's `appendAsFollower` does;
+  `Log::clear_reconciled_next_offset` drops the frontier.
 - A per-broker `listeners` and `listener.security.protocol.map` change now
   opens and closes data-plane listeners without a restart, as Kafka's
   `DynamicListenerConfig` does: a new listener name is bound and served with
@@ -135,6 +159,29 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   OAUTHBEARER validator refuses what Kafka's does: an `exp` not after `iat`,
   a non-numeric `iat`, a blank principal and a numeric scope claim
   (krabka-io/krabka-protocol#65, #66).
+- These dynamic broker configs now take effect on a running broker, per
+  broker and then cluster-wide, where before they were stored and reported
+  and changed nothing (#1424):
+  - `producer.id.expiration.ms` drives the producer-expiry sweep and the
+    transaction-verification window.
+  - The three group assignment intervals,
+    `group.consumer.assignment.interval.ms`,
+    `group.share.assignment.interval.ms` and
+    `group.streams.assignment.interval.ms`, apply under a group's own
+    override. A value outside the group minimum and maximum is refused with
+    Kafka's `GroupCoordinatorConfig` message.
+  - `remote.log.manager.copy.max.bytes.per.second` and
+    `remote.log.manager.fetch.max.bytes.per.second` meter segment uploads
+    and consumer cold reads with Kafka's `RLMQuotaManager` (KIP-956). A copy
+    over the quota waits; a fetch over it answers the partition with empty
+    records.
+  - `remote.fetch.max.wait.ms` bounds a fetch's cold reads, as
+    `DelayedRemoteFetch` does.
+  - `remote.log.index.file.cache.total.size.bytes` resizes the remote index
+    cache, and a shrink evicts down to the new size.
+  - `follower.fetch.last.tiered.offset.enable` makes an empty follower of a
+    tiered topic start at the leader's earliest pending upload offset
+    (KIP-1023) instead of copying its whole local log.
 - A partition no longer stalls its appends and fetches while it deletes
   segment files that retention retired. When their `file.delete.delay.ms`
   passed, the partition writer unlinked them one after another under the log

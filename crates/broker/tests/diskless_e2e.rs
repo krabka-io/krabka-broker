@@ -30,6 +30,12 @@
 //! log -- and a crash can land between any two steps. Every offset that was
 //! ever acked must still read back afterwards.
 //!
+//! [`batched`] runs the traffic the other cases simplify away: a batching
+//! idempotent producer, so the flusher's trim lands inside batches, and the
+//! krabka consumer, which sends `last_fetched_epoch`. It requires a read from
+//! the earliest offset to return every record, every WAL voter to catch up,
+//! and a follower restarted under that load to rejoin the ISR.
+//!
 //! ## Layout
 //!
 //! The binary root carries the module tree and the constants every part
@@ -44,6 +50,8 @@ mod support;
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling
 // `diskless_e2e/` directory, which keeps the parts out of `tests/` where every
 // `.rs` file would become another test binary.
+#[path = "diskless_e2e/batched.rs"]
+mod batched;
 #[path = "diskless_e2e/cluster.rs"]
 mod cluster;
 #[path = "diskless_e2e/cold_read.rs"]

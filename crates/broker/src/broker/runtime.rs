@@ -47,6 +47,7 @@ use {
         partition_registry::PartitionRegistry,
         producer_state::ProducerState,
         quota::{QuotaBuckets, run as run_quota_refresh, run_expiry},
+        remote_log_manager::quota::RemoteLogQuotas,
         remote_reader::RemoteReader,
         throttle::{ThrottleState, apply_image, run as run_throttle},
         time_util::now_ms,
@@ -216,6 +217,7 @@ pub(super) struct BrokerRuntimeStartup {
     pub(super) quota_buckets: Arc<QuotaBuckets>,
     pub(super) fetch_session_cache: Arc<FetchSessionCache>,
     pub(super) remote_reader: Option<Arc<RemoteReader>>,
+    pub(super) remote_log_quotas: Arc<RemoteLogQuotas>,
     pub(super) diskless_read: Option<Arc<DisklessReadHandle>>,
     pub(super) client_metrics: Arc<ClientMetrics>,
     pub(super) audit_log: Arc<krabka_audit::AuditLog>,
@@ -360,6 +362,11 @@ pub(super) async fn start_broker_runtime(
     // `RemoteLogManager` in `BrokerServer` only. A node without the broker role
     // hosts no partition, and it opens no data-plane listener for the
     // topic-backed metadata manager to bootstrap from.
+    //
+    // KIP-956's two quotas exist on every broker, unlimited, so the fetch path
+    // reads them without asking whether the tier is configured; only a broker
+    // with a tier has a watch that changes them.
+    let remote_log_quotas = Arc::new(RemoteLogQuotas::default());
     let (kafka_swap_kickoff, remote) = if config.is_broker() {
         (
             kafka_swap_kickoff(config),
@@ -367,6 +374,7 @@ pub(super) async fn start_broker_runtime(
                 config,
                 storage.partitions,
                 controller,
+                &remote_log_quotas,
                 &metrics,
                 &supervisor_shutdown,
             )?,
@@ -401,6 +409,7 @@ pub(super) async fn start_broker_runtime(
         quota_buckets: caches.quota_buckets,
         fetch_session_cache: caches.fetch_sessions,
         remote_reader: remote.reader,
+        remote_log_quotas,
         diskless_read: remote.diskless_read,
         client_metrics,
         audit_log,

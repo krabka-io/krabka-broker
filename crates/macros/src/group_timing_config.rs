@@ -55,6 +55,23 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
             Self { assignment_interval: ::std::time::Duration::ZERO, ..Self::default() }
         }
 
+        /// These settings with the broker assignment interval `interval`, which
+        /// a dynamic broker config sets over the static one. The same interval
+        /// borrows these settings.
+        #[must_use]
+        pub(crate) fn with_assignment_interval(
+            &self,
+            interval: ::std::time::Duration,
+        ) -> ::std::borrow::Cow<'_, Self> {
+            if interval == self.assignment_interval {
+                ::std::borrow::Cow::Borrowed(self)
+            } else {
+                let mut config = self.clone();
+                config.assignment_interval = interval;
+                ::std::borrow::Cow::Owned(config)
+            }
+        }
+
         /// Apply this protocol's stored group timings within the broker bounds.
         /// A group with no valid timing override borrows the broker defaults.
         #[must_use]
@@ -142,7 +159,7 @@ mod tests {
             .filter_map(ImplItem::as_fn)
             .map(|method| method.sig.ident.text())
             .collect();
-        assert!(methods == ["assigning_at_once", "for_group"]);
+        assert!(methods == ["assigning_at_once", "with_assignment_interval", "for_group"]);
     }
 
     #[yare::parameterized(

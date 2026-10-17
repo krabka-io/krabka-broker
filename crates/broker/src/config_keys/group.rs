@@ -308,6 +308,40 @@ const MIN_ASSIGNMENT_INTERVAL_MS: i32 = 0;
 /// Kafka's `group.{consumer,share,streams}.max.assignment.interval.ms`
 /// default, which krabka does not make configurable.
 const MAX_ASSIGNMENT_INTERVAL_MS: i32 = 15_000;
+/// Kafka's `GroupCoordinatorConfig` checks of the three dynamic broker
+/// assignment intervals in `props` against this broker's bounds: the message
+/// of the first value outside them, in the constructor's order, consumer,
+/// share, streams.
+///
+/// Kafka's `DynamicBrokerConfig.processReconfiguration` builds a whole
+/// `KafkaConfig` from the configs a dynamic alter leaves, and the
+/// `GroupCoordinatorConfig` it builds `require`s each
+/// `group.{consumer,share,streams}.assignment.interval.ms` to lie within
+/// `group.*.min.assignment.interval.ms` and `group.*.max.assignment.interval.ms`.
+/// krabka's bounds are Kafka's defaults, which it does not make configurable.
+/// A value that is not an `INT` is the type check's to refuse, so it passes
+/// here.
+pub(super) fn broker_assignment_interval_error(props: &BTreeMap<String, String>) -> Option<String> {
+    ["consumer", "share", "streams"]
+        .into_iter()
+        .find_map(|protocol| {
+            let key = format!("group.{protocol}.assignment.interval.ms");
+            let millis = props.get(&key)?.trim().parse::<i32>().ok()?;
+            if millis < MIN_ASSIGNMENT_INTERVAL_MS {
+                Some(format!(
+                    "{key} must be greater than or equal to \
+                     group.{protocol}.min.assignment.interval.ms"
+                ))
+            } else if millis > MAX_ASSIGNMENT_INTERVAL_MS {
+                Some(format!(
+                    "{key} must be less than or equal to group.{protocol}.max.assignment.interval.ms"
+                ))
+            } else {
+                None
+            }
+        })
+}
+
 /// The task assignors krabka's streams coordinator registers, which is what
 /// `group.streams.assignors` names on a Kafka broker.
 const REGISTERED_ASSIGNORS: &[&str] = &["auto", "sticky", "highly_available"];
@@ -1080,5 +1114,44 @@ mod tests {
         let mut ordered = DEFINITION_ORDER.to_vec();
         ordered.sort_unstable();
         check!(ordered == names);
+    }
+
+    /// Kafka's `GroupCoordinatorConfig` `require`s, for each protocol's
+    /// broker assignment interval, in the constructor's order: below the
+    /// minimum, above the maximum, the bounds themselves, and a value the type
+    /// check refuses, which passes here.
+    #[yare::parameterized(
+        none = { &[], None },
+        below_the_minimum = {
+            &[("group.consumer.assignment.interval.ms", "-1")],
+            Some("group.consumer.assignment.interval.ms must be greater than or equal to \
+                  group.consumer.min.assignment.interval.ms"),
+        },
+        the_minimum = { &[("group.share.assignment.interval.ms", "0")], None },
+        the_maximum = { &[("group.streams.assignment.interval.ms", "15000")], None },
+        above_the_maximum = {
+            &[("group.streams.assignment.interval.ms", "15001")],
+            Some("group.streams.assignment.interval.ms must be less than or equal to \
+                  group.streams.max.assignment.interval.ms"),
+        },
+        share_before_streams = {
+            &[
+                ("group.streams.assignment.interval.ms", "-1"),
+                ("group.share.assignment.interval.ms", "15001"),
+            ],
+            Some("group.share.assignment.interval.ms must be less than or equal to \
+                  group.share.max.assignment.interval.ms"),
+        },
+        not_an_int = { &[("group.consumer.assignment.interval.ms", "soon")], None },
+        another_key = { &[("group.consumer.max.assignment.interval.ms", "20000")], None },
+    )]
+    fn broker_assignment_intervals_lie_within_the_broker_bounds(
+        props: &[(&str, &str)],
+        want: Option<&str>,
+    ) {
+        check!(
+            broker_assignment_interval_error(&overrides(props)).as_deref() == want,
+            "{props:?}"
+        );
     }
 }

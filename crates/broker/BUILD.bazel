@@ -35,7 +35,7 @@ crate_tests(
     # the test run and fail under coverage instrumentation, which is a statement
     # about the instrumentation rather than about the code. `diskless_e2e` and
     # `sharegroup_backlog` assert on a committed high-watermark across three
-    # brokers; `diskless_e2e` boots three such clusters at once, one per case,
+    # brokers; `diskless_e2e` boots one such cluster per case, all at once,
     # and every case gates on a quorum-committed watermark inside a bounded
     # deadline.
     #
