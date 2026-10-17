@@ -81,6 +81,9 @@ pub(super) async fn handle_replicate(
             if let Some(high_watermark) = high_watermark {
                 guard.release_replicated_transactions(high_watermark);
             }
+            // A follower takes its offsets from the leader; see
+            // `Log::clear_reconciled_next_offset`.
+            guard.clear_reconciled_next_offset();
             guard
                 .append_at(&mut batch, Offset(offset))
                 .map_err(BrokerError::from)?;
@@ -124,7 +127,11 @@ pub(super) async fn handle_replicate_verbatim(
     let log_for_blocking = Arc::clone(log);
     let result = run_log_mutation(
         move || {
-            lock_log(&log_for_blocking)
+            let mut guard = lock_log(&log_for_blocking);
+            // A follower takes its offsets from the leader; see
+            // `Log::clear_reconciled_next_offset`.
+            guard.clear_reconciled_next_offset();
+            guard
                 .append_verbatim_at(&batch, base_offset)
                 .map(|_| ())
                 .map_err(BrokerError::from)
