@@ -54,6 +54,22 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- The controller listener's TLS and SASL handshake is now held to
+  `connections.max.idle.ms` of silence, as Kafka's `Selector` does, instead
+  of to that long in total (#1426).
+- A request other than `SaslAuthenticate` during a SASL exchange now gets its
+  own error response with `ILLEGAL_SASL_STATE` (34), after the failed
+  authentication delay, before the connection closes, as Kafka's
+  `SaslServerAuthenticator` sends it. A request Kafka cannot parse still
+  closes at once (#1427).
+- A KIP-368 session, on a broker or the controller listener, now expires only
+  strictly after its deadline, as Kafka's `KafkaChannel` does, so a request at
+  the deadline itself is still served (#1428).
+- A SCRAM credential stored with fewer than 4096 iterations is now refused at
+  authentication with Kafka's generic failure (#1429).
+- The unsecured OAUTHBEARER validator allows no clock skew by default, as
+  Kafka's `unsecuredValidatorAllowableClockSkewMs` does. The signed and
+  introspection validators keep 30 s (#1430).
 - `max.connections.per.ip.overrides`, `max.connection.creation.rate` and the
   per-listener `listener.name.<listener>.max.connections` and
   `listener.name.<listener>.max.connection.creation.rate` now take effect, on
