@@ -462,12 +462,54 @@ pub(crate) async fn compute_unclean_restart_changes(
     liveness: &ControllerLivenessState,
     metrics: &BrokerMetrics,
 ) -> FailoverPlan {
+    restart_plan(
+        image,
+        returning,
+        liveness,
+        metrics,
+        withdraw_elr_membership(image, returning),
+    )
+    .await
+}
+
+/// The failover changes a new incarnation of `returning` needs when the
+/// controller cannot tell whether its last stop was clean: the
+/// `partitionsWithBrokerInIsr` half of [`compute_unclean_restart_changes`],
+/// without the ELR withdrawal.
+///
+/// A krabka broker registers itself by submitting its registration record, and
+/// the record carries no `previousBrokerEpoch`. The broker withdraws its own
+/// ELR membership in that batch when it cannot prove a clean stop, so what the
+/// controller adds is what `handleBrokerShutdown` does on either branch: the
+/// broker leaves every ISR and every leadership it still holds. It takes the
+/// unclean branch's eligibility, so an ISR removal here never makes the
+/// returning broker eligible to lead. For a broker that did stop cleanly that
+/// is the safe side of Kafka's clean branch, and a broker that stopped through
+/// controlled shutdown holds no ISR seat and no leadership, so nothing here
+/// touches it.
+pub(crate) async fn compute_reregistration_changes(
+    image: &MetadataImage,
+    returning: NodeId,
+    liveness: &ControllerLivenessState,
+    metrics: &BrokerMetrics,
+) -> FailoverPlan {
+    restart_plan(image, returning, liveness, metrics, Vec::new()).await
+}
+
+/// [`compute_unclean_restart_changes`] after `withdrawals`, its ELR half.
+async fn restart_plan(
+    image: &MetadataImage,
+    returning: NodeId,
+    liveness: &ControllerLivenessState,
+    metrics: &BrokerMetrics,
+    withdrawals: Vec<MetadataRecord>,
+) -> FailoverPlan {
     let FailoverPlan {
         mut changes,
         mut recoveries,
         mut unavailable,
     } = FailoverPlan {
-        changes: withdraw_elr_membership(image, returning),
+        changes: withdrawals,
         ..Default::default()
     };
     let ScanInputs {

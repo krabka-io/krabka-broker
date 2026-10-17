@@ -322,8 +322,7 @@ async fn a_stalled_partition_does_not_stop_the_sweep_reaching_the_next() {
             .metrics(&metrics)
             .index_cache(&index_cache)
             .call(),
-        NodeId(1),
-        1,
+        fixtures::serving_broker(&CancellationToken::new()),
         SweepConcurrency::default(),
     )
     .await;

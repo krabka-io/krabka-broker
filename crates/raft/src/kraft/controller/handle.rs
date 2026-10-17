@@ -5,7 +5,7 @@
 use {
     super::KraftController,
     crate::{
-        DelegationTokenMutation, SubmitChangeResult,
+        DelegationTokenMutation, RegistrationAdmission, SubmitChangeResult,
         error::RaftError,
         kraft::{
             event::Event,
@@ -113,12 +113,46 @@ impl KraftController {
         &self,
         records: Vec<krabka_metadata::MetadataRecord>,
     ) -> Result<SubmitChangeResult, RaftError> {
+        let records = self.admit_registrations(records).await?;
         self.ask(|reply| Command::SubmitChange {
             records,
             expected_image: None,
             reply,
         })
         .await?
+    }
+
+    /// Install the hook every batch that registers a broker anew passes through
+    /// on the leader. It can be installed once.
+    ///
+    /// # Errors
+    /// Returns an error if a hook is already installed.
+    pub fn install_registration_admission(
+        &self,
+        admission: Arc<dyn RegistrationAdmission>,
+    ) -> Result<(), &'static str> {
+        self.registration_admission
+            .set(admission)
+            .map_err(|_| "registration admission already installed")
+    }
+
+    /// `records` as the installed [`RegistrationAdmission`] admits them, when
+    /// this node leads and the batch registers a broker anew, and unchanged
+    /// otherwise. A follower forwards the batch as it was submitted, and the
+    /// leader that receives it admits it.
+    async fn admit_registrations(
+        &self,
+        records: Vec<krabka_metadata::MetadataRecord>,
+    ) -> Result<Vec<krabka_metadata::MetadataRecord>, RaftError> {
+        let registers_anew = records.iter().any(|record| {
+            matches!(record, krabka_metadata::MetadataRecord::V1BrokerRegistration(registration)
+                if registration.broker_epoch < 0)
+        });
+        let leads = *self.leader_rx.borrow() == Some(self.me);
+        match self.registration_admission.get() {
+            Some(admission) if registers_anew && leads => admission.admit(records).await,
+            _ => Ok(records),
+        }
     }
 
     /// Submit a leader-local mutation only while its admission image is current.

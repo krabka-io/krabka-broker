@@ -8,6 +8,7 @@ use {
     super::{
         RemoteTier,
         archive::{ArchiveMode, ChainPosition},
+        copy::CopyIdentity,
         leader_epoch::leader_epoch_index_bytes,
         rlmm::rlmm_mutate,
     },
@@ -35,6 +36,10 @@ pub(super) enum CopyOutcome {
     /// The attempt did not reach `CopySegmentFinished`. The caller keeps its
     /// chain position and the next tick retries the segment.
     Failed,
+    /// The broker stopped leading the partition, or began shutting down,
+    /// while the copy ran. The copy was rolled back rather than published, and
+    /// the pass stops: the tier is the new leader's to write.
+    Fenced,
 }
 
 /// Copy one sealed segment through the full `Started` → `Finished`
@@ -47,11 +52,17 @@ pub(super) enum CopyOutcome {
 /// is, the stamp goes on before the copy, so the `CopySegmentStarted` record
 /// already says where the manifest was meant to sit, and a durable metadata
 /// manager shows that even if the broker dies mid-copy.
+///
+/// The copy asks `identity`'s fence twice more: once `CopySegmentStarted` is
+/// recorded, before any byte is uploaded, and once the upload returns, before
+/// `CopySegmentFinished` is published. Either write can wait on the metadata
+/// manager for seconds, and a broker that lost the partition in that time must
+/// not publish a copy over offsets the new leader is copying under its own
+/// segment boundaries; both copies would stay in the tier.
 pub(super) async fn copy_one(
     tier: &RemoteTier<'_>,
     tp: &TopicIdPartition,
-    broker_id: i32,
-    leader_epoch: krabka_ids::LeaderEpoch,
+    identity: CopyIdentity<'_>,
     ex: &SegmentExport,
     chain: ChainPosition,
 ) -> CopyOutcome {
@@ -61,7 +72,7 @@ pub(super) async fn copy_one(
     // finish and the two divide into a failure rate.
     tier.metrics
         .record_remote_request(RemoteTierPath::Copy, &tp.topic);
-    let outcome = copy_one_inner(tier, tp, broker_id, leader_epoch, ex, chain).await;
+    let outcome = copy_one_inner(tier, tp, identity, ex, chain).await;
     match outcome {
         // The bytes are counted on a *finished* copy, not on the backend PUT
         // returning: a copy whose metadata never reached `CopySegmentFinished`
@@ -75,6 +86,8 @@ pub(super) async fn copy_one(
             tier.metrics
                 .record_remote_error(RemoteTierPath::Copy, &tp.topic);
         }
+        // Losing the partition is not a backend error.
+        CopyOutcome::Fenced => {}
     }
     outcome
 }
@@ -82,8 +95,11 @@ pub(super) async fn copy_one(
 async fn copy_one_inner(
     tier: &RemoteTier<'_>,
     tp: &TopicIdPartition,
-    broker_id: i32,
-    leader_epoch: krabka_ids::LeaderEpoch,
+    CopyIdentity {
+        broker_id,
+        leader_epoch,
+        fence,
+    }: CopyIdentity<'_>,
     ex: &SegmentExport,
     chain: ChainPosition,
 ) -> CopyOutcome {
@@ -154,6 +170,15 @@ async fn copy_one_inner(
         return CopyOutcome::Failed;
     }
 
+    // Recording `CopySegmentStarted` waits for the metadata manager to apply
+    // it. Nothing is uploaded yet, so a broker that lost the partition in
+    // that wait withdraws the record and leaves the tier untouched.
+    if !fence.holds() {
+        fenced(tp, ex, "before the upload");
+        rollback(&metadata, broker_id, chain.archive(), rsm, rlmm).await;
+        return CopyOutcome::Fenced;
+    }
+
     let data = export_segment_data(ex, ProducerSnapshotExport::Include, || {
         leader_epoch_index_bytes(&epochs)
     });
@@ -209,6 +234,18 @@ async fn copy_one_inner(
             return CopyOutcome::Failed;
         }
     };
+
+    // The upload may have outlived this broker's leadership. On a mutable
+    // tier the objects are withdrawn before anything references them, so the
+    // new leader's copy of these offsets is the only one the tier keeps. A
+    // write-once copy is past that point: the backend has sealed a manifest
+    // over the objects, they cannot be deleted, and the chain the next copy
+    // extends already runs through it, so it is published as usual.
+    if chain == ChainPosition::Unchained && !fence.holds() {
+        fenced(tp, ex, "after the upload");
+        rollback(&metadata, broker_id, chain.archive(), rsm, rlmm).await;
+        return CopyOutcome::Fenced;
+    }
 
     // A write-once copy is only complete once the backend hands back a receipt
     // carrying the head its manifest produced. Without one the objects landed
@@ -273,6 +310,14 @@ async fn copy_one_inner(
     debug!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
            end = ex.last_offset.0, "remote-log-manager: copied segment to remote tier");
     CopyOutcome::Copied { next }
+}
+
+/// Log a copy withdrawn because the broker lost the partition `when`.
+fn fenced(tp: &TopicIdPartition, ex: &SegmentExport, when: &str) {
+    debug!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+           end = ex.last_offset.0, when,
+           "remote-log-manager: no longer the partition's leader in this epoch; withdrawing \
+            the copy instead of publishing it");
 }
 
 /// Delete partial remote data and drop the metadata after a failed copy.
@@ -482,8 +527,7 @@ mod tests {
             let outcome = copy_one(
                 &tier(chain.archive(), &rsm, &rlmm),
                 &tp(),
-                1,
-                LeaderEpoch(0),
+                CopyIdentity::unfenced(1, LeaderEpoch(0)),
                 &export,
                 chain,
             )
@@ -527,8 +571,7 @@ mod tests {
             let outcome = copy_one(
                 &tier(ArchiveMode::WriteOnce, &rsm, &rlmm),
                 &tp(),
-                1,
-                LeaderEpoch(0),
+                CopyIdentity::unfenced(1, LeaderEpoch(0)),
                 &synth_export().call(),
                 ChainPosition::At(requested),
             )
@@ -620,8 +663,7 @@ mod tests {
             copy_one(
                 &tier,
                 &tp(),
-                1,
-                LeaderEpoch(0),
+                CopyIdentity::unfenced(1, LeaderEpoch(0)),
                 &synth_export().call(),
                 chain,
             )

@@ -127,6 +127,23 @@ pub(crate) fn remote_retention_eviction_set(
     finished.iter().take(len).cloned().collect()
 }
 
+/// Whether the archive enforces `floor`: no finished segment lies wholly
+/// below it.
+///
+/// The log-start breach in [`remote_retention_eviction_set`] deletes every
+/// finished segment whose `end_offset` is below the floor somebody deleted up
+/// to, so a floor a `DeleteRecords` or a retention pass moved leaves no such
+/// segment once the pass has run. A floor nobody deleted up to leaves the
+/// archive below it as it was. A follower reads this before it lowers a floor
+/// it established to a lower start its leader reports: see
+/// [`super::follow_unenforced_floor`].
+pub(crate) fn archive_enforces_floor(segments: &[RemoteLogSegmentMetadata], floor: Offset) -> bool {
+    !segments.iter().any(|segment| {
+        segment.state() == RemoteLogSegmentState::CopySegmentFinished
+            && segment.end_offset() < floor.0
+    })
+}
+
 /// Kafka's `deleteLogSegmentsDueToLeaderEpochCacheTruncation`: the segments
 /// whose leader epochs all lie below `earliest_epoch`, in the order given.
 ///

@@ -243,11 +243,20 @@ async fn a_follower_left_with_a_raised_floor_takes_its_leaders_back() {
     drop(reopened);
 
     // The follower comes back and fetches from broker 2, which reports the
-    // real global start.
+    // real global start. The archive still holds every segment below the
+    // raised floor, so nobody deleted up to it, and the follower takes the
+    // leader's start back once its RLMM can say so.
     cluster.restart(FOLLOWER).await;
     let end = cluster
         .produce_and_replicate(ARCHIVED..ARCHIVED + LATER)
         .await;
+    await_log_start(
+        cluster.brokers[FOLLOWER]
+            .as_ref()
+            .expect("the follower runs"),
+        0,
+    )
+    .await;
 
     Box::pin(cluster.read_back_from_the_follower(end)).await;
 }
@@ -303,6 +312,25 @@ async fn await_local_eviction(log_dir: &Path) {
             "{} never evicted its first segment: {:?}",
             partition_dir.display(),
             local_segment_bases(&partition_dir)
+        );
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+}
+
+/// Wait until `broker`'s replica of the partition starts at `start`.
+async fn await_log_start(broker: &BrokerHandle, start: i64) {
+    let deadline = Instant::now() + Duration::from_mins(2);
+    // intentional: a follower takes its leader's log start on a fetch
+    // response, once its RLMM has caught up after the restart, and neither has
+    // an awaitable signal, so poll the partition (bounded loop).
+    loop {
+        let current = broker.partition_log_start_for_test(TOPIC, 0);
+        if current == Some(start) {
+            return;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "the replica's log start stayed at {current:?}, not {start}"
         );
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
