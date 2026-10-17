@@ -178,6 +178,22 @@ impl Partition {
             .await?
     }
 
+    /// Take the leader's global log start as this follower's own, through
+    /// the writer actor. Returns the resulting `log_start_offset`. See
+    /// [`krabka_log::Log::follow_leader_log_start`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `BrokerError` if the writer is dead, the ack is dropped, or
+    /// the underlying log call fails.
+    pub(crate) async fn follow_leader_log_start(
+        &self,
+        leader_start: Offset,
+    ) -> Result<Offset, BrokerError> {
+        self.ask_writer(|ack| WriterMessage::FollowLeaderLogStart { leader_start, ack })
+            .await?
+    }
+
     /// Send a `WriterMessage::Compact` to the partition's writer
     /// actor and await the ack. The broker-wide [`Cleaner`] ticker
     /// calls this.

@@ -214,6 +214,13 @@ pub enum WriterMessage {
         new_start: Offset,
         ack: tokio::sync::oneshot::Sender<Result<Offset, BrokerError>>,
     },
+    /// Take the leader's global log start as this follower's own, as
+    /// [`krabka_log::Log::follow_leader_log_start`] describes. Returns the
+    /// resulting `log_start_offset`. The replicator sends this message.
+    FollowLeaderLogStart {
+        leader_start: Offset,
+        ack: tokio::sync::oneshot::Sender<Result<Offset, BrokerError>>,
+    },
     /// Test-only: shift the in-memory `log_start_offset` and do not
     /// physically truncate segments. This simulates retention-driven
     /// truncation for the `out_of_range_truncates_and_recovers`

@@ -14,23 +14,77 @@
 //! The certificate reaches this module after rustls has verified it, so a
 //! small DER reader over the few structures a Subject needs is enough.
 
+use std::collections::BTreeSet;
+
 /// Returns the Subject DN of the DER certificate `cert_der` in the RFC 2253
 /// form `X500Principal.getName()` gives, or `None` when the bytes are not a
 /// certificate.
 #[must_use]
 pub fn subject_dn_rfc2253(cert_der: &[u8]) -> Option<String> {
+    let subject = Tlv::read(tbs_from_subject(cert_der)?, SEQUENCE)?.tlv;
+    name_rfc2253(subject.value)
+}
+
+/// The `TBSCertificate` contents of the DER certificate `cert_der` from its
+/// subject on: past the optional `[0]` version, `serialNumber`, `signature`,
+/// `issuer` and `validity`.
+fn tbs_from_subject(cert_der: &[u8]) -> Option<&[u8]> {
     let certificate = Tlv::read_exact(cert_der, SEQUENCE)?;
     let mut tbs = Tlv::read(certificate.value, SEQUENCE)?.tlv.value;
-    // TBSCertificate: [0] version (optional), serialNumber, signature, issuer,
-    // validity, subject.
     if tbs.first() == Some(&EXPLICIT_VERSION) {
         tbs = Tlv::read(tbs, EXPLICIT_VERSION)?.rest;
     }
     for tag in [INTEGER, SEQUENCE, SEQUENCE, SEQUENCE] {
         tbs = Tlv::read(tbs, tag)?.rest;
     }
-    let subject = Tlv::read(tbs, SEQUENCE)?.tlv;
-    name_rfc2253(subject.value)
+    Some(tbs)
+}
+
+/// Returns the subject alternative names of the DER certificate `cert_der`,
+/// each `GeneralName` as its whole DER encoding, or `None` when the bytes are
+/// not a certificate. A certificate with no `subjectAltName` extension has
+/// none. Kafka's `SslFactory.CertificateEntries` compares these as a set when
+/// a dynamic keystore update replaces a listener's certificate.
+#[must_use]
+pub fn subject_alt_names(cert_der: &[u8]) -> Option<BTreeSet<Vec<u8>>> {
+    let mut tbs = tbs_from_subject(cert_der)?;
+    // subject, subjectPublicKeyInfo.
+    for _ in 0..2 {
+        tbs = Tlv::read(tbs, SEQUENCE)?.rest;
+    }
+    // issuerUniqueID [1] and subjectUniqueID [2], then extensions [3].
+    while let Some(&tag) = tbs.first() {
+        let TlvAndRest { tlv, rest } = Tlv::read(tbs, None)?;
+        tbs = rest;
+        if tag != EXPLICIT_EXTENSIONS {
+            continue;
+        }
+        let mut extensions = Tlv::read_exact(tlv.value, SEQUENCE)?.value;
+        while !extensions.is_empty() {
+            let TlvAndRest {
+                tlv: extension,
+                rest,
+            } = Tlv::read(extensions, SEQUENCE)?;
+            extensions = rest;
+            let TlvAndRest { tlv: oid, mut rest } = Tlv::read(extension.value, OBJECT_IDENTIFIER)?;
+            if oid.value != SUBJECT_ALT_NAME {
+                continue;
+            }
+            if rest.first() == Some(&BOOLEAN) {
+                rest = Tlv::read(rest, BOOLEAN)?.rest;
+            }
+            let value = Tlv::read_exact(rest, OCTET_STRING)?.value;
+            let mut names = Tlv::read_exact(value, SEQUENCE)?.value;
+            let mut out = BTreeSet::new();
+            while !names.is_empty() {
+                let TlvAndRest { tlv: name, rest } = Tlv::read(names, None)?;
+                names = rest;
+                out.insert(name.whole.to_vec());
+            }
+            return Some(out);
+        }
+    }
+    Some(BTreeSet::new())
 }
 
 /// Renders the contents of a DER `Name` (the RDN sequence) in RFC 2253 form.
@@ -184,7 +238,9 @@ fn dotted_oid(content: &[u8]) -> Option<String> {
     })
 }
 
+const BOOLEAN: u8 = 0x01;
 const INTEGER: u8 = 0x02;
+const OCTET_STRING: u8 = 0x04;
 const OBJECT_IDENTIFIER: u8 = 0x06;
 const UTF8_STRING: u8 = 0x0C;
 const PRINTABLE_STRING: u8 = 0x13;
@@ -195,6 +251,10 @@ const BMP_STRING: u8 = 0x1E;
 const SEQUENCE: u8 = 0x30;
 const SET: u8 = 0x31;
 const EXPLICIT_VERSION: u8 = 0xA0;
+const EXPLICIT_EXTENSIONS: u8 = 0xA3;
+
+/// The content of the `subjectAltName` OID, 2.5.29.17.
+const SUBJECT_ALT_NAME: &[u8] = &[0x55, 0x1D, 0x11];
 
 /// One DER tag-length-value with a single-octet tag.
 #[derive(Debug, Clone, Copy)]
