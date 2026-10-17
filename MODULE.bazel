@@ -129,6 +129,13 @@ pull_image = use_repo_rule("@rules_img//img:pull.bzl", "pull")
         # single-platform image and no attestation to trip over. The index is
         # sha256:797ce226d62f947c009dc40246b30cfb456b8473d8241407f9d6f2c04e4d69ef.
         ("fake_gcs_server", "mirror.gcr.io", "fsouza/fake-gcs-server", "1.56.1", "sha256:af5fcc12a29db42953c9659dc44b478c164b78f6303390cf25fc93037d78522b"),
+        # The Prometheus that soak_contract runs beside its cluster, so the run's
+        # evidence records when each shipped alert rule fired and resolved.
+        # The linux/amd64 manifest, for the reason fake_gcs_server gives:
+        # `image_import` builds every manifest an index holds, and the index
+        # (sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996)
+        # carries five platforms the runner never runs.
+        ("prometheus_3_5_0", "mirror.gcr.io", "prom/prometheus", "v3.5.0", "sha256:8672a850efe2f9874702406c8318704edb363587f8c2ca88586b4c8fdb5cea24"),
         ("kcat_1_7_1", "mirror.gcr.io", "edenhill/kcat", "1.7.1", "sha256:8f16a5fed099931ce1122420b7473efe467ff9841d53680b99db25dd1723d711"),
         # The 1.x half of librdkafka_conformance. The 2.x half is
         # //bazel/images:kcat_librdkafka_2x, built here from an apko lock,

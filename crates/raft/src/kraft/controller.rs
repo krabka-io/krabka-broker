@@ -95,6 +95,7 @@ pub mod checkpoint;
 mod cleaning;
 mod control_state;
 mod engine_loop;
+mod graceful_shutdown;
 mod handle;
 mod idle;
 mod inbound;
@@ -139,6 +140,8 @@ mod tests_event_queue;
 mod tests_fetch;
 #[cfg(test)]
 mod tests_fetch_requests;
+#[cfg(test)]
+mod tests_graceful_shutdown;
 #[cfg(test)]
 mod tests_lifecycle;
 #[cfg(test)]

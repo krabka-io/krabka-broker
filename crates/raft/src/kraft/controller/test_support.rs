@@ -394,6 +394,25 @@ impl PeerSender for RecordingPeerSender {
     }
 }
 
+/// A spawned three-voter controller, voter 1, whose peer sends are captured and
+/// answered with `response`, under `election_timeout`.
+pub fn spawn_recording_controller(
+    election_timeout: Time,
+    response: bytes::Bytes,
+) -> (
+    KraftController,
+    tempfile::TempDir,
+    mpsc::UnboundedReceiver<CapturedPeerSend>,
+) {
+    let (sends, rx) = mpsc::unbounded_channel();
+    let (controller, dir) =
+        spawn_test_controller(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)], |config| {
+            config.election_timeout = election_timeout;
+            config.peers = Arc::new(RecordingPeerSender { sends, response });
+        });
+    (controller, dir, rx)
+}
+
 pub fn record_peer_sends(
     engine: &mut Engine,
     response: bytes::Bytes,

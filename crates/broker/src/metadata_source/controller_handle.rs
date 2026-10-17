@@ -148,6 +148,8 @@ impl MetadataSource for ControllerHandle {
     }
 
     async fn cancel(&self) { ControllerHandle::cancel(self).await; }
+
+    async fn halt(&self) { ControllerHandle::halt(self).await; }
 }
 
 #[cfg(test)]

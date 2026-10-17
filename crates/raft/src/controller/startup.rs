@@ -164,7 +164,7 @@ impl Controller {
         if let Some(refusal) =
             unsupported_feature_level(&engine.current_image(), config.unstable_feature_versions)
         {
-            engine.shutdown().await;
+            engine.halt().await;
             return Err(RaftError::FatalFault(refusal));
         }
 
@@ -302,7 +302,7 @@ async fn stop_on_fatal_fault(
             continue;
         }
         shutdown.cancel();
-        engine.shutdown().await;
+        engine.halt().await;
         return;
     }
 }
