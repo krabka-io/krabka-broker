@@ -1,12 +1,25 @@
 //! Configuration and feature update request fixtures.
 
-use krabka_protocol::owned::{
-    describe_configs_request::DescribeConfigsResource,
-    incremental_alter_configs_request::{
-        AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
+use {
+    krabka_broker::{config::BrokerConfig, file_config::FileConfig},
+    krabka_protocol::owned::{
+        describe_configs_request::DescribeConfigsResource,
+        incremental_alter_configs_request::{
+            AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
+        },
+        update_features_request::FeatureUpdateKey,
     },
-    update_features_request::FeatureUpdateKey,
 };
+
+/// The [`BrokerConfig`] a broker's TOML node file `text` applies to,
+/// panicking with the text on a parse or apply error.
+pub fn apply_node_file(text: &str) -> BrokerConfig {
+    let file: FileConfig = toml::from_str(text).unwrap_or_else(|error| panic!("{text}\n{error}"));
+    let mut config = BrokerConfig::default();
+    file.apply_to(&mut config)
+        .unwrap_or_else(|error| panic!("{text}\n{error}"));
+    config
+}
 
 #[derive(Clone, Copy, Default)]
 pub enum ConfigOperation {

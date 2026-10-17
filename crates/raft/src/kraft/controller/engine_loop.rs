@@ -6,6 +6,7 @@
 use {
     super::{
         Engine, METADATA_LOG_CLEAN_INTERVAL,
+        graceful_shutdown::graceful_shutdown_window,
         timing::{
             election_timer_starts_election, following_leader_for_role, heartbeat_period,
             instant_from_clock_base, should_fail_waiters_on_leadership_change, whole_millis,
@@ -69,6 +70,9 @@ impl Engine {
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let mut faulted = false;
+        // Set by a graceful `Shutdown`: when the engine stops waiting for the
+        // quorum to elect a successor.
+        let mut shutdown_at: Option<Instant> = None;
         loop {
             // Build the timer futures fresh each turn from the current deadlines.
             let election_sleep = sleep_until_opt(self.election_at);
@@ -77,34 +81,55 @@ impl Engine {
             let parked_fetch_sleep = sleep_until_opt(self.next_parked_fetch_deadline());
             let noop_sleep = sleep_until_opt(self.noop_at);
             let clean_sleep = tokio::time::sleep_until(self.clean_at);
+            let shutdown_sleep = sleep_until_opt(shutdown_at);
             tokio::pin!(election_sleep);
             tokio::pin!(fetch_sleep);
             tokio::pin!(check_quorum_sleep);
             tokio::pin!(parked_fetch_sleep);
             tokio::pin!(noop_sleep);
             tokio::pin!(clean_sleep);
+            tokio::pin!(shutdown_sleep);
 
+            // A shutting-down replica starts no election of its own: Kafka's
+            // poll loop keeps a resigned or unattached voter where it is, and
+            // lets a candidate finish only the election it already runs.
+            let shutting_down = shutdown_at.is_some();
             let wake = tokio::select! {
                 queued = cmd_rx.recv() => match queued {
-                    None | Some(QueuedCommand { command: Command::Shutdown, .. }) => break,
-                    Some(QueuedCommand { command, enqueued_at }) => Wake::Command {
-                        arrival: Arrival {
-                            enqueued_at,
-                            caller_gone: command.caller_gone(),
-                        },
-                        command,
-                    },
+                    None | Some(QueuedCommand { command: Command::Halt, .. }) => break,
+                    Some(QueuedCommand { command, enqueued_at }) => {
+                        if matches!(command, Command::Shutdown) {
+                            shutdown_at.get_or_insert_with(|| {
+                                Instant::now() + graceful_shutdown_window(self.timeouts.fetch)
+                            });
+                        }
+                        Wake::Command {
+                            arrival: Arrival {
+                                enqueued_at,
+                                caller_gone: command.caller_gone(),
+                            },
+                            command,
+                        }
+                    }
                 },
                 () = &mut election_sleep => Wake::Election,
                 () = &mut fetch_sleep => Wake::Fetch,
                 () = &mut check_quorum_sleep => Wake::CheckQuorum,
+                () = &mut shutdown_sleep => {
+                    tracing::warn!(
+                        node = self.me.0,
+                        role = self.core.role().name(),
+                        "kraft: graceful shutdown timed out before a successor was elected"
+                    );
+                    break;
+                }
                 _ = heartbeat.tick() => Wake::Heartbeat,
                 // A parked fetch whose wait ran out is answered below.
                 () = &mut parked_fetch_sleep => Wake::ParkedFetch,
                 () = &mut noop_sleep => Wake::Noop,
                 () = &mut clean_sleep => Wake::Clean,
             };
-            self.run_turn(wake);
+            self.run_turn(wake, shutting_down);
             // A write to the metadata log directory that failed this turn
             // ends the controller (KIP-858), and so does a failed controller
             // activation. The engine stops taking part in the quorum at once,
@@ -126,6 +151,11 @@ impl Engine {
             // waiter.
             self.turn = None;
             self.event_queue.finish_turn();
+            // A graceful shutdown resigns a leadership this replica holds, or
+            // wins while it waits, and ends once a successor is known.
+            if shutdown_at.is_some() && self.step_graceful_shutdown() {
+                break;
+            }
         }
         if faulted {
             // The engine takes part in nothing more, but it keeps its watch
@@ -135,7 +165,7 @@ impl Engine {
             // also sees the fatal fault and not a bare shutdown.
             let mut held = Vec::new();
             while let Some(command) = cmd_rx.recv().await {
-                if matches!(command.command, Command::Shutdown) {
+                if matches!(command.command, Command::Shutdown | Command::Halt) {
                     break;
                 }
                 held.push(command);
@@ -149,7 +179,9 @@ impl Engine {
 
     /// Run the event the loop woke for, metered as one Kafka controller
     /// event: a command with its queue time, a timer without one.
-    fn run_turn(&mut self, wake: Wake) {
+    /// Run one turn for `wake`. While `shutting_down`, the election, fetch and
+    /// check-quorum timers clear without acting.
+    fn run_turn(&mut self, wake: Wake, shutting_down: bool) {
         let arrival = match &wake {
             Wake::Command { arrival, .. } => Some(*arrival),
             _ => None,
@@ -159,15 +191,21 @@ impl Engine {
             Wake::Command { command, .. } => self.on_command(command),
             Wake::Election => {
                 self.election_at = None;
-                self.on_timer(TimerTick::Election);
+                if !shutting_down {
+                    self.on_timer(TimerTick::Election);
+                }
             }
             Wake::Fetch => {
                 self.fetch_at = None;
-                self.on_timer(TimerTick::Fetch);
+                if !shutting_down {
+                    self.on_timer(TimerTick::Fetch);
+                }
             }
             Wake::CheckQuorum => {
                 self.check_quorum_at = None;
-                self.on_timer(TimerTick::CheckQuorum);
+                if !shutting_down {
+                    self.on_timer(TimerTick::CheckQuorum);
+                }
             }
             Wake::Heartbeat => self.on_timer(TimerTick::Heartbeat),
             Wake::ParkedFetch => {}
@@ -218,7 +256,7 @@ impl Engine {
 
     pub fn on_command(&mut self, cmd: Command) {
         match cmd {
-            Command::Shutdown => {}
+            Command::Shutdown | Command::Halt => {}
             Command::Event(event) => self.on_event(event),
             Command::FetchResponse { from, body } => self.on_fetch_response(from, &body),
             Command::VoteResponse { from, body } => self.on_vote_response(from, &body),

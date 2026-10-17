@@ -22,6 +22,7 @@ mod election;
 mod leadership;
 mod membership;
 mod replication;
+mod shutdown;
 mod vote_request;
 
 #[cfg(test)]

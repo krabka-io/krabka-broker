@@ -220,7 +220,7 @@ impl QuorumStateMachine {
         skip_all,
         fields(node = self.me.0, epoch = self.state.leader_epoch, is_voter = self.is_voter())
     )]
-    fn transition_to_resigned(&mut self, now: SimInstant) -> Vec<Action> {
+    pub(super) fn transition_to_resigned(&mut self, now: SimInstant) -> Vec<Action> {
         let epoch = self.state.leader_epoch;
         let preferred_successors = self.preferred_successors();
         self.state.leader_id = None;

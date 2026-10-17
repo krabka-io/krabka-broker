@@ -97,8 +97,9 @@ fn unit_fraction(draw: u64) -> f64 {
 /// # Errors
 ///
 /// Returns every pair of occurrences that overlap (counting each one's
-/// recovery deadlines) and every occurrence that would still be running or
-/// recovering inside the settle window.
+/// recovery deadlines), and every plan whose first occurrence would still be
+/// running or recovering inside the settle window. A later occurrence that
+/// would do so is not an error: the plan's repeats stop before it.
 pub fn expand(contract: &Contract) -> Result<Vec<ScheduledFault>, Vec<ContractError>> {
     let quiet_from = contract.duration - contract.settle;
     let mut schedule = Vec::new();
@@ -121,7 +122,22 @@ pub fn expand(contract: &Contract) -> Result<Vec<ScheduledFault>, Vec<ContractEr
             };
             let roll = draw(contract.seed, &plan.name, n);
             let start = slot + plan.jitter * unit_fraction(roll);
-            if start >= quiet_from && n > 0 {
+            let checks = plan.fault.checks(plan.target);
+            let fault = ScheduledFault {
+                id: format!("{}#{n}", plan.name),
+                plan: plan.name.clone(),
+                kind: plan.fault.clone(),
+                target: plan.target,
+                start,
+                duration: plan.duration,
+                checks,
+            };
+            // A repeat that would still be running or recovering when the
+            // settle window starts ends the plan. A first occurrence that
+            // does not fit is kept, so the validation below reports it: that
+            // plan cannot fit the run at all.
+            let recovered_at = fault.end() + fault.recovery_budget(&contract.deadlines);
+            if n > 0 && (start >= quiet_from || recovered_at > quiet_from) {
                 break;
             }
             let target = match plan.target {
@@ -131,15 +147,7 @@ pub fn expand(contract: &Contract) -> Result<Vec<ScheduledFault>, Vec<ContractEr
                 ),
                 other => other,
             };
-            schedule.push(ScheduledFault {
-                id: format!("{}#{n}", plan.name),
-                plan: plan.name.clone(),
-                kind: plan.fault.clone(),
-                target,
-                start,
-                duration: plan.duration,
-                checks: plan.fault.checks(plan.target),
-            });
+            schedule.push(ScheduledFault { target, ..fault });
             if plan.every.is_none() {
                 break;
             }
@@ -287,5 +295,56 @@ mod tests {
     )]
     fn draws_map_to_fractions_below_one(draw: u64, expected: f64) {
         check!(unit_fraction(draw).to_bits() == expected.to_bits());
+    }
+
+    /// A plan whose slot at 1h49m40s, 20s before the settle window at 1h50m,
+    /// starts inside the window's recovery budget for every seed: the pause
+    /// lasts 1s and its catch-up deadline is 30s.
+    fn straddling(seed: u64) -> Contract {
+        let mut contract = periodic(seed);
+        contract.faults[0].first_at = minutes(9) + secs(40);
+        contract.faults[0].jitter = secs(10);
+        contract
+    }
+
+    #[yare::parameterized(
+        seed_1 = { 1 },
+        seed_7 = { 7 },
+        seed_1392 = { 1392 },
+    )]
+    fn a_repeat_that_would_recover_inside_the_settle_window_is_dropped(seed: u64) {
+        let contract = straddling(seed);
+        let quiet_from = contract.duration - contract.settle;
+        let schedule = expand(&contract).unwrap();
+        // Slots at 9m40s, 19m40s, ..., 1h39m40s; the 1h49m40s slot is dropped.
+        check!(schedule.len() == 10);
+        let last = schedule.last().unwrap();
+        check!(last.end() + last.recovery_budget(&contract.deadlines) <= quiet_from);
+        // The contract's own validation finds nothing wrong with the schedule.
+        // (The fixture without its self-check section is refused for that.)
+        let errors = contract.validate();
+        check!(
+            errors
+                .iter()
+                .all(|error| !error.0.contains("settle window")),
+            "{errors:?}"
+        );
+    }
+
+    #[yare::parameterized(
+        one_shot = { None },
+        periodic = { Some(minutes(10)) },
+    )]
+    fn a_plan_whose_first_occurrence_cannot_fit_is_refused(every: Option<Time>) {
+        let mut contract = straddling(1392);
+        contract.faults[0].first_at = hours(1) + minutes(49) + secs(40);
+        contract.faults[0].every = every;
+        let errors = expand(&contract).unwrap_err();
+        check!(errors.len() == 1);
+        check!(
+            errors[0].0.contains("inside the settle window"),
+            "{:?}",
+            errors
+        );
     }
 }

@@ -226,9 +226,26 @@ impl ControllerHandle {
     /// `self`. Used by `BrokerHandle::shutdown` where the controller is behind
     /// an `Arc`. Idempotent. Awaits the listener task so the OS port is released
     /// before returning.
+    ///
+    /// The engine stops gracefully, before the listener does: a leader resigns,
+    /// and its successor's `BeginQuorumEpoch` still reaches the listener, which
+    /// is how the engine learns that the handover is complete.
     pub async fn cancel(&self) {
-        self.shutdown.cancel();
         self.engine.shutdown().await;
+        self.stop_listener().await;
+    }
+
+    /// Stop the engine at once, handing nothing over, and cancel the listener,
+    /// as a halted process stops. The quorum finds out through its fetch
+    /// watchdog. Idempotent.
+    pub async fn halt(&self) {
+        self.shutdown.cancel();
+        self.engine.halt().await;
+        self.stop_listener().await;
+    }
+
+    async fn stop_listener(&self) {
+        self.shutdown.cancel();
         if let Some(h) = self.listener_task.lock().await.take() {
             let _ = h.await;
         }
