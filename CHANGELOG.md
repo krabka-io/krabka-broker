@@ -102,6 +102,12 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   the DN or drops a SAN. Before, the broker stored and reported the keys and
   kept serving its static certificate. krabka reads PEM stores with an
   unencrypted key only (#1422).
+- The broker refuses to start when `broker_id` and `node_id` differ, as
+  Kafka's `KafkaConfig` refuses a `broker.id` that is not the `node.id`.
+  Before, such a broker registered under its node id but heartbeated under
+  its broker id, so the controller never unfenced it, and `Broker::start`
+  waited out `startup_leader_wait_timeout` (two minutes) before going on
+  fenced (#1471).
 - `max.connections.per.ip.overrides`, `max.connection.creation.rate` and the
   per-listener `listener.name.<listener>.max.connections` and
   `listener.name.<listener>.max.connection.creation.rate` now take effect, on
