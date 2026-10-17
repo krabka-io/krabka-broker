@@ -24,7 +24,9 @@
 use {
     crate::{
         multi_client::topic_id_for,
-        multi_cluster::{ready_admin, start_three_tiered_brokers_with_segment_sizes},
+        multi_cluster::{
+            controller_leader_addr, ready_admin, start_three_tiered_brokers_with_segment_sizes,
+        },
         multi_workload::local_segment_bases,
         support::{
             client::connect_owned,
@@ -222,12 +224,7 @@ async fn a_replica_added_to_a_tiered_partition_does_not_pull_the_archive() {
 
     // Add broker 3 as a replica. The request goes to the controller leader's
     // own listener, as `kafka-reassign-partitions` sends it.
-    let controller_leader = b1.wait_until_controller_leader().await;
-    let controller_addr = [&b1, &b2, &b3]
-        .iter()
-        .find(|handle| handle.node_id() == controller_leader.0)
-        .map(|handle| format!("127.0.0.1:{}", handle.listen_addr().port()))
-        .expect("the controller leader is one of the three brokers");
+    let controller_addr = controller_leader_addr([&b1, &b2, &b3]).await;
     let controller_client = connect_owned(
         &controller_addr,
         "tiered-reassign-controller",

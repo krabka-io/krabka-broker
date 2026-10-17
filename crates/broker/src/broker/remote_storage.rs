@@ -12,7 +12,9 @@ use {
         metrics::{BrokerMetrics, RemoteReaderLevels, RemoteReaderTotals},
         partition_registry::PartitionRegistry,
         remote_log_manager::{
-            ArchiveMode, RemoteLogManagerConfig, RemoteLogManagerContext, SweepConcurrency, run,
+            ArchiveMode, RemoteLogManagerConfig, RemoteLogManagerContext, SweepConcurrency,
+            quota::{self, RemoteLogQuotas, WatchedIndexCache},
+            run,
         },
         remote_reader::{ReaderPool, RemoteReader, RemoteReaderLimits},
     },
@@ -61,10 +63,15 @@ struct RemoteLogMetadata {
     swap_target: Option<Arc<krabka_remote_storage_topic::SwappableRlmm>>,
 }
 
+/// Builds the remote tier for a broker with a remote storage backend, and
+/// starts the tasks that run it: the remote-log-manager sweep, the reader's
+/// gauges, and the image watch that applies the dynamic tiered-storage
+/// configs to `quotas` and to the reader's index cache.
 pub(super) fn start_remote_storage(
     config: &BrokerConfig,
     partitions: &Arc<PartitionRegistry>,
     controller: &Arc<dyn MetadataSource>,
+    quotas: &Arc<RemoteLogQuotas>,
     metrics: &BrokerMetrics,
     shutdown: &CancellationToken,
 ) -> Result<RemoteStorageStartup, BrokerError> {
@@ -145,6 +152,28 @@ pub(super) fn start_remote_storage(
         }
     };
     let index_cache = Arc::new(index_cache);
+    // Kafka's `DynamicRemoteLogConfig.reconfigure`. The current image is
+    // applied before the sweep and the reader start, so neither runs one pass
+    // under a value the operator has already changed.
+    let watched_cache = WatchedIndexCache {
+        cache: Arc::clone(&index_cache),
+        static_size: config.remote_index_cache_size.bytes_u64(),
+    };
+    quota::apply_image(
+        &controller.current_image(),
+        config.node_id,
+        &quota::DynamicRemoteLogTargets {
+            quotas,
+            index_cache: Some((&watched_cache.cache, watched_cache.static_size)),
+        },
+    );
+    tokio::spawn(quota::run(
+        controller.watch_image(),
+        config.node_id,
+        Arc::clone(quotas),
+        watched_cache,
+        shutdown.child_token(),
+    ));
     let remote_log_manager = tokio::spawn(run(
         RemoteLogManagerContext {
             partitions: Arc::clone(partitions),
@@ -153,6 +182,7 @@ pub(super) fn start_remote_storage(
             rsm: Arc::clone(&storage),
             rlmm: Arc::clone(&metadata),
             index_cache: Arc::clone(&index_cache),
+            copy_quota: Arc::clone(&quotas.copy),
             metrics: metrics.clone(),
             node_id: config.node_id,
             broker_id: config.broker_id,

@@ -24,6 +24,7 @@
 
 use {
     crate::coordinator::unified::commit_validation_reply,
+    krabka_metadata::NodeId,
     krabka_protocol::owned::{
         streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
         streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
@@ -521,15 +522,16 @@ struct ActorState {
 }
 
 impl ActorState {
-    /// Apply a published group override and restart its session tick only on change.
+    /// Apply a published broker value or group override and restart its
+    /// session tick only on change.
     fn refresh_configuration(
         &mut self,
         defaults: &StreamsGroupConfig,
-        image: &krabka_metadata::MetadataImage,
+        (image, node): (&krabka_metadata::MetadataImage, Option<NodeId>),
         config: &mut StreamsGroupConfig,
         tick: &mut tokio::time::Interval,
     ) {
-        let next = resolve_group_config_from_image(defaults, image, &self.state.group_id);
+        let next = resolve_broker_and_group_config(defaults, image, node, &self.state.group_id);
         if next != *config {
             *config = next;
             self.trunk_records = config.topology_description_plugin.is_configured();
@@ -616,10 +618,11 @@ async fn actor_loop(
     mut rx: mpsc::Receiver<StreamsGroupActorMessage>,
 ) {
     let offsets_log = coordinator.offsets_log.clone();
+    let node = coordinator.node_id();
     let mut metadata = MetadataLink::default();
     let mut config = metadata.attach(&coordinator).map_or_else(
         || (*default_config).clone(),
-        |image| resolve_group_config_from_image(&default_config, &image, &group_id),
+        |image| resolve_broker_and_group_config(&default_config, &image, node, &group_id),
     );
     let mut actor = ActorState::new(group_id);
     actor.trunk_records = config.topology_description_plugin.is_configured();
@@ -641,7 +644,7 @@ async fn actor_loop(
             image = wait_for_metadata_change(&mut metadata.images) => Wake::Image(image),
         };
         if let Some(image) = metadata.attach(&coordinator) {
-            actor.refresh_configuration(&default_config, &image, &mut config, &mut tick);
+            actor.refresh_configuration(&default_config, (&image, node), &mut config, &mut tick);
         }
         let metadata_source = metadata.source.as_ref();
         match wake {
@@ -726,7 +729,12 @@ async fn actor_loop(
                 // changed assignment configuration bumps the group epoch at
                 // the next heartbeat, which compares it with the
                 // `LastAssignmentConfigs` of the last bump.
-                actor.refresh_configuration(&default_config, &image, &mut config, &mut tick);
+                actor.refresh_configuration(
+                    &default_config,
+                    (&image, node),
+                    &mut config,
+                    &mut tick,
+                );
             }
         }
     }
@@ -930,6 +938,22 @@ async fn handle_message(
         }
     }
     Step::Continue
+}
+
+/// The streams config of `group_id` on `node`: the group config overrides in
+/// `image` over the broker `defaults`, whose assignment interval is the
+/// dynamic broker value of `image` when one applies.
+///
+/// Kafka's `GroupMetadataManager` reads
+/// `groupConfig.streamsAssignmentIntervalMs()` over the broker's current
+/// `GroupCoordinatorConfig`, which a dynamic broker config reconfigures.
+pub(crate) fn resolve_broker_and_group_config(
+    defaults: &StreamsGroupConfig,
+    image: &krabka_metadata::MetadataImage,
+    node: Option<NodeId>,
+    group_id: &str,
+) -> StreamsGroupConfig {
+    resolve_group_config_from_image(&defaults.for_broker(image, node), image, group_id)
 }
 
 /// The streams config of `group_id`: the group config overrides in `image`

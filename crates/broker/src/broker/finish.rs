@@ -139,6 +139,7 @@ pub(super) async fn finish_broker_startup(
         want_shutdown: runtime.liveness_services.want_shutdown,
         should_shutdown: runtime.liveness_services.should_shutdown,
         remote_reader: runtime.remote_reader,
+        remote_log_quotas: runtime.remote_log_quotas,
         diskless_read: runtime.diskless_read,
         hot_tail: storage.diskless.hot_tail,
         wal_shards: storage.diskless.wal_shards,

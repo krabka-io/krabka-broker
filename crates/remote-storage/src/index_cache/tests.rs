@@ -264,3 +264,87 @@ fn opening_the_cache_empties_a_directory_an_earlier_process_left() {
     check!(cache.stats() == IndexCacheStats::default());
     check!(std::fs::read_dir(&root).expect("cache dir").count() == 0);
 }
+
+/// What a cache of four 40-byte entries holds after one resize.
+#[derive(Debug, PartialEq, Eq)]
+struct ResizeOutcome {
+    stats: IndexCacheStats,
+    max_bytes: u64,
+    files: usize,
+    /// Which of the four entries, oldest first, are still cached.
+    cached: [bool; 4],
+}
+
+#[yare::parameterized(
+    shrink_evicts_the_two_oldest = { 80, ResizeOutcome {
+        stats: IndexCacheStats { hits: 0, misses: 4, evictions: 2, entries: 2, bytes: 80 },
+        max_bytes: 80,
+        files: 2,
+        cached: [false, false, true, true],
+    } },
+    shrink_below_one_entry_evicts_all = { 1, ResizeOutcome {
+        stats: IndexCacheStats { hits: 0, misses: 4, evictions: 4, entries: 0, bytes: 0 },
+        max_bytes: 1,
+        files: 0,
+        cached: [false; 4],
+    } },
+    grow_evicts_nothing = { 1 << 20, ResizeOutcome {
+        stats: IndexCacheStats { hits: 0, misses: 4, evictions: 0, entries: 4, bytes: 160 },
+        max_bytes: 1 << 20,
+        files: 4,
+        cached: [true; 4],
+    } },
+)]
+fn resizing_a_live_cache_evicts_down_to_the_new_budget(new_budget: u64, expected: ResizeOutcome) {
+    let TestCache { dir, cache } = test_cache(160);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let segments = [
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    ];
+    for segment in segments {
+        cache
+            .get_or_fetch(segment, IndexType::Offset, counting_fetch(&calls, 40))
+            .expect("fill");
+    }
+
+    cache.resize(new_budget);
+
+    let stats = cache.stats();
+    let files = std::fs::read_dir(dir.path().join(REMOTE_INDEX_CACHE_DIR))
+        .expect("cache dir")
+        .count();
+    let cached = segments.map(|segment| {
+        let (_, outcome) = cache
+            .get_or_fetch(segment, IndexType::Offset, counting_fetch(&calls, 0))
+            .expect("probe");
+        outcome == IndexCacheOutcome::Hit
+    });
+    check!(
+        ResizeOutcome {
+            stats,
+            max_bytes: cache.max_bytes(),
+            files,
+            cached,
+        } == expected
+    );
+}
+
+#[test]
+fn an_entry_stored_after_a_shrink_fits_the_new_budget() {
+    let TestCache { dir: _dir, cache } = test_cache(1 << 20);
+    cache.resize(16);
+    let calls = Arc::new(AtomicUsize::new(0));
+
+    cache
+        .get_or_fetch(
+            Uuid::new_v4(),
+            IndexType::Offset,
+            counting_fetch(&calls, 40),
+        )
+        .expect("lookup");
+
+    check!(cache.stats().entries == 0);
+}

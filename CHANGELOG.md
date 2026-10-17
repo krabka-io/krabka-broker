@@ -59,6 +59,29 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- These dynamic broker configs now take effect on a running broker, per
+  broker and then cluster-wide, where before they were stored and reported
+  and changed nothing (#1424):
+  - `producer.id.expiration.ms` drives the producer-expiry sweep and the
+    transaction-verification window.
+  - The three group assignment intervals,
+    `group.consumer.assignment.interval.ms`,
+    `group.share.assignment.interval.ms` and
+    `group.streams.assignment.interval.ms`, apply under a group's own
+    override. A value outside the group minimum and maximum is refused with
+    Kafka's `GroupCoordinatorConfig` message.
+  - `remote.log.manager.copy.max.bytes.per.second` and
+    `remote.log.manager.fetch.max.bytes.per.second` meter segment uploads
+    and consumer cold reads with Kafka's `RLMQuotaManager` (KIP-956). A copy
+    over the quota waits; a fetch over it answers the partition with empty
+    records.
+  - `remote.fetch.max.wait.ms` bounds a fetch's cold reads, as
+    `DelayedRemoteFetch` does.
+  - `remote.log.index.file.cache.total.size.bytes` resizes the remote index
+    cache, and a shrink evicts down to the new size.
+  - `follower.fetch.last.tiered.offset.enable` makes an empty follower of a
+    tiered topic start at the leader's earliest pending upload offset
+    (KIP-1023) instead of copying its whole local log.
 - A partition no longer stalls its appends and fetches while it deletes
   segment files that retention retired. When their `file.delete.delay.ms`
   passed, the partition writer unlinked them one after another under the log

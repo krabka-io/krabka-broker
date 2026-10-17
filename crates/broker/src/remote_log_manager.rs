@@ -73,6 +73,7 @@ mod delete;
 mod delivery;
 mod leader_epoch;
 mod local_retention;
+pub(crate) mod quota;
 mod remote_retention;
 mod rlmm;
 
@@ -232,6 +233,9 @@ pub(crate) struct RemoteLogManagerContext {
     /// The reader's index cache, so a segment this task deletes stops holding
     /// the cache's byte budget.
     pub index_cache: Arc<krabka_remote_storage::RemoteIndexCache>,
+    /// `remote.log.manager.copy.max.bytes.per.second`. See
+    /// [`RemoteTier::copy_quota`].
+    pub copy_quota: Arc<quota::RlmQuotaManager>,
     pub metrics: BrokerMetrics,
     pub node_id: NodeId,
     pub broker_id: i32,
@@ -251,6 +255,9 @@ pub(crate) struct RemoteTier<'a> {
     pub rlmm: &'a Arc<dyn RemoteLogMetadataManager>,
     pub metrics: &'a BrokerMetrics,
     pub index_cache: &'a Arc<krabka_remote_storage::RemoteIndexCache>,
+    /// Kafka's copy `RLMQuotaManager`: every segment waits for it before its
+    /// upload starts, and its `.log` bytes are recorded against it.
+    pub copy_quota: &'a quota::RlmQuotaManager,
     /// How long one segment copy may take before the sweep abandons it.
     ///
     /// A partition's copy holds one of the sweep's copier slots for as long
@@ -275,6 +282,7 @@ impl RemoteLogManagerContext {
             rlmm: &self.rlmm,
             metrics: &self.metrics,
             index_cache: &self.index_cache,
+            copy_quota: &self.copy_quota,
             copy_timeout: cfg.copy_timeout,
             unstable_api_versions: cfg.unstable_api_versions,
         }
@@ -990,6 +998,7 @@ mod tests {
                 rsm,
                 rlmm: rlmm.clone(),
                 index_cache: Arc::new(krabka_remote_storage::RemoteIndexCache::disabled()),
+                copy_quota: Arc::new(quota::RlmQuotaManager::unlimited()),
                 metrics: BrokerMetrics::new(),
                 node_id: NodeId(1),
                 broker_id: 1,

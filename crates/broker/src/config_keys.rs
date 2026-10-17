@@ -123,6 +123,7 @@ pub(crate) use self::{
     delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, resolve_delivery_max_delay},
     diskless::{DISKLESS, resolve_diskless, validate_diskless_unchanged},
     log_config::apply_to_log_config,
+    lookup::node_or_cluster_default,
     message_size::resolve_max_message_bytes,
     min_isr::{clear_elr_records, effective_min_insync_replicas, node_min_insync_replicas},
     recovery::{

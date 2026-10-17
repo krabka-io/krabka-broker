@@ -14,6 +14,7 @@
 use {
     super::{
         MIN_INSYNC_REPLICAS,
+        group::broker_assignment_interval_error,
         kafka_broker::{self, Dynamic, listener_override_base},
         parse::{check_range, parse_long},
         recovery::UNCLEAN_RECOVERY_STRATEGY,
@@ -391,7 +392,9 @@ fn check_broker_value(
 /// # Errors
 /// Returns `INVALID_REQUEST` with Kafka's message, in Kafka's order: a
 /// non-dynamic key, then an unprefixed SSL key, then a bad value, then a
-/// per-broker key on the cluster-default resource.
+/// per-broker key on the cluster-default resource, then an assignment interval
+/// outside the broker's bounds, which Kafka's `GroupCoordinatorConfig` refuses
+/// when `processReconfiguration` builds the new `KafkaConfig`.
 pub(crate) fn validate_dynamic_broker_configs(
     props: &BTreeMap<String, String>,
     per_broker: bool,
@@ -435,7 +438,8 @@ pub(crate) fn validate_dynamic_broker_configs(
             ));
         }
     }
-    Ok(())
+    broker_assignment_interval_error(props)
+        .map_or(Ok(()), |message| Err((codes::INVALID_REQUEST, message)))
 }
 
 /// Kafka's `ConfigurationControlManager` ELR rules for one broker config
@@ -702,6 +706,59 @@ mod tests {
             map(&[("sasl.enabled.mechanisms", "PLAIN")]),
             true,
             Ok(()),
+        },
+        consumer_assignment_interval_at_the_maximum = {
+            map(&[("group.consumer.assignment.interval.ms", "15000")]),
+            false,
+            Ok(()),
+        },
+        consumer_assignment_interval_at_the_minimum = {
+            map(&[("group.consumer.assignment.interval.ms", "0")]),
+            true,
+            Ok(()),
+        },
+        consumer_assignment_interval_above_the_maximum = {
+            map(&[("group.consumer.assignment.interval.ms", "15001")]),
+            false,
+            Err(
+                "group.consumer.assignment.interval.ms must be less than or equal to \
+                 group.consumer.max.assignment.interval.ms",
+            ),
+        },
+        share_assignment_interval_above_the_maximum = {
+            map(&[("group.share.assignment.interval.ms", " 60000 ")]),
+            true,
+            Err(
+                "group.share.assignment.interval.ms must be less than or equal to \
+                 group.share.max.assignment.interval.ms",
+            ),
+        },
+        streams_assignment_interval_above_the_maximum = {
+            map(&[("group.streams.assignment.interval.ms", "20000")]),
+            false,
+            Err(
+                "group.streams.assignment.interval.ms must be less than or equal to \
+                 group.streams.max.assignment.interval.ms",
+            ),
+        },
+        consumer_interval_is_checked_before_share = {
+            map(&[
+                ("group.share.assignment.interval.ms", "20000"),
+                ("group.consumer.assignment.interval.ms", "20000"),
+            ]),
+            false,
+            Err(
+                "group.consumer.assignment.interval.ms must be less than or equal to \
+                 group.consumer.max.assignment.interval.ms",
+            ),
+        },
+        negative_assignment_interval_fails_the_type_check_first = {
+            map(&[("group.consumer.assignment.interval.ms", "-1")]),
+            false,
+            Err(
+                "Invalid value -1 for configuration group.consumer.assignment.interval.ms: \
+                 Value must be at least 0",
+            ),
         },
     )]
     fn dynamic_broker_configs_follow_kafkas_validate_configs(

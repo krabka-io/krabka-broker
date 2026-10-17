@@ -10,6 +10,11 @@
 //! `OFFSET_MOVED_TO_TIERED_STORAGE` runs the KIP-405
 //! `ListOffsets(EARLIEST_LOCAL_TIMESTAMP)` lookup and restarts the log at the
 //! leader's local log start.
+//!
+//! On either of the first and last of those, an empty replica of a tiered
+//! topic with `follower.fetch.last.tiered.offset.enable` set restarts at the
+//! leader's earliest pending upload offset instead (KIP-1023). See
+//! [`last_tiered`].
 
 #[cfg(test)]
 use crate::config::ReplicationRuntimeConfig;
@@ -30,8 +35,15 @@ use {
             OffsetForLeaderEpochRequest, OffsetForLeaderPartition, OffsetForLeaderTopic,
         },
     },
+    last_tiered::{
+        EARLIEST_PENDING_UPLOAD_TIMESTAMP, LastTieredOffsetFacts, LocalTieringFacts,
+        UNKNOWN_PENDING_UPLOAD_OFFSET, earliest_pending_upload_offset,
+        should_fetch_from_last_tiered_offset,
+    },
     tracing::{info, warn},
 };
+
+mod last_tiered;
 
 /// Where this follower truncates for a KIP-320 `diverging_epoch` row, as
 /// `AbstractFetcherThread.getOffsetTruncationState` computes it.
@@ -113,6 +125,9 @@ const EARLIEST_TIMESTAMP: i64 = -2;
 /// replica's log once it knows the leader's log end offset.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LeaderEndRecovery {
+    /// KIP-1023: this replica is empty and its topic is tiered, so it restarts
+    /// at the leader's earliest pending upload offset.
+    RestartAtLastTiered,
     /// The unclean-election case: the leader's log ends below this replica's,
     /// so the replica truncates to the leader's end and fetches from there.
     TruncateTo(i64),
@@ -121,14 +136,18 @@ enum LeaderEndRecovery {
     AskLeaderStart,
 }
 
-/// `fetchOffsetAndTruncate`'s first test, `leaderEndOffset <
+/// `fetchOffsetAndTruncate`'s first two tests: its KIP-1023 branch,
+/// `shouldFetchFromLastTieredOffset`, and then `leaderEndOffset <
 /// replicaEndOffset`.
-///
-/// Its KIP-1023 branch, which restarts an empty replica at the last tiered
-/// offset, needs `follower.fetch.last.tiered.offset.enable`, which defaults
-/// to `false` and which this broker does not offer, so it is never taken.
-fn recovery_for_leader_end(replica_end: i64, leader_end: i64) -> LeaderEndRecovery {
-    if leader_end < replica_end {
+fn recovery_for_leader_end(facts: LastTieredOffsetFacts) -> LeaderEndRecovery {
+    let LastTieredOffsetFacts {
+        replica_end,
+        leader_end,
+        ..
+    } = facts;
+    if should_fetch_from_last_tiered_offset(facts) {
+        LeaderEndRecovery::RestartAtLastTiered
+    } else if leader_end < replica_end {
         LeaderEndRecovery::TruncateTo(leader_end)
     } else {
         LeaderEndRecovery::AskLeaderStart
@@ -175,6 +194,11 @@ macro_rules! return_if_target_stale {
 /// `ListOffsets(EARLIEST)` and restart an emptied log there when the log
 /// start lies above this replica's end.
 ///
+/// An empty replica of a tiered topic with
+/// `follower.fetch.last.tiered.offset.enable` set restarts at the leader's
+/// earliest pending upload offset instead, after `ListOffsets(EARLIEST)` and
+/// `ListOffsets(EARLIEST_PENDING_UPLOAD)` (KIP-1023).
+///
 /// The error row's own offsets are not read: Kafka answers this error with
 /// `LogReadResult(Errors)`, whose offsets are all -1. A lookup that fails
 /// deletes nothing; the row backs off and fetches again, as Kafka's
@@ -198,7 +222,7 @@ pub(super) async fn handle_offset_out_of_range(cfg: &Config) -> RowAction {
 async fn recover_offset_out_of_range<F, Fut>(cfg: &Config, mut leader_offset: F) -> RowAction
 where
     F: FnMut(i64) -> Fut,
-    Fut: std::future::Future<Output = Result<i64, String>>,
+    Fut: Future<Output = Result<i64, String>>,
 {
     return_if_target_stale!(
         cfg,
@@ -217,13 +241,27 @@ where
         );
         RowAction::Backoff(cfg.connection.replication.unexpected_error_backoff)
     };
-    let replica_end = partition.log_end_offset().0;
+    let local = LocalTieringFacts::read(cfg, &partition);
+    let replica_end = local.replica_end;
     let leader_end = match leader_offset(LATEST_TIMESTAMP).await {
         Ok(offset) => offset,
         Err(error) => return backoff(error),
     };
-    let (target, reset) = match recovery_for_leader_end(replica_end, leader_end) {
-        LeaderEndRecovery::TruncateTo(leader_end) => (leader_end, false),
+    let (target, restart) = match recovery_for_leader_end(local.with_leader_end(leader_end)) {
+        LeaderEndRecovery::RestartAtLastTiered => {
+            let leader_start = match leader_offset(EARLIEST_TIMESTAMP).await {
+                Ok(offset) => offset,
+                Err(error) => return backoff(error),
+            };
+            match earliest_pending_upload_offset(&mut leader_offset, leader_start).await {
+                Ok(pending) => (
+                    pending,
+                    Some("truncating fully and restarting at the leader's earliest pending upload"),
+                ),
+                Err(error) => return backoff(error),
+            }
+        }
+        LeaderEndRecovery::TruncateTo(leader_end) => (leader_end, None),
         LeaderEndRecovery::AskLeaderStart => {
             let leader_start = match leader_offset(EARLIEST_TIMESTAMP).await {
                 Ok(offset) => offset,
@@ -240,9 +278,13 @@ where
                 );
                 return RowAction::Continue;
             };
-            (leader_start, true)
+            (
+                leader_start,
+                Some("truncating fully and restarting at the leader's log start"),
+            )
         }
     };
+    let reset = restart.is_some();
     // Stale-response guard, as on every other recovery path: the metadata
     // image can have chosen another target while the lookups were in flight.
     if replication_target_changed(cfg) {
@@ -262,11 +304,7 @@ where
         target,
         reset,
         "replicator.out_of_range; {}",
-        if reset {
-            "truncating fully and restarting at the leader's log start"
-        } else {
-            "truncating to the leader's log end"
-        }
+        restart.unwrap_or("truncating to the leader's log end")
     );
     let result = if reset {
         partition.reset_to(Offset(target)).await
@@ -311,13 +349,49 @@ const EARLIEST_LOCAL_TIMESTAMP: i64 = -4;
 ///
 /// The lookup failing is not evidence about the log, so nothing is deleted:
 /// the row backs off and fetches again.
-// cargo-mutants: an IO-only wrapper. Every step is inter-broker IO -- connect,
-// send `ListOffsets`, then `reset_to` -- so no in-process seam distinguishes a
-// mutant. The request it sends and the answer it reads are computed by
-// `build_leader_offsets_request` and `leader_offset_from`, which are
-// unit-tested below.
+///
+/// An empty replica of a tiered topic with
+/// `follower.fetch.last.tiered.offset.enable` set restarts at the leader's
+/// earliest pending upload offset instead, as Kafka's
+/// `handleOffsetsMovedToTieredStorage` does (KIP-1023). See
+/// [`recover_offset_moved_to_tiered_storage`].
+// cargo-mutants: an IO-only wrapper. It reads the epoch to ask under and hands
+// the `ListOffsets` round trips to `recover_offset_moved_to_tiered_storage`,
+// which the tests below drive with a scripted leader.
 #[cfg_attr(test, mutants::skip)]
 pub(super) async fn handle_offset_moved_to_tiered_storage(cfg: &Config) -> RowAction {
+    // Asked under the epoch the local partition last saw; a partition that is
+    // gone is caught by the recovery itself, which asks nothing then.
+    let our_epoch =
+        cfg.partitions
+            .get(&cfg.topic, cfg.partition)
+            .map_or(cfg.leader_epoch.0, |partition| {
+                partition
+                    .current_leader_epoch
+                    .load(std::sync::atomic::Ordering::Acquire)
+            });
+    recover_offset_moved_to_tiered_storage(cfg, |timestamp| {
+        leader_list_offset(cfg, our_epoch, timestamp)
+    })
+    .await
+}
+
+/// [`handle_offset_moved_to_tiered_storage`] over an injectable `ListOffsets`
+/// lookup, which maps a sentinel timestamp to the leader's offset for it.
+///
+/// Kafka's `handleOffsetsMovedToTieredStorage` asks for the leader's log end
+/// and log start before it decides between the two restart points. This asks
+/// for them only when the local facts leave the KIP-1023 restart possible, so
+/// a broker without the flag makes the one `EARLIEST_LOCAL` round trip it made
+/// before; the decision is the same either way.
+async fn recover_offset_moved_to_tiered_storage<F, Fut>(
+    cfg: &Config,
+    mut leader_offset: F,
+) -> RowAction
+where
+    F: FnMut(i64) -> Fut,
+    Fut: Future<Output = Result<i64, String>>,
+{
     return_if_target_stale!(
         cfg,
         "replicator: skipping tiered-storage restart from stale target",
@@ -326,23 +400,22 @@ pub(super) async fn handle_offset_moved_to_tiered_storage(cfg: &Config) -> RowAc
     let Some(partition) = cfg.partitions.get(&cfg.topic, cfg.partition) else {
         return RowAction::Continue;
     };
-    let our_epoch = partition
-        .current_leader_epoch
-        .load(std::sync::atomic::Ordering::Acquire);
+    let local = LocalTieringFacts::read(cfg, &partition);
     drop(partition);
 
-    let local_log_start = match leader_list_offset(cfg, our_epoch, EARLIEST_LOCAL_TIMESTAMP).await {
-        Ok(offset) => offset,
+    let restart = match moved_to_tiered_restart_point(local, &mut leader_offset).await {
+        Ok(restart) => restart,
         Err(error) => {
             warn!(
                 topic = %cfg.topic,
                 partition = cfg.partition.get(),
                 %error,
-                "replicator: could not read the leader's local log start; retrying"
+                "replicator: could not read the leader's restart point; retrying"
             );
             return RowAction::Backoff(cfg.connection.replication.unexpected_error_backoff);
         }
     };
+    let TieredRestart { offset, reason } = restart;
 
     let Some(partition) = cfg.partitions.get(&cfg.topic, cfg.partition) else {
         return RowAction::Continue;
@@ -359,22 +432,58 @@ pub(super) async fn handle_offset_moved_to_tiered_storage(cfg: &Config) -> RowAc
         cfg,
         "replicator: skipping tiered-storage restart from stale local target"
     );
-    match partition.reset_to(Offset(local_log_start)).await {
+    match partition.reset_to(Offset(offset)).await {
         Ok(()) => {
-            truncate_producer_state(cfg, local_log_start).await;
+            truncate_producer_state(cfg, offset).await;
             info!(
                 topic = %cfg.topic,
                 partition = cfg.partition.get(),
-                local_log_start,
-                "replicator: offset moved to tiered storage; restarting at the leader's \
-                 local log start"
+                offset,
+                "replicator: offset moved to tiered storage; {}",
+                reason
             );
         }
         Err(error) => {
-            warn!(error = %error, "replicator: reset_to(leader local log start) failed");
+            warn!(error = %error, offset, "replicator: tiered-storage reset_to failed");
         }
     }
     RowAction::Continue
+}
+
+/// Where a follower answered `OFFSET_MOVED_TO_TIERED_STORAGE` restarts, and
+/// why.
+struct TieredRestart {
+    offset: i64,
+    reason: &'static str,
+}
+
+/// `handleOffsetsMovedToTieredStorage`'s choice of restart point: the
+/// leader's earliest pending upload offset when
+/// `shouldFetchFromLastTieredOffset` holds, and its local log start otherwise.
+async fn moved_to_tiered_restart_point<F, Fut>(
+    local: LocalTieringFacts,
+    leader_offset: &mut F,
+) -> Result<TieredRestart, String>
+where
+    F: FnMut(i64) -> Fut,
+    Fut: Future<Output = Result<i64, String>>,
+{
+    if local.may_fetch_from_last_tiered_offset() {
+        let leader_end = leader_offset(LATEST_TIMESTAMP).await?;
+        if should_fetch_from_last_tiered_offset(local.with_leader_end(leader_end)) {
+            let leader_start = leader_offset(EARLIEST_TIMESTAMP).await?;
+            let offset = earliest_pending_upload_offset(leader_offset, leader_start).await?;
+            return Ok(TieredRestart {
+                offset,
+                reason: "restarting at the leader's earliest pending upload",
+            });
+        }
+    }
+    let offset = leader_offset(EARLIEST_LOCAL_TIMESTAMP).await?;
+    Ok(TieredRestart {
+        offset,
+        reason: "restarting at the leader's local log start",
+    })
 }
 
 /// Dial with the partition's unchanged identity and outbound policy, before its RPC.
@@ -402,7 +511,7 @@ async fn leader_list_offset(cfg: &Config, our_epoch: i32, timestamp: i64) -> Res
         .send(build_leader_offsets_request(cfg, our_epoch, timestamp))
         .await
         .map_err(|e| format!("list_offsets({timestamp}): send: {e}"))?;
-    leader_offset_from(&response, &cfg.topic, cfg.partition.get())
+    leader_offset_from(&response, &cfg.topic, cfg.partition.get(), timestamp)
 }
 
 /// The `ListOffsets` a follower sends to learn one of the leader's offsets.
@@ -433,16 +542,24 @@ fn build_leader_offsets_request(
     }
 }
 
-/// Reads the answer for one partition out of a `ListOffsets` response.
+/// Reads the answer for one partition out of a `ListOffsets` response to a
+/// question about `timestamp`.
 ///
 /// A row the leader answered with an error, a row it did not answer at all,
 /// and a negative offset are all failures rather than a truncation point: none
 /// of them says where this follower's log should begin or end, and acting on
 /// one would delete a log on no evidence.
+///
+/// The one exception is the leader's `-1` for
+/// `EARLIEST_PENDING_UPLOAD_TIMESTAMP`, which is an answer: the leader does not
+/// know its pending upload offset. Kafka's
+/// `fetchEarliestPendingUploadOffset` reads it and falls back to the leader's
+/// local log start.
 fn leader_offset_from(
     response: &ListOffsetsResponse,
     topic: &str,
     partition: i32,
+    timestamp: i64,
 ) -> Result<i64, String> {
     let Some(row) = response
         .topics
@@ -455,7 +572,9 @@ fn leader_offset_from(
     if row.error_code != codes::NONE {
         return Err(format!("list_offsets: error {}", row.error_code));
     }
-    if row.offset < 0 {
+    let unknown_pending_upload = timestamp == EARLIEST_PENDING_UPLOAD_TIMESTAMP
+        && row.offset == UNKNOWN_PENDING_UPLOAD_OFFSET;
+    if row.offset < 0 && !unknown_pending_upload {
         return Err(format!(
             "list_offsets: the leader reported offset {}",
             row.offset
@@ -615,7 +734,7 @@ mod tests {
                 ConfigWithDir, LEADER_ID, NODE_ID, PARTITION, TOPIC, image_with_leader, test_config,
             },
         },
-        assert2::assert,
+        assert2::{assert, check},
         krabka_raft::NodeId,
     };
 
@@ -775,6 +894,7 @@ mod tests {
             (LATEST_TIMESTAMP, -1),
             (EARLIEST_TIMESTAMP, -2),
             (EARLIEST_LOCAL_TIMESTAMP, -4),
+            (EARLIEST_PENDING_UPLOAD_TIMESTAMP, -6),
         ] {
             let req = build_leader_offsets_request(&cfg, 7, sentinel);
 
@@ -836,7 +956,30 @@ mod tests {
         };
 
         let answered = response(TOPIC, vec![row(PARTITION, codes::NONE, 4_096)]);
-        assert!(leader_offset_from(&answered, TOPIC, PARTITION) == Ok(4_096));
+        assert!(
+            leader_offset_from(&answered, TOPIC, PARTITION, EARLIEST_LOCAL_TIMESTAMP) == Ok(4_096)
+        );
+        // The leader's "unknown" is an answer to the pending upload question
+        // alone.
+        let unknown = response(TOPIC, vec![row(PARTITION, codes::NONE, -1)]);
+        assert!(
+            leader_offset_from(
+                &unknown,
+                TOPIC,
+                PARTITION,
+                EARLIEST_PENDING_UPLOAD_TIMESTAMP
+            ) == Ok(-1)
+        );
+        let below_unknown = response(TOPIC, vec![row(PARTITION, codes::NONE, -2)]);
+        assert!(
+            leader_offset_from(
+                &below_unknown,
+                TOPIC,
+                PARTITION,
+                EARLIEST_PENDING_UPLOAD_TIMESTAMP
+            )
+            .is_err()
+        );
 
         for (what, resp) in [
             (
@@ -862,7 +1005,7 @@ mod tests {
             ),
         ] {
             assert!(
-                leader_offset_from(&resp, TOPIC, PARTITION).is_err(),
+                leader_offset_from(&resp, TOPIC, PARTITION, EARLIEST_LOCAL_TIMESTAMP).is_err(),
                 "{what} named a restart point"
             );
         }
@@ -1005,6 +1148,255 @@ mod tests {
             };
             assert!(got == expected, "{name}");
         }
+    }
+
+    /// The replica a KIP-1023 recovery row starts from: the flag as the
+    /// metadata image publishes it, this replica's topic config, and how many
+    /// records its log holds.
+    #[derive(Clone, Copy)]
+    struct TieringReplica {
+        /// `follower.fetch.last.tiered.offset.enable`, at the node it is
+        /// published for.
+        flag: Option<(krabka_metadata::NodeId, &'static str)>,
+        tiered: bool,
+        compact: bool,
+        records: usize,
+    }
+
+    /// The leader's scripted answer to each sentinel a follower asks about.
+    #[derive(Clone, Copy)]
+    struct TieringLeader {
+        latest: i64,
+        earliest: i64,
+        earliest_local: i64,
+        pending_upload: i64,
+    }
+
+    /// Which error the follower is recovering from.
+    #[derive(Clone, Copy, Debug)]
+    enum TieringRecovery {
+        OutOfRange,
+        MovedToTieredStorage,
+    }
+
+    const CLUSTER_ON: Option<(krabka_metadata::NodeId, &str)> =
+        Some((krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID, "true"));
+    const THIS_BROKER_ON: Option<(krabka_metadata::NodeId, &str)> = Some((NODE_ID, "TRUE"));
+
+    fn replica(
+        flag: Option<(krabka_metadata::NodeId, &'static str)>,
+        tiered: bool,
+        compact: bool,
+        records: usize,
+    ) -> TieringReplica {
+        TieringReplica {
+            flag,
+            tiered,
+            compact,
+            records,
+        }
+    }
+
+    /// A tiered leader whose log starts at 10, whose local log starts at 40,
+    /// which has uploaded everything below 75, and whose log ends at 90.
+    const TIERED_LEADER: TieringLeader = TieringLeader {
+        latest: 90,
+        earliest: 10,
+        earliest_local: 40,
+        pending_upload: 75,
+    };
+
+    /// The same leader before it has learned which of its evicted segments
+    /// are uploaded.
+    const UNKNOWN_UPLOADS: TieringLeader = TieringLeader {
+        pending_upload: -1,
+        ..TIERED_LEADER
+    };
+
+    /// A tiered leader that has uploaded nothing and evicted nothing.
+    const NOTHING_UPLOADED: TieringLeader = TieringLeader {
+        earliest_local: 10,
+        pending_upload: -1,
+        ..TIERED_LEADER
+    };
+
+    /// A tiered leader with an empty log.
+    const EMPTY_LEADER: TieringLeader = TieringLeader {
+        latest: 0,
+        earliest: 0,
+        earliest_local: 0,
+        pending_upload: 0,
+    };
+
+    fn recovery(action: RowAction, asked: &[i64], log_start: i64, log_end: i64) -> Recovery {
+        Recovery {
+            action,
+            asked: asked.to_vec(),
+            log_start,
+            log_end,
+        }
+    }
+
+    fn backoff() -> RowAction {
+        RowAction::Backoff(ReplicationRuntimeConfig::default().unexpected_error_backoff)
+    }
+
+    /// KIP-1023 over both recovery paths: `fetchOffsetAndTruncate` for
+    /// `OFFSET_OUT_OF_RANGE` and `handleOffsetsMovedToTieredStorage` for
+    /// `OFFSET_MOVED_TO_TIERED_STORAGE`. Each row is the replica, the leader,
+    /// and what the recovery asked and left behind.
+    #[yare::parameterized(
+        out_of_range_restarts_at_the_pending_upload = {
+            TieringRecovery::OutOfRange, replica(CLUSTER_ON, true, false, 0), TIERED_LEADER,
+            recovery(RowAction::Continue, &[-1, -2, -6], 75, 75)
+        },
+        out_of_range_reads_this_brokers_own_flag = {
+            TieringRecovery::OutOfRange, replica(THIS_BROKER_ON, true, false, 0), TIERED_LEADER,
+            recovery(RowAction::Continue, &[-1, -2, -6], 75, 75)
+        },
+        out_of_range_without_the_flag_restarts_at_the_log_start = {
+            TieringRecovery::OutOfRange, replica(None, true, false, 0), TIERED_LEADER,
+            recovery(RowAction::Continue, &[-1, -2], 10, 10)
+        },
+        out_of_range_flag_off_restarts_at_the_log_start = {
+            TieringRecovery::OutOfRange,
+            replica(Some((krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID, "false")), true, false, 0),
+            TIERED_LEADER,
+            recovery(RowAction::Continue, &[-1, -2], 10, 10)
+        },
+        out_of_range_untiered_restarts_at_the_log_start = {
+            TieringRecovery::OutOfRange, replica(CLUSTER_ON, false, false, 0), TIERED_LEADER,
+            recovery(RowAction::Continue, &[-1, -2], 10, 10)
+        },
+        out_of_range_compacted_restarts_at_the_log_start = {
+            TieringRecovery::OutOfRange, replica(CLUSTER_ON, true, true, 0), TIERED_LEADER,
+            recovery(RowAction::Continue, &[-1, -2], 10, 10)
+        },
+        out_of_range_non_empty_restarts_at_the_log_start = {
+            TieringRecovery::OutOfRange, replica(CLUSTER_ON, true, false, 6), TIERED_LEADER,
+            recovery(RowAction::Continue, &[-1, -2], 10, 10)
+        },
+        out_of_range_empty_leader_keeps_the_log = {
+            TieringRecovery::OutOfRange, replica(CLUSTER_ON, true, false, 0), EMPTY_LEADER,
+            recovery(RowAction::Continue, &[-1, -2], 0, 0)
+        },
+        out_of_range_nothing_uploaded_restarts_at_the_local_start = {
+            TieringRecovery::OutOfRange, replica(CLUSTER_ON, true, false, 0), NOTHING_UPLOADED,
+            recovery(RowAction::Continue, &[-1, -2, -6, -4], 10, 10)
+        },
+        out_of_range_unknown_uploads_back_off = {
+            TieringRecovery::OutOfRange, replica(CLUSTER_ON, true, false, 0), UNKNOWN_UPLOADS,
+            recovery(backoff(), &[-1, -2, -6, -4], 0, 0)
+        },
+        moved_restarts_at_the_pending_upload = {
+            TieringRecovery::MovedToTieredStorage, replica(CLUSTER_ON, true, false, 0),
+            TIERED_LEADER,
+            recovery(RowAction::Continue, &[-1, -2, -6], 75, 75)
+        },
+        moved_reads_this_brokers_own_flag = {
+            TieringRecovery::MovedToTieredStorage, replica(THIS_BROKER_ON, true, false, 0),
+            TIERED_LEADER,
+            recovery(RowAction::Continue, &[-1, -2, -6], 75, 75)
+        },
+        moved_without_the_flag_restarts_at_the_local_start = {
+            TieringRecovery::MovedToTieredStorage, replica(None, true, false, 0), TIERED_LEADER,
+            recovery(RowAction::Continue, &[-4], 40, 40)
+        },
+        moved_untiered_restarts_at_the_local_start = {
+            TieringRecovery::MovedToTieredStorage, replica(CLUSTER_ON, false, false, 0),
+            TIERED_LEADER,
+            recovery(RowAction::Continue, &[-4], 40, 40)
+        },
+        moved_compacted_restarts_at_the_local_start = {
+            TieringRecovery::MovedToTieredStorage, replica(CLUSTER_ON, true, true, 0),
+            TIERED_LEADER,
+            recovery(RowAction::Continue, &[-4], 40, 40)
+        },
+        moved_non_empty_restarts_at_the_local_start = {
+            TieringRecovery::MovedToTieredStorage, replica(CLUSTER_ON, true, false, 6),
+            TIERED_LEADER,
+            recovery(RowAction::Continue, &[-4], 40, 40)
+        },
+        moved_empty_leader_restarts_at_the_local_start = {
+            TieringRecovery::MovedToTieredStorage, replica(CLUSTER_ON, true, false, 0),
+            EMPTY_LEADER,
+            recovery(RowAction::Continue, &[-1, -4], 0, 0)
+        },
+        moved_nothing_uploaded_restarts_at_the_local_start = {
+            TieringRecovery::MovedToTieredStorage, replica(CLUSTER_ON, true, false, 0),
+            NOTHING_UPLOADED,
+            recovery(RowAction::Continue, &[-1, -2, -6, -4], 10, 10)
+        },
+        moved_unknown_uploads_back_off = {
+            TieringRecovery::MovedToTieredStorage, replica(CLUSTER_ON, true, false, 0),
+            UNKNOWN_UPLOADS,
+            recovery(backoff(), &[-1, -2, -6, -4], 0, 0)
+        },
+    )]
+    #[test_macro(tokio::test)]
+    async fn an_empty_tiered_replica_restarts_where_kip_1023_says(
+        path: TieringRecovery,
+        replica: TieringReplica,
+        leader: TieringLeader,
+        expected: Recovery,
+    ) {
+        let mut image = image_with_leader(LEADER_ID);
+        if let Some((node_id, value)) = replica.flag {
+            image.apply(&krabka_metadata::MetadataRecord::V1BrokerConfig(
+                krabka_metadata::BrokerConfigRecord {
+                    node_id,
+                    config_name: "follower.fetch.last.tiered.offset.enable".to_owned(),
+                    config_value: Some(value.to_owned()),
+                },
+            ));
+        }
+        let (mut cfg, _log_dir) = test_config(image);
+        cfg.log_settings.remote_storage_enable = replica.tiered;
+        if replica.compact {
+            cfg.log_settings.cleanup_policy = krabka_log::CleanupPolicy::Compact;
+        }
+        ensure_local_partition(&cfg).unwrap();
+        let partition = cfg.partitions.get(&cfg.topic, cfg.partition).unwrap();
+        {
+            let mut log = partition.log.lock().unwrap();
+            for _ in 0..replica.records {
+                let mut batch = krabka_protocol::records::RecordBatch {
+                    partition_leader_epoch: 4,
+                    records: vec![krabka_protocol::records::Record {
+                        key: Some(bytes::Bytes::from_static(b"k")),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                };
+                log.append(&mut batch).unwrap();
+            }
+        }
+        let asked = std::cell::RefCell::new(Vec::new());
+        let lookup = |timestamp| {
+            asked.borrow_mut().push(timestamp);
+            std::future::ready(match timestamp {
+                LATEST_TIMESTAMP => Ok(leader.latest),
+                EARLIEST_TIMESTAMP => Ok(leader.earliest),
+                EARLIEST_LOCAL_TIMESTAMP => Ok(leader.earliest_local),
+                EARLIEST_PENDING_UPLOAD_TIMESTAMP => Ok(leader.pending_upload),
+                other => Err(format!("unexpected sentinel {other}")),
+            })
+        };
+
+        let action = match path {
+            TieringRecovery::OutOfRange => recover_offset_out_of_range(&cfg, lookup).await,
+            TieringRecovery::MovedToTieredStorage => {
+                recover_offset_moved_to_tiered_storage(&cfg, lookup).await
+            }
+        };
+
+        let got = Recovery {
+            action,
+            asked: asked.into_inner(),
+            log_start: partition.log_start_offset().0,
+            log_end: partition.log_end_offset().0,
+        };
+        check!(got == expected, "{path:?}");
     }
 
     /// A recovery for a leader the metadata image no longer names asks the

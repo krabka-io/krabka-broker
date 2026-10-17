@@ -2,6 +2,9 @@
 //! longer holds, and the KFC-1 activation check that keeps a batch the
 //! tier returns from going out before it is due.
 
+mod wait;
+
+pub(super) use wait::RemoteFetchWait;
 use {
     super::{
         plan::{PendingRead, refused_read},
@@ -150,6 +153,65 @@ fn reject_saturated(p: &mut PendingRead) -> usize {
     fail_partition(p)
 }
 
+/// Why a consumer partition in the remote band went out without remote
+/// records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemoteReadSkipped {
+    /// KIP-956's fetch quota is exceeded, so the read never started.
+    Throttled { throttle_ms: i64 },
+    /// `remote.fetch.max.wait.ms` passed before the read finished.
+    Expired,
+}
+
+/// Answers a consumer partition in the remote band whose remote read was not
+/// run or did not finish: no error, no records, and the live bounds.
+///
+/// Both of Kafka's paths build this row. A partition the fetch quota holds
+/// back is `handleOffsetOutOfRangeError`'s throttled `FetchDataInfo`, which is
+/// deliberately not an error, so the other partitions of the fetch are still
+/// served and the consumer simply asks again. A remote read that
+/// `DelayedRemoteFetch` expires is answered by `onComplete` from the local read
+/// result, which for the remote band is the same empty `FetchDataInfo`. Both
+/// carry the high watermark, log start and last stable offset the log reports,
+/// and a null aborted-transaction list whatever the isolation level, because
+/// neither `FetchDataInfo` has one.
+///
+/// Returns zero served bytes.
+fn answer_without_remote_records(
+    p: &mut PendingRead,
+    live: LiveOffsets,
+    skipped: RemoteReadSkipped,
+) -> usize {
+    tracing::debug!(
+        topic = %p.topic_name,
+        partition = p.partition_index,
+        offset = p.fetch_offset,
+        ?skipped,
+        "remote-reader: answering the partition without its remote records"
+    );
+    p.out = refused_read(p.partition_index, codes::NONE);
+    live.report(&mut p.out);
+    0
+}
+
+/// [`answer_without_remote_records`] for a read `remote.fetch.max.wait.ms`
+/// expired.
+fn expired(p: &mut PendingRead, live: LiveOffsets) -> usize {
+    answer_without_remote_records(p, live, RemoteReadSkipped::Expired)
+}
+
+/// The bytes a finished remote read counts against the fetch quota: the batch
+/// it returned, and zero for a read that found nothing or failed, as
+/// `RemoteLogReader.call` records them.
+fn fetched_bytes<E>(fetched: &Result<Option<RecordBatch>, E>) -> u64 {
+    match fetched {
+        Ok(Some(batch)) => {
+            u64::try_from(<RecordBatch as Encode>::encoded_len(batch, 0)).unwrap_or(u64::MAX)
+        }
+        Ok(None) | Err(_) => 0,
+    }
+}
+
 /// Answers a follower that fetched into the band the leader keeps only in the
 /// remote tier.
 ///
@@ -221,10 +283,19 @@ fn moved_to_tiered_storage(p: &mut PendingRead, live: LiveOffsets, local_log_sta
 /// reader's bounded pool, exactly as Kafka runs one `RemoteLogReader` task per
 /// remote fetch. A read that arrives with the pool's pending queue already
 /// full is refused: see [`reject_saturated`].
+///
+/// A consumer read is held back while KIP-956's fetch quota is exceeded, and
+/// the time it waits for a reader slot and for the tier is bounded by `wait`,
+/// the request's `remote.fetch.max.wait.ms`. Either way the partition goes out
+/// without records and without an error: see
+/// [`answer_without_remote_records`]. The bytes every finished read takes from
+/// the tier are recorded against the fetch quota, as Kafka's
+/// `RemoteLogReader` records them.
 pub(super) async fn try_remote_read(
     broker: &Broker,
     p: &mut PendingRead,
     part: &Partition,
+    wait: &mut RemoteFetchWait,
 ) -> Option<usize> {
     let reader = broker.remote_reader.clone()?;
     let (
@@ -279,6 +350,17 @@ pub(super) async fn try_remote_read(
     // `logStartOffset <= offset` before `offset < localLogStartOffset`.
     if p.is_follower_fetch && p.fetch_offset < local_log_start.0 {
         return Some(moved_to_tiered_storage(p, live, local_log_start.0));
+    }
+    // KIP-956: Kafka asks the fetch quota right after the follower branch of
+    // `handleOffsetOutOfRangeError`, before any remote work, and skips the read
+    // while the bytes already read put the rate over the bound.
+    let throttle_ms = broker.remote_log_quotas.fetch.throttle_time_ms();
+    if throttle_ms > 0 {
+        return Some(answer_without_remote_records(
+            p,
+            live,
+            RemoteReadSkipped::Throttled { throttle_ms },
+        ));
     }
     if p.topic_id == WireUuid::ZERO {
         // Without a topic_id we can't build `TopicIdPartition` keyed the
@@ -336,17 +418,34 @@ pub(super) async fn try_remote_read(
     // KIP-405's `remote.log.reader.threads` / `.max.pending.tasks` cap. The
     // permit is held for the batch read and the `.txnindex` read below, so one
     // cold fetch occupies one reader slot however many objects it touches.
-    let Ok(_permit) = reader.pool.acquire().await else {
+    // A read still queued for a slot when `remote.fetch.max.wait.ms` passes is
+    // one Kafka's `DelayedRemoteFetch.onExpiration` cancels.
+    let Some(permit) = wait.bound(broker, reader.pool.acquire()).await else {
+        return Some(expired(p, live));
+    };
+    let Ok(_permit) = permit else {
         return Some(reject_saturated(p));
     };
     // Kafka's `RemoteLogReaderFetchRateAndTimeMs` measures the reader task,
     // which is exactly the span this permit covers.
     let _read_timer = ReadTimer::started(&broker.metrics);
 
-    match reader
-        .fetch_batch(&tp, leader_epoch, p.fetch_offset, max_bytes)
+    let Some(fetched) = wait
+        .bound(
+            broker,
+            reader.fetch_batch(&tp, leader_epoch, p.fetch_offset, max_bytes),
+        )
         .await
-    {
+    else {
+        return Some(expired(p, live));
+    };
+    // `RemoteLogReader.call` records what the read returned, and zero for a
+    // read that found nothing or failed, against the fetch quota.
+    broker
+        .remote_log_quotas
+        .fetch
+        .record(fetched_bytes(&fetched));
+    match fetched {
         Ok(Some(batch)) => {
             // A follower is never gated: it replicates a scheduled record, and
             // counts it toward the ISR, before any consumer may see it.
@@ -401,12 +500,23 @@ pub(super) async fn try_remote_read(
                 let Some(batch_end) = batch_last_offset.checked_add(1) else {
                     return Some(fail_partition(p));
                 };
-                let aborts = match reader
-                    .aborted_transactions(&tp, leader_epoch, p.fetch_offset, batch_last_offset)
+                let aborts = match wait
+                    .bound(
+                        broker,
+                        reader.aborted_transactions(
+                            &tp,
+                            leader_epoch,
+                            p.fetch_offset,
+                            batch_last_offset,
+                        ),
+                    )
                     .await
                 {
-                    Ok(aborts) => aborts,
-                    Err(e) => return Some(fail_remote_read(&broker.metrics, p, &e)),
+                    Some(Ok(aborts)) => aborts,
+                    Some(Err(e)) => return Some(fail_remote_read(&broker.metrics, p, &e)),
+                    None => {
+                        return Some(expired(p, live));
+                    }
                 };
                 let local = part
                     .log
@@ -456,6 +566,8 @@ pub(super) async fn try_remote_read(
 #[cfg(test)]
 mod tests {
     mod aborts;
+    mod fetch_quota;
+    mod remote_wait;
 
     use {
         crate::{
@@ -612,6 +724,22 @@ mod tests {
         owners: TieredBroker,
     }
 
+    impl CommittedTieredFixture {
+        /// The cold read of `fetch_offset` that a local `OFFSET_OUT_OF_RANGE`
+        /// hands to the tier, and the bytes it served.
+        async fn cold_read(&self, fetch_offset: i64) -> (super::PendingRead, Option<usize>) {
+            let mut read = out_of_range_at(&self.part, fetch_offset);
+            let bytes = super::try_remote_read(
+                &self.broker,
+                &mut read,
+                &self.part,
+                &mut super::RemoteFetchWait::default(),
+            )
+            .await;
+            (read, bytes)
+        }
+    }
+
     async fn committed_tiered_fixture() -> CommittedTieredFixture {
         let owners = tiered_broker().await;
         let broker = owners.handle.broker_arc_for_test();
@@ -626,7 +754,10 @@ mod tests {
 
     /// A broker with a local archive and an in-memory RLMM, and the
     /// directories both live in.
-    async fn tiered_broker() -> TieredBroker {
+    async fn tiered_broker() -> TieredBroker { tiered_broker_with(|_| {}).await }
+
+    /// [`tiered_broker`] with `configure` applied to its config first.
+    async fn tiered_broker_with(configure: impl FnOnce(&mut BrokerConfig)) -> TieredBroker {
         let dir = tempfile::tempdir().expect("tempdir");
         let remote_dir = tempfile::tempdir().expect("remote tempdir");
         let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
@@ -634,6 +765,7 @@ mod tests {
             dir: remote_dir.path().to_path_buf(),
         });
         config.remote_log_metadata = RlmmKind::InMemory;
+        configure(&mut config);
         let handle = Broker::start(config).await.expect("start broker");
         TieredBroker {
             handle,
@@ -713,8 +845,7 @@ mod tests {
 
         let out_of_range = || out_of_range_at(&tiered.part, 0);
         // The floor has not moved, so offset 0 is the remote tier's to serve.
-        let mut served = out_of_range();
-        let bytes_served = super::try_remote_read(&tiered.broker, &mut served, &tiered.part).await;
+        let (served, bytes_served) = tiered.cold_read(0).await;
         check!(bytes_served.is_some_and(|n| n > 0), "the tier answers");
         check!(served.out.error_code == codes::NONE);
         check!(bounds(&served.out) == served_bounds(0));
@@ -731,15 +862,26 @@ mod tests {
             .expect("move the log start");
 
         let mut refused = out_of_range();
-        let bytes_served = super::try_remote_read(&tiered.broker, &mut refused, &tiered.part).await;
+        let bytes_served = super::try_remote_read(
+            &tiered.broker,
+            &mut refused,
+            &tiered.part,
+            &mut super::RemoteFetchWait::default(),
+        )
+        .await;
         check!(bytes_served == None, "no tier answers below the floor");
         check!(refused.out == super::refused_read(0, codes::OFFSET_OUT_OF_RANGE));
 
         // The floor itself still reads: the band above it is the tier's, and
         // the row reports the floor that moved.
         let mut at_floor = out_of_range_at(&tiered.part, 5);
-        let bytes_served =
-            super::try_remote_read(&tiered.broker, &mut at_floor, &tiered.part).await;
+        let bytes_served = super::try_remote_read(
+            &tiered.broker,
+            &mut at_floor,
+            &tiered.part,
+            &mut super::RemoteFetchWait::default(),
+        )
+        .await;
         check!(bytes_served.is_some_and(|n| n > 0), "the floor is readable");
         check!(bounds(&at_floor.out) == served_bounds(5));
 
@@ -781,7 +923,13 @@ mod tests {
         };
 
         let mut follower = follower_at(0);
-        let served = super::try_remote_read(&tiered.broker, &mut follower, &tiered.part).await;
+        let served = super::try_remote_read(
+            &tiered.broker,
+            &mut follower,
+            &tiered.part,
+            &mut super::RemoteFetchWait::default(),
+        )
+        .await;
         check!(
             served == Some(0),
             "the follower is served no archived bytes"
@@ -797,7 +945,13 @@ mod tests {
 
         // A consumer at the very same offset still reads the archive.
         let mut consumer = out_of_range_at(&tiered.part, 0);
-        let served = super::try_remote_read(&tiered.broker, &mut consumer, &tiered.part).await;
+        let served = super::try_remote_read(
+            &tiered.broker,
+            &mut consumer,
+            &tiered.part,
+            &mut super::RemoteFetchWait::default(),
+        )
+        .await;
         check!(
             served.is_some_and(|n| n > 0),
             "the tier answers the consumer"
@@ -815,7 +969,13 @@ mod tests {
 
         // Above the leader's log there is no tiered band to redirect into.
         let mut ahead = follower_at(10_000);
-        let served = super::try_remote_read(&tiered.broker, &mut ahead, &tiered.part).await;
+        let served = super::try_remote_read(
+            &tiered.broker,
+            &mut ahead,
+            &tiered.part,
+            &mut super::RemoteFetchWait::default(),
+        )
+        .await;
         check!(served == None, "no segment holds offset 10_000");
         check!(ahead.out == super::refused_read(0, codes::OFFSET_OUT_OF_RANGE));
 
@@ -828,7 +988,13 @@ mod tests {
             .set_log_start_offset(Offset(5))
             .expect("move the log start");
         let mut deleted = follower_at(0);
-        let served = super::try_remote_read(&tiered.broker, &mut deleted, &tiered.part).await;
+        let served = super::try_remote_read(
+            &tiered.broker,
+            &mut deleted,
+            &tiered.part,
+            &mut super::RemoteFetchWait::default(),
+        )
+        .await;
         check!(served == None, "nothing serves an offset below the floor");
         check!(deleted.out == super::refused_read(0, codes::OFFSET_OUT_OF_RANGE));
 
@@ -859,8 +1025,7 @@ mod tests {
             .current_leader_epoch
             .store(7, std::sync::atomic::Ordering::Release);
 
-        let mut served = out_of_range_at(&tiered.part, 0);
-        let bytes_served = super::try_remote_read(&tiered.broker, &mut served, &tiered.part).await;
+        let (served, bytes_served) = tiered.cold_read(0).await;
         check!(
             bytes_served.is_some_and(|n| n > 0),
             "the archive answers offset 0"
@@ -898,7 +1063,13 @@ mod tests {
         commit_everything(&part).await;
 
         let mut served = out_of_range_at(&part, 0);
-        let bytes_served = super::try_remote_read(&broker, &mut served, &part).await;
+        let bytes_served = super::try_remote_read(
+            &broker,
+            &mut served,
+            &part,
+            &mut super::RemoteFetchWait::default(),
+        )
+        .await;
         check!(
             bytes_served.is_some_and(|n| n > 0),
             "the tier still answers offset 0 after a restart"
@@ -910,7 +1081,16 @@ mod tests {
             is_follower_fetch: true,
             ..out_of_range_at(&part, 0)
         };
-        check!(super::try_remote_read(&broker, &mut follower, &part).await == Some(0));
+        check!(
+            super::try_remote_read(
+                &broker,
+                &mut follower,
+                &part,
+                &mut super::RemoteFetchWait::default()
+            )
+            .await
+                == Some(0)
+        );
         check!(
             follower.out
                 == PartitionData {
@@ -1032,7 +1212,13 @@ mod tests {
         // An offset above everything the archive holds: the RLMM is caught up
         // and answers, and no segment covers it. That is a genuine miss.
         let mut missing = out_of_range_at(&part, 10_000);
-        let bytes_served = super::try_remote_read(&broker, &mut missing, &part).await;
+        let bytes_served = super::try_remote_read(
+            &broker,
+            &mut missing,
+            &part,
+            &mut super::RemoteFetchWait::default(),
+        )
+        .await;
         check!(bytes_served == None, "no segment holds offset 10_000");
         check!(missing.out == super::refused_read(0, codes::OFFSET_OUT_OF_RANGE));
 
@@ -1041,7 +1227,13 @@ mod tests {
         std::fs::remove_dir_all(remote_dir.path()).expect("wipe the archive");
 
         let mut failed = out_of_range_at(&part, 0);
-        let bytes_served = super::try_remote_read(&broker, &mut failed, &part).await;
+        let bytes_served = super::try_remote_read(
+            &broker,
+            &mut failed,
+            &part,
+            &mut super::RemoteFetchWait::default(),
+        )
+        .await;
         check!(bytes_served == Some(0), "a failed read serves no bytes");
         check!(failed.out == super::refused_read(0, codes::UNKNOWN_SERVER_ERROR));
 

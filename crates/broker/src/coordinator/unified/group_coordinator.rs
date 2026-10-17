@@ -21,6 +21,7 @@ use {
         metrics::BrokerMetrics, share_coordinator::persister_client::SharePersister,
     },
     dashmap::DashMap,
+    krabka_metadata::NodeId,
     std::sync::Arc,
 };
 
@@ -116,6 +117,13 @@ pub struct GroupCoordinator {
     /// refreshes them at its next heartbeat. See `coordinator::topic_deletion`
     /// for what moves it.
     pub(crate) regex_refresh_version: std::sync::atomic::AtomicI64,
+    /// The node this coordinator runs on, whose dynamic broker configs layer
+    /// over the static group settings.
+    ///
+    /// The broker sets it once at startup. It is unset in the
+    /// pure-coordinator unit tests, where only the cluster-wide dynamic
+    /// configs apply.
+    pub(crate) node_id: std::sync::OnceLock<NodeId>,
 }
 
 /// `Debug`-able wrapper around an `Arc<dyn MetadataSource>` so that it can
@@ -156,6 +164,7 @@ impl GroupCoordinator {
             recent_topic_deletions: std::sync::Mutex::default(),
             shard_terms: std::sync::Mutex::default(),
             regex_refresh_version: std::sync::atomic::AtomicI64::new(-1),
+            node_id: std::sync::OnceLock::new(),
         }
     }
 
@@ -203,6 +212,16 @@ impl GroupCoordinator {
     pub(crate) fn metadata_source(&self) -> Option<Arc<dyn MetadataSource>> {
         self.metadata_source.get().map(|h| h.0.clone())
     }
+
+    /// Name the node this coordinator runs on.
+    ///
+    /// The broker calls this once at startup. A second call does nothing,
+    /// because the `OnceLock` keeps the first value.
+    pub(crate) fn set_node_id(&self, node: NodeId) { let _ = self.node_id.set(node); }
+
+    /// The node this coordinator runs on, if the broker named it.
+    #[must_use]
+    pub(crate) fn node_id(&self) -> Option<NodeId> { self.node_id.get().copied() }
 
     /// Install the metric bundle whose group-lag series this coordinator
     /// releases.

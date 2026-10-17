@@ -7,6 +7,7 @@ use {
         archive::ChainPosition,
         copy_segment::{CopyOutcome, copy_one},
         local_retention::{OffsetRange, remote_covered_through},
+        quota::RlmQuotaManager,
     },
     crate::config_keys::RemoteCopyLag,
     krabka_log::SegmentExport,
@@ -277,6 +278,43 @@ impl CopyIdentity<'static> {
     }
 }
 
+/// The longest one wait for the copy quota sleeps before it asks the quota
+/// and the fence again: Kafka's `RemoteLogManager.quotaTimeout()`.
+const COPY_QUOTA_RECHECK: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Kafka's copy-quota gate in `RLMCopyTask.copyLogSegmentsToRemote`: wait
+/// until `quota` allows more bytes, then record the segment's `bytes` against
+/// it before the upload starts.
+///
+/// Kafka waits on a condition for at most `quotaTimeout()` and asks the quota
+/// again; the task is interrupted when it is cancelled. This sleeps for the
+/// throttle time, capped at the same second, and asks `fence` after each
+/// sleep, so a broker that loses the partition or starts to shut down stops
+/// waiting.
+///
+/// Returns `false` when the fence stopped holding during the wait.
+async fn wait_for_copy_quota(
+    quota: &RlmQuotaManager,
+    bytes: u64,
+    fence: &dyn CopyFence,
+    tp: &TopicIdPartition,
+) -> bool {
+    loop {
+        let throttle_ms = match quota.try_acquire(bytes) {
+            Ok(()) => return true,
+            Err(throttle_ms) => throttle_ms,
+        };
+        debug!(topic = %tp.topic, partition = tp.partition, throttle_ms,
+               "remote-log-manager: quota exceeded for copying log segments, waiting for the \
+                quota to be available");
+        let wait = std::time::Duration::from_millis(u64::try_from(throttle_ms).unwrap_or(0));
+        tokio::time::sleep(wait.min(COPY_QUOTA_RECHECK)).await;
+        if !fence.holds() {
+            return false;
+        }
+    }
+}
+
 /// What holds a copy pass back: the last stable offset that bounds what it
 /// uploads and the copy lag that delays it.
 #[derive(Clone, Copy)]
@@ -436,6 +474,14 @@ pub(crate) async fn copy_eligible_delayed(
                    epoch = leader_epoch.0,
                    "remote-log-manager: no longer the partition's leader in this epoch; \
                     stopping the copy pass");
+            break;
+        }
+        // KIP-956's copy quota, asked after the fence and before the upload as
+        // `RLMCopyTask` asks it, and charged with the segment's `.log` bytes.
+        if !wait_for_copy_quota(tier.copy_quota, ex.size.bytes_u64(), fence, tp).await {
+            debug!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                   "remote-log-manager: the copy fence closed while waiting for the copy \
+                    quota; stopping the copy pass");
             break;
         }
         // Each success hands back the next chain position, so a run of
