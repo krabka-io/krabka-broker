@@ -19,7 +19,7 @@ use {
             config_prefix, normalised,
         },
     },
-    crate::codes,
+    crate::{codes, listener_tls::ListenerTlsInputs},
     krabka_metadata::MetadataImage,
     krabka_security::ListenerProtocol,
     std::collections::BTreeMap,
@@ -83,14 +83,10 @@ const DEFAULT_SASL_MECHANISM: &str = "GSSAPI";
 
 /// A Scala `require` failure, as `IllegalArgumentException.getMessage` gives
 /// it.
-fn requirement(message: &str) -> String {
-    format!("requirement failed: {message}")
-}
+fn requirement(message: &str) -> String { format!("requirement failed: {message}") }
 
 /// Kafka's `ListenerName.toString`.
-fn listener_name(name: &str) -> String {
-    format!("ListenerName({name})")
-}
+fn listener_name(name: &str) -> String { format!("ListenerName({name})") }
 
 /// A `DynamicListenerConfig` refusal, as `processReconfiguration` wraps it.
 fn invalid_dynamic_configuration(cause: &str) -> String {
@@ -141,7 +137,10 @@ fn listener_values_changed(current: &ListenerView, proposed: &ListenerView) -> b
             SASL_MECHANISM_INTER_BROKER_PROTOCOL,
         ]
         .iter()
-        .filter_map(|key| view.get(key).map(|value| ((*key).to_owned(), value.to_owned())))
+        .filter_map(|key| {
+            view.get(key)
+                .map(|value| ((*key).to_owned(), value.to_owned()))
+        })
         .chain(
             view.with_prefix("listener.name.")
                 .into_iter()
@@ -163,7 +162,10 @@ fn advertised_controller_listeners(view: &ListenerView) -> Result<Vec<Endpoint>,
         .iter()
         .filter_map(|name| {
             let name = normalised(name);
-            listeners.iter().find(|endpoint| endpoint.name == name).cloned()
+            listeners
+                .iter()
+                .find(|endpoint| endpoint.name == name)
+                .cloned()
         })
         .collect())
 }
@@ -360,7 +362,7 @@ fn validate_reconfiguration(current: &ListenerView, proposed: &ListenerView) -> 
 }
 
 /// A node's listener config before and after an alter of its own resource.
-pub(crate) struct ListenerChange {
+struct ListenerChange {
     current: ListenerView,
     proposed: ListenerView,
 }
@@ -369,7 +371,7 @@ impl ListenerChange {
     /// The node's config with its `current` and its `proposed` per-broker
     /// dynamic configs, over its `static_config` and the cluster default
     /// `image` holds.
-    pub(crate) fn new(
+    fn new(
         static_config: &BTreeMap<String, String>,
         image: &MetadataImage,
         current: &BTreeMap<String, String>,
@@ -388,7 +390,7 @@ impl ListenerChange {
     ///
     /// # Errors
     /// `INVALID_REQUEST` with the message of the reader that failed.
-    pub(crate) fn check_values(&self) -> Result<(), (i16, String)> {
+    fn check_values(&self) -> Result<(), (i16, String)> {
         if !listener_values_changed(&self.current, &self.proposed) {
             return Ok(());
         }
@@ -400,12 +402,45 @@ impl ListenerChange {
     ///
     /// # Errors
     /// `INVALID_REQUEST`, wrapped as `Invalid dynamic configuration`.
-    pub(crate) fn check_reconfiguration(&self) -> Result<(), (i16, String)> {
+    fn check_reconfiguration(&self) -> Result<(), (i16, String)> {
         if !listener_reconfiguration_needed(&self.current, &self.proposed) {
             return Ok(());
         }
-        validate_reconfiguration(&self.current, &self.proposed)
-            .map_err(|cause| (codes::INVALID_REQUEST, invalid_dynamic_configuration(&cause)))
+        validate_reconfiguration(&self.current, &self.proposed).map_err(|cause| {
+            (
+                codes::INVALID_REQUEST,
+                invalid_dynamic_configuration(&cause),
+            )
+        })
+    }
+}
+
+/// What the reconfiguration checks of an alter of this node's own `BROKER`
+/// resource need of the node: its running listeners for their `SslFactory`
+/// checks, and its static config as Kafka keys.
+pub(crate) struct OwnBrokerChecks<'a> {
+    pub(crate) listener_tls: ListenerTlsInputs<'a>,
+    pub(crate) static_config: BTreeMap<String, String>,
+}
+
+impl OwnBrokerChecks<'_> {
+    /// Kafka's checks of the node's `proposed` per-broker configs against its
+    /// `current` ones, in `processReconfiguration`'s order: the new config's
+    /// listener values, then the TLS listeners' new keystores and
+    /// truststores, then the listeners it keeps.
+    ///
+    /// # Errors
+    /// `INVALID_REQUEST` with Kafka's message for the first check that fails.
+    pub(crate) fn check(
+        self,
+        image: &MetadataImage,
+        current: &BTreeMap<String, String>,
+        proposed: &BTreeMap<String, String>,
+    ) -> Result<(), (i16, String)> {
+        let listeners = ListenerChange::new(&self.static_config, image, current, proposed);
+        listeners.check_values()?;
+        self.listener_tls.check_reconfiguration(current, proposed)?;
+        listeners.check_reconfiguration()
     }
 }
 

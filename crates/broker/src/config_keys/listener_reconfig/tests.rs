@@ -11,7 +11,10 @@ fn map(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
 fn broker_only() -> BTreeMap<String, String> {
     map(&[
         (PROCESS_ROLES, "broker"),
-        (LISTENERS, "PLAINTEXT://0.0.0.0:9092,INTERNAL://0.0.0.0:9094"),
+        (
+            LISTENERS,
+            "PLAINTEXT://0.0.0.0:9092,INTERNAL://0.0.0.0:9094",
+        ),
         (
             LISTENER_SECURITY_PROTOCOL_MAP,
             "PLAINTEXT:PLAINTEXT,INTERNAL:SASL_PLAINTEXT,CONTROLLER:PLAINTEXT",
@@ -31,7 +34,10 @@ fn broker_only() -> BTreeMap<String, String> {
 fn combined() -> BTreeMap<String, String> {
     map(&[
         (PROCESS_ROLES, "broker,controller"),
-        (LISTENERS, "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"),
+        (
+            LISTENERS,
+            "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093",
+        ),
         (
             LISTENER_SECURITY_PROTOCOL_MAP,
             "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT",
@@ -148,12 +154,23 @@ const ADDED_MAP: (&str, &str) = (
         )
     },
     the_inter_broker_listener_keeps_its_mechanism = {
-        &[],
+        &[("listener.name.internal.sasl.enabled.mechanisms", "SCRAM-SHA-512")],
         &[
             (SASL_ENABLED_MECHANISMS, "PLAIN"),
             ("listener.name.internal.sasl.enabled.mechanisms", "SCRAM-SHA-512"),
         ],
         Ok(())
+    },
+    an_existing_listener_gains_a_key_beside_a_broker_wide_change = {
+        &[],
+        &[
+            (SASL_ENABLED_MECHANISMS, "PLAIN"),
+            ("listener.name.internal.sasl.enabled.mechanisms", "SCRAM-SHA-512"),
+        ],
+        reconfiguration_refused(
+            "Configs cannot be updated dynamically for existing listener \
+             ListenerName(INTERNAL), restart broker or create a new listener for update",
+        )
     },
     an_existing_listener_changes_protocol = {
         &[],

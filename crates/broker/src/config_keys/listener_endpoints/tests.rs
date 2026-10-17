@@ -173,10 +173,16 @@ fn view(per_broker: &[(&str, &str)]) -> ListenerView {
             ADVERTISED_LISTENERS.to_owned(),
             "PLAINTEXT://localhost:9092".to_owned(),
         ),
-        (CONTROLLER_LISTENER_NAMES.to_owned(), "CONTROLLER".to_owned()),
+        (
+            CONTROLLER_LISTENER_NAMES.to_owned(),
+            "CONTROLLER".to_owned(),
+        ),
         (SASL_ENABLED_MECHANISMS.to_owned(), "PLAIN".to_owned()),
     ]);
-    let default = BTreeMap::from([(SASL_ENABLED_MECHANISMS.to_owned(), "SCRAM-SHA-256".to_owned())]);
+    let default = BTreeMap::from([(
+        SASL_ENABLED_MECHANISMS.to_owned(),
+        "SCRAM-SHA-256".to_owned(),
+    )]);
     let per_broker = per_broker
         .iter()
         .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
@@ -187,7 +193,10 @@ fn view(per_broker: &[(&str, &str)]) -> ListenerView {
 #[test]
 fn the_view_layers_static_default_and_per_broker_configs() {
     let view = view(&[
-        (LISTENERS, "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,SSL://:9094"),
+        (
+            LISTENERS,
+            "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,SSL://:9094",
+        ),
         (
             LISTENER_SECURITY_PROTOCOL_MAP,
             "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,SSL:SSL",
@@ -203,15 +212,17 @@ fn the_view_layers_static_default_and_per_broker_configs() {
     );
     check!(
         view.advertised_broker_listeners()
-            == Ok(vec![endpoint("PLAINTEXT", Plaintext, Some("localhost"), 9092)])
+            == Ok(vec![endpoint(
+                "PLAINTEXT",
+                Plaintext,
+                Some("localhost"),
+                9092
+            )])
     );
     check!(view.sasl_enabled_mechanisms("SSL") == vec![SaslMechanism::OAuthBearer]);
     check!(view.sasl_enabled_mechanisms("PLAINTEXT") == vec![SaslMechanism::ScramSha256]);
     check!(
         view.with_prefix("listener.name.ssl.")
-            == BTreeMap::from([(
-                SASL_ENABLED_MECHANISMS.to_owned(),
-                "OAUTHBEARER".to_owned()
-            )])
+            == BTreeMap::from([(SASL_ENABLED_MECHANISMS.to_owned(), "OAUTHBEARER".to_owned())])
     );
 }

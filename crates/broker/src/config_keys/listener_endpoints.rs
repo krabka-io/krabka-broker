@@ -42,9 +42,7 @@ pub(crate) const SASL_MECHANISM_INTER_BROKER_PROTOCOL: &str =
 pub(crate) const PROCESS_ROLES: &str = "process.roles";
 
 /// Kafka's `ListenerName.normalised`: a listener name is upper case.
-pub(crate) fn normalised(name: &str) -> String {
-    name.to_uppercase()
-}
+pub(crate) fn normalised(name: &str) -> String { name.to_uppercase() }
 
 /// Kafka's `ListenerName.configPrefix`: `listener.name.` and the name in
 /// lower case.
@@ -92,13 +90,14 @@ pub(crate) fn config_list(value: &str) -> Vec<String> {
     if trimmed.is_empty() {
         return Vec::new();
     }
-    trimmed.split(',').map(|entry| entry.trim().to_owned()).collect()
+    trimmed
+        .split(',')
+        .map(|entry| entry.trim().to_owned())
+        .collect()
 }
 
 /// A Java `List.toString`: `[a, b]`.
-fn java_list(entries: &[String]) -> String {
-    format!("[{}]", entries.join(", "))
-}
+fn java_list(entries: &[String]) -> String { format!("[{}]", entries.join(", ")) }
 
 /// Kafka's `URI_PARSE_REGEXP`, anchored as `Matcher.matches` anchors it.
 static URI_PARSE: LazyLock<regex::Regex> = LazyLock::new(|| {

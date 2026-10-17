@@ -30,7 +30,7 @@ use {
     crate::{
         config_keys::{
             MIN_INSYNC_REPLICAS, broker_dynamic::BrokerConfigContext, clear_elr_records,
-            group::GroupBounds, listener_endpoints::static_originals,
+            group::GroupBounds,
         },
         handlers::{
             ApiVersion, DispatchResult, RequestContext, audit_resource, config_resource_refusal,
@@ -121,7 +121,7 @@ krabka_macros::decoded_dispatch! {
                         serving: broker.config.node_id,
                         log_dirs: &broker.config.broker_log_dirs(),
                         unstable: broker.config.features.unstable_api_versions,
-                    }, broker.listener_tls_inputs(), &static_originals(&broker.config))
+                    }, broker.own_config_checks())
                 });
                 if let Err((code, message)) = preprocessed {
                     let (code, message) = if validate_resource_shape(&resource, duplicate).is_err() {

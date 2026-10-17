@@ -444,9 +444,7 @@ impl BrokerHandle {
         // and join all active connection children. The requests themselves
         // are not drained, but this method does not return while a child can
         // still mutate the victim's data files.
-        for task in self.listener_tasks.drain(..) {
-            let _ = task.await;
-        }
+        self.stop_listeners().await;
 
         // The supervisor's cancellation epilogue aborts and joins its private
         // ordinary and WAL follower tasks. Its run loop races every reconcile
@@ -494,6 +492,18 @@ impl BrokerHandle {
         write(&config.log_dir, config.broker_epoch);
     }
 
+    /// Await the listener watcher, so that it opens no listener after this,
+    /// and then every data-plane accept loop, each of which closes its
+    /// connections. The caller has cancelled the shutdown token.
+    async fn stop_listeners(&mut self) {
+        if let Some(task) = self.listener_watcher.take() {
+            let _ = task.await;
+        }
+        for task in self.broker.data_plane.close() {
+            let _ = task.await;
+        }
+    }
+
     /// Cancel the listener and drain in-flight connections. The returned
     /// future completes when the listener task exits.
     pub async fn shutdown(mut self) {
@@ -519,9 +529,7 @@ impl BrokerHandle {
         if let Some(task) = self.diskless_task.take() {
             let _ = task.await;
         }
-        for t in self.listener_tasks.drain(..) {
-            let _ = t.await;
-        }
+        self.stop_listeners().await;
         self.broker
             .audit_log
             .emit(krabka_audit::AuditEvent::Lifecycle {
@@ -562,7 +570,10 @@ impl Drop for BrokerHandle {
         {
             task.abort();
         }
-        for task in self.listener_tasks.drain(..) {
+        if let Some(task) = self.listener_watcher.take() {
+            task.abort();
+        }
+        for task in self.broker.data_plane.close() {
             task.abort();
         }
         if let Some(task) = self.topic_rlmm_task.take() {
