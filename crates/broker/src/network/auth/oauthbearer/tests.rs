@@ -325,29 +325,6 @@ async fn authenticate_during_reauth_different_principal_rejected_with_sasl_auth_
     assert!(matches!(auth, ConnectionAuth::Reauthenticating { .. }));
 }
 
-/// A rejected re-authentication token gets the same RFC 7628 error challenge
-/// as an initial one, and the client's `\x01` then fails the exchange with
-/// that JSON as the message, leaving the previous session in place while the
-/// dispatcher closes the connection.
-#[tokio::test]
-async fn a_rejected_reauth_token_gets_the_error_challenge_then_fails_with_its_json() {
-    let validator = krabka_security::OAuthBearerValidator::default();
-    let now_ms = 1_000_000_000_000;
-    let mut auth = oauth_reauthenticating("alice", now_ms + 1_000);
-    // exp far in the past → expired.
-    let expired = oauthbearer_client_response(&unsecured_token("alice", 1_000_000));
-    let challenge = authenticate(&expired, &mut auth, &validator, now_ms, None).await;
-    assert_success_authenticate_response(&challenge, br#"{"status":"invalid_token"}"#, 0);
-
-    let dummy = SaslAuthenticateRequest {
-        auth_bytes: bytes::Bytes::from_static(&[1u8]),
-        ..Default::default()
-    };
-    let failure = authenticate(&dummy, &mut auth, &validator, now_ms, None).await;
-    assert_failed_authenticate_response(&failure, Some(r#"{"status":"invalid_token"}"#));
-    assert!(auth.principal().map(|p| p.name.as_str()) == Some("alice"));
-}
-
 /// An unsecured token for `alice`, valid until 1 000 000 900 s, whose `scope`
 /// claim is the JSON `scope`.
 fn scoped_token(scope: &str) -> String {

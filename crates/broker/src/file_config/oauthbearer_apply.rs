@@ -319,15 +319,12 @@ mod tests {
                 FileConfig, FileConfigError,
                 test_support::{configured, configured_unwrap_parse},
             },
+            test_support::Es256SigningKey,
         },
         assert2::{assert, check},
         base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64},
-        krabka_security::{Jwks, OAuthBearerValidator},
+        krabka_security::OAuthBearerValidator,
         krabka_units::{minutes, secs},
-        ring::{
-            rand::SystemRandom,
-            signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair as _},
-        },
     };
 
     /// The instant every clock-skew case validates at, in epoch milliseconds.
@@ -344,21 +341,9 @@ mod tests {
     /// Install a fresh ES256 key in `validator`'s key set and return a token
     /// it signs for `sub = "alice"` with the given `exp`, in epoch seconds.
     fn signed_token(validator: &krabka_security::SignedJwsValidator, exp_s: i64) -> String {
-        let rng = SystemRandom::new();
-        let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).unwrap();
-        let key = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8.as_ref(), &rng)
-            .unwrap();
-        let point = key.public_key().as_ref();
-        let jwks = serde_json::json!({"keys": [{"kty": "EC", "crv": "P-256", "kid": "skew",
-            "x": B64.encode(&point[1..33]), "y": B64.encode(&point[33..65])}]});
-        validator
-            .key_handle()
-            .store(Jwks::from_json(&jwks.to_string(), false).unwrap());
-        let header = B64.encode(br#"{"alg":"ES256","kid":"skew"}"#);
-        let payload = B64.encode(serde_json::json!({"sub": "alice", "exp": exp_s}).to_string());
-        let input = format!("{header}.{payload}");
-        let signature = key.sign(&rng, input.as_bytes()).unwrap();
-        format!("{input}.{}", B64.encode(signature.as_ref()))
+        let key = Es256SigningKey::generate("skew");
+        validator.key_handle().store(key.jwks());
+        key.sign(&serde_json::json!({"sub": "alice", "exp": exp_s}))
     }
 
     /// Kafka's `OAuthBearerUnsecuredValidatorCallbackHandler` defaults
