@@ -42,6 +42,7 @@ auto_join = false
 heartbeat_interval = "2s"
 heartbeat_timeout = "18s"
 replica_lag_time_max = "30s"
+controller_fetch_timeout = "2s"
 controller_election_timeout = "1s"
 controller_heartbeat_interval = "500ms"
 

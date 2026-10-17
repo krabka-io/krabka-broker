@@ -33,7 +33,7 @@ use crate::support::quorum::metadata_quorum_request as describe_quorum_request;
 /// A follower whose leader hint just went dead answers `DescribeQuorum` with
 /// a typed `NOT_LEADER_OR_FOLLOWER` instead of closing the connection: the
 /// follower still believes the shut-down node is the leader (it only learns
-/// otherwise from its own election timeout, which this test outruns), so
+/// otherwise from its own fetch timeout, which this test outruns), so
 /// `ControllerHandle::forward_raw`'s dial to it fails with
 /// `RaftError::Network`, exactly the "dial itself failed" case the fix
 /// catches and answers instead of propagating.
@@ -60,7 +60,7 @@ async fn a_follower_whose_leader_just_died_answers_not_leader_instead_of_closing
         .expect("the leader broker");
     let (leader_handle, _, _leader_dir) = cluster.remove(leader_index);
     // Shut the leader down and ask the follower right away: it still holds
-    // the now-dead leader as its hint (only its own election timeout would
+    // the now-dead leader as its hint (only its own fetch timeout would
     // change that), so the forward's dial fails immediately.
     leader_handle.shutdown().await;
 

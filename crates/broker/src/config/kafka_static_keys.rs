@@ -486,9 +486,14 @@ pub(crate) const KAFKA_STATIC_KEYS: &[KafkaStaticKey] = &[
         |c| (c.leader_imbalance_check_interval.millis_i64() / 1_000).to_string(),
     ),
     KafkaStaticKey::new(
-        "controller.quorum.fetch.timeout.ms",
+        "controller.quorum.election.timeout.ms",
         Some("controller_election_timeout"),
         |c| time_ms(c.controller_election_timeout),
+    ),
+    KafkaStaticKey::new(
+        "controller.quorum.fetch.timeout.ms",
+        Some("controller_fetch_timeout"),
+        |c| time_ms(c.controller_fetch_timeout),
     ),
     KafkaStaticKey::new(
         "metadata.log.max.record.bytes.between.snapshots",

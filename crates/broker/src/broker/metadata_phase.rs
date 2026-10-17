@@ -213,6 +213,7 @@ async fn start_metadata_source(
             initial_voters: prepare_initial_voters(config, &bootstrap_records),
             controller_listen_addr: config.controller_listen_addr,
             log_dir: config.metadata_dir().to_path_buf(),
+            fetch_timeout: config.controller_fetch_timeout,
             election_timeout: config.controller_election_timeout,
             heartbeat_interval: config
                 .controller_heartbeat_interval_explicit

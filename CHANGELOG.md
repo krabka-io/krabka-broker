@@ -52,10 +52,26 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   always rejects. See
   [Performance regression budgets](docs/operations/performance-budgets.md).
 
+### Changed
+
+- The controller quorum's fetch timeout and election timeout are two keys
+  now, as in Kafka. The new `controller_fetch_timeout`, Kafka's
+  `controller.quorum.fetch.timeout.ms` (default 5 s), is the follower and
+  observer fetch watchdog, and 1.5 times it is the leader's check-quorum
+  window. `controller_election_timeout` is now Kafka's
+  `controller.quorum.election.timeout.ms` only, with Kafka's default of 1 s:
+  it is the base of the randomized election timer, so a vote that splits
+  after a controller leader is killed is retried within one to two election
+  timeouts rather than 5 to 10 s. The derived controller heartbeat cadence is
+  `controller_fetch_timeout / 3`, and validation now requires
+  `controller_heartbeat_interval` to be below `controller_fetch_timeout`. An
+  operator who tuned `controller_election_timeout` as the fetch watchdog
+  should move that value to `controller_fetch_timeout` (#TBD).
+
 ### Fixed
 
 - A controller voter that stops hearing from the controller leader now
-  starts an election after one fetch timeout (`controller_election_timeout`),
+  starts an election after one fetch timeout (`controller_fetch_timeout`),
   as Kafka's `KafkaRaftClient.pollFollowerAsVoter` does. Before, it re-polled
   the silent leader until `controller_fetch_miss_limit` timeouts had passed
   (three by default, 15 s), so a killed or paused controller leader was
