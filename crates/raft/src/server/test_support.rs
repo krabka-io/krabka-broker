@@ -7,7 +7,10 @@ use {
         ControllerFetchMissLimit, MetadataLogConfig, MetadataRaftCommandQueueCapacity,
         MetadataRaftFetchMax, NoEventQueueRecorder,
         error::RaftError,
-        kraft::{Activation, KraftController, NullPeerSender, transport::wire::PeerRequest},
+        kraft::{
+            Activation, KraftController, NullPeerSender, QuorumTimeouts,
+            transport::wire::PeerRequest,
+        },
         test_support::{encode, single_partition_topic},
     },
     krabka_metadata::NodeId,
@@ -79,7 +82,10 @@ pub(super) fn test_engine_with_voters(
         Uuid::nil(),
         Uuid::nil(),
         krabka_metadata::VoterSet::from_voters(voters),
-        TEST_ELECTION_TIMEOUT,
+        QuorumTimeouts {
+            election: TEST_ELECTION_TIMEOUT,
+            fetch: TEST_ELECTION_TIMEOUT,
+        },
         None,
         ControllerFetchMissLimit::default(),
         MetadataRaftCommandQueueCapacity::default(),

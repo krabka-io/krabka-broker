@@ -7,8 +7,8 @@ use {
     super::{
         Engine, METADATA_LOG_CLEAN_INTERVAL,
         timing::{
-            election_timeout_ms, election_timer_starts_election, following_leader_for_role,
-            heartbeat_period, instant_from_clock_base, should_fail_waiters_on_leadership_change,
+            election_timer_starts_election, following_leader_for_role, heartbeat_period,
+            instant_from_clock_base, should_fail_waiters_on_leadership_change, whole_millis,
         },
     },
     crate::{
@@ -64,7 +64,7 @@ impl Engine {
         self.send_discovery_fetch();
 
         // Heartbeat ticks the whole time; the loop only acts on it while leader.
-        let hb_period = heartbeat_period(self.election_timeout, self.heartbeat_interval);
+        let hb_period = heartbeat_period(self.timeouts.fetch, self.heartbeat_interval);
         let mut heartbeat = tokio::time::interval(hb_period.to_std());
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -566,11 +566,10 @@ impl Engine {
         self.held_epoch = epoch;
     }
 
-    /// Arm the fetch timer one election-timeout out from now (re-poll cadence).
+    /// Arm the fetch timer one fetch timeout out from now (re-poll cadence).
     pub fn arm_fetch_timer(&mut self) {
-        self.fetch_at = Some(
-            Instant::now() + Duration::from_millis(election_timeout_ms(self.election_timeout)),
-        );
+        self.fetch_at =
+            Some(Instant::now() + Duration::from_millis(whole_millis(self.timeouts.fetch)));
     }
 
     /// Convert a core [`SimInstant`] deadline into a `tokio::time::Instant`.

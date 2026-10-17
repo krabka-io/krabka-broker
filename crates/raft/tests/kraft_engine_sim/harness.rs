@@ -14,7 +14,7 @@ pub(crate) use {
     krabka_raft::{
         ControllerFetchMissLimit, MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax,
         kraft::{
-            KraftConfig, KraftController, KraftLog, NodeId, QuorumState,
+            KraftConfig, KraftController, KraftLog, NodeId, QuorumState, QuorumTimeouts,
             snapshot_fetch::MetadataSnapshotFetchMax,
         },
     },
@@ -37,6 +37,14 @@ pub(crate) async fn shutdown_nodes(net: &SimNet, ids: &[NodeId]) {
 /// round rather than splitting the vote.
 pub(crate) const STAGGERED_TIMEOUTS: [Time; 3] = [millis(150), millis(300), millis(450)];
 
+/// One extent as both the election and the fetch timeout.
+pub(crate) const fn uniform(timeout: Time) -> QuorumTimeouts {
+    QuorumTimeouts {
+        election: timeout,
+        fetch: timeout,
+    }
+}
+
 krabka_macros::topic_record_fixture!(single_partition_topic);
 
 krabka_macros::empty_endpoint_voters!(voter_set);
@@ -57,6 +65,9 @@ pub(crate) struct SimClusterSetup<'a> {
     pub cluster_id: uuid::Uuid,
     #[default(&STAGGERED_TIMEOUTS)]
     pub timeouts: &'a [Time],
+    /// One fetch timeout for every node, or each node's election timeout when
+    /// `None`.
+    pub fetch_timeout: Option<Time>,
 }
 
 #[bon::builder]
@@ -65,16 +76,19 @@ pub(crate) fn start_engines(
     #[builder(default = & [NodeId (1) , NodeId (2) , NodeId (3)])] ids: &'_ [NodeId],
     #[builder(default)] cluster_id: uuid::Uuid,
     #[builder(default = & STAGGERED_TIMEOUTS)] timeouts: &'_ [Time],
+    fetch_timeout: Option<Time>,
 ) -> Vec<tempfile::TempDir> {
     let setup = SimClusterSetup {
         ids,
         cluster_id,
         timeouts,
+        fetch_timeout,
     };
     let SimClusterSetup {
         ids,
         cluster_id,
         timeouts,
+        fetch_timeout,
     } = setup;
     let mut dirs = Vec::new();
     for (i, &id) in ids.iter().enumerate() {
@@ -83,7 +97,10 @@ pub(crate) fn start_engines(
             .me(id)
             .ids(ids)
             .cluster_id(cluster_id)
-            .election_timeout(timeouts[i])
+            .timeouts(QuorumTimeouts {
+                election: timeouts[i],
+                fetch: fetch_timeout.unwrap_or(timeouts[i]),
+            })
             .call();
         net.register(id, ctrl);
         dirs.push(dir);
@@ -133,8 +150,8 @@ pub(crate) struct SimEngineSetup<'a> {
     #[default(&[NodeId(1), NodeId(2), NodeId(3)])]
     pub ids: &'a [NodeId],
     pub cluster_id: uuid::Uuid,
-    #[default(STAGGERED_TIMEOUTS[0])]
-    pub election_timeout: Time,
+    #[default(uniform(STAGGERED_TIMEOUTS[0]))]
+    pub timeouts: QuorumTimeouts,
     pub snapshot_interval_records: SnapshotRecordCount,
 }
 
@@ -144,21 +161,21 @@ pub(crate) fn build_engine(
     #[builder(into, default = NodeId (1))] me: NodeId,
     #[builder(default = & [NodeId (1) , NodeId (2) , NodeId (3)])] ids: &'_ [NodeId],
     #[builder(default)] cluster_id: uuid::Uuid,
-    #[builder(default = STAGGERED_TIMEOUTS [0])] election_timeout: Time,
+    #[builder(default = uniform(STAGGERED_TIMEOUTS[0]))] timeouts: QuorumTimeouts,
     #[builder(into, default)] snapshot_interval_records: SnapshotRecordCount,
 ) -> (KraftController, tempfile::TempDir) {
     let setup = SimEngineSetup {
         me,
         ids,
         cluster_id,
-        election_timeout,
+        timeouts,
         snapshot_interval_records,
     };
     let SimEngineSetup {
         me,
         ids,
         cluster_id,
-        election_timeout,
+        timeouts,
         snapshot_interval_records,
     } = setup;
     let dir = tempfile::tempdir().expect("tempdir");
@@ -170,7 +187,7 @@ pub(crate) fn build_engine(
             cluster_id,
             directory_id: uuid::Uuid::nil(),
             initial_state: QuorumState::bootstrap(cluster_id, voter_set(ids)),
-            election_timeout,
+            timeouts,
             heartbeat_interval: None,
             controller_fetch_miss_limit: ControllerFetchMissLimit::default(),
             metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity::default(),
@@ -203,7 +220,7 @@ pub(crate) fn reopen_controller(
         cid,
         uuid::Uuid::nil(),
         voter_set(ids),
-        STAGGERED_TIMEOUTS[usize::try_from(node.0 - 1).unwrap()],
+        uniform(STAGGERED_TIMEOUTS[usize::try_from(node.0 - 1).unwrap()]),
         None,
         ControllerFetchMissLimit::default(),
         MetadataRaftCommandQueueCapacity::default(),

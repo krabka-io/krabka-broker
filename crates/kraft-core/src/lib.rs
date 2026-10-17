@@ -31,7 +31,7 @@ pub mod sim;
 
 pub use {
     action::{Action, TimerKind},
-    core::{QuorumStateMachine, election_jitter_ms},
+    core::{QuorumStateMachine, QuorumTimeouts, election_jitter_ms},
     event::{Event, LogEnd, SuccessorRank},
     role::{ReplicaProgress, Role},
     types::{Epoch, LogOffsetMetadata, LogView, NodeId, QuorumState, ReplicaKey, SimInstant},

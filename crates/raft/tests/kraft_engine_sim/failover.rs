@@ -35,12 +35,14 @@ async fn elected_cluster(
     ids: &[fixture::NodeId],
     #[builder(default)] cluster_id: uuid::Uuid,
     #[builder(default = &fixture::STAGGERED_TIMEOUTS)] timeouts: &[krabka_units::Time],
+    fetch_timeout: Option<krabka_units::Time>,
 ) -> ElectedCluster {
     let dirs = start_engines()
         .net(net)
         .ids(ids)
         .cluster_id(cluster_id)
         .timeouts(timeouts)
+        .maybe_fetch_timeout(fetch_timeout)
         .call();
     let (leader, epoch) = await_single_leader(net, ids, fixture::Duration::from_secs(10)).await;
     ElectedCluster {
@@ -261,5 +263,64 @@ async fn isolated_leader_resigns_and_rejoins_after_heal() {
 
     for &id in &ids {
         net.get(id).expect("still registered").shutdown().await;
+    }
+}
+
+/// 3e. Two survivors whose fetch timers run in lockstep elect a new leader
+///     within one fetch timeout and a few election timeouts of a leader kill
+///     (#1477).
+///
+///     Both followers last heard from the leader in the same Fetch round, so
+///     their fetch timers expire together. Each wins the other's pre-vote, both
+///     stand, and the binding vote splits. Kafka retries a split vote one
+///     randomized election timeout later, `controller.quorum.election.timeout.ms`
+///     plus up to as much again, which is far shorter than the fetch timeout.
+///     When the election timer ran on the fetch timeout, the retry came one to
+///     two fetch timeouts after the split, so a crashed controller's
+///     leadership took up to three fetch timeouts to move.
+#[yare::parameterized(
+    first = { 940 },
+    second = { 941 },
+    third = { 942 },
+    fourth = { 943 },
+    fifth = { 944 },
+    sixth = { 945 },
+)]
+#[test_macro(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn lockstep_survivors_elect_within_a_fetch_timeout_and_a_few_election_timeouts(
+    cluster: u128,
+) {
+    let fetch_timeout = krabka_units::prelude::millis(1_500);
+    let election_timeout = krabka_units::prelude::millis(150);
+    let (net, ids) = three_voter_network();
+    let ElectedCluster {
+        dirs: _dirs,
+        leader,
+        epoch,
+    } = elected_cluster()
+        .net(&net)
+        .ids(&ids)
+        .cluster_id(uuid::Uuid::from_u128(cluster))
+        .timeouts(&[election_timeout; 3])
+        .fetch_timeout(fetch_timeout)
+        .call()
+        .await;
+    // Let both followers settle into the same long-poll Fetch rounds.
+    tokio::time::sleep(fixture::Duration::from_secs(1)).await;
+
+    let killed_at = tokio::time::Instant::now();
+    net.get(leader).unwrap().shutdown().await;
+    net.remove(leader);
+    let SurvivingLeader { survivors, .. } = await_surviving_leader(&net, &ids, leader, epoch).await;
+    let elapsed = killed_at.elapsed();
+
+    // One fetch timeout to notice, a split round, and one retry drawn from at
+    // most two election timeouts, with room for a loaded runner. A retry on the
+    // fetch timeout lands at least two fetch timeouts in, past this bound.
+    // 1500 ms, plus four 150 ms election timeouts, plus 500 ms of slack.
+    let bound = fixture::Duration::from_millis(2_600);
+    assert2::assert!(elapsed < bound);
+    for id in survivors {
+        net.get(id).unwrap().shutdown().await;
     }
 }

@@ -516,8 +516,10 @@ fn prospective_at_epoch_one(ids: &[NodeId], start: PreVoteStart) -> MachineAndLo
 
 /// The actions and role of a replica that, at `now`, goes back to following
 /// node 2, the leader it abandoned when its pre-vote round began.
+///
+/// Its fetch deadline is one fetch timeout out, two seconds in the fixture.
 fn following_node_two_again(now: SimInstant) -> (Vec<Action>, Role) {
-    let fetch_deadline = now.saturating_add_ms(1_000);
+    let fetch_deadline = now.saturating_add_ms(2_000);
     (
         vec![
             Action::PersistQuorumState,
