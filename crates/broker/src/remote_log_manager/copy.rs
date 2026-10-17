@@ -884,6 +884,8 @@ mod tests {
 
     impl CopyFence for AnsweredLeadership {
         fn holds(&self) -> bool { self.asked.fetch_add(1, Ordering::SeqCst) < self.answers }
+
+        fn established_log_start(&self) -> Option<Offset> { None }
     }
 
     /// The fence `copy_one` asks between recording `CopySegmentStarted` and
