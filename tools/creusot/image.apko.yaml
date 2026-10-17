@@ -28,7 +28,7 @@ contents:
 environment:
   HOME: /root
   PATH: /root/.cargo/bin:/root/.local/share/creusot/bin:/usr/local/sbin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/bin
-  RUSTUP_TOOLCHAIN: nightly-2026-06-22
+  RUSTUP_TOOLCHAIN: nightly-2026-08-03
 
 archs:
   - amd64
