@@ -28,17 +28,34 @@
 //! `/proc/<pid>/status` and `/proc/<pid>/fd` are readable from the test without
 //! a shell inside the image -- which the apko base does not carry.
 //!
+//! **A diskless quorum**, when the caller asks for one. A WAL follower's Fetch
+//! is authorized against the caller's principal: the leader serves a shard
+//! only to a voter that authenticates as `broker-<id>` on the inter-broker
+//! listener, so an anonymous cluster never forms a WAL quorum. Such a node
+//! binds a second data-plane listener, `SASL_PLAINTEXT` on the container's
+//! 9094, that `inter_broker_listener_name` selects and that carries
+//! replication and the WAL follower fetches; clients stay on `PLAINTEXT`. The
+//! broker's file configuration has no inter-broker PLAIN or SCRAM credential,
+//! so the node authenticates with `OAUTHBEARER`: an unsecured (`alg: none`)
+//! token whose `sub` is its principal, which the peers' development validator
+//! accepts. Each node also reports its own rack, because the WAL placement
+//! picks one voter per rack. The `diskless_jepsen` suite runs the same shape
+//! in process, with SASL/PLAIN.
+//!
 //! [`process_kill_durability`]: ../process_kill_durability.rs
 
 pub(crate) use crate::support::docker;
 use {
     crate::support::{
+        diskless::broker_principal,
         free_port,
         load_test::{Client, CreatableTopic, CreateTopicsRequest},
         remove_container_with_volumes,
         storage::host_directory_user,
     },
     assert2::assert,
+    base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD},
+    krabka_broker::NodeId,
     std::{
         path::{Path, PathBuf},
         process::Command,
@@ -61,6 +78,17 @@ const CONTAINER_LOG_DIR: &str = "/var/lib/krabka/data";
 /// The configuration file each node is written and started with, relative to
 /// the mount. See [`SoakBroker::write_config`] for why a quorum needs one.
 const CONFIG_FILE: &str = "broker.toml";
+
+/// The listener a diskless-quorum node's brokers speak to each other on.
+const INTER_BROKER_LISTENER: &str = "INTER_BROKER";
+
+/// The bearer token a diskless-quorum node authenticates to its peers with,
+/// relative to the mount.
+const TOKEN_FILE: &str = "inter-broker.token";
+
+/// The `exp` of that token, 2100-01-01: the validator requires one, and the
+/// session it opens ends there, well after any run.
+const TOKEN_EXPIRY_UNIX_SECONDS: u64 = 4_102_444_800;
 
 /// How long a fresh cluster gets to elect a controller and answer a request.
 const READY_TIMEOUT: Duration = Duration::from_secs(120);
@@ -93,6 +121,10 @@ pub(crate) struct SoakBroker {
     controller_port: u16,
     /// Published host port for the container's 9404.
     metrics_port: u16,
+    /// Published host port for the container's 9094, the authenticated
+    /// inter-broker listener a diskless quorum needs. `None` when the cluster
+    /// runs none.
+    inter_broker_port: Option<u16>,
     /// Host side of the `/var/lib/krabka` mount.
     pub(crate) root: tempfile::TempDir,
 }
@@ -179,10 +211,27 @@ impl SoakBroker {
     /// `extras` adds top-level keys after the voter list and whole tables at
     /// the end, where TOML allows each.
     fn write_config(&self, voters: &str, extras: &NodeExtras) {
+        let quorum = self.inter_broker_port.map(|port| {
+            std::fs::write(
+                self.host_root().join(TOKEN_FILE),
+                inter_broker_token(self.node_id),
+            )
+            .expect("write the inter-broker bearer token");
+            diskless_quorum_toml(
+                self.node_id,
+                port,
+                &format!("{CONTAINER_ROOT}/{TOKEN_FILE}"),
+            )
+        });
+        let (quorum_root, quorum_listener, quorum_tables) = quorum.map_or_else(
+            || (String::new(), String::new(), String::new()),
+            |toml| (toml.root, toml.listener, toml.tables),
+        );
         let toml = format!(
             "broker_id = {id}\n\
              log_dir = \"{CONTAINER_LOG_DIR}\"\n\
              controller_quorum_voters = [{voters}]\n\
+             {quorum_root}\
              {root}\
              \n\
              [[listeners]]\n\
@@ -190,9 +239,11 @@ impl SoakBroker {
              bind_addr = \"0.0.0.0:9092\"\n\
              advertised = \"host.docker.internal:{client}\"\n\
              protocol = \"Plaintext\"\n\
+             {quorum_listener}\
              \n\
              [process]\n\
              roles = [\"controller\", \"broker\"]\n\
+             {quorum_tables}\
              {tables}",
             id = self.node_id,
             client = self.client_port,
@@ -221,6 +272,7 @@ impl SoakBroker {
         let publish_client = format!("{}:9092", self.client_port);
         let publish_controller = format!("{}:9093", self.controller_port);
         let publish_metrics = format!("{}:9404", self.metrics_port);
+        let publish_inter_broker = self.inter_broker_port.map(|port| format!("{port}:9094"));
         let shared = extras
             .shared_mount
             .as_ref()
@@ -245,6 +297,9 @@ impl SoakBroker {
         let cluster = format!("--cluster-id={cluster_id}");
         let cleaner = format!("--cleaner-interval={CLEANER_INTERVAL}");
         let retention = format!("--log-retention-check-interval={RETENTION_CHECK_INTERVAL}");
+        if let Some(publish) = &publish_inter_broker {
+            args.extend(["--publish", publish.as_str()]);
+        }
         args.extend([
             "--publish",
             &publish_client,
@@ -297,6 +352,65 @@ impl Drop for SoakBroker {
 /// Kafka reserves and the broker refuses at startup.
 fn directory_id(n: u32) -> uuid::Uuid { uuid::Uuid::from_u64_pair(1, u64::from(n)) }
 
+/// What a diskless-quorum node adds to its configuration file: top-level keys,
+/// the inter-broker listener entry, and whole tables.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QuorumToml {
+    root: String,
+    listener: String,
+    tables: String,
+}
+
+/// The configuration node `node_id` needs to vote in a diskless WAL quorum,
+/// with its inter-broker listener published on host port `port` and its bearer
+/// token at `token_path`.
+///
+/// Its peers dial the advertised address, which goes through the host gateway
+/// as the client listener's does.
+fn diskless_quorum_toml(node_id: u32, port: u16, token_path: &str) -> QuorumToml {
+    QuorumToml {
+        root: format!(
+            "inter_broker_listener_name = \"{INTER_BROKER_LISTENER}\"\n\
+             rack = \"rack-{node_id}\"\n"
+        ),
+        listener: format!(
+            "\n\
+             [[listeners]]\n\
+             name = \"{INTER_BROKER_LISTENER}\"\n\
+             bind_addr = \"0.0.0.0:9094\"\n\
+             advertised = \"host.docker.internal:{port}\"\n\
+             protocol = \"SaslPlaintext\"\n\
+             \n\
+             [listeners.sasl_config]\n\
+             enabled_mechanisms = [\"OAUTHBEARER\"]\n"
+        ),
+        tables: format!(
+            "\n\
+             [inter_broker_credentials]\n\
+             type = \"oauth-bearer\"\n\
+             token_path = \"{token_path}\"\n\
+             \n\
+             [oauthbearer]\n\
+             allow_unsecured = true\n"
+        ),
+    }
+}
+
+/// The unsecured JWS node `node_id` presents to its peers: an `alg: none`
+/// header, a `sub` of the principal the WAL leader maps to that node id, and
+/// an empty signature.
+fn inter_broker_token(node_id: u32) -> String {
+    let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#);
+    let claims = URL_SAFE_NO_PAD.encode(
+        serde_json::json!({
+            "sub": broker_principal(NodeId(u64::from(node_id))),
+            "exp": TOKEN_EXPIRY_UNIX_SECONDS,
+        })
+        .to_string(),
+    );
+    format!("{header}.{claims}.")
+}
+
 /// What every node of one cluster adds to the fixture's configuration and
 /// container. See [`SoakCluster::configured`].
 struct NodeExtras {
@@ -321,11 +435,15 @@ impl SoakCluster {
     /// `tables_toml` is whole tables appended after it. `shared_mount` is a
     /// host directory and the container path every node mounts it on, for a
     /// store that the three brokers share, such as a local remote tier.
+    /// `diskless_quorum` gives every node the authenticated inter-broker
+    /// listener and the distinct rack a diskless WAL quorum needs; see the
+    /// module documentation.
     #[builder(finish_fn = call)]
     pub(crate) fn configured(
         #[builder(default)] root_toml: String,
         #[builder(default)] tables_toml: String,
         shared_mount: Option<(PathBuf, String)>,
+        #[builder(default)] diskless_quorum: bool,
     ) -> Self {
         let extras = NodeExtras {
             root_toml,
@@ -340,6 +458,7 @@ impl SoakCluster {
                 client_port: free_port(),
                 controller_port: free_port(),
                 metrics_port: free_port(),
+                inter_broker_port: diskless_quorum.then(free_port),
                 root: tempfile::TempDir::new().expect("host data directory"),
             })
             .collect();
@@ -449,4 +568,83 @@ pub(crate) async fn create_topics(
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     Err(last)
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::{INTER_BROKER_LISTENER, diskless_quorum_toml, inter_broker_token},
+        assert2::check,
+        krabka_broker::{
+            config::{BrokerConfig, InterBrokerCredentials},
+            file_config::FileConfig,
+        },
+        krabka_security::{ListenerProtocol, SaslMechanism, UnsecuredJwsValidator},
+    };
+
+    /// The node file's diskless-quorum parts, around the minimum that parses,
+    /// with the token written where the file says it is.
+    fn applied(node_id: u32, port: u16) -> BrokerConfig {
+        let dir = tempfile::TempDir::new().expect("token directory");
+        let token = dir.path().join("token");
+        std::fs::write(&token, inter_broker_token(node_id)).expect("write the token");
+        let toml = diskless_quorum_toml(node_id, port, &token.display().to_string());
+        let text = format!(
+            "broker_id = {node_id}\n{root}\n\
+             [[listeners]]\n\
+             name = \"PLAINTEXT\"\n\
+             bind_addr = \"0.0.0.0:9092\"\n\
+             advertised = \"host.docker.internal:19092\"\n\
+             protocol = \"Plaintext\"\n\
+             {listener}\n\
+             [process]\n\
+             roles = [\"controller\", \"broker\"]\n\
+             {tables}",
+            root = toml.root,
+            listener = toml.listener,
+            tables = toml.tables,
+        );
+        let file: FileConfig =
+            toml::from_str(&text).unwrap_or_else(|error| panic!("{text}\n{error}"));
+        let mut config = BrokerConfig::default();
+        file.apply_to(&mut config)
+            .unwrap_or_else(|error| panic!("{text}\n{error}"));
+        config
+    }
+
+    // `OpaAuthorizer::new` captures the current tokio runtime handle, so the
+    // apply step runs inside one, as it does in the binary.
+    #[yare::parameterized(
+        first = { 1, 30001 },
+        third = { 3, 30003 },
+    )]
+    #[test_macro(tokio::test)]
+    async fn a_diskless_quorum_node_dials_its_peers_authenticated(node_id: u32, port: u16) {
+        let config = applied(node_id, port);
+        check!(config.inter_broker_listener_name == INTER_BROKER_LISTENER);
+        check!(config.rack.as_deref() == Some(format!("rack-{node_id}").as_str()));
+        let inter_broker = config
+            .listeners
+            .iter()
+            .find(|listener| listener.name == INTER_BROKER_LISTENER)
+            .expect("an inter-broker listener");
+        check!(inter_broker.protocol == ListenerProtocol::SaslPlaintext);
+        check!(inter_broker.advertised == format!("host.docker.internal:{port}"));
+        check!(inter_broker.sasl_mechanisms.as_deref() == Some(&[SaslMechanism::OAuthBearer][..]));
+        check!(matches!(
+            config.inter_broker_credentials,
+            Some(InterBrokerCredentials::OAuthBearer { .. })
+        ));
+    }
+
+    #[yare::parameterized(
+        first = { 1, "broker-1" },
+        third = { 3, "broker-3" },
+    )]
+    fn the_token_names_the_principal_a_wal_leader_maps_to_the_node(node_id: u32, principal: &str) {
+        let outcome = UnsecuredJwsValidator::default()
+            .validate(&inter_broker_token(node_id), 1_800_000_000_000)
+            .expect("the development validator accepts the token");
+        check!(outcome.principal.name == principal);
+    }
 }

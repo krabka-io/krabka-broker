@@ -12,8 +12,12 @@
 //! The cluster is the `soak` suite's [`cluster`]: three containers of
 //! `//packaging`'s image in one three-voter quorum, configured with the
 //! contract's check-quorum window, replica lag, replication factor and minimum
-//! ISR (see [`plan::node_toml`]). A tiered path gets a local remote tier on a
-//! host directory that all three containers mount at the same path.
+//! ISR (see [`plan::node_toml`]). A tiered or diskless path gets a local object
+//! store on a host directory that all three containers mount at the same path.
+//! A diskless path also gets a diskless WAL quorum: every node binds a second,
+//! authenticated inter-broker listener and reports its own rack, while every
+//! client of the run stays on the anonymous `PLAINTEXT` listener (see
+//! [`cluster`]).
 //!
 //! For the contract's `duration`, each path runs one paced producer and one
 //! live consumer group per declared isolation level ([`load`]). Meanwhile the
@@ -283,15 +287,16 @@ async fn inject_and_read_back(
 
 /// Boot the contract's cluster, create its topics and wait for their ISRs.
 ///
-/// Returns the cluster, the remote-tier directory its nodes share (kept
+/// Returns the cluster, the object-store directory its nodes share (kept
 /// alive for as long as the cluster), and the executor's view of its nodes.
 async fn boot(contract: &Contract) -> (SoakCluster, Option<tempfile::TempDir>, Arc<Nodes>) {
-    let remote_tier =
-        plan::tiered(contract).then(|| tempfile::TempDir::new().expect("remote tier directory"));
+    let remote_tier = plan::object_store(contract)
+        .then(|| tempfile::TempDir::new().expect("object store directory"));
     let toml = plan::node_toml(contract);
     let cluster = SoakCluster::configured()
         .root_toml(toml.root)
         .tables_toml(toml.tables)
+        .diskless_quorum(plan::diskless(contract))
         .maybe_shared_mount(
             remote_tier
                 .as_ref()

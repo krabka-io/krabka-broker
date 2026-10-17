@@ -8,8 +8,9 @@ use {
     krabka_units::prelude::*,
 };
 
-/// Where every node mounts the shared host directory that is the local remote
-/// tier of a tiered path.
+/// Where every node mounts the shared host directory that is the local object
+/// store: the remote tier of a tiered path and the flushed WAL objects of a
+/// diskless one.
 pub(crate) const REMOTE_TIER: &str = "/var/lib/krabka-remote";
 
 /// Segment size of a compacted topic. The default 1 GiB segment would never
@@ -23,28 +24,15 @@ const TIERED_SEGMENT_BYTES: &str = "4194304";
 const TIERED_SEGMENT_MS: &str = "15000";
 
 /// Every reason this executor cannot run `contract`, one line each.
-///
-/// A diskless path needs an authenticated inter-broker listener -- the WAL
-/// leader serves a shard only to a voter that authenticates as
-/// `broker-<id>` on that listener -- and the three-container fixture runs one
-/// anonymous plaintext listener, so it refuses one rather than run a path that
-/// can never form its quorum.
 pub(crate) fn unsupported(contract: &Contract) -> Vec<String> {
     let mut reasons = Vec::new();
     for path in &contract.paths {
-        match (path.storage, path.semantics) {
-            (Storage::Diskless, _) => reasons.push(format!(
-                "path `{}` is diskless: the soak executor's three-container cluster has no \
-                 authenticated inter-broker listener, which a diskless WAL quorum needs \
-                 (krabka-io/krabka-broker#1393)",
-                path.name
-            )),
-            (Storage::Tiered, Semantics::Compacted) => reasons.push(format!(
+        if (path.storage, path.semantics) == (Storage::Tiered, Semantics::Compacted) {
+            reasons.push(format!(
                 "path `{}` is compacted and tiered: Kafka refuses remote.storage.enable on a \
                  compacted topic",
                 path.name
-            )),
-            _ => {}
+            ));
         }
     }
     if contract.cluster.brokers != 3 {
@@ -69,6 +57,12 @@ pub(crate) struct NodeToml {
 /// The check-quorum window and the replica lag are set from the contract
 /// rather than left at the broker's defaults, so the limits the contract's
 /// pause plans were validated against are the ones the cluster runs with.
+///
+/// A tiered or diskless path gets the shared local object store and the
+/// topic-backed remote-log metadata manager: the remote tier keeps its segment
+/// metadata there, and the WAL keeps its flush index there. A diskless path
+/// also gets one WAL voter per broker. The listener and rack a diskless quorum
+/// needs are per node, so the fixture writes them; see [`diskless`].
 pub(crate) fn node_toml(contract: &Contract) -> NodeToml {
     let cluster = &contract.cluster;
     let root = format!(
@@ -80,7 +74,7 @@ pub(crate) fn node_toml(contract: &Contract) -> NodeToml {
     // The remote-log manager's pass runs every second rather than every
     // thirty, so a sealed segment reaches the remote tier inside a short run
     // as well as a long one.
-    let remote = if tiered(contract) {
+    let remote = if object_store(contract) {
         format!(
             "remote_log_manager_interval = \"1s\"\n\
              \n\
@@ -97,11 +91,17 @@ pub(crate) fn node_toml(contract: &Contract) -> NodeToml {
     } else {
         String::new()
     };
+    let wal = if diskless(contract) {
+        format!("diskless_wal_local_replica_count = {}\n", cluster.brokers)
+    } else {
+        String::new()
+    };
     let tables = format!(
         "\n[runtime]\n\
          default_min_insync_replicas = {min_isr}\n\
          offsets_topic_replication_factor = {rf}\n\
          transaction_state_replication_factor = {rf}\n\
+         {wal}\
          {remote}",
         min_isr = cluster.min_insync_replicas,
         rf = cluster.replication_factor,
@@ -109,19 +109,26 @@ pub(crate) fn node_toml(contract: &Contract) -> NodeToml {
     NodeToml { root, tables }
 }
 
-/// Whether any path of `contract` is tiered.
-pub(crate) fn tiered(contract: &Contract) -> bool {
-    contract
-        .paths
-        .iter()
-        .any(|path| path.storage == Storage::Tiered)
+/// Whether any path of `contract` is diskless, so that the cluster has to run
+/// a diskless WAL quorum.
+pub(crate) fn diskless(contract: &Contract) -> bool { any_storage(contract, Storage::Diskless) }
+
+/// Whether any path of `contract` is tiered or diskless, so that the nodes
+/// share a local object store at [`REMOTE_TIER`].
+pub(crate) fn object_store(contract: &Contract) -> bool {
+    any_storage(contract, Storage::Tiered) || diskless(contract)
+}
+
+fn any_storage(contract: &Contract, storage: Storage) -> bool {
+    contract.paths.iter().any(|path| path.storage == storage)
 }
 
 /// The topic configuration of `path`, in the order it is sent.
 ///
 /// Every unbounded topic keeps all it is given, because reconciliation reads
 /// every acknowledged record back from the earliest offset. A tiered topic
-/// keeps one byte locally, so that read is served from the remote tier.
+/// keeps one byte locally, so that read is served from the remote tier. A
+/// diskless topic sets `krabka.diskless`, which is fixed at creation.
 pub(crate) fn topic_configs(
     path: &LoadPath,
     min_insync_replicas: i16,
@@ -156,13 +163,16 @@ pub(crate) fn topic_configs(
             ("local.retention.bytes", "1"),
         ]));
     }
+    if path.storage == Storage::Diskless {
+        configs.extend(owned(&[("krabka.diskless", "true")]));
+    }
     configs
 }
 
 #[cfg(test)]
 mod tests {
     use {
-        super::{REMOTE_TIER, node_toml, topic_configs, unsupported},
+        super::{REMOTE_TIER, diskless, node_toml, topic_configs, unsupported},
         crate::support::manifest_dir,
         assert2::check,
         krabka_bench_driver::soak::contract::{Contract, Semantics, Storage},
@@ -180,13 +190,15 @@ mod tests {
         Contract::from_yaml(&text).unwrap_or_else(|error| panic!("{name}: {error}"))
     }
 
-    fn with_tiered_path(mut contract: Contract) -> Contract {
+    fn with_path(mut contract: Contract, storage: Storage) -> Contract {
         let mut path = contract.paths[0].clone();
-        path.name = "tiered-idempotent".to_owned();
-        path.storage = Storage::Tiered;
+        path.name = format!("{storage:?}-idempotent").to_lowercase();
+        path.storage = storage;
         contract.paths.push(path);
         contract
     }
+
+    fn with_tiered_path(contract: Contract) -> Contract { with_path(contract, Storage::Tiered) }
 
     /// The node file the fixture writes, with the parts the fixture owns kept
     /// to the minimum that parses.
@@ -205,16 +217,12 @@ mod tests {
     }
 
     #[yare::parameterized(
-        self_check = { "self-check.yaml", &[] },
-        soak = { "rf3-72h.yaml", &["path `diskless-idempotent` is diskless"] },
+        self_check = { "self-check.yaml" },
+        soak = { "rf3-72h.yaml" },
     )]
-    fn only_a_diskless_path_is_refused(file: &str, refused: &[&str]) {
+    fn every_checked_in_contract_is_runnable(file: &str) {
         let reasons = unsupported(&checked_in(file));
-        check!(reasons.len() == refused.len(), "{reasons:?}");
-        for (reason, fragment) in reasons.iter().zip(refused) {
-            check!(reason.starts_with(fragment));
-            check!(reason.contains("#1393"));
-        }
+        check!(reasons.is_empty(), "{reasons:?}");
     }
 
     #[test]
@@ -246,9 +254,13 @@ mod tests {
         check!(config.remote_storage_backend.is_none());
     }
 
-    #[tokio::test]
-    async fn a_tiered_contract_shares_one_local_remote_tier() {
-        let config = applied(&with_tiered_path(checked_in("self-check.yaml")));
+    #[yare::parameterized(
+        tiered = { Storage::Tiered },
+        diskless = { Storage::Diskless },
+    )]
+    #[test_macro(tokio::test)]
+    async fn an_object_store_contract_shares_one_local_store(storage: Storage) {
+        let config = applied(&with_path(checked_in("self-check.yaml"), storage));
         check!(matches!(
             &config.remote_storage_backend,
             Some(RemoteStorageBackend::Local { dir }) if dir.as_path() == std::path::Path::new(REMOTE_TIER)
@@ -262,6 +274,21 @@ mod tests {
         };
         check!(rlmm.replication == 3);
         check!(rlmm.num_partitions == 3);
+    }
+
+    #[yare::parameterized(
+        classic = { "self-check.yaml", false },
+        soak = { "rf3-72h.yaml", true },
+    )]
+    fn only_a_diskless_contract_runs_a_wal_quorum(file: &str, quorum: bool) {
+        check!(diskless(&checked_in(file)) == quorum);
+    }
+
+    #[tokio::test]
+    async fn a_diskless_contract_votes_every_broker_into_the_wal() {
+        let contract = checked_in("rf3-72h.yaml");
+        let config = applied(&contract);
+        check!(config.diskless_wal_local_replica_count == 3);
     }
 
     #[yare::parameterized(
@@ -288,6 +315,13 @@ mod tests {
             ("internal.segment.bytes", "4194304"),
             ("segment.ms", "15000"),
             ("local.retention.bytes", "1"),
+        ] },
+        diskless = { 0, Storage::Diskless, &[
+            ("min.insync.replicas", "2"),
+            ("cleanup.policy", "delete"),
+            ("retention.ms", "-1"),
+            ("retention.bytes", "-1"),
+            ("krabka.diskless", "true"),
         ] },
     )]
     fn each_path_gets_the_topic_its_semantics_need(
