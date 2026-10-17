@@ -80,7 +80,15 @@ fn offline_after_failed_append(part: &Partition, cfg: &Config) -> Option<RowActi
 /// On a tiered partition the follower takes the leader's start in either
 /// direction, which repairs a floor no deletion put there and gives a rebuilt
 /// follower the leader's global start: see
-/// [`krabka_log::Log::follow_leader_log_start`].
+/// [`krabka_log::Log::follow_leader_log_start`]. A floor it established is
+/// the exception: a leader that reports less is recorded on the partition and
+/// left to the remote-log manager, which lowers the floor only when the
+/// archive does not enforce it (`remote_log_manager::follow_unenforced_floor`).
+/// A floor a `DeleteRecords` or remote retention moved is kept against a
+/// leader that reports less, such as a replica an older broker rebuilt with no
+/// checkpoint, which reports 0. The archive check needs the RLMM, which may
+/// not have caught up, and an idle partition stops appearing in incremental
+/// fetch responses, so it runs on the manager's own tick rather than here.
 ///
 /// A diskless partition's local log start is the flusher's trim frontier, and
 /// its delete floor travels through the WAL index instead, so it is left
@@ -90,12 +98,21 @@ async fn follow_leader_log_start(part: &Partition, cfg: &Config, leader_log_star
         return;
     }
     let target = Offset(leader_log_start).min(part.high_watermark().await);
-    let differs = part
-        .log
-        .lock()
-        .expect("log mutex poisoned")
-        .differs_from_leader_log_start(target);
-    if !differs {
+    let (differs, established) = {
+        let log = part.log.lock().expect("log mutex poisoned");
+        (
+            log.differs_from_leader_log_start(target),
+            log.established_log_start(),
+        )
+    };
+    // Every response overwrites the record, so a lower start reported before
+    // a raise cannot pull the raised floor back down.
+    let lowers = established.is_some_and(|floor| target < floor);
+    part.reported_leader_log_start.store(
+        if lowers { target.0 } else { -1 },
+        std::sync::atomic::Ordering::Release,
+    );
+    if lowers || !differs {
         return;
     }
     if let Err(error) = part.follow_leader_log_start(target).await {
@@ -678,6 +695,57 @@ mod tests {
             dir: log_dir,
             part,
         }
+    }
+
+    /// A tiered follower takes its leader's log start on the fetch response,
+    /// except that it never lowers a floor it established there: it records
+    /// the lower start for the remote-log manager, which lowers the floor only
+    /// when the archive does not enforce it. A raise, and a floor nobody
+    /// established yet, follow the leader at once and clear a lower start an
+    /// earlier response recorded.
+    #[yare::parameterized(
+        a_lower_start_under_an_established_floor_is_recorded = { Some(5), 0, 5, 0 },
+        a_higher_start_raises_an_established_floor = { Some(5), 7, 7, -1 },
+        an_unestablished_floor_follows_a_lower_start = { None, 3, 3, -1 },
+    )]
+    #[test_macro(tokio::test)]
+    async fn a_tiered_follower_defers_lowering_an_established_floor(
+        established: Option<i64>,
+        leader_start: i64,
+        start: i64,
+        recorded: i64,
+    ) {
+        let LocalPartitionFixture {
+            cfg,
+            dir: _dir,
+            part,
+        } = local_partition_fixture();
+        {
+            let mut log = part.log.lock().expect("log mutex poisoned");
+            log.set_config(krabka_log::LogConfig {
+                remote_storage_enable: true,
+                ..log.config_snapshot()
+            });
+            for base_offset in 0..10 {
+                log.append(&mut one_record_batch(base_offset)).unwrap();
+            }
+            if let Some(floor) = established {
+                log.set_log_start_offset(Offset(floor)).unwrap();
+            }
+        }
+        part.set_follower_hw(Offset(10)).await;
+        part.reported_leader_log_start
+            .store(1, std::sync::atomic::Ordering::Release);
+
+        follow_leader_log_start(&part, &cfg, leader_start).await;
+
+        assert2::assert!(
+            (
+                part.log_start_offset(),
+                part.reported_leader_log_start
+                    .load(std::sync::atomic::Ordering::Acquire)
+            ) == (Offset(start), recorded)
+        );
     }
 
     fn one_record_batch(base_offset: i64) -> RecordBatch {

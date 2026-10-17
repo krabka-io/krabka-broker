@@ -28,7 +28,7 @@ use {
         path::PathBuf,
         sync::{
             Arc, Mutex,
-            atomic::{AtomicI32, AtomicU64},
+            atomic::{AtomicI32, AtomicI64, AtomicU64},
         },
     },
     tokio::{
@@ -178,10 +178,19 @@ pub struct Partition {
     /// True for diskless runtime partitions whose client-visible HW may only
     /// advance through the WAL durable-sync path.
     pub(crate) diskless: bool,
+    /// The last log start this replica's leader reported below the floor this
+    /// replica established, or -1 when there is none. The replicator records
+    /// it rather than lowering the floor, and the remote-log manager's follower
+    /// pass lowers the floor to it only when the archive does not enforce the
+    /// floor: see `remote_log_manager::follow_unenforced_floor`.
+    pub(crate) reported_leader_log_start: Arc<AtomicI64>,
     /// Retained so broker shutdown can abort and await the writer task after
     /// all request handlers have drained.
     pub(crate) writer_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
+
+/// New partitions begin with no leader log start recorded below their floor.
+pub(crate) fn unreported_leader_log_start() -> Arc<AtomicI64> { Arc::new(AtomicI64::new(-1)) }
 
 /// New partitions begin with no transaction-marker resolutions owed to group actors.
 pub(crate) fn empty_marker_materialization() -> Arc<tokio::sync::Mutex<OwedMarkerResolutions>> {
@@ -247,6 +256,7 @@ impl Partition {
             delivery,
             replication_target: initial_replication_target(None),
             diskless: false,
+            reported_leader_log_start: unreported_leader_log_start(),
             writer_handle: Arc::new(Mutex::new(Some(writer))),
         }
     }
