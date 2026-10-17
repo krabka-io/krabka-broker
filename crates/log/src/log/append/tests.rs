@@ -307,6 +307,20 @@ fn a_replicated_batch_is_not_held_to_the_decompressed_record_limit() {
     assert!(log.log_end_offset() == Offset(1));
 }
 
+/// A follower appends the leader's batches from its own log end: once the
+/// frontier is cleared, the batches below it are taken at their offsets.
+#[test]
+fn a_cleared_frontier_admits_append_at_from_the_log_end() {
+    let TempLog { dir: _dir, mut log } = test_log();
+    log.append(&mut test_batch_at(0)).unwrap();
+    log.reconcile_next_offset(Offset(3));
+
+    log.clear_reconciled_next_offset();
+    log.append_at(&mut test_batch_at(0), Offset(1)).unwrap();
+
+    assert!(log.log_end_offset() == Offset(2));
+}
+
 #[test]
 fn assigned_append_uses_reconciled_frontier_floor() {
     let TempLog { dir: _dir, mut log } = test_log();
