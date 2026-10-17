@@ -15,7 +15,10 @@ use {
             capped_session_closes, different_principal_closes, repeated_expired_reauth,
             same_principal_reopens,
         },
-        support::wire::CorrelationId,
+        support::{
+            sasl::{HashIterations, provision_scram, sasl_plaintext_mechanisms},
+            wire::CorrelationId,
+        },
     },
     assert2::assert,
     krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse,
@@ -114,6 +117,79 @@ async fn sasl_scram_sha256_wrong_password_closes_connection() {
         result.is_err(),
         "wrong password must fail SHA-256 SCRAM session: {result:?}"
     );
+}
+
+/// Kafka's `ScramSaslServer` refuses a stored credential stretched fewer than
+/// 4096 times in round 1, with the generic invalid-credentials text, and
+/// accepts one at 4096. Such a credential reaches the image only through a
+/// bootstrap record, never through `AlterUserScramCredentials`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scram_credential_below_4096_iterations_is_refused_in_round_one() {
+    for (mechanism, iterations, expected) in [
+        (
+            SaslMechanism::ScramSha256,
+            4095,
+            Some(
+                "Authentication failed during authentication due to invalid credentials with \
+                 SASL mechanism SCRAM-SHA-256",
+            ),
+        ),
+        (
+            SaslMechanism::ScramSha512,
+            4095,
+            Some(
+                "Authentication failed during authentication due to invalid credentials with \
+                 SASL mechanism SCRAM-SHA-512",
+            ),
+        ),
+        (SaslMechanism::ScramSha256, 4096, None),
+        (SaslMechanism::ScramSha512, 4096, None),
+    ] {
+        let log_dir = tempfile::tempdir().unwrap();
+        let cfg = sasl_plaintext_mechanisms(log_dir.path().to_path_buf(), vec![mechanism]);
+        let handle = krabka_broker::Broker::start(cfg)
+            .await
+            .expect("broker must start");
+        provision_scram()
+            .broker(&handle)
+            .mechanism(mechanism)
+            .iterations(HashIterations(iterations))
+            .call()
+            .await;
+        let mut stream = TcpStream::connect(handle.listen_addr())
+            .await
+            .expect("connect");
+        let response = scram_authenticate(
+            &mut stream,
+            &mut CorrelationId(0),
+            &ScramAuthenticationSetup {
+                client_id: "krabka-sasl-test",
+                user: "alice",
+                password: alice_password(),
+                mechanism,
+            },
+        )
+        .await
+        .expect("SCRAM rounds complete");
+        handle.shutdown().await;
+        let refused = expected.map(|message| SaslAuthenticateResponse {
+            error_code: 58,
+            error_message: Some(message.to_owned()),
+            ..Default::default()
+        });
+        match refused {
+            Some(refused) => {
+                assert!(
+                    response == refused,
+                    "{mechanism:?} at {iterations} iterations"
+                );
+            }
+            None => assert!(
+                response.error_code == 0,
+                "{mechanism:?} at {iterations} iterations"
+            ),
+        }
+    }
 }
 
 /// Drive a complete SASL/SCRAM session against a `SASL_PLAINTEXT` listener.

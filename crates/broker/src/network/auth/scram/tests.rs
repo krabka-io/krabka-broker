@@ -130,8 +130,22 @@ impl KafkaScramClient {
 }
 
 fn scram_user(user: &str, mechanism: SaslMechanism) -> MetadataRecord {
-    let credential =
-        hash_scram_password_with_salt(USER_PASSWORD.as_bytes(), mechanism, 4096, b"salt".to_vec());
+    scram_user_with_iterations(user, mechanism, 4096)
+}
+
+/// A SCRAM user whose stored credential was stretched `iterations` times, as
+/// a bootstrap record may carry one below Kafka's floor.
+fn scram_user_with_iterations(
+    user: &str,
+    mechanism: SaslMechanism,
+    iterations: u32,
+) -> MetadataRecord {
+    let credential = hash_scram_password_with_salt(
+        USER_PASSWORD.as_bytes(),
+        mechanism,
+        iterations,
+        b"salt".to_vec(),
+    );
     MetadataRecord::V1ScramCredential(ScramCredentialRecord {
         user: user.into(),
         mechanism,
@@ -289,6 +303,9 @@ fn tokenauth_extension_selects_the_credential_store() {
                 token("expired", now_ms() - 1),
                 // `a,b=c` on the wire is `a=2Cb=3Dc`.
                 scram_user("a,b=c", mechanism),
+                // One below and at `ScramMechanism.minIterations`.
+                scram_user_with_iterations("weak", mechanism, 4095),
+                scram_user_with_iterations("floor", mechanism, 4096),
             ])
             .build();
         let user = USER_PASSWORD.as_bytes();
@@ -302,7 +319,7 @@ fn tokenauth_extension_selects_the_credential_store() {
         };
         let generic_failure = Outcome::FirstRoundFailed(None);
         // (case, authzid, sasl name, extensions, password, expected)
-        let cases: [ExchangeCase<'_>; 15] = [
+        let cases: [ExchangeCase<'_>; 18] = [
             ExchangeCase {
                 case: "SCRAM user without extension",
                 authorization_id: None,
@@ -448,6 +465,41 @@ fn tokenauth_extension_selects_the_credential_store() {
                 case: "authorization id other than the user",
                 authorization_id: Some("mallory"),
                 sasl_name: "alice",
+                extensions: "",
+                password: user,
+                expected: Outcome::FirstRoundFailed(Some(
+                    "Authentication failed: Client requested an authorization id that is \
+                     different from username"
+                        .into(),
+                )),
+            },
+            // `ScramSaslServer` refuses a stored credential below 4096
+            // iterations with a `SaslException`, so the client gets the
+            // generic text.
+            ExchangeCase {
+                case: "credential below the iteration floor",
+                authorization_id: None,
+                sasl_name: "weak",
+                extensions: "",
+                password: user,
+                expected: Outcome::FirstRoundFailed(None),
+            },
+            ExchangeCase {
+                case: "credential at the iteration floor",
+                authorization_id: None,
+                sasl_name: "floor",
+                extensions: "",
+                password: user,
+                expected: Outcome::Authenticated {
+                    principal: principal("floor", mechanism),
+                    via_token: false,
+                },
+            },
+            // Kafka checks the authorization id before the iterations.
+            ExchangeCase {
+                case: "authorization id mismatch wins over a weak credential",
+                authorization_id: Some("mallory"),
+                sasl_name: "weak",
                 extensions: "",
                 password: user,
                 expected: Outcome::FirstRoundFailed(Some(
