@@ -729,6 +729,7 @@ mod tests {
                 local_retention::{OffsetRange, finished_segment_ranges},
                 test_support as fixtures,
             },
+            remote_reader::test_support::NotReadyRlmm,
         },
         assert2::{assert, check},
         fixtures::{local_backends, partition_log, sweep_counts},
@@ -787,7 +788,7 @@ mod tests {
                 fixtures::seed_finished_segments(&rlmm, 1);
                 rlmm
             }
-            Metadata::NotReady => Arc::new(crate::remote_reader::test_support::NotReadyRlmm),
+            Metadata::NotReady => Arc::new(NotReadyRlmm),
         };
         let deleted_below = {
             let mut log = partition.log.lock().expect("log mutex poisoned");
