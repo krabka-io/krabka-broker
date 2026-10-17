@@ -417,9 +417,9 @@ krabka_macros::broker_config! {
         /// `meta.properties` at boot. Identifies which voter this node *is*.
         pub directory_id: uuid::Uuid,
 
-        /// UUID for this broker process invocation. The broker keeps it in
-        /// `{log_dir}/incarnation_id` and reloads it on restart. The internal
-        /// `load_or_generate` helper sets it before self-registration. Tests
+        /// UUID for this broker process invocation. Startup draws a new one
+        /// before self-registration, as Kafka's `BrokerLifecycleManager` does
+        /// for every process, so a restart is a new incarnation. Tests
         /// generate a random UUID for each call through [`Self::for_tests`].
         pub incarnation_id: uuid::Uuid,
 

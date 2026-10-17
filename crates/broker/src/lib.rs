@@ -226,6 +226,7 @@ pub mod quota;
 pub mod raft_handshake;
 pub(crate) mod re2j;
 pub(crate) mod reassignment;
+pub(crate) mod registration_admission;
 pub(crate) mod remote_log_manager;
 pub(crate) mod remote_reader;
 pub mod replica_selector;
