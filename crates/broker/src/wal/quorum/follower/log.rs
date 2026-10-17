@@ -631,12 +631,8 @@ mod tests {
                 Ok((start, end)) => {
                     assert!(outcome.unwrap() == Offset(end), "{}", case.name);
                     drop(follower);
-                    let mut reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
-                    recover_durable_offset(&mut reopened, &dir.path().join(DURABLE_OFFSET_FILE))
-                        .unwrap();
                     assert!(
-                        (reopened.log_start_offset(), reopened.log_end_offset())
-                            == (Offset(start), Offset(end)),
+                        recovered_range(dir.path()) == (Offset(start), Offset(end)),
                         "{}",
                         case.name
                     );
@@ -687,10 +683,14 @@ mod tests {
         assert2::assert!((follower.start_offset()) == (Offset(1)));
         assert2::assert!((follower.end_offset()) == (Offset(2)));
         drop(follower);
-        let mut reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
-        recover_durable_offset(&mut reopened, &dir.path().join(DURABLE_OFFSET_FILE)).unwrap();
-        assert2::assert!((reopened.log_start_offset()) == (Offset(1)));
-        assert2::assert!((reopened.log_end_offset()) == (Offset(2)));
+        assert!(recovered_range(dir.path()) == (Offset(1), Offset(2)));
+    }
+
+    /// The `[start, end)` a follower log in `dir` recovers to on reopen.
+    fn recovered_range(dir: &Path) -> (Offset, Offset) {
+        let mut reopened = Log::open(dir, LogConfig::default()).unwrap();
+        recover_durable_offset(&mut reopened, &dir.join(DURABLE_OFFSET_FILE)).unwrap();
+        (reopened.log_start_offset(), reopened.log_end_offset())
     }
 
     /// The leader could not place epoch 7, newer than its whole log, and

@@ -407,10 +407,7 @@ mod tests {
     /// arrives as.
     #[tokio::test]
     async fn a_follower_takes_a_compressed_record_above_the_decompressed_limit() {
-        use {
-            krabka_ids::{LeaderEpoch, ProducerId},
-            krabka_protocol::records::{Attributes, Record},
-        };
+        use krabka_protocol::records::{Attributes, Record};
 
         let (p, _td) = test_partition_with_writer();
         {
@@ -435,30 +432,7 @@ mod tests {
             ..Default::default()
         };
 
-        p.replicate_batch(oversized(0))
-            .await
-            .expect("the owned batch is taken");
-        assert!(p.log.lock().expect("partition log lock").log_end_offset() == 1);
-
-        let producer = oversized(1);
-        let mut wire = bytes::BytesMut::new();
-        producer.encode(&mut wire).expect("encode the batch");
-        p.replicate_verbatim(
-            krabka_log::VerbatimBatch {
-                bytes: wire.freeze(),
-                last_offset_delta: producer.last_offset_delta,
-                max_timestamp: producer.max_timestamp,
-                leader_epoch: LeaderEpoch(0),
-                producer_id: ProducerId(-1),
-                producer_epoch: -1,
-                base_sequence: -1,
-                is_transactional: false,
-            },
-            Offset(1),
-        )
-        .await
-        .expect("the verbatim batch is taken");
-        assert!(p.log.lock().expect("partition log lock").log_end_offset() == 2);
+        take_both_follower_writes(&p, oversized(0), oversized(1)).await;
     }
 
     /// A diskless replica reopens with the committed `KRaft` next offset as its
@@ -468,10 +442,7 @@ mod tests {
     /// at their own offsets.
     #[tokio::test]
     async fn a_follower_takes_the_leader_batches_below_a_recovered_frontier() {
-        use {
-            krabka_ids::{LeaderEpoch, ProducerId},
-            krabka_protocol::records::Record,
-        };
+        use krabka_protocol::records::Record;
 
         let (p, _td) = test_partition_with_writer();
         p.log
@@ -487,17 +458,26 @@ mod tests {
             ..Default::default()
         };
 
-        p.replicate_batch(batch(0))
+        take_both_follower_writes(&p, batch(0), batch(1)).await;
+    }
+
+    /// Replicate `owned` at offset 0 as an owned batch and `verbatim` at
+    /// offset 1 as verbatim bytes, the two writes of a follower's Fetch loop,
+    /// and require the log to take each one.
+    async fn take_both_follower_writes(p: &Partition, owned: RecordBatch, verbatim: RecordBatch) {
+        use krabka_ids::{LeaderEpoch, ProducerId};
+
+        p.replicate_batch(owned)
             .await
             .expect("the owned batch is taken");
-        let producer = batch(1);
+        assert!(p.log.lock().expect("partition log lock").log_end_offset() == 1);
         let mut wire = bytes::BytesMut::new();
-        producer.encode(&mut wire).expect("encode the batch");
+        verbatim.encode(&mut wire).expect("encode the batch");
         p.replicate_verbatim(
             krabka_log::VerbatimBatch {
                 bytes: wire.freeze(),
-                last_offset_delta: producer.last_offset_delta,
-                max_timestamp: producer.max_timestamp,
+                last_offset_delta: verbatim.last_offset_delta,
+                max_timestamp: verbatim.max_timestamp,
                 leader_epoch: LeaderEpoch(0),
                 producer_id: ProducerId(-1),
                 producer_epoch: -1,
@@ -508,7 +488,6 @@ mod tests {
         )
         .await
         .expect("the verbatim batch is taken");
-
         assert!(p.log.lock().expect("partition log lock").log_end_offset() == 2);
     }
 }

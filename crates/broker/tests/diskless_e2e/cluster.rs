@@ -104,21 +104,18 @@ impl DisklessCluster {
     /// Stop `node` the way a power cut would: no controlled shutdown, no
     /// leadership handover, no final flush.
     pub(crate) async fn crash(&mut self, node: NodeId) {
-        let index = Self::index_of(node);
-        let broker = self.brokers[index]
-            .take()
-            .unwrap_or_else(|| panic!("broker {} is already down", node.0));
-        broker.crash_for_test().await;
+        self.take_live(node).crash_for_test().await;
     }
 
     /// Stop `node` gracefully, the way `docker stop` stops a container: a
     /// controlled shutdown and a clean close of its logs.
-    pub(crate) async fn stop(&mut self, node: NodeId) {
-        let index = Self::index_of(node);
-        let broker = self.brokers[index]
+    pub(crate) async fn stop(&mut self, node: NodeId) { self.take_live(node).shutdown().await; }
+
+    /// Take the handle of `node`, which must be up, leaving it marked down.
+    fn take_live(&mut self, node: NodeId) -> BrokerHandle {
+        self.brokers[Self::index_of(node)]
             .take()
-            .unwrap_or_else(|| panic!("broker {} is already down", node.0));
-        broker.shutdown().await;
+            .unwrap_or_else(|| panic!("broker {} is already down", node.0))
     }
 
     /// Bring `node` back up on the addresses it just vacated, so the surviving

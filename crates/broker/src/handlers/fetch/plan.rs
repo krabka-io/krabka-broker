@@ -1317,6 +1317,18 @@ mod tests {
             .call()
     }
 
+    /// Epochs 0, 1 and 2 of two records each, with the log start moved to 5.
+    fn trimmed_partition(dir: &std::path::Path, storage: StorageMode) -> Arc<Partition> {
+        let partition = epoch_checks_partition_with_storage(dir, storage);
+        {
+            let mut log = partition.log.lock().expect("log mutex poisoned");
+            append_epoch_batches(&mut log, &[0, 0, 1, 1, 2, 2]);
+            log.set_log_start_offset(super::Offset(5))
+                .expect("move log start");
+        }
+        partition
+    }
+
     fn epoch_checks_partition_with_history(epochs: &[i32]) -> (tempfile::TempDir, Arc<Partition>) {
         let dir = tempfile::tempdir().expect("tempdir");
         let partition = epoch_checks_partition(dir.path());
@@ -1396,25 +1408,12 @@ mod tests {
         // established, above the epoch-0 boundary (2) that a
         // `last_fetched_epoch = 0` fetch would otherwise diverge to.
         let trimmed_dir = tempfile::tempdir().expect("tempdir");
-        let trimmed = epoch_checks_partition(trimmed_dir.path());
-        {
-            let mut log = trimmed.log.lock().expect("log mutex poisoned");
-            append_epoch_batches(&mut log, &[0, 0, 1, 1, 2, 2]);
-            log.set_log_start_offset(super::Offset(5))
-                .expect("move log start");
-        }
+        let trimmed = trimmed_partition(trimmed_dir.path(), StorageMode::Local);
 
         // The same trimmed history on a diskless partition, where the flusher
         // moved the log start and the WAL objects still hold what is below it.
         let diskless_dir = tempfile::tempdir().expect("tempdir");
-        let trimmed_diskless =
-            epoch_checks_partition_with_storage(diskless_dir.path(), StorageMode::Diskless);
-        {
-            let mut log = trimmed_diskless.log.lock().expect("log mutex poisoned");
-            append_epoch_batches(&mut log, &[0, 0, 1, 1, 2, 2]);
-            log.set_log_start_offset(super::Offset(5))
-                .expect("move log start");
-        }
+        let trimmed_diskless = trimmed_partition(diskless_dir.path(), StorageMode::Diskless);
 
         // Both histories have HW/LSO 4 and start 0; epoch 0 ends at offset 2.
         let expected_history_divergence = || super::PartitionData {
