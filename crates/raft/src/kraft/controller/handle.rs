@@ -243,10 +243,24 @@ impl KraftController {
             .map_err(|_| RaftError::Shutdown)
     }
 
-    /// Stop the engine task and wait for its log to close.
-    pub async fn shutdown(&self) {
+    /// Stop the engine task gracefully and wait for its log to close.
+    ///
+    /// A leader resigns first and sends `EndQuorumEpoch`, and the engine keeps
+    /// taking part in the quorum until a successor is known or its graceful
+    /// shutdown window runs out, as Kafka's `KafkaRaftClient.shutdown` does. A
+    /// follower or an observer stops at once.
+    pub async fn shutdown(&self) { self.stop(Command::Shutdown).await; }
+
+    /// Stop the engine task at once, handing nothing over, and wait for its
+    /// log to close.
+    ///
+    /// This is the stop of a halted process: a fatal fault, or a test that
+    /// models a crash. The quorum finds out through its fetch watchdog.
+    pub async fn halt(&self) { self.stop(Command::Halt).await; }
+
+    async fn stop(&self, command: Command) {
         let mut image = self.image_rx.clone();
-        let _ = self.cmd_tx.send(Command::Shutdown).await;
+        let _ = self.cmd_tx.send(command).await;
         // The engine owns the image sender. Wait for it to drop before callers
         // can reopen or remove the log directory.
         while image.changed().await.is_ok() {}

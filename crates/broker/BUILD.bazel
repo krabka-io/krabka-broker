@@ -123,8 +123,14 @@ crate_tests(
     # `cli_smoke_test`, `config_reference_test` and `krabka-broker_test` -- and
     # this suite, like the other 114, contributes none. It still runs on every
     # pull request, in the `test` step that exists for this tag.
+    #
+    # `controller_failover` joins on the same shape, ahead of any failure: it
+    # boots three brokers with the production raft timings, stops the active
+    # controller and bounds the time until the survivors elect and serve a
+    # mutation. That bound is an elapsed wall-clock time across a quorum.
     cpu_heavy = [
         "compaction",
+        "controller_failover",
         "diskless_e2e",
         "durability",
         "elect_leaders",
@@ -283,6 +289,9 @@ crate_tests(
         # neither librdkafka nor the JVM, so its decoder agrees with neither
         # by construction.
         "sarama_conformance": ["kaf_sarama"],
+        # The Prometheus sidecar that evaluates the shipped alert rules over the
+        # run, so the evidence records when each one fired and resolved.
+        "soak_contract": ["prometheus_3_5_0"],
         # One image, used twice: as the `kafka-topics` client that reads
         # krabka's answer and as the Kafka broker the same command is run
         # against for the differential.
