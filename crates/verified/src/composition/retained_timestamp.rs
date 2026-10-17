@@ -31,6 +31,10 @@ pub(super) fn constructed_index_retained_candidate(
         entries,
         selected: _untrimmed,
     } = constructed_time_index_preserves_first(offsets, timestamps, rows, target);
+    // Unfold the ordered-offsets closure once, so the floor scan and the suffix
+    // below reason over a first-order quantifier rather than the mapping.
+    proof_assert!(forall<i: Int, j: Int> 0 <= i && i < j && j < offsets@.len()
+        ==> offsets@[i]@ < offsets@[j]@);
     let mut start = 0usize;
     #[invariant(start@ <= offsets@.len())]
     #[invariant(forall<i: Int> 0 <= i && i < start@ ==> base@ + offsets@[i]@ < minimum@)]
@@ -49,11 +53,26 @@ pub(super) fn constructed_index_retained_candidate(
     proof_assert!(forall<i: Int, j: Int> 0 <= i && i < entries@.len()
         && 0 <= j && j < retained_offsets@.len() && retained_offsets@[j]@ < entries@[i].coordinate@
         ==> retained_timestamps@[j]@ <= entries@[i].key@);
-    let selected = indexed_timestamp_scan_finds_first(
+    proof_assert!(forall<i: Int, j: Int> 0 <= i && i < j && j < retained_offsets@.len()
+        ==> retained_offsets@[i]@ < retained_offsets@[j]@);
+    // Map each outcome on the suffix back to the original record indexes.
+    match indexed_timestamp_scan_finds_first(
         &entries,
         retained_offsets,
         retained_timestamps,
         target,
-    )?;
-    Some(start + selected)
+    ) {
+        None => {
+            proof_assert!(forall<i: Int> start@ <= i && i < timestamps@.len()
+                ==> timestamps@[i]@ < target@);
+            None
+        }
+        Some(selected) => {
+            proof_assert!(start@ + selected@ < timestamps@.len()
+                && timestamps@[start@ + selected@]@ >= target@);
+            proof_assert!(forall<i: Int> start@ <= i && i < start@ + selected@
+                ==> timestamps@[i]@ < target@);
+            Some(start + selected)
+        }
+    }
 }
