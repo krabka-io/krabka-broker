@@ -50,7 +50,7 @@ const UNKNOWN_SERVER_ERROR_MESSAGE: &str =
 ///
 /// # Errors
 /// Returns the deadline error outside the operation's own result.
-pub(super) async fn guarded_operation_on_source<T, F, Fut>(
+pub(crate) async fn guarded_operation_on_source<T, F, Fut>(
     source: &dyn MetadataSource,
     deadline: tokio::time::Instant,
     mut operation: F,
