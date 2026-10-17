@@ -4,7 +4,10 @@
 //! `max.connections.per.ip`.
 
 use {
-    super::{ConnectionContext, Unstable, handle_conn, run, test_support::single_voter_engine},
+    super::{
+        ConnectionContext, Unstable, handle_conn, run, test_support::single_voter_engine,
+        upgrade_within_idle_window,
+    },
     crate::{AllowAllGrants, ListenerLimits, RaftError, kraft::KraftController},
     assert2::check,
     std::{sync::Arc, time::Duration},
@@ -15,6 +18,7 @@ use {
     tokio_util::sync::CancellationToken,
 };
 
+mod handshake_idle;
 mod session_expiry;
 
 /// An `ApiVersions` v0 request frame: a v1 header, `client_id` "c", no body.

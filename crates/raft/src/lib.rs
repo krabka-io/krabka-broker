@@ -104,8 +104,8 @@ pub use {
     error::{MetadataReplayError, PersistedFormatError, RaftError},
     event_queue::{EventQueueRecorder, NoEventQueueRecorder},
     handshake::{
-        AllowAllGrants, ClusterGrants, ClusterOperation, ControllerApiVersions, RaftConnection,
-        RaftHandshakeError, RaftListenerHandshake,
+        AllowAllGrants, ClusterGrants, ClusterOperation, ControllerApiVersions, HandshakeStream,
+        RaftConnection, RaftHandshakeError, RaftListenerHandshake,
     },
     kraft::{
         MetadataFetchSlice,

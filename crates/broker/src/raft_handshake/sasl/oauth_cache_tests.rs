@@ -142,7 +142,7 @@ async fn controller_signed_oauth_requires_a_fresh_published_cache() {
             .await
             .unwrap();
         let (server, _) = listener.accept().await.unwrap();
-        let task = tokio::spawn(async move { cfg.upgrade(server, &NoApiVersions).await });
+        let task = tokio::spawn(async move { cfg.upgrade(server.into(), &NoApiVersions).await });
         let mut body = bytes::BytesMut::new();
         SaslHandshakeRequest {
             mechanism: "OAUTHBEARER".into(),

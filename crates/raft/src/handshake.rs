@@ -5,10 +5,11 @@
 //! trait abstraction keeps `krabka-raft` free of any dependency on
 //! `krabka-broker` and `krabka-security`.
 
-use {
-    bytes::Bytes, krabka_client_core::ClientDuplex, std::sync::Arc, thiserror::Error,
-    tokio::net::TcpStream,
-};
+use {bytes::Bytes, krabka_client_core::ClientDuplex, std::sync::Arc, thiserror::Error};
+
+mod stream;
+
+pub use self::stream::HandshakeStream;
 
 /// Authenticated controller-listener connection plus request-level grants.
 pub struct RaftConnection {
@@ -85,10 +86,12 @@ pub enum RaftHandshakeError {
 
 /// Per-connection handshake hook.
 ///
-/// Implementors consume the raw `TcpStream` and return one of two things. On
-/// success they return an authenticated `Box<dyn ClientDuplex>` that carries
-/// the raft frames. On failure they return a `RaftHandshakeError`, and the
-/// listener then drops the connection at debug level.
+/// Implementors consume the accepted [`HandshakeStream`] and return one of
+/// two things. On success they return an authenticated `Box<dyn ClientDuplex>`
+/// that carries the raft frames. On failure they return a
+/// `RaftHandshakeError`, and the listener then drops the connection at debug
+/// level. The listener closes a handshake that reads and writes nothing for
+/// `connections.max.idle.ms`, so a slow peer that keeps sending is not closed.
 #[async_trait::async_trait]
 pub trait RaftListenerHandshake: Send + Sync {
     /// Upgrades one accepted connection.
@@ -99,7 +102,7 @@ pub trait RaftListenerHandshake: Send + Sync {
     /// same `apiVersionSupplier` to `SaslServerAuthenticator`.
     async fn upgrade(
         &self,
-        stream: TcpStream,
+        stream: HandshakeStream,
         api_versions: &dyn ControllerApiVersions,
     ) -> Result<RaftConnection, RaftHandshakeError>;
 }

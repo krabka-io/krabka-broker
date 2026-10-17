@@ -19,8 +19,8 @@ use {
     crate::platform::Sockets,
     krabka_client_core::ClientDuplex,
     krabka_raft::{
-        ControllerApiVersions, ControllerHandle, RaftConnection, RaftHandshakeError,
-        RaftListenerHandshake,
+        ControllerApiVersions, ControllerHandle, HandshakeStream, RaftConnection,
+        RaftHandshakeError, RaftListenerHandshake,
     },
     krabka_security::{ListenerProtocol, SaslMechanism},
     std::{
@@ -30,7 +30,7 @@ use {
             atomic::{AtomicI64, AtomicU64},
         },
     },
-    tokio::{net::TcpStream, sync::OnceCell},
+    tokio::sync::OnceCell,
     tokio_rustls::TlsAcceptor,
 };
 
@@ -120,7 +120,7 @@ pub struct BrokerRaftHandshake {
 impl RaftListenerHandshake for BrokerRaftHandshake {
     async fn upgrade(
         &self,
-        stream: TcpStream,
+        stream: HandshakeStream,
         api_versions: &dyn ControllerApiVersions,
     ) -> Result<RaftConnection, RaftHandshakeError> {
         // Capture the peer address before the stream is consumed by TLS
@@ -128,7 +128,7 @@ impl RaftListenerHandshake for BrokerRaftHandshake {
         // there is none (a socket closed mid-accept, or a platform with
         // preopened sockets), it is the unspecified address, which no ACL
         // host pattern matches.
-        let peer = Sockets::TARGET.peer_address(&stream);
+        let peer = Sockets::TARGET.peer_address(stream.get_ref());
 
         // 1. TLS termination (if the listener protocol requires it). A
         //    client certificate names the principal of an `SSL` connection,
@@ -246,7 +246,7 @@ mod tests {
             .mechanisms(vec![])
             .credentials(HashMap::new())
             .call();
-        // `upgrade(TcpStream)` requires a real TCP socket, so we
+        // `upgrade(HandshakeStream)` requires a real TCP socket, so we
         // exercise the short-circuit predicates directly here. The full
         // upgrade-path is exercised end-to-end in integration tests.
         assert!(!cfg.protocol.requires_tls());
