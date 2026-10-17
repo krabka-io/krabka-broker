@@ -295,6 +295,12 @@ async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
     survivor
         .wait_until_partition_leader_changed(TOPIC, 0, NodeId(leader_id))
         .await;
+    // The image names the new leader before the survivor's partition runtime
+    // installs it. A Produce in that gap gets NOT_LEADER_OR_FOLLOWER, which a
+    // loaded runner hits, so wait until the survivor itself accepts writes.
+    survivor
+        .wait_until_local_partition_leader(TOPIC, 0, NodeId(survivor.node_id()))
+        .await;
 
     let survivor_bootstrap = format!("127.0.0.1:{}", survivor.listen_addr().port());
     let survivor_client = connect_owned(
