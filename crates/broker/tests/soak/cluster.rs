@@ -16,6 +16,9 @@
 //! the `/etc/hosts` line CI's container jobs already add. One name that both
 //! sides can reach, which is what the JVM suites in this crate do for the
 //! reverse direction.
+//! A host without that line cannot reach any broker it is told about, so
+//! [`SoakCluster::configured`] refuses to start one there, and says how to add
+//! the line.
 //!
 //! **The quorum.** `--standalone` writes a one-voter `VotersRecord`. Here each
 //! node is formatted with the same `--cluster-id` and the same
@@ -57,11 +60,49 @@ use {
     base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD},
     krabka_broker::NodeId,
     std::{
+        io,
+        net::{SocketAddr, ToSocketAddrs as _},
         path::{Path, PathBuf},
         process::Command,
         time::{Duration, Instant},
     },
 };
+
+/// The name every node advertises, and the one the test's own clients dial.
+const HOST_GATEWAY: &str = "host.docker.internal";
+
+/// Why the host cannot reach the brokers by [`HOST_GATEWAY`], given what
+/// resolving it returned, or `None` when it resolves to loopback.
+///
+/// The brokers publish their ports on the host and advertise this name. Inside
+/// a container it is the host gateway; on the host it needs an `/etc/hosts`
+/// line pointing at loopback. Without that line every client that follows a
+/// broker's advertised address fails with a closed connection, the run's load
+/// never starts, and the failure reads as a broker that stopped answering.
+fn host_gateway_problem(resolved: io::Result<Vec<SocketAddr>>) -> Option<String> {
+    let fix = format!(
+        "add `127.0.0.1 {HOST_GATEWAY}` to /etc/hosts, as CI's container jobs do \
+         (`echo \"127.0.0.1 {HOST_GATEWAY}\" | sudo tee -a /etc/hosts`)"
+    );
+    match resolved {
+        Err(error) => Some(format!(
+            "{HOST_GATEWAY} does not resolve on this host ({error}); {fix}"
+        )),
+        Ok(addrs) if addrs.iter().any(|addr| addr.ip().is_loopback()) => None,
+        Ok(addrs) => Some(format!(
+            "{HOST_GATEWAY} resolves to {addrs:?} on this host, not to loopback, so the brokers' \
+             published ports are not reachable through it; {fix}"
+        )),
+    }
+}
+
+/// Refuse to boot a cluster the host's clients could not reach.
+fn require_host_gateway() {
+    let resolved = (HOST_GATEWAY, 0).to_socket_addrs().map(Iterator::collect);
+    if let Some(problem) = host_gateway_problem(resolved) {
+        panic!("{problem}");
+    }
+}
 
 /// The tag `//packaging:image_load` loads the broker image under.
 ///
@@ -445,6 +486,7 @@ impl SoakCluster {
         shared_mount: Option<(PathBuf, String)>,
         #[builder(default)] diskless_quorum: bool,
     ) -> Self {
+        require_host_gateway();
         let extras = NodeExtras {
             root_toml,
             tables_toml,
@@ -573,7 +615,10 @@ pub(crate) async fn create_topics(
 #[cfg(test)]
 mod tests {
     use {
-        super::{INTER_BROKER_LISTENER, diskless_quorum_toml, inter_broker_token},
+        super::{
+            HOST_GATEWAY, INTER_BROKER_LISTENER, diskless_quorum_toml, host_gateway_problem,
+            inter_broker_token,
+        },
         crate::support::configs::apply_node_file,
         assert2::check,
         krabka_broker::config::{BrokerConfig, InterBrokerCredentials},
@@ -639,5 +684,31 @@ mod tests {
             .validate(&inter_broker_token(node_id), 1_800_000_000_000)
             .expect("the development validator accepts the token");
         check!(outcome.principal.name == principal);
+    }
+
+    // A host without the `/etc/hosts` line is refused before any container
+    // starts, with the fix in the message, rather than failing as a cluster
+    // whose clients all see closed connections.
+    #[yare::parameterized(
+        loopback = { Ok(vec!["127.0.0.1:0".parse().unwrap()]), None },
+        loopback_among_others = {
+            Ok(vec!["10.0.0.5:0".parse().unwrap(), "[::1]:0".parse().unwrap()]),
+            None
+        },
+        unresolved = {
+            Err(std::io::Error::other("failed to lookup address information")),
+            Some("does not resolve on this host")
+        },
+        elsewhere = { Ok(vec!["10.0.0.5:0".parse().unwrap()]), Some("not to loopback") },
+    )]
+    fn the_host_gateway_name_must_reach_loopback(
+        resolved: std::io::Result<Vec<std::net::SocketAddr>>,
+        problem: Option<&str>,
+    ) {
+        let found = host_gateway_problem(resolved);
+        check!(found.is_some() == problem.is_some(), "{found:?}");
+        let message = found.unwrap_or_default();
+        let fix = format!("127.0.0.1 {HOST_GATEWAY}");
+        check!(problem.is_none_or(|reason| message.contains(reason) && message.contains(&fix)));
     }
 }
