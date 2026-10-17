@@ -1,8 +1,9 @@
 //! Graceful failover of the active controller under production raft timings.
 //!
 //! A three-node combined cluster runs with the production controller timings:
-//! the five-second `controller_election_timeout`, the default fetch-miss limit
-//! and the default broker heartbeat cadence. The test stops the active
+//! the two-second `controller_fetch_timeout`, the one-second
+//! `controller_election_timeout`, the default fetch-miss limit and the default
+//! broker heartbeat cadence. The test stops the active
 //! controller the way SIGTERM does, with `controlled_shutdown`, and measures
 //! how long the two survivors take to elect a new leader and then to serve a
 //! controller mutation through it.
@@ -11,7 +12,7 @@
 //! to `Resigned` and sends `EndQuorumEpoch` to the voters, ordered by fetch
 //! offset, so the first preferred successor elects at once instead of waiting
 //! out its fetch timeout. A leader that stopped without resigning would leave
-//! the survivors to notice it only when their five-second fetch timer expired,
+//! the survivors to notice it only when their two-second fetch timer expired,
 //! and then to win an election.
 
 use {
@@ -37,14 +38,15 @@ mod support;
 ///
 /// It covers the leadership drain (a broker heartbeat and its 50 ms re-ask),
 /// the resignation and one election, about half a second in all. It is below
-/// one five-second `controller_election_timeout`, which is the least a stop
+/// one two-second `controller_fetch_timeout`, which is the least a stop
 /// without a resignation takes: the survivors elect only once their fetch
 /// timer expires.
-const FAILOVER_BOUND: Duration = Duration::from_secs(4);
+const FAILOVER_BOUND: Duration = Duration::from_millis(1_800);
 
 /// Give `config` the production controller and broker heartbeat timings.
 fn production_timings(config: &mut BrokerConfig) {
     let defaults = BrokerConfig::default();
+    config.controller_fetch_timeout = defaults.controller_fetch_timeout;
     config.controller_election_timeout = defaults.controller_election_timeout;
     config.controller_heartbeat_interval = defaults.controller_heartbeat_interval;
     config.controller_heartbeat_interval_explicit = defaults.controller_heartbeat_interval_explicit;

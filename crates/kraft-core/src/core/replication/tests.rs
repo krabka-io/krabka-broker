@@ -323,7 +323,7 @@ fn a_follower_truncates_to_where_both_logs_still_hold_the_epoch(
                 },
                 Action::ResetTimer {
                     kind: TimerKind::Fetch,
-                    deadline: SimInstant(11).saturating_add_ms(m.election_timeout_ms),
+                    deadline: SimInstant(11).saturating_add_ms(m.fetch_timeout_ms),
                 },
             ]
     );
@@ -361,15 +361,15 @@ fn elect_empty_log(voter_ids: &[NodeId]) -> MachineLogAndActions {
 /// arms nothing at all -- Kafka's `timeUntilCheckQuorumExpires` reports
 /// `Long.MAX_VALUE` for a single-voter quorum.
 #[yare::parameterized(
-    three_voters = { &[NodeId(1), NodeId(2), NodeId(3)][..], Some(SimInstant(3500)) },
-    two_voters = { &[NodeId(1), NodeId(2)][..], Some(SimInstant(3500)) },
+    three_voters = { &[NodeId(1), NodeId(2), NodeId(3)][..], Some(SimInstant(5000)) },
+    two_voters = { &[NodeId(1), NodeId(2)][..], Some(SimInstant(5000)) },
     sole_voter = { &[NodeId(1)][..], None },
 )]
 fn promotion_arms_the_check_quorum_window_unless_the_leader_is_alone(
     voter_ids: &[NodeId],
     want: Option<SimInstant>,
 ) {
-    // `TEST_ELECTION_TIMEOUT` is one second, so the window is 1500ms.
+    // `TEST_TIMEOUTS.fetch` is two seconds, so the window is 3000ms.
     let MachineLogAndActions {
         machine: m,
         actions,
@@ -387,7 +387,7 @@ fn promotion_arms_the_check_quorum_window_unless_the_leader_is_alone(
     three_voters_one_follower = {
         &[NodeId(1), NodeId(2), NodeId(3)][..],
         &[NodeId(2)][..],
-        &[Some(SimInstant(3600))][..]
+        &[Some(SimInstant(5100))][..]
     },
     five_voters_one_follower = {
         &[NodeId(1), NodeId(2), NodeId(3), NodeId(4), NodeId(5)][..],
@@ -397,7 +397,7 @@ fn promotion_arms_the_check_quorum_window_unless_the_leader_is_alone(
     five_voters_two_followers = {
         &[NodeId(1), NodeId(2), NodeId(3), NodeId(4), NodeId(5)][..],
         &[NodeId(2), NodeId(3)][..],
-        &[None, Some(SimInstant(3600))][..]
+        &[None, Some(SimInstant(5100))][..]
     },
     repeated_follower = {
         &[NodeId(1), NodeId(2), NodeId(3), NodeId(4), NodeId(5)][..],
@@ -454,7 +454,7 @@ fn a_snapshot_fetch_is_check_quorum_contact() {
         actions
             == vec![Action::ResetTimer {
                 kind: TimerKind::CheckQuorum,
-                deadline: SimInstant(3600),
+                deadline: SimInstant(5100),
             }]
     );
 }
@@ -481,7 +481,7 @@ fn a_diverging_fetch_still_counts_as_contact() {
             == vec![
                 Action::ResetTimer {
                     kind: TimerKind::CheckQuorum,
-                    deadline: SimInstant(3600),
+                    deadline: SimInstant(5100),
                 },
                 Action::ReplyDivergingEpoch(LogOffsetMetadata {
                     offset: 5,
@@ -587,7 +587,7 @@ fn growing_past_one_voter_starts_the_leader_a_window() {
         actions
             == vec![Action::ResetTimer {
                 kind: TimerKind::CheckQuorum,
-                deadline: SimInstant(5500),
+                deadline: SimInstant(7000),
             }]
     );
 }
@@ -606,7 +606,7 @@ fn a_removed_leader_still_runs_check_quorum_over_the_remaining_voter() {
     // commits.
     let applied = m.apply_voter_set(voters(&[NodeId(2)]), SimInstant(3000));
     assert2::assert!(m.role().is_leader());
-    assert2::check!(armed_check_quorum(&applied) == Some(SimInstant(4500)));
+    assert2::check!(armed_check_quorum(&applied) == Some(SimInstant(6000)));
 
     // That remaining voter is now the whole majority, so its fetch re-arms.
     let fetched = m.on_event(
@@ -618,10 +618,10 @@ fn a_removed_leader_still_runs_check_quorum_over_the_remaining_voter() {
         &log,
         SimInstant(3100),
     );
-    assert2::check!(armed_check_quorum(&fetched) == Some(SimInstant(4600)));
+    assert2::check!(armed_check_quorum(&fetched) == Some(SimInstant(6100)));
 
     // And silence from it still deposes us.
-    m.on_event(Event::CheckQuorumTimeout, &log, SimInstant(5000));
+    m.on_event(Event::CheckQuorumTimeout, &log, SimInstant(6100));
     assert2::assert!(!m.role().is_leader());
 }
 
@@ -677,12 +677,12 @@ fn a_removed_leader_resigns_into_observer_discovery() {
     let log = FakeLog::new(0, 0);
     let mut m = three_voter_leader(&log);
     m.apply_voter_set(voters(&[NodeId(2), NodeId(3)]), SimInstant(3000));
-    let actions = m.on_event(Event::CheckQuorumTimeout, &log, SimInstant(5000));
+    let actions = m.on_event(Event::CheckQuorumTimeout, &log, SimInstant(6000));
     assert2::assert!(
         actions
             == expected_quorum_loss("Observer", Action::ResetTimer {
                 kind: TimerKind::Fetch,
-                deadline: SimInstant(6000),
+                deadline: SimInstant(8000),
             })
     );
     assert2::assert!(
@@ -690,7 +690,7 @@ fn a_removed_leader_resigns_into_observer_discovery() {
             == (
                 Role::Observer {
                     leader_id: None,
-                    fetch_deadline: SimInstant(6000),
+                    fetch_deadline: SimInstant(8000),
                 },
                 None
             )
@@ -724,7 +724,7 @@ fn an_observer_whose_fetches_time_out_looks_for_the_current_leader() {
 
     let actions = m.on_event(Event::FetchTimeout, &log, SimInstant(2_000));
 
-    let deadline = SimInstant(2_000).saturating_add_ms(1_000);
+    let deadline = SimInstant(2_000).saturating_add_ms(2_000);
     assert2::assert!(
         actions
             == vec![
@@ -906,7 +906,7 @@ fn a_newer_epoch_without_a_leader_detaches_the_replica(
             )
         }
         LeaderlessEpochOutcome::DiscoveringObserver => {
-            let fetch_deadline = now.saturating_add_ms(1_000);
+            let fetch_deadline = now.saturating_add_ms(2_000);
             (
                 Role::Observer {
                     leader_id: None,
@@ -994,7 +994,7 @@ fn a_fetch_answer_counts_only_from_the_followed_leader_in_its_epoch(
             actions
                 == vec![Action::SendFetch { leader_id: from }, Action::ResetTimer {
                     kind: TimerKind::Fetch,
-                    deadline: now.saturating_add_ms(1_000),
+                    deadline: now.saturating_add_ms(2_000),
                 },]
         );
     } else {

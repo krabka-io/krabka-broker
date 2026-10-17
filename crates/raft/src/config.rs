@@ -54,6 +54,9 @@ const DEFAULT_MAX_SNAPSHOT_INTERVAL: Time = hours(1);
 /// Election timeout used by [`ControllerConfig::for_tests`].
 const TEST_ELECTION_TIMEOUT: Time = secs(1);
 
+/// Fetch timeout used by [`ControllerConfig::for_tests`]: Kafka's default.
+const TEST_FETCH_TIMEOUT: Time = secs(2);
+
 /// Leader heartbeat cadence used by [`ControllerConfig::for_tests`].
 const TEST_HEARTBEAT_INTERVAL: Time = millis(200);
 
@@ -160,10 +163,16 @@ pub struct ControllerConfig {
     /// keeps the metadata partition in its
     /// [`METADATA_PARTITION_DIR`] subdirectory.
     pub log_dir: PathBuf,
+    /// Kafka's `controller.quorum.election.timeout.ms`: the base of the
+    /// randomized election timer.
     #[debug("{:?}", election_timeout.human().to_string())]
     pub election_timeout: Time,
+    /// Kafka's `controller.quorum.fetch.timeout.ms`: the follower and observer
+    /// fetch watchdog, and the base of the leader's check-quorum window.
+    #[debug("{:?}", fetch_timeout.human().to_string())]
+    pub fetch_timeout: Time,
     /// Explicit heartbeat cadence. `None` preserves the derived
-    /// `election_timeout / 3` behavior.
+    /// `fetch_timeout / 3` behavior.
     #[debug("{:?}", heartbeat_interval.map(|value| value.human().to_string()))]
     pub heartbeat_interval: Option<Time>,
     pub controller_fetch_miss_limit: ControllerFetchMissLimit,
@@ -281,6 +290,7 @@ impl ControllerConfig {
             controller_listen_addr: listen,
             log_dir,
             election_timeout: TEST_ELECTION_TIMEOUT,
+            fetch_timeout: TEST_FETCH_TIMEOUT,
             heartbeat_interval: Some(TEST_HEARTBEAT_INTERVAL),
             controller_fetch_miss_limit: ControllerFetchMissLimit::default(),
             metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity::default(),
@@ -339,6 +349,7 @@ mod tests {
         check!(cfg.max_bytes_between_snapshots.bytes_u64() == 20 * 1024 * 1024);
         check!(cfg.max_snapshot_interval.millis_i64() == 3_600_000);
         check!(cfg.election_timeout.millis_i64() == 1_000);
+        check!(cfg.fetch_timeout.millis_i64() == 2_000);
         check!(
             cfg.heartbeat_interval
                 .expect("test heartbeat is explicit")
@@ -362,6 +373,7 @@ mod tests {
             // rather than as a bare byte count.
             "max_bytes_between_snapshots: \"20MiB\"",
             "election_timeout: \"1s\"",
+            "fetch_timeout: \"2s\"",
             "max_snapshot_interval: \"1h\"",
             "metadata_snapshot_fetch_max: \"1GiB\"",
         ] {

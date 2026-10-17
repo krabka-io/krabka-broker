@@ -29,7 +29,7 @@ use {
         node::{Message, Node, deadline_millis, election_timeout_of, make_voter_set},
     },
     crate::{
-        core::QuorumStateMachine,
+        core::{QuorumStateMachine, QuorumTimeouts},
         role::Role,
         simulation_support::partition_node,
         types::{Epoch, NodeId, QuorumState, SimInstant},
@@ -88,7 +88,10 @@ impl Sim {
             let machine = QuorumStateMachine::new(
                 id,
                 QuorumState::bootstrap(uuid::Uuid::nil(), voters.clone()),
-                election_timeout,
+                QuorumTimeouts {
+                    election: election_timeout,
+                    fetch: election_timeout,
+                },
             );
             nodes.insert(id, Node {
                 id,

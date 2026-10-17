@@ -17,13 +17,10 @@ use {
             CertificateDer, ClientConfig, PemObject as _, PinnedCertVerifier, ServerName,
             TcpStream, TlsConnector, fixture_signature_schemes,
         },
-        wire::HeaderEncoding,
     },
     assert2::assert,
     krabka_broker::{Broker, BrokerConfig, BrokerHandle},
-    krabka_protocol::owned::incremental_alter_configs_response::{
-        AlterConfigsResourceResponse, IncrementalAlterConfigsResponse,
-    },
+    krabka_protocol::owned::incremental_alter_configs_response::AlterConfigsResourceResponse,
     krabka_security::{ClientAuthMode, ListenerProtocol, TlsConfig},
     rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair},
     std::{
@@ -143,22 +140,7 @@ impl TlsBroker {
         mutation: ConfigMutation,
     ) -> AlterConfigsResourceResponse {
         let request = broker_alter_request(self.resource(), configs, mutation);
-        let mut stream = TcpStream::connect(self.admin).await.expect("connect");
-        let response: IncrementalAlterConfigsResponse = kafka_wire::exchange()
-            .stream(&mut stream)
-            .request(&request)
-            .api_key(44)
-            .version(1)
-            .client_id(CLIENT_ID)
-            .header(HeaderEncoding::Flexible)
-            .call()
-            .await
-            .expect("IncrementalAlterConfigs round trip");
-        response
-            .responses
-            .into_iter()
-            .next()
-            .expect("one resource row")
+        kafka_wire::alter_one_resource(self.admin, &request, CLIENT_ID).await
     }
 
     /// Whether the SSL listener completes a handshake serving `identity`.

@@ -199,7 +199,7 @@ fn preprocess_resource(
                 log_dirs: &broker.config.broker_log_dirs(),
                 unstable: broker.config.features.unstable_api_versions,
             },
-            broker.listener_tls_inputs(),
+            broker.own_config_checks(),
         )
     });
     let (code, message) = result.err()?;

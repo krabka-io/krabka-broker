@@ -26,6 +26,7 @@ use {
     krabka_security::{ClientAuthMode, TlsConfig},
     rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, pem::PemObject},
     std::{
+        borrow::Cow,
         collections::{BTreeMap, BTreeSet, HashMap},
         fmt::Write as _,
         path::{Path, PathBuf},
@@ -428,12 +429,12 @@ fn refusal(cause: &str) -> (i16, String) {
     )
 }
 
-/// What a listener SSL check needs of the node the client addressed: its
-/// listeners and the broker-wide `tls_config` a listener without its own
-/// uses.
-#[derive(Clone, Copy)]
+/// What a listener SSL check needs of the node the client addressed: the
+/// listeners it runs, a listener a dynamic `listeners` added among them, and
+/// the broker-wide `tls_config` a listener without its own uses.
+#[derive(Clone)]
 pub(crate) struct ListenerTlsInputs<'a> {
-    pub(crate) listeners: &'a [ListenerSpec],
+    pub(crate) listeners: Cow<'a, [ListenerSpec]>,
     pub(crate) tls_config: Option<&'a TlsConfig>,
 }
 
@@ -454,11 +455,14 @@ impl ListenerTlsInputs<'_> {
     /// and the `proposed` one. A listener that is not TLS has no
     /// `SslFactory`, so its keys are stored unchecked, as in Kafka.
     ///
+    /// The inputs are taken by value: they are a snapshot of the running
+    /// listeners, built for the one check.
+    ///
     /// # Errors
     /// `INVALID_REQUEST` with Kafka's message when a store does not load or a
     /// new certificate changes the DN or drops a SAN.
     pub(crate) fn check_reconfiguration(
-        &self,
+        self,
         current: &BTreeMap<String, String>,
         proposed: &BTreeMap<String, String>,
     ) -> Result<(), (i16, String)> {

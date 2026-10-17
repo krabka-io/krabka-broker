@@ -460,22 +460,27 @@ krabka_macros::broker_config! {
         /// Default 30s.
         pub replica_lag_time_max: Time,
 
-        /// Controller election timeout, covering both Kafka's
-        /// `controller.quorum.election.timeout.ms` and its
-        /// `controller.quorum.fetch.timeout.ms`. Default 5s.
+        /// Controller quorum fetch timeout, Kafka's
+        /// `controller.quorum.fetch.timeout.ms`. Default 2s, as in Kafka.
         ///
-        /// One extent drives three deadlines in the `KRaft` engine. It is the
-        /// base of an electing voter's randomized election timer, before the
-        /// per-(node, epoch) jitter the core adds. It is the follower and
-        /// observer fetch watchdog, so it bounds how long a lost leader goes
-        /// unnoticed. And 1.5x of it -- Kafka's
+        /// It is the follower and observer fetch watchdog in the `KRaft`
+        /// engine, so it bounds how long a lost leader goes unnoticed before
+        /// a voter starts an election. And 1.5x of it -- Kafka's
         /// `LeaderState.CHECK_QUORUM_TIMEOUT_FACTOR` -- is the leader's
         /// check-quorum window: a leader that a majority of the voters has
         /// not fetched from within that window resigns rather than keep
         /// answering as the leader of an epoch the quorum has replaced.
+        pub controller_fetch_timeout: Time,
+
+        /// Controller election timeout, Kafka's
+        /// `controller.quorum.election.timeout.ms`. Default 1s, as in Kafka.
         ///
-        /// The default is conservative and avoids a split vote on slow
-        /// runners.
+        /// It is the base of a candidate's randomized election timer: each
+        /// election waits this long plus a jitter in `[0, timeout)`, like
+        /// Kafka's random election timeout. Two voters whose fetch timers
+        /// expired together and split the vote therefore retry within one to
+        /// two election timeouts, and the jitter makes a second split
+        /// unlikely.
         pub controller_election_timeout: Time,
 
         /// Leader heartbeat cadence. Default 500ms. The `KRaft` engine
@@ -483,11 +488,11 @@ krabka_macros::broker_config! {
         /// missed the original announcement, or an old leader that
         /// rejoined, re-attaches without waiting for an election.
         /// Validation rejects a value that is not below
-        /// `controller_election_timeout`.
+        /// `controller_fetch_timeout`.
         pub controller_heartbeat_interval: Time,
         /// Whether the heartbeat interval was explicitly configured. An
         /// omitted value leaves the engine on its derived cadence of
-        /// `controller_election_timeout / 3`, with a floor of one
+        /// `controller_fetch_timeout / 3`, with a floor of one
         /// millisecond.
         pub controller_heartbeat_interval_explicit: bool,
         /// Consecutive fetch misses an observer tolerates before it looks for the

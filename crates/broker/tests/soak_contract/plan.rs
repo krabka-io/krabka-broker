@@ -66,7 +66,7 @@ pub(crate) struct NodeToml {
 pub(crate) fn node_toml(contract: &Contract) -> NodeToml {
     let cluster = &contract.cluster;
     let root = format!(
-        "controller_election_timeout = \"{}ms\"\n\
+        "controller_fetch_timeout = \"{}ms\"\n\
          replica_lag_time_max = \"{}ms\"\n",
         cluster.check_quorum_window.millis_i64(),
         cluster.replica_lag_time_max.millis_i64(),
@@ -238,7 +238,7 @@ mod tests {
     async fn the_node_file_carries_the_contracts_cluster_limits() {
         let contract = checked_in("self-check.yaml");
         let config = applied(&contract);
-        check!(config.controller_election_timeout == contract.cluster.check_quorum_window);
+        check!(config.controller_fetch_timeout == contract.cluster.check_quorum_window);
         check!(config.replica_lag_time_max == contract.cluster.replica_lag_time_max);
         check!(config.default_min_insync_replicas == 2);
         check!(config.offsets_topic_replication_factor == 3);
