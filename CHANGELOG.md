@@ -66,7 +66,7 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   `controller_fetch_timeout / 3`, and validation now requires
   `controller_heartbeat_interval` to be below `controller_fetch_timeout`. An
   operator who tuned `controller_election_timeout` as the fetch watchdog
-  should move that value to `controller_fetch_timeout` (#TBD).
+  should move that value to `controller_fetch_timeout` (#1477).
 
 ### Fixed
 
