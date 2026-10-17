@@ -497,7 +497,17 @@ pub(super) async fn apply_epoch_checks(
     // `LogReadResult(Errors)`, whose offsets are all -1: `refused_read`. A
     // follower learns the leader's bounds from `ListOffsets` instead
     // (`AbstractFetcherThread.fetchOffsetAndTruncate`).
-    if let Some(established) = established_log_start
+    //
+    // Kafka compares against `UnifiedLog.logStartOffset`, the partition's
+    // global floor. A diskless partition's log start is not that floor: it is
+    // the flusher's trim frontier, and the WAL objects still hold every offset
+    // from the floor `ListOffsets(EARLIEST)` answers up to it. So a diskless
+    // read below the log start goes on to the cold-read path, which answers
+    // `OFFSET_OUT_OF_RANGE` itself for an offset that no object holds or that
+    // `DeleteRecords` removed, as a tiered partition's read below its local
+    // log start goes on to the remote tier.
+    if !partition.diskless
+        && let Some(established) = established_log_start
         && request.fetch_offset < established.0
     {
         if log_dir_offline {
@@ -958,7 +968,7 @@ mod tests {
             producer_state::ProducerState,
             replica_selector::ReplicaSelectorKind,
             test_support::{
-                TemporaryPartition, broker_registration, spawn_standalone_partition,
+                StorageMode, TemporaryPartition, broker_registration, spawn_standalone_partition,
                 temporary_partition,
             },
         },
@@ -1292,10 +1302,18 @@ mod tests {
     }
 
     fn epoch_checks_partition(dir: &std::path::Path) -> Arc<Partition> {
+        epoch_checks_partition_with_storage(dir, StorageMode::Local)
+    }
+
+    fn epoch_checks_partition_with_storage(
+        dir: &std::path::Path,
+        storage: StorageMode,
+    ) -> Arc<Partition> {
         spawn_standalone_partition()
             .log_dir(dir)
             .log(Log::open(dir, LogConfig::default()).expect("open partition log"))
             .topic("diverge")
+            .storage(storage)
             .call()
     }
 
@@ -1386,6 +1404,18 @@ mod tests {
                 .expect("move log start");
         }
 
+        // The same trimmed history on a diskless partition, where the flusher
+        // moved the log start and the WAL objects still hold what is below it.
+        let diskless_dir = tempfile::tempdir().expect("tempdir");
+        let trimmed_diskless =
+            epoch_checks_partition_with_storage(diskless_dir.path(), StorageMode::Diskless);
+        {
+            let mut log = trimmed_diskless.log.lock().expect("log mutex poisoned");
+            append_epoch_batches(&mut log, &[0, 0, 1, 1, 2, 2]);
+            log.set_log_start_offset(super::Offset(5))
+                .expect("move log start");
+        }
+
         // Both histories have HW/LSO 4 and start 0; epoch 0 ends at offset 2.
         let expected_history_divergence = || super::PartitionData {
             partition_index: 0,
@@ -1447,6 +1477,18 @@ mod tests {
                 4,
                 true,
                 super::refused_read(0, OFFSET_OUT_OF_RANGE),
+            ),
+            (
+                "fetch offset below a diskless partition's trimmed log start: \
+                 the read goes on to the WAL objects",
+                Arc::clone(&trimmed_diskless),
+                2,
+                4,
+                false,
+                super::PartitionData {
+                    partition_index: 0,
+                    ..Default::default()
+                },
             ),
             (
                 "a true divergence still answers a diverging_epoch with epoch >= 0",

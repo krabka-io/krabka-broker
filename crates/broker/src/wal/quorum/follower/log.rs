@@ -231,8 +231,26 @@ impl FollowerLog {
         let bytes: Bytes = encoded.freeze();
         let batches = split_batches(&bytes)?;
         let mut expected = requested;
+        if let Some(first) = batches.first()
+            && restarts_at_batch_base(
+                self.start_offset(),
+                requested,
+                first.base_offset,
+                first.last_offset,
+            )
+        {
+            self.reset_to(first.base_offset).await?;
+            expected = first.base_offset;
+        }
+        // A batch may start above the offset before it: the leader's log has
+        // a hole there, where the controller reserved offsets that no batch
+        // was ever written at -- a produce group's refused or duplicate batch,
+        // or a reservation its appender lost to a leader change. The leader
+        // serves the next batch it holds, and the follower keeps the same
+        // hole, as Kafka's `appendAsFollower` keeps a compacted leader's. A
+        // batch that starts below it overlaps what this log already holds.
         for batch in &batches {
-            if batch.base_offset != expected {
+            if batch.base_offset < expected {
                 return Err(BrokerError::Replication(format!(
                     "WAL fetch is not contiguous at {}, got {}",
                     expected.0, batch.base_offset.0
@@ -268,6 +286,27 @@ impl FollowerLog {
         .await?;
         Ok(actual)
     }
+}
+
+/// Whether an empty follower log must restart at the base of the leader's
+/// first batch before it can take that batch, Kafka's
+/// `Partition.appendRecordsToFollowerOrFutureReplica` recovery from
+/// `UnexpectedAppendOffsetException`.
+///
+/// A leader serves the whole batch that holds the fetch offset, so a follower
+/// that restarted at a leader log start inside a batch -- the flusher trims to
+/// the high watermark less the safety lag, which a batch of many records
+/// straddles -- receives a batch that begins below its own log end. The log
+/// holds nothing yet (`log_start == requested`), so restarting it at the
+/// batch's base loses nothing, and the batch then appends where it begins. A
+/// log that holds records keeps the contiguity check, as Kafka rethrows there.
+fn restarts_at_batch_base(
+    log_start: Offset,
+    requested: Offset,
+    batch_base: Offset,
+    batch_last: Offset,
+) -> bool {
+    log_start == requested && batch_base < requested && requested <= batch_last
 }
 
 pub(super) fn voter_dir(root: &Path, topic: &str, shard: ShardId, node_id: NodeId) -> PathBuf {
@@ -443,25 +482,37 @@ mod tests {
         assert2::assert!((reopened.log_end_offset()) == (Offset(1)));
     }
 
+    /// The leader's log has a hole where the controller reserved offsets no
+    /// batch was written at, and the follower keeps the same hole.
     #[tokio::test]
-    async fn follower_rejects_a_gap_before_writing() {
-        let FreshFollower {
-            dir: _dir,
-            follower,
-        } = fresh_follower();
-        let batch = RecordBatch {
-            base_offset: 1,
-            records: vec![Record::default()],
-            ..RecordBatch::default()
-        };
+    async fn follower_keeps_a_hole_in_the_leader_log() {
+        let FreshFollower { dir, follower } = fresh_follower();
+        let batches = [0, 3]
+            .into_iter()
+            .map(|base_offset| RecordBatch {
+                base_offset,
+                records: vec![Record::default()],
+                ..RecordBatch::default()
+            })
+            .collect();
 
-        let error = follower
-            .append(Offset(0), Offset(2), Some(RecordsPayload::V2(vec![batch])))
+        let end = follower
+            .append(Offset(0), Offset(4), Some(RecordsPayload::V2(batches)))
             .await
-            .unwrap_err();
+            .unwrap();
 
-        assert!(error.to_string().contains("not contiguous"));
-        assert2::assert!((follower.end_offset()) == (Offset(0)));
+        assert!(end == Offset(4));
+        drop(follower);
+        let reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let read = reopened
+            .read_raw(Offset(0), Offset(4), krabka_units::mebibytes(1))
+            .unwrap();
+        let mut cursor = &read.bytes[..];
+        let mut bases = Vec::new();
+        while !cursor.is_empty() {
+            bases.push(RecordBatch::decode(&mut cursor).unwrap().base_offset);
+        }
+        assert!(bases == [0, 3]);
     }
 
     #[tokio::test]
@@ -493,6 +544,114 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("beyond leader LEO"));
         assert!(follower.end_offset() == Offset(1));
+    }
+
+    /// A batch of `count` records starting at `base_offset`.
+    fn wide_batch(base_offset: i64, count: i32) -> RecordBatch {
+        RecordBatch {
+            base_offset,
+            last_offset_delta: count - 1,
+            records: (0..count)
+                .map(|offset_delta| Record {
+                    offset_delta,
+                    ..Record::default()
+                })
+                .collect(),
+            ..RecordBatch::default()
+        }
+    }
+
+    /// The leader serves the whole batch that holds the fetch offset. A
+    /// follower whose log is empty at an offset inside that batch -- it reset
+    /// to a leader log start the flusher put mid-batch -- restarts at the
+    /// batch's base and takes it, as Kafka's
+    /// `Partition.appendRecordsToFollowerOrFutureReplica` does. One that holds
+    /// records still refuses a batch that overlaps them.
+    #[tokio::test]
+    async fn an_empty_follower_restarts_at_the_base_of_the_batch_it_is_served() {
+        struct Case {
+            name: &'static str,
+            /// The follower's log before the fetch: empty at this offset, or
+            /// holding this batch.
+            empty_at: Option<i64>,
+            held: Option<RecordBatch>,
+            /// The fetch offset, and the leader's batch that holds it.
+            requested: i64,
+            served: RecordBatch,
+            /// The durable `[start, end)` after the append, or the error.
+            want: Result<(i64, i64), &'static str>,
+        }
+        let cases = [
+            Case {
+                name: "empty inside the batch: restarts at its base",
+                empty_at: Some(3573),
+                held: None,
+                requested: 3573,
+                served: wide_batch(3570, 5),
+                want: Ok((3570, 3575)),
+            },
+            Case {
+                name: "empty at the batch base: appends as it is",
+                empty_at: Some(3570),
+                held: None,
+                requested: 3570,
+                served: wide_batch(3570, 5),
+                want: Ok((3570, 3575)),
+            },
+            Case {
+                name: "holding records the batch overlaps: refused",
+                empty_at: None,
+                held: Some(wide_batch(0, 3)),
+                requested: 3,
+                served: wide_batch(2, 3),
+                want: Err("not contiguous"),
+            },
+        ];
+        for case in cases {
+            let FreshFollower { dir, follower } = fresh_follower();
+            if let Some(offset) = case.empty_at {
+                follower.reset_to(Offset(offset)).await.unwrap();
+            }
+            if let Some(held) = case.held {
+                let end = held.base_offset + i64::from(held.last_offset_delta) + 1;
+                follower
+                    .append(Offset(0), Offset(end), Some(RecordsPayload::V2(vec![held])))
+                    .await
+                    .unwrap();
+            }
+            let leader_end = case.served.base_offset + i64::from(case.served.last_offset_delta) + 1;
+            let outcome = follower
+                .append(
+                    Offset(case.requested),
+                    Offset(leader_end),
+                    Some(RecordsPayload::V2(vec![case.served])),
+                )
+                .await;
+            match case.want {
+                Ok((start, end)) => {
+                    assert!(outcome.unwrap() == Offset(end), "{}", case.name);
+                    drop(follower);
+                    let mut reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
+                    recover_durable_offset(&mut reopened, &dir.path().join(DURABLE_OFFSET_FILE))
+                        .unwrap();
+                    assert!(
+                        (reopened.log_start_offset(), reopened.log_end_offset())
+                            == (Offset(start), Offset(end)),
+                        "{}",
+                        case.name
+                    );
+                }
+                Err(message) => {
+                    let error = outcome.unwrap_err().to_string();
+                    assert!(error.contains(message), "{}: {error}", case.name);
+                    assert!(
+                        follower.end_offset() == Offset(case.requested),
+                        "{}",
+                        case.name
+                    );
+                }
+            }
+        }
     }
 
     #[tokio::test]

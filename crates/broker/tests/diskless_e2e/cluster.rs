@@ -111,6 +111,16 @@ impl DisklessCluster {
         broker.crash_for_test().await;
     }
 
+    /// Stop `node` gracefully, the way `docker stop` stops a container: a
+    /// controlled shutdown and a clean close of its logs.
+    pub(crate) async fn stop(&mut self, node: NodeId) {
+        let index = Self::index_of(node);
+        let broker = self.brokers[index]
+            .take()
+            .unwrap_or_else(|| panic!("broker {} is already down", node.0));
+        broker.shutdown().await;
+    }
+
     /// Bring `node` back up on the addresses it just vacated, so the surviving
     /// peers reconnect to the endpoint they already hold.
     pub(crate) async fn restart(&mut self, node: NodeId) {

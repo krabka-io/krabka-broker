@@ -59,6 +59,30 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- A diskless topic now serves its whole log to a consumer that sends
+  `last_fetched_epoch`, as the krabka Rust consumer does on Fetch v12 and
+  later. Before, a fetch below the leader's local log start answered
+  `OFFSET_OUT_OF_RANGE` before the WAL objects were consulted, because the
+  epoch check measured it against the flusher's trim frontier rather than the
+  partition's real floor. Such a consumer reset to the latest offset each
+  time it fell behind a trim, and read only a few dozen of thousands of
+  records. A replica of a diskless partition that fell behind the trim was
+  refused the same way.
+- A diskless WAL follower now takes the batch it is served when its log is
+  empty at an offset inside that batch, as Kafka's
+  `Partition.appendRecordsToFollowerOrFutureReplica` does: it restarts at the
+  batch's base. The flusher trims to the high watermark less the safety lag,
+  which a batch of many records straddles, so a voter that fell behind the
+  trim reset into a batch and then failed every fetch with `WAL fetch is not
+  contiguous`. The follower also keeps a hole in the leader's WAL, where the
+  controller reserved offsets that no batch was written at, instead of
+  refusing the batch after it, which stalled the quorum after a leader change.
+- A broker restarted while a diskless partition took writes rejoins that
+  partition's ISR. It reopened the partition with the committed `KRaft` next
+  offset as its append frontier, and its replicator then refused every leader
+  batch below that frontier with `offset mismatch`. A follower now appends the
+  leader's batches from its own log end, as Kafka's `appendAsFollower` does;
+  `Log::clear_reconciled_next_offset` drops the frontier.
 - A broker that stops leading a tiered partition stops copying it to the
   remote tier at its next segment, as Kafka's `RLMCopyTask` does once it is
   cancelled. Before, the copy pass checked leadership only at the start of

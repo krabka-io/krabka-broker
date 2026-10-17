@@ -460,4 +460,55 @@ mod tests {
         .expect("the verbatim batch is taken");
         assert!(p.log.lock().expect("partition log lock").log_end_offset() == 2);
     }
+
+    /// A diskless replica reopens with the committed `KRaft` next offset as its
+    /// append frontier. When it reopened behind it -- it was down while the
+    /// leader appended -- the batches between its log end and that frontier
+    /// are the leader's, and both writes of a follower's Fetch loop take them
+    /// at their own offsets.
+    #[tokio::test]
+    async fn a_follower_takes_the_leader_batches_below_a_recovered_frontier() {
+        use {
+            krabka_ids::{LeaderEpoch, ProducerId},
+            krabka_protocol::records::Record,
+        };
+
+        let (p, _td) = test_partition_with_writer();
+        p.log
+            .lock()
+            .expect("partition log lock")
+            .reconcile_next_offset(Offset(5));
+        let batch = |base_offset| RecordBatch {
+            base_offset,
+            producer_id: -1,
+            producer_epoch: -1,
+            base_sequence: -1,
+            records: vec![Record::default()],
+            ..Default::default()
+        };
+
+        p.replicate_batch(batch(0))
+            .await
+            .expect("the owned batch is taken");
+        let producer = batch(1);
+        let mut wire = bytes::BytesMut::new();
+        producer.encode(&mut wire).expect("encode the batch");
+        p.replicate_verbatim(
+            krabka_log::VerbatimBatch {
+                bytes: wire.freeze(),
+                last_offset_delta: producer.last_offset_delta,
+                max_timestamp: producer.max_timestamp,
+                leader_epoch: LeaderEpoch(0),
+                producer_id: ProducerId(-1),
+                producer_epoch: -1,
+                base_sequence: -1,
+                is_transactional: false,
+            },
+            Offset(1),
+        )
+        .await
+        .expect("the verbatim batch is taken");
+
+        assert!(p.log.lock().expect("partition log lock").log_end_offset() == 2);
+    }
 }
