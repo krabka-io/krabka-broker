@@ -1,67 +1,12 @@
 use {
-    super::{TOPIC_ID, case, check, default_message},
+    super::{
+        super::tests::{TOPIC_ID, case, check, default_message},
+        *,
+    },
     crate::codes::ILLEGAL_SASL_STATE,
-    krabka_protocol::{
-        api_key::ApiKey,
-        owned::{
-            alter_share_group_offsets_request::AlterShareGroupOffsetsRequest,
-            alter_share_group_offsets_response::AlterShareGroupOffsetsResponse,
-            consumer_group_describe_request::ConsumerGroupDescribeRequest,
-            consumer_group_describe_response::{
-                ConsumerGroupDescribeResponse, DescribedGroup as ConsumerDescribedGroup,
-            },
-            consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
-            consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse,
-            delete_groups_request::DeleteGroupsRequest,
-            delete_groups_response::{DeletableGroupResult, DeleteGroupsResponse},
-            delete_share_group_offsets_request::DeleteShareGroupOffsetsRequest,
-            delete_share_group_offsets_response::DeleteShareGroupOffsetsResponse,
-            describe_groups_request::DescribeGroupsRequest,
-            describe_groups_response::{DescribeGroupsResponse, DescribedGroup},
-            find_coordinator_request::FindCoordinatorRequest,
-            find_coordinator_response::{Coordinator, FindCoordinatorResponse},
-            heartbeat_request::HeartbeatRequest,
-            heartbeat_response::HeartbeatResponse,
-            join_group_request::JoinGroupRequest,
-            join_group_response::JoinGroupResponse,
-            leave_group_request::LeaveGroupRequest,
-            leave_group_response::LeaveGroupResponse,
-            list_groups_request::ListGroupsRequest,
-            list_groups_response::ListGroupsResponse,
-            offset_commit_request::{
-                OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
-            },
-            offset_commit_response::{
-                OffsetCommitResponse, OffsetCommitResponsePartition, OffsetCommitResponseTopic,
-            },
-            offset_delete_request::OffsetDeleteRequest,
-            offset_delete_response::OffsetDeleteResponse,
-            offset_fetch_request::{
-                OffsetFetchRequest, OffsetFetchRequestGroup, OffsetFetchRequestTopic,
-            },
-            offset_fetch_response::{
-                OffsetFetchResponse, OffsetFetchResponseGroup, OffsetFetchResponsePartition,
-                OffsetFetchResponseTopic,
-            },
-            share_acknowledge_request::ShareAcknowledgeRequest,
-            share_acknowledge_response::ShareAcknowledgeResponse,
-            share_fetch_request::ShareFetchRequest,
-            share_fetch_response::ShareFetchResponse,
-            share_group_describe_request::ShareGroupDescribeRequest,
-            share_group_describe_response::{
-                DescribedGroup as ShareDescribedGroup, ShareGroupDescribeResponse,
-            },
-            share_group_heartbeat_request::ShareGroupHeartbeatRequest,
-            share_group_heartbeat_response::ShareGroupHeartbeatResponse,
-            streams_group_describe_request::StreamsGroupDescribeRequest,
-            streams_group_describe_response::{
-                DescribedGroup as StreamsDescribedGroup, StreamsGroupDescribeResponse,
-            },
-            streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
-            streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
-            sync_group_request::SyncGroupRequest,
-            sync_group_response::SyncGroupResponse,
-        },
+    krabka_protocol::owned::{
+        offset_commit_request::{OffsetCommitRequestPartition, OffsetCommitRequestTopic},
+        offset_fetch_request::{OffsetFetchRequestGroup, OffsetFetchRequestTopic},
     },
 };
 

@@ -41,10 +41,13 @@ mod tests_api_versions;
 mod tests_listener_limits;
 mod voter_admin;
 
-pub use self::api_versions::{
-    api_versions_max_version, finalized_feature_keys, is_valid_api_versions_request,
-    is_valid_client_info, supported_feature_key, supported_feature_keys,
-    unsupported_version_response,
+pub use self::{
+    api_versions::{
+        api_versions_max_version, finalized_feature_keys, is_valid_api_versions_request,
+        is_valid_client_info, supported_feature_key, supported_feature_keys,
+        unsupported_version_response,
+    },
+    authorization::fetch_error_response,
 };
 use {
     self::{

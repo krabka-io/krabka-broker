@@ -8,7 +8,10 @@
 //! it by the same window: see `handshake_within_idle_window`.
 
 use {
-    super::{serve_connection_stream, write_idle::WriteIdle},
+    super::{
+        serve_connection_stream,
+        write_idle::{IdleTimer, WriteIdle},
+    },
     crate::{
         broker::Broker,
         config::ListenerSpec,
@@ -117,7 +120,7 @@ pub async fn serve_connection_on_listener(
 
         // rustls can make ciphertext progress while its outer poll_flush
         // remains pending. Track the socket writes beneath its buffer.
-        let handshake = acceptor.accept(WriteIdle::new(stream, idle));
+        let handshake = acceptor.accept(WriteIdle::new(stream, IdleTimer::new(idle)));
         // A required certificate was checked by rustls; optional/disabled certificates may be absent.
         // A presented DN with no configured mapping still closes the connection.
         let Some(AuthenticatedTls {

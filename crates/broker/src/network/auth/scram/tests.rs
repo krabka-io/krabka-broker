@@ -286,6 +286,47 @@ struct ExchangeCase<'a> {
     expected: Outcome,
 }
 
+/// Runs every row against `source` with the token secret `secret_key`.
+fn run_cases<'a>(
+    source: &FakeMetadataSource,
+    secret_key: &SecretBytes,
+    mechanism: SaslMechanism,
+    cases: impl IntoIterator<Item = ExchangeCase<'a>>,
+) {
+    for ExchangeCase {
+        case,
+        authorization_id,
+        sasl_name,
+        extensions,
+        password,
+        expected,
+    } in cases
+    {
+        check!(
+            exchange(
+                source,
+                Some(secret_key),
+                mechanism,
+                authorization_id,
+                sasl_name,
+                extensions,
+                password
+            ) == expected,
+            "{mechanism:?}: {case}"
+        );
+    }
+}
+
+/// The `SaslException` text for a GS2 authorization id that is not the
+/// SCRAM user name.
+fn authorization_id_mismatch() -> Outcome {
+    Outcome::FirstRoundFailed(Some(
+        "Authentication failed: Client requested an authorization id that is different from \
+         username"
+            .into(),
+    ))
+}
+
 /// Kafka's `ScramSaslServer` reads the token store if and only if the
 /// client-first message carries `tokenauth=true`, for both mechanisms.
 #[test]
@@ -452,11 +493,7 @@ fn tokenauth_extension_selects_the_credential_store() {
                 sasl_name: "a=2Cb=3Dc",
                 extensions: "",
                 password: user,
-                expected: Outcome::FirstRoundFailed(Some(
-                    "Authentication failed: Client requested an authorization id that is \
-                     different from username"
-                        .into(),
-                )),
+                expected: authorization_id_mismatch(),
             },
             ExchangeCase {
                 case: "authorization id other than the user",
@@ -464,35 +501,10 @@ fn tokenauth_extension_selects_the_credential_store() {
                 sasl_name: "alice",
                 extensions: "",
                 password: user,
-                expected: Outcome::FirstRoundFailed(Some(
-                    "Authentication failed: Client requested an authorization id that is \
-                     different from username"
-                        .into(),
-                )),
+                expected: authorization_id_mismatch(),
             },
         ];
-        for ExchangeCase {
-            case,
-            authorization_id,
-            sasl_name,
-            extensions,
-            password,
-            expected,
-        } in cases
-        {
-            check!(
-                exchange(
-                    &source,
-                    Some(&secret),
-                    mechanism,
-                    authorization_id,
-                    sasl_name,
-                    extensions,
-                    password
-                ) == expected,
-                "{mechanism:?}: {case}"
-            );
-        }
+        run_cases(&source, &secret, mechanism, cases);
     }
 }
 
@@ -540,35 +552,10 @@ fn a_credential_below_kafkas_iteration_floor_is_refused() {
                 sasl_name: "weak",
                 extensions: "",
                 password: user,
-                expected: Outcome::FirstRoundFailed(Some(
-                    "Authentication failed: Client requested an authorization id that is \
-                     different from username"
-                        .into(),
-                )),
+                expected: authorization_id_mismatch(),
             },
         ];
-        for ExchangeCase {
-            case,
-            authorization_id,
-            sasl_name,
-            extensions,
-            password,
-            expected,
-        } in cases
-        {
-            check!(
-                exchange(
-                    &source,
-                    Some(&secret),
-                    mechanism,
-                    authorization_id,
-                    sasl_name,
-                    extensions,
-                    password
-                ) == expected,
-                "{mechanism:?}: {case}"
-            );
-        }
+        run_cases(&source, &secret, mechanism, cases);
     }
 }
 

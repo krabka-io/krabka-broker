@@ -334,25 +334,16 @@ fn elect_leaders(
         } else {
             0
         },
-        replica_election_results: req
-            .topic_partitions
-            .iter()
-            .flatten()
-            .map(|topic| ReplicaElectionResult {
+        replica_election_results: rows!(req.topic_partitions.iter().flatten(), |topic| {
+            ReplicaElectionResult {
                 topic: topic.topic.clone(),
-                partition_result: topic
-                    .partitions
-                    .iter()
-                    .map(|&partition_id| PartitionResult {
-                        partition_id,
-                        error_code: failure.error_code,
-                        error_message: failure.api_message(),
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            })
-            .collect(),
+                partition_result: rows!(&topic.partitions, |&partition_id| PartitionResult {
+                    partition_id,
+                    error_code: failure.error_code,
+                    error_message: failure.api_message(),
+                }),
+            }
+        }),
         ..Default::default()
     }
 }
@@ -366,24 +357,16 @@ fn alter_partition_reassignments(
     AlterPartitionReassignmentsResponse {
         error_code: failure.error_code,
         error_message: failure.api_message(),
-        responses: req
-            .topics
-            .iter()
-            .map(|topic| ReassignableTopicResponse {
-                name: topic.name.clone(),
-                partitions: topic
-                    .partitions
-                    .iter()
-                    .map(|partition| ReassignablePartitionResponse {
-                        partition_index: partition.partition_index,
-                        error_code: failure.error_code,
-                        error_message: failure.api_message(),
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            })
-            .collect(),
+        responses: rows!(&req.topics, |topic| ReassignableTopicResponse {
+            name: topic.name.clone(),
+            partitions: rows!(&topic.partitions, |partition| {
+                ReassignablePartitionResponse {
+                    partition_index: partition.partition_index,
+                    error_code: failure.error_code,
+                    error_message: failure.api_message(),
+                }
+            }),
+        }),
         ..Default::default()
     }
 }
@@ -425,17 +408,12 @@ fn describe_configs(
     failure: &RequestFailure<'_>,
 ) -> DescribeConfigsResponse {
     DescribeConfigsResponse {
-        results: req
-            .resources
-            .iter()
-            .map(|resource| DescribeConfigsResult {
-                error_code: failure.error_code,
-                error_message: Some(failure.error_message()),
-                resource_type: resource.resource_type,
-                resource_name: resource.resource_name.clone(),
-                ..Default::default()
-            })
-            .collect(),
+        results: rows!(&req.resources, |resource| DescribeConfigsResult {
+            error_code: failure.error_code,
+            error_message: Some(failure.error_message()),
+            resource_type: resource.resource_type,
+            resource_name: resource.resource_name.clone(),
+        }),
         ..Default::default()
     }
 }
@@ -444,17 +422,12 @@ fn describe_configs(
 /// code and `ApiError`'s message.
 fn alter_configs(req: &AlterConfigsRequest, failure: &RequestFailure<'_>) -> AlterConfigsResponse {
     AlterConfigsResponse {
-        responses: req
-            .resources
-            .iter()
-            .map(|resource| AlterConfigsResourceResponse {
-                error_code: failure.error_code,
-                error_message: failure.api_message(),
-                resource_type: resource.resource_type,
-                resource_name: resource.resource_name.clone(),
-                ..Default::default()
-            })
-            .collect(),
+        responses: rows!(&req.resources, |resource| AlterConfigsResourceResponse {
+            error_code: failure.error_code,
+            error_message: failure.api_message(),
+            resource_type: resource.resource_type,
+            resource_name: resource.resource_name.clone(),
+        }),
         ..Default::default()
     }
 }
@@ -466,17 +439,12 @@ fn incremental_alter_configs(
     failure: &RequestFailure<'_>,
 ) -> IncrementalAlterConfigsResponse {
     IncrementalAlterConfigsResponse {
-        responses: req
-            .resources
-            .iter()
-            .map(|resource| IncrementalResourceResponse {
-                error_code: failure.error_code,
-                error_message: failure.api_message(),
-                resource_type: resource.resource_type,
-                resource_name: resource.resource_name.clone(),
-                ..Default::default()
-            })
-            .collect(),
+        responses: rows!(&req.resources, |resource| IncrementalResourceResponse {
+            error_code: failure.error_code,
+            error_message: failure.api_message(),
+            resource_type: resource.resource_type,
+            resource_name: resource.resource_name.clone(),
+        }),
         ..Default::default()
     }
 }

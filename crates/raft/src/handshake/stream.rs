@@ -2,9 +2,10 @@
 //! that measures its silence for `connections.max.idle.ms`.
 
 use {
+    crate::{ObservedStream, StreamObserver},
     std::{
-        io::{self, IoSlice},
-        pin::{Pin, pin},
+        io,
+        pin::pin,
         sync::{
             Arc, Mutex, PoisonError,
             atomic::{AtomicBool, Ordering},
@@ -12,11 +13,7 @@ use {
         task::{Context, Poll},
         time::Duration,
     },
-    tokio::{
-        io::{AsyncRead, AsyncWrite, ReadBuf},
-        net::TcpStream,
-        time::Instant,
-    },
+    tokio::{net::TcpStream, time::Instant},
 };
 
 /// An accepted controller-listener connection, handed to
@@ -27,9 +24,37 @@ use {
 /// The window closes a handshake that goes silent, not one that is slow. Once
 /// the listener takes the upgraded stream for its request loop, the clock is
 /// disarmed and the stream only passes bytes through.
-pub struct HandshakeStream<S = TcpStream> {
-    inner: S,
-    clock: Option<Arc<ActivityClock>>,
+pub type HandshakeStream<S = TcpStream> = ObservedStream<S, HandshakeClock>;
+
+/// The idle clock a [`HandshakeStream`] restarts on every read or write that
+/// moves bytes, or none when no window watches the stream.
+pub struct HandshakeClock(Option<Arc<ActivityClock>>);
+
+impl HandshakeClock {
+    fn progressed(&self) {
+        if let Some(clock) = &self.0 {
+            clock.progressed();
+        }
+    }
+}
+
+impl StreamObserver for HandshakeClock {
+    fn on_read(&mut self, filled: usize) {
+        if filled > 0 {
+            self.progressed();
+        }
+    }
+
+    fn on_write(
+        &mut self,
+        _cx: &mut Context<'_>,
+        result: Poll<io::Result<usize>>,
+    ) -> Poll<io::Result<usize>> {
+        if matches!(result, Poll::Ready(Ok(written)) if written > 0) {
+            self.progressed();
+        }
+        result
+    }
 }
 
 impl<S> HandshakeStream<S> {
@@ -44,30 +69,14 @@ impl<S> HandshakeStream<S> {
             clock: Arc::clone(&clock),
             window,
         };
-        (
-            Self {
-                inner,
-                clock: Some(clock),
-            },
-            watch,
-        )
-    }
-
-    /// The accepted stream, for what a handshake reads off the socket itself,
-    /// such as the peer address.
-    pub fn get_ref(&self) -> &S { &self.inner }
-
-    fn progressed(&self) {
-        if let Some(clock) = &self.clock {
-            clock.progressed();
-        }
+        (Self::new(inner, HandshakeClock(Some(clock))), watch)
     }
 }
 
 /// A stream no idle window watches, for a listener without
 /// `connections.max.idle.ms` and for tests that drive a handshake directly.
 impl<S> From<S> for HandshakeStream<S> {
-    fn from(inner: S) -> Self { Self { inner, clock: None } }
+    fn from(inner: S) -> Self { Self::new(inner, HandshakeClock(None)) }
 }
 
 /// When a handshake last moved a byte, and whether anyone still asks.
@@ -122,58 +131,4 @@ impl IdleWatch {
 
 impl Drop for IdleWatch {
     fn drop(&mut self) { self.clock.armed.store(false, Ordering::Relaxed); }
-}
-
-impl<S: AsyncRead + Unpin> AsyncRead for HandshakeStream<S> {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        let before = buf.filled().len();
-        let result = Pin::new(&mut this.inner).poll_read(cx, buf);
-        if buf.filled().len() > before {
-            this.progressed();
-        }
-        result
-    }
-}
-
-impl<S: AsyncWrite + Unpin> AsyncWrite for HandshakeStream<S> {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        let this = self.get_mut();
-        let result = Pin::new(&mut this.inner).poll_write(cx, buf);
-        if matches!(result, Poll::Ready(Ok(written)) if written > 0) {
-            this.progressed();
-        }
-        result
-    }
-
-    fn poll_write_vectored(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        bufs: &[IoSlice<'_>],
-    ) -> Poll<io::Result<usize>> {
-        let this = self.get_mut();
-        let result = Pin::new(&mut this.inner).poll_write_vectored(cx, bufs);
-        if matches!(result, Poll::Ready(Ok(written)) if written > 0) {
-            this.progressed();
-        }
-        result
-    }
-
-    fn is_write_vectored(&self) -> bool { self.inner.is_write_vectored() }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
-    }
 }

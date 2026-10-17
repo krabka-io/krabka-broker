@@ -1,10 +1,12 @@
 //! Each api's error response, compared whole against the one its Kafka
 //! `getErrorResponse` override builds from the same request.
+//!
+//! The control and group tables live in child modules of `control` and
+//! `groups`, so they share those modules' imports. They run on the helpers
+//! here.
 
 mod admin;
 mod client;
-mod control;
-mod groups;
 mod txn;
 
 use {
@@ -47,20 +49,25 @@ const FAILURE: RequestFailure<'static> = RequestFailure {
 };
 
 /// A topic id that is not the zero id, so a dropped id shows.
-const TOPIC_ID: Uuid = Uuid([7; 16]);
+pub(super) const TOPIC_ID: Uuid = Uuid([7; 16]);
 
 /// `ApiError.fromThrowable(e).message()` for [`FAILURE`].
 fn exception_message() -> String { EXCEPTION_MESSAGE.to_owned() }
 
 /// `Errors.message()` for [`FAILURE`].
-fn default_message() -> String { DEFAULT_MESSAGE.to_owned() }
+pub(super) fn default_message() -> String { DEFAULT_MESSAGE.to_owned() }
 
 /// One table row, which asserts on its own answer when run.
 type Case = Box<dyn Fn()>;
 
 /// The row for `request` of `api` at `version`, which expects `expected`
 /// back: the decoded response, or `None` for no response.
-fn case<Req, Resp>(api: ApiKey, version: i16, request: Req, expected: Option<Resp>) -> Case
+pub(super) fn case<Req, Resp>(
+    api: ApiKey,
+    version: i16,
+    request: Req,
+    expected: Option<Resp>,
+) -> Case
 where
     Req: Encode + 'static,
     Resp: for<'de> Decode<'de> + PartialEq + Debug + 'static,
@@ -72,7 +79,7 @@ where
 }
 
 /// Runs every row.
-fn check(cases: Vec<Case>) {
+pub(super) fn check(cases: Vec<Case>) {
     for case in cases {
         case();
     }

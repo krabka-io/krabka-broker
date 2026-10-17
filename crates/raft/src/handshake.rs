@@ -9,7 +9,7 @@ use {bytes::Bytes, krabka_client_core::ClientDuplex, std::sync::Arc, thiserror::
 
 mod stream;
 
-pub use self::stream::HandshakeStream;
+pub use self::stream::{HandshakeClock, HandshakeStream};
 
 /// Authenticated controller-listener connection plus request-level grants.
 pub struct RaftConnection {

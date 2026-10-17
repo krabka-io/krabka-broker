@@ -64,6 +64,7 @@ pub mod event_queue;
 pub mod handshake;
 pub mod kraft;
 mod network;
+mod observed_stream;
 pub mod reconfig;
 pub mod voter_requests;
 mod voter_wire;
@@ -112,11 +113,12 @@ pub use {
         controller::{control_batch_image_records, decode_committed_value, is_kip835_noop},
     },
     network::{OutboundDialer, PlaintextDialer},
+    observed_stream::{ObservedStream, StreamObserver},
     reconfig::{AddVoter, ReconfigOutcome, RemoveVoter, UpdateVoter},
     server::{
-        api_versions_max_version, describe_quorum::describe_quorum, finalized_feature_keys,
-        is_valid_api_versions_request, is_valid_client_info, supported_feature_key,
-        supported_feature_keys, unsupported_version_response,
+        api_versions_max_version, describe_quorum::describe_quorum, fetch_error_response,
+        finalized_feature_keys, is_valid_api_versions_request, is_valid_client_info,
+        supported_feature_key, supported_feature_keys, unsupported_version_response,
     },
     types::{
         AppData, AppDataResponse, DelegationTokenMutation, Node, NodeId, OffsetReservation,

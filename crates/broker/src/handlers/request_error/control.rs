@@ -187,23 +187,15 @@ fn share_state(
         ApiKey::InitializeShareGroupState => {
             request.respond(|req: InitializeShareGroupStateRequest| {
                 InitializeShareGroupStateResponse {
-                    results: req
-                        .topics
-                        .iter()
-                        .map(|topic| InitializeStateResult {
-                            topic_id: topic.topic_id,
-                            partitions: topic
-                                .partitions
-                                .iter()
-                                .map(|partition| InitializePartitionResult {
-                                    partition: partition.partition,
-                                    error_code: code,
-                                    ..Default::default()
-                                })
-                                .collect(),
-                            ..Default::default()
-                        })
-                        .collect(),
+                    results: rows!(&req.topics, |topic| InitializeStateResult {
+                        topic_id: topic.topic_id,
+                        partitions: rows!(&topic.partitions, |partition| {
+                            InitializePartitionResult {
+                                partition: partition.partition,
+                                error_code: code,
+                            }
+                        }),
+                    }),
                     ..Default::default()
                 }
             })
@@ -211,23 +203,13 @@ fn share_state(
         ApiKey::DeleteShareGroupState => {
             request.respond(
                 |req: DeleteShareGroupStateRequest| DeleteShareGroupStateResponse {
-                    results: req
-                        .topics
-                        .iter()
-                        .map(|topic| DeleteStateResult {
-                            topic_id: topic.topic_id,
-                            partitions: topic
-                                .partitions
-                                .iter()
-                                .map(|partition| DeletePartitionResult {
-                                    partition: partition.partition,
-                                    error_code: code,
-                                    ..Default::default()
-                                })
-                                .collect(),
-                            ..Default::default()
-                        })
-                        .collect(),
+                    results: rows!(&req.topics, |topic| DeleteStateResult {
+                        topic_id: topic.topic_id,
+                        partitions: rows!(&topic.partitions, |partition| DeletePartitionResult {
+                            partition: partition.partition,
+                            error_code: code,
+                        }),
+                    }),
                     ..Default::default()
                 },
             )
@@ -247,24 +229,14 @@ fn share_state_with_message(
         ApiKey::ReadShareGroupState => {
             request.respond(
                 |req: ReadShareGroupStateRequest| ReadShareGroupStateResponse {
-                    results: req
-                        .topics
-                        .iter()
-                        .map(|topic| ReadStateResult {
-                            topic_id: topic.topic_id,
-                            partitions: topic
-                                .partitions
-                                .iter()
-                                .map(|partition| ReadPartitionResult {
-                                    partition: partition.partition,
-                                    error_code: code,
-                                    error_message: Some(failure.error_message()),
-                                    ..Default::default()
-                                })
-                                .collect(),
-                            ..Default::default()
-                        })
-                        .collect(),
+                    results: rows!(&req.topics, |topic| ReadStateResult {
+                        topic_id: topic.topic_id,
+                        partitions: rows!(&topic.partitions, |partition| ReadPartitionResult {
+                            partition: partition.partition,
+                            error_code: code,
+                            error_message: Some(failure.error_message()),
+                        }),
+                    }),
                     ..Default::default()
                 },
             )
@@ -272,24 +244,14 @@ fn share_state_with_message(
         ApiKey::WriteShareGroupState => {
             request.respond(
                 |req: WriteShareGroupStateRequest| WriteShareGroupStateResponse {
-                    results: req
-                        .topics
-                        .iter()
-                        .map(|topic| WriteStateResult {
-                            topic_id: topic.topic_id,
-                            partitions: topic
-                                .partitions
-                                .iter()
-                                .map(|partition| WritePartitionResult {
-                                    partition: partition.partition,
-                                    error_code: code,
-                                    error_message: Some(failure.error_message()),
-                                    ..Default::default()
-                                })
-                                .collect(),
-                            ..Default::default()
-                        })
-                        .collect(),
+                    results: rows!(&req.topics, |topic| WriteStateResult {
+                        topic_id: topic.topic_id,
+                        partitions: rows!(&topic.partitions, |partition| WritePartitionResult {
+                            partition: partition.partition,
+                            error_code: code,
+                            error_message: Some(failure.error_message()),
+                        }),
+                    }),
                     ..Default::default()
                 },
             )
@@ -297,24 +259,16 @@ fn share_state_with_message(
         ApiKey::ReadShareGroupStateSummary => {
             request.respond(|req: ReadShareGroupStateSummaryRequest| {
                 ReadShareGroupStateSummaryResponse {
-                    results: req
-                        .topics
-                        .iter()
-                        .map(|topic| ReadStateSummaryResult {
-                            topic_id: topic.topic_id,
-                            partitions: topic
-                                .partitions
-                                .iter()
-                                .map(|partition| ReadSummaryPartitionResult {
-                                    partition: partition.partition,
-                                    error_code: code,
-                                    error_message: Some(failure.error_message()),
-                                    ..Default::default()
-                                })
-                                .collect(),
-                            ..Default::default()
-                        })
-                        .collect(),
+                    results: rows!(&req.topics, |topic| ReadStateSummaryResult {
+                        topic_id: topic.topic_id,
+                        partitions: rows!(&topic.partitions, |partition| {
+                            ReadSummaryPartitionResult {
+                                partition: partition.partition,
+                                error_code: code,
+                                error_message: Some(failure.error_message()),
+                            }
+                        }),
+                    }),
                     ..Default::default()
                 }
             })
@@ -322,3 +276,6 @@ fn share_state_with_message(
         _ => return None,
     })
 }
+
+#[cfg(test)]
+mod tests;

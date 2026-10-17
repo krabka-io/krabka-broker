@@ -444,3 +444,6 @@ fn describe_share_group_offsets(
         ..Default::default()
     }
 }
+
+#[cfg(test)]
+mod tests;

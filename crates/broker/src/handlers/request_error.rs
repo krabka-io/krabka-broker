@@ -23,6 +23,22 @@
 //! order here, and they merge repeated entries the way the map does. The
 //! third sorts as Kafka sorts.
 
+/// Each item of `$items` as a `$row` with the fields given and every other
+/// field defaulted: the topic, partition and resource rows that the overrides
+/// repeat from a request.
+macro_rules! rows {
+    ($items:expr, |$item:pat_param| $row:ident { $($field:ident $(: $value:expr)?),* $(,)? }) => {
+        ($items)
+            .into_iter()
+            .map(|$item| $row { $($field $(: $value)?,)* ..Default::default() })
+            .collect()
+    };
+    // rustfmt wraps a long row in a block.
+    ($items:expr, |$item:pat_param| { $row:ident { $($body:tt)* } }) => {
+        rows!($items, |$item| $row { $($body)* })
+    };
+}
+
 mod admin;
 mod client;
 mod control;

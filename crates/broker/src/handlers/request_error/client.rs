@@ -22,7 +22,6 @@ use {
                 DescribeTopicPartitionsResponse, DescribeTopicPartitionsResponseTopic,
             },
             fetch_request::FetchRequest,
-            fetch_response::{FetchResponse, FetchableTopicResponse, PartitionData},
             get_telemetry_subscriptions_request::GetTelemetrySubscriptionsRequest,
             get_telemetry_subscriptions_response::GetTelemetrySubscriptionsResponse,
             init_producer_id_request::InitProducerIdRequest,
@@ -46,8 +45,8 @@ use {
             sasl_handshake_response::SaslHandshakeResponse,
         },
         primitives::uuid::Uuid,
-        records::RecordsPayload,
     },
+    krabka_raft::fetch_error_response,
 };
 
 /// `ProduceResponse.INVALID_OFFSET`, `ListOffsetsResponse.UNKNOWN_OFFSET` and
@@ -66,19 +65,14 @@ const NO_PRODUCER_ID: i64 = -1;
 /// `RecordBatch.NO_PRODUCER_EPOCH`.
 const NO_PRODUCER_EPOCH: i16 = -1;
 
-/// `FetchResponse.INVALID_HIGH_WATERMARK`.
-const INVALID_HIGH_WATERMARK: i64 = -1;
-
-/// The first `Fetch` version whose error response has no partitions
-/// (`FetchRequest.getErrorResponse`).
-const FETCH_TOP_LEVEL_ERROR_ONLY_MIN_VERSION: i16 = 13;
-
 pub(super) fn answer(api: ApiKey, request: Request<'_>) -> Option<ErrorAnswer> {
     let code = request.code();
     let failure = request.failure;
     Some(match api {
         ApiKey::Produce => request.maybe_respond(|req| produce(&req, failure)),
-        ApiKey::Fetch => request.respond(|req| fetch(&req, request.version, code)),
+        ApiKey::Fetch => {
+            request.respond(|req: FetchRequest| fetch_error_response(&req, request.version, code))
+        }
         ApiKey::ListOffsets => request.respond(|req| list_offsets(&req, code)),
         ApiKey::Metadata => {
             request.respond(|req: MetadataRequest| metadata::error_response(&req, code))
@@ -181,40 +175,6 @@ fn topic_rows<'a>(
             responses.len() - 1
         });
     &mut responses[index]
-}
-
-/// `FetchRequest.getErrorResponse`: the top-level code, the request's session
-/// id, and before v13 every requested partition with the code.
-fn fetch(req: &FetchRequest, version: i16, code: i16) -> FetchResponse {
-    let responses = if version < FETCH_TOP_LEVEL_ERROR_ONLY_MIN_VERSION {
-        req.topics
-            .iter()
-            .map(|topic| FetchableTopicResponse {
-                topic: topic.topic.clone(),
-                topic_id: topic.topic_id,
-                partitions: topic
-                    .partitions
-                    .iter()
-                    .map(|partition| PartitionData {
-                        partition_index: partition.partition,
-                        error_code: code,
-                        high_watermark: INVALID_HIGH_WATERMARK,
-                        records: Some(RecordsPayload::default()),
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-    FetchResponse {
-        error_code: code,
-        session_id: req.session_id,
-        responses,
-        ..Default::default()
-    }
 }
 
 /// `ListOffsetsRequest.getErrorResponse`: every requested partition with the
