@@ -123,16 +123,14 @@ async fn follow_leader_log_start(part: &Partition, cfg: &Config, leader_log_star
 
 /// The base and last offset of the first batch in `records`.
 fn first_batch_span(records: &RecordsPayload) -> Option<(Offset, Offset)> {
-    let (base, last_delta) = match records {
-        RecordsPayload::Raw(bytes) => {
-            let header = validate_one_v2_batch(bytes).ok()?.header;
-            (header.base_offset.get(), header.last_offset_delta.get())
-        }
-        RecordsPayload::V2(batches) => {
-            let first = batches.first()?;
-            (first.base_offset, first.last_offset_delta)
-        }
-        _ => return None,
+    let (base, last_delta) = if let RecordsPayload::Raw(bytes) = records {
+        let header = validate_one_v2_batch(bytes).ok()?.header;
+        (header.base_offset.get(), header.last_offset_delta.get())
+    } else if let RecordsPayload::V2(batches) = records {
+        let first = batches.first()?;
+        (first.base_offset, first.last_offset_delta)
+    } else {
+        return None;
     };
     Some((
         Offset(base),
