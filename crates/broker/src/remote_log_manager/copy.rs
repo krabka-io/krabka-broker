@@ -475,9 +475,8 @@ mod tests {
             ChainHead, ChainStamp, CustomMetadata, EpochId, IndexType,
             InmemoryRemoteLogMetadataManager, LogSegmentData, ManifestSeq,
             RemoteLogMetadataManager, RemoteLogSegmentDetails, RemoteLogSegmentId,
-            RemoteLogSegmentMetadata, RemoteLogSegmentMetadataUpdate,
-            RemotePartitionDeleteMetadata, RemoteStorageError, RemoteStorageManager,
-            WormChainRecord,
+            RemoteLogSegmentMetadata, RemoteLogSegmentMetadataUpdate, RemoteStorageError,
+            RemoteStorageManager, WormChainRecord,
         },
         krabka_units::bytes,
         std::sync::{
@@ -849,82 +848,25 @@ mod tests {
         let backend = Arc::new(LeadershipMovingRsm::new(&leadership, lose_on));
         let rlmm = fixtures::in_memory_metadata();
 
-        let got = fenced_copy_pass(&leadership, &backend, &rlmm).await;
+        let got = fenced_copy_pass(&*leadership, &backend, &rlmm).await;
 
         check!(got == want);
     }
 
-    /// A metadata manager that takes `leadership` away while it records the
-    /// `lose_on`th `CopySegmentStarted` -- the partition moving while that
-    /// write waits on the metadata log, before any byte is uploaded. Every
-    /// call is answered by an in-memory manager underneath.
-    struct LeadershipMovingRlmm {
-        leadership: Arc<Leadership>,
-        lose_on: usize,
-        started: AtomicUsize,
-        inner: InmemoryRemoteLogMetadataManager,
+    /// A broker's leadership as a fence that answers "still the leader" for
+    /// its first `answers` questions and "no longer" from then on.
+    ///
+    /// A copy pass asks three times per segment: before the segment, between
+    /// recording `CopySegmentStarted` and uploading, and after the upload. So
+    /// `answers` picks the question at which the partition has moved: `1` is
+    /// the first segment's pre-upload question, `4` the second segment's.
+    struct AnsweredLeadership {
+        answers: usize,
+        asked: AtomicUsize,
     }
 
-    impl RemoteLogMetadataManager for LeadershipMovingRlmm {
-        fn add_remote_log_segment_metadata(
-            &self,
-            metadata: RemoteLogSegmentMetadata,
-        ) -> Result<(), RemoteStorageError> {
-            self.inner.add_remote_log_segment_metadata(metadata)?;
-            if self.started.fetch_add(1, Ordering::SeqCst) + 1 == self.lose_on {
-                self.leadership.lost.store(true, Ordering::SeqCst);
-            }
-            Ok(())
-        }
-
-        fn update_remote_log_segment_metadata(
-            &self,
-            update: RemoteLogSegmentMetadataUpdate,
-        ) -> Result<(), RemoteStorageError> {
-            self.inner.update_remote_log_segment_metadata(update)
-        }
-
-        fn remote_log_segment_metadata(
-            &self,
-            topic_id_partition: &TopicIdPartition,
-            leader_epoch: LeaderEpoch,
-            offset: i64,
-        ) -> Result<Option<RemoteLogSegmentMetadata>, RemoteStorageError> {
-            self.inner
-                .remote_log_segment_metadata(topic_id_partition, leader_epoch, offset)
-        }
-
-        fn highest_offset_for_epoch(
-            &self,
-            topic_id_partition: &TopicIdPartition,
-            leader_epoch: LeaderEpoch,
-        ) -> Result<Option<i64>, RemoteStorageError> {
-            self.inner
-                .highest_offset_for_epoch(topic_id_partition, leader_epoch)
-        }
-
-        fn list_remote_log_segments(
-            &self,
-            topic_id_partition: &TopicIdPartition,
-        ) -> Result<Vec<RemoteLogSegmentMetadata>, RemoteStorageError> {
-            self.inner.list_remote_log_segments(topic_id_partition)
-        }
-
-        fn list_remote_log_segments_by_epoch(
-            &self,
-            topic_id_partition: &TopicIdPartition,
-            leader_epoch: LeaderEpoch,
-        ) -> Result<Vec<RemoteLogSegmentMetadata>, RemoteStorageError> {
-            self.inner
-                .list_remote_log_segments_by_epoch(topic_id_partition, leader_epoch)
-        }
-
-        fn put_remote_partition_delete_metadata(
-            &self,
-            metadata: RemotePartitionDeleteMetadata,
-        ) -> Result<(), RemoteStorageError> {
-            self.inner.put_remote_partition_delete_metadata(metadata)
-        }
+    impl CopyFence for AnsweredLeadership {
+        fn holds(&self) -> bool { self.asked.fetch_add(1, Ordering::SeqCst) < self.answers }
     }
 
     /// The fence `copy_one` asks between recording `CopySegmentStarted` and
@@ -940,24 +882,25 @@ mod tests {
         recording_the_first = { 1, FencedPass {
             copied: 0, uploads: 0, held: vec![], finished: vec![], started: vec![], errors: 0,
         } },
-        recording_the_second = { 2, FencedPass {
+        recording_the_second = { 4, FencedPass {
             copied: 1, uploads: 1, held: vec![(0, 9)], finished: vec![(0, 9)], started: vec![],
             errors: 0,
         } },
     )]
     #[test_macro(tokio::test)]
     async fn a_copy_whose_leadership_moves_before_the_upload_uploads_nothing(
-        lose_on: usize,
+        answers: usize,
         want: FencedPass,
     ) {
-        let leadership = Arc::new(Leadership::default());
-        let backend = Arc::new(LeadershipMovingRsm::new(&leadership, 0));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(LeadershipMovingRlmm {
-            leadership: Arc::clone(&leadership),
-            lose_on,
-            started: AtomicUsize::new(0),
-            inner: InmemoryRemoteLogMetadataManager::new(),
-        });
+        let leadership = AnsweredLeadership {
+            answers,
+            asked: AtomicUsize::new(0),
+        };
+        let backend = Arc::new(LeadershipMovingRsm::new(
+            &Arc::new(Leadership::default()),
+            0,
+        ));
+        let rlmm = fixtures::in_memory_metadata();
 
         let got = fenced_copy_pass(&leadership, &backend, &rlmm).await;
 
@@ -965,9 +908,9 @@ mod tests {
     }
 
     /// One copy pass over three ten-offset segments, as broker 1 in epoch 0
-    /// behind `leadership`, and what it left in `backend` and `rlmm`.
+    /// behind `fence`, and what it left in `backend` and `rlmm`.
     async fn fenced_copy_pass(
-        leadership: &Arc<Leadership>,
+        fence: &dyn CopyFence,
         backend: &Arc<LeadershipMovingRsm>,
         rlmm: &Arc<dyn RemoteLogMetadataManager>,
     ) -> FencedPass {
@@ -985,7 +928,7 @@ mod tests {
             CopyIdentity {
                 broker_id: 1,
                 leader_epoch: LeaderEpoch(0),
-                fence: &**leadership,
+                fence,
             },
             three_exports().call(),
             CopyBound {
