@@ -2,30 +2,32 @@
 
 use {
     crate::network::fetch_writer::SendfileSink,
+    krabka_raft::{ObservedStream, StreamObserver},
     std::{
-        io::{self, IoSlice},
+        io,
         pin::Pin,
         task::{Context, Poll},
         time::Duration,
     },
-    tokio::{
-        io::{AsyncRead, AsyncWrite, ReadBuf},
-        time::Sleep,
-    },
+    tokio::time::Sleep,
 };
 
 /// The listener's idle window applies to pending writes as well as reads.
 /// Each successful write starts a new window; handler and quota waits do not.
-pub(crate) struct WriteIdle<S> {
-    inner: S,
+pub(crate) type WriteIdle<S> = ObservedStream<S, IdleTimer>;
+
+/// The no-progress timer of a [`WriteIdle`]: armed by a write, flush or
+/// shutdown that stays pending, and reset by one that completes.
+pub(crate) struct IdleTimer {
     window: Option<Duration>,
     pending: Option<Pin<Box<Sleep>>>,
 }
 
-impl<S> WriteIdle<S> {
-    pub(crate) fn new(inner: S, window: Option<Duration>) -> Self {
+impl IdleTimer {
+    /// A timer that fails a pending write once `window` passes, or never
+    /// without one.
+    pub(crate) fn new(window: Option<Duration>) -> Self {
         Self {
-            inner,
             window,
             pending: None,
         }
@@ -63,79 +65,54 @@ impl<S> WriteIdle<S> {
     }
 }
 
-impl<S: AsyncRead + Unpin> AsyncRead for WriteIdle<S> {
-    fn poll_read(
-        self: Pin<&mut Self>,
+impl StreamObserver for IdleTimer {
+    fn on_write(
+        &mut self,
         cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
+        result: Poll<io::Result<usize>>,
+    ) -> Poll<io::Result<usize>> {
+        self.poll_result(cx, result)
+    }
+
+    fn on_flush(
+        &mut self,
+        cx: &mut Context<'_>,
+        result: Poll<io::Result<()>>,
     ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().inner).poll_read(cx, buf)
-    }
-}
-
-impl<S: AsyncWrite + Unpin> AsyncWrite for WriteIdle<S> {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        let this = self.get_mut();
-        let result = Pin::new(&mut this.inner).poll_write(cx, buf);
-        this.poll_result(cx, result)
-    }
-
-    fn poll_write_vectored(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        bufs: &[IoSlice<'_>],
-    ) -> Poll<io::Result<usize>> {
-        let this = self.get_mut();
-        let result = Pin::new(&mut this.inner).poll_write_vectored(cx, bufs);
-        this.poll_result(cx, result)
-    }
-
-    fn is_write_vectored(&self) -> bool { self.inner.is_write_vectored() }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        let result = Pin::new(&mut this.inner).poll_flush(cx);
-        this.poll_result(cx, result)
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        let result = Pin::new(&mut this.inner).poll_shutdown(cx);
-        this.poll_result(cx, result)
+        self.poll_result(cx, result)
     }
 }
 
 impl<S: SendfileSink> SendfileSink for WriteIdle<S> {
     #[krabka_macros::sendfile_cfg]
     fn write_idle_window(&self) -> Option<Duration> {
-        self.window.or_else(|| self.inner.write_idle_window())
+        self.observer()
+            .window
+            .or_else(|| self.get_ref().write_idle_window())
     }
 
     #[krabka_macros::sendfile_cfg]
-    fn tcp_for_sendfile(&self) -> Option<&tokio::net::TcpStream> { self.inner.tcp_for_sendfile() }
+    fn tcp_for_sendfile(&self) -> Option<&tokio::net::TcpStream> {
+        self.get_ref().tcp_for_sendfile()
+    }
 
     fn write_idle_is_enforced(&self) -> bool {
-        self.window.is_some() || self.inner.write_idle_is_enforced()
+        self.observer().window.is_some() || self.get_ref().write_idle_is_enforced()
     }
 
-    fn is_sendfile_capable(&self) -> bool { self.inner.is_sendfile_capable() }
+    fn is_sendfile_capable(&self) -> bool { self.get_ref().is_sendfile_capable() }
 }
 
-impl<S: SendfileSink> WriteIdle<S> {
-    /// Apply a listener's policy only if no lower transport layer already
-    /// measures progress. TLS must measure ciphertext writes below rustls.
-    pub(super) fn for_response(inner: S, window: Option<Duration>) -> Self {
-        let window = if inner.write_idle_is_enforced() {
-            None
-        } else {
-            window
-        };
-        Self::new(inner, window)
-    }
+/// Wraps a response writer in the listener's `window`, applied only if no
+/// lower transport layer already measures progress. TLS must measure
+/// ciphertext writes below rustls.
+pub(super) fn for_response<S: SendfileSink>(inner: S, window: Option<Duration>) -> WriteIdle<S> {
+    let window = if inner.write_idle_is_enforced() {
+        None
+    } else {
+        window
+    };
+    WriteIdle::new(inner, IdleTimer::new(window))
 }
 
 #[cfg(test)]

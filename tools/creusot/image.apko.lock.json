@@ -2,7 +2,7 @@
   "version": "v1",
   "config": {
     "name": "tools/creusot/image.apko.yaml",
-    "checksum": "sha256-jhd7NLGEJhVYFX1W5vpibSluFRnPgtWxTuq/XnSGT90="
+    "checksum": "sha256-ZO6QvxyikdD4afIYZteqQRnvqHAQsQ+nWWkgRLIWlcA="
   },
   "contents": {
     "keyring": [

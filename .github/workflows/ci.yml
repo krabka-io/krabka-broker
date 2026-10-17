@@ -619,7 +619,7 @@ jobs:
       packages: write
     env:
       # What the proof step runs, and what `image_load` writes locally.
-      LOCAL_IMAGE: docker.io/krabka-io/creusot:0.13.0
+      LOCAL_IMAGE: docker.io/krabka-io/creusot:0.14.0
       # Must match `image_push`'s registry and repository in //tools/creusot.
       REGISTRY_IMAGE: ghcr.io/krabka-io/creusot
     steps:

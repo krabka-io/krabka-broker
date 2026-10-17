@@ -105,7 +105,10 @@ pub use acl_decision::{
 };
 
 mod session;
-pub use session::{sasl_session_expiry, session_expired_for_request};
+pub use session::{
+    MIN_REAUTH_INTERVAL_MS, reauthentication_begins, sasl_session_expiry,
+    session_expired_for_request,
+};
 
 mod controller_session;
 pub use controller_session::controller_request_admission;

@@ -23,7 +23,7 @@ workspace = true
 [dependencies]
 bon = { workspace = true }
 assert2 = { workspace = true }
-creusot-std = "0.13.0"
+creusot-std = "0.14.0"
 derive_more = { workspace = true }
 krabka-ids = { version = "0.6.0" }
 
