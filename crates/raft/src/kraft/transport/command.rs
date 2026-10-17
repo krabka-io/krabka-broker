@@ -264,8 +264,11 @@ pub enum Command {
         records: Vec<krabka_metadata::MetadataRecord>,
         reply: oneshot::Sender<i64>,
     },
-    /// Stop the loop.
+    /// Stop the loop gracefully: a leader resigns and the loop runs on, within
+    /// a bound, until the quorum has elected a successor.
     Shutdown,
+    /// Stop the loop at once, handing nothing over, as a halted process does.
+    Halt,
 }
 
 impl Command {
@@ -288,7 +291,8 @@ impl Command {
             | Self::VoteResponse { .. }
             | Self::FetchSnapshotResponse { .. }
             | Self::Timer(_)
-            | Self::Shutdown => false,
+            | Self::Shutdown
+            | Self::Halt => false,
         }
     }
 }

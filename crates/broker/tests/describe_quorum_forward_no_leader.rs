@@ -32,11 +32,15 @@ use crate::support::quorum::metadata_quorum_request as describe_quorum_request;
 
 /// A follower whose leader hint just went dead answers `DescribeQuorum` with
 /// a typed `NOT_LEADER_OR_FOLLOWER` instead of closing the connection: the
-/// follower still believes the shut-down node is the leader (it only learns
-/// otherwise from its own election timeout, which this test outruns), so
+/// follower still believes the crashed node is the leader (it only learns
+/// otherwise from its own fetch timeout, which this test outruns), so
 /// `ControllerHandle::forward_raw`'s dial to it fails with
 /// `RaftError::Network`, exactly the "dial itself failed" case the fix
 /// catches and answers instead of propagating.
+///
+/// The leader crashes rather than stopping gracefully: a graceful stop resigns
+/// and sends `EndQuorumEpoch`, so the follower would elect itself at once and
+/// answer as the leader.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_follower_whose_leader_just_died_answers_not_leader_instead_of_closing() {
     let mut cluster = start_n_node_with_retry(2).await;
@@ -59,10 +63,10 @@ async fn a_follower_whose_leader_just_died_answers_not_leader_instead_of_closing
         .position(|(_, cfg, _)| cfg.broker_id == leader_id)
         .expect("the leader broker");
     let (leader_handle, _, _leader_dir) = cluster.remove(leader_index);
-    // Shut the leader down and ask the follower right away: it still holds
-    // the now-dead leader as its hint (only its own election timeout would
-    // change that), so the forward's dial fails immediately.
-    leader_handle.shutdown().await;
+    // Crash the leader and ask the follower right away: it still holds the
+    // now-dead leader as its hint (only its own fetch timeout would change
+    // that), so the forward's dial fails immediately.
+    leader_handle.crash_for_test().await;
 
     let (_, follower_cfg, _dir1) = &cluster[0];
     let follower_client = build_client(follower_cfg.listen_addr).await;
