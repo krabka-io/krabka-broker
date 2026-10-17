@@ -43,6 +43,11 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   visibility and committed offsets, and tells permitted retries from loss. A
   five-minute self-check in the container matrix proves that the judge catches
   an injected missing record and a missed recovery deadline.
+- The sustained-load executor keeps the evidence a 72-hour run needs (issue
+  #1393): resource and controller-progress telemetry for every node every
+  10 s, and the firing history of the shipped alert rules from a pinned
+  Prometheus sidecar, both written as the run goes. It also runs diskless
+  paths, on a SASL inter-broker listener.
 - `qualify.sh budget` compares a candidate build with an earlier revision or
   with pinned Kafka 4.3.1 over a predeclared RF=3 workload matrix, in
   interleaved rounds. `krabka-parse-benches` assembles every raw trial into a

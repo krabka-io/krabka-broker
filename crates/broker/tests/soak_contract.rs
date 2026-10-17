@@ -39,7 +39,12 @@
 //! | `contract.yaml` | first: the contract as run |
 //! | `schedule.json` | before the load starts |
 //! | `faults.jsonl` | as each fault is injected and as it is cleared |
+//! | `telemetry.jsonl` | every [`TELEMETRY_INTERVAL`]: one row per node of resources and controller progress ([`telemetry`]) |
+//! | `prometheus.yml` | when the alert sidecar starts ([`alerts`]) |
+//! | `alerts.json` | every [`CHECKPOINT_INTERVAL`] and at the end: each shipped alert rule's firing history |
+//! | `evidence.partial.json` | after each fault: the faults, recoveries and commit checks so far |
 //! | `evidence.json` | after the read-back |
+//! | `telemetry-summary.json` | after the read-back |
 //! | `verdict.json` | last: the verdict, or the self-check report |
 //!
 //! # What fails it
@@ -100,6 +105,7 @@ mod windows;
 
 use {
     crate::{
+        alerts::AlertSidecar,
         cluster::{SoakCluster, image},
         executor::{Executor, await_full_isr},
         host::{FaultLog, environment, evidence_dir, image_identity, now_ms, write_json},
@@ -109,6 +115,7 @@ use {
         },
         readback::{commit_checks, delete_one_record, read_back, wait_stable},
         support::{manifest_dir, topics::topic_configs},
+        telemetry::Telemetry,
         topology::{Node, Nodes},
         windows::{Latencies, Span, Windows, measurement, planned_span, steady_millis},
     },
@@ -127,8 +134,16 @@ use {
         sync::Arc,
         time::Duration,
     },
-    tokio::task::JoinHandle,
+    tokio::{sync::oneshot, task::JoinHandle},
 };
+
+/// How often every node's resources and controller progress are sampled.
+/// Over 72 hours and three nodes that is about 78 000 rows.
+const TELEMETRY_INTERVAL: Duration = Duration::from_secs(10);
+
+/// How often the alert history so far is written to `alerts.json`, so a run
+/// that dies keeps it.
+const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(300);
 
 /// The contract this run executes.
 fn contract_source() -> PathBuf {
@@ -159,6 +174,91 @@ async fn create_topics(bootstrap: &str, contract: &Contract) {
         .collect();
     if let Err(last) = cluster::create_topics(bootstrap, &topics).await {
         panic!("could not create the contract's topics on {bootstrap}: {last}");
+    }
+}
+
+/// Write the alert history to `alerts.json` every [`CHECKPOINT_INTERVAL`]
+/// until `stop` fires. A failed checkpoint is printed and leaves the previous
+/// one in place.
+async fn checkpoint_alerts(
+    alerts: Arc<AlertSidecar>,
+    http: reqwest::Client,
+    dir: PathBuf,
+    start_ms: i64,
+    mut stop: oneshot::Receiver<()>,
+) {
+    let mut ticks = tokio::time::interval(CHECKPOINT_INTERVAL);
+    ticks.tick().await;
+    loop {
+        tokio::select! {
+            _ = &mut stop => return,
+            _ = ticks.tick() => {
+                if let Err(error) = alerts.checkpoint(&http, start_ms, now_ms(), &dir).await {
+                    eprintln!("soak-contract: alert checkpoint failed: {error}");
+                }
+            }
+        }
+    }
+}
+
+/// What runs beside the load for the whole run: the telemetry sampler and
+/// the alert sidecar, with its periodic checkpoints.
+struct Recorders {
+    telemetry: Telemetry,
+    alerts: Arc<AlertSidecar>,
+    http: reqwest::Client,
+    stop_checkpoints: oneshot::Sender<()>,
+    checkpoints: JoinHandle<()>,
+}
+
+impl Recorders {
+    /// Start sampling `nodes` and evaluating the alert rules against them,
+    /// with the evidence in `dir` and the history counted from `start_ms`.
+    fn start(nodes: &Arc<Nodes>, dir: &Path, start_ms: i64) -> Self {
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(20))
+            .build()
+            .expect("build an HTTP client");
+        let telemetry = Telemetry::start(Arc::clone(nodes), dir, TELEMETRY_INTERVAL);
+        let alerts = Arc::new(
+            AlertSidecar::start(nodes, dir)
+                .unwrap_or_else(|error| panic!("start the alert sidecar: {error}")),
+        );
+        let (stop_checkpoints, stopped) = oneshot::channel();
+        let checkpoints = tokio::spawn(checkpoint_alerts(
+            Arc::clone(&alerts),
+            http.clone(),
+            dir.to_path_buf(),
+            start_ms,
+            stopped,
+        ));
+        Self {
+            telemetry,
+            alerts,
+            http,
+            stop_checkpoints,
+            checkpoints,
+        }
+    }
+
+    /// Stop both, write the final `alerts.json` and `telemetry-summary.json`,
+    /// and return their summary lines.
+    async fn finish(self, dir: &Path, start_ms: i64) -> Vec<String> {
+        // The task is gone only if it panicked, which the await reports.
+        let _ = self.stop_checkpoints.send(());
+        self.checkpoints.await.expect("the alert checkpoint task");
+        let history = self
+            .alerts
+            .checkpoint(&self.http, start_ms, now_ms(), dir)
+            .await
+            .unwrap_or_else(|error| panic!("read the alert history: {error}"));
+        let resources = self.telemetry.stop().await;
+        write_json(dir, "telemetry-summary.json", &resources);
+        resources
+            .lines()
+            .into_iter()
+            .chain(history.lines())
+            .collect()
     }
 }
 
@@ -422,6 +522,7 @@ async fn the_sustained_load_contract_holds() {
 
     let load_start = now_ms();
     evidence.started_unix_ms = load_start;
+    let recorders = Recorders::start(&nodes, &dir, load_start);
     let windows = Arc::new(Windows::new(
         schedule
             .iter()
@@ -493,6 +594,7 @@ async fn the_sustained_load_contract_holds() {
         evidence.faults.push(outcome.record);
         evidence.recoveries.extend(outcome.recoveries);
         evidence.commits.extend(outcome.commits);
+        write_json(&dir, "evidence.partial.json", &evidence);
     }
     sleep_until(load_start + contract.duration.millis_i64()).await;
     let load_end = now_ms();
@@ -542,7 +644,11 @@ async fn the_sustained_load_contract_holds() {
     evidence.ended_unix_ms = now_ms();
     write_json(&dir, "evidence.json", &evidence);
 
-    for line in timing_summary(&evidence, load_start) {
+    let recorded = recorders.finish(&dir, load_start).await;
+    for line in timing_summary(&evidence, load_start)
+        .into_iter()
+        .chain(recorded)
+    {
         eprintln!("soak-contract: {line}");
     }
     let passed = grade(&contract, &evidence, &dir);

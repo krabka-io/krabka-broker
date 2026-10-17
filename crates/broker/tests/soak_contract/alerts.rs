@@ -32,10 +32,10 @@ use {
     tempfile::TempDir,
 };
 
-/// The Prometheus image the sidecar runs: v3.5.0, pinned by digest so every
-/// run evaluates the rules with the same engine.
-const PROMETHEUS_IMAGE: &str =
-    "prom/prometheus@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996";
+/// The Prometheus image the sidecar runs: v3.5.0, the tag
+/// `//bazel/images:prometheus_3_5_0` loads the digest `//MODULE.bazel` pins
+/// under. Under Cargo, `docker run` pulls the tag on first use.
+const PROMETHEUS_IMAGE: &str = "mirror.gcr.io/prom/prometheus:v3.5.0";
 
 /// The scrape job the shipped rules select on, as in `up{job="krabka-broker"}`.
 const JOB: &str = "krabka-broker";

@@ -83,7 +83,12 @@ pub(crate) fn evidence_dir() -> PathBuf {
 /// Write `value` as pretty JSON to `dir/name`.
 pub(crate) fn write_json(dir: &Path, name: &str, value: &impl Serialize) {
     let text = serde_json::to_string_pretty(value).expect("evidence serializes");
-    std::fs::write(dir.join(name), text).unwrap_or_else(|error| panic!("write {name}: {error}"));
+    // Through a sibling and a rename, so a checkpoint the run dies in the
+    // middle of leaves the previous one whole.
+    let partial = dir.join(format!("{name}.tmp"));
+    std::fs::write(&partial, text)
+        .and_then(|()| std::fs::rename(&partial, dir.join(name)))
+        .unwrap_or_else(|error| panic!("write {name}: {error}"));
 }
 
 /// `faults.jsonl`: one line when a fault is injected and one when it is

@@ -283,6 +283,9 @@ crate_tests(
         # neither librdkafka nor the JVM, so its decoder agrees with neither
         # by construction.
         "sarama_conformance": ["kaf_sarama"],
+        # The Prometheus sidecar that evaluates the shipped alert rules over the
+        # run, so the evidence records when each one fired and resolved.
+        "soak_contract": ["prometheus_3_5_0"],
         # One image, used twice: as the `kafka-topics` client that reads
         # krabka's answer and as the Kafka broker the same command is run
         # against for the differential.
