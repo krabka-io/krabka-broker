@@ -88,7 +88,6 @@ use {
             FrameSizeLimit, FrameWaitPolicy, RequestLimits, initial_connection_auth,
             next_connection_frame,
         },
-        write_idle::WriteIdle,
     },
     crate::{
         api_catalog::{INTER_BROKER_ONLY_APIS, ListenerKind, is_disabled_version},
@@ -370,7 +369,7 @@ async fn serve_connection_stream<S>(
 {
     let limits = RequestLimits::of(&broker.config);
     let stream =
-        WriteIdle::for_response(stream, broker.config.connections_max_idle_for(&spec.name));
+        write_idle::for_response(stream, broker.config.connections_max_idle_for(&spec.name));
     let mut framed = Framed::new(stream, codec::codec(limits.request_max()));
     let is_sasl_listener = spec.protocol.requires_sasl();
     let sasl_mechanisms =

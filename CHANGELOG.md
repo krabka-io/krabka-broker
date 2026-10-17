@@ -56,6 +56,12 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   median and MAD rule as the criterion lane. A lost or duplicated record
   always rejects. See
   [Performance regression budgets](docs/operations/performance-budgets.md).
+- `[oauthbearer]` takes Kafka's `unsecuredValidatorRequiredScope` and
+  `unsecuredValidatorScopeClaimName` for the unsecured validator, as
+  `unsecured_required_scope` (space-separated scope items a token must all
+  carry) and `unsecured_scope_claim_name` (default `scope`). An item outside
+  the RFC 6749 scope-token grammar fails config validation, as Kafka's
+  handler fails its configuration (#1390).
 
 ### Fixed
 
@@ -72,6 +78,50 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   stored and reported and changed nothing. As in Kafka, the SASL and Kerberos
   keys and `principal.builder.class` reach only listeners added later
   (#1423).
+- The controller listener's TLS and SASL handshake is now held to
+  `connections.max.idle.ms` of silence, as Kafka's `Selector` does, instead
+  of to that long in total (#1426).
+- A request other than `SaslAuthenticate` during a SASL exchange now gets its
+  own error response with `ILLEGAL_SASL_STATE` (34), after the failed
+  authentication delay, before the connection closes, as Kafka's
+  `SaslServerAuthenticator` sends it. A request Kafka cannot parse still
+  closes at once (#1427).
+- A KIP-368 session, on a broker or the controller listener, now expires only
+  strictly after its deadline, as Kafka's `KafkaChannel` does, so a request at
+  the deadline itself is still served (#1428).
+- A SCRAM credential stored with fewer than 4096 iterations is now refused at
+  authentication with Kafka's generic failure (#1429).
+- The unsecured OAUTHBEARER validator allows no clock skew by default, as
+  Kafka's `unsecuredValidatorAllowableClockSkewMs` does. The signed and
+  introspection validators keep 30 s (#1430).
+- A token that lacks a required scope item gets Kafka's `insufficient_scope`
+  OAUTHBEARER challenge, `{"status":"insufficient_scope", "scope":"[a, b]"}`,
+  and the client's `\x01` then fails with error 58 and that JSON as the
+  message, as Kafka's `OAuthBearerSaslServer` does. Every other refused token
+  still gets `invalid_token`. The controller listener answers the same way
+  (#1390, krabka-io/krabka-protocol#66).
+- SCRAM parses the client-final message with Kafka's grammar,
+  `c=...,r=...[,extensions],p=...` in that order, and the unsecured
+  OAUTHBEARER validator refuses what Kafka's does: an `exp` not after `iat`,
+  a non-numeric `iat`, a blank principal and a numeric scope claim
+  (krabka-io/krabka-protocol#65, #66).
+- A partition no longer stalls its appends and fetches while it deletes
+  segment files that retention retired. When their `file.delete.delay.ms`
+  passed, the partition writer unlinked them one after another under the log
+  lock, and an unlink drops the file's page cache, which takes tens of
+  milliseconds a segment on a loaded disk. Under RF3 `acks=all` saturation
+  with size retention this held produce acks for up to about a second
+  (#1394). The writer now deletes them on the blocking pool, outside the log
+  lock and off its own loop, as Kafka deletes them from its scheduler.
+- The bench driver's consumer no longer stalls each `poll` for up to
+  `fetch.max.wait.ms`. The krabka-client-rs pin moves to 29dac7a5
+  (krabka-io/krabka-client-rs#186), whose consumer refreshes metadata only
+  when it is due rather than on every poll, behind a parked `Fetch`. RF3
+  multi-partition end-to-end latencies from `krabka-bench-driver` were set by
+  that stall (#1394).
+- The bench driver's `acks: all` scenarios run again. They turn idempotence on,
+  and the driver asked for more in-flight requests than an idempotent producer
+  allows, so each one failed at start.
 - A broker that stops leading a tiered partition stops copying it to the
   remote tier at its next segment, as Kafka's `RLMCopyTask` does once it is
   cancelled. Before, the copy pass checked leadership only at the start of
