@@ -26,6 +26,8 @@ impl BrokerConfig {
     /// # Errors
     ///
     /// Returns `Err` when:
+    /// - `broker_id` and `node_id` differ, which Kafka's `KafkaConfig` refuses
+    ///   in `KRaft` mode.
     /// - Two listeners share the same `bind_addr`.
     /// - `inter_broker_listener_name` does not match any listener name.
     /// - A SASL listener is declared while `enabled_sasl_mechanisms` is empty.
@@ -37,6 +39,12 @@ impl BrokerConfig {
     ///   configured: the metrics server, the OTLP forwarding of client
     ///   metrics, or the OAUTHBEARER JWKS refresher.
     pub fn validate(&self) -> Result<(), BrokerError> {
+        if u64::try_from(self.broker_id).ok() != Some(self.node_id.0) {
+            return Err(BrokerError::BrokerIdNodeIdMismatch {
+                broker_id: self.broker_id,
+                node_id: self.node_id,
+            });
+        }
         self.validate_log_io_policy()?;
         validate_audit_topic_name(&self.audit_topic)?;
         if self.roles.is_empty() {
@@ -384,6 +392,38 @@ mod tests {
         krabka_security::ListenerProtocol,
         krabka_units::{Time, bytes, millis},
     };
+
+    /// Kafka's `KafkaConfig` requires `broker.id == node.id` in `KRaft` mode. A
+    /// broker whose ids differ would register under one and heartbeat under
+    /// the other, so the controller never unfences it.
+    #[test]
+    fn requires_broker_id_to_equal_node_id() {
+        let cases = [
+            ("equal", 7, 7, None),
+            ("broker id differs", 42, 1, Some((42, 1))),
+            ("negative broker id", -1, 1, Some((-1, 1))),
+            (
+                "node id past i32",
+                1,
+                u64::from(u32::MAX),
+                Some((1, u64::from(u32::MAX))),
+            ),
+        ];
+        for (name, broker_id, node_id, want) in cases {
+            let mut config = BrokerConfig::default();
+            config.broker_id = broker_id;
+            config.node_id = krabka_raft::NodeId(node_id);
+            config.controller_quorum_voters = vec![(config.node_id, "127.0.0.1:9093".to_string())];
+            let got = match config.validate() {
+                Ok(()) => None,
+                Err(BrokerError::BrokerIdNodeIdMismatch { broker_id, node_id }) => {
+                    Some((broker_id, node_id.0))
+                }
+                Err(other) => panic!("{name}: unexpected error {other}"),
+            };
+            assert!(got == want, "{name}");
+        }
+    }
 
     /// Kafka's `super.users` accepts any principal, `User:ANONYMOUS`
     /// included. A cluster with a `PLAINTEXT` controller listener and a
