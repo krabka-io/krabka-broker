@@ -62,6 +62,12 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   with size retention this held produce acks for up to about a second
   (#1394). The writer now deletes them on the blocking pool, outside the log
   lock and off its own loop, as Kafka deletes them from its scheduler.
+- The bench driver's consumer no longer stalls each `poll` for up to
+  `fetch.max.wait.ms`. The krabka-client-rs pin moves to 29dac7a5
+  (krabka-io/krabka-client-rs#186), whose consumer refreshes metadata only
+  when it is due rather than on every poll, behind a parked `Fetch`. RF3
+  multi-partition end-to-end latencies from `krabka-bench-driver` were set by
+  that stall (#1394).
 - The bench driver's `acks: all` scenarios run again. They turn idempotence on,
   and the driver asked for more in-flight requests than an idempotent producer
   allows, so each one failed at start.
