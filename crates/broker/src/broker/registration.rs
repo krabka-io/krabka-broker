@@ -259,15 +259,19 @@ pub(super) fn spawn_deferred_controller_registration(
 /// the ELR withdrawals its lost log tail requires, and then the ordinary
 /// registration batch.
 ///
-/// A crashed broker keeps its node id, and krabka keeps its incarnation id in
-/// the log dir, so neither says anything about whether the log this node
+/// A crashed broker keeps its node id, and every process draws a new
+/// incarnation id, so neither says anything about whether the log this node
 /// brings back is the log its ELR membership claims. The clean-shutdown proof
 /// does: a graceful stop wrote the broker epoch the cluster still holds, and
 /// nothing else can. Absent or stale, the restart is unclean and every ELR
 /// naming this node is withdrawn, exactly as
 /// `ClusterControlManager.registerBroker` calls
 /// `ReplicationControlManager.handleBrokerShutdown(id, isCleanShutdown=false,
-/// ...)` before it appends its `RegisterBrokerRecord`.
+/// ...)` before it appends its `RegisterBrokerRecord`. The rest of
+/// `handleBrokerShutdown` -- leaving every ISR and every leadership the
+/// previous incarnation still holds -- the controller leader adds to this
+/// batch itself, against its own image and heartbeat registry (see
+/// the `registration_admission` module).
 fn broker_restart_batch(
     config: &BrokerConfig,
     image: &krabka_metadata::MetadataImage,

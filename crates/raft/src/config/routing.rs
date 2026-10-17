@@ -11,6 +11,7 @@
 use {
     crate::{config::kafka_4_3_1_max, error::RaftError},
     bytes::Bytes,
+    krabka_metadata::MetadataRecord,
     krabka_protocol::ProtocolRequest,
     std::{future::Future, net::SocketAddr, pin::Pin},
 };
@@ -245,6 +246,26 @@ pub type ControllerAdminRouteFuture<'a> =
 pub trait ControllerAdminRouter: Send + Sync {
     fn api_versions(&self) -> &[ControllerApiVersion];
     fn route(&self, request: ControllerAdminRequest) -> ControllerAdminRouteFuture<'_>;
+}
+
+/// The batch [`RegistrationAdmission::admit`] answers with.
+pub type RegistrationAdmissionFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Vec<MetadataRecord>, RaftError>> + Send + 'a>>;
+
+/// What the broker crate does to a batch that registers a broker anew, before
+/// the leader appends it.
+///
+/// Kafka's `ClusterControlManager.registerBroker` writes the records that
+/// retire the previous incarnation of a broker id -- the partition changes of
+/// `ReplicationControlManager.handleBrokerShutdown` -- ahead of the new
+/// `RegisterBrokerRecord`, in the same batch. Those changes depend on the
+/// heartbeat registry and the election ladder, which live in the broker crate.
+/// The leader hands every batch that carries a new registration (a
+/// `V1BrokerRegistration` with no epoch yet) to this hook, whether it was
+/// submitted on this node or forwarded by a follower, and appends the batch the
+/// hook returns.
+pub trait RegistrationAdmission: Send + Sync {
+    fn admit(&self, records: Vec<MetadataRecord>) -> RegistrationAdmissionFuture<'_>;
 }
 
 #[cfg(test)]

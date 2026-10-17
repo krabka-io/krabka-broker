@@ -142,7 +142,7 @@ pub(crate) mod test_support;
 pub(crate) use self::copy::copy_eligible;
 pub(crate) use self::{
     archive::ArchiveMode,
-    copy::{CopyBound, CopyDelay, CopyIdentity, copy_eligible_delayed},
+    copy::{CopyBound, CopyDelay, CopyFence, CopyIdentity, copy_eligible_delayed},
     delete::cascade_remote_partition_delete,
     local_retention::{LocalRetentionBounds, local_retention_pass},
     remote_retention::{LocalLogFootprint, RemoteRetentionBounds, remote_retention_pass},
@@ -282,6 +282,11 @@ impl RemoteLogManagerContext {
 }
 
 /// Spawned task entry point. Ticks every `cfg.interval` until `shutdown`.
+///
+/// `shutdown` also fences the copy pass of a tick already running: the pass
+/// stops at its next segment, and a copy in flight is withdrawn rather than
+/// published. A broker that is stopping has, or is about to have, handed its
+/// partitions to another leader, and that leader copies over the same offsets.
 // task dependencies; bundling would obscure them
 pub(crate) async fn run(
     context: RemoteLogManagerContext,
@@ -290,19 +295,26 @@ pub(crate) async fn run(
 ) {
     let mut ticker = tokio::time::interval(cfg.interval.to_std());
     loop {
+        // `biased`: a tick that ran past its interval leaves the ticker ready
+        // at once, and an unbiased select would then start another whole tick
+        // after shutdown half the time.
         tokio::select! {
-            _ = ticker.tick() => {}
+            biased;
             () = shutdown.cancelled() => {
                 debug!("remote-log-manager task shutting down");
                 return;
             }
+            _ = ticker.tick() => {}
         }
         tick_all(
             &context.partitions,
             &*context.controller,
             &context.tier(&cfg),
-            context.node_id,
-            context.broker_id,
+            SweepingBroker {
+                node_id: context.node_id,
+                broker_id: context.broker_id,
+                shutdown: &shutdown,
+            },
             cfg.concurrency,
         )
         .await;
@@ -322,8 +334,7 @@ async fn tick_all(
     partitions: &PartitionRegistry,
     controller: &dyn MetadataSource,
     tier: &RemoteTier<'_>,
-    node_id: NodeId,
-    broker_id: i32,
+    broker: SweepingBroker<'_>,
     concurrency: SweepConcurrency,
 ) {
     // Snapshot first to avoid holding any registry guard across an await.
@@ -335,12 +346,44 @@ async fn tick_all(
             partition,
             image: &image,
             tier,
-            node_id,
-            broker_id,
+            broker,
             permits: &permits,
         })
     }))
     .await;
+}
+
+/// The broker a sweep runs on: its node and broker ids, and the token that
+/// stops it.
+#[derive(Clone, Copy)]
+pub(crate) struct SweepingBroker<'a> {
+    node_id: NodeId,
+    broker_id: i32,
+    shutdown: &'a CancellationToken,
+}
+
+/// The copy fence of a partition this broker led when its tick began: it holds
+/// while the partition's leader is still this node in the same leader epoch,
+/// and the broker is not shutting down.
+///
+/// Both atomics are the ones the metadata listener moves on a leader change,
+/// so a pass that started as leader sees the move at its next segment rather
+/// than at the next tick. The epoch matters as well as the node: a broker that
+/// loses the partition and wins it back has a new epoch, and its copies belong
+/// to the pass that starts under it.
+struct LeaderFence<'a> {
+    partition: &'a Partition,
+    node_id: NodeId,
+    leader_epoch: i32,
+    shutdown: &'a CancellationToken,
+}
+
+impl CopyFence for LeaderFence<'_> {
+    fn holds(&self) -> bool {
+        !self.shutdown.is_cancelled()
+            && self.partition.current_leader.load(Ordering::Acquire) == self.node_id
+            && self.partition.current_leader_epoch.load(Ordering::Acquire) == self.leader_epoch
+    }
 }
 
 /// One partition's place in a tick: the partition itself, the metadata image
@@ -350,8 +393,7 @@ struct PartitionSweep<'a> {
     partition: Arc<Partition>,
     image: &'a krabka_metadata::MetadataImage,
     tier: &'a RemoteTier<'a>,
-    node_id: NodeId,
-    broker_id: i32,
+    broker: SweepingBroker<'a>,
     permits: &'a SweepPermits,
 }
 
@@ -366,10 +408,18 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
         partition,
         image,
         tier,
-        node_id,
-        broker_id,
+        broker:
+            SweepingBroker {
+                node_id,
+                broker_id,
+                shutdown,
+            },
         permits,
     } = sweep;
+    // A stopping broker starts nothing new against the tier.
+    if shutdown.is_cancelled() {
+        return;
+    }
     // Leadership decides which halves of the sweep run, not whether it
     // runs at all: the copy and the remote-retention pass are the
     // leader's, local retention is every replica's.
@@ -452,10 +502,16 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
     // tier already holds keeps working, which is what makes the state a
     // freeze of the copy rather than an abandonment of the data.
     if is_leader && !exports.is_empty() && !log_config.remote_tier.copy_disable {
+        let raw_epoch = partition.current_leader_epoch.load(Ordering::Acquire);
         // Atomic stores the raw epoch; wrap for the remote-storage
         // metadata seam.
-        let leader_epoch =
-            krabka_ids::LeaderEpoch(partition.current_leader_epoch.load(Ordering::Acquire));
+        let leader_epoch = krabka_ids::LeaderEpoch(raw_epoch);
+        let fence = LeaderFence {
+            partition: &partition,
+            node_id,
+            leader_epoch: raw_epoch,
+            shutdown,
+        };
         let _permit = permits.copier().await;
         let delay = copy_delay(
             CopyScope {
@@ -476,6 +532,7 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
             CopyIdentity {
                 broker_id,
                 leader_epoch,
+                fence: &fence,
             },
             exports.clone(),
             CopyBound {
@@ -506,6 +563,9 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
         return;
     }
     let _permit = permits.expiration().await;
+    if shutdown.is_cancelled() {
+        return;
+    }
     retention_passes(
         RetentionPasses {
             partition: &partition,
@@ -810,8 +870,15 @@ mod tests {
     async fn wait_for_remote_segments(rlmm: &Arc<dyn RemoteLogMetadataManager>, expected: usize) {
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
-                let listed = rlmm.list_remote_log_segments(&tp()).unwrap();
-                if listed.len() >= expected {
+                // Finished copies only: a copy still in flight when the task is
+                // told to stop is withdrawn, not published.
+                let finished = rlmm
+                    .list_remote_log_segments(&tp())
+                    .unwrap()
+                    .iter()
+                    .filter(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
+                    .count();
+                if finished >= expected {
                     break;
                 }
                 tokio::task::yield_now().await;
@@ -819,6 +886,85 @@ mod tests {
         })
         .await
         .expect("remote-log-manager run loop did not copy expected segments");
+    }
+
+    /// The copy fence a sweep gives a partition it leads: the pass may go on
+    /// while this broker still leads the partition in the epoch it started
+    /// under and is not shutting down, and must stop on any one of them
+    /// changing. Kafka cancels the partition's `RLMCopyTask` on a leadership
+    /// change, and a broker that loses the partition and wins it back is a new
+    /// epoch with a task of its own.
+    #[yare::parameterized(
+        still_leading = { 1, 0, false, true },
+        leadership_moved = { 2, 0, false, false },
+        led_again_in_a_new_epoch = { 1, 1, false, false },
+        shutting_down = { 1, 0, true, false },
+    )]
+    #[test_macro(tokio::test)]
+    async fn the_copy_fence_holds_only_for_the_same_leader_and_epoch(
+        leader: u64,
+        epoch: i32,
+        stopping: bool,
+        holds: bool,
+    ) {
+        let log_dir = tempfile::tempdir().unwrap();
+        let partition = rolled_tiered_partition(log_dir.path());
+        partition.current_leader.store(1, Ordering::Release);
+        partition.current_leader_epoch.store(0, Ordering::Release);
+        let shutdown = CancellationToken::new();
+        let fence = LeaderFence {
+            partition: &partition,
+            node_id: NodeId(1),
+            leader_epoch: 0,
+            shutdown: &shutdown,
+        };
+
+        partition.current_leader.store(leader, Ordering::Release);
+        partition
+            .current_leader_epoch
+            .store(epoch, Ordering::Release);
+        if stopping {
+            shutdown.cancel();
+        }
+
+        check!(fence.holds() == holds);
+    }
+
+    /// A sweep on a broker that is shutting down starts no copy: the broker's
+    /// partitions are about to have other leaders, and they copy the same
+    /// offsets under their own segment boundaries.
+    #[yare::parameterized(
+        serving = { false },
+        stopping = { true },
+    )]
+    #[test_macro(tokio::test)]
+    async fn a_stopping_broker_starts_no_copy(stopping: bool) {
+        let TempDirs {
+            local: log_dir,
+            remote: remote_dir,
+        } = fixtures::temporary_dirs();
+        let partitions = PartitionRegistry::new();
+        let partition = rolled_tiered_partition(log_dir.path());
+        let sealed = fixtures::sealed_segment_count(&partition);
+        check!(sealed >= 2, "test needs multiple sealed segments");
+        partitions.insert("orders".into(), PartitionIndex(0), partition);
+        let fixtures::Backends { rsm, rlmm } = local_backends(remote_dir.path());
+        let shutdown = CancellationToken::new();
+        if stopping {
+            shutdown.cancel();
+        }
+
+        tick_all(
+            &partitions,
+            &fixed_source(image_with_orders_topic()),
+            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
+            fixtures::serving_broker(&shutdown),
+            SweepConcurrency::default(),
+        )
+        .await;
+
+        let want = if stopping { 0 } else { sealed };
+        check!(rlmm.list_remote_log_segments(&tp()).unwrap().len() == want);
     }
 
     #[tokio::test]
@@ -983,8 +1129,7 @@ mod tests {
                 unstable_api_versions: unstable,
                 ..tier(ArchiveMode::Mutable, &rsm, &rlmm)
             },
-            NodeId(1),
-            1,
+            fixtures::serving_broker(&CancellationToken::new()),
             SweepConcurrency::default(),
         )
         .await;

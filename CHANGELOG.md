@@ -76,6 +76,19 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 - The bench driver's `acks: all` scenarios run again. They turn idempotence on,
   and the driver asked for more in-flight requests than an idempotent producer
   allows, so each one failed at start.
+- A broker that stops leading a tiered partition stops copying it to the
+  remote tier at its next segment, as Kafka's `RLMCopyTask` does once it is
+  cancelled. Before, the copy pass checked leadership only at the start of
+  each tick and then uploaded every segment it had planned, and a shutdown
+  never stopped a tick that was already running. The new leader, which had
+  seen the old leader's unfinished copy, copied the same offsets again under
+  its own segment boundaries, so the tier held two copies of them. The pass
+  now re-checks the leader and the leader epoch before each segment and
+  again before it uploads. On a mutable tier it checks once more before it
+  publishes `CopySegmentFinished`, and an upload that outlived the broker's
+  leadership is withdrawn, not published. A write-once archive has already
+  sealed that upload's manifest, so the copy is published.
+  `BrokerHandle::shutdown` now waits for the copy task to stop.
 - A gracefully stopped active controller now hands the metadata quorum over
   before it exits, as Kafka's `KafkaRaftClient.shutdown` does: it resigns,
   sends `EndQuorumEpoch` naming the other voters by how far they have fetched,
@@ -119,6 +132,12 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   the DN or drops a SAN. Before, the broker stored and reported the keys and
   kept serving its static certificate. krabka reads PEM stores with an
   unencrypted key only (#1422).
+- The broker refuses to start when `broker_id` and `node_id` differ, as
+  Kafka's `KafkaConfig` refuses a `broker.id` that is not the `node.id`.
+  Before, such a broker registered under its node id but heartbeated under
+  its broker id, so the controller never unfenced it, and `Broker::start`
+  waited out `startup_leader_wait_timeout` (two minutes) before going on
+  fenced (#1471).
 - `max.connections.per.ip.overrides`, `max.connection.creation.rate` and the
   per-listener `listener.name.<listener>.max.connections` and
   `listener.name.<listener>.max.connection.creation.rate` now take effect, on
