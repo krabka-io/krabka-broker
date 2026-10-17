@@ -120,6 +120,16 @@ pub struct FileOAuthBearerConfig {
     /// trusting unsigned tokens; set this to true to accept that
     /// fallback in development. Never set it in production.
     pub allow_unsecured: Option<bool>,
+    /// Scope items a token must all carry, separated by spaces, as Kafka's
+    /// `unsecuredValidatorRequiredScope`. A token that lacks one is refused
+    /// with the RFC 7628 `insufficient_scope` challenge. Default none. An
+    /// item outside the RFC 6749 scope-token grammar, such as one with a `"`
+    /// or `\`, fails config validation. Unsecured validator only.
+    pub unsecured_required_scope: Option<String>,
+    /// Claim that holds the token's scope, as Kafka's
+    /// `unsecuredValidatorScopeClaimName`. Default `scope`. Unsecured
+    /// validator only.
+    pub unsecured_scope_claim_name: Option<String>,
 
     /// When true, the JWKS parser keeps keys regardless of `use`
     /// field. Default false (filter out `use=enc`). Some identity providers

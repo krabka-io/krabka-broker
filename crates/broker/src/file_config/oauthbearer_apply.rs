@@ -166,6 +166,19 @@ pub(super) fn apply_oauthbearer(
         })
     });
 
+    let unsecured_required_scope = oauth
+        .unsecured_required_scope
+        .as_deref()
+        .map(|option| {
+            krabka_security::parse_required_scope(option).map_err(|error| {
+                FileConfigError::InvalidConfig(format!(
+                    "[oauthbearer]: unsecured_required_scope {option:?} is invalid: {error}"
+                ))
+            })
+        })
+        .transpose()?
+        .unwrap_or_default();
+
     match (
         oauth.jwks_endpoint_uri.as_ref(),
         oauth.introspection_endpoint_uri.as_ref(),
@@ -286,6 +299,11 @@ pub(super) fn apply_oauthbearer(
             v.fallback_user_name_prefix = oauth.fallback_user_name_prefix;
             v.groups_claim = groups_claim_compiled;
             v.groups_claim_delimiter = oauth.groups_claim_delimiter;
+            // Kafka's scope options.
+            if let Some(name) = oauth.unsecured_scope_claim_name {
+                v.scope_claim_name = name;
+            }
+            v.required_scope = unsecured_required_scope;
             cfg.oauthbearer_validator = krabka_security::OAuthBearerValidator::Unsecured(v);
         }
     }
@@ -388,6 +406,84 @@ mod tests {
             }
         };
         assert2::assert!(outcome.is_ok() == admitted, "{table:?}: {outcome:?}");
+    }
+
+    /// `unsecured_required_scope` and `unsecured_scope_claim_name` are Kafka's
+    /// `unsecuredValidatorRequiredScope` and `unsecuredValidatorScopeClaimName`.
+    /// Each case builds the unsecured validator from `[oauthbearer]`, offers it
+    /// a token for `alice` with the extra `claims`, and renders a refusal as
+    /// the RFC 7628 challenge the broker sends.
+    #[yare::parameterized(
+        no_required_scope_admits_a_token_without_scope = { "", "", Ok("alice") },
+        every_required_item_admits = {
+            "unsecured_required_scope = \"a b\"", r#", "scope": ["b", "a", "c"]"#, Ok("alice")
+        },
+        a_missing_item_is_insufficient_scope = {
+            "unsecured_required_scope = \"a b\"",
+            r#", "scope": ["a"]"#,
+            Err(r#"{"status":"insufficient_scope", "scope":"[a, b]"}"#)
+        },
+        a_blank_required_scope_requires_none = {
+            "unsecured_required_scope = \"   \"", "", Ok("alice")
+        },
+        the_custom_claim_name_is_read = {
+            "unsecured_required_scope = \"a\"\nunsecured_scope_claim_name = \"scp\"",
+            r#", "scp": "a""#,
+            Ok("alice")
+        },
+        the_default_claim_is_ignored_under_a_custom_name = {
+            "unsecured_required_scope = \"a\"\nunsecured_scope_claim_name = \"scp\"",
+            r#", "scope": "a""#,
+            Err(r#"{"status":"insufficient_scope", "scope":"[a]"}"#)
+        },
+        a_numeric_custom_claim_is_an_invalid_token = {
+            "unsecured_scope_claim_name = \"scp\"",
+            r#", "scp": 7"#,
+            Err(r#"{"status":"invalid_token"}"#)
+        },
+    )]
+    fn file_config_unsecured_validator_applies_the_kafka_scope_options(
+        table: &str,
+        claims: &str,
+        expected: Result<&str, &str>,
+    ) {
+        let cfg =
+            configured_unwrap_parse(&format!("[oauthbearer]\nallow_unsecured = true\n{table}\n"))
+                .unwrap();
+        let OAuthBearerValidator::Unsecured(validator) = &cfg.oauthbearer_validator else {
+            panic!(
+                "expected the unsecured validator; got {:?}",
+                cfg.oauthbearer_validator
+            )
+        };
+        let header = B64.encode(br#"{"alg":"none"}"#);
+        let exp_s = NOW_MS / 1000 + 60;
+        let payload = B64.encode(format!(r#"{{"sub": "alice", "exp": {exp_s}{claims}}}"#));
+        let outcome = validator
+            .validate(&format!("{header}.{payload}."), NOW_MS)
+            .map(|outcome| outcome.principal.name)
+            .map_err(|error| krabka_security::oauth_error_json(&error));
+        assert2::assert!(
+            outcome == expected.map(str::to_owned).map_err(str::to_owned),
+            "{table:?}"
+        );
+    }
+
+    /// Kafka fails the unsecured validator's configuration on a required-scope
+    /// item outside the RFC 6749 scope-token grammar.
+    #[test]
+    fn an_invalid_required_scope_item_fails_the_config() {
+        let error = configured_unwrap_parse(
+            "[oauthbearer]\nallow_unsecured = true\nunsecured_required_scope = 'a b\"c'\n",
+        )
+        .expect_err("an invalid scope item must fail the config");
+        let FileConfigError::InvalidConfig(message) = &error else {
+            panic!("expected InvalidConfig; got {error:?}")
+        };
+        assert!(
+            message
+                == "[oauthbearer]: unsecured_required_scope \"a b\\\"c\" is invalid: invalid scope value: b\"c"
+        );
     }
 
     fn check_unsecured(cfg: &BrokerConfig) {

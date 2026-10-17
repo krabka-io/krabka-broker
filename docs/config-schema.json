@@ -749,6 +749,20 @@
             "null"
           ]
         },
+        "unsecured_required_scope": {
+          "description": "Scope items a token must all carry, separated by spaces, as Kafka's\n`unsecuredValidatorRequiredScope`. A token that lacks one is refused\nwith the RFC 7628 `insufficient_scope` challenge. Default none. An\nitem outside the RFC 6749 scope-token grammar, such as one with a `\"`\nor `\\`, fails config validation. Unsecured validator only.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unsecured_scope_claim_name": {
+          "description": "Claim that holds the token's scope, as Kafka's\n`unsecuredValidatorScopeClaimName`. Default `scope`. Unsecured\nvalidator only.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "userinfo_endpoint_uri": {
           "description": "Optional OIDC userinfo endpoint URL. When set, the\nintrospection validator calls `GET userinfo` after a successful\nintrospection and merges the profile claims over the\nintrospection claims (introspection wins for `active`, `exp`,\n`iat`, `nbf`, `scope`, `client_id`, `sub`).",
           "type": [
