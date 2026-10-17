@@ -303,9 +303,6 @@ fn tokenauth_extension_selects_the_credential_store() {
                 token("expired", now_ms() - 1),
                 // `a,b=c` on the wire is `a=2Cb=3Dc`.
                 scram_user("a,b=c", mechanism),
-                // One below and at `ScramMechanism.minIterations`.
-                scram_user_with_iterations("weak", mechanism, 4095),
-                scram_user_with_iterations("floor", mechanism, 4096),
             ])
             .build();
         let user = USER_PASSWORD.as_bytes();
@@ -319,7 +316,7 @@ fn tokenauth_extension_selects_the_credential_store() {
         };
         let generic_failure = Outcome::FirstRoundFailed(None);
         // (case, authzid, sasl name, extensions, password, expected)
-        let cases: [ExchangeCase<'_>; 18] = [
+        let cases: [ExchangeCase<'_>; 15] = [
             ExchangeCase {
                 case: "SCRAM user without extension",
                 authorization_id: None,
@@ -473,6 +470,47 @@ fn tokenauth_extension_selects_the_credential_store() {
                         .into(),
                 )),
             },
+        ];
+        for ExchangeCase {
+            case,
+            authorization_id,
+            sasl_name,
+            extensions,
+            password,
+            expected,
+        } in cases
+        {
+            check!(
+                exchange(
+                    &source,
+                    Some(&secret),
+                    mechanism,
+                    authorization_id,
+                    sasl_name,
+                    extensions,
+                    password
+                ) == expected,
+                "{mechanism:?}: {case}"
+            );
+        }
+    }
+}
+
+/// `ScramSaslServer` refuses a stored credential below
+/// `ScramMechanism.minIterations` (4096) with a `SaslException`, after the
+/// authorization id check, for both mechanisms.
+#[test]
+fn a_credential_below_kafkas_iteration_floor_is_refused() {
+    for mechanism in [SaslMechanism::ScramSha256, SaslMechanism::ScramSha512] {
+        let source = FakeMetadataSource::builder()
+            .records(&[
+                scram_user_with_iterations("weak", mechanism, 4095),
+                scram_user_with_iterations("floor", mechanism, 4096),
+            ])
+            .build();
+        let user = USER_PASSWORD.as_bytes();
+        let secret = token_secret();
+        let cases: [ExchangeCase<'_>; 3] = [
             // `ScramSaslServer` refuses a stored credential below 4096
             // iterations with a `SaslException`, so the client gets the
             // generic text.

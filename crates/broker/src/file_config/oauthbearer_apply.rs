@@ -383,7 +383,9 @@ mod tests {
         let outcome = match &cfg.oauthbearer_validator {
             OAuthBearerValidator::Unsecured(v) => v.validate(&unsecured_token(exp_s), NOW_MS),
             OAuthBearerValidator::Signed(v) => v.validate(&signed_token(v, exp_s), NOW_MS),
-            other => panic!("expected an unsecured or signed validator; got {other:?}"),
+            OAuthBearerValidator::Introspection(_) => {
+                panic!("expected an unsecured or signed validator; got introspection")
+            }
         };
         assert2::assert!(outcome.is_ok() == admitted, "{table:?}: {outcome:?}");
     }
