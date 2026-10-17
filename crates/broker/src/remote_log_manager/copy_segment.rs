@@ -9,14 +9,16 @@ use {
         RemoteTier,
         archive::{ArchiveMode, ChainPosition},
         copy::CopyIdentity,
+        delete::delete_one_segment,
         leader_epoch::leader_epoch_index_bytes,
         rlmm::rlmm_mutate,
     },
     crate::{blocking::spawn_blocking, metrics::RemoteTierPath, time_util::now_ms},
-    krabka_log::SegmentExport,
+    krabka_log::{Offset, SegmentExport},
     krabka_remote_storage::{
         RemoteLogMetadataManager, RemoteLogSegmentId, RemoteLogSegmentMetadata,
-        RemoteLogSegmentState, RemoteStorageManager, TopicIdPartition, WormChainRecord,
+        RemoteLogSegmentState, RemoteStorageError, RemoteStorageManager, TopicIdPartition,
+        WormChainRecord,
     },
     krabka_units::convert::{ByteSizeExt as _, TimeExt as _},
     std::{collections::BTreeMap, sync::Arc},
@@ -25,7 +27,7 @@ use {
 };
 
 /// What one [`copy_one`] attempt left behind.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(super) enum CopyOutcome {
     /// The segment reached `CopySegmentFinished`.
     Copied {
@@ -36,6 +38,16 @@ pub(super) enum CopyOutcome {
     /// The attempt did not reach `CopySegmentFinished`. The caller keeps its
     /// chain position and the next tick retries the segment.
     Failed,
+    /// The copy uploaded, but the segment was deleted under it: a
+    /// `DeleteRecords` marked it for deletion before `CopySegmentFinished`
+    /// went in, or it finished wholly below the partition's established log
+    /// start and was deleted straight after. Nothing is retried, since the
+    /// offsets are gone, but a write-once copy did seal its manifest, so the
+    /// chain moves on to `next` all the same.
+    Withdrawn {
+        /// Where the next copy in this tick joins the chain.
+        next: ChainPosition,
+    },
     /// The broker stopped leading the partition, or began shutting down,
     /// while the copy ran. The copy was rolled back rather than published, and
     /// the pass stops: the tier is the new leader's to write.
@@ -86,8 +98,8 @@ pub(super) async fn copy_one(
             tier.metrics
                 .record_remote_error(RemoteTierPath::Copy, &tp.topic);
         }
-        // Losing the partition is not a backend error.
-        CopyOutcome::Fenced => {}
+        // Losing the partition, or the offsets, is not a backend error.
+        CopyOutcome::Fenced | CopyOutcome::Withdrawn { .. } => {}
     }
     outcome
 }
@@ -294,7 +306,7 @@ async fn copy_one_inner(
 
     // The backend's receipt is the chain position a restart reads back, so
     // it has to be durable alongside the segment, not dropped here.
-    if let Err(e) = super::rlmm::update_segment(
+    match super::rlmm::update_segment(
         rlmm,
         id,
         returned,
@@ -303,13 +315,103 @@ async fn copy_one_inner(
     )
     .await
     {
-        warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
-              error = %e, "remote-log-manager: failed to record CopySegmentFinished");
-        return CopyOutcome::Failed;
+        Ok(()) => {}
+        Err(e) if deleted_under_the_copy(&e) => {
+            debug!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                   end = ex.last_offset.0, error = %e,
+                   "remote-log-manager: the segment was deleted while it was copied; \
+                    withdrawing the copy");
+            rollback(&metadata, broker_id, chain.archive(), rsm, rlmm).await;
+            return CopyOutcome::Withdrawn { next };
+        }
+        Err(e) => {
+            warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                  error = %e, "remote-log-manager: failed to record CopySegmentFinished");
+            return CopyOutcome::Failed;
+        }
     }
     debug!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
            end = ex.last_offset.0, "remote-log-manager: copied segment to remote tier");
-    CopyOutcome::Copied { next }
+    match fence.established_log_start() {
+        Some(floor) if ex.last_offset < floor => {
+            if delete_below_floor(tier, tp, broker_id, &metadata, floor).await {
+                CopyOutcome::Withdrawn { next }
+            } else {
+                CopyOutcome::Copied { next }
+            }
+        }
+        _ => CopyOutcome::Copied { next },
+    }
+}
+
+/// Whether a refused `CopySegmentFinished` means somebody deleted the segment
+/// while it was being copied: a `DeleteRecords` that marked it
+/// `DeleteSegmentStarted` under the floor it raised, or a retention pass that
+/// went on to finish that delete. The copy then rolls back, and its bytes go
+/// with it.
+fn deleted_under_the_copy(error: &RemoteStorageError) -> bool {
+    matches!(
+        error,
+        RemoteStorageError::SegmentNotFound(_)
+            | RemoteStorageError::InvalidSegmentTransition {
+                from: RemoteLogSegmentState::DeleteSegmentStarted
+                    | RemoteLogSegmentState::DeleteSegmentFinished,
+                ..
+            }
+    )
+}
+
+/// Delete a copy that has just finished wholly below `floor`, the partition's
+/// established log start, and return whether it went.
+///
+/// The segment is read back from the metadata manager first, so a
+/// `DeleteRecords` that marked it `DeleteSegmentStarted` in the meantime is
+/// picked up where it left off. A delete that fails leaves a finished segment
+/// below the floor, and the next retention pass's log-start breach removes it.
+async fn delete_below_floor(
+    tier: &RemoteTier<'_>,
+    tp: &TopicIdPartition,
+    broker_id: i32,
+    copied: &RemoteLogSegmentMetadata,
+    floor: Offset,
+) -> bool {
+    let id = copied.remote_log_segment_id();
+    let current = match tier.rlmm.list_remote_log_segments(tp) {
+        Ok(listed) => listed
+            .into_iter()
+            .find(|md| md.remote_log_segment_id() == id),
+        Err(e) => {
+            warn!(topic = %tp.topic, partition = tp.partition, base = copied.start_offset(),
+                  error = %e,
+                  "remote-log-manager: failed to re-read a copy that finished below the log \
+                   start; leaving it to remote retention");
+            return false;
+        }
+    };
+    // Somebody else finished the delete already.
+    let Some(current) = current else {
+        return true;
+    };
+    debug!(topic = %tp.topic, partition = tp.partition, base = copied.start_offset(),
+           end = copied.end_offset(), floor = floor.0,
+           "remote-log-manager: copy finished below the established log start; deleting it");
+    tier.metrics
+        .record_remote_request(RemoteTierPath::Delete, &tp.topic);
+    let deleted = delete_one_segment(
+        tp,
+        broker_id,
+        &current,
+        tier.archive,
+        tier.rsm,
+        tier.rlmm,
+        tier.index_cache,
+    )
+    .await;
+    if !deleted {
+        tier.metrics
+            .record_remote_error(RemoteTierPath::Delete, &tp.topic);
+    }
+    deleted
 }
 
 /// Log a copy withdrawn because the broker lost the partition `when`.
@@ -367,6 +469,7 @@ mod tests {
     use {
         super::*,
         crate::remote_log_manager::{
+            copy::CopyFence,
             copy_eligible,
             test_support::{
                 self as fixtures, FakeWormArchive, copy_exports, local_backends, rolled_log,
@@ -436,6 +539,162 @@ mod tests {
                 .push(metadata.clone());
             Err(RemoteStorageError::InvalidArgument("captured".into()))
         }
+    }
+
+    /// A fence that always holds, over a partition whose established log
+    /// start reads `floor`.
+    struct FloorFence(Option<Offset>);
+
+    impl CopyFence for FloorFence {
+        fn holds(&self) -> bool { true }
+
+        fn established_log_start(&self) -> Option<Offset> { self.0 }
+    }
+
+    /// Accepts every copy and records the segment each delete removes. With
+    /// `marking` set, a copy also moves its own segment to
+    /// `DeleteSegmentStarted` before it answers, which is what a
+    /// `DeleteRecords` that raises the floor over a copy in flight does.
+    #[derive(Default)]
+    struct DeletingRsm {
+        marking: Option<Arc<dyn RemoteLogMetadataManager>>,
+        deleted: Mutex<Vec<Uuid>>,
+    }
+
+    #[krabka_macros::missing_remote_reads]
+    impl RemoteStorageManager for DeletingRsm {
+        fn copy_log_segment_data(
+            &self,
+            metadata: &RemoteLogSegmentMetadata,
+            _data: &LogSegmentData,
+        ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
+            if let Some(rlmm) = &self.marking {
+                rlmm.update_remote_log_segment_metadata(
+                    krabka_remote_storage::RemoteLogSegmentMetadataUpdate {
+                        remote_log_segment_id: metadata.remote_log_segment_id().clone(),
+                        event_timestamp_ms: 100,
+                        custom_metadata: None,
+                        state: RemoteLogSegmentState::DeleteSegmentStarted,
+                        broker_id: 1,
+                    },
+                )?;
+            }
+            Ok(None)
+        }
+
+        fn delete_log_segment_data(
+            &self,
+            metadata: &RemoteLogSegmentMetadata,
+        ) -> Result<(), RemoteStorageError> {
+            self.deleted
+                .lock()
+                .expect("deleted-segments mutex poisoned")
+                .push(metadata.remote_log_segment_id().id);
+            Ok(())
+        }
+    }
+
+    /// What one copy of the fixture segment, offsets 0 to 9, left: its
+    /// outcome, the segment states still listed, and how many segments the
+    /// backend deleted.
+    #[derive(Debug, PartialEq, Eq)]
+    struct CopyResidue {
+        outcome: CopyOutcome,
+        states: Vec<RemoteLogSegmentState>,
+        deletes: usize,
+    }
+
+    async fn copy_under(
+        rsm_impl: Arc<DeletingRsm>,
+        rlmm: &Arc<dyn RemoteLogMetadataManager>,
+        floor: Option<Offset>,
+    ) -> CopyResidue {
+        let rsm: Arc<dyn RemoteStorageManager> = rsm_impl.clone();
+        let outcome = copy_one(
+            &tier(ArchiveMode::Mutable, &rsm, rlmm),
+            &tp(),
+            CopyIdentity {
+                broker_id: 1,
+                leader_epoch: LeaderEpoch(0),
+                fence: &FloorFence(floor),
+            },
+            &synth_export().call(),
+            ChainPosition::Unchained,
+        )
+        .await;
+        let states = rlmm
+            .list_remote_log_segments(&tp())
+            .unwrap()
+            .iter()
+            .map(RemoteLogSegmentMetadata::state)
+            .collect();
+        let deletes = rsm_impl
+            .deleted
+            .lock()
+            .expect("deleted-segments mutex poisoned")
+            .len();
+        CopyResidue {
+            outcome,
+            states,
+            deletes,
+        }
+    }
+
+    /// A copy that finishes wholly below the partition's established log
+    /// start is deleted straight away, so no finished segment is left below
+    /// the floor for a follower to read as an unenforced one.
+    #[yare::parameterized(
+        no_established_floor = { None, false },
+        floor_at_the_last_offset = { Some(9), false },
+        floor_past_the_segment = { Some(10), true },
+    )]
+    #[test_macro(tokio::test)]
+    async fn a_copy_that_finishes_below_the_floor_is_deleted(floor: Option<i64>, deleted: bool) {
+        let rlmm = fixtures::in_memory_metadata();
+
+        let residue = copy_under(Arc::default(), &rlmm, floor.map(Offset)).await;
+
+        let next = ChainPosition::Unchained;
+        let expected = if deleted {
+            CopyResidue {
+                outcome: CopyOutcome::Withdrawn { next },
+                states: Vec::new(),
+                deletes: 1,
+            }
+        } else {
+            CopyResidue {
+                outcome: CopyOutcome::Copied { next },
+                states: vec![RemoteLogSegmentState::CopySegmentFinished],
+                deletes: 0,
+            }
+        };
+        check!(residue == expected);
+    }
+
+    /// A `DeleteRecords` that marks a segment `DeleteSegmentStarted` while
+    /// its copy uploads makes `CopySegmentFinished` an invalid transition.
+    /// The copy then rolls back: its bytes are deleted, and its metadata ends
+    /// in `DeleteSegmentFinished`, which the metadata manager lists no more.
+    #[tokio::test]
+    async fn a_copy_marked_for_deletion_mid_copy_rolls_back() {
+        let rlmm = fixtures::in_memory_metadata();
+        let rsm_impl = Arc::new(DeletingRsm {
+            marking: Some(rlmm.clone()),
+            ..DeletingRsm::default()
+        });
+
+        let residue = copy_under(rsm_impl, &rlmm, None).await;
+
+        check!(
+            residue
+                == CopyResidue {
+                    outcome: CopyOutcome::Withdrawn {
+                        next: ChainPosition::Unchained,
+                    },
+                    states: Vec::new(),
+                    deletes: 1,
+                }
+        );
     }
 
     #[tokio::test]
