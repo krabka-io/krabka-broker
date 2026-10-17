@@ -62,20 +62,14 @@ async fn close_after(stream: tokio::net::TcpStream, delay: Time) {
 
 async fn shutdown_connection_tasks(connections: &mut JoinSet<()>) { connections.shutdown().await; }
 
-/// Accept connections on `listener` until `shutdown`. `protected` marks the
-/// inter-broker listener of a broker with more than one listener, which
-/// Kafka's `ConnectionQuotas` exempts from the broker-wide cap and rate.
+/// Accept connections on `listener` until `shutdown`, then close the
+/// listener and every connection it accepted.
 pub(super) async fn accept_loop(
     broker: Arc<Broker>,
     listener: TcpListener,
     spec: ListenerSpec,
-    protected: bool,
     shutdown: CancellationToken,
 ) {
-    let accepting = AcceptingListener {
-        name: &spec.name,
-        protected,
-    };
     let mut connections = JoinSet::new();
     'accept: loop {
         tokio::select! {
@@ -95,6 +89,17 @@ pub(super) async fn accept_loop(
                     Ok((stream, peer)) => {
                         tracing::debug!(%peer, name = %spec.name, "accepted connection");
                         let peer_ip = peer.ip();
+                        // Kafka's `ConnectionQuotas.protectedListener` is
+                        // evaluated at each accept, so a listener added or
+                        // removed while the broker runs protects or
+                        // unprotects the inter-broker listener from the
+                        // next connection on.
+                        let accepting = AcceptingListener {
+                            name: &spec.name,
+                            protected: broker
+                                .data_plane
+                                .is_protected(&spec.name, &broker.config.inter_broker_listener_name),
+                        };
                         tune_accepted_socket(
                             &stream,
                             broker.config.socket_send_buffer,

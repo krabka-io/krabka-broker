@@ -25,7 +25,7 @@ use {
     tempfile::TempDir,
 };
 
-/// The controller election timeout of every node, pinned here rather than
+/// The controller fetch timeout of every node, pinned here rather than
 /// inherited from `BrokerConfig::for_tests` because the tests depend on it.
 ///
 /// Every node runs in this one process, so a stall of the process, from a
@@ -38,7 +38,7 @@ use {
 /// At 200 ms, the window was 300 ms, and the 400 ms freezes of #621 stalled
 /// every run. At 500 ms, the window is 750 ms: a stall of 400 ms, or of 600
 /// ms, still lets the quorum converge.
-const ELECTION_TIMEOUT: Time = krabka_units::millis(500);
+const FETCH_TIMEOUT: Time = krabka_units::millis(500);
 
 /// A started node, and the directory that backs it.
 struct DynamicNode {
@@ -65,7 +65,7 @@ async fn start_dynamic_cluster(n: u64) -> Vec<DynamicNode> {
         config.listen_addr = data_addr;
         config.advertised_listener = data_addr.to_string();
         config.controller_listen_addr = controller_addr;
-        config.controller_election_timeout = ELECTION_TIMEOUT;
+        config.controller_fetch_timeout = FETCH_TIMEOUT;
         config.auto_join_retry_backoff = krabka_units::millis(20);
         config.startup_leader_wait_timeout = krabka_units::secs(10);
 

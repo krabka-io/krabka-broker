@@ -32,7 +32,8 @@ impl RuntimeFileConfig {
             nonnegative_time: partition_disk_scan_interval;
             plain: observer_lag_bound;
             positive_time: heartbeat_interval, heartbeat_timeout, replica_lag_time_max,
-                controller_election_timeout, controller_heartbeat_interval;
+                controller_fetch_timeout, controller_election_timeout,
+                controller_heartbeat_interval;
         }
         if runtime.controller_heartbeat_interval.is_some() {
             cfg.controller_heartbeat_interval_explicit = true;

@@ -615,7 +615,7 @@
           ]
         },
         "allowable_clock_skew_ms": {
-          "description": "Clock-skew tolerance, in milliseconds, for `exp` / `iat` / `nbf`.\nDefault 30000.",
+          "description": "Clock-skew tolerance, in milliseconds, for `exp` / `iat` / `nbf`.\nDefault 0 for the unsecured-JWS validator, as Kafka's\n`unsecuredValidatorAllowableClockSkewMs`, and 30000 for the signed-JWT\nand introspection validators, as Kafka's\n`sasl.oauthbearer.clock.skew.seconds`.",
           "format": "int64",
           "type": [
             "integer",
@@ -744,6 +744,20 @@
         },
         "principal_claim_name": {
           "description": "Claim whose value becomes the principal name. Default `sub`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unsecured_required_scope": {
+          "description": "Scope items a token must all carry, separated by spaces, as Kafka's\n`unsecuredValidatorRequiredScope`. A token that lacks one is refused\nwith the RFC 7628 `insufficient_scope` challenge. Default none. An\nitem outside the RFC 6749 scope-token grammar, such as one with a `\"`\nor `\\`, fails config validation. Unsecured validator only.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unsecured_scope_claim_name": {
+          "description": "Claim that holds the token's scope, as Kafka's\n`unsecuredValidatorScopeClaimName`. Default `scope`. Unsecured\nvalidator only.",
           "type": [
             "string",
             "null"
@@ -1753,7 +1767,7 @@
         },
         "controller_election_timeout": {
           "default": null,
-          "description": "Controller election timeout, Kafka's\n`controller.quorum.fetch.timeout.ms`. It is the follower fetch\nwatchdog, and 1.5x of it is the leader's check-quorum window: a leader\nthat a majority of the voters has not fetched from within that window\nresigns its epoch.",
+          "description": "Controller election timeout, Kafka's\n`controller.quorum.election.timeout.ms`. It is the base of a\ncandidate's randomized election timer, which adds a jitter in\n`[0, timeout)`, so a split vote is retried within one to two election\ntimeouts.",
           "format": "duration",
           "type": [
             "string",
@@ -1769,9 +1783,18 @@
             "null"
           ]
         },
+        "controller_fetch_timeout": {
+          "default": null,
+          "description": "Controller quorum fetch timeout, Kafka's\n`controller.quorum.fetch.timeout.ms`. It is the follower and observer\nfetch watchdog, and 1.5x of it is the leader's check-quorum window: a\nleader that a majority of the voters has not fetched from within that\nwindow resigns its epoch.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "controller_heartbeat_interval": {
           "default": null,
-          "description": "Raft heartbeat interval on the controller quorum. It should stay at or\nbelow `controller_election_timeout / 3`.",
+          "description": "Raft heartbeat interval on the controller quorum. It should stay at or\nbelow `controller_fetch_timeout / 3`.",
           "format": "duration",
           "type": [
             "string",
@@ -3281,7 +3304,16 @@
     },
     "controller_election_timeout": {
       "default": null,
-      "description": "Controller election timeout, Kafka's `controller.quorum.fetch.timeout.ms`.\nIt is the follower fetch watchdog, and 1.5x of it is the leader's\ncheck-quorum window: a leader that has not been fetched from by a\nmajority of the voters within that window resigns its epoch. Absent\nleaves the `BrokerConfig` default intact.",
+      "description": "Controller election timeout, Kafka's\n`controller.quorum.election.timeout.ms`. It is the base of a\ncandidate's randomized election timer, which adds a jitter in\n`[0, timeout)`, so a split vote is retried within one to two election\ntimeouts. Absent leaves the `BrokerConfig` default intact.",
+      "format": "duration",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "controller_fetch_timeout": {
+      "default": null,
+      "description": "Controller quorum fetch timeout, Kafka's\n`controller.quorum.fetch.timeout.ms`. It is the follower and observer\nfetch watchdog, and 1.5x of it is the leader's check-quorum window: a\nleader that has not been fetched from by a majority of the voters\nwithin that window resigns its epoch. Absent leaves the `BrokerConfig`\ndefault intact.",
       "format": "duration",
       "type": [
         "string",

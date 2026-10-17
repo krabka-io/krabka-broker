@@ -56,9 +56,91 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   median and MAD rule as the criterion lane. A lost or duplicated record
   always rejects. See
   [Performance regression budgets](docs/operations/performance-budgets.md).
+- `[oauthbearer]` takes Kafka's `unsecuredValidatorRequiredScope` and
+  `unsecuredValidatorScopeClaimName` for the unsecured validator, as
+  `unsecured_required_scope` (space-separated scope items a token must all
+  carry) and `unsecured_scope_claim_name` (default `scope`). An item outside
+  the RFC 6749 scope-token grammar fails config validation, as Kafka's
+  handler fails its configuration (#1390).
+
+### Changed
+
+- The controller quorum's fetch timeout and election timeout are two keys
+  now, as in Kafka. The new `controller_fetch_timeout`, Kafka's
+  `controller.quorum.fetch.timeout.ms`, is the follower and observer fetch
+  watchdog, and 1.5 times it is the leader's check-quorum window. Its default
+  is Kafka's 2 s, down from the 5 s the single key had, so the survivors of a
+  crashed controller leader start their election after 2 s rather than 5 s.
+  `controller_election_timeout` is now Kafka's
+  `controller.quorum.election.timeout.ms` only, with Kafka's default of 1 s:
+  it is the base of the randomized election timer, so a vote that splits
+  after a controller leader is killed is retried within one to two election
+  timeouts rather than 5 to 10 s. The derived controller heartbeat cadence is
+  `controller_fetch_timeout / 3`, and validation now requires
+  `controller_heartbeat_interval` to be below `controller_fetch_timeout`. An
+  operator who tuned `controller_election_timeout` as the fetch watchdog
+  should move that value to `controller_fetch_timeout`, and one whose
+  controller links need more than 2 s should raise it (#1477).
 
 ### Fixed
 
+- A per-broker `listeners` and `listener.security.protocol.map` change now
+  opens and closes data-plane listeners without a restart, as Kafka's
+  `DynamicListenerConfig` does: a new listener name is bound and served with
+  its own `listener.name.<listener>.sasl.enabled.mechanisms`, a dropped one
+  closes with its connections, and a stored `listeners` opens again after a
+  restart. The broker the alter is addressed to first refuses, with
+  `INVALID_REQUEST` and Kafka's message, a change Kafka refuses: a listener
+  without a protocol, a repeated name or port, a dropped advertised listener
+  or controller mapping, a disabled inter-broker SASL mechanism, or a new
+  protocol or own key for a listener that stays. Before, both keys were
+  stored and reported and changed nothing. As in Kafka, the SASL and Kerberos
+  keys and `principal.builder.class` reach only listeners added later
+  (#1423).
+- The controller listener's TLS and SASL handshake is now held to
+  `connections.max.idle.ms` of silence, as Kafka's `Selector` does, instead
+  of to that long in total (#1426).
+- A request other than `SaslAuthenticate` during a SASL exchange now gets its
+  own error response with `ILLEGAL_SASL_STATE` (34), after the failed
+  authentication delay, before the connection closes, as Kafka's
+  `SaslServerAuthenticator` sends it. A request Kafka cannot parse still
+  closes at once (#1427).
+- A KIP-368 session, on a broker or the controller listener, now expires only
+  strictly after its deadline, as Kafka's `KafkaChannel` does, so a request at
+  the deadline itself is still served (#1428).
+- A SCRAM credential stored with fewer than 4096 iterations is now refused at
+  authentication with Kafka's generic failure (#1429).
+- The unsecured OAUTHBEARER validator allows no clock skew by default, as
+  Kafka's `unsecuredValidatorAllowableClockSkewMs` does. The signed and
+  introspection validators keep 30 s (#1430).
+- A token that lacks a required scope item gets Kafka's `insufficient_scope`
+  OAUTHBEARER challenge, `{"status":"insufficient_scope", "scope":"[a, b]"}`,
+  and the client's `\x01` then fails with error 58 and that JSON as the
+  message, as Kafka's `OAuthBearerSaslServer` does. Every other refused token
+  still gets `invalid_token`. The controller listener answers the same way
+  (#1390, krabka-io/krabka-protocol#66).
+- SCRAM parses the client-final message with Kafka's grammar,
+  `c=...,r=...[,extensions],p=...` in that order, and the unsecured
+  OAUTHBEARER validator refuses what Kafka's does: an `exp` not after `iat`,
+  a non-numeric `iat`, a blank principal and a numeric scope claim
+  (krabka-io/krabka-protocol#65, #66).
+- A partition no longer stalls its appends and fetches while it deletes
+  segment files that retention retired. When their `file.delete.delay.ms`
+  passed, the partition writer unlinked them one after another under the log
+  lock, and an unlink drops the file's page cache, which takes tens of
+  milliseconds a segment on a loaded disk. Under RF3 `acks=all` saturation
+  with size retention this held produce acks for up to about a second
+  (#1394). The writer now deletes them on the blocking pool, outside the log
+  lock and off its own loop, as Kafka deletes them from its scheduler.
+- The bench driver's consumer no longer stalls each `poll` for up to
+  `fetch.max.wait.ms`. The krabka-client-rs pin moves to 29dac7a5
+  (krabka-io/krabka-client-rs#186), whose consumer refreshes metadata only
+  when it is due rather than on every poll, behind a parked `Fetch`. RF3
+  multi-partition end-to-end latencies from `krabka-bench-driver` were set by
+  that stall (#1394).
+- The bench driver's `acks: all` scenarios run again. They turn idempotence on,
+  and the driver asked for more in-flight requests than an idempotent producer
+  allows, so each one failed at start.
 - A broker that stops leading a tiered partition stops copying it to the
   remote tier at its next segment, as Kafka's `RLMCopyTask` does once it is
   cancelled. Before, the copy pass checked leadership only at the start of
@@ -75,16 +157,17 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 - A gracefully stopped active controller now hands the metadata quorum over
   before it exits, as Kafka's `KafkaRaftClient.shutdown` does: it resigns,
   sends `EndQuorumEpoch` naming the other voters by how far they have fetched,
-  and waits up to five seconds (or one `controller_election_timeout`, when that
-  is shorter) for a successor. Before, it stopped without a word, and the other
-  voters noticed only after three missed five-second fetch timeouts and then an
-  election, 18–26 s after `SIGTERM` in a three-node cluster with the default
-  timings. A new controller now serves within about half a second. A broker in
-  controlled shutdown also sends its first heartbeat at once and asks again 50
-  ms after the controller's first answer, as Kafka's `BrokerLifecycleManager`
-  does, instead of waiting a `heartbeat_interval` for each (#1446).
+  and waits up to five seconds (or two and a half `controller_fetch_timeout`s,
+  when that is shorter) for a successor. Before, it stopped without a word,
+  and the other voters noticed only after three missed five-second fetch
+  timeouts and then an election, 18–26 s after `SIGTERM` in a three-node
+  cluster with the default timings. A new controller now serves within about
+  half a second. A broker in controlled shutdown also sends its first
+  heartbeat at once and asks again 50 ms after the controller's first answer,
+  as Kafka's `BrokerLifecycleManager` does, instead of waiting a
+  `heartbeat_interval` for each (#1446).
 - A controller voter that stops hearing from the controller leader now
-  starts an election after one fetch timeout (`controller_election_timeout`),
+  starts an election after one fetch timeout (`controller_fetch_timeout`),
   as Kafka's `KafkaRaftClient.pollFollowerAsVoter` does. Before, it re-polled
   the silent leader until `controller_fetch_miss_limit` timeouts had passed
   (three by default, 15 s), so a killed or paused controller leader was

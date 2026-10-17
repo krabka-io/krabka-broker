@@ -8,7 +8,7 @@ use {
                 submit_metadata_topic_partition,
             },
         },
-        config::BrokerConfig,
+        config::{BrokerConfig, RemoteStorageBackend, RlmmKind},
         partition::{Partition, WriterMessage},
         test_support::{
             UNSUPPORTED_LEVEL_FAULT, broker_registration, finalize_unstable_metadata_version,
@@ -16,8 +16,9 @@ use {
         },
     },
     assert2::{assert, check},
-    std::sync::Arc,
+    std::{sync::Arc, time::Duration},
     tempfile::tempdir,
+    tokio::task::JoinHandle,
 };
 
 async fn assert_listener_stops_accepting(addr: SocketAddr) {
@@ -372,6 +373,148 @@ async fn dropping_handle_stops_idle_connections_and_partition_writers() {
     assert_listener_stops_accepting(addr).await;
     drop(stream);
     broker.controller.cancel().await;
+}
+
+/// How a test stops a broker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stop {
+    /// [`BrokerHandle::shutdown`], which joins the copy task.
+    Shutdown,
+    /// [`BrokerHandle::crash_for_test`], which aborts it and waits for it.
+    Crash,
+    /// Dropping the handle, which aborts it and returns at once.
+    Drop,
+}
+
+/// Whether the broker's remote-log-manager task has finished, or `None` when
+/// the broker has no remote tier and so no such task.
+async fn copy_task_finished(broker: &Broker) -> Option<bool> {
+    broker
+        .remote_log_manager_handle
+        .lock()
+        .await
+        .as_ref()
+        .map(JoinHandle::is_finished)
+}
+
+/// Waits until the remote-log-manager sweep holds `partition` in its snapshot
+/// and stays there, which is the sweep parked on the partition's replica-state
+/// lock the test holds. Other tasks clone a partition only for as long as a
+/// synchronous pass over the registry takes, so a count that stays raised
+/// across consecutive samples is the sweep's.
+async fn await_sweep_parked_on(partition: &Arc<Partition>, baseline: usize) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut raised = 0;
+        while raised < 5 {
+            raised = if Arc::strong_count(partition) > baseline {
+                raised + 1
+            } else {
+                0
+            };
+            // intentional: the sweep runs on its own 10 ms interval, and a
+            // reference count is the only sign it holds the partition.
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the remote-log-manager sweep reaches the held partition");
+}
+
+/// However a broker stops, its remote-log-manager task stops with it, even in
+/// the middle of a tick. A copy task that outlived its broker went on
+/// uploading into a tier that the partitions' new leaders were copying into,
+/// and the tier kept both copies.
+///
+/// The test holds a partition's replica-state lock, so the sweep parks
+/// mid-tick on an await that does not watch the shutdown token. Cancelling the
+/// token alone cannot stop it there:
+/// - a crash and a dropped handle abort the task, which stops it where it is;
+/// - `shutdown` joins it, so it returns only once the held lock is released
+///   and the tick has finished.
+#[yare::parameterized(
+    shutdown = { Stop::Shutdown },
+    crash = { Stop::Crash },
+    dropped_handle = { Stop::Drop },
+)]
+#[test_macro(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn a_stopped_broker_leaves_no_remote_log_manager_task_running(stop: Stop) {
+    let dir = tempdir().unwrap();
+    let remote = tempdir().unwrap();
+    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+    config.remote_storage_backend = Some(RemoteStorageBackend::Local {
+        dir: remote.path().to_path_buf(),
+    });
+    config.remote_log_metadata = RlmmKind::InMemory;
+    config.remote_log_manager_interval = krabka_units::millis(10);
+    let handle = Broker::start(config).await.unwrap();
+    let broker = handle.broker_arc_for_test();
+    check!(
+        copy_task_finished(&broker).await == Some(false),
+        "the copy task runs while the broker serves"
+    );
+
+    let partition = local_partition_with_records()
+        .log_dir(dir.path())
+        .topic("parked-sweep")
+        .call();
+    let held = partition.replica_state.lock().await;
+    let baseline = Arc::strong_count(&partition) + 1;
+    broker.partitions.insert(
+        "parked-sweep".into(),
+        PartitionIndex(0),
+        Arc::clone(&partition),
+    );
+    await_sweep_parked_on(&partition, baseline).await;
+
+    match stop {
+        Stop::Shutdown => {
+            let shutdown = tokio::spawn(handle.shutdown());
+            // intentional: a shutdown that did not join the task would return
+            // within this window; one that joins it cannot while the lock is
+            // held, which is the property under test.
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            // `shutdown` holds the task's handle while it joins it, so the
+            // handle cannot be read here; the shutdown itself is the witness.
+            check!(
+                !shutdown.is_finished(),
+                "shutdown returned with the copy task still mid-tick"
+            );
+            drop(held);
+            tokio::time::timeout(Duration::from_secs(10), shutdown)
+                .await
+                .expect("shutdown returns once the tick finishes")
+                .expect("shutdown does not panic");
+        }
+        Stop::Crash => {
+            let crash = tokio::spawn(handle.crash_for_test());
+            await_copy_task_finished(&broker).await;
+            drop(held);
+            tokio::time::timeout(Duration::from_secs(10), crash)
+                .await
+                .expect("the crash returns")
+                .expect("the crash does not panic");
+        }
+        Stop::Drop => {
+            drop(handle);
+            await_copy_task_finished(&broker).await;
+            drop(held);
+            broker.controller.cancel().await;
+        }
+    }
+
+    check!(copy_task_finished(&broker).await == Some(true));
+}
+
+/// Waits until the broker's remote-log-manager task has finished, with the
+/// replica-state lock it is parked on still held.
+async fn await_copy_task_finished(broker: &Broker) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while copy_task_finished(broker).await != Some(true) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the aborted copy task stops while it is parked mid-tick");
 }
 
 #[tokio::test]

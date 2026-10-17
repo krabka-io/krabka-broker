@@ -48,8 +48,7 @@ fn expected(
             renewed
         };
         let lifetime = i64::try_from(i128::from(at) - completed).unwrap();
-        let admitted =
-            matches!(api, 17 | 36) || i128::from(original) + i128::from(delays.2) < i128::from(at);
+        let admitted = api == 17 || saturated(i128::from(original) + i128::from(delays.2)) <= at;
         Some((at, lifetime, admitted))
     };
     RenewalTrace {
@@ -72,8 +71,16 @@ fn renewal_at_exact_expiry_preserves_service_against_old_cleanup() {
     assert2::assert!(trace.renewal == TokenMutationDecision::Append);
     assert2::assert!(trace.cleanup == TokenMutationDecision::Reject);
     assert2::assert!(trace.session == Some((1500, 250, true)));
-    let expired = renewed_token_survives_captured_cleanup(0, periods, (0, 250, 500), 0, false, 0);
+    let deadline = renewed_token_survives_captured_cleanup(0, periods, (0, 250, 500), 0, false, 0);
+    assert2::assert!(deadline.session == Some((1500, 250, true)));
+    let expired = renewed_token_survives_captured_cleanup(0, periods, (0, 250, 501), 0, false, 0);
     assert2::assert!(expired.session == Some((1500, 250, false)));
+    let bare_authenticate =
+        renewed_token_survives_captured_cleanup(0, periods, (0, 250, 501), 0, false, 36);
+    assert2::assert!(bare_authenticate.session == Some((1500, 250, false)));
+    let handshake =
+        renewed_token_survives_captured_cleanup(0, periods, (0, 250, 501), 0, false, 17);
+    assert2::assert!(handshake.session == Some((1500, 250, true)));
     let late = renewed_token_survives_captured_cleanup(0, periods, (0, 500, 500), 0, false, 36);
     assert2::assert!(late.session == None);
 }

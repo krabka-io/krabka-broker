@@ -7,7 +7,7 @@ use {
     crate::{
         harness::{
             await_single_leader, await_until, build_engine, shutdown_nodes, three_voter_network,
-            topic_record,
+            topic_record, uniform,
         },
         sim_net::SimNet,
     },
@@ -51,7 +51,7 @@ fn start_snapshot_pair(
                 .me(id)
                 .ids(voters)
                 .cluster_id(cid)
-                .election_timeout(SNAPSHOT_TIMEOUTS[idx])
+                .timeouts(uniform(SNAPSHOT_TIMEOUTS[idx]))
                 .snapshot_interval_records(interval)
                 .call();
             net.register(id, ctrl);
@@ -205,7 +205,7 @@ async fn lagging_follower_catches_up_via_snapshot() {
         .me(3)
         .ids(&ids)
         .cluster_id(cid)
-        .election_timeout(SNAPSHOT_TIMEOUTS[2])
+        .timeouts(uniform(SNAPSHOT_TIMEOUTS[2]))
         .snapshot_interval_records(interval)
         .call();
     net.register(NodeId(3), lag_ctrl);

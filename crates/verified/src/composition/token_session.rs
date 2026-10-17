@@ -19,8 +19,10 @@ type TokenSessionReceipt = (i64, i64, i64, i64, bool, TokenApiAdmission);
 /// Create a token, classify SCRAM round one, recheck its captured expiry at
 /// round two, then combine session expiry with request and token-API gates.
 /// The receipt derives deadline coherence from creation rather than assuming
-/// it, and proves admission before the earliest ceiling as well as rejection
-/// at it. Cryptographic authentication success, faithful pending expiry/identity
+/// it, and proves admission up to and at the earliest ceiling as well as
+/// rejection after it, the strict deadline Kafka's KIP-368 check uses. No
+/// re-authentication has started on the connection, so past the deadline only
+/// a `SaslHandshake` (17), which begins one, is still admitted. Cryptographic authentication success, faithful pending expiry/identity
 /// transfer, coherent metadata and nondecreasing clock observations remain host
 /// obligations. Renewal/revocation after round one is outside this snapshot.
 #[requires(0 <= times.0@ && times.0@ <= times.1@
@@ -38,17 +40,17 @@ type TokenSessionReceipt = (i64, i64, i64, i64, bool, TokenApiAdmission);
         && times.2@ < receipt.2@ && receipt.2@ <= receipt.0@
         && (periods.3@ > 0 ==> receipt.2@ <= times.2@ + periods.3@)
         && receipt.3@ == receipt.2@ - times.2@
-        && receipt.4 == (api_key@ == 17 || api_key@ == 36 || times.3@ < receipt.2@)
+        && receipt.4 == (api_key@ == 17 || times.3@ <= receipt.2@)
         && receipt.5 == TokenApiAdmission::Reject,
 })]
 #[ensures(match result {
     None => true,
     Some(receipt) =>
-        ((times.3@ >= receipt.0@ || times.3@ >= receipt.1@
-            || (periods.3@ > 0 && times.3@ >= times.2@ + periods.3@))
-            ==> receipt.4 == (api_key@ == 17 || api_key@ == 36))
-        && ((times.3@ < receipt.0@
-            && (periods.3@ <= 0 || times.3@ < times.2@ + periods.3@)) ==> receipt.4),
+        ((times.3@ > receipt.0@ || times.3@ > receipt.1@
+            || (periods.3@ > 0 && times.3@ > times.2@ + periods.3@))
+            ==> receipt.4 == (api_key@ == 17))
+        && ((times.3@ <= receipt.0@
+            && (periods.3@ <= 0 || times.3@ <= times.2@ + periods.3@)) ==> receipt.4),
 })]
 pub(super) fn created_token_session_bounds_requests(
     times: (i64, i64, i64, i64),   // creation, SCRAM rounds one/two, request
@@ -81,7 +83,7 @@ pub(super) fn created_token_session_bounds_requests(
         return None;
     };
     let admitted = request_auth_admission(RequestAuthState::Authenticated, api_key)
-        && !session_expired_for_request(Some(at), api_key, times.3);
+        && !session_expired_for_request(Some(at), api_key, times.3, None);
     let token_admission = token_api_admission(true, true, token_api);
     Some((
         pending_expiry,

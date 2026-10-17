@@ -99,15 +99,14 @@ pub(crate) struct StartedPair {
 impl MixedQuorum {
     pub(crate) async fn start(
         cluster_id: Uuid,
-        election_timeout: Option<krabka_units::Time>,
+        fetch_timeout: Option<krabka_units::Time>,
     ) -> (
         [u16; 3],
         [krabka_broker::BrokerHandle; 2],
         [tempfile::TempDir; 2],
     ) {
         let endpoints = Self::allocate().await;
-        let StartedPair { brokers, dirs } =
-            endpoints.start_pair(cluster_id, election_timeout).await;
+        let StartedPair { brokers, dirs } = endpoints.start_pair(cluster_id, fetch_timeout).await;
         (endpoints.ports, brokers, dirs)
     }
 
@@ -123,7 +122,7 @@ impl MixedQuorum {
     pub(crate) async fn start_pair(
         &self,
         cluster_id: Uuid,
-        election_timeout: Option<krabka_units::Time>,
+        fetch_timeout: Option<krabka_units::Time>,
     ) -> StartedPair {
         let dirs: [tempfile::TempDir; 2] = std::array::from_fn(|_| tempfile::tempdir().unwrap());
         let voters: Vec<_> = self
@@ -147,8 +146,8 @@ impl MixedQuorum {
                 })
                 .cluster_id(cluster_id)
                 .call();
-            if let Some(timeout) = election_timeout {
-                config.controller_election_timeout = timeout;
+            if let Some(timeout) = fetch_timeout {
+                config.controller_fetch_timeout = timeout;
             }
             config
         });

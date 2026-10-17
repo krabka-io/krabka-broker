@@ -239,7 +239,8 @@ pub fn jvm_broker_config(
         heartbeat_interval: krabka_units::millis(3_000),
         heartbeat_timeout: krabka_units::millis(9_000),
         replica_lag_time_max: krabka_units::millis(30_000),
-        controller_election_timeout: krabka_units::secs(5),
+        controller_fetch_timeout: krabka_units::secs(5),
+        controller_election_timeout: krabka_units::secs(1),
         controller_heartbeat_interval: krabka_units::millis(500),
         bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
         ..krabka_broker::BrokerConfig::default().with_internal_topics_for(quorum_size)

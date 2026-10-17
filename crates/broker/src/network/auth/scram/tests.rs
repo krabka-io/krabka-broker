@@ -130,8 +130,22 @@ impl KafkaScramClient {
 }
 
 fn scram_user(user: &str, mechanism: SaslMechanism) -> MetadataRecord {
-    let credential =
-        hash_scram_password_with_salt(USER_PASSWORD.as_bytes(), mechanism, 4096, b"salt".to_vec());
+    scram_user_with_iterations(user, mechanism, 4096)
+}
+
+/// A SCRAM user whose stored credential was stretched `iterations` times, as
+/// a bootstrap record may carry one below Kafka's floor.
+fn scram_user_with_iterations(
+    user: &str,
+    mechanism: SaslMechanism,
+    iterations: u32,
+) -> MetadataRecord {
+    let credential = hash_scram_password_with_salt(
+        USER_PASSWORD.as_bytes(),
+        mechanism,
+        iterations,
+        b"salt".to_vec(),
+    );
     MetadataRecord::V1ScramCredential(ScramCredentialRecord {
         user: user.into(),
         mechanism,
@@ -270,6 +284,47 @@ struct ExchangeCase<'a> {
     extensions: &'a str,
     password: &'a [u8],
     expected: Outcome,
+}
+
+/// Runs every row against `source` with the token secret `secret_key`.
+fn run_cases<'a>(
+    source: &FakeMetadataSource,
+    secret_key: &SecretBytes,
+    mechanism: SaslMechanism,
+    cases: impl IntoIterator<Item = ExchangeCase<'a>>,
+) {
+    for ExchangeCase {
+        case,
+        authorization_id,
+        sasl_name,
+        extensions,
+        password,
+        expected,
+    } in cases
+    {
+        check!(
+            exchange(
+                source,
+                Some(secret_key),
+                mechanism,
+                authorization_id,
+                sasl_name,
+                extensions,
+                password
+            ) == expected,
+            "{mechanism:?}: {case}"
+        );
+    }
+}
+
+/// The `SaslException` text for a GS2 authorization id that is not the
+/// SCRAM user name.
+fn authorization_id_mismatch() -> Outcome {
+    Outcome::FirstRoundFailed(Some(
+        "Authentication failed: Client requested an authorization id that is different from \
+         username"
+            .into(),
+    ))
 }
 
 /// Kafka's `ScramSaslServer` reads the token store if and only if the
@@ -438,11 +493,7 @@ fn tokenauth_extension_selects_the_credential_store() {
                 sasl_name: "a=2Cb=3Dc",
                 extensions: "",
                 password: user,
-                expected: Outcome::FirstRoundFailed(Some(
-                    "Authentication failed: Client requested an authorization id that is \
-                     different from username"
-                        .into(),
-                )),
+                expected: authorization_id_mismatch(),
             },
             ExchangeCase {
                 case: "authorization id other than the user",
@@ -450,35 +501,61 @@ fn tokenauth_extension_selects_the_credential_store() {
                 sasl_name: "alice",
                 extensions: "",
                 password: user,
-                expected: Outcome::FirstRoundFailed(Some(
-                    "Authentication failed: Client requested an authorization id that is \
-                     different from username"
-                        .into(),
-                )),
+                expected: authorization_id_mismatch(),
             },
         ];
-        for ExchangeCase {
-            case,
-            authorization_id,
-            sasl_name,
-            extensions,
-            password,
-            expected,
-        } in cases
-        {
-            check!(
-                exchange(
-                    &source,
-                    Some(&secret),
-                    mechanism,
-                    authorization_id,
-                    sasl_name,
-                    extensions,
-                    password
-                ) == expected,
-                "{mechanism:?}: {case}"
-            );
-        }
+        run_cases(&source, &secret, mechanism, cases);
+    }
+}
+
+/// `ScramSaslServer` refuses a stored credential below
+/// `ScramMechanism.minIterations` (4096) with a `SaslException`, after the
+/// authorization id check, for both mechanisms.
+#[test]
+fn a_credential_below_kafkas_iteration_floor_is_refused() {
+    for mechanism in [SaslMechanism::ScramSha256, SaslMechanism::ScramSha512] {
+        let source = FakeMetadataSource::builder()
+            .records(&[
+                scram_user_with_iterations("weak", mechanism, 4095),
+                scram_user_with_iterations("floor", mechanism, 4096),
+            ])
+            .build();
+        let user = USER_PASSWORD.as_bytes();
+        let secret = token_secret();
+        let cases: [ExchangeCase<'_>; 3] = [
+            // `ScramSaslServer` refuses a stored credential below 4096
+            // iterations with a `SaslException`, so the client gets the
+            // generic text.
+            ExchangeCase {
+                case: "credential below the iteration floor",
+                authorization_id: None,
+                sasl_name: "weak",
+                extensions: "",
+                password: user,
+                expected: Outcome::FirstRoundFailed(None),
+            },
+            ExchangeCase {
+                case: "credential at the iteration floor",
+                authorization_id: None,
+                sasl_name: "floor",
+                extensions: "",
+                password: user,
+                expected: Outcome::Authenticated {
+                    principal: principal("floor", mechanism),
+                    via_token: false,
+                },
+            },
+            // Kafka checks the authorization id before the iterations.
+            ExchangeCase {
+                case: "authorization id mismatch wins over a weak credential",
+                authorization_id: Some("mallory"),
+                sasl_name: "weak",
+                extensions: "",
+                password: user,
+                expected: authorization_id_mismatch(),
+            },
+        ];
+        run_cases(&source, &secret, mechanism, cases);
     }
 }
 
@@ -527,9 +604,11 @@ fn token_round_one_threads_the_token_expiry() {
         expiry - after <= round2.session_lifetime_ms
             && round2.session_lifetime_ms <= expiry - before
     );
-    assert!(!auth.expired_for_request(0, expiry - 1, None));
-    assert!(auth.expired_for_request(0, expiry, None));
-    assert!(!auth.expired_for_request(17, expiry, None));
+    // Kafka expires the session strictly after its deadline, and a
+    // `SaslHandshake` that begins re-authentication is still admitted.
+    assert!(!auth.expired_for_request(0, expiry, None));
+    assert!(auth.expired_for_request(0, expiry + 1, None));
+    assert!(!auth.expired_for_request(17, expiry + 1, None));
     assert!(
         auth.token_api_admission(krabka_verified::delegation_token::TokenApi::Describe)
             == krabka_verified::delegation_token::TokenApiAdmission::Reject

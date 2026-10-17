@@ -231,7 +231,7 @@ impl QuorumStateMachine {
                 deadline: self.election_deadline(now),
             }
         } else {
-            let fetch_deadline = now.saturating_add_ms(self.election_timeout_ms);
+            let fetch_deadline = now.saturating_add_ms(self.fetch_timeout_ms);
             self.role = Role::Observer {
                 leader_id: None,
                 fetch_deadline,
@@ -368,7 +368,7 @@ impl QuorumStateMachine {
             })
             .into_iter()
             .collect();
-        let fetch_deadline = now.saturating_add_ms(self.election_timeout_ms);
+        let fetch_deadline = now.saturating_add_ms(self.fetch_timeout_ms);
         actions.extend([Action::SendFetch { leader_id }, Action::ResetTimer {
             kind: TimerKind::Fetch,
             deadline: fetch_deadline,
@@ -441,7 +441,7 @@ impl QuorumStateMachine {
     /// leader, whose fetch timer retries the discovery Fetch.
     fn become_discovering_observer(&mut self, now: SimInstant) -> Vec<Action> {
         self.state.leader_id = None;
-        let fetch_deadline = now.saturating_add_ms(self.election_timeout_ms);
+        let fetch_deadline = now.saturating_add_ms(self.fetch_timeout_ms);
         self.role = Role::Observer {
             leader_id: None,
             fetch_deadline,

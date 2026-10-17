@@ -127,6 +127,11 @@ impl FileConfig {
         {
             cfg.replica_lag_time_max = positive_time("replica_lag_time_max", value)?;
         }
+        if let Some(value) = self.controller_fetch_timeout
+            && cfg.controller_fetch_timeout == defaults.controller_fetch_timeout
+        {
+            cfg.controller_fetch_timeout = positive_time("controller_fetch_timeout", value)?;
+        }
         if let Some(value) = self.controller_election_timeout
             && cfg.controller_election_timeout == defaults.controller_election_timeout
         {
@@ -314,6 +319,7 @@ protocol = "Plaintext"
             heartbeat_interval: None,
             heartbeat_timeout: None,
             replica_lag_time_max: None,
+            controller_fetch_timeout: None,
             controller_election_timeout: None,
             controller_heartbeat_interval: None,
             inter_broker_listener_name: Some("PLAIN".to_string()),
@@ -507,6 +513,7 @@ protocol = "Plaintext"
 heartbeat_interval = "500ms"
 heartbeat_timeout = "1500ms"
 replica_lag_time_max = "2s"
+controller_fetch_timeout = "1500ms"
 controller_election_timeout = "500ms"
 controller_heartbeat_interval = "100ms"
 "#;
@@ -515,6 +522,7 @@ controller_heartbeat_interval = "100ms"
         check!(cfg.heartbeat_interval == millis(500));
         check!(cfg.heartbeat_timeout == millis(1500));
         check!(cfg.replica_lag_time_max == secs(2));
+        check!(cfg.controller_fetch_timeout == millis(1500));
         check!(cfg.controller_election_timeout == millis(500));
         check!(cfg.controller_heartbeat_interval == millis(100));
     }

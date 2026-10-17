@@ -10,7 +10,7 @@ use {
     },
     krabka_kraft_core::simulation_support::NodeFingerprint,
     krabka_raft::kraft::{
-        QuorumStateMachine,
+        QuorumStateMachine, QuorumTimeouts,
         role::Role,
         types::{Epoch, NodeId, QuorumState, SimInstant},
     },
@@ -44,7 +44,10 @@ impl<L: SimNodeLog> Sim<L> {
             let machine = QuorumStateMachine::new(
                 id,
                 QuorumState::bootstrap(uuid::Uuid::nil(), voters.clone()),
-                election_timeout_of(id),
+                QuorumTimeouts {
+                    election: election_timeout_of(id),
+                    fetch: election_timeout_of(id),
+                },
             );
             nodes.insert(
                 id,

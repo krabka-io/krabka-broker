@@ -16,7 +16,8 @@ type ControllerSessionTrace = (Option<i64>, Vec<bool>, (u64, u64));
 
 /// Bind publication, cache freshness and validation completion to a history of
 /// `DescribeQuorum` requests and their current Cluster Describe ACL facts.
-/// Return the maximal handled prefix before the first expired clock observation:
+/// Return the maximal handled prefix before the first expired clock observation,
+/// one strictly after the deadline as in Kafka:
 /// ACL denial returns a refusal and continues; expiry closes even for superusers.
 /// Once closed, later clock rollback cannot revive this connection.
 /// Publication history covers validation, not later key rotation. Faithful claim,
@@ -33,12 +34,12 @@ type ControllerSessionTrace = (Option<i64>, Vec<bool>, (u64, u64));
 #[ensures(result.1@.len() <= requests@.len())]
 #[ensures(forall<i: Int> 0 <= i && i < result.1@.len() ==> match result.0 {
     None => false,
-    Some(expiry) => requests@[i].0@ < expiry@,
+    Some(expiry) => requests@[i].0@ <= expiry@,
 })]
 #[ensures(match result.0 {
     None => true,
     Some(expiry) => result.1@.len() < requests@.len()
-        ==> requests@[result.1@.len()].0@ >= expiry@,
+        ==> requests@[result.1@.len()].0@ > expiry@,
 })]
 #[ensures(forall<i: Int> 0 <= i && i < result.1@.len() ==>
     result.1@[i] == (requests@[i].1.super_user || (!requests@[i].1.saw_deny
@@ -68,7 +69,7 @@ pub(super) fn published_controller_session_bounds_quorum_requests(
     };
     let mut i = 0_usize;
     #[invariant(responses@.len() == i@ && i@ <= requests@.len())]
-    #[invariant(forall<j: Int> 0 <= j && j < i@ ==> requests@[j].0@ < expiry@)]
+    #[invariant(forall<j: Int> 0 <= j && j < i@ ==> requests@[j].0@ <= expiry@)]
     #[invariant(forall<j: Int> 0 <= j && j < i@ ==>
         responses@[j] == (requests@[j].1.super_user || (!requests@[j].1.saw_deny
             && (requests@[j].1.saw_allow || requests@[j].1.default_decision == AclDefault::Allow))))]

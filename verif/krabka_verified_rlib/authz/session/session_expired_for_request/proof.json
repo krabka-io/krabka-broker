@@ -3,9 +3,10 @@
   "proofs": {
     "Coma": {
       "vc_elim_Some": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_reauthentication_begins": { "prover": "alt-ergo", "time": 0.016 },
       "vc_session_expired_for_request": {
         "prover": "alt-ergo",
-        "time": 0.016
+        "time": 0.045
       }
     }
   }

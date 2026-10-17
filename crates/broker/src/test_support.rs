@@ -160,6 +160,47 @@ pub(crate) fn finalized_broker_features(
         .collect()
 }
 
+/// An ES256 key, the one-key JWKS that publishes it, and the tokens it signs,
+/// for the signed-OAUTHBEARER validator tests.
+pub(crate) struct Es256SigningKey {
+    key: ring::signature::EcdsaKeyPair,
+    rng: ring::rand::SystemRandom,
+    kid: &'static str,
+}
+
+impl Es256SigningKey {
+    /// A fresh P-256 key published under `kid`.
+    pub(crate) fn generate(kid: &'static str) -> Self {
+        use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair};
+        let rng = ring::rand::SystemRandom::new();
+        let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).unwrap();
+        let key = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8.as_ref(), &rng)
+            .unwrap();
+        Self { key, rng, kid }
+    }
+
+    /// The JWKS a validator verifies this key's tokens against.
+    pub(crate) fn jwks(&self) -> krabka_security::Jwks {
+        use {
+            base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64},
+            ring::signature::KeyPair as _,
+        };
+        let point = self.key.public_key().as_ref();
+        let jwks = serde_json::json!({"keys": [{"kty": "EC", "crv": "P-256", "kid": self.kid,
+            "x": B64.encode(&point[1..33]), "y": B64.encode(&point[33..65])}]});
+        krabka_security::Jwks::from_json(&jwks.to_string(), false).unwrap()
+    }
+
+    /// A compact JWS over `claims`, signed with this key.
+    pub(crate) fn sign(&self, claims: &serde_json::Value) -> String {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
+        let header = B64.encode(serde_json::json!({"alg": "ES256", "kid": self.kid}).to_string());
+        let input = format!("{header}.{}", B64.encode(claims.to_string()));
+        let signature = self.key.sign(&self.rng, input.as_bytes()).unwrap();
+        format!("{input}.{}", B64.encode(signature.as_ref()))
+    }
+}
+
 /// Generate a real Ed25519 pair for signing and trust-set fixtures.
 pub(crate) fn fresh_ed25519_key() -> ring::signature::Ed25519KeyPair {
     use ring::signature::Ed25519KeyPair;

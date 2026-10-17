@@ -73,7 +73,8 @@ pub(crate) async fn start_two_sasl_ssl_brokers_with_controller_protocol(
         config.inter_broker_listener_name = "SASL_SSL".into();
         config.controller_listener_protocol = ctrl_protocol;
         // TLS adds handshake round trips to both controller and data traffic.
-        config.controller_election_timeout = krabka_units::secs(8);
+        config.controller_fetch_timeout = krabka_units::secs(8);
+        config.controller_election_timeout = krabka_units::secs(2);
         config.tls_config = Some(TlsConfig {
             cert_chain_path: cert_path.clone(),
             private_key_path: security.join("dev_key.pem"),

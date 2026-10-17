@@ -20,16 +20,11 @@ use {
         wire::HeaderEncoding,
     },
     assert2::assert,
-    bytes::BytesMut,
-    krabka_protocol::{
-        Encode,
-        owned::{
-            api_versions_request::ApiVersionsRequest,
-            describe_configs_request::DescribeConfigsRequest,
-            describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResponse},
-            incremental_alter_configs_response::{
-                AlterConfigsResourceResponse, IncrementalAlterConfigsResponse,
-            },
+    krabka_protocol::owned::{
+        describe_configs_request::DescribeConfigsRequest,
+        describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResponse},
+        incremental_alter_configs_response::{
+            AlterConfigsResourceResponse, IncrementalAlterConfigsResponse,
         },
     },
     std::{
@@ -87,23 +82,14 @@ async fn connect_served(addr: SocketAddr) -> Option<TcpStream> {
 
 /// [`connect_served`] from the loopback `source` address, or the default one.
 async fn connect_served_from(addr: SocketAddr, source: Option<IpAddr>) -> Option<TcpStream> {
-    let mut body = BytesMut::new();
-    ApiVersionsRequest::default()
-        .encode(&mut body, 0)
-        .expect("encode ApiVersions");
     let socket = TcpSocket::new_v4().ok()?;
     if let Some(ip) = source {
         socket.bind(SocketAddr::new(ip, 0)).ok()?;
     }
     let mut stream = socket.connect(addr).await.ok()?;
-    kafka_wire::round_trip()
-        .stream(&mut stream)
-        .client_id(CLIENT_ID)
-        .body(&body)
-        .call()
+    kafka_wire::api_versions_answered(&mut stream, CLIENT_ID)
         .await
-        .ok()
-        .map(|_| stream)
+        .then_some(stream)
 }
 
 /// Poll until a new connection is served (`want`) or refused (`!want`), and

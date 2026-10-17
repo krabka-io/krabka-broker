@@ -2,7 +2,7 @@
 //! ciphertext progress and a complete flush spanning many idle windows exact.
 
 use {
-    super::WriteIdle,
+    super::{IdleTimer, WriteIdle, for_response},
     crate::test_support::localhost_ecdsa_pair,
     assert2::assert,
     rustls::pki_types::{PrivateKeyDer, ServerName},
@@ -120,7 +120,7 @@ async fn tls_pair(window: Duration) -> TlsPair {
         next_read: None,
     };
     let (server, client) = tokio::join!(
-        acceptor.accept(WriteIdle::new(server, Some(window))),
+        acceptor.accept(WriteIdle::new(server, IdleTimer::new(Some(window)))),
         connector.connect(
             ServerName::try_from("localhost").expect("server name"),
             reader
@@ -146,7 +146,7 @@ async fn tls_ciphertext_progress_rearms_idle_during_a_long_flush() {
     let writer = tokio::spawn(async move {
         // The same response wrapper as dispatch must recognize the timer
         // beneath TLS rather than timing the complete encrypted flush.
-        let mut server = WriteIdle::for_response(server, Some(window));
+        let mut server = for_response(server, Some(window));
         server.write_all(&vec![7; 64 * 1024]).await?;
         server.flush().await
     });
@@ -171,7 +171,7 @@ async fn a_tls_reader_that_stops_ciphertext_progress_expires() {
         client: _nonreading_client,
         paced: _paced,
     } = tls_pair(window).await;
-    let mut server = WriteIdle::for_response(server, Some(window));
+    let mut server = for_response(server, Some(window));
     let result = async {
         server.write_all(&vec![7; 64 * 1024]).await?;
         server.flush().await

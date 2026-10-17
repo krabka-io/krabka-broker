@@ -204,7 +204,9 @@ pub(crate) mod produce;
 // KIP-714 client-metrics push, paired with get_telemetry_subscriptions.
 pub(crate) mod push_telemetry;
 pub(crate) mod remove_raft_voter;
+// Kafka's `AbstractRequest.getErrorResponse` for every api key.
 pub(crate) mod renew_delegation_token;
+pub(crate) mod request_error;
 // KIP-932 ShareGroupDescribe (api_key 77), with a per-group Describe ACL gate.
 pub(crate) mod share_group_describe;
 // KIP-932 share-group membership (api_key 76).
