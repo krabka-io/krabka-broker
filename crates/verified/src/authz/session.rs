@@ -46,20 +46,62 @@ pub fn sasl_session_expiry(
     (expiry, lifetime)
 }
 
-/// Expired sessions may start/continue reauthentication (17/36), but cannot
-/// serve ordinary requests at or after their deadline. Authentication phase
-/// admission is a separate gate, including during the reauthentication rounds.
-#[ensures(result == (api_key@ != 17 && api_key@ != 36 && match expiry_ms {
-    None => false,
-    Some(at) => at@ <= now_ms@,
+/// Kafka's `KafkaChannel.MIN_REAUTH_INTERVAL_ONE_SECOND_NANOS`, in ms: a
+/// connection may not start a re-authentication more than once a second.
+pub const MIN_REAUTH_INTERVAL_MS: i64 = 1_000;
+
+/// Whether a `SaslHandshake` on a session that expires at `expiry_ms` begins
+/// a KIP-368 re-authentication, as Kafka's
+/// `KafkaChannel.maybeBeginServerReauthentication` decides: the session must
+/// have an expiry, and the last re-authentication on the connection, if any,
+/// must have started [`MIN_REAUTH_INTERVAL_MS`] or more before `now_ms`.
+#[ensures(result == (expiry_ms != None && match last_start_ms {
+    None => true,
+    Some(last) => now_ms@ - last@ >= 1000,
 }))]
 #[must_use]
-pub fn session_expired_for_request(expiry_ms: Option<i64>, api_key: i16, now_ms: i64) -> bool {
-    if matches!(api_key, 17 | 36) {
-        return false;
+pub fn reauthentication_begins(
+    expiry_ms: Option<i64>,
+    now_ms: i64,
+    last_start_ms: Option<i64>,
+) -> bool {
+    match (expiry_ms, last_start_ms) {
+        (None, _) => false,
+        (Some(_), None) => true,
+        (Some(_), Some(last)) => now_ms.saturating_sub(last) >= MIN_REAUTH_INTERVAL_MS,
     }
+}
+
+/// Whether a request must close the connection because its KIP-368 session
+/// has expired, as Kafka's `Processor.processCompletedReceives` decides.
+///
+/// A session expires only strictly after its deadline, as in
+/// `KafkaChannel.serverAuthenticationSessionExpired`: a request at exactly
+/// `expiry_ms` is still served. Past the deadline the one exempt frame is a
+/// `SaslHandshake` (17) that [`reauthentication_begins`] accepts, because
+/// Kafka asks `maybeBeginServerReauthentication` before it checks the
+/// deadline. Every other frame closes, a `SaslAuthenticate` (36) with no
+/// handshake before it and a handshake inside the one-second interval
+/// included. Authentication phase admission is a separate gate, including
+/// during the re-authentication rounds.
+#[ensures(result == (match expiry_ms {
+    None => false,
+    Some(at) => now_ms@ > at@,
+} && !(api_key@ == 17 && match last_reauth_start_ms {
+    None => true,
+    Some(last) => now_ms@ - last@ >= 1000,
+})))]
+#[must_use]
+pub fn session_expired_for_request(
+    expiry_ms: Option<i64>,
+    api_key: i16,
+    now_ms: i64,
+    last_reauth_start_ms: Option<i64>,
+) -> bool {
     match expiry_ms {
-        Some(at) => at <= now_ms,
-        None => false,
+        Some(at) if now_ms > at => {
+            !(api_key == 17 && reauthentication_begins(expiry_ms, now_ms, last_reauth_start_ms))
+        }
+        _ => false,
     }
 }

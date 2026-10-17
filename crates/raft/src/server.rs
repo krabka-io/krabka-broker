@@ -41,10 +41,13 @@ mod tests_api_versions;
 mod tests_listener_limits;
 mod voter_admin;
 
-pub use self::api_versions::{
-    api_versions_max_version, finalized_feature_keys, is_valid_api_versions_request,
-    is_valid_client_info, supported_feature_key, supported_feature_keys,
-    unsupported_version_response,
+pub use self::{
+    api_versions::{
+        api_versions_max_version, finalized_feature_keys, is_valid_api_versions_request,
+        is_valid_client_info, supported_feature_key, supported_feature_keys,
+        unsupported_version_response,
+    },
+    authorization::fetch_error_response,
 };
 use {
     self::{
@@ -61,8 +64,9 @@ use {
     },
     crate::{
         AcceptingListener, ClusterGrants, ConnectionLimiter, ControllerAdminRouter,
-        ControllerApiVersions, ListenerLimits, RaftHandshakeError, RaftListenerHandshake,
-        RaftShardRouter, UnstableApiVersions, error::RaftError, kraft::KraftController,
+        ControllerApiVersions, HandshakeStream, ListenerLimits, RaftHandshakeError,
+        RaftListenerHandshake, RaftShardRouter, UnstableApiVersions, error::RaftError,
+        kraft::KraftController,
     },
 };
 
@@ -221,10 +225,12 @@ pub(crate) async fn run(
                                 // Kafka registers a channel with its `Selector` at
                                 // accept time, so `connections.max.idle.ms` also
                                 // covers a peer that never finishes the TLS or
-                                // SASL handshake.
-                                let upgraded = within_idle_window(
+                                // SASL handshake. The window measures silence:
+                                // every byte either way restarts it.
+                                let upgraded = upgrade_within_idle_window(
+                                    stream,
                                     limits.max_idle,
-                                    hs.upgrade(stream, &api_versions),
+                                    |stream| hs.upgrade(stream, &api_versions),
                                 )
                                 .await;
                                 match upgraded {
@@ -280,16 +286,30 @@ pub(crate) async fn run(
     }
 }
 
-/// Runs `future`, giving up once `window` passes. `None` for the window waits
-/// as long as the future takes, and `None` from this function means it gave
-/// up.
-async fn within_idle_window<F: std::future::Future>(
+/// Runs `upgrade` on `stream`, giving up once `window` passes with no byte
+/// read or written. Kafka's `Selector` refreshes a channel's idle clock on
+/// every ready key, so a handshake that is slow but keeps moving bytes is not
+/// closed. `None` for the window waits as long as the handshake takes, and
+/// `None` from this function means it gave up.
+///
+/// The watch is dropped on return, which disarms the stream's clock, so the
+/// request loop's own idle window is the only one that applies after.
+async fn upgrade_within_idle_window<S, F, Fut>(
+    stream: S,
     window: Option<std::time::Duration>,
-    future: F,
-) -> Option<F::Output> {
-    match window {
-        Some(window) => tokio::time::timeout(window, future).await.ok(),
-        None => Some(future.await),
+    upgrade: F,
+) -> Option<Fut::Output>
+where
+    F: FnOnce(HandshakeStream<S>) -> Fut,
+    Fut: std::future::Future,
+{
+    let Some(window) = window else {
+        return Some(upgrade(HandshakeStream::from(stream)).await);
+    };
+    let (stream, watch) = HandshakeStream::watched(stream, window);
+    tokio::select! {
+        upgraded = upgrade(stream) => Some(upgraded),
+        () = watch.expired() => None,
     }
 }
 

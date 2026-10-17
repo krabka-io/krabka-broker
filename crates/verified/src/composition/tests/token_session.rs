@@ -48,7 +48,7 @@ fn check_trace(times: [i64; 4], periods: [i64; 4], api: i16, token_api: TokenApi
                 maximum,
                 at,
                 window,
-                matches!(api, 17 | 36) || times[3] < at,
+                api == 17 || times[3] <= at,
                 TokenApiAdmission::Reject,
             ))
         }
@@ -101,7 +101,7 @@ fn token_session_deadline_and_round_boundaries() {
                     let at = at.unwrap();
                     assert2::assert!(
                         credential_free_session_cap_bounds_requests(now, cap, request, api)
-                            == (at, window, matches!(api, 17 | 36) || request < at)
+                            == (at, window, api == 17 || request <= at)
                     );
                 }
             }
@@ -118,8 +118,8 @@ fn token_session_deadline_and_round_boundaries() {
                 );
                 for api in [0, 17, 18, 36, 41] {
                     assert2::assert!(
-                        session_expired_for_request(credential, api, now)
-                            == (!matches!(api, 17 | 36) && credential.is_some_and(|at| at <= now))
+                        session_expired_for_request(credential, api, now, None)
+                            == (api != 17 && credential.is_some_and(|at| now > at))
                     );
                 }
             }
@@ -132,10 +132,12 @@ proptest! {
     fn session_kernel_matches_wide_integer_oracle(
         now in any::<i64>(), credential in proptest::option::of(any::<i64>()),
         cap in proptest::option::of(any::<i64>()), api in any::<i16>(),
+        last in proptest::option::of(any::<i64>()),
     ) {
         prop_assert_eq!(sasl_session_expiry(now, credential, cap), session_oracle(now, credential, cap));
-        prop_assert_eq!(session_expired_for_request(credential, api, now),
-            !matches!(api, 17 | 36) && credential.is_some_and(|at| at <= now));
+        prop_assert_eq!(session_expired_for_request(credential, api, now, last),
+            credential.is_some_and(|at| now > at) && !(api == 17 && last.is_none_or(|last|
+                i128::from(now) - i128::from(last) >= 1_000)));
     }
 
     #[test]

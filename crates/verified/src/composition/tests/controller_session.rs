@@ -65,7 +65,7 @@ fn expected(
     let rows = if let Some(expiry) = deadline {
         requests
             .iter()
-            .take_while(|(clock, _)| *clock < expiry)
+            .take_while(|(clock, _)| *clock <= expiry)
             .map(|(_, a)| {
                 a.super_user
                     || (!a.saw_deny && (a.saw_allow || a.default_decision == AclDefault::Allow))
@@ -80,11 +80,11 @@ fn expected(
 #[test]
 fn controller_phase_expiry_is_exact_for_every_api_and_integer_boundary() {
     for expiry in [None, Some(-1), Some(0), Some(1000), Some(i64::MAX)] {
-        for clock in [i64::MIN, -1, 0, 999, 1000, i64::MAX] {
+        for clock in [i64::MIN, -1, 0, 999, 1000, 1001, i64::MAX - 1, i64::MAX] {
             for api in [i16::MIN, 0, 17, 18, 36, 55, i16::MAX] {
                 assert2::assert!(
                     controller_request_admission(expiry, api, clock)
-                        == expiry.is_none_or(|at| clock < at)
+                        == expiry.is_none_or(|at| clock <= at)
                 );
             }
         }
@@ -107,6 +107,11 @@ fn admitted_session_handles_exact_prefix_and_cannot_resurrect_after_expiry() {
                             let histories = [
                                 std::vec![],
                                 std::vec![(expiry, acl(flags)), (finish, acl(flags))],
+                                std::vec![
+                                    (expiry, acl(flags)),
+                                    (expiry.saturating_add(1), acl(flags ^ 3)),
+                                    (finish, acl(1)),
+                                ],
                                 std::vec![
                                     (finish, acl(flags)),
                                     (expiry - 1, acl(flags ^ 3)),
