@@ -226,7 +226,7 @@ pub(crate) struct JavaTranslation {
 /// `fancy_regex` lacks, becomes escaped literals before anything else is read,
 /// as Java does it.
 ///
-/// Seven things read differently by default, and the rewrite gives the Java
+/// Eight things read differently by default, and the rewrite gives the Java
 /// reading, following the flags in force at each place (`(?s)`, `(?d)`,
 /// `(?m)`, `(?U)`, `(?i)`, `(?u)` and `(?x)`, alone or scoped to a group):
 ///
@@ -259,6 +259,13 @@ pub(crate) struct JavaTranslation {
 /// - Under `(?x)` (`COMMENTS`) the rewrite drops the whitespace and the `#`
 ///   comments Java ignores, so that the text of a comment is never read as
 ///   pattern.
+/// - A class with `&&` is the set Java's `Pattern.clazz` builds, where
+///   `fancy_regex` reads an empty side of `&&` as the empty set. An empty
+///   right side takes the operand before the `&&`, an empty left side
+///   leaves the right one, `&&` binds to the right, and the single chars
+///   below U+0100 of one class are one set, which a char after the
+///   intersection still joins ([`ClassMember`]). So `[a-z&&]` is `[a-z]`,
+///   `[&&a]` is `[a]`, and `[a&&&b]` is `[a&b]`.
 pub(crate) fn translate_java(pattern: &str) -> Option<JavaTranslation> {
     let chars = java_fold::remove_qe_quoting(&pattern.chars().collect::<Vec<char>>());
     let mut translator = Translator {
@@ -266,7 +273,7 @@ pub(crate) fn translate_java(pattern: &str) -> Option<JavaTranslation> {
         out: String::with_capacity(pattern.len()),
         scope: Scope::default(),
         outer: Vec::new(),
-        class_depth: 0,
+        classes: Vec::new(),
         class_start: false,
         run: 0,
         prior_run: 0,
@@ -294,8 +301,8 @@ struct Translator<'a> {
     scope: Scope,
     /// The flags of the groups around here, the innermost last.
     outer: Vec<Scope>,
-    /// How many character classes are open here.
-    class_depth: usize,
+    /// The character classes open here, the innermost last.
+    classes: Vec<OpenClass>,
     /// The next char is the first in a class, where a `]` is a member.
     class_start: bool,
     /// How many literal chars, counting the one just read, Java has read as
@@ -329,7 +336,7 @@ enum Quantified {
 }
 
 impl Translator<'_> {
-    fn in_class(&self) -> bool { self.class_depth > 0 }
+    fn in_class(&self) -> bool { !self.classes.is_empty() }
 
     /// Copies `len` chars as they are.
     fn copy(&mut self, len: usize) {
@@ -357,6 +364,11 @@ impl Translator<'_> {
                 _ => return None,
             };
         }
+        // A member of the innermost class: not one that opens or closes a
+        // class, nor a `&`, which [`Self::ampersand`] reads.
+        let closes = c == ']' && !first_in_class;
+        let member = (self.in_class() && !closes && !matches!(c, '[' | '&'))
+            .then_some((self.out.len(), self.at));
         match c {
             '\\' => self.escape()?,
             '(' if !self.in_class() => self.group()?,
@@ -368,11 +380,7 @@ impl Translator<'_> {
             }
             '[' => self.open_class(),
             // First in a class, a `]` is a member, and may start a range.
-            ']' if self.in_class() && !first_in_class => {
-                self.class_depth -= 1;
-                self.out.push(']');
-                self.at += 1;
-            }
+            ']' if self.in_class() && !first_in_class => self.close_class()?,
             '.' if !self.in_class() && !self.scope.dot.dotall && !self.scope.dot.unix_lines => {
                 self.out.push_str(JAVA_DOT);
                 self.at += 1;
@@ -384,6 +392,9 @@ impl Translator<'_> {
             '{' if !self.in_class() => self.braces()?,
             '&' if self.in_class() => self.ampersand()?,
             _ => self.atom(u32::from(c), 1)?,
+        }
+        if let Some((out_at, at)) = member {
+            self.class_member(out_at, at);
         }
         Some(())
     }
@@ -637,13 +648,16 @@ impl Translator<'_> {
     /// the start of a range, as in `[a&&-1]`.
     fn ampersand(&mut self) -> Option<()> {
         let second = self.at + 1 + self.ignored_len(self.at + 1);
+        let (out_at, at) = (self.out.len(), self.at);
         if self.chars.get(second) == Some(&'&') {
+            self.push_class_member(out_at, ClassMember::Intersect);
             self.out.push_str("&&");
             self.at = second + 1;
-            Some(())
         } else {
-            self.atom(u32::from('&'), 1)
+            self.atom(u32::from('&'), 1)?;
+            self.class_member(out_at, at);
         }
+        Some(())
     }
 
     /// A `{`, which starts the bounds of a quantifier, `{n}`, `{n,}` or
@@ -704,12 +718,83 @@ impl Translator<'_> {
 
     /// A `[`, which opens a class, or a class in a class.
     fn open_class(&mut self) {
-        self.class_depth += 1;
+        let out_at = self.out.len();
+        self.push_class_member(out_at, ClassMember::Nested);
         self.class_start = true;
         self.copy(1);
         if self.chars.get(self.at) == Some(&'^') {
             self.copy(1);
         }
+        self.classes.push(OpenClass {
+            members_at: self.out.len(),
+            members: Vec::new(),
+        });
+    }
+
+    /// A `]` that closes the innermost class. A class with `&&` is written
+    /// again, as the set that Java builds from its members ([`java_class`]).
+    /// `None` where Java refuses the class: `Bad class syntax` for `[&&]`, and
+    /// `Bad intersection syntax` for an empty side after a single char.
+    fn close_class(&mut self) -> Option<()> {
+        let class = self.classes.pop()?;
+        if class
+            .members
+            .iter()
+            .any(|&(_, member)| member == ClassMember::Intersect)
+        {
+            let text = self.out.split_off(class.members_at);
+            let mut members = Vec::with_capacity(class.members.len());
+            for (index, &(at, member)) in class.members.iter().enumerate() {
+                let end = class
+                    .members
+                    .get(index + 1)
+                    .map_or(text.len(), |&(next, _)| next - class.members_at);
+                members.push((member, &text[at - class.members_at..end]));
+            }
+            let mut bit_sets = Vec::new();
+            let mut next = 0;
+            let set = java_class(&members, &mut next, &mut bit_sets)?;
+            set.write(&mut self.out, &bit_sets);
+        }
+        self.out.push(']');
+        self.at += 1;
+        Some(())
+    }
+
+    /// Records a member of the innermost class, if one is open, which starts
+    /// at `out_at` in the output.
+    fn push_class_member(&mut self, out_at: usize, member: ClassMember) {
+        if let Some(class) = self.classes.last_mut() {
+            class.members.push((out_at, member));
+        }
+    }
+
+    /// Records the member of the innermost class just read from `at`, written
+    /// from `out_at`. Java keeps a single char below U+0100 in the class's
+    /// `BitClass` (`bitsOrSingle`), except under a Unicode fold the chars
+    /// whose other case is above U+00FF, or that another char folds to.
+    fn class_member(&mut self, out_at: usize, at: usize) {
+        let single = java_fold::read_member(self.chars, at)
+            .filter(|member| at + member.len == self.at)
+            .map(|member| member.value);
+        let unicode_fold = self.scope.unicode_fold();
+        let bits = single.is_some_and(|code| {
+            code < 0x100
+                && !(unicode_fold
+                    && matches!(
+                        code,
+                        0xFF | 0xB5 | 0x49 | 0x69 | 0x53 | 0x73 | 0x4B | 0x6B | 0xC5 | 0xE5
+                    ))
+        });
+        let ampersand = self.chars[at] == '&';
+        self.push_class_member(
+            out_at,
+            if bits {
+                ClassMember::Bits { ampersand }
+            } else {
+                ClassMember::Set { ampersand }
+            },
+        );
     }
 
     /// A `(`: a group, a lookaround, or inline flags.
@@ -919,6 +1004,156 @@ fn java_space(escape: char, in_class: bool) -> Option<&'static str> {
         ('V', _) => "[^\\n-\\r\\x{85}\\x{2028}\\x{2029}]",
         _ => return None,
     })
+}
+
+/// A character class that [`Translator`] has open.
+struct OpenClass {
+    /// Where its members start in the output, after the `[` or `[^`.
+    members_at: usize,
+    /// Each member written so far, and where it starts in the output.
+    members: Vec<(usize, ClassMember)>,
+}
+
+/// What a member of a class is to Java's `Pattern.clazz`, which builds the
+/// set of a class with `&&` from them ([`java_class`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClassMember {
+    /// A single char that goes in the class's `BitClass`. Java keeps one
+    /// `BitClass` for the whole class, so every such char joins the same set,
+    /// one after an intersection too. `ampersand` for a literal `&`, which
+    /// ends the right side of a `&&`.
+    Bits { ampersand: bool },
+    /// Any other member: a char that Java matches by its own predicate, a
+    /// range, a shorthand or a property.
+    Set { ampersand: bool },
+    /// A class in the class.
+    Nested,
+    /// `&&`.
+    Intersect,
+}
+
+/// A set that [`java_class`] builds, as Java's `CharPredicate` tree.
+#[derive(Clone)]
+enum ClassSet<'a> {
+    /// The `BitClass` of a class, at an index into the bit sets, as it is when
+    /// the class closes.
+    Bits(usize),
+    /// One member, as the rewrite wrote it.
+    Member(&'a str),
+    Union(Box<Self>, Box<Self>),
+    And(Box<Self>, Box<Self>),
+}
+
+impl ClassSet<'_> {
+    fn union(left: Option<Self>, right: Self) -> Self {
+        match left {
+            Some(left) => Self::Union(Box::new(left), Box::new(right)),
+            None => right,
+        }
+    }
+
+    /// Writes the set as a class in `fancy_regex` syntax.
+    fn write(&self, out: &mut String, bit_sets: &[String]) {
+        out.push('[');
+        match self {
+            Self::Bits(index) => out.push_str(&bit_sets[*index]),
+            Self::Member(text) => push_class_text(out, text),
+            Self::Union(left, right) => {
+                left.write(out, bit_sets);
+                right.write(out, bit_sets);
+            }
+            Self::And(left, right) => {
+                left.write(out, bit_sets);
+                out.push_str("&&");
+                right.write(out, bit_sets);
+            }
+        }
+        out.push(']');
+    }
+}
+
+/// Writes the text of a class member where another member's text, or the `[`
+/// of a class, may now be next to it. A `&` or `~` alone would make an
+/// operator of `fancy_regex`'s with a neighbour, and a leading `^` a negation.
+fn push_class_text(out: &mut String, text: &str) {
+    if text.starts_with('^') || matches!(text, "&" | "~") {
+        out.push('\\');
+    }
+    out.push_str(text);
+}
+
+/// The set of a class, or of the right side of a `&&` in it, from the members
+/// at `next` on, as Java's `Pattern.clazz` builds it. `None` for a class that
+/// Java refuses.
+///
+/// `clazz` keeps `prev`, the set so far, `curr`, the last member that is not
+/// a single char in the `BitClass`, and the `BitClass`, which it adds to
+/// `prev` before a `&&` and at the `]`. The side after `&&` is read up to the
+/// `]` or the next `&`, as a class of its own, so `&&` binds to the right.
+/// When it is empty, `curr` takes its place, and when the side before is,
+/// the side after is the set. The `BitClass` that an intersection took is
+/// the same one the chars after it go in, so they join it there too.
+fn java_class<'a>(
+    members: &[(ClassMember, &'a str)],
+    next: &mut usize,
+    bit_sets: &mut Vec<String>,
+) -> Option<ClassSet<'a>> {
+    let bits = bit_sets.len();
+    bit_sets.push(String::new());
+    let (mut prev, mut curr, mut has_bits) = (None, None, false);
+    while let Some(&(member, text)) = members.get(*next) {
+        match member {
+            ClassMember::Bits { .. } => {
+                push_class_text(&mut bit_sets[bits], text);
+                curr = None;
+                has_bits = true;
+                *next += 1;
+            }
+            ClassMember::Set { .. } | ClassMember::Nested => {
+                curr = Some(ClassSet::Member(text));
+                prev = Some(ClassSet::union(prev, ClassSet::Member(text)));
+                *next += 1;
+            }
+            ClassMember::Intersect => {
+                *next += 1;
+                let mut right = None;
+                while let Some(&(member, text)) = members.get(*next) {
+                    right = Some(match member {
+                        ClassMember::Intersect
+                        | ClassMember::Bits { ampersand: true }
+                        | ClassMember::Set { ampersand: true } => break,
+                        ClassMember::Nested => {
+                            *next += 1;
+                            ClassSet::union(right, ClassSet::Member(text))
+                        }
+                        _ => ClassSet::union(right, java_class(members, next, bit_sets)?),
+                    });
+                }
+                if std::mem::take(&mut has_bits) {
+                    match prev {
+                        None => {
+                            prev = Some(ClassSet::Bits(bits));
+                            curr = Some(ClassSet::Bits(bits));
+                        }
+                        Some(set) => prev = Some(ClassSet::union(Some(set), ClassSet::Bits(bits))),
+                    }
+                }
+                if right.is_some() {
+                    curr.clone_from(&right);
+                }
+                prev = Some(match prev {
+                    None => right?,
+                    Some(set) => ClassSet::And(Box::new(set), Box::new(curr.clone()?)),
+                });
+            }
+        }
+    }
+    match (prev, has_bits) {
+        (None, false) => None,
+        (None, true) => Some(ClassSet::Bits(bits)),
+        (Some(set), false) => Some(set),
+        (Some(set), true) => Some(ClassSet::union(Some(set), ClassSet::Bits(bits))),
+    }
 }
 
 /// The ASCII form of a Java shorthand class, or word boundary, which is what

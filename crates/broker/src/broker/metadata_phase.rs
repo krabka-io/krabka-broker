@@ -21,13 +21,13 @@ use {
         error::BrokerError,
         features::LATEST_PRODUCTION_METADATA_VERSION,
         host_port::{HostPort, parse_host_port},
-        incarnation::load_or_generate,
         metadata_observer::{MetadataObserver, ObserverConfig},
         metadata_source::{MetadataSource, ObserverSource, QuorumForwarder, or_fatal_fault},
         metrics::BrokerMetrics,
         network::client::{InterBrokerClient, InterBrokerDialer},
         platform::{Sockets, bind_listener},
         raft_handshake::{AuditLogArc, BrokerRaftHandshake},
+        registration_admission::BrokerRegistrationAdmission,
         time_util::system_timer,
         wal::quorum::registry::{WalShardRegistry, WalShardRouter},
     },
@@ -265,6 +265,18 @@ async fn start_metadata_source(
                 })?,
         );
         let _ = controller_cell.set(Arc::clone(&controller));
+        // Installed before this node can lead a registration: a new
+        // incarnation of a broker id retires the previous one in the batch that
+        // registers it, as `ClusterControlManager.registerBroker` does.
+        if let Some(router) = &admin_router {
+            controller
+                .install_registration_admission(Arc::new(BrokerRegistrationAdmission::new(
+                    config.node_id,
+                    controller.watch_image(),
+                    Arc::clone(router),
+                )))
+                .map_err(|error| BrokerError::Startup(error.into()))?;
+        }
         return Ok(MetadataControlPlane {
             source: controller as Arc<dyn MetadataSource>,
             admin_router,
@@ -501,7 +513,10 @@ async fn join_metadata_quorum(
         wait_for_metadata_version(&**controller, timeout).await?;
     }
     if config.is_controller() || config.is_broker() {
-        config.incarnation_id = load_or_generate(&config.log_dir);
+        // Every process is a new incarnation, as Kafka's `BrokerLifecycleManager`
+        // draws `Uuid.randomUuid()` at every start: it is what lets the
+        // controller tell a restart from this process registering again.
+        config.incarnation_id = uuid::Uuid::new_v4();
         // Spend the clean-shutdown proof the last stop left, if it left one.
         // Reading it here -- before this node registers -- is what lets
         // `register_broker` tell a graceful restart from a crash.

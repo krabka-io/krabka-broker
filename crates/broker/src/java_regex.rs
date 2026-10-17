@@ -124,15 +124,21 @@ impl JavaPattern {
         }
     }
 
-    /// `Matcher.find(from)`: the span of each group of the first match that
-    /// starts at `from` or after it, group 0 the whole match.
+    /// `Matcher.find()`: the span of each group of the first match that starts
+    /// at `from` or after it, group 0 the whole match. `last` is where the
+    /// match before ended, or `from` for the first, which `\G` matches. Only
+    /// the backtracking matcher reads it: a pattern with `\G` keeps
+    /// `fancy_regex` only where the matcher does not know a node of it.
     fn find(
         &self,
         input: &str,
         from: usize,
+        last: usize,
     ) -> Result<Option<Vec<Option<Range<usize>>>>, ReplacementError> {
         if let Some(program) = &self.0.backtrack {
-            return program.find(input, from).map_err(ReplacementError::search);
+            return program
+                .find(input, from, last)
+                .map_err(ReplacementError::search);
         }
         let captures = self
             .0
@@ -154,7 +160,8 @@ impl JavaPattern {
     /// After a match that is not empty, `find` may match the empty string at
     /// the very position the match ended, and the crate's iterator does not:
     /// `"alice".replaceAll("(.*)", "$1x")` is `alicexx` in Java. After an empty
-    /// match `find` starts one character on.
+    /// match `find` starts one character on, and `\G` stays where that match
+    /// ended.
     pub(crate) fn replace(
         &self,
         input: &str,
@@ -165,7 +172,7 @@ impl JavaPattern {
         let mut copied = 0;
         let mut search_from = 0;
         while search_from <= input.len() {
-            let Some(groups) = self.find(input, search_from)? else {
+            let Some(groups) = self.find(input, search_from, copied)? else {
                 break;
             };
             let Some(whole) = groups.first().cloned().flatten() else {
@@ -2149,5 +2156,186 @@ mod tests {
             row("(?<=(ab)?)c", "c", true),
         ];
         check_matches(cases, true);
+    }
+
+    /// A class with `&&` is the set Java's `Pattern.clazz` builds: an empty
+    /// side of `&&` takes the operand before it, or leaves the side after it,
+    /// `&&` binds to the right, and the single chars below U+0100 of a class
+    /// are one set that a char after the intersection still joins, so
+    /// `[a&&&b]` matches `a`, `&` and `b`. Each row is `Pattern.matches` on
+    /// JDK 25.0.4.
+    #[test]
+    fn a_class_intersection_with_an_empty_side_is_the_set_java_builds() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            row("[a-z&&]", "a", true),
+            row("[a-z&&]", "A", false),
+            row("[&&a]", "a", true),
+            row("[&&a]", "b", false),
+            row("[a&&&b]", "a", true),
+            row("[a&&&b]", "b", true),
+            row("[a&&&b]", "&", true),
+            row("[a&&]", "a", true),
+            row("[a&&]", "b", false),
+            row("[^a&&]", "a", false),
+            row("[^a&&]", "b", true),
+            row("[^&&a]", "b", true),
+            row("[a&&&&b]", "a", false),
+            row("[a&&[b]&&]", "b", false),
+            row("[a&&[b]&&]", "a", false),
+            row("[[a]&&]", "a", true),
+            row("[a&& ]", "a", false),
+            row("[a&& ]", " ", false),
+            row("(?x)[a&& ]", "a", true),
+            row("(?x)[a&& b]", "a", false),
+            row("[a-c&&&&b]", "b", true),
+            row("[a-c&&&&b]", "a", false),
+            row("[a&&\\w]", "a", true),
+            row("[\\w&&]", "a", true),
+            row("[&&[a]]", "a", true),
+            row("[b&&[a]]", "a", false),
+            row("[a[b]&&]", "b", true),
+            row("[a[b]&&c]", "b", false),
+            row("[a&&b[c]]", "c", false),
+            row("[ab-c&&]", "a", false),
+            row("[ab-c&&]", "b", true),
+            row("[a&&[b]&c]", "a", true),
+            row("[a&&[b]&c]", "b", false),
+            row("[a&&[b]&c]", "c", true),
+            row("[a&&[b]&c]", "&", true),
+            row("[a&&b&&c]", "a", false),
+            row("[a-c&&b-d&&c]", "c", true),
+            row("[a-c&&b-d&&c]", "b", false),
+            row("[^a-c&&b]", "b", false),
+            row("[^a-c&&b]", "a", true),
+            row("[^a-c&&]", "d", true),
+            row("[^a-c&&]", "a", false),
+            row("(?i)[a-c&&]", "B", true),
+            row("(?i)[a&&]", "A", true),
+            row("(?i)[A&&&b]", "B", true),
+            row("(?iu)[k&&]", "\u{212a}", true),
+            row("(?iu)[k&&&a]", "a", true),
+            row("[\\w&&\\d]", "5", true),
+            row("[\\w&&\\d]", "a", false),
+            row("[\\d&&]", "5", true),
+            row("[a\\d&&]", "a", false),
+            row("[a\\d&&]", "5", true),
+            row("[[a-c]&&]", "b", true),
+            row("[x[a-c]&&]", "x", false),
+            row("[x[a-c]&&]", "b", true),
+            row("[a-z&&[^aeiou]]", "b", true),
+            row("[a-z&&[^aeiou]]", "a", false),
+            row("[a&&[b]c]", "c", false),
+            row("[ab&&b]", "b", true),
+            row("[ab&&b]", "a", false),
+            row("[\u{100}&&]", "\u{100}", true),
+            row("[a\u{100}&&]", "a", false),
+            row("[a&&&&b]", "b", false),
+            row("[a-c&&&&b]", "c", false),
+            row("[&&a-c]", "b", true),
+            row("[&&[a]&&]", "a", true),
+            row("[a&&]]", "]", false),
+            row("[]&&]]", "]", false),
+            row("[]a&&]", "a", true),
+        ];
+        check_matches(cases, true);
+    }
+
+    /// Where a side of `&&` is empty and there is no operand to take its
+    /// place, Java answers `Bad class syntax` or `Bad intersection syntax`.
+    /// Each row is refused by `Pattern.compile` on JDK 25.0.4.
+    #[yare::parameterized(
+        both_sides_empty = { "[&&]" },
+        both_sides_empty_then_ampersand = { "[&&&a]" },
+        empty_side_after_a_single_char = { "[a-cd&&]" },
+        empty_side_after_a_single_char_after_a_class = { "[[a-c]x&&]" },
+        empty_nested_class = { "[a&&[]]" },
+    )]
+    fn a_class_intersection_java_refuses_does_not_compile(source: &str) {
+        check!(JavaPattern::compile(source).is_err(), "{source:?}");
+    }
+
+    /// A repeat of a group with a group in it, whose last iteration matches
+    /// nothing, keeps the groups that iteration set, as Java's `Loop` does,
+    /// where `fancy_regex` takes no such iteration. Each row is
+    /// `String.replaceAll` on JDK 25.0.4.
+    #[test]
+    fn replace_sees_the_groups_of_an_empty_last_iteration_as_java_does() {
+        // (pattern, input, replacement, replaceAll result)
+        let cases = [
+            replace_row("(a*)*", "aa", "[$1]", "[][]"),
+            replace_row("(a|)*", "aa", "[$1]", "[][]"),
+            replace_row("(a*)+", "aa", "[$1]", "[][]"),
+            replace_row("(a*){2,}", "aa", "[$1]", "[][]"),
+            replace_row("(a*){1,3}", "aa", "[$1]", "[][]"),
+            replace_row("(a*){0,5}", "aaa", "[$1]", "[][]"),
+            replace_row("(a*)*?", "aa", "[$1]", "[]a[]a[]"),
+            replace_row("(a*)*+", "aa", "[$1]", "[][]"),
+            replace_row("(a*)+?b", "aab", "[$1]", "[aa]"),
+            replace_row("(?:(a)|b|)*", "ab", "[$1]", "[a][]"),
+            replace_row("(?:(a)|)*", "aa", "[$1]", "[a][]"),
+            replace_row("(?:(a)?)*", "aa", "[$1]", "[a][]"),
+            replace_row("(?:b|(a?))*", "ab", "[$1]", "[][]"),
+            replace_row("((a)|)*", "aa", "[$1|$2]", "[|a][|]"),
+            replace_row("(a?)*", "aa", "[$1]", "[][]"),
+            replace_row("(a?)+", "a", "[$1]", "[][]"),
+            replace_row("(a??)*", "aa", "[$1]", "[]a[]a[]"),
+            replace_row("()*", "a", "[$1]", "[]a[]"),
+            replace_row("(\\b)*", "a", "[$1]", "[]a[]"),
+            replace_row("(a{0})*", "a", "[$1]", "[]a[]"),
+            replace_row("(?:a(b*))*", "abab", "[$1]", "[b][]"),
+            replace_row("(?:a(b*))*", "aba", "[$1]", "[][]"),
+            replace_row("(?:(a*)b)*", "abb", "[$1]", "[][]"),
+            replace_row("((a*)*)*", "aa", "[$1|$2]", "[|][|]"),
+            replace_row("(a*)*x", "aax", "[$1]", "[]"),
+            replace_row("(a|b*)*c", "abc", "[$1]", "[]"),
+        ];
+        check_replacements(cases, true, true);
+    }
+
+    /// A backreference sees the group an empty last iteration set. Each row is
+    /// `Pattern.matches` on JDK 25.0.4.
+    #[test]
+    fn a_reference_sees_the_group_of_an_empty_last_iteration_as_java_does() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            row("(a*)*\\1", "aa", true),
+            row("(a*)+\\1", "aa", true),
+            row("(a|)*\\1", "aa", true),
+            row("(?:(a)|)*\\1", "aa", true),
+            row("(a*)*b\\1", "aab", true),
+            row("(a*)*b\\1", "aabaa", true),
+            row("(a|)+b\\1", "ab", true),
+            row("(a|)+b\\1", "aba", true),
+            row("()*+\\1", "", true),
+            row("(){1,}\\1", "", true),
+            row("()+\\1", "", true),
+            row("(()|a)*\\2", "aa", true),
+            row("(?:())*\\1", "", true),
+            row("(())*\\2", "", true),
+        ];
+        check_matches(cases, true);
+    }
+
+    /// `\G` matches where the last match ended. After an empty match the next
+    /// search starts one char on and `\G` stays behind it, so it matches no
+    /// more, as Java's `LastMatch` does, in a look-around too. Each row is
+    /// `String.replaceAll` on JDK 25.0.4.
+    #[test]
+    fn last_match_anchor_stays_where_the_last_match_ended() {
+        // (pattern, input, replacement, replaceAll result)
+        let cases = [
+            replace_row("\\G", "aa", "-", "-aa"),
+            replace_row("\\Ga", "aaba", "-", "--ba"),
+            replace_row("\\G|a", "aa", "-", "-a--"),
+            replace_row("\\G|b", "ab", "-", "-a--"),
+            replace_row("a|\\G", "baa", "-", "-b---"),
+            replace_row("(?<=\\G.)", "abc", "-", "a-b-c-"),
+            replace_row("(?=\\G)", "aa", "-", "-aa"),
+            replace_row("x*\\G", "aa", "-", "-aa"),
+            replace_row("\\G(a|)", "aab", "[$1]", "[a][a][]b"),
+            replace_row("a*?\\G", "aa", "-", "-aa"),
+        ];
+        check_replacements(cases, true, true);
     }
 }

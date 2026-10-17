@@ -2,7 +2,7 @@
 //! `java.util.regex` does.
 //!
 //! [`Program`] takes the tree that `fancy_regex` parses from the rewritten
-//! pattern and runs it on a backtracking machine of its own. It reads four
+//! pattern and runs it on a backtracking machine of its own. It reads six
 //! things as Java does and `fancy_regex` does not:
 //!
 //! - A backreference under a case flag, which the rewrite writes as
@@ -23,9 +23,20 @@
 //! - Java sets a group when it ends, so a backreference inside the group it
 //!   refers to sees the text the group had before: `(a|b\1)+` does not
 //!   match `abb`. `fancy_regex` sets the start when the group opens.
+//! - A repeat of a group with a group in it, which can match nothing, keeps
+//!   the groups its last iteration set when that iteration matched nothing:
+//!   Java's `Loop` ends the repeat there without undoing them, so
+//!   `"aa".replaceAll("(a*)*", "[$1]")` is `[][]`. `fancy_regex` takes no
+//!   such iteration. (Java's `GroupCurly`, for a group that only ever
+//!   matches nothing, such as `()*`, undoes its group instead. Its tree is
+//!   that of `(?:())*`, whose group Java keeps, so the machine keeps both.)
+//! - `\G` is `LastMatch`, where the last match ended, and the first search
+//!   started. After a match that is empty, the next search starts one char
+//!   on and `\G` stays where that match ended, so `"aa".replaceAll("\\G",
+//!   "-")` is `-aa`. `fancy_regex`'s `\G` is where each search starts.
 //!
 //! Every other node matches as `fancy_regex` matches it, and a pattern that
-//! has none of the four keeps `fancy_regex`. A tree with a node the machine
+//! has none of the six keeps `fancy_regex`. A tree with a node the machine
 //! does not know is not compiled, and the pattern keeps `fancy_regex`'s
 //! answer. The rewrite of a pattern that `Pattern.compile` takes writes none.
 //!
@@ -129,7 +140,8 @@ enum Inst {
     /// The end of an iteration that started at the position in `start`. Once
     /// `lo` iterations are made, one that matched nothing leaves the repeat,
     /// so that an empty iteration cannot loop for ever. Before that it counts
-    /// toward `lo`, as in Java and `fancy_regex`.
+    /// toward `lo`, as in Java and `fancy_regex`. Either way it keeps the
+    /// groups it set, as Java's `Loop` does.
     RepeatEnd {
         count: usize,
         lo: usize,
@@ -145,8 +157,8 @@ enum Inst {
 enum Check {
     StartText,
     EndText,
-    /// `\G`: where the search started.
-    SearchStart,
+    /// `\G`: where the last match ended, or the first search started.
+    LastMatchEnd,
     /// `\Z`: the end, or only `\n`s after here.
     EndTextBeforeNewlines,
     /// Under `(?m)`: the start, or after `\n`.
@@ -205,8 +217,9 @@ impl Program {
     }
 
     /// Whether the pattern has a backreference under a case flag or inside the
-    /// group it refers to, a `\R`, or a group inside a look-around or an
-    /// atomic group, which `fancy_regex` does not read as Java does.
+    /// group it refers to, a `\R`, a group inside a look-around or an atomic
+    /// group, a repeat of a group with a group in it that can match nothing,
+    /// or a `\G`, which `fancy_regex` does not read as Java does.
     pub(super) fn differs_from_fancy(&self) -> bool { self.differs }
 
     /// `Matcher.matches()`: whether some way of matching from the start spans
@@ -217,14 +230,16 @@ impl Program {
         Ok(machine.run(0, 0, Some(input.len()), &mut slots)?.is_some())
     }
 
-    /// `Matcher.find(from)`: the first match that starts at `from` or after
+    /// `Matcher.find()` after a match that ended at `last`, or the first one
+    /// with `last` at `from`: the first match that starts at `from` or after
     /// it, as the span of each group, group 0 the whole match.
     pub(super) fn find(
         &self,
         input: &str,
         from: usize,
+        last: usize,
     ) -> Result<Option<Vec<Option<Range<usize>>>>, SearchError> {
-        let mut machine = Machine::new(self, input, from);
+        let mut machine = Machine::new(self, input, last);
         let starts = input[from..]
             .char_indices()
             .map(|(offset, _)| from + offset)
@@ -305,7 +320,10 @@ impl Compiler<'_> {
                     give_back: !self.first_way,
                 });
             }
-            Expr::ContinueFromPreviousMatchEnd => code.push(Inst::Assert(Check::SearchStart)),
+            Expr::ContinueFromPreviousMatchEnd => {
+                self.differs = true;
+                code.push(Inst::Assert(Check::LastMatchEnd));
+            }
             Expr::Assertion(assertion) => code.push(Inst::Assert(check(*assertion)?)),
             Expr::Literal { val, casei: false } => code.extend(val.chars().map(Inst::Char)),
             Expr::Concat(children) => {
@@ -408,6 +426,9 @@ impl Compiler<'_> {
         code: &mut Vec<Inst>,
     ) -> Option<()> {
         let (count, start) = (self.slot(), self.slot());
+        // Java's `Loop` keeps the groups of a last iteration that matched
+        // nothing, which `fancy_regex` never takes.
+        self.differs |= (lo, hi) != (0, 1) && has_group(child) && can_be_empty(child);
         code.push(Inst::RepeatStart { count });
         let head = code.len();
         code.push(Inst::Repeat {
@@ -471,6 +492,33 @@ pub(super) fn deterministic(expr: &Expr) -> bool {
     }
 }
 
+/// Whether `expr` has a capturing group in it.
+fn has_group(expr: &Expr) -> bool {
+    match expr {
+        Expr::Group(_) => true,
+        Expr::Concat(children) | Expr::Alt(children) => children.iter().any(has_group),
+        Expr::Repeat { child, .. } | Expr::LookAround(child, _) | Expr::AtomicGroup(child) => {
+            has_group(child)
+        }
+        _ => false,
+    }
+}
+
+/// Whether `expr` may match the empty string. A node the machine does not
+/// know may.
+fn can_be_empty(expr: &Expr) -> bool {
+    match expr {
+        Expr::Literal { val, .. } => val.is_empty(),
+        Expr::Any { .. } | Expr::Delegate { .. } | Expr::GeneralNewline { .. } => false,
+        Expr::Concat(children) => children.iter().all(can_be_empty),
+        Expr::Alt(children) => children.iter().any(can_be_empty),
+        Expr::Group(child) => can_be_empty(child),
+        Expr::AtomicGroup(child) => can_be_empty(child),
+        Expr::Repeat { child, lo, .. } => *lo == 0 || can_be_empty(child),
+        _ => true,
+    }
+}
+
 /// The [`Check`] for an assertion, or `None` for one the machine does not
 /// know.
 fn check(assertion: Assertion) -> Option<Check> {
@@ -500,18 +548,18 @@ enum Frame {
 struct Machine<'a> {
     program: &'a Program,
     input: &'a str,
-    /// Where the search started, which `\G` matches.
-    search_start: usize,
+    /// Where the last match ended, which `\G` matches.
+    last_match_end: usize,
     /// The backtracking steps left.
     budget: usize,
 }
 
 impl<'a> Machine<'a> {
-    fn new(program: &'a Program, input: &'a str, search_start: usize) -> Self {
+    fn new(program: &'a Program, input: &'a str, last_match_end: usize) -> Self {
         Self {
             program,
             input,
-            search_start,
+            last_match_end,
             budget: BACKTRACK_LIMIT,
         }
     }
@@ -741,7 +789,7 @@ impl<'a> Machine<'a> {
         match check {
             Check::StartText => before.is_empty(),
             Check::EndText => after.is_empty(),
-            Check::SearchStart => pos == self.search_start,
+            Check::LastMatchEnd => pos == self.last_match_end,
             Check::EndTextBeforeNewlines => after.bytes().all(|byte| byte == b'\n'),
             Check::StartLine => before.is_empty() || before.ends_with('\n'),
             Check::EndLine => after.is_empty() || after.starts_with('\n'),

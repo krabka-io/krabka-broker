@@ -26,6 +26,9 @@ pub(super) struct RemoteStorageStartup {
     pub(super) reader: Option<Arc<RemoteReader>>,
     pub(super) swap_target: Option<Arc<krabka_remote_storage_topic::SwappableRlmm>>,
     pub(super) diskless_read: Option<Arc<DisklessReadHandle>>,
+    /// The remote-log-manager sweep, so shutdown can wait for a copy pass to
+    /// stop before the broker reports itself stopped.
+    pub(super) remote_log_manager: Option<tokio::task::JoinHandle<()>>,
 }
 
 fn build_diskless_read_handle(
@@ -142,7 +145,7 @@ pub(super) fn start_remote_storage(
         }
     };
     let index_cache = Arc::new(index_cache);
-    tokio::spawn(run(
+    let remote_log_manager = tokio::spawn(run(
         RemoteLogManagerContext {
             partitions: Arc::clone(partitions),
             controller: Arc::clone(controller),
@@ -186,6 +189,7 @@ pub(super) fn start_remote_storage(
         reader: Some(reader),
         swap_target,
         diskless_read,
+        remote_log_manager: Some(remote_log_manager),
     })
 }
 

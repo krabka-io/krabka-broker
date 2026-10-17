@@ -33,6 +33,7 @@ mod submit;
 mod test_support;
 
 use crate::{
+    RegistrationAdmission,
     kraft::KraftController,
     network::OutboundDialer,
     types::{Node, NodeId},
@@ -128,6 +129,18 @@ impl ControllerHandle {
     /// Current metadata snapshot (cheap; `Arc` clone).
     #[must_use]
     pub fn current_image(&self) -> Arc<MetadataImage> { self.engine.current_image() }
+
+    /// Install the hook every batch that registers a broker anew passes
+    /// through while this node leads. See [`RegistrationAdmission`].
+    ///
+    /// # Errors
+    /// Returns an error if a hook is already installed.
+    pub fn install_registration_admission(
+        &self,
+        admission: Arc<dyn RegistrationAdmission>,
+    ) -> Result<(), &'static str> {
+        self.engine.install_registration_admission(admission)
+    }
 
     /// The address the controller listener actually bound to.
     #[must_use]

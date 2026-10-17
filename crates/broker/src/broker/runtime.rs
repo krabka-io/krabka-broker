@@ -208,6 +208,7 @@ pub(super) struct BrokerRuntimeStartup {
     pub(super) supervisor_shutdown: CancellationToken,
     pub(super) supervisor_handle: JoinHandle<()>,
     pub(super) disk_scanner_handle: Option<JoinHandle<()>>,
+    pub(super) remote_log_manager_handle: Option<JoinHandle<()>>,
     pub(super) liveness_services: LivenessStartup,
     pub(super) metrics: BrokerMetrics,
     pub(super) metrics_bound_addr: Option<SocketAddr>,
@@ -386,6 +387,7 @@ pub(super) async fn start_broker_runtime(
         supervisor_shutdown,
         supervisor_handle,
         disk_scanner_handle,
+        remote_log_manager_handle: remote.remote_log_manager,
         liveness_services: LivenessStartup {
             liveness,
             want_shutdown,

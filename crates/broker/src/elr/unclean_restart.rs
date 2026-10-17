@@ -5,8 +5,8 @@
 //! partition still had `min.insync.replicas` members, so it holds every
 //! committed record and may be elected without accepting data loss". A broker
 //! that died with an unflushed tail no longer holds what that claim says it
-//! does. Its identity is unchanged -- same node id, and in krabka the
-//! incarnation id lives in the log dir, so a crash-restart reuses it too --
+//! does. Its node id is unchanged, and a new incarnation id says only that a
+//! new process started, not whether the last one stopped gracefully --
 //! but its log is shorter, and electing it would lose the records between the
 //! two.
 //!
