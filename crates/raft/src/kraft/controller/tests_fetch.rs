@@ -13,8 +13,8 @@ use {
                 records::{decode_batches, encode_batches},
                 replication::{
                     FetchBatchDisposition, classify_fetch_batch, fetch_epoch_for_request,
-                    should_serve_fetch_records, should_start_snapshot_fetch,
-                    snapshot_fetch_response_invalid,
+                    refetches_after_refusal, should_serve_fetch_records,
+                    should_start_snapshot_fetch, snapshot_fetch_response_invalid,
                 },
                 test_support::{
                     CapturedPeerSend, EngineInDir, build_engine_only, elect_single_voter_engine,
@@ -379,20 +379,106 @@ fn following_node_one(
     (EngineInDir { engine, dir }, sends)
 }
 
-/// Node 1's answer to a Fetch after it lost epoch 1: epoch 7, with `leader_id`
-/// as the leader it knows.
-fn answer_from_epoch_seven(leader_id: Option<NodeId>) -> bytes::Bytes {
+/// The peer that each Fetch went to over the next 50 ms, failing on any other
+/// send. `None` when nothing was sent.
+async fn fetches_sent(
+    sends: &mut tokio::sync::mpsc::UnboundedReceiver<CapturedPeerSend>,
+) -> Option<NodeId> {
+    tokio::time::sleep(StdDuration::from_millis(50)).await;
+    let sent = std::iter::from_fn(|| sends.try_recv().ok())
+        .map(|send| (send.peer, send.api_key))
+        .collect::<Vec<_>>();
+    match sent.as_slice() {
+        [] => None,
+        [(peer, key)] if *key == api_key::FETCH => Some(*peer),
+        other => panic!("expected at most one Fetch, sent {other:?}"),
+    }
+}
+
+/// Node 1's refusal of a Fetch: `error_code` at `epoch`, naming `leader_id` as
+/// the leader it knows.
+fn refusal_from_node_one(error_code: i16, epoch: Epoch, leader_id: Option<NodeId>) -> bytes::Bytes {
     wire::PeerResponse::Fetch(wire::FetchAnswer {
-        error_code: NOT_LEADER_OR_FOLLOWER,
+        error_code,
         leader: wire::QuorumLeader {
             leader_id,
-            epoch: 7,
+            epoch,
             endpoint: None,
         },
         hwm: -1,
-        ..leader_answer(NodeId(1), 7)
+        ..leader_answer(NodeId(1), epoch)
     })
     .encode()
+}
+
+/// Node 1's answer to a Fetch after it lost epoch 1: epoch 7, with `leader_id`
+/// as the leader it knows.
+fn answer_from_epoch_seven(leader_id: Option<NodeId>) -> bytes::Bytes {
+    refusal_from_node_one(NOT_LEADER_OR_FOLLOWER, 7, leader_id)
+}
+
+/// Kafka's `FENCED_LEADER_EPOCH`.
+const FENCED_LEADER_EPOCH: i16 = 74;
+/// Kafka's `UNKNOWN_LEADER_EPOCH`.
+const UNKNOWN_LEADER_EPOCH: i16 = 75;
+/// Kafka's `INVALID_REQUEST`.
+const INVALID_REQUEST: i16 = 42;
+
+/// A refused Fetch answer from the leader a replica follows sends it straight
+/// back to that leader exactly when Kafka's `maybeHandleCommonResponse`
+/// handles the answer: one from an older epoch, an `UNKNOWN_LEADER_EPOCH`, or
+/// a `FENCED_LEADER_EPOCH` or `NOT_LEADER_OR_FOLLOWER` in the replica's own
+/// epoch. Node 2 follows node 1 at epoch 5 in every case but the last.
+#[yare::parameterized(
+    not_leader_in_its_epoch = { Some(NodeId(1)), NodeId(1), 5, NOT_LEADER_OR_FOLLOWER, true },
+    fenced_in_its_epoch = { Some(NodeId(1)), NodeId(1), 5, FENCED_LEADER_EPOCH, true },
+    unknown_leader_epoch = { Some(NodeId(1)), NodeId(1), 5, UNKNOWN_LEADER_EPOCH, true },
+    older_epoch = { Some(NodeId(1)), NodeId(1), 4, 0, true },
+    invalid_request = { Some(NodeId(1)), NodeId(1), 5, INVALID_REQUEST, false },
+    from_another_node = { Some(NodeId(1)), NodeId(3), 5, NOT_LEADER_OR_FOLLOWER, false },
+    following_no_one = { None, NodeId(1), 5, NOT_LEADER_OR_FOLLOWER, false },
+)]
+fn a_refusal_from_the_followed_leader_refetches_as_kafka_does(
+    following: Option<NodeId>,
+    from: NodeId,
+    answer_epoch: Epoch,
+    error_code: i16,
+    refetches: bool,
+) {
+    assert2::assert!(
+        refetches_after_refusal(following, 5, from, answer_epoch, error_code) == refetches
+    );
+}
+
+/// A leader that has resigned in the follower's own epoch answers
+/// `NOT_LEADER_OR_FOLLOWER` and names no leader. The follower sends its next
+/// Fetch to that leader at once, as Kafka's does, and leaves its fetch timer as
+/// it was, so a leader that keeps refusing still ends in an election. A refusal
+/// Kafka does not handle, such as `INVALID_REQUEST`, sends nothing.
+#[yare::parameterized(
+    resigned_leader = { NOT_LEADER_OR_FOLLOWER, Some(NodeId(1)) },
+    invalid_request = { INVALID_REQUEST, None },
+)]
+#[test_macro(tokio::test)]
+async fn a_followed_leader_that_refuses_is_fetched_from_again_at_once(
+    error_code: i16,
+    fetches_from: Option<NodeId>,
+) {
+    let (
+        EngineInDir {
+            mut engine,
+            dir: _dir,
+        },
+        mut sends,
+    ) = following_node_one(NodeId(2));
+    let fetch_at = engine.fetch_at;
+
+    engine.on_fetch_response(NodeId(1), &refusal_from_node_one(error_code, 1, None));
+
+    assert2::assert!(fetches_sent(&mut sends).await == fetches_from);
+    assert2::assert!(engine.fetch_at == fetch_at);
+    let state = engine.core.quorum_state();
+    assert2::assert!((state.leader_id, state.leader_epoch) == (Some(NodeId(1)), 1));
 }
 
 /// A Fetch response from a newer epoch moves a follower or an observer to the
@@ -462,15 +548,7 @@ async fn a_newer_epoch_without_a_leader_detaches_the_node_from_its_old_leader(
     let state = engine.core.quorum_state();
     assert2::assert!((state.leader_id, state.leader_epoch) == (None, 7));
     assert2::assert!(engine.following_leader().is_none());
-    tokio::time::sleep(StdDuration::from_millis(50)).await;
-    let sent = std::iter::from_fn(|| sends.try_recv().ok())
-        .map(|send| (send.peer, send.api_key))
-        .collect::<Vec<_>>();
-    let expected = discovery_fetch_to
-        .map(|peer| (peer, api_key::FETCH))
-        .into_iter()
-        .collect::<Vec<_>>();
-    assert2::assert!(sent == expected);
+    assert2::assert!(fetches_sent(&mut sends).await == discovery_fetch_to);
 }
 
 /// A replica answers a Fetch as Kafka's `tryCompleteFetchRequest` does:
