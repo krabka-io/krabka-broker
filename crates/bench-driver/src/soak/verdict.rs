@@ -117,7 +117,7 @@ pub fn judge(contract: &Contract, evidence: &Evidence) -> Verdict {
         contract: contract.name.clone(),
         profile: contract.profile,
         contract_errors,
-        reconciliation: reconcile(contract, evidence),
+        reconciliation: reconcile(contract, &schedule, evidence),
         budgets: check_budgets(contract, evidence),
         schedule,
         deadlines,

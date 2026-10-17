@@ -133,7 +133,9 @@ pub struct CommitCheck {
     /// What `OffsetFetch` returned once the fault had recovered. `None` when it
     /// returned nothing at all.
     pub fetched: Option<i64>,
-    /// The partition's log end offset when `fetched` was read.
+    /// The partition's log end offset when `fetched` was read, or `-1` when
+    /// the executor could not read it. The judge reports a check with an
+    /// unknown log end as missing, not as an offset past the log.
     pub log_end: i64,
 }
 

@@ -9,6 +9,12 @@
 //! below the 72-hour contract's rates. Missed ticks are skipped, not caught
 //! up, so a stall during a fault never turns into a burst that inflates the
 //! steady rate after it.
+//!
+//! The transactional producer is the exception. It stops ticking while it
+//! waits for a transaction's deliveries and for its commit or abort, every
+//! transaction, on a healthy cluster as much as during a fault. Skipping the
+//! ticks missed in those waits would hold it below its rate, so it catches
+//! them up instead.
 
 use {
     crate::{
@@ -200,9 +206,19 @@ async fn enqueue(producer: &Producer, record: ProducerRecord, seq: u64, attempt:
     }
 }
 
-fn ticker(path: &LoadPath) -> tokio::time::Interval {
-    let mut ticker = tokio::time::interval(path.rate.period().to_std());
+/// The pace of a pipelined producer: one tick per `period`, skipping the ticks
+/// it missed.
+fn pipelined_ticker(period: Duration) -> tokio::time::Interval {
+    let mut ticker = tokio::time::interval(period);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    ticker
+}
+
+/// The pace of a transactional producer: one tick per `period` on average,
+/// with the ticks missed while a transaction ended fired at once.
+fn transactional_ticker(period: Duration) -> tokio::time::Interval {
+    let mut ticker = tokio::time::interval(period);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Burst);
     ticker
 }
 
@@ -246,7 +262,7 @@ pub(crate) async fn run_idempotent(ctx: Arc<LoadContext>, path: LoadPath) -> Pro
     let Some(producer) = connect_producer(&ctx, &name, false).await else {
         return ProducerOutput { ledger, latencies };
     };
-    let mut ticker = ticker(&path);
+    let mut ticker = pipelined_ticker(path.rate.period().to_std());
     let mut inflight: FuturesUnordered<Delivery> = FuturesUnordered::new();
     let mut next_seq = 0_u64;
     loop {
@@ -304,7 +320,7 @@ pub(crate) async fn run_transactional(ctx: Arc<LoadContext>, path: LoadPath) -> 
         name: producer_name(&path.name),
         ledger: empty_ledger(&path, &producer_name(&path.name)),
         latencies: Latencies::new(),
-        ticker: ticker(&path),
+        ticker: transactional_ticker(path.rate.period().to_std()),
         next_seq: 0,
         index: 0,
     };
@@ -550,10 +566,41 @@ pub(crate) async fn run_consumer(
 #[cfg(test)]
 mod tests {
     use {
-        super::{aborted_on_purpose, compacted_key, key_index, record_value, superseded},
+        super::{
+            aborted_on_purpose, compacted_key, key_index, pipelined_ticker, record_value,
+            superseded, transactional_ticker,
+        },
         assert2::check,
         krabka_bench_driver::soak::evidence::parse_record_tag,
+        std::time::Duration,
+        tokio::time::{Instant, Interval},
     };
+
+    const PERIOD: Duration = Duration::from_millis(10);
+
+    /// How long ten ticks take when the ticker stalls for five periods after
+    /// the first, as a transactional producer does while a transaction ends.
+    async fn ten_ticks_across_a_stall(mut ticker: Interval) -> Duration {
+        let start = Instant::now();
+        ticker.tick().await;
+        tokio::time::sleep(PERIOD * 5).await;
+        for _ in 1..10 {
+            ticker.tick().await;
+        }
+        start.elapsed()
+    }
+
+    #[yare::parameterized(
+        transactional_keeps_its_average_rate = { transactional_ticker, PERIOD * 9 },
+        pipelined_drops_what_it_missed = { pipelined_ticker, PERIOD * 13 },
+    )]
+    #[test_macro(tokio::test(start_paused = true))]
+    async fn only_a_pipelined_producer_drops_the_ticks_a_stall_missed(
+        ticker: fn(Duration) -> Interval,
+        took: Duration,
+    ) {
+        check!(ten_ticks_across_a_stall(ticker(PERIOD)).await == took);
+    }
 
     #[yare::parameterized(
         padded = { 64, 64 },

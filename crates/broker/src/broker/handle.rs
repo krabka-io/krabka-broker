@@ -464,7 +464,9 @@ impl BrokerHandle {
             task.abort();
             let _ = task.await;
         }
-        self.broker.controller.cancel().await;
+        // A dead process hands no leadership over: the quorum finds out
+        // through its fetch watchdog, as it does after a kill.
+        self.broker.controller.halt().await;
     }
 
     /// Record the broker epoch this node is stopping on, so its next start can
@@ -564,7 +566,10 @@ impl BrokerHandle {
         // participating in elections after the broker is logically dead.
         // Without this, a killed broker's in-process raft engine keeps ticking
         // and re-elects itself, preventing the surviving nodes from detecting
-        // the leader failure and electing a replacement.
+        // the leader failure and electing a replacement. A controller that
+        // leads the quorum resigns first and sends `EndQuorumEpoch`, as Kafka's
+        // `KafkaRaftClient.shutdown` does, so its successor elects at once
+        // rather than after the followers' fetch watchdog.
         self.broker.controller.cancel().await;
     }
 }

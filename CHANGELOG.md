@@ -43,6 +43,11 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   visibility and committed offsets, and tells permitted retries from loss. A
   five-minute self-check in the container matrix proves that the judge catches
   an injected missing record and a missed recovery deadline.
+- The sustained-load executor keeps the evidence a 72-hour run needs (issue
+  #1393): resource and controller-progress telemetry for every node every
+  10 s, and the firing history of the shipped alert rules from a pinned
+  Prometheus sidecar, both written as the run goes. It also runs diskless
+  paths, on a SASL inter-broker listener.
 - `qualify.sh budget` compares a candidate build with an earlier revision or
   with pinned Kafka 4.3.1 over a predeclared RF=3 workload matrix, in
   interleaved rounds. `krabka-parse-benches` assembles every raw trial into a
@@ -67,6 +72,17 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   stored and reported and changed nothing. As in Kafka, the SASL and Kerberos
   keys and `principal.builder.class` reach only listeners added later
   (#1423).
+- A gracefully stopped active controller now hands the metadata quorum over
+  before it exits, as Kafka's `KafkaRaftClient.shutdown` does: it resigns,
+  sends `EndQuorumEpoch` naming the other voters by how far they have fetched,
+  and waits up to five seconds (or one `controller_election_timeout`, when that
+  is shorter) for a successor. Before, it stopped without a word, and the other
+  voters noticed only after three missed five-second fetch timeouts and then an
+  election, 18–26 s after `SIGTERM` in a three-node cluster with the default
+  timings. A new controller now serves within about half a second. A broker in
+  controlled shutdown also sends its first heartbeat at once and asks again 50
+  ms after the controller's first answer, as Kafka's `BrokerLifecycleManager`
+  does, instead of waiting a `heartbeat_interval` for each (#1446).
 - A controller voter that stops hearing from the controller leader now
   starts an election after one fetch timeout (`controller_election_timeout`),
   as Kafka's `KafkaRaftClient.pollFollowerAsVoter` does. Before, it re-polled
@@ -99,6 +115,12 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   the DN or drops a SAN. Before, the broker stored and reported the keys and
   kept serving its static certificate. krabka reads PEM stores with an
   unencrypted key only (#1422).
+- The broker refuses to start when `broker_id` and `node_id` differ, as
+  Kafka's `KafkaConfig` refuses a `broker.id` that is not the `node.id`.
+  Before, such a broker registered under its node id but heartbeated under
+  its broker id, so the controller never unfenced it, and `Broker::start`
+  waited out `startup_leader_wait_timeout` (two minutes) before going on
+  fenced (#1471).
 - `max.connections.per.ip.overrides`, `max.connection.creation.rate` and the
   per-listener `listener.name.<listener>.max.connections` and
   `listener.name.<listener>.max.connection.creation.rate` now take effect, on

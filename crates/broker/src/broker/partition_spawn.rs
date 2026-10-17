@@ -11,7 +11,7 @@ use {
         log_dir_status::LogDirRegistry,
         partition::{
             Partition, PartitionRuntimeConfig, ReplicationTarget, WriterMessage,
-            empty_marker_materialization, initial_replication_target,
+            empty_marker_materialization, initial_replication_target, unreported_leader_log_start,
         },
         partition_writer::{
             WriterIdentity, WriterServices, WriterSignals, WriterStorage, run_with_sequencer,
@@ -341,6 +341,7 @@ pub(crate) fn try_spawn_partition_with_replication_target(
         current_leader_epoch,
         replication_target,
         diskless,
+        reported_leader_log_start: unreported_leader_log_start(),
         writer_handle: Arc::new(Mutex::new(Some(writer))),
     }))
 }
