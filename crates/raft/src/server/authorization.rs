@@ -23,7 +23,15 @@ use {
         },
     },
     bytes::{Bytes, BytesMut},
-    krabka_protocol::{Decode, Encode, owned},
+    krabka_protocol::{
+        Decode, Encode,
+        owned::{
+            self,
+            fetch_request::FetchRequest,
+            fetch_response::{FetchResponse, FetchableTopicResponse, PartitionData},
+        },
+        records::RecordsPayload,
+    },
 };
 
 /// Kafka's `CLUSTER_AUTHORIZATION_FAILED`.
@@ -199,17 +207,28 @@ pub(super) fn refusal(api_key: i16, version: i16, body: &[u8]) -> Result<Bytes, 
     Ok(out.freeze())
 }
 
-/// Kafka's `FetchRequest.getErrorResponse`: the top-level error and the
-/// session id of the request. Before v13 every requested partition also
-/// carries the error, with an invalid high watermark and no records.
-fn fetch_refusal(
-    version: i16,
-    body: &[u8],
-) -> Result<owned::fetch_response::FetchResponse, RaftError> {
-    use owned::fetch_response::{FetchResponse, FetchableTopicResponse, PartitionData};
-
+/// Kafka's `FetchRequest.getErrorResponse`, refused with
+/// `CLUSTER_AUTHORIZATION_FAILED`.
+fn fetch_refusal(version: i16, body: &[u8]) -> Result<FetchResponse, RaftError> {
     let mut cursor = body;
-    let request = owned::fetch_request::FetchRequest::decode(&mut cursor, version)?;
+    let request = FetchRequest::decode(&mut cursor, version)?;
+    Ok(fetch_error_response(
+        &request,
+        version,
+        CLUSTER_AUTHORIZATION_FAILED,
+    ))
+}
+
+/// Kafka's `FetchRequest.getErrorResponse`: `error_code` and the session id
+/// of `request` at the top level. Before v13 every requested partition also
+/// carries the code, as `FetchResponse.partitionResponse` builds it: an
+/// invalid high watermark and empty, non-null records.
+#[must_use]
+pub fn fetch_error_response(
+    request: &FetchRequest,
+    version: i16,
+    error_code: i16,
+) -> FetchResponse {
     let responses = if version < FETCH_TOP_LEVEL_ERROR_ONLY_VERSION {
         request
             .topics
@@ -222,23 +241,24 @@ fn fetch_refusal(
                     .iter()
                     .map(|partition| PartitionData {
                         partition_index: partition.partition,
-                        error_code: CLUSTER_AUTHORIZATION_FAILED,
+                        error_code,
                         high_watermark: INVALID_HIGH_WATERMARK,
+                        records: Some(RecordsPayload::default()),
                         ..Default::default()
                     })
                     .collect(),
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+                ..Default::default()
             })
             .collect()
     } else {
         Vec::new()
     };
-    Ok(FetchResponse {
-        error_code: CLUSTER_AUTHORIZATION_FAILED,
+    FetchResponse {
+        error_code,
         session_id: request.session_id,
         responses,
         ..Default::default()
-    })
+    }
 }
 
 #[cfg(test)]

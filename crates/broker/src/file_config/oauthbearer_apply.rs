@@ -7,26 +7,36 @@
 //! configuration.
 
 #[cfg(not(target_family = "wasm"))]
-use super::oauthbearer::{DEFAULT_ALLOWABLE_CLOCK_SKEW, DEFAULT_INTROSPECTION_HTTP_TIMEOUT};
+use super::oauthbearer::DEFAULT_INTROSPECTION_HTTP_TIMEOUT;
 #[cfg(not(target_family = "wasm"))]
 use crate::oauth_introspection::ReqwestIntrospectionClient;
 use {
-    super::{FileConfigError, oauthbearer::FileOAuthBearerConfig},
+    super::{
+        FileConfigError,
+        oauthbearer::{
+            DEFAULT_ALLOWABLE_CLOCK_SKEW, DEFAULT_UNSECURED_ALLOWABLE_CLOCK_SKEW,
+            FileOAuthBearerConfig,
+        },
+    },
     crate::config::{BrokerConfig, DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE},
     krabka_units::{Time, convert::TimeExt as _},
 };
 
+/// Set the principal claim and the clock skew of a JWS validator from
+/// `[oauthbearer]`. An unset `allowable_clock_skew_ms` takes `default_skew`,
+/// which differs between the unsecured and the signed validator in Kafka.
 fn apply_jws_claim_options(
     principal_claim_name: &mut String,
     allowable_clock_skew: &mut Time,
+    default_skew: Time,
     oauth: &FileOAuthBearerConfig,
 ) {
     if let Some(name) = oauth.principal_claim_name.clone() {
         *principal_claim_name = name;
     }
-    if let Some(skew) = oauth.allowable_clock_skew_ms {
-        *allowable_clock_skew = Time::from_millis(skew);
-    }
+    *allowable_clock_skew = oauth
+        .allowable_clock_skew_ms
+        .map_or(default_skew, Time::from_millis);
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -156,6 +166,19 @@ pub(super) fn apply_oauthbearer(
         })
     });
 
+    let unsecured_required_scope = oauth
+        .unsecured_required_scope
+        .as_deref()
+        .map(|option| {
+            krabka_security::parse_required_scope(option).map_err(|error| {
+                FileConfigError::InvalidConfig(format!(
+                    "[oauthbearer]: unsecured_required_scope {option:?} is invalid: {error}"
+                ))
+            })
+        })
+        .transpose()?
+        .unwrap_or_default();
+
     match (
         oauth.jwks_endpoint_uri.as_ref(),
         oauth.introspection_endpoint_uri.as_ref(),
@@ -190,6 +213,7 @@ pub(super) fn apply_oauthbearer(
             apply_jws_claim_options(
                 &mut v.principal_claim_name,
                 &mut v.allowable_clock_skew,
+                DEFAULT_ALLOWABLE_CLOCK_SKEW,
                 &oauth,
             );
             v.valid_issuer = oauth.valid_issuer_uri;
@@ -264,6 +288,7 @@ pub(super) fn apply_oauthbearer(
             apply_jws_claim_options(
                 &mut v.principal_claim_name,
                 &mut v.allowable_clock_skew,
+                DEFAULT_UNSECURED_ALLOWABLE_CLOCK_SKEW,
                 &oauth,
             );
             // JsonPath custom_claim_check + JWT typ check.
@@ -274,6 +299,11 @@ pub(super) fn apply_oauthbearer(
             v.fallback_user_name_prefix = oauth.fallback_user_name_prefix;
             v.groups_claim = groups_claim_compiled;
             v.groups_claim_delimiter = oauth.groups_claim_delimiter;
+            // Kafka's scope options.
+            if let Some(name) = oauth.unsecured_scope_claim_name {
+                v.scope_claim_name = name;
+            }
+            v.required_scope = unsecured_required_scope;
             cfg.oauthbearer_validator = krabka_security::OAuthBearerValidator::Unsecured(v);
         }
     }
@@ -289,10 +319,157 @@ mod tests {
                 FileConfig, FileConfigError,
                 test_support::{configured, configured_unwrap_parse},
             },
+            test_support::Es256SigningKey,
         },
         assert2::{assert, check},
+        base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64},
+        krabka_security::OAuthBearerValidator,
         krabka_units::{minutes, secs},
     };
+
+    /// The instant every clock-skew case validates at, in epoch milliseconds.
+    const NOW_MS: i64 = 2_000_000_000_000;
+
+    /// An unsecured (`alg:none`) token for `sub = "alice"` with the given
+    /// `exp`, in epoch seconds.
+    fn unsecured_token(exp_s: i64) -> String {
+        let header = B64.encode(br#"{"alg":"none"}"#);
+        let payload = B64.encode(serde_json::json!({"sub": "alice", "exp": exp_s}).to_string());
+        format!("{header}.{payload}.")
+    }
+
+    /// Install a fresh ES256 key in `validator`'s key set and return a token
+    /// it signs for `sub = "alice"` with the given `exp`, in epoch seconds.
+    fn signed_token(validator: &krabka_security::SignedJwsValidator, exp_s: i64) -> String {
+        let key = Es256SigningKey::generate("skew");
+        validator.key_handle().store(key.jwks());
+        key.sign(&serde_json::json!({"sub": "alice", "exp": exp_s}))
+    }
+
+    /// Kafka's `OAuthBearerUnsecuredValidatorCallbackHandler` defaults
+    /// `unsecuredValidatorAllowableClockSkewMs` to 0, while the signed path's
+    /// `sasl.oauthbearer.clock.skew.seconds` defaults to 30. Each case builds
+    /// the validator from `[oauthbearer]` and offers it a token whose `exp`
+    /// lies `expired_by_s` seconds before now.
+    #[yare::parameterized(
+        unsecured_default_refuses_one_second_past_exp = {
+            "allow_unsecured = true", 1, false
+        },
+        unsecured_explicit_skew_admits_one_second_past_exp = {
+            "allow_unsecured = true\nallowable_clock_skew_ms = 5000", 1, true
+        },
+        unsecured_explicit_skew_refuses_past_the_skew = {
+            "allow_unsecured = true\nallowable_clock_skew_ms = 5000", 6, false
+        },
+        signed_default_admits_one_second_past_exp = {
+            "jwks_endpoint_uri = \"https://idp.example/jwks\"", 1, true
+        },
+        signed_default_admits_just_inside_thirty_seconds = {
+            "jwks_endpoint_uri = \"https://idp.example/jwks\"", 29, true
+        },
+        signed_default_refuses_past_thirty_seconds = {
+            "jwks_endpoint_uri = \"https://idp.example/jwks\"", 31, false
+        },
+        signed_explicit_zero_skew_refuses_one_second_past_exp = {
+            "jwks_endpoint_uri = \"https://idp.example/jwks\"\nallowable_clock_skew_ms = 0",
+            1,
+            false
+        },
+    )]
+    fn file_config_validator_applies_the_kafka_clock_skew_default(
+        table: &str,
+        expired_by_s: i64,
+        admitted: bool,
+    ) {
+        let cfg = configured_unwrap_parse(&format!("[oauthbearer]\n{table}\n")).unwrap();
+        let exp_s = NOW_MS / 1000 - expired_by_s;
+        let outcome = match &cfg.oauthbearer_validator {
+            OAuthBearerValidator::Unsecured(v) => v.validate(&unsecured_token(exp_s), NOW_MS),
+            OAuthBearerValidator::Signed(v) => v.validate(&signed_token(v, exp_s), NOW_MS),
+            OAuthBearerValidator::Introspection(_) => {
+                panic!("expected an unsecured or signed validator; got introspection")
+            }
+        };
+        assert2::assert!(outcome.is_ok() == admitted, "{table:?}: {outcome:?}");
+    }
+
+    /// `unsecured_required_scope` and `unsecured_scope_claim_name` are Kafka's
+    /// `unsecuredValidatorRequiredScope` and `unsecuredValidatorScopeClaimName`.
+    /// Each case builds the unsecured validator from `[oauthbearer]`, offers it
+    /// a token for `alice` with the extra `claims`, and renders a refusal as
+    /// the RFC 7628 challenge the broker sends.
+    #[yare::parameterized(
+        no_required_scope_admits_a_token_without_scope = { "", "", Ok("alice") },
+        every_required_item_admits = {
+            "unsecured_required_scope = \"a b\"", r#", "scope": ["b", "a", "c"]"#, Ok("alice")
+        },
+        a_missing_item_is_insufficient_scope = {
+            "unsecured_required_scope = \"a b\"",
+            r#", "scope": ["a"]"#,
+            Err(r#"{"status":"insufficient_scope", "scope":"[a, b]"}"#)
+        },
+        a_blank_required_scope_requires_none = {
+            "unsecured_required_scope = \"   \"", "", Ok("alice")
+        },
+        the_custom_claim_name_is_read = {
+            "unsecured_required_scope = \"a\"\nunsecured_scope_claim_name = \"scp\"",
+            r#", "scp": "a""#,
+            Ok("alice")
+        },
+        the_default_claim_is_ignored_under_a_custom_name = {
+            "unsecured_required_scope = \"a\"\nunsecured_scope_claim_name = \"scp\"",
+            r#", "scope": "a""#,
+            Err(r#"{"status":"insufficient_scope", "scope":"[a]"}"#)
+        },
+        a_numeric_custom_claim_is_an_invalid_token = {
+            "unsecured_scope_claim_name = \"scp\"",
+            r#", "scp": 7"#,
+            Err(r#"{"status":"invalid_token"}"#)
+        },
+    )]
+    fn file_config_unsecured_validator_applies_the_kafka_scope_options(
+        table: &str,
+        claims: &str,
+        expected: Result<&str, &str>,
+    ) {
+        let cfg =
+            configured_unwrap_parse(&format!("[oauthbearer]\nallow_unsecured = true\n{table}\n"))
+                .unwrap();
+        let OAuthBearerValidator::Unsecured(validator) = &cfg.oauthbearer_validator else {
+            panic!(
+                "expected the unsecured validator; got {:?}",
+                cfg.oauthbearer_validator
+            )
+        };
+        let header = B64.encode(br#"{"alg":"none"}"#);
+        let exp_s = NOW_MS / 1000 + 60;
+        let payload = B64.encode(format!(r#"{{"sub": "alice", "exp": {exp_s}{claims}}}"#));
+        let outcome = validator
+            .validate(&format!("{header}.{payload}."), NOW_MS)
+            .map(|outcome| outcome.principal.name)
+            .map_err(|error| krabka_security::oauth_error_json(&error));
+        assert2::assert!(
+            outcome == expected.map(str::to_owned).map_err(str::to_owned),
+            "{table:?}"
+        );
+    }
+
+    /// Kafka fails the unsecured validator's configuration on a required-scope
+    /// item outside the RFC 6749 scope-token grammar.
+    #[test]
+    fn an_invalid_required_scope_item_fails_the_config() {
+        let error = configured_unwrap_parse(
+            "[oauthbearer]\nallow_unsecured = true\nunsecured_required_scope = 'a b\"c'\n",
+        )
+        .expect_err("an invalid scope item must fail the config");
+        let FileConfigError::InvalidConfig(message) = &error else {
+            panic!("expected InvalidConfig; got {error:?}")
+        };
+        assert!(
+            message
+                == "[oauthbearer]: unsecured_required_scope \"a b\\\"c\" is invalid: invalid scope value: b\"c"
+        );
+    }
 
     fn check_unsecured(cfg: &BrokerConfig) {
         assert!(cfg.oauthbearer_jwks_endpoint.is_none());
