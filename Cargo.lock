@@ -3353,10 +3353,11 @@ dependencies = [
 [[package]]
 name = "krabka-client-admin"
 version = "0.6.0"
-source = "git+https://github.com/krabka-io/krabka-client-rs?rev=ee411691e39a05f3ed4e4ed8adc1e8939fd111b4#ee411691e39a05f3ed4e4ed8adc1e8939fd111b4"
+source = "git+https://github.com/krabka-io/krabka-client-rs?rev=29dac7a590a8ccab2e88205987d3c28fe3c9f669#29dac7a590a8ccab2e88205987d3c28fe3c9f669"
 dependencies = [
  "assert2",
  "async-trait",
+ "bon",
  "bytes",
  "futures-util",
  "krabka-client-core",
@@ -3364,6 +3365,7 @@ dependencies = [
  "krabka-protocol",
  "krabka-security",
  "krabka-units",
+ "maplit",
  "ring",
  "thiserror 2.0.21",
  "tokio",
@@ -3374,17 +3376,19 @@ dependencies = [
 [[package]]
 name = "krabka-client-consumer"
 version = "0.6.0"
-source = "git+https://github.com/krabka-io/krabka-client-rs?rev=ee411691e39a05f3ed4e4ed8adc1e8939fd111b4#ee411691e39a05f3ed4e4ed8adc1e8939fd111b4"
+source = "git+https://github.com/krabka-io/krabka-client-rs?rev=29dac7a590a8ccab2e88205987d3c28fe3c9f669#29dac7a590a8ccab2e88205987d3c28fe3c9f669"
 dependencies = [
  "assert2",
  "async-trait",
  "bon",
  "bytes",
+ "derive_more",
  "futures-util",
  "krabka-client-core",
  "krabka-ids",
  "krabka-protocol",
  "krabka-units",
+ "maplit",
  "refined_type",
  "thiserror 2.0.21",
  "tokio",
@@ -3396,13 +3400,14 @@ dependencies = [
 [[package]]
 name = "krabka-client-core"
 version = "0.6.0"
-source = "git+https://github.com/krabka-io/krabka-client-rs?rev=ee411691e39a05f3ed4e4ed8adc1e8939fd111b4#ee411691e39a05f3ed4e4ed8adc1e8939fd111b4"
+source = "git+https://github.com/krabka-io/krabka-client-rs?rev=29dac7a590a8ccab2e88205987d3c28fe3c9f669#29dac7a590a8ccab2e88205987d3c28fe3c9f669"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
  "bon",
  "bytes",
  "dashmap",
+ "derive_more",
  "dns-lookup",
  "futures-util",
  "hmac",
@@ -3411,6 +3416,7 @@ dependencies = [
  "krabka-protocol",
  "krabka-security",
  "krabka-units",
+ "maplit",
  "p12-keystore",
  "pbkdf2",
  "pkcs8",
@@ -3434,7 +3440,7 @@ dependencies = [
 [[package]]
 name = "krabka-client-producer"
 version = "0.6.0"
-source = "git+https://github.com/krabka-io/krabka-client-rs?rev=ee411691e39a05f3ed4e4ed8adc1e8939fd111b4#ee411691e39a05f3ed4e4ed8adc1e8939fd111b4"
+source = "git+https://github.com/krabka-io/krabka-client-rs?rev=29dac7a590a8ccab2e88205987d3c28fe3c9f669#29dac7a590a8ccab2e88205987d3c28fe3c9f669"
 dependencies = [
  "assert2",
  "async-trait",
@@ -3447,6 +3453,7 @@ dependencies = [
  "krabka-compression",
  "krabka-protocol",
  "krabka-units",
+ "maplit",
  "refined_type",
  "thiserror 2.0.21",
  "tokio",
@@ -8708,7 +8715,7 @@ source = "git+https://github.com/krabka-io/krabka-cli?rev=b39dc88d0da3792db02ad6
 [[patch.unused]]
 name = "krabka-client-coordination"
 version = "0.6.0"
-source = "git+https://github.com/krabka-io/krabka-client-rs?rev=ee411691e39a05f3ed4e4ed8adc1e8939fd111b4#ee411691e39a05f3ed4e4ed8adc1e8939fd111b4"
+source = "git+https://github.com/krabka-io/krabka-client-rs?rev=29dac7a590a8ccab2e88205987d3c28fe3c9f669#29dac7a590a8ccab2e88205987d3c28fe3c9f669"
 
 [[patch.unused]]
 name = "krabka-client-streams"
