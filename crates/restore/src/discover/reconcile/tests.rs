@@ -360,6 +360,55 @@ async fn a_segment_the_snapshot_does_not_mention_is_a_disagreement() {
     check_orders_disagreement(err);
 }
 
+/// What reconciling the two-segment archive against a snapshot that names
+/// only one of its segments, as live, must give.
+enum OneNamed {
+    /// The segment named is the first; the second was archived after it.
+    First,
+    /// The segment named is the second; the first lies inside its range.
+    Second,
+}
+
+#[yare::parameterized(
+    archived_after_the_snapshot_is_kept = { OneNamed::First, Some(2) },
+    unnamed_inside_the_snapshot_disagrees = { OneNamed::Second, None },
+)]
+#[test_macro(tokio::test)]
+async fn a_segment_the_snapshot_does_not_name_is_kept_only_when_it_is_newer(
+    named: OneNamed,
+    kept: Option<usize>,
+) {
+    let TwoSegmentArchive {
+        dir: archive,
+        topic_id,
+        first,
+        second,
+    } = two_segment_archive();
+    let (segment_id, base_offset) = match named {
+        OneNamed::First => (first, Offset(0)),
+        OneNamed::Second => (second, Offset(100)),
+    };
+    let SnapshotLocation {
+        dir: _snap_dir,
+        path: snap_path,
+    } = snapshot_with_segments(topic_id, &[SnapshotSegmentEntry {
+        segment_id,
+        base_offset,
+        state: RemoteLogSegmentState::CopySegmentFinished,
+    }]);
+    match kept {
+        Some(count) => {
+            let inventory = sole_partition_inventory(archive.path(), &snap_path).await;
+            check!(inventory.segments.len() == count);
+        }
+        None => check_orders_disagreement(
+            snapshot_inventory(archive.path(), &snap_path)
+                .await
+                .unwrap_err(),
+        ),
+    }
+}
+
 #[tokio::test]
 async fn a_delete_finished_segment_with_bytes_still_present_is_a_disagreement() {
     // `DeleteSegmentFinished` says the bytes should be gone. Bytes still

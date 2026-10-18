@@ -69,6 +69,89 @@ async fn authenticated_object_count_covers_only_the_selected_topic() {
     check!(report.authentication.unwrap().objects == expected);
 }
 
+/// A source lost mid-upload leaves a segment's objects without the manifest
+/// that would have named them. An authenticated restore leaves that segment
+/// out and says so, instead of refusing the whole archive: no signed claim
+/// covers it, and the pinned heads prove no manifest was taken away.
+#[tokio::test]
+async fn an_upload_without_its_manifest_is_skipped_by_an_authenticated_restore() {
+    let fixture = build_fixture();
+    let keys = tempfile::tempdir().unwrap();
+    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
+    let signer = std::sync::Arc::new(
+        FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), "key".to_owned()).unwrap(),
+    );
+    let public_key = keys.path().join("key.pub");
+    std::fs::write(&public_key, signer.public_key()).unwrap();
+    let heads = fixture.sign_worm(&[signer]);
+
+    // Copy one archived segment of `orders` under a base offset past its end,
+    // with no manifest: the bytes of an upload the loss interrupted.
+    let partition_dir = std::fs::read_dir(fixture.archive_root.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("orders-"))
+        })
+        .unwrap();
+    let mut copied = 0;
+    for entry in std::fs::read_dir(&partition_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+    {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.ends_with(MANIFEST_SUFFIX) || !name.starts_with(&format!("{:020}", 0)) {
+            continue;
+        }
+        // Its own segment id too: the first character of the encoded id,
+        // `-` sitting between the base offset and it, is changed.
+        let first = if name.as_bytes()[21] == b'A' {
+            'B'
+        } else {
+            'A'
+        };
+        let orphan = format!("{:020}-{first}{}", 99_999_999, &name[22..]);
+        std::fs::copy(entry.path(), partition_dir.join(orphan)).unwrap();
+        copied += 1;
+    }
+    check!(copied > 0);
+
+    let mut extra = vec![
+        "--topic".to_owned(),
+        "orders".to_owned(),
+        "--worm-key-id".to_owned(),
+        "key".to_owned(),
+        "--worm-public-key".to_owned(),
+        public_key.display().to_string(),
+    ];
+    for (partition, head) in heads {
+        extra.push("--worm-expect-head".to_owned());
+        extra.push(format!("{partition}={head}"));
+    }
+    let target = tempfile::tempdir().unwrap();
+    let refs = extra.iter().map(String::as_str).collect::<Vec<_>>();
+    let args = restore_args(fixture.archive_root.path(), target.path(), RestoreOptions {
+        extra: &refs,
+        ..Default::default()
+    });
+
+    let report = restore(&args).await.unwrap();
+    let skipped: Vec<(String, String)> = report
+        .skipped
+        .iter()
+        .map(|segment| (segment.topic.clone(), segment.reason.clone()))
+        .collect();
+    check!(
+        skipped
+            == [(
+                "orders".to_owned(),
+                "uploaded without a manifest: no signed claim names it".to_owned()
+            )]
+    );
+}
+
 /// 5. `restore()`'s report -- the structured value `--report json` renders --
 /// carries exactly the record and segment counts this fixture should
 /// produce, compared as whole structs rather than field by field.
