@@ -47,7 +47,7 @@ candidate evidence to the delivered bytes.
 | Run | Revision | Delivered image | What it executed |
 | :--- | :--- | :--- | :--- |
 | [Nightly 39114726914](https://github.com/krabka-io/krabka-broker/actions/runs/39114726914), 2026-10-18 | `948e3cc8f99dfabad5bd0917f7b710abc3a07710` | `sha256:ad1149a44f899e4d30c8eddd9944444e9fddcf8bb3f0ff322ff17f1e85ba4a23`, from [push CI 39058863421](https://github.com/krabka-io/krabka-broker/actions/runs/39058863421/job/117476230788) | The full container matrix. Three groups failed before any test ran, because their image pulls were cancelled: `jvm_acceptance_legacy+6`, `librdkafka_conformance+6` and `minio_roundtrip`. The four-hour soak failed. The upgrade job stopped at its time limit. |
-| [Nightly 39019310161](https://github.com/krabka-io/krabka-broker/actions/runs/39019310161), 2026-10-17 | `dc4acebe91b704dc1eed7dcce6e687638f70617d` | `sha256:c418a9bdd17611459c3b534d0743aa20c6a81e942b37a7c810c191ef9b922a2c`, from [push CI 39017848795](https://github.com/krabka-io/krabka-broker/actions/runs/39017848795) | The last nightly in which every container group passed. The upgrade job and the four-hour soak stopped at their time limits. |
+| [Nightly 39019310161](https://github.com/krabka-io/krabka-broker/actions/runs/39019310161), 2026-10-17 | `dc4acebe91b704dc1eed7dcce6e687638f70617d` | `sha256:c418a9bdd17611459c3b534d0743aa20c6a81e942b37a7c810c191ef9b922a2c`, from [push CI 39017848795](https://github.com/krabka-io/krabka-broker/actions/runs/39017848795) | The last nightly in which every container group passed. The four-hour soak failed as in the first row, and the upgrade job stopped at its time limit. |
 | [Push CI 39058863421](https://github.com/krabka-io/krabka-broker/actions/runs/39058863421), 2026-10-17 | `948e3cc8f99dfabad5bd0917f7b710abc3a07710` | As the first row | `bazel test //...`, Clippy, the proofs and the sustained-load self-check on three brokers. |
 | [Release 38520465048](https://github.com/krabka-io/krabka-broker/actions/runs/38520465048), `v1.0.5` | `ac9deff316d38418622b16c237c671df88f57c7a` | `sha256:8c515d335e89455525fb1ad4d9986769c9dd18e44fb259250919c6e7cb53bd84` (amd64) and `sha256:303ced00e15fcd07480e324f7c430f604dcce6b52d38a5df4ed2936743becd4a` (arm64) | Promotion of the image that CI run 38516831673 delivered. |
 | [qualification-36293960620](https://github.com/krabka-io/krabka-broker/releases/tag/qualification-36293960620), `v0.6.1` | `d7e46cfed8ecccac21f4fa3391fd4643dc03fcb6` | `sha256:d904478424431650314950e390e00107aee089464747208f573206a95c8d0c24` | All eight [ecosystem qualification](../qualification.md) gates, with krabka-operator v0.4.1. This is a 0.x build, so the 1.x on-disk contract does not cover it. |
@@ -116,7 +116,7 @@ each image covers. The rows below say when each client last ran.
 | :--- | :--- | :--- | :--- | :--- |
 | Single node, combined broker and controller | `historical` | [Push CI 39058863421, `build · lint · format · test · docgen`](https://github.com/krabka-io/krabka-broker/actions/runs/39058863421/job/117472458106) | `948e3cc8` | The in-process suites and `cli_smoke`. |
 | Three nodes, RF3, Docker | `historical` | [Push CI 39058863421, `container · soak_contract`](https://github.com/krabka-io/krabka-broker/actions/runs/39058863421/job/117472677079) | `948e3cc8` | The self-check runs for about five minutes. It is not the 72-hour soak. |
-| Three nodes, RF3, four-hour soak | `failing` | [Nightly 39114726914, `soak · four hours`](https://github.com/krabka-io/krabka-broker/actions/runs/39114726914/job/117638077308) | `948e3cc8` | Every broker's log directory rose about 4.9 MB in the second half, against a 4 MiB allowance. No acknowledged record was lost. On 2026-10-16 and 2026-10-17 the soak job stopped at its time limit. |
+| Three nodes, RF3, four-hour soak | `failing` | [Nightly 39114726914, `soak · four hours`](https://github.com/krabka-io/krabka-broker/actions/runs/39114726914/job/117638077308) | `948e3cc8` | Every broker's log directory rose about 4.9 MB in the second half, against a 4 MiB allowance. No acknowledged record was lost. It failed the same way on every nightly in which the soak finished, from 2026-10-08 on, and the job then reads cancelled. [#1507](https://github.com/krabka-io/krabka-broker/issues/1507). |
 | Three nodes, RF3, 72-hour soak | `untested` | [#1393](https://github.com/krabka-io/krabka-broker/issues/1393) | none | The contract is `bench/soak/rf3-72h.yaml`. No host is chosen. |
 | Kubernetes StatefulSet on Kind | `historical` | [Nightly 39114726914, `kubernetes · kind`](https://github.com/krabka-io/krabka-broker/actions/runs/39114726914/job/117638077033) | `948e3cc8` | `packaging/k8s/kind-smoke.sh`: three pods, RF3 produce, rolling restart, readback. |
 | krabka-operator on Kind | `historical` | [qualification-36293960620](https://github.com/krabka-io/krabka-broker/releases/tag/qualification-36293960620) | `v0.6.1` (`d7e46cfe`) | Operator v0.4.1: upgrade, disruption, scale-down and certificate rotation. No 1.x build has run it. |
@@ -126,7 +126,7 @@ each image covers. The rows below say when each client last ran.
 
 | Combination | Status | Evidence | Tested at | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| `v1.0.5` to `main`, single-broker smoke | `failing` | [Nightly 39114726914, `upgrade · previous release`](https://github.com/krabka-io/krabka-broker/actions/runs/39114726914/job/117638077261) | `948e3cc8` | The job stopped at its 90-minute limit after the `DeleteRecords` step. It also stopped at that limit on 2026-10-16 and 2026-10-17. The last pass is on the branch of #1403, at `d9ac0e4d`, in [run 38693039638](https://github.com/krabka-io/krabka-broker/actions/runs/38693039638/job/116283138060). |
+| `v1.0.5` to `main`, single-broker smoke | `failing` | [Nightly 39114726914, `upgrade · previous release`](https://github.com/krabka-io/krabka-broker/actions/runs/39114726914/job/117638077261) | `948e3cc8` | The job stopped at its 90-minute limit after the `DeleteRecords` step. It also stopped at that limit on 2026-10-16 and 2026-10-17. [#1508](https://github.com/krabka-io/krabka-broker/issues/1508). The last pass is on the branch of #1403, at `d9ac0e4d`, in [run 38693039638](https://github.com/krabka-io/krabka-broker/actions/runs/38693039638/job/116283138060). |
 | Rolling upgrade under load, RF3 | `untested` | [#1396](https://github.com/krabka-io/krabka-broker/issues/1396) | none | |
 | Rollback before feature finalization | `untested` | [#1396](https://github.com/krabka-io/krabka-broker/issues/1396) | none | [Persisted formats](../persisted_formats.md) states the rule. No run exercises it. |
 | 0.x data directory read by 1.x | `unsupported` | [Persisted formats](../persisted_formats.md#the-contract) | none | Reformat and restore. |
@@ -184,12 +184,12 @@ its source. An item stays here until a linked change removes it.
 - **`COORDINATOR_NOT_AVAILABLE` under max-rate RF3 load.** #1410 fixed two
   follower-fetch causes. The storage-stall candidate needs a benchmark-host
   rerun. [#1352](https://github.com/krabka-io/krabka-broker/issues/1352) is open.
-- **The four-hour soak fails its log-directory drift bound** at `948e3cc8`.
-  See [Deployment configurations](#deployment-configurations). It is not
-  diagnosed yet.
+- **The four-hour soak fails its log-directory drift bound** on every
+  nightly from 2026-10-08 to 2026-10-18. It is not diagnosed yet.
+  [#1507](https://github.com/krabka-io/krabka-broker/issues/1507).
 - **The nightly upgrade smoke stops at its time limit** after its
-  `DeleteRecords` step, on the last three nightlies. See
-  [Upgrades and rollback](#upgrades-and-rollback). It is not diagnosed yet.
+  `DeleteRecords` step, on the last three nightlies. It is not diagnosed yet.
+  [#1508](https://github.com/krabka-io/krabka-broker/issues/1508).
 
 ### Kafka behavior differences
 
@@ -254,9 +254,11 @@ no run. This section stays empty until #1399 publishes consented results.
    `948e3cc8`, three groups did not.
 3. The 72-hour RF3 soak, including the diskless and netem faults
    ([#1393](https://github.com/krabka-io/krabka-broker/issues/1393)), and a
-   diagnosis of the four-hour soak's log-directory drift.
-4. A diagnosis of the `upgrade · previous release` job that stops at its
-   time limit, a pass of it on `main`, and loaded upgrade and rollback runs on
+   fix for the four-hour soak's log-directory drift
+   ([#1507](https://github.com/krabka-io/krabka-broker/issues/1507)).
+4. A fix for the `upgrade · previous release` job that stops at its time
+   limit ([#1508](https://github.com/krabka-io/krabka-broker/issues/1508)), a
+   pass of it on `main`, and loaded upgrade and rollback runs on
    release images
    ([#1396](https://github.com/krabka-io/krabka-broker/issues/1396)).
 5. Secured disaster recovery with measured RPO and RTO for a 1.x image
