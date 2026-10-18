@@ -239,7 +239,7 @@ Reconciliation checks:
 | Topic settings | `kafka-configs --describe` on the scratch cluster matches production at the capture for every restored topic. |
 | ACLs and credentials | `kafka-acls --list` matches production at the capture. A pilot principal authenticates with its SCRAM password. |
 | Group offsets | After `krabka-backup restore-offsets`, every captured group's position equals the captured position. |
-| Compacted topic and schemas | Restored from the protection that gap issue [#1499](https://github.com/krabka-io/krabka-broker/issues/1499) defines. The archive does not hold them, so a drill without that protection fails this check. |
+| Compacted topic and schemas | Restored from the separate protection that [Topics the archive does not hold](backup-restore.md#topics-the-archive-does-not-hold) describes. The operator records which protection each topic uses in P1. The archive does not hold them, so a drill without that protection fails this check. |
 | Measured values | `rpo_ms` and `rto_ms` are inside the declared values. |
 
 ### Runbook sections the operator follows
@@ -439,7 +439,7 @@ Writing the plans found these gaps and defects in the existing documents. Each o
 | [#1496](https://github.com/krabka-io/krabka-broker/issues/1496) | The migration guide does not say which topic name producers write after the cutover, what the reverse flow carries back, or that ACL sync skips `WRITE` grants. | A |
 | [#1497](https://github.com/krabka-io/krabka-broker/issues/1497) | The migration guide does not say how to create tiered or compacted target topics before the mirror starts. | A |
 | [#1498](https://github.com/krabka-io/krabka-broker/issues/1498) | No document describes the schema registry cutover that the migration guide says is needed. | A |
-| [#1499](https://github.com/krabka-io/krabka-broker/issues/1499) | The backup guide does not say that compacted user topics and `_schemas` are never in the archive, so a restore does not bring them back. | A drill |
+| [#1499](https://github.com/krabka-io/krabka-broker/issues/1499) | The backup guide did not say that compacted user topics and `_schemas` are never in the archive, so a restore does not bring them back. [Topics the archive does not hold](backup-restore.md#topics-the-archive-does-not-hold) now says so. | None. Closed by the same pull request as this document. |
 | [#1500](https://github.com/krabka-io/krabka-broker/issues/1500) | The backup guide and the restore runbook showed no `--command-config` for a secured cluster, showed the `--worm-*` flags as always needed (they fail a capture with no diskless boundary), and said that a restored cluster has a new cluster id after a step that keeps the old one. [Secured clusters](backup-restore.md#secured-clusters) and the runbook now cover each one. | None. Closed by the same pull request as this document. |
 | [#1501](https://github.com/krabka-io/krabka-broker/issues/1501) | [Deploy](deploy.md) had no krabka-operator installation path, but [Scale a cluster](scaling.md) and the qualified manifest use the operator. [Kubernetes operator](deploy.md#kubernetes-operator) now describes it. | None. Closed by the same pull request as this document. |
 | [#1502](https://github.com/krabka-io/krabka-broker/issues/1502) | [Kubernetes](deploy.md#kubernetes) says the image is published for amd64 only, but [Install](deploy.md#install) says release tags are amd64 and arm64 indexes. | None |

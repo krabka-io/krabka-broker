@@ -24,6 +24,42 @@ one, and it names the target node as the leader and sole replica of every
 partition. Record the cluster id of every production cluster somewhere outside
 it, and pass it to the restore.
 
+### Topics the archive does not hold
+
+The archive holds only the topics that tier their segments, the topics with
+`remote.storage.enable=true`. A topic that does not tier is not in the
+archive, and `krabka restore` does not bring it back. Two kinds of topic
+cannot tier at all:
+
+- **A compacted topic.** krabka refuses `remote.storage.enable` together with
+  `cleanup.policy=compact`, as Kafka does. Every compacted user topic is
+  outside the archive. Examples are a table of latest values per key, a
+  Kafka Streams changelog, and the internal topics of Kafka Connect.
+- **A schema registry's `_schemas` topic.** It is compacted. A restored topic
+  of Avro, Protobuf or JSON Schema records carries schema ids that no
+  registry can resolve until the registry has its schemas back.
+
+`krabka-backup` captures none of these. The group offsets are the only
+compacted data that it captures. Protect each such topic separately, before
+the day you need it:
+
+- Mirror it to a second cluster with MirrorMaker 2, as
+  [Migrate from Apache Kafka](migrate-from-kafka.md) describes for a
+  migration. The mirror is a copy of the topic, not a point-in-time backup,
+  so a bad write reaches it too.
+- Or rebuild it from its source of truth. A Kafka Streams changelog rebuilds
+  from the restored input topics when the application starts with a new
+  `application.id`, if those topics still hold every record that the state
+  needs. A schema registry can register its schemas again from the schema
+  files that its producers build from. A plain registration gives a schema a
+  new id, and the restored records name schemas by their old ids. Use a
+  registry mode that registers a schema under a given id, such as the
+  `IMPORT` mode of Confluent Schema Registry, and check every id.
+
+A restore rehearsal checks these topics as well as the archive. Read one
+record from each restored tiered topic, decode it with the restored registry,
+and compare it with production.
+
 ## Capture the inputs
 
 `krabka-backup capture` copies all three into the archive, beside the segments
@@ -284,8 +320,11 @@ The restore's contract is stated in full in
 What does not come back at all: the cluster id, unless it is passed; the node
 identity and the replica assignment, which the restore rewrites to the target
 node; in-flight transaction state, which lives in the never-tiered
-`__transaction_state`; and any classic active-segment or diskless uncommitted
-tail beyond the reported capture boundary.
+`__transaction_state`; every topic that does not tier, compacted topics and
+`_schemas` among them, as
+[Topics the archive does not hold](#topics-the-archive-does-not-hold) says;
+and any classic active-segment or diskless uncommitted tail beyond the
+reported capture boundary.
 
 ## Related
 
