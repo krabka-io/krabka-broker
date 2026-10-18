@@ -212,10 +212,11 @@ The provenance defect is in `release.yml`. It writes a SLSA v1 predicate
 every field is dropped, and the statement carries no commit, no ref and no
 image source. `cosign verify-attestation --type slsaprovenance` still passes,
 because it checks the signature and the type, not the content. A local
-`cosign attest-blob` test with cosign 3.0.2 shows that `--type
-slsaprovenance1` keeps the predicate. The proposed fix is blocker B1 below.
-It does not change the attestations of v1.0.0 to v1.0.5, so those releases
-keep an empty provenance predicate. For them, the release run log and the
+`cosign attest-blob` test with cosign 3.0.2 shows that the type
+`https://slsa.dev/provenance/v1` keeps the predicate as written. The fix is
+blocker B1 below, in
+[#1509](https://github.com/krabka-io/krabka-broker/pull/1509). It does not change the attestations of v1.0.0 to
+v1.0.5, so those releases keep an empty provenance predicate. For them, the release run log and the
 `delivery-image` artifact are the provenance evidence.
 
 ## Blocker list (proposal)
@@ -233,7 +234,7 @@ The maintainer agrees this list on #1401. Each item has one class:
 
 | ID | Item | Source | Reason |
 | :--- | :--- | :--- | :--- |
-| B1 | The provenance attestation has an empty predicate. | This record; `release.yml` | The provenance is the link between the signed index, the commit and the tested image. Fix: in `release.yml`, attest with `--type slsaprovenance1` and verify with the same type, then run `aspect verify-release` after signing. |
+| B1 | The provenance attestation has an empty predicate. | This record; `release.yml` | The provenance is the link between the signed index, the commit and the tested image. Fix in [#1509](https://github.com/krabka-io/krabka-broker/pull/1509): attest with `--type https://slsa.dev/provenance/v1`, and fail the release unless the statement read back names the commit, the ref and both children. Verified when the next release passes `aspect verify-release`. |
 | B2 | The four-hour soak fails: log-directory growth is over its allowance on all three brokers. | `ci.yml` `soak`, 2026-10-16 to 10-18. No issue tracks it. | A resource that rises without bound under steady load is the failure this lane exists to find. Root-cause it, or show from evidence that the allowance is wrong. |
 | B3 | The upgrade lane stops at its timeout after `DeleteRecords`. | `ci.yml` `upgrade`, 2026-10-16 to 10-18; [#1301](https://github.com/krabka-io/krabka-broker/issues/1301), [#1389](https://github.com/krabka-io/krabka-broker/issues/1389) | The upgrade from the previous release is a lifecycle gate, and the #1301 confirmation that #1389 needs has never passed on `main`. |
 | B4 | The full container matrix is not green on any recent commit. | [#1493](https://github.com/krabka-io/krabka-broker/issues/1493), run 39114726914 | Three groups failed on image pulls, so their Kafka 4.3.1 and librdkafka suites have no result. Get one green full-matrix run on the candidate. |
