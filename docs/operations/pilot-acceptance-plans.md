@@ -168,7 +168,7 @@ Installation exit checks:
 
 ### Migration and cutover checks
 
-MirrorMaker 2 follows [Configure MirrorMaker 2](migrate-from-kafka.md#configure-mirrormaker-2) with `DefaultReplicationPolicy`, `sync.group.offsets.enabled = true`, `offset.lag.max = 100` and `offset-syncs.topic.location = target`. The operator creates the target topics before MirrorMaker 2 starts. Each target topic has the source's partition count and the target's tier and retention settings. Gap issue [#1497](https://github.com/krabka-io/krabka-broker/issues/1497) asks for that step in the migration guide. The `_schemas` topic is mirrored, and the target registry stays read-only until the producer cutover, as the `registry-migration` gate's forward handoff does. Gap issue [#1498](https://github.com/krabka-io/krabka-broker/issues/1498) asks for that procedure in the guide.
+MirrorMaker 2 follows [Configure MirrorMaker 2](migrate-from-kafka.md#configure-mirrormaker-2) with `DefaultReplicationPolicy`, `sync.group.offsets.enabled = true`, `offset.lag.max = 100` and `offset-syncs.topic.location = target`. The operator creates the target topics before MirrorMaker 2 starts. Each target topic has the source's partition count and the target's tier and retention settings, and the flow's `config.properties.exclude` keeps those settings, as [Create the target topics first](migrate-from-kafka.md#create-the-target-topics-first) describes. MirrorMaker 2 uses the client settings and the principal ACLs of [Secured clusters](migrate-from-kafka.md#secured-clusters). The `_schemas` topic is mirrored, and the target registry stays read-only until the producer cutover, as the `registry-migration` gate's forward handoff does. Gap issue [#1498](https://github.com/krabka-io/krabka-broker/issues/1498) asks for that procedure in the guide.
 
 Mirror parity checks, at the end of P2:
 
@@ -178,11 +178,11 @@ Mirror parity checks, at the end of P2:
 | Record counts | For each canary partition, every acknowledged value in the source producer ledger is present on the mirrored partition. Missing values: 0. |
 | Partition counts | Equal for every mirrored topic. |
 | Topic configs | `kafka-configs --describe` on each mirrored topic matches the source for every key the plan does not set on purpose. Each intended difference is in the sign-off record. |
-| ACL parity | Every source ACL, with the topic name mapped to its `prod.` name, exists on krabka. MirrorMaker 2's ACL sync copies topic ACLs only, and gap issue [#1496](https://github.com/krabka-io/krabka-broker/issues/1496) records that it does not copy a `WRITE` grant. The operator creates the rest with `kafka-acls` and records the diff, which has to be empty. |
+| ACL parity | Every source ACL exists on krabka, under the topic name that its client uses after the cutover: `prod.<topic>` for a reader of mirrored records, and `<topic>` for a producer. [ACL sync](migrate-from-kafka.md#acl-sync) lists what the sync copies. The operator creates the rest with `kafka-acls` and records the diff, which has to be empty. |
 | SCRAM principals | Every client principal authenticates against krabka. |
 | Schemas | Every subject and version on the source registry has the same schema id on the target registry. |
 
-Cutover follows [Cut the consumers over](migrate-from-kafka.md#cut-the-consumers-over) and then [Cut the producers over](migrate-from-kafka.md#cut-the-producers-over). Consumers subscribe to the pattern `(prod\.)?<topic>`, so after the producer cutover they read both the mirrored topic and the local topic that the producers now write. Gap issue [#1496](https://github.com/krabka-io/krabka-broker/issues/1496) asks the guide to state which topic name producers write after the cutover.
+Cutover follows [Cut the consumers over](migrate-from-kafka.md#cut-the-consumers-over) and then [Cut the producers over](migrate-from-kafka.md#cut-the-producers-over). Consumers subscribe to the pattern `(prod\.)?<topic>`, so after the producer cutover they read both the mirrored topic and the local topic `<topic>` that the producers now write.
 
 Cutover checks, for each consumer group:
 
@@ -300,7 +300,7 @@ Installation exit checks:
 
 ### Migration and cutover checks
 
-MirrorMaker 2 runs with `IdentityReplicationPolicy`, `offset-syncs.topic.location = target` and `sync.group.offsets.enabled = false`. It mirrors the input topics only. It does not mirror the output topic or the Streams internal topics, and it does not sync the Streams group or the downstream group. The source-side consumer of MirrorMaker 2 reads with `isolation.level=read_committed`, so the mirror carries no aborted record. Gap issue [#1495](https://github.com/krabka-io/krabka-broker/issues/1495) asks the migration guide to describe each of these settings for a transactional source.
+MirrorMaker 2 runs with `IdentityReplicationPolicy`, `offset-syncs.topic.location = target` and `sync.group.offsets.enabled = false`. It mirrors the input topics only. It does not mirror the output topic or the Streams internal topics, and it does not sync the Streams group or the downstream group. The source-side consumer of MirrorMaker 2 reads with `isolation.level=read_committed`, so the mirror carries no aborted record. [Transactional sources and Kafka Streams](migrate-from-kafka.md#transactional-sources-and-kafka-streams) describes each of these settings, and [Secured clusters](migrate-from-kafka.md#secured-clusters) gives the client settings and ACLs for MirrorMaker 2's principal.
 
 The cutover has three stages.
 
@@ -430,14 +430,14 @@ A person does each of these through the project's normal process. Neither this d
 
 ## Gap Issues
 
-Writing the plans found these gaps and defects in the existing documents. Each one is a small issue in milestone 29. This document does not fix them, because [#1399](https://github.com/krabka-io/krabka-broker/issues/1399) owns the validation of the runbooks.
+Writing the plans found these gaps and defects in the existing documents. Each one is a small issue in milestone 29. The pull request that added this document also fixed the issues whose Blocks column says so. The validation of the runbooks by independent operators stays with [#1399](https://github.com/krabka-io/krabka-broker/issues/1399).
 
 | Issue | Gap | Blocks |
 | :--- | :--- | :--- |
-| [#1494](https://github.com/krabka-io/krabka-broker/issues/1494) | The migration guide shows no MirrorMaker 2 client settings for a SASL or mTLS cluster, and no ACLs for MirrorMaker 2's own principal. | A and B |
-| [#1495](https://github.com/krabka-io/krabka-broker/issues/1495) | The migration guide does not cover a transactional source or a Kafka Streams application: the mirror's isolation level, aborted records, and the Streams internal topics. | B |
-| [#1496](https://github.com/krabka-io/krabka-broker/issues/1496) | The migration guide does not say which topic name producers write after the cutover, what the reverse flow carries back, or that ACL sync skips `WRITE` grants. | A |
-| [#1497](https://github.com/krabka-io/krabka-broker/issues/1497) | The migration guide does not say how to create tiered or compacted target topics before the mirror starts. | A |
+| [#1494](https://github.com/krabka-io/krabka-broker/issues/1494) | The migration guide showed no MirrorMaker 2 client settings for a SASL or mTLS cluster, and no ACLs for MirrorMaker 2's own principal. [Secured clusters](migrate-from-kafka.md#secured-clusters) now gives both, with the ACLs checked against MirrorMaker 2 from Kafka 4.3.1. | None. Closed by the same pull request as this document. |
+| [#1495](https://github.com/krabka-io/krabka-broker/issues/1495) | The migration guide did not cover a transactional source or a Kafka Streams application. [Transactional sources and Kafka Streams](migrate-from-kafka.md#transactional-sources-and-kafka-streams) now does, with the aborted-record behavior measured. | None. Closed by the same pull request as this document. |
+| [#1496](https://github.com/krabka-io/krabka-broker/issues/1496) | The migration guide did not say which topic name producers write after the cutover, what the reverse flow carries back, or which ACLs the sync copies. [Cut the producers over](migrate-from-kafka.md#cut-the-producers-over), [Roll back](migrate-from-kafka.md#roll-back) and [ACL sync](migrate-from-kafka.md#acl-sync) now do. | None. Closed by the same pull request as this document. |
+| [#1497](https://github.com/krabka-io/krabka-broker/issues/1497) | The migration guide did not say how to create tiered or compacted target topics before the mirror starts. [Create the target topics first](migrate-from-kafka.md#create-the-target-topics-first) now does, including that each config sync removes target-only keys. | None. Closed by the same pull request as this document. |
 | [#1498](https://github.com/krabka-io/krabka-broker/issues/1498) | No document describes the schema registry cutover that the migration guide says is needed. | A |
 | [#1499](https://github.com/krabka-io/krabka-broker/issues/1499) | The backup guide did not say that compacted user topics and `_schemas` are never in the archive, so a restore does not bring them back. [Topics the archive does not hold](backup-restore.md#topics-the-archive-does-not-hold) now says so. | None. Closed by the same pull request as this document. |
 | [#1500](https://github.com/krabka-io/krabka-broker/issues/1500) | The backup guide and the restore runbook showed no `--command-config` for a secured cluster, showed the `--worm-*` flags as always needed (they fail a capture with no diskless boundary), and said that a restored cluster has a new cluster id after a step that keeps the old one. [Secured clusters](backup-restore.md#secured-clusters) and the runbook now cover each one. | None. Closed by the same pull request as this document. |
