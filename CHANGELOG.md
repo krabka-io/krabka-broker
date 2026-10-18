@@ -84,6 +84,18 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- A classic follower whose log was empty at a leader log start inside a
+  batch now catches up. `DeleteRecords` (KIP-107) or retention can put the
+  leader's log start in the middle of a multi-record batch, and a follower
+  that is behind, or a new replica, resets there after `OFFSET_OUT_OF_RANGE`.
+  The leader serves the whole batch that holds the fetch offset, so every
+  fetch returned a batch that began below the follower's log end, and the
+  append refused it forever ("offset mismatch: expected 25, got 20"): the
+  follower never caught up and never rejoined the ISR. The empty follower now
+  restarts at the batch's base and takes it, as Kafka's
+  `Partition.appendRecordsToFollowerOrFutureReplica` does, then raises its log
+  start to the leader's from the next fetch response. The diskless WAL
+  follower shares the same check (`Log::restarts_at_batch_base`).
 - A `DeleteRecords` on a tiered topic can no longer be undone by a leadership
   move. Its floor was enforced only when the leader's next remote-retention
   pass deleted the archived segments below it. If leadership moved first to a

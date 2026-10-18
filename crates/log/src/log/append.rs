@@ -322,6 +322,26 @@ impl Log {
         Ok(())
     }
 
+    /// Whether this follower log must restart at `batch_base` before it can
+    /// take the leader batch `[batch_base, batch_last]`: Kafka's
+    /// `Partition.appendRecordsToFollowerOrFutureReplica` recovery from
+    /// `UnexpectedAppendOffsetException`.
+    ///
+    /// A leader serves the whole batch that holds the fetch offset, so a
+    /// follower that restarted at a leader log start inside a batch --
+    /// `DeleteRecords`, retention, or a diskless flusher's trim put it there
+    /// -- receives a batch that begins below its own log end. When the log
+    /// holds nothing (`log_start == log_end`) and the batch spans its end,
+    /// restarting it at the batch's base loses nothing, and the batch then
+    /// appends where it begins. The follower raises its log start to the
+    /// leader's again from a later fetch response. A log that holds records
+    /// keeps the [`Log::append_at`] refusal, as Kafka rethrows there.
+    #[must_use]
+    pub fn restarts_at_batch_base(&self, batch_base: Offset, batch_last: Offset) -> bool {
+        let end = self.log_end_offset();
+        self.log_start_offset() == end && batch_base < end && end <= batch_last
+    }
+
     /// Append a `RecordBatch` whose `base_offset` the caller sets.
     ///
     /// Unlike [`Log::append`], this method does NOT overwrite

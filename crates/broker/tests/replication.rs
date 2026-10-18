@@ -13,7 +13,7 @@ use {
         client::connect_client,
         offsets::{delete_records_partition, delete_records_request, delete_records_topic},
         produce::{SinglePartitionProduceSetup, batch_request},
-        records::{batch_from_records, value_record},
+        records::batch_from_records,
         registered_cluster, shutdown_cluster,
         topics::{
             AssignedTopicSetup, CreateTopicSetup, TopicPartitionCount, TopicReplicationFactor,
@@ -136,8 +136,19 @@ async fn replication_factor_three_propagates_to_all_followers() {
     shutdown_cluster(cluster).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn out_of_range_truncates_and_recovers() {
+/// What a follower holds once it has recovered from `OFFSET_OUT_OF_RANGE`.
+#[derive(Debug, PartialEq, Eq)]
+struct RecoveredFollower {
+    batch_bases: Option<Vec<i64>>,
+    log_start: Option<i64>,
+}
+
+/// Produces 50 records in batches of `records_per_batch`, empties broker 3,
+/// and advances the leader's log start to 25, as retention or `DeleteRecords`
+/// (KIP-107) would. Broker 3 then fetches at 0, the leader answers
+/// `OFFSET_OUT_OF_RANGE`, and the replicator restarts at the leader's log
+/// start and must copy the log from there to its end.
+async fn recover_from_out_of_range(topic: &str, records_per_batch: i32) -> RecoveredFollower {
     let _g = cluster_lock().lock().await;
     let (
         cluster,
@@ -145,58 +156,80 @@ async fn out_of_range_truncates_and_recovers() {
             leader_addr,
             topic_id,
         },
-    ) = three_replica_topic("oor").await;
+    ) = three_replica_topic(topic).await;
 
-    // Produce 50 records in 50 separate single-record batches so the
-    // leader's log holds them as discrete batches. A single 50-record
-    // batch won't do, because `Fetch` returns the whole batch as the
-    // smallest unit, so after advancing leader's `log_start` to 25 the
-    // follower would still pull a batch with `base_offset=0` and reject
-    // it with `OffsetMismatch`. Per-record batches let
-    // `Segment::read(25, ...)` filter out the prefix cleanly.
     let producer = connect_client(leader_addr, None).await;
-    for i in 0..50i32 {
-        let batch = RecordBatch {
-            base_offset: 0,
-            last_offset_delta: 0,
-            ..batch_from_records(vec![value_record(
-                0,
-                Some(bytes::Bytes::from(format!("v{i}"))),
-            )])
-        };
-        produce_replicated(&producer, "oor", topic_id, batch).await;
+    for _ in 0..50 / records_per_batch {
+        let batch = support::client::value_batch()
+            .records(records_per_batch)
+            .call();
+        produce_replicated(&producer, topic, topic_id, batch).await;
     }
-
-    // Wait for every broker's local log to catch up to 50.
     for (h, _, _) in &cluster {
-        h.wait_until_local_log_end_offset("oor", 0, 50).await;
+        h.wait_until_local_log_end_offset(topic, 0, 50).await;
     }
 
-    // Simulate broker 3 "falling behind past retention": truncate its
-    // local log to 0 AND advance the leader's `log_start` to 25. After
-    // this, broker 3's replicator will fetch at offset 0, leader will
-    // return OFFSET_OUT_OF_RANGE with `log_start_offset=25`, and the
-    // replicator's recovery path must `reset_to(25)` and re-fetch from
-    // 25 to converge again.
     cluster[2]
         .0
-        .test_truncate_local_log("oor", 0, 0)
+        .test_truncate_local_log(topic, 0, 0)
         .await
         .expect("truncate broker 3");
     cluster[0]
         .0
-        .test_advance_log_start("oor", 0, 25)
+        .test_advance_log_start(topic, 0, 25)
         .await
         .expect("advance leader log_start");
 
-    // Wait for broker 3 to converge again — log_end_offset should reach
-    // 50 once it has fetched records 25..50 from the leader.
-    cluster[2]
-        .0
-        .wait_until_local_log_end_offset("oor", 0, 50)
-        .await;
+    let follower = &cluster[2].0;
+    follower.wait_until_local_log_end_offset(topic, 0, 50).await;
+    // The response that carries the last batch also carries the leader's log
+    // start, which the follower raises its own to only after the append.
+    support::poll::within(
+        "the follower's log start reaching the leader's",
+        std::time::Duration::from_secs(30),
+        async {
+            while follower.partition_log_start_for_test(topic, 0) != Some(25) {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        },
+    )
+    .await;
+    let recovered = RecoveredFollower {
+        batch_bases: follower.local_batch_base_offsets_for_test(topic, 0),
+        log_start: follower.partition_log_start_for_test(topic, 0),
+    };
 
     shutdown_cluster(cluster).await;
+    recovered
+}
+
+/// A leader log start on a batch boundary: the follower restarts there and
+/// takes every batch from it on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn out_of_range_at_a_batch_boundary_restarts_at_the_leader_log_start() {
+    assert!(
+        recover_from_out_of_range("oor", 1).await
+            == RecoveredFollower {
+                batch_bases: Some((25..50).collect()),
+                log_start: Some(25),
+            }
+    );
+}
+
+/// A leader log start inside a batch: the leader serves the whole batch that
+/// holds it, which begins below the follower's restart offset. The empty
+/// follower restarts at that batch's base and takes it, as Kafka's
+/// `Partition.appendRecordsToFollowerOrFutureReplica` does, and then raises
+/// its log start to the leader's from the next Fetch response.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn out_of_range_inside_a_batch_restarts_at_the_batch_base() {
+    assert!(
+        recover_from_out_of_range("oor-mid-batch", 10).await
+            == RecoveredFollower {
+                batch_bases: Some(vec![20, 30, 40]),
+                log_start: Some(25),
+            }
+    );
 }
 
 /// A follower that catches up across sealed segments copies every batch of the
