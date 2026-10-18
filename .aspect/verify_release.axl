@@ -1,0 +1,394 @@
+"""Verify a published release against the bytes it delivered, without releasing.
+
+`release.yml` signs the release image index, attests a CycloneDX SBOM and a
+SLSA provenance statement for it, and uploads the same SBOM to the GitHub
+release. Its own `verify release signatures` step runs once, inside the release
+job, before anything is published. This task repeats the whole check from the
+outside, against a release that already exists, so an operator or a candidate
+qualification can prove what was delivered:
+
+  * the index the tag names is signed by `release.yml` under the identity of the
+    ref that ran it (`refs/tags/<tag>`, or `refs/heads/main` for a dispatched
+    re-release),
+  * the index has exactly an amd64 and an arm64 child,
+  * the provenance statement is SLSA v1 and is about that index, and its
+    predicate names the tagged commit, the tag ref, the arm64 child and the
+    tested amd64 delivery image,
+  * the attested SBOM is the `sbom.cdx.json` attached to the GitHub release,
+  * the amd64 child is the digest main CI's `delivery` job recorded, when that
+    artifact is given with `--delivery-digest`,
+  * the support documents at the tagged commit are hashed into a digest-pinned
+    record, and match an earlier record when one is given with
+    `--expected-support`.
+
+A verified signature says who built an image. The provenance and the delivery
+digest are what tie it to the commit and the CI run that tested it, which is
+why an empty provenance predicate fails here even though cosign accepts it.
+
+Nothing is signed, pushed, tagged or uploaded. The task reads the registry, the
+GitHub REST API and the local git object store, and writes the record into
+`--output` when one is named.
+
+    git fetch origin tag v1.0.5
+    aspect verify-release --tag v1.0.5
+    aspect verify-release --tag v1.0.5 --delivery-digest delivery-image.digest \\
+      --output release-verification
+    aspect verify-release --tag v1.0.0 --identity-ref refs/heads/main
+"""
+
+load("@std//hash.axl", "sha256")
+load("./changes.axl", "valid_base")
+
+REPOSITORY = "krabka-io/krabka-broker"
+
+IMAGE = "ghcr.io/krabka-io/krabka-broker"
+
+ISSUER = "https://token.actions.githubusercontent.com"
+
+# The signing identity is this workflow at the ref that ran it.
+WORKFLOW = "https://github.com/krabka-io/krabka-broker/.github/workflows/release.yml@"
+
+PROVENANCE_TYPE = "https://slsa.dev/provenance/v1"
+
+# What `cosign attest --type slsaprovenance` writes. cosign parses the predicate
+# into the v0.2 schema, so release.yml's v1-shaped predicate lands empty.
+LEGACY_PROVENANCE_TYPE = "https://slsa.dev/provenance/v0.2"
+
+SBOM_TYPE = "https://cyclonedx.org/bom"
+
+SBOM_ASSET = "sbom.cdx.json"
+
+SOURCE_URI = "git+https://github.com/krabka-io/krabka-broker"
+
+PLATFORMS = ["linux/amd64", "linux/arm64"]
+
+# The documents an operator runs a release by. Each one must exist at the tagged
+# commit. Every file under `SUPPORT_TREES` is added to them, so a support page
+# added later is pinned without a change here.
+SUPPORT_DOCUMENTS = [
+    "README.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "docs/persisted_formats.md",
+    "docs/format-divergences.md",
+    "docs/KIP_MATRIX.md",
+    "docs/config-reference.md",
+    "docs/releasing.md",
+    "docs/qualification.md",
+]
+
+SUPPORT_TREES = ["docs/operations/"]
+
+# Build files live beside the support pages and describe nothing an operator
+# reads.
+_NOT_SUPPORT = ["BUILD.bazel"]
+
+_HEX = "0123456789abcdef"
+
+def is_digest(value):
+    """Whether `value` is a `sha256:` digest of 64 lowercase hex digits."""
+    if type(value) != "string" or not value.startswith("sha256:") or len(value) != 71:
+        return False
+    for char in value[7:].elems():
+        if char not in _HEX:
+            return False
+    return True
+
+def text_sha256(text):
+    """The `sha256:` digest of `text`'s UTF-8 bytes."""
+    digest = sha256()
+    digest.update(text)
+    return "sha256:" + digest.hexdigest()
+
+def signing_identity(tag, identity_ref = ""):
+    """The certificate identity release.yml signs with for this release."""
+    return WORKFLOW + (identity_ref or "refs/tags/" + tag)
+
+def index_children(raw):
+    """`({platform: digest}, problems)` for a raw OCI image index."""
+    problems = []
+    children = {}
+    document = json.decode(raw) if raw.strip().startswith("{") else None
+    if type(document) != "dict" or type(document.get("manifests")) != "list":
+        return children, ["the release tag does not name an image index"]
+    for manifest in document["manifests"]:
+        platform = manifest.get("platform") or {}
+        name = "%s/%s" % (platform.get("os", ""), platform.get("architecture", ""))
+        if name not in PLATFORMS:
+            problems.append("the image index has an unexpected child %s" % name)
+        elif name in children:
+            problems.append("the image index has two %s children" % name)
+        elif not is_digest(manifest.get("digest", "")):
+            problems.append("the %s child has no sha256 digest" % name)
+        else:
+            children[name] = manifest["digest"]
+    for name in PLATFORMS:
+        if name not in children and not [p for p in problems if name in p]:
+            problems.append("the image index has no %s child" % name)
+    return children, problems
+
+def subject_problems(label, statement, index_digest):
+    """Problems with an in-toto statement's subject for the release index."""
+    subjects = statement.get("subject")
+    if type(subjects) != "list" or len(subjects) != 1:
+        return ["%s: the statement needs exactly one subject" % label]
+    subject = subjects[0]
+    problems = []
+    if subject.get("name") != IMAGE:
+        problems.append("%s: the subject is %r, not %s" % (label, subject.get("name"), IMAGE))
+    if "sha256:" + (subject.get("digest") or {}).get("sha256", "") != index_digest:
+        problems.append("%s: the subject is not the release index %s" % (label, index_digest))
+    return problems
+
+def _source_commit(predicate):
+    dependencies = (predicate.get("buildDefinition") or {}).get("resolvedDependencies") or []
+    commits = [
+        (dependency.get("digest") or {}).get("gitCommit", "")
+        for dependency in dependencies
+        if dependency.get("uri") == SOURCE_URI
+    ]
+    return commits[0] if len(commits) == 1 else ""
+
+def provenance_problems(statement, index_digest, tag, commit, children):
+    """Problems with the release's provenance statement.
+
+    `statement` is the decoded in-toto statement, or None when no provenance
+    attestation verified.
+    """
+    if statement == None:
+        return ["provenance: no attestation verified under the release identity"]
+    problems = subject_problems("provenance", statement, index_digest)
+    predicate_type = statement.get("predicateType")
+    predicate = statement.get("predicate")
+    if predicate_type != PROVENANCE_TYPE:
+        problems.append("provenance: attested as %s, not %s" % (predicate_type, PROVENANCE_TYPE))
+    if type(predicate) != "dict" or not predicate:
+        problems.append("provenance: the predicate is empty, so nothing ties the image to a commit or a CI run")
+        return problems
+    definition = predicate.get("buildDefinition") or {}
+    internal = definition.get("internalParameters") or {}
+    if _source_commit(predicate) != commit:
+        problems.append("provenance: the source commit is %r, not the tagged %s" % (_source_commit(predicate), commit))
+    if (definition.get("externalParameters") or {}).get("ref") != "refs/tags/" + tag:
+        problems.append("provenance: the ref is not refs/tags/%s" % tag)
+    arm64 = children.get("linux/arm64", "")
+    if internal.get("arm64Digest") != arm64:
+        problems.append("provenance: arm64Digest is %r, not the index's arm64 child %s" % (internal.get("arm64Digest"), arm64))
+    amd64 = children.get("linux/amd64", "")
+    source = internal.get("imageSource", "")
+    if type(source) != "string" or not amd64 or not source.endswith("%s@%s" % (IMAGE, amd64)):
+        problems.append("provenance: imageSource %r does not name the index's amd64 child %s" % (source, amd64))
+    if not ((predicate.get("runDetails") or {}).get("builder") or {}).get("id", "").startswith("https://github.com/" + REPOSITORY + "/actions/runs/"):
+        problems.append("provenance: the builder is not a %s Actions run" % REPOSITORY)
+    return problems
+
+def sbom_problems(statement, index_digest, asset):
+    """Problems with the SBOM attestation against the release's SBOM asset.
+
+    `asset` is the text of the release's `sbom.cdx.json`, or "" when the
+    release carries none. The two are compared as JSON values: cosign
+    re-serialises the predicate, so its bytes never equal the uploaded file's.
+    """
+    if statement == None:
+        return ["sbom: no CycloneDX attestation verified under the release identity"]
+    problems = subject_problems("sbom", statement, index_digest)
+    if statement.get("predicateType") != SBOM_TYPE:
+        problems.append("sbom: attested as %s, not %s" % (statement.get("predicateType"), SBOM_TYPE))
+    if not asset.strip():
+        problems.append("sbom: the release has no %s asset" % SBOM_ASSET)
+    elif json.decode(asset) != statement.get("predicate"):
+        problems.append("sbom: the attested SBOM is not the release's %s" % SBOM_ASSET)
+    return problems
+
+def delivery_problems(expected, children):
+    """Problems with the amd64 child against delivery's recorded digest."""
+    expected = expected.strip()
+    if not expected:
+        return []
+    if not is_digest(expected):
+        return ["delivery: the delivery digest artifact is malformed"]
+    if children.get("linux/amd64") != expected:
+        return ["delivery: the amd64 child %s is not the tested delivery image %s" % (children.get("linux/amd64"), expected)]
+    return []
+
+def support_paths(listing):
+    """The support documents among `git ls-tree -r --name-only` output lines."""
+    paths = [path for path in SUPPORT_DOCUMENTS]
+    for path in listing:
+        path = path.strip()
+        if not path or path in paths or path.rsplit("/", 1)[-1] in _NOT_SUPPORT:
+            continue
+        for tree in SUPPORT_TREES:
+            if path.startswith(tree):
+                paths.append(path)
+                break
+    return sorted(paths)
+
+def support_problems(record, expected):
+    """Problems with support-document digests against an earlier record.
+
+    Both are `{path: digest}`. A missing document is a problem; a document the
+    earlier record did not pin is reported too, so a page added after
+    qualification is not silently covered by it.
+    """
+    problems = []
+    for path in sorted(record.keys()):
+        if not is_digest(record[path]):
+            problems.append("support: %s is missing at the tagged commit" % path)
+        elif path not in expected:
+            problems.append("support: %s was not pinned by the expected record" % path)
+        elif expected[path] != record[path]:
+            problems.append("support: %s at the tagged commit is not the pinned %s" % (path, expected[path]))
+    for path in sorted(expected.keys()):
+        if path not in record:
+            problems.append("support: the pinned %s is not shipped at the tagged commit" % path)
+    return problems
+
+def verification_record(tag, commit, identity, index_digest, children, sbom_digest, support, problems):
+    """The digest-pinned record this task writes."""
+    return {
+        "schema": 1,
+        "tag": tag,
+        "commit": commit,
+        "image": IMAGE,
+        "index_digest": index_digest,
+        "children": children,
+        "signing_identity": identity,
+        "sbom_asset_sha256": sbom_digest,
+        "support_documents": support,
+        "problems": problems,
+        "verified": not problems,
+    }
+
+def _exec(ctx, executable, argv):
+    """`(exit code, stdout, stderr)` of a command run at the workspace root."""
+    result = (
+        ctx.std.process.command(executable)
+            .args(argv)
+            .current_dir(ctx.std.env.bazel_root_dir())
+            .stdout("piped")
+            .stderr("piped")
+            .spawn()
+            .wait_with_output()
+    )
+    return result.status.code, result.stdout, result.stderr.strip()
+
+def _cosign_identity_args(identity):
+    return ["--certificate-identity", identity, "--certificate-oidc-issuer", ISSUER]
+
+def _attested_statement(ctx, scratch, reference, identity, predicate_type):
+    """The decoded statement of the one attestation of this type, or None."""
+    code, out, _ = _exec(ctx, "cosign", ["verify-attestation", "--type", predicate_type] + _cosign_identity_args(identity) + [reference])
+    if code != 0:
+        return None
+    envelopes = [json.decode(line) for line in out.splitlines() if line.strip().startswith("{")]
+    if len(envelopes) != 1:
+        return None
+    path = scratch + "/payload.b64"
+    ctx.std.fs.write(path, envelopes[0].get("payload", ""))
+    code, decoded, _ = _exec(ctx, "base64", ["--decode", path])
+    return json.decode(decoded) if code == 0 else None
+
+def _release_asset(ctx, tag):
+    code, url, _ = _exec(ctx, "gh", [
+        "api",
+        "repos/%s/releases/tags/%s" % (REPOSITORY, tag),
+        "--jq",
+        '.assets[] | select(.name == "%s") | .url' % SBOM_ASSET,
+    ])
+    if code != 0 or not url.strip():
+        return ""
+    code, asset, _ = _exec(ctx, "gh", ["api", "-H", "Accept: application/octet-stream", url.strip()])
+    return asset if code == 0 else ""
+
+def _support_digests(ctx, commit):
+    code, listing, _ = _exec(ctx, "git", ["ls-tree", "-r", "--name-only", commit])
+    present = listing.splitlines() if code == 0 else []
+    digests = {}
+    for path in support_paths(present):
+        if path not in present:
+            digests[path] = "missing"
+            continue
+        code, text, _ = _exec(ctx, "git", ["show", "%s:%s" % (commit, path)])
+        digests[path] = text_sha256(text) if code == 0 else "missing"
+    return digests
+
+def _impl(ctx: TaskContext) -> int:
+    tag = ctx.args.tag
+    if not tag.startswith("v"):
+        ctx.std.io.stderr.write("--tag must name a v* release tag\n")
+        return 2
+    image = ctx.args.image or IMAGE
+    identity = signing_identity(tag, ctx.args.identity_ref)
+    problems = []
+
+    code, commit, detail = _exec(ctx, "git", ["rev-parse", "--verify", "refs/tags/%s^{commit}" % tag])
+    commit = commit.strip()
+    if code != 0 or not valid_base(ctx, commit):
+        ctx.std.io.stderr.write("%s is not a local tag (%s); run `git fetch origin tag %s` first.\n" % (tag, detail, tag))
+        return 2
+
+    code, index_digest, detail = _exec(ctx, "docker", ["buildx", "imagetools", "inspect", "%s:%s" % (image, tag), "--format", "{{.Manifest.Digest}}"])
+    index_digest = index_digest.strip()
+    if code != 0 or not is_digest(index_digest):
+        ctx.std.io.stderr.write("%s:%s does not resolve to an image digest: %s\n" % (image, tag, detail))
+        return 1
+    reference = "%s@%s" % (image, index_digest)
+    code, raw, _ = _exec(ctx, "docker", ["buildx", "imagetools", "inspect", "--raw", reference])
+    children, found = index_children(raw if code == 0 else "")
+    problems.extend(found)
+
+    code, _, detail = _exec(ctx, "cosign", ["verify"] + _cosign_identity_args(identity) + [reference])
+    if code != 0:
+        problems.append("signature: %s is not signed by %s: %s" % (reference, identity, detail.splitlines()[-1] if detail else "cosign failed"))
+
+    scratch = ctx.std.fs.mkdtemp(prefix = "krabka-verify-release-")
+    ctx.defer(ctx.std.fs.remove_dir_all, scratch)
+    provenance = _attested_statement(ctx, scratch, reference, identity, PROVENANCE_TYPE)
+    if provenance == None:
+        provenance = _attested_statement(ctx, scratch, reference, identity, LEGACY_PROVENANCE_TYPE)
+    problems.extend(provenance_problems(provenance, index_digest, tag, commit, children))
+
+    asset = _release_asset(ctx, tag)
+    sbom = _attested_statement(ctx, scratch, reference, identity, SBOM_TYPE)
+    problems.extend(sbom_problems(sbom, index_digest, asset))
+
+    if ctx.args.delivery_digest:
+        problems.extend(delivery_problems(ctx.std.fs.read_to_string(ctx.args.delivery_digest), children))
+
+    support = _support_digests(ctx, commit)
+    expected = {}
+    if ctx.args.expected_support:
+        expected = json.decode(ctx.std.fs.read_to_string(ctx.args.expected_support)).get("support_documents") or {}
+        problems.extend(support_problems(support, expected))
+    else:
+        problems.extend(["support: %s is missing at the tagged commit" % path for path in sorted(support.keys()) if not is_digest(support[path])])
+
+    record = verification_record(tag, commit, identity, index_digest, children, text_sha256(asset) if asset else "", support, problems)
+    if ctx.args.output:
+        ctx.std.fs.create_dir_all(ctx.args.output)
+        ctx.std.fs.write(ctx.args.output + "/release-verification.json", json.encode(record) + "\n")
+
+    ctx.std.io.stdout.write("%s %s -> %s@%s\n" % (tag, commit, image, index_digest))
+    for name in PLATFORMS:
+        ctx.std.io.stdout.write("  %s %s\n" % (name, children.get(name, "absent")))
+    ctx.std.io.stdout.write("  %d support documents pinned\n" % len(support))
+    for problem in problems:
+        ctx.std.io.stderr.write("FAIL %s\n" % problem)
+    if problems:
+        return 1
+    ctx.std.io.stdout.write("verified: signature, SLSA provenance, SBOM and support documents\n")
+    return 0
+
+verify_release = task(
+    summary = "Verify a published release's signature, provenance, SBOM and support documents",
+    implementation = _impl,
+    args = {
+        "tag": args.string(default = "", description = "The v* release tag to verify."),
+        "image": args.string(default = "", description = "Image repository; defaults to " + IMAGE + "."),
+        "identity_ref": args.string(default = "", description = "The ref release.yml ran from; refs/heads/main for a dispatched re-release."),
+        "delivery_digest": args.string(default = "", description = "main CI's delivery-image.digest artifact for the tagged commit."),
+        "expected_support": args.string(default = "", description = "An earlier release-verification.json whose support documents must match."),
+        "output": args.string(default = "", description = "Directory to write release-verification.json into."),
+    },
+)

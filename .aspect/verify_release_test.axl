@@ -1,0 +1,182 @@
+"""A release verifies only when its attestations bind the delivered bytes."""
+
+load("./testing.axl", "check_eq", "suite", "suite_task")
+load(
+    "./verify_release.axl",
+    "IMAGE",
+    "LEGACY_PROVENANCE_TYPE",
+    "PROVENANCE_TYPE",
+    "SBOM_TYPE",
+    "SUPPORT_DOCUMENTS",
+    "delivery_problems",
+    "index_children",
+    "provenance_problems",
+    "sbom_problems",
+    "signing_identity",
+    "support_paths",
+    "support_problems",
+    "text_sha256",
+    "verification_record",
+)
+
+# The v1.0.5 release, as the registry and its attestations hold it.
+_INDEX = "sha256:2a81d1ba38de4e8ffb032fedf67952845185158a7607ac76ba38fa162dc37e50"
+_AMD64 = "sha256:8c515d335e89455525fb1ad4d9986769c9dd18e44fb259250919c6e7cb53bd84"
+_ARM64 = "sha256:303ced00e15fcd07480e324f7c430f604dcce6b52d38a5df4ed2936743becd4a"
+_COMMIT = "ac9deff316d38418622b16c237c671df88f57c7a"
+_TAG = "v1.0.5"
+_CHILDREN = {"linux/amd64": _AMD64, "linux/arm64": _ARM64}
+
+_RAW_INDEX = json.encode({
+    "schemaVersion": 2,
+    "mediaType": "application/vnd.oci.image.index.v1+json",
+    "manifests": [
+        {"digest": _AMD64, "platform": {"architecture": "amd64", "os": "linux"}},
+        {"digest": _ARM64, "platform": {"architecture": "arm64", "os": "linux"}},
+    ],
+})
+
+def _subject(digest = _INDEX):
+    return [{"name": IMAGE, "digest": {"sha256": digest.removeprefix("sha256:")}}]
+
+# What `cosign attest --type slsaprovenance` stored for every release through
+# v1.0.5: the v0.2 type, and a predicate cosign emptied while parsing it.
+_LEGACY_STATEMENT = {
+    "_type": "https://in-toto.io/Statement/v0.1",
+    "subject": _subject(),
+    "predicateType": LEGACY_PROVENANCE_TYPE,
+    "predicate": {},
+}
+
+def _predicate(commit = _COMMIT, ref = "refs/tags/" + _TAG, arm64 = _ARM64, amd64 = _AMD64):
+    """release.yml's predicate, as `--type slsaprovenance1` keeps it."""
+    return {
+        "buildDefinition": {
+            "buildType": "https://github.com/krabka-io/krabka-broker/.github/workflows/release.yml@v1",
+            "externalParameters": {"ref": ref},
+            "internalParameters": {
+                "bazelTarget": "//packaging:image",
+                "platforms": "//:linux_arm64",
+                "compilationMode": "opt",
+                "arm64Digest": arm64,
+                "imageSource": "promoted from CI run 38516831673: %s@%s" % (IMAGE, amd64),
+            },
+            "resolvedDependencies": [{
+                "uri": "git+https://github.com/krabka-io/krabka-broker",
+                "digest": {"gitCommit": commit},
+            }],
+        },
+        "runDetails": {
+            "builder": {"id": "https://github.com/krabka-io/krabka-broker/actions/runs/38520465048/attempts/1"},
+            "metadata": {"invocationID": "https://github.com/krabka-io/krabka-broker/actions/runs/38520465048/attempts/1"},
+        },
+    }
+
+def _statement(predicate = None, digest = _INDEX, predicate_type = PROVENANCE_TYPE):
+    return {
+        "_type": "https://in-toto.io/Statement/v1",
+        "subject": _subject(digest),
+        "predicateType": predicate_type,
+        "predicate": predicate if predicate != None else _predicate(),
+    }
+
+_SBOM = {"bomFormat": "CycloneDX", "specVersion": "1.6", "metadata": {"component": {"name": IMAGE, "version": _TAG}}, "components": [{"purl": "pkg:cargo/krabka-broker@1.0.5"}]}
+
+def _test_identity_is_the_ref_that_ran_release(_ctx):
+    base = "https://github.com/krabka-io/krabka-broker/.github/workflows/release.yml@"
+    check_eq("tag push", signing_identity(_TAG), base + "refs/tags/v1.0.5")
+    check_eq("dispatched re-release", signing_identity("v1.0.0", "refs/heads/main"), base + "refs/heads/main")
+
+def _test_index_children_are_one_per_platform(_ctx):
+    check_eq("release index", index_children(_RAW_INDEX), (_CHILDREN, []))
+    single = json.encode({"manifests": [{"digest": _AMD64, "platform": {"architecture": "amd64", "os": "linux"}}]})
+    check_eq("amd64 only", index_children(single), ({"linux/amd64": _AMD64}, ["the image index has no linux/arm64 child"]))
+    check_eq("a single manifest", index_children(json.encode({"schemaVersion": 2, "layers": []})), ({}, ["the release tag does not name an image index"]))
+    check_eq("not JSON", index_children("manifest unknown"), ({}, ["the release tag does not name an image index"]))
+    extra = json.encode({"manifests": json.decode(_RAW_INDEX)["manifests"] + [{"digest": _AMD64, "platform": {"architecture": "s390x", "os": "linux"}}]})
+    check_eq("unexpected platform", index_children(extra)[1], ["the image index has an unexpected child linux/s390x"])
+
+def _test_complete_v1_provenance_verifies(_ctx):
+    check_eq("v1 provenance", provenance_problems(_statement(), _INDEX, _TAG, _COMMIT, _CHILDREN), [])
+
+def _test_released_v0_2_provenance_is_refused(_ctx):
+    check_eq("v1.0.5's provenance", provenance_problems(_LEGACY_STATEMENT, _INDEX, _TAG, _COMMIT, _CHILDREN), [
+        "provenance: attested as https://slsa.dev/provenance/v0.2, not https://slsa.dev/provenance/v1",
+        "provenance: the predicate is empty, so nothing ties the image to a commit or a CI run",
+    ])
+    check_eq("no attestation", provenance_problems(None, _INDEX, _TAG, _COMMIT, _CHILDREN), [
+        "provenance: no attestation verified under the release identity",
+    ])
+
+def _test_provenance_must_bind_commit_ref_and_children(_ctx):
+    other = "sha256:" + "b" * 64
+    cases = [
+        (_statement(digest = other), "provenance: the subject is not the release index " + _INDEX),
+        (_statement(_predicate(commit = "f" * 40)), "provenance: the source commit is %r, not the tagged %s" % ("f" * 40, _COMMIT)),
+        (_statement(_predicate(ref = "refs/heads/feature")), "provenance: the ref is not refs/tags/v1.0.5"),
+        (_statement(_predicate(arm64 = other)), "provenance: arm64Digest is %r, not the index's arm64 child %s" % (other, _ARM64)),
+        (_statement(_predicate(amd64 = other)), "provenance: imageSource %r does not name the index's amd64 child %s" % ("promoted from CI run 38516831673: %s@%s" % (IMAGE, other), _AMD64)),
+    ]
+    for statement, want in cases:
+        check_eq(want, provenance_problems(statement, _INDEX, _TAG, _COMMIT, _CHILDREN), [want])
+
+def _test_attested_sbom_must_be_the_release_asset(_ctx):
+    asset = json.encode(_SBOM)
+    statement = _statement(_SBOM, predicate_type = SBOM_TYPE)
+    check_eq("same SBOM", sbom_problems(statement, _INDEX, asset), [])
+    check_eq("reordered keys are the same SBOM", sbom_problems(statement, _INDEX, json.encode({k: _SBOM[k] for k in reversed(_SBOM.keys())})), [])
+    changed = dict(_SBOM)
+    changed["components"] = []
+    check_eq("different asset", sbom_problems(statement, _INDEX, json.encode(changed)), ["sbom: the attested SBOM is not the release's sbom.cdx.json"])
+    check_eq("no asset", sbom_problems(statement, _INDEX, ""), ["sbom: the release has no sbom.cdx.json asset"])
+    check_eq("no attestation", sbom_problems(None, _INDEX, asset), ["sbom: no CycloneDX attestation verified under the release identity"])
+
+def _test_amd64_child_must_be_the_delivery_digest(_ctx):
+    check_eq("no artifact given", delivery_problems("", _CHILDREN), [])
+    check_eq("tested digest", delivery_problems(_AMD64 + "\n", _CHILDREN), [])
+    check_eq("rebuilt image", delivery_problems("sha256:" + "c" * 64, _CHILDREN), [
+        "delivery: the amd64 child %s is not the tested delivery image %s" % (_AMD64, "sha256:" + "c" * 64),
+    ])
+    check_eq("malformed artifact", delivery_problems("sha256:abc", _CHILDREN), ["delivery: the delivery digest artifact is malformed"])
+
+def _test_support_paths_cover_the_operations_tree(_ctx):
+    listing = ["docs/operations/deploy.md", "docs/operations/BUILD.bazel", "docs/operations/runbooks/disk-full.md", "crates/broker/src/lib.rs", "README.md"]
+    want = sorted(SUPPORT_DOCUMENTS + ["docs/operations/deploy.md", "docs/operations/runbooks/disk-full.md"])
+    check_eq("support set", support_paths(listing), want)
+
+def _test_support_documents_must_match_the_pinned_record(_ctx):
+    pinned = {"README.md": text_sha256("readme\n"), "docs/operations/deploy.md": text_sha256("deploy\n")}
+    check_eq("same bytes", support_problems(dict(pinned), pinned), [])
+    edited = dict(pinned)
+    edited["README.md"] = text_sha256("readme, edited\n")
+    check_eq("edited after pinning", support_problems(edited, pinned), ["support: README.md at the tagged commit is not the pinned %s" % pinned["README.md"]])
+    gone = {"README.md": pinned["README.md"], "docs/operations/deploy.md": "missing"}
+    check_eq("removed", support_problems(gone, pinned), ["support: docs/operations/deploy.md is missing at the tagged commit"])
+    added = dict(pinned)
+    added["docs/operations/new.md"] = text_sha256("new\n")
+    check_eq("added after pinning", support_problems(added, pinned), ["support: docs/operations/new.md was not pinned by the expected record"])
+    check_eq("pinned, not shipped", support_problems({"README.md": pinned["README.md"]}, pinned), ["support: the pinned docs/operations/deploy.md is not shipped at the tagged commit"])
+
+def _test_text_digest_is_sha256_of_the_bytes(_ctx):
+    check_eq("empty", text_sha256(""), "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+
+def _test_record_is_verified_only_without_problems(_ctx):
+    record = verification_record(_TAG, _COMMIT, signing_identity(_TAG), _INDEX, _CHILDREN, "", {}, [])
+    check_eq("clean record", record["verified"], True)
+    check_eq("failed record", verification_record(_TAG, _COMMIT, "", _INDEX, _CHILDREN, "", {}, ["x"])["verified"], False)
+
+verify_release_tests = suite("verify-release", [
+    _test_identity_is_the_ref_that_ran_release,
+    _test_index_children_are_one_per_platform,
+    _test_complete_v1_provenance_verifies,
+    _test_released_v0_2_provenance_is_refused,
+    _test_provenance_must_bind_commit_ref_and_children,
+    _test_attested_sbom_must_be_the_release_asset,
+    _test_amd64_child_must_be_the_delivery_digest,
+    _test_support_paths_cover_the_operations_tree,
+    _test_support_documents_must_match_the_pinned_record,
+    _test_text_digest_is_sha256_of_the_bytes,
+    _test_record_is_verified_only_without_problems,
+])
+
+test_verify_release = suite_task(verify_release_tests)

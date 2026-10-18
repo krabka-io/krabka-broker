@@ -1,0 +1,88 @@
+"""A frozen candidate names every sibling pin and every manifest drift."""
+
+load("./freeze_candidate.axl", "freeze_record", "patch_pins", "pin_drift")
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+_PROTOCOL = "af4dc00a1f6502c5f67280f356c90768dabcf4c4"
+_CLIENT = "29dac7a590a8ccab2e88205987d3c28fe3c9f669"
+
+_CARGO_TOML = [
+    "[workspace]",
+    "members = [\"crates/*\"]",
+    "",
+    "[workspace.dependencies]",
+    "krabka-protocol = { version = \"0.4.0\", git = \"https://github.com/krabka-io/krabka-protocol\", rev = \"%s\" }" % ("0" * 40),
+    "",
+    "[patch.crates-io]",
+    "krabka-broker = { path = \"crates/broker\" }",
+    "krabka-client-core = { git = \"https://github.com/krabka-io/krabka-client-rs\", rev = \"%s\" }" % _CLIENT,
+    "krabka-ids = { git = \"https://github.com/krabka-io/krabka-protocol\", rev = \"%s\" }" % _PROTOCOL,
+    "krabka-protocol = { git = \"https://github.com/krabka-io/krabka-protocol\", rev = \"%s\" }" % _PROTOCOL,
+    "",
+    "[profile.release]",
+    "krabka-other = { git = \"https://github.com/krabka-io/elsewhere\", rev = \"%s\" }" % ("1" * 40),
+]
+
+_PINS = {"krabka-io/krabka-client-rs": _CLIENT, "krabka-io/krabka-protocol": _PROTOCOL}
+
+def _test_pins_come_only_from_the_patch_block(_ctx):
+    check_eq("patch pins", patch_pins(_CARGO_TOML), (_PINS, []))
+
+def _test_a_sibling_pinned_twice_is_refused(_ctx):
+    split = _CARGO_TOML + [
+        "[patch.crates-io]",
+        "krabka-units = { git = \"https://github.com/krabka-io/krabka-protocol\", rev = \"%s\" }" % ("2" * 40),
+    ]
+    check_eq("two revisions", patch_pins(split)[1], [
+        "krabka-units: krabka-io/krabka-protocol is pinned at both %s and %s" % (_PROTOCOL, "2" * 40),
+    ])
+
+def _test_a_branch_or_short_rev_is_not_a_pin(_ctx):
+    lines = [
+        "[patch.crates-io]",
+        "krabka-a = { git = \"https://github.com/krabka-io/a\", branch = \"main\" }",
+        "krabka-b = { git = \"https://github.com/krabka-io/b\", rev = \"abc123\" }",
+        "krabka-c = { git = \"https://gitlab.com/krabka-io/c\", rev = \"%s\" }" % ("3" * 40),
+    ]
+    check_eq("unpinned entries", patch_pins(lines), ({}, [
+        "krabka-a: a git patch needs a github.com URL and a full 40-character rev",
+        "krabka-b: a git patch needs a github.com URL and a full 40-character rev",
+        "krabka-c: a git patch needs a github.com URL and a full 40-character rev",
+    ]))
+
+def _test_drift_names_each_component_off_its_pin(_ctx):
+    manifest = {"components": [
+        {"repository": "krabka-io/krabka-broker", "revision": "d" * 40},
+        {"repository": "krabka-io/krabka-protocol", "revision": "05e3e32d9a0b832453b0c0de144f138c3bab735b"},
+        {"repository": "krabka-io/krabka-client-rs", "revision": _CLIENT},
+    ]}
+    check_eq("baseline against current pins", pin_drift(_PINS, manifest), [
+        {"repository": "krabka-io/krabka-protocol", "pinned": _PROTOCOL, "manifest": "05e3e32d9a0b832453b0c0de144f138c3bab735b"},
+    ])
+    check_eq("sibling absent from the manifest", pin_drift(_PINS, {"components": []}), [
+        {"repository": "krabka-io/krabka-client-rs", "pinned": _CLIENT, "manifest": ""},
+        {"repository": "krabka-io/krabka-protocol", "pinned": _PROTOCOL, "manifest": ""},
+    ])
+
+def _test_record_lists_siblings_in_order(_ctx):
+    digest = "sha256:" + "a" * 64
+    check_eq("frozen record", freeze_record("e" * 40, digest, _PINS, "sha256:" + "f" * 64, []), {
+        "schema": 1,
+        "broker": {"repository": "krabka-io/krabka-broker", "revision": "e" * 40, "image": "ghcr.io/krabka-io/krabka-broker", "digest": digest},
+        "siblings": [
+            {"repository": "krabka-io/krabka-client-rs", "revision": _CLIENT},
+            {"repository": "krabka-io/krabka-protocol", "revision": _PROTOCOL},
+        ],
+        "cargo_lock_sha256": "sha256:" + "f" * 64,
+        "manifest_drift": [],
+    })
+
+freeze_candidate_tests = suite("freeze-candidate", [
+    _test_pins_come_only_from_the_patch_block,
+    _test_a_sibling_pinned_twice_is_refused,
+    _test_a_branch_or_short_rev_is_not_a_pin,
+    _test_drift_names_each_component_off_its_pin,
+    _test_record_lists_siblings_in_order,
+])
+
+test_freeze_candidate = suite_task(freeze_candidate_tests)
