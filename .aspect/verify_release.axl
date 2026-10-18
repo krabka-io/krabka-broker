@@ -200,6 +200,19 @@ def sbom_problems(statement, index_digest, asset):
         problems.append("sbom: the attested SBOM is not the release's %s" % SBOM_ASSET)
     return problems
 
+def best_problems(results):
+    """[] when one attestation passes, else the problems of the closest one.
+
+    `results` holds the problem list of each verified attestation of one
+    type. One correct attestation is enough; an earlier, wrong one beside it
+    does not fail the release.
+    """
+    best = results[0]
+    for problems in results:
+        if len(problems) < len(best):
+            best = problems
+    return best
+
 def delivery_problems(expected, children):
     """Problems with the amd64 child against delivery's recorded digest."""
     expected = expected.strip()
@@ -276,18 +289,25 @@ def _exec(ctx, executable, argv):
 def _cosign_identity_args(identity):
     return ["--certificate-identity", identity, "--certificate-oidc-issuer", ISSUER]
 
-def _attested_statement(ctx, scratch, reference, identity, predicate_type):
-    """The decoded statement of the one attestation of this type, or None."""
+def _attested_statements(ctx, scratch, reference, identity, predicate_type):
+    """The decoded statements of every verified attestation of this type.
+
+    A release run that is re-run after its signing step attests again, so one
+    identity can hold several attestations of one type.
+    """
     code, out, _ = _exec(ctx, "cosign", ["verify-attestation", "--type", predicate_type] + _cosign_identity_args(identity) + [reference])
     if code != 0:
-        return None
-    envelopes = [json.decode(line) for line in out.splitlines() if line.strip().startswith("{")]
-    if len(envelopes) != 1:
-        return None
+        return []
+    statements = []
     path = scratch + "/payload.b64"
-    ctx.std.fs.write(path, envelopes[0].get("payload", ""))
-    code, decoded, _ = _exec(ctx, "base64", ["--decode", path])
-    return json.decode(decoded) if code == 0 else None
+    for line in out.splitlines():
+        if not line.strip().startswith("{"):
+            continue
+        ctx.std.fs.write(path, json.decode(line).get("payload", ""))
+        code, decoded, _ = _exec(ctx, "base64", ["--decode", path])
+        if code == 0:
+            statements.append(json.decode(decoded))
+    return statements
 
 def _release_asset(ctx, tag):
     code, url, _ = _exec(ctx, "gh", [
@@ -344,14 +364,14 @@ def _impl(ctx: TaskContext) -> int:
 
     scratch = ctx.std.fs.mkdtemp(prefix = "krabka-verify-release-")
     ctx.defer(ctx.std.fs.remove_dir_all, scratch)
-    provenance = _attested_statement(ctx, scratch, reference, identity, PROVENANCE_TYPE)
-    if provenance == None:
-        provenance = _attested_statement(ctx, scratch, reference, identity, LEGACY_PROVENANCE_TYPE)
-    problems.extend(provenance_problems(provenance, index_digest, tag, commit, children))
+    provenance = _attested_statements(ctx, scratch, reference, identity, PROVENANCE_TYPE)
+    if not provenance:
+        provenance = _attested_statements(ctx, scratch, reference, identity, LEGACY_PROVENANCE_TYPE)
+    problems.extend(best_problems([provenance_problems(s, index_digest, tag, commit, children) for s in provenance or [None]]))
 
     asset = _release_asset(ctx, tag)
-    sbom = _attested_statement(ctx, scratch, reference, identity, SBOM_TYPE)
-    problems.extend(sbom_problems(sbom, index_digest, asset))
+    sbom = _attested_statements(ctx, scratch, reference, identity, SBOM_TYPE)
+    problems.extend(best_problems([sbom_problems(s, index_digest, asset) for s in sbom or [None]]))
 
     if ctx.args.delivery_digest:
         problems.extend(delivery_problems(ctx.std.fs.read_to_string(ctx.args.delivery_digest), children))

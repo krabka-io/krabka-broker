@@ -34,6 +34,21 @@ _PATCH_HEADER = "[patch.crates-io]"
 
 _GITHUB = "https://github.com/"
 
+_HEX = "0123456789abcdef"
+
+def is_commit(revision):
+    """Whether `revision` is a full lowercase SHA-1, and not a named ref.
+
+    Cargo also takes a branch or tag name as `rev`, and a name can move after
+    qualification. Only a commit id freezes a sibling.
+    """
+    if len(revision) != 40:
+        return False
+    for char in revision.elems():
+        if char not in _HEX:
+            return False
+    return True
+
 def _quoted_after(line, key):
     """The double-quoted value after `key = ` in `line`, or ""."""
     start = line.find(key + " = \"")
@@ -63,8 +78,8 @@ def patch_pins(lines):
         crate = stripped.split(" ", 1)[0]
         url = _quoted_after(stripped, "git")
         revision = _quoted_after(stripped, "rev")
-        if not url.startswith(_GITHUB) or len(revision) != 40:
-            problems.append("%s: a git patch needs a github.com URL and a full 40-character rev" % crate)
+        if not url.startswith(_GITHUB) or not is_commit(revision):
+            problems.append("%s: a git patch needs a github.com URL and a full 40-character commit id as its rev" % crate)
             continue
         repository = url.removeprefix(_GITHUB).removesuffix(".git")
         if pins.get(repository, revision) != revision:
@@ -87,6 +102,14 @@ def pin_drift(pins, manifest):
         if named.get(repository, "") != pins[repository]:
             drift.append({"repository": repository, "pinned": pins[repository], "manifest": named.get(repository, "")})
     return drift
+
+def lock_digest(readable, text):
+    """The `sha256:` digest of a `Cargo.lock`, or "" when there is none to pin."""
+    if not readable or not text.strip():
+        return ""
+    digest = sha256()
+    digest.update(text)
+    return "sha256:" + digest.hexdigest()
 
 def freeze_record(commit, digest, pins, lock_sha256, drift):
     """The frozen candidate record."""
@@ -119,9 +142,9 @@ def _impl(ctx: TaskContext) -> int:
     _, manifest_text, _ = _exec(ctx, "git", ["show", commit + ":Cargo.toml"])
     pins, problems = patch_pins(manifest_text.splitlines())
     code, lock, _ = _exec(ctx, "git", ["show", commit + ":Cargo.lock"])
-    digest = sha256()
-    digest.update(lock)
-    lock_sha256 = "sha256:" + digest.hexdigest() if code == 0 else ""
+    lock_sha256 = lock_digest(code == 0, lock)
+    if not lock_sha256:
+        problems.append("%s has no readable Cargo.lock, so the record cannot pin the dependency set" % commit)
 
     image_digest = ""
     if ctx.args.delivery_digest:

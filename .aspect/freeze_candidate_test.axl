@@ -1,6 +1,6 @@
 """A frozen candidate names every sibling pin and every manifest drift."""
 
-load("./freeze_candidate.axl", "freeze_record", "patch_pins", "pin_drift")
+load("./freeze_candidate.axl", "freeze_record", "lock_digest", "patch_pins", "pin_drift")
 load("./testing.axl", "check_eq", "suite", "suite_task")
 
 _PROTOCOL = "af4dc00a1f6502c5f67280f356c90768dabcf4c4"
@@ -43,12 +43,12 @@ def _test_a_branch_or_short_rev_is_not_a_pin(_ctx):
         "krabka-a = { git = \"https://github.com/krabka-io/a\", branch = \"main\" }",
         "krabka-b = { git = \"https://github.com/krabka-io/b\", rev = \"abc123\" }",
         "krabka-c = { git = \"https://gitlab.com/krabka-io/c\", rev = \"%s\" }" % ("3" * 40),
+        # Cargo takes a named ref as `rev` too; a 40-character one is not a commit.
+        "krabka-d = { git = \"https://github.com/krabka-io/d\", rev = \"%s\" }" % ("release-candidate-" + "x" * 22),
+        "krabka-e = { git = \"https://github.com/krabka-io/e\", rev = \"%s\" }" % ("A" * 40),
     ]
-    check_eq("unpinned entries", patch_pins(lines), ({}, [
-        "krabka-a: a git patch needs a github.com URL and a full 40-character rev",
-        "krabka-b: a git patch needs a github.com URL and a full 40-character rev",
-        "krabka-c: a git patch needs a github.com URL and a full 40-character rev",
-    ]))
+    problem = ": a git patch needs a github.com URL and a full 40-character commit id as its rev"
+    check_eq("unpinned entries", patch_pins(lines), ({}, ["krabka-" + name + problem for name in ["a", "b", "c", "d", "e"]]))
 
 def _test_drift_names_each_component_off_its_pin(_ctx):
     manifest = {"components": [
@@ -63,6 +63,11 @@ def _test_drift_names_each_component_off_its_pin(_ctx):
         {"repository": "krabka-io/krabka-client-rs", "pinned": _CLIENT, "manifest": ""},
         {"repository": "krabka-io/krabka-protocol", "pinned": _PROTOCOL, "manifest": ""},
     ])
+
+def _test_a_candidate_without_a_lock_pins_nothing(_ctx):
+    check_eq("no Cargo.lock at the commit", lock_digest(False, ""), "")
+    check_eq("empty Cargo.lock", lock_digest(True, "\n"), "")
+    check_eq("lock bytes", lock_digest(True, "version = 4\n"), "sha256:" + "083791b01c1a67ae66aca99070c9ee48082d04307473d494376e6de7cf9a654a")
 
 def _test_record_lists_siblings_in_order(_ctx):
     digest = "sha256:" + "a" * 64
@@ -82,6 +87,7 @@ freeze_candidate_tests = suite("freeze-candidate", [
     _test_a_sibling_pinned_twice_is_refused,
     _test_a_branch_or_short_rev_is_not_a_pin,
     _test_drift_names_each_component_off_its_pin,
+    _test_a_candidate_without_a_lock_pins_nothing,
     _test_record_lists_siblings_in_order,
 ])
 

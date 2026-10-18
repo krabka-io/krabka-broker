@@ -8,6 +8,7 @@ load(
     "PROVENANCE_TYPE",
     "SBOM_TYPE",
     "SUPPORT_DOCUMENTS",
+    "best_problems",
     "delivery_problems",
     "index_children",
     "provenance_problems",
@@ -120,6 +121,17 @@ def _test_provenance_must_bind_commit_ref_and_children(_ctx):
     for statement, want in cases:
         check_eq(want, provenance_problems(statement, _INDEX, _TAG, _COMMIT, _CHILDREN), [want])
 
+def _test_one_good_attestation_is_enough(_ctx):
+    def check(statement):
+        return provenance_problems(statement, _INDEX, _TAG, _COMMIT, _CHILDREN)
+
+    legacy = check(_LEGACY_STATEMENT)
+    check_eq("a re-run beside an earlier empty attestation", best_problems([legacy, check(_statement())]), [])
+    check_eq("good first", best_problems([check(_statement()), legacy]), [])
+    wrong = check(_statement(_predicate(commit = "f" * 40)))
+    check_eq("closest failure is reported", best_problems([legacy, wrong]), wrong)
+    check_eq("only failures of equal size keep the first", best_problems([wrong, wrong]), wrong)
+
 def _test_attested_sbom_must_be_the_release_asset(_ctx):
     asset = json.encode(_SBOM)
     statement = _statement(_SBOM, predicate_type = SBOM_TYPE)
@@ -171,6 +183,7 @@ verify_release_tests = suite("verify-release", [
     _test_complete_v1_provenance_verifies,
     _test_released_v0_2_provenance_is_refused,
     _test_provenance_must_bind_commit_ref_and_children,
+    _test_one_good_attestation_is_enough,
     _test_attested_sbom_must_be_the_release_asset,
     _test_amd64_child_must_be_the_delivery_digest,
     _test_support_paths_cover_the_operations_tree,
