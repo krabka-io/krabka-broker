@@ -29,7 +29,7 @@ a topic config that changes after the mirror starts.
 | Offsets as numbers | Target offsets differ from source offsets. Read a group's position from the target after the cutover, never from a source offset you wrote down. |
 | Transactional state and producer ids | Restart transactional producers against krabka. An open transaction on the source does not move. |
 | Delegation tokens, SCRAM credentials and quotas | Create them on krabka before the cutover. `kafka-configs` and `kafka-acls` do that. |
-| Schema registry subjects | Copy them with the registry's own export. The `_schemas` topic is an ordinary topic, so MirrorMaker 2 can mirror it, but the registry then needs its own cutover. |
+| A schema registry's own cutover | MirrorMaker 2 mirrors the `_schemas` topic like any other topic. Moving the registry onto it is a separate step. See [Cut the schema registry over](#cut-the-schema-registry-over). |
 
 ## Before you start
 
@@ -274,6 +274,54 @@ order for each key across the cutover needs
 Producers that write the mirrored name `prod.orders` on krabka cannot be
 rolled back: the reverse flow in [Roll back](#roll-back) never carries that
 topic.
+
+## Cut the schema registry over
+
+A Confluent Schema Registry keeps its schemas in the compacted `_schemas`
+topic, and every record names its schema by id. Mirror that topic, run a
+second registry on krabka that only reads it, and make that registry writable
+at the producer cutover. The schema ids then stay the same on both clusters.
+This procedure was checked with the Confluent Schema Registry 7.4 image that
+krabka's registry tests pin, and MirrorMaker 2 from Kafka 4.3.1.
+
+1. Add `_schemas` to `prod->krabka.topics`. It arrives as `prod._schemas`,
+   compacted, with one partition.
+2. Start the target registry against krabka, with the mirrored topic and no
+   right to lead:
+
+   ```properties
+   kafkastore.bootstrap.servers=SASL_SSL://krabka-1.example.com:9094
+   kafkastore.topic=prod._schemas
+   leader.eligibility=false
+   ```
+
+   It serves every read. It answers a write with error `50004`, `Leader not
+   known`, so it cannot give out an id that the source registry gives out too.
+3. Check the two registries against each other. Compare `GET /subjects`,
+   `GET /schemas/ids/<id>` for every id, and `GET /config/<subject>` for every
+   subject with its own compatibility level. Do not compare end offsets: the
+   target registry writes its own marker record into the topic when it
+   starts. Consumers that already read from krabka can use this registry.
+4. At the producer cutover, freeze schema changes on the source with
+   `PUT /mode` and the body `{"mode": "READONLY"}`. A producer can still look
+   up and re-register a schema that exists. A new schema is refused with
+   error `42205`.
+5. Wait until the target registry serves the newest id of the source. Then
+   remove `_schemas` from `prod->krabka.topics` and restart MirrorMaker 2, or
+   stop it, so that the topic has one writer.
+6. Restart the target registry without `leader.eligibility=false`. It now
+   leads, and it gives out ids above the highest id in the topic.
+7. The `READONLY` mode of step 4 was mirrored too, so the target registry is
+   read-only as well. Leave it read-only until the rollback window closes.
+   Then send `{"mode": "READWRITE"}` to its `PUT /mode`.
+
+With `IdentityReplicationPolicy` the topic keeps the name `_schemas`, and the
+target registry needs no `kafkastore.topic` setting.
+
+A schema that is registered only on krabka cannot roll back. The reverse
+flow in [Roll back](#roll-back) never carries `prod._schemas`, and a schema
+registered again on the source can get another id. The read-only mode of
+step 7 keeps every id on both registries until the rollback window closes.
 
 ## Clean up
 
