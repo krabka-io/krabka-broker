@@ -206,14 +206,17 @@ cosign verify \
 ```
 
 Then read the provenance back. Use cosign 3: `sigstore/cosign-installer` v4
-signs with it, and cosign 2 finds no signature on these images.
+signs with it, and cosign 2 finds no signature on these images. Only a release
+after v1.0.5 has a v1 provenance. For v1.0.5 and earlier, the command finds no
+matching attestation.
 
 ```sh
+tag=vX.Y.Z
 cosign verify-attestation \
   --type https://slsa.dev/provenance/v1 \
-  --certificate-identity https://github.com/krabka-io/krabka-broker/.github/workflows/release.yml@refs/tags/v0.5.2 \
+  --certificate-identity "https://github.com/krabka-io/krabka-broker/.github/workflows/release.yml@refs/tags/${tag}" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/krabka-io/krabka-broker:v0.5.2 |
+  "ghcr.io/krabka-io/krabka-broker:${tag}" |
   jq -r .payload | base64 --decode | jq .predicate.buildDefinition
 ```
 
