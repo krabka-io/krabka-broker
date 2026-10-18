@@ -109,7 +109,11 @@ what the topic should hold, is a wrong `--archive-prefix` or a wrong bound.
    could not be written, and a different target may work.
 
 3. **Boot a broker** on the restored directory. It is an ordinary krabka data
-   directory and needs no restore-specific configuration. Confirm that
+   directory and needs no restore-specific configuration. The ACLs and SCRAM
+   credentials come back from the metadata checkpoint, but the listeners, the
+   TLS files and the `[authorization]` table come from the new broker's own
+   configuration. Give it the same ones as production, or the restored ACLs
+   have no authorizer to enforce them. Confirm that
    `kafka-topics --describe` lists the topics and that `kafka-configs
    --describe` shows the topic configuration the metadata checkpoint carried. If
    the configuration is missing, the restore ran without
@@ -120,15 +124,28 @@ what the topic should hold, is a wrong `--archive-prefix` or a wrong bound.
    ```sh
    krabka-backup restore-offsets --capture <id> \
      -b restored-broker:9092 \
-     --worm-key-id <id> --worm-public-key <path> \
-     --worm-expect-head <diskless-capture-head> \
      --archive-s3-bucket krabka-tier --archive-prefix prod/
    ```
 
+   On a secured restored cluster, add `--command-config <file>` with the backup
+   principal's client properties.
+   [Secured clusters](../backup-restore.md#secured-clusters) shows the file and
+   the ACLs that the principal needs.
+
+   Add the trust flags only when the capture holds a signed diskless boundary,
+   that is, when the backup ran `capture` with `--worm-signing-key-id`:
+
+   ```sh
+     --worm-key-id <id> --worm-public-key <path> \
+     --worm-expect-head <diskless-capture-head>
+   ```
+
+   With a signed capture the tool refuses to commit without all three. With a
+   capture that holds no diskless boundary, the tool refuses the flags: it
+   exits `5` and names the capture. The expected head must come from the
+   incident evidence, not from the archive being restored.
+
    Run it with `--dry-run` first to see the positions it will write. It commits
-   only after a signed capture authenticates their digest when the backup used
-   capture signing. The expected head must come from the incident evidence,
-   not from the archive being restored. It commits
    as a simple consumer, so the coordinator fences it on any group that already
    has live members. That is why this step comes before the consumers: a group
    that is running has to be stopped for its position to be set.
@@ -140,8 +157,9 @@ what the topic should hold, is a wrong `--archive-prefix` or a wrong bound.
    replica of everything. Add brokers and reassign partitions with
    `kafka-reassign-partitions` as a separate, planned piece of work.
 
-7. **Capture immediately.** The restored cluster has a new cluster id, possibly
-   a new node identity, and a fresh metadata log. Run `krabka-backup capture`
+7. **Capture immediately.** The restored cluster has a fresh metadata log and
+   possibly a new node identity. It also has a new cluster id, unless step 2
+   passed `--cluster-id`. Run `krabka-backup capture`
    against it as soon as it serves traffic, so the next incident is not restored
    from the dead cluster's inputs.
 
