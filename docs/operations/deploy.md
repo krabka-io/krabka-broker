@@ -137,10 +137,13 @@ krabka-format --log-dir /var/lib/krabka --standalone --node-id 1 \
 A cluster with fewer than three brokers must lower the replication factor of
 the internal topics when it starts, as a Kafka quickstart sets
 `offsets.topic.replication.factor=1`. Start the broker with
-`--offsets-topic-replication-factor 1` and
-`--transaction-state-replication-factor 1`. Without them the broker cannot
-create `__consumer_offsets`. It logs `INVALID_REPLICATION_FACTOR`, and every
-consumer group waits for a coordinator with no error to the client.
+`--offsets-topic-replication-factor 1`,
+`--transaction-state-replication-factor 1` and
+`--transaction-state-min-isr 1`. Without the first, the broker cannot create
+`__consumer_offsets`. It logs `INVALID_REPLICATION_FACTOR`, and every
+consumer group waits for a coordinator with no error to the client. Without
+the last, `__transaction_state` has one replica against a minimum ISR of 2,
+and no transactional producer can write.
 
 A three-node quorum with a KIP-853 dynamic initial voter set. Every node
 runs the same command with its own `--node-id`, its own `--directory-id` and

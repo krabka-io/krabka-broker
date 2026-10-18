@@ -76,16 +76,20 @@ dry run a scratch directory. Fetch the two snapshots first, as step 1 of
 the metadata:
 
 ```sh
+plan_dir="$(mktemp -d)"
 krabka-restore --dry-run --report json \
   --archive-s3-bucket krabka-tier --archive-s3-region eu-west-1 \
   --archive-prefix prod/ \
   --rlmm-snapshot ./rlmm-snapshot \
   --metadata-snapshot ./cluster-metadata.checkpoint \
-  --log-dir /tmp/krabka-restore-plan \
+  --log-dir "${plan_dir}" \
   --node-id 1 --standalone --controller-listener 127.0.0.1:9093 \
-  --to-timestamp 2026-08-24T09:15:00Z
-rm -r /tmp/krabka-restore-plan
+  --to-timestamp 2026-08-24T09:15:00Z > plan.out
+rm -r "${plan_dir}"
 ```
+
+`mktemp -d` makes a new empty directory, so the dry run never writes into a
+directory that something else uses, and `rm` removes only that directory.
 
 The JSON report starts at the first `{`. The format step prints two lines
 before it on stdout, `Formatting ...` and `Formatted ...`, so remove them
@@ -131,7 +135,11 @@ step 3, from a record kept outside the cluster.
    could not be written, and a different target may work.
 
 3. **Boot a broker** on the restored directory. It is an ordinary krabka data
-   directory and needs no restore-specific configuration. Confirm that
+   directory and needs no restore-specific configuration. It is a
+   single-node cluster, so start it with the internal-topic flags that
+   [Format the log directory](../deploy.md#format-the-log-directory) gives
+   for fewer than three brokers. Without them the broker cannot create
+   `__consumer_offsets`, and step 4 fails every time. Confirm that
    `kafka-topics --describe` lists the topics and that `kafka-configs
    --describe` shows the topic configuration the metadata checkpoint carried. If
    the configuration is missing, the restore ran without
@@ -156,7 +164,9 @@ step 3, from a record kept outside the cluster.
    `COORDINATOR_NOT_AVAILABLE` while the broker creates `__consumer_offsets`,
    and the tool does not retry it yet
    ([#1515](https://github.com/krabka-io/krabka-broker/issues/1515)). Run the
-   same command again after a few seconds.
+   same command again after a few seconds. If it fails again, read the broker
+   log for `INVALID_REPLICATION_FACTOR`: the broker then needs the flags of
+   step 3.
 
    Run it with `--dry-run` first to see the positions it will write. It commits
    only after a signed capture authenticates their digest when the backup used
