@@ -349,6 +349,22 @@ With MirrorMaker 2 from Kafka 4.3.1 and `DefaultReplicationPolicy`:
   The policy refuses a topic whose name already carries the other cluster's
   prefix. That is what keeps the two flows from looping.
 
+With `IdentityReplicationPolicy`, a topic has the same name on both clusters,
+and the krabka copy also holds every record that the forward flow mirrored. A
+new reverse flow reads from the earliest offset by default, so it would append
+that whole history to the source topic again. Start the reverse flow at the
+producer cutover, before any producer writes to krabka, and stop the forward
+flow first so that the two cannot loop:
+
+```properties
+krabka->prod.enabled = true
+krabka.consumer.auto.offset.reset = latest
+```
+
+A new flow with that setting starts at the end of each topic. In a test with
+MirrorMaker 2 from Kafka 4.3.1 it copied the 12 records written after it
+started and none of the 30 written before.
+
 ## ACL sync
 
 `sync.topic.acls.enabled` is `true` by default, and it works in one direction

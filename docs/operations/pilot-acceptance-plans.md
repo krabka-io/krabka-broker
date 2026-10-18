@@ -80,6 +80,8 @@ So both plans forbid `kafka-features upgrade` during the run, except where a pla
 
 [#1397](https://github.com/krabka-io/krabka-broker/issues/1397) destroys source data, but only in its own isolated qualification cluster. A pilot never destroys an operator's data. Each plan's drill restores the newest verifying capture from the production archive into a scratch target, as [Check a copy](backup-restore.md#check-a-copy) and the [restore-from-archive](runbooks/restore-from-archive.md) runbook describe. The drill then reconciles the scratch cluster against the production cluster at the capture boundary. The drill measures RPO and RTO with the definitions of the `disaster-recovery` qualification gate, so a pilot result and a #1397 result use the same units. `rpo_ms` is the age of the capture when the drill declares the loss. `rto_ms` runs from the declared loss to a cluster that has served every captured record, each topic's settings and the group positions back to a reader.
 
+A drill against a live archive needs one more step. The cluster keeps copying new segments to the archive and deleting old ones after the capture. `krabka restore` with `--rlmm-snapshot` refuses an archive that holds a segment the snapshot does not list, or that lacks a segment the snapshot lists as live. So each drill restores from an archive view that matches its capture, as [#1522](https://github.com/krabka-io/krabka-broker/issues/1522) asks the backup guide to describe. A drill that restores from the live prefix fails at reconciliation, and that failure is the documented behavior, not a finding.
+
 The archive bounds what a drill can restore. A record reaches the archive only when its segment rolls and the remote copy completes. Compacted topics cannot be tiered, so no archive holds them. The plans set `segment.ms` on every tiered topic to bound the first limit, and they protect compacted topics another way (see [gap issues](#gap-issues)).
 
 ### Define a maintainer intervention narrowly and record every one
@@ -162,7 +164,7 @@ Installation exit checks:
 
 1. `/readyz` answers 200 on every broker, and `kafka-metadata-quorum describe --status` names one leader and every voter.
 2. `krabka_broker_under_replicated_partitions` and `krabka_broker_offline_partitions_count` are zero on every broker.
-3. A client with no credentials fails to authenticate. A client with a valid credential and no ACL gets `TOPIC_AUTHORIZATION_FAILED`. The [authentication-failures](runbooks/authentication-failures.md) and [authorization-denials](runbooks/authorization-denials.md) alerts fire for those attempts and resolve after them.
+3. A client with a wrong password fails to authenticate. A client with a valid credential and no ACL gets `TOPIC_AUTHORIZATION_FAILED`. To make the alerts fire, the operator repeats each attempt for longer than its rule's hold time. `KrabkaAuthenticationFailures` needs more than 1 failure per second over 5 minutes, held for 5 minutes, so the wrong-password client tries at least 2 times per second for 12 minutes. `KrabkaAuthorizationDenials` needs a non-zero 5-minute rate held for 10 minutes, so the denied client tries at least once every 30 seconds for 12 minutes. Each alert fires, the operator follows [authentication-failures](runbooks/authentication-failures.md) and [authorization-denials](runbooks/authorization-denials.md), and each alert resolves after the attempts stop.
 4. The first `krabka-backup verify` exits `0`.
 5. `kafka-features describe` output is recorded.
 
@@ -189,7 +191,7 @@ Cutover checks, for each consumer group:
 | Check | Pass condition |
 | :--- | :--- |
 | Position | `kafka-consumer-groups --describe` on krabka names the mirrored topic, and the group's lag falls for 5 minutes after the start. |
-| Skipped records | The canary consumer's first value after the cutover is at most its last value before the cutover plus 1. Skipped values: 0. |
+| Skipped records | The operator compares the ledgers for each canary partition. Every value that the producer ledger acknowledged on that partition is in the union of the consumer's ledger before and after the cutover. Skipped values: 0. Values are compared as a set for each partition, because the canary producer spreads increasing values over 12 partitions with no key, and no order across partitions exists. |
 | Re-read records | The canary consumer re-reads at most `offset.lag.max` values for each partition. The run records the measured count. |
 | Lag monitor | The lag monitor reports the group on krabka with a non-zero member count and a lag within 10% of `kafka-consumer-groups`. A report of zero consumers on a group that runs is a failure. |
 
@@ -218,7 +220,7 @@ The observation window P4 is 7 days on krabka after the last producer moves.
 | Producers write to krabka | Until the end of P4 plus 7 days, with a reverse flow | Follow [Roll back](migrate-from-kafka.md#roll-back). The reverse flow carries the local topics that producers write on krabka back to the source as `krabka.<topic>`. The source consumers then subscribe to `(krabka\.)?<topic>`. |
 | The source cluster is gone | None | Recovery from now on is the [recovery drill](#recovery-drill) path. |
 
-P5 exercises the second row on one canary group and one real group that the operator selects. The rollback checks are the same skipped-record and re-read checks as the cutover, in the other direction. Version rollback follows [Tie rollback to persisted-format eligibility](#tie-rollback-to-persisted-format-eligibility).
+P5 takes place after the producer cutover, so it exercises the third row, on the canary topic only. The operator starts the reverse flow for the local canary topic, moves the canary producer and the canary consumer back to the source, and checks that every value acknowledged on krabka arrives on the source as `krabka.<canary topic>`. The rollback checks are the same per-partition skipped-record and re-read checks as the cutover, in the other direction. The canary then moves back to krabka, and the reverse flow stops. Version rollback follows [Tie rollback to persisted-format eligibility](#tie-rollback-to-persisted-format-eligibility).
 
 ### Recovery drill
 
@@ -278,7 +280,7 @@ The workload is a payment ledger. Upstream services write payment events in tran
 | Downstream consumer | Java client 4.3.1 | `group.protocol=consumer` (KIP-848), `isolation.level=read_committed` |
 | Admin | The JVM admin tools from 4.3.1, `kafka-transactions` included ([KIP-664](https://cwiki.apache.org/confluence/display/KAFKA/KIP-664%3A+Provide+tooling+to+detect+and+abort+hanging+transactions)) | Through an mTLS admin principal |
 | Mirror | MirrorMaker 2 from 4.3.1, dedicated mode | See [Migration](#migration-and-cutover-checks-1) |
-| Canary | `kafka-verifiable-producer` into a canary input topic, the same Streams application on it, and `kafka-verifiable-consumer` with `isolation.level=read_committed` on its output | 6 partitions, 50 records/s |
+| Canary | `kafka-verifiable-producer` writes a raw topic. Kafka's `transactional-message-copier` (`kafka-run-class.sh org.apache.kafka.tools.TransactionalMessageCopier --enable-random-aborts`), one for each partition, copies it into the canary input topic in transactions and aborts some of them. The same Streams application runs on the canary input, and `kafka-verifiable-consumer` with `isolation.level=read_committed` reads its output. | 6 partitions, 50 records/s. The aborted values are the values that a `read_uncommitted` reader of the canary input sees and a `read_committed` reader does not. A test run of the copier from Kafka 4.3.1 aborted about 100 of 600 transactional records. |
 
 ### Security
 
@@ -296,7 +298,7 @@ Installation exit checks:
 1. The same quorum, health and replication checks as Plan A.
 2. A client with no certificate fails the TLS handshake. A client with a certificate from another CA fails the handshake. A valid client whose mapped principal has no ACL gets an authorization error.
 3. `kafka-acls --list` shows every ACL under the mapped short names, not under full DNs.
-4. `kafka-features describe` shows `transaction.version` and `group.version` at the levels that the plan's clients need. The output is recorded.
+4. `kafka-features describe` shows `transaction.version` and `group.version` at the levels that the plan's clients need. If M6 picks `group.protocol=streams`, it also shows `streams.version` at level 1 or higher; the operator finalizes it in P1, before the run forbids feature upgrades, because the broker answers the KIP-1071 heartbeats with `UNSUPPORTED_VERSION` without it. The output is recorded.
 
 ### Migration and cutover checks
 
@@ -304,7 +306,7 @@ MirrorMaker 2 runs with `IdentityReplicationPolicy`, `offset-syncs.topic.locatio
 
 The cutover has three stages.
 
-1. **Shadow.** The operator starts the Streams application on krabka with the same `application.id` and `auto.offset.reset=earliest`. It reads the mirrored inputs, rebuilds its state, and writes the output topic on krabka. The source application keeps running and stays the system of record.
+1. **Shadow.** The operator creates the output topic on krabka first, with its 48 partitions and its tier settings, because a Streams sink topic has to exist and broker auto-creation would give it the wrong shape. Then the operator starts the Streams application on krabka with the same `application.id` and `auto.offset.reset=earliest`. It reads the mirrored inputs, rebuilds its state, and writes the output topic on krabka. The source application keeps running and stays the system of record.
 2. **Quiesce.** The operator stops the upstream producers on the source and starts the write freeze. The declared freeze is TBD(M2), proposed 15 minutes or less. The mirror drains. Both Streams applications reach zero lag. `kafka-transactions list` on both clusters shows no ongoing transaction.
 3. **Switch.** The operator compares the outputs, then points the upstream producers and the downstream consumer at krabka, then stops the source application and MirrorMaker 2.
 
@@ -312,7 +314,7 @@ Shadow and quiesce checks:
 
 | Check | Pass condition |
 | :--- | :--- |
-| Aborted records | The canary input on krabka, read with `read_uncommitted`, holds no value that the source producer ledger reports as aborted. |
+| Aborted records | The source canary input holds at least one aborted value, so the check cannot pass with nothing to test. The canary input on krabka, read with `read_uncommitted`, holds none of the aborted values. |
 | Committed records | Every committed canary input value is on krabka. Missing values: 0. |
 | Output equality | For every closed window that ends before the freeze, the count and the sum for each account on the krabka output equal the source output. Differences: 0. |
 | Order | For each account, the downstream canary on krabka reads windows in increasing window-start order. Violations: 0. |
@@ -323,7 +325,7 @@ Switch checks:
 
 | Check | Pass condition |
 | :--- | :--- |
-| Downstream position | The downstream group starts on krabka at the first output window after the last window it read on the source. The operator sets the position with `kafka-consumer-groups --reset-offsets --to-datetime` at the freeze time. Gaps and repeats in window sequence: 0. |
+| Downstream position | At the quiesce, the downstream group's lag on the source is zero. The operator dumps each output partition on both clusters, with offsets, and finds for each krabka partition the first offset after which no record is one the downstream group already read on the source. Every record before that offset is one it read. The operator sets each partition with `kafka-consumer-groups --reset-offsets --to-offset --topic <output>:<partition>`. A timestamp reset is not enough: the two outputs hold the same records but not always in the same order within a partition. Gaps and repeats in window sequence: 0. |
 | First transactions | The first transaction of each upstream producer on krabka commits. `kafka-transactions describe` shows its `transactional.id` in `CompleteCommit`. |
 
 ### Success criteria
@@ -347,16 +349,16 @@ The observation window P4 is 7 days on krabka after the switch.
 | :--- | :--- | :--- |
 | During the shadow stage | Free | Stop the krabka application and MirrorMaker 2. The source never stopped. |
 | During the write freeze, before the switch | Free | Restart the upstream producers on the source. Discard the krabka topics. |
-| After the switch, up to 24 hours | With duplicate output for the krabka period | Quiesce krabka the same way. Run a reverse MirrorMaker 2 flow, krabka to source, with `IdentityReplicationPolicy` and `read_committed`, for the input topics only. The forward flow is already stopped, so the identity policy cannot loop. The source application resumes from its own committed offsets and processes the records that were written on krabka. The downstream consumer re-reads the windows of the krabka period from the source, so it has to tolerate one repeat of each window. |
+| After the switch, up to 24 hours | With duplicate output for the krabka period | At the switch, before the first upstream producer writes to krabka, the operator starts a reverse MirrorMaker 2 flow, krabka to source, with `IdentityReplicationPolicy`, `read_committed` and `krabka.consumer.auto.offset.reset = latest`, for the input topics only. A new flow with that setting starts at the end of each topic, so it copies only the records written after the switch. A test with MirrorMaker 2 from Kafka 4.3.1 copied 12 of 12 later records and none of the 30 earlier ones. The forward flow is already stopped, so the identity policy cannot loop. To roll back, the operator quiesces krabka, waits for the reverse flow to drain, and restarts the source application from its own committed offsets. The downstream consumer re-reads the windows of the krabka period from the source, so it has to tolerate one repeat of each window. |
 | After 24 hours | None | The plan does not offer a migration rollback. Recovery is the [recovery drill](#recovery-drill-1) path. |
 
 P5 exercises the third row with the canary pipeline only: canary producers, the canary Streams application and the canary consumer. The checks are the shadow and switch checks in the other direction, with the one declared repeat for each window. Version rollback follows [Tie rollback to persisted-format eligibility](#tie-rollback-to-persisted-format-eligibility). In Plan B, a change of `transaction.version` or `group.version` is also a change of client behavior, so the operator does not change either level during the run.
 
 ### Recovery drill
 
-The drill is a point-in-time restore, which a bad-write incident needs. The operator picks a timestamp T inside P4 and restores the input and output topics into a scratch cluster with `--to-timestamp` T. The drill follows [restore-from-archive](runbooks/restore-from-archive.md): [Confirm](runbooks/restore-from-archive.md#confirm), [Diagnose](runbooks/restore-from-archive.md#diagnose) with the `--dry-run` plan, and steps 1 to 5 of [Fix](runbooks/restore-from-archive.md#fix).
+The drill is a point-in-time restore, which a bad-write incident needs. The operator picks a timestamp T inside P4 and restores the input topics only, with `--topic`, into a scratch cluster with `--to-timestamp` T. The drill follows [restore-from-archive](runbooks/restore-from-archive.md): [Confirm](runbooks/restore-from-archive.md#confirm), [Diagnose](runbooks/restore-from-archive.md#diagnose) with the `--dry-run` plan, and steps 1 to 5 of [Fix](runbooks/restore-from-archive.md#fix).
 
-The Streams changelog is compacted, so the archive does not hold it. A restore also does not keep in-flight transaction state, as [What comes back](backup-restore.md#what-comes-back) states. So the drill starts the canary Streams application on the scratch cluster with a new `application.id`. The application rebuilds its state from the restored inputs.
+The Streams changelog is compacted, so the archive does not hold it. A restore also does not keep in-flight transaction state, as [What comes back](backup-restore.md#what-comes-back) states. So the drill creates an empty output topic on the scratch cluster and starts the canary Streams application there with a new `application.id`. The application rebuilds its state from the restored inputs and writes a fresh output. The drill does not restore the production output topic, so the rebuilt output has no restored records mixed into it.
 
 | Declared value | Proposed | Basis |
 | :--- | :--- | :--- |
@@ -402,8 +404,8 @@ The runner is a person who meets every condition below. The maintainer records t
 An independent run has no operator workload, so the runner builds the plan's workload from tools that already exist:
 
 - The source cluster is the pinned `apache/kafka:4.3.1` image, at the digest in `MODULE.bazel`.
-- Plan A load comes from `kafka-producer-perf-test` and the canary tools, at the rates in the workload table, with Avro values from the registry's own serializer.
-- Plan B load comes from the canary tools and the Streams application of the `jvm_streams_app` suite, with `processing.guarantee=exactly_once_v2`.
+- Plan A load comes from `kafka-producer-perf-test` and the canary tools, at the rates in the workload table. `kafka-producer-perf-test` sends raw bytes only, so the schema-encoded share of the load comes from `kafka-avro-console-producer`, which ships in the pinned Confluent Schema Registry image and registers and looks up its schemas in the registry.
+- Plan B load comes from the canary tools and `transactional-message-copier`, which is Kafka's own exactly-once read-process-write tool, one for each input partition, with `--enable-random-aborts`. No existing tool runs a Kafka Streams topology at the Plan B rate for 7 days: the application of the `jvm_streams_app` suite processes five records and stops. So an independent run of Plan B covers the transaction, visibility, order and security criteria, and it does not cover the windowed-output criteria. The evidence lists those criteria as not covered. Action M11 asks for a long-running Streams workload if the maintainer wants them covered.
 
 ### How the evidence is labeled
 
@@ -427,6 +429,7 @@ A person does each of these through the project's normal process. Neither this d
 | M8 | Triage the [gap issues](#gap-issues). Close each issue that a plan lists as blocking. | Both |
 | M9 | Set the date after which a plan without an operator becomes an independent acceptance run. Proposed: 2027-01-15, 8 weeks before the M29 target. Name each runner and record the independence check. | Fallback only |
 | M10 | In P7, verify each evidence set against this document and publish it after the operator's consent review. | Both |
+| M11 | Decide whether independent runs of Plan B have to cover the windowed-output criteria. If yes, supply a long-running Kafka Streams workload through the normal process. | Fallback only |
 
 ## Gap Issues
 
@@ -443,6 +446,7 @@ Writing the plans found these gaps and defects in the existing documents. Each o
 | [#1500](https://github.com/krabka-io/krabka-broker/issues/1500) | The backup guide and the restore runbook showed no `--command-config` for a secured cluster, showed the `--worm-*` flags as always needed (they fail a capture with no diskless boundary), and said that a restored cluster has a new cluster id after a step that keeps the old one. [Secured clusters](backup-restore.md#secured-clusters) and the runbook now cover each one. | None. Closed by the same pull request as this document. |
 | [#1501](https://github.com/krabka-io/krabka-broker/issues/1501) | [Deploy](deploy.md) had no krabka-operator installation path, but [Scale a cluster](scaling.md) and the qualified manifest use the operator. [Kubernetes operator](deploy.md#kubernetes-operator) now describes it. | None. Closed by the same pull request as this document. |
 | [#1502](https://github.com/krabka-io/krabka-broker/issues/1502) | [Kubernetes](deploy.md#kubernetes) says the image is published for amd64 only, but [Install](deploy.md#install) says release tags are amd64 and arm64 indexes. | None |
+| [#1522](https://github.com/krabka-io/krabka-broker/issues/1522) | The backup guide says to rehearse a restore from the live production archive, but `krabka restore` with a snapshot refuses an archive that changed after the capture. Found in review. | A and B drills |
 | [#1503](https://github.com/krabka-io/krabka-broker/issues/1503) | The ecosystem matrix does not name Kafka Streams, KIP-848 consumers or share-group consumers, though suites cover each. | None |
 
 ## Integration
