@@ -117,6 +117,32 @@ async fn an_upload_without_its_manifest_is_skipped_by_an_authenticated_restore()
         copied += 1;
     }
     check!(copied > 0);
+    // And a partition whose only upload was interrupted: no manifest, no head.
+    let dir_name = partition_dir
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let (number, topic_id) = dir_name
+        .strip_prefix("orders-")
+        .and_then(|rest| rest.split_once('-'))
+        .unwrap();
+    let interrupted: i32 = number.parse().unwrap();
+    let lone = fixture
+        .archive_root
+        .path()
+        .join(format!("orders-7-{topic_id}"));
+    check!(interrupted != 7);
+    std::fs::create_dir(&lone).unwrap();
+    for entry in std::fs::read_dir(&partition_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+    {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with(&format!("{:020}", 99_999_999)) {
+            std::fs::copy(entry.path(), lone.join(name)).unwrap();
+        }
+    }
 
     let mut extra = vec![
         "--topic".to_owned(),
@@ -138,17 +164,32 @@ async fn an_upload_without_its_manifest_is_skipped_by_an_authenticated_restore()
     });
 
     let report = restore(&args).await.unwrap();
-    let skipped: Vec<(String, String)> = report
+    let mut skipped: Vec<(String, i32, String)> = report
         .skipped
         .iter()
-        .map(|segment| (segment.topic.clone(), segment.reason.clone()))
+        .map(|segment| {
+            (
+                segment.topic.clone(),
+                segment.partition,
+                segment.reason.clone(),
+            )
+        })
         .collect();
+    skipped.sort();
+    let reason = "uploaded without a manifest: no signed claim names it".to_owned();
     check!(
         skipped
-            == [(
-                "orders".to_owned(),
-                "uploaded without a manifest: no signed claim names it".to_owned()
-            )]
+            == [
+                ("orders".to_owned(), interrupted, reason.clone()),
+                ("orders".to_owned(), 7, reason)
+            ]
+    );
+    // The lone partition is not restored at all: nothing signed names it.
+    check!(
+        !report
+            .partitions
+            .iter()
+            .any(|partition| partition.partition == 7)
     );
 }
 

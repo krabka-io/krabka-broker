@@ -214,6 +214,9 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         let count = trusted.as_ref().map_or(0, |trusted| trusted.count);
         record_capture_head(&mut authenticated, head, count);
     }
+    // Before anything is seeded from the inventory: a segment no manifest
+    // names, and a partition that held nothing else, are not restored.
+    let unclaimed = drop_unclaimed_uploads(&mut archive, authenticated.as_ref());
     let AuthenticatedSnapshots {
         metadata: metadata_bytes,
         rlmm: rlmm_snapshot,
@@ -254,7 +257,7 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         consumed_authenticated_objects.insert("rlmm-snapshot".to_owned());
     }
     let mut partitions = Vec::with_capacity(archive.partitions.len());
-    let mut skipped = Vec::new();
+    let mut skipped = unclaimed;
     for entry in &archive.partitions {
         if entry.segments.is_empty() {
             continue;
@@ -262,11 +265,6 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         let mut segments = Vec::with_capacity(entry.segments.len());
         let mut skipped_predecessor = false;
         for segment in &entry.segments {
-            if let Some(unclaimed) = unclaimed_upload(authenticated.as_ref(), entry, segment) {
-                skipped.push(unclaimed);
-                skipped_predecessor = true;
-                continue;
-            }
             let verification = match &authenticated {
                 Some(SourceAuthentication {
                     archive: Some(authenticated),
@@ -454,23 +452,41 @@ fn record_capture_head(authenticated: &mut Option<SourceAuthentication>, head: &
         .insert(CAPTURE_HEAD_NAME.to_owned(), head.to_owned());
 }
 
-/// The skip of `segment` when an authenticated restore found its objects in
-/// the archive with no manifest naming them.
-fn unclaimed_upload(
+/// Remove from `archive` every segment whose objects an authenticated restore
+/// found with no manifest naming them, and every partition left with no
+/// segment, and say what was removed.
+///
+/// This runs before the inventory seeds anything. A partition whose only
+/// upload was interrupted has no manifest and no head; were it kept, its
+/// topic and partition would be created from directory names alone.
+fn drop_unclaimed_uploads(
+    archive: &mut ArchiveInventory,
     authenticated: Option<&SourceAuthentication>,
-    entry: &PartitionInventory,
-    segment: &SegmentInventory,
-) -> Option<SkippedSegment> {
-    let unclaimed = &authenticated?.unclaimed;
-    segment
-        .artifacts()
-        .any(|object| unclaimed.contains(object.key.as_ref()))
-        .then(|| SkippedSegment {
-            topic: entry.partition.topic.clone(),
-            partition: entry.partition.partition,
-            segment_id: segment.segment_id,
-            reason: "uploaded without a manifest: no signed claim names it".to_owned(),
-        })
+) -> Vec<SkippedSegment> {
+    let Some(unclaimed) = authenticated.map(|source| &source.unclaimed) else {
+        return Vec::new();
+    };
+    let mut skipped = Vec::new();
+    for partition in &mut archive.partitions {
+        partition.segments.retain(|segment| {
+            let claimed = !segment
+                .artifacts()
+                .any(|object| unclaimed.contains(object.key.as_ref()));
+            if !claimed {
+                skipped.push(SkippedSegment {
+                    topic: partition.partition.topic.clone(),
+                    partition: partition.partition.partition,
+                    segment_id: segment.segment_id,
+                    reason: "uploaded without a manifest: no signed claim names it".to_owned(),
+                });
+            }
+            claimed
+        });
+    }
+    archive
+        .partitions
+        .retain(|partition| !partition.segments.is_empty());
+    skipped
 }
 
 /// The trusted WORM manifest keys and how many the operator supplied.

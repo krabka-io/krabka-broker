@@ -157,6 +157,11 @@ fn reconcile_decision(
 /// snapshot was written, so no deletion the snapshot records can concern it.
 /// It is kept, as a live segment is. A segment the snapshot does not name
 /// inside the range it covers still disagrees.
+///
+/// A copy the snapshot caught as `CopySegmentStarted` may then have failed
+/// and been retried under a new segment id at the same base offset. So the
+/// range is that of the snapshot's other segments, and a started copy the
+/// scan does not find is excluded: it never completed.
 fn reconcile_lagging_decision(
     scanned: bool,
     state: Option<RemoteLogSegmentState>,
@@ -165,6 +170,9 @@ fn reconcile_lagging_decision(
 ) -> RestoreReconcileDecision {
     if scanned && state.is_none() && newer_than_snapshot {
         return RestoreReconcileDecision::Keep;
+    }
+    if !scanned && state == Some(RemoteLogSegmentState::CopySegmentStarted) {
+        return RestoreReconcileDecision::Exclude;
     }
     if retain_deleted_objects
         && scanned
@@ -210,6 +218,7 @@ fn reconcile_partition(
     let snapshot_end = dump
         .into_iter()
         .flat_map(|dump| &dump.segments)
+        .filter(|segment| segment.state() != RemoteLogSegmentState::CopySegmentStarted)
         .map(RemoteLogSegmentMetadata::end_offset)
         .max();
     let scanned_decision = |segment: &SegmentInventory| {
@@ -244,7 +253,16 @@ fn reconcile_partition(
                 ) == RestoreReconcileDecision::Disagree
             });
 
-    if duplicate_snapshot_key || scan_disagrees || snapshot_disagrees {
+    // A retry kept beside the attempt it replaced would restore one range
+    // twice. Which of them is the copy is not the restore's to guess.
+    let mut kept_bases = HashSet::new();
+    let duplicate_kept_base = partition
+        .segments
+        .iter()
+        .filter(|segment| scanned_decision(segment) == RestoreReconcileDecision::Keep)
+        .any(|segment| !kept_bases.insert(segment.base_offset.get()));
+
+    if duplicate_snapshot_key || scan_disagrees || snapshot_disagrees || duplicate_kept_base {
         return Err(RestoreError::MetadataDisagreement {
             topic: partition.partition.topic.clone(),
             partition: partition.partition.partition,
