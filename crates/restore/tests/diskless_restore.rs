@@ -383,7 +383,6 @@ fn trusted_capture_setup() -> TrustedCaptureSetup {
     .unwrap();
     let rlmm_bytes = std::fs::read(&rlmm_path).unwrap();
     let mut capture = fixture(archive.path(), true, false);
-    capture.metadata_snapshot_sha256 = Some(Sha256Digest::of(b"trusted metadata"));
     capture.rlmm_snapshot_sha256 = Some(Sha256Digest::of(&rlmm_bytes));
     let wal_key = capture.partitions[0].ranges[0].object_key.clone();
     let wal = std::fs::read(archive.path().join(&wal_key)).unwrap();
@@ -484,6 +483,24 @@ async fn trusted_capture_accepts_only_its_key_head_state_and_wal_bytes() {
     let error = restore(&tampered_metadata).await.unwrap_err();
     check!(matches!(error, RestoreError::Authenticity { .. }));
 
+    // The capture binds an RLMM snapshot, so a restore that omits it is
+    // refused. The metadata checkpoint takes the same path: omitting it would
+    // bring the cluster back without its ACLs and SCRAM credentials.
+    let target = tempfile::tempdir().unwrap();
+    let error = restore(&trusted_args(
+        archive.path(),
+        target.path(),
+        &capture_path,
+        &public_path,
+        &head,
+    ))
+    .await
+    .unwrap_err();
+    check!(matches!(
+        &error,
+        RestoreError::Authenticity { reason } if reason.contains("--rlmm-snapshot")
+    ));
+
     let target = tempfile::tempdir().unwrap();
     let mut missing_classic = trusted_args(
         archive.path(),
@@ -503,16 +520,19 @@ async fn trusted_capture_accepts_only_its_key_head_state_and_wal_bytes() {
     let mut wal_tampered = wal;
     wal_tampered[10] ^= 1;
     std::fs::write(archive.path().join(wal_key), wal_tampered).unwrap();
-    let error = restore(&trusted_args(
+    let mut wal_args = trusted_args(
         archive.path(),
         target.path(),
         &capture_path,
         &public_path,
         &head,
-    ))
-    .await
-    .unwrap_err();
-    check!(matches!(error, RestoreError::Authenticity { .. }));
+    );
+    wal_args.archive.rlmm_snapshot = Some(rlmm_path);
+    let error = restore(&wal_args).await.unwrap_err();
+    check!(matches!(
+        &error,
+        RestoreError::Authenticity { reason } if !reason.contains("--rlmm-snapshot")
+    ));
 }
 
 #[derive(Clone, Copy)]
@@ -553,15 +573,15 @@ async fn trusted_capture_rejects_changed_state_head_and_key(
     let key_path = setup.archive.path().join(format!("{name}.pub"));
     write_capture(&changed_path, &changed);
     std::fs::write(&key_path, key_bytes).unwrap();
-    let error = restore(&trusted_args(
+    let mut args = trusted_args(
         setup.archive.path(),
         target.path(),
         &changed_path,
         &key_path,
         &expected_head,
-    ))
-    .await
-    .unwrap_err();
+    );
+    args.archive.rlmm_snapshot = Some(setup.rlmm_path.clone());
+    let error = restore(&args).await.unwrap_err();
     check!(matches!(error, RestoreError::Authenticity { .. }), "{name}");
 }
 
