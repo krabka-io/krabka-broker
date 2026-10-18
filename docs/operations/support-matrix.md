@@ -18,7 +18,8 @@ cannot work are in [Ecosystem support](ecosystem-support.md).
 Candidate revision: `none`
 
 No release candidate is frozen yet. [#1401](https://github.com/krabka-io/krabka-broker/issues/1401)
-freezes it. Until then, no row can be `candidate`, and every passing result
+freezes it, with the procedure and gates in
+[Release candidate qualification](../release-candidate-qualification.md). Until then, no row can be `candidate`, and every passing result
 below is `historical`: it is true of the revision that it names, and it says
 nothing about a later build.
 
@@ -46,7 +47,7 @@ candidate evidence to the delivered bytes.
 
 | Run | Revision | Delivered image | What it executed |
 | :--- | :--- | :--- | :--- |
-| [Nightly 39114726914](https://github.com/krabka-io/krabka-broker/actions/runs/39114726914), 2026-10-18 | `948e3cc8f99dfabad5bd0917f7b710abc3a07710` | `sha256:ad1149a44f899e4d30c8eddd9944444e9fddcf8bb3f0ff322ff17f1e85ba4a23`, from [push CI 39058863421](https://github.com/krabka-io/krabka-broker/actions/runs/39058863421/job/117476230788) | The full container matrix. Three groups failed before any test ran, because their image pulls were cancelled: `jvm_acceptance_legacy+6`, `librdkafka_conformance+6` and `minio_roundtrip`. The four-hour soak failed. The upgrade job stopped at its time limit. |
+| [Nightly 39114726914](https://github.com/krabka-io/krabka-broker/actions/runs/39114726914), 2026-10-18 | `948e3cc8f99dfabad5bd0917f7b710abc3a07710` | `sha256:ad1149a44f899e4d30c8eddd9944444e9fddcf8bb3f0ff322ff17f1e85ba4a23`, from [push CI 39058863421](https://github.com/krabka-io/krabka-broker/actions/runs/39058863421/job/117476230788) | The full container matrix. Three groups failed before any test ran, because their image pulls were cancelled: `jvm_acceptance_legacy+6`, `librdkafka_conformance+6` and `minio_roundtrip` ([#1493](https://github.com/krabka-io/krabka-broker/issues/1493)). The four-hour soak failed. The upgrade job stopped at its time limit. |
 | [Nightly 39019310161](https://github.com/krabka-io/krabka-broker/actions/runs/39019310161), 2026-10-17 | `dc4acebe91b704dc1eed7dcce6e687638f70617d` | `sha256:c418a9bdd17611459c3b534d0743aa20c6a81e942b37a7c810c191ef9b922a2c`, from [push CI 39017848795](https://github.com/krabka-io/krabka-broker/actions/runs/39017848795) | The last nightly in which every container group passed. The four-hour soak failed as in the first row, and the upgrade job stopped at its time limit. |
 | [Push CI 39058863421](https://github.com/krabka-io/krabka-broker/actions/runs/39058863421), 2026-10-17 | `948e3cc8f99dfabad5bd0917f7b710abc3a07710` | As the first row | `bazel test //...`, Clippy, the proofs and the sustained-load self-check on three brokers. |
 | [Release 38520465048](https://github.com/krabka-io/krabka-broker/actions/runs/38520465048), `v1.0.5` | `ac9deff316d38418622b16c237c671df88f57c7a` | `sha256:8c515d335e89455525fb1ad4d9986769c9dd18e44fb259250919c6e7cb53bd84` (amd64) and `sha256:303ced00e15fcd07480e324f7c430f604dcce6b52d38a5df4ed2936743becd4a` (arm64) | Promotion of the image that CI run 38516831673 delivered. |

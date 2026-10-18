@@ -26,11 +26,13 @@ load("./check_scripts_test.axl", "check_scripts_tests")
 load("./check_support_matrix_test.axl", "check_support_matrix_tests")
 load("./check_version_pins_test.axl", "check_version_pins_tests")
 load("./creusot_image_tag_test.axl", "creusot_image_tag_tests")
+load("./freeze_candidate_test.axl", "freeze_candidate_tests")
 load("./generate_config_reference_test.axl", "generate_config_reference_tests")
 load("./generate_kip_matrix_test.axl", "generate_kip_matrix_tests")
 load("./kafka_system_tests_test.axl", "kafka_system_tests_tests")
 load("./mutants_shard_test.axl", "mutants_shard_tests")
 load("./testing.axl", "run_suites")
+load("./verify_release_test.axl", "verify_release_tests")
 
 SUITES = [
     changed_scope_tests,
@@ -51,10 +53,12 @@ SUITES = [
     check_support_matrix_tests,
     check_version_pins_tests,
     creusot_image_tag_tests,
+    freeze_candidate_tests,
     generate_config_reference_tests,
     generate_kip_matrix_tests,
     kafka_system_tests_tests,
     mutants_shard_tests,
+    verify_release_tests,
 ]
 
 def _impl(ctx: TaskContext) -> int:

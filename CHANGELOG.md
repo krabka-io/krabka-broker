@@ -34,6 +34,17 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   its evidence. [Capacity](docs/operations/capacity.md#measured-envelope) gains
   a measured envelope that names the workload, host and artifact of every
   number and claims no maximum.
+- `aspect verify-release` checks a published release from outside: the
+  signature, the SLSA provenance content, the SBOM attestation against the
+  uploaded `sbom.cdx.json`, the tested delivery digest, and the support
+  documents at the tagged commit. v1.0.0 to v1.0.5 fail its provenance check,
+  because their provenance predicate is empty.
+  [Release candidate qualification](docs/release-candidate-qualification.md)
+  records the result, the candidate gates and the proposed release blockers.
+- `aspect freeze-candidate` records a release candidate's commit, its
+  `[patch.crates-io]` sibling pins and its delivery image digest, and lists
+  where a qualification manifest differs from those pins.
+
 - The controller exports Kafka's event-queue metrics:
   `controller_event_queue_time_seconds` and
   `controller_event_queue_processing_time_seconds` (`EventQueueTimeMs`,
