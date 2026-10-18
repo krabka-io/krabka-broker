@@ -37,12 +37,26 @@ _HEX = "0123456789abcdef"
 # punctuation around a commit or a tag.
 _SEPARATORS = "`(),;"
 
+# What an escaped pipe stands for while a row is split on its real pipes. The
+# character is a control code, which no Markdown on the page holds.
+_ESCAPED_PIPE = "\x1f"
+
 def cells(line):
-    """The trimmed cells of a Markdown table row, or None for a non-row."""
+    """The trimmed cells of a Markdown table row, or None for a non-row.
+
+    An escaped pipe, a backslash before a `|`, is part of its cell, as Markdown
+    renders it, and comes back unchanged.
+    """
     row = line.strip()
     if len(row) < 2 or not row.startswith("|") or not row.endswith("|"):
         return None
-    return [cell.strip() for cell in row[1:-1].split("|")]
+    row = row.replace("\\|", _ESCAPED_PIPE)
+    if row.endswith(_ESCAPED_PIPE):
+        return None
+    return [
+        cell.strip().replace(_ESCAPED_PIPE, "\\|")
+        for cell in row[1:-1].split("|")
+    ]
 
 def is_separator(row):
     """Whether the cells are the `| :--- |` line under a header."""
@@ -133,9 +147,28 @@ def matrix_rows(lines):
             found.append((index + 1, row))
     return found
 
+def misheaded_tables(lines):
+    """The line number of every evidence table whose header is not `HEADER`.
+
+    A table is an evidence table when its header names both a `Status` and an
+    `Evidence` column. Only a table with exactly `HEADER` is checked row by row,
+    so a renamed column would otherwise take its whole table out of the check.
+    """
+    found = []
+    for index in range(len(lines) - 1):
+        header = cells(lines[index])
+        below = cells(lines[index + 1])
+        if header == None or below == None or not is_separator(below) or is_separator(header):
+            continue
+        if "Status" in header and "Evidence" in header and lines[index].strip() != HEADER:
+            found.append(index + 1)
+    return found
+
 def problems(lines):
     """Every complaint about the matrix page `lines`, in page order."""
     found = []
+    for number in misheaded_tables(lines):
+        found.append("line %d: an evidence table's header is not %s" % (number, HEADER))
     candidate = candidate_revision(lines)
     if not candidate:
         found.append("no `%s` line" % CANDIDATE_PREFIX.strip())

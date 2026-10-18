@@ -33,6 +33,12 @@ def _test_cells(_ctx):
     check_eq("indented", cells("  | a |  "), ["a"])
     check_eq("prose is not a row", cells("Some prose."), None)
     check_eq("an empty line is not a row", cells(""), None)
+    check_eq(
+        "an escaped pipe stays in its cell",
+        cells("| PLAINTEXT \\| SSL | `historical` |"),
+        ["PLAINTEXT \\| SSL", "`historical`"],
+    )
+    check_eq("an escaped closing pipe does not close the row", cells("| a \\|"), None)
 
 def _test_revisions(_ctx):
     check_eq("a short commit", revisions("`948e3cc8`"), ["948e3cc8"])
@@ -142,6 +148,26 @@ def _test_the_candidate_line_is_required_and_checked(_ctx):
         ["candidate revision `soon` is neither none nor a commit"],
     )
 
+def _test_an_escaped_pipe_does_not_add_a_cell(_ctx):
+    check_eq(
+        "five cells, one of them holding a pipe",
+        problems(_page([_row("historical", name = "PLAINTEXT \\| SSL")])),
+        [],
+    )
+
+def _test_a_renamed_evidence_table_is_reported(_ctx):
+    lines = _page([_row("historical")]) + [
+        "",
+        "| Combination | Status | Evidence | Test revision | Notes |",
+        "| :--- | :--- | :--- | :--- | :--- |",
+        _row("bogus", name = "TLS"),
+    ]
+    check_eq(
+        "the renamed table is not skipped in silence",
+        problems(lines),
+        ["line 11: an evidence table's header is not " + HEADER],
+    )
+
 def _test_a_short_row_is_reported(_ctx):
     check_eq(
         "four cells",
@@ -170,6 +196,8 @@ check_support_matrix_tests = suite("check-support-matrix", [
     _test_no_candidate_row_while_none_is_frozen,
     _test_a_candidate_row_names_the_candidate,
     _test_the_candidate_line_is_required_and_checked,
+    _test_an_escaped_pipe_does_not_add_a_cell,
+    _test_a_renamed_evidence_table_is_reported,
     _test_a_short_row_is_reported,
     _test_a_page_without_rows_is_reported,
 ])

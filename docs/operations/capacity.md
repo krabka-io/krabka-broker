@@ -125,8 +125,10 @@ the scrape with `metric_relabel_configs` when a dashboard does not need them.
 
 ## Measured envelope
 
-Every number in this section is a measurement of one workload on one host at
-one revision. The tables name all three. No number here was measured on a
+Every number in this section is a measurement of one workload on one host.
+Each table names the workload, the host and the build. The one exception is
+[Observations without a recorded build](#observations-without-a-recorded-build),
+which holds the results whose build was not recorded. No number here was measured on a
 release candidate: [#1401](https://github.com/krabka-io/krabka-broker/issues/1401)
 has not frozen one, and the [support matrix](support-matrix.md) tracks the
 reruns that the candidate needs.
@@ -192,10 +194,10 @@ compression.
 
 | Build | `preallocate` | Publish rate | End-to-end p99 |
 | :--- | :--- | ---: | ---: |
-| `v1.0.3` (`2de40082`) | `true` | 444,000 to 651,000/s | 95 ms to 58.6 s |
-| `main` with #1373 and #1376, revision not recorded | `true` | 801,000 to 903,000/s | 55 to 82 ms |
-| Same host, page cache | `false` | 920,000 to 1,110,000/s | 117 to 253 ms |
+| `v1.0.3` (`2de40082`), image `ghcr.io/krabka-io/krabka-broker:v1.0.3` | `true` | 444,000 to 651,000/s | 95 ms to 58.6 s |
 
+The later runs of the same workload did not record their build. They are
+under [Observations without a recorded build](#observations-without-a-recorded-build).
 The drives were not trimmed between some of these trials.
 [A later comment](https://github.com/krabka-io/krabka-broker/issues/1370#issuecomment-6157203260)
 shows that this moved direct-write throughput by up to a factor of three. The
@@ -204,7 +206,10 @@ changed the write alignment after these runs and has no benchmark-host rerun.
 
 ### VM-indicative before and after
 
-These rows say only that a change moved a number on the cloud VM.
+These rows say only that a change moved a number on the cloud VM. Each one
+compares two builds that differ only by the change in the Source column. The
+pull request names the builds it measured. Where it names a base commit, the
+row gives it.
 
 | Change | Workload | Before | After | Source |
 | :--- | :--- | :--- | :--- | :--- |
@@ -212,6 +217,20 @@ These rows say only that a change moved a number on the cloud VM.
 | As above | RF3, 6 partitions, 20,000 records/s, Kafka 4.0.0 client | end-to-end p99 75 ms | 37 ms, with overlapping ranges | As above |
 | krabka-client-rs consumer metadata refresh | RF3, 6 partitions, 20,000 records/s | consumer end-to-end p99 480 ms | 10 ms | [#1394 comment](https://github.com/krabka-io/krabka-broker/issues/1394#issuecomment-6227085667) |
 | `O_DIRECT` alignment to the filesystem block | `log-iobench` `direct_append`, 1 MiB batches | 110 MB/s | 430 MB/s | [#1438](https://github.com/krabka-io/krabka-broker/pull/1438), six interleaved rounds |
+
+### Observations without a recorded build
+
+These come from [#1370](https://github.com/krabka-io/krabka-broker/issues/1370#issuecomment-6156154004)
+on the OpenMessaging benchmark host, with the workload of
+[One partition at maximum rate](#one-partition-at-maximum-rate). The run did
+not record the revision or the image of the broker. So these rows are not
+bound to any build, and they cannot support a claim about a release. A rerun
+that records its artifact replaces them.
+
+| Build | `preallocate` | Publish rate | End-to-end p99 |
+| :--- | :--- | ---: | ---: |
+| `main` with #1373 and #1376, revision not recorded | `true` | 801,000 to 903,000/s | 55 to 82 ms |
+| Not recorded, same host, page cache | `false` | 920,000 to 1,110,000/s | 117 to 253 ms |
 
 ### Not measured
 
