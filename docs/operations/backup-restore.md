@@ -109,6 +109,75 @@ Credentials work the way they do for the broker's own tiered storage. Leave
 AWS credential chain applies, so a capture under an instance role or under
 Workload Identity puts no secret on a command line.
 
+### Secured clusters
+
+On a cluster with TLS, SASL or an authorizer, pass a Kafka client-properties
+file with `--command-config`, as for the JVM tools. `capture` and
+`restore-offsets` read the same file. The tool reads `security.protocol`,
+`sasl.mechanism` and `sasl.jaas.config`, and it reads TLS trust and client
+identity from PEM files:
+
+```properties
+security.protocol=SASL_SSL
+ssl.truststore.type=PEM
+ssl.truststore.location=/etc/krabka/backup/ca.pem
+sasl.mechanism=SCRAM-SHA-512
+sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="backup" password="<password>";
+```
+
+For mutual TLS, set `security.protocol=SSL` and add
+`ssl.keystore.type=PEM`, `ssl.keystore.location=<client certificate PEM>` and
+`ssl.key.location=<client private-key PEM>`. The tool never copies the file
+into the archive or prints it. Keep its permissions tight, because it holds
+the password or the key path.
+
+Give the backup principal only what the capture reads:
+
+| Resource | Operations | Why |
+| :--- | :--- | :--- |
+| Each captured group | `Describe` | Read the committed offsets. |
+| Each captured topic | `Describe`, `Read` | Resolve the partitions of the committed offsets. |
+| Each diskless topic | `DescribeConfigs` | Keep empty diskless partitions in the recovery topology. |
+| `__diskless_wal_index` | `Describe`, `Read` | Read the diskless index. A capture never writes to it. |
+
+Restoring offsets into the restored cluster needs `Describe` and `Read` on
+each captured group and each captured topic. Grant every row on the group and
+topic prefixes that the backup policy covers, not on `*`.
+
+In Kubernetes, put the properties file and the CA in a Secret, and mount it
+into the `CronJob` beside the data volume. The changes to the example above:
+
+```yaml
+              args:
+                - capture
+                - --log-dir=/var/lib/krabka
+                - --bootstrap-server=krabka-0.krabka:9094
+                - --command-config=/etc/krabka/backup/client.properties
+                - --archive-s3-bucket=krabka-tier
+                - --archive-s3-region=eu-west-1
+                - --archive-prefix=prod/
+              volumeMounts:
+                - name: data
+                  mountPath: /var/lib/krabka
+                  readOnly: true
+                - name: backup-client
+                  mountPath: /etc/krabka/backup
+                  readOnly: true
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: data-krabka-0
+            - name: backup-client
+              secret:
+                # Holds client.properties and ca.pem, and for mutual TLS the
+                # client certificate and key.
+                secretName: krabka-backup-client
+```
+
+Point `--bootstrap-server` at the listener that the properties file speaks
+to. On the three-node example in [Deploy](deploy.md#configure), that is the
+`CLIENT` listener on 9094.
+
 ## How often
 
 The right interval is the amount of recovery quality the operator will accept

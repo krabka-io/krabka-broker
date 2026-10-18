@@ -289,7 +289,7 @@ The workload is a payment ledger. Upstream services write payment events in tran
 
 ### Installation
 
-The operator installs the broker image by digest on three hosts, formats each log directory with `krabka-format` and a KIP-853 initial voter set, and writes the TOML file. [Format the log directory](deploy.md#format-the-log-directory), [Configure](deploy.md#configure) and [Start](deploy.md#start) describe each step. The `krabka-backup capture` job runs hourly through the operator's own scheduler with an mTLS client properties file. Gap issue [#1500](https://github.com/krabka-io/krabka-broker/issues/1500) asks the backup guide to show that file.
+The operator installs the broker image by digest on three hosts, formats each log directory with `krabka-format` and a KIP-853 initial voter set, and writes the TOML file. [Format the log directory](deploy.md#format-the-log-directory), [Configure](deploy.md#configure) and [Start](deploy.md#start) describe each step. The `krabka-backup capture` job runs hourly through the operator's own scheduler with an mTLS client properties file, as [Secured clusters](backup-restore.md#secured-clusters) describes.
 
 Installation exit checks:
 
@@ -440,7 +440,7 @@ Writing the plans found these gaps and defects in the existing documents. Each o
 | [#1497](https://github.com/krabka-io/krabka-broker/issues/1497) | The migration guide does not say how to create tiered or compacted target topics before the mirror starts. | A |
 | [#1498](https://github.com/krabka-io/krabka-broker/issues/1498) | No document describes the schema registry cutover that the migration guide says is needed. | A |
 | [#1499](https://github.com/krabka-io/krabka-broker/issues/1499) | The backup guide does not say that compacted user topics and `_schemas` are never in the archive, so a restore does not bring them back. | A drill |
-| [#1500](https://github.com/krabka-io/krabka-broker/issues/1500) | The backup guide and the restore runbook show no `--command-config` for a secured cluster, show the `--worm-*` flags as always needed, and say that a restored cluster has a new cluster id after a step that keeps the old one. | A and B drills |
+| [#1500](https://github.com/krabka-io/krabka-broker/issues/1500) | The backup guide and the restore runbook showed no `--command-config` for a secured cluster, showed the `--worm-*` flags as always needed (they fail a capture with no diskless boundary), and said that a restored cluster has a new cluster id after a step that keeps the old one. [Secured clusters](backup-restore.md#secured-clusters) and the runbook now cover each one. | None. Closed by the same pull request as this document. |
 | [#1501](https://github.com/krabka-io/krabka-broker/issues/1501) | [Deploy](deploy.md) had no krabka-operator installation path, but [Scale a cluster](scaling.md) and the qualified manifest use the operator. [Kubernetes operator](deploy.md#kubernetes-operator) now describes it. | None. Closed by the same pull request as this document. |
 | [#1502](https://github.com/krabka-io/krabka-broker/issues/1502) | [Kubernetes](deploy.md#kubernetes) says the image is published for amd64 only, but [Install](deploy.md#install) says release tags are amd64 and arm64 indexes. | None |
 | [#1503](https://github.com/krabka-io/krabka-broker/issues/1503) | The ecosystem matrix does not name Kafka Streams, KIP-848 consumers or share-group consumers, though suites cover each. | None |
