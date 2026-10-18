@@ -5,7 +5,7 @@
 use {
     crate::{
         args::{RestoreOptions, restore_args},
-        fixture::build_fixture,
+        fixture::{Fixture, build_fixture},
         restored::fresh_restore,
     },
     assert2::check,
@@ -17,31 +17,68 @@ use {
         restore,
     },
     ring::{rand::SystemRandom, signature::Ed25519KeyPair},
+    std::{path::PathBuf, sync::Arc},
+    tempfile::TempDir,
 };
 
-#[tokio::test]
-async fn authenticated_object_count_covers_only_the_selected_topic() {
+/// A fixture whose archive one WORM key signed, with the key and heads an
+/// authenticated restore of it trusts.
+struct Signed {
+    fixture: Fixture,
+    _keys: TempDir,
+    public_key: PathBuf,
+    heads: Vec<(String, String)>,
+}
+
+fn signed_fixture() -> Signed {
     let fixture = build_fixture();
     let keys = tempfile::tempdir().unwrap();
     let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
-    let signer = std::sync::Arc::new(
-        FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), "key".to_owned()).unwrap(),
-    );
+    let signer =
+        Arc::new(FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), "key".to_owned()).unwrap());
     let public_key = keys.path().join("key.pub");
     std::fs::write(&public_key, signer.public_key()).unwrap();
     let heads = fixture.sign_worm(&[signer]);
+    Signed {
+        fixture,
+        _keys: keys,
+        public_key,
+        heads,
+    }
+}
+
+/// Restore `orders` from a signed fixture, authenticated against its key and
+/// pinned to its heads.
+async fn restore_orders(signed: &Signed) -> RestoreReport {
     let mut extra = vec![
         "--topic".to_owned(),
         "orders".to_owned(),
         "--worm-key-id".to_owned(),
         "key".to_owned(),
         "--worm-public-key".to_owned(),
-        public_key.display().to_string(),
+        signed.public_key.display().to_string(),
     ];
-    for (partition, head) in heads {
+    for (partition, head) in &signed.heads {
         extra.push("--worm-expect-head".to_owned());
         extra.push(format!("{partition}={head}"));
     }
+    let target = tempfile::tempdir().unwrap();
+    let refs = extra.iter().map(String::as_str).collect::<Vec<_>>();
+    let args = restore_args(
+        signed.fixture.archive_root.path(),
+        target.path(),
+        RestoreOptions {
+            extra: &refs,
+            ..Default::default()
+        },
+    );
+    restore(&args).await.unwrap()
+}
+
+#[tokio::test]
+async fn authenticated_object_count_covers_only_the_selected_topic() {
+    let signed = signed_fixture();
+    let fixture = &signed.fixture;
     let expected = std::fs::read_dir(fixture.archive_root.path())
         .unwrap()
         .filter_map(Result::ok)
@@ -58,14 +95,7 @@ async fn authenticated_object_count_covers_only_the_selected_topic() {
                 .ends_with(MANIFEST_SUFFIX)
         })
         .count() as u64;
-    let target = tempfile::tempdir().unwrap();
-    let refs = extra.iter().map(String::as_str).collect::<Vec<_>>();
-    let args = restore_args(fixture.archive_root.path(), target.path(), RestoreOptions {
-        extra: &refs,
-        ..Default::default()
-    });
-
-    let report = restore(&args).await.unwrap();
+    let report = restore_orders(&signed).await;
     check!(report.authentication.unwrap().objects == expected);
 }
 
@@ -75,15 +105,8 @@ async fn authenticated_object_count_covers_only_the_selected_topic() {
 /// covers it, and the pinned heads prove no manifest was taken away.
 #[tokio::test]
 async fn an_upload_without_its_manifest_is_skipped_by_an_authenticated_restore() {
-    let fixture = build_fixture();
-    let keys = tempfile::tempdir().unwrap();
-    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
-    let signer = std::sync::Arc::new(
-        FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), "key".to_owned()).unwrap(),
-    );
-    let public_key = keys.path().join("key.pub");
-    std::fs::write(&public_key, signer.public_key()).unwrap();
-    let heads = fixture.sign_worm(&[signer]);
+    let signed = signed_fixture();
+    let fixture = &signed.fixture;
 
     // Copy one archived segment of `orders` under a base offset past its end,
     // with no manifest: the bytes of an upload the loss interrupted.
@@ -144,26 +167,7 @@ async fn an_upload_without_its_manifest_is_skipped_by_an_authenticated_restore()
         }
     }
 
-    let mut extra = vec![
-        "--topic".to_owned(),
-        "orders".to_owned(),
-        "--worm-key-id".to_owned(),
-        "key".to_owned(),
-        "--worm-public-key".to_owned(),
-        public_key.display().to_string(),
-    ];
-    for (partition, head) in heads {
-        extra.push("--worm-expect-head".to_owned());
-        extra.push(format!("{partition}={head}"));
-    }
-    let target = tempfile::tempdir().unwrap();
-    let refs = extra.iter().map(String::as_str).collect::<Vec<_>>();
-    let args = restore_args(fixture.archive_root.path(), target.path(), RestoreOptions {
-        extra: &refs,
-        ..Default::default()
-    });
-
-    let report = restore(&args).await.unwrap();
+    let report = restore_orders(&signed).await;
     let mut skipped: Vec<(String, i32, String)> = report
         .skipped
         .iter()
