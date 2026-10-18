@@ -29,6 +29,9 @@ fails the build when the series drift.
   Kafka protocol, and which need broker-side JMX or a JVM plugin and therefore
   do not. Cruise Control is in the second list; the lag monitors that decode
   `__consumer_offsets` are in the first.
+- [Release support matrix](support-matrix.md): the clients, builds, security
+  modes, storage modes and deployments with evidence, the revision each one
+  ran at, the upgrade and rollback rules, and the known limitations.
 - [Migrate from Apache Kafka](migrate-from-kafka.md): how to move a running
   Kafka cluster onto krabka with MirrorMaker 2, and how to cut consumers and
   producers over. Names what the mirror carries, what it does not, and what

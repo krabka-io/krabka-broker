@@ -23,6 +23,7 @@ load("./check_mutants_config_test.axl", "check_mutants_config_tests")
 load("./check_mutants_skip_test.axl", "check_mutants_skip_tests")
 load("./check_qualification_test.axl", "check_qualification_tests")
 load("./check_scripts_test.axl", "check_scripts_tests")
+load("./check_support_matrix_test.axl", "check_support_matrix_tests")
 load("./check_version_pins_test.axl", "check_version_pins_tests")
 load("./creusot_image_tag_test.axl", "creusot_image_tag_tests")
 load("./generate_config_reference_test.axl", "generate_config_reference_tests")
@@ -47,6 +48,7 @@ SUITES = [
     check_mutants_config_tests,
     check_mutants_skip_tests,
     check_scripts_tests,
+    check_support_matrix_tests,
     check_version_pins_tests,
     creusot_image_tag_tests,
     generate_config_reference_tests,

@@ -25,6 +25,15 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Added
 
+- A [release support matrix](docs/operations/support-matrix.md) (issue
+  #1400). Each client, broker build, security mode, storage mode, deployment
+  and upgrade path has a status, a link to its evidence and the revision it ran
+  at. Untested and failing combinations are listed as such, with the issue
+  that owns each gap, and the page gathers the upgrade and rollback rules and
+  the known limitations. `aspect check-support-matrix` fails a row that lacks
+  its evidence. [Capacity](docs/operations/capacity.md#measured-envelope) gains
+  a measured envelope that names the workload, host and artifact of every
+  number and claims no maximum.
 - The controller exports Kafka's event-queue metrics:
   `controller_event_queue_time_seconds` and
   `controller_event_queue_processing_time_seconds` (`EventQueueTimeMs`,

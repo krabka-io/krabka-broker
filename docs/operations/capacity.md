@@ -2,9 +2,10 @@
 
 How to size a krabka-broker cluster and how to read the series that say
 whether the size is right. The numbers here are the ones the broker enforces
-or defaults to. The [broker performance result](performance-results.md) is the
-measured reference point; re-run its workload on production hardware before
-using it as a capacity promise.
+or defaults to. The [measured envelope](#measured-envelope) lists every
+measured throughput, latency and partition number with its workload, host and
+artifact. None of them is a capacity promise. Re-run the workload on
+production hardware before you size a cluster from it.
 
 ## What a broker spends
 
@@ -121,3 +122,103 @@ per-topic families one per topic. The reference run measured at most 2.38 MB,
 27,249 series and a 1.121-second scrape at roughly 10,000 hosted replicas.
 Scrape at 30s or 60s rather than 15s, and drop the per-partition families at
 the scrape with `metric_relabel_configs` when a dashboard does not need them.
+
+## Measured envelope
+
+Every number in this section is a measurement of one workload on one host at
+one revision. The tables name all three. No number here was measured on a
+release candidate: [#1401](https://github.com/krabka-io/krabka-broker/issues/1401)
+has not frozen one, and the [support matrix](support-matrix.md) tracks the
+reruns that the candidate needs.
+
+Read the tables with these rules:
+
+- **No maximum.** A row says what passed at the load it ran. The highest tier
+  that passed is the highest tested tier, not the broker's maximum. Do not
+  read a ceiling from it.
+- **VM-indicative rows** come from a 4-vCPU cloud VM with one virtio disk.
+  They show the direction of a change between two builds on that VM. Do not
+  compare them with the benchmark-host rows, and do not size from them.
+- **Same contract only.** A Kafka number beside a krabka number compares the
+  two on that contract. It does not rank the brokers in general.
+
+### Hosts
+
+| Host | Hardware | Broker resources |
+| :--- | :--- | :--- |
+| Benchmark host, Kind | AMD EPYC 4344P, 16 logical CPUs, about 61 GiB RAM, RAID-backed disk | Three combined broker/controller pods, each 2 CPU and 2 GiB. |
+| Benchmark host, OpenMessaging | ext4 on md RAID1 of two NVMe drives, Linux 7.0 | One broker, 4 CPU and 10 GiB. |
+| Cloud VM (VM-indicative) | 4 vCPU, 15 GiB, ext4 on one virtio disk | Three combined broker/controllers on cores 0 to 2, client on core 3. |
+
+### RF3 throughput and latency
+
+All rows: RF 3, `min.insync.replicas=2`, `acks=all`, idempotence, 1 KiB
+records, 12 partitions, a 65,536-byte batch and a 5 ms linger, on the
+benchmark host under Kind.
+
+| Workload | records/s | p99 | CPU per record | Artifact | Source |
+| :--- | ---: | ---: | ---: | :--- | :--- |
+| Random, LZ4, unlimited, Kafka 4.3.1 client | 342,679 | 553.9 ms | 7.293 µs | Baseline `40194573` with the release changes, image `sha256:66999791…` with the binary mounted | [Kafka 4.3.1 experiment](performance-kafka-4.3.1.md#three-brokers-rf3minisr2), 2026-09-30, median of three topics |
+| Random, LZ4, 20,000 records/s, Kafka 4.3.1 client | 19,997 | 4.0 ms | 17.073 µs | As above | As above |
+| LZ4, saturation, 100,000 records, Kafka 4.0.0 client | 172,020 | 311.533 ms | not recorded | `106ae27b`, image `sha256:d46923ca…` | [Broker performance results](performance-results.md#kafka-comparison), median of three runs |
+| LZ4, 5,000 records/s, Kafka 4.0.0 client | 4,999 | 7.790 ms | not recorded | As above | As above |
+
+The two experiments ran different revisions, clients and record counts. Their
+saturation numbers differ by a factor of two, so use neither as the RF3
+throughput of a later build.
+
+### Partition count
+
+From [Broker performance results](performance-results.md#partition-envelope),
+at `106ae27b`. Each tier ran 600,000 acknowledged records at 1,000 records/s
+while the test deleted the active controller and moved 1,000 partitions to a
+fourth broker.
+
+| User partitions | Replicas on the largest broker | Failover | p99 | Result |
+| ---: | ---: | ---: | ---: | :--- |
+| 1,000 | 1,000 | 22 s | 10,084 ms | pass |
+| 10,000 | 9,667 | 23 s | 12,756 ms | pass |
+
+10,000 is the highest tested tier. No tier above it ran, so this page claims
+no partition limit.
+
+### One partition at maximum rate
+
+From [#1370](https://github.com/krabka-io/krabka-broker/issues/1370#issuecomment-6156154004),
+on the OpenMessaging benchmark host: workload
+`max-rate-1-topic-1-partition-1p-1c-1kb`, RF 1, the Kafka 3.6.1 client,
+`acks=all`, idempotence, one in-flight request, 1 ms linger and no
+compression.
+
+| Build | `preallocate` | Publish rate | End-to-end p99 |
+| :--- | :--- | ---: | ---: |
+| `v1.0.3` (`2de40082`) | `true` | 444,000 to 651,000/s | 95 ms to 58.6 s |
+| `main` with #1373 and #1376, revision not recorded | `true` | 801,000 to 903,000/s | 55 to 82 ms |
+| Same host, page cache | `false` | 920,000 to 1,110,000/s | 117 to 253 ms |
+
+The drives were not trimmed between some of these trials.
+[A later comment](https://github.com/krabka-io/krabka-broker/issues/1370#issuecomment-6157203260)
+shows that this moved direct-write throughput by up to a factor of three. The
+runner trims before every trial since then. [#1438](https://github.com/krabka-io/krabka-broker/pull/1438)
+changed the write alignment after these runs and has no benchmark-host rerun.
+
+### VM-indicative before and after
+
+These rows say only that a change moved a number on the cloud VM.
+
+| Change | Workload | Before | After | Source |
+| :--- | :--- | :--- | :--- | :--- |
+| Delete retired segments outside the log lock | RF3, 1 partition, saturation, `krabka-bench-driver` | 89,300 records/s, ack p99.9 638 ms, at `4e342a55` | 109,700 records/s, ack p99.9 93 ms | [#1457](https://github.com/krabka-io/krabka-broker/pull/1457), five interleaved rounds |
+| As above | RF3, 6 partitions, 20,000 records/s, Kafka 4.0.0 client | end-to-end p99 75 ms | 37 ms, with overlapping ranges | As above |
+| krabka-client-rs consumer metadata refresh | RF3, 6 partitions, 20,000 records/s | consumer end-to-end p99 480 ms | 10 ms | [#1394 comment](https://github.com/krabka-io/krabka-broker/issues/1394#issuecomment-6227085667) |
+| `O_DIRECT` alignment to the filesystem block | `log-iobench` `direct_append`, 1 MiB batches | 110 MB/s | 430 MB/s | [#1438](https://github.com/krabka-io/krabka-broker/pull/1438), six interleaved rounds |
+
+### Not measured
+
+- **The RF3 regression budgets.** The contract `rf3-regression-v1` is checked
+  in, and [#1395](https://github.com/krabka-io/krabka-broker/issues/1395) has
+  no run of it on the benchmark host yet. Its budgets are not calibrated.
+- **TLS, SASL, tiered and diskless throughput.** No run above used
+  authentication, encryption, a remote tier or the diskless WAL.
+- **Sustained load.** The 72-hour soak has not run.
+  [#1393](https://github.com/krabka-io/krabka-broker/issues/1393) owns it.
