@@ -38,6 +38,11 @@ fails the build when the series drift.
   records and nothing else, so the RLMM snapshot, the controller metadata
   checkpoint and the committed group offsets have to be captured before the
   day they are needed.
+- [Pilot acceptance plans](pilot-acceptance-plans.md): the two workload
+  plans an operator who did not build krabka follows to install, migrate
+  from Apache Kafka, cut over, roll back and run a recovery drill, with the
+  checks that decide each phase, what counts as a maintainer intervention,
+  and how independent acceptance runs are labeled.
 - [Audit](../../crates/audit/README.md#which-rpcs-are-audited): which admin
   RPCs write an `AdminOperation` record to `__krabka_audit`, what each record
   names, and what is redacted from it.
