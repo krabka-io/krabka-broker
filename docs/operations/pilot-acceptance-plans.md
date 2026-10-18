@@ -152,11 +152,11 @@ The partition count stays inside the 10,000-partition tier that [Broker performa
 - The client listener is `SaslSsl` with a server certificate (one-way TLS) and `SCRAM-SHA-512`. The inter-broker listener follows the operator's own network policy.
 - The authorizer is `type = "simple"`, with `allow_everyone_if_no_acl_found = false`. The admin principal is the only `super_users` entry.
 - Each producer, consumer group, the registry, the lag monitor, MirrorMaker 2 and `krabka-backup` has its own SCRAM principal and only the ACLs it needs.
-- The operator creates SCRAM credentials on krabka with `kafka-configs`. MirrorMaker 2 does not carry them.
+- The operator creates each SCRAM principal on krabka as a `KafkaUser`, which gives it a generated password in a Secret. MirrorMaker 2 does not carry credentials. A client that has to keep its source password gets it set with `kafka-configs` instead, and the evidence records which principals took which path.
 
 ### Installation
 
-The operator installs the krabka-operator chart and the broker image by digest from the candidate's qualified manifest. Gap issue [#1501](https://github.com/krabka-io/krabka-broker/issues/1501) blocks this phase until [Deploy](deploy.md) describes that path. The broker configuration sets `[remote_storage]` for the archive bucket, the `SaslSsl` listener, `[authorization]` and `[sasl_plain]` only if PLAIN is in use. The operator then runs the `krabka-backup capture` CronJob from [Capture the inputs](backup-restore.md#capture-the-inputs), hourly, with the backup principal.
+The operator installs the krabka-operator chart and the broker image by digest from the candidate's qualified manifest, as [Kubernetes operator](deploy.md#kubernetes-operator) describes. The `Kafka` resource sets `tieredStorage` for the archive bucket, a client listener with `tls: true` and `scram-sha-512`, and `authorization` of `type: simple`. Each principal is a `KafkaUser`, and each topic is a `KafkaTopic`. The operator then runs the `krabka-backup capture` CronJob from [Capture the inputs](backup-restore.md#capture-the-inputs), hourly, with the backup principal.
 
 Installation exit checks:
 
@@ -246,7 +246,7 @@ Reconciliation checks:
 
 | Phase | Sections |
 | :--- | :--- |
-| P1 | [Install](deploy.md#install), [Kubernetes](deploy.md#kubernetes), [Configure](deploy.md#configure), [Health checks](deploy.md#health-checks), [Capture the inputs](backup-restore.md#capture-the-inputs), [How often](backup-restore.md#how-often) |
+| P1 | [Install](deploy.md#install), [Kubernetes operator](deploy.md#kubernetes-operator), [Health checks](deploy.md#health-checks), [Capture the inputs](backup-restore.md#capture-the-inputs), [How often](backup-restore.md#how-often) |
 | P2 | [Before you start](migrate-from-kafka.md#before-you-start), [Configure MirrorMaker 2](migrate-from-kafka.md#configure-mirrormaker-2), [Watch the mirror catch up](migrate-from-kafka.md#watch-the-mirror-catch-up), [ACL sync](migrate-from-kafka.md#acl-sync) |
 | P3 | [Cut the consumers over](migrate-from-kafka.md#cut-the-consumers-over), [Cut the producers over](migrate-from-kafka.md#cut-the-producers-over), [Clean up](migrate-from-kafka.md#clean-up) |
 | P4 | [broker-down](runbooks/broker-down.md), [under-replicated-partitions](runbooks/under-replicated-partitions.md), [consumer-group-lag](runbooks/consumer-group-lag.md), [remote-copy-lag](runbooks/remote-copy-lag.md), [log-cleaner-stalled](runbooks/log-cleaner-stalled.md), and any runbook whose alert fires |
@@ -441,7 +441,7 @@ Writing the plans found these gaps and defects in the existing documents. Each o
 | [#1498](https://github.com/krabka-io/krabka-broker/issues/1498) | No document describes the schema registry cutover that the migration guide says is needed. | A |
 | [#1499](https://github.com/krabka-io/krabka-broker/issues/1499) | The backup guide does not say that compacted user topics and `_schemas` are never in the archive, so a restore does not bring them back. | A drill |
 | [#1500](https://github.com/krabka-io/krabka-broker/issues/1500) | The backup guide and the restore runbook show no `--command-config` for a secured cluster, show the `--worm-*` flags as always needed, and say that a restored cluster has a new cluster id after a step that keeps the old one. | A and B drills |
-| [#1501](https://github.com/krabka-io/krabka-broker/issues/1501) | [Deploy](deploy.md) has no krabka-operator installation path, but [Scale a cluster](scaling.md) and the qualified manifest use the operator. | A install |
+| [#1501](https://github.com/krabka-io/krabka-broker/issues/1501) | [Deploy](deploy.md) had no krabka-operator installation path, but [Scale a cluster](scaling.md) and the qualified manifest use the operator. [Kubernetes operator](deploy.md#kubernetes-operator) now describes it. | None. Closed by the same pull request as this document. |
 | [#1502](https://github.com/krabka-io/krabka-broker/issues/1502) | [Kubernetes](deploy.md#kubernetes) says the image is published for amd64 only, but [Install](deploy.md#install) says release tags are amd64 and arm64 indexes. | None |
 | [#1503](https://github.com/krabka-io/krabka-broker/issues/1503) | The ecosystem matrix does not name Kafka Streams, KIP-848 consumers or share-group consumers, though suites cover each. | None |
 
@@ -458,7 +458,7 @@ Writing the plans found these gaps and defects in the existing documents. Each o
 - **MirrorMaker 2** ([KIP-382](https://cwiki.apache.org/confluence/display/KAFKA/KIP-382%3A+MirrorMaker+2.0)). Both plans run the unmodified 4.3.1 MirrorMaker 2. The offset translation and its replay bound are MirrorMaker 2's behavior, not krabka's. The plans measure the re-reads and never accept a skipped record. The ACL sync behavior that Plan A relies on is MirrorMaker 2's own: it copies topic ACLs and does not copy a `WRITE` grant.
 - **Transactions** (KIP-98, KIP-447, and [KIP-890](https://cwiki.apache.org/confluence/display/KAFKA/KIP-890%3A+Transactions+Server-Side+Defense)). Plan B checks `read_committed` visibility and the absence of hanging transactions with Kafka's own tools. A transaction never crosses clusters. The quiesce stage makes sure that none is open at the switch, because MirrorMaker 2 carries no transaction state.
 - **Groups** (KIP-848, and KIP-1071 if M6 picks it). Plan B's downstream consumer uses `group.protocol=consumer`. Plan A keeps the classic protocol, so the two plans cover both group protocols.
-- **Security** (KIP-371, and [KIP-554](https://cwiki.apache.org/confluence/display/KAFKA/KIP-554%3A+Add+Broker-side+SCRAM+Config+API)). Plan A creates SCRAM credentials with `kafka-configs`. Plan B maps certificate DNs with `ssl.principal.mapping.rules`, which krabka reads per listener as `principal_mapping_rules`.
+- **Security** (KIP-371, and [KIP-554](https://cwiki.apache.org/confluence/display/KAFKA/KIP-554%3A+Add+Broker-side+SCRAM+Config+API)). Plan A creates SCRAM principals as `KafkaUser` resources, or with `kafka-configs` where a client keeps its source password. Plan B maps certificate DNs with `ssl.principal.mapping.rules`, which krabka reads per listener as `principal_mapping_rules`.
 - **Tiered storage** ([KIP-405](https://cwiki.apache.org/confluence/display/KAFKA/KIP-405%3A+Kafka+Tiered+Storage)). As in Kafka, a compacted topic cannot be tiered. The plans keep compacted topics local and protect them outside the archive.
 - **Feature levels** ([KIP-584](https://cwiki.apache.org/confluence/display/KAFKA/KIP-584%3A+Versioning+scheme+for+features), [KIP-778](https://cwiki.apache.org/confluence/display/KAFKA/KIP-778%3A+KRaft+to+KRaft+Upgrades)). Version rollback eligibility follows the finalized levels, as in Kafka.
 

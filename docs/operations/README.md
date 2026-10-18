@@ -8,9 +8,10 @@ fails the build when the series drift.
 
 ## Guides
 
-- [Deploy](deploy.md): install the image, the binary or the reference
-  Kubernetes manifests. Format a log directory, write the config file, and
-  start, stop and roll a cluster. Wire the `/healthz` and `/readyz` probes.
+- [Deploy](deploy.md): install the image, the binary, the reference
+  Kubernetes manifests or the krabka-operator chart. Format a log directory,
+  write the config file, and start, stop and roll a cluster. Wire the
+  `/healthz` and `/readyz` probes.
 - [Capacity](capacity.md): what a broker spends per partition and per byte,
   how to size disk, network and voters, and how to read the phase families.
 - [Performance qualification](performance-qualification.md): reproduce the
