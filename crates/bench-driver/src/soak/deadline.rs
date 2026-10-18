@@ -327,6 +327,7 @@ mod tests {
             kind: kind.to_owned(),
             target: "broker-1".to_owned(),
             role: role.to_owned(),
+            node: None,
             injected_unix_ms: STARTED_MS + offset_ms,
             cleared_unix_ms: Some(STARTED_MS + offset_ms + 1_000),
             cleanup_error: None,

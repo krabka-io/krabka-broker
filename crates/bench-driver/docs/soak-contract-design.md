@@ -139,6 +139,18 @@ The self-check contract names one idempotent path and one recovery. After the lo
 
 The same proof also runs with no cluster. `krabka-soak-check self-check` without `--evidence` builds a synthetic perfect run of the contract and removes one record from it. This runs in every pull request. It proves that each checked-in contract is consistent, because a perfect run of a soak contract passes. It also proves that the verdict depends on the evidence, because the same run with one record removed fails and names that record.
 
+### A lifecycle is a contract whose plan holds transitions
+
+A lifecycle run upgrades, reconfigures and rolls back a cluster under the same load as a soak, so it is a third profile of the same contract, not a second harness. `profile: lifecycle` adds a `lifecycle` section, which declares the source release by image digest with the feature ranges that it advertises, and three transition kinds to the fault plan:
+
+- `roll` stops one broker with a controlled shutdown and starts it again on the same data from the source or the target image. It is measured as a graceful restart: leader failover, ISR rejoin, and controller failover when it lands on the controller.
+- `certificate_rotation` gives one broker's TLS listener a certificate from a new CA, with the same DN and SAN, and swaps its keystore and truststore through the dynamic listener configuration. It is measured until a handshake that trusts only the new CA completes.
+- `reassignment` drains one broker of a path with `AlterPartitionReassignments`. It is measured until no partition of the path is reassigning and every one has its planned replicas and a full ISR. The cluster needs more brokers than the replication factor, so the contract may set `brokers` above three.
+
+A transition targets a broker by index and happens once, so the plan says which broker moves and in what order. After each transition the executor writes a checkpoint: the image each node runs, the finalized feature levels, whether a rollback to the source is still supported, every path read back at `read_uncommitted` against the records its producer had been acknowledged, and the topic and rotated-broker configuration against what the run set. The judge adds four rules to the soak verdict. The source must advertise the declared ranges, every checkpoint must reconcile, a rolled broker must run its side's image, and a roll to the source must not follow a checkpoint that ruled the rollback out. `lifecycle::rollback` derives that answer from the rule of `docs/persisted_formats.md`: a cluster may roll back while every finalized level is one that the source supports.
+
+The executor also runs the rollback that the rule forbids, on one node: the candidate finalizes an unstable `metadata.version`, and the source must refuse to start before it changes the log. `docs/qualification.md` states the lifecycle contract and the gate that runs it on release images.
+
 ## Integration
 
 **Cluster fixture.** The executor uses `crates/broker/tests/soak/cluster.rs`, which the four-hour `soak` lane also uses. A change to that fixture selects the `soak_contract` suite on a pull request.
@@ -173,5 +185,5 @@ The contract tests Kafka semantics. It does not define new semantics.
 - `crates/bench-driver/src/soak/*.rs`: unit tests for every validation rule, the seeded schedule, sequence sets, every reconciliation class, the deadline and budget checks, and the self-check judge.
 - `crates/bench-driver/tests/contract_files.rs`: each contract under `bench/soak/` validates, and a synthetic run of it is judged as its profile says.
 - `crates/bench-driver/tests/soak_check_cli.rs`: `krabka-soak-check` as an operator runs it.
-- `crates/broker/tests/soak_contract.rs`: the live executor, and the self-check against a real three-broker cluster.
+- `crates/broker/tests/soak_contract.rs`: the live executor, the self-check against a real three-broker cluster, the lifecycle contract against two release images, and the refused rollback.
 - `crates/broker/tests/soak.rs`: the four-hour resource-drift soak that this design extends.

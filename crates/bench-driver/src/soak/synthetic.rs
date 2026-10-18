@@ -10,13 +10,14 @@
 
 use {
     super::{
-        contract::{Contract, Isolation, LatencyBudget, Semantics, Target},
+        contract::{Contract, FaultKind, Isolation, LatencyBudget, Semantics, Target},
         evidence::{
             CommitCheck, Evidence, FINAL_COMMIT_CHECK, FaultRecord, InjectedLoss, LatencySummary,
             PathMeasurement, ProducerLedger, ReaderLedger, RecoveryRecord, TxnLedger, TxnOutcome,
         },
         ledger::SeqSet,
-        schedule::expand,
+        lifecycle::{Checkpoint, CheckpointRead, Side, is_transition, rollback},
+        schedule::{ScheduledFault, expand},
     },
     krabka_units::prelude::*,
     std::collections::BTreeMap,
@@ -141,6 +142,7 @@ pub fn clean_run(contract: &Contract) -> Evidence {
                 Target::Any | Target::Broker(_) => "broker",
             }
             .to_owned(),
+            node: synthetic_node(fault.target),
             injected_unix_ms: injected,
             cleared_unix_ms: Some(cleared),
             cleanup_error: None,
@@ -156,7 +158,72 @@ pub fn clean_run(contract: &Contract) -> Evidence {
             });
         }
     }
+    lifecycle_run(contract, &schedule, &mut evidence);
     evidence
+}
+
+/// The node id a synthetic run gives broker index `i`: `i + 1`, as the
+/// executor's fixture numbers its nodes.
+fn synthetic_node(target: Target) -> Option<i32> {
+    match target {
+        Target::Broker(index) => i32::try_from(index).ok().map(|index| index + 1),
+        Target::Controller | Target::Leader | Target::Follower | Target::Any => None,
+    }
+}
+
+/// The releases, the source's advertised ranges and one clean checkpoint per
+/// transition of a lifecycle contract: every broker starts on the source, a
+/// roll moves its broker to that side's image, nothing is finalized, and every
+/// acknowledged record is read back.
+fn lifecycle_run(contract: &Contract, schedule: &[ScheduledFault], evidence: &mut Evidence) {
+    let Some(lifecycle) = &contract.lifecycle else {
+        return;
+    };
+    let image = |side: Side| format!("synthetic-{side}");
+    for side in [Side::Source, Side::Target] {
+        evidence.releases.insert(side.to_string(), image(side));
+    }
+    evidence
+        .source_supports
+        .clone_from(&lifecycle.source.supports);
+    let brokers = i32::try_from(contract.cluster.brokers).unwrap_or(i32::MAX);
+    let mut images: BTreeMap<i32, String> = (1..=brokers)
+        .map(|node| (node, image(Side::Source)))
+        .collect();
+    for fault in schedule.iter().filter(|fault| is_transition(&fault.kind)) {
+        if let (FaultKind::Roll { to }, Some(node)) = (&fault.kind, synthetic_node(fault.target)) {
+            images.insert(node, image(*to));
+        }
+        let finalized = BTreeMap::new();
+        evidence.checkpoints.push(Checkpoint {
+            fault: fault.id.clone(),
+            unix_ms: EPOCH_MS + fault.end().millis_i64(),
+            images: images.clone(),
+            rollback: rollback(&lifecycle.source, &finalized),
+            finalized,
+            records: contract
+                .paths
+                .iter()
+                .map(|path| CheckpointRead {
+                    path: path.name.clone(),
+                    semantics: path.semantics,
+                    key_space: path.key_space,
+                    acknowledged: SeqSet::range(0, RECORDS),
+                    reader: ReaderLedger {
+                        path: path.name.clone(),
+                        isolation: Isolation::ReadUncommitted,
+                        producer: format!("{}-0", path.name),
+                        seen: SeqSet::range(0, RECORDS),
+                        duplicates: Vec::new(),
+                        latest_by_key: path.key_space.map_or_else(BTreeMap::new, |space| {
+                            (0..RECORDS).map(|seq| (seq % space, seq)).collect()
+                        }),
+                    },
+                })
+                .collect(),
+            config_mismatches: Vec::new(),
+        });
+    }
 }
 
 /// Remove the first acknowledged record of the self-check's path from every

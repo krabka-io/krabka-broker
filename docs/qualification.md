@@ -79,6 +79,154 @@ Skipped or zero-test runs cannot produce a valid gate receipt. Historical recove
 relabel those old runs as fresh candidate results. The monthly schedule is enabled only after
 the first schema-2 eight-gate manifest is checked in as the immutable baseline.
 
+## Loaded lifecycle
+
+The eight gates qualify the ecosystem around one broker image. The loaded
+lifecycle gate qualifies the move between two broker images: the newest
+published 1.0.x release and the candidate. It runs under the sustained load of
+the soak contract's executor, and the soak judge grades it. Issue 1396 owns it.
+
+### Design Goals
+
+- **Published bytes only.** The source and the target are images by digest. The
+  gate never builds a broker. The executor and the judge are the adapter: the
+  reviewed checkout that runs the task, as for every other gate.
+- **One load, one judge.** The rolling upgrade, the certificate rotation, the
+  reassignment and the rollback are transitions in one soak contract,
+  [`bench/soak/lifecycle.yaml`](../bench/soak/lifecycle.yaml). The executor
+  measures the disruption of each transition as it measures a fault. The judge
+  reconciles the records and the committed offsets as it does for a soak. There
+  is no second load generator and no second reconciler.
+- **Reconcile after each transition, not only at the end.** A record that a
+  later transition loses must not hide behind a record that an earlier one
+  lost, and a configuration that a rollback drops must not wait for the end of
+  the run.
+- **Refuse a rollback that the formats do not allow, before it writes.**
+
+### The lifecycle contract
+
+| | Value |
+| :--- | :--- |
+| Source | `v1.0.5`, `ghcr.io/krabka-io/krabka-broker@sha256:2a81d1ba38de4e8ffb032fedf67952845185158a7607ac76ba38fa162dc37e50`, the multi-platform index that the release workflow signed |
+| Target | The candidate: the `broker_digest` of a successful delivery run of a `main` commit |
+| Cluster | Four nodes, each a controller and a broker, RF=3, `min.insync.replicas=2`, one TLS listener per node |
+| Load | Three classic paths: idempotent, transactional and compacted, at 40 records per second each, with committing consumers at both isolation levels |
+| Transitions | Upgrade brokers 0 to 3 to the target, one at a time. Rotate the TLS certificate of brokers 0 to 3, one at a time. Drain broker 3 of `classic-idempotent` by reassignment: each of its replicas moves to the broker that holds none of that partition. Roll brokers 0 to 3 back to the source, one at a time. |
+| After each transition | The image that each node runs, the finalized feature levels, whether a rollback is still supported, every record that a producer had been acknowledged, the committed offsets of every group, the topic configuration, and the dynamic listener configuration of every rotated broker |
+| Deadlines | Leader failover 25s, ISR rejoin 60s, controller failover 30s, certificate served 30s, reassignment complete 180s. The controller deadline covers the source: a `v1.0.5` controller leader that stops gracefully does not resign (#1446, fixed after `v1.0.5`), so the quorum replaces it only after its fetch timeouts. |
+
+The source declares the feature ranges that it advertises in `ApiVersions`. The
+executor reads the ranges back from the running source, and the judge compares
+them. For `v1.0.5`, `metadata.version` is 7 to 30 and `krabka.version` is 0 to
+1, and the candidate advertises the same ranges.
+
+To move the source to a newer release, change the `lifecycle.source` section of
+the contract: the version, the digest of the release's signed index, and the
+ranges that it advertises. Do not use a tag. The contract validation refuses an
+image that has no digest.
+
+### Rollback eligibility
+
+[`persisted_formats.md`](persisted_formats.md) states the rule: a 1.x broker
+writes a new format only after the operator finalizes the feature level that
+introduces it. So the formats on disk tell whether a rollback is safe, and the
+finalized levels tell which formats are on disk.
+
+| Cluster state | Rollback to the source |
+| :--- | :--- |
+| Every finalized level is in the source's supported range | Supported. The source reads every byte that the target wrote. |
+| A `metadata.version` above the source's maximum is finalized | Not supported. A KIP-1155 downgrade of `metadata.version` must come first. |
+| A `krabka.version` above the source's maximum is finalized, which is level 2 or more for every 1.0.x release | Not supported. No downgrade path exists for a krabka-only format. |
+| A feature that the source does not name is finalized above 0 | Not supported. The source supports level 0 only of a feature that it does not know, as Kafka's `QuorumFeatures.DISABLED` does. |
+
+`krabka_bench_driver::soak::lifecycle::rollback` applies the rule, and each
+checkpoint records its answer. The judge fails a run that rolls back after a
+checkpoint that ruled the rollback out. The lifecycle contract finalizes no
+level, so its rollback is supported.
+
+The broker enforces the same rule, so an operator cannot take an unsupported
+rollback by mistake. A node that runs a controller replays the finalized levels
+when it opens its log, and it stops with Kafka's fatal-fault message before it
+binds a listener:
+`Tried to apply FeatureLevelRecord FeatureLevelRecord(name='metadata.version', featureLevel=33), but this controller only supports versions 7-30`.
+A broker-only node cannot register: the controller answers its
+`BrokerRegistration` with `UNSUPPORTED_VERSION`, as Kafka's
+`ClusterControlManager.registerBroker` does. Every 1.0.x release has both
+checks. `crates/broker/tests/fatal_feature_level_exit.rs` and
+`crates/raft/tests/unsupported_feature_level.rs` test them in process.
+
+The gate also proves the refusal on the release images. The candidate formats a
+node at `metadata.version` `4.4-IV2` (33) with
+`unstable.feature.versions.enable`, and writes a record. The source then starts
+on the same directory without that setting. The source must exit with a failure
+status and Kafka's message. It must not change one byte of a log segment, a
+checkpoint, `quorum-state` or another file. Only producer-state snapshots and
+the offset and time indexes of a segment may change, because a broker rebuilds
+them from the segment when it opens the log, as Kafka does. The candidate must then open the directory again
+and read the record back.
+
+### What runs
+
+The `loaded lifecycle` job of the `ecosystem qualification` workflow runs the
+gate. It runs when a dispatch sets `loaded_lifecycle` or `execute`. It needs
+`broker_revision` and `broker_digest`, because the baseline manifest names a
+broker older than the source. The job freezes the candidate input as the
+`candidate` job does, then runs:
+
+```sh
+aspect check-qualification --manifest .qualification-input.json \
+  --gate loaded-lifecycle --output qualification-results
+```
+
+`loaded-lifecycle` is a gate that a candidate can execute but that its manifest
+does not list. So the qualified eight-gate baselines stay valid as they were
+published, and the receipt binds to the candidate and the adapters as every
+other receipt does.
+
+The gate runs `the_sustained_load_contract_holds` and
+`an_unsupported_rollback_is_refused_before_it_damages_data` of the broker's
+`soak_contract` suite with Cargo, against the two image digests. Then it checks
+the verdict and the evidence:
+
+| Check | Passes when |
+| :--- | :--- |
+| `loaded-lifecycle`, `lifecycle-verdict` | The suite passes, and the verdict has no contract error, no reconciliation finding, no missed or unobserved deadline and no lifecycle failure. |
+| `rolling-upgrade` | After the first to the fourth upgrade, exactly one to four nodes run the target image. |
+| `certificate-rotation` | Four rotations ran, and each broker served a certificate that only its new CA verifies. |
+| `reassignment` | The reassignment ran and completed. |
+| `supported-rollback`, `rollback-eligible` | After the first to the fourth rollback, exactly one to four nodes run the source image again, and every checkpoint found the rollback supported. |
+| `checkpoint-reconciliation` | No checkpoint found a configuration that differs from what the run set. |
+| `unsupported-rollback-refused`, `unsupported-rollback-undamaged` | The source refused the unsupported rollback, changed nothing, and the candidate read the record back. |
+
+### Evidence
+
+The job uploads `qualification-loaded-lifecycle`, which holds the receipt and:
+
+- `candidate.json` and `commands.txt`: the frozen candidate and the exact
+  adapter commands, and `adapter-revision.txt`.
+- `source-image.json` and `krabka-broker-image.json`: `docker image inspect` of
+  the two images.
+- `lifecycle/`: the contract as run, the schedule, the fault log, the
+  telemetry, the alert history, `evidence.json` with every checkpoint, and
+  `verdict.json`.
+- `disruption.json`: each transition with the time that it held its broker, and
+  each measured recovery in milliseconds.
+- `unsupported-rollback/unsupported-rollback.json`: the exit code, the refusal,
+  and the files that the refused rollback changed.
+
+### What this does not cover
+
+- **One host.** The four nodes are containers on one runner. A network
+  partition between hosts, and a rollback of a node on a different kernel or
+  disk, need a multi-host cluster, which a hosted runner does not give.
+- **Classic topics only.** The upgrade smoke test (`packaging/upgrade-smoke.sh`)
+  covers a diskless topic and a `DeleteRecords` floor across an upgrade, without
+  load. The contract can add tiered and diskless paths; the executor already
+  runs them for the soak.
+- **The operator.** The `operator-lifecycle` gate upgrades and rotates through
+  `krabka-operator`. This gate drives the release images directly, so that a
+  failure names the broker and not the operator.
+
 ## Local execution and evidence
 
 ```sh

@@ -48,6 +48,17 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   10 s, and the firing history of the shipped alert rules from a pinned
   Prometheus sidecar, both written as the run goes. It also runs diskless
   paths, on a SASL inter-broker listener.
+- A loaded lifecycle gate for release images (issue #1396).
+  `bench/soak/lifecycle.yaml` upgrades a four-broker cluster from the v1.0.5
+  image to the candidate broker by broker, rotates every broker's TLS
+  certificate through the dynamic listener keystore and truststore, drains a
+  broker by reassignment, and rolls back to v1.0.5, all under the soak load.
+  After each transition the executor reconciles the acknowledged records, the
+  committed offsets and the configuration, and records which image each
+  broker runs and whether a rollback is still supported. The gate also proves
+  that v1.0.5 refuses a log finalized at a newer `metadata.version` before it
+  changes it. `docs/qualification.md` states the contract, and the
+  `loaded lifecycle` job of the qualification workflow runs it.
 - `qualify.sh budget` compares a candidate build with an earlier revision or
   with pinned Kafka 4.3.1 over a predeclared RF=3 workload matrix, in
   interleaved rounds. `krabka-parse-benches` assembles every raw trial into a

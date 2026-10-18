@@ -12,16 +12,18 @@ use {
     crate::{
         faults::{Injected, inject},
         host::{FaultLog, now_ms},
+        lifecycle_run::LifecycleRun,
         load::CommitTracker,
         readback::commit_checks,
         topology::{
-            Nodes, PartitionState, TopicPartition, isr_complete, led_by, not_failed_over,
+            Node, Nodes, PartitionState, TopicPartition, isr_complete, led_by, not_failed_over,
             resolve_target, role_of,
         },
+        transitions::{self, Expect},
         windows::{Span, Windows},
     },
     krabka_bench_driver::soak::{
-        contract::{Contract, RecoveryCheck},
+        contract::{Contract, FaultKind, RecoveryCheck},
         deadline::checks_for,
         evidence::{CommitCheck, FaultRecord, RecoveryRecord},
         schedule::ScheduledFault,
@@ -42,7 +44,10 @@ const POLL: Duration = Duration::from_millis(250);
 pub(crate) fn measured_from_injection(check: RecoveryCheck) -> bool {
     matches!(
         check,
-        RecoveryCheck::LeaderFailover | RecoveryCheck::ControllerFailover
+        RecoveryCheck::LeaderFailover
+            | RecoveryCheck::ControllerFailover
+            | RecoveryCheck::CertificateServed
+            | RecoveryCheck::ReassignmentComplete
     )
 }
 
@@ -61,6 +66,8 @@ pub(crate) struct Executor {
     pub(crate) log: Arc<FaultLog>,
     pub(crate) trackers: Vec<Arc<CommitTracker>>,
     pub(crate) bootstrap: String,
+    /// The release images and the rotation state of a lifecycle run.
+    pub(crate) lifecycle: Option<Arc<LifecycleRun>>,
 }
 
 impl Executor {
@@ -112,6 +119,7 @@ impl Executor {
             kind: fault.kind.name().to_owned(),
             target: format!("{:?}", fault.target),
             role: "broker".to_owned(),
+            node: None,
             injected_unix_ms: now_ms(),
             cleared_unix_ms: None,
             cleanup_error: None,
@@ -132,6 +140,7 @@ impl Executor {
             return (record, Vec::new());
         };
         record.target = node.container.clone();
+        record.node = Some(target);
         role_of(target, roles).clone_into(&mut record.role);
         // `None` when no node answered: what the target led is then unknown,
         // not empty, and a leader failover cannot be measured.
@@ -151,13 +160,7 @@ impl Executor {
         let injected = now_ms();
         record.injected_unix_ms = injected;
         self.windows.injected(injected);
-        let kind = fault.kind.clone();
-        let host = self.contract.host.clone();
-        let (container, root) = (node.container.clone(), node.root.clone());
-        let injection =
-            tokio::task::spawn_blocking(move || inject(&kind, &container, &root, &host))
-                .await
-                .unwrap_or_else(|error| Err(format!("injection task: {error}")));
+        let (injection, expect) = self.inject(fault, &node).await;
         let Injected { guard, detail } = match injection {
             Ok(injected) => injected,
             Err(error) => {
@@ -181,7 +184,16 @@ impl Executor {
         let mut measuring: Vec<JoinHandle<RecoveryRecord>> = checks
             .iter()
             .filter(|check| measured_from_injection(**check))
-            .map(|check| self.measure(&fault.id, *check, target, led.clone(), injected))
+            .map(|check| {
+                self.measure(
+                    &fault.id,
+                    *check,
+                    target,
+                    led.clone(),
+                    expect.clone(),
+                    injected,
+                )
+            })
             .collect();
 
         let hold_until = injected + fault.duration.millis_i64();
@@ -220,7 +232,16 @@ impl Executor {
             checks
                 .iter()
                 .filter(|check| !measured_from_injection(**check))
-                .map(|check| self.measure(&fault.id, *check, target, led.clone(), cleared)),
+                .map(|check| {
+                    self.measure(
+                        &fault.id,
+                        *check,
+                        target,
+                        led.clone(),
+                        expect.clone(),
+                        cleared,
+                    )
+                }),
         );
         let mut recoveries = Vec::new();
         for task in measuring {
@@ -241,6 +262,43 @@ impl Executor {
         (record, recoveries)
     }
 
+    /// Inject `fault` on `node`: a request to the cluster for a rotation or
+    /// a reassignment, otherwise a Docker operation off the async workers.
+    /// Returns what a lifecycle check then waits to observe.
+    async fn inject(
+        &self,
+        fault: &ScheduledFault,
+        node: &Node,
+    ) -> (Result<Injected, String>, Option<Expect>) {
+        if matches!(
+            fault.kind,
+            FaultKind::CertificateRotation | FaultKind::Reassignment { .. }
+        ) {
+            let Some(run) = &self.lifecycle else {
+                return (
+                    Err("a lifecycle transition outside a lifecycle run".to_owned()),
+                    None,
+                );
+            };
+            return match transitions::inject(&fault.kind, node, &self.nodes, run).await {
+                Ok((injected, expect)) => (Ok(injected), Some(expect)),
+                Err(error) => (Err(error), None),
+            };
+        }
+        let relaunch = match (&fault.kind, &self.lifecycle) {
+            (FaultKind::Roll { to }, Some(run)) => Some(node.launch.argv(run.image(*to))),
+            _ => None,
+        };
+        let kind = fault.kind.clone();
+        let host = self.contract.host.clone();
+        let (container, root) = (node.container.clone(), node.root.clone());
+        let injected =
+            tokio::task::spawn_blocking(move || inject(&kind, &container, &root, &host, relaunch))
+                .await
+                .unwrap_or_else(|error| Err(format!("injection task: {error}")));
+        (injected, None)
+    }
+
     /// Measure `check` after `fault`, from `from`, on a task of its own.
     fn measure(
         &self,
@@ -248,6 +306,7 @@ impl Executor {
         check: RecoveryCheck,
         target: i32,
         led: Option<BTreeSet<TopicPartition>>,
+        expect: Option<Expect>,
         from: i64,
     ) -> JoinHandle<RecoveryRecord> {
         let nodes = Arc::clone(&self.nodes);
@@ -256,7 +315,16 @@ impl Executor {
         let fault = fault.to_owned();
         tokio::spawn(async move {
             let recovered = loop {
-                let waiting = match recovered(&nodes, check, target, led.as_ref(), &topics).await {
+                let waiting = match recovered(
+                    &nodes,
+                    check,
+                    target,
+                    led.as_ref(),
+                    expect.as_ref(),
+                    &topics,
+                )
+                .await
+                {
                     Ok(()) => break Some(now_ms()),
                     Err(Waiting::Unmeasurable(why)) => {
                         eprintln!("soak-contract: {fault} {check}: gave up: {why}");
@@ -332,9 +400,18 @@ async fn recovered(
     check: RecoveryCheck,
     target: i32,
     led: Option<&BTreeSet<TopicPartition>>,
+    expect: Option<&Expect>,
     topics: &[(String, i32)],
 ) -> Result<(), Waiting> {
     match check {
+        RecoveryCheck::CertificateServed | RecoveryCheck::ReassignmentComplete => match expect {
+            Some(expect) => transitions::observed(nodes, expect)
+                .await
+                .map_err(Waiting::For),
+            None => Err(Waiting::Unmeasurable(
+                "the transition was not injected, so there is nothing to observe".to_owned(),
+            )),
+        },
         RecoveryCheck::LeaderFailover => {
             let answer = match led {
                 Some(_) => nodes.metadata_from_any(Some(target)).await,
@@ -447,6 +524,8 @@ mod tests {
         controller_failover = { RecoveryCheck::ControllerFailover, true },
         isr_rejoin = { RecoveryCheck::IsrRejoin, false },
         catch_up = { RecoveryCheck::CatchUpAfterPause, false },
+        certificate_served = { RecoveryCheck::CertificateServed, true },
+        reassignment_complete = { RecoveryCheck::ReassignmentComplete, true },
     )]
     fn a_failover_runs_from_the_injection_and_a_rejoin_from_the_cleanup(
         check: RecoveryCheck,

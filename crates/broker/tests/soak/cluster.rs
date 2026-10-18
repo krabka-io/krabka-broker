@@ -123,6 +123,59 @@ const CONFIG_FILE: &str = "broker.toml";
 /// The listener a diskless-quorum node's brokers speak to each other on.
 const INTER_BROKER_LISTENER: &str = "INTER_BROKER";
 
+/// The TLS listener a node binds when the cluster is given [`TlsFiles`].
+pub(crate) const TLS_LISTENER: &str = "TLS";
+
+/// Where a node's TLS files are, relative to the mount, and inside the
+/// container.
+pub(crate) const TLS_DIR: &str = "tls";
+pub(crate) const CONTAINER_TLS_DIR: &str = "/var/lib/krabka/tls";
+
+/// The certificate chain, the PKCS#8 key and the trusted CAs a node's TLS
+/// listener starts with, all PEM. Every node is given the same files: the
+/// certificate names `host.docker.internal`, which is every node's address.
+#[derive(Debug, Clone)]
+pub(crate) struct TlsFiles {
+    pub(crate) cert: String,
+    pub(crate) key: String,
+    pub(crate) truststore: String,
+}
+
+impl TlsFiles {
+    /// Write the three files into `root`'s TLS directory: `cert.pem`,
+    /// `key.pem`, `truststore.pem`, and `keystore.pem`, the key and the chain
+    /// in one file as a dynamic PEM keystore holds them.
+    pub(crate) fn write(&self, root: &Path) -> io::Result<()> {
+        let dir = root.join(TLS_DIR);
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join("cert.pem"), &self.cert)?;
+        std::fs::write(dir.join("key.pem"), &self.key)?;
+        std::fs::write(
+            dir.join("keystore.pem"),
+            format!("{}{}", self.key, self.cert),
+        )?;
+        std::fs::write(dir.join("truststore.pem"), &self.truststore)
+    }
+}
+
+/// The `docker run` arguments that start one node, around its image: what a
+/// roll uses to start the node again, on the same data, from another image.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Launch {
+    before_image: Vec<String>,
+    after_image: Vec<String>,
+}
+
+impl Launch {
+    /// The whole argument list, with `image`.
+    pub(crate) fn argv(&self, image: &str) -> Vec<String> {
+        let mut argv = self.before_image.clone();
+        argv.push(image.to_owned());
+        argv.extend(self.after_image.iter().cloned());
+        argv
+    }
+}
+
 /// The bearer token a diskless-quorum node authenticates to its peers with,
 /// relative to the mount.
 const TOKEN_FILE: &str = "inter-broker.token";
@@ -166,8 +219,13 @@ pub(crate) struct SoakBroker {
     /// inter-broker listener a diskless quorum needs. `None` when the cluster
     /// runs none.
     inter_broker_port: Option<u16>,
+    /// Published host port for the container's 9095, the TLS listener.
+    /// `None` when the cluster runs none.
+    pub(crate) tls_port: Option<u16>,
     /// Host side of the `/var/lib/krabka` mount.
     pub(crate) root: tempfile::TempDir,
+    /// How this node is started; see [`Launch`].
+    pub(crate) launch: Launch,
 }
 
 impl SoakBroker {
@@ -213,15 +271,15 @@ impl SoakBroker {
     }
 
     /// Format this node's log directory against the shared voter set.
-    fn format(&self, cluster_id: &str, voters: &str) {
+    fn format(&self, image: &str, cluster_id: &str, voters: &str, extra_args: &[String]) {
         let mount = format!("{}:{CONTAINER_ROOT}", self.host_root().display());
         let user = self.user();
-        let img = image();
         let node = format!("--node-id={}", self.node_id);
         let directory = format!("--directory-id={}", directory_id(self.node_id));
         let cluster = format!("--cluster-id={cluster_id}");
         let initial = format!("--initial-controllers={voters}");
-        docker(&[
+        let log_dir = format!("--log-dir={CONTAINER_LOG_DIR}");
+        let mut args = vec![
             "run",
             "--rm",
             "--user",
@@ -230,14 +288,16 @@ impl SoakBroker {
             &mount,
             "--entrypoint",
             "/usr/bin/krabka-format",
-            &img,
-            &format!("--log-dir={CONTAINER_LOG_DIR}"),
+            image,
+            &log_dir,
             &cluster,
             &node,
             &directory,
             &initial,
             "--ignore-formatted",
-        ]);
+        ];
+        args.extend(extra_args.iter().map(String::as_str));
+        docker(&args);
     }
 
     /// Write this node's configuration file into the bind mount.
@@ -268,6 +328,7 @@ impl SoakBroker {
             || (String::new(), String::new(), String::new()),
             |toml| (toml.root, toml.listener, toml.tables),
         );
+        let tls_listener = self.tls_port.map(tls_listener_toml).unwrap_or_default();
         let toml = format!(
             "broker_id = {id}\n\
              log_dir = \"{CONTAINER_LOG_DIR}\"\n\
@@ -280,6 +341,7 @@ impl SoakBroker {
              bind_addr = \"0.0.0.0:9092\"\n\
              advertised = \"host.docker.internal:{client}\"\n\
              protocol = \"Plaintext\"\n\
+             {tls_listener}\
              {quorum_listener}\
              \n\
              [process]\n\
@@ -304,16 +366,16 @@ impl SoakBroker {
     ///
     /// `extras.shared_mount`, when set, is bind-mounted into the container as
     /// well, at the same container path on every node.
-    fn run(&self, cluster_id: &str, extras: &NodeExtras) {
+    fn launch_for(&self, cluster_id: &str, extras: &NodeExtras) -> Launch {
         let mount = format!("{}:{CONTAINER_ROOT}", self.host_root().display());
         let user = self.user();
-        let img = image();
         // 0.0.0.0 rather than 127.0.0.1: a peer reaches this port through the
         // host gateway address, not through the host's loopback.
         let publish_client = format!("{}:9092", self.client_port);
         let publish_controller = format!("{}:9093", self.controller_port);
         let publish_metrics = format!("{}:9404", self.metrics_port);
         let publish_inter_broker = self.inter_broker_port.map(|port| format!("{port}:9094"));
+        let publish_tls = self.tls_port.map(|port| format!("{port}:9095"));
         let shared = extras
             .shared_mount
             .as_ref()
@@ -338,7 +400,7 @@ impl SoakBroker {
         let cluster = format!("--cluster-id={cluster_id}");
         let cleaner = format!("--cleaner-interval={CLEANER_INTERVAL}");
         let retention = format!("--log-retention-check-interval={RETENTION_CHECK_INTERVAL}");
-        if let Some(publish) = &publish_inter_broker {
+        for publish in [&publish_inter_broker, &publish_tls].into_iter().flatten() {
             args.extend(["--publish", publish.as_str()]);
         }
         args.extend([
@@ -348,16 +410,24 @@ impl SoakBroker {
             &publish_controller,
             "--publish",
             &publish_metrics,
-            &img,
-            &config,
-            &broker_id,
-            &cluster,
+        ]);
+        let before_image = args.into_iter().map(str::to_owned).collect();
+        let after_image = [
+            config.as_str(),
+            broker_id.as_str(),
+            cluster.as_str(),
             "--metrics-listen-addr=0.0.0.0:9404",
             "--health-listen-addr=none",
-            &cleaner,
-            &retention,
-        ]);
-        docker(&args);
+            cleaner.as_str(),
+            retention.as_str(),
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        Launch {
+            before_image,
+            after_image,
+        }
     }
 
     /// This broker's container log, for a failure message.
@@ -437,6 +507,23 @@ fn diskless_quorum_toml(node_id: u32, port: u16, token_path: &str) -> QuorumToml
     }
 }
 
+/// The TLS listener of a node whose container's 9095 is published on host
+/// port `port`, serving the static files of [`TlsFiles::write`].
+fn tls_listener_toml(port: u16) -> String {
+    format!(
+        "\n\
+         [[listeners]]\n\
+         name = \"{TLS_LISTENER}\"\n\
+         bind_addr = \"0.0.0.0:9095\"\n\
+         advertised = \"host.docker.internal:{port}\"\n\
+         protocol = \"Ssl\"\n\
+         \n\
+         [listeners.tls_config]\n\
+         cert_path = \"{CONTAINER_TLS_DIR}/cert.pem\"\n\
+         key_path = \"{CONTAINER_TLS_DIR}/key.pem\"\n"
+    )
+}
+
 /// The unsecured JWS node `node_id` presents to its peers: an `alg: none`
 /// header, a `sub` of the principal the WAL leader maps to that node id, and
 /// an empty signature.
@@ -479,13 +566,22 @@ impl SoakCluster {
     /// `diskless_quorum` gives every node the authenticated inter-broker
     /// listener and the distinct rack a diskless WAL quorum needs; see the
     /// module documentation.
+    ///
+    /// `brokers` nodes, all voters, are formatted with `image`, by default
+    /// [`image()`], and `format_args`, and started on `image`. `tls` gives
+    /// every node a TLS listener serving those files.
     #[builder(finish_fn = call)]
     pub(crate) fn configured(
         #[builder(default)] root_toml: String,
         #[builder(default)] tables_toml: String,
         shared_mount: Option<(PathBuf, String)>,
         #[builder(default)] diskless_quorum: bool,
+        #[builder(default = 3)] brokers: u32,
+        #[builder(name = image)] start_image: Option<&str>,
+        #[builder(default)] format_args: &[String],
+        tls: Option<&TlsFiles>,
     ) -> Self {
+        let image = start_image.map_or_else(image, str::to_owned);
         require_host_gateway();
         let extras = NodeExtras {
             root_toml,
@@ -493,7 +589,7 @@ impl SoakCluster {
             shared_mount,
         };
         let cluster_id = uuid::Uuid::new_v4().to_string();
-        let brokers: Vec<SoakBroker> = (1..=3)
+        let mut brokers: Vec<SoakBroker> = (1..=brokers)
             .map(|node_id| SoakBroker {
                 name: format!("krabka-soak-{}-{node_id}", std::process::id()),
                 node_id,
@@ -501,7 +597,9 @@ impl SoakCluster {
                 controller_port: free_port(),
                 metrics_port: free_port(),
                 inter_broker_port: diskless_quorum.then(free_port),
+                tls_port: tls.is_some().then(free_port),
                 root: tempfile::TempDir::new().expect("host data directory"),
+                launch: Launch::default(),
             })
             .collect();
 
@@ -519,12 +617,24 @@ impl SoakCluster {
             .map(|broker| format!("\"{}@{}\"", broker.node_id, broker.controller_advertised()))
             .collect::<Vec<_>>()
             .join(",");
-        for broker in &brokers {
-            broker.format(&cluster_id, &voters);
+        for broker in &mut brokers {
+            broker.format(&image, &cluster_id, &voters, format_args);
             broker.write_config(&quorum, &extras);
+            if let Some(tls) = tls {
+                tls.write(broker.host_root())
+                    .expect("write the node's TLS files");
+            }
+            broker.launch = broker.launch_for(&cluster_id, &extras);
         }
         for broker in &brokers {
-            broker.run(&cluster_id, &extras);
+            docker(
+                &broker
+                    .launch
+                    .argv(&image)
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+            );
         }
         Self { brokers }
     }

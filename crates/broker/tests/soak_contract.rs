@@ -90,16 +90,22 @@ mod executor;
 mod faults;
 #[path = "soak_contract/host.rs"]
 mod host;
+#[path = "soak_contract/lifecycle_run.rs"]
+mod lifecycle_run;
 #[path = "soak_contract/load.rs"]
 mod load;
 #[path = "soak_contract/plan.rs"]
 mod plan;
 #[path = "soak_contract/readback.rs"]
 mod readback;
+#[path = "soak_contract/rollback_guard.rs"]
+mod rollback_guard;
 #[path = "soak_contract/telemetry.rs"]
 mod telemetry;
 #[path = "soak_contract/topology.rs"]
 mod topology;
+#[path = "soak_contract/transitions.rs"]
+mod transitions;
 #[path = "soak_contract/windows.rs"]
 mod windows;
 
@@ -109,6 +115,7 @@ use {
         cluster::{SoakCluster, image},
         executor::{Executor, await_full_isr},
         host::{FaultLog, environment, evidence_dir, image_identity, now_ms, write_json},
+        lifecycle_run::{LifecycleRun, checkpoint, supported_features},
         load::{
             CommitTracker, LoadContext, ProducerOutput, group_name, producer_name, run_consumer,
             run_idempotent, run_transactional,
@@ -123,6 +130,7 @@ use {
     krabka_bench_driver::soak::{
         contract::{Contract, Profile, Semantics},
         evidence::{Evidence, FINAL_COMMIT_CHECK},
+        lifecycle::{Checkpoint, Side, is_transition},
         schedule::{ScheduledFault, expand},
         verdict::{judge, judge_self_check},
     },
@@ -154,6 +162,14 @@ fn contract_source() -> PathBuf {
             || manifest_dir().join("../../bench/soak/self-check.yaml"),
             PathBuf::from,
         )
+}
+
+/// The lifecycle contract whose source release the refused rollback runs.
+fn lifecycle_contract() -> Contract {
+    let source = manifest_dir().join("../../bench/soak/lifecycle.yaml");
+    let text = std::fs::read_to_string(&source)
+        .unwrap_or_else(|error| panic!("read {}: {error}", source.display()));
+    Contract::from_yaml(&text).unwrap_or_else(|error| panic!("{}: {error}", source.display()))
 }
 
 /// Create every path's topic, retrying while the fresh cluster elects.
@@ -389,10 +405,22 @@ async fn inject_and_read_back(
 ///
 /// Returns the cluster, the object-store directory its nodes share (kept
 /// alive for as long as the cluster), and the executor's view of its nodes.
-async fn boot(contract: &Contract) -> (SoakCluster, Option<tempfile::TempDir>, Arc<Nodes>) {
+async fn boot(
+    contract: &Contract,
+    lifecycle: Option<&LifecycleRun>,
+) -> (SoakCluster, Option<tempfile::TempDir>, Arc<Nodes>) {
     let remote_tier = plan::object_store(contract)
         .then(|| tempfile::TempDir::new().expect("object store directory"));
     let toml = plan::node_toml(contract);
+    // A lifecycle run is formatted and started on its source release, with a
+    // TLS listener for its rotations.
+    let tls = lifecycle.map(|run| {
+        run.authority
+            .lock()
+            .expect("the certificate authority")
+            .issue()
+            .unwrap_or_else(|error| panic!("issue the first certificates: {error}"))
+    });
     let cluster = SoakCluster::configured()
         .root_toml(toml.root)
         .tables_toml(toml.tables)
@@ -402,6 +430,9 @@ async fn boot(contract: &Contract) -> (SoakCluster, Option<tempfile::TempDir>, A
                 .as_ref()
                 .map(|tier| (tier.path().to_path_buf(), plan::REMOTE_TIER.to_owned())),
         )
+        .brokers(contract.cluster.brokers)
+        .maybe_image(lifecycle.map(|run| run.image(Side::Source)))
+        .maybe_tls(tls.as_ref())
         .call();
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
@@ -419,6 +450,8 @@ async fn boot(contract: &Contract) -> (SoakCluster, Option<tempfile::TempDir>, A
                 bootstrap: broker.bootstrap(),
                 metrics_url: broker.metrics_url(),
                 root: broker.root.path().to_path_buf(),
+                launch: broker.launch.clone(),
+                tls: broker.tls_port.map(|port| format!("127.0.0.1:{port}")),
             })
             .collect(),
     ));
@@ -437,11 +470,47 @@ async fn boot(contract: &Contract) -> (SoakCluster, Option<tempfile::TempDir>, A
     (cluster, remote_tier, nodes)
 }
 
+/// Record a lifecycle run's release images and the feature ranges its source
+/// advertises, before the load starts.
+async fn record_releases(run: &LifecycleRun, nodes: &Nodes, evidence: &mut Evidence) {
+    evidence.releases = run
+        .release_ids()
+        .unwrap_or_else(|error| panic!("identify the release images: {error}"));
+    evidence.source_supports = supported_features(nodes)
+        .await
+        .unwrap_or_else(|error| panic!("read the source's feature ranges: {error}"));
+    eprintln!(
+        "soak-contract: {} on {} supports {:?}; releases {:?}",
+        run.lifecycle.source.version,
+        run.image(Side::Source),
+        evidence.source_supports,
+        evidence.releases
+    );
+}
+
+/// The checkpoint after transition `fault`, printed as it is taken.
+async fn take_checkpoint(
+    fault: &str,
+    run: &LifecycleRun,
+    nodes: &Nodes,
+    ctx: &LoadContext,
+) -> Checkpoint {
+    let taken = checkpoint(fault, run, nodes, ctx).await;
+    eprintln!(
+        "soak-contract: checkpoint after {fault}: images {:?}, finalized {:?}, {:?}, {} config mismatches",
+        taken.images,
+        taken.finalized,
+        taken.rollback,
+        taken.config_mismatches.len()
+    );
+    taken
+}
+
 /// Judge `evidence` against `contract`, write `verdict.json` into `dir`, print
 /// every failure or detection, and say whether the run passed.
 fn grade(contract: &Contract, evidence: &Evidence, dir: &Path) -> bool {
     match contract.profile {
-        Profile::Soak => {
+        Profile::Soak | Profile::Lifecycle => {
             let verdict = judge(contract, evidence);
             write_json(dir, "verdict.json", &verdict);
             for failure in verdict.failures() {
@@ -506,10 +575,14 @@ async fn the_sustained_load_contract_holds() {
     std::fs::write(dir.join("contract.yaml"), &text).expect("write contract.yaml");
     let log = Arc::new(FaultLog::create(&dir));
 
-    let (cluster, _remote_tier, nodes) = boot(&contract).await;
+    let image = image();
+    let lifecycle = contract
+        .lifecycle
+        .clone()
+        .map(|lifecycle| Arc::new(LifecycleRun::new(lifecycle, image.clone())));
+    let (cluster, _remote_tier, nodes) = boot(&contract, lifecycle.as_deref()).await;
     let bootstrap = cluster.bootstrap();
 
-    let image = image();
     let mut evidence = Evidence {
         contract: contract.name.clone(),
         contract_digest: contract.digest(),
@@ -518,6 +591,9 @@ async fn the_sustained_load_contract_holds() {
         environment: environment(cluster.brokers[0].root.path(), &image),
         ..Evidence::default()
     };
+    if let Some(run) = &lifecycle {
+        record_releases(run, &nodes, &mut evidence).await;
+    }
     write_json(&dir, "schedule.json", &schedule);
 
     let load_start = now_ms();
@@ -579,6 +655,7 @@ async fn the_sustained_load_contract_holds() {
         log,
         trackers: trackers.clone(),
         bootstrap: bootstrap.clone(),
+        lifecycle: lifecycle.clone(),
     };
     for fault in &schedule {
         let due = load_start + fault.start.millis_i64();
@@ -594,6 +671,13 @@ async fn the_sustained_load_contract_holds() {
         evidence.faults.push(outcome.record);
         evidence.recoveries.extend(outcome.recoveries);
         evidence.commits.extend(outcome.commits);
+        if let Some(run) = &lifecycle
+            && is_transition(&fault.kind)
+        {
+            evidence
+                .checkpoints
+                .push(take_checkpoint(&fault.id, run, &nodes, &ctx).await);
+        }
         write_json(&dir, "evidence.partial.json", &evidence);
     }
     sleep_until(load_start + contract.duration.millis_i64()).await;
@@ -662,5 +746,30 @@ async fn the_sustained_load_contract_holds() {
         "`{}` did not hold; evidence and verdict in {}",
         contract.name,
         dir.display()
+    );
+}
+
+/// The rollback the lifecycle contract may not take is refused by its source
+/// release before it changes the log, and the candidate reopens the log.
+///
+/// See the `rollback_guard` module documentation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Docker, //packaging:image and the lifecycle contract's source release image"]
+async fn an_unsupported_rollback_is_refused_before_it_damages_data() {
+    let contract = lifecycle_contract();
+    let dir = evidence_dir();
+    let outcome = rollback_guard::refuse_unsupported_rollback(&contract, &image())
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    write_json(&dir, "unsupported-rollback.json", &outcome);
+    eprintln!("soak-contract: unsupported rollback: {outcome:?}");
+    assert!(
+        outcome.changed.is_empty(),
+        "the refused rollback changed {:?}",
+        outcome.changed
+    );
+    assert!(
+        outcome.record_read_back,
+        "the candidate did not read the record back"
     );
 }

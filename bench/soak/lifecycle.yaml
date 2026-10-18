@@ -1,0 +1,139 @@
+# The lifecycle contract of a release candidate: a cluster formatted and
+# loaded on the newest 1.0.x release is upgraded to the candidate broker by
+# broker, has every broker's TLS certificate rotated, has one broker
+# drained of a path by reassignment, and is rolled back to the release broker by broker, all under
+# the same sustained load. After every transition the executor reconciles the
+# acknowledged records, the committed offsets and the topic configuration, and
+# records which image each broker runs and which feature levels are finalized.
+#
+# Nothing in this plan finalizes a feature level, so by the rule of
+# docs/persisted_formats.md the rollback is supported: a 1.x candidate writes
+# only the formats the source reads until a level that introduces another is
+# finalized. docs/qualification.md gives the whole lifecycle contract,
+# including the rollback this plan may not take and the check that refuses it.
+#
+# The budgets are those of the self-check: this runs on a shared CI runner.
+name: lifecycle
+profile: lifecycle
+seed: 1396
+duration: 1200s
+settle: 60s
+
+host:
+  cpus: 4
+  memory: 16GiB
+  disk_capacity: 2GiB
+  disk_reserve: 4GiB
+
+cluster:
+  # One broker more than the replication factor, so a reassignment has a broker
+  # to move a drained replica to.
+  brokers: 4
+  replication_factor: 3
+  min_insync_replicas: 2
+  check_quorum_window: 5s
+  replica_lag_time_max: 30s
+
+clients:
+  producer:
+    acks: all
+    compression: lz4
+    linger: 5ms
+    batch_size: 16KiB
+    request_timeout: 10s
+    delivery_timeout: 30s
+    max_send_attempts: 3
+  transactions:
+    timeout: 30s
+    records_per_transaction: 10
+    abort_every: 4
+  consumer:
+    session_timeout: 10s
+    commit_interval: 2s
+    poll_timeout: 200ms
+
+lifecycle:
+  # v1.0.5, the newest 1.0.x release: the multi-platform index its release
+  # workflow signed. `ApiVersions` from this image advertises these ranges;
+  # the executor reads them back and the judge compares.
+  source:
+    version: v1.0.5
+    image: ghcr.io/krabka-io/krabka-broker@sha256:2a81d1ba38de4e8ffb032fedf67952845185158a7607ac76ba38fa162dc37e50
+    supports:
+      eligible.leader.replicas.version: {min: 0, max: 1}
+      group.version: {min: 0, max: 1}
+      krabka.version: {min: 0, max: 1}
+      kraft.version: {min: 0, max: 1}
+      metadata.version: {min: 7, max: 30}
+      share.version: {min: 0, max: 1}
+      streams.version: {min: 0, max: 1}
+      transaction.version: {min: 0, max: 2}
+
+paths:
+  - name: classic-idempotent
+    semantics: idempotent
+    storage: classic
+    partitions: 3
+    rate: 40/s
+    throughput_floor: 20/s
+    payload: 512B
+    consumers: [read_uncommitted, read_committed]
+    commit_offsets: true
+    produce_latency: {p50: 500ms, p99: 5s, p999: 10s}
+    consume_latency: {p50: 2s, p99: 10s, p999: 20s}
+  - name: classic-transactional
+    semantics: transactional
+    storage: classic
+    partitions: 3
+    rate: 40/s
+    throughput_floor: 20/s
+    payload: 512B
+    consumers: [read_committed, read_uncommitted]
+    commit_offsets: true
+    produce_latency: {p50: 500ms, p99: 5s, p999: 10s}
+    consume_latency: {p50: 2s, p99: 10s, p999: 20s}
+  - name: classic-compacted
+    semantics: compacted
+    storage: classic
+    partitions: 3
+    rate: 40/s
+    throughput_floor: 20/s
+    payload: 256B
+    key_space: 64
+    consumers: [read_uncommitted]
+    produce_latency: {p50: 500ms, p99: 5s, p999: 10s}
+    consume_latency: {p50: 2s, p99: 10s, p999: 20s}
+
+# A roll stops its broker with a controlled shutdown and starts it on the
+# other image after its duration: the deadlines are the self-check's for a
+# graceful restart, but for the controller's. A v1.0.5 controller leader that
+# stops gracefully does not resign (#1446, fixed after it), so the quorum
+# replaces it only after its fetch timeouts: 20 to 24 s on a shared runner. A
+# rotation is served within seconds; a reassignment copies a few minutes of
+# one path at most.
+deadlines:
+  leader_failover: 25s
+  isr_rejoin: 60s
+  controller_failover: 30s
+  catch_up_after_pause: 20s
+  certificate_rotation: 30s
+  reassignment: 180s
+
+faults:
+  - {name: upgrade-broker-0, fault: {kind: roll, to: target}, target: {broker: 0}, first_at: 30s, duration: 15s}
+  - {name: upgrade-broker-1, fault: {kind: roll, to: target}, target: {broker: 1}, first_at: 120s, duration: 15s}
+  - {name: upgrade-broker-2, fault: {kind: roll, to: target}, target: {broker: 2}, first_at: 210s, duration: 15s}
+  - {name: upgrade-broker-3, fault: {kind: roll, to: target}, target: {broker: 3}, first_at: 300s, duration: 15s}
+  - {name: rotate-broker-0, fault: {kind: certificate_rotation}, target: {broker: 0}, first_at: 390s, duration: 5s}
+  - {name: rotate-broker-1, fault: {kind: certificate_rotation}, target: {broker: 1}, first_at: 430s, duration: 5s}
+  - {name: rotate-broker-2, fault: {kind: certificate_rotation}, target: {broker: 2}, first_at: 470s, duration: 5s}
+  - {name: rotate-broker-3, fault: {kind: certificate_rotation}, target: {broker: 3}, first_at: 510s, duration: 5s}
+  - name: drain-broker-3
+    fault: {kind: reassignment, path: classic-idempotent}
+    target: {broker: 3}
+    first_at: 550s
+    duration: 10s
+  - {name: rollback-broker-0, fault: {kind: roll, to: source}, target: {broker: 0}, first_at: 750s, duration: 15s}
+  - {name: rollback-broker-1, fault: {kind: roll, to: source}, target: {broker: 1}, first_at: 840s, duration: 15s}
+  - {name: rollback-broker-2, fault: {kind: roll, to: source}, target: {broker: 2}, first_at: 930s, duration: 15s}
+  - {name: rollback-broker-3, fault: {kind: roll, to: source}, target: {broker: 3}, first_at: 1020s, duration: 15s}

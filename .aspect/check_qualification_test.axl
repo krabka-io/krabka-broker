@@ -202,9 +202,38 @@ def _test_schema_one_stays_historical_and_schema_two_requires_disaster_recovery(
     check_eq("schema two missing DR", len([problem for problem in manifest_problems(candidate) if "exactly once" in problem]), 1)
 
 def _test_all_adapters_are_executable_shell(ctx):
-    for name in _EVIDENCE:
+    for name in list(_EVIDENCE.keys()) + ["loaded-lifecycle"]:
         result = ctx.std.process.command("bash").args(["-n", "-c", gate_script(name)]).spawn().wait()
         check_eq(name, result.code, 0)
+
+def _test_the_loaded_lifecycle_runs_beside_the_manifest_gates(_ctx):
+    # An eight-gate candidate is complete without it, and cannot list it as
+    # one of its schema's gates.
+    candidate = _candidate()
+    check_eq("eight-gate candidate", manifest_problems(candidate), [])
+    candidate["gates"].append({"name": "loaded-lifecycle", "issue": 1396, "status": "pending", "evidence": []})
+    problems = manifest_problems(candidate)
+    check_eq("not a schema gate", len([problem for problem in problems if problem.startswith("loaded-lifecycle: gate does not name")]), 1)
+
+def _test_the_loaded_lifecycle_fails_when_its_contract_is_missing(ctx):
+    # The adapter refuses an adapter tree without the lifecycle contract
+    # before it pulls or runs anything, and leaves no executed check.
+    tree = temp_tree(ctx, {"README.md": "no contract here\n"})
+    evidence = tree + "/evidence"
+    work = tree + "/work"
+    script = gate_script("loaded-lifecycle")
+    body = script[script.find("adapter=$4"):]
+    result = ctx.std.process.command("bash").args([
+        "-c",
+        "set -euo pipefail; evidence=$2; work=$3; mkdir -p \"$evidence\"; : > \"$evidence/checks.txt\"; check() { local name=$1; shift; \"$@\"; printf '%s\\n' \"$name\" >> \"$evidence/checks.txt\"; }; " + body,
+        "loaded-lifecycle",
+        tree + "/candidate.json",
+        evidence,
+        work,
+        tree,
+    ]).spawn().wait()
+    check_eq("refused", result.code != 0, True)
+    check_eq("no checks", ctx.std.fs.read_to_string(evidence + "/checks.txt"), "")
 
 def _test_installation_enables_the_streams_protocol(_ctx):
     commands = gate_script("installation")
@@ -346,6 +375,8 @@ check_qualification_tests = suite("check-qualification", [
     _test_final_candidate_requires_all_five_fresh_receipts,
     _test_schema_one_stays_historical_and_schema_two_requires_disaster_recovery,
     _test_all_adapters_are_executable_shell,
+    _test_the_loaded_lifecycle_runs_beside_the_manifest_gates,
+    _test_the_loaded_lifecycle_fails_when_its_contract_is_missing,
     _test_installation_enables_the_streams_protocol,
     _test_installation_finalizes_topics_before_the_cluster,
     _test_disaster_recovery_uses_the_packaged_secured_loss_path,

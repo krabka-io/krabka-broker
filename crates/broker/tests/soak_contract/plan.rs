@@ -23,6 +23,10 @@ const COMPACTED_SEGMENT_BYTES: &str = "65536";
 const TIERED_SEGMENT_BYTES: &str = "4194304";
 const TIERED_SEGMENT_MS: &str = "15000";
 
+/// The most nodes the fixture boots: every node is a voter, and a quorum of
+/// five is the largest the CI runner's four CPUs carry under load.
+const MAX_BROKERS: u32 = 5;
+
 /// Every reason this executor cannot run `contract`, one line each.
 pub(crate) fn unsupported(contract: &Contract) -> Vec<String> {
     let mut reasons = Vec::new();
@@ -35,9 +39,9 @@ pub(crate) fn unsupported(contract: &Contract) -> Vec<String> {
             ));
         }
     }
-    if contract.cluster.brokers != 3 {
+    if !(3..=MAX_BROKERS).contains(&contract.cluster.brokers) {
         reasons.push(format!(
-            "the cluster has {} brokers; the soak fixture boots three",
+            "the cluster has {} brokers; the soak fixture boots three to {MAX_BROKERS}",
             contract.cluster.brokers
         ));
     }
