@@ -95,15 +95,23 @@ partition and `cleanup.policy=compact`.
 | `<source alias>.checkpoints.internal` | Target | The translated position of every mirrored consumer group. |
 | `mm2-offset-syncs.<alias>.internal` | Source, or target when you move it | The upstream-to-downstream offset pairs that translation reads. |
 
-Read the lag of MirrorMaker 2's own consumers on the source cluster:
+MirrorMaker 2's source consumers assign their partitions directly and commit
+no group offsets to the source cluster. They keep their position in the
+`mm2-offsets.<source alias>.internal` topic on the target. So
+`kafka-consumer-groups --describe --group prod-mm2` on the source answers
+`GroupIdNotFoundException`. Compare the end offsets of each source topic with
+those of its mirror instead:
 
 ```bash
-kafka-consumer-groups.sh --bootstrap-server kafka-1.example.com:9092 \
-  --describe --group prod-mm2
+kafka-get-offsets.sh --bootstrap-server kafka-1.example.com:9092 --topic orders
+kafka-get-offsets.sh --bootstrap-server krabka-1.example.com:9092 --topic prod.orders
 ```
 
-The mirror has caught up when that lag stays near zero and the target topic's
-end offsets stop moving faster than the source's.
+The mirror has caught up when the target's end offsets follow the source's and
+stop moving after the source producers stop. The two numbers are equal only
+when the source partition holds no transaction markers and no compacted gaps.
+MirrorMaker 2 also exports `record-age-ms` and `replication-latency-ms` per
+partition over JMX, under `kafka.connect.mirror:type=MirrorSourceConnector`.
 
 ## Cut the consumers over
 

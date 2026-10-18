@@ -12,7 +12,7 @@ The tool runs when the cluster does not. It reads the archive through [`krabka-o
 
 ## The binary is `krabka-restore`
 
-The `krabka` operator CLI resolves an unknown subcommand to `krabka-<name>` on `PATH`, the way git resolves `git foo` to `git-foo`. The binary therefore carries the name `krabka-restore`, and not the `krabka-` prefix that the rest of the workspace uses. Put the binary on `PATH` and `krabka restore` works.
+The `krabka` operator CLI resolves an unknown subcommand to `krabka-<name>` on `PATH`, the way git resolves `git foo` to `git-foo`. The binary therefore carries the name `krabka-restore`, and not the `krabka-` prefix that the rest of the workspace uses. Put the binary on `PATH` and `krabka restore` works. The `krabka` operator CLI is not in this repository or in the broker image, so an operator with only those runs `krabka-restore` by name.
 
 The crate is a library as well as a binary. A tool that embeds the restore calls `krabka_restore::restore`, which returns the structured report and the structured error. Only the binary maps an error onto an exit code.
 

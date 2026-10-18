@@ -36,12 +36,16 @@ copy it out. That path builds for the host it runs on, so it works anywhere the
 Rust toolchain does:
 
 ```
-bazel build //:broker_bin //:format_bin
-cp bazel-bin/crates/broker/krabka-broker bazel-bin/crates/format/krabka-format /usr/local/bin/
+bazel build //:broker_bin //:format_bin //:restore_bin //crates/backup-cli:krabka-backup
+cp bazel-bin/crates/broker/krabka-broker bazel-bin/crates/format/krabka-format \
+    bazel-bin/crates/restore/krabka-restore bazel-bin/crates/backup-cli/krabka-backup \
+    /usr/local/bin/
 ```
 
-Both binaries link glibc and nothing else. The image's Wolfi base supplies
-glibc and the CA bundle.
+`krabka-backup` and `krabka-restore` are the tools that
+[Backup and restore](backup-restore.md) uses. Install them on every host that
+captures restore inputs or runs a restore. The binaries link glibc and nothing
+else. The image's Wolfi base supplies glibc and the CA bundle.
 
 ### Kubernetes
 
@@ -95,8 +99,8 @@ The parts that carry the design:
 | :--- | :--- | :--- |
 | 9092 | Kafka client and inter-broker listener | `--listen-addr` (default `127.0.0.1:9092`). Under `--config-file` each `[[listeners]]` entry sets its own port. |
 | 9093 | KIP-595 controller listener | `--controller-listen-addr`, `KRABKA_CONTROLLER_LISTEN_ADDR`. By default `listen_addr` with the port set to 9093. Under `--config-file` the default binds all interfaces. It must equal the endpoint that `krabka format` recorded for the node. |
-| 9404 | Prometheus `/metrics` and `/debug/pprof` | `--metrics-listen-addr`, `KRABKA_METRICS_LISTEN_ADDR`. `none` disables it. |
-| 9405 | `/healthz` and `/readyz` probes | `--health-listen-addr`, `KRABKA_HEALTH_LISTEN_ADDR`. `none` disables them. |
+| 9404 | Prometheus `/metrics` and `/debug/pprof` | `--metrics-listen-addr`, `KRABKA_METRICS_LISTEN_ADDR` (default `0.0.0.0:9404`). It binds all interfaces even when the Kafka listener binds only loopback. `none` disables it. |
+| 9405 | `/healthz` and `/readyz` probes | `--health-listen-addr`, `KRABKA_HEALTH_LISTEN_ADDR` (default `0.0.0.0:9405`). It binds all interfaces even when the Kafka listener binds only loopback. `none` disables them. |
 
 Every broker in the cluster must reach every other broker's 9093. Clients
 need only the port of the listener they connect to: 9092 under
@@ -129,6 +133,14 @@ A single node that is its own controller:
 krabka-format --log-dir /var/lib/krabka --standalone --node-id 1 \
     --controller-listener broker-1.example:9093
 ```
+
+A cluster with fewer than three brokers must lower the replication factor of
+the internal topics when it starts, as a Kafka quickstart sets
+`offsets.topic.replication.factor=1`. Start the broker with
+`--offsets-topic-replication-factor 1` and
+`--transaction-state-replication-factor 1`. Without them the broker cannot
+create `__consumer_offsets`. It logs `INVALID_REPLICATION_FACTOR`, and every
+consumer group waits for a coordinator with no error to the client.
 
 A three-node quorum with a KIP-853 dynamic initial voter set. Every node
 runs the same command with its own `--node-id`, its own `--directory-id` and
@@ -226,8 +238,9 @@ credentials_path = "/etc/krabka/sasl/plain-credentials"
 controlled_shutdown_drain_timeout = "20s"
 ```
 
-The sections the file accepts are the fields of
-`krabka_broker::file_config::FileConfig`. The ones an operator reaches for
+The [configuration reference](../config-reference.md) lists every section and
+key the file accepts, with its default. `krabka-broker --print-config-schema`
+prints the same set as a JSON schema. The sections an operator reaches for
 first:
 
 | Section | Purpose |
@@ -236,7 +249,7 @@ first:
 | `[process]` | `roles`: `controller`, `broker`, and the `witness` modifier for a stretch cluster. |
 | `[stretch]` | The three sites of a stretch cluster and the preferred leader site. All-or-nothing. |
 | `[runtime]` | Timers and sizes: the controlled-shutdown drain, snapshot cadence, the diskless WAL flusher, queue capacities. Heartbeats and `replica_lag_time_max` sit at the top level. |
-| `[remote_storage]` | KIP-405 tiered storage: the S3 or GCS bucket, the WORM policy and the topic-backed metadata manager. |
+| `[remote_storage]` | KIP-405 tiered storage: the S3 or GCS bucket, the WORM policy and the topic-backed metadata manager. A topic tiers only with `remote.storage.enable=true`. [Backup and restore](backup-restore.md) restores only from this archive. |
 | `[audit]` | The audit topic, its failure mode, signing and the durable spool. |
 | `[sasl_plain]` | `credentials_path`: the file the static SASL/PLAIN credential table is read from. Required once a listener offers `PLAIN`. |
 | `[authorization]` | ACL or OPA authorizer. |
@@ -255,11 +268,11 @@ krabka-broker --config-file /etc/krabka/broker.toml \
     --cluster-id DX4vWpscTB6KPyttHkyfEA
 ```
 
-The broker logs `health server listening` first, before it opens the log
-directory, so the probes answer through recovery. It then logs
-`selected bootstrap mode`: `Bootstrap` on a fresh directory, `Rejoin` on one
-it has run from before. It logs `metrics server listening` once `/metrics` is
-up. It logs `krabka-broker started` when its start is complete. That line
+The broker first logs `selected bootstrap mode`: `Bootstrap` on a fresh
+directory, `Rejoin` on one it has run from before. It then logs
+`health server listening`, before it recovers the log directory, so the
+probes answer through recovery. It logs `metrics server listening` once
+`/metrics` is up. It logs `krabka-broker started` when its start is complete. That line
 names the listeners that the node opened: `listen_addr` for the client
 listener of a node with the `broker` role, and `controller_listen_addr` for
 the controller listener of a node with the `controller` role. A

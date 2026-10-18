@@ -4,10 +4,12 @@ What to copy off a krabka cluster, how often to copy it, and how to check that
 a copy would restore. The day this page matters is the day the disks are gone,
 so everything here has to already be running before then.
 
-`krabka restore` rebuilds a log directory out of a KIP-405 tiered-storage
-archive. The archive holds the records. It holds nothing else, and the three
-inputs that turn a pile of records back into the cluster an operator lost live
-on the disks the disaster destroys. This page is about those three.
+`krabka-restore` rebuilds a log directory out of a KIP-405 tiered-storage
+archive. The image and the [binary install](deploy.md#install) supply it and
+`krabka-backup` under those names. The archive holds the records. It holds
+nothing else, and the three inputs that turn a pile of records back into the
+cluster an operator lost live on the disks the disaster destroys. This page is
+about those three.
 
 ## What a restore needs
 
@@ -118,13 +120,24 @@ losing, and it is different for each input.
 | :--- | :--- | :--- |
 | Group offsets | Hourly, and again before any planned change to the cluster. | Every group resumes at the older position and reads the records after it a second time. Kafka consumers are already at-least-once, so this is a cost in duplicate work, not in correctness. |
 | RLMM snapshot | Daily, or hourly beside the offsets. It is cheap and small. | A restore includes segments that remote retention released after the snapshot was taken. Records the old cluster had already dropped come back. |
-| Metadata checkpoint | Daily, and again after any ACL, quota, credential or topic-config change. | The restore brings back the configuration as it was at the capture. A permission granted after it is gone, and, worse, a permission revoked after it comes back. |
+| Metadata checkpoint | Daily, and again after the controller writes its next checkpoint after any ACL, quota, credential or topic-config change. | The restore brings back the configuration as it was at the checkpoint. A permission granted after it is gone, and, worse, a permission revoked after it comes back. |
 
 One `krabka-backup capture` run takes all three, so the simple schedule is one
 hourly `CronJob` and nothing else to reason about. The metadata checkpoint is a
 whole controller snapshot: it is the largest artifact of the three, and the
 controller writes a new one on its own schedule, so an hourly capture often
 re-uploads bytes it already has.
+
+A capture takes the newest checkpoint on disk, and that file can be up to an
+hour old. The controller writes one each `metadata_max_snapshot_interval`
+(default 1 hour) or each `metadata_snapshot_interval_records` (default 10,000
+records), both in `[runtime]`. Until its first one, the newest file is the
+format-time `00000000000000000000-0000000000.checkpoint`, which holds no
+topic. A capture of a young cluster then restores no topic configuration, and
+neither tool warns
+([#1514](https://github.com/krabka-io/krabka-broker/issues/1514)). The capture
+prints the name of the checkpoint it took. Its first number is the metadata
+offset that the checkpoint covers, so `0` means the format-time checkpoint.
 
 Keep at least as many captures as the recovery window the business asks for. An
 attacker who can write to the cluster can also grant themselves an ACL, and a
@@ -153,8 +166,12 @@ archive holds, which is the check that the `CronJob` is still running at all.
 **The copy restores.** Nothing but a restore proves a restore. Rehearse it on a
 schedule the same way an on-call rotation is rehearsed:
 
-1. `krabka restore` from the production archive with the newest capture's two
+1. `krabka-restore` from the production archive with the newest capture's two
    snapshots into a scratch directory, with `--dry-run` first to see the plan.
+   The dry run formats its `--log-dir`, so give it a directory of its own
+   ([#1512](https://github.com/krabka-io/krabka-broker/issues/1512)).
+   Compare `metadata.topic_configs` in the plan with the number of topics that
+   have config overrides in production.
 2. Boot a broker on the result.
 3. `krabka-backup restore-offsets` against it.
 4. Read one topic from a group's restored position and compare against
