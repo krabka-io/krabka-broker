@@ -29,6 +29,13 @@ branch, and distributes that exact input to every job. This needs no candidate
 commit after the delivery image has been published. To change sibling revisions
 or artifacts, provide a reviewed manifest containing that full candidate set.
 
+The overrides replace the broker component only. Before you use them, run
+`aspect freeze-candidate` with the baseline manifest: a `DRIFT` line means the
+broker compiles in a sibling revision that the manifest does not name, and the
+run needs a reviewed manifest instead.
+[Release candidate qualification](release-candidate-qualification.md) gives
+the whole freeze procedure and every gate a release candidate passes.
+
 To qualify a new broker delivery against the baseline sibling set, run the
 baseline with the delivered revision and digest. When a run with a new sibling
 set publishes, check in its qualified manifest as the next baseline; do not
