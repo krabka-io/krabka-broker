@@ -182,23 +182,24 @@ pub(crate) fn reassignment_plan(
 }
 
 /// Whether `states` shows every partition of `plan` on its planned replicas,
-/// in any order, or which partition is not yet.
+/// in the planned order, or which partition is not yet. The order is part of
+/// the plan: the first replica is the preferred leader, and the drained
+/// broker's replacement takes its position.
 pub(crate) fn on_planned_replicas(
     states: &[PartitionState],
     topic: &str,
     plan: &BTreeMap<i32, Vec<i32>>,
 ) -> Result<(), String> {
     for (partition, planned) in plan {
-        let mut want = planned.clone();
-        want.sort_unstable();
-        let mut have = states
+        let have = states
             .iter()
             .find(|state| state.topic == topic && state.partition == *partition)
-            .map(|state| state.replicas.clone())
+            .map(|state| state.replicas.as_slice())
             .unwrap_or_default();
-        have.sort_unstable();
-        if have != want {
-            return Err(format!("{topic}-{partition} is on {have:?}, not {want:?}"));
+        if have != planned.as_slice() {
+            return Err(format!(
+                "{topic}-{partition} is on {have:?}, not {planned:?}"
+            ));
         }
     }
     Ok(())
@@ -469,10 +470,10 @@ mod tests {
 
     #[yare::parameterized(
         same_order = { &[1, 2, 4], true },
-        any_order = { &[4, 1, 2], true },
+        another_order = { &[4, 1, 2], false },
         not_yet = { &[1, 2, 3], false },
     )]
-    fn a_partition_is_on_its_plan_whatever_the_replica_order(replicas: &[i32], done: bool) {
+    fn a_partition_is_on_its_plan_in_the_planned_order(replicas: &[i32], done: bool) {
         let plan = BTreeMap::from([(0, vec![1, 2, 4])]);
         check!(on_planned_replicas(&[state(0, 1, replicas)], "t", &plan).is_ok() == done);
     }

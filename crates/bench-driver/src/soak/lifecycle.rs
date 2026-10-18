@@ -21,7 +21,7 @@
 
 use {
     super::{
-        contract::{Contract, FaultKind, Isolation, Semantics},
+        contract::{Contract, FaultKind, Isolation, Semantics, Target},
         evidence::{Evidence, ReaderLedger},
         ledger::SeqSet,
         reconcile::{Finding, FindingKind},
@@ -264,38 +264,106 @@ pub fn judge_lifecycle(
             failures.push(format!("{}: no checkpoint after the transition", fault.id));
             continue;
         };
-        for read in &checkpoint.records {
-            failures.extend(
-                checkpoint_findings(read)
-                    .into_iter()
-                    .map(|finding| format!("{}: {finding}", fault.id)),
-            );
-        }
         failures.extend(
-            checkpoint
-                .config_mismatches
-                .iter()
-                .map(|mismatch| format!("{}: configuration {mismatch}", fault.id)),
+            checkpoint_failures(contract, lifecycle, checkpoint)
+                .into_iter()
+                .map(|failure| format!("{}: {failure}", fault.id)),
         );
-        if let FaultKind::Roll { to } = fault.kind {
-            let expected = evidence.releases.get(&to.to_string());
-            let node = evidence
-                .faults
-                .iter()
-                .find(|record| record.id == fault.id)
-                .and_then(|record| record.node);
-            let running = node.and_then(|node| checkpoint.images.get(&node));
-            if expected.is_none() || running != expected {
-                failures.push(format!(
-                    "{}: node {node:?} runs {running:?} after a roll to the {to}, whose image is {expected:?}",
-                    fault.id
-                ));
-            }
-        }
-        rollback_ruled_out = match &checkpoint.rollback {
+        failures.extend(
+            placement_failures(fault, checkpoint, evidence)
+                .into_iter()
+                .map(|failure| format!("{}: {failure}", fault.id)),
+        );
+        // The judge's own reading of the finalized levels, not the one the
+        // executor recorded, decides whether a later rollback was allowed.
+        rollback_ruled_out = match rollback(&lifecycle.source, &checkpoint.finalized) {
             Rollback::Supported => None,
             Rollback::Unsupported(reasons) => Some(reasons.join("; ")),
         };
+    }
+    failures
+}
+
+/// What one checkpoint fails on by itself: a path read back other than once,
+/// a record or configuration that did not reconcile, and a recorded rollback
+/// answer that its own finalized levels contradict.
+fn checkpoint_failures(
+    contract: &Contract,
+    lifecycle: &Lifecycle,
+    checkpoint: &Checkpoint,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    for path in &contract.paths {
+        let reads = checkpoint
+            .records
+            .iter()
+            .filter(|read| read.path == path.name)
+            .count();
+        if reads != 1 {
+            failures.push(format!(
+                "path {} was read back {reads} times, not once",
+                path.name
+            ));
+        }
+    }
+    for read in &checkpoint.records {
+        if contract.path(&read.path).is_none() {
+            failures.push(format!("{} is not a path of the contract", read.path));
+        }
+        failures.extend(
+            checkpoint_findings(read)
+                .into_iter()
+                .map(|finding| finding.to_string()),
+        );
+    }
+    failures.extend(
+        checkpoint
+            .config_mismatches
+            .iter()
+            .map(|mismatch| format!("configuration {mismatch}")),
+    );
+    let derived = rollback(&lifecycle.source, &checkpoint.finalized);
+    if checkpoint.rollback != derived {
+        failures.push(format!(
+            "recorded the rollback as {:?}, but the finalized levels {:?} make it {derived:?}",
+            checkpoint.rollback, checkpoint.finalized
+        ));
+    }
+    failures
+}
+
+/// Whether `fault` landed on the broker its plan names, the node at that index
+/// of the cluster's nodes in id order, and, for a `roll`, left that node on
+/// its side's image.
+fn placement_failures(
+    fault: &ScheduledFault,
+    checkpoint: &Checkpoint,
+    evidence: &Evidence,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    let node = evidence
+        .faults
+        .iter()
+        .find(|record| record.id == fault.id)
+        .and_then(|record| record.node);
+    if let Target::Broker(index) = fault.target {
+        let planned = usize::try_from(index)
+            .ok()
+            .and_then(|index| checkpoint.images.keys().nth(index).copied());
+        if node.is_none() || node != planned {
+            failures.push(format!(
+                "landed on node {node:?}, but broker {index} of the plan is node {planned:?}"
+            ));
+        }
+    }
+    if let FaultKind::Roll { to } = fault.kind {
+        let expected = evidence.releases.get(&to.to_string());
+        let running = node.and_then(|node| checkpoint.images.get(&node));
+        if expected.is_none() || running != expected {
+            failures.push(format!(
+                "node {node:?} runs {running:?} after a roll to the {to}, whose image is {expected:?}"
+            ));
+        }
     }
     failures
 }
@@ -414,9 +482,29 @@ mod tests {
             |e: &mut Evidence| { e.checkpoints[0].images.insert(1, "synthetic-source".into()); },
             Some("upgrade#0: node Some(1) runs Some(\"synthetic-source\") after a roll to the target")
         },
+        wrong_broker = {
+            |e: &mut Evidence| e.faults[1].node = Some(1),
+            Some("rotate#0: landed on node Some(1), but broker 1 of the plan is node Some(2)")
+        },
         rollback_after_a_newer_level = {
-            |e: &mut Evidence| e.checkpoints[2].rollback = Rollback::Unsupported(vec!["krabka.version is finalized at 2".into()]),
-            Some("rollback#0 rolled back to v1.0.5 after a checkpoint ruled it out: krabka.version is finalized at 2")
+            |e: &mut Evidence| { e.checkpoints[2].finalized.insert("krabka.version".into(), 2); },
+            Some("reassign#0: recorded the rollback as Supported")
+        },
+        rollback_past_a_newer_level = {
+            |e: &mut Evidence| { e.checkpoints[2].finalized.insert("krabka.version".into(), 2); },
+            Some("rollback#0 rolled back to v1.0.5 after a checkpoint ruled it out: krabka.version is finalized at 2, but v1.0.5 supports 0-0")
+        },
+        rollback_answer_contradicts_the_levels = {
+            |e: &mut Evidence| e.checkpoints[0].rollback = Rollback::Unsupported(vec!["made up".into()]),
+            Some("upgrade#0: recorded the rollback as Unsupported")
+        },
+        a_path_left_unread = {
+            |e: &mut Evidence| { e.checkpoints[1].records.pop(); },
+            Some("rotate#0: path classic-transactional was read back 0 times, not once")
+        },
+        no_path_read = {
+            |e: &mut Evidence| e.checkpoints[1].records.clear(),
+            Some("rotate#0: path classic-idempotent was read back 0 times, not once")
         },
         config_drift = {
             |e: &mut Evidence| e.checkpoints[1].config_mismatches.push("classic-idempotent min.insync.replicas is 1, not 2".into()),
@@ -428,10 +516,7 @@ mod tests {
         failure: Option<&str>,
     ) {
         let failures = lifecycle_failures(edit);
-        check!(
-            failures.len() == usize::from(failure.is_some()),
-            "{failures:#?}"
-        );
+        check!(failures.is_empty() == failure.is_none(), "{failures:#?}");
         check!(
             failure.is_none_or(|failure| failures.iter().any(|found| found.starts_with(failure))),
             "{failures:#?}"
