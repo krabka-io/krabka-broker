@@ -1,0 +1,203 @@
+"""Every row of the release support matrix carries its evidence.
+
+`docs/operations/support-matrix.md` is hand-written, and a row that loses its
+link or its revision still reads like a claim. This check holds each row of
+every matrix table to the page's own status vocabulary:
+
+- the status is one of `STATUSES`;
+- the evidence cell links something;
+- a row that ran (`candidate`, `historical` or `failing`) names the revision
+  it ran at, as a hexadecimal commit of at least seven digits or a `vX.Y.Z`
+  tag;
+- an `untested` row links the GitHub issue that owns the gap;
+- a `candidate` row names the candidate revision that the page declares, and
+  no row is `candidate` while that revision is `none`.
+
+    aspect check-support-matrix
+"""
+
+load("./repo.axl", "read_lines")
+
+MATRIX = "docs/operations/support-matrix.md"
+
+# The header of every table that this check reads. Other tables on the page,
+# such as the status legend and the reference runs, have other headers.
+HEADER = "| Combination | Status | Evidence | Tested at | Notes |"
+
+STATUSES = ["candidate", "historical", "failing", "untested", "unsupported"]
+
+# The statuses that say a check executed, and so must name where.
+EXECUTED = ["candidate", "historical", "failing"]
+
+CANDIDATE_PREFIX = "Candidate revision: "
+
+_HEX = "0123456789abcdef"
+
+# Characters that end a revision token inside a cell: Markdown and prose
+# punctuation around a commit or a tag.
+_SEPARATORS = "`(),;"
+
+# What an escaped pipe stands for while a row is split on its real pipes. The
+# character is a control code, which no Markdown on the page holds.
+_ESCAPED_PIPE = "\x1f"
+
+def cells(line):
+    """The trimmed cells of a Markdown table row, or None for a non-row.
+
+    An escaped pipe, a backslash before a `|`, is part of its cell, as Markdown
+    renders it, and comes back unchanged.
+    """
+    row = line.strip()
+    if len(row) < 2 or not row.startswith("|") or not row.endswith("|"):
+        return None
+    row = row.replace("\\|", _ESCAPED_PIPE)
+    if row.endswith(_ESCAPED_PIPE):
+        return None
+    return [
+        cell.strip().replace(_ESCAPED_PIPE, "\\|")
+        for cell in row[1:-1].split("|")
+    ]
+
+def is_separator(row):
+    """Whether the cells are the `| :--- |` line under a header."""
+    for cell in row:
+        for char in cell.elems():
+            if char not in "-: ":
+                return False
+    return True
+
+def candidate_revision(lines):
+    """The value of the page's `Candidate revision:` line, or "" if absent."""
+    for line in lines:
+        if line.startswith(CANDIDATE_PREFIX):
+            return line[len(CANDIDATE_PREFIX):].strip().strip("`")
+    return ""
+
+def _is_commit(token):
+    if len(token) < 7 or len(token) > 40:
+        return False
+    for char in token.elems():
+        if char not in _HEX:
+            return False
+    return True
+
+def _is_tag(token):
+    if not token.startswith("v") or token.count(".") != 2:
+        return False
+    for part in token[1:].split("."):
+        if not part.isdigit():
+            return False
+    return True
+
+def revisions(cell):
+    """Every commit or `vX.Y.Z` tag that `cell` names, in order."""
+    text = cell
+    for char in _SEPARATORS.elems():
+        text = text.replace(char, " ")
+    return [token for token in text.split() if _is_commit(token) or _is_tag(token)]
+
+def _names_revision(cell, revision):
+    for named in revisions(cell):
+        if named.startswith(revision) or revision.startswith(named):
+            return True
+    return False
+
+def _row_problems(number, row, candidate):
+    if len(row) != 5:
+        return ["line %d: a matrix row has %d cells, want 5" % (number, len(row))]
+    name = row[0]
+    status = row[1].strip("`")
+    evidence = row[2]
+    tested_at = row[3]
+    found = []
+    if status not in STATUSES:
+        found.append("line %d: %s has status `%s`, want one of %s" % (
+            number,
+            name,
+            status,
+            ", ".join(STATUSES),
+        ))
+    if evidence.find("](") < 0:
+        found.append("line %d: %s has no evidence link" % (number, name))
+    if status in EXECUTED and not revisions(tested_at):
+        found.append("line %d: %s is %s but names no revision" % (number, name, status))
+    if status == "untested" and evidence.find("/issues/") < 0:
+        found.append("line %d: %s is untested but links no issue" % (number, name))
+    if status == "candidate":
+        if candidate == "none":
+            found.append("line %d: %s is candidate, but the candidate revision is none" % (number, name))
+        elif not _names_revision(tested_at, candidate):
+            found.append("line %d: %s is candidate but does not name %s" % (number, name, candidate))
+    return found
+
+def matrix_rows(lines):
+    """Every `(line number, cells)` row of the matrix tables, in page order."""
+    found = []
+    in_matrix = False
+    for index, line in enumerate(lines):
+        if line.strip() == HEADER:
+            in_matrix = True
+            continue
+        if not in_matrix:
+            continue
+        row = cells(line)
+        if row == None:
+            in_matrix = False
+        elif not is_separator(row):
+            found.append((index + 1, row))
+    return found
+
+def misheaded_tables(lines):
+    """The line number of every evidence table whose header is not `HEADER`.
+
+    A table is an evidence table when its header names both a `Status` and an
+    `Evidence` column. Only a table with exactly `HEADER` is checked row by row,
+    so a renamed column would otherwise take its whole table out of the check.
+    """
+    found = []
+    for index in range(len(lines) - 1):
+        header = cells(lines[index])
+        below = cells(lines[index + 1])
+        if header == None or below == None or not is_separator(below) or is_separator(header):
+            continue
+        if "Status" in header and "Evidence" in header and lines[index].strip() != HEADER:
+            found.append(index + 1)
+    return found
+
+def problems(lines):
+    """Every complaint about the matrix page `lines`, in page order."""
+    found = []
+    for number in misheaded_tables(lines):
+        found.append("line %d: an evidence table's header is not %s" % (number, HEADER))
+    candidate = candidate_revision(lines)
+    if not candidate:
+        found.append("no `%s` line" % CANDIDATE_PREFIX.strip())
+    elif candidate != "none" and not _is_commit(candidate):
+        found.append("candidate revision `%s` is neither none nor a commit" % candidate)
+
+    rows = matrix_rows(lines)
+    if not rows:
+        found.append("no matrix rows under the header %s" % HEADER)
+    for number, row in rows:
+        found.extend(_row_problems(number, row, candidate))
+    return found
+
+def _impl(ctx: TaskContext) -> int:
+    root = ctx.std.env.bazel_root_dir()
+    lines = read_lines(ctx.std.fs, root + "/" + MATRIX)
+    found = problems(lines)
+    for problem in found:
+        ctx.std.io.stderr.write("%s: %s\n" % (MATRIX, problem))
+    if found:
+        return 1
+
+    ctx.std.io.stdout.write(
+        "check-support-matrix: %d rows carry their evidence\n" % len(matrix_rows(lines)),
+    )
+    return 0
+
+check_support_matrix = task(
+    summary = "Check that every support-matrix row has a status, evidence and a revision",
+    implementation = _impl,
+    args = {},
+)

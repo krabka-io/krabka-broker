@@ -574,6 +574,9 @@ jobs:
       # Every crate has a README and the root README crate table names it.
       - name: crate READMEs
         run: aspect check-crate-readmes
+      # Every row of the release support matrix has a status from its legend, an evidence link, and the revision it ran at; no row claims a candidate that is not frozen.
+      - name: support matrix evidence
+        run: aspect check-support-matrix
       # //bazel/images' IMAGES restates every //MODULE.bazel image pin as the tag the image is loaded under. A digest bump that moves the tag on one side only leaves a suite testing bytes its `const KAFKA_IMAGE` no longer describes.
       - name: pinned images
         run: aspect check-images
