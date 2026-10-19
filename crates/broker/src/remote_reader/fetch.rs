@@ -71,7 +71,7 @@ impl RemoteReader {
         else {
             return Ok(None);
         };
-        match whole_batches_from(&read.data, offset) {
+        match whole_batches_from(&read.data, offset, max_bytes) {
             RawScan::Batches(range) => Ok(Some(Bytes::from(read.data).slice(range))),
             RawScan::Missing => Ok(None),
             RawScan::Truncated { at, len } => {
@@ -99,7 +99,7 @@ impl RemoteReader {
                 let data = self
                     .fetch_log_blocking(read.metadata, start, Some(end))
                     .await?;
-                Ok(match whole_batches_from(&data, offset) {
+                Ok(match whole_batches_from(&data, offset, max_bytes) {
                     RawScan::Batches(range) => Some(Bytes::from(data).slice(range)),
                     RawScan::Missing | RawScan::Truncated { .. } => None,
                 })
@@ -244,7 +244,15 @@ fn batch_len(bytes: &[u8]) -> Option<usize> {
 /// The read's cap always reaches past every batch in front of the one that
 /// holds `offset`, so a batch that the read cut short before the first wanted
 /// one counts as that wanted batch, and a malformed length ends the walk.
-fn whole_batches_from(data: &[u8], offset: LogOffset) -> RawScan {
+///
+/// The run holds no more than `max_bytes` from the start of its first batch,
+/// which is kept whole whatever its size: Kafka's `RemoteLogManager.read`
+/// reads `maxBytes` from the first batch on, and the batch alone when it is
+/// larger (`minOneMessage`). The read reaches past the first batch by the gap
+/// to the next offset-index entry as well as by the budget, so the batches in
+/// that gap would otherwise go out over it. A `max_bytes` of zero means no
+/// cap, as it does for the read.
+fn whole_batches_from(data: &[u8], offset: LogOffset, max_bytes: usize) -> RawScan {
     let mut at = 0_usize;
     let mut first: Option<usize> = None;
     let found = |first: Option<usize>, at: usize| first.map(|first| RawScan::Batches(first..at));
@@ -267,8 +275,12 @@ fn whole_batches_from(data: &[u8], offset: LogOffset) -> RawScan {
             .base_offset
             .get()
             .saturating_add(i64::from(header.last_offset_delta.get()));
-        if last >= offset && first.is_none() {
-            first = Some(at);
+        match first {
+            None if last >= offset => first = Some(at),
+            Some(start) if max_bytes > 0 && at + len - start > max_bytes => {
+                return RawScan::Batches(start..at);
+            }
+            _ => {}
         }
         at += len;
     }
@@ -358,7 +370,12 @@ mod tests {
             (12, 4096, Some(both)),
             (14, 4096, Some(second.clone())),
             (16, sparse_fixture_second_batch_len(), Some(second.clone())),
-            (10, 1, Some(first)),
+            (10, 1, Some(first.clone())),
+            // The read widens to the next index entry to find the batch that
+            // holds the offset, and must not hand back more than the budget
+            // past it: the second batch fits the read but not the budget.
+            (10, first.len(), Some(first.clone())),
+            (12, first.len() + 1, Some(first)),
             (14, 1, Some(second)),
             (17, 4096, None),
         ];
@@ -380,46 +397,73 @@ mod tests {
     // of them.
     #[test]
     fn the_raw_scan_keeps_whole_batches_from_the_offset() {
-        /// A label, the bytes read, the offset asked for and the scan they
-        /// must give.
+        /// A label, the bytes read, the offset asked for, the byte budget
+        /// (zero for none) and the scan they must give.
         struct ScanCase<'a> {
             label: &'a str,
             data: Vec<u8>,
             offset: i64,
+            max_bytes: usize,
             want: RawScan,
         }
         let [first, second] = sparse_fixture_batch_bytes();
         let both = [first.to_vec(), second.to_vec()].concat();
         let (one, two) = (first.len(), both.len());
-        let cases: [ScanCase<'_>; 7] = [
+        let cases: [ScanCase<'_>; 10] = [
+            ScanCase {
+                label: "the budget ends the run",
+                data: both.clone(),
+                offset: 10,
+                max_bytes: one,
+                want: RawScan::Batches(0..one),
+            },
+            ScanCase {
+                label: "the first batch is whole over the budget",
+                data: both.clone(),
+                offset: 10,
+                max_bytes: 1,
+                want: RawScan::Batches(0..one),
+            },
+            ScanCase {
+                label: "a budget that holds both",
+                data: both.clone(),
+                offset: 12,
+                max_bytes: two,
+                want: RawScan::Batches(0..two),
+            },
             ScanCase {
                 label: "both batches",
                 data: both.clone(),
                 offset: 10,
+                max_bytes: 0,
                 want: RawScan::Batches(0..two),
             },
             ScanCase {
                 label: "from the second",
                 data: both.clone(),
                 offset: 14,
+                max_bytes: 0,
                 want: RawScan::Batches(one..two),
             },
             ScanCase {
                 label: "past the read",
                 data: both.clone(),
                 offset: 17,
+                max_bytes: 0,
                 want: RawScan::Missing,
             },
             ScanCase {
                 label: "a cut second batch ends the run",
                 data: both[..two - 1].to_vec(),
                 offset: 10,
+                max_bytes: 0,
                 want: RawScan::Batches(0..one),
             },
             ScanCase {
                 label: "a cut first batch is read again whole",
                 data: both[..one - 1].to_vec(),
                 offset: 10,
+                max_bytes: 0,
                 want: RawScan::Truncated {
                     at: 0,
                     len: Some(one),
@@ -429,6 +473,7 @@ mod tests {
                 label: "a cut wanted batch after a skipped one",
                 data: both[..one + 20].to_vec(),
                 offset: 14,
+                max_bytes: 0,
                 want: RawScan::Truncated {
                     at: one,
                     len: Some(two - one),
@@ -438,6 +483,7 @@ mod tests {
                 label: "a cut before the length field",
                 data: both[..one + 4].to_vec(),
                 offset: 14,
+                max_bytes: 0,
                 want: RawScan::Truncated { at: one, len: None },
             },
         ];
@@ -445,10 +491,14 @@ mod tests {
             label,
             data,
             offset,
+            max_bytes,
             want,
         } in cases
         {
-            check!(whole_batches_from(&data, offset) == want, "{label}");
+            check!(
+                whole_batches_from(&data, offset, max_bytes) == want,
+                "{label}"
+            );
         }
     }
 
