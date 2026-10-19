@@ -61,6 +61,9 @@ object_store = { workspace = true, features = ["aws", "gcp", "fs"] }
 regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+# A dry run formats a throwaway directory, so the formatter checks the
+# target-side flags without writing to the target.
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 # `cli_main!` writes the binary's `main`.
 krabka-macros = { version = "1.0.5", path = "../macros" }
@@ -90,4 +93,3 @@ krabka-security = { workspace = true }
 # `diskless_capture_broker` sets the diskless flush cadence on a broker config.
 krabka-units = { workspace = true }
 ring = { workspace = true }
-tempfile = { workspace = true }

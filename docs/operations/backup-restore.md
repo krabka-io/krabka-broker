@@ -238,11 +238,18 @@ hour old. The controller writes one each `metadata_max_snapshot_interval`
 (default 1 hour) or each `metadata_snapshot_interval_records` (default 10,000
 records), both in `[runtime]`. Until its first one, the newest file is the
 format-time `00000000000000000000-0000000000.checkpoint`, which holds no
-topic. A capture of a young cluster then restores no topic configuration, and
-neither tool warns
-([#1514](https://github.com/krabka-io/krabka-broker/issues/1514)). The capture
-prints the name of the checkpoint it took. Its first number is the metadata
-offset that the checkpoint covers, so `0` means the format-time checkpoint.
+topic. `krabka-backup capture` refuses that checkpoint and exits `7`, so a
+young cluster has no capture until the controller writes its first checkpoint
+([#1514](https://github.com/krabka-io/krabka-broker/issues/1514)). Lower
+`metadata_max_snapshot_interval` to shorten that window. A cluster that
+`krabka-restore` formatted is captured at once: the restore seeds the restored
+topics into the same offset-zero checkpoint.
+
+A capture that succeeds prints a `NOTE` line with the age of the newest record
+in its checkpoint. A change committed after that record is not in the capture,
+and the restore report does not name it. So a capture right after a
+topic-config change carries the change only once the controller has written its
+next checkpoint.
 
 Keep at least as many captures as the recovery window the business asks for. An
 attacker who can write to the cluster can also grant themselves an ACL, and a
@@ -273,8 +280,6 @@ schedule the same way an on-call rotation is rehearsed:
 
 1. `krabka-restore` from the production archive with the newest capture's two
    snapshots into a scratch directory, with `--dry-run` first to see the plan.
-   The dry run formats its `--log-dir`, so give it a directory of its own
-   ([#1512](https://github.com/krabka-io/krabka-broker/issues/1512)).
    Compare `metadata.topic_configs` in the plan with the number of topics that
    have config overrides in production.
 2. Boot a broker on the result.

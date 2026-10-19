@@ -27,13 +27,12 @@ path = "src/main.rs"
 
 [dependencies]
 krabka-audit = { workspace = true }
-# `ListGroups` and `OffsetFetch` for the offsets capture. The tool speaks only
-# stock Kafka APIs, so it also runs against a cluster that is not krabka.
+# `ListGroups` and `OffsetFetch` for the offsets capture, and the
+# `alterConsumerGroupOffsets` that puts them back. The tool speaks only stock
+# Kafka APIs, so it also runs against a cluster that is not krabka.
 krabka-client-admin = { version = "0.6.0" }
-# The connection, the `FindCoordinator` helpers, and the request trait the
-# `OffsetCommit` that puts offsets back is sent over.
+# The client security policy, and the timeout an admin call ends with.
 krabka-client-core = { version = "0.6.0" }
-krabka-protocol = { version = "0.6.0", default-features = false }
 krabka-security = { workspace = true }
 # The archive the capture is written to is the archive `krabka restore` reads,
 # so the backend mapping is the object-store layer the restore uses, not the
@@ -42,6 +41,10 @@ krabka-security = { workspace = true }
 krabka-object-store = { version = "1.0.5", path = "../object-store", features = ["clap"] }
 krabka-remote-storage = { version = "1.0.5", path = "../remote-storage" }
 krabka-remote-storage-topic = { version = "1.0.5", path = "../remote-storage-topic" }
+# Decodes a format-time metadata checkpoint to tell a plain format, which
+# holds no topic, from a restore's seeded one, and reads a checkpoint's age.
+krabka-metadata = { version = "0.6.0" }
+krabka-raft = { version = "1.0.5", path = "../raft" }
 
 bytes = { workspace = true }
 clap = { workspace = true, features = ["env"] }
@@ -62,7 +65,13 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+# Formats a real log directory, so the format-time checkpoint a test captures
+# is the one a node holds.
+krabka-format = { path = "../format" }
+krabka-ids = { version = "0.6.0" }
 assert2 = { workspace = true }
+# The `Time` an admin call's timeout carries.
+krabka-units = { workspace = true }
 tempfile = { workspace = true }
 async-trait = { workspace = true }
 yare = { workspace = true }

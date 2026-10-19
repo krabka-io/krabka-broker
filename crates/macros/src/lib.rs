@@ -322,7 +322,9 @@
 //! `main.rs`, in place of its `main`. It expands to a `#[tokio::main]`
 //! `async fn main()` that installs a `tracing_subscriber::fmt()` subscriber
 //! filtered by `RUST_LOG`, or at `info` when `RUST_LOG` is unset or does not
-//! parse, then awaits `path::run_from_args(std::env::args_os())` and exits the
+//! parse, and writes to stderr. stdout stays the binary's own, so a report that
+//! a script parses, such as `krabka-restore --report json`, holds no log lines.
+//! It then awaits `path::run_from_args(std::env::args_os())` and exits the
 //! process with the `i32` it returns. Any arguments after the path, such as
 //! `flavor = "multi_thread"`, go to `#[tokio::main(...)]` unchanged. The
 //! binary depends on `tokio` with its `macros` feature and on
