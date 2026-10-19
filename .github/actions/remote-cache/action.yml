@@ -131,7 +131,7 @@ runs:
           # and `--config=rbe` falls back to the single credential-free flag
           # `.bazelrc` defines -- a local build, not an unauthenticated one.
           echo "build:rbe --remote_executor=grpcs://remote.buildbuddy.io"
-          echo "build:rbe --extra_execution_platforms=@llvm//:rbe_linux_x86_64"
+          echo "build:rbe --extra_execution_platforms=//bazel:rbe_linux_x86_64"
           # Far past the runner's four cores: the point is to have more actions
           # in flight than this machine could run itself.
           echo "build:rbe --jobs=100"
