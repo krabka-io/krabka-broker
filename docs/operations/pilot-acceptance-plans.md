@@ -80,7 +80,7 @@ So both plans forbid `kafka-features upgrade` during the run, except where a pla
 
 [#1397](https://github.com/krabka-io/krabka-broker/issues/1397) destroys source data, but only in its own isolated qualification cluster. A pilot never destroys an operator's data. Each plan's drill restores the newest verifying capture from the production archive into a scratch target, as [Check a copy](backup-restore.md#check-a-copy) and the [restore-from-archive](runbooks/restore-from-archive.md) runbook describe. The drill then reconciles the scratch cluster against the production cluster at the capture boundary. The drill measures RPO and RTO with the definitions of the `disaster-recovery` qualification gate, so a pilot result and a #1397 result use the same units. `rpo_ms` is the age of the capture when the drill declares the loss. `rto_ms` runs from the declared loss to a cluster that has served every captured record, each topic's settings and the group positions back to a reader.
 
-A drill against a live archive needs one more step. The cluster keeps copying new segments to the archive and deleting old ones after the capture. `krabka restore` with `--rlmm-snapshot` refuses an archive that holds a segment the snapshot does not list, or that lacks a segment the snapshot lists as live. So each drill restores from an archive view that matches its capture, as [#1522](https://github.com/krabka-io/krabka-broker/issues/1522) asks the backup guide to describe. A drill that restores from the live prefix fails at reconciliation, and that failure is the documented behavior, not a finding.
+A drill reads a live archive. After the capture, the cluster keeps copying new segments to the archive, and remote retention keeps deleting the oldest ones. `krabka restore` with `--rlmm-snapshot` accepts both changes, as [Check a copy](backup-restore.md#check-a-copy) describes. Each restored partition then starts at the oldest segment the archive holds when the restore reads it. So the drill reads each canary partition's earliest offset with `kafka-get-offsets --time -2` twice: on the scratch cluster, and on production after the restore has finished. Retention only moves production's earliest offset forward, so the scratch value must not be above it. A restore that stops for one of the reasons that section lists is rerun from a new capture. The first such stop is not a finding. A repeat is.
 
 The archive bounds what a drill can restore. A record reaches the archive only when its segment rolls and the remote copy completes. Compacted topics cannot be tiered, so no archive holds them. The plans set `segment.ms` on every tiered topic to bound the first limit, and they protect compacted topics another way (see [gap issues](#gap-issues)).
 
@@ -237,7 +237,7 @@ Reconciliation checks:
 | Check | Pass condition |
 | :--- | :--- |
 | Capture | `krabka-backup verify` exits `0` for the capture the drill uses. |
-| Records | For each canary partition, every value acknowledged before the capture boundary and older than the RPO is present at its original offset. |
+| Records | For each canary partition, every value acknowledged before the capture boundary and older than the RPO is present at its original offset, if its offset is at or above the scratch partition's earliest offset. That earliest offset is at or below production's earliest offset after the restore. |
 | Topic settings | `kafka-configs --describe` on the scratch cluster matches production at the capture for every restored topic. |
 | ACLs and credentials | `kafka-acls --list` matches production at the capture. A pilot principal authenticates with its SCRAM password. |
 | Group offsets | After `krabka-backup restore-offsets`, every captured group's position equals the captured position. |
@@ -370,7 +370,7 @@ Reconciliation checks:
 | Check | Pass condition |
 | :--- | :--- |
 | Bound | No restored record has a timestamp after T. |
-| Committed records | Every canary value committed before T minus the RPO is present at its original offset. |
+| Committed records | Every canary value committed before T minus the RPO is present at its original offset, if its offset is at or above the scratch partition's earliest offset. That earliest offset is at or below production's earliest offset after the restore. |
 | Transactional visibility | A `read_committed` reader of the restored canary input sees no aborted value. |
 | Output rebuild | For every window that closes before T minus the RPO, the rebuilt output of the new application equals the production output. |
 | ACLs and principals | `kafka-acls --list` matches production at the capture. An mTLS client maps to the same principal. |
@@ -446,7 +446,7 @@ Writing the plans found these gaps and defects in the existing documents. Each o
 | [#1500](https://github.com/krabka-io/krabka-broker/issues/1500) | The backup guide and the restore runbook showed no `--command-config` for a secured cluster, showed the `--worm-*` flags as always needed (they fail a capture with no diskless boundary), and said that a restored cluster has a new cluster id after a step that keeps the old one. [Secured clusters](backup-restore.md#secured-clusters) and the runbook now cover each one. | None. Closed by the same pull request as this document. |
 | [#1501](https://github.com/krabka-io/krabka-broker/issues/1501) | [Deploy](deploy.md) had no krabka-operator installation path, but [Scale a cluster](scaling.md) and the qualified manifest use the operator. [Kubernetes operator](deploy.md#kubernetes-operator) now describes it. | None. Closed by the same pull request as this document. |
 | [#1502](https://github.com/krabka-io/krabka-broker/issues/1502) | [Kubernetes](deploy.md#kubernetes) says the image is published for amd64 only, but [Install](deploy.md#install) says release tags are amd64 and arm64 indexes. | None |
-| [#1522](https://github.com/krabka-io/krabka-broker/issues/1522) | The backup guide says to rehearse a restore from the live production archive, but `krabka restore` with a snapshot refuses an archive that changed after the capture. Found in review. | A and B drills |
+| [#1522](https://github.com/krabka-io/krabka-broker/issues/1522) | The backup guide said to rehearse a restore from the live production archive, but `krabka restore` with a snapshot refused an archive that remote retention had changed after the capture. Found in review. The restore now accepts the segments that retention deleted after the snapshot, as it already accepted the segments uploaded after it. [Check a copy](backup-restore.md#check-a-copy) says what still stops a rehearsal. | None. Closed by the pull request that fixed the restore. |
 | [#1503](https://github.com/krabka-io/krabka-broker/issues/1503) | The ecosystem matrix does not name Kafka Streams, KIP-848 consumers or share-group consumers, though suites cover each. | None |
 
 ## Integration

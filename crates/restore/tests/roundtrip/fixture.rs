@@ -17,9 +17,11 @@ use {
     krabka_protocol::records::RecordBatch,
     krabka_remote_storage::{
         ChainHead, ChainStamp, EpochId, LocalTieredStorage, MANIFEST_SUFFIX, ManifestSeq,
-        ObjectEntry, RemoteLogSegmentMetadata, Sha256Digest, TopicIdPartition, WormArchiver,
-        WormChainRecord, parse_segment_file_name, partition_dir_name, segment_file_name,
+        ObjectEntry, PartitionDump, RemoteLogSegmentMetadata, RlmmCacheDump, Sha256Digest,
+        TopicIdPartition, WormArchiver, WormChainRecord, parse_segment_file_name,
+        partition_dir_name, segment_file_name,
     },
+    krabka_remote_storage_topic::Snapshot,
     tempfile::TempDir,
     uuid::Uuid,
 };
@@ -33,7 +35,6 @@ pub(crate) struct SegmentFixture {
     /// The remote metadata this segment was archived under. It is what a
     /// broker's RLMM would hold for the segment, so a test that needs a
     /// consistent `--rlmm-snapshot` builds one out of these.
-    #[allow(dead_code)] // only `dr_roundtrip` builds a snapshot out of these
     pub(crate) metadata: RemoteLogSegmentMetadata,
 }
 
@@ -194,6 +195,42 @@ impl Fixture {
             .into_iter()
             .find(|entry| entry.topic == topic && entry.partition == partition)
             .unwrap_or_else(|| panic!("this fixture holds no {topic}-{partition}"))
+    }
+
+    /// The RLMM snapshot a capture of this archive takes. It names each
+    /// archived segment for which `named` returns `true`, given the segment's
+    /// partition and its position in that partition.
+    ///
+    /// A restore reconciles the bucket scan against this file, so a snapshot
+    /// that names every segment is the one the archive is consistent with.
+    pub(crate) fn rlmm_snapshot(
+        &self,
+        named: impl Fn(&PartitionFixture, usize) -> bool,
+    ) -> Vec<u8> {
+        let partitions = self
+            .partitions()
+            .into_iter()
+            .map(|partition| PartitionDump {
+                topic_id_partition: TopicIdPartition::new(
+                    partition.topic_id,
+                    partition.topic,
+                    partition.partition,
+                ),
+                segments: partition
+                    .segments
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| named(partition, *index))
+                    .map(|(_, segment)| segment.metadata.clone())
+                    .collect(),
+                delete_state: None,
+            })
+            .collect();
+        Snapshot {
+            committed_offsets: vec![0],
+            dump: RlmmCacheDump { partitions },
+        }
+        .encode()
     }
 
     /// Seal every archived segment into a signed WORM chain. Signers rotate by
