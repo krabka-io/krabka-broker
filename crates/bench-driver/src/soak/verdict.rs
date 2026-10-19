@@ -15,6 +15,7 @@ use {
         ledger::SeqSet,
         lifecycle::judge_lifecycle,
         reconcile::{FindingKind, Reconciliation, reconcile},
+        recovery::{RecoveryVerdict, check_recovery},
         schedule::{ScheduledFault, expand},
     },
     serde::{Deserialize, Serialize},
@@ -38,6 +39,10 @@ pub struct Verdict {
     /// other profile.
     #[serde(default)]
     pub lifecycle: Vec<String>,
+    /// A disaster-recovery drill's recovery point and recovery time against
+    /// its objectives. Absent for a soak.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<RecoveryVerdict>,
 }
 
 impl Verdict {
@@ -82,6 +87,14 @@ impl Verdict {
                 .iter()
                 .map(|failure| format!("lifecycle: {failure}")),
         );
+        if let Some(recovery) = &self.recovery {
+            lines.extend(
+                recovery
+                    .problems
+                    .iter()
+                    .map(|problem| format!("recovery: {problem}")),
+            );
+        }
         lines
     }
 
@@ -133,6 +146,7 @@ pub fn judge(contract: &Contract, evidence: &Evidence) -> Verdict {
         reconciliation: reconcile(contract, &schedule, evidence),
         budgets: check_budgets(contract, evidence),
         lifecycle: judge_lifecycle(contract, &schedule, evidence),
+        recovery: check_recovery(contract, evidence),
         schedule,
         deadlines,
         fault_problems,

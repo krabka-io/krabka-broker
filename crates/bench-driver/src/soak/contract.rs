@@ -13,10 +13,11 @@
 use {
     super::lifecycle::{Lifecycle, Side},
     crate::scenario::{Acks, Compression, bounded},
+    anyhow::{Context as _, bail},
     krabka_units::{fmt::Human as _, prelude::*, serde_units},
     serde::{Deserialize, Serialize},
     sha2::{Digest as _, Sha256},
-    std::{collections::BTreeSet, fmt},
+    std::{collections::BTreeSet, fmt, path::Path},
 };
 
 /// Whether a contract is a soak or the short self-check of the soak machinery.
@@ -36,6 +37,13 @@ pub enum Profile {
     /// transitions, and each one must reconcile at its checkpoint as well as at
     /// the end. See [`super::lifecycle`].
     Lifecycle,
+    /// A disaster-recovery drill: the load runs through a capture and into the
+    /// loss of the whole source cluster, and the verdict reconciles what a
+    /// fresh cluster restored from the capture serves. Every record
+    /// acknowledged before the capture started must come back; the records
+    /// acknowledged after it that do not are the recovery point, judged
+    /// against the declared [`RecoveryObjectives`].
+    DisasterRecovery,
 }
 
 /// A sustained-load and failure contract.
@@ -67,6 +75,35 @@ pub struct Contract {
     /// when absent, so the digest of a contract without one is unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<Lifecycle>,
+    /// The recovery objectives of a disaster-recovery drill. Omitted from the
+    /// encoding when absent, so a soak's digest does not change with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disaster_recovery: Option<RecoveryObjectives>,
+}
+
+/// What a disaster-recovery drill must achieve, declared before it runs.
+///
+/// The capture boundary is the instant the capture starts. A record the
+/// cluster acknowledged before it is inside the boundary and must be restored.
+/// A record acknowledged after it may be lost: the drill counts those, and the
+/// recovery point objective bounds how far back the oldest lost one may be.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryObjectives {
+    /// How long the load keeps running after the capture starts, before the
+    /// source cluster is lost. Records acknowledged in it are the ones a
+    /// restore from that capture may lose.
+    #[serde(with = "bounded::positive_time")]
+    pub post_capture_load: Time,
+    /// The recovery point objective: the most time, back from the loss, whose
+    /// acknowledged records may be missing from the restored cluster.
+    #[serde(with = "bounded::positive_time")]
+    pub rpo: Time,
+    /// The recovery time objective: from the loss until a fresh cluster,
+    /// restored from the capture alone, serves authenticated produce and
+    /// consume of the captured data.
+    #[serde(with = "bounded::positive_time")]
+    pub rto: Time,
 }
 
 /// The machine a run is entitled to. Recorded so that a result names the
@@ -532,6 +569,33 @@ impl Contract {
         serde_saphyr::from_str(text)
     }
 
+    /// Read, parse and validate the contract at `path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns why the file cannot be read or parsed, or every reason
+    /// [`Self::validate`] refuses it, one per line.
+    pub fn from_file(path: &Path) -> anyhow::Result<Self> {
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        let contract =
+            Self::from_yaml(&text).with_context(|| format!("parse contract {}", path.display()))?;
+        let errors = contract.validate();
+        if !errors.is_empty() {
+            bail!(
+                "{} is not a usable contract ({} problem(s)):\n{}",
+                path.display(),
+                errors.len(),
+                errors
+                    .iter()
+                    .map(|error| format!("contract: {error}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+        }
+        Ok(contract)
+    }
+
     /// The SHA-256 of the contract's canonical JSON encoding, as lowercase hex.
     ///
     /// Evidence records this, and the judge refuses evidence whose digest
@@ -854,6 +918,12 @@ impl Contract {
     }
 
     fn validate_profile(&self, fail: &mut impl FnMut(String)) {
+        if self.profile != Profile::DisasterRecovery && self.disaster_recovery.is_some() {
+            fail(
+                "only a disaster_recovery contract declares recovery objectives; drop disaster_recovery"
+                    .to_owned(),
+            );
+        }
         if self.profile == Profile::Lifecycle {
             self.validate_lifecycle(fail);
             return;
@@ -862,6 +932,7 @@ impl Contract {
             fail("only a lifecycle contract declares a lifecycle section".to_owned());
         }
         match (self.profile, &self.self_check) {
+            (Profile::DisasterRecovery, _) => self.validate_drill(fail),
             (Profile::Soak, Some(_)) => {
                 fail(
                     "a soak may not inject failures into its own evidence; drop self_check"
@@ -961,6 +1032,67 @@ impl Contract {
             fail("a lifecycle contract must roll at least one broker to the target".to_owned());
         }
     }
+
+    /// A drill restores what a capture holds and nothing else, so each of its
+    /// paths must be one the capture can hold, and its only fault is the loss.
+    fn validate_drill(&self, fail: &mut impl FnMut(String)) {
+        if self.self_check.is_some() {
+            fail("a disaster-recovery drill may not inject failures; drop self_check".to_owned());
+        }
+        if !self.faults.is_empty() {
+            fail(
+                "a disaster-recovery drill's only fault is the loss of the source cluster; drop faults"
+                    .to_owned(),
+            );
+        }
+        let Some(objectives) = &self.disaster_recovery else {
+            fail("a disaster-recovery contract needs a disaster_recovery section".to_owned());
+            return;
+        };
+        if objectives.rpo < objectives.post_capture_load {
+            fail(format!(
+                "disaster_recovery.rpo ({}) is shorter than post_capture_load ({}): a restore of a \
+                 diskless topic loses everything after the capture, so no run could meet it",
+                human(objectives.rpo),
+                human(objectives.post_capture_load)
+            ));
+        }
+        if objectives.post_capture_load >= self.duration {
+            fail(format!(
+                "disaster_recovery.post_capture_load ({}) must be shorter than the run ({})",
+                human(objectives.post_capture_load),
+                human(self.duration)
+            ));
+        }
+        for path in &self.paths {
+            if path.storage == Storage::Classic {
+                fail(format!(
+                    "path `{}` is classic: a classic topic's segments are never archived, so it is \
+                     outside the backup boundary",
+                    path.name
+                ));
+            }
+            if path.semantics != Semantics::Idempotent {
+                fail(format!(
+                    "path `{}` must be idempotent: transaction state is never captured, and a \
+                     compacted topic is never tiered",
+                    path.name
+                ));
+            }
+        }
+        let storage: BTreeSet<Storage> = self.paths.iter().map(|path| path.storage).collect();
+        for (wanted, label) in [
+            (Storage::Tiered, "a tiered topic"),
+            (Storage::Diskless, "a diskless topic"),
+        ] {
+            if !storage.contains(&wanted) {
+                fail(format!("a disaster-recovery drill must cover {label}"));
+            }
+        }
+        if !self.paths.iter().any(|path| path.commit_offsets) {
+            fail("a disaster-recovery drill must cover a path that commits offsets".to_owned());
+        }
+    }
 }
 
 /// A time in its human form, for a message.
@@ -969,7 +1101,10 @@ pub(crate) fn human(time: Time) -> String { time.human().to_string() }
 #[cfg(test)]
 pub(crate) mod fixture {
     use {
-        super::{Contract, FaultKind, FaultPlan, Profile, Target},
+        super::{
+            Contract, FaultKind, FaultPlan, Isolation, LoadPath, Profile, RecoveryObjectives,
+            Storage, Target,
+        },
         crate::soak::lifecycle::{LevelRange, Lifecycle, Release, Side},
         krabka_units::prelude::*,
         std::collections::BTreeMap,
@@ -1114,14 +1249,49 @@ self_check:
         assert2::assert!(contract.validate().is_empty(), "{:?}", contract.validate());
         contract
     }
+
+    /// A valid disaster-recovery drill: the self-check's shape, with a tiered
+    /// and a diskless idempotent path, no fault and recovery objectives.
+    pub(crate) fn drill() -> Contract {
+        let mut contract = self_check();
+        contract.name = "fixture-drill".to_owned();
+        contract.profile = Profile::DisasterRecovery;
+        contract.duration = minutes(20);
+        contract.settle = Time::ZERO;
+        contract.faults.clear();
+        contract.self_check = None;
+        let path = contract.paths[0].clone();
+        contract.paths = [
+            ("tiered-idempotent", Storage::Tiered),
+            ("diskless-idempotent", Storage::Diskless),
+        ]
+        .into_iter()
+        .map(|(name, storage)| LoadPath {
+            name: name.to_owned(),
+            storage,
+            consumers: vec![Isolation::ReadUncommitted, Isolation::ReadCommitted],
+            // Low, so the recovery tests' few acknowledgements after the
+            // boundary meet it.
+            throughput_floor: Frequency::from_per_sec(0.1),
+            ..path.clone()
+        })
+        .collect();
+        contract.disaster_recovery = Some(RecoveryObjectives {
+            post_capture_load: secs(20),
+            rpo: minutes(2),
+            rto: minutes(10),
+        });
+        assert2::assert!(contract.validate().is_empty(), "{:?}", contract.validate());
+        contract
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use {
         super::{
-            Acks, Contract, FaultKind, Isolation, Profile, RecoveryCheck, Semantics, Slowdown,
-            Storage, Target, fixture,
+            Acks, Contract, FaultKind, FaultPlan, Isolation, Profile, RecoveryCheck, Semantics,
+            Slowdown, Storage, Target, fixture,
         },
         crate::soak::lifecycle::Side,
         assert2::{assert, check},
@@ -1295,5 +1465,84 @@ mod tests {
         expected: &[RecoveryCheck],
     ) {
         check!(kind.checks(target) == expected);
+    }
+
+    #[test]
+    fn the_drill_fixture_is_valid() {
+        check!(messages(&fixture::drill()).is_empty());
+    }
+
+    #[test]
+    fn a_contract_without_objectives_encodes_none_so_its_digest_is_unchanged() {
+        let encoded = serde_json::to_string(&fixture::self_check()).unwrap();
+        check!(!encoded.contains("disaster_recovery"));
+        let encoded = serde_json::to_string(&fixture::drill()).unwrap();
+        check!(encoded.contains("disaster_recovery"));
+    }
+
+    fn classic(contract: &mut Contract) { contract.paths[0].storage = Storage::Classic; }
+
+    fn transactional(contract: &mut Contract) {
+        contract.paths[0].semantics = Semantics::Transactional;
+    }
+
+    fn short_rpo(contract: &mut Contract) {
+        if let Some(objectives) = &mut contract.disaster_recovery {
+            objectives.rpo = secs(5);
+        }
+    }
+
+    fn long_post_capture_load(contract: &mut Contract) {
+        if let Some(objectives) = &mut contract.disaster_recovery {
+            objectives.post_capture_load = contract.duration;
+            objectives.rpo = contract.duration;
+        }
+    }
+
+    fn no_objectives(contract: &mut Contract) { contract.disaster_recovery = None; }
+
+    fn a_fault(contract: &mut Contract) {
+        contract.faults.push(FaultPlan {
+            name: "pause".into(),
+            fault: FaultKind::Pause {
+                intends_failover: false,
+            },
+            target: Target::Follower,
+            first_at: secs(30),
+            every: None,
+            jitter: Time::ZERO,
+            duration: secs(1),
+        });
+    }
+
+    fn no_diskless(contract: &mut Contract) { contract.paths[1].storage = Storage::Tiered; }
+
+    fn no_commits(contract: &mut Contract) {
+        for path in &mut contract.paths {
+            path.commit_offsets = false;
+        }
+    }
+
+    fn objectives_on_a_soak(contract: &mut Contract) {
+        let objectives = contract.disaster_recovery.clone();
+        *contract = fixture::self_check();
+        contract.disaster_recovery = objectives;
+    }
+
+    #[yare::parameterized(
+        classic_is_outside_the_boundary = { classic, "outside the backup boundary" },
+        transactions_are_not_captured = { transactional, "must be idempotent" },
+        rpo_below_the_post_capture_load = { short_rpo, "no run could meet it" },
+        post_capture_load_past_the_run = { long_post_capture_load, "must be shorter than the run" },
+        objectives_missing = { no_objectives, "needs a disaster_recovery section" },
+        faults_declared = { a_fault, "only fault is the loss" },
+        diskless_missing = { no_diskless, "must cover a diskless topic" },
+        commits_missing = { no_commits, "a path that commits offsets" },
+        objectives_on_another_profile = { objectives_on_a_soak, "only a disaster_recovery contract" },
+    )]
+    fn a_drill_is_refused_when_it_cannot_be_judged(edit: fn(&mut Contract), fragment: &str) {
+        let mut contract = fixture::drill();
+        edit(&mut contract);
+        assert_refused(&contract, fragment);
     }
 }

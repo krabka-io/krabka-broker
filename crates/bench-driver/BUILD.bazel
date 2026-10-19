@@ -29,6 +29,14 @@ crate_binary(
     lib = ":bench-driver",
 )
 
+# The disaster-recovery executor: `krabka-soak-drill load|probe|readback`,
+# which the qualification drill runs against its secured clusters.
+crate_binary(
+    name = "krabka-soak-drill",
+    crate_root = "src/soak_drill_main.rs",
+    lib = ":bench-driver",
+)
+
 crate_tests(
     # `scenario_files` loads every checked-in scenario through the driver's own
     # loader, and `report_cli` runs the report binary the way an operator does.

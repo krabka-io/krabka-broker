@@ -10,6 +10,7 @@ set -euo pipefail
 manifest=$1
 evidence=$2
 work=$3
+# $4 is the qualification checkout, whose adapters every gate runs.
 scope=qualification-$(basename "$work" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9')
 mkdir -p "$evidence" "$work/sources" "$work/artifacts"
 : > "$evidence/checks.txt"
@@ -308,6 +309,25 @@ _DISASTER_RECOVERY = r"""
 broker_source=$(source_repo krabka-broker)
 cli_binary=$(download krabka-cli binary)
 chmod +x "$cli_binary"
+# The declared load and its judge are qualification adapters, like this
+# script: they are built from the qualification checkout, not the candidate,
+# so every candidate is loaded and judged by the same reviewed code. The
+# contract is fixed before the run; bench/soak/dr-secured.yaml says why each
+# number is what it is.
+qualification_root=$4
+(cd "$qualification_root" && bazel build //crates/bench-driver:krabka-soak-drill //crates/bench-driver:krabka-soak-check) \
+  2>&1 | tee "$evidence/drill-build.log"
+for tool in krabka-soak-drill krabka-soak-check; do
+  cp -L "$qualification_root/$(cd "$qualification_root" && bazel cquery --output=files "//crates/bench-driver:$tool" 2>/dev/null)" "$work/artifacts/$tool"
+  chmod 0755 "$work/artifacts/$tool"
+done
+soak_drill=$work/artifacts/krabka-soak-drill
+soak_check=$work/artifacts/krabka-soak-check
+git -C "$qualification_root" rev-parse HEAD > "$evidence/drill-revision.txt"
+cp "$qualification_root/bench/soak/dr-secured.yaml" "$work/dr-contract.yaml"
+cp "$work/dr-contract.yaml" "$evidence/dr-contract.yaml"
+"$soak_drill" objectives --contract "$work/dr-contract.yaml" > "$evidence/dr-objectives.json"
+post_capture_load_ms=$(jq -er .post_capture_load_ms "$evidence/dr-objectives.json")
 (cd "$broker_source" && bazel test //crates/restore:dr_roundtrip_test --test_output=all --nocache_test_results) \
   2>&1 | tee "$evidence/hermetic-dr.log"
 check hermetic-dr grep -F 'test a_captured_cluster_restores_with_its_configuration_and_its_group_positions ... ok' "$evidence/hermetic-dr.log"
@@ -340,6 +360,8 @@ worm_verify() {
 }
 
 cleanup() {
+  docker logs "$scope-drill" > "$evidence/drill-load.log" 2>&1 || true
+  docker rm -f "$scope-drill" > /dev/null 2>&1 || true
   for cluster in source restored; do
     for n in 1 2 3; do
       docker logs "$scope-$cluster-$n" > "$evidence/$cluster-broker-$n.log" 2>&1 || true
@@ -352,8 +374,9 @@ cleanup() {
 }
 trap cleanup EXIT
 docker network create "$network"
-mkdir -p "$work/tls" "$work/worm" "$work/capture" "$work/restored-node1"
-chmod 0777 "$work" "$work/capture" "$work/restored-node1"
+: > "$evidence/limits.txt"
+mkdir -p "$work/tls" "$work/worm" "$work/capture" "$work/restored-node1" "$work/drill"
+chmod 0777 "$work" "$work/capture" "$work/restored-node1" "$work/drill"
 
 # One throwaway CA and one certificate naming every endpoint keep the drill's
 # TLS trust boundary explicit without introducing an external PKI dependency.
@@ -418,6 +441,9 @@ docker run --rm --network "$network" --entrypoint /bin/sh "$mc_image" -c \
   "until mc alias set local http://$scope-minio:9000 $access $secret >/dev/null 2>&1; do sleep 1; done; mc mb --with-lock local/$bucket; mc retention set --default COMPLIANCE 1d local/$bucket"
 
 cluster_id=3d70a78c-bb3a-4af5-a767-51e31f403c62
+# A segment must hold the largest batch the drill writes: Kafka refuses a batch
+# larger than segment.bytes. The classic ledger's segments roll by time
+# (segment.ms=1000 and the sentinel writes), not by size.
 for n in 1 2 3; do
   mkdir -p "$work/source-node$n"
   chmod 0777 "$work/source-node$n"
@@ -427,6 +453,7 @@ for n in 1 2 3; do
     --add-scram 'SCRAM-SHA-512=[name=admin,password=qualification-admin]' \
     --add-scram 'SCRAM-SHA-512=[name=backup,password=qualification-backup]' \
     --add-scram 'SCRAM-SHA-512=[name=denied,password=qualification-denied]' \
+    --add-scram 'SCRAM-SHA-512=[name=soak,password=qualification-soak]' \
     --add-acl 'principal=User:ANONYMOUS,host=*,operation=All,permission=Allow,resource=Cluster:kafka-cluster' \
     --add-acl 'principal=User:ANONYMOUS,host=*,operation=All,permission=Allow,resource=Topic:*'
   cat > "$work/source-node$n/broker.toml" <<EOF
@@ -440,7 +467,7 @@ controller_listener_protocol = "Plaintext"
 [runtime]
 metadata_snapshot_interval_records = 1
 metadata_max_snapshot_interval = "1s"
-log_segment_bytes = "1KiB"
+log_segment_bytes = "1MiB"
 log_retention_check_interval = "1s"
 remote_log_manager_interval = "1s"
 diskless_wal_flush_interval = "50ms"
@@ -527,7 +554,52 @@ docker run --rm --network "$network" -v "$work:/work:ro" -v "$cli_binary:/tmp/kr
   --partitions 1 --replication-factor 3 --config krabka.diskless=true \
   --config retention.ms=604800000 --bootstrap-server "$scope-source-1:9094" \
   --command-config /work/admin.properties
+
+# The declared load: its topics, its principal and its settings. `soak` holds
+# ACLs and nothing else, so every read and write it makes, before and after
+# the loss, is an authorization decision of the cluster that serves it.
+drill() {
+  local cluster=$1 user=$2 password=$3
+  shift 3
+  docker run --rm --network "$network" -v "$work:/work:ro" -v "$work/drill:/work/drill" \
+    -v "$soak_drill:/usr/local/bin/krabka-soak-drill:ro" -e KRABKA_DRILL_PASSWORD="$password" --entrypoint /usr/local/bin/krabka-soak-drill "$broker_image" "$@" \
+    --bootstrap "$scope-$cluster-1:9094" --tls-ca /work/tls/ca.pem --tls-server-name "$scope-$cluster-1" --username "$user"
+}
+kafka source acls --add --allow-principal User:soak --operation IdempotentWrite --cluster
+kafka source acls --add --allow-principal User:soak --operation READ --operation DESCRIBE \
+  --group soak- --resource-pattern-type prefixed
+kafka source acls --add --allow-principal User:backup --operation READ --operation DESCRIBE \
+  --group soak- --resource-pattern-type prefixed
+while read -r name storage partitions min_isr; do
+  kafka source acls --add --allow-principal User:soak --operation WRITE --operation READ --operation DESCRIBE --topic "$name"
+  kafka source acls --add --allow-principal User:backup --operation READ --operation DESCRIBE --operation DescribeConfigs --topic "$name"
+  if [ "$storage" = tiered ]; then
+    # Segments roll every two seconds under the load, so a record is in a
+    # closed, archivable segment within seconds of its acknowledgement.
+    kafka source topics --create --topic "$name" --partitions "$partitions" --replication-factor 3 \
+      --config remote.storage.enable=true --config min.insync.replicas="$min_isr" \
+      --config segment.bytes=1048576 --config segment.ms=2000 --config retention.ms=604800000
+  else
+    docker run --rm --network "$network" -v "$work:/work:ro" -v "$cli_binary:/tmp/krabka:ro" \
+      --entrypoint /tmp/krabka "$broker_image" topics --create --topic "$name" \
+      --partitions "$partitions" --replication-factor 3 --config krabka.diskless=true \
+      --config min.insync.replicas="$min_isr" --config retention.ms=604800000 \
+      --bootstrap-server "$scope-source-1:9094" --command-config /work/admin.properties
+  fi
+done < <(jq -r '.paths[] | [.name, .storage, .partitions, .min_insync_replicas] | @tsv' "$evidence/dr-objectives.json")
+# A client quota and a cluster-wide dynamic broker default, so the settings
+# the restore must reproduce are more than the topics' own.
+kafka source configs --alter --entity-type users --entity-name soak --add-config producer_byte_rate=104857600
+kafka source configs --alter --entity-type brokers --entity-default --add-config log.retention.ms=604800000
 sleep 5
+docker run -d --name "$scope-drill" --network "$network" -v "$work:/work" \
+  -v "$soak_drill:/usr/local/bin/krabka-soak-drill:ro" -e KRABKA_DRILL_PASSWORD=qualification-soak \
+  --entrypoint /usr/local/bin/krabka-soak-drill "$broker_image" load --contract /work/dr-contract.yaml \
+  --bootstrap "$scope-source-1:9094" --tls-ca /work/tls/ca.pem --tls-server-name "$scope-source-1" \
+  --username soak --broker-image "$broker_image" --out /work/drill/load.json
+load_started_ms=$(date +%s%3N)
+sleep 5
+check drill-load-running test "$(docker inspect --format '{{.State.Running}}' "$scope-drill")" = true
 
 for topic in classic diskless; do
   seq 0 199 | awk -v topic="$topic" '{printf "%s-%04d-%01024d\n", topic, $1, $1}' | \
@@ -548,6 +620,21 @@ docker run --rm --network "$network" -v "$work:/work:ro" "$tools_image" \
   /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server "$scope-source-1:9094" \
   --consumer.config /work/admin.properties --topic classic --group dr-group \
   --from-beginning --max-messages 75 --timeout-ms 60000 > "$evidence/source-group-read.txt"
+# Under load a describe can time out finding the coordinator, and the tool
+# still exits 0, so a listing counts only once it names the group.
+group_offsets() {
+  local cluster=$1 listing attempt
+  for attempt in $(seq 1 10); do
+    listing=$(kafka "$cluster" consumer-groups --describe --group dr-group || true)
+    if grep -q '^dr-group ' <<< "$listing"; then
+      printf '%s\n' "$listing"
+      return 0
+    fi
+    sleep 3
+  done
+  printf '%s\n' "$listing"
+  return 1
+}
 group_coordinator=$(kafka source consumer-groups --describe --group dr-group --state | \
   awk '$1 == "dr-group" {sub(/:[0-9]+$/, "", $2); print $2; exit}')
 test -n "$group_coordinator"
@@ -567,7 +654,7 @@ negative_capture() {
   negative_listing=$(docker run --rm --network "$network" --entrypoint /bin/sh "$mc_image" -c \
     "mc alias set local http://$scope-minio:9000 $access $secret >/dev/null; mc find local/$bucket/$negative_prefix --name manifest.json 2>/dev/null || true")
   check "$name-no-manifest" test -z "$negative_listing"
-  check "$name-no-secret" bash -c '! grep -F -e qualification-admin -e qualification-backup -e qualification-denied -e qualification-wrong "$1"' qualification "$evidence/$name.log"
+  check "$name-no-secret" bash -c '! grep -F -e qualification-admin -e qualification-backup -e qualification-denied -e qualification-soak -e qualification-wrong "$1"' qualification "$evidence/$name.log"
 }
 negative_capture invalid-credentials bad.properties
 negative_capture denied-acl denied.properties
@@ -578,7 +665,35 @@ if docker run --rm --network "$network" -v "$work:/work:ro" "$tools_image" \
   exit 1
 fi
 check invalid-certificate grep -Eq 'SSL|certificate|trust' "$evidence/invalid-certificate.log"
-check invalid-certificate-no-secret bash -c '! grep -F -e qualification-admin -e qualification-backup -e qualification-denied -e qualification-wrong "$1"' qualification "$evidence/invalid-certificate.log"
+check invalid-certificate-no-secret bash -c '! grep -F -e qualification-admin -e qualification-backup -e qualification-denied -e qualification-soak -e qualification-wrong "$1"' qualification "$evidence/invalid-certificate.log"
+
+# Denied access: a principal with no ACL, and the load's own principal on a
+# topic it holds no ACL for, are both refused. The same probes run again on
+# the restored cluster.
+denied_probe() {
+  local cluster=$1 name=$2 user=$3 password=$4 topic=$5
+  if drill "$cluster" "$user" "$password" probe --topic "$topic" > "$evidence/$name.log" 2>&1; then
+    echo "$name: $user unexpectedly wrote and read $topic" >&2
+    exit 1
+  fi
+  # Kafka's TOPIC_, GROUP_ and CLUSTER_AUTHORIZATION_FAILED, by name or code.
+  check "$name" grep -Eqi 'authoriz|error_code (29|30|31)([^0-9]|$)' "$evidence/$name.log"
+}
+denied_probe source denied-access-source denied qualification-denied tiered-idempotent
+denied_probe source unlisted-topic-source soak qualification-soak classic
+
+# What the restore must reproduce besides records: every ACL, every user's
+# SCRAM mechanisms and quotas, and the broker defaults. Each listing is
+# sorted, because the order a response lists them in is not part of them.
+settings_listing() {
+  local cluster=$1
+  kafka "$cluster" acls --list | grep -E 'ResourcePattern|principal=' | sed 's/^[[:space:]]*//' | sort > "$evidence/$cluster-acls.txt"
+  kafka "$cluster" configs --describe --entity-type users | sort > "$evidence/$cluster-users.txt"
+  kafka "$cluster" configs --describe --entity-type brokers --entity-default | sort > "$evidence/$cluster-broker-defaults.txt"
+}
+settings_listing source
+check source-acls-listed grep -q 'User:soak' "$evidence/source-acls.txt"
+check source-scram-listed grep -q 'SCRAM-SHA-512' "$evidence/source-users.txt"
 
 # Wait until the archive covers the classic recovery boundary and has a
 # diskless WAL object. Producer batches may coalesce, so manifest count is not
@@ -586,7 +701,15 @@ check invalid-certificate-no-secret bash -c '! grep -F -e qualification-admin -e
 for attempt in $(seq 1 120); do
   listing=$(docker run --rm --network "$network" --entrypoint /bin/sh "$mc_image" -c \
     "mc alias set local http://$scope-minio:9000 $access $secret >/dev/null; mc find local/$bucket")
-  archive_status=$(worm_verify "$bucket" "$work/worm-current" --prefix "$data_prefix" \
+  # The declared load keeps archiving tiered segments, so a mirror of the
+  # whole bucket can catch a chain mid-upload. Only the quiesced classic chain
+  # decides this wait, so it alone is verified.
+  mkdir -p "$work/worm-classic"
+  chmod 0777 "$work/worm-classic"
+  docker run --rm --network "$network" -v "$work/worm-classic:/mirror" --entrypoint /bin/sh "$mc_image" -c \
+    "mc alias set local http://$scope-minio:9000 $access $secret >/dev/null; mc mirror --overwrite --remove local/$bucket/ /mirror/ >/dev/null; find /mirror/$data_prefix -mindepth 1 -maxdepth 1 ! -name 'classic-0-*' -exec rm -rf {} +" || true
+  archive_status=$(docker run --rm -v "$work/worm-classic:/archive:ro" -v "$work/worm:/worm:ro" \
+    --entrypoint /usr/bin/krabka-worm-verify "$broker_image" verify --local-dir /archive --prefix "$data_prefix" \
     --key-id qualification-worm --public-key /worm/signing.pub 2>/dev/null || true)
   if awk '/classic-0-/ && /offsets/ {split($0,a,"offsets "); split(a[2],b,","); split(b[1],c,/\.\./); if (c[2] >= 200) ready=1} END {exit !ready}' <<<"$archive_status" && \
     grep -q 'diskless-wal' <<<"$listing"; then break; fi
@@ -596,7 +719,7 @@ done
 printf '%s\n' "$listing" > "$evidence/archive-before.txt"
 for attempt in $(seq 1 60); do
   if test -s "$work/source-node1/remote-log-metadata/snapshot" && \
-    find "$work/source-node1/__cluster_metadata" -name '*.checkpoint' -type f | grep -q .; then
+    find "$work/source-node1" -maxdepth 3 -path '*/__cluster_metadata*' -name '*.checkpoint' -type f -print -quit | grep -q .; then
     break
   fi
   test "$attempt" -lt 60
@@ -604,10 +727,11 @@ for attempt in $(seq 1 60); do
 done
 check capture-source-files test -s "$work/source-node1/remote-log-metadata/snapshot"
 
-# Producers and the dr-group reader have stopped and capture is read-only, so
-# the source state the restore must reproduce is read here, concurrently, and
-# stays out of the RPO window. The ledger readers assign the partition rather
-# than join a group, so no read waits out the initial rebalance delay.
+# The fixed ledgers' producers and the dr-group reader have stopped, so the
+# source state the restore must reproduce for them is read here, concurrently.
+# The declared load keeps running throughout; its records are reconciled by
+# the soak judge instead. The ledger readers assign the partition rather than
+# join a group, so no read waits out the initial rebalance delay.
 background=()
 for topic in classic diskless; do
   messages=200
@@ -622,13 +746,16 @@ for topic in classic diskless; do
     --max-messages "$messages" --timeout-ms 60000 --property print.offset=true > "$evidence/source-$topic-ledger.txt" &
   background+=($!)
 done
-kafka source consumer-groups --describe --group dr-group > "$evidence/source-group-offsets.txt" &
+group_offsets source > "$evidence/source-group-offsets.txt" &
 background+=($!)
 for pid in "${background[@]}"; do wait "$pid"; done
 awk 'NR > 1 {print $1, $2, $3, $4}' "$evidence/source-group-offsets.txt" > "$evidence/source-group-positions.txt"
 
 # The image's tool captures snapshots, group positions, and the committed WAL
-# projection over the real SASL/TLS coordinator paths.
+# projection over the real SASL/TLS coordinator paths, under the load. Its
+# start is the capture boundary: every record acknowledged before it must come
+# back.
+capture_started_ms=$(date +%s%3N)
 docker run --rm --network "$network" -v "$work:/work:ro" -v "$work/source-node1:/var/lib/krabka:ro" \
   --entrypoint /usr/bin/krabka-backup "$broker_image" capture \
   --log-dir /var/lib/krabka --bootstrap-server "$group_coordinator:9095" \
@@ -638,8 +765,26 @@ docker run --rm --network "$network" -v "$work:/work:ro" -v "$work/source-node1:
   --archive-s3-secret-access-key "$secret" --archive-s3-allow-http --archive-prefix "$capture_prefix" \
   --worm-signing-key-id qualification-worm --worm-signing-key /work/worm/signing.pk8 \
   2>&1 | tee "$evidence/capture.log"
-# Restore demands each archive tip equal its expected head, so the heads are
-# read after the capture, the last point the source could still archive.
+check capture-under-load test "$(docker inspect --format '{{.State.Running}}' "$scope-drill")" = true
+
+# The load runs on past the capture for the declared post_capture_load, and the
+# source is then lost at once: every broker killed, mid-write.
+until [ "$(date +%s%3N)" -ge $((capture_started_ms + post_capture_load_ms)) ]; do sleep 0.2; done
+docker kill "$scope-source-1" "$scope-source-2" "$scope-source-3" >/dev/null
+disaster_ms=$(date +%s%3N)
+# SIGTERM: the load abandons every send in flight and records what it was told.
+docker stop --time 120 "$scope-drill" >/dev/null
+docker logs "$scope-drill" > "$evidence/drill-load.log" 2>&1
+check drill-load-recorded jq -e '.run.producers | length > 0' "$work/drill/load.json"
+cp "$work/drill/load.json" "$evidence/drill-load.json"
+# Complete loss means no source log directory survives into materialization.
+docker run --rm -v "$work:/work" --entrypoint /bin/sh "$mc_image" -c \
+  'rm -rf /work/source-node1 /work/source-node2 /work/source-node3'
+check source-volumes-destroyed test ! -e "$work/source-node1"
+
+# Restore demands each archive tip equal its expected head. Under load the
+# tips move until the loss, so no head retained before it can equal them: the
+# heads are read from the locked bucket now, before anything else touches it.
 worm_verify "$bucket" "$work/worm-current" --prefix "$data_prefix" \
   --key-id qualification-worm --public-key /worm/signing.pub --deep \
   > "$evidence/worm-verified.txt"
@@ -648,15 +793,6 @@ awk '/: tip / && $3 != "none," {sub(/:$/, "", $1); sub(/,$/, "", $3); print $1, 
 awk '/diskless-capture WORM head / {print $1, $4}' "$evidence/capture.log" >> "$evidence/worm-heads.txt"
 check worm-heads test -s "$evidence/worm-heads.txt"
 check diskless-worm-head grep -Eq '^diskless-capture [0-9a-f]{64}$' "$evidence/worm-heads.txt"
-
-# Complete loss means no source log directory survives into materialization.
-# Nothing is written after the capture, so no record is lost; the RPO this
-# records is the capture's age when the cluster is lost.
-docker rm -f "$scope-source-1" "$scope-source-2" "$scope-source-3" >/dev/null
-docker run --rm -v "$work:/work" --entrypoint /bin/sh "$mc_image" -c \
-  'rm -rf /work/source-node1 /work/source-node2 /work/source-node3'
-check source-volumes-destroyed test ! -e "$work/source-node1"
-disaster_ms=$(date +%s%3N)
 
 # From here to the committed group positions is the recovery an operator runs:
 # find the newest capture, verify it, fetch its inputs, restore, start, commit.
@@ -720,7 +856,11 @@ bootstrap_servers = ["$scope-restored-1:9093"]
 inter_broker_listener_name = "INTERNAL"
 controller_listener_protocol = "Plaintext"
 [runtime]
-log_segment_bytes = "1KiB"
+# One node: the coordinators' topics are created on first use, and at
+# Kafka's default replication factor of 3 they never could be.
+offsets_topic_replication_factor = 1
+transaction_state_replication_factor = 1
+log_segment_bytes = "1MiB"
 remote_log_manager_interval = "1s"
 diskless_wal_flush_interval = "50ms"
 diskless_wal_flush_max_size = "1KiB"
@@ -801,9 +941,22 @@ done
 
 # Recovery ends when the restored cluster serves the captured state, so these
 # reads -- a Fetch of every captured record, each topic's settings and the
-# group's positions -- sit inside RTO. Comparing them with the source is the
-# proof, and that stays outside.
+# group's positions -- sit inside RTO, and so does an authenticated write and
+# read back by `soak`, a principal that holds only restored ACLs and a
+# restored SCRAM credential, on each storage kind. Comparing them with the
+# source is the proof, and that stays outside.
 background=()
+while read -r name; do
+  drill restored soak qualification-soak probe --topic "$name" > "$evidence/restored-probe-$name.log" 2>&1 &
+  background+=($!)
+done < <(jq -r '.paths[].name' "$evidence/dr-objectives.json")
+# Serving the captured data includes serving the declared load's records: every
+# path is read back from its earliest offset, as `soak`, inside the window.
+drill restored soak qualification-soak readback --contract /work/dr-contract.yaml \
+  --load /work/drill/load.json --capture-started-ms "$capture_started_ms" \
+  --disaster-ms "$disaster_ms" --out /work/drill/evidence.json \
+  > "$evidence/drill-readback.log" 2>&1 &
+background+=($!)
 for topic in classic diskless; do
   messages=200
   if [ "$topic" = classic ]; then messages=201; fi
@@ -817,17 +970,77 @@ for topic in classic diskless; do
     --max-messages "$messages" --timeout-ms 60000 --property print.offset=true > "$evidence/restored-$topic-ledger.txt" &
   background+=($!)
 done
-kafka restored consumer-groups --describe --group dr-group > "$evidence/restored-group-offsets.txt" &
+group_offsets restored > "$evidence/restored-group-offsets.txt" &
 background+=($!)
-for pid in "${background[@]}"; do wait "$pid"; done
+# Every read finishes before the clock stops, and one that fails is reported by
+# its own check below, with the others' evidence beside it.
+for pid in "${background[@]}"; do wait "$pid" || true; done
 restore_ready_ms=$(date +%s%3N)
+
+# The declared load, reconciled by the soak judge from the read-back above:
+# every record acknowledged before the capture boundary was read exactly once
+# by every declared reader, nothing appears that was never sent, every
+# committing group's
+# restored offset is no lower than its last commit before the boundary and no
+# higher than the log end, and the oldest acknowledged record that did not
+# come back sets the recovery point the contract bounds. The restored cluster
+# served from the loss until `restore_ready_ms`, read-back included.
+jq --argjson serving "$restore_ready_ms" '.recovery.serving_unix_ms = $serving' \
+  "$work/drill/evidence.json" > "$evidence/drill-evidence.json"
+cp "$evidence/drill-evidence.json" "$work/drill/evidence.json"
+# The judge writes its verdict before it reports a failure.
+{ "$soak_check" judge --contract "$work/dr-contract.yaml" --evidence "$work/drill/evidence.json" \
+  --out "$evidence/soak-verdict.json" 2>&1 || true; } | tee "$evidence/soak-judge.log"
+# RPO is the age at the loss of the oldest acknowledged record that did not
+# come back, from the soak judge; the capture's own age at the loss is kept
+# beside it. RTO runs from the loss to a restored cluster serving the captured
+# records, settings and group positions, and authenticated produce and consume;
+# the proof that it did, and the resumed WORM chain, are the verification that
+# follows, timed as `verification_ms` when the drill completes. Both are
+# recorded before any proof is checked, so a failed drill still reports them.
+jq -n --argjson captured_at_ms "$capture_ms" --argjson source_started_ms "$source_started_ms" \
+  --argjson capture_started_ms "$capture_started_ms" --argjson load_started_ms "$load_started_ms" \
+  --argjson disaster_ms "$disaster_ms" --argjson restore_ready_ms "$restore_ready_ms" \
+  --slurpfile verdict "$evidence/soak-verdict.json" \
+  '{capture_boundary_ms:$capture_started_ms,capture_manifest_ms:$captured_at_ms,disaster_ms:$disaster_ms,
+    rpo_ms:$verdict[0].recovery.rpo_ms,rpo_objective:$verdict[0].recovery.objectives.rpo,
+    records_lost_beyond_boundary:$verdict[0].recovery.lost_beyond_boundary,
+    capture_age_ms:($disaster_ms-$capture_started_ms),
+    rto_ms:($restore_ready_ms-$disaster_ms),rto_objective:$verdict[0].recovery.objectives.rto,
+    load_before_capture_ms:($capture_started_ms-$load_started_ms),
+    source_runtime_ms:($captured_at_ms-$source_started_ms)}' \
+  > "$evidence/rpo-rto.json"
+check measured-rpo-rto jq -e '.rpo_ms >= 0 and .rto_ms > 0 and .rto_ms == $verdict[0].recovery.rto_ms' \
+  --slurpfile verdict "$evidence/soak-verdict.json" "$evidence/rpo-rto.json"
+
+# A topic's settings are its own values. Their synonyms also name the dynamic
+# broker defaults, which are outside the boundary and recorded below.
+topic_settings() { sed -E 's/ synonyms=\{.*\}$//' "$1"; }
 for topic in classic diskless; do
   check "$topic-original-offsets" grep -Eq "^$topic:[[:space:]]*0:[[:space:]]*[1-9][0-9]*$" "$evidence/restored-$topic-offsets.txt"
-  check "$topic-settings" cmp "$evidence/source-$topic-config.txt" "$evidence/restored-$topic-config.txt"
+  check "$topic-settings" cmp <(topic_settings "$evidence/source-$topic-config.txt") <(topic_settings "$evidence/restored-$topic-config.txt")
   check "$topic-ledger" cmp "$evidence/source-$topic-ledger.txt" "$evidence/restored-$topic-ledger.txt"
 done
 awk 'NR > 1 {print $1, $2, $3, $4}' "$evidence/restored-group-offsets.txt" > "$evidence/restored-group-positions.txt"
 check consumer-positions cmp "$evidence/source-group-positions.txt" "$evidence/restored-group-positions.txt"
+while read -r name; do
+  check "authenticated-round-trip-$name" grep -F 'wrote and read back offset' "$evidence/restored-probe-$name.log"
+done < <(jq -r '.paths[].name' "$evidence/dr-objectives.json")
+
+# Access controls come back as they were: the same ACLs, the same users with
+# the same SCRAM mechanisms and quotas. Denied access stays denied.
+settings_listing restored
+check acls-restored cmp "$evidence/source-acls.txt" "$evidence/restored-acls.txt"
+check scram-users-restored cmp "$evidence/source-users.txt" "$evidence/restored-users.txt"
+denied_probe restored denied-access-restored denied qualification-denied tiered-idempotent
+denied_probe restored unlisted-topic-restored soak qualification-soak classic
+# Dynamic broker configs are outside the declared boundary: restore does not
+# carry them. Both listings are kept as evidence of what the operator re-applies.
+if cmp -s "$evidence/source-broker-defaults.txt" "$evidence/restored-broker-defaults.txt"; then
+  printf 'broker-defaults: restored\n' >> "$evidence/limits.txt"
+else
+  printf 'broker-defaults: not restored (outside the declared boundary)\n' >> "$evidence/limits.txt"
+fi
 
 # Resume archival and prove the restored RLMM receipt continues the original
 # WORM chain instead of starting a second epoch.
@@ -857,16 +1070,15 @@ for attempt in $(seq 1 60); do
   sleep 2
 done
 check worm-chain-continued test -n "$classic_new_head" -a "$classic_new_head" != "$classic_old_head"
+
+# The verdict judged above: the declared load came back inside its objectives.
+check soak-judge grep -Fx 'dr-secured: PASS' "$evidence/soak-judge.log"
+check records-inside-boundary jq -e '([.reconciliation.findings[] | select(.kind == "lost")] | length) == 0' "$evidence/soak-verdict.json"
+check offsets-reconciled jq -e '[.reconciliation.findings[] | select(.kind | startswith("committed_offset"))] | length == 0' "$evidence/soak-verdict.json"
 drill_complete_ms=$(date +%s%3N)
-# RPO is the capture's age at the loss. RTO runs from the loss to a restored
-# cluster serving the captured records, settings and group positions; the proof
-# that it did, and the resumed WORM chain, are the verification that follows.
-jq -n --argjson captured_at_ms "$capture_ms" --argjson source_started_ms "$source_started_ms" \
-  --argjson disaster_ms "$disaster_ms" --argjson restore_ready_ms "$restore_ready_ms" \
-  --argjson drill_complete_ms "$drill_complete_ms" \
-  '{capture_boundary_ms:$captured_at_ms,disaster_ms:$disaster_ms,rpo_ms:($disaster_ms-$captured_at_ms),rto_ms:($restore_ready_ms-$disaster_ms),verification_ms:($drill_complete_ms-$restore_ready_ms),source_runtime_ms:($captured_at_ms-$source_started_ms)}' \
-  > "$evidence/rpo-rto.json"
-check measured-rpo-rto jq -e '.rpo_ms >= 0 and .rto_ms > 0' "$evidence/rpo-rto.json"
+jq --argjson verification_ms "$((drill_complete_ms - restore_ready_ms))" '.verification_ms = $verification_ms' \
+  "$evidence/rpo-rto.json" > "$evidence/rpo-rto.json.partial"
+mv "$evidence/rpo-rto.json.partial" "$evidence/rpo-rto.json"
 
 # Failure copies are mutable by design: they prove the consumers of archive
 # evidence reject hostile bytes without weakening the locked source bucket.
@@ -874,7 +1086,7 @@ for bad in tampered missing; do
   docker run --rm --network "$network" --entrypoint /bin/sh "$mc_image" -c \
     "mc alias set local http://$scope-minio:9000 $access $secret >/dev/null; mc mb local/$bad >/dev/null; mc mirror local/$bucket local/$bad >/dev/null"
 done
-tamper_object=$(grep '\.log$' "$evidence/archive-before.txt" | head -1 | sed "s#local/$bucket#local/tampered#")
+tamper_object=$(grep -m1 '\.log$' "$evidence/archive-before.txt" | sed "s#local/$bucket#local/tampered#")
 missing_manifest=$(grep '\.manifest$' "$evidence/archive-before.txt" | tail -1 | sed "s#local/$bucket#local/missing#")
 test -n "$tamper_object" -a -n "$missing_manifest"
 docker run --rm -i --network "$network" --entrypoint /bin/sh "$mc_image" -c \
@@ -921,6 +1133,67 @@ if docker run --rm --network "$network" -v "$work/capture:/capture:ro" -v "$work
   exit 1
 fi
 printf 'untrusted-worm-key\n' >> "$evidence/checks.txt"
+
+# A capture is accepted whole or not at all. In separate mutable copies of it,
+# one artifact is changed and one is deleted: verify refuses both, and
+# restore-offsets refuses the changed one and commits nothing.
+backup_archive() {
+  local archive_bucket=$1
+  shift
+  docker run --rm --network "$network" -v "$work:/work:ro" --entrypoint /usr/bin/krabka-backup "$broker_image" "$@" \
+    --archive-s3-bucket "$archive_bucket" --archive-s3-region us-east-1 \
+    --archive-s3-endpoint "http://$scope-minio:9000" --archive-s3-access-key-id "$access" \
+    --archive-s3-secret-access-key "$secret" --archive-s3-allow-http --archive-prefix "$capture_prefix"
+}
+for bad in capture-tampered capture-missing; do
+  docker run --rm --network "$network" --entrypoint /bin/sh "$mc_image" -c \
+    "mc alias set local http://$scope-minio:9000 $access $secret >/dev/null; mc mb local/$bad >/dev/null; mc mirror local/$bucket/$capture_prefix/ local/$bad/$capture_prefix/ >/dev/null"
+done
+mkdir -p "$work/capture-tampered"
+jq '.groups |= map(if .group == "dr-group" then .offsets |= map(.offset += 1000) else . end)' \
+  "$work/capture/group-offsets.json" > "$work/capture-tampered/group-offsets.json"
+chmod -R a+rX "$work/capture-tampered"
+docker run --rm --network "$network" -v "$work/capture-tampered:/tampered:ro" --entrypoint /bin/sh "$mc_image" -c \
+  "mc alias set local http://$scope-minio:9000 $access $secret >/dev/null; mc cp /tampered/group-offsets.json local/capture-tampered/$capture_prefix/restore-inputs/$capture_id/group-offsets.json >/dev/null; mc rm local/capture-missing/$capture_prefix/restore-inputs/$capture_id/rlmm-snapshot >/dev/null"
+for bad in capture-tampered capture-missing; do
+  if backup_archive "$bad" verify > "$evidence/$bad-verify.log" 2>&1; then
+    echo "$bad unexpectedly verified" >&2
+    exit 1
+  fi
+  printf '%s\n' "$bad-refused" >> "$evidence/checks.txt"
+done
+if backup_archive capture-tampered restore-offsets --bootstrap-server "$scope-restored-1:9095" \
+  --command-config /work/backup.properties --worm-key-id qualification-worm \
+  --worm-public-key /work/worm/signing.pub \
+  --worm-expect-head "$(awk '$1 == "diskless-capture" {print $2}' "$evidence/worm-heads.txt")" \
+  > "$evidence/capture-tampered-restore-offsets.log" 2>&1; then
+  echo 'a tampered capture unexpectedly committed group offsets' >&2
+  exit 1
+fi
+printf 'capture-tampered-restore-offsets-refused\n' >> "$evidence/checks.txt"
+group_offsets restored | awk 'NR > 1 {print $1, $2, $3, $4}' \
+  > "$evidence/restored-group-positions-after-tamper.txt"
+check tampered-offsets-not-committed cmp "$evidence/restored-group-positions.txt" "$evidence/restored-group-positions-after-tamper.txt"
+
+# An authenticated restore that is not given an input its signed capture
+# binds. Recorded, not checked: the release under test restores without it,
+# and the restored cluster then has no ACL and no SCRAM credential.
+mkdir -p "$work/missing-input-target"
+chmod 0777 "$work/missing-input-target"
+missing_input_args=()
+skip_next=false
+for arg in "${restore_args[@]}"; do
+  if $skip_next; then skip_next=false; continue; fi
+  if [ "$arg" = --metadata-snapshot ]; then skip_next=true; continue; fi
+  missing_input_args+=("$arg")
+done
+if docker run --rm --network "$network" -v "$work/capture:/capture:ro" -v "$work/worm:/worm:ro" \
+  -v "$work/missing-input-target:/restored" --entrypoint /usr/bin/krabka-restore "$broker_image" \
+  "${missing_input_args[@]}" > "$evidence/restore-without-metadata-snapshot.log" 2>&1; then
+  printf 'restore-without-metadata-snapshot: accepted; the restored cluster has no ACLs and no SCRAM users\n' >> "$evidence/limits.txt"
+else
+  printf 'restore-without-metadata-snapshot: refused\n' >> "$evidence/limits.txt"
+fi
 """
 
 _SCHEMA_EVOLUTION = r"""

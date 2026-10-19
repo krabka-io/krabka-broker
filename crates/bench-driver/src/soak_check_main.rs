@@ -66,23 +66,7 @@ enum Command {
     },
 }
 
-fn load_contract(path: &Path) -> Result<Contract> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let contract =
-        Contract::from_yaml(&text).with_context(|| format!("parse contract {}", path.display()))?;
-    let errors = contract.validate();
-    if !errors.is_empty() {
-        for error in &errors {
-            eprintln!("contract: {error}");
-        }
-        bail!(
-            "{} is not a usable contract ({} problem(s))",
-            path.display(),
-            errors.len()
-        );
-    }
-    Ok(contract)
-}
+fn load_contract(path: &Path) -> Result<Contract> { Contract::from_file(path) }
 
 fn load_evidence(path: &Path) -> Result<Evidence> {
     let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;

@@ -13,16 +13,19 @@ use {
         faults::{Injected, inject},
         host::{FaultLog, now_ms},
         lifecycle_run::LifecycleRun,
-        load::CommitTracker,
-        readback::commit_checks,
         topology::{
             Node, Nodes, PartitionState, TopicPartition, isr_complete, led_by, not_failed_over,
             resolve_target, role_of,
         },
         transitions::{self, Expect},
-        windows::{Span, Windows},
     },
     krabka_bench_driver::soak::{
+        client::{
+            Endpoint,
+            load::CommitTracker,
+            readback::commit_checks,
+            windows::{Span, Windows},
+        },
         contract::{Contract, FaultKind, RecoveryCheck},
         deadline::checks_for,
         evidence::{CommitCheck, FaultRecord, RecoveryRecord},
@@ -65,7 +68,7 @@ pub(crate) struct Executor {
     pub(crate) windows: Arc<Windows>,
     pub(crate) log: Arc<FaultLog>,
     pub(crate) trackers: Vec<Arc<CommitTracker>>,
-    pub(crate) bootstrap: String,
+    pub(crate) endpoint: Endpoint,
     /// The release images and the rotation state of a lifecycle run.
     pub(crate) lifecycle: Option<Arc<LifecycleRun>>,
 }
@@ -96,7 +99,7 @@ impl Executor {
         // finding, and the offsets still had to survive whatever did happen.
         let mut commits = Vec::new();
         for (tracker, acknowledged) in self.trackers.iter().zip(&before) {
-            commits.extend(commit_checks(&self.bootstrap, tracker, &fault.id, acknowledged).await);
+            commits.extend(commit_checks(&self.endpoint, tracker, &fault.id, acknowledged).await);
         }
         FaultOutcome {
             record,

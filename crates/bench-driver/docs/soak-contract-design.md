@@ -21,9 +21,9 @@ bench/soak/<contract>.yaml ──► executor ──► evidence.json, faults.js
         (declared)            (measures)          (recorded)              (pure)     (graded)
 ```
 
-**The contract** is a YAML file under `bench/soak/`. [`rf3-72h.yaml`](../../../bench/soak/rf3-72h.yaml) is the 72-hour M26 soak that issue #1393 executes. [`self-check.yaml`](../../../bench/soak/self-check.yaml) is a run of about five minutes that proves the judge. `Contract::validate` refuses a contract that the harness cannot run safely or judge honestly, and it gives every reason at once.
+**The contract** is a YAML file under `bench/soak/`. [`rf3-72h.yaml`](../../../bench/soak/rf3-72h.yaml) is the 72-hour M26 soak that issue #1393 executes. [`self-check.yaml`](../../../bench/soak/self-check.yaml) is a run of about five minutes that proves the judge. [`dr-secured.yaml`](../../../bench/soak/dr-secured.yaml) is the M28 disaster-recovery drill that issue #1397 executes, with the profile `disaster_recovery`. `Contract::validate` refuses a contract that the harness cannot run safely or judge honestly, and it gives every reason at once.
 
-**The executor** is the `soak_contract` suite of `krabka-broker` (`crates/broker/tests/soak_contract.rs`). It boots the three-broker cluster of the existing four-hour `soak` lane: real broker processes from the packaging image, one formatted three-voter quorum, and host-side access to each broker's `/proc` and data directory. It runs the declared load paths, executes the fault schedule, measures each recovery and reads every topic back. It records what it saw and makes no decision.
+**The executor** of a soak or a self-check is the `soak_contract` suite of `krabka-broker` (`crates/broker/tests/soak_contract.rs`). It boots the three-broker cluster of the existing four-hour `soak` lane: real broker processes from the packaging image, one formatted three-voter quorum, and host-side access to each broker's `/proc` and data directory. It runs the declared load paths, executes the fault schedule, measures each recovery and reads every topic back. It records what it saw and makes no decision. The client half of that work, the paced producers, the live consumer groups, the read-back and the steady and disturbed windows, is the `soak::client` module of `krabka-bench-driver`, so a second executor can share it. The executor of a disaster-recovery drill is `krabka-soak-drill`, which the qualification gate runs; [A disaster-recovery drill is a contract too](#a-disaster-recovery-drill-is-a-contract-too) describes it.
 
 **The judge** is the `soak` module of `krabka-bench-driver`. It does no IO and has no clock. It expands the fault schedule from the seed, reconciles the ledgers, checks each recovery against its deadline and each path against its budgets, and returns a verdict. `krabka-soak-check` is its command-line front end: `plan` prints the schedule, `judge` grades evidence, and `self-check` runs the proof.
 
@@ -37,6 +37,7 @@ bench/soak/<contract>.yaml ──► executor ──► evidence.json, faults.js
 | `paths` | one entry per load path: semantics, storage, partitions, paced rate, throughput floor, payload, consumers, offset commits, and p50/p99/p999 budgets for produce and for consume | five paths, below |
 | `deadlines` | leader failover, ISR rejoin, controller failover, catch-up after a pause | 15 s, 2 min, 15 s, 1 min |
 | `faults` | named plans: kind, target, first offset, period, jitter, duration | seven plans, below |
+| `disaster_recovery` | a drill only: how long the load runs after the capture starts, and the RPO and RTO objectives | absent |
 
 The 72-hour paths cover every combination that the milestone names:
 
@@ -151,15 +152,41 @@ A transition targets a broker by index and happens once, so the plan says which 
 
 The executor also runs the rollback that the rule forbids, on one node: the candidate finalizes an unstable `metadata.version`, and the source must refuse to start before it changes the log. `docs/qualification.md` states the lifecycle contract and the gate that runs it on release images.
 
+### A disaster-recovery drill is a contract too
+
+Milestone M28 asks whether a cluster restored from its backup holds what the source acknowledged, under load, with its access controls. That question has the same shape as a soak's: a declared load, limits fixed before the run, and a judge that classifies every record. So a drill is a contract with the profile `disaster_recovery`, judged by the same reconciler, not a second harness with its own rules.
+
+**The executor is `krabka-soak-drill`.** The drill runs inside the `disaster-recovery` gate of the qualification workflow ([`docs/qualification.md`](../../../docs/qualification.md#disaster-recovery-declaration)), against an RF=3 TLS and SASL/SCRAM-SHA-512 cluster built from a candidate image, not against the soak lane's host-side cluster. The gate owns the cluster, the capture, the loss and the restore. The binary owns the client side: `load` runs the contract's paths against the source as an ACL-only principal until `SIGTERM`, `probe` writes and reads back one record as that principal, and `readback` reads the restored cluster and writes the evidence. It uses `soak::client` exactly as the `soak_contract` suite does, with an `Endpoint` that carries the TLS trust and SASL credentials. Both executors send the same records and keep the same ledgers, so one reconciler judges both. On `SIGTERM` the load abandons every send in flight, because the cluster that could answer it is gone. An abandoned send is neither acknowledged nor failed, which the reconciler reads as a record that may or may not have been written.
+
+**The boundary cut reuses the reconciler.** The capture boundary is the instant the capture started. `soak::recovery::bound_evidence` cuts each producer's ledger there: only the records acknowledged before the boundary stay acknowledged in the ledger the judge sees. The reconciler then requires every one of them to be restored, and reports a missing one as `lost`, by the same rule as a soak. A record acknowledged after the boundary may or may not be restored, which is exactly how the reconciler already treats a send whose outcome is unknown. No new reconciliation class was needed, and none of the soak's rules changed. The committed-offset checks work the same way: each committing group's restored offset must be no lower than its last commit acknowledged before the boundary.
+
+**RPO and RTO are measured, then held against the contract.** The missing records beyond the boundary are the drill's data loss, and `PathRecovery` counts them. The recovery point is the loss instant minus the acknowledgement time of the oldest acknowledged record that did not come back, and zero when every record came back. It is not the capture's age: a diskless topic loses everything after the capture's committed WAL cutoffs, while a tiered topic keeps every segment archived before the loss, so the capture's age says little about what was actually lost. The recovery time runs from the loss to the instant the restored cluster served authenticated produce and consume to the ACL-only principal. `check_recovery` holds both against the contract's `rpo` and `rto`, and also fails a drill whose source was lost before `post_capture_load`, and a path that acknowledged nothing before the boundary, because then the capture proved nothing about it.
+
+**Validation keeps a drill inside the backup boundary.** A drill restores what a capture holds and nothing else, so `validate_drill` refuses a contract that no restore could pass honestly:
+
+- A classic path is refused, because a classic topic's segments are never archived. It is outside the backup boundary.
+- A path that is not idempotent is refused. Transaction state is never captured, and a compacted topic is never tiered.
+- Faults and a `self_check` section are refused. The drill's only fault is the loss of the source cluster.
+- An `rpo` shorter than `post_capture_load` is refused, because a diskless topic loses everything after the capture and no run could meet it.
+- A drill must cover a tiered topic, a diskless topic and a path that commits offsets.
+
+**Only a drill timestamps each acknowledgement.** To place a record on one side of the boundary, the drill needs the wall-clock time of every acknowledgement. A `SeqSet` stores a 72-hour soak's 200 million acknowledged sequence numbers as a few runs, but one timestamp per record does not compress that way, and the soak would carry gigabytes of them for no use. So `LoadContext` records acknowledgement times only when its executor asks, and only `krabka-soak-drill` does. A drill runs for minutes at 60 records a second, so its timestamps are small.
+
+The alternative was to keep the drill's checks in the gate's shell script, as the fixed 200-record ledgers are. That works for a fixed ledger that stops before the capture. It does not work for a load that is still running at the capture and at the loss, where each record's side of the boundary is decided by its acknowledgement time and the reader must tell lost from permitted. That classification is the reconciler's job, and it already has unit tests whose answers are known.
+
 ## Integration
 
-**Cluster fixture.** The executor uses `crates/broker/tests/soak/cluster.rs`, which the four-hour `soak` lane also uses. A change to that fixture selects the `soak_contract` suite on a pull request.
+**Client code.** `soak::client` (`load`, `readback` and `windows`) lives in `krabka-bench-driver`, not in the broker's test tree, because two executors use it. The `soak_contract` suite imports it from there, and `krabka-soak-drill` links it into a binary the qualification gate builds from the qualification checkout.
+
+**Cluster fixture.** The `soak_contract` executor uses `crates/broker/tests/soak/cluster.rs`, which the four-hour `soak` lane also uses. A change to that fixture selects the `soak_contract` suite on a pull request.
 
 **CI.** The `soak_contract` suite is in the `krabka_image` list of `crates/broker/BUILD.bazel`, so it runs as `//crates/broker:soak_contract_docker_test` in the `docker` matrix of `.github/workflows/ci.yml`. A pull request selects it when it changes the suite, the soak fixture, the judge or a contract (`.aspect/container_suites.axl`). The nightly full matrix always runs it. It takes minutes, so it does not need its own lane, unlike the four-hour `soak`. The hermetic tests of the judge (`krabka-bench-driver`'s unit tests, `contract_files` and `soak_check_cli`) run in `bazel test //...` on every pull request.
 
 **The 72-hour run.** Issue #1393 runs the same executor with `KRABKA_SOAK_CONTRACT=bench/soak/rf3-72h.yaml` on a host that matches the contract's `host` section, with `KRABKA_SOAK_EVIDENCE_DIR` on retained storage. The evidence directory holds the contract, the expanded schedule, `faults.jsonl`, `telemetry.jsonl`, `alerts.json`, `evidence.json` and `verdict.json`. Publish it unchanged, as the performance qualification does.
 
 **The diskless path.** A diskless WAL quorum serves a shard only to a voter that authenticates as `broker-<id>` on the inter-broker listener, and places one voter per rack. So when a contract has a diskless path, every node of the soak cluster binds a second listener, `SASL_PLAINTEXT`, that `inter_broker_listener_name` selects, and reports its own rack. Every client of the run stays on the anonymous `PLAINTEXT` listener. The broker's file configuration has no inter-broker PLAIN or SCRAM credential, so each node authenticates with `OAUTHBEARER`: an unsecured (`alg: none`) token whose `sub` is its principal, which the peers accept under `[oauthbearer] allow_unsecured = true`. That is a test-cluster shortcut, not a deployment shape. The three nodes share one local object store, the host directory that a tiered path already uses for its remote tier, and the topic-backed remote-log metadata manager that holds the WAL flush index. `crates/broker/tests/diskless_jepsen.rs` runs the same quorum in process with SASL/PLAIN.
+
+**The disaster-recovery drill.** The `disaster-recovery` gate in `.aspect/check_qualification_gates.axl` builds `krabka-soak-drill` and `krabka-soak-check`, prints the contract's objectives with `krabka-soak-drill objectives`, starts `load` in a container on the drill network, captures and loses the source under it, restores, and then runs `readback` and `krabka-soak-check judge`. The gate passes only when the judge prints `dr-secured: PASS`. [`docs/qualification.md`](../../../docs/qualification.md#disaster-recovery-declaration) declares the backup boundary, the objectives and the negative checks.
 
 **What the executor does not run yet.** The `netem` slowdown is implemented but has not run on a kernel with the `sch_netem` module. Issue #1393 closes that before the 72-hour run.
 
@@ -183,7 +210,9 @@ The contract tests Kafka semantics. It does not define new semantics.
 ## Testing
 
 - `crates/bench-driver/src/soak/*.rs`: unit tests for every validation rule, the seeded schedule, sequence sets, every reconciliation class, the deadline and budget checks, and the self-check judge.
+- `crates/bench-driver/src/soak/recovery/tests.rs`: the boundary cut, the commit before the boundary, the loss counted beyond it, a record lost inside the boundary failing the reconciler, and each missed objective failing `check_recovery`.
 - `crates/bench-driver/tests/contract_files.rs`: each contract under `bench/soak/` validates, and a synthetic run of it is judged as its profile says.
 - `crates/bench-driver/tests/soak_check_cli.rs`: `krabka-soak-check` as an operator runs it.
-- `crates/broker/tests/soak_contract.rs`: the live executor, the self-check against a real three-broker cluster, the lifecycle contract against two release images, and the refused rollback.
+- `crates/broker/tests/soak_contract.rs`: the live executor, the self-check against a real three-broker cluster through `soak::client`, the lifecycle contract against two release images, and the refused rollback.
+- The `disaster-recovery` qualification gate: the live drill, which runs `krabka-soak-drill` against a secured cluster and its restore.
 - `crates/broker/tests/soak.rs`: the four-hour resource-drift soak that this design extends.

@@ -16,6 +16,7 @@ use {
         contract::{Isolation, RecoveryCheck, Semantics},
         ledger::SeqSet,
         lifecycle::{Checkpoint, LevelRange},
+        recovery::RecoveryEvidence,
     },
     krabka_units::{prelude::*, serde_units},
     serde::{Deserialize, Serialize},
@@ -61,6 +62,10 @@ pub struct Evidence {
     /// What a lifecycle run found after each of its transitions.
     #[serde(default)]
     pub checkpoints: Vec<Checkpoint>,
+    /// A disaster-recovery drill's capture boundary, loss and recovery.
+    /// Absent from a soak.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<RecoveryEvidence>,
 }
 
 /// One producer's account of what it sent.

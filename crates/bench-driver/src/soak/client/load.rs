@@ -17,20 +17,21 @@
 //! them up instead.
 
 use {
-    crate::{
-        host::now_ms,
-        windows::{Latencies, Windows},
+    super::{
+        Endpoint, now_ms,
+        windows::{Latencies, Windows, measurement},
     },
-    bytes::Bytes,
-    futures_util::{StreamExt as _, stream::FuturesUnordered},
-    krabka_bench_driver::{
+    crate::{
         scenario::{Acks as ContractAcks, Compression as ContractCompression},
         soak::{
             contract::{Contract, Isolation, LoadPath, Semantics},
-            evidence::{ProducerLedger, TxnLedger, TxnOutcome, record_tag},
+            evidence::{PathMeasurement, ProducerLedger, TxnLedger, TxnOutcome, record_tag},
             ledger::SeqSet,
+            recovery::{Ack, CommitAck},
         },
     },
+    bytes::Bytes,
+    futures::{StreamExt as _, stream::FuturesUnordered},
     krabka_client_consumer::{
         AutoOffsetReset, Consumer, ConsumerError, IsolationLevel, OffsetAndMetadata,
     },
@@ -48,32 +49,48 @@ use {
         },
         time::{Duration, Instant},
     },
-    tokio::time::MissedTickBehavior,
+    tokio::{sync::Notify, task::JoinHandle, time::MissedTickBehavior},
 };
 
 /// How long a client that could not be built waits before it tries again.
 const RECONNECT_BACKOFF: Duration = Duration::from_secs(1);
 
 /// What every load task shares.
-pub(crate) struct LoadContext {
-    pub(crate) contract: Contract,
-    pub(crate) bootstrap: String,
-    pub(crate) windows: Arc<Windows>,
+pub struct LoadContext {
+    pub contract: Contract,
+    pub endpoint: Endpoint,
+    pub windows: Arc<Windows>,
+    /// Whether each producer records when each of its sends was acknowledged.
+    /// A disaster-recovery drill needs it to place every record on one side of
+    /// the capture boundary; a 72-hour soak does not, and could not afford it.
+    record_ack_times: bool,
     running: AtomicBool,
     /// Every path's acknowledged records so far, for a lifecycle checkpoint
     /// that reconciles them while the load runs. The producers' own ledgers
     /// are only handed back when the load stops.
     acknowledged: Mutex<BTreeMap<String, SeqSet>>,
+    abandoned: AtomicBool,
+    abandon: Notify,
 }
 
+#[bon::bon]
 impl LoadContext {
-    pub(crate) fn new(contract: Contract, bootstrap: String, windows: Arc<Windows>) -> Self {
+    #[builder]
+    pub fn new(
+        contract: Contract,
+        endpoint: Endpoint,
+        windows: Arc<Windows>,
+        #[builder(default)] record_ack_times: bool,
+    ) -> Self {
         Self {
             contract,
-            bootstrap,
+            endpoint,
             windows,
+            record_ack_times,
             running: AtomicBool::new(true),
             acknowledged: Mutex::new(BTreeMap::new()),
+            abandoned: AtomicBool::new(false),
+            abandon: Notify::new(),
         }
     }
 
@@ -85,7 +102,7 @@ impl LoadContext {
     }
 
     /// `path`'s acknowledged records so far.
-    pub(crate) fn acknowledged(&self, path: &str) -> SeqSet {
+    pub fn acknowledged(&self, path: &str) -> SeqSet {
         self.acknowledged
             .lock()
             .ok()
@@ -95,21 +112,43 @@ impl LoadContext {
 
     fn running(&self) -> bool { self.running.load(Ordering::Relaxed) }
 
+    fn is_abandoned(&self) -> bool { self.abandoned.load(Ordering::Relaxed) }
+
     /// Stop every producer and consumer at its next step.
-    pub(crate) fn stop(&self) { self.running.store(false, Ordering::Relaxed); }
+    pub fn stop(&self) { self.running.store(false, Ordering::Relaxed); }
+
+    /// Stop every idempotent producer and every consumer now, without waiting
+    /// for a send in flight or closing a client: the cluster they talk to is
+    /// gone. A send in flight is then neither acknowledged nor failed, which
+    /// the reconciler reads as a record that may or may not have been written.
+    pub fn abandon(&self) {
+        self.stop();
+        self.abandoned.store(true, Ordering::Relaxed);
+        self.abandon.notify_waiters();
+    }
+
+    /// Resolves once [`Self::abandon`] has been called.
+    async fn abandoned(&self) {
+        let notified = self.abandon.notified();
+        if self.is_abandoned() {
+            return;
+        }
+        notified.await;
+    }
 }
 
 /// The one producer of `path`, named as the evidence names it.
-pub(crate) fn producer_name(path: &str) -> String { format!("{path}-0") }
+#[must_use]
+pub fn producer_name(path: &str) -> String { format!("{path}-0") }
 
 /// The consumer group of `path` read at `isolation`.
-pub(crate) fn group_name(path: &str, isolation: Isolation) -> String {
-    format!("soak-{path}-{isolation}")
-}
+#[must_use]
+pub fn group_name(path: &str, isolation: Isolation) -> String { format!("soak-{path}-{isolation}") }
 
 /// A record value: the tag, padded with `x` to `payload` bytes. A tag longer
 /// than the payload is sent whole.
-pub(crate) fn record_value(producer: &str, seq: u64, payload: usize) -> Bytes {
+#[must_use]
+pub fn record_value(producer: &str, seq: u64, payload: usize) -> Bytes {
     let mut value = record_tag(producer, seq).into_bytes();
     if value.len() < payload {
         value.resize(payload, b'x');
@@ -118,12 +157,14 @@ pub(crate) fn record_value(producer: &str, seq: u64, payload: usize) -> Bytes {
 }
 
 /// The key of record `seq` on a compacted path: `<producer>/k<seq mod keys>`.
-pub(crate) fn compacted_key(producer: &str, seq: u64, key_space: u64) -> String {
+#[must_use]
+pub fn compacted_key(producer: &str, seq: u64, key_space: u64) -> String {
     format!("{producer}/k{}", seq % key_space.max(1))
 }
 
 /// The key index a compacted key carries.
-pub(crate) fn key_index(key: &[u8]) -> Option<u64> {
+#[must_use]
+pub fn key_index(key: &[u8]) -> Option<u64> {
     let text = std::str::from_utf8(key).ok()?;
     let (_, index) = text.rsplit_once("/k")?;
     index.parse().ok()
@@ -132,19 +173,24 @@ pub(crate) fn key_index(key: &[u8]) -> Option<u64> {
 /// Whether a failed compacted send has been superseded: a later value of its
 /// key was already sent, so resending it would put an older value after a
 /// newer one, which is a regression the application itself would cause.
-pub(crate) fn superseded(seq: u64, key_space: u64, next_seq: u64) -> bool {
+#[must_use]
+pub fn superseded(seq: u64, key_space: u64, next_seq: u64) -> bool {
     seq.saturating_add(key_space) < next_seq
 }
 
 /// Whether transaction `index` (counting from zero) is aborted on purpose.
-pub(crate) fn aborted_on_purpose(index: u64, abort_every: u32) -> bool {
+#[must_use]
+pub fn aborted_on_purpose(index: u64, abort_every: u32) -> bool {
     (index + 1).is_multiple_of(u64::from(abort_every.max(1)))
 }
 
 /// What a producer task returns when the load stops.
-pub(crate) struct ProducerOutput {
-    pub(crate) ledger: ProducerLedger,
-    pub(crate) latencies: Latencies,
+pub struct ProducerOutput {
+    pub ledger: ProducerLedger,
+    pub latencies: Latencies,
+    /// When each acknowledged send was acknowledged, in the order the acks
+    /// arrived. Empty unless the context records ack times.
+    pub acked_at: Vec<Ack>,
 }
 
 fn acks(acks: ContractAcks) -> Acks {
@@ -177,7 +223,8 @@ async fn build_producer(
         .as_ref()
         .map(|_| ctx.contract.clients.transactions.timeout.to_std());
     Producer::builder()
-        .bootstrap(ctx.bootstrap.clone())
+        .bootstrap(ctx.endpoint.bootstrap.clone())
+        .maybe_security(ctx.endpoint.security.clone())
         .client_id(name.to_owned())
         .acks(acks(settings.acks))
         .enable_idempotence(true)
@@ -275,13 +322,16 @@ fn record(path: &LoadPath, producer: &str, seq: u64) -> ProducerRecord {
 /// A send that fails is sent again, up to `max_send_attempts` in all, and is
 /// recorded as failed and as retried. A compacted send whose key has a later
 /// value in flight is not sent again: see [`superseded`].
-pub(crate) async fn run_idempotent(ctx: Arc<LoadContext>, path: LoadPath) -> ProducerOutput {
+pub async fn run_idempotent(ctx: Arc<LoadContext>, path: LoadPath) -> ProducerOutput {
     let name = producer_name(&path.name);
-    let mut ledger = empty_ledger(&path, &name);
-    let mut latencies = Latencies::new();
+    let mut output = ProducerOutput {
+        ledger: empty_ledger(&path, &name),
+        latencies: Latencies::new(),
+        acked_at: Vec::new(),
+    };
     let max_attempts = ctx.contract.clients.producer.max_send_attempts;
     let Some(producer) = connect_producer(&ctx, &name, false).await else {
-        return ProducerOutput { ledger, latencies };
+        return output;
     };
     let mut ticker = pipelined_ticker(path.rate.period().to_std());
     let mut inflight: FuturesUnordered<Delivery> = FuturesUnordered::new();
@@ -291,6 +341,7 @@ pub(crate) async fn run_idempotent(ctx: Arc<LoadContext>, path: LoadPath) -> Pro
             break;
         }
         tokio::select! {
+            () = ctx.abandoned() => break,
             _ = ticker.tick(), if ctx.running() => {
                 let seq = next_seq;
                 next_seq += 1;
@@ -301,18 +352,21 @@ pub(crate) async fn run_idempotent(ctx: Arc<LoadContext>, path: LoadPath) -> Pro
                 let at = now_ms();
                 match result {
                     Ok(_) => {
-                        ledger.acked.insert(seq);
+                        output.ledger.acked.insert(seq);
                         ctx.acknowledge(&path.name, seq);
-                        latencies.record(ctx.windows.disturbed(at), Time::from_millis(at - sent));
+                        output.latencies.record(ctx.windows.disturbed(at), Time::from_millis(at - sent));
+                        if ctx.record_ack_times {
+                            output.acked_at.push(Ack { seq, unix_ms: at });
+                        }
                     }
                     Err(error) => {
-                        ledger.failed.insert(seq);
+                        output.ledger.failed.insert(seq);
                         let stale = path
                             .key_space
                             .is_some_and(|keys| superseded(seq, keys, next_seq));
                         if attempt < max_attempts && !stale {
                             eprintln!("soak-contract: {name}: send {seq} attempt {attempt} failed, resending: {error}");
-                            ledger.retried.insert(seq);
+                            output.ledger.retried.insert(seq);
                             let delivery = enqueue(&producer, record(&path, &name, seq), seq, attempt + 1).await;
                             inflight.push(delivery);
                         } else {
@@ -323,9 +377,13 @@ pub(crate) async fn run_idempotent(ctx: Arc<LoadContext>, path: LoadPath) -> Pro
             }
         }
     }
-    ledger.attempted = next_seq;
-    let _ = producer.close().await;
-    ProducerOutput { ledger, latencies }
+    output.ledger.attempted = next_seq;
+    // A producer of an abandoned cluster is dropped, not closed: closing waits
+    // for the sends in flight, which can no longer be answered.
+    if !ctx.is_abandoned() {
+        let _ = producer.close().await;
+    }
+    output
 }
 
 /// The transactional producer of `path`, until the load stops.
@@ -337,11 +395,12 @@ pub(crate) async fn run_idempotent(ctx: Arc<LoadContext>, path: LoadPath) -> Pro
 /// id, whose `InitProducerId` settles what it left open. A commit that
 /// returned an error is recorded as [`TxnOutcome::Unknown`]; a transaction
 /// whose commit was never sent is aborted, whatever ended it.
-pub(crate) async fn run_transactional(ctx: Arc<LoadContext>, path: LoadPath) -> ProducerOutput {
+pub async fn run_transactional(ctx: Arc<LoadContext>, path: LoadPath) -> ProducerOutput {
     let mut run = TransactionalRun {
         name: producer_name(&path.name),
         ledger: empty_ledger(&path, &producer_name(&path.name)),
         latencies: Latencies::new(),
+        acked_at: Vec::new(),
         ticker: transactional_ticker(path.rate.period().to_std()),
         next_seq: 0,
         index: 0,
@@ -365,6 +424,7 @@ pub(crate) async fn run_transactional(ctx: Arc<LoadContext>, path: LoadPath) -> 
     ProducerOutput {
         ledger: run.ledger,
         latencies: run.latencies,
+        acked_at: run.acked_at,
     }
 }
 
@@ -373,6 +433,7 @@ struct TransactionalRun {
     name: String,
     ledger: ProducerLedger,
     latencies: Latencies,
+    acked_at: Vec<Ack>,
     ticker: tokio::time::Interval,
     next_seq: u64,
     index: u64,
@@ -417,6 +478,9 @@ impl TransactionalRun {
                     ctx.acknowledge(&path.name, seq);
                     self.latencies
                         .record(ctx.windows.disturbed(at), Time::from_millis(at - sent));
+                    if ctx.record_ack_times {
+                        self.acked_at.push(Ack { seq, unix_ms: at });
+                    }
                 }
                 Err(error) => {
                     eprintln!("soak-contract: {name}: transactional send {seq} failed: {error}");
@@ -454,25 +518,39 @@ impl TransactionalRun {
 }
 
 /// The last commit the coordinator acknowledged for one consumer group.
-pub(crate) struct CommitTracker {
-    pub(crate) group: String,
-    pub(crate) topic: String,
-    pub(crate) partitions: i32,
+pub struct CommitTracker {
+    pub group: String,
+    pub topic: String,
+    pub partitions: i32,
     acknowledged: Mutex<BTreeMap<i32, i64>>,
+    /// Every acknowledged commit, in order, so a drill can ask which commit
+    /// was the last one before its capture boundary.
+    history: Mutex<Vec<CommitAck>>,
 }
 
 impl CommitTracker {
-    pub(crate) fn new(group: String, topic: String, partitions: i32) -> Self {
+    #[must_use]
+    pub fn new(group: String, topic: String, partitions: i32) -> Self {
         Self {
             group,
             topic,
             partitions,
             acknowledged: Mutex::new(BTreeMap::new()),
+            history: Mutex::new(Vec::new()),
         }
     }
 
+    /// Every acknowledged commit so far, oldest first.
+    #[must_use]
+    pub fn history(&self) -> Vec<CommitAck> {
+        self.history
+            .lock()
+            .map(|history| history.clone())
+            .unwrap_or_default()
+    }
+
     /// The last acknowledged commit of every partition committed so far.
-    pub(crate) fn snapshot(&self) -> BTreeMap<i32, i64> {
+    pub fn snapshot(&self) -> BTreeMap<i32, i64> {
         self.acknowledged
             .lock()
             .map(|acked| acked.clone())
@@ -482,6 +560,12 @@ impl CommitTracker {
     fn acknowledge(&self, positions: &BTreeMap<i32, i64>) {
         if let Ok(mut acked) = self.acknowledged.lock() {
             acked.extend(positions);
+        }
+        if let Ok(mut history) = self.history.lock() {
+            history.push(CommitAck {
+                unix_ms: now_ms(),
+                offsets: positions.clone(),
+            });
         }
     }
 }
@@ -493,7 +577,8 @@ async fn build_consumer(
 ) -> Result<Consumer, ConsumerError> {
     let consumer = &ctx.contract.clients.consumer;
     Consumer::builder()
-        .bootstrap(ctx.bootstrap.clone())
+        .bootstrap(ctx.endpoint.bootstrap.clone())
+        .maybe_security(ctx.endpoint.security.clone())
         .client_id(group_name(&path.name, isolation))
         .group_id(group_name(&path.name, isolation))
         .subscribe(vec![path.name.clone()])
@@ -506,7 +591,8 @@ async fn build_consumer(
         .await
 }
 
-pub(crate) fn isolation_level(isolation: Isolation) -> IsolationLevel {
+#[must_use]
+pub fn isolation_level(isolation: Isolation) -> IsolationLevel {
     match isolation {
         Isolation::ReadCommitted => IsolationLevel::ReadCommitted,
         Isolation::ReadUncommitted => IsolationLevel::ReadUncommitted,
@@ -518,7 +604,7 @@ pub(crate) fn isolation_level(isolation: Isolation) -> IsolationLevel {
 /// It measures create-time-to-poll latency for every record it polls, and,
 /// with a `tracker`, commits what it has polled every `commit_interval` and
 /// records each commit the coordinator acknowledged.
-pub(crate) async fn run_consumer(
+pub async fn run_consumer(
     ctx: Arc<LoadContext>,
     path: LoadPath,
     isolation: Isolation,
@@ -544,7 +630,11 @@ pub(crate) async fn run_consumer(
     let mut committed: BTreeMap<i32, i64> = BTreeMap::new();
     let mut last_commit = Instant::now();
     while ctx.running() {
-        match consumer.poll(settings.poll_timeout).await {
+        let polled = tokio::select! {
+            () = ctx.abandoned() => break,
+            polled = consumer.poll(settings.poll_timeout) => polled,
+        };
+        match polled {
             Ok(records) => {
                 let at = now_ms();
                 let disturbed = ctx.windows.disturbed(at);
@@ -573,7 +663,11 @@ pub(crate) async fn run_consumer(
                     )
                 })
                 .collect();
-            match consumer.commit_offsets_sync(offsets).await {
+            let commit = tokio::select! {
+                () = ctx.abandoned() => break,
+                commit = consumer.commit_offsets_sync(offsets) => commit,
+            };
+            match commit {
                 Ok(()) => {
                     tracker.acknowledge(&positions);
                     committed.clone_from(&positions);
@@ -582,8 +676,126 @@ pub(crate) async fn run_consumer(
             }
         }
     }
-    let _ = consumer.close().await;
+    if !ctx.is_abandoned() {
+        let _ = consumer.close().await;
+    }
     latencies
+}
+
+/// Every task of a running load: one producer per path, one consumer group
+/// per path and isolation level, and the commit tracker of every group that
+/// commits.
+pub struct RunningLoad {
+    pub ctx: Arc<LoadContext>,
+    pub trackers: Vec<Arc<CommitTracker>>,
+    producers: Vec<JoinHandle<ProducerOutput>>,
+    consumers: Vec<(String, JoinHandle<Latencies>)>,
+}
+
+/// What a load left behind once every task ended.
+pub struct LoadOutcome {
+    pub producers: Vec<ProducerOutput>,
+    /// Every consumer group's latency, merged per path.
+    pub consume_latency: BTreeMap<String, Latencies>,
+}
+
+/// Start the load `ctx` declares. It runs until [`LoadContext::stop`] or
+/// [`LoadContext::abandon`], and [`RunningLoad::finish`] then collects it.
+#[must_use]
+pub fn start(ctx: &Arc<LoadContext>) -> RunningLoad {
+    let contract = &ctx.contract;
+    let producers = contract
+        .paths
+        .iter()
+        .map(|path| match path.semantics {
+            Semantics::Transactional => {
+                tokio::spawn(run_transactional(Arc::clone(ctx), path.clone()))
+            }
+            Semantics::Idempotent | Semantics::Compacted => {
+                tokio::spawn(run_idempotent(Arc::clone(ctx), path.clone()))
+            }
+        })
+        .collect();
+    let mut trackers = Vec::new();
+    let mut consumers = Vec::new();
+    for path in &contract.paths {
+        for &isolation in &path.consumers {
+            let tracker = path.commit_offsets.then(|| {
+                Arc::new(CommitTracker::new(
+                    group_name(&path.name, isolation),
+                    path.name.clone(),
+                    path.partitions,
+                ))
+            });
+            if let Some(tracker) = &tracker {
+                trackers.push(Arc::clone(tracker));
+            }
+            consumers.push((
+                path.name.clone(),
+                tokio::spawn(run_consumer(
+                    Arc::clone(ctx),
+                    path.clone(),
+                    isolation,
+                    tracker,
+                )),
+            ));
+        }
+    }
+    RunningLoad {
+        ctx: Arc::clone(ctx),
+        trackers,
+        producers,
+        consumers,
+    }
+}
+
+impl RunningLoad {
+    /// Wait for every task of a load that was stopped or abandoned.
+    ///
+    /// # Panics
+    ///
+    /// When a load task panicked: its ledger is gone, and a run without it
+    /// cannot be judged.
+    pub async fn finish(self) -> LoadOutcome {
+        let mut producers = Vec::new();
+        for task in self.producers {
+            producers.push(task.await.expect("a producer task"));
+        }
+        let mut consume_latency: BTreeMap<String, Latencies> = BTreeMap::new();
+        for (path, task) in self.consumers {
+            let latencies = task.await.expect("a consumer task");
+            consume_latency.entry(path).or_default().merge(&latencies);
+        }
+        LoadOutcome {
+            producers,
+            consume_latency,
+        }
+    }
+}
+
+impl LoadOutcome {
+    /// Each path's measurement over `steady` time.
+    #[must_use]
+    pub fn measurements(&self, contract: &Contract, steady: Time) -> Vec<PathMeasurement> {
+        let empty = Latencies::new();
+        contract
+            .paths
+            .iter()
+            .map(|path| {
+                let produce = self
+                    .producers
+                    .iter()
+                    .find(|output| output.ledger.path == path.name)
+                    .map_or(&empty, |output| &output.latencies);
+                measurement(
+                    &path.name,
+                    produce,
+                    self.consume_latency.get(&path.name).unwrap_or(&empty),
+                    steady,
+                )
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -593,8 +805,8 @@ mod tests {
             aborted_on_purpose, compacted_key, key_index, pipelined_ticker, record_value,
             superseded, transactional_ticker,
         },
+        crate::soak::evidence::parse_record_tag,
         assert2::check,
-        krabka_bench_driver::soak::evidence::parse_record_tag,
         std::time::Duration,
         tokio::time::{Instant, Interval},
     };

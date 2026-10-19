@@ -1,5 +1,5 @@
-//! After the load: the self-check's deleted record, the committed offsets, and
-//! the read-back that the reconciler compares with the producers' ledgers.
+//! After the load: the committed offsets, and the read-back that the
+//! reconciler compares with the producers' ledgers.
 //!
 //! The read-back is a fresh consumer with no group, assigned every partition
 //! of a path and started from the earliest offset, that reads until it has
@@ -9,22 +9,19 @@
 //! the ledger it checks.
 
 use {
-    crate::{
+    super::{
+        Endpoint,
         load::{CommitTracker, isolation_level, key_index},
-        topology::{Nodes, leader_of},
+        now_ms,
     },
-    krabka_bench_driver::soak::{
+    crate::soak::{
         contract::{Isolation, LoadPath, Semantics},
-        evidence::{
-            CommitCheck, DuplicateRead, InjectedLoss, ProducerLedger, ReaderLedger,
-            parse_record_tag,
-        },
+        evidence::{CommitCheck, DuplicateRead, ReaderLedger, parse_record_tag},
         ledger::SeqSet,
     },
+    bytes::Bytes,
     krabka_client_consumer::{Consumer, ConsumerError, ConsumerRecord},
-    krabka_protocol::owned::delete_records_request::{
-        DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic,
-    },
+    krabka_client_producer::{Acks, Producer, ProducerRecord},
     krabka_units::prelude::*,
     std::{
         collections::{BTreeMap, HashMap},
@@ -44,7 +41,8 @@ const READBACK_STALL: Duration = Duration::from_mins(2);
 const LOOKUP_ATTEMPTS: u32 = 10;
 
 /// Every partition of `path`.
-pub(crate) fn partitions(path: &LoadPath) -> Vec<(String, i32)> {
+#[must_use]
+pub fn partitions(path: &LoadPath) -> Vec<(String, i32)> {
     (0..path.partitions)
         .map(|partition| (path.name.clone(), partition))
         .collect()
@@ -52,24 +50,31 @@ pub(crate) fn partitions(path: &LoadPath) -> Vec<(String, i32)> {
 
 /// Whether every partition of `ends` has a next offset at or past its end.
 /// A partition that ends at offset zero holds nothing and needs no read.
-pub(crate) fn caught_up(next: &BTreeMap<i32, i64>, ends: &BTreeMap<i32, i64>) -> bool {
+#[must_use]
+pub fn caught_up(next: &BTreeMap<i32, i64>, ends: &BTreeMap<i32, i64>) -> bool {
     ends.iter()
         .all(|(partition, end)| *end <= 0 || next.get(partition).is_some_and(|next| next >= end))
 }
 
 /// Whether no transaction is open on any partition: the last stable offset
 /// is the high watermark everywhere.
-pub(crate) fn stable(
-    committed_ends: &BTreeMap<i32, i64>,
-    uncommitted_ends: &BTreeMap<i32, i64>,
-) -> bool {
+#[must_use]
+pub fn stable(committed_ends: &BTreeMap<i32, i64>, uncommitted_ends: &BTreeMap<i32, i64>) -> bool {
     !uncommitted_ends.is_empty() && committed_ends == uncommitted_ends
 }
 
 /// A consumer with no group, for reading and for offset lookups.
-async fn groupless(bootstrap: &str, isolation: Isolation) -> Result<Consumer, ConsumerError> {
+///
+/// # Errors
+///
+/// Returns the client's error when the consumer cannot be built.
+pub async fn groupless(
+    endpoint: &Endpoint,
+    isolation: Isolation,
+) -> Result<Consumer, ConsumerError> {
     Consumer::builder()
-        .bootstrap(bootstrap.to_owned())
+        .bootstrap(endpoint.bootstrap.clone())
+        .maybe_security(endpoint.security.clone())
         .client_id(format!("soak-readback-{isolation}"))
         .isolation_level(isolation_level(isolation))
         .default_api_timeout(secs(15))
@@ -106,12 +111,12 @@ where
 
 /// The end offset of every partition at `isolation`.
 async fn end_offsets(
-    bootstrap: &str,
+    endpoint: &Endpoint,
     isolation: Isolation,
     partitions: &[(String, i32)],
 ) -> Result<BTreeMap<i32, i64>, String> {
     let ends = ask_consumer(
-        async || groupless(bootstrap, isolation).await,
+        async || groupless(endpoint, isolation).await,
         async |consumer: &Consumer| consumer.end_offsets(partitions).await,
     )
     .await?;
@@ -124,15 +129,15 @@ async fn end_offsets(
 /// Wait until no transaction is open on `path`, so a `read_committed`
 /// read-back is not cut short by a transaction that its producer left open
 /// and the coordinator has yet to time out.
-pub(crate) async fn wait_stable(bootstrap: &str, path: &LoadPath, limit: Time) {
+pub async fn wait_stable(endpoint: &Endpoint, path: &LoadPath, limit: Time) {
     if path.semantics != Semantics::Transactional {
         return;
     }
     let partitions = partitions(path);
     let deadline = Instant::now() + limit.to_std();
     loop {
-        let committed = end_offsets(bootstrap, Isolation::ReadCommitted, &partitions).await;
-        let uncommitted = end_offsets(bootstrap, Isolation::ReadUncommitted, &partitions).await;
+        let committed = end_offsets(endpoint, Isolation::ReadCommitted, &partitions).await;
+        let uncommitted = end_offsets(endpoint, Isolation::ReadUncommitted, &partitions).await;
         if let (Ok(committed), Ok(uncommitted)) = (&committed, &uncommitted)
             && stable(committed, uncommitted)
         {
@@ -152,14 +157,14 @@ pub(crate) async fn wait_stable(bootstrap: &str, path: &LoadPath, limit: Time) {
 /// Read every partition of `path` at `isolation` from the earliest offset to
 /// its end, handing each record to `visit`.
 async fn scan(
-    bootstrap: &str,
+    endpoint: &Endpoint,
     path: &LoadPath,
     isolation: Isolation,
     mut visit: impl FnMut(&ConsumerRecord),
 ) -> Result<(), String> {
     let partitions = partitions(path);
-    let ends = end_offsets(bootstrap, isolation, &partitions).await?;
-    let consumer = groupless(bootstrap, isolation)
+    let ends = end_offsets(endpoint, isolation, &partitions).await?;
+    let consumer = groupless(endpoint, isolation)
         .await
         .map_err(|error| error.to_string())?;
     let mut consumer = consumer;
@@ -212,8 +217,8 @@ async fn scan(
 }
 
 /// What one reader saw of `producer`'s records on `path`.
-pub(crate) async fn read_back(
-    bootstrap: &str,
+pub async fn read_back(
+    endpoint: &Endpoint,
     path: &LoadPath,
     isolation: Isolation,
     producer: &str,
@@ -222,7 +227,7 @@ pub(crate) async fn read_back(
     let mut repeated = SeqSet::new();
     let mut latest_by_key: BTreeMap<u64, u64> = BTreeMap::new();
     let mut foreign = 0_u64;
-    let first = scan(bootstrap, path, isolation, |record| {
+    let first = scan(endpoint, path, isolation, |record| {
         let Some((owner, seq)) = record.value.as_deref().and_then(parse_record_tag) else {
             foreign += 1;
             return;
@@ -253,7 +258,7 @@ pub(crate) async fn read_back(
     let mut duplicates = Vec::new();
     if !repeated.is_empty() {
         let mut positions: HashMap<u64, Vec<(i32, i64)>> = HashMap::new();
-        let second = scan(bootstrap, path, isolation, |record| {
+        let second = scan(endpoint, path, isolation, |record| {
             if let Some((owner, seq)) = record.value.as_deref().and_then(parse_record_tag)
                 && owner == producer
                 && repeated.contains(seq)
@@ -286,124 +291,10 @@ pub(crate) async fn read_back(
     }
 }
 
-/// The first record of `topic`-`partition`, at its log-start offset.
-async fn first_record(
-    bootstrap: &str,
-    topic: &str,
-    partition: i32,
-) -> Result<ConsumerRecord, String> {
-    let assignment = [(topic.to_owned(), partition)];
-    let mut consumer = groupless(bootstrap, Isolation::ReadUncommitted)
-        .await
-        .map_err(|error| error.to_string())?;
-    consumer
-        .assign(&assignment)
-        .await
-        .map_err(|error| error.to_string())?;
-    consumer
-        .seek_to_beginning(&assignment)
-        .await
-        .map_err(|error| error.to_string())?;
-    let deadline = Instant::now() + Duration::from_secs(60);
-    let found = loop {
-        if Instant::now() >= deadline {
-            break Err(format!("{topic}-{partition}: no record within a minute"));
-        }
-        match consumer.poll(secs(1)).await {
-            Ok(records) => {
-                if let Some(record) = records.into_iter().next() {
-                    break Ok(record);
-                }
-            }
-            Err(error) => eprintln!("soak-contract: first record of {topic}-{partition}: {error}"),
-        }
-    };
-    let _ = consumer.close().await;
-    found
-}
-
-/// Whether `seq` is one acknowledged send and nothing else: never failed and
-/// never resent, so deleting its one copy is exactly one lost record.
-pub(crate) fn deletable(ledger: &ProducerLedger, seq: u64) -> bool {
-    ledger.acked.contains(seq) && !ledger.failed.contains(seq) && !ledger.retried.contains(seq)
-}
-
-/// Delete one acknowledged record of `path` from the cluster: the record at
-/// the log-start offset of the first partition whose first record is
-/// [`deletable`], deleted with `DeleteRecords` up to its offset plus one.
-pub(crate) async fn delete_one_record(
-    bootstrap: &str,
-    nodes: &Nodes,
-    path: &LoadPath,
-    ledger: &ProducerLedger,
-) -> Result<InjectedLoss, String> {
-    for partition in 0..path.partitions {
-        let record = first_record(bootstrap, &path.name, partition).await?;
-        let Some((owner, seq)) = record.value.as_deref().and_then(parse_record_tag) else {
-            continue;
-        };
-        if owner != ledger.producer || !deletable(ledger, seq) {
-            continue;
-        }
-        let (_, states) = nodes
-            .metadata_from_any(None)
-            .await
-            .ok_or_else(|| "no node answers Metadata".to_owned())?;
-        let leader = leader_of(&states, &path.name, partition)
-            .ok_or_else(|| format!("{}-{partition} has no leader", path.name))?;
-        let response = nodes
-            .send(leader, DeleteRecordsRequest {
-                topics: vec![DeleteRecordsTopic {
-                    name: path.name.clone(),
-                    partitions: vec![DeleteRecordsPartition {
-                        partition_index: partition,
-                        offset: record.offset + 1,
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                timeout_ms: 30_000,
-                ..Default::default()
-            })
-            .await?;
-        let result = response
-            .topics
-            .iter()
-            .flat_map(|topic| topic.partitions.iter())
-            .find(|result| result.partition_index == partition)
-            .ok_or_else(|| {
-                format!(
-                    "DeleteRecords answered nothing for {}-{partition}",
-                    path.name
-                )
-            })?;
-        if result.error_code != 0 || result.low_watermark != record.offset + 1 {
-            return Err(format!(
-                "DeleteRecords on {}-{partition} up to {}: error {}, low watermark {}",
-                path.name,
-                record.offset + 1,
-                result.error_code,
-                result.low_watermark
-            ));
-        }
-        return Ok(InjectedLoss {
-            path: path.name.clone(),
-            producer: ledger.producer.clone(),
-            seq,
-            partition,
-            offset: record.offset,
-        });
-    }
-    Err(format!(
-        "no partition of {} starts with a deletable record",
-        path.name
-    ))
-}
-
 /// The committed offsets of `group` on `partitions`, as `OffsetFetch` returns
 /// them. A partition with nothing committed is absent.
 async fn committed(
-    bootstrap: &str,
+    endpoint: &Endpoint,
     group: &str,
     partitions: &[(String, i32)],
 ) -> Result<BTreeMap<i32, i64>, String> {
@@ -411,7 +302,8 @@ async fn committed(
     // reads the group's offsets without becoming a member of it.
     let build = async || {
         Consumer::builder()
-            .bootstrap(bootstrap.to_owned())
+            .bootstrap(endpoint.bootstrap.clone())
+            .maybe_security(endpoint.security.clone())
             .client_id(format!("{group}-checker"))
             .group_id(group.to_owned())
             .enable_auto_commit(false)
@@ -436,8 +328,8 @@ async fn committed(
 /// A group that had acknowledged no commit yet is checked on every one of its
 /// `partitions` from zero, so each fault is checked for each group and a group
 /// that never commits is a finding rather than an absence.
-pub(crate) async fn commit_checks(
-    bootstrap: &str,
+pub async fn commit_checks(
+    endpoint: &Endpoint,
     tracker: &CommitTracker,
     fault: &str,
     acknowledged: &BTreeMap<i32, i64>,
@@ -454,11 +346,11 @@ pub(crate) async fn commit_checks(
         .keys()
         .map(|partition| (topic.to_owned(), *partition))
         .collect();
-    let fetched = committed(bootstrap, group, &partitions).await;
+    let fetched = committed(endpoint, group, &partitions).await;
     if let Err(error) = &fetched {
         eprintln!("soak-contract: OffsetFetch of {group} after {fault}: {error}");
     }
-    let ends = end_offsets(bootstrap, Isolation::ReadUncommitted, &partitions)
+    let ends = end_offsets(endpoint, Isolation::ReadUncommitted, &partitions)
         .await
         .unwrap_or_else(|error| {
             eprintln!("soak-contract: end offsets of {topic} after {fault}: {error}");
@@ -481,14 +373,84 @@ pub(crate) async fn commit_checks(
         .collect()
 }
 
+/// Produce one record to `topic`-`partition` with `acks=all`, then read it
+/// back at the offset it was acknowledged at, and return that offset.
+///
+/// This is what "serving" means after a restore: a client of the restored
+/// cluster, authenticated as an ordinary principal, can write and then read.
+///
+/// # Errors
+///
+/// Returns why the write or the read failed, or that the record did not come
+/// back within a minute.
+pub async fn round_trip(endpoint: &Endpoint, topic: &str, partition: i32) -> Result<i64, String> {
+    let producer = Producer::builder()
+        .bootstrap(endpoint.bootstrap.clone())
+        .maybe_security(endpoint.security.clone())
+        .client_id("soak-drill-probe".to_owned())
+        .acks(Acks::All)
+        .enable_idempotence(true)
+        .request_timeout(Duration::from_secs(10))
+        .delivery_timeout(Duration::from_secs(30))
+        .build()
+        .await
+        .map_err(|error| format!("build a producer: {error}"))?;
+    let value = format!("soak-drill-probe/{};", now_ms());
+    let sent = producer
+        .send(ProducerRecord {
+            topic: topic.to_owned(),
+            partition: Some(partition),
+            value: Some(Bytes::from(value.clone())),
+            ..Default::default()
+        })
+        .await
+        .map_err(|error| format!("produce to {topic}-{partition}: {error}"));
+    let _ = producer.close().await;
+    let offset = sent?.offset;
+    let assignment = [(topic.to_owned(), partition)];
+    let mut consumer = groupless(endpoint, Isolation::ReadUncommitted)
+        .await
+        .map_err(|error| format!("build a consumer: {error}"))?;
+    let read = async {
+        consumer
+            .assign(&assignment)
+            .await
+            .map_err(|error| error.to_string())?;
+        consumer
+            .seek(topic, partition, offset)
+            .await
+            .map_err(|error| error.to_string())?;
+        let deadline = Instant::now() + Duration::from_mins(1);
+        while Instant::now() < deadline {
+            match consumer.poll(secs(1)).await {
+                Ok(records) => {
+                    if let Some(record) = records.iter().find(|record| record.offset == offset) {
+                        return if record.value.as_deref() == Some(value.as_bytes()) {
+                            Ok(offset)
+                        } else {
+                            Err(format!(
+                                "{topic}-{partition} offset {offset} holds another record"
+                            ))
+                        };
+                    }
+                }
+                Err(error) => eprintln!("soak-drill: probe read of {topic}-{partition}: {error}"),
+            }
+        }
+        Err(format!(
+            "{topic}-{partition} offset {offset} did not come back within a minute"
+        ))
+    }
+    .await;
+    let _ = consumer.close().await;
+    read
+}
+
 #[cfg(test)]
 mod tests {
     use {
-        super::{caught_up, deletable, stable},
+        super::{caught_up, stable},
         assert2::check,
-        krabka_bench_driver::soak::{
-            contract::Semantics, evidence::ProducerLedger, ledger::SeqSet,
-        },
         std::collections::BTreeMap,
     };
 
@@ -520,25 +482,5 @@ mod tests {
         expected: bool,
     ) {
         check!(stable(&offsets(committed), &offsets(uncommitted)) == expected);
-    }
-
-    #[yare::parameterized(
-        acknowledged_once = { 3, true },
-        never_acknowledged = { 12, false },
-        failed_then_acknowledged = { 5, false },
-        resent = { 6, false },
-    )]
-    fn only_a_record_sent_once_and_acknowledged_is_deleted(seq: u64, expected: bool) {
-        let ledger = ProducerLedger {
-            path: "p".into(),
-            producer: "p-0".into(),
-            semantics: Semantics::Idempotent,
-            attempted: 13,
-            acked: SeqSet::range(0, 10),
-            failed: [5].into_iter().collect(),
-            retried: [6].into_iter().collect(),
-            transactions: Vec::new(),
-        };
-        check!(deletable(&ledger, seq) == expected);
     }
 }

@@ -6,7 +6,9 @@
 //! trials: it loads and validates, and a synthetic run of it is judged the way
 //! its profile says a real run will be. A soak's perfect run must pass. A
 //! self-check's must pass once one record is removed, and must fail when
-//! nothing is, so the self-check cannot pass vacuously.
+//! nothing is, so the self-check cannot pass vacuously. A disaster-recovery
+//! drill's perfect run must pass within its objectives, and must fail once a
+//! record from inside its capture boundary is missing.
 //!
 //! This is `libtest-mimic` with the corpus listed by hand, for the reason
 //! `scenario_files` gives: Bazel stages runfiles as symbolic links, and
@@ -77,6 +79,19 @@ fn synthetic_run_is_judged(path: &Path) -> Result<(), String> {
             read.reader.latest_by_key.clear();
             let failures = judge(&contract, &lost).lifecycle;
             check!(failures.len() == 1, "{failures:#?}");
+        }
+        Profile::DisasterRecovery => {
+            let verdict = judge(&contract, &clean);
+            check!(verdict.passed(), "{:#?}", verdict.failures());
+            check!(
+                verdict.recovery.is_some(),
+                "a drill is judged for its recovery"
+            );
+            let mut lost = clean.clone();
+            for reader in &mut lost.readers {
+                reader.seen.remove(0);
+            }
+            check!(!judge(&contract, &lost).passed());
         }
     }
     Ok(())

@@ -24,10 +24,13 @@ use {
         cluster::{SoakBroker, SoakCluster, create_topics},
         host::docker_try,
         lifecycle_run::source_image,
-        load::{producer_name, record_value},
-        readback::read_back,
     },
     krabka_bench_driver::soak::{
+        client::{
+            Endpoint,
+            load::{producer_name, record_value},
+            readback::read_back,
+        },
         contract::{Contract, Isolation, LoadPath},
         lifecycle::LevelRange,
     },
@@ -261,7 +264,7 @@ pub(crate) async fn refuse_unsupported_rollback(
     std::fs::write(&config, unstable).map_err(|error| error.to_string())?;
     bring_up(broker, target)?;
     let reader = read_back(
-        &broker.bootstrap(),
+        &Endpoint::plaintext(broker.bootstrap()),
         &path,
         Isolation::ReadUncommitted,
         &producer_name(&path.name),
