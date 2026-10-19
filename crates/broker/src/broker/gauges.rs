@@ -573,42 +573,21 @@ mod tests {
                 partition_epoch: 0,
             },
         ));
-        let GaugeFixture {
-            metrics,
-            mut config,
-        } = gauge_fixture();
-        config.default_min_insync_replicas = 2;
-        let shutdown = CancellationToken::new();
-        spawn_broker_gauge_updater(
-            GaugeStorage {
-                partitions: Arc::new(PartitionRegistry::new()),
-                log_dir_status: LogDirRegistry::default(),
-            },
-            Arc::new(fake_source(image, None)),
-            Arc::new(ControllerLivenessState::new(secs(10))),
-            node_id,
-            GaugeObservability {
-                metrics: metrics.clone(),
-                health: None,
-            },
-            &config,
-            shutdown.child_token(),
-        );
+        let gauges = spawn_test_gauges()
+            .image(image)
+            .node_id(node_id)
+            .default_min_insync_replicas(2)
+            .call();
 
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            while metrics.under_min_isr_partition_count.get() != 1 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("gauge observes configured minimum ISR");
-
-        assert!(metrics.under_min_isr_partition_count.get() == 1);
+        gauges
+            .wait_until("the gauge observes the configured minimum ISR", |metrics| {
+                metrics.under_min_isr_partition_count.get() == 1
+            })
+            .await;
         assert!(
-            metrics.offline_partitions_count.get() == 0,
+            gauges.metrics.offline_partitions_count.get() == 0,
             "a non-controller has no cluster liveness view and must not invent an offline partition"
         );
-        shutdown.cancel();
     }
 
     /// One offline-partition sample on the active controller of a three-broker
@@ -709,39 +688,22 @@ mod tests {
             for node_id in case.alive {
                 liveness.record_heartbeat(*node_id).await;
             }
-            let GaugeFixture {
-                metrics,
-                mut config,
-            } = gauge_fixture();
-            config.audit_enabled = case.audit_enabled;
-            let shutdown = CancellationToken::new();
-            spawn_broker_gauge_updater(
-                GaugeStorage {
-                    partitions: Arc::new(PartitionRegistry::new()),
-                    log_dir_status: LogDirRegistry::default(),
-                },
-                Arc::new(fake_source(image, Some(krabka_raft::NodeId(1)))),
-                liveness,
-                NodeId(1),
-                GaugeObservability {
-                    metrics: metrics.clone(),
-                    health: None,
-                },
-                &config,
-                shutdown.child_token(),
-            );
+            let gauges = spawn_test_gauges()
+                .image(image)
+                .leader(krabka_raft::NodeId(1))
+                .liveness(liveness)
+                .audit_enabled(case.audit_enabled)
+                .call();
 
             // The controller-only cluster gauges are written in the same pass,
             // after the offline counts, so a full partition count means the
             // pass that set the offline counts has run.
-            tokio::time::timeout(std::time::Duration::from_secs(1), async {
-                while metrics.global_partitions.get() != total_partitions {
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await
-            .expect("the controller publishes a gauge pass");
-
+            gauges
+                .wait_until("the controller publishes a gauge pass", |metrics| {
+                    metrics.global_partitions.get() == total_partitions
+                })
+                .await;
+            let metrics = &gauges.metrics;
             check!(
                 (
                     metrics.offline_partitions_count.get(),
@@ -750,21 +712,75 @@ mod tests {
                 "{}",
                 case.name
             );
-            shutdown.cancel();
         }
     }
 
-    /// The metric registry a gauge test reads, and the config of the node.
-    struct GaugeFixture {
+    /// A gauge sampler a test started: the registry it writes, and the token
+    /// that stops it when the handle drops.
+    struct RunningGauges {
         metrics: BrokerMetrics,
-        config: BrokerConfig,
+        shutdown: CancellationToken,
     }
 
-    fn gauge_fixture() -> GaugeFixture {
-        let metrics = BrokerMetrics::new();
+    impl RunningGauges {
+        /// Wait up to a second for the published gauges to satisfy `done`.
+        async fn wait_until(&self, what: &str, done: impl Fn(&BrokerMetrics) -> bool) {
+            let waited = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                while !done(&self.metrics) {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await;
+            assert!(waited.is_ok(), "timed out waiting until {what}");
+        }
+    }
+
+    impl Drop for RunningGauges {
+        fn drop(&mut self) { self.shutdown.cancel(); }
+    }
+
+    /// Start the gauge sampler over `image` with no local partitions, on a
+    /// test config that polls every millisecond. `leader` names the quorum
+    /// leader the source reports; the node is the active controller when it
+    /// names `node_id`. The two config overrides keep the test defaults when
+    /// unset.
+    #[bon::builder]
+    fn spawn_test_gauges(
+        image: MetadataImage,
+        leader: Option<krabka_raft::NodeId>,
+        #[builder(default = Arc::new(ControllerLivenessState::new(secs(10))))] liveness: Arc<
+            ControllerLivenessState,
+        >,
+        #[builder(default)] log_dirs: LogDirRegistry,
+        #[builder(default = NodeId(1))] node_id: NodeId,
+        audit_enabled: Option<bool>,
+        default_min_insync_replicas: Option<i32>,
+    ) -> RunningGauges {
         let mut config = BrokerConfig::for_tests(std::path::PathBuf::new());
         config.gauge_poll_interval = millis(1);
-        GaugeFixture { metrics, config }
+        config.audit_enabled = audit_enabled.unwrap_or(config.audit_enabled);
+        config.default_min_insync_replicas =
+            default_min_insync_replicas.unwrap_or(config.default_min_insync_replicas);
+        let gauges = RunningGauges {
+            metrics: BrokerMetrics::new(),
+            shutdown: CancellationToken::new(),
+        };
+        spawn_broker_gauge_updater(
+            GaugeStorage {
+                partitions: Arc::new(PartitionRegistry::new()),
+                log_dir_status: log_dirs,
+            },
+            Arc::new(fake_source(image, leader)),
+            liveness,
+            node_id,
+            GaugeObservability {
+                metrics: gauges.metrics.clone(),
+                health: None,
+            },
+            &config,
+            gauges.shutdown.child_token(),
+        );
+        gauges
     }
 
     /// A dir that goes offline under live traffic has to reach the scrape.
@@ -774,48 +790,25 @@ mod tests {
     async fn broker_gauge_publishes_the_offline_log_dir_count() {
         let dir = tempfile::tempdir().expect("log root");
         let log_dirs = LogDirRegistry::probe(&[dir.path().to_path_buf()]);
-        let GaugeFixture { metrics, config } = gauge_fixture();
-        let shutdown = CancellationToken::new();
-        let cancel_token = shutdown.child_token();
-        spawn_broker_gauge_updater(
-            GaugeStorage {
-                partitions: Arc::new(PartitionRegistry::new()),
-                log_dir_status: log_dirs.clone(),
-            },
-            Arc::new(fake_source(
-                krabka_metadata::MetadataImage::new(uuid::Uuid::nil()),
-                None,
-            )),
-            Arc::new(ControllerLivenessState::new(secs(10))),
-            krabka_metadata::NodeId(1),
-            GaugeObservability {
-                metrics: metrics.clone(),
-                health: None,
-            },
-            &config,
-            cancel_token,
-        );
+        let gauges = spawn_test_gauges()
+            .image(MetadataImage::new(uuid::Uuid::nil()))
+            .log_dirs(log_dirs.clone())
+            .call();
 
         // A healthy dir publishes the series at zero, so an operator can tell
         // "no dir is offline" apart from "this broker does not report".
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            while metrics.partitions_total.get() != 0 || metrics.offline_log_dirs.get() != 0 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("the sampler ran at least once");
+        gauges
+            .wait_until("the sampler ran at least once", |metrics| {
+                metrics.partitions_total.get() == 0 && metrics.offline_log_dirs.get() == 0
+            })
+            .await;
 
         log_dirs.mark_offline(dir.path(), "partition write/fsync failed: synthetic EIO");
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            while metrics.offline_log_dirs.get() != 1 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("the flip reaches the gauge without a restart");
-
-        shutdown.cancel();
+        gauges
+            .wait_until("the flip reaches the gauge without a restart", |metrics| {
+                metrics.offline_log_dirs.get() == 1
+            })
+            .await;
     }
 
     /// An image where node 1 sits in `rack` and leads `led` partitions of one
