@@ -34,12 +34,20 @@ IMAGES = {
     "prometheus_3_5_0": "mirror.gcr.io/prom/prometheus:v3.5.0",
 }
 
+# `no-remote-exec`: a load is a registry fetch and a tar, nothing a remote
+# executor does better than the runner. Run remotely, it also needs the
+# executor to pull its own `ubuntu:22.04` from Docker Hub first, and when that
+# pull fails the suite fails to build before a test starts. The tag still reads
+# the remote cache, so a load that is already cached does not run at all.
 [
     image_load(
         name = name,
         image = "@" + name,
         tag = tag,
-        tags = ["docker"],
+        tags = [
+            "docker",
+            "no-remote-exec",
+        ],
     )
     for name, tag in IMAGES.items()
 ]
