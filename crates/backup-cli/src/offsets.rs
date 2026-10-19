@@ -21,7 +21,11 @@
 
 use {
     crate::{error::BackupError, manifest::decode_versioned},
-    krabka_client_admin::groups::{ConsumerGroupOffsetOutcome, GroupOffsets as AdminGroupOffsets},
+    krabka_client_admin::{
+        AdminError,
+        groups::{ConsumerGroupOffsetOutcome, GroupOffsets as AdminGroupOffsets},
+    },
+    krabka_client_core::ClientError,
     serde::{Deserialize, Serialize},
     std::collections::BTreeMap,
 };
@@ -141,16 +145,52 @@ pub fn commit_refusals(outcomes: &[ConsumerGroupOffsetOutcome]) -> Vec<String> {
         .collect()
 }
 
+/// How many offsets one group's commit put back, or why it put back none.
+///
+/// The admin client retries `COORDINATOR_LOAD_IN_PROGRESS`,
+/// `COORDINATOR_NOT_AVAILABLE`, `NOT_COORDINATOR` and `REBALANCE_IN_PROGRESS`
+/// until Kafka's `default.api.timeout.ms` runs out, so a timeout means the
+/// group's coordinator never became ready, not that the cluster refused.
+///
+/// # Errors
+///
+/// [`BackupError::Cluster`] when the call failed or timed out, or when the
+/// coordinator refused any partition.
+pub fn commit_outcome(
+    offsets: &GroupOffsets,
+    result: Result<Vec<ConsumerGroupOffsetOutcome>, AdminError>,
+) -> Result<usize, BackupError> {
+    let group = &offsets.group;
+    let outcomes = result.map_err(|error| match error {
+        AdminError::Transport(ClientError::Timeout(_)) => BackupError::Cluster(format!(
+            "OffsetCommit for {group}: {error}: the group coordinator did not become \
+             available. A broker creates and loads `__consumer_offsets` on the first \
+             coordinator lookup; check the broker log, for example for \
+             INVALID_REPLICATION_FACTOR"
+        )),
+        error => BackupError::Cluster(format!("OffsetCommit for {group}: {error}")),
+    })?;
+    let refusals = commit_refusals(&outcomes);
+    if !refusals.is_empty() {
+        return Err(BackupError::Cluster(format!(
+            "OffsetCommit for {group}: {}",
+            refusals.join("; ")
+        )));
+    }
+    Ok(offsets.offsets.len())
+}
+
 #[cfg(test)]
 mod tests {
     use {
         super::{
             CommittedOffset, GROUP_OFFSETS_VERSION, GroupOffsets, GroupOffsetsFile, admin_offsets,
-            commit_refusals, group_offsets,
+            commit_outcome, commit_refusals, group_offsets,
         },
         crate::error::BackupError,
         assert2::check,
-        krabka_client_admin::{KafkaError, groups::ConsumerGroupOffsetOutcome},
+        krabka_client_admin::{AdminError, KafkaError, groups::ConsumerGroupOffsetOutcome},
+        krabka_client_core::ClientError,
         std::collections::BTreeMap,
     };
 
@@ -233,6 +273,33 @@ mod tests {
         expected: &[&str],
     ) {
         check!(commit_refusals(&outcomes) == expected);
+    }
+
+    #[yare::parameterized(
+        committed = { Ok(vec![outcome(0, None), outcome(1, None)]), Ok(3) },
+        refused = {
+            Ok(vec![outcome(0, None), outcome(1, Some((25, "UNKNOWN_MEMBER_ID")))]),
+            Err("cluster: OffsetCommit for orders-consumers: orders-1: UNKNOWN_MEMBER_ID (25)"),
+        },
+        coordinator_never_ready = {
+            Err(AdminError::Transport(ClientError::Timeout(krabka_units::secs(60)))),
+            Err("cluster: OffsetCommit for orders-consumers: client-core: request timed out \
+                 after 1m: the group coordinator did not become available. A broker creates \
+                 and loads `__consumer_offsets` on the first coordinator lookup; check the \
+                 broker log, for example for INVALID_REPLICATION_FACTOR"),
+        },
+        call_failed = {
+            Err(AdminError::Transport(ClientError::Server { error_code: 30 })),
+            Err("cluster: OffsetCommit for orders-consumers: client-core: protocol error from \
+                 server: 30"),
+        },
+    )]
+    fn a_group_commit_reports_its_count_or_why_it_committed_nothing(
+        result: Result<Vec<ConsumerGroupOffsetOutcome>, AdminError>,
+        expected: Result<usize, &str>,
+    ) {
+        let actual = commit_outcome(&captured(), result).map_err(|error| error.to_string());
+        check!(actual == expected.map_err(str::to_owned));
     }
 
     /// The exact bytes this build writes for one group of [`captured`]. A

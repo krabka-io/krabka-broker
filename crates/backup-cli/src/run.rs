@@ -16,14 +16,14 @@ use {
             Artifact, CAPTURE_ROOT, DISKLESS_WAL_INDEX, GROUP_OFFSETS, MANIFEST, MANIFEST_VERSION,
             METADATA_CHECKPOINT, Manifest, RLMM_SNAPSHOT, artifact_problem, sha256_hex,
         },
-        offsets::{GroupOffsetsFile, admin_offsets, commit_refusals, group_offsets},
+        offsets::{GroupOffsetsFile, admin_offsets, commit_outcome, group_offsets},
     },
     krabka_audit::FileEd25519Signer,
     krabka_client_admin::{
         AdminClient, AdminError, ConfigResource, DescribeConfigsOptions, TopicMetadata,
         groups::ListGroupsOptions,
     },
-    krabka_client_core::{ClientError, security::ClientSecurity},
+    krabka_client_core::security::ClientSecurity,
     krabka_remote_storage::{ObjectEntry, Sha256Digest},
     krabka_remote_storage_topic::{KafkaMetadataEventLog, KafkaMetadataLogConfig},
     std::collections::{BTreeMap, BTreeSet},
@@ -712,40 +712,13 @@ async fn restore_offsets_secured(
         if group.offsets.is_empty() {
             continue;
         }
-        let outcomes = admin
+        let result = admin
             .alter_consumer_group_offsets(&group.group, &admin_offsets(group))
-            .await
-            .map_err(|error| commit_failure(&group.group, &error))?;
-        let refusals = commit_refusals(&outcomes);
-        if !refusals.is_empty() {
-            return Err(BackupError::Cluster(format!(
-                "OffsetCommit for {}: {}",
-                group.group,
-                refusals.join("; ")
-            )));
-        }
-        committed += group.offsets.len();
+            .await;
+        committed += commit_outcome(group, result)?;
         println!("{}: {} offsets committed", group.group, group.offsets.len());
     }
     Ok(committed)
-}
-
-/// Report a group whose offsets could not be committed.
-///
-/// The admin client retries `COORDINATOR_LOAD_IN_PROGRESS`,
-/// `COORDINATOR_NOT_AVAILABLE`, `NOT_COORDINATOR` and `REBALANCE_IN_PROGRESS`
-/// until Kafka's `default.api.timeout.ms` runs out, so a timeout means the
-/// group's coordinator never became ready, not that the cluster refused.
-fn commit_failure(group: &str, error: &AdminError) -> BackupError {
-    match error {
-        AdminError::Transport(ClientError::Timeout(_)) => BackupError::Cluster(format!(
-            "OffsetCommit for {group}: {error}: the group coordinator did not become \
-             available. A broker creates and loads `__consumer_offsets` on the first \
-             coordinator lookup; check the broker log, for example for \
-             INVALID_REPLICATION_FACTOR"
-        )),
-        _ => BackupError::Cluster(format!("OffsetCommit for {group}: {error}")),
-    }
 }
 
 async fn verify_offsets_boundary(

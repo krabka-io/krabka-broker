@@ -3168,6 +3168,7 @@ dependencies = [
  "krabka-remote-storage",
  "krabka-remote-storage-topic",
  "krabka-security",
+ "krabka-units",
  "object_store",
  "serde",
  "serde_json",
