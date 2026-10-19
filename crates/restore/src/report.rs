@@ -122,9 +122,9 @@ impl MetadataRestoreReport {
             )),
             Some(snapshot) => (!self.topics_without_configuration.is_empty()).then(|| {
                 format!(
-                    "WARNING: --metadata-snapshot {} does not hold these restored topics, so \
-                     their configuration was not recovered: {}. The checkpoint predates them; \
-                     set their configuration again with kafka-configs",
+                    "WARNING: --metadata-snapshot {} does not hold these restored topics under \
+                     their archived topic ids, so their configuration was not recovered: {}. Set \
+                     their configuration again with kafka-configs",
                     snapshot.display(),
                     self.topics_without_configuration.join(", ")
                 )
@@ -277,7 +277,10 @@ impl RestoreReport {
 
         if let Some(warning) = self.metadata.warning() {
             writeln!(out, "{warning}").expect("String writer is infallible");
-        } else {
+        }
+        // Without a snapshot nothing was recovered, and the warning says so.
+        // With one, the counts stay visible beside any warning.
+        if self.metadata.snapshot.is_some() {
             writeln!(
                 out,
                 "metadata: {} topic config{}, {} ACL{}, {} client quota{}, {} SCRAM credential{}, {} feature level{}",
@@ -608,8 +611,18 @@ mod tests {
         check!(text.contains("orders-2"));
     }
 
-    #[test]
-    fn text_rendering_exact_snapshot_for_one_partition() {
+    /// A snapshot that misses a restored topic adds its warning above the
+    /// metadata counts; the counts of what it did restore stay visible.
+    #[yare::parameterized(
+        knows_every_topic = { &[], "" },
+        misses_a_topic = {
+            &["payments"],
+            "WARNING: --metadata-snapshot /backup/metadata.checkpoint does not hold these \
+             restored topics under their archived topic ids, so their configuration was not \
+             recovered: payments. Set their configuration again with kafka-configs\n"
+        },
+    )]
+    fn text_rendering_exact_snapshot_for_one_partition(missing: &[&str], warning: &str) {
         let report = RestoreReport {
             dry_run: false,
             log_dir: "/var/lib/krabka/restored".into(),
@@ -623,7 +636,10 @@ mod tests {
                 client_quotas: 0,
                 scram_credentials: 0,
                 feature_levels: 0,
-                topics_without_configuration: vec![],
+                topics_without_configuration: missing
+                    .iter()
+                    .map(|topic| (*topic).to_owned())
+                    .collect(),
             },
             partitions: vec![PartitionReport {
                 topic: "orders-archive".to_owned(),
@@ -634,12 +650,14 @@ mod tests {
             skipped: vec![],
         };
 
-        let expected = "krabka restore: wrote /var/lib/krabka/restored\n\
+        let expected = format!(
+            "krabka restore: wrote /var/lib/krabka/restored\n\
              cluster id: 00000000-0000-0000-0000-000000000000\n\
-             metadata: 1 topic config, 0 ACLs, 0 client quotas, 0 SCRAM credentials, 0 feature levels\n\
+             {warning}metadata: 1 topic config, 0 ACLs, 0 client quotas, 0 SCRAM credentials, 0 feature levels\n\
              \n\
              orders-archive (topic id 00000000-0000-0000-0000-000000000000)\n\
-             \x20 partition 0: 1 segment, offsets [0, 402], 402 records kept, 0 dropped\n";
+             \x20 partition 0: 1 segment, offsets [0, 402], 402 records kept, 0 dropped\n"
+        );
 
         check!(report.render(ReportFormat::Text) == expected);
     }
@@ -722,8 +740,8 @@ mod tests {
             &["orders", "payments"],
             Some(
                 "WARNING: --metadata-snapshot cluster-metadata.checkpoint does not hold these \
-                 restored topics, so their configuration was not recovered: orders, payments. \
-                 The checkpoint predates them; set their configuration again with kafka-configs"
+                 restored topics under their archived topic ids, so their configuration was not \
+                 recovered: orders, payments. Set their configuration again with kafka-configs"
             )
         },
     )]
