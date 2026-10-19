@@ -59,8 +59,6 @@ use {
         Client, CoordinatorKeyType, build_find_coordinator, coordinator_endpoint,
     },
     krabka_metadata::{MetadataImage, MetadataRecord, NodeId, TopicConfigRecord, TopicRecord},
-    krabka_remote_storage::{PartitionDump, RlmmCacheDump, TopicIdPartition},
-    krabka_remote_storage_topic::Snapshot,
     krabka_restore::restore,
     std::collections::BTreeMap,
     uuid::Uuid,
@@ -88,35 +86,6 @@ const RETENTION_MS: &str = "604800000";
 /// What `OffsetFetch` answers for a partition with no committed offset. It is
 /// the value that makes a consumer fall back to `auto.offset.reset`.
 const NO_COMMITTED_OFFSET: i64 = -1;
-
-/// Build the RLMM snapshot the fixture's own archive is consistent with.
-///
-/// A restore reconciles the bucket scan against this file and stops on any
-/// disagreement, so it has to name every archived segment and no other.
-fn rlmm_snapshot(fixture: &Fixture) -> Vec<u8> {
-    let partitions = fixture
-        .partitions()
-        .into_iter()
-        .map(|partition| PartitionDump {
-            topic_id_partition: TopicIdPartition::new(
-                partition.topic_id,
-                partition.topic,
-                partition.partition,
-            ),
-            segments: partition
-                .segments
-                .iter()
-                .map(|segment| segment.metadata.clone())
-                .collect(),
-            delete_state: None,
-        })
-        .collect();
-    Snapshot {
-        committed_offsets: vec![0],
-        dump: RlmmCacheDump { partitions },
-    }
-    .encode()
-}
 
 /// Build the controller metadata checkpoint the pre-disaster cluster would
 /// have written, carrying the topic configuration a restore must bring back.
@@ -149,7 +118,8 @@ fn metadata_checkpoint(fixture: &Fixture) -> Vec<u8> {
 fn write_node_files(log_dir: &std::path::Path, fixture: &Fixture) {
     let rlmm = log_dir.join("remote-log-metadata");
     std::fs::create_dir_all(&rlmm).expect("create the rlmm dir");
-    std::fs::write(rlmm.join("snapshot"), rlmm_snapshot(fixture)).expect("write the rlmm snapshot");
+    std::fs::write(rlmm.join("snapshot"), fixture.rlmm_snapshot(|_, _| true))
+        .expect("write the rlmm snapshot");
 
     let metadata = krabka_raft::metadata_partition_dir(log_dir);
     std::fs::create_dir_all(&metadata).expect("create the metadata dir");

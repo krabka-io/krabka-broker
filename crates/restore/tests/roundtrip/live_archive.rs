@@ -17,10 +17,7 @@ use {
         fixture::{Fixture, build_fixture},
     },
     assert2::check,
-    krabka_remote_storage::{
-        LocalTieredStorage, PartitionDump, RemoteStorageManager, RlmmCacheDump, TopicIdPartition,
-    },
-    krabka_remote_storage_topic::Snapshot,
+    krabka_remote_storage::{LocalTieredStorage, RemoteStorageManager},
     krabka_restore::{RestoreError, restore},
     uuid::Uuid,
 };
@@ -87,41 +84,6 @@ impl AfterTheCapture {
     }
 }
 
-/// The RLMM snapshot the capture took: every archived segment except those
-/// uploaded after it.
-fn captured_snapshot(fixture: &Fixture, uploaded: &[SegmentAt]) -> Vec<u8> {
-    let partitions = fixture
-        .partitions()
-        .into_iter()
-        .map(|partition| PartitionDump {
-            topic_id_partition: TopicIdPartition::new(
-                partition.topic_id,
-                partition.topic,
-                partition.partition,
-            ),
-            segments: partition
-                .segments
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| {
-                    !uploaded.contains(&SegmentAt {
-                        topic: partition.topic,
-                        partition: partition.partition,
-                        index: *index,
-                    })
-                })
-                .map(|(_, segment)| segment.metadata.clone())
-                .collect(),
-            delete_state: None,
-        })
-        .collect();
-    Snapshot {
-        committed_offsets: vec![0],
-        dump: RlmmCacheDump { partitions },
-    }
-    .encode()
-}
-
 /// The segment ids a restore of the moved-on archive must write, per
 /// partition: everything the archive still holds.
 fn surviving_segments(fixture: &Fixture, deleted: &[SegmentAt]) -> Vec<(String, i32, Vec<Uuid>)> {
@@ -169,7 +131,15 @@ async fn a_capture_restores_from_the_archive_its_source_kept_writing(
     let fixture = build_fixture();
     let capture = tempfile::tempdir().unwrap();
     let snapshot = capture.path().join("rlmm-snapshot");
-    std::fs::write(&snapshot, captured_snapshot(&fixture, after.uploaded())).unwrap();
+    // The capture names every archived segment but those uploaded after it.
+    let captured = fixture.rlmm_snapshot(|partition, index| {
+        !after.uploaded().contains(&SegmentAt {
+            topic: partition.topic,
+            partition: partition.partition,
+            index,
+        })
+    });
+    std::fs::write(&snapshot, captured).unwrap();
 
     let storage = LocalTieredStorage::new(fixture.archive_root.path());
     for at in after.deleted() {
