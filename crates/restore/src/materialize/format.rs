@@ -5,6 +5,8 @@
 //! forwarding the target-side flags and handing it one `TopicRecord` per topic
 //! and one `PartitionRecord` per partition, so the restored cluster boots with
 //! its topics already present. This runs once, before any segment is written.
+//! Under `--dry-run` it formats a throwaway directory instead, so the target
+//! stays as it was.
 
 #[cfg(test)]
 use krabka_metadata::FeatureLevelRecord;
@@ -24,6 +26,7 @@ use {
     krabka_remote_storage_topic::Snapshot,
     std::{
         collections::{HashMap, HashSet},
+        io::Write,
         path::Path,
     },
     uuid::Uuid,
@@ -82,10 +85,22 @@ pub(crate) async fn format_target_with_snapshot(
     })?;
     let cluster_id = args.target.cluster_id.unwrap_or_else(Uuid::new_v4);
 
+    // A dry run formats a throwaway directory instead of the target, so the
+    // formatter still checks the target-side flags and the seed records, and
+    // the target is left exactly as it was. The restore that follows the plan
+    // then gets the same `--log-dir` (#1512).
+    let scratch = if args.dry_run {
+        Some(tempfile::tempdir()?)
+    } else {
+        None
+    };
+    let format_dir = scratch
+        .as_ref()
+        .map_or(args.target.log_dir.as_path(), tempfile::TempDir::path);
     let mut format_argv = vec![
         "krabka-format".to_owned(),
         "--log-dir".to_owned(),
-        args.target.log_dir.to_string_lossy().into_owned(),
+        format_dir.to_string_lossy().into_owned(),
         "--cluster-id".to_owned(),
         cluster_id.to_string(),
         "--node-id".to_owned(),
@@ -120,7 +135,12 @@ pub(crate) async fn format_target_with_snapshot(
         args.archive.metadata_snapshot.clone(),
         snapshot_records.as_deref(),
     )?;
-    let code = krabka_format::run_from_args_with_records(format_argv, extra).await;
+    // stdout is the report's: `--report json` piped to `jq` must hold the
+    // report alone, so the formatter's progress lines go to stderr. A dry run
+    // drops them, because it formats nothing the operator keeps.
+    let (mut stderr, mut sink) = (std::io::stderr(), std::io::sink());
+    let progress: &mut (dyn Write + Send) = if args.dry_run { &mut sink } else { &mut stderr };
+    let code = krabka_format::run_from_args_with_records_to(format_argv, extra, progress).await;
     if code == 0 {
         Ok(FormatTargetOutcome {
             cluster_id,

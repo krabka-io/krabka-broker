@@ -54,6 +54,7 @@ pub(crate) fn expand(tokens: TokenStream) -> Result<TokenStream, ParseError> {
                     ::tracing_subscriber::EnvFilter::try_from_default_env()
                         .unwrap_or_else(|_| ::tracing_subscriber::EnvFilter::new("info")),
                 )
+                .with_writer(::std::io::stderr)
                 .init();
             ::std::process::exit({{ path }}::run_from_args(::std::env::args_os()).await);
         }
@@ -120,7 +121,7 @@ mod tests {
     /// `attribute`, calling the `run_from_args` of `path`, without whitespace.
     fn main_under(attribute: &str, path: &str) -> String {
         format!(
-            "{attribute}asyncfnmain(){{::tracing_subscriber::fmt().with_env_filter(::tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_|::tracing_subscriber::EnvFilter::new(\"info\")),).init();::std::process::exit({path}::run_from_args(::std::env::args_os()).await);}}"
+            "{attribute}asyncfnmain(){{::tracing_subscriber::fmt().with_env_filter(::tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_|::tracing_subscriber::EnvFilter::new(\"info\")),).with_writer(::std::io::stderr).init();::std::process::exit({path}::run_from_args(::std::env::args_os()).await);}}"
         )
     }
 
