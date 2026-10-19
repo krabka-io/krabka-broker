@@ -53,7 +53,10 @@ use {
     },
     krabka_security::scram::{MIN_SCRAM_ITERATIONS, hash_scram_password_with_salt},
     ring::rand::{SecureRandom, SystemRandom},
-    std::path::{Path, PathBuf},
+    std::{
+        io::Write,
+        path::{Path, PathBuf},
+    },
 };
 
 mod acl;
@@ -138,6 +141,20 @@ pub async fn run(args: FormatArgs) -> i32 { run_with_records(args, Vec::new()).a
 /// appearing in it. `is_dynamic_format` rejects that combination before this
 /// point, so reaching the panic means that validation and this branch have
 /// drifted apart.
+pub async fn run_with_records(args: FormatArgs, extra: Vec<MetadataRecord>) -> i32 {
+    run_with_records_to(args, extra, &mut std::io::stdout()).await
+}
+
+/// [`run_with_records`], with Kafka's progress lines written to `progress`
+/// instead of stdout.
+///
+/// A tool that formats as one step of its own command, such as
+/// `krabka-restore`, keeps its stdout for its own output: a `--report json`
+/// that a script pipes to `jq` must hold the report and nothing else.
+///
+/// # Panics
+///
+/// As [`run_with_records`].
 #[tracing::instrument(
     level = "info",
     name = "cli.format",
@@ -149,8 +166,12 @@ pub async fn run(args: FormatArgs) -> i32 { run_with_records(args, Vec::new()).a
         extra_records = extra.len(),
     )
 )]
-pub async fn run_with_records(args: FormatArgs, extra: Vec<MetadataRecord>) -> i32 {
-    match plan(args, extra).and_then(|plan| plan.execute(&Fault::from_env())) {
+pub async fn run_with_records_to(
+    args: FormatArgs,
+    extra: Vec<MetadataRecord>,
+    progress: &mut (dyn Write + Send),
+) -> i32 {
+    match plan(args, extra).and_then(|plan| plan.execute(&Fault::from_env(), progress)) {
         Ok(()) => EXIT_OK,
         Err(Failure { code, message }) => {
             eprintln!("{message}");
@@ -486,26 +507,34 @@ fn scram_records(args: &FormatArgs) -> Result<Vec<MetadataRecord>, Failure> {
 }
 
 impl Plan {
-    /// Writes every target directory, printing Kafka's progress lines.
-    fn execute(self, fault: &Fault) -> Result<(), Failure> {
+    /// Writes every target directory, printing Kafka's progress lines to
+    /// `progress`.
+    fn execute(self, fault: &Fault, progress: &mut dyn Write) -> Result<(), Failure> {
+        // A progress line is best effort: losing one does not fail the format.
         for dir in &self.errors {
-            println!(
+            let _ = writeln!(
+                progress,
                 "I/O error trying to read log directory {}. Ignoring...",
                 dir.display()
             );
         }
         for dir in &self.skipped {
-            println!(
+            let _ = writeln!(
+                progress,
                 "krabka format: {} is already formatted; leaving it alone",
                 dir.display()
             );
         }
         if self.targets.is_empty() {
-            println!("All of the log directories are already formatted.");
+            let _ = writeln!(
+                progress,
+                "All of the log directories are already formatted."
+            );
             return Ok(());
         }
         for target in &self.targets {
-            println!(
+            let _ = writeln!(
+                progress,
                 "Formatting {} {} with metadata.version {}.",
                 target.kind.description(),
                 target.dir.display(),
@@ -514,7 +543,8 @@ impl Plan {
             self.write(target, fault)
                 .map_err(|e| krabka(EXIT_BOOTSTRAP_FAIL, e))?;
         }
-        println!(
+        let _ = writeln!(
+            progress,
             "Formatted {} log director{} with cluster-id {} ({} seed record(s))",
             self.targets.len(),
             if self.targets.len() == 1 { "y" } else { "ies" },

@@ -273,8 +273,6 @@ schedule the same way an on-call rotation is rehearsed:
 
 1. `krabka-restore` from the production archive with the newest capture's two
    snapshots into a scratch directory, with `--dry-run` first to see the plan.
-   The dry run formats its `--log-dir`, so give it a directory of its own
-   ([#1512](https://github.com/krabka-io/krabka-broker/issues/1512)).
    Compare `metadata.topic_configs` in the plan with the number of topics that
    have config overrides in production.
 2. Boot a broker on the result.
