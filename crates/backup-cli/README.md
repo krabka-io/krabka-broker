@@ -1,3 +1,4 @@
+| 7 | The newest metadata checkpoint is the format-time one, which holds no topic. |
 # krabka-backup
 
 Captures the inputs a point-in-time restore needs, and puts committed
@@ -109,6 +110,19 @@ The manifest records each artifact's size and SHA-256, which is what makes
 two. A node that runs a controller has the first. A broker-only node has the
 second, because the metadata observer keeps its checkpoints in that
 subdirectory and never directly in `__cluster_metadata-0`.
+
+`capture` refuses a node whose newest checkpoint is the one `krabka format`
+wrote, `00000000000000000000-0000000000.checkpoint`, and exits `7`. That
+checkpoint holds no topic, so a restore from it would bring back no topic
+configuration, and its report could not say so. The controller writes its
+first checkpoint after `metadata_max_snapshot_interval` (1 hour by default),
+or sooner once enough metadata is committed. Capture again after that. The
+capture checks before it uploads anything, so a refused capture leaves nothing
+in the archive.
+
+A capture that takes a checkpoint prints a `NOTE` line with the metadata offset
+the checkpoint ends at and its age. A metadata change committed after that
+checkpoint is not in the capture.
 
 Both directories are in the metadata log directory, Kafka's `metadata.log.dir`.
 That is the broker's first log directory unless its `metadata_log_dir` names

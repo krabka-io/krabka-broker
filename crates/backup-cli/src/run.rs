@@ -7,7 +7,10 @@
 use {
     crate::{
         archive::{Archive, ArchiveArgs},
-        capture::{RLMM_SNAPSHOT_RELATIVE, capture_id, capture_key, newest_metadata_checkpoint},
+        capture::{
+            CheckpointId, MetadataCheckpoint, RLMM_SNAPSHOT_RELATIVE, capture_id, capture_key,
+            newest_metadata_checkpoint,
+        },
         cli::{CaptureSigningArgs, CaptureTrustArgs, LATEST},
         connection::SecurityArgs,
         diskless::capture_projection,
@@ -153,8 +156,16 @@ async fn capture_secured_at(
     let mut absent: Vec<String> = Vec::new();
     let mut metadata_snapshot_sha256 = None;
     let mut rlmm_snapshot_sha256 = None;
+    let mut notes: Vec<String> = Vec::new();
 
     if let Some(log_dir) = log_dir {
+        // Vet the checkpoint before anything is uploaded, so a refused capture
+        // leaves no orphan artifact in the archive.
+        let checkpoint = newest_metadata_checkpoint(log_dir);
+        if let Some(checkpoint) = &checkpoint {
+            refuse_format_time_checkpoint(checkpoint)?;
+        }
+
         let rlmm = log_dir.join(RLMM_SNAPSHOT_RELATIVE);
         match read_capture_file(&rlmm, RLMM_SNAPSHOT).await {
             Ok(bytes) => {
@@ -176,9 +187,13 @@ async fn capture_secured_at(
             Err(error) => return Err(error),
         }
 
-        match newest_metadata_checkpoint(log_dir) {
-            Some(path) => {
+        match checkpoint {
+            Some(MetadataCheckpoint {
+                id: checkpoint_id,
+                path,
+            }) => {
                 let bytes = read_capture_file(&path, METADATA_CHECKPOINT).await?;
+                notes.push(checkpoint_note(checkpoint_id, &path));
                 metadata_snapshot_sha256 = Some(Sha256Digest::of(&bytes));
                 artifacts.push(
                     upload(
@@ -257,10 +272,55 @@ async fn capture_secured_at(
             artifact.name, artifact.source, artifact.size_bytes, artifact.sha256
         );
     }
+    for note in &notes {
+        println!("  NOTE: {note}");
+    }
     for missing in &absent {
         println!("  WARNING: {missing}");
     }
     Ok(id)
+}
+
+/// Refuses a capture whose newest metadata checkpoint is the one `krabka
+/// format` wrote.
+///
+/// That checkpoint holds no topic. A restore from it brings back no topic
+/// configuration, and its report cannot say so, because the restore takes the
+/// checkpoint as the whole of the cluster's metadata. A capture without the
+/// checkpoint would at least let the restore warn, but a capture is taken to be
+/// restored from, so the honest result is no capture.
+fn refuse_format_time_checkpoint(checkpoint: &MetadataCheckpoint) -> Result<(), BackupError> {
+    if !checkpoint.id.is_format_time() {
+        return Ok(());
+    }
+    Err(BackupError::StaleMetadata(format!(
+        "the newest metadata checkpoint is {}, the one `krabka format` wrote. It holds no \
+         topic, so a restore from it would bring back no topic configuration. The controller \
+         writes its next checkpoint after `metadata_max_snapshot_interval` (1 hour by \
+         default), or sooner once enough metadata is committed. Capture again after that, or \
+         lower `metadata_max_snapshot_interval`",
+        checkpoint.path.display()
+    )))
+}
+
+/// What a capture prints about the metadata checkpoint it took: where it ends
+/// and how old it is. A metadata change committed after the checkpoint, such
+/// as a topic config change, is not in the capture, and the age is how far back
+/// that window reaches.
+fn checkpoint_note(id: CheckpointId, path: &std::path::Path) -> String {
+    let age = std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .map_or_else(
+            || "of unknown age".to_owned(),
+            |elapsed| format!("written {}s ago", elapsed.as_secs()),
+        );
+    format!(
+        "{METADATA_CHECKPOINT} ends at metadata offset {}, {age}. Metadata changes \
+         committed after it are not in this capture",
+        id.end_offset
+    )
 }
 
 async fn capture_diskless_index(
@@ -874,12 +934,12 @@ mod tests {
             BackupError, CAPTURE_ROOT, DISKLESS_WAL_INDEX, FileEd25519Signer, GROUP_OFFSETS,
             MANIFEST, MAX_SNAPSHOT_BYTES, METADATA_CHECKPOINT, RLMM_SNAPSHOT,
             RLMM_SNAPSHOT_RELATIVE, Sha256Digest, artifact_byte_limit, capture, check_capture_size,
-            list, newest_metadata_checkpoint, restore_offsets, upload_capped, verify,
-            verify_offsets_boundary,
+            checkpoint_note, list, newest_metadata_checkpoint, restore_offsets, upload_capped,
+            verify, verify_offsets_boundary,
         },
         crate::{
             archive::{Archive, ArchiveArgs},
-            capture::capture_key,
+            capture::{CheckpointId, capture_key},
             cli::CaptureTrustArgs,
             manifest::{Artifact, MANIFEST_VERSION, Manifest, sha256_hex},
             offsets::{CommittedOffset, GROUP_OFFSETS_VERSION, GroupOffsets, GroupOffsetsFile},
@@ -987,7 +1047,7 @@ mod tests {
         let path = if name == RLMM_SNAPSHOT {
             node.path().join(RLMM_SNAPSHOT_RELATIVE)
         } else {
-            newest_metadata_checkpoint(node.path()).unwrap()
+            newest_metadata_checkpoint(node.path()).unwrap().path
         };
         std::fs::OpenOptions::new()
             .write(true)
@@ -1331,6 +1391,103 @@ mod tests {
                 == Some(sha256_hex(CHECKPOINT_BYTES))
         );
         check!(manifest.artifact(GROUP_OFFSETS) == None);
+    }
+
+    #[yare::parameterized(
+        controller = { "__cluster_metadata-0" },
+        observer = { "__cluster_metadata-0/observer" },
+    )]
+    #[test_macro(tokio::test(flavor = "multi_thread"))]
+    async fn a_capture_refuses_the_format_time_checkpoint_and_writes_nothing(subdir: &str) {
+        let log_dir = node_with_rlmm();
+        let metadata = log_dir.path().join(subdir);
+        std::fs::create_dir_all(&metadata).expect("create the checkpoint dir");
+        std::fs::write(
+            metadata.join("00000000000000000000-0000000000.checkpoint"),
+            CHECKPOINT_BYTES,
+        )
+        .expect("write the format-time checkpoint");
+        let ArchiveFixture { root, args, .. } = archive_fixture();
+
+        let error = capture(Some(log_dir.path()), None, &args)
+            .await
+            .expect_err("a capture of the format-time checkpoint fails");
+
+        check!(
+            matches!(&error, BackupError::StaleMetadata(_)),
+            "got: {error}"
+        );
+        let message = error.to_string();
+        check!(
+            message.contains("00000000000000000000-0000000000.checkpoint"),
+            "got: {message}"
+        );
+        check!(
+            message.contains("metadata_max_snapshot_interval"),
+            "got: {message}"
+        );
+        check!(
+            std::fs::read_dir(root.path()).unwrap().next().is_none(),
+            "the refused capture wrote no artifact"
+        );
+    }
+
+    #[yare::parameterized(
+        present = { true, "cluster-metadata.checkpoint ends at metadata offset 42, written " },
+        missing = { false, "cluster-metadata.checkpoint ends at metadata offset 42, of unknown age." },
+    )]
+    fn the_checkpoint_note_names_its_end_offset_and_age(exists: bool, expected_prefix: &str) {
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir
+            .path()
+            .join("00000000000000000042-0000000001.checkpoint");
+        if exists {
+            std::fs::write(&path, CHECKPOINT_BYTES).expect("write a checkpoint");
+        }
+
+        let note = checkpoint_note(
+            CheckpointId {
+                end_offset: 42,
+                epoch: 1,
+            },
+            &path,
+        );
+
+        check!(note.starts_with(expected_prefix), "got: {note}");
+        check!(
+            note.ends_with("Metadata changes committed after it are not in this capture"),
+            "got: {note}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_capture_takes_a_controller_checkpoint_past_the_format_time_one() {
+        let log_dir = node_with_rlmm();
+        let metadata = log_dir.path().join("__cluster_metadata-0");
+        std::fs::create_dir_all(&metadata).expect("create the checkpoint dir");
+        std::fs::write(
+            metadata.join("00000000000000000000-0000000000.checkpoint"),
+            b"format-time",
+        )
+        .expect("write the format-time checkpoint");
+        write_checkpoint(log_dir.path());
+        let ArchiveFixture {
+            root: _root,
+            args,
+            store,
+        } = archive_fixture();
+
+        let id = capture(Some(log_dir.path()), None, &args)
+            .await
+            .expect("a capture past the format-time checkpoint succeeds");
+
+        let manifest = capture_manifest(&store, &id).await;
+        check!(
+            manifest
+                .artifact(METADATA_CHECKPOINT)
+                .map(|a| a.sha256.clone())
+                == Some(sha256_hex(CHECKPOINT_BYTES))
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
