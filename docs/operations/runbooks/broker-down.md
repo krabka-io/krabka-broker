@@ -45,14 +45,14 @@ other broker reports both gauges as 0. The controller fences the node after
    path from Prometheus. In that case the cluster is healthy and the alert is
    a monitoring fault.
 5. Check the effect on the cluster. `krabka_broker_under_replicated_partitions`
-   and `krabka_broker_offline_partitions_count` on the surviving brokers say
-   whether the loss cost availability. With the audit subsystem enabled, the
-   default, the offline count includes the missing broker's own partition of
-   the audit topic (`__krabka_audit` by default). That partition has no other
-   replica, so one down broker always counts 1
-   ([#1516](https://github.com/krabka-io/krabka-broker/issues/1516)). A
-   broker that was a controller voter also shows up in
-   [no active controller](no-active-controller.md).
+   on the surviving brokers, and
+   `krabka_broker_offline_partitions_count - krabka_broker_offline_audit_partitions`
+   on the active controller, say whether the loss cost availability. The
+   offline count alone includes the missing broker's own partition of the
+   audit topic (`__krabka_audit` by default), which has no other replica, so
+   it reads at least 1 while the broker is down; the audit gauge counts that
+   partition and nothing else. A broker that was a controller voter also
+   shows up in [no active controller](no-active-controller.md).
 
 ## Fix
 

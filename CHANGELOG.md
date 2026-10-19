@@ -115,6 +115,17 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- `KrabkaOfflinePartitions` no longer pages for every broker that is down,
+  a planned stop in a rolling upgrade included (issue #1516). Each broker
+  holds one single-replica partition of the audit topic, which has no leader
+  while that broker is down. `krabka_broker_offline_partitions_count` still
+  counts it, as Kafka's `OfflinePartitionsCount` counts every leaderless
+  partition. The new `krabka_broker_offline_audit_partitions` gauge counts
+  those partitions alone, and the shipped alert rule subtracts it. Update a
+  copied `alert-rules.yaml` to the new expression. The gauge's help text and
+  `metrics.md` now say that the active controller reports the count for the
+  whole cluster, and name Kafka's `KafkaController` MBean, not
+  `ReplicaManager`.
 - The release image's SLSA provenance attestation carries its predicate
   again. Through v1.0.5, `release.yml` attested its SLSA v1 predicate as
   `--type slsaprovenance`, which cosign reads as SLSA v0.2, so every release

@@ -31,9 +31,12 @@ krabka_broker_under_replicated_partitions 0
 # HELP krabka_broker_under_min_isr_partition_count Count of partitions this broker leads whose ISR is strictly less than the topic's min.insync.replicas. Mirrors Kafka's ReplicaManager.UnderMinIsrPartitionCount; alert on > 0 — these partitions reject acks=all produces with NOT_ENOUGH_REPLICAS..
 # TYPE krabka_broker_under_min_isr_partition_count gauge
 krabka_broker_under_min_isr_partition_count 0
-# HELP krabka_broker_offline_partitions_count Count of partitions this broker leads that have no live leader (leader dead with no eligible ISR replacement). Mirrors Kafka's ReplicaManager.OfflinePartitionsCount; alert on > 0 — these partitions are wholly unavailable until an ISR member returns or an unclean election runs..
+# HELP krabka_broker_offline_partitions_count Count of partitions in the cluster that have no live leader, internal topics included. Reported by the active controller; zero on every other node. Mirrors Kafka's KafkaController.OfflinePartitionsCount. Subtract offline_audit_partitions before alerting on > 0..
 # TYPE krabka_broker_offline_partitions_count gauge
 krabka_broker_offline_partitions_count 0
+# HELP krabka_broker_offline_audit_partitions Count of audit-topic partitions that have no live leader. Each broker holds one single-replica audit partition, so this counts brokers that are down. Reported by the active controller; zero on every other node and with audit disabled. Already included in offline_partitions_count..
+# TYPE krabka_broker_offline_audit_partitions gauge
+krabka_broker_offline_audit_partitions 0
 # HELP krabka_broker_active_controller 1 if this broker is the raft (controller) leader, 0 otherwise..
 # TYPE krabka_broker_active_controller gauge
 krabka_broker_active_controller 0

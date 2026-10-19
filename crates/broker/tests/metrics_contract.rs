@@ -202,6 +202,7 @@ fn every_family_is_accounted_for(metrics: &BrokerMetrics) {
         under_replicated_partitions: _,
         under_min_isr_partition_count: _,
         offline_partitions_count: _,
+        offline_audit_partitions: _,
         active_controller: _,
         ignored_static_voters: _,
         witness_role: _,

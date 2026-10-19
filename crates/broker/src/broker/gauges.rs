@@ -206,6 +206,7 @@ pub(super) fn spawn_broker_gauge_updater(
     let poll_interval = config.gauge_poll_interval;
     let default_min_insync_replicas = config.default_min_insync_replicas;
     let static_voter_count = config.controller_quorum_voters.len();
+    let audit_topic = config.audit_enabled.then(|| config.audit_topic.clone());
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(poll_interval.to_std());
         let mut previous_voted_directory = None;
@@ -249,6 +250,7 @@ pub(super) fn spawn_broker_gauge_updater(
                 })
                 .collect();
             let mut partition_health = (0_usize, 0_usize, 0_usize);
+            let mut offline_audit = 0_usize;
             for partition in image.all_partitions() {
                 if partition.leader == node_id {
                     partition_health.0 +=
@@ -261,8 +263,16 @@ pub(super) fn spawn_broker_gauge_updater(
                         i32::try_from(partition.isr.len()).unwrap_or(i32::MAX) < minimum,
                     );
                 }
-                partition_health.2 +=
-                    usize::from(is_controller && !alive.contains(&partition.leader.0));
+                // Kafka's OfflinePartitionsCount counts every leaderless
+                // partition, internal topics included, so the audit topic
+                // counts here too. Its partitions are also counted alone:
+                // each has one replica on its own broker, so it is leaderless
+                // exactly while that broker is down (#1516).
+                let offline = is_controller && !alive.contains(&partition.leader.0);
+                partition_health.2 += usize::from(offline);
+                offline_audit += usize::from(
+                    offline && audit_topic.as_deref() == Some(partition.topic.as_str()),
+                );
             }
             metrics
                 .under_replicated_partitions
@@ -273,6 +283,9 @@ pub(super) fn spawn_broker_gauge_updater(
             metrics
                 .offline_partitions_count
                 .set(i64::try_from(partition_health.2).unwrap_or(i64::MAX));
+            metrics
+                .offline_audit_partitions
+                .set(i64::try_from(offline_audit).unwrap_or(i64::MAX));
             metrics.leader_site_drift_partitions.set(
                 i64::try_from(leader_site_drift_partitions(&image, node_id)).unwrap_or(i64::MAX),
             );
@@ -392,12 +405,14 @@ mod tests {
         super::*,
         crate::{
             broker::test_support::fake_source,
+            config::DEFAULT_AUDIT_TOPIC,
             handlers::test_support::replicated_partition,
             metadata_source::test_support::{StartedController, start_controller, topic_record},
             metrics::BrokerMetrics,
             test_support::{broker_registration, single_partition_topic},
         },
         assert2::{assert, check},
+        krabka_metadata::{MetadataImage, MetadataRecord, NodeId},
         krabka_units::{millis, secs},
     };
 
@@ -594,6 +609,149 @@ mod tests {
             "a non-controller has no cluster liveness view and must not invent an offline partition"
         );
         shutdown.cancel();
+    }
+
+    /// One offline-partition sample on the active controller of a three-broker
+    /// cluster: which brokers are alive, which extra partition sits on
+    /// broker 3, whether audit is on, and the two gauges it should publish.
+    struct OfflineCase {
+        name: &'static str,
+        alive: &'static [u64],
+        audit_enabled: bool,
+        single_replica_user_partition_on_broker_3: bool,
+        expected_offline: i64,
+        expected_offline_audit: i64,
+    }
+
+    /// The `deploy.md` example: three brokers, an RF=3 user topic, and the
+    /// audit topic with one RF=1 partition on each broker. Optionally a user
+    /// topic with one RF=1 partition on broker 3.
+    fn three_broker_image(single_replica_user_partition_on_broker_3: bool) -> MetadataImage {
+        let brokers = [NodeId(1), NodeId(2), NodeId(3)];
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        for node_id in brokers {
+            image.apply(&MetadataRecord::V1BrokerRegistration(broker_registration(
+                node_id,
+            )));
+        }
+        image.apply(&topic_record("orders"));
+        image.apply(&MetadataRecord::V1Partition(
+            replicated_partition().replicas(&brokers).call(),
+        ));
+        image.apply(&topic_record(DEFAULT_AUDIT_TOPIC));
+        for (index, node_id) in (0..).zip(brokers) {
+            image.apply(&MetadataRecord::V1Partition(
+                replicated_partition()
+                    .topic(DEFAULT_AUDIT_TOPIC)
+                    .partition(index)
+                    .leader(node_id)
+                    .replicas(&[node_id])
+                    .call(),
+            ));
+        }
+        if single_replica_user_partition_on_broker_3 {
+            image.apply(&topic_record("ledger"));
+            image.apply(&MetadataRecord::V1Partition(
+                replicated_partition()
+                    .topic("ledger")
+                    .leader(NodeId(3))
+                    .replicas(&[NodeId(3)])
+                    .call(),
+            ));
+        }
+        image
+    }
+
+    /// #1516: a down broker leaves its RF=1 audit partition leaderless. The
+    /// Kafka-named gauge counts it, as Kafka's `OfflinePartitionsCount`
+    /// counts every leaderless partition, and the audit gauge says how much
+    /// of that count is audit, so the alert can leave it out.
+    #[tokio::test]
+    async fn controller_separates_offline_audit_partitions_from_the_offline_count() {
+        let cases = [
+            OfflineCase {
+                name: "every broker alive",
+                alive: &[1, 2, 3],
+                audit_enabled: true,
+                single_replica_user_partition_on_broker_3: false,
+                expected_offline: 0,
+                expected_offline_audit: 0,
+            },
+            OfflineCase {
+                name: "broker 3 down: only its audit partition is leaderless",
+                alive: &[1, 2],
+                audit_enabled: true,
+                single_replica_user_partition_on_broker_3: false,
+                expected_offline: 1,
+                expected_offline_audit: 1,
+            },
+            OfflineCase {
+                name: "broker 3 down with a user partition only it holds",
+                alive: &[1, 2],
+                audit_enabled: true,
+                single_replica_user_partition_on_broker_3: true,
+                expected_offline: 2,
+                expected_offline_audit: 1,
+            },
+            OfflineCase {
+                name: "audit disabled: a topic with the audit name is a user topic",
+                alive: &[1, 2],
+                audit_enabled: false,
+                single_replica_user_partition_on_broker_3: false,
+                expected_offline: 1,
+                expected_offline_audit: 0,
+            },
+        ];
+        for case in cases {
+            let image = three_broker_image(case.single_replica_user_partition_on_broker_3);
+            let total_partitions = i64::try_from(image.all_partitions().count()).expect("count");
+            let liveness = Arc::new(ControllerLivenessState::new(secs(10)));
+            for node_id in case.alive {
+                liveness.record_heartbeat(*node_id).await;
+            }
+            let GaugeFixture {
+                metrics,
+                mut config,
+            } = gauge_fixture();
+            config.audit_enabled = case.audit_enabled;
+            let shutdown = CancellationToken::new();
+            spawn_broker_gauge_updater(
+                GaugeStorage {
+                    partitions: Arc::new(PartitionRegistry::new()),
+                    log_dir_status: LogDirRegistry::default(),
+                },
+                Arc::new(fake_source(image, Some(krabka_raft::NodeId(1)))),
+                liveness,
+                NodeId(1),
+                GaugeObservability {
+                    metrics: metrics.clone(),
+                    health: None,
+                },
+                &config,
+                shutdown.child_token(),
+            );
+
+            // The controller-only cluster gauges are written in the same pass,
+            // after the offline counts, so a full partition count means the
+            // pass that set the offline counts has run.
+            tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                while metrics.global_partitions.get() != total_partitions {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("the controller publishes a gauge pass");
+
+            check!(
+                (
+                    metrics.offline_partitions_count.get(),
+                    metrics.offline_audit_partitions.get()
+                ) == (case.expected_offline, case.expected_offline_audit),
+                "{}",
+                case.name
+            );
+            shutdown.cancel();
+        }
     }
 
     /// The metric registry a gauge test reads, and the config of the node.

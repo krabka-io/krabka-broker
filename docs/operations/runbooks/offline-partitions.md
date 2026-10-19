@@ -1,6 +1,8 @@
 # Offline partitions
 
-**Alert:** `KrabkaOfflinePartitions`, `krabka_broker_offline_partitions_count > 0` for 1m.
+**Alert:** `KrabkaOfflinePartitions`,
+`krabka_broker_offline_partitions_count - krabka_broker_offline_audit_partitions > 0`
+for 1m.
 
 ## What it means
 
@@ -18,15 +20,15 @@ kafka-topics --bootstrap-server <broker>:9092 --describe --unavailable-partition
 The output shows `Leader: none` for each affected partition, with the replica
 list and the last known ISR.
 
-With the audit subsystem enabled, which is the default, a partition of the
-audit topic in that list is expected while its broker is down. The topic is
+The alert does not count partitions of the audit topic, which is
 `__krabka_audit` unless `[audit] topic` names another one. Each broker holds
-one audit partition with no other replica, so the alert fires for every
-broker that is down for more than a minute, a planned stop included
-([#1516](https://github.com/krabka-io/krabka-broker/issues/1516)).
-Follow [broker down](broker-down.md) for that broker. Do not run an unclean
-election for an audit partition: it has no other replica to elect. When the
-audit partitions are the only ones listed, no user partition is offline.
+one audit partition with no other replica, so that partition has no leader
+exactly while its broker is down, a planned stop included.
+`krabka_broker_offline_audit_partitions` counts those partitions, and the
+command above still lists them. Ignore them here and follow
+[broker down](broker-down.md) for their brokers. Do not run an unclean
+election for an audit partition: it has no other replica to elect. The
+alert fires only for a partition outside the audit topic.
 
 ## Diagnose
 
