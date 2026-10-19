@@ -79,7 +79,11 @@ async fn alter_remote_fetch_max_wait(broker: &Broker, ms: u64) {
 async fn the_remote_fetch_wait_bounds_a_read_that_cannot_start_and_follows_an_alter() {
     let owners = single_reader_broker().await;
     let broker = owners.handle.broker_arc_for_test();
-    let part = tiered_partition(&broker, owners.dir.path(), false).await;
+    let part = tiered_partition()
+        .broker(&broker)
+        .dir(owners.dir.path())
+        .call()
+        .await;
     commit_everything(&part).await;
     let reader = broker.remote_reader.clone().expect("remote reader");
 
@@ -134,7 +138,6 @@ async fn the_remote_fetch_wait_bounds_a_read_that_cannot_start_and_follows_an_al
             .out
             .records
             .as_ref()
-            .and_then(|records| records.as_v2())
-            .is_some_and(|batches| !batches.is_empty())
+            .is_some_and(|records| records.payload_len() > 0)
     );
 }

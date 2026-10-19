@@ -20,6 +20,39 @@ impl BrokerHandle {
         self.broker.metrics.tiered_storage_rlmm_topic_backed.get() == 1
     }
 
+    /// Test-only: the remote segments this broker's RLMM lists for one
+    /// partition of `topic`, as `(start offset, end offset)` pairs, or the
+    /// error it answers instead -- `NotReady` while the metadata partition
+    /// that covers it has not caught up. `None` when the broker has no remote
+    /// tier or does not know the topic.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn remote_log_segments_for_test(
+        &self,
+        topic: &str,
+        partition: i32,
+    ) -> Option<Result<Vec<(i64, i64)>, krabka_remote_storage::RemoteStorageError>> {
+        let topic_id = self
+            .broker
+            .controller
+            .current_image()
+            .topic(topic)?
+            .topic_id;
+        let rlmm = std::sync::Arc::clone(&self.broker.remote_reader.as_ref()?.rlmm);
+        let tp = krabka_remote_storage::TopicIdPartition::new(topic_id, topic, partition);
+        // The topic-backed manager bridges to its runtime with `block_on`, so
+        // it is asked off the runtime, as the broker asks it.
+        tokio::task::spawn_blocking(move || {
+            rlmm.list_remote_log_segments(&tp).map(|segments| {
+                segments
+                    .iter()
+                    .map(|segment| (segment.start_offset(), segment.end_offset()))
+                    .collect()
+            })
+        })
+        .await
+        .ok()
+    }
+
     /// Test-only count of object PUT errors observed by the diskless WAL
     /// flusher. Shipping-gate tests sample this before and after fault
     /// injection so a PUT failure that never reaches the real flusher cannot

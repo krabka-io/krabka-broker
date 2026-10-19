@@ -251,6 +251,7 @@ fn encode_records_prefix(
         }
         return Ok(());
     };
+    let payload = framed_records(payload)?;
 
     let payload_len = payload.payload_len();
     if flex {
@@ -263,8 +264,30 @@ fn encode_records_prefix(
         put_i32(buf, records_len);
     }
     flush_fetch_inline(buf, ops);
-    ops.push(FetchWriteOp::Records(payload.clone()));
+    ops.push(FetchWriteOp::Records(payload));
     Ok(())
+}
+
+/// The records payload as the wire will carry it, with a length that is the
+/// length of the bytes written.
+///
+/// Every length this plan writes -- the records field's own prefix, and the
+/// frame length the caller sums from the ops -- is taken from
+/// [`RecordsPayload::payload_len`] before a single records byte is written.
+/// For verbatim bytes and file regions that length is exact. For parsed
+/// batches it is only `RecordBatch::encoded_len`'s prediction, which holds
+/// for an uncompressed batch alone: a compressed batch encodes to whatever its
+/// codec makes of it. A frame that announces more bytes than follow it leaves
+/// the client waiting for the rest, and one that announces fewer splits the
+/// next response. So parsed batches are encoded here, once, and framed by
+/// the bytes that encoding produced.
+fn framed_records(payload: &RecordsPayload) -> Result<RecordsPayload, ProtocolError> {
+    let RecordsPayload::V2(_) = payload else {
+        return Ok(payload.clone());
+    };
+    let mut encoded = BytesMut::with_capacity(payload.payload_len());
+    payload.encode_to(&mut encoded)?;
+    Ok(RecordsPayload::Raw(encoded.freeze()))
 }
 
 fn flush_fetch_inline(buf: &mut BytesMut, ops: &mut Vec<FetchWriteOp>) {

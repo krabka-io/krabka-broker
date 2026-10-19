@@ -26,23 +26,23 @@
 //!   restarted leader's local start established as the global one, and then
 //!   makes it the leader. The leader it followed reported the real start, and
 //!   a tiered follower takes it even when it is lower.
+//! - [`a_compressed_archive_reads_back_from_earliest`] reads back an archive
+//!   that an lz4 producer wrote, from a leader that evicted the start of it
+//!   (#1448).
 
 use {
     crate::{
         TOPIC,
         multi_cluster::{TieredCluster, ready_admin, start_tiered_cluster},
         multi_workload::local_segment_bases,
-        support::{
-            self,
-            producer::{default_producer, producer_record},
-            topics::AssignedTopicSetup,
-        },
+        support::{self, producer::producer_record, topics::AssignedTopicSetup},
         topic_fixture::{await_tiered_replicas, create_assigned_topic},
     },
     assert2::assert,
     krabka_broker::{BootstrapMode, BrokerConfig, BrokerHandle},
     krabka_client_consumer::{Consumer, IsolationLevel},
     krabka_client_core::Client,
+    krabka_client_producer::{Compression, Producer},
     krabka_metadata::NodeId,
     krabka_protocol::owned::elect_leaders_request::{ElectLeadersRequest, TopicPartitions},
     std::{
@@ -76,13 +76,18 @@ struct Archived {
     _remote_dir: tempfile::TempDir,
     admin: Client,
     bootstrap: String,
+    /// The codec every record the case produces is compressed with.
+    compression: Compression,
 }
 
+#[bon::bon]
 impl Archived {
     /// Boot the cluster, create the partition on replicas 2, 3 and 1 (broker
     /// 2 leads), produce [`ARCHIVED`] records, and wait until local retention
-    /// has evicted the first of them from broker index `evicted`.
-    async fn start(evicted: usize) -> Self {
+    /// has evicted the first of them from broker index `evicted`. Every
+    /// record goes out compressed with `compression`.
+    #[builder]
+    async fn start(evicted: usize, #[builder(default)] compression: Compression) -> Self {
         let TieredCluster {
             brokers,
             configs,
@@ -110,7 +115,7 @@ impl Archived {
         .await;
         await_leader(&b1, 2).await;
         let bootstrap = format!("127.0.0.1:{}", b1.listen_addr().port());
-        produce(&bootstrap, 0..ARCHIVED).await;
+        produce(&bootstrap, 0..ARCHIVED, compression).await;
         await_local_eviction(log_dirs[evicted].path()).await;
         Self {
             brokers: [Some(b1), Some(b2), Some(b3)],
@@ -119,6 +124,7 @@ impl Archived {
             _remote_dir: remote_dir,
             admin,
             bootstrap,
+            compression,
         }
     }
 
@@ -153,7 +159,7 @@ impl Archived {
     /// Produce `indexes` and wait until every running replica's high
     /// watermark covers them, so each has fetched from the leader since.
     async fn produce_and_replicate(&self, indexes: std::ops::Range<usize>) -> i64 {
-        produce(&self.bootstrap, indexes.clone()).await;
+        produce(&self.bootstrap, indexes.clone(), self.compression).await;
         let end = i64::try_from(indexes.end).expect("small count");
         for broker in self.brokers.iter().flatten() {
             broker.wait_until_high_watermark(TOPIC, 0, end).await;
@@ -199,7 +205,7 @@ impl Archived {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_tiered_partition_reads_back_from_earliest_after_its_leader_restarts() {
-    let mut cluster = Box::pin(Archived::start(LEADER)).await;
+    let mut cluster = Box::pin(Archived::start().evicted(LEADER).call()).await;
 
     // Restart the preferred leader on the log it left: it opens a log whose
     // first local segment sits above everything the archive holds.
@@ -220,7 +226,7 @@ async fn a_tiered_partition_reads_back_from_earliest_after_its_leader_restarts()
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_follower_left_with_a_raised_floor_takes_its_leaders_back() {
-    let mut cluster = Box::pin(Archived::start(FOLLOWER)).await;
+    let mut cluster = Box::pin(Archived::start().evicted(FOLLOWER).call()).await;
 
     // Leave the follower's log on the floor an older broker established: the
     // first segment its disk still holds, which every archived offset below
@@ -261,9 +267,38 @@ async fn a_follower_left_with_a_raised_floor_takes_its_leaders_back() {
     Box::pin(cluster.read_back_from_the_follower(end)).await;
 }
 
-/// Produce one acknowledged record per index, each its own batch.
-async fn produce(bootstrap: &str, indexes: std::ops::Range<usize>) {
-    let producer = default_producer(bootstrap).await;
+/// An archive an lz4 producer wrote reads back from the earliest offset
+/// (#1448).
+///
+/// Broker 2 leads and has evicted the first archived segments, so the read
+/// starts in the remote band. Before the fix the remote read decoded the
+/// archived batch and the response writer framed it by its uncompressed
+/// length, so the frame announced more bytes than it carried: the consumer
+/// waited on a fetch that was never answered and read nothing back, as the
+/// soak's lz4 read-back did. Kafka serves the segment's own bytes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_compressed_archive_reads_back_from_earliest() {
+    let cluster = Box::pin(
+        Archived::start()
+            .evicted(LEADER)
+            .compression(Compression::Lz4)
+            .call(),
+    )
+    .await;
+    let end = i64::try_from(ARCHIVED).expect("small count");
+    cluster.reads_back_everything(end).await;
+    Box::pin(cluster.shutdown()).await;
+}
+
+/// Produce one acknowledged record per index, each its own batch, compressed
+/// with `compression`.
+async fn produce(bootstrap: &str, indexes: std::ops::Range<usize>, compression: Compression) {
+    let producer = Producer::builder()
+        .bootstrap(bootstrap)
+        .compression(compression)
+        .build()
+        .await
+        .expect("producer");
     for index in indexes {
         let mut value = format!("record-{index}-").into_bytes();
         value.resize(PAYLOAD, b'x');

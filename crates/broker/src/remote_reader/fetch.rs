@@ -12,11 +12,10 @@ use {
     super::RemoteReader,
     bytes::Bytes,
     krabka_ids::LeaderEpoch,
-    krabka_protocol::records::{HEADER_LEN, RecordBatch, RecordBatchHeader},
+    krabka_protocol::records::{HEADER_LEN, RecordBatchHeader},
     krabka_remote_storage::{
         IndexType, LogOffset, RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageError,
-        TopicIdPartition, end_position_for, first_batch_at_or_after, parse_offset_index,
-        position_for_relative_offset,
+        TopicIdPartition, end_position_for, parse_offset_index, position_for_relative_offset,
     },
     krabka_verified::remote_read_relative_offset,
     zerocopy::FromBytes as _,
@@ -47,41 +46,16 @@ impl RemoteReader {
         Ok(archived_epoch_for_offset(&segments, offset, ceiling))
     }
 
-    /// Finds the finished segment in the RLMM that covers
-    /// `(leader_epoch, offset)`, fetches its offset index, positions into the
-    /// `.log` data, and returns the first batch whose last offset is
-    /// `>= offset`. It returns `None` when no finished segment covers the
-    /// requested offset.
-    ///
-    /// `max_bytes` caps the byte range that this method fetches from the
-    /// remote tier. The caller's `partition_max_bytes` from the Fetch request
-    /// arrives here.
-    pub(crate) async fn fetch_batch(
-        &self,
-        tp: &TopicIdPartition,
-        leader_epoch: LeaderEpoch,
-        offset: LogOffset,
-        max_bytes: usize,
-    ) -> Result<Option<RecordBatch>, RemoteStorageError> {
-        let Some(read) = self
-            .read_segment_at(tp, leader_epoch, offset, max_bytes)
-            .await?
-        else {
-            return Ok(None);
-        };
-        Ok(first_batch_at_or_after(&read.data, offset))
-    }
-
     /// Kafka's `RemoteLogManager.read`: the whole batches of the finished
     /// segment that covers `(leader_epoch, offset)`, from the batch that holds
     /// `offset` on, as the segment stores them.
     ///
-    /// A share fetch and a dead-letter copy answer with the log's own bytes,
-    /// so they read the tier through this and not through
-    /// [`Self::fetch_batch`], which decodes. The read stays inside one
-    /// segment and caps its bytes at `max_bytes` past the batch that holds
-    /// `offset`, as [`Self::fetch_batch`] does. The first batch comes back
-    /// whole even when it is larger than `max_bytes`, which is Kafka's
+    /// A consumer fetch, a share fetch and a dead-letter copy all answer with
+    /// the log's own bytes, so all three read the tier through this. A batch
+    /// decoded and encoded again need not keep its length once it is
+    /// compressed. The read stays inside one segment and caps its bytes at
+    /// `max_bytes` past the batch that holds `offset`. The first batch comes
+    /// back whole even when it is larger than `max_bytes`, which is Kafka's
     /// `minOneMessage`. It returns `None` when no finished segment holds a
     /// batch at or after `offset`.
     pub(crate) async fn fetch_raw(
@@ -493,7 +467,7 @@ mod tests {
 
         for offset in [10, 12] {
             reader
-                .fetch_batch(&tp(), LeaderEpoch(0), offset, 4096)
+                .fetch_raw(&tp(), LeaderEpoch(0), offset, 4096)
                 .await
                 .expect("ok")
                 .expect("both offsets are in the synthetic remote segment");
@@ -527,13 +501,13 @@ mod tests {
             .id;
 
         reader
-            .fetch_batch(&tp(), LeaderEpoch(0), 10, 4096)
+            .fetch_raw(&tp(), LeaderEpoch(0), 10, 4096)
             .await
             .expect("ok")
             .expect("a batch");
         reader.index_cache.remove_segment(segment_id);
         reader
-            .fetch_batch(&tp(), LeaderEpoch(0), 12, 4096)
+            .fetch_raw(&tp(), LeaderEpoch(0), 12, 4096)
             .await
             .expect("ok")
             .expect("a batch");
@@ -542,8 +516,17 @@ mod tests {
         assert!(reader.index_cache.stats().hits == 0);
     }
 
+    /// The base offset and the last offset of the first batch a raw read
+    /// holds, off its header.
+    fn first_batch_bounds(read: &Bytes) -> (i64, i64) {
+        let header =
+            RecordBatchHeader::ref_from_bytes(&read[..HEADER_LEN]).expect("a batch header");
+        let base = header.base_offset.get();
+        (base, base + i64::from(header.last_offset_delta.get()))
+    }
+
     #[tokio::test]
-    async fn fetch_batch_finds_segment_and_returns_first_batch() {
+    async fn fetch_raw_finds_segment_and_starts_at_the_covering_batch() {
         // Pick an offset inside the second sealed segment. Each batch covers
         // two records, so base_offset=2 lives in segment[1] (base=2).
         let ReaderFixture {
@@ -557,38 +540,36 @@ mod tests {
         let target_offset = exports[1].base_offset.0;
 
         let got = reader
-            .fetch_batch(&tp(), LeaderEpoch(0), target_offset, 4096)
+            .fetch_raw(&tp(), LeaderEpoch(0), target_offset, 4096)
             .await
             .expect("ok")
             .expect("found a batch");
         // The batch returned should start at or before target_offset and end
         // at or after it.
-        let last = got.base_offset + i64::from(got.last_offset_delta);
+        let (base, last) = first_batch_bounds(&got);
         assert!(
-            got.base_offset <= target_offset && last >= target_offset,
-            "batch [{},{}] doesn't cover target {target_offset}",
-            got.base_offset,
-            last
+            base <= target_offset && last >= target_offset,
+            "batch [{base},{last}] doesn't cover target {target_offset}"
         );
     }
 
     #[tokio::test]
-    async fn fetch_batch_uses_offset_relative_to_remote_segment_start() {
+    async fn fetch_raw_uses_offset_relative_to_remote_segment_start() {
         let ReaderWithDir {
             reader,
             dir: _remote_dir,
         } = sparse_remote_segment_reader();
 
         let got = reader
-            .fetch_batch(&tp(), LeaderEpoch(0), 12, 4096)
+            .fetch_raw(&tp(), LeaderEpoch(0), 12, 4096)
             .await
             .expect("ok")
             .expect("offset 12 is in the synthetic remote segment");
 
+        let (base, _) = first_batch_bounds(&got);
         assert!(
-            got.base_offset == 10,
-            "relative offset 2 should read the first batch, not jump to {}",
-            got.base_offset
+            base == 10,
+            "relative offset 2 should read the first batch, not jump to {base}"
         );
     }
 
@@ -598,34 +579,34 @@ mod tests {
     /// return that batch: the read counts its budget from the covering batch,
     /// not from the indexed one before it.
     #[tokio::test]
-    async fn fetch_batch_budget_counts_from_the_covering_batch() {
+    async fn fetch_raw_budget_counts_from_the_covering_batch() {
         let ReaderWithDir {
             reader,
             dir: _remote_dir,
         } = sparse_remote_segment_reader();
 
         let got = reader
-            .fetch_batch(&tp(), LeaderEpoch(0), 14, sparse_fixture_second_batch_len())
+            .fetch_raw(&tp(), LeaderEpoch(0), 14, sparse_fixture_second_batch_len())
             .await
             .expect("ok")
             .expect("offset 14 starts the second batch");
 
-        assert!(got.base_offset == 14);
+        assert!(first_batch_bounds(&got).0 == 14);
     }
 
     #[tokio::test]
-    async fn fetch_batch_returns_none_when_segment_not_in_rlmm() {
+    async fn fetch_raw_returns_none_when_segment_not_in_rlmm() {
         let (_remote_dir, reader) = empty_reader();
         // RLMM is empty → no segment for `tp` at epoch 0.
         let got = reader
-            .fetch_batch(&tp(), LeaderEpoch(0), 0, 4096)
+            .fetch_raw(&tp(), LeaderEpoch(0), 0, 4096)
             .await
             .unwrap();
         assert!(got.is_none());
     }
 
     #[tokio::test]
-    async fn fetch_batch_returns_none_for_in_progress_segment() {
+    async fn fetch_raw_returns_none_for_in_progress_segment() {
         let remote_dir = tempfile::tempdir().unwrap();
         let fixtures::Backends { rsm, rlmm } = local_backends(remote_dir.path());
         let id = krabka_remote_storage::RemoteLogSegmentId::new(tp(), Uuid::new_v4());
@@ -646,7 +627,7 @@ mod tests {
         rlmm.add_remote_log_segment_metadata(md).unwrap();
         let reader = RemoteReader::new(rsm, rlmm);
         let got = reader
-            .fetch_batch(&tp(), LeaderEpoch(0), 50, 4096)
+            .fetch_raw(&tp(), LeaderEpoch(0), 50, 4096)
             .await
             .unwrap();
         assert!(
@@ -656,13 +637,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_batch_propagates_not_ready() {
+    async fn fetch_raw_propagates_not_ready() {
         let ReaderWithDir {
             dir: _remote_dir,
             reader,
         } = not_ready_reader();
         let err = reader
-            .fetch_batch(&tp(), LeaderEpoch(0), 0, 4096)
+            .fetch_raw(&tp(), LeaderEpoch(0), 0, 4096)
             .await
             .unwrap_err();
         assert!(matches!(err, RemoteStorageError::NotReady { partition: 3 }));
@@ -765,7 +746,7 @@ mod tests {
     }
 
     /// The broker tiers segments under the leader epoch that was active at
-    /// copy time. In normal operation `fetch_batch` receives the owning epoch,
+    /// copy time. In normal operation `fetch_raw` receives the owning epoch,
     /// which the caller resolves from the leader-epoch checkpoint, and the
     /// epoch-indexed primary lookup hits.
     ///
@@ -793,7 +774,7 @@ mod tests {
         // None because the segment's `segment_leader_epochs` only contains
         // epoch 0. The fallback must not cross that lineage boundary.
         let got = reader
-            .fetch_batch(&tp(), LeaderEpoch(1), target_offset, 4096)
+            .fetch_raw(&tp(), LeaderEpoch(1), target_offset, 4096)
             .await
             .expect("ok");
 

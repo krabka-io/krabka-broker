@@ -82,6 +82,15 @@ pub(crate) struct TieredCluster {
 pub(crate) async fn start_tiered_cluster(
     segment_sizes: [krabka_units::ByteSize; 3],
 ) -> TieredCluster {
+    start_tiered_cluster_with(segment_sizes, |_, _| {}).await
+}
+
+/// [`start_tiered_cluster`], with `configure` applied to broker `i`'s
+/// configuration last, so a case can change what the suite's defaults set.
+pub(crate) async fn start_tiered_cluster_with(
+    segment_sizes: [krabka_units::ByteSize; 3],
+    configure: impl Fn(usize, &mut BrokerConfig),
+) -> TieredCluster {
     support::init_tracing();
 
     // Pre-bind concrete client + controller ports for all 3 brokers.
@@ -133,6 +142,7 @@ pub(crate) async fn start_tiered_cluster(
             security: None,
             ..KafkaRlmmConfig::default()
         });
+        configure(i, &mut cfg);
         cfg
     });
 
