@@ -247,3 +247,28 @@ async fn stop_cancels_the_named_listeners_and_close_takes_the_rest() {
     assert!(listeners.names().is_empty());
     assert!(listeners.state().closed);
 }
+
+/// A listener added on a port another socket holds fails with an error that
+/// names the listener, its address and the `listeners` config, which the log
+/// line of the failed open carries.
+#[tokio::test]
+async fn an_added_listener_on_a_taken_port_names_itself_in_the_bind_error() {
+    let taken = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = taken.local_addr().expect("local address");
+    let spec = AddedListener::builder()
+        .endpoint(&plaintext("INTERNAL", i32::from(addr.port())))
+        .bind_addr(addr)
+        .sasl_mechanisms(vec![])
+        .principal_mapper(SslPrincipalMapper::default())
+        .build()
+        .spec();
+
+    let Err(error) = bind_added(&spec).await else {
+        panic!("an added listener bound a port another socket holds");
+    };
+
+    check!(error.kind() == ErrorKind::AddrInUse);
+    check!(error.to_string().starts_with(&format!(
+        "unable to bind the INTERNAL listener to {addr} (set by listeners): "
+    )));
+}

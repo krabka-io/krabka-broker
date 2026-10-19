@@ -23,6 +23,7 @@ use {
             broker_dynamic::stored_dynamic_configs,
             listener_endpoints::{Endpoint, ListenerView, normalised, static_originals},
         },
+        error::BrokerError,
         network::auth::SslPrincipalMapper,
         platform::bind_listener,
     },
@@ -263,6 +264,17 @@ impl AddedListener<'_> {
     }
 }
 
+/// Bind the address of the added listener `spec`. A failure names the
+/// listener, its address and the dynamic `listeners` config that asked for it.
+async fn bind_added(spec: &ListenerSpec) -> io::Result<TcpListener> {
+    bind_listener(spec.bind_addr).await.map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            BrokerError::listener_bind(&spec.name, spec.bind_addr, "listeners")(error),
+        )
+    })
+}
+
 /// Open the listener on `endpoint`, as Kafka's `SocketServer.addListeners`
 /// does: build its spec from `view`, check that the broker can serve it,
 /// bind it and start its accept loop. A failure is logged and recorded, and
@@ -281,7 +293,7 @@ async fn open(broker: &Arc<Broker>, view: &ListenerView, endpoint: Endpoint) {
             .config
             .validate_added_listener(&spec)
             .map_err(io::Error::other)?;
-        let listener = bind_listener(bind_addr).await?;
+        let listener = bind_added(&spec).await?;
         Ok::<_, io::Error>((spec, listener))
     }
     .await;

@@ -140,6 +140,15 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   coordinator again after `COORDINATOR_NOT_AVAILABLE` and `NOT_COORDINATOR`, as
   Kafka's `AlterConsumerGroupOffsetsHandler` does. The restore runbook no
   longer tells the operator to run the command twice.
+- A listener that cannot bind its port now says which listener, which address
+  and which setting (issue #1517). A node whose controller port another
+  process held exited with `storage: I/O: Address already in use`, which sent
+  an operator to the log directory, and the client, metrics and health
+  listeners named no address either. The error now reads, for example,
+  `unable to bind the CONTROLLER listener to 0.0.0.0:9093 (set by
+  --controller-listen-addr): Address already in use (os error 98)`. The
+  controller listener also binds before the metadata engine opens, so the
+  failure leaves no engine running.
 - The release image's SLSA provenance attestation carries its predicate
   again. Through v1.0.5, `release.yml` attested its SLSA v1 predicate as
   `--type slsaprovenance`, which cosign reads as SLSA v0.2, so every release

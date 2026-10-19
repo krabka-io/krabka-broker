@@ -42,7 +42,7 @@
 //! target.
 
 #[cfg(not(target_family = "wasm"))]
-use crate::http_server::spawn;
+use crate::{error::BrokerError, http_server::spawn};
 #[cfg(not(target_family = "wasm"))]
 use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
 #[cfg(not(target_family = "wasm"))]
@@ -270,15 +270,19 @@ pub fn router(state: HealthState) -> Router {
 ///
 /// # Errors
 ///
-/// Returns the bind error when `addr` cannot be bound.
+/// Returns [`BrokerError::ListenerBind`], naming the `health` listener, `addr`
+/// and `--health-listen-addr`, when `addr` cannot be bound.
 #[cfg(not(target_family = "wasm"))]
 pub async fn serve(
     addr: SocketAddr,
     state: HealthState,
     shutdown: CancellationToken,
-) -> std::io::Result<SocketAddr> {
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    let bound = listener.local_addr()?;
+) -> Result<SocketAddr, BrokerError> {
+    let bind_error = || BrokerError::listener_bind("health", addr, "--health-listen-addr");
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .map_err(bind_error())?;
+    let bound = listener.local_addr().map_err(bind_error())?;
     tracing::info!(%bound, "health server listening");
     let app = router(state);
     spawn(listener, app, shutdown, |error| {

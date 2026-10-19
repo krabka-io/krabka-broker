@@ -285,6 +285,12 @@ need only the port of the listener they connect to: 9092 under
 `--listen-addr`, or the `bind_addr` port of their `[[listeners]]` entry under
 `--config-file`. The three-node file below serves clients on 9094.
 
+A node whose port another process holds exits at startup with an error that
+names the listener, the address and the setting that gave it, for example
+`unable to bind the CONTROLLER listener to 0.0.0.0:9093 (set by
+--controller-listen-addr): Address already in use (os error 98)`. Two brokers
+on one host need distinct ports for each listener in this table.
+
 ## Format the log directory
 
 A node refuses to boot on an unformatted log directory. `krabka-format`
