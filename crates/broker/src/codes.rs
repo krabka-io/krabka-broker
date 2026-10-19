@@ -686,6 +686,7 @@ pub fn from_broker_error(err: &BrokerError) -> i16 {
         | BrokerError::Log(_)
         | BrokerError::Protocol(_)
         | BrokerError::Startup(_)
+        | BrokerError::ListenerBind { .. }
         | BrokerError::FatalFault(_)
         | BrokerError::Txn(_)
         | BrokerError::MarkerWriteRefused { .. }

@@ -281,7 +281,13 @@ async fn run(
     );
     let health_shutdown = tokio_util::sync::CancellationToken::new();
     if let Some(addr) = health_listen_addr {
-        krabka_broker::health::serve(addr, health.clone(), health_shutdown.child_token()).await?;
+        krabka_broker::health::serve(addr, health.clone(), health_shutdown.child_token())
+            .await
+            .map_err(BrokerError::listener_bind(
+                "health",
+                addr,
+                "--health-listen-addr",
+            ))?;
     }
 
     let health_for_shutdown = health.clone();

@@ -673,3 +673,71 @@ async fn latch_unsupported_fault(
     .expect("the fault did not latch the self-shutdown flag within 30s")
     .expect("the self-shutdown flag closed");
 }
+
+/// Points the controller listener, and this node's voter entry, at `addr`.
+fn controller_listener_on(config: &mut BrokerConfig, addr: SocketAddr) {
+    config.controller_listen_addr = addr;
+    config.controller_quorum_voters = vec![(config.node_id, addr.to_string())];
+}
+
+/// Points the one data-plane listener at `addr`.
+fn client_listener_on(config: &mut BrokerConfig, addr: SocketAddr) {
+    config.listen_addr = addr;
+    config.advertised_listener = addr.to_string();
+}
+
+/// Points the metrics listener at `addr`.
+fn metrics_listener_on(config: &mut BrokerConfig, addr: SocketAddr) {
+    config.metrics_listen_addr = Some(addr);
+}
+
+/// A listener whose port another socket holds fails the start with an error
+/// that names the listener, the address, the setting that gave it and the
+/// cause, as Kafka's `SocketServer` fails with `Socket server failed to bind
+/// to <address>`. It is not a storage or plain I/O error, which would send an
+/// operator to the log directory instead of the network.
+#[yare::parameterized(
+    controller = { controller_listener_on, "CONTROLLER", "--controller-listen-addr" },
+    client = { client_listener_on, "PLAINTEXT", "--listen-addr" },
+    metrics = { metrics_listener_on, "metrics", "--metrics-listen-addr" },
+)]
+#[test_macro(tokio::test)]
+async fn a_taken_listener_port_fails_the_start_with_a_listener_bind_error(
+    listener_on: fn(&mut BrokerConfig, SocketAddr),
+    listener: &str,
+    setting: &str,
+) {
+    let taken = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = taken.local_addr().expect("local address");
+    let dir = tempdir().unwrap();
+    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+    listener_on(&mut config, addr);
+
+    let Err(refused) = Broker::start(config).await else {
+        panic!("a broker started with its {listener} listener on a port another socket holds");
+    };
+
+    // `yare` puts each case in a module of its own, where `assert` and
+    // `check` are ambiguous with the prelude, so the macros are named in full.
+    let message = refused.to_string();
+    assert2::assert!(
+        let BrokerError::ListenerBind {
+            listener: failed,
+            addr: failed_addr,
+            setting: failed_setting,
+            source,
+        } = refused
+    );
+    assert2::check!(failed == listener);
+    assert2::check!(failed_addr == addr);
+    assert2::check!(failed_setting == setting);
+    assert2::check!(source.kind() == std::io::ErrorKind::AddrInUse);
+    assert2::check!(
+        message
+            == format!(
+                "unable to bind the {listener} listener to {addr} (set by {setting}): {source}"
+            )
+    );
+}

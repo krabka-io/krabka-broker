@@ -73,14 +73,35 @@ pub(super) async fn bind_ephemeral_data_plane_listener(
     {
         return Ok(());
     }
-    let listener = bind_listener(config.listen_addr).await?;
-    let bound = Sockets::TARGET.listener_address(&listener, config.listen_addr)?;
+    let addr = config.listen_addr;
+    // `listeners` is empty here, so the one listener is `PLAINTEXT`, as
+    // `BrokerConfig::effective_listeners` builds it.
+    let bind_error = || BrokerError::listener_bind("PLAINTEXT", addr, LISTEN_ADDR_SETTING);
+    let listener = bind_listener(addr).await.map_err(bind_error())?;
+    let bound = Sockets::TARGET
+        .listener_address(&listener, addr)
+        .map_err(bind_error())?;
     config.listen_addr = bound;
     if let Some((host, _)) = config.advertised_listener.rsplit_once(':') {
         config.advertised_listener = format!("{host}:{}", bound.port());
     }
     data_plane_listeners.push(listener);
     Ok(())
+}
+
+/// The setting that gives the address of the one data-plane listener when
+/// `listeners` is empty.
+const LISTEN_ADDR_SETTING: &str = "--listen-addr";
+
+/// The setting that gives the data-plane listeners' addresses, which a bind
+/// error names: the `bind_addr` of the config file's `[[listeners]]` when the
+/// config has listeners, and `--listen-addr` otherwise.
+fn data_plane_listen_setting(config: &BrokerConfig) -> &'static str {
+    if config.listeners.is_empty() {
+        LISTEN_ADDR_SETTING
+    } else {
+        "[[listeners]] bind_addr"
+    }
 }
 
 /// The data-plane listeners that this node opens: every listener of the
@@ -107,6 +128,7 @@ pub(super) async fn bind_listeners_and_recover_moves(
     let bound = adopt_or_bind_listeners(
         Sockets::TARGET,
         data_plane_listener_specs(config),
+        data_plane_listen_setting(config),
         supplied_listeners,
     )
     .await?;
@@ -171,8 +193,9 @@ pub(super) async fn bind_listeners_and_recover_moves(
 async fn adopt_or_bind_listeners(
     sockets: Sockets,
     specs: Vec<ListenerSpec>,
+    setting: &'static str,
     mut supplied: Vec<TcpListener>,
-) -> std::io::Result<Vec<BoundListener>> {
+) -> Result<Vec<BoundListener>, BrokerError> {
     let mut bound = Vec::with_capacity(specs.len());
     for spec in specs {
         let serving = match sockets {
@@ -183,11 +206,14 @@ async fn adopt_or_bind_listeners(
             }),
             Sockets::Preopened => (!supplied.is_empty()).then_some(0),
         };
+        let bind_error = || BrokerError::listener_bind(&spec.name, spec.bind_addr, setting);
         let listener = match serving {
             Some(index) => supplied.remove(index),
-            None => bind_listener(spec.bind_addr).await?,
+            None => bind_listener(spec.bind_addr).await.map_err(bind_error())?,
         };
-        let address = sockets.listener_address(&listener, spec.bind_addr)?;
+        let address = sockets
+            .listener_address(&listener, spec.bind_addr)
+            .map_err(bind_error())?;
         bound.push(BoundListener {
             spec,
             listener,
@@ -301,6 +327,7 @@ mod tests {
         let bound = adopt_or_bind_listeners(
             Sockets::Preopened,
             vec![spec("PLAINTEXT", data), spec("INTERNAL", internal)],
+            "listeners",
             vec![first, second],
         )
         .await
@@ -329,6 +356,7 @@ mod tests {
         let bound = adopt_or_bind_listeners(
             Sockets::Native,
             vec![spec("PLAINTEXT", second_addr), spec("INTERNAL", first_addr)],
+            "listeners",
             vec![first, second],
         )
         .await

@@ -23,6 +23,7 @@ use {
             broker_dynamic::stored_dynamic_configs,
             listener_endpoints::{Endpoint, ListenerView, normalised, static_originals},
         },
+        error::BrokerError,
         network::auth::SslPrincipalMapper,
         platform::bind_listener,
     },
@@ -281,7 +282,12 @@ async fn open(broker: &Arc<Broker>, view: &ListenerView, endpoint: Endpoint) {
             .config
             .validate_added_listener(&spec)
             .map_err(io::Error::other)?;
-        let listener = bind_listener(bind_addr).await?;
+        let listener = bind_listener(bind_addr).await.map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                BrokerError::listener_bind(&spec.name, bind_addr, "listeners")(error),
+            )
+        })?;
         Ok::<_, io::Error>((spec, listener))
     }
     .await;
