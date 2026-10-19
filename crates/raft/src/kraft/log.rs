@@ -10,7 +10,7 @@ use {
         kraft::types::{Epoch, LogOffsetMetadata, LogView},
     },
     krabka_ids::{LeaderEpoch, Offset},
-    krabka_log::{Log, LogConfig, RawRead},
+    krabka_log::{FailedDeletion, Log, LogConfig, RawRead},
     krabka_protocol::{Decode as _, records::RecordBatch},
     krabka_units::prelude::ByteSize,
     std::{
@@ -29,6 +29,9 @@ pub struct KraftLog {
     /// It stays set: Kafka treats a failed metadata log directory as fatal
     /// (KIP-858), and the engine stops the controller over it.
     failure: Option<String>,
+    /// The retired files being deleted off the engine, if a deletion is
+    /// running. See [`Self::reap_retired_files`].
+    reaping: Option<std::thread::JoinHandle<Result<(), FailedDeletion>>>,
 }
 
 /// Read budget [`KraftLog::timestamp_below`] starts from. It only ever needs
@@ -171,6 +174,7 @@ impl KraftLog {
             hwm,
             hwm_path,
             failure: None,
+            reaping: None,
         })
     }
 
@@ -386,12 +390,36 @@ impl KraftLog {
     /// log is not one of them, so every cleaning would leave its segments on
     /// disk until the node restarted.
     ///
+    /// The unlinks run on a thread of their own, as the partition writer hands
+    /// its due deletions to a background task: a metadata segment can be a
+    /// GiB, and unlinking it on the engine would stall fetches, heartbeats and
+    /// every controller command behind it. One deletion runs at a time. Each
+    /// call first collects the one before it, and a failed one hands its
+    /// remaining files back to the log, which retries them on a later call.
+    ///
     /// # Errors
-    /// Returns [`RaftError`] if a deletion fails. The files that were not
-    /// deleted are retried on the next call.
+    /// Returns [`RaftError`] if the earlier deletion failed, or if the flush
+    /// that `Log::maintain_deferring_deletions` runs first fails.
+    ///
+    /// # Panics
+    /// Panics if the deletion thread panicked.
     pub fn reap_retired_files(&mut self, now: SystemTime) -> Result<(), RaftError> {
-        let maintained = self.log.maintain(now);
-        self.checked(maintained)
+        if let Some(reaping) = self.reaping.take_if(|reaping| reaping.is_finished()) {
+            let deleted = reaping.join().expect("the retired-file deletion panicked");
+            if let Err(FailedDeletion { error, remaining }) = deleted {
+                self.log.restore_deletions(remaining, now);
+                return self.checked(Err(error));
+            }
+        }
+        if self.reaping.is_some() {
+            return Ok(());
+        }
+        let due = self.log.maintain_deferring_deletions(now);
+        let due = self.checked(due)?;
+        if !due.is_empty() {
+            self.reaping = Some(std::thread::spawn(move || due.delete()));
+        }
+        Ok(())
     }
 
     /// Replaces the log with an empty log that starts at `end_offset`, which
@@ -951,7 +979,8 @@ mod tests {
 
     /// A pruned segment stays on disk under a `.deleted` name for Kafka's
     /// 60-second `file.delete.delay.ms`, and the first reap after that deletes
-    /// it. Before the reap existed, nothing deleted it until a restart.
+    /// it, off the caller. Before the reap existed, nothing deleted it until a
+    /// restart.
     #[test]
     fn a_reap_deletes_the_pruned_segments_once_their_delay_has_passed() {
         let retired = |dir: &Path| -> Vec<String> {
@@ -993,6 +1022,13 @@ mod tests {
             ),
         ] {
             log.reap_retired_files(now).expect("reap");
+            // The unlinks run off the caller, so wait for them, collecting
+            // the finished deletion on each call as the engine does.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while retired(dir.path()) != left && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                log.reap_retired_files(now).expect("reap");
+            }
             check!(retired(dir.path()) == left, "{when}");
         }
         check!(

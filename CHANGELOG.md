@@ -120,13 +120,17 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   a survivor's own base offset (issue #1507). It used to leave them all, so a
   compacted partition gained one `.snapshot` file per segment roll until the
   broker restarted. The four-hour soak's `soak-compacted` partitions held 183
-  snapshots beside 2 segments after 15 minutes.
+  snapshots beside 2 segments after 15 minutes. A log open now also reclaims
+  a retired snapshot's `.deleted` tombstone, which a restart inside
+  `file.delete.delay.ms` used to leave behind for good, from retention as well
+  as from compaction.
 - The KRaft metadata log deletes the segments its cleaning retired once
   `file.delete.delay.ms` (60 s, as in Kafka) has passed (issue #1507). Since
   the delete delay took effect in #1335, a retired metadata segment was renamed
   to `.deleted` and left on disk until the node restarted, because nothing
   reaped the metadata log's retired files. The controller now reaps them after
-  each snapshot and once a minute.
+  each snapshot and once a minute, on a thread of its own, so a large unlink
+  never stalls the Raft engine.
 - The release image's SLSA provenance attestation carries its predicate
   again. Through v1.0.5, `release.yml` attested its SLSA v1 predicate as
   `--type slsaprovenance`, which cosign reads as SLSA v0.2, so every release

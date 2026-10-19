@@ -92,7 +92,10 @@ fn is_deleted_tombstone(value: &str) -> bool {
             !generation.is_empty() && generation.bytes().all(|b| b.is_ascii_digit())
         })
         .map_or(rest, |(path, _)| path);
-    ["log"]
+    // A retired producer-state snapshot is a tombstone too: retention and
+    // compaction retire it with its segment. It is not a stranded sidecar,
+    // because a live snapshot may sit at an offset with no `.log`.
+    ["log", "snapshot"]
         .into_iter()
         .chain(SIDECAR_EXTENSIONS)
         .any(|ext| canonical_base(rest, ext).is_some())
@@ -138,6 +141,11 @@ mod tests {
             p.join("00000000000000000010.log.deleted"),
             p.join("00000000000000000010.index.deleted"),
             p.join("00000000000000000010.timeindex.deleted"),
+            p.join("00000000000000000010.snapshot.deleted"),
+            // Deferred deletion's generation-numbered names, which a restart
+            // inside `file.delete.delay.ms` leaves behind.
+            p.join("00000000000000000030.log.7.deleted"),
+            p.join("00000000000000000030.snapshot.7.deleted"),
         ];
         for path in &tombstones {
             touch(path);

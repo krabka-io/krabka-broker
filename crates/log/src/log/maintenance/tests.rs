@@ -298,11 +298,23 @@ fn compaction_deletes_the_producer_snapshots_of_the_segments_it_replaces() {
     use crate::log::test_support::{
         KeyedRecord, compacting_segments, compaction_ctx, keyed_batch, set_segment_size,
     };
-    for file_delete_delay in [Time::ZERO, millis(60_000)] {
-        let TempLog { dir, mut log } = configured_test_log(LogConfig {
+    // How the retired files go: unlinked at once, reaped once their delay
+    // has passed, or reclaimed by the next open after a restart inside the
+    // delay, when the in-memory queue of pending deletions is gone. A reopen
+    // also writes a fresh snapshot at the log end, as Kafka's
+    // `rebuildProducerState` does.
+    for (how, file_delete_delay, restart, snapshots) in [
+        ("immediate deletion", Time::ZERO, false, vec![2]),
+        ("a reap past the delay", millis(60_000), false, vec![2]),
+        ("a restart inside the delay", millis(60_000), true, vec![
+            2, 3,
+        ]),
+    ] {
+        let config = LogConfig {
             file_delete_delay,
             ..compacting_segments()
-        });
+        };
+        let TempLog { dir, mut log } = configured_test_log(config.clone());
         for value in [b"old", b"new", b"end"] {
             log.append(&mut keyed_batch(0, &[KeyedRecord {
                 offset_delta: 0,
@@ -316,14 +328,17 @@ fn compaction_deletes_the_producer_snapshots_of_the_segments_it_replaces() {
         log.sync().unwrap();
         check!(
             bases_with_suffix(dir.path(), ".snapshot") == vec![1, 2],
-            "{file_delete_delay:?}: a snapshot at each roll"
+            "{how}: a snapshot at each roll"
         );
 
         // The pass groups by `segment.bytes`; widen it so that one pass
         // merges both sealed segments into a survivor at 0.
         set_segment_size(&mut log, krabka_units::mebibytes(1));
         log.compact(&compaction_ctx()).unwrap();
-        if let Some(deadline) = log
+        if restart {
+            drop(log);
+            log = Log::open(dir.path(), config).unwrap();
+        } else if let Some(deadline) = log
             .pending_deletes
             .iter()
             .map(|pending| pending.deadline)
@@ -332,13 +347,19 @@ fn compaction_deletes_the_producer_snapshots_of_the_segments_it_replaces() {
             log.maintain(deadline).unwrap();
         }
 
+        let tombstones = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".deleted"))
+            .count();
         check!(
             (
                 bases_with_suffix(dir.path(), ".log"),
                 bases_with_suffix(dir.path(), ".snapshot"),
+                tombstones,
                 log.log_end_offset(),
-            ) == (vec![0, 2], vec![2], Offset(3)),
-            "{file_delete_delay:?}"
+            ) == (vec![0, 2], snapshots, 0, Offset(3)),
+            "{how}"
         );
     }
 }
