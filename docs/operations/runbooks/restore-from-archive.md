@@ -135,8 +135,12 @@ step 3, from a record kept outside the cluster.
    could not be written, and a different target may work.
 
 3. **Boot a broker** on the restored directory. It is an ordinary krabka data
-   directory and needs no restore-specific configuration. It is a
-   single-node cluster, so start it with the internal-topic flags that
+   directory and needs no restore-specific configuration. The ACLs and SCRAM
+   credentials come back from the metadata checkpoint, but the listeners, the
+   TLS files and the `[authorization]` table come from the new broker's own
+   configuration. Give it the same ones as production, or the restored ACLs
+   have no authorizer to enforce them. It is a single-node cluster, so also
+   start it with the internal-topic flags that
    [Format the log directory](../deploy.md#format-the-log-directory) gives
    for fewer than three brokers. Without them the broker cannot create
    `__consumer_offsets`, and step 4 fails every time. Confirm that
@@ -154,10 +158,26 @@ step 3, from a record kept outside the cluster.
    ```sh
    krabka-backup restore-offsets --capture <id> \
      -b restored-broker:9092 \
-     --worm-key-id <id> --worm-public-key <path> \
-     --worm-expect-head <diskless-capture-head> \
      --archive-s3-bucket krabka-tier --archive-prefix prod/
    ```
+
+   On a secured restored cluster, add `--command-config <file>` with the backup
+   principal's client properties.
+   [Secured clusters](../backup-restore.md#secured-clusters) shows the file and
+   the ACLs that the principal needs.
+
+   Add the trust flags only when the capture holds a signed diskless boundary,
+   that is, when the backup ran `capture` with `--worm-signing-key-id`:
+
+   ```sh
+     --worm-key-id <id> --worm-public-key <path> \
+     --worm-expect-head <diskless-capture-head>
+   ```
+
+   With a signed capture the tool refuses to commit without all three. With a
+   capture that holds no diskless boundary, the tool refuses the flags: it
+   exits `5` and names the capture. The expected head must come from the
+   incident evidence, not from the archive being restored.
 
    The first run against a freshly booted broker can exit `6` with
    `FindCoordinator ... protocol error from server: 15`. That is
@@ -169,9 +189,6 @@ step 3, from a record kept outside the cluster.
    step 3.
 
    Run it with `--dry-run` first to see the positions it will write. It commits
-   only after a signed capture authenticates their digest when the backup used
-   capture signing. The expected head must come from the incident evidence,
-   not from the archive being restored. It commits
    as a simple consumer, so the coordinator fences it on any group that already
    has live members. That is why this step comes before the consumers: a group
    that is running has to be stopped for its position to be set.
@@ -183,8 +200,9 @@ step 3, from a record kept outside the cluster.
    replica of everything. Add brokers and reassign partitions with
    `kafka-reassign-partitions` as a separate, planned piece of work.
 
-7. **Capture immediately.** The restored cluster has a new cluster id, possibly
-   a new node identity, and a fresh metadata log. Run `krabka-backup capture`
+7. **Capture immediately.** The restored cluster has a fresh metadata log and
+   possibly a new node identity. It also has a new cluster id, unless step 2
+   passed `--cluster-id`. Run `krabka-backup capture`
    against it as soon as it serves traffic, so the next incident is not restored
    from the dead cluster's inputs.
 

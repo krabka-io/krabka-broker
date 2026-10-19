@@ -1,0 +1,184 @@
+"""Freeze a release candidate: the broker commit, its sibling pins and its image.
+
+A release candidate is three things that must not move while it is qualified:
+
+  * the krabka-broker commit, which main CI tested and `delivery` pushed,
+  * every sibling repository revision that commit's `[patch.crates-io]` block
+    pins, because those revisions are compiled into the image,
+  * the amd64 image digest that `delivery` recorded for the commit.
+
+This task reads all three at a commit, checks the digest artifact against the
+registry, and writes them as one record. Given a qualification manifest, it
+also lists each component whose revision differs from the pin the candidate
+compiles in. The ecosystem qualification workflow's `broker_revision` and
+`broker_digest` overrides replace the broker component only, so a drift line
+means the run would describe siblings that the image was not built from: give
+the workflow a reviewed manifest whose components name the pinned revisions.
+
+Nothing is pushed or tagged. The task reads the local git object store and the
+registry.
+
+    aspect freeze-candidate --commit 045b10d4 --delivery-digest delivery-image.digest
+    aspect freeze-candidate --commit 045b10d4 --delivery-digest delivery-image.digest \\
+      --manifest qualification/ecosystem-eight-gate-baseline.json --output candidate-freeze.json
+"""
+
+load("@std//hash.axl", "sha256")
+load("./check_delivery_image.axl", "checked_digest")
+
+IMAGE = "ghcr.io/krabka-io/krabka-broker"
+
+BROKER = "krabka-io/krabka-broker"
+
+_PATCH_HEADER = "[patch.crates-io]"
+
+_GITHUB = "https://github.com/"
+
+_HEX = "0123456789abcdef"
+
+def is_commit(revision):
+    """Whether `revision` is a full lowercase SHA-1, and not a named ref.
+
+    Cargo also takes a branch or tag name as `rev`, and a name can move after
+    qualification. Only a commit id freezes a sibling.
+    """
+    if len(revision) != 40:
+        return False
+    for char in revision.elems():
+        if char not in _HEX:
+            return False
+    return True
+
+def _quoted_after(line, key):
+    """The double-quoted value after `key = ` in `line`, or ""."""
+    start = line.find(key + " = \"")
+    if start < 0:
+        return ""
+    start += len(key) + 4
+    end = line.find("\"", start)
+    return line[start:end] if end > start else ""
+
+def patch_pins(lines):
+    """`({repository: revision}, problems)` from a root `Cargo.toml`.
+
+    Only git entries of `[patch.crates-io]` are pins; a `path` entry is this
+    repository. One repository pinned at two revisions is a problem, because
+    the candidate would then compile two versions of the same sibling.
+    """
+    pins = {}
+    problems = []
+    inside = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("["):
+            inside = stripped == _PATCH_HEADER
+            continue
+        if not inside or "git = " not in stripped:
+            continue
+        crate = stripped.split(" ", 1)[0]
+        url = _quoted_after(stripped, "git")
+        revision = _quoted_after(stripped, "rev")
+        if not url.startswith(_GITHUB) or not is_commit(revision):
+            problems.append("%s: a git patch needs a github.com URL and a full 40-character commit id as its rev" % crate)
+            continue
+        repository = url.removeprefix(_GITHUB).removesuffix(".git")
+        if pins.get(repository, revision) != revision:
+            problems.append("%s: %s is pinned at both %s and %s" % (crate, repository, pins[repository], revision))
+            continue
+        pins[repository] = revision
+    return pins, problems
+
+def pin_drift(pins, manifest):
+    """Components of `manifest` whose revision is not the candidate's pin.
+
+    A pinned sibling the manifest does not name is listed too, with an empty
+    manifest revision, so a new dependency is not qualified by omission.
+    """
+    named = {}
+    for component in manifest.get("components") or []:
+        named[component.get("repository", "")] = component.get("revision", "")
+    drift = []
+    for repository in sorted(pins.keys()):
+        if named.get(repository, "") != pins[repository]:
+            drift.append({"repository": repository, "pinned": pins[repository], "manifest": named.get(repository, "")})
+    return drift
+
+def lock_digest(readable, text):
+    """The `sha256:` digest of a `Cargo.lock`, or "" when there is none to pin."""
+    if not readable or not text.strip():
+        return ""
+    digest = sha256()
+    digest.update(text)
+    return "sha256:" + digest.hexdigest()
+
+def freeze_record(commit, digest, pins, lock_sha256, drift):
+    """The frozen candidate record."""
+    return {
+        "schema": 1,
+        "broker": {"repository": BROKER, "revision": commit, "image": IMAGE, "digest": digest},
+        "siblings": [{"repository": repository, "revision": pins[repository]} for repository in sorted(pins.keys())],
+        "cargo_lock_sha256": lock_sha256,
+        "manifest_drift": drift,
+    }
+
+def _exec(ctx, executable, argv):
+    result = (
+        ctx.std.process.command(executable)
+            .args(argv)
+            .current_dir(ctx.std.env.bazel_root_dir())
+            .stdout("piped")
+            .stderr("piped")
+            .spawn()
+            .wait_with_output()
+    )
+    return result.status.code, result.stdout, result.stderr.strip()
+
+def _impl(ctx: TaskContext) -> int:
+    code, commit, detail = _exec(ctx, "git", ["rev-parse", "--verify", ctx.args.commit + "^{commit}"])
+    commit = commit.strip()
+    if code != 0:
+        ctx.std.io.stderr.write("%s is not a local commit: %s\n" % (ctx.args.commit, detail))
+        return 2
+    _, manifest_text, _ = _exec(ctx, "git", ["show", commit + ":Cargo.toml"])
+    pins, problems = patch_pins(manifest_text.splitlines())
+    code, lock, _ = _exec(ctx, "git", ["show", commit + ":Cargo.lock"])
+    lock_sha256 = lock_digest(code == 0, lock)
+    if not lock_sha256:
+        problems.append("%s has no readable Cargo.lock, so the record cannot pin the dependency set" % commit)
+
+    image_digest = ""
+    if ctx.args.delivery_digest:
+        expected = ctx.std.fs.read_to_string(ctx.args.delivery_digest)
+        _, observed, _ = _exec(ctx, "docker", ["buildx", "imagetools", "inspect", "%s:%s" % (IMAGE, commit), "--format", "{{.Manifest.Digest}}"])
+        image_digest = checked_digest(expected, observed)
+        if not image_digest:
+            problems.append("%s:%s is missing or is not the delivery artifact's digest" % (IMAGE, commit))
+    else:
+        problems.append("no --delivery-digest: a candidate is frozen only with main CI's delivery-image artifact")
+
+    drift = []
+    if ctx.args.manifest:
+        drift = pin_drift(pins, json.decode(ctx.std.fs.read_to_string(ctx.args.manifest)))
+
+    record = freeze_record(commit, image_digest, pins, lock_sha256, drift)
+    if ctx.args.output:
+        ctx.std.fs.write(ctx.args.output, json.encode(record) + "\n")
+    ctx.std.io.stdout.write("%s %s %s\n" % (BROKER, commit, image_digest or "(no verified digest)"))
+    for repository in sorted(pins.keys()):
+        ctx.std.io.stdout.write("  %s %s\n" % (repository, pins[repository]))
+    for entry in drift:
+        ctx.std.io.stdout.write("DRIFT %s: pinned %s, manifest %s\n" % (entry["repository"], entry["pinned"], entry["manifest"] or "(absent)"))
+    for problem in problems:
+        ctx.std.io.stderr.write("FAIL %s\n" % problem)
+    return 1 if problems else 0
+
+freeze_candidate = task(
+    summary = "Record a release candidate's broker commit, sibling pins and delivery image digest",
+    implementation = _impl,
+    args = {
+        "commit": args.string(default = "HEAD", description = "The krabka-broker commit main CI tested."),
+        "delivery_digest": args.string(default = "", description = "main CI's delivery-image.digest artifact for that commit."),
+        "manifest": args.string(default = "", description = "A qualification manifest to compare the sibling pins against."),
+        "output": args.string(default = "", description = "File to write the frozen candidate record to."),
+    },
+)

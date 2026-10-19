@@ -206,6 +206,20 @@ aspect check-delivery-image --expected delivery-image.digest \
 
 The GitHub release carries `sbom.cdx.json` for the same build.
 
+`aspect verify-release` does all of these checks from outside, with cosign 3,
+and also checks what the attestations say: the provenance must name the tagged
+commit and the tested amd64 digest, and the SBOM attestation must be the
+uploaded `sbom.cdx.json`. It reads and writes nothing in the registry or the
+release:
+
+```sh
+aspect verify-release --tag v0.5.2 --delivery-digest delivery-image.digest
+```
+
+[Release candidate qualification](release-candidate-qualification.md) gives
+the gates a candidate passes before its stack is described as
+ecosystem-qualified, and the result of this check for v1.0.5.
+
 ## Crates.io
 
 The same tag push also starts

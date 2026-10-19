@@ -26,6 +26,42 @@ one, and it names the target node as the leader and sole replica of every
 partition. Record the cluster id of every production cluster somewhere outside
 it, and pass it to the restore.
 
+### Topics the archive does not hold
+
+The archive holds only the topics that tier their segments, the topics with
+`remote.storage.enable=true`. A topic that does not tier is not in the
+archive, and `krabka-restore` does not bring it back. Two kinds of topic
+cannot tier at all:
+
+- **A compacted topic.** krabka refuses `remote.storage.enable` together with
+  `cleanup.policy=compact`, as Kafka does. Every compacted user topic is
+  outside the archive. Examples are a table of latest values per key, a
+  Kafka Streams changelog, and the internal topics of Kafka Connect.
+- **A schema registry's `_schemas` topic.** It is compacted. A restored topic
+  of Avro, Protobuf or JSON Schema records carries schema ids that no
+  registry can resolve until the registry has its schemas back.
+
+`krabka-backup` captures none of these. The group offsets are the only
+compacted data that it captures. Protect each such topic separately, before
+the day you need it:
+
+- Mirror it to a second cluster with MirrorMaker 2, as
+  [Migrate from Apache Kafka](migrate-from-kafka.md) describes for a
+  migration. The mirror is a copy of the topic, not a point-in-time backup,
+  so a bad write reaches it too.
+- Or rebuild it from its source of truth. A Kafka Streams changelog rebuilds
+  from the restored input topics when the application starts with a new
+  `application.id`, if those topics still hold every record that the state
+  needs. A schema registry can register its schemas again from the schema
+  files that its producers build from. A plain registration gives a schema a
+  new id, and the restored records name schemas by their old ids. Use a
+  registry mode that registers a schema under a given id, such as the
+  `IMPORT` mode of Confluent Schema Registry, and check every id.
+
+A restore rehearsal checks these topics as well as the archive. Read one
+record from each restored tiered topic, decode it with the restored registry,
+and compare it with production.
+
 ## Capture the inputs
 
 `krabka-backup capture` copies all three into the archive, beside the segments
@@ -110,6 +146,75 @@ Credentials work the way they do for the broker's own tiered storage. Leave
 `--archive-s3-access-key-id` and `--archive-s3-secret-access-key` off and the
 AWS credential chain applies, so a capture under an instance role or under
 Workload Identity puts no secret on a command line.
+
+### Secured clusters
+
+On a cluster with TLS, SASL or an authorizer, pass a Kafka client-properties
+file with `--command-config`, as for the JVM tools. `capture` and
+`restore-offsets` read the same file. The tool reads `security.protocol`,
+`sasl.mechanism` and `sasl.jaas.config`, and it reads TLS trust and client
+identity from PEM files:
+
+```properties
+security.protocol=SASL_SSL
+ssl.truststore.type=PEM
+ssl.truststore.location=/etc/krabka/backup/ca.pem
+sasl.mechanism=SCRAM-SHA-512
+sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="backup" password="<password>";
+```
+
+For mutual TLS, set `security.protocol=SSL` and add
+`ssl.keystore.type=PEM`, `ssl.keystore.location=<client certificate PEM>` and
+`ssl.key.location=<client private-key PEM>`. The tool never copies the file
+into the archive or prints it. Keep its permissions tight, because it holds
+the password or the key path.
+
+Give the backup principal only what the capture reads:
+
+| Resource | Operations | Why |
+| :--- | :--- | :--- |
+| Each captured group | `Describe` | Read the committed offsets. |
+| Each captured topic | `Describe`, `Read` | Resolve the partitions of the committed offsets. |
+| Each diskless topic | `DescribeConfigs` | Keep empty diskless partitions in the recovery topology. |
+| `__diskless_wal_index` | `Describe`, `Read` | Read the diskless index. A capture never writes to it. |
+
+Restoring offsets into the restored cluster needs `Describe` and `Read` on
+each captured group and each captured topic. Grant every row on the group and
+topic prefixes that the backup policy covers, not on `*`.
+
+In Kubernetes, put the properties file and the CA in a Secret, and mount it
+into the `CronJob` beside the data volume. The changes to the example above:
+
+```yaml
+              args:
+                - capture
+                - --log-dir=/var/lib/krabka
+                - --bootstrap-server=krabka-0.krabka:9094
+                - --command-config=/etc/krabka/backup/client.properties
+                - --archive-s3-bucket=krabka-tier
+                - --archive-s3-region=eu-west-1
+                - --archive-prefix=prod/
+              volumeMounts:
+                - name: data
+                  mountPath: /var/lib/krabka
+                  readOnly: true
+                - name: backup-client
+                  mountPath: /etc/krabka/backup
+                  readOnly: true
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: data-krabka-0
+            - name: backup-client
+              secret:
+                # Holds client.properties and ca.pem, and for mutual TLS the
+                # client certificate and key.
+                secretName: krabka-backup-client
+```
+
+Point `--bootstrap-server` at the listener that the properties file speaks
+to. On the three-node example in [Deploy](deploy.md#configure), that is the
+`CLIENT` listener on 9094.
 
 ## How often
 
@@ -232,8 +337,11 @@ The restore's contract is stated in full in
 What does not come back at all: the cluster id, unless it is passed; the node
 identity and the replica assignment, which the restore rewrites to the target
 node; in-flight transaction state, which lives in the never-tiered
-`__transaction_state`; and any classic active-segment or diskless uncommitted
-tail beyond the reported capture boundary.
+`__transaction_state`; every topic that does not tier, compacted topics and
+`_schemas` among them, as
+[Topics the archive does not hold](#topics-the-archive-does-not-hold) says;
+and any classic active-segment or diskless uncommitted tail beyond the
+reported capture boundary.
 
 ## Related
 
