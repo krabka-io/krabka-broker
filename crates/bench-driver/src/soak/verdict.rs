@@ -34,8 +34,7 @@ pub struct Verdict {
     pub deadlines: Vec<DeadlineVerdict>,
     pub fault_problems: Vec<FaultProblem>,
     pub budgets: Vec<BudgetVerdict>,
-    /// What a lifecycle contract adds: see
-    /// [`judge_lifecycle`](super::lifecycle::judge_lifecycle). Empty for any
+    /// What a lifecycle contract adds: see [`judge_lifecycle`]. Empty for any
     /// other profile.
     #[serde(default)]
     pub lifecycle: Vec<String>,
