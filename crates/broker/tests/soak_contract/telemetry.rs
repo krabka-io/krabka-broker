@@ -537,7 +537,10 @@ mod tests {
             NodeSummary, Progress, Telemetry, TelemetryRow, TelemetrySummary, Usage, gauge,
             parse_percent, parse_size, parse_stats, progress, raft_state, summarize,
         },
-        crate::topology::{Node, Nodes},
+        crate::{
+            cluster::Launch,
+            topology::{Node, Nodes},
+        },
         assert2::{assert, check},
         std::{collections::BTreeMap, sync::Arc, time::Duration},
     };
@@ -782,6 +785,8 @@ krabka_broker_offline_partitions_count 0
             // The discard port: nothing listens, so the scrape is refused.
             metrics_url: "http://127.0.0.1:9/metrics".to_owned(),
             root: root.path().to_path_buf(),
+            launch: Launch::default(),
+            tls: None,
         }]));
         let telemetry =
             Telemetry::spawn(nodes, evidence.path(), Duration::from_millis(20), |names| {

@@ -61,6 +61,23 @@ fn synthetic_run_is_judged(path: &Path) -> Result<(), String> {
             check!(report.passed, "{:#?}", report.problems);
             check!(!judge_self_check(&contract, &clean).passed);
         }
+        Profile::Lifecycle => {
+            let verdict = judge(&contract, &clean);
+            check!(verdict.passed(), "{:#?}", verdict.failures());
+            check!(
+                clean.checkpoints.len() == verdict.schedule.len(),
+                "every transition of a lifecycle contract leaves a checkpoint"
+            );
+            // A checkpoint that loses one record fails the run, so the
+            // per-transition reconciliation cannot pass vacuously.
+            let mut lost = clean.clone();
+            let read = &mut lost.checkpoints[0].records[0];
+            let first = read.acknowledged.iter().next().unwrap_or_default();
+            read.reader.seen.remove(first);
+            read.reader.latest_by_key.clear();
+            let failures = judge(&contract, &lost).lifecycle;
+            check!(failures.len() == 1, "{failures:#?}");
+        }
     }
     Ok(())
 }

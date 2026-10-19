@@ -136,6 +136,13 @@ pull_image = use_repo_rule("@rules_img//img:pull.bzl", "pull")
         # (sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996)
         # carries five platforms the runner never runs.
         ("prometheus_3_5_0", "mirror.gcr.io", "prom/prometheus", "v3.5.0", "sha256:8672a850efe2f9874702406c8318704edb363587f8c2ca88586b4c8fdb5cea24"),
+        # The source release of `bench/soak/lifecycle.yaml`: krabka-broker v1.0.5,
+        # whose image soak_contract formats a cluster on, rolls back to, and
+        # proves refuses a log finalized at a newer `metadata.version`. The
+        # linux/amd64 manifest of the signed index the contract names
+        # (sha256:2a81d1ba38de4e8ffb032fedf67952845185158a7607ac76ba38fa162dc37e50),
+        # for the reason fake_gcs_server gives. Move it with the contract.
+        ("krabka_broker_1_0_5", "ghcr.io", "krabka-io/krabka-broker", "v1.0.5", "sha256:8c515d335e89455525fb1ad4d9986769c9dd18e44fb259250919c6e7cb53bd84"),
         ("kcat_1_7_1", "mirror.gcr.io", "edenhill/kcat", "1.7.1", "sha256:8f16a5fed099931ce1122420b7473efe467ff9841d53680b99db25dd1723d711"),
         # The 1.x half of librdkafka_conformance. The 2.x half is
         # //bazel/images:kcat_librdkafka_2x, built here from an apko lock,

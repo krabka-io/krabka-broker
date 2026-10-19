@@ -1042,6 +1042,53 @@ check forward-handoff grep -F 'our_store_decodes_cp_schema_registry_records ... 
 check reverse-handoff grep -F 'cp_replays_krabka_schema_registry_records ... ok' "$evidence/reverse.log"
 """
 
+# The loaded lifecycle of issue 1396: the candidate broker image against the
+# newest 1.0.x release image that `bench/soak/lifecycle.yaml` pins by digest,
+# under the sustained load of the soak contract's executor. The executor and
+# the contract come from the adapter tree ($4), the reviewed checkout that runs
+# this task, so the candidate is exercised only as the image its digest names.
+# `docs/qualification.md` states the lifecycle contract.
+_LOADED_LIFECYCLE = r"""
+adapter=$4
+contract="$adapter/bench/soak/lifecycle.yaml"
+test -f "$contract"
+git -C "$adapter" rev-parse HEAD > "$evidence/adapter-revision.txt"
+cp "$contract" "$evidence/lifecycle-contract.yaml"
+# Every broker advertises host.docker.internal; the host-side clients need it
+# to be loopback, as the soak fixture checks before it boots.
+grep -Eq '^127\.0\.0\.1[[:space:]]+host\.docker\.internal' /etc/hosts
+source_image=$(sed -n 's/^    image: //p' "$contract")
+case "$source_image" in *@sha256:*) ;; *) echo "the contract's source image is not pinned by digest" >&2; exit 1 ;; esac
+docker pull "$source_image" >&2
+docker image inspect "$source_image" > "$evidence/source-image.json"
+lifecycle_test() {
+  local name=$1 out=$2
+  mkdir -p "$out"
+  (cd "$adapter" && env CARGO_INCREMENTAL=0 CARGO_PROFILE_TEST_DEBUG=0 \
+    KRABKA_BROKER_IMAGE="$broker_image" KRABKA_SOAK_CONTRACT="$contract" KRABKA_SOAK_EVIDENCE_DIR="$out" \
+    cargo test --locked -p krabka-broker --test soak_contract -- --ignored --exact --nocapture "$name")
+}
+lifecycle_test the_sustained_load_contract_holds "$evidence/lifecycle" 2>&1 | tee "$evidence/lifecycle.log"
+check loaded-lifecycle grep -F 'test the_sustained_load_contract_holds ... ok' "$evidence/lifecycle.log"
+verdict="$evidence/lifecycle/verdict.json"
+run="$evidence/lifecycle/evidence.json"
+check lifecycle-verdict jq -e '.profile == "lifecycle" and .contract_errors == [] and .lifecycle == [] and .reconciliation.findings == [] and ([.deadlines[] | select(.outcome != "met")] == [])' "$verdict"
+transitions() { jq -e --arg kind "$1" --argjson count "$2" '[.faults[] | select(.kind == $kind)] | length == $count' "$run"; }
+# Broker by broker: after the n-th upgrade exactly n brokers run the target,
+# and after the n-th rollback exactly n run the source again.
+on_side() { jq -e --arg prefix "$1" --arg side "$2" '.releases[$side] as $image | [.checkpoints[] | select(.fault | startswith($prefix)) | [.images[] | select(. == $image)] | length] == [1, 2, 3, 4]' "$run"; }
+check rolling-upgrade on_side upgrade- target
+check certificate-rotation transitions certificate_rotation 4
+check reassignment transitions reassignment 1
+check supported-rollback on_side rollback- source
+check rollback-eligible jq -e 'all(.checkpoints[]; .rollback.rollback == "supported")' "$run"
+check checkpoint-reconciliation jq -e '[.checkpoints[] | select(.config_mismatches != [])] == []' "$run"
+jq '{source: .releases.source, target: .releases.target, source_supports, transitions: [.faults[] | {id, kind, target, role, held_ms: (.cleared_unix_ms - .injected_unix_ms)}], recoveries: [.recoveries[] | {fault, check, took_ms: (if .recovered_unix_ms then .recovered_unix_ms - .from_unix_ms else null end)}], checkpoints: [.checkpoints[] | {fault, images, finalized, rollback, acknowledged: [.records[] | {path, acknowledged: (.acknowledged | length)}]}], paths}' "$run" > "$evidence/disruption.json"
+lifecycle_test an_unsupported_rollback_is_refused_before_it_damages_data "$evidence/unsupported-rollback" 2>&1 | tee "$evidence/unsupported-rollback.log"
+check unsupported-rollback-refused grep -F 'test an_unsupported_rollback_is_refused_before_it_damages_data ... ok' "$evidence/unsupported-rollback.log"
+check unsupported-rollback-undamaged jq -e '.source_exit_code != 0 and .changed == [] and .record_read_back' "$evidence/unsupported-rollback/unsupported-rollback.json"
+"""
+
 _SNAPSHOT_RETENTION = r"""
 java=$(source_repo krabka-streams-java)
 (cd "$java" && bazel test //krabka-streams-columnar:tests --test_output=all --nocache_test_results) 2>&1 | tee "$evidence/retention.log"
@@ -1064,6 +1111,7 @@ def gate_script(name):
         "schema-evolution": _SCHEMA_EVOLUTION,
         "registry-migration": _REGISTRY_MIGRATION,
         "snapshot-retention": _SNAPSHOT_RETENTION,
+        "loaded-lifecycle": _LOADED_LIFECYCLE,
     }[name]
 
 def run_gate(ctx, document, identity, name, digest):
@@ -1092,12 +1140,13 @@ def run_gate(ctx, document, identity, name, digest):
     # external timeout also bounds hung helper processes outside Actions.
     result = ctx.std.process.command("bash").args([
         "-c",
-        "set -o pipefail; timeout 150m bash \"$1\" \"$2\" \"$3\" \"$4\" 2>&1 | tee \"$3/run.log\"",
+        "set -o pipefail; timeout 150m bash \"$1\" \"$2\" \"$3\" \"$4\" \"$5\" 2>&1 | tee \"$3/run.log\"",
         "qualification",
         output + "/commands.txt",
         output + "/candidate.json",
         output,
         work,
+        root,
     ]).spawn().wait()
     if result.code != 0:
         ctx.std.io.stderr.write("qualification failed; retained evidence in " + output + "; scratch " + work + "\n")

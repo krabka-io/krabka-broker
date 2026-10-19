@@ -8,7 +8,7 @@
 //! another node.
 
 use {
-    crate::probe,
+    crate::{cluster::Launch, probe},
     krabka_bench_driver::soak::contract::Target,
     krabka_client_core::{Client, ProtocolRequest},
     krabka_protocol::owned::{
@@ -186,6 +186,10 @@ pub(crate) struct Node {
     pub(crate) metrics_url: String,
     /// The host side of the node's `/var/lib/krabka` mount.
     pub(crate) root: PathBuf,
+    /// How the node is started, for a roll to start it from another image.
+    pub(crate) launch: Launch,
+    /// The host address of the node's TLS listener, when it has one.
+    pub(crate) tls: Option<String>,
 }
 
 /// The cluster's nodes, and a client pinned to each.

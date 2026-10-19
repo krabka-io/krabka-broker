@@ -13,6 +13,7 @@ use {
         },
         evidence::Evidence,
         ledger::SeqSet,
+        lifecycle::judge_lifecycle,
         reconcile::{FindingKind, Reconciliation, reconcile},
         schedule::{ScheduledFault, expand},
     },
@@ -33,6 +34,10 @@ pub struct Verdict {
     pub deadlines: Vec<DeadlineVerdict>,
     pub fault_problems: Vec<FaultProblem>,
     pub budgets: Vec<BudgetVerdict>,
+    /// What a lifecycle contract adds: see [`judge_lifecycle`]. Empty for any
+    /// other profile.
+    #[serde(default)]
+    pub lifecycle: Vec<String>,
 }
 
 impl Verdict {
@@ -72,6 +77,11 @@ impl Verdict {
                     )
                 }),
         );
+        lines.extend(
+            self.lifecycle
+                .iter()
+                .map(|failure| format!("lifecycle: {failure}")),
+        );
         lines
     }
 
@@ -108,8 +118,11 @@ pub fn judge(contract: &Contract, evidence: &Evidence) -> Verdict {
             evidence.seed, contract.seed
         ));
     }
-    if contract.profile == Profile::Soak && !evidence.injected.is_empty() {
-        contract_errors.push("a soak's evidence records injected losses".to_owned());
+    if contract.profile != Profile::SelfCheck && !evidence.injected.is_empty() {
+        contract_errors.push(format!(
+            "a {:?} run's evidence records injected losses",
+            contract.profile
+        ));
     }
     let schedule = expand(contract).unwrap_or_default();
     let (deadlines, fault_problems) = check_recoveries(contract, &schedule, evidence);
@@ -119,6 +132,7 @@ pub fn judge(contract: &Contract, evidence: &Evidence) -> Verdict {
         contract_errors,
         reconciliation: reconcile(contract, &schedule, evidence),
         budgets: check_budgets(contract, evidence),
+        lifecycle: judge_lifecycle(contract, &schedule, evidence),
         schedule,
         deadlines,
         fault_problems,

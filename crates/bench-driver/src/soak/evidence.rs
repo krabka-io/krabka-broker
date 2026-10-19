@@ -15,6 +15,7 @@ use {
     super::{
         contract::{Isolation, RecoveryCheck, Semantics},
         ledger::SeqSet,
+        lifecycle::{Checkpoint, LevelRange},
     },
     krabka_units::{prelude::*, serde_units},
     serde::{Deserialize, Serialize},
@@ -48,6 +49,18 @@ pub struct Evidence {
     /// Records a self-check deleted from the cluster on purpose. Empty in a soak.
     #[serde(default)]
     pub injected: Vec<InjectedLoss>,
+    /// A lifecycle run's release images by side, `source` and `target`, as
+    /// `docker inspect` names them: the identity a rolled broker's image is
+    /// compared with.
+    #[serde(default)]
+    pub releases: BTreeMap<String, String>,
+    /// The feature ranges the source release advertised in `ApiVersions`
+    /// when a lifecycle run booted on it.
+    #[serde(default)]
+    pub source_supports: BTreeMap<String, LevelRange>,
+    /// What a lifecycle run found after each of its transitions.
+    #[serde(default)]
+    pub checkpoints: Vec<Checkpoint>,
 }
 
 /// One producer's account of what it sent.
@@ -150,6 +163,9 @@ pub struct FaultRecord {
     /// What that broker was when the fault started: `controller`, `leader`,
     /// `follower`, or a plain `broker`.
     pub role: String,
+    /// The node id of that broker, once the target resolved.
+    #[serde(default)]
+    pub node: Option<i32>,
     pub injected_unix_ms: i64,
     /// When cleanup completed. `None` when it never did.
     pub cleared_unix_ms: Option<i64>,

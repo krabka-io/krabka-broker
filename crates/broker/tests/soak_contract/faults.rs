@@ -8,6 +8,11 @@
 //! | `slow_follower`, `cpu_throttle` | `docker update --cpus <cpus>` | `docker update --cpu-quota -1` |
 //! | `slow_follower`, `netem` | `tc qdisc add dev eth0 root netem delay ...` in the broker's network namespace | `tc qdisc del dev eth0 root` |
 //! | `disk_pressure` | a ballast file in the broker's data root | removing it |
+//! | `roll` | `docker stop -t 60`, then `docker rm`: the data root is a bind mount and stays | `docker run` of the same node from the other release's image |
+//!
+//! A `certificate_rotation` and a `reassignment` are not injected here: they
+//! are requests to the running cluster, which the executor sends itself (see
+//! the `transitions` module).
 //!
 //! `docker update --cpus 0` does not lift a quota: the daemon keeps the
 //! `NanoCpus` it had and the cgroup keeps its CFS quota. `--cpu-quota -1`
@@ -42,11 +47,33 @@ const BALLAST: &str = "soak-ballast";
 /// How a fault is undone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Cleanup {
-    Resume { container: String },
-    Start { container: String },
-    Uncap { container: String, host_cpus: usize },
-    DropQdisc { container: String, image: String },
-    RemoveBallast { path: PathBuf },
+    Resume {
+        container: String,
+    },
+    Start {
+        container: String,
+    },
+    Uncap {
+        container: String,
+        host_cpus: usize,
+    },
+    DropQdisc {
+        container: String,
+        image: String,
+    },
+    RemoveBallast {
+        path: PathBuf,
+    },
+    /// Start node `container` again: `argv` is its whole `docker run`. A
+    /// container left behind by a half-done roll is removed first.
+    Relaunch {
+        container: String,
+        argv: Vec<String>,
+    },
+    /// Nothing to undo; `what` says why.
+    Nothing {
+        what: String,
+    },
 }
 
 impl Cleanup {
@@ -78,8 +105,22 @@ impl Cleanup {
                 }
                 Err(error) => Err(format!("remove {}: {error}", path.display())),
             },
+            Cleanup::Relaunch { container, argv } => {
+                // Absent after a completed `docker rm`, which is the usual case.
+                let _ = docker_try(&["rm", "--force", container]);
+                let args: Vec<&str> = argv.iter().map(String::as_str).collect();
+                docker_try(&args).map(|_| format!("docker {}", relaunched_image(argv)))
+            }
+            Cleanup::Nothing { what } => Ok(what.clone()),
         }
     }
+}
+
+/// The image a relaunch's `docker run` arguments start, for the fault log.
+fn relaunched_image(argv: &[String]) -> String {
+    argv.iter()
+        .find(|arg| arg.contains("@sha256:") || arg.contains("krabka-broker:"))
+        .map_or_else(|| "run".to_owned(), |image| format!("run {image}"))
 }
 
 /// A fault in place. [`FaultGuard::clear`] undoes it; dropping the guard
@@ -90,7 +131,7 @@ pub(crate) struct FaultGuard {
 }
 
 impl FaultGuard {
-    fn new(cleanup: Cleanup) -> Self {
+    pub(crate) fn new(cleanup: Cleanup) -> Self {
         Self {
             cleanup: Some(cleanup),
         }
@@ -172,7 +213,8 @@ pub(crate) struct Injected {
 }
 
 /// Inject `kind` into the broker running as `container`, whose data root is
-/// `root` on the host.
+/// `root` on the host. `relaunch` is the `docker run` a `roll` starts the node
+/// again with, from the image of the release it rolls to.
 ///
 /// Blocking: it runs Docker and writes files, so callers run it off the async
 /// workers.
@@ -181,9 +223,30 @@ pub(crate) fn inject(
     container: &str,
     root: &Path,
     host: &HostResources,
+    relaunch: Option<Vec<String>>,
 ) -> Result<Injected, String> {
     let container = container.to_owned();
     match kind {
+        FaultKind::Roll { to } => {
+            let argv =
+                relaunch.ok_or_else(|| format!("no image to roll {container} to the {to}"))?;
+            docker_try(&["stop", "--time", "60", &container])?;
+            // From here the node is down: the guard starts it again, on the
+            // other image, whatever happens next.
+            let guard = FaultGuard::new(Cleanup::Relaunch {
+                container: container.clone(),
+                argv,
+            });
+            docker_try(&["rm", &container])?;
+            Ok(Injected {
+                guard,
+                detail: format!("docker stop --time 60 and docker rm, to roll to the {to}"),
+            })
+        }
+        FaultKind::CertificateRotation | FaultKind::Reassignment { .. } => Err(format!(
+            "a {} is a request to the cluster, which the executor sends",
+            kind.name()
+        )),
         FaultKind::Pause { .. } => {
             let guard = FaultGuard::new(Cleanup::Resume {
                 container: container.clone(),

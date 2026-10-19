@@ -11,6 +11,7 @@
 //! `64KiB`, `15s`, `2000/s`.
 
 use {
+    super::lifecycle::{Lifecycle, Side},
     crate::scenario::{Acks, Compression, bounded},
     krabka_units::{fmt::Human as _, prelude::*, serde_units},
     serde::{Deserialize, Serialize},
@@ -30,6 +31,11 @@ pub enum Profile {
     /// one missing record and one missed deadline and passes only when both,
     /// and nothing else, are detected.
     SelfCheck,
+    /// A run whose verdict is evidence about upgrading, reconfiguring and
+    /// rolling back release images under load. Its plan holds lifecycle
+    /// transitions, and each one must reconcile at its checkpoint as well as at
+    /// the end. See [`super::lifecycle`].
+    Lifecycle,
 }
 
 /// A sustained-load and failure contract.
@@ -57,6 +63,10 @@ pub struct Contract {
     pub faults: Vec<FaultPlan>,
     #[serde(default)]
     pub self_check: Option<SelfCheck>,
+    /// The release a `lifecycle` contract starts on. Left out of the encoding
+    /// when absent, so the digest of a contract without one is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifecycle: Option<Lifecycle>,
 }
 
 /// The machine a run is entitled to. Recorded so that a result names the
@@ -253,6 +263,23 @@ pub struct RecoveryDeadlines {
     /// From `SIGCONT` until every partition's ISR is its full replica set again.
     #[serde(with = "bounded::positive_time")]
     pub catch_up_after_pause: Time,
+    /// From a certificate rotation until the rotated broker serves the new
+    /// certificate. Required when the plan rotates one.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "serde_units::human::option_time"
+    )]
+    pub certificate_rotation: Option<Time>,
+    /// From a reassignment until it is complete: no partition of the path is
+    /// still reassigning, each has the planned replicas, and its ISR is full.
+    /// Required when the plan reassigns.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "serde_units::human::option_time"
+    )]
+    pub reassignment: Option<Time>,
 }
 
 /// A recovery the harness measures after a fault.
@@ -263,10 +290,14 @@ pub enum RecoveryCheck {
     IsrRejoin,
     ControllerFailover,
     CatchUpAfterPause,
+    CertificateServed,
+    ReassignmentComplete,
 }
 
 impl RecoveryCheck {
-    /// The deadline the contract gives this check.
+    /// The deadline the contract gives this check. A lifecycle check whose
+    /// deadline the contract left out has none to meet: [`Contract::validate`]
+    /// refuses a plan that needs it.
     #[must_use]
     pub fn deadline(self, deadlines: &RecoveryDeadlines) -> Time {
         match self {
@@ -274,6 +305,10 @@ impl RecoveryCheck {
             RecoveryCheck::IsrRejoin => deadlines.isr_rejoin,
             RecoveryCheck::ControllerFailover => deadlines.controller_failover,
             RecoveryCheck::CatchUpAfterPause => deadlines.catch_up_after_pause,
+            RecoveryCheck::CertificateServed => {
+                deadlines.certificate_rotation.unwrap_or(Time::ZERO)
+            }
+            RecoveryCheck::ReassignmentComplete => deadlines.reassignment.unwrap_or(Time::ZERO),
         }
     }
 }
@@ -285,6 +320,8 @@ impl fmt::Display for RecoveryCheck {
             RecoveryCheck::IsrRejoin => "isr_rejoin",
             RecoveryCheck::ControllerFailover => "controller_failover",
             RecoveryCheck::CatchUpAfterPause => "catch_up_after_pause",
+            RecoveryCheck::CertificateServed => "certificate_served",
+            RecoveryCheck::ReassignmentComplete => "reassignment_complete",
         })
     }
 }
@@ -348,6 +385,22 @@ pub enum FaultKind {
         /// `SIGTERM` and a controlled shutdown when true, `SIGKILL` when false.
         graceful: bool,
     },
+    /// A lifecycle transition: stop the target with a controlled shutdown,
+    /// and after the fault's duration start it again, on the same data, from
+    /// the image of the `to` release.
+    Roll { to: Side },
+    /// A lifecycle transition: give the target's TLS listener a certificate
+    /// from a new CA, with the same DN and SANs, and a truststore that holds
+    /// both CAs. The files are rewritten in place and the listener's
+    /// keystore and truststore are altered to them, which the broker reloads
+    /// without a restart.
+    CertificateRotation,
+    /// A lifecycle transition: drain the target of `path`. Every replica of
+    /// the path that the target holds moves, with
+    /// `AlterPartitionReassignments`, to a broker that holds no replica of that
+    /// partition, so the cluster needs more brokers than the replication
+    /// factor.
+    Reassignment { path: String },
 }
 
 impl FaultKind {
@@ -359,6 +412,9 @@ impl FaultKind {
             FaultKind::SlowFollower { .. } => "slow_follower",
             FaultKind::Pause { .. } => "pause",
             FaultKind::Restart { .. } => "restart",
+            FaultKind::Roll { .. } => "roll",
+            FaultKind::CertificateRotation => "certificate_rotation",
+            FaultKind::Reassignment { .. } => "reassignment",
         }
     }
 
@@ -370,6 +426,7 @@ impl FaultKind {
         matches!(
             self,
             FaultKind::Restart { .. }
+                | FaultKind::Roll { .. }
                 | FaultKind::Pause {
                     intends_failover: true
                 }
@@ -390,12 +447,14 @@ impl FaultKind {
                 RecoveryCheck::LeaderFailover,
                 RecoveryCheck::CatchUpAfterPause,
             ],
-            FaultKind::Restart { .. } => {
+            FaultKind::Restart { .. } | FaultKind::Roll { .. } => {
                 vec![RecoveryCheck::LeaderFailover, RecoveryCheck::IsrRejoin]
             }
             FaultKind::SlowFollower { .. } | FaultKind::DiskPressure { .. } => {
                 vec![RecoveryCheck::IsrRejoin]
             }
+            FaultKind::CertificateRotation => vec![RecoveryCheck::CertificateServed],
+            FaultKind::Reassignment { .. } => vec![RecoveryCheck::ReassignmentComplete],
         };
         if self.moves_leadership() && target == Target::Controller {
             checks.push(RecoveryCheck::ControllerFailover);
@@ -552,6 +611,7 @@ impl Contract {
         self.validate_clients(&mut fail);
         self.validate_paths(&mut fail);
         self.validate_faults(&mut fail);
+        self.validate_transitions(&mut fail);
         self.validate_profile(&mut fail);
         if let Err(schedule_errors) = super::schedule::expand(self) {
             errors.extend(schedule_errors);
@@ -732,7 +792,75 @@ impl Contract {
         }
     }
 
+    /// The rules for lifecycle transitions: a `roll` needs a declared source
+    /// and a fixed broker, a rotation and a reassignment need their deadlines,
+    /// and a reassignment needs a path and a broker that holds none of it.
+    fn validate_transitions(&self, fail: &mut impl FnMut(String)) {
+        for plan in &self.faults {
+            let name = &plan.name;
+            let is_transition = matches!(
+                plan.fault,
+                FaultKind::Roll { .. }
+                    | FaultKind::CertificateRotation
+                    | FaultKind::Reassignment { .. }
+            );
+            if is_transition && self.profile != Profile::Lifecycle {
+                fail(format!(
+                    "fault `{name}` is a lifecycle transition, which only a lifecycle contract runs"
+                ));
+            }
+            if is_transition && plan.every.is_some() {
+                fail(format!(
+                    "transition `{name}` repeats; a lifecycle transition happens once"
+                ));
+            }
+            if is_transition && !matches!(plan.target, Target::Broker(_)) {
+                fail(format!(
+                    "transition `{name}` must target a broker by index, so the plan says which \
+                     broker moves and in what order"
+                ));
+            }
+            match &plan.fault {
+                FaultKind::CertificateRotation if self.deadlines.certificate_rotation.is_none() => {
+                    fail(format!(
+                        "transition `{name}` rotates a certificate, but deadlines.certificate_rotation \
+                         is not set"
+                    ));
+                }
+                FaultKind::Reassignment { path } => {
+                    if self.deadlines.reassignment.is_none() {
+                        fail(format!(
+                            "transition `{name}` reassigns, but deadlines.reassignment is not set"
+                        ));
+                    }
+                    if self.path(path).is_none() {
+                        fail(format!(
+                            "transition `{name}` reassigns `{path}`, which is no path"
+                        ));
+                    }
+                    if u32::try_from(self.cluster.replication_factor).unwrap_or(u32::MAX)
+                        >= self.cluster.brokers
+                    {
+                        fail(format!(
+                            "transition `{name}` reassigns, but every one of the {} brokers already \
+                             holds a replica at replication_factor {}",
+                            self.cluster.brokers, self.cluster.replication_factor
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn validate_profile(&self, fail: &mut impl FnMut(String)) {
+        if self.profile == Profile::Lifecycle {
+            self.validate_lifecycle(fail);
+            return;
+        }
+        if self.lifecycle.is_some() {
+            fail("only a lifecycle contract declares a lifecycle section".to_owned());
+        }
         match (self.profile, &self.self_check) {
             (Profile::Soak, Some(_)) => {
                 fail(
@@ -785,6 +913,52 @@ impl Contract {
                     fail("self_check.missed_deadline must be shorter than the contract's own deadline".to_owned());
                 }
             }
+            // Validated above, by `validate_lifecycle`.
+            (Profile::Lifecycle, _) => {}
+        }
+    }
+
+    /// A lifecycle contract declares its source release by digest, injects
+    /// nothing into its own evidence, and upgrades at least one broker.
+    fn validate_lifecycle(&self, fail: &mut impl FnMut(String)) {
+        if self.self_check.is_some() {
+            fail(
+                "a lifecycle run may not inject failures into its own evidence; drop self_check"
+                    .to_owned(),
+            );
+        }
+        match &self.lifecycle {
+            None => fail("a lifecycle contract needs a lifecycle section".to_owned()),
+            Some(lifecycle) => {
+                let source = &lifecycle.source;
+                if !source.image.contains("@sha256:") {
+                    fail(format!(
+                        "lifecycle.source.image must be pinned by digest, not `{}`",
+                        source.image
+                    ));
+                }
+                if !source.supports.contains_key("metadata.version") {
+                    fail(
+                        "lifecycle.source.supports must name metadata.version, which every release \
+                         supports"
+                            .to_owned(),
+                    );
+                }
+                for (feature, range) in &source.supports {
+                    if range.min > range.max {
+                        fail(format!(
+                            "lifecycle.source.supports.{feature} is inverted: {range}"
+                        ));
+                    }
+                }
+            }
+        }
+        let upgrades = self
+            .faults
+            .iter()
+            .any(|plan| plan.fault == FaultKind::Roll { to: Side::Target });
+        if !upgrades {
+            fail("a lifecycle contract must roll at least one broker to the target".to_owned());
         }
     }
 }
@@ -794,7 +968,12 @@ pub(crate) fn human(time: Time) -> String { time.human().to_string() }
 
 #[cfg(test)]
 pub(crate) mod fixture {
-    use super::Contract;
+    use {
+        super::{Contract, FaultKind, FaultPlan, Profile, Target},
+        crate::soak::lifecycle::{LevelRange, Lifecycle, Release, Side},
+        krabka_units::prelude::*,
+        std::collections::BTreeMap,
+    };
 
     /// A valid self-check contract, small enough to read in a test.
     pub(crate) const SELF_CHECK: &str = r"
@@ -868,6 +1047,73 @@ self_check:
         assert2::assert!(contract.validate().is_empty(), "{:?}", contract.validate());
         contract
     }
+
+    /// The self-check's cluster and load as a valid lifecycle contract: four
+    /// brokers, one upgrade, one rotation and one reassignment.
+    pub(crate) fn lifecycle() -> Contract {
+        let mut contract = self_check();
+        contract.name = "fixture-lifecycle".to_owned();
+        contract.profile = Profile::Lifecycle;
+        contract.self_check = None;
+        contract.cluster.brokers = 4;
+        contract.deadlines.certificate_rotation = Some(secs(30));
+        contract.deadlines.reassignment = Some(secs(60));
+        contract.lifecycle = Some(Lifecycle {
+            source: Release {
+                version: "v1.0.5".to_owned(),
+                image: "ghcr.io/krabka-io/krabka-broker@sha256:2a81".to_owned(),
+                supports: BTreeMap::from([("metadata.version".to_owned(), LevelRange {
+                    min: 7,
+                    max: 30,
+                })]),
+            },
+        });
+        let plan =
+            |name: &str, fault: FaultKind, broker: u32, first_at: Time, duration: Time| FaultPlan {
+                name: name.to_owned(),
+                fault,
+                target: Target::Broker(broker),
+                first_at,
+                every: None,
+                jitter: Time::ZERO,
+                duration,
+            };
+        contract.faults = vec![
+            plan(
+                "upgrade",
+                FaultKind::Roll { to: Side::Target },
+                0,
+                secs(30),
+                secs(5),
+            ),
+            plan(
+                "rotate",
+                FaultKind::CertificateRotation,
+                1,
+                secs(100),
+                secs(1),
+            ),
+            plan(
+                "reassign",
+                FaultKind::Reassignment {
+                    path: "classic-idempotent".to_owned(),
+                },
+                3,
+                secs(135),
+                secs(1),
+            ),
+            plan(
+                "rollback",
+                FaultKind::Roll { to: Side::Source },
+                0,
+                secs(200),
+                secs(5),
+            ),
+        ];
+        contract.duration = minutes(6);
+        assert2::assert!(contract.validate().is_empty(), "{:?}", contract.validate());
+        contract
+    }
 }
 
 #[cfg(test)]
@@ -877,6 +1123,7 @@ mod tests {
             Acks, Contract, FaultKind, Isolation, Profile, RecoveryCheck, Semantics, Slowdown,
             Storage, Target, fixture,
         },
+        crate::soak::lifecycle::Side,
         assert2::{assert, check},
         krabka_units::prelude::*,
     };
@@ -957,6 +1204,41 @@ mod tests {
     }
 
     #[test]
+    fn the_lifecycle_fixture_is_valid() {
+        check!(messages(&fixture::lifecycle()).is_empty());
+    }
+
+    #[yare::parameterized(
+        transition_in_a_soak = { |c: &mut Contract| { c.profile = Profile::Soak; c.lifecycle = None; }, "only a lifecycle contract runs" },
+        lifecycle_section_in_a_soak = { |c: &mut Contract| c.profile = Profile::Soak, "only a lifecycle contract declares" },
+        no_lifecycle_section = { |c: &mut Contract| c.lifecycle = None, "needs a lifecycle section" },
+        unpinned_source = { |c: &mut Contract| c.lifecycle.as_mut().unwrap().source.image = "ghcr.io/krabka-io/krabka-broker:v1.0.5".into(), "pinned by digest" },
+        source_without_metadata_version = { |c: &mut Contract| c.lifecycle.as_mut().unwrap().source.supports.clear(), "must name metadata.version" },
+        inverted_source_range = { |c: &mut Contract| c.lifecycle.as_mut().unwrap().source.supports.get_mut("metadata.version").unwrap().min = 31, "is inverted" },
+        no_upgrade = { |c: &mut Contract| c.faults[0].fault = FaultKind::Roll { to: Side::Source }, "at least one broker to the target" },
+        repeating_transition = { |c: &mut Contract| c.faults[0].every = Some(minutes(10)), "happens once" },
+        transition_by_role = { |c: &mut Contract| c.faults[0].target = Target::Leader, "target a broker by index" },
+        rotation_without_deadline = { |c: &mut Contract| c.deadlines.certificate_rotation = None, "deadlines.certificate_rotation" },
+        reassignment_without_deadline = { |c: &mut Contract| c.deadlines.reassignment = None, "deadlines.reassignment" },
+        reassignment_of_no_path = { |c: &mut Contract| c.faults[2].fault = FaultKind::Reassignment { path: "nope".into() }, "which is no path" },
+        reassignment_without_a_spare_broker = { |c: &mut Contract| { c.cluster.brokers = 3; c.faults[2].target = Target::Broker(2); }, "already holds a replica" },
+        lifecycle_with_injection = { |c: &mut Contract| c.self_check = fixture::self_check().self_check, "may not inject" },
+    )]
+    fn an_unrunnable_lifecycle_contract_is_refused(edit: fn(&mut Contract), fragment: &str) {
+        let mut contract = fixture::lifecycle();
+        edit(&mut contract);
+        assert_refused(&contract, fragment);
+    }
+
+    #[test]
+    fn a_contract_without_lifecycle_deadlines_keeps_its_digest() {
+        let encoded = serde_json::to_string(&fixture::self_check()).unwrap();
+        check!(!encoded.contains("lifecycle"));
+        check!(!encoded.contains("certificate_rotation"));
+        check!(!encoded.contains("reassignment"));
+    }
+
+    #[test]
     fn a_soak_must_cover_every_path_the_milestone_names() {
         let mut contract = fixture::self_check();
         contract.profile = Profile::Soak;
@@ -1003,6 +1285,9 @@ mod tests {
         controller_restart = { FaultKind::Restart { graceful: false }, Target::Controller, &[RecoveryCheck::LeaderFailover, RecoveryCheck::IsrRejoin, RecoveryCheck::ControllerFailover] },
         quiet_controller_pause = { FaultKind::Pause { intends_failover: false }, Target::Controller, &[RecoveryCheck::CatchUpAfterPause] },
         disk = { FaultKind::DiskPressure { watermark: fraction(0.5) }, Target::Any, &[RecoveryCheck::IsrRejoin] },
+        roll = { FaultKind::Roll { to: Side::Target }, Target::Broker(0), &[RecoveryCheck::LeaderFailover, RecoveryCheck::IsrRejoin] },
+        rotation = { FaultKind::CertificateRotation, Target::Broker(0), &[RecoveryCheck::CertificateServed] },
+        reassignment = { FaultKind::Reassignment { path: "p".into() }, Target::Broker(3), &[RecoveryCheck::ReassignmentComplete] },
     )]
     fn each_fault_kind_names_the_recoveries_it_is_measured_for(
         kind: FaultKind,

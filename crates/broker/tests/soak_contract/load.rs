@@ -60,6 +60,10 @@ pub(crate) struct LoadContext {
     pub(crate) bootstrap: String,
     pub(crate) windows: Arc<Windows>,
     running: AtomicBool,
+    /// Every path's acknowledged records so far, for a lifecycle checkpoint
+    /// that reconciles them while the load runs. The producers' own ledgers
+    /// are only handed back when the load stops.
+    acknowledged: Mutex<BTreeMap<String, SeqSet>>,
 }
 
 impl LoadContext {
@@ -69,7 +73,24 @@ impl LoadContext {
             bootstrap,
             windows,
             running: AtomicBool::new(true),
+            acknowledged: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// Record that `path`'s producer was acknowledged `seq`.
+    fn acknowledge(&self, path: &str, seq: u64) {
+        if let Ok(mut acknowledged) = self.acknowledged.lock() {
+            acknowledged.entry(path.to_owned()).or_default().insert(seq);
+        }
+    }
+
+    /// `path`'s acknowledged records so far.
+    pub(crate) fn acknowledged(&self, path: &str) -> SeqSet {
+        self.acknowledged
+            .lock()
+            .ok()
+            .and_then(|acknowledged| acknowledged.get(path).cloned())
+            .unwrap_or_default()
     }
 
     fn running(&self) -> bool { self.running.load(Ordering::Relaxed) }
@@ -281,6 +302,7 @@ pub(crate) async fn run_idempotent(ctx: Arc<LoadContext>, path: LoadPath) -> Pro
                 match result {
                     Ok(_) => {
                         ledger.acked.insert(seq);
+                        ctx.acknowledge(&path.name, seq);
                         latencies.record(ctx.windows.disturbed(at), Time::from_millis(at - sent));
                     }
                     Err(error) => {
@@ -392,6 +414,7 @@ impl TransactionalRun {
             match result {
                 Ok(_) => {
                     self.ledger.acked.insert(seq);
+                    ctx.acknowledge(&path.name, seq);
                     self.latencies
                         .record(ctx.windows.disturbed(at), Time::from_millis(at - sent));
                 }

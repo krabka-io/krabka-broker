@@ -23,6 +23,7 @@ pub mod contract;
 pub mod deadline;
 pub mod evidence;
 pub mod ledger;
+pub mod lifecycle;
 pub mod reconcile;
 pub mod schedule;
 pub mod synthetic;

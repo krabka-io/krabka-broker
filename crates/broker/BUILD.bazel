@@ -291,7 +291,12 @@ crate_tests(
         "sarama_conformance": ["kaf_sarama"],
         # The Prometheus sidecar that evaluates the shipped alert rules over the
         # run, so the evidence records when each one fired and resolved.
-        "soak_contract": ["prometheus_3_5_0"],
+        # And the source release of the lifecycle contract, which its
+        # executor formats a cluster on and rolls back to; see `env` below.
+        "soak_contract": [
+            "krabka_broker_1_0_5",
+            "prometheus_3_5_0",
+        ],
         # One image, used twice: as the `kafka-topics` client that reads
         # krabka's answer and as the Kafka broker the same command is run
         # against for the differential.
@@ -309,7 +314,15 @@ crate_tests(
     # `cli_smoke` boots the real binary and finds it through the variable Cargo
     # exports for a `[[bin]]` in the same package. Bazel exports no such thing,
     # so the same name is set here from the binary's own target.
-    env = {"CARGO_BIN_EXE_krabka-broker": "$(rootpath :krabka-broker)"},
+    #
+    # `KRABKA_LIFECYCLE_SOURCE_IMAGE` is the tag `krabka_broker_1_0_5` loads
+    # under, which soak_contract runs in place of the lifecycle contract's
+    # digest reference: a loaded image carries no registry digest, and a
+    # container suite does not pull.
+    env = {
+        "CARGO_BIN_EXE_krabka-broker": "$(rootpath :krabka-broker)",
+        "KRABKA_LIFECYCLE_SOURCE_IMAGE": "ghcr.io/krabka-io/krabka-broker:v1.0.5",
+    },
     # The suites that run brokers as real processes out of //packaging's image
     # rather than as in-process handles. For `process_kill_durability` that is
     # what makes a `docker kill -s KILL` a kill of the thing that holds the log;
