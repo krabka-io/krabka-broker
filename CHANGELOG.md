@@ -169,6 +169,22 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   --controller-listen-addr): Address already in use (os error 98)`. The
   controller listener also binds before the metadata engine opens, so the
   failure leaves no engine running.
+- A diskless broker's hot-tail cache keeps every compressed batch it is given.
+  The cache split each newly durable run into batches by the decoded batch's
+  `encoded_len`, which is its uncompressed length. A compressed batch does not
+  occupy that many bytes, so the first batch of each run was cached cut short
+  or with the next batch's bytes attached, and every batch after it was
+  dropped. A `read_uncommitted` fetch the cache answered could get a truncated
+  batch. The cache now takes the length that the decode consumed.
+- A consumer reads every record of a restored diskless partition (issue
+  #1525). On v1.0.5 it read only the first batch of each one. The restored
+  node flushes the materialized records into its own WAL and trims its local
+  log to them, so a KIP-320 consumer's fetch from the earliest offset falls
+  below the trimmed log start. v1.0.5 answered that fetch
+  `OFFSET_OUT_OF_RANGE`, and the consumer reset to the end. The fix in #1487
+  sends that fetch to the WAL objects. A new `diskless_capture_broker` case
+  restores a captured diskless topic and reads it back the way the
+  qualification drill does.
 - The release image's SLSA provenance attestation carries its predicate
   again. Through v1.0.5, `release.yml` attested its SLSA v1 predicate as
   `--type slsaprovenance`, which cosign reads as SLSA v0.2, so every release
