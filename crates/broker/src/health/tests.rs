@@ -260,3 +260,31 @@ async fn serve_answers_on_the_reported_port_until_it_is_cancelled() {
     }
     assert!(refused, "the health server should stop when cancelled");
 }
+
+/// A health port another socket holds fails `serve` with an error that names
+/// the `health` listener, the address and `--health-listen-addr`.
+#[tokio::test]
+async fn serve_on_a_taken_port_names_the_health_listener() {
+    let taken = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = taken.local_addr().expect("local address");
+
+    let Err(error) = serve(addr, HealthState::new(100), CancellationToken::new()).await else {
+        panic!("the health listener bound a port another socket holds");
+    };
+
+    let message = error.to_string();
+    assert!(let BrokerError::ListenerBind { listener, addr: failed, setting, source } = error);
+    assert!(listener == "health");
+    assert!(failed == addr);
+    assert!(setting == "--health-listen-addr");
+    assert!(source.kind() == std::io::ErrorKind::AddrInUse);
+    assert!(
+        message
+            == format!(
+                "unable to bind the health listener to {addr} (set by --health-listen-addr): \
+                 {source}"
+            )
+    );
+}
