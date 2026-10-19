@@ -211,15 +211,31 @@ partition and `cleanup.policy=compact`.
 | `<source alias>.checkpoints.internal` | Target | The translated position of every mirrored consumer group. |
 | `mm2-offset-syncs.<alias>.internal` | Source, or target when you move it | The upstream-to-downstream offset pairs that translation reads. |
 
-Read the lag of MirrorMaker 2's own consumers on the source cluster:
+MirrorMaker 2's source consumers assign their partitions directly and commit
+no group offsets to the source cluster. They keep their position in the
+`mm2-offsets.<source alias>.internal` topic on the target. So
+`kafka-consumer-groups --describe --group prod-mm2` on the source answers
+`GroupIdNotFoundException`. Use MirrorMaker 2's own metrics instead. It
+exports `record-age-ms` and `replication-latency-ms` per partition over JMX,
+under `kafka.connect.mirror:type=MirrorSourceConnector`. The mirror has caught
+up when both stay near zero.
+
+To check one topic without JMX, read the earliest and the end offsets on both
+sides:
 
 ```bash
-kafka-consumer-groups.sh --bootstrap-server kafka-1.example.com:9092 \
-  --describe --group prod-mm2
+kafka-get-offsets.sh --bootstrap-server kafka-1.example.com:9092 --topic orders --time -2
+kafka-get-offsets.sh --bootstrap-server kafka-1.example.com:9092 --topic orders
+kafka-get-offsets.sh --bootstrap-server krabka-1.example.com:9092 --topic prod.orders --time -2
+kafka-get-offsets.sh --bootstrap-server krabka-1.example.com:9092 --topic prod.orders
 ```
 
-The mirror has caught up when that lag stays near zero and the target topic's
-end offsets stop moving faster than the source's.
+The mirror starts at offset 0, and the source keeps its own numbering after
+retention removes old segments. So compare the end offset minus the earliest
+offset on each side, not the end offsets. The mirror has caught up when that
+difference stops changing after the source producers stop. The two
+differences are equal only when the source partition holds no transaction
+markers and no compacted gaps.
 
 ## Cut the consumers over
 

@@ -18,6 +18,16 @@ kafka-topics --bootstrap-server <broker>:9092 --describe --unavailable-partition
 The output shows `Leader: none` for each affected partition, with the replica
 list and the last known ISR.
 
+With the audit subsystem enabled, which is the default, a partition of the
+audit topic in that list is expected while its broker is down. The topic is
+`__krabka_audit` unless `[audit] topic` names another one. Each broker holds
+one audit partition with no other replica, so the alert fires for every
+broker that is down for more than a minute, a planned stop included
+([#1516](https://github.com/krabka-io/krabka-broker/issues/1516)).
+Follow [broker down](broker-down.md) for that broker. Do not run an unclean
+election for an audit partition: it has no other replica to elect. When the
+audit partitions are the only ones listed, no user partition is offline.
+
 ## Diagnose
 
 1. Find the brokers in the last ISR. Check whether they are running and

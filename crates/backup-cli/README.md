@@ -42,7 +42,9 @@ needs a Cargo working tree and a Bazel test sandbox has none.
 
 The binary is named `krabka-backup`, so `krabka backup` reaches it: the `krabka`
 operator CLI resolves an unknown subcommand to `krabka-<name>` on `PATH`, the
-way git resolves `git foo` to `git-foo`.
+way git resolves `git foo` to `git-foo`. The `krabka` CLI is not in this
+repository or in the broker image, so an operator with only those runs
+`krabka-backup` and `krabka-restore` by name.
 
 Every subcommand takes the same `--archive-*` flags `krabka restore` takes, and
 a capture is written into the archive the restore reads. Capture from a node and

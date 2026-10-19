@@ -24,9 +24,11 @@ A connection refused confirms the broker is not serving clients. Under
 Kubernetes, `kubectl get pod` and `kubectl describe pod` name the restart
 count and the last termination reason.
 
-`krabka_broker_active_brokers` and `krabka_broker_fenced_brokers` on a broker
-that is still up say whether the controller has fenced the missing node yet.
-The controller fences it after `heartbeat_timeout`.
+`krabka_broker_active_brokers` and `krabka_broker_fenced_brokers` on the
+active controller say whether it has fenced the missing node yet. The active
+controller is the broker where `krabka_broker_active_controller` is 1. Every
+other broker reports both gauges as 0. The controller fences the node after
+`heartbeat_timeout`.
 
 ## Diagnose
 
@@ -44,8 +46,13 @@ The controller fences it after `heartbeat_timeout`.
    a monitoring fault.
 5. Check the effect on the cluster. `krabka_broker_under_replicated_partitions`
    and `krabka_broker_offline_partitions_count` on the surviving brokers say
-   whether the loss cost availability. A broker that was a controller voter
-   also shows up in [no active controller](no-active-controller.md).
+   whether the loss cost availability. With the audit subsystem enabled, the
+   default, the offline count includes the missing broker's own partition of
+   the audit topic (`__krabka_audit` by default). That partition has no other
+   replica, so one down broker always counts 1
+   ([#1516](https://github.com/krabka-io/krabka-broker/issues/1516)). A
+   broker that was a controller voter also shows up in
+   [no active controller](no-active-controller.md).
 
 ## Fix
 

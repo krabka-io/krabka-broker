@@ -68,11 +68,15 @@ data-loss event that no alert fires for:
 [restore-from-archive](runbooks/restore-from-archive.md), the rebuild of a
 cluster out of its tiered-storage archive.
 
+The runbooks name the Kafka command-line tools without the `.sh` suffix, for
+example `kafka-topics`. An Apache Kafka release archive has the same tools in
+its `bin/` directory with the suffix, for example `bin/kafka-topics.sh`.
+
 | Alert | Runbook |
 | :--- | :--- |
 | `KrabkaNoActiveController` | [no-active-controller](runbooks/no-active-controller.md) |
 | `KrabkaBrokerDown` | [broker-down](runbooks/broker-down.md) |
-| `KrabkaMetadataLag` | [metadata-quorum-loss](runbooks/metadata-quorum-loss.md) |
+| `KrabkaMetadataLag`, `KrabkaMetadataStale` | [metadata-quorum-loss](runbooks/metadata-quorum-loss.md) |
 | `KrabkaUnderReplicatedPartitions` | [under-replicated-partitions](runbooks/under-replicated-partitions.md) |
 | `KrabkaUnderMinIsrPartitions` | [under-min-isr-partitions](runbooks/under-min-isr-partitions.md) |
 | `KrabkaOfflinePartitions` | [offline-partitions](runbooks/offline-partitions.md) |

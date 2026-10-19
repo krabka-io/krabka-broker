@@ -6,9 +6,12 @@ a point before it. No alert fires for this; a person decides it.
 
 ## What it means
 
-`krabka restore` reads the KIP-405 tiered-storage archive and writes a complete,
-bootable log directory out of it, up to a bound the operator names. The tool
-runs when the cluster does not, and it does not depend on the broker.
+`krabka-restore` reads the KIP-405 tiered-storage archive and writes a
+complete, bootable log directory out of it, up to a bound the operator names.
+The tool runs when the cluster does not, and it does not depend on the broker.
+The image and the [binary install](../deploy.md#install) supply it as
+`krabka-restore`. They do not supply the `krabka` dispatcher that turns
+`krabka restore` into `krabka-restore`, so run `krabka-restore` by name.
 
 Three things a restore needs are not in the archive: the RLMM snapshot, the
 controller's metadata checkpoint, and the committed offsets of every consumer
@@ -65,19 +68,42 @@ Answer four questions before writing anything.
    archive is restored.
 
 Run the plan first. `--dry-run` runs discovery, verification and the bound, and
-writes no partition data:
+writes no partition data. It does format its `--log-dir`, and the real restore
+then refuses that directory with exit `3`
+([#1512](https://github.com/krabka-io/krabka-broker/issues/1512)). Give the
+dry run a scratch directory. Fetch the two snapshots first, as step 1 of
+[Fix](#fix) says, and give them to the dry run so that the plan also counts
+the metadata:
 
 ```sh
-krabka restore --dry-run --report json \
+plan_dir="$(mktemp -d)"
+krabka-restore --dry-run --report json \
   --archive-s3-bucket krabka-tier --archive-s3-region eu-west-1 \
   --archive-prefix prod/ \
-  --log-dir /var/lib/krabka-restored \
+  --rlmm-snapshot ./rlmm-snapshot \
+  --metadata-snapshot ./cluster-metadata.checkpoint \
+  --log-dir "${plan_dir}" \
   --node-id 1 --standalone --controller-listener 127.0.0.1:9093 \
-  --to-timestamp 2026-08-24T09:15:00Z
+  --to-timestamp 2026-08-24T09:15:00Z > plan.out
+rm -r "${plan_dir}"
 ```
+
+`mktemp -d` makes a new empty directory, so the dry run never writes into a
+directory that something else uses, and `rm` removes only that directory.
+
+The JSON report starts at the first `{`. The format step prints two lines
+before it on stdout, `Formatting ...` and `Formatted ...`, so remove them
+before you give the output to `jq`.
 
 Read the counts. A partition missing from the plan, or a record count far from
 what the topic should hold, is a wrong `--archive-prefix` or a wrong bound.
+Read `metadata.topic_configs` too. Zero, for topics that have config
+overrides in production, is a checkpoint that predates them
+([#1514](https://github.com/krabka-io/krabka-broker/issues/1514)), and
+`topics_without_configuration` does not name them. No capture of that
+cluster carries the overrides then. Set them again with `kafka-configs` after
+step 3, from a record kept outside the cluster.
+[How often](../backup-restore.md#how-often) says how to avoid this.
 
 ## Fix
 
@@ -88,7 +114,7 @@ what the topic should hold, is a wrong `--archive-prefix` or a wrong bound.
 2. **Restore**, with both:
 
    ```sh
-   krabka restore \
+   krabka-restore \
      --archive-s3-bucket krabka-tier --archive-s3-region eu-west-1 \
      --archive-prefix prod/ \
      --rlmm-snapshot ./rlmm-snapshot \
@@ -113,11 +139,19 @@ what the topic should hold, is a wrong `--archive-prefix` or a wrong bound.
    credentials come back from the metadata checkpoint, but the listeners, the
    TLS files and the `[authorization]` table come from the new broker's own
    configuration. Give it the same ones as production, or the restored ACLs
-   have no authorizer to enforce them. Confirm that
+   have no authorizer to enforce them. It is a single-node cluster, so also
+   start it with the internal-topic flags that
+   [Format the log directory](../deploy.md#format-the-log-directory) gives
+   for fewer than three brokers. Without them the broker cannot create
+   `__consumer_offsets`, and step 4 fails every time. Confirm that
    `kafka-topics --describe` lists the topics and that `kafka-configs
    --describe` shows the topic configuration the metadata checkpoint carried. If
    the configuration is missing, the restore ran without
-   `--metadata-snapshot`, and the report says so.
+   `--metadata-snapshot`, and the report says so. Or the checkpoint predates
+   the configuration, and the report does not say so
+   ([#1514](https://github.com/krabka-io/krabka-broker/issues/1514)). Check
+   `remote.storage.enable` in particular: a topic restored without it does
+   not tier again.
 
 4. **Put the group offsets back, before any consumer starts.**
 
@@ -144,6 +178,15 @@ what the topic should hold, is a wrong `--archive-prefix` or a wrong bound.
    capture that holds no diskless boundary, the tool refuses the flags: it
    exits `5` and names the capture. The expected head must come from the
    incident evidence, not from the archive being restored.
+
+   The first run against a freshly booted broker can exit `6` with
+   `FindCoordinator ... protocol error from server: 15`. That is
+   `COORDINATOR_NOT_AVAILABLE` while the broker creates `__consumer_offsets`,
+   and the tool does not retry it yet
+   ([#1515](https://github.com/krabka-io/krabka-broker/issues/1515)). Run the
+   same command again after a few seconds. If it fails again, read the broker
+   log for `INVALID_REPLICATION_FACTOR`: the broker then needs the flags of
+   step 3.
 
    Run it with `--dry-run` first to see the positions it will write. It commits
    as a simple consumer, so the coordinator fences it on any group that already
