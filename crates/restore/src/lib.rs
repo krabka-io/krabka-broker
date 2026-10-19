@@ -214,6 +214,9 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         let count = trusted.as_ref().map_or(0, |trusted| trusted.count);
         record_capture_head(&mut authenticated, head, count);
     }
+    // Before anything is seeded from the inventory: a segment no manifest
+    // names, and a partition that held nothing else, are not restored.
+    let unclaimed = drop_unclaimed_uploads(&mut archive, authenticated.as_ref());
     let AuthenticatedSnapshots {
         metadata: metadata_bytes,
         rlmm: rlmm_snapshot,
@@ -254,7 +257,7 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         consumed_authenticated_objects.insert("rlmm-snapshot".to_owned());
     }
     let mut partitions = Vec::with_capacity(archive.partitions.len());
-    let mut skipped = Vec::new();
+    let mut skipped = unclaimed;
     for entry in &archive.partitions {
         if entry.segments.is_empty() {
             continue;
@@ -431,6 +434,7 @@ async fn authenticate_captured_snapshot(
 fn record_capture_head(authenticated: &mut Option<SourceAuthentication>, head: &str, count: usize) {
     let source = authenticated.get_or_insert_with(|| SourceAuthentication {
         archive: None,
+        unclaimed: std::collections::BTreeSet::new(),
         report: AuthenticationReport {
             partitions: 0,
             manifests: 0,
@@ -448,6 +452,43 @@ fn record_capture_head(authenticated: &mut Option<SourceAuthentication>, head: &
         .insert(CAPTURE_HEAD_NAME.to_owned(), head.to_owned());
 }
 
+/// Remove from `archive` every segment whose objects an authenticated restore
+/// found with no manifest naming them, and every partition left with no
+/// segment, and say what was removed.
+///
+/// This runs before the inventory seeds anything. A partition whose only
+/// upload was interrupted has no manifest and no head; were it kept, its
+/// topic and partition would be created from directory names alone.
+fn drop_unclaimed_uploads(
+    archive: &mut ArchiveInventory,
+    authenticated: Option<&SourceAuthentication>,
+) -> Vec<SkippedSegment> {
+    let Some(unclaimed) = authenticated.map(|source| &source.unclaimed) else {
+        return Vec::new();
+    };
+    let mut skipped = Vec::new();
+    for partition in &mut archive.partitions {
+        partition.segments.retain(|segment| {
+            let claimed = !segment
+                .artifacts()
+                .any(|object| unclaimed.contains(object.key.as_ref()));
+            if !claimed {
+                skipped.push(SkippedSegment {
+                    topic: partition.partition.topic.clone(),
+                    partition: partition.partition.partition,
+                    segment_id: segment.segment_id,
+                    reason: "uploaded without a manifest: no signed claim names it".to_owned(),
+                });
+            }
+            claimed
+        });
+    }
+    archive
+        .partitions
+        .retain(|partition| !partition.segments.is_empty());
+    skipped
+}
+
 /// The trusted WORM manifest keys and how many the operator supplied.
 struct TrustedKeySet {
     keys: TrustedManifestKeys,
@@ -460,6 +501,10 @@ struct TrustedKeySet {
 struct SourceAuthentication {
     archive: Option<AuthenticatedArchive>,
     report: AuthenticationReport,
+    /// Objects inside a partition directory that no manifest names: an upload
+    /// whose manifest was never written. They make no signed claim, so the
+    /// restore leaves their segments out rather than trust them.
+    unclaimed: std::collections::BTreeSet<String>,
 }
 
 async fn authenticate_source(
@@ -493,7 +538,7 @@ async fn authenticate_source(
         ))
     } else if !report.fully_attested() {
         Some("one or more manifests are unsigned or use an untrusted key".to_owned())
-    } else if !report.ok() {
+    } else if !report.global_orphan_objects.is_empty() {
         Some("the archive contains objects outside its authenticated manifests".to_owned())
     } else if report.has_epoch_restarts() {
         Some("the archive contains an untrusted manifest-chain restart".to_owned())
@@ -534,9 +579,19 @@ async fn authenticate_source(
         chain_heads: actual_heads,
         tail_truncation_protected: true,
     };
+    // A partition whose chain is unbroken and fully attested is not `ok` only
+    // for objects no manifest names. A source lost mid-upload leaves exactly
+    // that: a segment's objects without the manifest that would have named
+    // them. The pinned heads above already prove no manifest was taken away.
+    let unclaimed = report
+        .partitions
+        .iter()
+        .flat_map(|partition| partition.orphan_objects.iter().cloned())
+        .collect();
     Ok(Some(SourceAuthentication {
         archive: Some(authenticated),
         report: coverage,
+        unclaimed,
     }))
 }
 

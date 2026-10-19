@@ -360,6 +360,70 @@ async fn a_segment_the_snapshot_does_not_mention_is_a_disagreement() {
     check_orders_disagreement(err);
 }
 
+/// What the snapshot says of the two-segment archive, whose segments start at
+/// 0 and 100.
+#[derive(Clone, Copy)]
+enum SnapshotView {
+    /// It names the first segment only; the second was archived after it.
+    FirstOnly,
+    /// It names the second segment only; the first lies inside its range.
+    SecondOnly,
+    /// It names the first, and a copy at 100 it caught as started under
+    /// another id: the second segment is the retry of that copy.
+    FirstAndAStartedCopy,
+}
+
+#[yare::parameterized(
+    archived_after_the_snapshot_is_kept = { SnapshotView::FirstOnly, Some(2) },
+    unnamed_inside_the_snapshot_disagrees = { SnapshotView::SecondOnly, None },
+    a_retry_of_a_started_copy_is_kept = { SnapshotView::FirstAndAStartedCopy, Some(2) },
+)]
+#[test_macro(tokio::test)]
+async fn a_segment_the_snapshot_does_not_name_is_kept_only_when_it_is_newer(
+    view: SnapshotView,
+    kept: Option<usize>,
+) {
+    let TwoSegmentArchive {
+        dir: archive,
+        topic_id,
+        first,
+        second,
+    } = two_segment_archive();
+    let entry = |segment_id, base, state| SnapshotSegmentEntry {
+        segment_id,
+        base_offset: Offset(base),
+        state,
+    };
+    let finished = RemoteLogSegmentState::CopySegmentFinished;
+    let segments = match view {
+        SnapshotView::FirstOnly => vec![entry(first, 0, finished)],
+        SnapshotView::SecondOnly => vec![entry(second, 100, finished)],
+        SnapshotView::FirstAndAStartedCopy => vec![
+            entry(first, 0, finished),
+            entry(
+                Uuid::from_u128(12),
+                100,
+                RemoteLogSegmentState::CopySegmentStarted,
+            ),
+        ],
+    };
+    let SnapshotLocation {
+        dir: _snap_dir,
+        path: snap_path,
+    } = snapshot_with_segments(topic_id, &segments);
+    match kept {
+        Some(count) => {
+            let inventory = sole_partition_inventory(archive.path(), &snap_path).await;
+            check!(inventory.segments.len() == count);
+        }
+        None => check_orders_disagreement(
+            snapshot_inventory(archive.path(), &snap_path)
+                .await
+                .unwrap_err(),
+        ),
+    }
+}
+
 #[tokio::test]
 async fn a_delete_finished_segment_with_bytes_still_present_is_a_disagreement() {
     // `DeleteSegmentFinished` says the bytes should be gone. Bytes still

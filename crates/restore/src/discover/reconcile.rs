@@ -145,6 +145,35 @@ fn reconcile_decision(
     state: Option<RemoteLogSegmentState>,
     retain_deleted_objects: bool,
 ) -> RestoreReconcileDecision {
+    reconcile_lagging_decision(scanned, state, retain_deleted_objects, false)
+}
+
+/// [`reconcile_decision`] for a scanned segment that may postdate the snapshot.
+///
+/// The source keeps archiving after a capture reads its RLMM snapshot, so the
+/// archive of a cluster lost while it still wrote holds segments the snapshot
+/// never saw. One that starts after every segment the snapshot names for its
+/// partition is that lag, not an inconsistency: it did not exist when the
+/// snapshot was written, so no deletion the snapshot records can concern it.
+/// It is kept, as a live segment is. A segment the snapshot does not name
+/// inside the range it covers still disagrees.
+///
+/// A copy the snapshot caught as `CopySegmentStarted` may then have failed
+/// and been retried under a new segment id at the same base offset. So the
+/// range is that of the snapshot's other segments, and a started copy the
+/// scan does not find is excluded: it never completed.
+fn reconcile_lagging_decision(
+    scanned: bool,
+    state: Option<RemoteLogSegmentState>,
+    retain_deleted_objects: bool,
+    newer_than_snapshot: bool,
+) -> RestoreReconcileDecision {
+    if scanned && state.is_none() && newer_than_snapshot {
+        return RestoreReconcileDecision::Keep;
+    }
+    if !scanned && state == Some(RemoteLogSegmentState::CopySegmentStarted) {
+        return RestoreReconcileDecision::Exclude;
+    }
     if retain_deleted_objects
         && scanned
         && state == Some(RemoteLogSegmentState::DeleteSegmentFinished)
@@ -183,8 +212,17 @@ fn reconcile_partition(
         duplicate_snapshot_key |= by_key.insert(key, segment.state()).is_some();
     }
 
+    // The last offset of anything the snapshot names for this partition. A
+    // partition it names with no segment at all has no range, so nothing in
+    // it counts as newer.
+    let snapshot_end = dump
+        .into_iter()
+        .flat_map(|dump| &dump.segments)
+        .filter(|segment| segment.state() != RemoteLogSegmentState::CopySegmentStarted)
+        .map(RemoteLogSegmentMetadata::end_offset)
+        .max();
     let scanned_decision = |segment: &SegmentInventory| {
-        reconcile_decision(
+        reconcile_lagging_decision(
             true,
             by_key
                 .get(&SegmentKey {
@@ -193,6 +231,7 @@ fn reconcile_partition(
                 })
                 .copied(),
             retain_deleted_objects,
+            snapshot_end.is_some_and(|end| segment.base_offset.get() > end),
         )
     };
     let scan_disagrees = partition
@@ -214,7 +253,16 @@ fn reconcile_partition(
                 ) == RestoreReconcileDecision::Disagree
             });
 
-    if duplicate_snapshot_key || scan_disagrees || snapshot_disagrees {
+    // A retry kept beside the attempt it replaced would restore one range
+    // twice. Which of them is the copy is not the restore's to guess.
+    let mut kept_bases = HashSet::new();
+    let duplicate_kept_base = partition
+        .segments
+        .iter()
+        .filter(|segment| scanned_decision(segment) == RestoreReconcileDecision::Keep)
+        .any(|segment| !kept_bases.insert(segment.base_offset.get()));
+
+    if duplicate_snapshot_key || scan_disagrees || snapshot_disagrees || duplicate_kept_base {
         return Err(RestoreError::MetadataDisagreement {
             topic: partition.partition.topic.clone(),
             partition: partition.partition.partition,
