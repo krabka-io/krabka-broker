@@ -105,7 +105,9 @@ pub struct MetadataRestoreReport {
     pub scram_credentials: usize,
     /// Finalized feature-level records restored.
     pub feature_levels: usize,
-    /// Topics whose configuration was unavailable because no snapshot was supplied.
+    /// Restored topics whose configuration was not recovered: every topic when
+    /// no snapshot was supplied, and otherwise each one the snapshot does not
+    /// hold under the archive's topic id.
     pub topics_without_configuration: Vec<String>,
 }
 
@@ -113,12 +115,21 @@ impl MetadataRestoreReport {
     /// Warning emitted when cluster metadata could not be recovered.
     #[must_use]
     pub fn warning(&self) -> Option<String> {
-        self.snapshot.is_none().then(|| {
-            format!(
+        match &self.snapshot {
+            None => Some(format!(
                 "WARNING: no --metadata-snapshot; topic configuration was not recovered for: {}; ACLs, client quotas, SCRAM credentials, and feature levels were not recovered",
                 self.topics_without_configuration.join(", ")
-            )
-        })
+            )),
+            Some(snapshot) => (!self.topics_without_configuration.is_empty()).then(|| {
+                format!(
+                    "WARNING: --metadata-snapshot {} does not hold these restored topics, so \
+                     their configuration was not recovered: {}. The checkpoint predates them; \
+                     set their configuration again with kafka-configs",
+                    snapshot.display(),
+                    self.topics_without_configuration.join(", ")
+                )
+            }),
+        }
     }
 }
 
@@ -425,6 +436,7 @@ mod tests {
         },
         assert2::check,
         krabka_ids::Offset,
+        std::path::PathBuf,
         uuid::Uuid,
     };
 
@@ -700,6 +712,36 @@ mod tests {
         check!(text.contains("no segments restored"));
         check!(text.contains("WARNING: no --metadata-snapshot"));
         check!(text.contains("ACLs, client quotas, SCRAM credentials, and feature levels"));
+    }
+
+    /// With a snapshot, the warning fires only for restored topics the
+    /// snapshot does not know, and names them (#1514).
+    #[yare::parameterized(
+        knows_every_topic = { &[], None },
+        misses_two_topics = {
+            &["orders", "payments"],
+            Some(
+                "WARNING: --metadata-snapshot cluster-metadata.checkpoint does not hold these \
+                 restored topics, so their configuration was not recovered: orders, payments. \
+                 The checkpoint predates them; set their configuration again with kafka-configs"
+            )
+        },
+    )]
+    fn a_snapshot_warns_for_each_restored_topic_it_does_not_know(
+        missing: &[&str],
+        expected: Option<&str>,
+    ) {
+        let metadata = MetadataRestoreReport {
+            snapshot: Some(PathBuf::from("cluster-metadata.checkpoint")),
+            topic_configs: 0,
+            access_control_entries: 0,
+            client_quotas: 0,
+            scram_credentials: 0,
+            feature_levels: 0,
+            topics_without_configuration: missing.iter().map(|topic| (*topic).to_owned()).collect(),
+        };
+
+        check!(metadata.warning().as_deref() == expected);
     }
 
     #[test]

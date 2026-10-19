@@ -334,13 +334,6 @@ fn seed_metadata_records(
         feature_levels: 0,
         topics_without_configuration: Vec::new(),
     };
-    if snapshot_records.is_none() {
-        metadata.topics_without_configuration = topic_order
-            .iter()
-            .map(|topic| (*topic).to_owned())
-            .collect();
-    }
-
     let mut features = Vec::new();
     let mut feature_epoch = Vec::new();
     let mut topic_configs = Vec::new();
@@ -354,6 +347,19 @@ fn seed_metadata_records(
             MetadataRecord::V1Topic(topic) => Some((topic.name.as_str(), topic.topic_id)),
             _ => None,
         })
+        .collect();
+    // A restored topic whose configuration cannot come back: every topic when
+    // there is no snapshot, and otherwise each one the snapshot does not hold
+    // under the archive's topic id. The format-time checkpoint holds no topic
+    // at all, so a restore from it names every topic here rather than none
+    // (#1514).
+    metadata.topics_without_configuration = topic_order
+        .iter()
+        .filter(|topic| {
+            snapshot_records.is_none()
+                || snapshot_topics.get(**topic) != topics.get(**topic).map(|tally| &tally.topic_id)
+        })
+        .map(|topic| (*topic).to_owned())
         .collect();
     let mut snapshot_features = HashSet::new();
     for record in snapshot_records.into_iter().flatten() {
@@ -568,6 +574,58 @@ mod tests {
             metadata.topics_without_configuration
                 == vec!["orders".to_owned(), "payments".to_owned()]
         );
+    }
+
+    /// A metadata snapshot that does not hold a restored topic, under the
+    /// archive's topic id, cannot restore its configuration, and the report
+    /// names it. The format-time checkpoint, which holds no topic, names every
+    /// restored topic (#1514).
+    #[yare::parameterized(
+        format_time_checkpoint = { &[], &["orders", "payments"] },
+        knows_one_topic = { &["orders"], &["payments"] },
+        knows_every_topic = { &["orders", "payments"], &[] },
+        knows_a_name_under_another_id = { &["orders@other", "payments"], &["orders"] },
+    )]
+    fn a_snapshot_names_each_restored_topic_it_does_not_know(
+        snapshot_topics: &[&str],
+        expected: &[&str],
+    ) {
+        let ids: HashMap<&str, Uuid> = HashMap::from([
+            ("orders", Uuid::from_u128(1)),
+            ("payments", Uuid::from_u128(2)),
+        ]);
+        let inventory = ArchiveInventory {
+            partitions: vec![
+                partition_inventory("orders", ids["orders"], 0),
+                partition_inventory("payments", ids["payments"], 0),
+            ],
+            unrecognized: UnrecognizedKeys::default(),
+        };
+        let snapshot: Vec<MetadataRecord> = snapshot_topics
+            .iter()
+            .map(|topic| {
+                let (name, topic_id) = match topic.split_once('@') {
+                    Some((name, _)) => (name, Uuid::from_u128(99)),
+                    None => (*topic, ids[topic]),
+                };
+                MetadataRecord::V1Topic(TopicRecord {
+                    name: name.to_owned(),
+                    topic_id,
+                    partitions: 1,
+                    replication_factor: 1,
+                })
+            })
+            .collect();
+
+        let SeededMetadata { report, .. } = seed_metadata_records(
+            &inventory,
+            NodeId(7),
+            Some(std::path::PathBuf::from("cluster-metadata.checkpoint")),
+            Some(&snapshot),
+        )
+        .expect("seed metadata");
+
+        check!(report.topics_without_configuration == expected);
     }
 
     #[test]

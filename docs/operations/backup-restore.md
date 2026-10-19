@@ -246,8 +246,10 @@ young cluster has no capture until the controller writes its first checkpoint
 topics into the same offset-zero checkpoint.
 
 A capture that succeeds prints a `NOTE` line with the age of the newest record
-in its checkpoint. A change committed after that record is not in the capture,
-and the restore report does not name it. So a capture right after a
+in its checkpoint. A change committed after that record is not in the capture.
+The restore report names a topic created after it, in
+`topics_without_configuration`, but not a config change to a topic that the
+checkpoint holds. So a capture right after a
 topic-config change carries the change only once the controller has written its
 next checkpoint.
 
