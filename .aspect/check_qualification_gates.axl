@@ -987,9 +987,10 @@ restore_ready_ms=$(date +%s%3N)
 # served from the loss until `restore_ready_ms`, read-back included.
 jq --argjson serving "$restore_ready_ms" '.recovery.serving_unix_ms = $serving' \
   "$work/drill/evidence.json" > "$evidence/drill-evidence.json"
-cp "$evidence/drill-evidence.json" "$work/drill/evidence.json"
+# The judge reads the copy the runner just wrote. The read-back container
+# created `$work/drill/evidence.json` as root, so the runner cannot rewrite it.
 # The judge writes its verdict before it reports a failure.
-{ "$soak_check" judge --contract "$work/dr-contract.yaml" --evidence "$work/drill/evidence.json" \
+{ "$soak_check" judge --contract "$work/dr-contract.yaml" --evidence "$evidence/drill-evidence.json" \
   --out "$evidence/soak-verdict.json" 2>&1 || true; } | tee "$evidence/soak-judge.log"
 # RPO is the age at the loss of the oldest acknowledged record that did not
 # come back, from the soak judge; the capture's own age at the loss is kept
