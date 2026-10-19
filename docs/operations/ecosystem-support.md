@@ -53,6 +53,10 @@ Kafka decoder rather than to a claim.
 A tool in this table that has both a protocol path and a JMX path keeps the
 protocol path. Turn the JMX collector off rather than the whole tool.
 
+The [release support matrix](support-matrix.md) names the client versions
+that have run against krabka, the revision that each one ran at, and the link
+to that run.
+
 ## Reporting a gap
 
 A tool that speaks the protocol and still misbehaves is a bug in krabka, and

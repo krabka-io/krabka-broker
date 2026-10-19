@@ -1,0 +1,104 @@
+{
+  "schema": 1,
+  "broker": {
+    "repository": "krabka-io/krabka-broker",
+    "revision": "948e3cc8f99dfabad5bd0917f7b710abc3a07710",
+    "image": "ghcr.io/krabka-io/krabka-broker",
+    "digest": "sha256:ad1149a44f899e4d30c8eddd9944444e9fddcf8bb3f0ff322ff17f1e85ba4a23"
+  },
+  "siblings": [
+    {
+      "repository": "krabka-io/krabka-cli",
+      "revision": "b39dc88d0da3792db02ad62469b45f4fe312ea75"
+    },
+    {
+      "repository": "krabka-io/krabka-client-rs",
+      "revision": "29dac7a590a8ccab2e88205987d3c28fe3c9f669"
+    },
+    {
+      "repository": "krabka-io/krabka-connect",
+      "revision": "ecd5fd77656bc24addb087e714477b9201053a28"
+    },
+    {
+      "repository": "krabka-io/krabka-gateway",
+      "revision": "49870fd8e5f708274ff69a3e64a092844e2f8809"
+    },
+    {
+      "repository": "krabka-io/krabka-o11y",
+      "revision": "c6643b232c4ead91079fc649b98fa9fa72f2d288"
+    },
+    {
+      "repository": "krabka-io/krabka-operator",
+      "revision": "b409b564a8f744be7cc87634e194b6249ed9b5b1"
+    },
+    {
+      "repository": "krabka-io/krabka-protocol",
+      "revision": "af4dc00a1f6502c5f67280f356c90768dabcf4c4"
+    },
+    {
+      "repository": "krabka-io/krabka-rebalancer",
+      "revision": "9df7a58ec6f0e78b582e7d69c60b208a9c73644e"
+    },
+    {
+      "repository": "krabka-io/krabka-schema-registry",
+      "revision": "565e5ed9fb6d275bca20871bceb777e4913d7829"
+    },
+    {
+      "repository": "krabka-io/krabka-streams-rs",
+      "revision": "44afe9b6936eddaaef9eff85f22c9f11fa9056b5"
+    }
+  ],
+  "cargo_lock_sha256": "sha256:577756aed26a9fbe8c5684e8b7a5363710b56ec9eaef391538b747d13b301379",
+  "manifest_drift": [
+    {
+      "repository": "krabka-io/krabka-cli",
+      "pinned": "b39dc88d0da3792db02ad62469b45f4fe312ea75",
+      "manifest": "09edae1c0af58038c664b5d1d0fae9bd85f25257"
+    },
+    {
+      "repository": "krabka-io/krabka-client-rs",
+      "pinned": "29dac7a590a8ccab2e88205987d3c28fe3c9f669",
+      "manifest": "c4c113c74f0ef9774698734aee1ba90fc3785eca"
+    },
+    {
+      "repository": "krabka-io/krabka-connect",
+      "pinned": "ecd5fd77656bc24addb087e714477b9201053a28",
+      "manifest": "5cc1bfb806a5288afddc72c2da11510078acd262"
+    },
+    {
+      "repository": "krabka-io/krabka-gateway",
+      "pinned": "49870fd8e5f708274ff69a3e64a092844e2f8809",
+      "manifest": ""
+    },
+    {
+      "repository": "krabka-io/krabka-o11y",
+      "pinned": "c6643b232c4ead91079fc649b98fa9fa72f2d288",
+      "manifest": "f960dedf6bd71b85b32eeed912ad426da51baddd"
+    },
+    {
+      "repository": "krabka-io/krabka-operator",
+      "pinned": "b409b564a8f744be7cc87634e194b6249ed9b5b1",
+      "manifest": "908e2763d8c3aa27766aabeedc9b98c298e7bb04"
+    },
+    {
+      "repository": "krabka-io/krabka-protocol",
+      "pinned": "af4dc00a1f6502c5f67280f356c90768dabcf4c4",
+      "manifest": "05e3e32d9a0b832453b0c0de144f138c3bab735b"
+    },
+    {
+      "repository": "krabka-io/krabka-rebalancer",
+      "pinned": "9df7a58ec6f0e78b582e7d69c60b208a9c73644e",
+      "manifest": "2aecf3613c732f9648fa18dfffccf2c07f24a373"
+    },
+    {
+      "repository": "krabka-io/krabka-schema-registry",
+      "pinned": "565e5ed9fb6d275bca20871bceb777e4913d7829",
+      "manifest": "904490ad9242f59da78aa4a87bcda9b1436c4a59"
+    },
+    {
+      "repository": "krabka-io/krabka-streams-rs",
+      "pinned": "44afe9b6936eddaaef9eff85f22c9f11fa9056b5",
+      "manifest": "375faae45e895ca2afc0622904994a8538fc3593"
+    }
+  ]
+}

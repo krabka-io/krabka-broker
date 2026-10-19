@@ -89,6 +89,184 @@ The parts that carry the design:
 - The PodDisruptionBudget sets `minAvailable: 2`, the majority of three. Scale
   the StatefulSet and move the budget with it.
 
+### Kubernetes operator
+
+[krabka-operator](https://github.com/krabka-io/krabka-operator) is the other
+Kubernetes path. It reconciles a cluster from custom resources in the group
+`krabka.io`, version `v1alpha1`. It formats each node, finds the controllers,
+issues the certificates, rolls pods one at a time and owns each StatefulSet
+and its claims. Use the operator or the reference manifests above for a
+cluster, not both.
+
+Install the chart and the operator image that a qualified manifest names, by
+digest. [Ecosystem qualification](../qualification.md) describes the
+manifests. The component `krabka-io/krabka-operator` in the manifest gives
+the chart URL and SHA-256 and the image digest. The component
+`krabka-io/krabka-broker` gives the broker image digest.
+
+```
+curl -fsSLo krabka-operator.tgz "<chart url from the manifest>"
+echo "<chart sha256 from the manifest>  krabka-operator.tgz" | sha256sum -c -
+helm install krabka-operator ./krabka-operator.tgz \
+    --namespace krabka-system --create-namespace --wait \
+    --set image.digest=<operator image digest> \
+    --set brokerImage.digest=<broker image digest>
+```
+
+A digest in `image.digest` or `brokerImage.digest` wins over the tag. The
+broker image is the default for every `KafkaNodePool` that sets no
+`spec.image`. `watchNamespaces` limits the operator to a list of namespaces;
+empty means the whole cluster.
+
+Helm creates the CRDs from the chart's `crds/` directory on install. It does
+not change them on `helm upgrade`. After an upgrade, apply that directory from
+the same chart archive:
+
+```
+mkdir -p /tmp/krabka-operator-chart
+tar -xzf krabka-operator.tgz -C /tmp/krabka-operator-chart
+kubectl apply -f /tmp/krabka-operator-chart/krabka-operator/crds
+```
+
+A cluster is one `Kafka` resource and one or more `KafkaNodePool` resources.
+Each pool carries the label `krabka.io/cluster: <Kafka name>`. This example
+is a three-node combined-role cluster with a mutual-TLS replication listener,
+a SASL/SCRAM client listener over TLS, the ACL authorizer and S3 tiered
+storage:
+
+```yaml
+apiVersion: krabka.io/v1alpha1
+kind: Kafka
+metadata:
+  name: prod
+spec:
+  kafkaVersion: "4.0.0"
+  listeners:
+    - name: REPLICATION
+      port: 9091
+      type: internal
+      tls: true
+      authentication:
+        type: tls
+    - name: CLIENTS
+      port: 9092
+      type: internal
+      tls: true
+      authentication:
+        type: scram-sha-512
+  interBrokerListenerName: REPLICATION
+  authorization:
+    type: simple
+    superUsers: ["User:admin"]
+  tieredStorage:
+    type: S3
+    s3:
+      bucket: krabka-tier
+      region: eu-west-1
+      prefix: prod/
+  metricsConfig: {}
+---
+apiVersion: krabka.io/v1alpha1
+kind: KafkaNodePool
+metadata:
+  name: nodes
+  labels:
+    krabka.io/cluster: prod
+spec:
+  roles: [Controller, Broker]
+  replicas: 3
+  nodeIdStart: 0
+  storage:
+    type: PersistentClaim
+    size: 500Gi
+    deleteClaim: false
+```
+
+The parts that matter for operation:
+
+- Port 9093 is the controller listener on every node. Do not give a
+  `listeners` entry that port.
+- `tls: true` uses a broker certificate that the cluster CA signs. The
+  operator generates the cluster CA and the clients CA unless
+  `spec.clusterCa` and `spec.clientsCa` say otherwise.
+- With `authorization` set, the operator adds its own principal,
+  `User:CN=krabka-operator@internal`, to the super users. Name every other
+  super user yourself.
+- `tieredStorage` renders `[remote_storage]`. Leave
+  `tieredStorage.s3.credentials` unset to use the pod's cloud identity, or
+  name a Secret for `accessKeyId` and `secretAccessKey`. The metadata manager
+  defaults to the topic-based one, which survives a restart. Enable a topic
+  with `remote.storage.enable: "true"` in its configuration.
+- `metricsConfig: {}` opens `/metrics` on 9404. Without it the brokers serve
+  no metrics.
+- `spec.config` passes `server.properties` keys to the broker's
+  `[server_properties]` table. The resources have no field for a raw TOML
+  section. A setting that no field carries, such as `principal_mapping_rules`,
+  `[audit]` or `[schema_registry]`, cannot be set through the operator. Use
+  the image path for a cluster that needs one.
+- `deleteClaim: false` keeps the claims when the pool is deleted.
+
+Wait for both resources to report `Ready`:
+
+```
+kubectl wait kafkanodepool/nodes \
+    --for=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'=True --timeout=10m
+kubectl wait kafka/prod \
+    --for=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'=True --timeout=10m
+```
+
+Declare topics and principals as resources too. A `KafkaUser` with
+`authentication: {type: scram-sha-512}` gets a Secret with the same name. The
+Secret holds the generated `password` and a ready `sasl.jaas.config`. Its
+ACLs are a list under `authorization`:
+
+```yaml
+apiVersion: krabka.io/v1alpha1
+kind: KafkaUser
+metadata:
+  name: orders-producer
+  labels:
+    krabka.io/cluster: prod
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      - resource: {type: topic, name: orders, patternType: literal}
+        operations: [Write, Describe]
+---
+apiVersion: krabka.io/v1alpha1
+kind: KafkaTopic
+metadata:
+  name: orders
+  labels:
+    krabka.io/cluster: prod
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    min.insync.replicas: "2"
+    remote.storage.enable: "true"
+```
+
+To change the broker image, set `spec.image` on the pool, or upgrade the
+chart with a new `brokerImage.digest`. The operator rolls the pods one at a
+time, and each pod waits for `/readyz`. The checks in
+[Rolling upgrade](#rolling-upgrade) still apply before and after the roll.
+
+`spec.kafkaVersion` also sets `metadata.version`. The level follows the
+`major.minor` of the version. When it rises, the operator rolls the images and
+then finalizes the new level with `UpdateFeatures`. A finalized level ends the
+roll back to a build that does not support it. To keep that roll back
+possible, set `spec.metadataVersion` to the current level before you raise
+`kafkaVersion`. Raise `spec.metadataVersion` later, as its own step.
+`status.metadataVersion` reports the finalized level, and the condition
+`KafkaVersionUpgrade` reports the progress.
+
+To add or remove brokers on an operator-managed pool, follow
+[Scale a cluster](scaling.md).
+
 ## Ports
 
 | Port | Listener | Configured by |
