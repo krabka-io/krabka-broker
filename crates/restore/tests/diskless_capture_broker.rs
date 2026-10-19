@@ -297,6 +297,20 @@ async fn await_flush_state(
     }
 }
 
+/// Capture the cluster at `bootstrap` into a fresh local archive, and return
+/// the archive and the capture id.
+async fn capture(bootstrap: &str) -> (TempDir, String) {
+    let backup_root = TempDir::new().expect("backup root");
+    let archive = ArchiveArgs {
+        local: Some(backup_root.path().to_path_buf()),
+        ..ArchiveArgs::default()
+    };
+    let id = run::capture(None, Some(bootstrap), &archive)
+        .await
+        .expect("capture a cluster that has a diskless WAL index");
+    (backup_root, id)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn capture_freezes_a_live_diskless_index_without_producing_to_it() {
     #[derive(Debug)]
@@ -308,15 +322,7 @@ async fn capture_freezes_a_live_diskless_index_without_producing_to_it() {
     let topic_id = create_diskless_topic(&broker.bootstrap, 1).await;
     produce(&broker.bootstrap, topic_id).await;
     await_flushed(&broker.handle, 0, RECORDS).await;
-    let backup_root = TempDir::new().expect("backup root");
-    let archive = ArchiveArgs {
-        local: Some(backup_root.path().to_path_buf()),
-        ..ArchiveArgs::default()
-    };
-
-    let id = run::capture(None, Some(&broker.bootstrap), &archive)
-        .await
-        .expect("capture a cluster that has a diskless WAL index");
+    let (backup_root, id) = capture(&broker.bootstrap).await;
 
     let manifest: Manifest = serde_json::from_slice(
         &std::fs::read(backup_root.path().join(capture_key(&id, MANIFEST))).expect("manifest"),
@@ -562,14 +568,7 @@ async fn a_restored_diskless_partition_serves_every_materialized_record() {
         let end = i64::try_from(values.len()).expect("a small partition");
         await_flushed(&source.handle, *partition, end).await;
     }
-    let backup_root = TempDir::new().expect("backup root");
-    let archive = ArchiveArgs {
-        local: Some(backup_root.path().to_path_buf()),
-        ..ArchiveArgs::default()
-    };
-    let id = run::capture(None, Some(&source.bootstrap), &archive)
-        .await
-        .expect("capture the diskless cluster");
+    let (backup_root, id) = capture(&source.bootstrap).await;
     let capture_path = backup_root
         .path()
         .join(capture_key(&id, DISKLESS_WAL_INDEX));
