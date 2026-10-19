@@ -107,7 +107,7 @@ pub struct MetadataRestoreReport {
     pub feature_levels: usize,
     /// Restored topics whose configuration was not recovered: every topic when
     /// no snapshot was supplied, and otherwise each topic the snapshot does not
-    /// know by name and topic id, because it predates the topic.
+    /// hold under the archived name and topic id.
     pub topics_without_configuration: Vec<String>,
 }
 
@@ -123,7 +123,7 @@ impl MetadataRestoreReport {
         }
         (!self.topics_without_configuration.is_empty()).then(|| {
             format!(
-                "WARNING: the --metadata-snapshot predates these topics, so their configuration was not recovered: {}",
+                "WARNING: the --metadata-snapshot does not hold these restored topics under their archived topic id, so their configuration was not recovered: {}",
                 self.topics_without_configuration.join(", ")
             )
         })
@@ -647,10 +647,10 @@ mod tests {
             &["orders"],
             Some("WARNING: no --metadata-snapshot; topic configuration was not recovered for: orders; ACLs, client quotas, SCRAM credentials, and feature levels were not recovered"),
         },
-        snapshot_predates_topics = {
+        snapshot_lacks_topics = {
             Some("/backup/metadata.checkpoint"),
             &["orders", "payments"],
-            Some("WARNING: the --metadata-snapshot predates these topics, so their configuration was not recovered: orders, payments"),
+            Some("WARNING: the --metadata-snapshot does not hold these restored topics under their archived topic id, so their configuration was not recovered: orders, payments"),
         },
         snapshot_knows_every_topic = { Some("/backup/metadata.checkpoint"), &[], None },
     )]
@@ -673,7 +673,7 @@ mod tests {
     }
 
     #[test]
-    fn text_rendering_keeps_the_counts_and_warns_when_the_snapshot_predates_a_topic() {
+    fn text_rendering_keeps_the_counts_and_warns_when_the_snapshot_lacks_a_topic() {
         let report = RestoreReport {
             dry_run: false,
             log_dir: "/var/lib/krabka/restored".into(),
@@ -701,7 +701,7 @@ mod tests {
         let expected = "krabka restore: wrote /var/lib/krabka/restored\n\
              cluster id: 00000000-0000-0000-0000-000000000000\n\
              metadata: 0 topic configs, 0 ACLs, 0 client quotas, 0 SCRAM credentials, 1 feature level\n\
-             WARNING: the --metadata-snapshot predates these topics, so their configuration was not recovered: ledger\n\
+             WARNING: the --metadata-snapshot does not hold these restored topics under their archived topic id, so their configuration was not recovered: ledger\n\
              \n\
              ledger (topic id 00000000-0000-0000-0000-000000000000)\n\
              \x20 partition 0: 1 segment, offsets [0, 402], 402 records kept, 0 dropped\n";

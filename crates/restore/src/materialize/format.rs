@@ -348,9 +348,10 @@ fn seed_metadata_records(
             _ => None,
         })
         .collect();
-    // A topic the snapshot does not know by name and id has no configuration
-    // in it: the snapshot predates the topic, or its re-creation. Without a
-    // snapshot, no topic has any.
+    // A topic the snapshot does not hold under the archived name and id has no
+    // configuration in it: the snapshot was taken before the topic existed, or
+    // holds another incarnation of the name. Without a snapshot, no topic has
+    // any.
     metadata.topics_without_configuration = topic_order
         .iter()
         .filter(|topic| {
@@ -839,14 +840,14 @@ mod tests {
     }
 
     /// A restored topic the snapshot does not know, by name and topic id, has
-    /// no configuration to bring back: the snapshot predates it, or predates
-    /// its re-creation. The report names it, as it names every topic when no
-    /// snapshot is given.
+    /// no configuration to bring back: the snapshot was taken before the topic
+    /// existed, or holds another incarnation of the name, older or newer. The
+    /// report names it, as it names every topic when no snapshot is given.
     #[yare::parameterized(
         knows_both = { &[("orders", 1), ("payments", 2)], &[] },
-        predates_one = { &[("orders", 1)], &["payments"] },
-        predates_a_recreation = { &[("orders", 1), ("payments", 9)], &["payments"] },
-        predates_both = { &[], &["orders", "payments"] },
+        lacks_one = { &[("orders", 1)], &["payments"] },
+        holds_another_incarnation = { &[("orders", 1), ("payments", 9)], &["payments"] },
+        lacks_both = { &[], &["orders", "payments"] },
     )]
     fn a_restored_topic_the_snapshot_does_not_know_is_without_configuration(
         snapshot_topics: &[(&str, u128)],
