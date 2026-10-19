@@ -11,6 +11,7 @@
 
 use {
     crate::manifest::CAPTURE_ROOT,
+    krabka_metadata::MetadataRecord,
     std::path::{Path, PathBuf},
     uuid::Uuid,
 };
@@ -99,12 +100,26 @@ impl CheckpointId {
     /// Whether this is the checkpoint `krabka format` writes, at end offset
     /// zero.
     ///
-    /// It holds the bootstrap records only, and never a topic, a topic config,
-    /// an ACL or a quota. The controller writes its first checkpoint past it
-    /// only after `metadata_max_snapshot_interval`, or once enough metadata is
-    /// committed, so until then it is the newest checkpoint on the node.
+    /// A plain format puts the bootstrap records only in it, and never a
+    /// topic. A format that `krabka-restore` runs also seeds the restored
+    /// topics into it, so [`holds_a_topic`] tells the two apart. The controller
+    /// writes its first checkpoint past it only after
+    /// `metadata_max_snapshot_interval`, or once enough metadata is committed,
+    /// so until then it is the newest checkpoint on the node.
     #[must_use]
     pub const fn is_format_time(self) -> bool { self.end_offset == 0 }
+}
+
+/// Whether a checkpoint's decoded records hold a topic.
+///
+/// The format-time checkpoint of a plain `krabka format` holds none. One that
+/// `krabka-restore` wrote holds the restored topics, and a controller's
+/// periodic checkpoint holds every topic the cluster had.
+#[must_use]
+pub fn holds_a_topic(records: &[MetadataRecord]) -> bool {
+    records
+        .iter()
+        .any(|record| matches!(record, MetadataRecord::V1Topic(_)))
 }
 
 /// A metadata checkpoint file and the id its name encodes.

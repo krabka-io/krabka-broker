@@ -8,7 +8,7 @@ use {
     crate::{
         archive::{Archive, ArchiveArgs},
         capture::{
-            CheckpointId, MetadataCheckpoint, RLMM_SNAPSHOT_RELATIVE, capture_id, capture_key,
+            MetadataCheckpoint, RLMM_SNAPSHOT_RELATIVE, capture_id, capture_key, holds_a_topic,
             newest_metadata_checkpoint,
         },
         cli::{CaptureSigningArgs, CaptureTrustArgs, LATEST},
@@ -27,6 +27,7 @@ use {
         groups::ListGroupsOptions,
     },
     krabka_client_core::security::ClientSecurity,
+    krabka_raft::{deserialize_metadata_snapshot, metadata_snapshot_last_contained_log_timestamp},
     krabka_remote_storage::{ObjectEntry, Sha256Digest},
     krabka_remote_storage_topic::{KafkaMetadataEventLog, KafkaMetadataLogConfig},
     std::collections::{BTreeMap, BTreeSet},
@@ -159,12 +160,18 @@ async fn capture_secured_at(
     let mut notes: Vec<String> = Vec::new();
 
     if let Some(log_dir) = log_dir {
-        // Vet the checkpoint before anything is uploaded, so a refused capture
-        // leaves no orphan artifact in the archive.
-        let checkpoint = newest_metadata_checkpoint(log_dir);
-        if let Some(checkpoint) = &checkpoint {
-            refuse_format_time_checkpoint(checkpoint)?;
-        }
+        // Read and vet the checkpoint before anything is uploaded. A refused
+        // capture then leaves no orphan artifact in the archive, and the
+        // controller cannot delete the chosen file while the RLMM snapshot
+        // uploads.
+        let checkpoint = match newest_metadata_checkpoint(log_dir) {
+            Some(checkpoint) => {
+                let bytes = read_capture_file(&checkpoint.path, METADATA_CHECKPOINT).await?;
+                refuse_format_time_checkpoint(&checkpoint, &bytes)?;
+                Some((checkpoint, bytes))
+            }
+            None => None,
+        };
 
         let rlmm = log_dir.join(RLMM_SNAPSHOT_RELATIVE);
         match read_capture_file(&rlmm, RLMM_SNAPSHOT).await {
@@ -188,12 +195,8 @@ async fn capture_secured_at(
         }
 
         match checkpoint {
-            Some(MetadataCheckpoint {
-                id: checkpoint_id,
-                path,
-            }) => {
-                let bytes = read_capture_file(&path, METADATA_CHECKPOINT).await?;
-                notes.push(checkpoint_note(checkpoint_id, &path));
+            Some((MetadataCheckpoint { path, .. }, bytes)) => {
+                notes.push(checkpoint_note(&bytes, captured_at_ms));
                 metadata_snapshot_sha256 = Some(Sha256Digest::of(&bytes));
                 artifacts.push(
                     upload(
@@ -282,15 +285,30 @@ async fn capture_secured_at(
 }
 
 /// Refuses a capture whose newest metadata checkpoint is the one `krabka
-/// format` wrote.
+/// format` wrote and holds no topic.
 ///
-/// That checkpoint holds no topic. A restore from it brings back no topic
-/// configuration, and its report cannot say so, because the restore takes the
-/// checkpoint as the whole of the cluster's metadata. A capture without the
-/// checkpoint would at least let the restore warn, but a capture is taken to be
-/// restored from, so the honest result is no capture.
-fn refuse_format_time_checkpoint(checkpoint: &MetadataCheckpoint) -> Result<(), BackupError> {
+/// A plain format writes that checkpoint with the bootstrap records only. A
+/// restore from it brings back no topic configuration, and its report cannot
+/// say so, because the restore takes the checkpoint as the whole of the
+/// cluster's metadata. A capture is taken to be restored from, so the honest
+/// result is no capture.
+///
+/// A format that `krabka-restore` ran also writes its checkpoint at offset
+/// zero, but seeds the restored topics into it, so that one is captured.
+fn refuse_format_time_checkpoint(
+    checkpoint: &MetadataCheckpoint,
+    bytes: &[u8],
+) -> Result<(), BackupError> {
     if !checkpoint.id.is_format_time() {
+        return Ok(());
+    }
+    let records = deserialize_metadata_snapshot(bytes).map_err(|error| {
+        BackupError::Integrity(format!(
+            "metadata checkpoint {}: {error}",
+            checkpoint.path.display()
+        ))
+    })?;
+    if holds_a_topic(&records) {
         return Ok(());
     }
     Err(BackupError::StaleMetadata(format!(
@@ -303,23 +321,31 @@ fn refuse_format_time_checkpoint(checkpoint: &MetadataCheckpoint) -> Result<(), 
     )))
 }
 
-/// What a capture prints about the metadata checkpoint it took: where it ends
-/// and how old it is. A metadata change committed after the checkpoint, such
-/// as a topic config change, is not in the capture, and the age is how far back
+/// What a capture prints about the metadata checkpoint it took: how old its
+/// newest record is. A metadata change committed after the checkpoint, such as
+/// a topic config change, is not in the capture, and the age is how far back
 /// that window reaches.
-fn checkpoint_note(id: CheckpointId, path: &std::path::Path) -> String {
-    let age = std::fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
+///
+/// The age comes from the checkpoint's own last-contained-record timestamp, not
+/// the file's modification time: a broker-only node writes the file when it
+/// fetches a snapshot, which can be long after the controller took it.
+fn checkpoint_note(bytes: &[u8], now_ms: u64) -> String {
+    let age = metadata_snapshot_last_contained_log_timestamp(bytes)
         .ok()
-        .and_then(|modified| modified.elapsed().ok())
+        .and_then(|timestamp| u64::try_from(timestamp).ok())
+        .filter(|timestamp| *timestamp > 0)
         .map_or_else(
-            || "of unknown age".to_owned(),
-            |elapsed| format!("written {}s ago", elapsed.as_secs()),
+            || "the age of its newest record is unknown".to_owned(),
+            |timestamp| {
+                format!(
+                    "its newest record is {}s old",
+                    now_ms.saturating_sub(timestamp) / 1000
+                )
+            },
         );
     format!(
-        "{METADATA_CHECKPOINT} ends at metadata offset {}, {age}. Metadata changes \
-         committed after it are not in this capture",
-        id.end_offset
+        "{METADATA_CHECKPOINT}: {age}. Metadata changes committed after it are not in \
+         this capture"
     )
 }
 
@@ -939,12 +965,14 @@ mod tests {
         },
         crate::{
             archive::{Archive, ArchiveArgs},
-            capture::{CheckpointId, capture_key},
+            capture::capture_key,
             cli::CaptureTrustArgs,
             manifest::{Artifact, MANIFEST_VERSION, Manifest, sha256_hex},
             offsets::{CommittedOffset, GROUP_OFFSETS_VERSION, GroupOffsets, GroupOffsetsFile},
         },
         assert2::{assert, check},
+        krabka_ids::PartitionIndex,
+        krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord},
     };
 
     /// The RLMM snapshot bytes a fixture node holds. The capture copies bytes
@@ -1062,19 +1090,15 @@ mod tests {
         } = archive_fixture();
         let error = capture(Some(node.path()), None, &args).await.unwrap_err();
         check!(error.to_string().contains(name));
-        let ids = store.child_directories(CAPTURE_ROOT).await.unwrap();
-        check!(ids.len() == usize::from(name == METADATA_CHECKPOINT));
-        for id in ids {
-            check!(store.get(&capture_key(&id, RLMM_SNAPSHOT)).await.unwrap() == RLMM_BYTES);
-            for absent in [name, MANIFEST] {
-                check!(matches!(
-                    store.get(&capture_key(&id, absent)).await,
-                    Err(BackupError::ObjectStore(
-                        krabka_object_store::ObjectStoreError::NotFound(_)
-                    ))
-                ));
-            }
-        }
+        // Both local snapshots are read before the first upload, so either
+        // refusal leaves the archive untouched.
+        check!(
+            store
+                .child_directories(CAPTURE_ROOT)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -1393,23 +1417,72 @@ mod tests {
         check!(manifest.artifact(GROUP_OFFSETS) == None);
     }
 
+    /// The name `krabka format` gives its offset-zero checkpoint.
+    const FORMAT_TIME_CHECKPOINT: &str = "00000000000000000000-0000000000.checkpoint";
+
+    krabka_macros::single_replica_partition_fixture!(single_replica_partition);
+
+    /// The records `krabka-restore` seeds for one restored topic.
+    fn restored_topic() -> Vec<MetadataRecord> {
+        vec![
+            MetadataRecord::V1Topic(TopicRecord {
+                name: "ledger".to_owned(),
+                topic_id: uuid::Uuid::from_u128(1),
+                partitions: 1,
+                replication_factor: 1,
+            }),
+            MetadataRecord::V1Partition(PartitionRecord {
+                directories: vec![uuid::Uuid::nil()],
+                ..single_replica_partition("ledger", PartitionIndex(0), NodeId(1))
+            }),
+        ]
+    }
+
+    /// A node log directory that `krabka format` wrote with `seeded` records,
+    /// its offset-zero checkpoint moved into `subdir` and an RLMM snapshot
+    /// beside it. The returned guard owns the parent directory.
+    async fn formatted_node(
+        seeded: Vec<MetadataRecord>,
+        subdir: &str,
+    ) -> (tempfile::TempDir, std::path::PathBuf) {
+        let parent = tempfile::tempdir().expect("parent dir");
+        // The formatter refuses a directory that already exists.
+        let log_dir = parent.path().join("node");
+        let argv = [
+            "krabka-format",
+            "--log-dir",
+            &log_dir.display().to_string(),
+            "--cluster-id",
+            "8a2f4e1c-0000-4000-8000-00000000c1d0",
+            "--node-id",
+            "1",
+            "--no-initial-controllers",
+        ]
+        .map(ToOwned::to_owned);
+        check!(krabka_format::run_from_args_with_records(argv, seeded).await == 0);
+        let formatted = log_dir
+            .join("__cluster_metadata-0")
+            .join(FORMAT_TIME_CHECKPOINT);
+        let target = log_dir.join(subdir);
+        std::fs::create_dir_all(&target).expect("create the checkpoint dir");
+        std::fs::rename(&formatted, target.join(FORMAT_TIME_CHECKPOINT))
+            .expect("move the format-time checkpoint");
+        let rlmm = log_dir.join(RLMM_SNAPSHOT_RELATIVE);
+        std::fs::create_dir_all(rlmm.parent().expect("a parent")).expect("create the rlmm dir");
+        std::fs::write(rlmm, RLMM_BYTES).expect("write the rlmm snapshot");
+        (parent, log_dir)
+    }
+
     #[yare::parameterized(
         controller = { "__cluster_metadata-0" },
         observer = { "__cluster_metadata-0/observer" },
     )]
     #[test_macro(tokio::test(flavor = "multi_thread"))]
-    async fn a_capture_refuses_the_format_time_checkpoint_and_writes_nothing(subdir: &str) {
-        let log_dir = node_with_rlmm();
-        let metadata = log_dir.path().join(subdir);
-        std::fs::create_dir_all(&metadata).expect("create the checkpoint dir");
-        std::fs::write(
-            metadata.join("00000000000000000000-0000000000.checkpoint"),
-            CHECKPOINT_BYTES,
-        )
-        .expect("write the format-time checkpoint");
+    async fn a_capture_refuses_a_plain_format_time_checkpoint_and_writes_nothing(subdir: &str) {
+        let (_parent, log_dir) = formatted_node(Vec::new(), subdir).await;
         let ArchiveFixture { root, args, .. } = archive_fixture();
 
-        let error = capture(Some(log_dir.path()), None, &args)
+        let error = capture(Some(&log_dir), None, &args)
             .await
             .expect_err("a capture of the format-time checkpoint fails");
 
@@ -1418,10 +1491,7 @@ mod tests {
             "got: {error}"
         );
         let message = error.to_string();
-        check!(
-            message.contains("00000000000000000000-0000000000.checkpoint"),
-            "got: {message}"
-        );
+        check!(message.contains(FORMAT_TIME_CHECKPOINT), "got: {message}");
         check!(
             message.contains("metadata_max_snapshot_interval"),
             "got: {message}"
@@ -1433,30 +1503,63 @@ mod tests {
     }
 
     #[yare::parameterized(
-        present = { true, "cluster-metadata.checkpoint ends at metadata offset 42, written " },
-        missing = { false, "cluster-metadata.checkpoint ends at metadata offset 42, of unknown age." },
+        controller = { "__cluster_metadata-0" },
+        observer = { "__cluster_metadata-0/observer" },
     )]
-    fn the_checkpoint_note_names_its_end_offset_and_age(exists: bool, expected_prefix: &str) {
-        let dir = tempfile::tempdir().expect("dir");
-        let path = dir
-            .path()
-            .join("00000000000000000042-0000000001.checkpoint");
-        if exists {
-            std::fs::write(&path, CHECKPOINT_BYTES).expect("write a checkpoint");
-        }
+    #[test_macro(tokio::test(flavor = "multi_thread"))]
+    async fn a_capture_takes_the_format_time_checkpoint_a_restore_seeded(subdir: &str) {
+        let (_parent, log_dir) = formatted_node(restored_topic(), subdir).await;
+        let checkpoint = std::fs::read(log_dir.join(subdir).join(FORMAT_TIME_CHECKPOINT))
+            .expect("read the seeded checkpoint");
+        let ArchiveFixture {
+            root: _root,
+            args,
+            store,
+        } = archive_fixture();
 
-        let note = checkpoint_note(
-            CheckpointId {
-                end_offset: 42,
-                epoch: 1,
-            },
-            &path,
-        );
+        let id = capture(Some(&log_dir), None, &args)
+            .await
+            .expect("a capture of a restored node succeeds");
 
-        check!(note.starts_with(expected_prefix), "got: {note}");
+        let manifest = capture_manifest(&store, &id).await;
         check!(
-            note.ends_with("Metadata changes committed after it are not in this capture"),
-            "got: {note}"
+            manifest
+                .artifact(METADATA_CHECKPOINT)
+                .map(|a| a.sha256.clone())
+                == Some(sha256_hex(&checkpoint))
+        );
+    }
+
+    #[yare::parameterized(
+        an_hour_old = { 1_700_000_000_000, 1_700_003_600_000, "its newest record is 3600s old" },
+        no_timestamp = { 0, 1_700_003_600_000, "the age of its newest record is unknown" },
+    )]
+    fn the_checkpoint_note_gives_the_age_of_its_newest_record(
+        last_contained_ms: i64,
+        now_ms: u64,
+        age: &str,
+    ) {
+        let bytes = krabka_raft::serialize_metadata_snapshot(
+            &MetadataImage::new(uuid::Uuid::from_u128(7)),
+            last_contained_ms,
+        )
+        .expect("serialize a checkpoint");
+
+        check!(
+            checkpoint_note(&bytes, now_ms)
+                == format!(
+                    "cluster-metadata.checkpoint: {age}. Metadata changes committed after it \
+                     are not in this capture"
+                )
+        );
+    }
+
+    #[test]
+    fn the_checkpoint_note_of_an_undecodable_checkpoint_has_no_age() {
+        check!(
+            checkpoint_note(CHECKPOINT_BYTES, 1)
+                == "cluster-metadata.checkpoint: the age of its newest record is unknown. \
+                    Metadata changes committed after it are not in this capture"
         );
     }
 

@@ -1,4 +1,3 @@
-| 7 | The newest metadata checkpoint is the format-time one, which holds no topic. |
 # krabka-backup
 
 Captures the inputs a point-in-time restore needs, and puts committed
@@ -112,17 +111,19 @@ second, because the metadata observer keeps its checkpoints in that
 subdirectory and never directly in `__cluster_metadata-0`.
 
 `capture` refuses a node whose newest checkpoint is the one `krabka format`
-wrote, `00000000000000000000-0000000000.checkpoint`, and exits `7`. That
-checkpoint holds no topic, so a restore from it would bring back no topic
+wrote, `00000000000000000000-0000000000.checkpoint`, when that checkpoint holds
+no topic, and exits `7`. A restore from it would bring back no topic
 configuration, and its report could not say so. The controller writes its
 first checkpoint after `metadata_max_snapshot_interval` (1 hour by default),
-or sooner once enough metadata is committed. Capture again after that. The
-capture checks before it uploads anything, so a refused capture leaves nothing
-in the archive.
+or sooner once enough metadata is committed. Capture again after that. A node
+that `krabka-restore` formatted is captured at once, because the restore seeds
+the restored topics into that checkpoint. The capture reads and checks the
+checkpoint before it uploads anything, so a refused capture leaves nothing in
+the archive.
 
-A capture that takes a checkpoint prints a `NOTE` line with the metadata offset
-the checkpoint ends at and its age. A metadata change committed after that
-checkpoint is not in the capture.
+A capture that takes a checkpoint prints a `NOTE` line with the age of the
+newest record in it, read from the checkpoint itself. A metadata change
+committed after that record is not in the capture.
 
 Both directories are in the metadata log directory, Kafka's `metadata.log.dir`.
 That is the broker's first log directory unless its `metadata_log_dir` names
@@ -198,6 +199,7 @@ operations only on the group and topic prefixes covered by the backup policy.
 | 4 | The archive, the log directory, or the named capture cannot be read. |
 | 5 | An integrity failure: an artifact does not match its recorded digest. |
 | 6 | The cluster could not be reached, or it refused a request. |
+| 7 | The newest metadata checkpoint is the format-time one, and it holds no topic. |
 
 `2`, `4` and `5` mean what they mean in `krabka restore`, because one runbook
 branches on both tools.

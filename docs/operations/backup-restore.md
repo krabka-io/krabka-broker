@@ -241,13 +241,15 @@ format-time `00000000000000000000-0000000000.checkpoint`, which holds no
 topic. `krabka-backup capture` refuses that checkpoint and exits `7`, so a
 young cluster has no capture until the controller writes its first checkpoint
 ([#1514](https://github.com/krabka-io/krabka-broker/issues/1514)). Lower
-`metadata_max_snapshot_interval` to shorten that window.
+`metadata_max_snapshot_interval` to shorten that window. A cluster that
+`krabka-restore` formatted is captured at once: the restore seeds the restored
+topics into the same offset-zero checkpoint.
 
-A capture that succeeds prints a `NOTE` line with the metadata offset its
-checkpoint ends at and the checkpoint's age. A change committed after that
-checkpoint is not in the capture, and the restore report does not name it. So
-a capture right after a topic-config change carries the change only once the
-controller has written its next checkpoint.
+A capture that succeeds prints a `NOTE` line with the age of the newest record
+in its checkpoint. A change committed after that record is not in the capture,
+and the restore report does not name it. So a capture right after a
+topic-config change carries the change only once the controller has written its
+next checkpoint.
 
 Keep at least as many captures as the recovery window the business asks for. An
 attacker who can write to the cluster can also grant themselves an ACL, and a
