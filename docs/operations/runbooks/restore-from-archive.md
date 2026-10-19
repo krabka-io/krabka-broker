@@ -81,12 +81,15 @@ krabka-restore --dry-run --report json \
   --rlmm-snapshot ./rlmm-snapshot \
   --metadata-snapshot ./cluster-metadata.checkpoint \
   --log-dir /var/lib/krabka-restored \
+  --cluster-id <the old cluster id> \
   --node-id 1 --standalone --controller-listener 127.0.0.1:9093 \
   --to-timestamp 2026-08-24T09:15:00Z > plan.json
 ```
 
 With `--report json`, stdout holds only the JSON report, so `jq` reads
-`plan.json` as it is. The format step prints its progress lines on stderr.
+`plan.json` as it is. The format step and the log print on stderr. Give the
+dry run the same `--cluster-id` as the restore: without it, each run generates
+its own id, and the plan names one the restored cluster does not get.
 
 Read the counts. A partition missing from the plan, or a record count far from
 what the topic should hold, is a wrong `--archive-prefix` or a wrong bound.

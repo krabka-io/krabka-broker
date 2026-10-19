@@ -13,7 +13,7 @@ use {
     },
     assert2::check,
     krabka_log::name,
-    krabka_restore::{EXIT_OK, run_from_args},
+    krabka_restore::{EXIT_OK, UNRECOGNIZED_SAMPLE_LIMIT, run_from_args},
     std::{path::Path, process::Command},
 };
 
@@ -64,13 +64,23 @@ async fn a_dry_run_writes_nothing_and_the_same_restore_then_succeeds(precreate: 
 /// 2. With `--report json`, stdout holds the one report object and nothing
 ///    else, so `krabka-restore ... --report json | jq` parses. A real run puts
 ///    the formatter's progress lines on stderr. A dry run formats nothing the
-///    operator keeps, so it drops them (#1512).
+///    operator keeps, so it drops them (#1512). Log events go to stderr too:
+///    an archive with more unattributable keys than the report samples makes
+///    the scan log a warning.
 #[yare::parameterized(
-    dry_run = { &["--report", "json", "--dry-run"], true },
-    real_run = { &["--report", "json"], false },
+    dry_run = { &["--report", "json", "--dry-run"], true, 0 },
+    real_run = { &["--report", "json"], false, 0 },
+    real_run_logging_a_warning = { &["--report", "json"], false, UNRECOGNIZED_SAMPLE_LIMIT + 1 },
 )]
-fn json_report_stdout_is_one_json_object(extra: &[&str], dry_run: bool) {
+fn json_report_stdout_is_one_json_object(extra: &[&str], dry_run: bool, stray_keys: usize) {
     let fixture = build_fixture();
+    for key in 0..stray_keys {
+        std::fs::write(
+            fixture.archive_root.path().join(format!("stray-{key}")),
+            b"",
+        )
+        .expect("stray archive key");
+    }
     let target = tempfile::tempdir().expect("target parent");
     let log_dir = target.path().join("restored");
     let argv = restore_argv(fixture.archive_root.path(), &log_dir, RestoreOptions {
@@ -88,4 +98,7 @@ fn json_report_stdout_is_one_json_object(extra: &[&str], dry_run: bool) {
     check!(report["dry_run"] == serde_json::Value::Bool(dry_run));
     let stderr = String::from_utf8(output.stderr).expect("utf-8 stderr");
     check!(stderr.contains("Formatted 1 log directory with cluster-id") == !dry_run);
+    check!(
+        stderr.contains("the archive holds keys this restore cannot attribute") == (stray_keys > 0)
+    );
 }

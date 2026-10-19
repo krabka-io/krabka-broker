@@ -78,7 +78,7 @@ Three flag combinations are rejected. A partition named twice by `--to-offset` i
 
 ### Behaviour
 
-`--dry-run` runs discovery, verification, and the bound, and writes no partition data. It does write the target's cluster metadata, so it still needs an empty `--log-dir`, and it produces the same report a real run produces with `dry_run` set. An operator who wants to see what a bound will do runs it and reads the counts.
+`--dry-run` runs discovery, verification, and the bound, and checks the format against a throwaway directory. It writes nothing to `--log-dir`, so the real run that follows it can use the same directory. It still refuses a `--log-dir` that is not empty, as a real run does, and it produces the same report a real run produces with `dry_run` set. Without `--cluster-id`, each run generates its own cluster id, so the plan names an id the restored cluster does not get; pass `--cluster-id` to pin it. An operator who wants to see what a bound will do runs it and reads the counts.
 
 `--continue-on-corrupt` turns a segment that fails verification into a skipped segment in the report instead of an error. `--report text|json` selects the rendering.
 
