@@ -334,13 +334,6 @@ fn seed_metadata_records(
         feature_levels: 0,
         topics_without_configuration: Vec::new(),
     };
-    if snapshot_records.is_none() {
-        metadata.topics_without_configuration = topic_order
-            .iter()
-            .map(|topic| (*topic).to_owned())
-            .collect();
-    }
-
     let mut features = Vec::new();
     let mut feature_epoch = Vec::new();
     let mut topic_configs = Vec::new();
@@ -354,6 +347,17 @@ fn seed_metadata_records(
             MetadataRecord::V1Topic(topic) => Some((topic.name.as_str(), topic.topic_id)),
             _ => None,
         })
+        .collect();
+    // A topic the snapshot does not know by name and id has no configuration
+    // in it: the snapshot predates the topic, or its re-creation. Without a
+    // snapshot, no topic has any.
+    metadata.topics_without_configuration = topic_order
+        .iter()
+        .filter(|topic| {
+            snapshot_records.is_none()
+                || snapshot_topics.get(**topic) != topics.get(**topic).map(|tally| &tally.topic_id)
+        })
+        .map(|topic| (*topic).to_owned())
         .collect();
     let mut snapshot_features = HashSet::new();
     for record in snapshot_records.into_iter().flatten() {
@@ -832,6 +836,50 @@ mod tests {
             krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE,
         ]));
         check!(records == expected);
+    }
+
+    /// A restored topic the snapshot does not know, by name and topic id, has
+    /// no configuration to bring back: the snapshot predates it, or predates
+    /// its re-creation. The report names it, as it names every topic when no
+    /// snapshot is given.
+    #[yare::parameterized(
+        knows_both = { &[("orders", 1), ("payments", 2)], &[] },
+        predates_one = { &[("orders", 1)], &["payments"] },
+        predates_a_recreation = { &[("orders", 1), ("payments", 9)], &["payments"] },
+        predates_both = { &[], &["orders", "payments"] },
+    )]
+    fn a_restored_topic_the_snapshot_does_not_know_is_without_configuration(
+        snapshot_topics: &[(&str, u128)],
+        expected: &[&str],
+    ) {
+        let inventory = ArchiveInventory {
+            partitions: vec![
+                partition_inventory("orders", Uuid::from_u128(1), 0),
+                partition_inventory("payments", Uuid::from_u128(2), 0),
+            ],
+            unrecognized: UnrecognizedKeys::default(),
+        };
+        let snapshot_records = snapshot_topics
+            .iter()
+            .map(|(name, topic_id)| {
+                MetadataRecord::V1Topic(TopicRecord {
+                    name: (*name).to_owned(),
+                    topic_id: Uuid::from_u128(*topic_id),
+                    partitions: 1,
+                    replication_factor: 1,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let SeededMetadata { report, .. } = seed_metadata_records(
+            &inventory,
+            NodeId(7),
+            Some("metadata.checkpoint".into()),
+            Some(&snapshot_records),
+        )
+        .expect("seed metadata");
+
+        check!(report.topics_without_configuration == expected);
     }
 
     #[test]

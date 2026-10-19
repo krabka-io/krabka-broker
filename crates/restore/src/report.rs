@@ -105,7 +105,9 @@ pub struct MetadataRestoreReport {
     pub scram_credentials: usize,
     /// Finalized feature-level records restored.
     pub feature_levels: usize,
-    /// Topics whose configuration was unavailable because no snapshot was supplied.
+    /// Restored topics whose configuration was not recovered: every topic when
+    /// no snapshot was supplied, and otherwise each topic the snapshot does not
+    /// know by name and topic id, because it predates the topic.
     pub topics_without_configuration: Vec<String>,
 }
 
@@ -113,9 +115,15 @@ impl MetadataRestoreReport {
     /// Warning emitted when cluster metadata could not be recovered.
     #[must_use]
     pub fn warning(&self) -> Option<String> {
-        self.snapshot.is_none().then(|| {
-            format!(
+        if self.snapshot.is_none() {
+            return Some(format!(
                 "WARNING: no --metadata-snapshot; topic configuration was not recovered for: {}; ACLs, client quotas, SCRAM credentials, and feature levels were not recovered",
+                self.topics_without_configuration.join(", ")
+            ));
+        }
+        (!self.topics_without_configuration.is_empty()).then(|| {
+            format!(
+                "WARNING: the --metadata-snapshot predates these topics, so their configuration was not recovered: {}",
                 self.topics_without_configuration.join(", ")
             )
         })
@@ -264,9 +272,7 @@ impl RestoreReport {
             .expect("String writer is infallible");
         }
 
-        if let Some(warning) = self.metadata.warning() {
-            writeln!(out, "{warning}").expect("String writer is infallible");
-        } else {
+        if self.metadata.snapshot.is_some() {
             writeln!(
                 out,
                 "metadata: {} topic config{}, {} ACL{}, {} client quota{}, {} SCRAM credential{}, {} feature level{}",
@@ -282,6 +288,9 @@ impl RestoreReport {
                 plural(self.metadata.feature_levels as u64),
             )
             .expect("String writer is infallible");
+        }
+        if let Some(warning) = self.metadata.warning() {
+            writeln!(out, "{warning}").expect("String writer is infallible");
         }
 
         let mut current_topic: Option<TopicHeading<'_>> = None;
@@ -627,6 +636,74 @@ mod tests {
              metadata: 1 topic config, 0 ACLs, 0 client quotas, 0 SCRAM credentials, 0 feature levels\n\
              \n\
              orders-archive (topic id 00000000-0000-0000-0000-000000000000)\n\
+             \x20 partition 0: 1 segment, offsets [0, 402], 402 records kept, 0 dropped\n";
+
+        check!(report.render(ReportFormat::Text) == expected);
+    }
+
+    #[yare::parameterized(
+        no_snapshot = {
+            None,
+            &["orders"],
+            Some("WARNING: no --metadata-snapshot; topic configuration was not recovered for: orders; ACLs, client quotas, SCRAM credentials, and feature levels were not recovered"),
+        },
+        snapshot_predates_topics = {
+            Some("/backup/metadata.checkpoint"),
+            &["orders", "payments"],
+            Some("WARNING: the --metadata-snapshot predates these topics, so their configuration was not recovered: orders, payments"),
+        },
+        snapshot_knows_every_topic = { Some("/backup/metadata.checkpoint"), &[], None },
+    )]
+    fn the_metadata_warning_names_every_topic_without_configuration(
+        snapshot: Option<&str>,
+        topics: &[&str],
+        expected: Option<&str>,
+    ) {
+        let metadata = MetadataRestoreReport {
+            snapshot: snapshot.map(Into::into),
+            topic_configs: 0,
+            access_control_entries: 0,
+            client_quotas: 0,
+            scram_credentials: 0,
+            feature_levels: 0,
+            topics_without_configuration: topics.iter().map(|topic| (*topic).to_owned()).collect(),
+        };
+
+        check!(metadata.warning().as_deref() == expected);
+    }
+
+    #[test]
+    fn text_rendering_keeps_the_counts_and_warns_when_the_snapshot_predates_a_topic() {
+        let report = RestoreReport {
+            dry_run: false,
+            log_dir: "/var/lib/krabka/restored".into(),
+            cluster_id: Uuid::nil(),
+            authentication: None,
+            diskless: None,
+            metadata: MetadataRestoreReport {
+                snapshot: Some("/backup/metadata.checkpoint".into()),
+                topic_configs: 0,
+                access_control_entries: 0,
+                client_quotas: 0,
+                scram_credentials: 0,
+                feature_levels: 1,
+                topics_without_configuration: vec!["ledger".to_owned()],
+            },
+            partitions: vec![PartitionReport {
+                topic: "ledger".to_owned(),
+                partition: 0,
+                topic_id: Uuid::nil(),
+                segments: vec![segment().call()],
+            }],
+            skipped: vec![],
+        };
+
+        let expected = "krabka restore: wrote /var/lib/krabka/restored\n\
+             cluster id: 00000000-0000-0000-0000-000000000000\n\
+             metadata: 0 topic configs, 0 ACLs, 0 client quotas, 0 SCRAM credentials, 1 feature level\n\
+             WARNING: the --metadata-snapshot predates these topics, so their configuration was not recovered: ledger\n\
+             \n\
+             ledger (topic id 00000000-0000-0000-0000-000000000000)\n\
              \x20 partition 0: 1 segment, offsets [0, 402], 402 records kept, 0 dropped\n";
 
         check!(report.render(ReportFormat::Text) == expected);
