@@ -9,8 +9,8 @@
 use {
     super::{
         super::{RemoteFetchWait, refused_read, try_remote_read, wait::remote_fetch_max_wait},
-        TIERED_HIGH_WATERMARK, TieredBroker, commit_everything, out_of_range_at,
-        tiered_broker_with, tiered_partition,
+        TIERED_HIGH_WATERMARK, TieredBroker, committed_tiered_partition, out_of_range_at,
+        tiered_broker_with,
     },
     crate::{
         broker::Broker,
@@ -79,12 +79,7 @@ async fn alter_remote_fetch_max_wait(broker: &Broker, ms: u64) {
 async fn the_remote_fetch_wait_bounds_a_read_that_cannot_start_and_follows_an_alter() {
     let owners = single_reader_broker().await;
     let broker = owners.handle.broker_arc_for_test();
-    let part = tiered_partition()
-        .broker(&broker)
-        .dir(owners.dir.path())
-        .call()
-        .await;
-    commit_everything(&part).await;
+    let part = committed_tiered_partition(&broker, owners.dir.path()).await;
     let reader = broker.remote_reader.clone().expect("remote reader");
 
     alter_remote_fetch_max_wait(&broker, 300).await;

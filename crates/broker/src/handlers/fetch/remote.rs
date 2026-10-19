@@ -839,15 +839,20 @@ mod tests {
         }
     }
 
+    /// [`tiered_partition`] under `dir`, with every record it holds committed.
+    async fn committed_tiered_partition(
+        broker: &Arc<Broker>,
+        dir: &std::path::Path,
+    ) -> Arc<Partition> {
+        let part = tiered_partition().broker(broker).dir(dir).call().await;
+        commit_everything(&part).await;
+        part
+    }
+
     async fn committed_tiered_fixture() -> CommittedTieredFixture {
         let owners = tiered_broker().await;
         let broker = owners.handle.broker_arc_for_test();
-        let part = tiered_partition()
-            .broker(&broker)
-            .dir(owners.dir.path())
-            .call()
-            .await;
-        commit_everything(&part).await;
+        let part = committed_tiered_partition(&broker, owners.dir.path()).await;
         CommittedTieredFixture {
             part,
             broker,
@@ -1225,20 +1230,14 @@ mod tests {
     #[tokio::test]
     async fn the_archive_is_served_as_the_segment_holds_it() {
         use {
-            crate::codes,
+            crate::{codes, test_support::EVERY_CODEC},
             krabka_protocol::{owned::fetch_response::PartitionData, records::RecordsPayload},
             krabka_remote_storage::TopicIdPartition,
         };
 
         let mut actual = Vec::new();
         let mut expected = Vec::new();
-        for compression in [
-            CompressionType::None,
-            CompressionType::Gzip,
-            CompressionType::Snappy,
-            CompressionType::Lz4,
-            CompressionType::Zstd,
-        ] {
+        for compression in EVERY_CODEC {
             let owners = tiered_broker().await;
             let broker = owners.handle.broker_arc_for_test();
             let part = tiered_partition()

@@ -86,7 +86,7 @@ fn build_fetch_plan_matches_legacy_encode_path() {
 fn a_parsed_batch_is_framed_by_the_bytes_it_encodes_to() {
     use {
         super::test_support::{compressible_batch, one_partition_response},
-        krabka_compression::CompressionType,
+        crate::test_support::EVERY_CODEC,
         krabka_protocol::{Decode, owned::fetch_response::FetchResponse},
     };
 
@@ -101,13 +101,7 @@ fn a_parsed_batch_is_framed_by_the_bytes_it_encodes_to() {
 
     let mut actual = Vec::new();
     let mut expected = Vec::new();
-    for codec in [
-        CompressionType::None,
-        CompressionType::Gzip,
-        CompressionType::Snappy,
-        CompressionType::Lz4,
-        CompressionType::Zstd,
-    ] {
+    for codec in EVERY_CODEC {
         // From v11 every field the fixture sets is on the wire, so the
         // decoded response is the whole response.
         for version in [11i16, 12, 13, 17] {
