@@ -27,19 +27,11 @@
 mod support;
 
 use {
-    assert2::{assert, check},
-    krabka_broker::{Broker, BrokerConfig, codes},
-    krabka_protocol::owned::offset_commit_request::{
-        OffsetCommitRequest, OffsetCommitRequestPartition,
-    },
+    assert2::check,
+    krabka_broker::{Broker, BrokerConfig},
     krabka_units::prelude::{Time, millis},
     std::{path::Path, time::Duration},
-    support::{
-        client::connect_owned,
-        offsets::offset_commit_topic,
-        topic_id_for,
-        topics::{creatable_topic, create_topic_request_with_setup},
-    },
+    support::{client::connect_owned, commit_partition_zero, create_topic_for_commits},
 };
 
 /// The soak's one-minute roll, snapshot and retention intervals, scaled down.
@@ -149,38 +141,13 @@ async fn second_half_rise(settings: Settings) -> Rise {
     broker.wait_until_group_coordinator_ready().await;
     let client = connect_owned(broker.listen_addr().to_string(), "steady-reclaim", "client").await;
 
-    let created = client
-        .send(
-            create_topic_request_with_setup()
-                .topic(creatable_topic().name(TOPIC.to_owned()).call())
-                .timeout(10_000)
-                .call(),
-        )
-        .await
-        .expect("CreateTopics");
-    assert!(created.topics[0].error_code == codes::NONE);
-    let topic_id = topic_id_for(&client, TOPIC).await;
+    let topic_id = create_topic_for_commits(&client, TOPIC).await;
 
     let mut halves = Vec::new();
     for half in 0..2 {
         for commit in 0..COMMITS_PER_HALF {
-            let committed = client
-                .send(OffsetCommitRequest {
-                    group_id: GROUP.to_owned(),
-                    generation_id_or_member_epoch: -1,
-                    topics: vec![offset_commit_topic(TOPIC, topic_id, vec![
-                        OffsetCommitRequestPartition {
-                            partition_index: 0,
-                            committed_offset: half * COMMITS_PER_HALF + commit,
-                            committed_leader_epoch: -1,
-                            ..Default::default()
-                        },
-                    ])],
-                    ..Default::default()
-                })
-                .await
-                .expect("OffsetCommit");
-            assert!(committed.topics[0].partitions[0].error_code == codes::NONE);
+            let offset = half * COMMITS_PER_HALF + commit;
+            commit_partition_zero(&client, GROUP, (TOPIC, topic_id), offset).await;
             tokio::time::sleep(COMMIT_PACE).await;
         }
         halves.push(Sizes::of(&log_dir));

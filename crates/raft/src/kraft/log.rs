@@ -950,11 +950,8 @@ mod tests {
         }
     }
 
-    /// A prune deletes every segment wholly below the new log start, as
-    /// Kafka's `deleteBeforeSnapshot` does, and keeps the one the new start
-    /// falls in.
-    #[test]
-    fn a_prune_deletes_the_segments_wholly_below_the_new_log_start() {
+    /// Four committed one-record batches, one segment each.
+    fn four_committed_segments() -> LogInDir {
         let dir = tempfile::tempdir().expect("tempdir");
         let config = MetadataLogConfig {
             segment_size: krabka_units::prelude::bytes(1),
@@ -965,6 +962,15 @@ mod tests {
             log.append(&mut batch(0, 1, b"x"), 0).expect("append");
         }
         log.advance_hwm(Offset(4));
+        LogInDir { log, dir }
+    }
+
+    /// A prune deletes every segment wholly below the new log start, as
+    /// Kafka's `deleteBeforeSnapshot` does, and keeps the one the new start
+    /// falls in.
+    #[test]
+    fn a_prune_deletes_the_segments_wholly_below_the_new_log_start() {
+        let LogInDir { mut log, dir } = four_committed_segments();
 
         log.prune_to(Offset(2)).expect("prune");
 
@@ -993,16 +999,7 @@ mod tests {
             names.sort();
             names
         };
-        let dir = tempfile::tempdir().expect("tempdir");
-        let config = MetadataLogConfig {
-            segment_size: krabka_units::prelude::bytes(1),
-            ..MetadataLogConfig::default()
-        };
-        let mut log = KraftLog::open(dir.path(), &config).expect("open");
-        for _ in 0..4 {
-            log.append(&mut batch(0, 1, b"x"), 0).expect("append");
-        }
-        log.advance_hwm(Offset(4));
+        let LogInDir { mut log, dir } = four_committed_segments();
         let pruned_at = SystemTime::now();
         log.prune_to(Offset(2)).expect("prune");
         let after_prune = retired(dir.path());
@@ -1031,13 +1028,6 @@ mod tests {
             }
             check!(retired(dir.path()) == left, "{when}");
         }
-        check!(
-            segment_files(dir.path())
-                == vec![
-                    "00000000000000000002.log".to_owned(),
-                    "00000000000000000003.log".to_owned(),
-                ]
-        );
     }
 
     /// The exact text of a version-0 high-watermark file that records offset

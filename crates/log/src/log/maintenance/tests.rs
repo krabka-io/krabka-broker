@@ -241,10 +241,10 @@ fn owned_gzip_batches_use_the_live_level_and_verbatim_keeps_producer_bytes() {
     }
 }
 
-#[test]
-fn compaction_keeps_retired_files_until_the_deadline() {
-    use crate::log::test_support::{KeyedRecord, compacting_segments, compaction_ctx, keyed_batch};
-    let TempLog { dir: _dir, mut log } = configured_test_log(compacting_segments());
+/// Append three versions of one key, one batch per segment on a log of
+/// `compacting_segments`, so a pass has two sealed segments to merge.
+fn append_three_versions_of_one_key(log: &mut Log) {
+    use crate::log::test_support::{KeyedRecord, keyed_batch};
     for value in [b"old", b"new", b"end"] {
         log.append(&mut keyed_batch(0, &[KeyedRecord {
             offset_delta: 0,
@@ -253,6 +253,13 @@ fn compaction_keeps_retired_files_until_the_deadline() {
         }]))
         .unwrap();
     }
+}
+
+#[test]
+fn compaction_keeps_retired_files_until_the_deadline() {
+    use crate::log::test_support::{compacting_segments, compaction_ctx};
+    let TempLog { dir: _dir, mut log } = configured_test_log(compacting_segments());
+    append_three_versions_of_one_key(&mut log);
     log.compact(&compaction_ctx()).unwrap();
     check!(!log.pending_deletes.is_empty());
     let paths: Vec<_> = log
@@ -295,9 +302,7 @@ fn bases_with_suffix(dir: &std::path::Path, suffix: &str) -> Vec<i64> {
 /// file per roll until it was reopened.
 #[test]
 fn compaction_deletes_the_producer_snapshots_of_the_segments_it_replaces() {
-    use crate::log::test_support::{
-        KeyedRecord, compacting_segments, compaction_ctx, keyed_batch, set_segment_size,
-    };
+    use crate::log::test_support::{compacting_segments, compaction_ctx, set_segment_size};
     // How the retired files go: unlinked at once, reaped once their delay
     // has passed, or reclaimed by the next open after a restart inside the
     // delay, when the in-memory queue of pending deletions is gone. A reopen
@@ -315,14 +320,7 @@ fn compaction_deletes_the_producer_snapshots_of_the_segments_it_replaces() {
             ..compacting_segments()
         };
         let TempLog { dir, mut log } = configured_test_log(config.clone());
-        for value in [b"old", b"new", b"end"] {
-            log.append(&mut keyed_batch(0, &[KeyedRecord {
-                offset_delta: 0,
-                key: b"key",
-                value,
-            }]))
-            .unwrap();
-        }
+        append_three_versions_of_one_key(&mut log);
         // A rolled segment's snapshot and its compaction boundary are
         // published by the rollover flush.
         log.sync().unwrap();
