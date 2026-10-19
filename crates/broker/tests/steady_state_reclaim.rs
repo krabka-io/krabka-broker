@@ -47,6 +47,9 @@ const IDLE_INTERVAL: Time = millis(10);
 /// Commits in each half of a run.
 const COMMITS_PER_HALF: i64 = 300;
 
+/// Commits between two samples of the directories: fifteen samples a half.
+const COMMITS_PER_SAMPLE: i64 = 20;
+
 /// The pause between commits.
 const COMMIT_PACE: Duration = Duration::from_millis(10);
 
@@ -123,7 +126,21 @@ impl Sizes {
     }
 }
 
-/// How much each directory rose over the second half of a run.
+/// The median of `values`, which must not be empty.
+fn median(mut values: Vec<u64>) -> i128 {
+    values.sort_unstable();
+    i128::from(values[values.len() / 2])
+}
+
+/// How much each directory rose from the first half of a run to the second,
+/// as the difference of the two halves' medians.
+///
+/// A directory that only climbs rises by about a half's writes. One that a
+/// roll reclaims is a sawtooth, and a single sample lands anywhere on a tooth:
+/// on a loaded runner a lagging cleaning made an end-minus-midpoint reading
+/// of the metadata log a third of the climb it was compared against. The
+/// median of fifteen samples sits mid-tooth in both halves, so a sawtooth's
+/// rise stays near zero however its phase falls.
 #[derive(Debug, Clone, Copy)]
 struct Rise {
     offsets: i128,
@@ -131,7 +148,7 @@ struct Rise {
 }
 
 /// Run the committer for two halves on a broker set up by `settings`, and
-/// return each directory's rise over the second half.
+/// return each directory's rise from the first half to the second.
 async fn second_half_rise(settings: Settings) -> Rise {
     let dir = tempfile::TempDir::new().unwrap();
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
@@ -143,29 +160,33 @@ async fn second_half_rise(settings: Settings) -> Rise {
 
     let topic_id = create_topic_for_commits(&client, TOPIC).await;
 
-    let mut halves = Vec::new();
-    for half in 0..2 {
+    let mut halves: [Vec<Sizes>; 2] = [Vec::new(), Vec::new()];
+    for (half, samples) in (0..).zip(&mut halves) {
         for commit in 0..COMMITS_PER_HALF {
             let offset = half * COMMITS_PER_HALF + commit;
             commit_partition_zero(&client, GROUP, (TOPIC, topic_id), offset).await;
             tokio::time::sleep(COMMIT_PACE).await;
+            if (commit + 1) % COMMITS_PER_SAMPLE == 0 {
+                samples.push(Sizes::of(&log_dir));
+            }
         }
-        halves.push(Sizes::of(&log_dir));
     }
     broker.shutdown().await;
 
-    let [mid, end] = halves[..] else {
-        unreachable!("two halves were sampled");
+    let [first, second] = halves;
+    let rise = |field: fn(&Sizes) -> u64| {
+        median(second.iter().map(field).collect()) - median(first.iter().map(field).collect())
     };
     Rise {
-        offsets: i128::from(end.offsets) - i128::from(mid.offsets),
-        metadata: i128::from(end.metadata) - i128::from(mid.metadata),
+        offsets: rise(|sizes| sizes.offsets),
+        metadata: rise(|sizes| sizes.metadata),
     }
 }
 
 /// At Kafka's defaults a steady committer and a steady no-op writer each
-/// climb the whole second half. At the soak's roll, snapshot and retention
-/// settings, both directories rise by less than a quarter of that.
+/// climb by a half's writes from one half to the next. At the soak's roll,
+/// snapshot and retention settings, both directories rise by less than a
+/// quarter of that.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_soak_settings_reclaim_what_kafkas_defaults_let_climb() {
     let defaults = second_half_rise(Settings::KafkaDefaults).await;
@@ -177,7 +198,7 @@ async fn the_soak_settings_reclaim_what_kafkas_defaults_let_climb() {
     ];
     for (directory, at_defaults, at_soak) in rows {
         eprintln!(
-            "{directory}: a second-half rise of {at_defaults} bytes at Kafka's defaults, \
+            "{directory}: a median rise of {at_defaults} bytes at Kafka's defaults, \
              {at_soak} at the soak's settings"
         );
         check!(
