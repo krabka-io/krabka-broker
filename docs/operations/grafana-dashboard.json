@@ -349,7 +349,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "refId": "A",
-          "expr": "krabka_broker_offline_partitions_count{instance=~\"$instance\"} - krabka_broker_offline_audit_partitions{instance=~\"$instance\"}",
+          "expr": "krabka_broker_offline_partitions_count{instance=~\"$instance\"} - (krabka_broker_offline_audit_partitions{instance=~\"$instance\"} or krabka_broker_offline_partitions_count{instance=~\"$instance\"} * 0)",
           "legendFormat": "{{instance}}"
         }
       ],
