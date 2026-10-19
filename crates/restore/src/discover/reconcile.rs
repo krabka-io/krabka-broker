@@ -52,7 +52,8 @@ pub(crate) fn load_snapshot(path: &std::path::Path) -> Result<Snapshot, RestoreE
 /// in the archive is a genuine disagreement worth stopping for, not a routine
 /// lag. The same holds for a segment the scan found that the snapshot does
 /// not mention at all, and for a segment the snapshot names as live that the
-/// scan did not find.
+/// scan did not find, unless the archive has only moved on at one of its
+/// ends since the snapshot, as [`reconcile_lagging_decision`] describes.
 ///
 /// # Errors
 ///
@@ -145,18 +146,44 @@ fn reconcile_decision(
     state: Option<RemoteLogSegmentState>,
     retain_deleted_objects: bool,
 ) -> RestoreReconcileDecision {
-    reconcile_lagging_decision(scanned, state, retain_deleted_objects, false)
+    reconcile_lagging_decision(scanned, state, retain_deleted_objects, ArchiveLag::Within)
 }
 
-/// [`reconcile_decision`] for a scanned segment that may postdate the snapshot.
+/// Where a segment lies against the range the other source covers for its
+/// partition.
 ///
-/// The source keeps archiving after a capture reads its RLMM snapshot, so the
-/// archive of a cluster lost while it still wrote holds segments the snapshot
-/// never saw. One that starts after every segment the snapshot names for its
-/// partition is that lag, not an inconsistency: it did not exist when the
-/// snapshot was written, so no deletion the snapshot records can concern it.
-/// It is kept, as a live segment is. A segment the snapshot does not name
-/// inside the range it covers still disagrees.
+/// The source keeps running after a capture reads its RLMM snapshot, so the
+/// archive a restore scans has moved on at both ends. Remote copy has added
+/// segments after the newest one the snapshot names, and remote retention has
+/// deleted, oldest first, segments the snapshot still names as live.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArchiveLag {
+    /// Inside the range both sources cover. A disagreement about it is real.
+    Within,
+    /// A scanned segment that starts after every segment the snapshot names.
+    UploadedAfterSnapshot,
+    /// A snapshot segment that ends before every segment the scan keeps.
+    DeletedAfterSnapshot,
+}
+
+/// [`reconcile_decision`] for a segment at either end of the archive, which
+/// may have moved since the snapshot.
+///
+/// A scanned segment the snapshot does not name, and that starts after every
+/// segment the snapshot names, was archived after the snapshot. It did not
+/// exist when the snapshot was written, so no deletion the snapshot records
+/// can concern it. It is kept, as a live segment is.
+///
+/// A segment the snapshot names as live that the scan does not find, and that
+/// ends before every segment the scan keeps, was deleted by remote retention
+/// after the snapshot. Retention deletes a partition's oldest segments first,
+/// so the archive now starts later. It is excluded, as a finished deletion
+/// is.
+///
+/// Anything else the two sources disagree about still disagrees: a segment
+/// the snapshot does not name inside its range, a live segment missing from
+/// inside the range the scan keeps, and a partition the scan finds nothing
+/// for at all.
 ///
 /// A copy the snapshot caught as `CopySegmentStarted` may then have failed
 /// and been retried under a new segment id at the same base offset. So the
@@ -166,10 +193,16 @@ fn reconcile_lagging_decision(
     scanned: bool,
     state: Option<RemoteLogSegmentState>,
     retain_deleted_objects: bool,
-    newer_than_snapshot: bool,
+    lag: ArchiveLag,
 ) -> RestoreReconcileDecision {
-    if scanned && state.is_none() && newer_than_snapshot {
+    if scanned && state.is_none() && lag == ArchiveLag::UploadedAfterSnapshot {
         return RestoreReconcileDecision::Keep;
+    }
+    if !scanned
+        && state == Some(RemoteLogSegmentState::CopySegmentFinished)
+        && lag == ArchiveLag::DeletedAfterSnapshot
+    {
+        return RestoreReconcileDecision::Exclude;
     }
     if !scanned && state == Some(RemoteLogSegmentState::CopySegmentStarted) {
         return RestoreReconcileDecision::Exclude;
@@ -231,13 +264,27 @@ fn reconcile_partition(
                 })
                 .copied(),
             retain_deleted_objects,
-            snapshot_end.is_some_and(|end| segment.base_offset.get() > end),
+            if snapshot_end.is_some_and(|end| segment.base_offset.get() > end) {
+                ArchiveLag::UploadedAfterSnapshot
+            } else {
+                ArchiveLag::Within
+            },
         )
     };
     let scan_disagrees = partition
         .segments
         .iter()
         .any(|segment| scanned_decision(segment) == RestoreReconcileDecision::Disagree);
+
+    // The first offset of anything the scan keeps for this partition. A
+    // partition it keeps nothing of has no range, so nothing the snapshot
+    // names for it counts as deleted after the snapshot.
+    let scan_start = partition
+        .segments
+        .iter()
+        .filter(|segment| scanned_decision(segment) == RestoreReconcileDecision::Keep)
+        .map(|segment| segment.base_offset.get())
+        .min();
     let snapshot_disagrees =
         dump.into_iter()
             .flat_map(|dump| &dump.segments)
@@ -246,10 +293,15 @@ fn reconcile_partition(
                     scanned.segment_id == snapshot_segment.remote_log_segment_id().id
                         && scanned.base_offset.get() == snapshot_segment.start_offset()
                 });
-                reconcile_decision(
+                reconcile_lagging_decision(
                     scanned,
                     Some(snapshot_segment.state()),
                     retain_deleted_objects,
+                    if scan_start.is_some_and(|start| snapshot_segment.end_offset() < start) {
+                        ArchiveLag::DeletedAfterSnapshot
+                    } else {
+                        ArchiveLag::Within
+                    },
                 ) == RestoreReconcileDecision::Disagree
             });
 

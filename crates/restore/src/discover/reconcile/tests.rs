@@ -424,6 +424,65 @@ async fn a_segment_the_snapshot_does_not_name_is_kept_only_when_it_is_newer(
     }
 }
 
+/// The base offsets of a three-segment partition the snapshot names as live.
+const LIVE_BASES: [i64; 3] = [0, 100, 200];
+
+#[yare::parameterized(
+    the_oldest_gone_is_retention = { &[100, 200], Some(&[100, 200]) },
+    the_two_oldest_gone_is_retention = { &[200], Some(&[200]) },
+    a_gap_in_the_middle_disagrees = { &[0, 200], None },
+    the_newest_gone_disagrees = { &[0, 100], None },
+)]
+#[test_macro(tokio::test)]
+async fn a_live_segment_the_scan_does_not_find_is_excluded_only_when_it_is_older(
+    archived: &[i64],
+    kept: Option<&[i64]>,
+) {
+    let archive = tempfile::tempdir().expect("temp dir");
+    let topic_id = Uuid::from_u128(1);
+    let segment_id = |base: i64| Uuid::from_u128(10 + u128::try_from(base).unwrap());
+    for &base in archived {
+        write_full_segment()
+            .root(archive.path())
+            .partition(PartitionKey {
+                topic_id,
+                ..Default::default()
+            })
+            .base_offset(Offset(base))
+            .segment_id(segment_id(base))
+            .call();
+    }
+    let segments: Vec<SnapshotSegmentEntry> = LIVE_BASES
+        .iter()
+        .map(|&base| SnapshotSegmentEntry {
+            segment_id: segment_id(base),
+            base_offset: Offset(base),
+            state: RemoteLogSegmentState::CopySegmentFinished,
+        })
+        .collect();
+    let SnapshotLocation {
+        dir: _snap_dir,
+        path: snap_path,
+    } = snapshot_with_segments(topic_id, &segments);
+
+    match kept {
+        Some(bases) => {
+            let inventory = sole_partition_inventory(archive.path(), &snap_path).await;
+            let restored: Vec<i64> = inventory
+                .segments
+                .iter()
+                .map(|segment| segment.base_offset.get())
+                .collect();
+            check!(restored == bases);
+        }
+        None => check_orders_disagreement(
+            snapshot_inventory(archive.path(), &snap_path)
+                .await
+                .unwrap_err(),
+        ),
+    }
+}
+
 #[tokio::test]
 async fn a_delete_finished_segment_with_bytes_still_present_is_a_disagreement() {
     // `DeleteSegmentFinished` says the bytes should be gone. Bytes still
