@@ -115,6 +115,26 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- `KrabkaOfflinePartitions` no longer pages for every broker that is down,
+  a planned stop in a rolling upgrade included (issue #1516). Each broker
+  holds one single-replica partition of the audit topic, which has no leader
+  while that broker is down. `krabka_broker_offline_partitions_count` still
+  counts it, as Kafka's `OfflinePartitionsCount` counts every leaderless
+  partition. The new `krabka_broker_offline_audit_partitions` gauge counts
+  those partitions alone, and the shipped alert rule subtracts it. Update a
+  copied `alert-rules.yaml` to the new expression. The gauge's help text and
+  `metrics.md` now say that the active controller reports the count for the
+  whole cluster, and name Kafka's `KafkaController` MBean, not
+  `ReplicaManager`.
+- `krabka_broker_offline_partitions_count` counts a partition that a log-dir
+  failure left without a leader while its broker stays up. The KIP-112
+  failover keeps the live broker as the recorded leader and marks the
+  partition leaderless through its last-known ELR, and the gauge only checked
+  whether the recorded leader was alive, so it read 0 where Kafka's
+  `OfflinePartitionsCount` counts the partition. `KrabkaOfflinePartitions`
+  now fires for it. `krabka_broker_offline_audit_partitions` counts only
+  audit partitions with no live replica, so an audit partition on a failed
+  dir of a live broker still pages.
 - Log compaction deletes the producer-state snapshot of every segment it
   merges, as Kafka's `UnifiedLog.replaceSegments` does, keeping only the one at
   a survivor's own base offset (issue #1507). It used to leave them all, so a

@@ -505,7 +505,13 @@ contains.
    `krabka_broker_under_replicated_partitions` is zero on every broker and
    `krabka_broker_offline_partitions_count` is zero. Do not roll a cluster
    that is already under-replicated: the next stop drops a partition below
-   `min.insync.replicas`.
+   `min.insync.replicas`. During the roll, the stopped broker's audit
+   partition counts as offline until the broker is back, so
+   `krabka_broker_offline_partitions_count` and
+   `krabka_broker_offline_audit_partitions` both read 1 on the active
+   controller and `KrabkaOfflinePartitions` stays quiet. An offline count
+   above the audit count is a user partition that lost its leader: stop the
+   roll.
 2. Stop one broker with `SIGTERM`. Wait for its log to record the controlled
    shutdown, or for `krabka_broker_partitions_led` on it to reach zero.
 3. Replace the binary or the image and start the broker on the same

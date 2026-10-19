@@ -349,7 +349,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "refId": "A",
-          "expr": "krabka_broker_offline_partitions_count{instance=~\"$instance\"}",
+          "expr": "krabka_broker_offline_partitions_count{instance=~\"$instance\"} - (krabka_broker_offline_audit_partitions{instance=~\"$instance\"} or krabka_broker_offline_partitions_count{instance=~\"$instance\"} * 0)",
           "legendFormat": "{{instance}}"
         }
       ],
@@ -367,7 +367,7 @@
         },
         "colorMode": "value"
       },
-      "description": "Alert: > 0. These partitions serve nothing."
+      "description": "Alert: > 0. These partitions serve nothing. A down broker's audit partition is left out."
     },
     {
       "id": 8,

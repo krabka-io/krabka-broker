@@ -74,14 +74,19 @@ groups:
           description: "These partitions reject acks=all produces with NOT_ENOUGH_REPLICAS. Writes are blocked."
           runbook: docs/operations/runbooks/under-min-isr-partitions.md
 
+      # The audit topic's partitions are left out: each has one replica on its
+      # own broker, so it is leaderless exactly while that broker is down, and
+      # KrabkaBrokerDown already pages for that. The `or` keeps the rule firing
+      # on a controller too old to export the audit gauge.
       - alert: KrabkaOfflinePartitions
-        expr: krabka_broker_offline_partitions_count > 0
+        expr: >-
+          krabka_broker_offline_partitions_count - (krabka_broker_offline_audit_partitions or krabka_broker_offline_partitions_count * 0) > 0
         for: 1m
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.instance }} reports {{ $value }} offline partitions"
-          description: "A partition has no live leader. It is unavailable until an ISR member returns or an unclean election runs."
+          summary: "{{ $labels.instance }} reports {{ $value }} offline partitions outside the audit topic"
+          description: "A partition has no live leader. It is unavailable until an ISR member returns or an unclean election runs. Audit-topic partitions of a down broker are not counted."
           runbook: docs/operations/runbooks/offline-partitions.md
 
       - alert: KrabkaLeaderSiteDrift

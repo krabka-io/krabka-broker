@@ -151,6 +151,7 @@ async fn registry_has_broker_prefix_and_all_metrics() {
     m.under_replicated_partitions.set(3);
     m.under_min_isr_partition_count.set(2);
     m.offline_partitions_count.set(1);
+    m.offline_audit_partitions.set(1);
     m.active_controller.set(1);
     m.ignored_static_voters.set(3);
     m.witness_role.set(1);
@@ -176,6 +177,7 @@ async fn registry_has_broker_prefix_and_all_metrics() {
         "krabka_broker_under_replicated_partitions",
         "krabka_broker_under_min_isr_partition_count",
         "krabka_broker_offline_partitions_count",
+        "krabka_broker_offline_audit_partitions",
         "krabka_broker_active_controller",
         "krabka_broker_ignored_static_voters",
         "krabka_broker_witness_role",
