@@ -217,7 +217,7 @@ pub struct RestoreArgs {
     )]
     pub exclude_offset: Vec<OffsetRange>,
 
-    /// Verify, format cluster metadata, and report without writing partition data.
+    /// Verify, check the format, and report without writing to --log-dir.
     #[arg(long, help_heading = HEADING_BEHAVIOUR)]
     pub dry_run: bool,
 
