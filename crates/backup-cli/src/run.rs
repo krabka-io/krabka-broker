@@ -16,18 +16,14 @@ use {
             Artifact, CAPTURE_ROOT, DISKLESS_WAL_INDEX, GROUP_OFFSETS, MANIFEST, MANIFEST_VERSION,
             METADATA_CHECKPOINT, Manifest, RLMM_SNAPSHOT, artifact_problem, sha256_hex,
         },
-        offsets::{GroupOffsetsFile, commit_refusals, commit_request, group_offsets},
+        offsets::{GroupOffsetsFile, admin_offsets, commit_outcome, group_offsets},
     },
     krabka_audit::FileEd25519Signer,
     krabka_client_admin::{
         AdminClient, AdminError, ConfigResource, DescribeConfigsOptions, TopicMetadata,
         groups::ListGroupsOptions,
     },
-    krabka_client_core::{
-        Client, CoordinatorKeyType, build_find_coordinator, coordinator_endpoint,
-        security::ClientSecurity,
-    },
-    krabka_protocol::primitives::uuid::Uuid as WireUuid,
+    krabka_client_core::security::ClientSecurity,
     krabka_remote_storage::{ObjectEntry, Sha256Digest},
     krabka_remote_storage_topic::{KafkaMetadataEventLog, KafkaMetadataLogConfig},
     std::collections::{BTreeMap, BTreeSet},
@@ -707,50 +703,19 @@ async fn restore_offsets_secured(
         return Ok(offsets.offset_count());
     }
 
-    let topic_ids = topic_ids(bootstrap_server, &offsets, security.clone()).await?;
-    let client = Client::builder()
-        .bootstrap(bootstrap_server)
-        .client_id("krabka-backup")
-        .maybe_security(security)
-        .build()
-        .await
-        .map_err(|error| {
-            BackupError::Cluster(format!("cannot reach {bootstrap_server}: {error}"))
-        })?;
-
+    if offsets.offset_count() == 0 {
+        return Ok(0);
+    }
+    let mut admin = connect_admin(bootstrap_server, security).await?;
     let mut committed = 0;
     for group in &offsets.groups {
         if group.offsets.is_empty() {
             continue;
         }
-        let found = client
-            .send(build_find_coordinator(
-                &group.group,
-                CoordinatorKeyType::Group,
-            ))
-            .await
-            .map_err(|error| {
-                BackupError::Cluster(format!("FindCoordinator for {}: {error}", group.group))
-            })?;
-        let coordinator = coordinator_endpoint(&group.group, found).map_err(|error| {
-            BackupError::Cluster(format!("FindCoordinator for {}: {error}", group.group))
-        })?;
-        let response = client
-            .broker(coordinator.node_id)
-            .send(commit_request(group, &topic_ids))
-            .await
-            .map_err(|error| {
-                BackupError::Cluster(format!("OffsetCommit for {}: {error}", group.group))
-            })?;
-        let refusals = commit_refusals(&response);
-        if !refusals.is_empty() {
-            return Err(BackupError::Cluster(format!(
-                "OffsetCommit for {}: {}",
-                group.group,
-                refusals.join("; ")
-            )));
-        }
-        committed += group.offsets.len();
+        let result = admin
+            .alter_consumer_group_offsets(&group.group, &admin_offsets(group))
+            .await;
+        committed += commit_outcome(group, result)?;
         println!("{}: {} offsets committed", group.group, group.offsets.len());
     }
     Ok(committed)
@@ -808,40 +773,6 @@ async fn verify_offsets_boundary(
         ));
     }
     Ok(())
-}
-
-/// The topic id the restored cluster gave each topic the capture names.
-///
-/// `OffsetCommit` v10 puts the topic id on the wire instead of the name, so a
-/// commit that carried names only would silently commit nothing there.
-async fn topic_ids(
-    bootstrap_server: &str,
-    offsets: &GroupOffsetsFile,
-    security: Option<ClientSecurity>,
-) -> Result<BTreeMap<String, WireUuid>, BackupError> {
-    let names: BTreeSet<&str> = offsets
-        .groups
-        .iter()
-        .flat_map(|group| group.offsets.iter().map(|offset| offset.topic.as_str()))
-        .collect();
-    if names.is_empty() {
-        return Ok(BTreeMap::new());
-    }
-    let mut admin = connect_admin(bootstrap_server, security).await?;
-    let wanted: Vec<&str> = names.into_iter().collect();
-    let metadata = admin
-        .metadata(&wanted)
-        .await
-        .map_err(|error| BackupError::Cluster(format!("Metadata: {error}")))?;
-    Ok(metadata
-        .topics
-        .into_iter()
-        .filter_map(|topic| {
-            topic
-                .topic_id
-                .map(|id| (topic.name, WireUuid(id.into_bytes())))
-        })
-        .collect())
 }
 
 /// Read every group's committed offsets from a live cluster.
@@ -1700,7 +1631,7 @@ mod tests {
         write_offsets_capture(&store, "0000000000000001", &offsets, &offsets).await;
         let address = closed_address();
 
-        // The topic ids come first, so this is the Metadata lookup failing.
+        // The admin client's bootstrap connection is the first thing to fail.
         let error = restore_offsets("latest", &address, false, &args)
             .await
             .expect_err("a commit cannot reach a cluster that is not there");

@@ -115,6 +115,15 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- `krabka-backup restore-offsets` waits for a freshly booted broker's group
+  coordinator instead of exiting `6` (issue #1515). It commits through the
+  admin client's `alterConsumerGroupOffsets`, which retries
+  `COORDINATOR_LOAD_IN_PROGRESS`, `COORDINATOR_NOT_AVAILABLE`,
+  `NOT_COORDINATOR` and `REBALANCE_IN_PROGRESS` with Kafka's backoff until
+  Kafka's default `default.api.timeout.ms` (60 seconds) runs out, and finds the
+  coordinator again after `COORDINATOR_NOT_AVAILABLE` and `NOT_COORDINATOR`, as
+  Kafka's `AlterConsumerGroupOffsetsHandler` does. The restore runbook no
+  longer tells the operator to run the command twice.
 - The release image's SLSA provenance attestation carries its predicate
   again. Through v1.0.5, `release.yml` attested its SLSA v1 predicate as
   `--type slsaprovenance`, which cosign reads as SLSA v0.2, so every release
