@@ -918,7 +918,7 @@
               "type": "null"
             }
           ],
-          "description": "Opt-in to the topic-backed `RemoteLogMetadataManager`.\nWhen absent, the broker uses the in-memory fixture."
+          "description": "Overrides for the topic-backed `RemoteLogMetadataManager`.\nTiered storage uses that manager when the table is absent too;\n`in_memory = true` selects the in-memory manager instead."
         },
         "reader_max_pending_tasks": {
           "description": "How many cold-tier reads may wait for a reader slot before one is\nrefused. Kafka's `remote.log.reader.max.pending.tasks`; defaults to\n100.",
