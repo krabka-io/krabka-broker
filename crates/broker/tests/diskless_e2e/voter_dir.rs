@@ -103,6 +103,14 @@ pub(crate) fn durable_bytes(dir: &Path, range: DurableRange) -> Bytes {
     .bytes
 }
 
+/// Copies the voter log directory `from` to `to`, file by file.
+///
+/// The voter keeps running while this copies it, and its cleaner removes a
+/// segment it has compacted or deleted. A file listed and then gone before the
+/// copy reached it is one the voter no longer holds, so it is skipped: an
+/// atomic snapshot taken a moment later would not hold it either. Skipping
+/// cannot hide data the caller asked for, because `durable_bytes` reads the
+/// copy back and a missing range fails there.
 fn copy_dir(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).expect("create the voter log copy");
     for entry in std::fs::read_dir(from).expect("read the voter log dir") {
@@ -110,8 +118,12 @@ fn copy_dir(from: &Path, to: &Path) {
         let target = to.join(entry.file_name());
         if entry.path().is_dir() {
             copy_dir(&entry.path(), &target);
-        } else {
-            std::fs::copy(entry.path(), &target).expect("copy a voter log file");
+            continue;
+        }
+        match std::fs::copy(entry.path(), &target) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("copy a voter log file: {error}"),
         }
     }
 }
