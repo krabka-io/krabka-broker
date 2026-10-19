@@ -94,9 +94,11 @@ its own id, and the plan names one the restored cluster does not get.
 Read the counts. A partition missing from the plan, or a record count far from
 what the topic should hold, is a wrong `--archive-prefix` or a wrong bound.
 Read `metadata.topic_configs` too. Zero, for topics that have config
-overrides in production, is a checkpoint that predates them
-([#1514](https://github.com/krabka-io/krabka-broker/issues/1514)), and
-`topics_without_configuration` does not name them. No capture of that
+overrides in production, is a checkpoint that predates them, and
+`topics_without_configuration` does not name them. A current
+`krabka-backup` refuses the format-time checkpoint
+([#1514](https://github.com/krabka-io/krabka-broker/issues/1514)), but a
+capture still misses a change committed after the checkpoint it took. No capture of that
 cluster carries the overrides then. Set them again with `kafka-configs` after
 step 3, from a record kept outside the cluster.
 [How often](../backup-restore.md#how-often) says how to avoid this.
@@ -144,8 +146,8 @@ step 3, from a record kept outside the cluster.
    --describe` shows the topic configuration the metadata checkpoint carried. If
    the configuration is missing, the restore ran without
    `--metadata-snapshot`, and the report says so. Or the checkpoint predates
-   the configuration, and the report does not say so
-   ([#1514](https://github.com/krabka-io/krabka-broker/issues/1514)). Check
+   the configuration, and the report does not say so. The dry-run check of
+   `metadata.topic_configs` catches this before the restore. Check
    `remote.storage.enable` in particular: a topic restored without it does
    not tier again.
 

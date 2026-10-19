@@ -11,6 +11,7 @@
 
 use {
     crate::manifest::CAPTURE_ROOT,
+    krabka_metadata::MetadataRecord,
     std::path::{Path, PathBuf},
     uuid::Uuid,
 };
@@ -95,10 +96,39 @@ pub fn file_names(dir: &Path) -> Vec<String> {
         .collect()
 }
 
-/// A checkpoint file and the id its name encodes.
-struct LocatedCheckpoint {
-    id: CheckpointId,
-    path: PathBuf,
+impl CheckpointId {
+    /// Whether this is the checkpoint `krabka format` writes, at end offset
+    /// zero.
+    ///
+    /// A plain format puts the bootstrap records only in it, and never a
+    /// topic. A format that `krabka-restore` runs also seeds the restored
+    /// topics into it, so [`holds_a_topic`] tells the two apart. The controller
+    /// writes its first checkpoint past it only after
+    /// `metadata_max_snapshot_interval`, or once enough metadata is committed,
+    /// so until then it is the newest checkpoint on the node.
+    #[must_use]
+    pub const fn is_format_time(self) -> bool { self.end_offset == 0 }
+}
+
+/// Whether a checkpoint's decoded records hold a topic.
+///
+/// The format-time checkpoint of a plain `krabka format` holds none. One that
+/// `krabka-restore` wrote holds the restored topics, and a controller's
+/// periodic checkpoint holds every topic the cluster had.
+#[must_use]
+pub fn holds_a_topic(records: &[MetadataRecord]) -> bool {
+    records
+        .iter()
+        .any(|record| matches!(record, MetadataRecord::V1Topic(_)))
+}
+
+/// A metadata checkpoint file and the id its name encodes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetadataCheckpoint {
+    /// The id the file name encodes.
+    pub id: CheckpointId,
+    /// The file.
+    pub path: PathBuf,
 }
 
 /// The newest metadata checkpoint under `log_dir`, the node's metadata log
@@ -115,8 +145,8 @@ struct LocatedCheckpoint {
 /// rejects, which the two functions cannot do: the first selects only names the
 /// second parsed.
 #[must_use]
-pub fn newest_metadata_checkpoint(log_dir: &Path) -> Option<PathBuf> {
-    let mut best: Option<LocatedCheckpoint> = None;
+pub fn newest_metadata_checkpoint(log_dir: &Path) -> Option<MetadataCheckpoint> {
+    let mut best: Option<MetadataCheckpoint> = None;
     for subdir in [CONTROLLER_CHECKPOINT_DIR, OBSERVER_CHECKPOINT_DIR] {
         let dir = log_dir.join(subdir);
         let Some(name) = newest_checkpoint(&file_names(&dir)) else {
@@ -124,13 +154,13 @@ pub fn newest_metadata_checkpoint(log_dir: &Path) -> Option<PathBuf> {
         };
         let id = checkpoint_id(&name).expect("newest_checkpoint returns a parseable name");
         if best.as_ref().is_none_or(|seen| id > seen.id) {
-            best = Some(LocatedCheckpoint {
+            best = Some(MetadataCheckpoint {
                 id,
                 path: dir.join(name),
             });
         }
     }
-    best.map(|located| located.path)
+    best
 }
 
 /// The id a capture taken at `now_ms` carries, which is also its directory
@@ -150,8 +180,8 @@ pub fn capture_key(capture_id: &str, artifact: &str) -> String {
 mod tests {
     use {
         super::{
-            CheckpointId, capture_id, capture_key, checkpoint_id, newest_checkpoint,
-            newest_metadata_checkpoint,
+            CheckpointId, MetadataCheckpoint, capture_id, capture_key, checkpoint_id,
+            newest_checkpoint, newest_metadata_checkpoint,
         },
         assert2::check,
     };
@@ -176,6 +206,20 @@ mod tests {
         expected: Option<CheckpointId>,
     ) {
         check!(checkpoint_id(name) == expected, "for {name}");
+    }
+
+    #[yare::parameterized(
+        format_time = { 0, 0, true },
+        format_time_later_epoch = { 0, 3, true },
+        first_controller_checkpoint = { 1, 1, false },
+        far_along = { 123_456, 42, false },
+    )]
+    fn only_end_offset_zero_is_the_format_time_checkpoint(
+        end_offset: u64,
+        epoch: u64,
+        expected: bool,
+    ) {
+        check!(CheckpointId { end_offset, epoch }.is_format_time() == expected);
     }
 
     #[test]
@@ -211,7 +255,16 @@ mod tests {
         )
         .expect("write an older checkpoint");
 
-        check!(newest_metadata_checkpoint(log_dir.path()) == Some(newest));
+        check!(
+            newest_metadata_checkpoint(log_dir.path())
+                == Some(MetadataCheckpoint {
+                    id: CheckpointId {
+                        end_offset: 42,
+                        epoch: 0
+                    },
+                    path: newest,
+                })
+        );
     }
 
     #[test]
@@ -227,7 +280,13 @@ mod tests {
 
         check!(
             newest_metadata_checkpoint(log_dir.path())
-                == Some(log_dir.path().join("__cluster_metadata-0").join(name))
+                == Some(MetadataCheckpoint {
+                    id: CheckpointId {
+                        end_offset: 42,
+                        epoch: 0
+                    },
+                    path: log_dir.path().join("__cluster_metadata-0").join(name),
+                })
         );
     }
 
