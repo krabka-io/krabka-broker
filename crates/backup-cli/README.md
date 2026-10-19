@@ -126,6 +126,15 @@ already has members is fenced, and that refusal is correct: an offset must not
 move under a consumer that reads from it. Start the restored cluster, put the
 offsets back, then start the consumers.
 
+A freshly booted broker creates `__consumer_offsets` on the first coordinator
+lookup and answers `COORDINATOR_NOT_AVAILABLE` while it does.
+`restore-offsets` retries the codes Kafka's admin client retries, with its
+backoff, until Kafka's default `default.api.timeout.ms` (60 seconds) runs out:
+`COORDINATOR_LOAD_IN_PROGRESS`, `COORDINATOR_NOT_AVAILABLE`, `NOT_COORDINATOR`
+and `REBALANCE_IN_PROGRESS`. It runs `FindCoordinator` again after
+`COORDINATOR_NOT_AVAILABLE` and `NOT_COORDINATOR`. It exits `6` only when the
+coordinator is still not ready at that deadline, and the message says so.
+
 The offsets a capture holds are as old as the capture. A group that committed
 after the last capture resumes at the older position and reads some records a
 second time, which is the at-least-once behaviour every Kafka consumer already

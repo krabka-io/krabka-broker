@@ -179,14 +179,10 @@ step 3, from a record kept outside the cluster.
    exits `5` and names the capture. The expected head must come from the
    incident evidence, not from the archive being restored.
 
-   The first run against a freshly booted broker can exit `6` with
-   `FindCoordinator ... protocol error from server: 15`. That is
-   `COORDINATOR_NOT_AVAILABLE` while the broker creates `__consumer_offsets`,
-   and the tool does not retry it yet
-   ([#1515](https://github.com/krabka-io/krabka-broker/issues/1515)). Run the
-   same command again after a few seconds. If it fails again, read the broker
-   log for `INVALID_REPLICATION_FACTOR`: the broker then needs the flags of
-   step 3.
+   On a freshly booted broker the tool waits, for up to 60 seconds, while the
+   broker creates and loads `__consumer_offsets`. If it exits `6` saying that
+   the group coordinator did not become available, read the broker log for
+   `INVALID_REPLICATION_FACTOR`: the broker then needs the flags of step 3.
 
    Run it with `--dry-run` first to see the positions it will write. It commits
    as a simple consumer, so the coordinator fences it on any group that already

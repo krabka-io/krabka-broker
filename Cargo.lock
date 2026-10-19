@@ -3165,7 +3165,6 @@ dependencies = [
  "krabka-client-core",
  "krabka-macros",
  "krabka-object-store",
- "krabka-protocol",
  "krabka-remote-storage",
  "krabka-remote-storage-topic",
  "krabka-security",
