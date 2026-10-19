@@ -294,26 +294,39 @@ live. `krabka-restore` accepts both changes:
   segment ends before every segment the archive still holds.
 
 So each restored partition starts at the oldest segment that the archive holds
-when the restore reads it, not at the capture. In step 4, compare with what
-production holds at that time: `kafka-get-offsets --time -2` gives each
-partition's earliest offset. Compaction does not change the archive, because
-a compacted topic never tiers.
+when the restore reads it, not at the capture. In step 4, compare from the
+restored partition's earliest offset: `kafka-get-offsets --time -2` gives it.
+Production's earliest offset, read after the restore, is never below it,
+because retention only moves it forward. Compaction does not change the
+archive, because a compacted topic never tiers.
 
-Two changes that a running cluster makes still stop a rehearsal:
+A captured group position can lie below the restored partition's earliest
+offset, when retention passed it after the capture. `restore-offsets` commits
+it as captured. The group's first fetch is then out of range, and the
+consumer resets as its `auto.offset.reset` says, as it would on production.
+
+Some changes that a running cluster makes still stop a rehearsal:
 
 - **Retention emptied a partition** after the capture. The restore stops with
   a metadata disagreement for that partition, because an archive that lost a
   whole partition looks the same.
+- **A partition archived its first segment** after the capture, for example
+  a topic created or tiered after it. The snapshot lists no segment for the
+  partition, so the restore cannot tell a new upload from the leftover bytes
+  of a deleted one, and stops with a metadata disagreement.
+- **An unclean leader election** after the capture. The new leader deletes
+  the remote segments outside its epoch lineage and uploads its own copies
+  of those offsets, and the restore stops with a metadata disagreement.
 - **Retention deleted a segment while the restore was reading it.** The
   restore stops with a torn copy, exit `5`, of the oldest segment of a
   partition.
 
-For both, take a new capture and run the rehearsal again. Take the capture
-just before the rehearsal, so retention has little time to act. If the
+For each, take a new capture and run the rehearsal again. Take the capture
+just before the rehearsal, so the archive has little time to change. If the
 same failure comes back, the archive itself is the problem. Any other
-disagreement is not something a running cluster does, so it is a finding.
-Examples are a segment missing from the middle of a partition, or a segment
-inside the snapshot's range that the snapshot does not list.
+disagreement is a finding. Examples are a segment missing from the middle of
+a partition, or a segment inside the snapshot's range that the snapshot does
+not list, with no unclean election since the capture.
 
 The [restore-from-archive](runbooks/restore-from-archive.md) runbook is that
 sequence written out for the day it is not a rehearsal.

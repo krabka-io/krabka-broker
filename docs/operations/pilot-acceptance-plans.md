@@ -80,7 +80,7 @@ So both plans forbid `kafka-features upgrade` during the run, except where a pla
 
 [#1397](https://github.com/krabka-io/krabka-broker/issues/1397) destroys source data, but only in its own isolated qualification cluster. A pilot never destroys an operator's data. Each plan's drill restores the newest verifying capture from the production archive into a scratch target, as [Check a copy](backup-restore.md#check-a-copy) and the [restore-from-archive](runbooks/restore-from-archive.md) runbook describe. The drill then reconciles the scratch cluster against the production cluster at the capture boundary. The drill measures RPO and RTO with the definitions of the `disaster-recovery` qualification gate, so a pilot result and a #1397 result use the same units. `rpo_ms` is the age of the capture when the drill declares the loss. `rto_ms` runs from the declared loss to a cluster that has served every captured record, each topic's settings and the group positions back to a reader.
 
-A drill reads a live archive. After the capture, the cluster keeps copying new segments to the archive, and remote retention keeps deleting the oldest ones. `krabka restore` with `--rlmm-snapshot` accepts both changes, as [Check a copy](backup-restore.md#check-a-copy) describes. Each restored partition then starts at the oldest segment the archive holds when the restore reads it. So the drill records each canary partition's earliest offset on production with `kafka-get-offsets --time -2` immediately before the restore. A restore that stops because retention emptied a partition, or deleted a segment while the restore read it, is rerun from a new capture, as that section says. The first such stop is not a finding. A repeat is.
+A drill reads a live archive. After the capture, the cluster keeps copying new segments to the archive, and remote retention keeps deleting the oldest ones. `krabka restore` with `--rlmm-snapshot` accepts both changes, as [Check a copy](backup-restore.md#check-a-copy) describes. Each restored partition then starts at the oldest segment the archive holds when the restore reads it. So the drill reads each canary partition's earliest offset with `kafka-get-offsets --time -2` twice: on the scratch cluster, and on production after the restore has finished. Retention only moves production's earliest offset forward, so the scratch value must not be above it. A restore that stops for one of the reasons that section lists is rerun from a new capture. The first such stop is not a finding. A repeat is.
 
 The archive bounds what a drill can restore. A record reaches the archive only when its segment rolls and the remote copy completes. Compacted topics cannot be tiered, so no archive holds them. The plans set `segment.ms` on every tiered topic to bound the first limit, and they protect compacted topics another way (see [gap issues](#gap-issues)).
 
@@ -237,7 +237,7 @@ Reconciliation checks:
 | Check | Pass condition |
 | :--- | :--- |
 | Capture | `krabka-backup verify` exits `0` for the capture the drill uses. |
-| Records | For each canary partition, every value acknowledged before the capture boundary and older than the RPO is present at its original offset, if its offset is at or above the earliest offset that the drill recorded on production before the restore. |
+| Records | For each canary partition, every value acknowledged before the capture boundary and older than the RPO is present at its original offset, if its offset is at or above the scratch partition's earliest offset. That earliest offset is at or below production's earliest offset after the restore. |
 | Topic settings | `kafka-configs --describe` on the scratch cluster matches production at the capture for every restored topic. |
 | ACLs and credentials | `kafka-acls --list` matches production at the capture. A pilot principal authenticates with its SCRAM password. |
 | Group offsets | After `krabka-backup restore-offsets`, every captured group's position equals the captured position. |
@@ -370,7 +370,7 @@ Reconciliation checks:
 | Check | Pass condition |
 | :--- | :--- |
 | Bound | No restored record has a timestamp after T. |
-| Committed records | Every canary value committed before T minus the RPO is present at its original offset, if its offset is at or above the earliest offset that the drill recorded on production before the restore. |
+| Committed records | Every canary value committed before T minus the RPO is present at its original offset, if its offset is at or above the scratch partition's earliest offset. That earliest offset is at or below production's earliest offset after the restore. |
 | Transactional visibility | A `read_committed` reader of the restored canary input sees no aborted value. |
 | Output rebuild | For every window that closes before T minus the RPO, the rebuilt output of the new application equals the production output. |
 | ACLs and principals | `kafka-acls --list` matches production at the capture. An mTLS client maps to the same principal. |
