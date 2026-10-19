@@ -554,9 +554,6 @@ pub(crate) struct SoakCluster {
 
 #[bon::bon]
 impl SoakCluster {
-    /// Format and boot three nodes.
-    pub(crate) fn start() -> Self { Self::configured().call() }
-
     /// Format and boot three nodes, each with the same additions.
     ///
     /// `root_toml` is top-level keys for every node's configuration file and

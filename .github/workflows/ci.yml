@@ -1010,6 +1010,12 @@ jobs:
   # `--test_timeout` because Bazel's longest built-in timeout, `eternal`, is
   # one hour. The value is the soak plus an hour for the image load, the
   # cluster boot and the read-back at the end.
+  #
+  # `--flaky_test_attempts=1` because every `_docker_test` is `flaky`, which
+  # gives it three attempts, and a second four-hour attempt cannot finish
+  # inside `timeout-minutes`. With the retry, every failed soak from
+  # 2026-10-06 to 10-18 ended as a job cancelled at the time limit, not as a
+  # failure.
   soak:
     name: soak · four hours
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -1056,6 +1062,7 @@ jobs:
             --config=docker \
             --bes_backend= \
             --test_timeout=18000 \
+            --flaky_test_attempts=1 \
             --test_env=KRABKA_SOAK_SECONDS \
             --test_output=streamed \
             //crates/broker:soak_docker_test

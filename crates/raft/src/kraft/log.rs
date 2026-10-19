@@ -13,7 +13,10 @@ use {
     krabka_log::{Log, LogConfig, RawRead},
     krabka_protocol::{Decode as _, records::RecordBatch},
     krabka_units::prelude::ByteSize,
-    std::path::{Path, PathBuf},
+    std::{
+        path::{Path, PathBuf},
+        time::SystemTime,
+    },
 };
 
 pub struct KraftLog {
@@ -370,6 +373,25 @@ impl KraftLog {
         let trimmed = self.log.trim_to_offset(end_offset);
         self.checked(trimmed)?;
         Ok(())
+    }
+
+    /// Deletes the files of every segment that [`Self::prune_to`] or
+    /// [`Self::install_snapshot`] retired at least `file.delete.delay.ms`
+    /// before `now`.
+    ///
+    /// A retired segment is renamed to `.deleted` and stays readable for that
+    /// delay, Kafka's 60-second default, as in Kafka's `KafkaRaftLog`. Kafka's
+    /// scheduler then deletes it. Without this call nothing would: the
+    /// broker's retention sweep reaps the partitions it owns, and the metadata
+    /// log is not one of them, so every cleaning would leave its segments on
+    /// disk until the node restarted.
+    ///
+    /// # Errors
+    /// Returns [`RaftError`] if a deletion fails. The files that were not
+    /// deleted are retried on the next call.
+    pub fn reap_retired_files(&mut self, now: SystemTime) -> Result<(), RaftError> {
+        let maintained = self.log.maintain(now);
+        self.checked(maintained)
     }
 
     /// Replaces the log with an empty log that starts at `end_offset`, which
@@ -924,6 +946,61 @@ mod tests {
                     "00000000000000000002.log".to_owned(),
                     "00000000000000000003.log".to_owned(),
                 ])
+        );
+    }
+
+    /// A pruned segment stays on disk under a `.deleted` name for Kafka's
+    /// 60-second `file.delete.delay.ms`, and the first reap after that deletes
+    /// it. Before the reap existed, nothing deleted it until a restart.
+    #[test]
+    fn a_reap_deletes_the_pruned_segments_once_their_delay_has_passed() {
+        let retired = |dir: &Path| -> Vec<String> {
+            let mut names: Vec<String> = std::fs::read_dir(dir)
+                .expect("list the partition directory")
+                .flatten()
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .filter(|name| name.ends_with(".deleted"))
+                .collect();
+            names.sort();
+            names
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = MetadataLogConfig {
+            segment_size: krabka_units::prelude::bytes(1),
+            ..MetadataLogConfig::default()
+        };
+        let mut log = KraftLog::open(dir.path(), &config).expect("open");
+        for _ in 0..4 {
+            log.append(&mut batch(0, 1, b"x"), 0).expect("append");
+        }
+        log.advance_hwm(Offset(4));
+        let pruned_at = SystemTime::now();
+        log.prune_to(Offset(2)).expect("prune");
+        let after_prune = retired(dir.path());
+        check!(
+            after_prune
+                .iter()
+                .any(|name| name.starts_with("00000000000000000000.log")),
+            "{after_prune:?}"
+        );
+
+        for (when, now, left) in [
+            ("inside the delay", pruned_at, after_prune.clone()),
+            (
+                "past the delay",
+                pruned_at + std::time::Duration::from_secs(61),
+                Vec::new(),
+            ),
+        ] {
+            log.reap_retired_files(now).expect("reap");
+            check!(retired(dir.path()) == left, "{when}");
+        }
+        check!(
+            segment_files(dir.path())
+                == vec![
+                    "00000000000000000002.log".to_owned(),
+                    "00000000000000000003.log".to_owned(),
+                ]
         );
     }
 

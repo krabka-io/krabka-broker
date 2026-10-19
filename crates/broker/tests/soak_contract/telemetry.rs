@@ -13,7 +13,7 @@
 use {
     crate::{
         host::{docker_try, free_bytes, now_ms},
-        probe::directory_bytes,
+        probe::directory_usage,
         topology::{Node, Nodes},
     },
     serde::{Deserialize, Serialize},
@@ -442,7 +442,7 @@ async fn sample(nodes: &Nodes, tick: u64, stats: StatsSource) -> Vec<TelemetryRo
         };
         let disks: Vec<(u64, Option<u64>)> = roots
             .iter()
-            .map(|root| (directory_bytes(root), free_bytes(root)))
+            .map(|root| (directory_usage(root).bytes, free_bytes(root)))
             .collect();
         (usage, disks)
     })

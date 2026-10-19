@@ -272,6 +272,77 @@ fn compaction_keeps_retired_files_until_the_deadline() {
     check!(log.log_end_offset() == Offset(3));
 }
 
+/// The base offsets of the files in `dir` named `<base><suffix>`.
+fn bases_with_suffix(dir: &std::path::Path, suffix: &str) -> Vec<i64> {
+    let mut bases: Vec<i64> = std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .filter_map(|entry| {
+            let file_name = entry.file_name().into_string().ok()?;
+            file_name.strip_suffix(suffix)?.parse().ok()
+        })
+        .collect();
+    bases.sort_unstable();
+    bases
+}
+
+/// Kafka's `UnifiedLog.replaceSegments` deletes the producer-state snapshot of
+/// every segment a compaction replaces, unless the survivor starts at that
+/// segment's base. Two sealed segments, at 0 and 1, merge into one survivor
+/// at 0, so the snapshot taken when the log rolled to 1 goes, and the one at
+/// the active segment's base stays. Before this, every pass left the merged
+/// segments' snapshots behind, and a compacted partition kept one snapshot
+/// file per roll until it was reopened.
+#[test]
+fn compaction_deletes_the_producer_snapshots_of_the_segments_it_replaces() {
+    use crate::log::test_support::{
+        KeyedRecord, compacting_segments, compaction_ctx, keyed_batch, set_segment_size,
+    };
+    for file_delete_delay in [Time::ZERO, millis(60_000)] {
+        let TempLog { dir, mut log } = configured_test_log(LogConfig {
+            file_delete_delay,
+            ..compacting_segments()
+        });
+        for value in [b"old", b"new", b"end"] {
+            log.append(&mut keyed_batch(0, &[KeyedRecord {
+                offset_delta: 0,
+                key: b"key",
+                value,
+            }]))
+            .unwrap();
+        }
+        // A rolled segment's snapshot and its compaction boundary are
+        // published by the rollover flush.
+        log.sync().unwrap();
+        check!(
+            bases_with_suffix(dir.path(), ".snapshot") == vec![1, 2],
+            "{file_delete_delay:?}: a snapshot at each roll"
+        );
+
+        // The pass groups by `segment.bytes`; widen it so that one pass
+        // merges both sealed segments into a survivor at 0.
+        set_segment_size(&mut log, krabka_units::mebibytes(1));
+        log.compact(&compaction_ctx()).unwrap();
+        if let Some(deadline) = log
+            .pending_deletes
+            .iter()
+            .map(|pending| pending.deadline)
+            .max()
+        {
+            log.maintain(deadline).unwrap();
+        }
+
+        check!(
+            (
+                bases_with_suffix(dir.path(), ".log"),
+                bases_with_suffix(dir.path(), ".snapshot"),
+                log.log_end_offset(),
+            ) == (vec![0, 2], vec![2], Offset(3)),
+            "{file_delete_delay:?}"
+        );
+    }
+}
+
 #[test]
 fn flush_deadlines_ignore_wall_clock_changes() {
     let TempLog { dir: _dir, mut log } = configured_test_log(LogConfig {
