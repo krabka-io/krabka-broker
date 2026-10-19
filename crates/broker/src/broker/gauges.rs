@@ -9,6 +9,7 @@ use {
         config_keys::{
             node_min_insync_replicas, resolve_broker_witness, resolve_preferred_leader_site,
         },
+        elr::state::is_leaderless,
         health::HealthState,
         heartbeat::controller_state::ControllerLivenessState,
         log_dir_status::LogDirRegistry,
@@ -263,15 +264,26 @@ pub(super) fn spawn_broker_gauge_updater(
                         i32::try_from(partition.isr.len()).unwrap_or(i32::MAX) < minimum,
                     );
                 }
-                // Kafka's OfflinePartitionsCount counts every leaderless
-                // partition, internal topics included, so the audit topic
-                // counts here too. Its partitions are also counted alone:
-                // each has one replica on its own broker, so it is leaderless
-                // exactly while that broker is down (#1516).
-                let offline = is_controller && !alive.contains(&partition.leader.0);
+                // Kafka's OfflinePartitionsCount counts every partition with
+                // no leader, internal topics included. A partition has none
+                // when its recorded leader is gone, or when the controller
+                // left it leaderless with the leader still alive, as the
+                // KIP-112 offline-dir failover does: krabka's record keeps
+                // that leader, and the ELR marker says it no longer leads.
+                let offline = is_controller
+                    && (!alive.contains(&partition.leader.0) || is_leaderless(&image, partition));
                 partition_health.2 += usize::from(offline);
+                // The audit share is the part a down broker explains: each
+                // audit partition has one replica on its own broker (#1516).
+                // A failed dir on a live broker is not down, so the alert
+                // still counts it.
                 offline_audit += usize::from(
-                    offline && audit_topic.as_deref() == Some(partition.topic.as_str()),
+                    offline
+                        && audit_topic.as_deref() == Some(partition.topic.as_str())
+                        && !partition
+                            .replicas
+                            .iter()
+                            .any(|replica| alive.contains(&replica.0)),
                 );
             }
             metrics
@@ -412,7 +424,7 @@ mod tests {
             test_support::{broker_registration, single_partition_topic},
         },
         assert2::{assert, check},
-        krabka_metadata::{MetadataImage, MetadataRecord, NodeId},
+        krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionElrRecord},
         krabka_units::{millis, secs},
     };
 
@@ -598,14 +610,24 @@ mod tests {
         alive: &'static [u64],
         audit_enabled: bool,
         single_replica_user_partition_on_broker_3: bool,
+        /// A partition, by topic and index, that the controller left without
+        /// a leader while its recorded leader stays alive, as the KIP-112
+        /// offline-dir failover does.
+        leaderless_marker: Option<(&'static str, i32)>,
         expected_offline: i64,
         expected_offline_audit: i64,
     }
 
     /// The `deploy.md` example: three brokers, an RF=3 user topic, and the
     /// audit topic with one RF=1 partition on each broker. Optionally a user
-    /// topic with one RF=1 partition on broker 3.
-    fn three_broker_image(single_replica_user_partition_on_broker_3: bool) -> MetadataImage {
+    /// topic with one RF=1 partition on broker 3, and one partition that
+    /// carries the ELR leaderless marker: its last-known ELR names only its
+    /// recorded leader.
+    #[bon::builder]
+    fn three_broker_image(
+        #[builder(default)] single_replica_user_partition_on_broker_3: bool,
+        leaderless_marker: Option<(&'static str, i32)>,
+    ) -> MetadataImage {
         let brokers = [NodeId(1), NodeId(2), NodeId(3)];
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         for node_id in brokers {
@@ -638,6 +660,18 @@ mod tests {
                     .call(),
             ));
         }
+        if let Some((topic, partition)) = leaderless_marker {
+            let leader = image
+                .partition(topic, partition)
+                .expect("marked partition")
+                .leader;
+            image.apply(&MetadataRecord::V1PartitionElr(PartitionElrRecord {
+                topic: topic.into(),
+                partition,
+                eligible_leader_replicas: Vec::new(),
+                last_known_elr: vec![leader],
+            }));
+        }
         image
     }
 
@@ -653,6 +687,7 @@ mod tests {
                 alive: &[1, 2, 3],
                 audit_enabled: true,
                 single_replica_user_partition_on_broker_3: false,
+                leaderless_marker: None,
                 expected_offline: 0,
                 expected_offline_audit: 0,
             },
@@ -661,6 +696,7 @@ mod tests {
                 alive: &[1, 2],
                 audit_enabled: true,
                 single_replica_user_partition_on_broker_3: false,
+                leaderless_marker: None,
                 expected_offline: 1,
                 expected_offline_audit: 1,
             },
@@ -669,6 +705,7 @@ mod tests {
                 alive: &[1, 2],
                 audit_enabled: true,
                 single_replica_user_partition_on_broker_3: true,
+                leaderless_marker: None,
                 expected_offline: 2,
                 expected_offline_audit: 1,
             },
@@ -677,12 +714,36 @@ mod tests {
                 alive: &[1, 2],
                 audit_enabled: false,
                 single_replica_user_partition_on_broker_3: false,
+                leaderless_marker: None,
+                expected_offline: 1,
+                expected_offline_audit: 0,
+            },
+            OfflineCase {
+                name: "every broker alive, a user partition leaderless after a dir failure",
+                alive: &[1, 2, 3],
+                audit_enabled: true,
+                single_replica_user_partition_on_broker_3: false,
+                leaderless_marker: Some(("orders", 0)),
+                expected_offline: 1,
+                expected_offline_audit: 0,
+            },
+            OfflineCase {
+                name: "every broker alive, an audit partition leaderless after a dir failure",
+                alive: &[1, 2, 3],
+                audit_enabled: true,
+                single_replica_user_partition_on_broker_3: false,
+                leaderless_marker: Some((DEFAULT_AUDIT_TOPIC, 0)),
                 expected_offline: 1,
                 expected_offline_audit: 0,
             },
         ];
         for case in cases {
-            let image = three_broker_image(case.single_replica_user_partition_on_broker_3);
+            let image = three_broker_image()
+                .single_replica_user_partition_on_broker_3(
+                    case.single_replica_user_partition_on_broker_3,
+                )
+                .maybe_leaderless_marker(case.leaderless_marker)
+                .call();
             let total_partitions = i64::try_from(image.all_partitions().count()).expect("count");
             let liveness = Arc::new(ControllerLivenessState::new(secs(10)));
             for node_id in case.alive {

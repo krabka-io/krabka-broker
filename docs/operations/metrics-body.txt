@@ -34,7 +34,7 @@ krabka_broker_under_min_isr_partition_count 0
 # HELP krabka_broker_offline_partitions_count Count of partitions in the cluster that have no live leader, internal topics included. Reported by the active controller; zero on every other node. Mirrors Kafka's KafkaController.OfflinePartitionsCount. Subtract offline_audit_partitions before alerting on > 0..
 # TYPE krabka_broker_offline_partitions_count gauge
 krabka_broker_offline_partitions_count 0
-# HELP krabka_broker_offline_audit_partitions Count of audit-topic partitions that have no live leader. Each broker holds one single-replica audit partition, so this counts brokers that are down. Reported by the active controller; zero on every other node and with audit disabled. Already included in offline_partitions_count..
+# HELP krabka_broker_offline_audit_partitions Count of audit-topic partitions that have no leader and no live replica. Each broker holds one single-replica audit partition, so this counts brokers that are down. Reported by the active controller; zero on every other node and with audit disabled. Already included in offline_partitions_count..
 # TYPE krabka_broker_offline_audit_partitions gauge
 krabka_broker_offline_audit_partitions 0
 # HELP krabka_broker_active_controller 1 if this broker is the raft (controller) leader, 0 otherwise..

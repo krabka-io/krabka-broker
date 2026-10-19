@@ -189,9 +189,11 @@ pub struct BrokerMetrics {
         with NOT_ENOUGH_REPLICAS.")]
     pub under_min_isr_partition_count: Gauge,
     /// Count of partitions in the cluster that have no live leader: the
-    /// leader is fenced or gone and no eligible ISR member replaced it. Only
-    /// the active controller reports a non-zero value; every other node
-    /// reports zero. Mirrors Kafka's
+    /// leader is fenced or gone and no eligible ISR member replaced it, or
+    /// the controller left the partition leaderless with its leader still
+    /// alive, as the KIP-112 offline-dir failover does when no live ISR
+    /// member can take over. Only the active controller reports a non-zero
+    /// value; every other node reports zero. Mirrors Kafka's
     /// `kafka.controller:type=KafkaController,name=OfflinePartitionsCount`,
     /// which counts every leaderless partition, internal topics included. The
     /// audit topic's partitions therefore count here while their broker is
@@ -204,17 +206,20 @@ pub struct BrokerMetrics {
         offline_audit_partitions before alerting on > 0.")]
     pub offline_partitions_count: Gauge,
     /// The part of
-    /// [`offline_partitions_count`](Self::offline_partitions_count) that
-    /// belongs to the audit topic. Each broker holds one audit partition with
-    /// no other replica, so the partition has no leader exactly while its
-    /// broker is down, a planned stop included. Only the active controller
-    /// reports a non-zero value, and the value is zero when the audit
-    /// subsystem is disabled. Kafka has no audit topic and no counterpart.
-    #[metric(help = "Count of audit-topic partitions that have no live leader. \
-        Each broker holds one single-replica audit partition, so this \
-        counts brokers that are down. Reported by the active controller; \
-        zero on every other node and with audit disabled. Already \
-        included in offline_partitions_count.")]
+    /// [`offline_partitions_count`](Self::offline_partitions_count) that a
+    /// down broker explains: audit-topic partitions with no leader and no
+    /// live replica. Each broker holds one audit partition with no other
+    /// replica, so this counts down brokers, a planned stop included. An
+    /// audit partition left leaderless by a failed log dir on a live broker
+    /// is not counted here, so the alert that subtracts this gauge still
+    /// fires for it. Only the active controller reports a non-zero value, and
+    /// the value is zero when the audit subsystem is disabled. Kafka has no
+    /// audit topic and no counterpart.
+    #[metric(help = "Count of audit-topic partitions that have no leader and no \
+        live replica. Each broker holds one single-replica audit partition, \
+        so this counts brokers that are down. Reported by the active \
+        controller; zero on every other node and with audit disabled. \
+        Already included in offline_partitions_count.")]
     pub offline_audit_partitions: Gauge,
     #[metric(help = "1 if this broker is the raft (controller) leader, 0 otherwise.")]
     pub active_controller: Gauge,
