@@ -63,6 +63,14 @@ feature level that turns the new format on, and updates
 on, every 1.x release reads every format that an earlier 1.x release wrote. A
 change that cannot keep that promise waits for the next major version.
 
+An entry that breaks the on-disk format opens with the exact marker
+`**Breaking, on-disk format.**`. The nightly upgrade smoke
+(`packaging/upgrade-smoke.sh`) reads only that marker. When an entry added since
+the previous release has it, the smoke expects the new build to refuse the old
+data directory. Without it, the smoke expects the new build to open the
+directory and serve the old records. Other wording, such as "the on-disk format
+does not change", does not count.
+
 Then fix the link definitions at the end of the file. Add one for the new tag,
 and move the `[Unreleased]` comparison onto that tag as well: it names the
 previous one, so leaving it alone would keep listing everything this release
