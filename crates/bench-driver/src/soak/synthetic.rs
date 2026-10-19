@@ -17,9 +17,11 @@ use {
         },
         ledger::SeqSet,
         lifecycle::{Checkpoint, CheckpointRead, Side, is_transition, rollback},
+        recovery::{PathRecovery, RecoveryEvidence},
         schedule::{ScheduledFault, expand},
     },
     krabka_units::prelude::*,
+    num_traits::ToPrimitive as _,
     std::collections::BTreeMap,
 };
 
@@ -158,6 +160,33 @@ pub fn clean_run(contract: &Contract) -> Evidence {
             });
         }
     }
+    if let Some(objectives) = &contract.disaster_recovery {
+        // The capture starts `post_capture_load` before the end of the load,
+        // the source is lost at its end, and the restored cluster serves half
+        // the recovery time objective later. Every record comes back.
+        let disaster = evidence.ended_unix_ms;
+        let held = objectives.post_capture_load.secs_f64();
+        evidence.recovery = Some(RecoveryEvidence {
+            capture_started_unix_ms: disaster - objectives.post_capture_load.millis_i64(),
+            disaster_unix_ms: disaster,
+            serving_unix_ms: Some(disaster + (objectives.rto * 0.5).millis_i64()),
+            paths: evidence
+                .producers
+                .iter()
+                .map(|producer| PathRecovery {
+                    path: producer.path.clone(),
+                    producer: producer.producer.clone(),
+                    // The load kept its paced rate after the capture, and every
+                    // record of it came back.
+                    acknowledged: producer.acked.len()
+                        + after_boundary(contract, &producer.path, held),
+                    before_boundary: producer.acked.len(),
+                    lost_beyond_boundary: SeqSet::new(),
+                    oldest_loss_unix_ms: None,
+                })
+                .collect(),
+        });
+    }
     lifecycle_run(contract, &schedule, &mut evidence);
     evidence
 }
@@ -224,6 +253,14 @@ fn lifecycle_run(contract: &Contract, schedule: &[ScheduledFault], evidence: &mu
             config_mismatches: Vec::new(),
         });
     }
+}
+
+/// Records `path` acknowledges at its paced rate over `seconds`.
+fn after_boundary(contract: &Contract, path: &str, seconds: f64) -> u64 {
+    let rate = contract
+        .path(path)
+        .map_or(0.0, |path| path.rate.per_sec_f64());
+    (rate * seconds).ceil().to_u64().unwrap_or(0)
 }
 
 /// Remove the first acknowledged record of the self-check's path from every

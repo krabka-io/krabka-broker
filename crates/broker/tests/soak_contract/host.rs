@@ -2,6 +2,9 @@
 //! environment, the wall clock, and Docker commands that report a failure
 //! instead of panicking.
 
+/// The wall clock, shared with the load so every timestamp of the evidence is
+/// in one coordinate.
+pub(crate) use krabka_bench_driver::soak::client::now_ms;
 use {
     serde::Serialize,
     std::{
@@ -11,19 +14,8 @@ use {
         path::{Path, PathBuf},
         process::Command,
         sync::Mutex,
-        time::{SystemTime, UNIX_EPOCH},
     },
 };
-
-/// The wall clock in Unix milliseconds, the coordinate every timestamp of the
-/// evidence is in.
-pub(crate) fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| {
-            i64::try_from(since.as_millis()).unwrap_or(i64::MAX)
-        })
-}
 
 /// Run `docker` with `args` and return its trimmed stdout, or a message with
 /// its stderr.

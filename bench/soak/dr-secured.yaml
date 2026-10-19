@@ -1,0 +1,112 @@
+# The M28 secured disaster-recovery contract: the load the qualification drill
+# runs through a capture and into the loss of its whole source cluster.
+#
+# This is the declaration issue #1397 executes, fixed before any run: change it
+# in a reviewed commit, never after looking at a result. The drill is the
+# `disaster-recovery` gate of `.aspect/check_qualification_gates.axl`, and
+# `docs/qualification.md` states what its capture includes.
+#
+# The load starts once the source cluster's topics exist and runs, unchanged,
+# through the gate's TLS, SASL and ACL checks and through the capture. It
+# keeps running for `post_capture_load` after the capture starts. Then every
+# source broker is killed and its data directory deleted, and the load is
+# abandoned with its sends in flight.
+#
+# - Every record acknowledged before the capture started must be restored,
+#   exactly once, by every declared reader.
+# - A record acknowledged after it may be lost. The oldest one lost sets the
+#   recovery point, which `rpo` bounds.
+# - `rto` bounds the time from the loss until a fresh cluster, restored from
+#   the capture alone, serves authenticated produce and consume to a principal
+#   that holds only ACLs, not super-user rights.
+#
+# The budgets are loose on purpose: this runs on a shared CI runner, beside
+# MinIO and three brokers, and what it judges is recovery, not latency.
+name: dr-secured
+profile: disaster_recovery
+seed: 1397
+# An upper bound. The drill ends the load at the loss, minutes in.
+duration: 60min
+settle: 0s
+
+host:
+  cpus: 4
+  memory: 16GiB
+  disk_capacity: 14GiB
+  disk_reserve: 2GiB
+
+cluster:
+  brokers: 3
+  replication_factor: 3
+  min_insync_replicas: 2
+  # The broker's `controller_election_timeout` default, as in the soak.
+  check_quorum_window: 5s
+  replica_lag_time_max: 30s
+
+clients:
+  producer:
+    acks: all
+    compression: lz4
+    linger: 5ms
+    batch_size: 16KiB
+    request_timeout: 10s
+    delivery_timeout: 30s
+    max_send_attempts: 3
+  # Unused: transaction state is outside the backup boundary, so no path is
+  # transactional. The section is part of every contract's shape.
+  transactions:
+    timeout: 30s
+    records_per_transaction: 10
+    abort_every: 4
+  consumer:
+    session_timeout: 10s
+    commit_interval: 2s
+    poll_timeout: 200ms
+
+paths:
+  # Restored from its archived KIP-405 segments and the captured RLMM snapshot.
+  - name: tiered-idempotent
+    semantics: idempotent
+    storage: tiered
+    partitions: 3
+    rate: 30/s
+    throughput_floor: 15/s
+    payload: 512B
+    consumers: [read_uncommitted, read_committed]
+    commit_offsets: true
+    produce_latency: {p50: 1s, p99: 5s, p999: 10s}
+    consume_latency: {p50: 2s, p99: 10s, p999: 20s}
+  # Restored from its WAL objects up to the captured WAL index's committed
+  # cutoffs.
+  - name: diskless-idempotent
+    semantics: idempotent
+    storage: diskless
+    partitions: 3
+    rate: 30/s
+    throughput_floor: 15/s
+    payload: 512B
+    consumers: [read_uncommitted, read_committed]
+    commit_offsets: true
+    produce_latency: {p50: 1s, p99: 5s, p999: 10s}
+    consume_latency: {p50: 2s, p99: 10s, p999: 20s}
+
+# Unused: a drill injects no fault but the loss. The section is part of every
+# contract's shape.
+deadlines:
+  leader_failover: 30s
+  isr_rejoin: 60s
+  controller_failover: 30s
+  catch_up_after_pause: 30s
+
+disaster_recovery:
+  # Long enough for every tiered segment that closed before the capture to
+  # reach the archive: segments roll every 2s and the remote log manager runs
+  # every 1s.
+  post_capture_load: 20s
+  # The capture holds the diskless WAL index as of its own start, so a diskless
+  # topic loses everything after it: about `post_capture_load` plus the
+  # capture's own run. Twice that, rounded up.
+  rpo: 60s
+  # The quiesced drill this extends recovered in 14s. Under load the archive
+  # holds minutes of records more.
+  rto: 5min

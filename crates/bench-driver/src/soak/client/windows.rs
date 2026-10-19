@@ -13,8 +13,7 @@
 //! yet cleared, every sample is disturbed.
 
 use {
-    hdrhistogram::Histogram,
-    krabka_bench_driver::{
+    crate::{
         hist,
         soak::{
             contract::Contract,
@@ -22,15 +21,16 @@ use {
             schedule::ScheduledFault,
         },
     },
+    hdrhistogram::Histogram,
     krabka_units::prelude::*,
     std::sync::Mutex,
 };
 
 /// A half-open interval of wall-clock Unix milliseconds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Span {
-    pub(crate) start: i64,
-    pub(crate) end: i64,
+pub struct Span {
+    pub start: i64,
+    pub end: i64,
 }
 
 impl Span {
@@ -39,11 +39,8 @@ impl Span {
 
 /// The disturbed span the schedule plans for `fault`, for a load that
 /// started at `load_start_ms`.
-pub(crate) fn planned_span(
-    contract: &Contract,
-    fault: &ScheduledFault,
-    load_start_ms: i64,
-) -> Span {
+#[must_use]
+pub fn planned_span(contract: &Contract, fault: &ScheduledFault, load_start_ms: i64) -> Span {
     Span {
         start: load_start_ms + fault.start.millis_i64(),
         end: load_start_ms
@@ -52,7 +49,8 @@ pub(crate) fn planned_span(
 }
 
 /// Milliseconds of `load` that no span of `spans` covers.
-pub(crate) fn steady_millis(load: Span, spans: &[Span]) -> i64 {
+#[must_use]
+pub fn steady_millis(load: Span, spans: &[Span]) -> i64 {
     let mut clipped: Vec<Span> = spans
         .iter()
         .map(|span| Span {
@@ -76,7 +74,7 @@ pub(crate) fn steady_millis(load: Span, spans: &[Span]) -> i64 {
 
 /// The spans that make time disturbed, shared by every task that classifies
 /// a sample.
-pub(crate) struct Windows {
+pub struct Windows {
     planned: Vec<Span>,
     actual: Mutex<Vec<Span>>,
     /// The injection instant of the fault now in progress.
@@ -84,7 +82,8 @@ pub(crate) struct Windows {
 }
 
 impl Windows {
-    pub(crate) fn new(planned: Vec<Span>) -> Self {
+    #[must_use]
+    pub fn new(planned: Vec<Span>) -> Self {
         Self {
             planned,
             actual: Mutex::new(Vec::new()),
@@ -93,7 +92,7 @@ impl Windows {
     }
 
     /// Whether a sample taken at `at` is disturbed.
-    pub(crate) fn disturbed(&self, at: i64) -> bool {
+    pub fn disturbed(&self, at: i64) -> bool {
         let active = self
             .active_since
             .lock()
@@ -106,14 +105,14 @@ impl Windows {
     }
 
     /// A fault was injected at `at`.
-    pub(crate) fn injected(&self, at: i64) {
+    pub fn injected(&self, at: i64) {
         if let Ok(mut since) = self.active_since.lock() {
             *since = Some(at);
         }
     }
 
     /// The fault in progress was cleared; `span` is how long it disturbs.
-    pub(crate) fn cleared(&self, span: Span) {
+    pub fn cleared(&self, span: Span) {
         if let Ok(mut spans) = self.actual.lock() {
             spans.push(span);
         }
@@ -123,7 +122,7 @@ impl Windows {
     }
 
     /// Every span, planned and actual, for the steady-time total.
-    pub(crate) fn spans(&self) -> Vec<Span> {
+    pub fn spans(&self) -> Vec<Span> {
         let mut spans = self.planned.clone();
         if let Ok(actual) = self.actual.lock() {
             spans.extend(actual.iter().copied());
@@ -142,15 +141,16 @@ impl Windows {
 
 /// Latency samples split by window, and the acknowledgements that count
 /// toward the steady rate.
-pub(crate) struct Latencies {
+pub struct Latencies {
     steady: Histogram<u64>,
     disturbed: Histogram<u64>,
     /// Samples taken in steady windows.
-    pub(crate) steady_count: u64,
+    pub steady_count: u64,
 }
 
 impl Latencies {
-    pub(crate) fn new() -> Self {
+    #[must_use]
+    pub fn new() -> Self {
         Self {
             steady: hist::new(),
             disturbed: hist::new(),
@@ -158,7 +158,7 @@ impl Latencies {
         }
     }
 
-    pub(crate) fn record(&mut self, disturbed: bool, latency: Time) {
+    pub fn record(&mut self, disturbed: bool, latency: Time) {
         if disturbed {
             hist::record(&mut self.disturbed, latency);
         } else {
@@ -167,7 +167,7 @@ impl Latencies {
         }
     }
 
-    pub(crate) fn merge(&mut self, other: &Self) {
+    pub fn merge(&mut self, other: &Self) {
         // Both sides were built by `hist::new`, so their bounds agree and the
         // addition cannot fail.
         let _ = self.steady.add(&other.steady);
@@ -178,6 +178,10 @@ impl Latencies {
     fn steady(&self) -> LatencySummary { summary(&self.steady) }
 
     fn disturbed(&self) -> LatencySummary { summary(&self.disturbed) }
+}
+
+impl Default for Latencies {
+    fn default() -> Self { Self::new() }
 }
 
 fn summary(histogram: &Histogram<u64>) -> LatencySummary {
@@ -194,7 +198,8 @@ fn summary(histogram: &Histogram<u64>) -> LatencySummary {
 ///
 /// The steady rate is the producer's steady acknowledgements over the steady
 /// time of the load.
-pub(crate) fn measurement(
+#[must_use]
+pub fn measurement(
     path: &str,
     produce: &Latencies,
     consume: &Latencies,
@@ -216,12 +221,11 @@ pub(crate) fn measurement(
 mod tests {
     use {
         super::{Latencies, Span, Windows, measurement, planned_span, steady_millis},
-        crate::support::manifest_dir,
-        assert2::check,
-        krabka_bench_driver::soak::{
-            contract::{Contract, FaultKind, Target},
+        crate::soak::{
+            contract::{Contract, FaultKind, Target, fixture::SELF_CHECK},
             schedule::ScheduledFault,
         },
+        assert2::check,
         krabka_units::prelude::*,
     };
 
@@ -243,8 +247,7 @@ mod tests {
 
     #[test]
     fn a_planned_span_runs_to_the_longest_deadline_after_cleanup() {
-        let path = manifest_dir().join("../../bench/soak/self-check.yaml");
-        let mut contract = Contract::from_yaml(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let mut contract = Contract::from_yaml(SELF_CHECK).unwrap();
         contract.deadlines.leader_failover = secs(20);
         contract.deadlines.isr_rejoin = secs(30);
         let kind = FaultKind::Restart { graceful: false };

@@ -275,22 +275,45 @@ The reusable candidate drill is the `disaster-recovery` leg of the
 RF=3 TLS and SASL/SCRAM-SHA-512 source cluster and a locked S3-compatible
 bucket. Its backup principal has only the cluster, group, user-topic and
 `__diskless_wal_index` permissions capture needs: READ and DESCRIBE on the
-index, and no WRITE, because capture only reads it. It records the
-capture manifest, independently held WORM chain heads, source ledger, topic
-settings and consumer positions before deleting every source data directory.
-The fresh cluster must reproduce those values through the capture boundary and
-the evidence bundle records measured RPO and RTO. `rpo_ms` is the capture's age
-when the source is lost. `rto_ms` runs from the loss through listing,
-verifying and fetching the capture, `krabka-restore`, broker start and
-`restore-offsets`, to a cluster that has served every captured record, each
-topic's settings and the group positions back to a reader. Comparing what it
-served with the source, and proving the resumed WORM chain, come after recovery
-completes, and the drill records that time separately as `verification_ms`.
-Separate copies of the
-archive prove that changed data, missing manifests or objects, an untrusted
-chain head, and unavailable credentials fail closed. Both classic and diskless
-topics are part of a schema-2 qualification; the fast hermetic roundtrip remains
-the per-change gate.
+index, and no WRITE, because capture only reads it.
+
+The drill runs under a declared load,
+[`bench/soak/dr-secured.yaml`](../../bench/soak/dr-secured.yaml): paced
+idempotent producers and committing consumer groups on one tiered and one
+diskless topic, sent over `SASL_SSL` by a principal that holds only ACLs. The
+load runs through the capture and past it, until every source broker is killed.
+The drill records the capture manifest, the WORM chain heads, the source ledger,
+topic settings, ACLs, SCRAM users, quotas and consumer positions, then deletes
+every source data directory. The fresh cluster must reproduce those values
+through the capture boundary, and the soak judge (`krabka-soak-check judge`)
+reconciles the load's records against it.
+
+The capture boundary is the instant the capture starts. Every record
+acknowledged before it must come back, and a missing one fails the drill.
+`rpo_ms` is the time from the loss back to the acknowledgement of the oldest
+acknowledged record that did not come back, and zero when every one did. The
+capture's own age at the loss is kept beside it as `capture_age_ms`. `rto_ms`
+runs from the loss through listing, verifying and fetching the capture,
+`krabka-restore`, broker start and `restore-offsets`, to a cluster that has
+served every captured record, each topic's settings and the group positions
+back to a reader, and has served an authenticated produce and consume to the
+ACL-only load principal. Comparing what it served with the source, proving the
+resumed WORM chain and judging the load come after recovery completes, and the
+drill records that time separately as `verification_ms`.
+
+Access control is reconciled, not assumed: the restored cluster's ACL listing
+and its users' SCRAM mechanisms and quotas must equal the source's, and a
+principal with no ACL, or the load principal on a topic it has no ACL for, is
+refused on both clusters. Separate copies of the archive prove that changed
+data, missing manifests or objects, an untrusted chain head, and unavailable
+credentials fail closed. Separate copies of the capture prove that a changed
+`group-offsets.json` and a missing `rlmm-snapshot` fail `krabka-backup verify`,
+and that `restore-offsets` refuses the changed one and commits nothing. Both
+classic and diskless topics are part of a schema-2 qualification; the fast
+hermetic roundtrip remains the per-change gate.
+[Disaster-recovery declaration](../qualification.md#disaster-recovery-declaration)
+states the drill's backup boundary, load, objectives and recorded limits before
+any run.
 
 ## What comes back
 
@@ -325,6 +348,12 @@ node; in-flight transaction state, which lives in the never-tiered
 [Topics the archive does not hold](#topics-the-archive-does-not-hold) says;
 and any classic active-segment or diskless uncommitted tail beyond the
 reported capture boundary.
+
+The metadata checkpoint holds more than the restore carries. Dynamic broker
+configs, delegation tokens, group configs and client-metrics configs are in the
+checkpoint, and the restore drops all four. Re-apply dynamic broker configs to
+the restored cluster, issue new delegation tokens, and re-apply group and
+client-metrics configs.
 
 ## Related
 

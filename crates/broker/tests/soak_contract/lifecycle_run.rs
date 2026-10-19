@@ -20,13 +20,15 @@
 use {
     crate::{
         host::{docker_try, now_ms},
-        load::{LoadContext, producer_name},
         plan,
-        readback::read_back,
         topology::Nodes,
         transitions::CertAuthority,
     },
     krabka_bench_driver::soak::{
+        client::{
+            load::{LoadContext, producer_name},
+            readback::read_back,
+        },
         contract::{Contract, Isolation},
         lifecycle::{Checkpoint, CheckpointRead, LevelRange, Lifecycle, Side, rollback},
     },
@@ -281,7 +283,7 @@ pub(crate) async fn checkpoint(
     for path in &contract.paths {
         let acknowledged = ctx.acknowledged(&path.name);
         let reader = read_back(
-            &ctx.bootstrap,
+            &ctx.endpoint,
             path,
             Isolation::ReadUncommitted,
             &producer_name(&path.name),

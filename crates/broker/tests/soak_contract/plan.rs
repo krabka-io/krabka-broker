@@ -4,7 +4,7 @@
 //! All of it is pure, so the hermetic tests below check it without a cluster.
 
 use {
-    krabka_bench_driver::soak::contract::{Contract, LoadPath, Semantics, Storage},
+    krabka_bench_driver::soak::contract::{Contract, LoadPath, Profile, Semantics, Storage},
     krabka_units::prelude::*,
 };
 
@@ -30,6 +30,13 @@ const MAX_BROKERS: u32 = 5;
 /// Every reason this executor cannot run `contract`, one line each.
 pub(crate) fn unsupported(contract: &Contract) -> Vec<String> {
     let mut reasons = Vec::new();
+    if contract.profile == Profile::DisasterRecovery {
+        reasons.push(
+            "a disaster_recovery contract runs in the qualification drill, under \
+             krabka-soak-drill, against its secured cluster"
+                .to_owned(),
+        );
+    }
     for path in &contract.paths {
         if (path.storage, path.semantics) == (Storage::Tiered, Semantics::Compacted) {
             reasons.push(format!(
@@ -219,6 +226,17 @@ mod tests {
     fn every_checked_in_contract_is_runnable(file: &str) {
         let reasons = unsupported(&checked_in(file));
         check!(reasons.is_empty(), "{reasons:?}");
+    }
+
+    #[test]
+    fn a_drill_is_left_to_the_qualification_drill() {
+        check!(
+            unsupported(&checked_in("dr-secured.yaml"))
+                == [
+                    "a disaster_recovery contract runs in the qualification drill, under \
+             krabka-soak-drill, against its secured cluster"
+                ]
+        );
     }
 
     #[test]

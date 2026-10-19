@@ -90,14 +90,12 @@ mod executor;
 mod faults;
 #[path = "soak_contract/host.rs"]
 mod host;
+#[path = "soak_contract/injection.rs"]
+mod injection;
 #[path = "soak_contract/lifecycle_run.rs"]
 mod lifecycle_run;
-#[path = "soak_contract/load.rs"]
-mod load;
 #[path = "soak_contract/plan.rs"]
 mod plan;
-#[path = "soak_contract/readback.rs"]
-mod readback;
 #[path = "soak_contract/rollback_guard.rs"]
 mod rollback_guard;
 #[path = "soak_contract/telemetry.rs"]
@@ -106,8 +104,6 @@ mod telemetry;
 mod topology;
 #[path = "soak_contract/transitions.rs"]
 mod transitions;
-#[path = "soak_contract/windows.rs"]
-mod windows;
 
 use {
     crate::{
@@ -115,20 +111,21 @@ use {
         cluster::{SoakCluster, image},
         executor::{Executor, await_full_isr},
         host::{FaultLog, environment, evidence_dir, image_identity, now_ms, write_json},
+        injection::delete_one_record,
         lifecycle_run::{LifecycleRun, checkpoint, supported_features},
-        load::{
-            CommitTracker, LoadContext, ProducerOutput, group_name, producer_name, run_consumer,
-            run_idempotent, run_transactional,
-        },
-        readback::{commit_checks, delete_one_record, read_back, wait_stable},
         support::{manifest_dir, topics::topic_configs},
         telemetry::Telemetry,
         topology::{Node, Nodes},
-        windows::{Latencies, Span, Windows, measurement, planned_span, steady_millis},
     },
     assert2::assert,
     krabka_bench_driver::soak::{
-        contract::{Contract, Profile, Semantics},
+        client::{
+            Endpoint,
+            load::{LoadContext, producer_name, start},
+            readback::{commit_checks, read_back, wait_stable},
+            windows::{Span, Windows, planned_span, steady_millis},
+        },
+        contract::{Contract, Profile},
         evidence::{Evidence, FINAL_COMMIT_CHECK},
         lifecycle::{Checkpoint, Side, is_transition},
         schedule::{ScheduledFault, expand},
@@ -137,7 +134,6 @@ use {
     krabka_protocol::owned::create_topics_request::CreatableTopic,
     krabka_units::prelude::*,
     std::{
-        collections::BTreeMap,
         path::{Path, PathBuf},
         sync::Arc,
         time::Duration,
@@ -364,12 +360,12 @@ fn timing_summary(evidence: &Evidence, load_start: i64) -> Vec<String> {
 /// record, and read every path back at every isolation level it declares.
 async fn inject_and_read_back(
     contract: &Contract,
-    bootstrap: &str,
+    endpoint: &Endpoint,
     nodes: &Nodes,
     evidence: &mut Evidence,
 ) {
     for path in &contract.paths {
-        wait_stable(bootstrap, path, contract.clients.transactions.timeout * 2.0).await;
+        wait_stable(endpoint, path, contract.clients.transactions.timeout * 2.0).await;
     }
     if contract.profile == Profile::SelfCheck
         && let Some(self_check) = &contract.self_check
@@ -379,7 +375,7 @@ async fn inject_and_read_back(
             .iter()
             .find(|ledger| ledger.path == path.name)
     {
-        match delete_one_record(bootstrap, nodes, path, ledger).await {
+        match delete_one_record(endpoint, nodes, path, ledger).await {
             Ok(loss) => {
                 eprintln!(
                     "soak-contract: deleted {} seq {} at {}-{} offset {}",
@@ -396,7 +392,7 @@ async fn inject_and_read_back(
         for &isolation in &path.consumers {
             evidence
                 .readers
-                .push(read_back(bootstrap, path, isolation, &producer_name(&path.name)).await);
+                .push(read_back(endpoint, path, isolation, &producer_name(&path.name)).await);
         }
     }
 }
@@ -510,7 +506,8 @@ async fn take_checkpoint(
 /// every failure or detection, and say whether the run passed.
 fn grade(contract: &Contract, evidence: &Evidence, dir: &Path) -> bool {
     match contract.profile {
-        Profile::Soak | Profile::Lifecycle => {
+        // `plan::unsupported` refuses a drill before any container starts.
+        Profile::Soak | Profile::Lifecycle | Profile::DisasterRecovery => {
             let verdict = judge(contract, evidence);
             write_json(dir, "verdict.json", &verdict);
             for failure in verdict.failures() {
@@ -605,48 +602,16 @@ async fn the_sustained_load_contract_holds() {
             .map(|fault| planned_span(&contract, fault, load_start))
             .collect(),
     ));
-    let ctx = Arc::new(LoadContext::new(
-        contract.clone(),
-        bootstrap.clone(),
-        Arc::clone(&windows),
-    ));
-    let producers: Vec<JoinHandle<ProducerOutput>> = contract
-        .paths
-        .iter()
-        .map(|path| match path.semantics {
-            Semantics::Transactional => {
-                tokio::spawn(run_transactional(Arc::clone(&ctx), path.clone()))
-            }
-            Semantics::Idempotent | Semantics::Compacted => {
-                tokio::spawn(run_idempotent(Arc::clone(&ctx), path.clone()))
-            }
-        })
-        .collect();
-    let mut trackers = Vec::new();
-    let mut consumers: Vec<(String, JoinHandle<Latencies>)> = Vec::new();
-    for path in &contract.paths {
-        for &isolation in &path.consumers {
-            let tracker = path.commit_offsets.then(|| {
-                Arc::new(CommitTracker::new(
-                    group_name(&path.name, isolation),
-                    path.name.clone(),
-                    path.partitions,
-                ))
-            });
-            if let Some(tracker) = &tracker {
-                trackers.push(Arc::clone(tracker));
-            }
-            consumers.push((
-                path.name.clone(),
-                tokio::spawn(run_consumer(
-                    Arc::clone(&ctx),
-                    path.clone(),
-                    isolation,
-                    tracker,
-                )),
-            ));
-        }
-    }
+    let endpoint = Endpoint::plaintext(bootstrap.clone());
+    let ctx = Arc::new(
+        LoadContext::builder()
+            .contract(contract.clone())
+            .endpoint(endpoint.clone())
+            .windows(Arc::clone(&windows))
+            .build(),
+    );
+    let load = start(&ctx);
+    let trackers = load.trackers.clone();
 
     let executor = Executor {
         contract: contract.clone(),
@@ -654,7 +619,7 @@ async fn the_sustained_load_contract_holds() {
         windows: Arc::clone(&windows),
         log,
         trackers: trackers.clone(),
-        bootstrap: bootstrap.clone(),
+        endpoint: endpoint.clone(),
         lifecycle: lifecycle.clone(),
     };
     for fault in &schedule {
@@ -688,23 +653,10 @@ async fn the_sustained_load_contract_holds() {
         load_end - load_start
     );
 
-    let mut produce_latency: BTreeMap<String, Latencies> = BTreeMap::new();
-    for task in producers {
-        let output = task.await.expect("a producer task");
-        produce_latency.insert(output.ledger.path.clone(), output.latencies);
-        evidence.producers.push(output.ledger);
-    }
-    let mut consume_latency: BTreeMap<String, Latencies> = BTreeMap::new();
-    for (path, task) in consumers {
-        let latencies = task.await.expect("a consumer task");
-        consume_latency
-            .entry(path)
-            .or_insert_with(Latencies::new)
-            .merge(&latencies);
-    }
+    let outcome = load.finish().await;
     for tracker in &trackers {
         evidence.commits.extend(
-            commit_checks(&bootstrap, tracker, FINAL_COMMIT_CHECK, &tracker.snapshot()).await,
+            commit_checks(&endpoint, tracker, FINAL_COMMIT_CHECK, &tracker.snapshot()).await,
         );
     }
     let steady = Time::from_millis(steady_millis(
@@ -714,17 +666,14 @@ async fn the_sustained_load_contract_holds() {
         },
         &windows.spans(),
     ));
-    for path in &contract.paths {
-        let empty = Latencies::new();
-        evidence.paths.push(measurement(
-            &path.name,
-            produce_latency.get(&path.name).unwrap_or(&empty),
-            consume_latency.get(&path.name).unwrap_or(&empty),
-            steady,
-        ));
-    }
+    evidence.paths = outcome.measurements(&contract, steady);
+    evidence.producers = outcome
+        .producers
+        .into_iter()
+        .map(|output| output.ledger)
+        .collect();
 
-    inject_and_read_back(&contract, &bootstrap, &nodes, &mut evidence).await;
+    inject_and_read_back(&contract, &endpoint, &nodes, &mut evidence).await;
     evidence.ended_unix_ms = now_ms();
     write_json(&dir, "evidence.json", &evidence);
 

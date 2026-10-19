@@ -35,6 +35,13 @@ path = "src/report_main.rs"
 name = "krabka-soak-check"
 path = "src/soak_check_main.rs"
 
+# The executor of a disaster-recovery contract. The qualification drill runs
+# its load against the secured source cluster until the loss, and its
+# read-back against the cluster restored from the capture.
+[[bin]]
+name = "krabka-soak-drill"
+path = "src/soak_drill_main.rs"
+
 [dependencies]
 bon = { workspace = true }
 assert2 = { workspace = true }

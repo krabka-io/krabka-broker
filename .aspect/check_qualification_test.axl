@@ -278,8 +278,51 @@ def _test_disaster_recovery_uses_the_packaged_secured_loss_path(_ctx):
         "invalid-certificate",
         "denied-acl",
         "no-manifest",
+        "krabka-soak-drill",
+        "krabka-soak-check",
+        "bench/soak/dr-secured.yaml",
+        "capture-tampered",
+        "capture-missing",
+        "acls-restored",
+        "scram-users-restored",
+        "denied-access-restored",
+        "unlisted-topic-restored",
+        "soak-judge",
     ]:
         check_eq(requirement, requirement in commands, True)
+
+def _test_disaster_recovery_runs_under_its_declared_load(_ctx):
+    commands = gate_script("disaster-recovery")
+    marks = [
+        ("load starts", "load --contract /work/dr-contract.yaml"),
+        ("denied on the source", "denied_probe source denied-access-source"),
+        ("source settings", "settings_listing source\n"),
+        ("capture boundary", "capture_started_ms=$(date"),
+        ("capture", "--log-dir /var/lib/krabka --bootstrap-server \"$group_coordinator:9095\""),
+        ("still loading", "check capture-under-load"),
+        ("post-capture load", "post_capture_load_ms)) ]"),
+        ("loss", "docker kill \"$scope-source-1\""),
+        ("disaster", "disaster_ms=$(date"),
+        ("load abandoned", "docker stop --time 120 \"$scope-drill\""),
+        ("data destroyed", "check source-volumes-destroyed"),
+        ("heads after the loss", "> \"$evidence/worm-verified.txt\""),
+        ("restore", "--entrypoint /usr/bin/krabka-restore"),
+        ("authenticated round trip", "probe --topic \"$name\""),
+        ("declared-load read-back", "readback --contract /work/dr-contract.yaml"),
+        ("recovered", "restore_ready_ms=$(date"),
+        ("measured before any proof", "check measured-rpo-rto"),
+        ("settings proof", "check \"$topic-settings\""),
+        ("access controls", "check acls-restored"),
+        ("denied after restore", "denied_probe restored denied-access-restored"),
+        ("soak judge", "check soak-judge"),
+        ("drill complete", "drill_complete_ms=$(date"),
+        ("tampered capture", "capture-tampered-restore-offsets-refused"),
+    ]
+    positions = [commands.find(needle) for _label, needle in marks]
+    for index, (label, _needle) in enumerate(marks):
+        check_eq(label + " exists", positions[index] >= 0, True)
+        if index > 0:
+            check_eq(label + " follows " + marks[index - 1][0], positions[index] > positions[index - 1], True)
 
 def _test_disaster_recovery_times_recovery_and_not_its_proof(_ctx):
     commands = gate_script("disaster-recovery")
@@ -380,6 +423,7 @@ check_qualification_tests = suite("check-qualification", [
     _test_installation_enables_the_streams_protocol,
     _test_installation_finalizes_topics_before_the_cluster,
     _test_disaster_recovery_uses_the_packaged_secured_loss_path,
+    _test_disaster_recovery_runs_under_its_declared_load,
     _test_disaster_recovery_times_recovery_and_not_its_proof,
     _test_registry_migration_resolves_the_advertised_host_before_the_handoffs,
     _test_a_failed_smoke_pipeline_cannot_pass,
