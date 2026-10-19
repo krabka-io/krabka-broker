@@ -73,6 +73,69 @@ fn build_fetch_plan_matches_legacy_encode_path() {
     }
 }
 
+/// A parsed batch goes out framed by the bytes it encodes to, whatever its
+/// codec.
+///
+/// `RecordBatch::encoded_len` predicts the length of an uncompressed batch
+/// only. A plan that framed a compressed batch by that prediction announced
+/// more bytes than it wrote: the client then waited for the rest of the frame
+/// and never answered its fetch, which is how a tiered read from the start of
+/// an lz4 topic hung (#1448). Each case decodes the frame back and must get
+/// the response it encoded, and the frame length must be the bytes after it.
+#[test]
+fn a_parsed_batch_is_framed_by_the_bytes_it_encodes_to() {
+    use {
+        super::test_support::{compressible_batch, one_partition_response},
+        crate::test_support::EVERY_CODEC,
+        krabka_protocol::{Decode, owned::fetch_response::FetchResponse},
+    };
+
+    /// What a frame says about itself: the length it announces and the bytes
+    /// that follow, and the response its body decodes to.
+    #[derive(Debug, PartialEq)]
+    struct Frame {
+        announced: usize,
+        following: usize,
+        response: FetchResponse,
+    }
+
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for codec in EVERY_CODEC {
+        // From v11 every field the fixture sets is on the wire, so the
+        // decoded response is the whole response.
+        for version in [11i16, 12, 13, 17] {
+            let body_flexible = version >= 12;
+            let response = one_partition_response(
+                version,
+                Some(RecordsPayload::V2(vec![compressible_batch(codec)])),
+            );
+            let ops =
+                build_fetch_plan(&response, version, 3, body_flexible, resolve_records_inline)
+                    .unwrap();
+            let mut wire = BytesMut::new();
+            for op in &ops {
+                wire.extend_from_slice(inline_bytes(op));
+            }
+            let announced = usize::try_from(u32::from_be_bytes(wire[..4].try_into().unwrap()))
+                .expect("a small frame");
+            let mut body = &wire[4 + response_header_len(ApiKey::Fetch as i16, body_flexible)..];
+            let decoded = FetchResponse::decode(&mut body, version).unwrap();
+            actual.push((codec, version, Frame {
+                announced,
+                following: wire.len() - 4,
+                response: decoded,
+            }));
+            expected.push((codec, version, Frame {
+                announced: wire.len() - 4,
+                following: wire.len() - 4,
+                response,
+            }));
+        }
+    }
+    assert2::assert!(actual == expected);
+}
+
 #[test]
 fn plan_total_len_matches_frame_prefix() {
     // The 4-byte frame prefix the writer emits must equal the actual bytes

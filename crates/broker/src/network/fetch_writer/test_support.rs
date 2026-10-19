@@ -30,6 +30,26 @@ pub(super) fn raw_batch(base: i64) -> Bytes {
     buf.freeze()
 }
 
+/// A parsed batch of `codec` whose records compress well, so a compressed
+/// encoding is much shorter than the uncompressed length
+/// `RecordBatch::encoded_len` predicts.
+pub(super) fn compressible_batch(codec: krabka_compression::CompressionType) -> RecordBatch {
+    let mut batch = RecordBatch {
+        base_offset: 40,
+        last_offset_delta: 3,
+        records: (0..4)
+            .map(|offset_delta| Record {
+                offset_delta,
+                value: Some(Bytes::from(vec![b'z'; 128])),
+                ..Default::default()
+            })
+            .collect(),
+        ..RecordBatch::default()
+    };
+    batch.attributes = batch.attributes.with_compression(codec);
+    batch
+}
+
 /// Extract the bytes of an `Inline` op. It panics on a `File` op. This
 /// avoids a `match`/`let-else` that is infallible on Windows, with one
 /// variant, but refutable on SENDFILE-alias platforms, with two variants.

@@ -95,6 +95,8 @@ mod multi_failover;
 mod multi_misaligned;
 #[path = "tiered_storage_multi_broker/multi_reassign.rs"]
 mod multi_reassign;
+#[path = "tiered_storage_multi_broker/multi_soak_shape.rs"]
+mod multi_soak_shape;
 #[path = "tiered_storage_multi_broker/multi_workload.rs"]
 mod multi_workload;
 

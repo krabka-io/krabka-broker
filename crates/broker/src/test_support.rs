@@ -3306,3 +3306,13 @@ pub(crate) fn streams_join_request(
         ..Default::default()
     }
 }
+
+/// Every record-batch codec Kafka defines, for the tests that run once per
+/// codec.
+pub(crate) const EVERY_CODEC: [krabka_compression::CompressionType; 5] = [
+    krabka_compression::CompressionType::None,
+    krabka_compression::CompressionType::Gzip,
+    krabka_compression::CompressionType::Snappy,
+    krabka_compression::CompressionType::Lz4,
+    krabka_compression::CompressionType::Zstd,
+];
