@@ -241,10 +241,10 @@ fn owned_gzip_batches_use_the_live_level_and_verbatim_keeps_producer_bytes() {
     }
 }
 
-#[test]
-fn compaction_keeps_retired_files_until_the_deadline() {
-    use crate::log::test_support::{KeyedRecord, compacting_segments, compaction_ctx, keyed_batch};
-    let TempLog { dir: _dir, mut log } = configured_test_log(compacting_segments());
+/// Append three versions of one key, one batch per segment on a log of
+/// `compacting_segments`, so a pass has two sealed segments to merge.
+fn append_three_versions_of_one_key(log: &mut Log) {
+    use crate::log::test_support::{KeyedRecord, keyed_batch};
     for value in [b"old", b"new", b"end"] {
         log.append(&mut keyed_batch(0, &[KeyedRecord {
             offset_delta: 0,
@@ -253,6 +253,13 @@ fn compaction_keeps_retired_files_until_the_deadline() {
         }]))
         .unwrap();
     }
+}
+
+#[test]
+fn compaction_keeps_retired_files_until_the_deadline() {
+    use crate::log::test_support::{compacting_segments, compaction_ctx};
+    let TempLog { dir: _dir, mut log } = configured_test_log(compacting_segments());
+    append_three_versions_of_one_key(&mut log);
     log.compact(&compaction_ctx()).unwrap();
     check!(!log.pending_deletes.is_empty());
     let paths: Vec<_> = log
@@ -270,6 +277,89 @@ fn compaction_keeps_retired_files_until_the_deadline() {
     log.maintain(deadline).unwrap();
     check!(paths.iter().all(|path| !path.exists()));
     check!(log.log_end_offset() == Offset(3));
+}
+
+/// The base offsets of the files in `dir` named `<base><suffix>`.
+fn bases_with_suffix(dir: &std::path::Path, suffix: &str) -> Vec<i64> {
+    let mut bases: Vec<i64> = std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .filter_map(|entry| {
+            let file_name = entry.file_name().into_string().ok()?;
+            file_name.strip_suffix(suffix)?.parse().ok()
+        })
+        .collect();
+    bases.sort_unstable();
+    bases
+}
+
+/// Kafka's `UnifiedLog.replaceSegments` deletes the producer-state snapshot of
+/// every segment a compaction replaces, unless the survivor starts at that
+/// segment's base. Two sealed segments, at 0 and 1, merge into one survivor
+/// at 0, so the snapshot taken when the log rolled to 1 goes, and the one at
+/// the active segment's base stays. Before this, every pass left the merged
+/// segments' snapshots behind, and a compacted partition kept one snapshot
+/// file per roll until it was reopened.
+#[test]
+fn compaction_deletes_the_producer_snapshots_of_the_segments_it_replaces() {
+    use crate::log::test_support::{compacting_segments, compaction_ctx, set_segment_size};
+    // How the retired files go: unlinked at once, reaped once their delay
+    // has passed, or reclaimed by the next open after a restart inside the
+    // delay, when the in-memory queue of pending deletions is gone. A reopen
+    // also writes a fresh snapshot at the log end, as Kafka's
+    // `rebuildProducerState` does.
+    for (how, file_delete_delay, restart, snapshots) in [
+        ("immediate deletion", Time::ZERO, false, vec![2]),
+        ("a reap past the delay", millis(60_000), false, vec![2]),
+        ("a restart inside the delay", millis(60_000), true, vec![
+            2, 3,
+        ]),
+    ] {
+        let config = LogConfig {
+            file_delete_delay,
+            ..compacting_segments()
+        };
+        let TempLog { dir, mut log } = configured_test_log(config.clone());
+        append_three_versions_of_one_key(&mut log);
+        // A rolled segment's snapshot and its compaction boundary are
+        // published by the rollover flush.
+        log.sync().unwrap();
+        check!(
+            bases_with_suffix(dir.path(), ".snapshot") == vec![1, 2],
+            "{how}: a snapshot at each roll"
+        );
+
+        // The pass groups by `segment.bytes`; widen it so that one pass
+        // merges both sealed segments into a survivor at 0.
+        set_segment_size(&mut log, krabka_units::mebibytes(1));
+        log.compact(&compaction_ctx()).unwrap();
+        if restart {
+            drop(log);
+            log = Log::open(dir.path(), config).unwrap();
+        } else if let Some(deadline) = log
+            .pending_deletes
+            .iter()
+            .map(|pending| pending.deadline)
+            .max()
+        {
+            log.maintain(deadline).unwrap();
+        }
+
+        let tombstones = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".deleted"))
+            .count();
+        check!(
+            (
+                bases_with_suffix(dir.path(), ".log"),
+                bases_with_suffix(dir.path(), ".snapshot"),
+                tombstones,
+                log.log_end_offset(),
+            ) == (vec![0, 2], snapshots, 0, Offset(3)),
+            "{how}"
+        );
+    }
 }
 
 #[test]

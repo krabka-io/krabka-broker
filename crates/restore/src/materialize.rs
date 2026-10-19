@@ -23,7 +23,8 @@
 //! preserve forward offset gaps. Empty filtered batches retain the archived span,
 //! while segment alignment allows a forward gap only after an explicitly skipped
 //! corrupt predecessor, preserving the offsets on both sides of the loss. Under
-//! `--dry-run` it does the same work and writes nothing.
+//! `--dry-run` it does the same work and writes nothing: the format goes to a
+//! throwaway directory, and no segment is written.
 
 use {
     crate::{RestoreArgs, RestoreError},

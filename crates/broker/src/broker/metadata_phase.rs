@@ -262,6 +262,13 @@ async fn start_metadata_source(
                     // running controller publishes, as Kafka's handler logs
                     // both alike.
                     krabka_raft::RaftError::FatalFault(fault) => BrokerError::FatalFault(fault),
+                    krabka_raft::RaftError::ControllerListenerBind { addr, source } => {
+                        BrokerError::listener_bind(
+                            CONTROLLER_LISTENER_NAME,
+                            addr,
+                            CONTROLLER_LISTEN_ADDR_SETTING,
+                        )(source)
+                    }
                     other => BrokerError::Startup(other.to_string()),
                 })?,
         );
@@ -407,6 +414,10 @@ async fn wait_for_metadata_version(
     }
 }
 
+/// The setting that gives the controller listener's address, which a bind
+/// error names.
+const CONTROLLER_LISTEN_ADDR_SETTING: &str = "--controller-listen-addr";
+
 /// Binds the controller listener before the quorum starts when the config asks
 /// for an OS-assigned port, and publishes the port it got.
 ///
@@ -427,8 +438,18 @@ async fn bind_ephemeral_controller_listener(
     if prebound.is_some() || !config.is_controller() || config.controller_listen_addr.port() != 0 {
         return Ok(prebound);
     }
-    let listener = bind_listener(config.controller_listen_addr).await?;
-    let bound = Sockets::TARGET.listener_address(&listener, config.controller_listen_addr)?;
+    let addr = config.controller_listen_addr;
+    let bind_error = || {
+        BrokerError::listener_bind(
+            CONTROLLER_LISTENER_NAME,
+            addr,
+            CONTROLLER_LISTEN_ADDR_SETTING,
+        )
+    };
+    let listener = bind_listener(addr).await.map_err(bind_error())?;
+    let bound = Sockets::TARGET
+        .listener_address(&listener, addr)
+        .map_err(bind_error())?;
     publish_bound_controller_addr(config, bound);
     Ok(Some(listener))
 }

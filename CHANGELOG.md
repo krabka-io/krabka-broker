@@ -126,6 +126,40 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   `metrics.md` now say that the active controller reports the count for the
   whole cluster, and name Kafka's `KafkaController` MBean, not
   `ReplicaManager`.
+- Log compaction deletes the producer-state snapshot of every segment it
+  merges, as Kafka's `UnifiedLog.replaceSegments` does, keeping only the one at
+  a survivor's own base offset (issue #1507). It used to leave them all, so a
+  compacted partition gained one `.snapshot` file per segment roll until the
+  broker restarted. The four-hour soak's `soak-compacted` partitions held 183
+  snapshots beside 2 segments after 15 minutes. A log open now also reclaims
+  a retired snapshot's `.deleted` tombstone, which a restart inside
+  `file.delete.delay.ms` used to leave behind for good, from retention as well
+  as from compaction.
+- The KRaft metadata log deletes the segments its cleaning retired once
+  `file.delete.delay.ms` (60 s, as in Kafka) has passed (issue #1507). Since
+  the delete delay took effect in #1335, a retired metadata segment was renamed
+  to `.deleted` and left on disk until the node restarted, because nothing
+  reaped the metadata log's retired files. The controller now reaps them after
+  each snapshot and once a minute, on a thread of its own, so a large unlink
+  never stalls the Raft engine.
+- `krabka-backup restore-offsets` waits for a freshly booted broker's group
+  coordinator instead of exiting `6` (issue #1515). It commits through the
+  admin client's `alterConsumerGroupOffsets`, which retries
+  `COORDINATOR_LOAD_IN_PROGRESS`, `COORDINATOR_NOT_AVAILABLE`,
+  `NOT_COORDINATOR` and `REBALANCE_IN_PROGRESS` with Kafka's backoff until
+  Kafka's default `default.api.timeout.ms` (60 seconds) runs out, and finds the
+  coordinator again after `COORDINATOR_NOT_AVAILABLE` and `NOT_COORDINATOR`, as
+  Kafka's `AlterConsumerGroupOffsetsHandler` does. The restore runbook no
+  longer tells the operator to run the command twice.
+- A listener that cannot bind its port now says which listener, which address
+  and which setting (issue #1517). A node whose controller port another
+  process held exited with `storage: I/O: Address already in use`, which sent
+  an operator to the log directory, and the client, metrics and health
+  listeners named no address either. The error now reads, for example,
+  `unable to bind the CONTROLLER listener to 0.0.0.0:9093 (set by
+  --controller-listen-addr): Address already in use (os error 98)`. The
+  controller listener also binds before the metadata engine opens, so the
+  failure leaves no engine running.
 - The release image's SLSA provenance attestation carries its predicate
   again. Through v1.0.5, `release.yml` attested its SLSA v1 predicate as
   `--type slsaprovenance`, which cosign reads as SLSA v0.2, so every release

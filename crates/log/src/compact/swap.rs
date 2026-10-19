@@ -11,6 +11,7 @@ use {
     crate::{
         error::LogError,
         io::{IoTarget, LogIo},
+        name::producer_snapshot_path,
         recovery::swap::{
             cleaned_path, promote_log, promote_sidecars, remove_if_present,
             remove_replaced_segment, swap_path,
@@ -61,8 +62,27 @@ pub fn atomic_swap(
     rewrite: &RewriteOutput,
 ) -> Result<(), LogError> {
     atomic_swap_retiring(io, dir, consumed_base_offsets, rewrite, |base| {
-        remove_replaced_segment(io, dir, base.0)
+        remove_replaced_segment(io, dir, base.0)?;
+        if replaces_producer_snapshot(base, rewrite.new_base_offset) {
+            remove_if_present(io, &producer_snapshot_path(dir, base.0))?;
+        }
+        Ok(())
     })
+}
+
+/// Whether a swap deletes the producer-state snapshot of the consumed segment
+/// at `consumed`.
+///
+/// Kafka's `UnifiedLog.replaceSegments` deletes the snapshot of every consumed
+/// segment that no survivor takes over, through `deleteProducerSnapshots` on
+/// the segments `LocalLog.replaceSegments` returns. A snapshot at the
+/// survivor's own base offset stays, because the survivor starts there. Without
+/// this, every compaction pass leaves the snapshot of each segment it merged,
+/// and a compacted partition gains one snapshot file per roll until it is
+/// reopened.
+#[must_use]
+pub(crate) fn replaces_producer_snapshot(consumed: Offset, new_base: Offset) -> bool {
+    consumed != new_base
 }
 
 /// The swap protocol with caller-owned reclamation of replaced files.

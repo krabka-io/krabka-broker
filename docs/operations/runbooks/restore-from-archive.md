@@ -67,40 +67,38 @@ Answer four questions before writing anything.
 4. **Which topics?** `--topic` restores a subset. Absent, every topic in the
    archive is restored.
 
-Run the plan first. `--dry-run` runs discovery, verification and the bound, and
-writes no partition data. It does format its `--log-dir`, and the real restore
-then refuses that directory with exit `3`
-([#1512](https://github.com/krabka-io/krabka-broker/issues/1512)). Give the
-dry run a scratch directory. Fetch the two snapshots first, as step 1 of
-[Fix](#fix) says, and give them to the dry run so that the plan also counts
-the metadata:
+Run the plan first. `--dry-run` runs discovery, verification, the bound and the
+format checks, and writes nothing to `--log-dir`. Run it with the same
+`--log-dir` that the restore in step 2 uses. It refuses a directory that is not
+empty with exit `3`, as the restore does. Fetch the two snapshots first, as
+step 1 of [Fix](#fix) says, and give them to the dry run so that the plan also
+counts the metadata:
 
 ```sh
-plan_dir="$(mktemp -d)"
 krabka-restore --dry-run --report json \
   --archive-s3-bucket krabka-tier --archive-s3-region eu-west-1 \
   --archive-prefix prod/ \
   --rlmm-snapshot ./rlmm-snapshot \
   --metadata-snapshot ./cluster-metadata.checkpoint \
-  --log-dir "${plan_dir}" \
+  --log-dir /var/lib/krabka-restored \
+  --cluster-id <the old cluster id> \
   --node-id 1 --standalone --controller-listener 127.0.0.1:9093 \
-  --to-timestamp 2026-08-24T09:15:00Z > plan.out
-rm -r "${plan_dir}"
+  --to-timestamp 2026-08-24T09:15:00Z > plan.json
 ```
 
-`mktemp -d` makes a new empty directory, so the dry run never writes into a
-directory that something else uses, and `rm` removes only that directory.
-
-The JSON report starts at the first `{`. The format step prints two lines
-before it on stdout, `Formatting ...` and `Formatted ...`, so remove them
-before you give the output to `jq`.
+With `--report json`, stdout holds only the JSON report, so `jq` reads
+`plan.json` as it is. The format step and the log print on stderr. Give the
+dry run the same `--cluster-id` as the restore: without it, each run generates
+its own id, and the plan names one the restored cluster does not get.
 
 Read the counts. A partition missing from the plan, or a record count far from
 what the topic should hold, is a wrong `--archive-prefix` or a wrong bound.
 Read `metadata.topic_configs` too. Zero, for topics that have config
-overrides in production, is a checkpoint that predates them
-([#1514](https://github.com/krabka-io/krabka-broker/issues/1514)), and
-`topics_without_configuration` does not name them. No capture of that
+overrides in production, is a checkpoint that predates them, and
+`topics_without_configuration` does not name them. A current
+`krabka-backup` refuses the format-time checkpoint
+([#1514](https://github.com/krabka-io/krabka-broker/issues/1514)), but a
+capture still misses a change committed after the checkpoint it took. No capture of that
 cluster carries the overrides then. Set them again with `kafka-configs` after
 step 3, from a record kept outside the cluster.
 [How often](../backup-restore.md#how-often) says how to avoid this.
@@ -148,8 +146,8 @@ step 3, from a record kept outside the cluster.
    --describe` shows the topic configuration the metadata checkpoint carried. If
    the configuration is missing, the restore ran without
    `--metadata-snapshot`, and the report says so. Or the checkpoint predates
-   the configuration, and the report does not say so
-   ([#1514](https://github.com/krabka-io/krabka-broker/issues/1514)). Check
+   the configuration, and the report does not say so. The dry-run check of
+   `metadata.topic_configs` catches this before the restore. Check
    `remote.storage.enable` in particular: a topic restored without it does
    not tier again.
 
@@ -179,14 +177,10 @@ step 3, from a record kept outside the cluster.
    exits `5` and names the capture. The expected head must come from the
    incident evidence, not from the archive being restored.
 
-   The first run against a freshly booted broker can exit `6` with
-   `FindCoordinator ... protocol error from server: 15`. That is
-   `COORDINATOR_NOT_AVAILABLE` while the broker creates `__consumer_offsets`,
-   and the tool does not retry it yet
-   ([#1515](https://github.com/krabka-io/krabka-broker/issues/1515)). Run the
-   same command again after a few seconds. If it fails again, read the broker
-   log for `INVALID_REPLICATION_FACTOR`: the broker then needs the flags of
-   step 3.
+   On a freshly booted broker the tool waits, for up to 60 seconds, while the
+   broker creates and loads `__consumer_offsets`. If it exits `6` saying that
+   the group coordinator did not become available, read the broker log for
+   `INVALID_REPLICATION_FACTOR`: the broker then needs the flags of step 3.
 
    Run it with `--dry-run` first to see the positions it will write. It commits
    as a simple consumer, so the coordinator fences it on any group that already

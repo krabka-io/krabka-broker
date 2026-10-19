@@ -10,10 +10,13 @@ use {
         kraft::types::{Epoch, LogOffsetMetadata, LogView},
     },
     krabka_ids::{LeaderEpoch, Offset},
-    krabka_log::{Log, LogConfig, RawRead},
+    krabka_log::{FailedDeletion, Log, LogConfig, RawRead},
     krabka_protocol::{Decode as _, records::RecordBatch},
     krabka_units::prelude::ByteSize,
-    std::path::{Path, PathBuf},
+    std::{
+        path::{Path, PathBuf},
+        time::SystemTime,
+    },
 };
 
 pub struct KraftLog {
@@ -26,6 +29,9 @@ pub struct KraftLog {
     /// It stays set: Kafka treats a failed metadata log directory as fatal
     /// (KIP-858), and the engine stops the controller over it.
     failure: Option<String>,
+    /// The retired files being deleted off the engine, if a deletion is
+    /// running. See [`Self::reap_retired_files`].
+    reaping: Option<std::thread::JoinHandle<Result<(), FailedDeletion>>>,
 }
 
 /// Read budget [`KraftLog::timestamp_below`] starts from. It only ever needs
@@ -168,6 +174,7 @@ impl KraftLog {
             hwm,
             hwm_path,
             failure: None,
+            reaping: None,
         })
     }
 
@@ -369,6 +376,49 @@ impl KraftLog {
         // would stay on disk.
         let trimmed = self.log.trim_to_offset(end_offset);
         self.checked(trimmed)?;
+        Ok(())
+    }
+
+    /// Deletes the files of every segment that [`Self::prune_to`] or
+    /// [`Self::install_snapshot`] retired at least `file.delete.delay.ms`
+    /// before `now`.
+    ///
+    /// A retired segment is renamed to `.deleted` and stays readable for that
+    /// delay, Kafka's 60-second default, as in Kafka's `KafkaRaftLog`. Kafka's
+    /// scheduler then deletes it. Without this call nothing would: the
+    /// broker's retention sweep reaps the partitions it owns, and the metadata
+    /// log is not one of them, so every cleaning would leave its segments on
+    /// disk until the node restarted.
+    ///
+    /// The unlinks run on a thread of their own, as the partition writer hands
+    /// its due deletions to a background task: a metadata segment can be a
+    /// GiB, and unlinking it on the engine would stall fetches, heartbeats and
+    /// every controller command behind it. One deletion runs at a time. Each
+    /// call first collects the one before it, and a failed one hands its
+    /// remaining files back to the log, which retries them on a later call.
+    ///
+    /// # Errors
+    /// Returns [`RaftError`] if the earlier deletion failed, or if the flush
+    /// that `Log::maintain_deferring_deletions` runs first fails.
+    ///
+    /// # Panics
+    /// Panics if the deletion thread panicked.
+    pub fn reap_retired_files(&mut self, now: SystemTime) -> Result<(), RaftError> {
+        if let Some(reaping) = self.reaping.take_if(|reaping| reaping.is_finished()) {
+            let deleted = reaping.join().expect("the retired-file deletion panicked");
+            if let Err(FailedDeletion { error, remaining }) = deleted {
+                self.log.restore_deletions(remaining, now);
+                return self.checked(Err(error));
+            }
+        }
+        if self.reaping.is_some() {
+            return Ok(());
+        }
+        let due = self.log.maintain_deferring_deletions(now);
+        let due = self.checked(due)?;
+        if !due.is_empty() {
+            self.reaping = Some(std::thread::spawn(move || due.delete()));
+        }
         Ok(())
     }
 
@@ -900,11 +950,8 @@ mod tests {
         }
     }
 
-    /// A prune deletes every segment wholly below the new log start, as
-    /// Kafka's `deleteBeforeSnapshot` does, and keeps the one the new start
-    /// falls in.
-    #[test]
-    fn a_prune_deletes_the_segments_wholly_below_the_new_log_start() {
+    /// Four committed one-record batches, one segment each.
+    fn four_committed_segments() -> LogInDir {
         let dir = tempfile::tempdir().expect("tempdir");
         let config = MetadataLogConfig {
             segment_size: krabka_units::prelude::bytes(1),
@@ -915,6 +962,15 @@ mod tests {
             log.append(&mut batch(0, 1, b"x"), 0).expect("append");
         }
         log.advance_hwm(Offset(4));
+        LogInDir { log, dir }
+    }
+
+    /// A prune deletes every segment wholly below the new log start, as
+    /// Kafka's `deleteBeforeSnapshot` does, and keeps the one the new start
+    /// falls in.
+    #[test]
+    fn a_prune_deletes_the_segments_wholly_below_the_new_log_start() {
+        let LogInDir { mut log, dir } = four_committed_segments();
 
         log.prune_to(Offset(2)).expect("prune");
 
@@ -925,6 +981,53 @@ mod tests {
                     "00000000000000000003.log".to_owned(),
                 ])
         );
+    }
+
+    /// A pruned segment stays on disk under a `.deleted` name for Kafka's
+    /// 60-second `file.delete.delay.ms`, and the first reap after that deletes
+    /// it, off the caller. Before the reap existed, nothing deleted it until a
+    /// restart.
+    #[test]
+    fn a_reap_deletes_the_pruned_segments_once_their_delay_has_passed() {
+        let retired = |dir: &Path| -> Vec<String> {
+            let mut names: Vec<String> = std::fs::read_dir(dir)
+                .expect("list the partition directory")
+                .flatten()
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .filter(|name| name.ends_with(".deleted"))
+                .collect();
+            names.sort();
+            names
+        };
+        let LogInDir { mut log, dir } = four_committed_segments();
+        let pruned_at = SystemTime::now();
+        log.prune_to(Offset(2)).expect("prune");
+        let after_prune = retired(dir.path());
+        check!(
+            after_prune
+                .iter()
+                .any(|name| name.starts_with("00000000000000000000.log")),
+            "{after_prune:?}"
+        );
+
+        for (when, now, left) in [
+            ("inside the delay", pruned_at, after_prune.clone()),
+            (
+                "past the delay",
+                pruned_at + std::time::Duration::from_secs(61),
+                Vec::new(),
+            ),
+        ] {
+            log.reap_retired_files(now).expect("reap");
+            // The unlinks run off the caller, so wait for them, collecting
+            // the finished deletion on each call as the engine does.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while retired(dir.path()) != left && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                log.reap_retired_files(now).expect("reap");
+            }
+            check!(retired(dir.path()) == left, "{when}");
+        }
     }
 
     /// The exact text of a version-0 high-watermark file that records offset

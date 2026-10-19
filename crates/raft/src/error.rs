@@ -169,6 +169,18 @@ pub enum RaftError {
     #[error("startup misconfiguration: {0}")]
     Startup(String),
 
+    /// The controller listener could not bind its address. Kafka's
+    /// `SocketServer` fails its start the same way, with `Socket server failed
+    /// to bind to` and the address. It is a network failure, not a storage
+    /// one.
+    #[error("unable to bind the controller listener to {addr}: {source}")]
+    ControllerListenerBind {
+        /// The address the listener tried to bind.
+        addr: std::net::SocketAddr,
+        /// Why the bind failed, such as `Address already in use`.
+        source: std::io::Error,
+    },
+
     /// The controller met a fault that Kafka's `ProcessTerminatingFaultHandler`
     /// halts the process over, such as a replay of a `FeatureLevelRecord`
     /// above the range this controller supports. The text is the

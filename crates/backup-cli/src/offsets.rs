@@ -9,31 +9,26 @@
 //! while the cluster is up, and written back with `OffsetCommit` once a
 //! restored cluster is.
 //!
-//! The write-back is a simple-consumer commit: empty `member_id` and
-//! generation `-1`, which is what Kafka's own `kafka-consumer-groups
-//! --reset-offsets --execute` sends and what the coordinator accepts for a
-//! group with no live members. A group with live members is fenced, which is
-//! the correct answer: an offset must not move under a consumer that is
-//! reading from it.
+//! The write-back is Kafka's `Admin.alterConsumerGroupOffsets`, the call
+//! `kafka-consumer-groups --reset-offsets --execute` makes: a simple-consumer
+//! commit, with an empty `member_id` and generation `-1`, that the coordinator
+//! accepts for a group with no live members. A group with live members is
+//! fenced, which is the correct answer: an offset must not move under a
+//! consumer that is reading from it. The admin client retries the coordinator
+//! codes Kafka's `AlterConsumerGroupOffsetsHandler` retries, so a freshly
+//! booted broker that is still creating `__consumer_offsets` is waited for
+//! rather than reported as a refusal.
 
 use {
     crate::{error::BackupError, manifest::decode_versioned},
-    krabka_protocol::owned::offset_commit_request::{
-        OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
+    krabka_client_admin::{
+        AdminError,
+        groups::{ConsumerGroupOffsetOutcome, GroupOffsets as AdminGroupOffsets},
     },
+    krabka_client_core::ClientError,
     serde::{Deserialize, Serialize},
     std::collections::BTreeMap,
 };
-
-/// `OffsetCommitRequest.generationIdOrMemberEpoch` for a caller that is not a
-/// group member. Kafka's admin path sends this, and the coordinator skips
-/// membership fencing for it.
-pub const SIMPLE_CONSUMER_GENERATION: i32 = -1;
-
-/// `OffsetCommitRequest.committedLeaderEpoch` when the epoch is not known.
-/// A restored partition's epoch history is rebuilt from the archived batches,
-/// so the capture does not carry an epoch to assert here.
-pub const UNKNOWN_LEADER_EPOCH: i32 = -1;
 
 /// One group's committed offset in one partition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,90 +115,82 @@ pub fn group_offsets(group: &str, fetched: &BTreeMap<(String, i32), i64>) -> Gro
     }
 }
 
-/// Build the `OffsetCommit` that puts one group's captured offsets back.
-///
-/// `topic_ids` carries the restored cluster's topic ids. `OffsetCommit` v10
-/// encodes the topic id instead of the name, so a request that names topics
-/// only would commit nothing there; below v10 the name is what is encoded and
-/// the id is dropped. Setting both makes one request correct at every version
-/// the broker may negotiate.
-///
-/// # Panics
-///
-/// Panics if the topic list is empty after a topic was pushed onto it, which
-/// the loop below cannot do.
+/// One group's captured offsets, keyed the way the admin client commits them.
 #[must_use]
-pub fn commit_request(
-    offsets: &GroupOffsets,
-    topic_ids: &BTreeMap<String, krabka_protocol::primitives::uuid::Uuid>,
-) -> OffsetCommitRequest {
-    let mut topics: Vec<OffsetCommitRequestTopic> = Vec::new();
-    for offset in &offsets.offsets {
-        if topics.last().map(|topic| topic.name.as_str()) != Some(offset.topic.as_str()) {
-            topics.push(OffsetCommitRequestTopic {
-                name: offset.topic.clone(),
-                topic_id: topic_ids.get(&offset.topic).copied().unwrap_or_default(),
-                ..OffsetCommitRequestTopic::default()
-            });
-        }
-        topics
-            .last_mut()
-            .expect("a topic was pushed above for this offset")
-            .partitions
-            .push(OffsetCommitRequestPartition {
-                partition_index: offset.partition,
-                committed_offset: offset.offset,
-                committed_leader_epoch: UNKNOWN_LEADER_EPOCH,
-                ..OffsetCommitRequestPartition::default()
-            });
-    }
-    OffsetCommitRequest {
-        group_id: offsets.group.clone(),
-        generation_id_or_member_epoch: SIMPLE_CONSUMER_GENERATION,
-        member_id: String::new(),
-        topics,
-        ..OffsetCommitRequest::default()
-    }
+pub fn admin_offsets(offsets: &GroupOffsets) -> AdminGroupOffsets {
+    offsets
+        .offsets
+        .iter()
+        .map(|offset| ((offset.topic.clone(), offset.partition), offset.offset))
+        .collect()
 }
 
-/// Every partition the coordinator refused, as `topic-partition: code`.
+/// Every partition the coordinator refused, as `topic-partition: NAME (code)`.
 ///
 /// A commit is per-partition on the wire, so a partial refusal is possible and
 /// silence about it would report a restore that put back fewer offsets than it
 /// claims.
 #[must_use]
-pub fn commit_refusals(
-    response: &krabka_protocol::owned::offset_commit_response::OffsetCommitResponse,
-) -> Vec<String> {
-    response
-        .topics
+pub fn commit_refusals(outcomes: &[ConsumerGroupOffsetOutcome]) -> Vec<String> {
+    outcomes
         .iter()
-        .flat_map(|topic| {
-            topic
-                .partitions
-                .iter()
-                .filter(|partition| partition.error_code != 0)
-                .map(move |partition| {
-                    format!(
-                        "{}-{}: error code {}",
-                        topic.name, partition.partition_index, partition.error_code
-                    )
-                })
+        .filter_map(|outcome| {
+            outcome.error.as_ref().map(|error| {
+                format!(
+                    "{}-{}: {} ({})",
+                    outcome.topic, outcome.partition, error.name, error.code
+                )
+            })
         })
         .collect()
+}
+
+/// How many offsets one group's commit put back, or why it put back none.
+///
+/// The admin client retries `COORDINATOR_LOAD_IN_PROGRESS`,
+/// `COORDINATOR_NOT_AVAILABLE`, `NOT_COORDINATOR` and `REBALANCE_IN_PROGRESS`
+/// until Kafka's `default.api.timeout.ms` runs out, so a timeout means the
+/// group's coordinator never became ready, not that the cluster refused.
+///
+/// # Errors
+///
+/// [`BackupError::Cluster`] when the call failed or timed out, or when the
+/// coordinator refused any partition.
+pub fn commit_outcome(
+    offsets: &GroupOffsets,
+    result: Result<Vec<ConsumerGroupOffsetOutcome>, AdminError>,
+) -> Result<usize, BackupError> {
+    let group = &offsets.group;
+    let outcomes = result.map_err(|error| match error {
+        AdminError::Transport(ClientError::Timeout(_)) => BackupError::Cluster(format!(
+            "OffsetCommit for {group}: {error}: the group coordinator did not become \
+             available. A broker creates and loads `__consumer_offsets` on the first \
+             coordinator lookup; check the broker log, for example for \
+             INVALID_REPLICATION_FACTOR"
+        )),
+        error => BackupError::Cluster(format!("OffsetCommit for {group}: {error}")),
+    })?;
+    let refusals = commit_refusals(&outcomes);
+    if !refusals.is_empty() {
+        return Err(BackupError::Cluster(format!(
+            "OffsetCommit for {group}: {}",
+            refusals.join("; ")
+        )));
+    }
+    Ok(offsets.offsets.len())
 }
 
 #[cfg(test)]
 mod tests {
     use {
         super::{
-            CommittedOffset, GROUP_OFFSETS_VERSION, GroupOffsets, GroupOffsetsFile,
-            SIMPLE_CONSUMER_GENERATION, UNKNOWN_LEADER_EPOCH, commit_refusals, commit_request,
-            group_offsets,
+            CommittedOffset, GROUP_OFFSETS_VERSION, GroupOffsets, GroupOffsetsFile, admin_offsets,
+            commit_outcome, commit_refusals, group_offsets,
         },
         crate::error::BackupError,
         assert2::check,
-        krabka_protocol::{owned as wire, primitives::uuid::Uuid as WireUuid},
+        krabka_client_admin::{AdminError, KafkaError, groups::ConsumerGroupOffsetOutcome},
+        krabka_client_core::ClientError,
         std::collections::BTreeMap,
     };
 
@@ -241,69 +228,78 @@ mod tests {
     }
 
     #[test]
-    fn the_commit_names_every_partition_once_per_topic_at_any_version() {
-        let orders = WireUuid([7_u8; 16]);
-        let topic_ids = BTreeMap::from([("orders".to_owned(), orders)]);
-
-        let request = commit_request(&captured(), &topic_ids);
-
-        let partition =
-            |index: i32, offset: i64| wire::offset_commit_request::OffsetCommitRequestPartition {
-                partition_index: index,
-                committed_offset: offset,
-                committed_leader_epoch: UNKNOWN_LEADER_EPOCH,
-                ..wire::offset_commit_request::OffsetCommitRequestPartition::default()
-            };
+    fn the_commit_carries_every_captured_partition() {
         check!(
-            request
-                == wire::offset_commit_request::OffsetCommitRequest {
-                    group_id: "orders-consumers".to_owned(),
-                    generation_id_or_member_epoch: SIMPLE_CONSUMER_GENERATION,
-                    member_id: String::new(),
-                    topics: vec![
-                        wire::offset_commit_request::OffsetCommitRequestTopic {
-                            name: "orders".to_owned(),
-                            topic_id: orders,
-                            partitions: vec![partition(0, 12), partition(1, 7)],
-                            ..wire::offset_commit_request::OffsetCommitRequestTopic::default()
-                        },
-                        wire::offset_commit_request::OffsetCommitRequestTopic {
-                            name: "payments".to_owned(),
-                            // The cluster did not name an id for this topic, so
-                            // the zero uuid goes on the wire and only the name
-                            // resolves it.
-                            topic_id: WireUuid::default(),
-                            partitions: vec![partition(0, 3)],
-                            ..wire::offset_commit_request::OffsetCommitRequestTopic::default()
-                        },
-                    ],
-                    ..wire::offset_commit_request::OffsetCommitRequest::default()
-                }
+            admin_offsets(&captured())
+                == BTreeMap::from([
+                    (("orders".to_owned(), 0), 12),
+                    (("orders".to_owned(), 1), 7),
+                    (("payments".to_owned(), 0), 3),
+                ])
         );
     }
 
-    #[test]
-    fn only_the_refused_partitions_are_reported() {
-        let response = wire::offset_commit_response::OffsetCommitResponse {
-            topics: vec![wire::offset_commit_response::OffsetCommitResponseTopic {
-                name: "orders".to_owned(),
-                partitions: vec![
-                    wire::offset_commit_response::OffsetCommitResponsePartition {
-                        partition_index: 0,
-                        error_code: 0,
-                        ..wire::offset_commit_response::OffsetCommitResponsePartition::default()
-                    },
-                    wire::offset_commit_response::OffsetCommitResponsePartition {
-                        partition_index: 1,
-                        error_code: 25,
-                        ..wire::offset_commit_response::OffsetCommitResponsePartition::default()
-                    },
-                ],
-                ..wire::offset_commit_response::OffsetCommitResponseTopic::default()
-            }],
-            ..wire::offset_commit_response::OffsetCommitResponse::default()
-        };
-        check!(commit_refusals(&response) == vec!["orders-1: error code 25".to_owned()]);
+    fn outcome(partition: i32, error: Option<(i16, &'static str)>) -> ConsumerGroupOffsetOutcome {
+        ConsumerGroupOffsetOutcome {
+            topic: "orders".to_owned(),
+            partition,
+            error: error.map(|(code, name)| KafkaError {
+                code,
+                name,
+                message: None,
+            }),
+        }
+    }
+
+    #[yare::parameterized(
+        all_accepted = { vec![outcome(0, None), outcome(1, None)], &[] },
+        one_refused = {
+            vec![outcome(0, None), outcome(1, Some((25, "UNKNOWN_MEMBER_ID")))],
+            &["orders-1: UNKNOWN_MEMBER_ID (25)"],
+        },
+        every_refused = {
+            vec![
+                outcome(0, Some((30, "GROUP_AUTHORIZATION_FAILED"))),
+                outcome(1, Some((30, "GROUP_AUTHORIZATION_FAILED"))),
+            ],
+            &[
+                "orders-0: GROUP_AUTHORIZATION_FAILED (30)",
+                "orders-1: GROUP_AUTHORIZATION_FAILED (30)",
+            ],
+        },
+    )]
+    fn only_the_refused_partitions_are_reported(
+        outcomes: Vec<ConsumerGroupOffsetOutcome>,
+        expected: &[&str],
+    ) {
+        check!(commit_refusals(&outcomes) == expected);
+    }
+
+    #[yare::parameterized(
+        committed = { Ok(vec![outcome(0, None), outcome(1, None)]), Ok(3) },
+        refused = {
+            Ok(vec![outcome(0, None), outcome(1, Some((25, "UNKNOWN_MEMBER_ID")))]),
+            Err("cluster: OffsetCommit for orders-consumers: orders-1: UNKNOWN_MEMBER_ID (25)"),
+        },
+        coordinator_never_ready = {
+            Err(AdminError::Transport(ClientError::Timeout(krabka_units::secs(60)))),
+            Err("cluster: OffsetCommit for orders-consumers: client-core: request timed out \
+                 after 1m: the group coordinator did not become available. A broker creates \
+                 and loads `__consumer_offsets` on the first coordinator lookup; check the \
+                 broker log, for example for INVALID_REPLICATION_FACTOR"),
+        },
+        call_failed = {
+            Err(AdminError::Transport(ClientError::Server { error_code: 30 })),
+            Err("cluster: OffsetCommit for orders-consumers: client-core: protocol error from \
+                 server: 30"),
+        },
+    )]
+    fn a_group_commit_reports_its_count_or_why_it_committed_nothing(
+        result: Result<Vec<ConsumerGroupOffsetOutcome>, AdminError>,
+        expected: Result<usize, &str>,
+    ) {
+        let actual = commit_outcome(&captured(), result).map_err(|error| error.to_string());
+        check!(actual == expected.map_err(str::to_owned));
     }
 
     /// The exact bytes this build writes for one group of [`captured`]. A
