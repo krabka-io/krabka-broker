@@ -14,10 +14,14 @@ use {
     },
     bytes::Bytes,
     krabka_ids::Offset,
+    krabka_log::Log,
     krabka_protocol::records::{RecordBatchBorrowed, validate_one_v2_batch},
     krabka_remote_storage::{
         ObjectEntry, TopicIdPartition, TrustedManifestKeys,
-        diskless::{CAPTURE_HEAD_NAME, CapturedWalRange, DisklessWalCapture, parse_wal_object},
+        diskless::{
+            CAPTURE_HEAD_NAME, CapturedWalRange, DisklessPartitionCapture, DisklessWalCapture,
+            parse_wal_object,
+        },
     },
     object_store::path::Path as ObjectPath,
     std::{
@@ -159,6 +163,71 @@ pub(super) fn authenticate(
     Ok(CaptureAuthentication { claims, head })
 }
 
+/// The offset a restored diskless partition's next write takes: the end the
+/// restore materializes it to.
+///
+/// `KRaft` assigns a diskless partition's offsets, so the restored cluster's
+/// metadata must start the partition there. Without it the first write is
+/// assigned offset 0 and the materialized log refuses it (#1524).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DisklessNextOffset {
+    pub(crate) topic: String,
+    pub(crate) partition: i32,
+    pub(crate) next_offset: i64,
+}
+
+/// The end every selected partition of `capture` will be materialized to,
+/// computed before anything is written so the target can be formatted with
+/// it.
+///
+/// A partition that no bound or exclusion touches keeps every captured
+/// batch, so it ends at the capture's recovery cutoff and no object is
+/// fetched for it. Any other partition is walked exactly as
+/// [`materialize`] walks it, without writing, because a bound or an
+/// exclusion decides its end batch by batch. [`materialize`] then requires
+/// each partition to end where this said.
+pub(super) async fn next_offsets(
+    store: &ArchiveStore,
+    predicates: &Predicates,
+    capture: &DisklessWalCapture,
+    args: &RestoreArgs,
+    authenticated: Option<&BTreeMap<String, ObjectEntry>>,
+) -> Result<Vec<DisklessNextOffset>, RestoreError> {
+    capture.validate().map_err(RestoreError::Integrity)?;
+    let mut cached_object: Option<CachedObject> = None;
+    let mut out = Vec::new();
+    for partition in capture
+        .partitions
+        .iter()
+        .filter(|partition| args.selects_topic(&partition.topic))
+    {
+        let partition_ref = PartitionRef {
+            topic: partition.topic.clone(),
+            partition: partition.partition,
+        };
+        let next_offset = if predicates.keeps_everything_in(&partition_ref) {
+            partition.recovery_cutoff
+        } else {
+            walk_partition(
+                store,
+                &mut cached_object,
+                predicates,
+                partition,
+                authenticated,
+                None,
+            )
+            .await?
+            .materialized_end
+        };
+        out.push(DisklessNextOffset {
+            topic: partition.topic.clone(),
+            partition: partition.partition,
+            next_offset,
+        });
+    }
+    Ok(out)
+}
+
 pub(super) async fn materialize(
     store: &ArchiveStore,
     args: &RestoreArgs,
@@ -175,148 +244,21 @@ pub(super) async fn materialize(
         .filter(|partition| args.selects_topic(&partition.topic))
     {
         let mut log = open_partition_log(args, &partition.topic, partition.partition)?;
-        let mut object_names = HashSet::new();
-        let mut batches = 0u64;
-        let mut records = 0u64;
-        let mut records_dropped = 0u64;
-        let mut observed_end = partition.delete_floor;
-        let mut materialized_end = partition.delete_floor;
-        let partition_ref = PartitionRef {
-            topic: partition.topic.clone(),
-            partition: partition.partition,
-        };
-        for range in &partition.ranges {
-            let object =
-                fetch_object(store, &mut cached_object, &range.object_key, authenticated).await?;
-            object_names.insert(range.object_key.as_str());
-            validate_footer_range(&object, range)?;
-            let start = usize::try_from(range.entry.byte_start)
-                .map_err(|_| RestoreError::Integrity("diskless WAL byte start overflow".into()))?;
-            let len = usize::try_from(range.entry.byte_len)
-                .map_err(|_| RestoreError::Integrity("diskless WAL byte length overflow".into()))?;
-            let end = start
-                .checked_add(len)
-                .filter(|end| *end <= object.len())
-                .ok_or_else(|| {
-                    RestoreError::Integrity(format!(
-                        "{}: captured byte range is outside object",
-                        range.object_key
-                    ))
-                })?;
-            let mut cursor = start;
-            let mut first = None;
-            let mut last: Option<i64> = None;
-            while cursor < end {
-                let validated = validate_one_v2_batch(&object[cursor..end])?;
-                let header = validated.header;
-                let batch_end = cursor.checked_add(validated.total_len).ok_or_else(|| {
-                    RestoreError::Integrity("diskless WAL byte range overflow".into())
-                })?;
-                if validated.total_len == 0 || batch_end > end {
-                    return Err(RestoreError::Integrity(format!(
-                        "{}: captured range disagrees with batch framing",
-                        range.object_key
-                    )));
-                }
-                let batch_last = header
-                    .base_offset
-                    .get()
-                    .checked_add(i64::from(header.last_offset_delta.get()))
-                    .ok_or_else(|| {
-                        RestoreError::Integrity("diskless WAL batch offset overflow".into())
-                    })?;
-                if last.is_some_and(|previous| {
-                    previous.checked_add(1) != Some(header.base_offset.get())
-                }) {
-                    return Err(RestoreError::Integrity(format!(
-                        "{}: non-contiguous batch offsets inside captured run",
-                        range.object_key
-                    )));
-                }
-                first.get_or_insert(header.base_offset.get());
-                last = Some(batch_last);
-                let base = Offset(header.base_offset.get());
-                if batch_last >= partition.delete_floor
-                    && !predicates.batch_past_offset_bound(&partition_ref, base)
-                {
-                    let mut batch_cursor = &object[cursor..batch_end];
-                    let batch = RecordBatchBorrowed::decode_borrow_with_policy(
-                        &mut batch_cursor,
-                        <_>::default(),
-                    )?;
-                    if !batch_cursor.is_empty() {
-                        return Err(RestoreError::Integrity(format!(
-                            "{}: decoded diskless batch left trailing bytes",
-                            range.object_key
-                        )));
-                    }
-                    let records_in_batch =
-                        u64::try_from(header.records_count.get().max(0)).unwrap_or(0);
-                    let (mut prepared, tally) = prepare_batch(
-                        PrepareBatchSetup::builder()
-                            .partition_ref(&partition_ref)
-                            .predicates(predicates)
-                            .batch(&batch)
-                            .batch_bytes(object.slice(cursor..batch_end))
-                            .records_in_batch(records_in_batch)
-                            .build(),
-                    )?;
-                    materialized_end = base
-                        .0
-                        .checked_add(i64::from(prepared.last_offset_delta()))
-                        .and_then(|last| last.checked_add(1))
-                        .ok_or_else(|| {
-                            RestoreError::Integrity("diskless WAL batch offset overflow".into())
-                        })?;
-                    if let Some(log) = log.as_mut() {
-                        if log.log_end_offset() == Offset(0) && base != Offset(0) {
-                            log.reset_to(base)?;
-                        }
-                        log.reconcile_next_offset(base);
-                        match &mut prepared {
-                            PreparedBatch::Verbatim(batch) => {
-                                log.append_verbatim_at(batch, base)?;
-                            }
-                            PreparedBatch::Owned { batch, .. } => {
-                                log.append_at(batch, base)?;
-                            }
-                        }
-                    }
-                    batches += 1;
-                    match tally {
-                        BatchTally::Kept => records = records.saturating_add(records_in_batch),
-                        BatchTally::Rewritten { kept, dropped } => {
-                            records = records.saturating_add(kept);
-                            records_dropped = records_dropped.saturating_add(dropped);
-                        }
-                        BatchTally::Emptied => {
-                            records_dropped = records_dropped.saturating_add(records_in_batch);
-                        }
-                    }
-                }
-                cursor = batch_end;
-            }
-            if first != Some(range.entry.first_offset) || last != Some(range.entry.last_offset) {
-                return Err(RestoreError::Integrity(format!(
-                    "{}: captured run disagrees with batch boundaries",
-                    range.object_key
-                )));
-            }
-            observed_end = range
-                .entry
-                .last_offset
-                .checked_add(1)
-                .ok_or_else(|| {
-                    RestoreError::Integrity("diskless WAL batch offset overflow".into())
-                })?
-                .max(partition.delete_floor);
-        }
-        if observed_end != partition.recovery_cutoff {
-            return Err(RestoreError::Integrity(format!(
-                "{}-{} validated through {observed_end}, capture declares cutoff {}",
-                partition.topic, partition.partition, partition.recovery_cutoff
-            )));
-        }
+        let Walked {
+            objects,
+            batches,
+            records,
+            records_dropped,
+            materialized_end,
+        } = walk_partition(
+            store,
+            &mut cached_object,
+            predicates,
+            partition,
+            authenticated,
+            log.as_mut(),
+        )
+        .await?;
         if let Some(log) = log.as_mut() {
             if log.log_end_offset() == Offset(0) && materialized_end != 0 {
                 log.reset_to(Offset(materialized_end))?;
@@ -339,7 +281,7 @@ pub(super) async fn materialize(
             topic_id: partition.topic_id,
             delete_floor: partition.delete_floor,
             recovery_cutoff: materialized_end,
-            objects: object_names.len() as u64,
+            objects,
             batches,
             records,
             records_dropped,
@@ -350,6 +292,199 @@ pub(super) async fn materialize(
         source_cutoffs: capture.source_cutoffs.clone(),
         partitions: reports,
         limitations: limitations(),
+    })
+}
+
+/// Require every materialized partition to end at the next offset the target
+/// was formatted with, so its metadata never starts it anywhere else.
+pub(super) fn check_next_offsets(
+    report: &DisklessRestoreReport,
+    planned: &[DisklessNextOffset],
+) -> Result<(), RestoreError> {
+    let materialized: Vec<DisklessNextOffset> = report
+        .partitions
+        .iter()
+        .map(|partition| DisklessNextOffset {
+            topic: partition.topic.clone(),
+            partition: partition.partition,
+            next_offset: partition.recovery_cutoff,
+        })
+        .collect();
+    if materialized == planned {
+        Ok(())
+    } else {
+        Err(RestoreError::Integrity(format!(
+            "diskless partitions materialized to {materialized:?}, but the target was formatted \
+             with next offsets {planned:?}"
+        )))
+    }
+}
+
+/// What walking one partition's captured ranges found.
+struct Walked {
+    objects: u64,
+    batches: u64,
+    records: u64,
+    records_dropped: u64,
+    /// The exclusive end of the batches the restore keeps.
+    materialized_end: i64,
+}
+
+/// Validate every captured range of `partition` against its WAL object, and
+/// append the batches the restore keeps to `log` when one is given.
+async fn walk_partition(
+    store: &ArchiveStore,
+    cached_object: &mut Option<CachedObject>,
+    predicates: &Predicates,
+    partition: &DisklessPartitionCapture,
+    authenticated: Option<&BTreeMap<String, ObjectEntry>>,
+    mut log: Option<&mut Log>,
+) -> Result<Walked, RestoreError> {
+    let mut object_names = HashSet::new();
+    let mut batches = 0u64;
+    let mut records = 0u64;
+    let mut records_dropped = 0u64;
+    let mut observed_end = partition.delete_floor;
+    let mut materialized_end = partition.delete_floor;
+    let partition_ref = PartitionRef {
+        topic: partition.topic.clone(),
+        partition: partition.partition,
+    };
+    for range in &partition.ranges {
+        let object = fetch_object(store, cached_object, &range.object_key, authenticated).await?;
+        object_names.insert(range.object_key.as_str());
+        validate_footer_range(&object, range)?;
+        let start = usize::try_from(range.entry.byte_start)
+            .map_err(|_| RestoreError::Integrity("diskless WAL byte start overflow".into()))?;
+        let len = usize::try_from(range.entry.byte_len)
+            .map_err(|_| RestoreError::Integrity("diskless WAL byte length overflow".into()))?;
+        let end = start
+            .checked_add(len)
+            .filter(|end| *end <= object.len())
+            .ok_or_else(|| {
+                RestoreError::Integrity(format!(
+                    "{}: captured byte range is outside object",
+                    range.object_key
+                ))
+            })?;
+        let mut cursor = start;
+        let mut first = None;
+        let mut last: Option<i64> = None;
+        while cursor < end {
+            let validated = validate_one_v2_batch(&object[cursor..end])?;
+            let header = validated.header;
+            let batch_end = cursor.checked_add(validated.total_len).ok_or_else(|| {
+                RestoreError::Integrity("diskless WAL byte range overflow".into())
+            })?;
+            if validated.total_len == 0 || batch_end > end {
+                return Err(RestoreError::Integrity(format!(
+                    "{}: captured range disagrees with batch framing",
+                    range.object_key
+                )));
+            }
+            let batch_last = header
+                .base_offset
+                .get()
+                .checked_add(i64::from(header.last_offset_delta.get()))
+                .ok_or_else(|| {
+                    RestoreError::Integrity("diskless WAL batch offset overflow".into())
+                })?;
+            if last
+                .is_some_and(|previous| previous.checked_add(1) != Some(header.base_offset.get()))
+            {
+                return Err(RestoreError::Integrity(format!(
+                    "{}: non-contiguous batch offsets inside captured run",
+                    range.object_key
+                )));
+            }
+            first.get_or_insert(header.base_offset.get());
+            last = Some(batch_last);
+            let base = Offset(header.base_offset.get());
+            if batch_last >= partition.delete_floor
+                && !predicates.batch_past_offset_bound(&partition_ref, base)
+            {
+                let mut batch_cursor = &object[cursor..batch_end];
+                let batch = RecordBatchBorrowed::decode_borrow_with_policy(
+                    &mut batch_cursor,
+                    <_>::default(),
+                )?;
+                if !batch_cursor.is_empty() {
+                    return Err(RestoreError::Integrity(format!(
+                        "{}: decoded diskless batch left trailing bytes",
+                        range.object_key
+                    )));
+                }
+                let records_in_batch =
+                    u64::try_from(header.records_count.get().max(0)).unwrap_or(0);
+                let (mut prepared, tally) = prepare_batch(
+                    PrepareBatchSetup::builder()
+                        .partition_ref(&partition_ref)
+                        .predicates(predicates)
+                        .batch(&batch)
+                        .batch_bytes(object.slice(cursor..batch_end))
+                        .records_in_batch(records_in_batch)
+                        .build(),
+                )?;
+                materialized_end = base
+                    .0
+                    .checked_add(i64::from(prepared.last_offset_delta()))
+                    .and_then(|last| last.checked_add(1))
+                    .ok_or_else(|| {
+                        RestoreError::Integrity("diskless WAL batch offset overflow".into())
+                    })?;
+                if let Some(log) = log.as_deref_mut() {
+                    if log.log_end_offset() == Offset(0) && base != Offset(0) {
+                        log.reset_to(base)?;
+                    }
+                    log.reconcile_next_offset(base);
+                    match &mut prepared {
+                        PreparedBatch::Verbatim(batch) => {
+                            log.append_verbatim_at(batch, base)?;
+                        }
+                        PreparedBatch::Owned { batch, .. } => {
+                            log.append_at(batch, base)?;
+                        }
+                    }
+                }
+                batches += 1;
+                match tally {
+                    BatchTally::Kept => records = records.saturating_add(records_in_batch),
+                    BatchTally::Rewritten { kept, dropped } => {
+                        records = records.saturating_add(kept);
+                        records_dropped = records_dropped.saturating_add(dropped);
+                    }
+                    BatchTally::Emptied => {
+                        records_dropped = records_dropped.saturating_add(records_in_batch);
+                    }
+                }
+            }
+            cursor = batch_end;
+        }
+        if first != Some(range.entry.first_offset) || last != Some(range.entry.last_offset) {
+            return Err(RestoreError::Integrity(format!(
+                "{}: captured run disagrees with batch boundaries",
+                range.object_key
+            )));
+        }
+        observed_end = range
+            .entry
+            .last_offset
+            .checked_add(1)
+            .ok_or_else(|| RestoreError::Integrity("diskless WAL batch offset overflow".into()))?
+            .max(partition.delete_floor);
+    }
+    if observed_end != partition.recovery_cutoff {
+        return Err(RestoreError::Integrity(format!(
+            "{}-{} validated through {observed_end}, capture declares cutoff {}",
+            partition.topic, partition.partition, partition.recovery_cutoff
+        )));
+    }
+    Ok(Walked {
+        objects: object_names.len() as u64,
+        batches,
+        records,
+        records_dropped,
+        materialized_end,
     })
 }
 

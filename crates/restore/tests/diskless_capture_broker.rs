@@ -195,14 +195,14 @@ async fn produce(bootstrap: &str, topic_id: Uuid) {
 /// Produce one batch holding `values` with `acks=all`, retrying only the
 /// errors a broker returns before it appends. `shape` sets everything but the
 /// records and their offsets and timestamps: the producer, its sequence and
-/// the codec.
+/// the codec. Returns the base offset the broker assigned.
 async fn produce_batch(
     client: &Client,
     topic_id: Uuid,
     partition: i32,
     values: &[String],
     shape: &RecordBatch,
-) {
+) -> i64 {
     let deadline = Instant::now() + Duration::from_mins(1);
     loop {
         // The flusher expires batches older than `retention.ms` out of the
@@ -230,7 +230,7 @@ async fn produce_batch(
             .await
             .expect("Produce");
         match response.responses[0].partition_responses[0].error_code {
-            0 => return,
+            0 => return response.responses[0].partition_responses[0].base_offset,
             NOT_LEADER_OR_FOLLOWER | UNKNOWN_TOPIC_OR_PARTITION => {
                 assert!(
                     Instant::now() <= deadline,
@@ -653,6 +653,38 @@ async fn a_restored_diskless_partition_serves_every_materialized_record() {
     // drill's read-back and Kafka's `endOffsets` consumers do.
     check!(latest == ends);
     check!(consume_from_earliest(&restored.bootstrap, &ends).await == expected);
+
+    // A restored partition takes new writes at its materialized end, as a
+    // classic or tiered one does, and serves them after the restored records
+    // (#1524). The drill's probe is this write: one batch, `acks=all`.
+    let after_restore: BTreeMap<i32, i64> = {
+        let mut assigned = BTreeMap::new();
+        for partition in ends.keys() {
+            let value = vec![format!("p{partition}-after-restore")];
+            assigned.insert(
+                *partition,
+                produce_batch(
+                    &reader,
+                    topic_id,
+                    *partition,
+                    &value,
+                    &RecordBatch::default(),
+                )
+                .await,
+            );
+            expected
+                .get_mut(partition)
+                .expect("a restored partition")
+                .extend(value);
+        }
+        assigned
+    };
+    check!(after_restore == ends);
+    let grown: BTreeMap<i32, i64> = ends
+        .iter()
+        .map(|(partition, end)| (*partition, end + 1))
+        .collect();
+    check!(consume_from_earliest(&restored.bootstrap, &grown).await == expected);
 
     drop(reader);
     restored.handle.shutdown().await;

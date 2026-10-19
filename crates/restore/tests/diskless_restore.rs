@@ -5,6 +5,7 @@ use {
     krabka_audit::FileEd25519Signer,
     krabka_ids::Offset,
     krabka_log::{Log, LogConfig},
+    krabka_metadata::{MetadataRecord, PartitionOffsetAdvanceRecord},
     krabka_protocol::records::{Record, RecordBatch, validate_one_v2_batch},
     krabka_remote_storage::{
         ObjectEntry, RlmmCacheDump, Sha256Digest,
@@ -648,4 +649,56 @@ async fn assert_dry_run_error(
             ));
         }
     }
+}
+
+/// The restored metadata starts a diskless partition's offsets where the
+/// restore ends its log, so the restored cluster assigns its first write the
+/// next offset (#1524). An unbounded restore ends at the capture's recovery
+/// cutoff. A `--to-offset` bound ends at the last batch it keeps, which only
+/// a walk of the WAL objects finds before the target is formatted.
+#[yare::parameterized(
+    unbounded = { &[], 2 },
+    bounded = { &["--to-offset", "orders:0=0"], 1 },
+)]
+#[test_macro(tokio::test)]
+async fn the_restored_metadata_starts_a_diskless_partition_at_its_restored_end(
+    extra: &[&str],
+    next_offset: i64,
+) {
+    let UnwrittenFixture {
+        archive,
+        target,
+        capture_path,
+        mut capture,
+    } = unwritten_fixture(true, false);
+    capture.partitions[0].delete_floor = 0;
+    write_capture(&capture_path, &capture);
+    let extra: Vec<String> = extra.iter().map(|flag| (*flag).to_owned()).collect();
+
+    restore(&capture_args(
+        archive.path(),
+        target.path(),
+        &capture_path,
+        &extra,
+    ))
+    .await
+    .unwrap();
+
+    let advances: Vec<MetadataRecord> =
+        krabka_broker::bootstrap::load_bootstrap_records(target.path())
+            .unwrap()
+            .into_iter()
+            .filter(|record| matches!(record, MetadataRecord::V1PartitionOffsetAdvance(_)))
+            .collect();
+    check!(
+        advances
+            == vec![MetadataRecord::V1PartitionOffsetAdvance(
+                PartitionOffsetAdvanceRecord {
+                    topic: "orders".to_owned(),
+                    partition: 0,
+                    count: next_offset,
+                }
+            )]
+    );
+    check_orders_offsets(target.path(), Offset(0), Offset(next_offset));
 }

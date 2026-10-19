@@ -135,6 +135,33 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   now fires for it. `krabka_broker_offline_audit_partitions` counts only
   audit partitions with no live replica, so an audit partition on a failed
   dir of a live broker still pages.
+- A diskless broker's hot-tail cache keeps every compressed batch it is given.
+  The cache split each newly durable run into batches by the decoded batch's
+  `encoded_len`, which is its uncompressed length. A compressed batch does not
+  occupy that many bytes, so the first batch of each run was cached cut short
+  or with the next batch's bytes attached, and every batch after it was
+  dropped. A `read_uncommitted` fetch the cache answered could get a truncated
+  batch. The cache now takes the length that the decode consumed.
+- A restored diskless partition takes new writes (issue #1524). `KRaft`
+  assigns a diskless partition's offsets, and a restored cluster's metadata
+  held no next offset for it, so the first write was assigned offset 0 and the
+  materialized log refused it with `UNKNOWN_SERVER_ERROR` ("offset mismatch:
+  expected 712, got 0"). `krabka-restore` now formats the target with a
+  `V1PartitionOffsetAdvance` that starts each diskless partition at the end it
+  restores the log to, and fails the restore if the log ends anywhere else. The
+  controller takes that record in its activation batch: a new leader reserves
+  no offsets for a request until its epoch commits, but the activation batch
+  of an empty log inherits no reservation to wait for. The record is the one
+  every 1.x metadata snapshot already carries.
+- A consumer reads every record of a restored diskless partition (issue
+  #1525). On v1.0.5 it read only the first batch of each one. The restored
+  node flushes the materialized records into its own WAL and trims its local
+  log to them, so a KIP-320 consumer's fetch from the earliest offset falls
+  below the trimmed log start. v1.0.5 answered that fetch
+  `OFFSET_OUT_OF_RANGE`, and the consumer reset to the end. The fix in #1487
+  sends that fetch to the WAL objects. A new `diskless_capture_broker` case
+  restores a captured diskless topic and reads it back the way the
+  qualification drill does.
 - Log compaction deletes the producer-state snapshot of every segment it
   merges, as Kafka's `UnifiedLog.replaceSegments` does, keeping only the one at
   a survivor's own base offset (issue #1507). It used to leave them all, so a
@@ -169,22 +196,6 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   --controller-listen-addr): Address already in use (os error 98)`. The
   controller listener also binds before the metadata engine opens, so the
   failure leaves no engine running.
-- A diskless broker's hot-tail cache keeps every compressed batch it is given.
-  The cache split each newly durable run into batches by the decoded batch's
-  `encoded_len`, which is its uncompressed length. A compressed batch does not
-  occupy that many bytes, so the first batch of each run was cached cut short
-  or with the next batch's bytes attached, and every batch after it was
-  dropped. A `read_uncommitted` fetch the cache answered could get a truncated
-  batch. The cache now takes the length that the decode consumed.
-- A consumer reads every record of a restored diskless partition (issue
-  #1525). On v1.0.5 it read only the first batch of each one. The restored
-  node flushes the materialized records into its own WAL and trims its local
-  log to them, so a KIP-320 consumer's fetch from the earliest offset falls
-  below the trimmed log start. v1.0.5 answered that fetch
-  `OFFSET_OUT_OF_RANGE`, and the consumer reset to the end. The fix in #1487
-  sends that fetch to the WAL objects. A new `diskless_capture_broker` case
-  restores a captured diskless topic and reads it back the way the
-  qualification drill does.
 - The release image's SLSA provenance attestation carries its predicate
   again. Through v1.0.5, `release.yml` attested its SLSA v1 predicate as
   `--type slsaprovenance`, which cosign reads as SLSA v0.2, so every release
