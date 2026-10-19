@@ -63,6 +63,14 @@ feature level that turns the new format on, and updates
 on, every 1.x release reads every format that an earlier 1.x release wrote. A
 change that cannot keep that promise waits for the next major version.
 
+An entry that breaks the on-disk format opens with the exact marker
+`**Breaking, on-disk format.**`. The nightly upgrade smoke
+(`packaging/upgrade-smoke.sh`) reads only that marker. When an entry added since
+the previous release has it, the smoke expects the new build to refuse the old
+data directory. Without it, the smoke expects the new build to open the
+directory and serve the old records. Other wording, such as "the on-disk format
+does not change", does not count.
+
 Then fix the link definitions at the end of the file. Add one for the new tag,
 and move the `[Unreleased]` comparison onto that tag as well: it names the
 previous one, so leaving it alone would keep listing everything this release
@@ -182,7 +190,15 @@ missing image reference or another image's digest must fail.
 
 It fails the release rather than publishing an unsigned or unverified image,
 because it runs `cosign verify` and `cosign verify-attestation` against the
-digest it signed.
+digest it signed. `verify-attestation` checks a signature and a predicate type,
+not what the predicate says, so the job also reads the provenance statement
+back. It must be SLSA v1 (`https://slsa.dev/provenance/v1`), its subject must
+be the signed index, and its predicate must name the tagged commit, the tag
+ref, the arm64 child and the tested amd64 image. Through v1.0.5 the job
+attested the provenance as `--type slsaprovenance`, which cosign reads as SLSA
+v0.2: it dropped every field of the v1 predicate and signed an empty one.
+Those releases keep that empty provenance, and their release run log and
+`delivery-image` artifact are what tie them to the tested commit.
 
 `latest` moves onto the release only when the tag is the newest `v*` tag in the
 repository, by `sort -V`. A patch cut after a later minor -- a `v0.5.4` tagged
@@ -195,6 +211,21 @@ cosign verify \
   --certificate-identity https://github.com/krabka-io/krabka-broker/.github/workflows/release.yml@refs/tags/v0.5.2 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/krabka-io/krabka-broker:v0.5.2
+```
+
+Then read the provenance back. Use cosign 3: `sigstore/cosign-installer` v4
+signs with it, and cosign 2 finds no signature on these images. Only a release
+after v1.0.5 has a v1 provenance. For v1.0.5 and earlier, the command finds no
+matching attestation.
+
+```sh
+tag=vX.Y.Z
+cosign verify-attestation \
+  --type https://slsa.dev/provenance/v1 \
+  --certificate-identity "https://github.com/krabka-io/krabka-broker/.github/workflows/release.yml@refs/tags/${tag}" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "ghcr.io/krabka-io/krabka-broker:${tag}" |
+  jq -r .payload | base64 --decode | jq .predicate.buildDefinition
 ```
 
 Also compare the release tag's digest against the delivery artifact:

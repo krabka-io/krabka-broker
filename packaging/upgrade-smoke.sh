@@ -204,16 +204,27 @@ bounded docker stop "${old_container}" >/dev/null
 bounded docker rm "${old_container}" >/dev/null
 
 step "read the changelog since ${previous}"
-# A declaration already present in the previous release is not a new break.
+# A release that breaks the on-disk format says so with this marker, as
+# docs/releasing.md asks. Only the marker counts: prose such as "the on-disk
+# format does not change" is no declaration, and reading it as one ran HEAD in
+# the foreground on a directory it opens normally (issue #1508). A marker
+# already present in the previous release is not a new break.
+break_marker='**Breaking, on-disk format.**'
 changes=$(bounded git diff --unified=0 "${previous}" -- CHANGELOG.md | sed -n 's/^+//p')
-if grep -Eqi 'format changed|on-disk format|fresh `krabka-format`' <<<"${changes}"; then
+if grep -Fq "${break_marker}" <<<"${changes}"; then
   step "check that HEAD refuses the declared format break"
-  if bounded docker run --name "${head_container}" --network "${network}" \
-      --network-alias krabka-upgrade-old \
-      -v "${volume}:/var/lib/krabka" -e KRABKA_CLUSTER_ID="${cluster_id}" \
-      -v "${old_config}:/etc/krabka.toml:ro" "${head_image}" \
-      --config-file /etc/krabka.toml >"${head_log}" 2>&1; then
+  head_status=0
+  bounded docker run --name "${head_container}" --network "${network}" \
+    --network-alias krabka-upgrade-old \
+    -v "${volume}:/var/lib/krabka" -e KRABKA_CLUSTER_ID="${cluster_id}" \
+    -v "${old_config}:/etc/krabka.toml:ro" "${head_image}" \
+    --config-file /etc/krabka.toml >"${head_log}" 2>&1 || head_status=$?
+  if [ "${head_status}" -eq 0 ]; then
     echo "HEAD opened a directory despite the declared format break" >&2
+    exit 1
+  fi
+  if [ "${head_status}" -eq 124 ] || [ "${head_status}" -eq 137 ]; then
+    echo "HEAD kept serving the directory ${previous} wrote, although the changelog declares an on-disk format break" >&2
     exit 1
   fi
   grep -Eq 'No readable meta.properties files found|Unsupported meta.properties version|INCONSISTENT_CLUSTER_ID' "${head_log}"
