@@ -104,6 +104,15 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- The release image's SLSA provenance attestation carries its predicate
+  again. Through v1.0.5, `release.yml` attested its SLSA v1 predicate as
+  `--type slsaprovenance`, which cosign reads as SLSA v0.2, so every release
+  from v1.0.0 to v1.0.5 has an empty provenance predicate: nothing in it names
+  the commit or the tested image. The release now attests the predicate as
+  `https://slsa.dev/provenance/v1`, and fails before it creates the GitHub
+  release unless the statement it reads back names the tagged commit, the tag
+  ref, the arm64 child and the tested amd64 image. The attestations of v1.0.0
+  to v1.0.5 do not change.
 - A classic follower whose log was empty at a leader log start inside a
   batch now catches up. `DeleteRecords` (KIP-107) or retention can put the
   leader's log start in the middle of a multi-record batch, and a follower
