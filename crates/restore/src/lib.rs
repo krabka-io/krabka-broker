@@ -409,6 +409,17 @@ async fn authenticate_captured_snapshot(
     flag: &str,
 ) -> Result<Option<Vec<u8>>, RestoreError> {
     let Some(path) = path else {
+        // A signed capture that binds this input says the source had it. A
+        // restore without it would silently come back without what it
+        // carries: for the metadata checkpoint, every ACL and SCRAM credential.
+        if let (true, Some(expected)) = (authenticated_restore, expected) {
+            return Err(RestoreError::Authenticity {
+                reason: format!(
+                    "the signed diskless capture binds {flag} (SHA-256 {expected}), but it was \
+                     not supplied"
+                ),
+            });
+        }
         return Ok(None);
     };
     if !authenticated_restore {
