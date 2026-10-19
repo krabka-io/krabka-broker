@@ -80,9 +80,7 @@ groups:
       # on a controller too old to export the audit gauge.
       - alert: KrabkaOfflinePartitions
         expr: >-
-          krabka_broker_offline_partitions_count
-          - (krabka_broker_offline_audit_partitions or krabka_broker_offline_partitions_count * 0)
-          > 0
+          krabka_broker_offline_partitions_count - (krabka_broker_offline_audit_partitions or krabka_broker_offline_partitions_count * 0) > 0
         for: 1m
         labels:
           severity: critical
