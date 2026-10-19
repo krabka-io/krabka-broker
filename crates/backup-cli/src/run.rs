@@ -1502,6 +1502,30 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_undecodable_format_time_checkpoint_is_an_integrity_failure_that_writes_nothing() {
+        let log_dir = node_with_rlmm();
+        let metadata = log_dir.path().join("__cluster_metadata-0");
+        std::fs::create_dir_all(&metadata).expect("create the checkpoint dir");
+        std::fs::write(metadata.join(FORMAT_TIME_CHECKPOINT), CHECKPOINT_BYTES)
+            .expect("write a damaged format-time checkpoint");
+        let ArchiveFixture { root, args, .. } = archive_fixture();
+
+        let error = capture(Some(log_dir.path()), None, &args)
+            .await
+            .expect_err("a damaged checkpoint fails the capture");
+
+        check!(matches!(&error, BackupError::Integrity(_)), "got: {error}");
+        check!(
+            error.to_string().contains(FORMAT_TIME_CHECKPOINT),
+            "got: {error}"
+        );
+        check!(
+            std::fs::read_dir(root.path()).unwrap().next().is_none(),
+            "the failed capture wrote no artifact"
+        );
+    }
+
     #[yare::parameterized(
         controller = { "__cluster_metadata-0" },
         observer = { "__cluster_metadata-0/observer" },
