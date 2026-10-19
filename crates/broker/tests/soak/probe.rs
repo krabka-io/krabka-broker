@@ -5,14 +5,14 @@
 //! nothing, and `docs/operations/capacity.md` tells the operator to size file
 //! descriptors as "one per client connection plus the segment files of every
 //! replica" while `krabka_broker_active_connections` counts only the first
-//! half. These are the four numbers that make that sizing checkable:
+//! half. These are the numbers that make that sizing checkable:
 //!
 //! | sample | where it comes from | what a rise would mean |
 //! | --- | --- | --- |
 //! | resident set | `/proc/<pid>/status` `VmRSS` | a leak: producer-id state, fetch sessions, the diskless hot tail |
 //! | open descriptors | entries in `/proc/<pid>/fd` | segment handles or connections not being closed |
 //! | `/metrics` series | sample lines in the scraped body | an unbounded metric family -- a per-partition or per-client label set that never drops a member |
-//! | log-directory bytes | the host side of the bind mount | retention not keeping up with the producer |
+//! | log-directory bytes and files | the host side of the bind mount, per top-level entry | retention, the cleaner or the metadata log not reclaiming what they replace |
 //!
 //! The pid comes from `docker inspect` and the container runs as the host user
 //! that owns its data directory, so both `/proc` reads work from the test
@@ -145,26 +145,147 @@ pub(crate) fn segments(log_dir: &Path) -> BTreeMap<String, BTreeSet<u64>> {
     found
 }
 
-/// Bytes held by every regular file under `root`.
+/// What the regular files under one directory hold.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct DirectoryUsage {
+    pub(crate) bytes: u64,
+    pub(crate) files: u64,
+}
+
+impl std::ops::Add for DirectoryUsage {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self {
+            bytes: self.bytes + other.bytes,
+            files: self.files + other.files,
+        }
+    }
+}
+
+impl std::iter::Sum for DirectoryUsage {
+    fn sum<I: Iterator<Item = Self>>(usages: I) -> Self {
+        usages.fold(Self::default(), std::ops::Add::add)
+    }
+}
+
+/// Bytes and files held by every regular file under `root`.
 ///
 /// Walked rather than `du`-ed: the image carries no shell and the host may not
 /// have one either under a Bazel test sandbox.
-pub(crate) fn directory_bytes(root: &Path) -> u64 {
-    let mut total = 0;
+pub(crate) fn directory_usage(root: &Path) -> DirectoryUsage {
     let Ok(entries) = std::fs::read_dir(root) else {
-        return 0;
+        return DirectoryUsage::default();
     };
-    for entry in entries.filter_map(Result::ok) {
-        let Ok(kind) = entry.file_type() else {
-            continue;
-        };
-        if kind.is_dir() {
-            total += directory_bytes(&entry.path());
-        } else if kind.is_file() {
-            total += entry.metadata().map_or(0, |m| m.len());
-        }
-    }
-    total
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| match entry.file_type() {
+            Ok(kind) if kind.is_dir() => directory_usage(&entry.path()),
+            Ok(kind) if kind.is_file() => DirectoryUsage {
+                bytes: entry.metadata().map_or(0, |m| m.len()),
+                files: 1,
+            },
+            _ => DirectoryUsage::default(),
+        })
+        .sum()
+}
+
+/// [`directory_usage`] of each top-level entry of `log_dir`, by name: one row
+/// per partition directory, the metadata log, the audit spool, and each loose
+/// file such as `meta.properties`.
+///
+/// This is what names the directory that grew when the log-directory series
+/// fails. A total alone cannot say whether retention, the cleaner, the metadata
+/// log or the offsets topic is the one not keeping up.
+pub(crate) fn top_level_usage(log_dir: &Path) -> BTreeMap<String, DirectoryUsage> {
+    let Ok(entries) = std::fs::read_dir(log_dir) else {
+        return BTreeMap::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let kind = entry.file_type().ok()?;
+            let usage = if kind.is_dir() {
+                directory_usage(&entry.path())
+            } else if kind.is_file() {
+                DirectoryUsage {
+                    bytes: entry.metadata().map_or(0, |m| m.len()),
+                    files: 1,
+                }
+            } else {
+                return None;
+            };
+            Some((name, usage))
+        })
+        .collect()
+}
+
+/// Whether `entry` is the directory of a partition of `topic`: `<topic>-<n>`.
+pub(crate) fn is_partition_of(entry: &str, topic: &str) -> bool {
+    entry
+        .strip_prefix(topic)
+        .and_then(|rest| rest.strip_prefix('-'))
+        .is_some_and(|index| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// The usage of every entry in `usage` except the partitions of `excluded`.
+pub(crate) fn usage_without(
+    usage: &BTreeMap<String, DirectoryUsage>,
+    excluded: &str,
+) -> DirectoryUsage {
+    usage
+        .iter()
+        .filter(|(entry, _)| !is_partition_of(entry, excluded))
+        .map(|(_, usage)| *usage)
+        .sum()
+}
+
+/// One top-level entry's change in bytes between two samples.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Growth {
+    pub(crate) entry: String,
+    pub(crate) bytes: i128,
+    pub(crate) files: i128,
+}
+
+/// What each top-level entry gained over the second half of `samples`, from
+/// the first sample at or past the run's midpoint to the last, largest byte
+/// gain first, at most `top` of them. An entry present at one end only counts
+/// as zero at the other. Entries that did not change are left out.
+///
+/// The midpoint is the one the drift judgement fits its trend from, so this names
+/// the entries behind a log-directory verdict.
+pub(crate) fn second_half_growth(
+    samples: &[(std::time::Duration, BTreeMap<String, DirectoryUsage>)],
+    top: usize,
+) -> Vec<Growth> {
+    let (Some((first, _)), Some((last, to))) = (samples.first(), samples.last()) else {
+        return Vec::new();
+    };
+    let midpoint = *first + last.saturating_sub(*first) / 2;
+    let Some((_, from)) = samples.iter().find(|(elapsed, _)| *elapsed >= midpoint) else {
+        return Vec::new();
+    };
+    let at = |usage: &BTreeMap<String, DirectoryUsage>, entry: &str| {
+        usage.get(entry).copied().unwrap_or_default()
+    };
+    let entries: BTreeSet<&String> = from.keys().chain(to.keys()).collect();
+    let mut growth: Vec<Growth> = entries
+        .into_iter()
+        .map(|entry| {
+            let (before, after) = (at(from, entry), at(to, entry));
+            Growth {
+                entry: entry.clone(),
+                bytes: i128::from(after.bytes) - i128::from(before.bytes),
+                files: i128::from(after.files) - i128::from(before.files),
+            }
+        })
+        .filter(|growth| growth.bytes != 0 || growth.files != 0)
+        .collect();
+    growth.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.entry.cmp(&b.entry)));
+    growth.truncate(top);
+    growth
 }
 
 /// Open descriptors held by `pid`.
@@ -277,15 +398,107 @@ krabka_broker_log_compactions_total_seconds 999
     }
 
     /// The walk sums regular files at every depth and ignores a directory it
-    /// cannot read.
+    /// cannot read, and the top-level rows are one per entry.
     #[test]
-    fn directory_bytes_sums_the_tree() {
+    fn directory_usage_sums_the_tree_per_top_level_entry() {
         let dir = tempfile::TempDir::new().expect("tempdir");
         std::fs::write(dir.path().join("a"), vec![0u8; 100]).expect("write a");
-        std::fs::create_dir(dir.path().join("nested")).expect("mkdir");
+        std::fs::create_dir_all(dir.path().join("nested/deeper")).expect("mkdir");
         std::fs::write(dir.path().join("nested/b"), vec![0u8; 250]).expect("write b");
-        check!(directory_bytes(dir.path()) == 350);
-        check!(directory_bytes(&dir.path().join("missing")) == 0);
+        std::fs::write(dir.path().join("nested/deeper/c"), vec![0u8; 50]).expect("write c");
+        let usage = |bytes, files| DirectoryUsage { bytes, files };
+        check!(directory_usage(dir.path()) == usage(400, 3));
+        check!(directory_usage(&dir.path().join("missing")) == DirectoryUsage::default());
+        check!(
+            top_level_usage(dir.path())
+                == BTreeMap::from([
+                    ("a".to_owned(), usage(100, 1)),
+                    ("nested".to_owned(), usage(300, 2)),
+                ])
+        );
+    }
+
+    /// Only `<topic>-<digits>` is a partition of the topic: not a topic that
+    /// shares its prefix, and not the topic name alone.
+    #[test]
+    fn a_partition_directory_is_the_topic_a_dash_and_an_index() {
+        for (entry, topic, want) in [
+            ("soak-verify-0", "soak-verify", true),
+            ("soak-verify-12", "soak-verify", true),
+            ("soak-verify", "soak-verify", false),
+            ("soak-verify-", "soak-verify", false),
+            ("soak-verify-x", "soak-verify", false),
+            ("soak-verify-extra-0", "soak-verify", false),
+            ("soak-retention-0", "soak-verify", false),
+            ("__cluster_metadata-0", "soak-verify", false),
+        ] {
+            check!(is_partition_of(entry, topic) == want, "{entry} of {topic}");
+        }
+    }
+
+    /// The excluded topic's partitions drop out of the sum, and everything
+    /// else stays in it.
+    #[test]
+    fn usage_without_a_topic_leaves_its_partitions_out() {
+        let usage = |bytes, files| DirectoryUsage { bytes, files };
+        let breakdown = BTreeMap::from([
+            ("soak-verify-0".to_owned(), usage(1_000, 3)),
+            ("soak-retention-0".to_owned(), usage(200, 4)),
+            ("__cluster_metadata-0".to_owned(), usage(30, 5)),
+            ("meta.properties".to_owned(), usage(4, 1)),
+        ]);
+        check!(usage_without(&breakdown, "soak-verify") == usage(234, 10));
+        check!(usage_without(&breakdown, "absent") == usage(1_234, 13));
+    }
+
+    /// The growth is measured from the first sample at or past the midpoint
+    /// to the last, largest byte gain first, and an entry that appears or
+    /// disappears counts as zero at the other end.
+    #[test]
+    fn second_half_growth_names_what_grew_most() {
+        use std::time::Duration;
+        let usage = |bytes, files| DirectoryUsage { bytes, files };
+        let at = |secs, rows: &[(&str, DirectoryUsage)]| {
+            (
+                Duration::from_secs(secs),
+                rows.iter()
+                    .map(|(name, usage)| ((*name).to_owned(), *usage))
+                    .collect::<BTreeMap<_, _>>(),
+            )
+        };
+        let samples = vec![
+            at(0, &[("meta", usage(0, 1)), ("offsets", usage(0, 3))]),
+            // Before the midpoint of 0..100: not the baseline.
+            at(40, &[("meta", usage(900, 1)), ("offsets", usage(900, 3))]),
+            at(50, &[
+                ("meta", usage(1_000, 7)),
+                ("offsets", usage(500, 3)),
+                ("gone", usage(80, 1)),
+                ("flat", usage(10, 1)),
+            ]),
+            at(100, &[
+                ("meta", usage(1_200, 9)),
+                ("offsets", usage(2_500, 3)),
+                ("new", usage(300, 2)),
+                ("flat", usage(10, 1)),
+            ]),
+        ];
+        let growth = |entry: &str, bytes, files| Growth {
+            entry: entry.to_owned(),
+            bytes,
+            files,
+        };
+        check!(
+            second_half_growth(&samples, 10)
+                == vec![
+                    growth("offsets", 2_000, 0),
+                    growth("new", 300, 2),
+                    growth("meta", 200, 2),
+                    growth("gone", -80, -1),
+                ]
+        );
+        check!(second_half_growth(&samples, 1) == vec![growth("offsets", 2_000, 0)]);
+        check!(second_half_growth(&[], 3).is_empty());
     }
 
     /// Segments are grouped by partition directory, and a directory holding no

@@ -330,7 +330,7 @@ pub(crate) fn inject(
         }
         FaultKind::DiskPressure { watermark } => {
             let path = root.join(BALLAST);
-            let used = probe::directory_bytes(root);
+            let used = probe::directory_usage(root).bytes;
             let free = free_bytes(root)
                 .ok_or_else(|| format!("no free-space reading for {}", root.display()))?;
             let fill = ballast_bytes(

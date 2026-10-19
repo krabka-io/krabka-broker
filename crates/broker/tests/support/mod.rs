@@ -287,6 +287,61 @@ pub async fn topic_id_for(
         .map_or_default(|t| t.topic_id)
 }
 
+/// Create the one-partition `topic` and return its id, which a KIP-516
+/// `OffsetCommit` (v10) names in place of the topic name: a commit that names
+/// only the topic lands under an empty name.
+///
+/// # Panics
+/// Panics if the topic cannot be created.
+pub async fn create_topic_for_commits(
+    client: &krabka_client_core::Client,
+    topic: &str,
+) -> krabka_protocol::primitives::uuid::Uuid {
+    let created = client
+        .send(
+            topics::create_topic_request_with_setup()
+                .topic(topics::creatable_topic().name(topic.to_owned()).call())
+                .timeout(10_000)
+                .call(),
+        )
+        .await
+        .expect("CreateTopics");
+    assert2::assert!(created.topics[0].error_code == krabka_broker::codes::NONE);
+    topic_id_for(client, topic).await
+}
+
+/// Commit `committed_offset` for partition 0 of `topic` as the memberless
+/// group `group`, the way an admin tool or a simple consumer does.
+///
+/// # Panics
+/// Panics if the commit is refused.
+pub async fn commit_partition_zero(
+    client: &krabka_client_core::Client,
+    group: &str,
+    (topic, topic_id): (&str, krabka_protocol::primitives::uuid::Uuid),
+    committed_offset: i64,
+) {
+    let committed = client
+        .send(
+            krabka_protocol::owned::offset_commit_request::OffsetCommitRequest {
+                group_id: group.to_owned(),
+                generation_id_or_member_epoch: -1,
+                topics: vec![offsets::offset_commit_topic(topic, topic_id, vec![
+                    krabka_protocol::owned::offset_commit_request::OffsetCommitRequestPartition {
+                        partition_index: 0,
+                        committed_offset,
+                        committed_leader_epoch: -1,
+                        ..Default::default()
+                    },
+                ])],
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("OffsetCommit");
+    assert2::assert!(committed.topics[0].partitions[0].error_code == krabka_broker::codes::NONE);
+}
+
 pub fn lazy_mutex(lock: &std::sync::OnceLock<tokio::sync::Mutex<()>>) -> &tokio::sync::Mutex<()> {
     lock.get_or_init(|| tokio::sync::Mutex::new(()))
 }
