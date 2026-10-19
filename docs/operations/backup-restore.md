@@ -246,8 +246,10 @@ young cluster has no capture until the controller writes its first checkpoint
 topics into the same offset-zero checkpoint.
 
 A capture that succeeds prints a `NOTE` line with the age of the newest record
-in its checkpoint. A change committed after that record is not in the capture,
-and the restore report does not name it. So a capture right after a
+in its checkpoint. A change committed after that record is not in the capture.
+The restore report names a topic created after it, in
+`topics_without_configuration`, but not a config change to a topic that the
+checkpoint holds. So a capture right after a
 topic-config change carries the change only once the controller has written its
 next checkpoint.
 
@@ -280,8 +282,9 @@ schedule the same way an on-call rotation is rehearsed:
 
 1. `krabka-restore` from the production archive with the newest capture's two
    snapshots into a scratch directory, with `--dry-run` first to see the plan.
-   Compare `metadata.topic_configs` in the plan with the number of topics that
-   have config overrides in production.
+   Check that `metadata.topics_without_configuration` in the plan is empty, and
+   that `metadata.topic_configs` is not zero when production has config
+   overrides.
 2. Boot a broker on the result.
 3. `krabka-backup restore-offsets` against it.
 4. Read one topic from a group's restored position and compare against
