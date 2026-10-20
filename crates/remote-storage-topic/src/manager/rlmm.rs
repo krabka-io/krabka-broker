@@ -292,7 +292,7 @@ mod tests {
                 seed_finished(&m, &[seed(10, 0, 99)]).await;
                 // The pump takes this lock before it applies a record, so
                 // holding it keeps the next record committed but unapplied.
-                let pump_stall = m.mutation_waiters.lock().await;
+                let pump_stall = m.mutation_waiters.stall_pump().await;
                 let event = MetadataEvent::AddSegment(started(11, 100, 199)).encode();
                 log.publish(mp, event).await.unwrap();
                 let got = ask(&m).await;
@@ -333,7 +333,7 @@ mod tests {
         let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
         let reader = start_manager_all(log.clone()).await;
         let writer = start_manager_all(log).await;
-        let stall = reader.mutation_waiters.lock().await;
+        let stall = reader.mutation_waiters.stall_pump().await;
         let w = writer.clone();
         on_blocking(move || {
             w.add_remote_log_segment_metadata(started(10, 0, 99))

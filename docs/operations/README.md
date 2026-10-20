@@ -92,6 +92,7 @@ its `bin/` directory with the suffix, for example `bin/kafka-topics.sh`.
 | `KrabkaRequestLatencyHigh`, `KrabkaQuotaThrottleHigh`, `KrabkaInFlightRequestsClimbing` | [broker-saturation](runbooks/broker-saturation.md) |
 | `KrabkaFetchZeroCopyLost` | [fetch-zero-copy-regression](runbooks/fetch-zero-copy-regression.md) |
 | `KrabkaRlmmBootstrapStuck` | [rlmm-bootstrap-stuck](runbooks/rlmm-bootstrap-stuck.md) |
+| `KrabkaRlmmPartitionNotReady` | [rlmm-partition-not-ready](runbooks/rlmm-partition-not-ready.md) |
 | `KrabkaRemoteCopyErrors` | [remote-copy-lag](runbooks/remote-copy-lag.md) |
 | `KrabkaRemoteCopyLagGrowing` | [remote-copy-lag](runbooks/remote-copy-lag.md) |
 | `KrabkaRemoteFetchErrors` | [remote-copy-lag](runbooks/remote-copy-lag.md) |

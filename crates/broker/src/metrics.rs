@@ -55,8 +55,8 @@ pub use self::{
         BreakGlassActionLabel, BreakGlassState, BreakGlassStateLabel, CleanerFailureLabel,
         CleanerFailureReason, ClientSoftwareLabel, ConnectionCloseReason,
         ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel, FetchDrainPath,
-        FetchDrainPathLabel, PartitionLabel, QuotaEntityLabel, QuotaType, QuotaTypeLabel,
-        RaftStateLabel, ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel,
+        FetchDrainPathLabel, MetadataPartitionLabel, PartitionLabel, QuotaEntityLabel, QuotaType,
+        QuotaTypeLabel, RaftStateLabel, ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel,
         ShareGroupIdLabel, ShareGroupLabel, TopicLabel, WalShardLabel, WalVoterLabel,
     },
     lag::LagSeriesIndex,
@@ -769,6 +769,40 @@ pub struct BrokerMetrics {
         stuck retrying, flat once tiered_storage_rlmm_topic_backed \
         flips to 1.")]
     pub tiered_storage_rlmm_bootstrap_attempts: Counter,
+    /// Whether this broker answers gated remote-log metadata reads for one
+    /// assigned `__remote_log_metadata` partition: `1` once its consumer has
+    /// applied every event up to the high-water mark it saw at assignment,
+    /// `0` while reads answer the retriable `NotReady`. The RLMM reconciler
+    /// samples it after every reconcile, which runs on each assignment change
+    /// and each `rlmm_reconcile_tick`, and releases the series when the
+    /// partition leaves the assignment.
+    #[metric(help = "KIP-405: 1 when this broker answers remote-log metadata \
+        reads for the assigned __remote_log_metadata partition \
+        metadata_partition, 0 while they return the retriable NotReady \
+        because its consumer has not reached the assignment-time \
+        high-water mark. Sampled after every RLMM reconcile; the series \
+        exists only while the partition is assigned.")]
+    pub tiered_storage_rlmm_partition_ready: Family<MetadataPartitionLabel, Gauge>,
+    /// The high-water mark of one assigned `__remote_log_metadata` partition
+    /// that its consumer must reach before reads are answered, or `-1` while
+    /// it is unknown because the assignment-time fetch failed. Sampled with
+    /// `tiered_storage_rlmm_partition_ready`.
+    #[metric(help = "KIP-405: assignment-time high-water mark of the assigned \
+        __remote_log_metadata partition metadata_partition, which its \
+        consumer must reach before reads are answered; -1 while the \
+        high-water-mark fetch has failed and a later reconcile has not \
+        refreshed it. Sampled after every RLMM reconcile.")]
+    pub tiered_storage_rlmm_partition_target_offset: Family<MetadataPartitionLabel, Gauge>,
+    /// The offset of the last event the consumer applied for one assigned
+    /// `__remote_log_metadata` partition, or `-1` when it has applied none.
+    /// The partition is ready once this reaches the target minus one.
+    /// Sampled with `tiered_storage_rlmm_partition_ready`.
+    #[metric(help = "KIP-405: offset of the last event this broker applied \
+        from the assigned __remote_log_metadata partition \
+        metadata_partition, -1 when none. Ready once it reaches \
+        tiered_storage_rlmm_partition_target_offset - 1. Sampled after \
+        every RLMM reconcile.")]
+    pub tiered_storage_rlmm_partition_applied_offset: Family<MetadataPartitionLabel, Gauge>,
     /// Per-topic counter of v0/v1 → v2 record-batch
     /// up-conversions on the Produce path. Mirrors Kafka's
     /// `BrokerTopicMetrics.ProduceMessageConversionsPerSec`. Bumped

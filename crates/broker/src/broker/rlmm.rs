@@ -7,11 +7,12 @@ use {
     crate::{
         config::{BrokerConfig, KafkaRlmmConfig, RlmmKind},
         host_port::parse_advertised_host_port,
-        metrics::BrokerMetrics,
+        metrics::{BrokerMetrics, MetadataPartitionLabel},
         network::client::to_client_creds,
     },
+    krabka_remote_storage_topic::{MetadataPartitionReadiness, TopicBasedRemoteLogMetadataManager},
     krabka_units::convert::TimeExt as _,
-    std::sync::Arc,
+    std::{collections::BTreeSet, sync::Arc},
     tokio_util::sync::CancellationToken,
 };
 
@@ -262,7 +263,7 @@ pub(super) async fn bootstrap_topic_rlmm(
                 continue;
             }
         };
-        let manager = match krabka_remote_storage_topic::TopicBasedRemoteLogMetadataManager::start(
+        let manager = match TopicBasedRemoteLogMetadataManager::start(
             log.clone(),
             runtime.clone(),
             cfg.cfg.snapshot_dir.clone(),
@@ -290,11 +291,20 @@ pub(super) async fn bootstrap_topic_rlmm(
     metrics.tiered_storage_rlmm_topic_backed.set(1);
     tracing::info!("topic-backed RemoteLogMetadataManager activated");
 
-    run_topic_assignment(manager, node_id, image_rx, cfg.reconcile_tick, shutdown).await;
+    run_topic_assignment(
+        manager,
+        metrics,
+        node_id,
+        image_rx,
+        cfg.reconcile_tick,
+        shutdown,
+    )
+    .await;
 }
 
 async fn run_topic_assignment(
-    manager: Arc<krabka_remote_storage_topic::TopicBasedRemoteLogMetadataManager>,
+    manager: Arc<TopicBasedRemoteLogMetadataManager>,
+    metrics: BrokerMetrics,
     node_id: krabka_metadata::NodeId,
     mut image_rx: tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
     reconcile_tick: std::time::Duration,
@@ -316,7 +326,7 @@ async fn run_topic_assignment(
     // them before the Tokio runtime drops.
     let image_watcher =
         watch_rlmm_needed_partitions(image_rx, set_tx, node_id, partition_count, shutdown.clone());
-    let reconciler = run_rlmm_reconciler(manager, set_rx, reconcile_tick, shutdown);
+    let reconciler = run_rlmm_reconciler(manager, metrics, set_rx, reconcile_tick, shutdown);
     tokio::join!(image_watcher, reconciler);
 }
 
@@ -353,22 +363,26 @@ async fn watch_rlmm_needed_partitions(
 }
 
 /// Run the metadata-partition reconciler on the initial value, every change,
-/// and the configured reconciliation cadence.
+/// and the configured reconciliation cadence, and publish the per-partition
+/// readiness gauges after each reconcile.
 ///
 /// The periodic tick is what makes a partition parked at the
 /// `HWM_UNKNOWN` sentinel (after a transient assignment-time
 /// `high_water_marks` failure) eventually re-attempt its HWM and leave the
 /// `NotReady` state, even when the metadata image stays static.
 /// `reconcile_assignment` is idempotent for partitions already
-/// assigned-and-ready, so the periodic re-apply is cheap.
+/// assigned-and-ready, so the periodic re-apply is cheap. The tick also
+/// refreshes the applied-offset gauges of a partition that is catching up.
 async fn run_rlmm_reconciler(
-    manager: Arc<krabka_remote_storage_topic::TopicBasedRemoteLogMetadataManager>,
+    manager: Arc<TopicBasedRemoteLogMetadataManager>,
+    metrics: BrokerMetrics,
     mut set_rx: tokio::sync::watch::Receiver<Vec<i32>>,
     reconcile_tick: std::time::Duration,
     shutdown: CancellationToken,
 ) {
+    let mut published = BTreeSet::new();
     let set = set_rx.borrow_and_update().clone();
-    manager.reconcile_assignment(&set).await;
+    reconcile_and_publish(&manager, &set, &metrics, &mut published).await;
     let mut tick = tokio::time::interval(reconcile_tick);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
@@ -379,14 +393,70 @@ async fn run_rlmm_reconciler(
                     return;
                 }
                 let set = set_rx.borrow_and_update().clone();
-                manager.reconcile_assignment(&set).await;
+                reconcile_and_publish(&manager, &set, &metrics, &mut published).await;
             }
             _ = tick.tick() => {
                 let set = set_rx.borrow().clone();
-                manager.reconcile_assignment(&set).await;
+                reconcile_and_publish(&manager, &set, &metrics, &mut published).await;
             }
         }
     }
+}
+
+/// Reconcile `manager` onto `set`, then publish its readiness. `published` is
+/// the set of metadata partitions that have series, carried between calls.
+async fn reconcile_and_publish(
+    manager: &TopicBasedRemoteLogMetadataManager,
+    set: &[i32],
+    metrics: &BrokerMetrics,
+    published: &mut BTreeSet<i32>,
+) {
+    manager.reconcile_assignment(set).await;
+    *published =
+        publish_rlmm_readiness(metrics, &manager.metadata_partition_readiness(), published);
+}
+
+/// Set the `tiered_storage_rlmm_partition_*` gauges from one readiness
+/// sample and release the series of every partition in `previous` that the
+/// sample no longer names. Returns the partitions the sample names, which is
+/// the `previous` of the next call.
+///
+/// The target gauge reads `-1` while the partition's high-water mark is
+/// unknown.
+fn publish_rlmm_readiness(
+    metrics: &BrokerMetrics,
+    readiness: &[MetadataPartitionReadiness],
+    previous: &BTreeSet<i32>,
+) -> BTreeSet<i32> {
+    let current: BTreeSet<i32> = readiness.iter().map(|entry| entry.partition).collect();
+    for &metadata_partition in previous.difference(&current) {
+        let label = MetadataPartitionLabel { metadata_partition };
+        metrics.tiered_storage_rlmm_partition_ready.remove(&label);
+        metrics
+            .tiered_storage_rlmm_partition_target_offset
+            .remove(&label);
+        metrics
+            .tiered_storage_rlmm_partition_applied_offset
+            .remove(&label);
+    }
+    for entry in readiness {
+        let label = MetadataPartitionLabel {
+            metadata_partition: entry.partition,
+        };
+        metrics
+            .tiered_storage_rlmm_partition_ready
+            .get_or_create(&label)
+            .set(i64::from(entry.ready));
+        metrics
+            .tiered_storage_rlmm_partition_target_offset
+            .get_or_create(&label)
+            .set(entry.target_offset.unwrap_or(-1));
+        metrics
+            .tiered_storage_rlmm_partition_applied_offset
+            .get_or_create(&label)
+            .set(entry.applied_offset);
+    }
+    current
 }
 
 #[cfg(test)]

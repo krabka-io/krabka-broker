@@ -21,14 +21,19 @@ pub(crate) struct JavaTranslation {
     /// alone, and the one after `(?:\R)` to the group, which it matches
     /// another way. `fancy_regex` parses the two the same.
     pub(crate) linebreak_atoms: Vec<bool>,
+    /// For each capturing group by number, group 0 first, whether a `*`, `+`
+    /// or counted quantifier that is not possessive follows its `)` in the
+    /// Java pattern. Java repeats such a group with a `GroupCurly` that sets
+    /// the group itself. `(?:(x))*` has the tree of `(x)*` in `fancy_regex`,
+    /// and Java repeats it with a `GroupCurly` that does not.
+    pub(crate) group_repeats: Vec<bool>,
 }
 
 /// Rewrite a `java.util.regex.Pattern` into `fancy_regex` syntax, or `None`
 /// for a group opener Java refuses, a `)` that closes no group, a class range
 /// Java refuses (`[a-\w]`), a `{` outside a class that does not open the
-/// bounds of a quantifier (`a{x}`), a `\N{name}`, which the rewrite cannot
-/// read, or a quantifier after inline flags that leave no text (`(?i){2}`),
-/// which `fancy_regex` has no form for.
+/// bounds of a quantifier (`a{x}`), a `*`, `+` or `?` that repeats nothing
+/// (`(?i)*`), or a `\N{name}`, which the rewrite cannot read.
 ///
 /// `fancy_regex` accepts Python and Oniguruma forms Java refuses, such as
 /// `(?P<name>x)`, `(?P=name)`, `(?'name'x)` and `(?~x)`, so every `(?` outside
@@ -36,7 +41,11 @@ pub(crate) struct JavaTranslation {
 /// `(?>`, `(?<=`, `(?<!`, `(?<name>` with an ASCII-letter-then-alphanumeric
 /// name, or inline flags from `idmsuxU-`. Java's `\Q...\E` quoting, which
 /// `fancy_regex` lacks, becomes escaped literals before anything else is read,
-/// as Java does it.
+/// as Java does it. Bounds where Java has no atom to repeat, at the start of
+/// a sequence or after a quantifier, as in `{2}`, `x|{2}` and `a*{2}`, repeat
+/// the empty atom, which matches the empty string. `fancy_regex` reads them as
+/// text, or as a quantifier of the quantified atom before, so the rewrite
+/// drops them, with the `?` or `+` that makes them lazy or possessive.
 ///
 /// Eight things read differently by default, and the rewrite gives the Java
 /// reading, following the flags in force at each place (`(?s)`, `(?d)`,
@@ -85,6 +94,7 @@ pub(crate) fn translate_java(pattern: &str) -> Option<JavaTranslation> {
         out: String::with_capacity(pattern.len()),
         scope: Scope::default(),
         outer: Vec::new(),
+        groups: Vec::new(),
         classes: Vec::new(),
         class_start: false,
         run: 0,
@@ -93,7 +103,8 @@ pub(crate) fn translate_java(pattern: &str) -> Option<JavaTranslation> {
         backref_folds: Vec::new(),
         linebreak_atoms: Vec::new(),
         group_names: Vec::new(),
-        quantified: Quantified::No,
+        group_repeats: vec![false],
+        quantified: Quantified::Start,
     };
     while translator.at < chars.len() {
         translator.step()?;
@@ -102,6 +113,7 @@ pub(crate) fn translate_java(pattern: &str) -> Option<JavaTranslation> {
         pattern: translator.out,
         backref_folds: translator.backref_folds,
         linebreak_atoms: translator.linebreak_atoms,
+        group_repeats: translator.group_repeats,
     })
 }
 
@@ -113,6 +125,9 @@ struct Translator<'a> {
     scope: Scope,
     /// The flags of the groups around here, the innermost last.
     outer: Vec<Scope>,
+    /// The number of each group in `outer`, or `None` for one that does not
+    /// capture.
+    groups: Vec<Option<usize>>,
     /// The character classes open here, the innermost last.
     classes: Vec<OpenClass>,
     /// The next char is the first in a class, where a `]` is a member.
@@ -130,21 +145,31 @@ struct Translator<'a> {
     linebreak_atoms: Vec<bool>,
     /// The names of the named groups opened so far.
     group_names: Vec<String>,
-    /// Whether the token before this one was a quantifier.
+    /// See [`JavaTranslation::group_repeats`].
+    group_repeats: Vec<bool>,
+    /// What the token before this one leaves a quantifier here.
     quantified: Quantified,
 }
 
-/// Where a quantifier leaves the next token. Java's `closure` reads one
-/// quantifier and then one `?` or `+` that makes it lazy or possessive, and a
-/// `*`, `+` or `?` after that is `Dangling meta character`.
+/// What the token before leaves a quantifier. Java's `closure` reads one
+/// quantifier after an atom and then one `?` or `+` that makes it lazy or
+/// possessive, and a `*`, `+` or `?` after that is `Dangling meta character`.
+/// A `{` after it, or where a sequence starts, goes to Java's `atom`, which
+/// reads no char before it, and `closure` repeats that empty atom.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Quantified {
-    /// The token before was no quantifier.
+    /// The token before was an atom, or a token in a class.
     No,
     /// A quantifier, which a `?` or `+` may still make lazy or possessive.
     Open,
     /// A quantifier and its `?` or `+`.
     Closed,
+    /// No atom precedes: the start of the pattern, a group opener, a `|`,
+    /// inline flags, or a repeat of the empty atom and its `?` or `+`.
+    Start,
+    /// A repeat of the empty atom, which a `?` or `+` may still make lazy or
+    /// possessive.
+    Empty,
 }
 
 impl Translator<'_> {
@@ -169,12 +194,29 @@ impl Translator<'_> {
         }
         self.prior_run = std::mem::take(&mut self.run);
         let quantified = std::mem::replace(&mut self.quantified, Quantified::No);
-        if !self.in_class() && matches!(c, '*' | '+' | '?') {
-            self.quantified = match (quantified, c) {
-                (Quantified::No, _) => Quantified::Open,
-                (Quantified::Open, '?' | '+') => Quantified::Closed,
-                _ => return None,
-            };
+        if !self.in_class() {
+            match (quantified, c) {
+                (Quantified::No, '*' | '+' | '?') => self.quantified = Quantified::Open,
+                (Quantified::Open, '?' | '+') => self.quantified = Quantified::Closed,
+                // A repeat of the empty atom matches the empty string, greedy,
+                // lazy or possessive, so neither it nor its `?` or `+` is
+                // written.
+                (Quantified::Empty, '?' | '+') => {
+                    self.quantified = Quantified::Start;
+                    self.at += 1;
+                    return Some(());
+                }
+                (_, '*' | '+' | '?') => return None,
+                (
+                    Quantified::Open | Quantified::Closed | Quantified::Start | Quantified::Empty,
+                    '{',
+                ) => {
+                    self.at += self.bounds_len(self.at)?;
+                    self.quantified = Quantified::Empty;
+                    return Some(());
+                }
+                _ => {}
+            }
         }
         // A member of the innermost class: not one that opens or closes a
         // class, nor a `&`, which [`Self::ampersand`] reads.
@@ -188,7 +230,15 @@ impl Translator<'_> {
             // is a `)` with no group: `Unmatched closing ')'` in Java.
             ')' if !self.in_class() => {
                 self.scope = self.outer.pop()?;
+                let number = self.groups.pop().flatten();
                 self.copy(1);
+                if let Some(number) = number {
+                    self.group_repeats[number] = self.group_curly_at(self.at);
+                }
+            }
+            '|' if !self.in_class() => {
+                self.copy(1);
+                self.quantified = Quantified::Start;
             }
             '[' => self.open_class(),
             // First in a class, a `]` is a member, and may start a range.
@@ -472,37 +522,68 @@ impl Translator<'_> {
         Some(())
     }
 
-    /// A `{`, which starts the bounds of a quantifier, `{n}`, `{n,}` or
-    /// `{n,m}`. They are copied whole, so that the digits in them are not
-    /// read as literal chars of a run. Any other `{` outside a class is Java's
-    /// `Illegal repetition`, and `None` here.
+    /// A `{` after an atom, which starts the bounds of its quantifier. They
+    /// are copied whole, so that the digits in them are not read as literal
+    /// chars of a run.
     fn braces(&mut self) -> Option<()> {
-        let rest = &self.chars[self.at..];
+        let len = self.bounds_len(self.at)?;
+        self.copy(len);
+        self.quantified = Quantified::Open;
+        Some(())
+    }
+
+    /// The chars of the bounds of a quantifier at `at`, `{n}`, `{n,}` or
+    /// `{n,m}`. `None` for any other `{` outside a class, Java's `Illegal
+    /// repetition`, and for a bound past `i32::MAX` or a maximum below the
+    /// minimum, Java's `Illegal repetition range`.
+    fn bounds_len(&self, at: usize) -> Option<usize> {
+        let rest = &self.chars[at..];
         let end = rest.iter().position(|&c| c == '}')?;
         let bounds = &rest[1..end];
-        if bounds.first().is_some_and(char::is_ascii_digit)
-            && bounds.iter().all(|&c| c.is_ascii_digit() || c == ',')
+        if !bounds.first().is_some_and(char::is_ascii_digit)
+            || !bounds.iter().all(|&c| c.is_ascii_digit() || c == ',')
         {
-            // Java's `Illegal repetition range`: a bound past `i32::MAX`, or
-            // a maximum below the minimum.
-            let text: String = bounds.iter().collect();
-            let count = |digits: &str| digits.parse::<i32>().ok();
-            let legal = match text.split_once(',') {
-                Some((min, "")) => count(min).is_some(),
-                Some((min, max)) => count(min)
-                    .zip(count(max))
-                    .is_some_and(|(min, max)| min <= max),
-                None => count(&text).is_some(),
-            };
-            if !legal {
-                return None;
-            }
-            self.copy(end + 1);
-            self.quantified = Quantified::Open;
-            Some(())
-        } else {
-            None
+            return None;
         }
+        let text: String = bounds.iter().collect();
+        let count = |digits: &str| digits.parse::<i32>().ok();
+        let legal = match text.split_once(',') {
+            Some((min, "")) => count(min).is_some(),
+            Some((min, max)) => count(min)
+                .zip(count(max))
+                .is_some_and(|(min, max)| min <= max),
+            None => count(&text).is_some(),
+        };
+        legal.then_some(end + 1)
+    }
+
+    /// Whether the quantifier at `at`, past any `(?x)` whitespace and
+    /// comment, repeats the group that closes before it with Java's
+    /// `GroupCurly`: a `*`, `+` or counted quantifier, greedy or lazy. A
+    /// possessive one is a `Curly`, and `closure` reads a `?` as a `Ques`.
+    fn group_curly_at(&self, at: usize) -> bool {
+        let at = at + self.ignored_len(at);
+        let len = match self.chars.get(at) {
+            Some('*' | '+') => Some(1),
+            Some('{') => self.bounds_len(at),
+            _ => None,
+        };
+        len.is_some_and(|len| {
+            let modifier = at + len;
+            self.chars.get(modifier + self.ignored_len(modifier)) != Some(&'+')
+        })
+    }
+
+    /// Opens a group with the flags in force here, and gives it the next
+    /// group number when it `captures`.
+    fn open_group(&mut self, captures: bool) {
+        self.outer.push(self.scope);
+        let number = captures.then(|| {
+            self.group_repeats.push(false);
+            self.group_repeats.len() - 1
+        });
+        self.groups.push(number);
+        self.quantified = Quantified::Start;
     }
 
     /// How the class member that ends before `after` goes on. Java reads a `-`
@@ -613,15 +694,15 @@ impl Translator<'_> {
     fn group(&mut self) -> Option<()> {
         let chars = self.chars;
         if chars.get(self.at + 1) != Some(&'?') {
-            self.outer.push(self.scope);
+            self.open_group(true);
             self.copy(1);
             return Some(());
         }
         let rest = &chars[self.at + 2..];
-        let opener = match rest.first() {
-            Some(':' | '=' | '!' | '>') => 3,
+        let (opener, captures) = match rest.first() {
+            Some(':' | '=' | '!' | '>') => (3, false),
             Some('<') => match rest.get(1) {
-                Some('=' | '!') => 4,
+                Some('=' | '!') => (4, false),
                 Some(first) if first.is_ascii_alphabetic() => {
                     let name = rest[2..].iter().position(|c| !c.is_ascii_alphanumeric())?;
                     if rest[2 + name] != '>' {
@@ -633,14 +714,14 @@ impl Translator<'_> {
                         return None;
                     }
                     self.group_names.push(text);
-                    name + 5
+                    (name + 5, true)
                 }
                 _ => return None,
             },
             Some(_) => return self.flag_group(rest),
             None => return None,
         };
-        self.outer.push(self.scope);
+        self.open_group(captures);
         self.copy(opener);
         Some(())
     }
@@ -649,28 +730,19 @@ impl Translator<'_> {
     fn flag_group(&mut self, rest: &[char]) -> Option<()> {
         let group = java_flag_group(rest)?;
         // `(?flags:x)` is a group the flags last to the end of, `(?flags)`
-        // lasts to the end of the group it is in.
+        // lasts to the end of the group it is in. Java's `group0` reads
+        // `(?flags)` as no node, so what follows starts as a sequence does: a
+        // `*`, `+` or `?` is dangling, and a `{` repeats the empty atom, not
+        // the atom before the flags.
         if group.scoped {
-            self.outer.push(self.scope);
+            self.open_group(false);
+        } else {
+            self.quantified = Quantified::Start;
         }
         for &FlagChange { flag, on } in &group.changes {
             self.scope.set(flag, on);
         }
-        let translation = group.translation();
-        // Java refuses `(?i)*` as a dangling quantifier; an emptied group must
-        // not hand it to the atom before it. Java repeats the empty match for
-        // `(?i){2}`, which `fancy_regex` has no form for, and it would read the
-        // braces as text.
-        let after = self.at + 2 + group.len;
-        if translation.is_empty()
-            && matches!(
-                self.chars.get(after + self.ignored_len(after)),
-                Some('*' | '+' | '?' | '{')
-            )
-        {
-            return None;
-        }
-        self.out.push_str(&translation);
+        self.out.push_str(&group.translation());
         self.at += 2 + group.len;
         Some(())
     }
@@ -1098,5 +1170,153 @@ impl FlagGroup {
             (false, _) if off.is_empty() => format!("(?{on}{end}"),
             (false, _) => format!("(?{on}-{off}{end}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use {super::translate_java, crate::JavaPattern, assert2::check};
+
+    /// One whole-input match: whether `source` matches all of `input`.
+    struct MatchCase<'a> {
+        source: &'a str,
+        input: &'a str,
+        expected: bool,
+    }
+
+    /// A [`MatchCase`] of `source` against `input`.
+    const fn row<'a>(source: &'a str, input: &'a str, expected: bool) -> MatchCase<'a> {
+        MatchCase {
+            source,
+            input,
+            expected,
+        }
+    }
+
+    /// Bounds where Java has no atom, at the start of a sequence, after inline
+    /// flags or after a quantifier, repeat the empty atom, and match the empty
+    /// string. Bounds after an atom repeat it. Each row is `Pattern.matches`
+    /// on JDK 25.
+    #[test]
+    fn bounds_with_no_atom_before_them_repeat_the_empty_atom() {
+        let cases = [
+            row("{2}", "", true),
+            row("{2}", "{2}", false),
+            row("x|{2}", "", true),
+            row("x|{2}{3}", "", true),
+            row("a|{2}b", "b", true),
+            row("a|{2}b", "{2}b", false),
+            row("({2})", "", true),
+            row("(?:{2})", "", true),
+            row("(?<n>{2})", "", true),
+            row("(?={2})", "", true),
+            row("(?>{2})a", "a", true),
+            row("(?i:{2})", "", true),
+            row("{2}{3}", "", true),
+            row("{2}+", "", true),
+            row("{2}?", "", true),
+            row("(?i){2}", "", true),
+            row("(?s){2}", "", true),
+            row("a(?s){2}", "a", true),
+            row("a(?i){2}b", "ab", true),
+            row("a(?i){2}b", "aB", true),
+            row("(?x) {2}", "", true),
+            row("(?iu){2}a", "A", true),
+            row("(?ix) {2}a", "A", true),
+            row("(?ix) {2}a", "", false),
+            row("a{2}{3}", "aa", true),
+            row("x{2}{3}", "xx", true),
+            row("a{2}{3}+", "", false),
+            row("a{2}{3}b{2}", "aabb", true),
+            row("(a){2}{3}", "aa", true),
+            row("(a)*{2}", "aaa", true),
+            row("a*{2}", "aaa", true),
+            row("a*{2}", "", true),
+            row("a*{2}b", "aab", true),
+            row("a*{2}?b", "aab", true),
+            row("a*{2}+b", "aab", true),
+            row("a*?{2}b", "aab", true),
+            row("a*+{2}b", "aab", true),
+            row("a*{2}{3}", "aa", true),
+            row("a*{2}{3}?b", "ab", true),
+            row("a+{2}", "a", true),
+            row("a?{2}", "aa", false),
+            row("a{1,2}{2}", "aaa", false),
+            row("a*{0}", "a", true),
+            row("(?x)a* {2} ?b", "aab", true),
+            row("(?x)ab * {2} c", "abbc", true),
+            row("\\R*{2}", "\r\n\n", true),
+            row("\\R*{2}", "\n", true),
+            // After an atom, the bounds are its quantifier.
+            row("^{2}", "", true),
+            row("a {2}", "", false),
+            row("ab{2}", "abb", true),
+            row("ab{2}", "abab", false),
+            row("ab*{2}c", "abbc", true),
+            row("ab*{2}c", "ac", true),
+            row("ab*?{2}c", "abbc", true),
+            row("ab*+{2}c", "abbc", true),
+            row("abc{2}{3}", "abcc", true),
+            row("\\R{2}", "\n\n", true),
+        ];
+        for MatchCase {
+            source,
+            input,
+            expected,
+        } in cases
+        {
+            let matched = JavaPattern::compile(source).map(|pattern| pattern.matches(input).ok());
+            check!(
+                matched == Ok(Some(expected)),
+                "{source:?} against {input:?}"
+            );
+        }
+    }
+
+    /// A `*`, `+` or `?` with nothing to repeat is Java's `Dangling meta
+    /// character`, a `{` that opens no bounds `Illegal repetition`, and bounds
+    /// past `i32::MAX` or out of order `Illegal repetition range`, whether an
+    /// atom precedes them or not. Each row is refused by `Pattern.compile` on
+    /// JDK 25.
+    #[yare::parameterized(
+        star_after_empty_repeat = { "a*{2}*" },
+        second_lazy_after_empty_repeat = { "a*{2}??" },
+        star_after_empty_repeat_past_whitespace = { "(?x)a* {2} *" },
+        star_after_leading_repeat = { "{2}*" },
+        second_lazy_after_leading_repeat = { "{2}??" },
+        star_at_start = { "*" },
+        star_after_bar = { "x|*" },
+        star_after_open = { "(*)" },
+        star_after_emptied_flags = { "(?i)*" },
+        plus_after_emptied_flags = { "(?i)+" },
+        question_after_emptied_flags = { "(?i)?" },
+        star_after_flags = { "(?s)*" },
+        letter_bounds_after_bounds = { "a{2}{x}" },
+        no_minimum_after_star = { "a*{,2}" },
+        reversed_range_after_star = { "a*{2,1}" },
+        huge_bound_after_star = { "a*{99999999999}" },
+    )]
+    fn a_quantifier_java_refuses_is_refused(source: &str) {
+        check!(JavaPattern::compile(source).is_err(), "{source:?}");
+    }
+
+    /// Whether a quantifier that Java reads as a `GroupCurly` follows each
+    /// capturing group, group 0 first.
+    #[yare::parameterized(
+        star = { "()*", &[false, true] },
+        inside_noncapturing_group = { "(?:())*", &[false, false] },
+        possessive = { "()*+", &[false, false] },
+        optional = { "()?", &[false, false] },
+        lazy = { "(a)*?", &[false, true] },
+        counted_named = { "(?<n>a){2}", &[false, true] },
+        nested = { "((a))+", &[false, true, false] },
+        second = { "(a)(b)*", &[false, false, true] },
+        past_whitespace = { "(?x)(a) *", &[false, true] },
+        inside_scoped_flags = { "(?i:(a))*", &[false, false] },
+        unquantified = { "(a)", &[false, false] },
+    )]
+    fn group_repeats_marks_the_groups_a_group_curly_repeats(source: &str, expected: &[bool]) {
+        let group_repeats = translate_java(source).map(|translation| translation.group_repeats);
+        check!(group_repeats.as_deref() == Some(expected), "{source:?}");
     }
 }

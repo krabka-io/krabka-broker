@@ -5,10 +5,7 @@
 //! reconciler records. Both halves share the `ready_targets` map and the
 //! HWM-unknown sentinel, so they belong in one module.
 
-use {
-    super::TopicBasedRemoteLogMetadataManager, crate::log::PartitionStart,
-    krabka_remote_storage::RemoteStorageError, tracing::warn,
-};
+use {super::TopicBasedRemoteLogMetadataManager, crate::log::PartitionStart, tracing::warn};
 
 #[cfg(test)]
 mod tests;
@@ -19,7 +16,7 @@ mod tests;
 /// returned index. The gate treats the sentinel as `NotReady`, because a real
 /// applied offset can never reach `i64::MAX`. The next `reconcile_assignment`
 /// retries the HWM fetch and replaces the sentinel with the real target.
-const HWM_UNKNOWN: i64 = i64::MAX;
+pub(super) const HWM_UNKNOWN: i64 = i64::MAX;
 
 /// Outcome of the per-metadata-partition readiness check that gates the
 /// gated [`RemoteLogMetadataManager`](krabka_remote_storage::RemoteLogMetadataManager)
@@ -40,43 +37,58 @@ pub enum ReadGate {
     Ready,
 }
 
+/// The read decision for an assigned metadata partition whose
+/// assignment-time high-water mark is `target`, given the offset of the last
+/// event applied on it. `applied` is `None` for a partition index outside
+/// the metadata log.
+pub(super) const fn read_gate(target: i64, applied: Option<i64>) -> ReadGate {
+    if target == 0 {
+        return ReadGate::Ready; // empty partition: nothing to catch up to
+    }
+    // A sentinel target means the real HWM is not yet known (the
+    // assignment-time fetch failed); the partition is assigned but the
+    // answer is unknown → retryable, never a false `Ok(None)`.
+    if target == HWM_UNKNOWN {
+        return ReadGate::NotReady;
+    }
+    // Defensive: a partition the metadata log does not have must NOT fail
+    // open into `Ready`, which would serve a possibly-stale or false-miss
+    // answer. Treat it as still catching up.
+    match applied {
+        Some(applied) if applied >= target - 1 => ReadGate::Ready,
+        _ => ReadGate::NotReady,
+    }
+}
+
 impl TopicBasedRemoteLogMetadataManager {
     /// The read decision for metadata partition `mp`, used to gate
     /// [`RemoteLogMetadataManager::remote_log_segment_metadata`](krabka_remote_storage::RemoteLogMetadataManager::remote_log_segment_metadata).
     pub(super) fn metadata_partition_gate(&self, mp: i32) -> ReadGate {
-        let target = {
-            let guard = self.ready_targets.lock().expect("ready_targets poisoned");
-            match guard.get(&mp) {
-                Some(&t) => t,
-                // Not assigned: this broker neither leads nor follows any
-                // user-partition in `mp`, so it must not answer from any
-                // stale cache it happened to consume earlier. A genuine
-                // miss — `Ok(None)`, NOT `NotReady`.
-                None => return ReadGate::Unassigned,
-            }
+        let target = self
+            .ready_targets
+            .lock()
+            .expect("ready_targets poisoned")
+            .get(&mp)
+            .copied();
+        // Not assigned: this broker neither leads nor follows any
+        // user-partition in `mp`, so it must not answer from any stale
+        // cache it happened to consume earlier. A genuine miss — `Ok(None)`,
+        // NOT `NotReady`.
+        let Some(target) = target else {
+            return ReadGate::Unassigned;
         };
-        if target == 0 {
-            return ReadGate::Ready; // empty partition: nothing to catch up to
-        }
-        // A sentinel target means the real HWM is not yet known (the
-        // assignment-time fetch failed); the partition is assigned but the
-        // answer is unknown → retryable, never a false `Ok(None)`.
-        if target == HWM_UNKNOWN {
-            return ReadGate::NotReady;
-        }
-        let Ok(idx) = usize::try_from(mp) else {
-            // Defensive: a metadata partition index that doesn't fit in
-            // usize is nonsensical, but if it ever happens we must NOT
-            // fail open into `Ready` (which would serve a possibly-stale
-            // or false-miss answer). Treat it as still catching up.
-            return ReadGate::NotReady;
-        };
-        let applied = self.applied.lock().expect("applied mutex poisoned");
-        if idx < applied.len() && applied[idx] >= target - 1 {
-            ReadGate::Ready
-        } else {
-            ReadGate::NotReady
-        }
+        read_gate(target, self.applied_offset(mp))
+    }
+
+    /// The offset of the last event the pump applied on metadata partition
+    /// `mp`, or `None` when `mp` is not a partition of the metadata log.
+    pub(super) fn applied_offset(&self, mp: i32) -> Option<i64> {
+        let index = usize::try_from(mp).ok()?;
+        self.applied
+            .lock()
+            .expect("applied mutex poisoned")
+            .get(index)
+            .copied()
     }
 
     /// `true` when metadata partition `mp` is assigned and caught up to its
@@ -215,22 +227,16 @@ impl TopicBasedRemoteLogMetadataManager {
             }
         }
         for mp in have.difference(&want).copied() {
-            let mut waiters = self.mutation_waiters.lock().await;
-            self.assignment.remove(mp);
-            self.ready_targets
-                .lock()
-                .expect("ready_targets poisoned")
-                .remove(&mp);
-            let keys: Vec<_> = waiters
-                .keys()
-                .copied()
-                .filter(|key| key.partition == mp)
-                .collect();
-            for key in keys {
-                if let Some(reply) = waiters.remove(&key) {
-                    let _ = reply.send(Err(RemoteStorageError::NotReady { partition: mp }));
-                }
-            }
+            // Unassign under the waiter lock, so a publish either sees the
+            // partition unassigned or learns of the removal when it
+            // registers its offset.
+            self.mutation_waiters.remove_partition(mp, || {
+                self.assignment.remove(mp);
+                self.ready_targets
+                    .lock()
+                    .expect("ready_targets poisoned")
+                    .remove(&mp);
+            });
         }
     }
 }

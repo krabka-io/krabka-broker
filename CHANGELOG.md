@@ -149,6 +149,18 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   until the segment reached `segment.bytes`. Records written before the
   upgrade keep timestamp 0, and `kafka-dump-log` shows `CreateTime:0` for
   them. The on-disk format does not change.
+- A combined node that is killed and restarts inside its heartbeat session,
+  and wins the controller election before its broker layer is up, no longer
+  keeps its partition leaderships at the same leader epoch (issue #1442). Its
+  own registration reached the new registration admission before the broker
+  bound, and went through unchanged. The batch now retires the previous
+  incarnation there too, as Kafka's `registerBroker` does on any active
+  controller: the broker leaves every ISR, and each partition it led elects
+  another leader at a new leader epoch. Before any broker heartbeats it, the
+  controller elects only brokers whose registration is unfenced and not in
+  controlled shutdown, as Kafka's `ClusterControlManager.isActive` does after
+  `activate`. Offset-aware recoveries the batch decides are handed to the
+  Unclean Recovery Manager once the broker binds.
 - `KrabkaOfflinePartitions` no longer pages for every broker that is down,
   a planned stop in a rolling upgrade included (issue #1516). Each broker
   holds one single-replica partition of the audit topic, which has no leader
@@ -221,6 +233,14 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   coordinator again after `COORDINATOR_NOT_AVAILABLE` and `NOT_COORDINATOR`, as
   Kafka's `AlterConsumerGroupOffsetsHandler` does. The restore runbook no
   longer tells the operator to run the command twice.
+- A successful `krabka-backup restore-offsets` no longer prints
+  `ERROR krabka_client_core::pool: error=connection closed` (issue #1515). The
+  Kafka client that the operator tools use logged every error it returned at
+  ERROR, even one its caller then retried. It now records each at the level
+  of its own tracing span, debug or info: the core, producer and coordination
+  crates in krabka-io/krabka-client-rs#187, and the consumer and share
+  consumer in krabka-io/krabka-client-rs#189. The workspace pins a revision
+  with both.
 - A listener that cannot bind its port now says which listener, which address
   and which setting (issue #1517). A node whose controller port another
   process held exited with `storage: I/O: Address already in use`, which sent
