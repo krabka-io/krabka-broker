@@ -161,12 +161,15 @@ PY
 (cd "$broker_source" && cargo metadata --format-version 1) > "$evidence/negative-metadata.json" 2> "$evidence/negative-lock.log"
 check negative-protocol-pin jq -e --arg revision "$bad_revision" '[.packages[] | select(.name == "krabka-protocol")] | length == 1 and (.[0].source | endswith("#" + $revision))' "$evidence/negative-metadata.json"
 check negative-client-pin jq -e --arg revision "$bad_client_revision" '[.packages[] | select(.name == "krabka-client-core")] | length == 1 and (.[0].source | endswith("#" + $revision))' "$evidence/negative-metadata.json"
+git -C "$broker_source" diff -- Cargo.toml Cargo.lock 'crates/*/Cargo.toml' > "$evidence/negative-compat.patch"
 if (cd "$broker_source" && cargo check --locked -p krabka-broker) > "$evidence/negative-compat.log" 2>&1; then
   echo 'unsupported protocol revision unexpectedly compiled' >&2
   exit 1
 fi
-check negative-compat grep -E 'V1PartitionElr|V1PartitionRecovery' "$evidence/negative-compat.log"
-git -C "$broker_source" diff -- Cargo.toml Cargo.lock 'crates/*/Cargo.toml' > "$evidence/negative-compat.patch"
+# Current log callers hit the missing RecordBatch API before Raft's metadata
+# variants. Both diagnostics prove a required record API is unavailable.
+check negative-compat grep -F -e 'V1PartitionElr' -e 'V1PartitionRecovery' \
+  -e 'no method named `encode_with_compression_level` found for reference `&RecordBatch`' "$evidence/negative-compat.log"
 docker compose -p "$project" -f "$work/compose.json" down -v
 
 kind create cluster --name "$cluster" --wait 120s
