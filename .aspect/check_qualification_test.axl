@@ -93,6 +93,21 @@ def _test_only_schema_two_requires_the_demo_image_slot(_ctx):
             component["artifacts"] = [artifact for artifact in component["artifacts"] if artifact["kind"] != "image"]
     check_eq("candidate demo image", [problem for problem in manifest_problems(candidate) if "preserve" in problem], ["krabka-io/krabka-o11y-demo: artifacts must preserve the compose, image slot"])
 
+def _test_candidates_can_bind_the_cli_binary_and_image(_ctx):
+    for kinds, failures in [
+        (["binary"], 0),
+        (["binary", "image"], 0),
+        (["image"], 1),
+        (["binary", "image", "image"], 1),
+        (["binary", "archive"], 1),
+    ]:
+        candidate = _candidate()
+        for component in candidate["components"]:
+            if component["repository"] == "krabka-io/krabka-cli":
+                component["artifacts"] = [{"kind": kind, "reference": "https://example.test/artifact", "digest": _DIGEST} for kind in kinds]
+        problems = [problem for problem in manifest_problems(candidate) if "preserve" in problem]
+        check_eq("CLI slots %s" % kinds, len(problems), failures)
+
 def _test_a_passed_gate_requires_complete_evidence(_ctx):
     manifest = _manifest()
     manifest["gates"][0]["status"] = "passed"
@@ -427,6 +442,7 @@ check_qualification_tests = suite("check-qualification", [
     _test_qualified_status_is_strict_without_the_flag,
     _test_a_draft_preserves_artifact_slots,
     _test_only_schema_two_requires_the_demo_image_slot,
+    _test_candidates_can_bind_the_cli_binary_and_image,
     _test_a_passed_gate_requires_complete_evidence,
     _test_timestamps_are_calendar_valid,
     _test_a_qualified_manifest_is_valid,
