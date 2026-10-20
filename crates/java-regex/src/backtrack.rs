@@ -53,13 +53,18 @@
 //!
 //! The machine keeps its alternatives on a stack of its own, so a long input
 //! cannot overflow the stack of the thread, and it gives up after as many
-//! backtracking steps as `fancy_regex` takes by default.
+//! backtracking steps as `fancy_regex` takes by default. A look-around, an
+//! atomic group and an iteration of a `GroupCurly` run on the same stack,
+//! above the frames of the block they are in, so none of them allocates. A
+//! look-behind tries only the starts that its body can match from, as the
+//! window of Java's `Behind` does, so one that fails costs as much as the
+//! longest text its body matches, not the text before it.
 
 use {
     crate::translate::BackrefFold,
     fancy_regex::{Assertion, Expr, LookAround},
     regex::Regex,
-    std::{ops::Range, slice::Iter},
+    std::{iter, ops::Range, slice::Iter},
 };
 
 /// The backtracking steps one search may take, `fancy_regex`'s default
@@ -96,8 +101,8 @@ pub(super) struct Program {
 enum Inst {
     /// This char.
     Char(char),
-    /// One char that this regex, compiled as `\A(?:class)\z`, matches.
-    Class(Regex),
+    /// One char of the class.
+    Class(Class),
     /// One char, other than `\n` unless `newline`.
     Any {
         newline: bool,
@@ -129,10 +134,11 @@ enum Inst {
     },
     Assert(Check),
     /// The block matches here, or with `behind` it matches text that ends
-    /// here, or with `negated` it does not.
+    /// here and starts within the lengths its body can match, or with
+    /// `negated` it does not.
     Look {
         block: usize,
-        behind: bool,
+        behind: Option<Lengths>,
         negated: bool,
     },
     /// The first way the block matches here, which nothing backtracks into.
@@ -175,6 +181,113 @@ enum Inst {
     Match,
 }
 
+/// One char that a regex, compiled as `\A(?:class)\z`, matches.
+///
+/// The answer for each ASCII char is worked out when the class is compiled,
+/// by the same regex, so that one under a case flag reads as it does. Only a
+/// char past ASCII runs the regex.
+#[derive(Debug)]
+struct Class {
+    /// Bit `c` is whether the regex matches the ASCII char `c`.
+    ascii: u128,
+    regex: Regex,
+}
+
+impl Class {
+    /// The class that `class`, in `regex` syntax, is, or `None` when `regex`
+    /// does not compile it.
+    fn new(class: &str) -> Option<Self> {
+        let regex = Regex::new(&format!("\\A(?:{class})\\z")).ok()?;
+        let ascii = (0..128_u8)
+            .filter(|&byte| regex.is_match(char::from(byte).encode_utf8(&mut [0; 4])))
+            .fold(0, |table, byte| table | 1 << byte);
+        Some(Self { ascii, regex })
+    }
+
+    fn matches(&self, c: char) -> bool {
+        if c.is_ascii() {
+            self.ascii >> u32::from(c) & 1 == 1
+        } else {
+            self.regex.is_match(c.encode_utf8(&mut [0; 4]))
+        }
+    }
+}
+
+/// The least and the most UTF-16 units that a look-behind's body can match,
+/// with `max` `None` when there is no most. Java's `Behind` tries the starts
+/// between its `rmin` and `rmax`. These are bounds of what the body matches
+/// on the machine instead, so no start outside them can match.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Lengths {
+    min: usize,
+    max: Option<usize>,
+}
+
+impl Lengths {
+    const fn exactly(units: usize) -> Self {
+        Self {
+            min: units,
+            max: Some(units),
+        }
+    }
+
+    /// The text of `self` then that of `other`.
+    fn then(self, other: Self) -> Self {
+        Self {
+            min: self.min.saturating_add(other.min),
+            max: self.max.zip(other.max).map(|(a, b)| a.saturating_add(b)),
+        }
+    }
+
+    /// The text of `self` or that of `other`.
+    fn or(self, other: Self) -> Self {
+        Self {
+            min: self.min.min(other.min),
+            max: self.max.zip(other.max).map(|(a, b)| a.max(b)),
+        }
+    }
+
+    /// Bounds of what `expr` can match on the machine. A char the machine
+    /// matches as one may be a supplementary one, two units. A node the
+    /// machine does not know, and a backreference, has no most.
+    fn of(expr: &Expr) -> Self {
+        const UNBOUNDED: Lengths = Lengths { min: 0, max: None };
+        match expr {
+            Expr::Empty
+            | Expr::Assertion(_)
+            | Expr::LookAround(..)
+            | Expr::ContinueFromPreviousMatchEnd => Self::exactly(0),
+            Expr::Literal { val, .. } => Self::exactly(val.encode_utf16().count()),
+            Expr::Any { .. } | Expr::Delegate { .. } | Expr::GeneralNewline { .. } => Self {
+                min: 1,
+                max: Some(2),
+            },
+            Expr::Concat(children) => children
+                .iter()
+                .map(Self::of)
+                .fold(Self::exactly(0), Self::then),
+            Expr::Alt(children) => children
+                .iter()
+                .map(Self::of)
+                .reduce(Self::or)
+                .unwrap_or(Self::exactly(0)),
+            Expr::Group(child) => Self::of(child),
+            Expr::AtomicGroup(child) => Self::of(child),
+            Expr::Repeat { child, lo, hi, .. } => {
+                let child = Self::of(child);
+                Self {
+                    min: child.min.saturating_mul(*lo),
+                    max: child
+                        .max
+                        .filter(|_| *hi != usize::MAX)
+                        .map(|max| max.saturating_mul(*hi)),
+                }
+            }
+            _ => UNBOUNDED,
+        }
+    }
+}
+
 /// A zero-width test, with the meaning `fancy_regex` gives it.
 #[derive(Debug)]
 enum Check {
@@ -191,7 +304,7 @@ enum Check {
     /// `\b`, or `\B` when `negated`, under `(?U)`: between a Unicode word
     /// char, which `word` matches, and one that is not.
     WordBoundary {
-        word: Regex,
+        word: Class,
         negated: bool,
     },
 }
@@ -391,6 +504,7 @@ impl Compiler<'_> {
                     LookAround::LookBehind => (true, false),
                     LookAround::LookBehindNeg => (true, true),
                 };
+                let behind = behind.then(|| Lengths::of(child));
                 code.push(Inst::Look {
                     block,
                     behind,
@@ -407,7 +521,7 @@ impl Compiler<'_> {
                 inner,
                 casei: false,
             } => {
-                code.push(Inst::Class(Regex::new(&format!("\\A(?:{inner})\\z")).ok()?));
+                code.push(Inst::Class(Class::new(inner)?));
             }
             Expr::Backref { group, casei } => {
                 self.differs |= *casei || self.open_groups.contains(group);
@@ -604,7 +718,7 @@ fn check(assertion: Assertion) -> Option<Check> {
         Assertion::StartLine { crlf: false } => Check::StartLine,
         Assertion::EndLine { crlf: false } => Check::EndLine,
         Assertion::WordBoundary | Assertion::NotWordBoundary => Check::WordBoundary {
-            word: Regex::new(r"\A\w\z").ok()?,
+            word: Class::new(r"\w")?,
             negated: matches!(assertion, Assertion::NotWordBoundary),
         },
         _ => return None,
@@ -612,6 +726,7 @@ fn check(assertion: Assertion) -> Option<Check> {
 }
 
 /// An entry of the machine's backtracking stack.
+#[derive(Clone, Copy)]
 enum Frame {
     /// Go on at `pc` and `pos`.
     Alternative { pc: usize, pos: usize },
@@ -627,6 +742,14 @@ struct Machine<'a> {
     last_match_end: usize,
     /// The backtracking steps left.
     budget: usize,
+    /// The frames of every block that runs, each nested run above those of
+    /// the block it is in.
+    stack: Vec<Frame>,
+    /// For each slot, the last [`Machine::keep`] that found a frame for it,
+    /// by the number in `keeps`.
+    kept: Vec<usize>,
+    /// The [`Machine::keep`]s so far.
+    keeps: usize,
 }
 
 impl<'a> Machine<'a> {
@@ -636,12 +759,17 @@ impl<'a> Machine<'a> {
             input,
             last_match_end,
             budget: BACKTRACK_LIMIT,
+            stack: Vec::new(),
+            kept: vec![0; program.slot_count],
+            keeps: 0,
         }
     }
 
     /// Runs `block` at `at`, and gives the position the first way of matching
     /// ends at, with the slots it set. With `end`, a way of matching that ends
-    /// elsewhere is not one. On no match the slots are as they were.
+    /// elsewhere is not one. The frames of the run go on the stack above
+    /// those it had. On no match they are gone, and the slots are as they
+    /// were but for the groups that a nested run set.
     fn run(
         &mut self,
         block: usize,
@@ -651,7 +779,7 @@ impl<'a> Machine<'a> {
     ) -> Result<Option<usize>, SearchError> {
         let program = self.program;
         let code = &program.blocks[block];
-        let mut stack = Vec::new();
+        let base = self.stack.len();
         let (mut pc, mut pos) = (0, at);
         loop {
             let next = match &code[pc] {
@@ -661,7 +789,7 @@ impl<'a> Machine<'a> {
                     .map(|actual| (pc + 1, pos + actual.len_utf8())),
                 Inst::Class(class) => self
                     .next_char(pos)
-                    .filter(|actual| class.is_match(actual.encode_utf8(&mut [0; 4])))
+                    .filter(|&actual| class.matches(actual))
                     .map(|actual| (pc + 1, pos + actual.len_utf8())),
                 Inst::Any { newline } => self
                     .next_char(pos)
@@ -670,7 +798,7 @@ impl<'a> Machine<'a> {
                 &Inst::Linebreak { give_back } => {
                     if self.input[pos..].starts_with("\r\n") {
                         if give_back {
-                            stack.push(Frame::Alternative {
+                            self.stack.push(Frame::Alternative {
                                 pc: pc + 1,
                                 pos: pos + 1,
                             });
@@ -693,17 +821,17 @@ impl<'a> Machine<'a> {
                     }
                 }
                 &Inst::Split { first, second } => {
-                    stack.push(Frame::Alternative { pc: second, pos });
+                    self.stack.push(Frame::Alternative { pc: second, pos });
                     Some((first, pos))
                 }
                 &Inst::Jump(target) => Some((target, pos)),
                 &Inst::Save(slot) => {
-                    set(&mut stack, slots, slot, Some(pos));
+                    set(&mut self.stack, slots, slot, Some(pos));
                     Some((pc + 1, pos))
                 }
                 &Inst::Close { group, open } => {
-                    set(&mut stack, slots, 2 * group, slots[open]);
-                    set(&mut stack, slots, 2 * group + 1, Some(pos));
+                    set(&mut self.stack, slots, 2 * group, slots[open]);
+                    set(&mut self.stack, slots, 2 * group + 1, Some(pos));
                     Some((pc + 1, pos))
                 }
                 &Inst::Backref { group, fold } => {
@@ -724,40 +852,28 @@ impl<'a> Machine<'a> {
                     behind,
                     negated,
                 } => {
-                    let before = slots.to_vec();
-                    let found = if behind {
-                        self.behind(block, pos, slots)?
-                    } else {
-                        self.run(block, pos, None, slots)?.is_some()
+                    let nested = self.stack.len();
+                    let found = match behind {
+                        Some(lengths) => self.behind(block, pos, lengths, slots)?,
+                        None => self.run(block, pos, None, slots)?.is_some(),
                     };
-                    self.keep(&mut stack, slots, &before);
+                    self.keep(nested, slots, None);
                     (found != negated).then_some((pc + 1, pos))
                 }
                 &Inst::Atomic(block) => {
-                    let before = slots.to_vec();
+                    let nested = self.stack.len();
                     let after = self.run(block, pos, None, slots)?;
-                    self.keep(&mut stack, slots, &before);
+                    self.keep(nested, slots, None);
                     after.map(|after| (pc + 1, after))
                 }
                 &Inst::Iteration { block, group } => {
-                    let before = slots.to_vec();
+                    let nested = self.stack.len();
                     let after = self.run(block, pos, None, slots)?;
-                    self.keep(&mut stack, slots, &before);
-                    for slot in group
-                        .into_iter()
-                        .flat_map(|group| [2 * group, 2 * group + 1])
-                    {
-                        if slots[slot] != before[slot] {
-                            stack.push(Frame::Undo {
-                                slot,
-                                value: before[slot],
-                            });
-                        }
-                    }
+                    self.keep(nested, slots, group);
                     after.map(|after| (pc + 1, after))
                 }
                 &Inst::RepeatStart { count } => {
-                    set(&mut stack, slots, count, Some(0));
+                    set(&mut self.stack, slots, count, Some(0));
                     Some((pc + 1, pos))
                 }
                 &Inst::Repeat {
@@ -773,10 +889,10 @@ impl<'a> Machine<'a> {
                     } else if done >= hi {
                         Some((exit, pos))
                     } else if greedy {
-                        stack.push(Frame::Alternative { pc: exit, pos });
+                        self.stack.push(Frame::Alternative { pc: exit, pos });
                         Some((pc + 1, pos))
                     } else {
-                        stack.push(Frame::Alternative { pc: pc + 1, pos });
+                        self.stack.push(Frame::Alternative { pc: pc + 1, pos });
                         Some((exit, pos))
                     }
                 }
@@ -789,7 +905,7 @@ impl<'a> Machine<'a> {
                     group_curly,
                 } => {
                     let done = slots[count].unwrap_or(0) + 1;
-                    set(&mut stack, slots, count, Some(done));
+                    set(&mut self.stack, slots, count, Some(done));
                     let empty = slots[start] == Some(pos);
                     match (group_curly, empty) {
                         (true, true) if done > lo => None,
@@ -802,7 +918,7 @@ impl<'a> Machine<'a> {
             };
             (pc, pos) = match next {
                 Some(next) => next,
-                None => match self.backtrack(&mut stack, slots)? {
+                None => match self.backtrack(base, slots)? {
                     Some(next) => next,
                     None => return Ok(None),
                 },
@@ -810,20 +926,21 @@ impl<'a> Machine<'a> {
         }
     }
 
-    /// Pops the stack, undoing the slots, to the next alternative, or `None`
-    /// when there is none left.
+    /// Pops the stack down to `base`, undoing the slots, to the next
+    /// alternative, or `None` when there is none left above `base`.
     fn backtrack(
         &mut self,
-        stack: &mut Vec<Frame>,
+        base: usize,
         slots: &mut [Option<usize>],
     ) -> Result<Option<(usize, usize)>, SearchError> {
-        while let Some(frame) = stack.pop() {
-            match frame {
-                Frame::Undo { slot, value } => slots[slot] = value,
-                Frame::Alternative { pc, pos } => {
+        while self.stack.len() > base {
+            match self.stack.pop() {
+                Some(Frame::Undo { slot, value }) => slots[slot] = value,
+                Some(Frame::Alternative { pc, pos }) => {
                     self.spend()?;
                     return Ok(Some((pc, pos)));
                 }
+                None => break,
             }
         }
         Ok(None)
@@ -839,20 +956,27 @@ impl<'a> Machine<'a> {
     }
 
     /// A look-behind: whether `block` matches text that ends at `pos`, trying
-    /// the nearest start first, as Java's `Behind` does.
+    /// the nearest start first, as Java's `Behind` does. Only a start that is
+    /// within `lengths` of `pos`, in UTF-16 units, can match.
     fn behind(
         &mut self,
         block: usize,
         pos: usize,
+        lengths: Lengths,
         slots: &mut [Option<usize>],
     ) -> Result<bool, SearchError> {
-        let starts = [pos].into_iter().chain(
-            self.input[..pos]
-                .char_indices()
-                .rev()
-                .map(|(start, _)| start),
-        );
-        for start in starts {
+        let before = self.input[..pos]
+            .char_indices()
+            .rev()
+            .scan(0, |units, (start, c)| {
+                *units += c.len_utf16();
+                Some((start, *units))
+            });
+        let starts = iter::once((pos, 0))
+            .chain(before)
+            .skip_while(|&(_, units)| units < lengths.min)
+            .take_while(|&(_, units)| lengths.max.is_none_or(|max| units <= max));
+        for (start, _) in starts {
             self.spend()?;
             if self.run(block, start, Some(pos), slots)?.is_some() {
                 return Ok(true);
@@ -861,18 +985,33 @@ impl<'a> Machine<'a> {
         Ok(false)
     }
 
-    /// After a nested run that matched, a look-around or an atomic group:
-    /// records on the stack the old value of each private slot it changed, so
-    /// that backtracking past it undoes the change. The groups it set keep
-    /// their text, as Java's do; it matched whether or not a negated
-    /// look-around then fails.
-    fn keep(&self, stack: &mut Vec<Frame>, slots: &[Option<usize>], before: &[Option<usize>]) {
-        let changed = slots.iter().zip(before).enumerate();
-        for (slot, (&now, &value)) in changed.skip(2 * self.program.groups) {
-            if now != value {
-                stack.push(Frame::Undo { slot, value });
+    /// After a nested run that started with the stack at `base`, a
+    /// look-around, an atomic group or an iteration: drops the frames the
+    /// run left, but for the old value of each private slot it changed, and
+    /// of `group` if it set that, so that backtracking past it undoes the
+    /// change. The other groups it set keep their text, as Java's do; it
+    /// matched whether or not a negated look-around then fails.
+    ///
+    /// The first frame for a slot above `base` holds the value the slot had
+    /// before the run, as the frames of a slot that a nested run set were
+    /// kept by this when it ended.
+    fn keep(&mut self, base: usize, slots: &[Option<usize>], group: Option<usize>) {
+        self.keeps += 1;
+        let private = 2 * self.program.groups;
+        let mut kept = base;
+        for index in base..self.stack.len() {
+            if let Frame::Undo { slot, value } = self.stack[index]
+                && (slot >= private || group.is_some_and(|group| slot / 2 == group))
+                && self.kept[slot] != self.keeps
+            {
+                self.kept[slot] = self.keeps;
+                if slots[slot] != value {
+                    self.stack[kept] = Frame::Undo { slot, value };
+                    kept += 1;
+                }
             }
         }
+        self.stack.truncate(kept);
     }
 
     fn next_char(&self, pos: usize) -> Option<char> { self.input[pos..].chars().next() }
@@ -887,8 +1026,7 @@ impl<'a> Machine<'a> {
             Check::StartLine => before.is_empty() || before.ends_with('\n'),
             Check::EndLine => after.is_empty() || after.starts_with('\n'),
             Check::WordBoundary { word, negated } => {
-                let is_word =
-                    |c: Option<char>| c.is_some_and(|c| word.is_match(c.encode_utf8(&mut [0; 4])));
+                let is_word = |c: Option<char>| c.is_some_and(|c| word.matches(c));
                 (is_word(before.chars().next_back()) != is_word(after.chars().next())) != *negated
             }
         }
@@ -1087,5 +1225,87 @@ mod tests {
         expected: bool,
     ) {
         check!(program(pattern, group_repeats, &[]).differs_from_fancy() == expected);
+    }
+
+    /// A look-behind tries only the starts its body can match from, so one
+    /// checked at each char of a long input answers in time, where trying
+    /// every start before it would run past the backtrack limit. Each row is
+    /// `Pattern.matches` on JDK 25.0.4.
+    #[test]
+    fn a_look_behind_on_a_long_input_answers() {
+        let xs = "x".repeat(20_000);
+        let after_y = format!("y{xs}");
+        // (pattern, input, linebreak_atoms, matches)
+        let cases = [
+            (r"y(?:(?<!z)x|\R)*", after_y.as_str(), &[false][..], true),
+            (r"x*(?<!x)", &xs, &[], false),
+            (r"x*(?<=y)", &xs, &[], false),
+            (r"x*(?<!y|x{1,3})", &xs, &[], false),
+            (r"x*(?<!x{1,3}y)", &xs, &[], true),
+            (r"x*(?<=x{2,4})", &xs, &[], true),
+        ];
+        for (pattern, input, linebreak_atoms, expected) in cases {
+            check_matches([row(pattern, input, &[false], expected)], linebreak_atoms);
+        }
+    }
+
+    /// A char of a look-behind's body may be a supplementary one, two UTF-16
+    /// units, so a start that far back is tried. Each row is
+    /// `Pattern.matches` on JDK 25.0.4.
+    #[yare::parameterized(
+        any = { r".(?<=.)x", "😀x", true },
+        class = { r".(?<=[^a])x", "😀x", true },
+        negated = { r".(?<!.)x", "😀x", false },
+        variable_length = { r"a.(?<=a.{0,2})x", "a😀x", true },
+    )]
+    fn a_look_behind_reaches_back_over_a_supplementary_char(
+        pattern: &str,
+        input: &str,
+        expected: bool,
+    ) {
+        check_matches([row(pattern, input, &[false], expected)], &[]);
+    }
+
+    /// The UTF-16 lengths a look-behind's body can match.
+    #[yare::parameterized(
+        empty = { "", 0, Some(0) },
+        literal = { "ab😀", 4, Some(4) },
+        any = { ".", 1, Some(2) },
+        class = { "[a-z]", 1, Some(2) },
+        linebreak = { r"\R", 1, Some(2) },
+        concat = { "a.b", 3, Some(4) },
+        alternation = { "ab|c|", 0, Some(2) },
+        group = { "(ab)", 2, Some(2) },
+        atomic_group = { "(?>ab)", 2, Some(2) },
+        counted = { "(?:ab){2,3}", 4, Some(6) },
+        unbounded = { "a+", 1, None },
+        assertions = { r"^\b(?=abc)(?<!x)a$", 1, Some(1) },
+        backref = { r"(a)\1", 1, None },
+    )]
+    fn the_lengths_of_a_look_behind_bound_its_body(pattern: &str, min: usize, max: Option<usize>) {
+        let tree = Expr::parse_tree(pattern).unwrap_or_else(|_| panic!("{pattern:?} parses"));
+        check!(Lengths::of(&tree.expr) == Lengths { min, max });
+    }
+
+    /// The table of a class answers for each ASCII char as its regex does,
+    /// under a case flag too, and the regex answers past ASCII.
+    #[yare::parameterized(
+        range = { "[a-z0-9._-]" },
+        negated = { "[^a-z]" },
+        case_insensitive = { "(?i:[a-z])" },
+        case_insensitive_kelvin = { "(?i:k)" },
+        word = { r"\w" },
+        unicode_class = { r"\p{Lu}" },
+    )]
+    fn a_class_matches_each_char_as_its_regex_does(class: &str) {
+        let compiled = Class::new(class).unwrap_or_else(|| panic!("{class:?} compiles"));
+        let regex = Regex::new(&format!(r"\A(?:{class})\z"))
+            .unwrap_or_else(|_| panic!("{class:?} compiles"));
+        for c in ('\0'..='\u{3FF}').chain(['\u{212A}', '\u{1F600}']) {
+            check!(
+                compiled.matches(c) == regex.is_match(c.encode_utf8(&mut [0; 4])),
+                "{class:?} against {c:?}"
+            );
+        }
     }
 }
