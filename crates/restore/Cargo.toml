@@ -82,6 +82,8 @@ async-trait = { workspace = true }
 # `krabka-log`'s writer.
 crc32c = { workspace = true }
 krabka-audit = { workspace = true }
+# `diskless_capture_broker` produces lz4 batches, as the qualification drill does.
+krabka-compression = { version = "0.6.0", default-features = false, features = ["lz4"] }
 # `dr_roundtrip` drives the operator's own backup tool: the capture it asserts
 # on is the one an operator runs, not a re-implementation of it.
 krabka-backup = { version = "1.0.5", path = "../backup-cli" }
@@ -89,6 +91,9 @@ krabka-broker = { version = "1.0.5", path = "../broker", features = ["test-helpe
 # `dr_roundtrip` reads a group's committed offsets back with `OffsetFetch`.
 krabka-client-admin = { version = "0.6.0" }
 krabka-client-core = { version = "0.6.0" }
+# `diskless_capture_broker` reads a restored topic back the way the
+# qualification drill does, with a groupless consumer.
+krabka-client-consumer = { version = "0.6.0" }
 krabka-security = { workspace = true }
 # `diskless_capture_broker` sets the diskless flush cadence on a broker config.
 krabka-units = { workspace = true }

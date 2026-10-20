@@ -347,6 +347,25 @@ def _test_disaster_recovery_times_recovery_and_not_its_proof(_ctx):
         if index > 0:
             check_eq(label + " follows " + marks[index - 1][0], positions[index] > positions[index - 1], True)
 
+def _test_disaster_recovery_never_rewrites_the_read_back_s_own_files(_ctx):
+    # The read-back runs in a container as root, so the files it writes under
+    # `$work/drill` are root's. A runner command that rewrites one fails with
+    # `Permission denied` and stops the gate before the judge runs. The judge
+    # reads the runner's own merged copy under `$evidence` instead.
+    commands = gate_script("disaster-recovery")
+    read_back = commands.find("readback --contract /work/dr-contract.yaml")
+    judge = commands.find("judge --contract")
+    check_eq("read-back exists", read_back >= 0, True)
+    check_eq("judge follows the read-back", judge > read_back, True)
+    after = commands[read_back:]
+    for write in ["> \"$work/drill/", "cp \"$evidence/drill-evidence.json\" \"$work/drill/"]:
+        check_eq("no runner write: " + write, write in after, False)
+    check_eq(
+        "judge reads the merged evidence",
+        "judge --contract \"$work/dr-contract.yaml\" --evidence \"$evidence/drill-evidence.json\"" in after,
+        True,
+    )
+
 def _test_registry_migration_resolves_the_advertised_host_before_the_handoffs(_ctx):
     commands = gate_script("registry-migration")
     resolve = commands.find("127.0.0.1 host.docker.internal # krabka-qualification")
@@ -425,6 +444,7 @@ check_qualification_tests = suite("check-qualification", [
     _test_disaster_recovery_uses_the_packaged_secured_loss_path,
     _test_disaster_recovery_runs_under_its_declared_load,
     _test_disaster_recovery_times_recovery_and_not_its_proof,
+    _test_disaster_recovery_never_rewrites_the_read_back_s_own_files,
     _test_registry_migration_resolves_the_advertised_host_before_the_handoffs,
     _test_a_failed_smoke_pipeline_cannot_pass,
     _test_retained_evidence_cannot_be_substituted,

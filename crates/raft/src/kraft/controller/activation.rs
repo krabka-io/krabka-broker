@@ -122,7 +122,7 @@ impl Engine {
     /// commits with this epoch. Kafka makes the same decision after its
     /// controller has replayed the log up to the epoch start.
     ///
-    /// The records go through [`Self::on_submit_change`], so the leader
+    /// The records go through [`Self::on_activation_change`], so the leader
     /// validates and encodes them as it does every other write. Nothing waits
     /// for them to commit. A leader that refuses them, or that cannot read
     /// its own log tail to decide, sets [`Engine::activation_fault`]. The
@@ -150,7 +150,7 @@ impl Engine {
              appending the bootstrap records"
         );
         let (reply, mut outcome) = oneshot::channel();
-        self.on_submit_change(&records, reply);
+        self.on_activation_change(&records, reply);
         if let Ok(Err(error)) = outcome.try_recv() {
             self.activation_fault = Some(format!("{ACTIVATION_FAULT}: {error}"));
         }

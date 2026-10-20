@@ -14,11 +14,14 @@ use {
     crate::{
         args::RestoreArgs,
         discover::{ArchiveInventory, load_snapshot},
+        diskless::DisklessNextOffset,
         error::RestoreError,
         report::MetadataRestoreReport,
     },
     krabka_ids::LeaderEpoch,
-    krabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicRecord},
+    krabka_metadata::{
+        MetadataRecord, NodeId, PartitionOffsetAdvanceRecord, PartitionRecord, TopicRecord,
+    },
     krabka_remote_storage::{
         ArchiveVerifyReport, ChainHead, ChainStamp, RemoteLogSegmentState, WormChainRecord,
         parse_partition_dir_name,
@@ -67,7 +70,7 @@ pub async fn format_target(
     args: &RestoreArgs,
     inventory: &ArchiveInventory,
 ) -> Result<FormatTargetOutcome, RestoreError> {
-    format_target_with_snapshot(args, inventory, None).await
+    format_target_with_snapshot(args, inventory, None, &[]).await
 }
 
 /// Format from retained authenticated bytes when supplied, without reopening the source path.
@@ -75,6 +78,7 @@ pub(crate) async fn format_target_with_snapshot(
     args: &RestoreArgs,
     inventory: &ArchiveInventory,
     authenticated_snapshot: Option<&[u8]>,
+    diskless_next_offsets: &[DisklessNextOffset],
 ) -> Result<FormatTargetOutcome, RestoreError> {
     let node_id = args.target.node_id.ok_or_else(|| {
         RestoreError::InvalidArgument(
@@ -134,6 +138,7 @@ pub(crate) async fn format_target_with_snapshot(
         node_id,
         args.archive.metadata_snapshot.clone(),
         snapshot_records.as_deref(),
+        diskless_next_offsets,
     )?;
     // stdout is the report's: `--report json` piped to `jq` must hold the
     // report alone, so the formatter's progress lines go to stderr. A dry run
@@ -304,12 +309,16 @@ struct TopicTally {
 ///
 /// Every topic's [`MetadataRecord::V1Topic`] precedes every [`MetadataRecord::V1Partition`], which is the ordering `krabka_format::run_with_records`'s own doc requires: a `MetadataImage` derives a topic's partition count from the partition records that apply after it, so a partition can only follow its own topic.
 ///
+///
+/// Each diskless partition in `diskless_next_offsets` then gets one [`MetadataRecord::V1PartitionOffsetAdvance`] that starts its committed next offset at its materialized end. That is the record a metadata snapshot carries a diskless partition's next offset in, and the one the write path appends, so every 1.x broker reads it (#1524).
+///
 /// Pulled out as a pure function, separate from [`format_target`]'s formatter call, so a test can check exactly what gets seeded without running the formatter at all.
 fn seed_metadata_records(
     inventory: &ArchiveInventory,
     node_id: NodeId,
     snapshot: Option<std::path::PathBuf>,
     snapshot_records: Option<&[MetadataRecord]>,
+    diskless_next_offsets: &[DisklessNextOffset],
 ) -> Result<SeededMetadata, RestoreError> {
     let mut topic_order: Vec<&str> = Vec::new();
     let mut topics: HashMap<&str, TopicTally> = HashMap::new();
@@ -478,6 +487,21 @@ fn seed_metadata_records(
             partition_epoch: 0,
         }));
     }
+    // KRaft is a diskless partition's offset authority: its first write is
+    // assigned the committed next offset, so it starts where the restored log
+    // ends. A partition restored empty from offset 0 needs no record.
+    records.extend(
+        diskless_next_offsets
+            .iter()
+            .filter(|next| next.next_offset > 0)
+            .map(|next| {
+                MetadataRecord::V1PartitionOffsetAdvance(PartitionOffsetAdvanceRecord {
+                    topic: next.topic.clone(),
+                    partition: next.partition,
+                    count: next.next_offset,
+                })
+            }),
+    );
     records.append(&mut topic_configs);
     records.append(&mut scram);
     records.append(&mut acls);
@@ -536,7 +560,7 @@ mod tests {
         let SeededMetadata {
             records,
             report: metadata,
-        } = seed_metadata_records(&inventory, NodeId(7), None, None).expect("seed metadata");
+        } = seed_metadata_records(&inventory, NodeId(7), None, None, &[]).expect("seed metadata");
 
         let partition_record = |topic: &str, partition: i32| {
             MetadataRecord::V1Partition(PartitionRecord {
@@ -622,10 +646,63 @@ mod tests {
             NodeId(7),
             Some(std::path::PathBuf::from("cluster-metadata.checkpoint")),
             Some(&snapshot),
+            &[],
         )
         .expect("seed metadata");
 
         check!(report.topics_without_configuration == expected);
+    }
+
+    /// Each restored diskless partition's committed next offset starts at its
+    /// materialized end, after every partition record, so the restored
+    /// cluster's first write to it is assigned that end (#1524). A partition
+    /// restored empty from offset 0 needs no record: an absent next offset is
+    /// 0.
+    #[yare::parameterized(
+        none = { &[], &[] },
+        one_partition = { &[("orders", 1, 712)], &[("orders", 1, 712)] },
+        empty_partition = { &[("orders", 0, 0), ("orders", 1, 5)], &[("orders", 1, 5)] },
+    )]
+    fn seed_metadata_records_starts_each_diskless_partition_at_its_materialized_end(
+        next_offsets: &[(&str, i32, i64)],
+        advances: &[(&str, i32, i64)],
+    ) {
+        let orders_id = Uuid::new_v4();
+        let inventory = ArchiveInventory {
+            partitions: vec![
+                partition_inventory("orders", orders_id, 0),
+                partition_inventory("orders", orders_id, 1),
+            ],
+            unrecognized: UnrecognizedKeys::default(),
+        };
+        let next_offsets: Vec<DisklessNextOffset> = next_offsets
+            .iter()
+            .map(|(topic, partition, next_offset)| DisklessNextOffset {
+                topic: (*topic).to_owned(),
+                partition: *partition,
+                next_offset: *next_offset,
+            })
+            .collect();
+
+        let SeededMetadata { records, .. } =
+            seed_metadata_records(&inventory, NodeId(7), None, None, &next_offsets)
+                .expect("seed metadata");
+
+        let expected: Vec<MetadataRecord> = advances
+            .iter()
+            .map(|(topic, partition, count)| {
+                MetadataRecord::V1PartitionOffsetAdvance(PartitionOffsetAdvanceRecord {
+                    topic: (*topic).to_owned(),
+                    partition: *partition,
+                    count: *count,
+                })
+            })
+            .collect();
+        let last_partition = records
+            .iter()
+            .rposition(|record| matches!(record, MetadataRecord::V1Partition(_)))
+            .expect("partition records");
+        check!(records[last_partition + 1..] == expected);
     }
 
     #[test]
@@ -813,6 +890,7 @@ mod tests {
             NodeId(7),
             Some(snapshot.clone()),
             Some(&snapshot_records),
+            &[],
         )
         .expect("seed metadata");
 
@@ -880,6 +958,7 @@ mod tests {
             NodeId(7),
             None,
             Some(std::slice::from_ref(&group_version)),
+            &[],
         )
         .expect("seed metadata");
 
@@ -920,6 +999,7 @@ mod tests {
             NodeId(7),
             Some("metadata.checkpoint".into()),
             Some(&snapshot_records),
+            &[],
         );
 
         check!(matches!(
@@ -938,6 +1018,7 @@ mod tests {
             NodeId(7),
             Some("metadata.checkpoint".into()),
             Some(&snapshot_records[1..]),
+            &[],
         );
         check!(matches!(
             missing_topic,

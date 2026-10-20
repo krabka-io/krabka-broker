@@ -47,7 +47,10 @@ impl HotTailCache {
             let Ok(batch) = RecordBatch::decode(&mut cur) else {
                 return;
             };
-            let len = batch.encoded_len();
+            // What the decode consumed is the batch's length on the wire.
+            // `encoded_len` is the decoded batch's uncompressed length, which a
+            // compressed batch does not occupy.
+            let len = bytes.len() - offset - cur.len();
             if len == 0 || offset + len > bytes.len() {
                 return;
             }
@@ -214,7 +217,10 @@ struct HotTailEntry {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::test_support::default_records_batch, assert2::check, bytes::BytesMut};
+    use {
+        super::*, crate::test_support::default_records_batch, assert2::check, bytes::BytesMut,
+        krabka_compression::CompressionType,
+    };
 
     /// An offset above every cached batch, for a lookup the window does not
     /// bound.
@@ -354,6 +360,54 @@ mod tests {
             .expect("small batch is cached");
         check!(cached.as_ptr() != small_in_run);
         check!(cached == small);
+    }
+
+    /// A batch of three records whose values are `value`, at `base_offset`,
+    /// encoded with `codec`, as a producer would send it.
+    fn coded_batch_bytes(base_offset: i64, codec: CompressionType, value: &[u8]) -> Bytes {
+        let mut batch = default_records_batch().count(3).call();
+        batch.base_offset = base_offset;
+        batch.attributes = batch.attributes.with_compression(codec);
+        for record in &mut batch.records {
+            record.value = Some(Bytes::copy_from_slice(value));
+        }
+        let mut buf = BytesMut::new();
+        batch.encode(&mut buf).unwrap();
+        buf.freeze()
+    }
+
+    /// 512 bytes no codec can shrink: a run of distinct byte pairs.
+    fn incompressible_value() -> Vec<u8> {
+        (0..256_u16)
+            .flat_map(|index| {
+                let [high, low] = (index.wrapping_mul(40_503)).to_be_bytes();
+                [high, low]
+            })
+            .collect()
+    }
+
+    /// A run cached on its way to durability is split into the batches it
+    /// holds, each one exactly the bytes it occupies in the run. A compressed
+    /// batch occupies its compressed length, which the decoded batch's
+    /// `encoded_len` does not report, so a split by that length cut the first
+    /// batch short or long and lost every batch after it (#1525).
+    #[yare::parameterized(
+        uncompressed = { CompressionType::None, b"value".to_vec() },
+        lz4_compressible = { CompressionType::Lz4, vec![b'a'; 512] },
+        lz4_incompressible = { CompressionType::Lz4, incompressible_value() },
+        gzip_compressible = { CompressionType::Gzip, vec![b'a'; 512] },
+    )]
+    fn a_run_is_cached_as_the_exact_bytes_of_each_batch(codec: CompressionType, value: Vec<u8>) {
+        let topic_id = Uuid::from_u128(11);
+        let partition = PartitionIndex(0);
+        let batches = [0, 3, 6].map(|base| coded_batch_bytes(base, codec, &value));
+        let cache = HotTailCache::new(usize::MAX);
+
+        cache.insert_run(topic_id, partition, &Bytes::from(batches.concat()));
+
+        let cached =
+            [0, 3, 6].map(|offset| cache.get(topic_id, partition, offset, UNBOUNDED, usize::MAX));
+        check!(cached == batches.map(Some));
     }
 
     fn batch_bytes(base_offset: i64, records: i32) -> Bytes {
