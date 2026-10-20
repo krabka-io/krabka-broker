@@ -684,22 +684,7 @@ async fn the_restored_metadata_starts_a_diskless_partition_at_its_restored_end(
     .await
     .unwrap();
 
-    let advances: Vec<MetadataRecord> =
-        krabka_broker::bootstrap::load_bootstrap_records(target.path())
-            .unwrap()
-            .into_iter()
-            .filter(|record| matches!(record, MetadataRecord::V1PartitionOffsetAdvance(_)))
-            .collect();
-    check!(
-        advances
-            == vec![MetadataRecord::V1PartitionOffsetAdvance(
-                PartitionOffsetAdvanceRecord {
-                    topic: "orders".to_owned(),
-                    partition: 0,
-                    count: next_offset,
-                }
-            )]
-    );
+    check_restored_next_offset(target.path(), next_offset);
     check_orders_offsets(target.path(), Offset(0), Offset(next_offset));
 }
 
@@ -740,22 +725,7 @@ async fn an_excluded_record_leaves_a_restored_diskless_partition_at_its_captured
             partition.recovery_cutoff
         ) == (1, 1, 2)
     );
-    let advances: Vec<MetadataRecord> =
-        krabka_broker::bootstrap::load_bootstrap_records(target.path())
-            .unwrap()
-            .into_iter()
-            .filter(|record| matches!(record, MetadataRecord::V1PartitionOffsetAdvance(_)))
-            .collect();
-    check!(
-        advances
-            == vec![MetadataRecord::V1PartitionOffsetAdvance(
-                PartitionOffsetAdvanceRecord {
-                    topic: "orders".to_owned(),
-                    partition: 0,
-                    count: 2,
-                }
-            )]
-    );
+    check_restored_next_offset(target.path(), 2);
 }
 
 /// A capture whose declared cutoff or run boundaries disagree with the batches
@@ -785,4 +755,24 @@ async fn a_capture_that_disagrees_with_its_batches_is_refused(
         DryRunExpectation::Integrity,
     )
     .await;
+}
+
+/// The target's bootstrap records start `orders-0` at `next_offset`, with the
+/// one `V1PartitionOffsetAdvance` the restore seeds for it.
+fn check_restored_next_offset(target: &std::path::Path, next_offset: i64) {
+    let advances: Vec<MetadataRecord> = krabka_broker::bootstrap::load_bootstrap_records(target)
+        .unwrap()
+        .into_iter()
+        .filter(|record| matches!(record, MetadataRecord::V1PartitionOffsetAdvance(_)))
+        .collect();
+    check!(
+        advances
+            == vec![MetadataRecord::V1PartitionOffsetAdvance(
+                PartitionOffsetAdvanceRecord {
+                    topic: "orders".to_owned(),
+                    partition: 0,
+                    count: next_offset,
+                }
+            )]
+    );
 }
