@@ -9,8 +9,9 @@ minutes is a starting point; tune it to the fleet.
 ## What it means
 
 The broker closed more than one connection per second because the connection
-went `connections_max_idle` without a complete frame. A TLS handshake that
-the peer opened and never drove counts too. The `max_connections` and
+went `connections_max_idle` with no socket activity: no read brought bytes
+and no response was written. A request still in its handler counts, and so
+does a TLS handshake that the peer opened and never drove. The `max_connections` and
 `max_connections_per_ip` caps do not surface this on their own, because the
 idle connections are closed before they reach the cap.
 

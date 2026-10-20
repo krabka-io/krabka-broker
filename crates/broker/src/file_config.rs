@@ -243,11 +243,13 @@ pub struct FileConfig {
     /// default `usize::MAX` (unlimited).
     pub max_connections_per_ip: Option<usize>,
 
-    /// How long a connection may go without a complete request frame before
-    /// the broker closes it (Kafka `connections.max.idle.ms`). Absent leaves
-    /// the `BrokerConfig` default of ten minutes, which is Kafka's 600000. A
-    /// `[[listeners]]` entry may carry its own `connections_max_idle`, which
-    /// wins for that listener.
+    /// How long a connection may go with no socket activity before the broker
+    /// closes it (Kafka `connections.max.idle.ms`). Each read and each response
+    /// write restarts the window, and it keeps running while a request is in its
+    /// handler or a throttled connection is muted. Absent leaves the
+    /// `BrokerConfig` default of ten minutes, which is Kafka's 600000. A
+    /// `[[listeners]]` entry may carry its own `connections_max_idle`, which wins
+    /// for that listener.
     pub connections_max_idle: Option<Time>,
 
     /// KIP-368 `connections.max.reauth.ms`: how long an authenticated SASL
