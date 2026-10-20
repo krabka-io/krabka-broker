@@ -28,6 +28,15 @@ use {
     tempfile::TempDir,
 };
 
+/// Whether `error_code` is Kafka's answer from a transaction coordinator that
+/// is not ready yet: `COORDINATOR_LOAD_IN_PROGRESS` (14) while it loads its
+/// partition, `COORDINATOR_NOT_AVAILABLE` (15) or `NOT_COORDINATOR` (16) while
+/// the partition's leadership settles. Kafka clients retry all three. A
+/// restarted single node meets every one of them: its registration retires the
+/// previous incarnation's leaderships, as Kafka's `registerBroker` does, and
+/// the coordinator loads again once the node leads its partition anew.
+const fn coordinator_not_ready(error_code: i16) -> bool { matches!(error_code, 14..=16) }
+
 /// Re-open the broker on the SAME data dir. A populated dir replays the raft
 /// log and checkpoint instead of a re-bootstrap, so the restart uses
 /// `BootstrapMode::Rejoin`. This is the same pattern as
@@ -88,11 +97,11 @@ async fn init_producer_id(client: &Client, tid: &str) -> ProducerIdentity {
             break;
         }
         assert!(
-            resp.error_code == 15 || resp.error_code == 16,
+            coordinator_not_ready(resp.error_code),
             "InitProducerId failed: {resp:?}"
         );
         // intentional: txn-coordinator load state is not in the metadata image and
-        // has no metric/awaiter; only InitProducerId's 15/16 code signals it.
+        // has no metric/awaiter; only InitProducerId's error code signals it.
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let init = init.expect("InitProducerId did not become ready within 10s");
@@ -154,11 +163,10 @@ async fn commit_via_end_txn(
             )
             .await
             .expect("EndTxn");
-        // 15/16: coordinator still loading — keep retrying until the deadline.
-        if (resp.error_code == 15 || resp.error_code == 16) && std::time::Instant::now() < deadline
-        {
+        // The coordinator is not ready yet: keep retrying until the deadline.
+        if coordinator_not_ready(resp.error_code) && std::time::Instant::now() < deadline {
             // intentional: coordinator recover/load state after restart is not in the
-            // metadata image and has no metric/awaiter; only EndTxn's 15/16 code
+            // metadata image and has no metric/awaiter; only EndTxn's error code
             // signals it. Bounded RPC-response poll, not a materialization wait.
             tokio::time::sleep(Duration::from_millis(100)).await;
             continue;
