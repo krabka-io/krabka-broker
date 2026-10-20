@@ -23,6 +23,20 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-10-20
+
+1.0.7 updates the broker's compiled protocol and Rust client libraries to their
+published 0.7.0 releases. It keeps the 1.x persisted formats and uses the
+startup-safe 1.0.6 broker as the loaded lifecycle baseline. The frozen manifest
+and its qualification report record the tested ecosystem set.
+
+### Changed
+
+- Use protocol 0.7 and Rust client 0.7 from their published source revisions.
+  This changes the Rust dependency types exposed by the workspace; the broker's
+  Kafka wire and persisted-format compatibility remain governed by their
+  existing version contracts.
+
 ## [1.0.6] - 2026-10-20
 
 1.0.6 fixes audit retention, diskless restore and replication, controller
@@ -2154,7 +2168,8 @@ robot-head/crabka.
 - An audit stamp carries the value that its freeze signature covers.
 - The release publishes the image digest that cosign signed.
 
-[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v1.0.6...HEAD
+[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v1.0.7...HEAD
+[1.0.7]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.7
 [1.0.6]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.6
 [1.0.5]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.5
 [1.0.4]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.4

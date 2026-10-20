@@ -32,17 +32,17 @@ assert2 = { workspace = true }
 bytes = { workspace = true }
 thiserror = { workspace = true }
 crc32fast = { workspace = true }
-krabka-compression = { version = "0.6.0", default-features = false, features = [
+krabka-compression = { version = "0.7.0", default-features = false, features = [
     "gzip",
     "snappy",
     "lz4",
     "zstd",
 ] }
-krabka-ids = { version = "0.6.0" }
-krabka-protocol = { version = "0.6.0", default-features = false }
+krabka-ids = { version = "0.7.0" }
+krabka-protocol = { version = "0.7.0", default-features = false }
 krabka-units = { workspace = true }
 
 [dev-dependencies]
-krabka-macros = { version = "1.0.6", path = "../macros" }
+krabka-macros = { version = "1.0.7", path = "../macros" }
 proptest = { workspace = true }
 yare = { workspace = true }
