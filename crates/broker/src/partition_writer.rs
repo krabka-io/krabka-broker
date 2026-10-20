@@ -298,10 +298,7 @@ pub async fn run_with_sequencer(
             WriterMessage::FollowLeaderLogStart { leader_start, ack } => {
                 handle_follow_leader_log_start(&log, storage_status, leader_start, ack).await;
             }
-            WriterMessage::SetLogConfig { config, ack } => {
-                lock_log(&log).set_config(config);
-                let _ = ack.send(());
-            }
+            WriterMessage::ConfigChanged => {}
             WriterMessage::Retain { ack } => {
                 handle_retention((&log, &log_dir, &log_dir_status), &replica_state, ack).await;
             }

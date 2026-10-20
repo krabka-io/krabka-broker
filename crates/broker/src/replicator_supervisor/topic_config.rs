@@ -12,7 +12,6 @@ use {
     krabka_log::LogConfig,
     krabka_metadata::MetadataImage,
     std::collections::{BTreeMap, HashSet},
-    tracing::warn,
 };
 
 /// Resolve the same effective settings before opening a log and on later updates.
@@ -32,8 +31,8 @@ pub(crate) fn topic_log_config(
 
 /// Push topic-config overrides onto every locally-hosted partition in
 /// `desired`. The call is idempotent, because the same `LogConfig` sent twice
-/// is a cheap noop write inside `Log::set_config`. Errors on individual
-/// partitions log through `warn!` and do not propagate.
+/// is a cheap noop. Configuration swaps hold the log lock and never await
+/// the writer's WAL durability work.
 ///
 /// `base` is the static `LogConfig` the process started with. The dynamic
 /// broker-wide defaults of `node` and of the cluster go over it first, so a
@@ -48,7 +47,7 @@ pub(crate) fn topic_log_config(
 /// the cluster default, and only when `unstable` says the broker serves trunk's
 /// topic keys: under Kafka 4.3.1 a stored value of it is an unknown key that
 /// nothing reads, so the log runs with no limit.
-pub(crate) async fn push_topic_configs(
+pub(crate) fn push_topic_configs(
     desired: &HashSet<TopicPartition>,
     partitions: &PartitionRegistry,
     image: &MetadataImage,
@@ -69,15 +68,7 @@ pub(crate) async fn push_topic_configs(
             max_decompressed_record: log_max_decompressed_record(image, node, topic, unstable),
             ..base.clone()
         };
-        if let Err(e) = part
-            .apply_log_config_overrides(overrides, &topic_base)
-            .await
-        {
-            warn!(
-                topic = %topic, partition = partition, error = %e,
-                "supervisor: apply_log_config_overrides failed"
-            );
-        }
+        part.apply_log_config_overrides(overrides, &topic_base);
     }
 }
 
@@ -137,7 +128,7 @@ mod tests {
         } = setup;
         let (_dir, partitions) = materialized_partition_with_config(base);
         let desired = HashSet::from([("t".to_owned(), 0)]);
-        push_topic_configs(&desired, &partitions, image, base, NodeId(1), unstable).await;
+        push_topic_configs(&desired, &partitions, image, base, NodeId(1), unstable);
         let part = partitions.get("t", PartitionIndex(0)).expect("partition");
         await_until(what, || {
             ready(&part.log.lock().expect("log lock").config_snapshot())

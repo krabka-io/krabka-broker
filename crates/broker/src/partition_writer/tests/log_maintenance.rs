@@ -1,5 +1,5 @@
 //! Writer-loop tests for the arms that maintain the log rather than write
-//! to it: a config swap, a log-start trim, and the deletion of retired files.
+//! to it: a config notification, a log-start trim, and the deletion of retired files.
 
 use {
     super::*,
@@ -8,32 +8,6 @@ use {
     krabka_log::{LogConfig, Offset},
     tempfile::tempdir,
 };
-
-#[tokio::test]
-async fn writer_set_log_config_swaps_config() {
-    let dir = tempdir().expect("tempdir");
-    let log = open_default_log(dir.path());
-    let (tx, writer) = spawn_default_writer(dir.path(), log.clone());
-
-    let new_cfg = LogConfig {
-        retention: Some(krabka_units::minutes(2)),
-        ..LogConfig::default()
-    };
-    let (ack, ack_rx) = tokio::sync::oneshot::channel();
-    tx.send(WriterMessage::SetLogConfig {
-        config: new_cfg.clone(),
-        ack,
-    })
-    .await
-    .expect("send");
-    ack_rx.await.expect("ack");
-
-    let observed = log.lock().expect("lock").config_snapshot();
-    assert!(observed.retention == new_cfg.retention);
-
-    drop(tx);
-    writer.await.expect("writer join");
-}
 
 #[tokio::test]
 async fn writer_trim_to_offset_advances_log_start() {
@@ -95,11 +69,8 @@ async fn writer_flush_timer_runs_after_a_live_config_change_without_another_appe
             log.test_set_io(std::sync::Arc::new(ObserveFlush(flushed.clone())));
         }
         let (tx, writer) = spawn_default_writer(dir.path(), log.clone());
-        let (ack, ack_rx) = tokio::sync::oneshot::channel();
-        tx.send(WriterMessage::SetLogConfig { config, ack })
-            .await
-            .unwrap();
-        ack_rx.await.unwrap();
+        log.lock().unwrap().set_config(config);
+        tx.send(WriterMessage::ConfigChanged).await.unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(2), flushed.notified())
             .await
             .expect("idle partition flushes after the live threshold changes");

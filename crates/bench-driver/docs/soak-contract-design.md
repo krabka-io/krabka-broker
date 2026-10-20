@@ -32,12 +32,19 @@ bench/soak/<contract>.yaml ──► executor ──► evidence.json, faults.js
 | Section | Content | 72-hour value |
 | :--- | :--- | :--- |
 | `host` | CPUs, memory, the data volume of each broker, the host free space that a disk fill must keep | 16 CPUs, 64 GiB, 500 GiB, 50 GiB |
-| `cluster` | brokers, replication factor, `min.insync.replicas`, check-quorum window, `replica.lag.time.max.ms` | 3, 3, 2, 5 s, 30 s |
+| `cluster` | brokers, replication factor, `min.insync.replicas`, check-quorum window, broker session timeout, `replica.lag.time.max.ms` | 3, 3, 2, 5 s, 5 s, 30 s |
 | `clients` | producer acks, compression, linger, batch, timeouts and send attempts; transaction size and abort cadence; consumer session, commit interval and poll timeout | `acks=all`, LZ4, 5 ms, 64 KiB, 5 attempts; 20 records, every fifth aborted; 5 s commits |
 | `paths` | one entry per load path: semantics, storage, partitions, paced rate, throughput floor, payload, consumers, offset commits, and p50/p99/p999 budgets for produce and for consume | five paths, below |
 | `deadlines` | leader failover, ISR rejoin, controller failover, catch-up after a pause | 15 s, 2 min, 15 s, 1 min |
 | `faults` | named plans: kind, target, first offset, period, jitter, duration | seven plans, below |
 | `disaster_recovery` | a drill only: how long the load runs after the capture starts, and the RPO and RTO objectives | absent |
+
+Controller election and broker session expiry are separate waits. A new
+controller grants brokers a fresh session, so the 12-second failover pauses
+declare a five-second broker session as well as a five-second controller
+window. Contracts that omit `broker_session_timeout` retain the executor's
+default and their original digest. Changing the declaration requires fresh
+run evidence; it does not change a saved run's verdict.
 
 The 72-hour paths cover every combination that the milestone names:
 

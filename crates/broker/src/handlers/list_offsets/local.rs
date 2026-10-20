@@ -111,6 +111,7 @@ mod tests {
             list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
             list_offsets_response::ListOffsetsPartitionResponse,
         },
+        krabka_units::convert::ByteSizeExt as _,
         std::sync::Arc,
     };
 
@@ -148,14 +149,48 @@ mod tests {
             .leader(broker.config.node_id.get())
             .call();
         register(&broker.partitions, &partition);
-        install_partition_leader_record(broker_handle, topic, broker.config.node_id.get()).await;
+        install_partition_leader_record(
+            broker_handle,
+            topic,
+            broker.config.node_id.get(),
+            &partition,
+        )
+        .await;
     }
 
     /// Tell `handle`'s metadata image that `leader` leads `topic`'s single
     /// partition, so the `ListOffsets` leadership gate admits a request this
     /// node answers from a locally spawned test fixture rather than from the
     /// real topic-creation path.
-    async fn install_partition_leader_record(handle: &BrokerHandle, topic: &str, leader: u64) {
+    async fn install_partition_leader_record(
+        handle: &BrokerHandle,
+        topic: &str,
+        leader: u64,
+        partition: &Partition,
+    ) {
+        // Reconciliation must retain the policy and retention settings of the fixture.
+        let config = partition.log.lock().unwrap().config_snapshot();
+        let mut overrides = std::collections::BTreeMap::from([
+            (
+                "delivery.mode".into(),
+                match config.delivery_policy {
+                    DeliveryPolicy::Immediate => "immediate",
+                    DeliveryPolicy::Scheduled => "scheduled",
+                }
+                .into(),
+            ),
+            (
+                "segment.bytes".into(),
+                config.segment_size.bytes_u64().to_string(),
+            ),
+            (
+                "remote.storage.enable".into(),
+                config.remote_storage_enable.to_string(),
+            ),
+        ]);
+        if let Some(size) = config.local_retention_size {
+            overrides.insert("local.retention.bytes".into(), size.bytes_u64().to_string());
+        }
         handle
             .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Topic(
                 krabka_metadata::TopicRecord {
@@ -167,6 +202,15 @@ mod tests {
             ))
             .await
             .expect("submit topic record");
+        handle
+            .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1TopicConfig(
+                krabka_metadata::TopicConfigRecord {
+                    topic: topic.into(),
+                    overrides,
+                },
+            ))
+            .await
+            .expect("submit fixture topic configuration");
         handle
             .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(
                 krabka_metadata::PartitionRecord {
@@ -190,7 +234,8 @@ mod tests {
         topic: &str,
     ) {
         register(&broker.partitions, partition);
-        install_partition_leader_record(handle, topic, broker.config.node_id.get()).await;
+        install_partition_leader_record(handle, topic, broker.config.node_id.get(), partition)
+            .await;
         partition
             .install_leader_change(broker.config.node_id.get(), 0)
             .await;
@@ -614,7 +659,13 @@ mod tests {
             .leader(OTHER_BROKER)
             .call();
         register(&broker.partitions, &partition);
-        install_partition_leader_record(&broker_handle, TOPIC, broker.config.node_id.get()).await;
+        install_partition_leader_record(
+            &broker_handle,
+            TOPIC,
+            broker.config.node_id.get(),
+            &partition,
+        )
+        .await;
         partition
             .install_leader_change(broker.config.node_id.get(), 0)
             .await;

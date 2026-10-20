@@ -6,6 +6,7 @@
 use {
     krabka_bench_driver::soak::contract::{Contract, LoadPath, Profile, Semantics, Storage},
     krabka_units::prelude::*,
+    std::fmt::Write as _,
 };
 
 /// Where every node mounts the shared host directory that is the local object
@@ -76,12 +77,16 @@ pub(crate) struct NodeToml {
 /// needs are per node, so the fixture writes them; see [`diskless`].
 pub(crate) fn node_toml(contract: &Contract) -> NodeToml {
     let cluster = &contract.cluster;
-    let root = format!(
+    let mut root = format!(
         "controller_fetch_timeout = \"{}ms\"\n\
          replica_lag_time_max = \"{}ms\"\n",
         cluster.check_quorum_window.millis_i64(),
         cluster.replica_lag_time_max.millis_i64(),
     );
+    if let Some(session) = cluster.broker_session_timeout {
+        writeln!(root, "heartbeat_timeout = \"{}ms\"", session.millis_i64())
+            .expect("write configuration into a String");
+    }
     // The remote-log manager's pass runs every second rather than every
     // thirty, so a sealed segment reaches the remote tier inside a short run
     // as well as a long one.
@@ -258,14 +263,24 @@ mod tests {
     // apply step runs inside one, as it does in the binary.
     #[tokio::test]
     async fn the_node_file_carries_the_contracts_cluster_limits() {
-        let contract = checked_in("self-check.yaml");
-        let config = applied(&contract);
-        check!(config.controller_fetch_timeout == contract.cluster.check_quorum_window);
-        check!(config.replica_lag_time_max == contract.cluster.replica_lag_time_max);
-        check!(config.default_min_insync_replicas == 2);
-        check!(config.offsets_topic_replication_factor == 3);
-        check!(config.transaction_state_replication_factor == 3);
-        check!(config.remote_storage_backend.is_none());
+        for file in ["self-check.yaml", "rf3-72h.yaml"] {
+            let contract = checked_in(file);
+            let config = applied(&contract);
+            check!(config.controller_fetch_timeout == contract.cluster.check_quorum_window);
+            check!(
+                config.heartbeat_timeout
+                    == contract.cluster.broker_session_timeout.unwrap_or(secs(9))
+            );
+            check!(config.replica_lag_time_max == contract.cluster.replica_lag_time_max);
+            check!(config.default_min_insync_replicas == 2);
+            check!(config.offsets_topic_replication_factor == 3);
+            check!(config.transaction_state_replication_factor == 3);
+        }
+        check!(
+            applied(&checked_in("self-check.yaml"))
+                .remote_storage_backend
+                .is_none()
+        );
     }
 
     #[yare::parameterized(

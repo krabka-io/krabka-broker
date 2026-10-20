@@ -137,6 +137,15 @@ pub struct ClusterShape {
     /// stay below it.
     #[serde(with = "bounded::positive_time")]
     pub check_quorum_window: Time,
+    /// Kafka's `broker.session.timeout.ms`. Omitted contracts keep the
+    /// executor's default and their original evidence digest. The executor's
+    /// three-second heartbeat cadence must fit inside this session.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "serde_units::human::option_time"
+    )]
+    pub broker_session_timeout: Option<Time>,
     /// Kafka's `replica.lag.time.max.ms`, recorded because it decides whether a
     /// paused or slowed follower leaves the ISR at all.
     #[serde(with = "bounded::positive_time")]
@@ -685,6 +694,15 @@ impl Contract {
 
     fn validate_cluster(&self, fail: &mut impl FnMut(String)) {
         let cluster = &self.cluster;
+        if cluster
+            .broker_session_timeout
+            .is_some_and(|timeout| timeout <= secs(3))
+        {
+            fail(
+                "broker_session_timeout must exceed the executor's 3s heartbeat interval"
+                    .to_owned(),
+            );
+        }
         if cluster.replication_factor != 3 {
             fail(format!(
                 "replication_factor is {}; the sustained-load contract is RF=3",
@@ -817,6 +835,16 @@ impl Contract {
                 ));
             }
             match &plan.fault {
+                FaultKind::Pause {
+                    intends_failover: true,
+                } if self.cluster.broker_session_timeout.is_some_and(|session| {
+                    plan.duration <= session + self.cluster.check_quorum_window
+                }) =>
+                {
+                    fail(format!(
+                        "fault `{name}` must outlast controller election plus the declared broker session timeout"
+                    ));
+                }
                 FaultKind::Pause {
                     intends_failover: false,
                 } if plan.duration >= self.cluster.check_quorum_window => fail(format!(
@@ -1406,6 +1434,30 @@ mod tests {
         check!(!encoded.contains("lifecycle"));
         check!(!encoded.contains("certificate_rotation"));
         check!(!encoded.contains("reassignment"));
+        check!(!encoded.contains("broker_session_timeout"));
+    }
+
+    #[test]
+    fn a_failover_pause_outlasts_both_controller_and_broker_timeouts() {
+        let mut contract = fixture::self_check();
+        contract.cluster.broker_session_timeout = Some(secs(5));
+        contract.faults[0].fault = FaultKind::Pause {
+            intends_failover: true,
+        };
+        contract.faults[0].target = Target::Controller;
+        for (duration, refused) in [(secs(7), true), (secs(8), false)] {
+            contract.faults[0].duration = duration;
+            check!(
+                messages(&contract)
+                    .iter()
+                    .any(|message| message.contains("broker session timeout"))
+                    == refused
+            );
+        }
+        for timeout in [secs(0), secs(1), secs(3)] {
+            contract.cluster.broker_session_timeout = Some(timeout);
+            assert_refused(&contract, "broker_session_timeout must exceed");
+        }
     }
 
     #[test]

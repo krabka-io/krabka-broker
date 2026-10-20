@@ -183,15 +183,8 @@ pub enum WriterMessage {
         new_base: Offset,
         ack: oneshot::Sender<Result<(), BrokerError>>,
     },
-    /// Atomically swap the partition's `LogConfig`. The writer task
-    /// serializes this with appends so no in-flight `RecordBatch` sees a
-    /// half-applied config. Sent by
-    /// `ReplicatorSupervisor::reconcile` whenever a `V1TopicConfig`
-    /// record changes the topic's overrides.
-    SetLogConfig {
-        config: krabka_log::LogConfig,
-        ack: tokio::sync::oneshot::Sender<()>,
-    },
+    /// Recalculate idle timers after the log's configuration was swapped.
+    ConfigChanged,
     /// Run one compaction pass. The writer actor serializes this with
     /// appends to preserve the single-writer invariant on `Log`.
     Compact {
