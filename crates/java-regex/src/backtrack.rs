@@ -184,6 +184,7 @@ impl Program {
         groups: usize,
         folds: &[BackrefFold],
         linebreak_atoms: &[bool],
+        group_repeats: &[bool],
     ) -> Option<Self> {
         let tree = Expr::parse_tree(translated).ok()?;
         let mut compiler = Compiler {
@@ -192,6 +193,7 @@ impl Program {
             next_group: 1,
             folds: folds.iter(),
             linebreak_atoms: linebreak_atoms.iter(),
+            group_repeats,
             nested: false,
             first_way: false,
             open_groups: Vec::new(),
@@ -275,6 +277,9 @@ struct Compiler<'a> {
     folds: Iter<'a, BackrefFold>,
     /// For each `\R` not reached yet, whether a quantifier binds to it alone.
     linebreak_atoms: Iter<'a, bool>,
+    /// For each group by number, whether Java repeats it with a `GroupCurly`
+    /// that sets the group itself: `JavaTranslation::group_repeats`.
+    group_repeats: &'a [bool],
     /// Inside a look-around or an atomic group.
     nested: bool,
     /// Inside the atom of a quantifier that Java matches the first way only.

@@ -21,6 +21,12 @@ pub(crate) struct JavaTranslation {
     /// alone, and the one after `(?:\R)` to the group, which it matches
     /// another way. `fancy_regex` parses the two the same.
     pub(crate) linebreak_atoms: Vec<bool>,
+    /// For each capturing group by number, group 0 first, whether a `*`, `+`
+    /// or counted quantifier that is not possessive follows its `)` in the
+    /// Java pattern. Java repeats such a group with a `GroupCurly` that sets
+    /// the group itself. `(?:(x))*` has the tree of `(x)*` in `fancy_regex`,
+    /// and Java repeats it with a `GroupCurly` that does not.
+    pub(crate) group_repeats: Vec<bool>,
 }
 
 /// Rewrite a `java.util.regex.Pattern` into `fancy_regex` syntax, or `None`
@@ -102,6 +108,7 @@ pub(crate) fn translate_java(pattern: &str) -> Option<JavaTranslation> {
         pattern: translator.out,
         backref_folds: translator.backref_folds,
         linebreak_atoms: translator.linebreak_atoms,
+        group_repeats: Vec::new(),
     })
 }
 

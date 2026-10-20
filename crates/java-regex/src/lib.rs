@@ -113,6 +113,7 @@ impl JavaPattern {
             pattern: translated,
             backref_folds,
             linebreak_atoms,
+            group_repeats,
         } = translate_java(pattern)
             .ok_or_else(|| PatternError(format!("{pattern:?} is not a java.util.regex pattern")))?;
         if Expr::parse_tree(&translated).is_ok_and(|tree| !look_behinds_bounded(&tree.expr)) {
@@ -136,6 +137,7 @@ impl JavaPattern {
             search.captures_len(),
             &backref_folds,
             &linebreak_atoms,
+            &group_repeats,
         )
         .filter(Program::differs_from_fancy);
         Ok(Self(Arc::new(Compiled {
