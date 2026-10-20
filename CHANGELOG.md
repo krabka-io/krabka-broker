@@ -30,6 +30,13 @@ published 0.7.0 releases. It keeps the 1.x persisted formats and uses the
 startup-safe 1.0.6 broker as the loaded lifecycle baseline. The frozen manifest
 and its qualification report record the tested ecosystem set.
 
+### Security
+
+- Update `rustls-webpki` to 0.103.16 and `webpki-root-certs` to 1.0.10 for
+  [RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382) and
+  [RUSTSEC-2026-0383](https://rustsec.org/advisories/RUSTSEC-2026-0383), which
+  address distrusted emSign certificate chains.
+
 ### Changed
 
 - **Breaking Rust API.** Use protocol 0.7 and Rust client 0.7 from their published source revisions.
