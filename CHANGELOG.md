@@ -32,10 +32,19 @@ and its qualification report record the tested ecosystem set.
 
 ### Changed
 
-- Use protocol 0.7 and Rust client 0.7 from their published source revisions.
+- **Breaking Rust API.** Use protocol 0.7 and Rust client 0.7 from their published source revisions.
   This changes the Rust dependency types exposed by the workspace; the broker's
   Kafka wire and persisted-format compatibility remain governed by their
   existing version contracts.
+
+### Added
+
+- A manually dispatched cloud qualification workflow for the frozen candidate.
+  It checks main CI and its delivery image, runs the two declared performance
+  budgets and the unchanged 72-hour soak on separate workers, and retains
+  evidence through renewable cloud credentials and a fresh publication job.
+  A host/publication preflight is the default; the full workload requires
+  `execute=true`.
 
 ## [1.0.6] - 2026-10-20
 

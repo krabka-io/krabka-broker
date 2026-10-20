@@ -10,11 +10,27 @@ promote anything. [Releasing](releasing.md) is the release procedure, and it
 stays unchanged: a candidate that passes every gate here is released by that
 procedure, from a `vX.Y.Z` tag on `main`.
 
-**Status, 2026-10-18.** No candidate is frozen. `main` is at `045b10d4`. The
-latest `main` commit with a green required CI run is `948e3cc8`. The latest
-release is v1.0.5 (`ac9deff3`). Several gates have no current evidence, and
-some gates are red. The blocker list below is a **proposal**. The maintainer
-agrees the final list on #1401.
+**Status, 2026-10-20.** The next ecosystem candidate is v1.0.7. Its protocol
+and Rust client dependencies are published at 0.7.0, and its CLI is published
+at 0.4.5. The v1.0.6 safety baseline at `402edff3` passed
+[main CI 39467563012](https://github.com/krabka-io/krabka-broker/actions/runs/39467563012).
+The final v1.0.7 commit, delivery image and website image pin still need to be
+frozen together before qualification. The tables dated 2026-10-18 below are
+historical observations, not results for this candidate.
+
+The [eight-gate preflight](https://github.com/krabka-io/krabka-broker/actions/runs/39446231280)
+exposed failures in single-node transaction configuration, CLI admin response
+handling and topic configuration, audit placement during operator evacuation,
+and the schema adapter's test ownership. Those fixes are merged in the website,
+CLI and broker. Broker [#1573](https://github.com/krabka-io/krabka-broker/pull/1573)
+also moves feature validation before recovery writes, so the loaded lifecycle
+uses the startup-safe v1.0.6 baseline. Every gate must run again on the final
+candidate; preflight passes do not qualify v1.0.7.
+
+The cloud [qualification workflow](operations/performance-qualification.md#run-the-frozen-candidate-in-the-cloud)
+provides the performance and 72-hour soak workers. Independent pilot acceptance
+still requires the named human operators and results in the
+[pilot plans](operations/pilot-acceptance-plans.md).
 
 ## Release and ecosystem claims
 
@@ -22,7 +38,7 @@ Krabka makes two separate claims, as [Releasing](releasing.md) and
 [Ecosystem qualification](qualification.md) say:
 
 - A **broker release** is a signed image and a GitHub release for a commit
-  whose `main` CI run passed. v1.0.0 to v1.0.5 are broker releases.
+  whose `main` CI run passed. This claim alone does not qualify an ecosystem.
 - An **ecosystem-qualified stack** is a broker release whose frozen candidate
   passed every gate in [Candidate gates](#candidate-gates), with the sibling
   set that the candidate manifest names.

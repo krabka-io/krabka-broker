@@ -1,0 +1,319 @@
+name: frozen candidate performance and 72-hour soak
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: Reviewed immutable ecosystem candidate manifest
+        type: string
+        required: true
+      execute:
+        description: Run the performance budgets and 72-hour soak; false checks the host and publication only
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: qualification-profile-${{ inputs.manifest }}
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      revision: ${{ steps.freeze.outputs.revision }}
+      image: ${{ steps.freeze.outputs.image }}
+      artifact: ${{ steps.freeze.outputs.artifact }}
+      prefix: ${{ steps.freeze.outputs.prefix }}
+    steps:
+      - name: Require the reviewed workflow on main
+        run: test "$GITHUB_REF" = refs/heads/main
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87
+        with:
+          disk-cache: false
+      - name: Bind the manifest to successful main CI and its delivery artifact
+        id: freeze
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANIFEST: ${{ inputs.manifest }}
+        run: |
+          set -euo pipefail
+          aspect check-qualification --manifest "$MANIFEST"
+          revision=$(jq -er '.components[] | select(.repository == "krabka-io/krabka-broker") | .revision' "$MANIFEST")
+          digest=$(jq -er '.components[] | select(.repository == "krabka-io/krabka-broker") | .artifacts[] | select(.kind == "image") | .digest' "$MANIFEST")
+          git merge-base --is-ancestor "$revision" origin/main
+          ci_run=$(gh run list --workflow ci.yml --commit "$revision" --event push --branch main --status success --json databaseId --jq '.[0].databaseId')
+          test -n "$ci_run" && test "$ci_run" != null
+          mkdir -p "$RUNNER_TEMP/profile-input"
+          gh run download "$ci_run" --name delivery-image --dir "$RUNNER_TEMP/profile-input/delivery"
+          test "$(cat "$RUNNER_TEMP/profile-input/delivery/delivery-image.digest")" = "$digest"
+          aspect freeze-candidate --commit "$revision" \
+            --delivery-digest "$RUNNER_TEMP/profile-input/delivery/delivery-image.digest" \
+            --manifest "$MANIFEST" --output "$RUNNER_TEMP/profile-input/frozen-candidate.json"
+          jq -e '.manifest_drift == [] and (.siblings | length) == 3' "$RUNNER_TEMP/profile-input/frozen-candidate.json"
+          cp "$MANIFEST" "$RUNNER_TEMP/profile-input/input-manifest.json"
+          git show "$revision:bench/soak/rf3-72h.yaml" > "$RUNNER_TEMP/profile-input/declared-contract.yaml"
+          printf '%s\n' "$ci_run" > "$RUNNER_TEMP/profile-input/main-ci-run.txt"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/krabka-io/krabka-broker@$digest" >> "$GITHUB_OUTPUT"
+          echo "artifact=qualification-profile-input-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          echo "prefix=gs://robot-head-krabka-broker-qualification/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ${{ steps.freeze.outputs.artifact }}
+          path: ${{ runner.temp }}/profile-input/
+          retention-days: 90
+
+  performance:
+    needs: candidate
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        mode: ${{ fromJSON(inputs.execute && '["before_after", "pinned_kafka"]' || '["preflight"]') }}
+    runs-on: ${{ inputs.execute && 'gcp-ubuntu-24-04-32core' || 'gcp-ubuntu-24-04-16core' }}
+    # Each mode has about 20 hours of declared timeouts; upload before the
+    # 24-hour job token expires. Comparisons stay interleaved on one host.
+    timeout-minutes: 1380
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.candidate.outputs.revision }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: ${{ needs.candidate.outputs.artifact }}
+          path: ${{ runner.temp }}/profile-input
+      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87
+        with:
+          disk-cache: false
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa
+        with:
+          install_only: true
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Check every benchmark host prerequisite before measurement
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/performance"
+          if test "$(cat /proc/sys/fs/inotify/max_user_instances)" -lt 512; then
+            sudo sysctl -w fs.inotify.max_user_instances=512
+          fi
+          result=0
+          for program in awk bazel docker getconf git javac jq kind kubectl nproc realpath sed sha256sum timeout; do
+            if ! command -v "$program"; then echo "missing benchmark prerequisite: $program"; result=1; fi
+          done
+          instances=$(cat /proc/sys/fs/inotify/max_user_instances)
+          if test "$instances" -lt 512; then echo "fs.inotify.max_user_instances=$instances; need at least 512"; result=1; fi
+          { nproc; grep '^MemTotal:' /proc/meminfo; df -T .; echo "inotify_instances=$instances"; } \
+            > "$RUNNER_TEMP/performance/host-prerequisites.txt"
+          exit "$result"
+      - name: Run the predeclared five-round performance comparison on this host
+        if: ${{ inputs.execute }}
+        env:
+          BUDGET_MODE: ${{ matrix.mode }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/performance" "$RUNNER_TEMP/performance-tmp"
+          export TMPDIR="$RUNNER_TEMP/performance-tmp"
+          reference=()
+          if test "$BUDGET_MODE" = before_after; then reference=(ac9deff316d38418622b16c237c671df88f57c7a); fi
+          PERF_ARTIFACT_DIR="$RUNNER_TEMP/performance/$BUDGET_MODE" \
+            packaging/performance/qualify.sh budget "$BUDGET_MODE" "${reference[@]}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: qualification-performance-${{ matrix.mode }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/performance/
+            ${{ runner.temp }}/profile-input/
+          retention-days: 90
+          if-no-files-found: error
+
+  soak:
+    needs: candidate
+    runs-on: gcp-ubuntu-24-04-32core
+    outputs:
+      inputs_retained: ${{ steps.storage.outcome }}
+      archive_retained: ${{ steps.retain.outcome }}
+    # 72 hours of load, its settle tail, build, read-back and evidence upload.
+    # The existing VM template expires after five days.
+    timeout-minutes: 5760
+    env:
+      BROKER_IMAGE: ${{ needs.candidate.outputs.image }}
+      CLOUD_PREFIX: ${{ needs.candidate.outputs.prefix }}
+      CLOUDSDK_STORAGE_PARALLEL_COMPOSITE_UPLOAD_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.candidate.outputs.revision }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: ${{ needs.candidate.outputs.artifact }}
+          path: ${{ runner.temp }}/profile-input
+      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87
+        with:
+          bazelisk-cache: false
+          repository-cache: false
+          disk-cache: false
+      - name: Check the actual host and prepare evidence on its data disk
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/soak-evidence" "$RUNNER_TEMP/soak-data" "$RUNNER_TEMP/publication"
+          cp "$RUNNER_TEMP/profile-input/"*.json "$RUNNER_TEMP/soak-evidence/"
+          cp bench/soak/rf3-72h.yaml "$RUNNER_TEMP/soak-evidence/declared-contract.yaml"
+          grep -Fx 'duration: 72h' bench/soak/rf3-72h.yaml
+          docker pull "$BROKER_IMAGE"
+          docker image inspect "$BROKER_IMAGE" > "$RUNNER_TEMP/soak-evidence/broker-image.json"
+          if ! grep -Eq '^127\.0\.0\.1[[:space:]]+host\.docker\.internal' /etc/hosts; then
+            echo '127.0.0.1 host.docker.internal' | sudo tee -a /etc/hosts
+          fi
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          info = json.loads(subprocess.check_output(['docker', 'info', '--format', '{{json .}}']))
+          free = lambda path: os.statvfs(path).f_bavail * os.statvfs(path).f_frsize
+          memory = int(next(row.split()[1] for row in pathlib.Path('/proc/meminfo').read_text().splitlines() if row.startswith('MemTotal:'))) * 1024
+          host = {'cpus': os.cpu_count(), 'memory_bytes': memory, 'data_free_bytes': free(os.environ['RUNNER_TEMP']), 'docker_free_bytes': free(info['DockerRootDir']), 'kernel': os.uname().release}
+          assert host['cpus'] >= 16 and memory >= 64 * 1024**3, host
+          assert min(host['data_free_bytes'], host['docker_free_bytes']) >= 700 * 1024**3, host
+          assert info['OSType'] == 'linux' and info['Architecture'] in ['amd64', 'x86_64'], info
+          assert info['KernelVersion'] == host['kernel'] and info['CgroupVersion'] == '2' and info['NCPU'] >= 16, info
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'soak-evidence', 'host-preflight.json').write_text(json.dumps(host, indent=2) + '\n')
+          PY
+      - name: Verify private evidence storage before starting the long run
+        id: storage
+        run: |
+          set -euo pipefail
+          gcloud storage cp --if-generation-match=0 "$RUNNER_TEMP/soak-evidence/"*.json \
+            "$RUNNER_TEMP/soak-evidence/declared-contract.yaml" "$CLOUD_PREFIX/inputs/"
+          gcloud storage cp "$CLOUD_PREFIX/inputs/host-preflight.json" "$RUNNER_TEMP/host-roundtrip.json"
+          cmp "$RUNNER_TEMP/soak-evidence/host-preflight.json" "$RUNNER_TEMP/host-roundtrip.json"
+      - name: Build the frozen executor and judge
+        if: ${{ inputs.execute }}
+        run: |
+          set -euo pipefail
+          bazel build -c opt --jobs=8 --bes_backend= //crates/broker:soak_contract_docker_bin //crates/bench-driver:krabka-soak-check
+      - name: Execute the unchanged 72-hour contract
+        id: execute
+        if: ${{ inputs.execute }}
+        run: |
+          set -euo pipefail
+          executable=$(bazel cquery -c opt --bes_backend= //crates/broker:soak_contract_docker_bin --output=files)
+          env TMPDIR="$RUNNER_TEMP/soak-data" CARGO_MANIFEST_DIR="$PWD/crates/broker" \
+            KRABKA_BROKER_IMAGE="$BROKER_IMAGE" KRABKA_SOAK_CONTRACT="$PWD/bench/soak/rf3-72h.yaml" \
+            KRABKA_SOAK_EVIDENCE_DIR="$RUNNER_TEMP/soak-evidence" \
+            "$executable" --ignored --exact --nocapture the_sustained_load_contract_holds \
+            2>&1 | tee "$RUNNER_TEMP/soak-evidence/executor.log"
+      - name: Judge the complete read-back evidence
+        id: judge
+        if: ${{ always() && inputs.execute && steps.storage.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          executable=$(bazel cquery -c opt --bes_backend= //crates/bench-driver:krabka-soak-check --output=files)
+          "$executable" judge --contract bench/soak/rf3-72h.yaml \
+            --evidence "$RUNNER_TEMP/soak-evidence/evidence.json" --out "$RUNNER_TEMP/soak-evidence/verdict.json"
+      - name: Retain the outcome with the worker's renewable cloud identity
+        id: retain
+        if: ${{ always() && steps.storage.outcome == 'success' }}
+        env:
+          EXECUTE: ${{ inputs.execute }}
+          EXECUTION: ${{ steps.execute.outcome }}
+          JUDGEMENT: ${{ steps.judge.outcome }}
+        run: |
+          set -euo pipefail
+          jq -n --arg execute "$EXECUTE" --arg execution "$EXECUTION" --arg judge "$JUDGEMENT" \
+            --arg image "$BROKER_IMAGE" --arg revision "$(git rev-parse HEAD)" \
+            '{execute: ($execute == "true"), execution: $execution, judge: $judge, image: $image, revision: $revision}' \
+            > "$RUNNER_TEMP/publication/outcome.json"
+          tar -C "$RUNNER_TEMP/soak-evidence" -czf - . | \
+            split -b 1024M -d -a 3 - "$RUNNER_TEMP/publication/soak-evidence.tar.gz.part-"
+          (cd "$RUNNER_TEMP/publication" && sha256sum soak-evidence.tar.gz.part-* outcome.json > SHA256SUMS)
+          gcloud storage cp --if-generation-match=0 "$RUNNER_TEMP/publication/"*.part-* \
+            "$RUNNER_TEMP/publication/outcome.json" "$CLOUD_PREFIX/evidence/"
+          # The checksum index is the completion marker and is written last.
+          gcloud storage cp --if-generation-match=0 "$RUNNER_TEMP/publication/SHA256SUMS" "$CLOUD_PREFIX/evidence/SHA256SUMS"
+
+  publish:
+    needs: [candidate, soak]
+    if: ${{ always() && !cancelled() && needs.candidate.result == 'success' }}
+    runs-on: gcp-ubuntu-24-04
+    timeout-minutes: 360
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CLOUD_PREFIX: ${{ needs.candidate.outputs.prefix }}
+      BROKER_IMAGE: ${{ needs.candidate.outputs.image }}
+      BROKER_REVISION: ${{ needs.candidate.outputs.revision }}
+      EVIDENCE_TAG: qualification-soak-${{ github.run_id }}-${{ github.run_attempt }}
+      EXECUTE: ${{ inputs.execute }}
+      WORKER_RESULT: ${{ needs.soak.result }}
+      INPUTS_RETAINED: ${{ needs.soak.outputs.inputs_retained }}
+      ARCHIVE_RETAINED: ${{ needs.soak.outputs.archive_retained }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: ${{ needs.candidate.outputs.artifact }}
+          path: ${{ runner.temp }}/profile-input
+      - name: Install the publication client
+        run: |
+          sudo apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install --yes gh
+      - name: Verify stored evidence and publish it with a fresh job token
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/stored-inputs" "$RUNNER_TEMP/publication"
+          gh release create "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" --draft --prerelease \
+            --target "$BROKER_REVISION" --title "Cloud qualification evidence: $GITHUB_RUN_ID" \
+            --notes "Source: $BROKER_REVISION. Image: $BROKER_IMAGE. Worker: $WORKER_RESULT."
+          gh release upload "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" "$RUNNER_TEMP/profile-input/"*.json \
+            "$RUNNER_TEMP/profile-input/declared-contract.yaml" "$RUNNER_TEMP/profile-input/main-ci-run.txt"
+          stored_inputs=false
+          if test "$INPUTS_RETAINED" = success; then
+            gcloud storage cp "$CLOUD_PREFIX/inputs/*" "$RUNNER_TEMP/stored-inputs/"
+            cmp "$RUNNER_TEMP/profile-input/frozen-candidate.json" "$RUNNER_TEMP/stored-inputs/frozen-candidate.json"
+            cmp "$RUNNER_TEMP/profile-input/declared-contract.yaml" "$RUNNER_TEMP/stored-inputs/declared-contract.yaml"
+            gh release upload "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" \
+              "$RUNNER_TEMP/stored-inputs/host-preflight.json" "$RUNNER_TEMP/stored-inputs/broker-image.json"
+            stored_inputs=true
+          fi
+          complete=false
+          if test "$ARCHIVE_RETAINED" = success; then
+            gcloud storage cp "$CLOUD_PREFIX/evidence/SHA256SUMS" "$RUNNER_TEMP/publication/SHA256SUMS"
+            while read -r digest name; do
+              [[ "$digest" =~ ^[0-9a-f]{64}$ && "$name" =~ ^[A-Za-z0-9._-]+$ ]]
+              test "$name" != . && test "$name" != ..
+              gcloud storage cp "$CLOUD_PREFIX/evidence/$name" "$RUNNER_TEMP/publication/$name"
+              (cd "$RUNNER_TEMP/publication" && echo "$digest  $name" | sha256sum --check --status)
+              gh release upload "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" "$RUNNER_TEMP/publication/$name"
+              if test "$name" != outcome.json; then rm "$RUNNER_TEMP/publication/$name"; fi
+            done < "$RUNNER_TEMP/publication/SHA256SUMS"
+            gh release upload "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" "$RUNNER_TEMP/publication/SHA256SUMS"
+            jq -e --arg revision "$BROKER_REVISION" --arg image "$BROKER_IMAGE" --argjson execute "$EXECUTE" \
+              '.revision == $revision and .image == $image and .execute == $execute' "$RUNNER_TEMP/publication/outcome.json"
+            complete=true
+          fi
+          if test "$WORKER_RESULT" = success; then
+            test "$stored_inputs" = true && test "$complete" = true
+          fi
+          if test "$EXECUTE" = true; then
+            outcome=failed
+            if test "$WORKER_RESULT" = success && test "$complete" = true && \
+              jq -e '.execute and .execution == "success" and .judge == "success"' "$RUNNER_TEMP/publication/outcome.json"; then
+              outcome=passed
+            fi
+            gh release edit "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false \
+              --title "72-hour qualification $outcome: $GITHUB_RUN_ID" \
+              --notes "Worker: $WORKER_RESULT. Image: $BROKER_IMAGE. Reassemble the SHA256SUMS-verified archive parts to inspect the complete evidence."
+          fi
