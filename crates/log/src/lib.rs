@@ -62,7 +62,7 @@
 //! # }
 //! ```
 
-#![doc(html_root_url = "https://docs.rs/krabka-log/1.0.6")]
+#![doc(html_root_url = "https://docs.rs/krabka-log/1.0.7")]
 
 mod compact;
 mod config;

@@ -71,3 +71,46 @@ krabka-soak-check judge --contract bench/soak/rf3-72h.yaml \
 ```
 
 Without `KRABKA_SOAK_CONTRACT` the suite runs `bench/soak/self-check.yaml`, a five-minute run that proves the judge reports an injected missing record and an injected missed deadline. The container matrix in CI runs it.
+
+## Run the frozen candidate in the cloud
+
+[`qualification-profile.yml`](../../.github/workflows/qualification-profile.yml)
+checks the manifest against successful main CI and its delivery digest before
+it allocates a cloud worker. Start it from `main`, with the reviewed candidate
+manifest. First check the host and evidence publication, then execute:
+
+```sh
+gh workflow run qualification-profile.yml --ref main \
+  -f manifest=qualification/ecosystem-v1.0.7.json -f execute=false
+gh workflow run qualification-profile.yml --ref main \
+  -f manifest=qualification/ecosystem-v1.0.7.json -f execute=true
+```
+
+The existing `gcp-ubuntu-24-04-32core` template supplies 32 logical CPUs,
+128 GiB of memory and a 1.2 TB SSD, with a five-day VM lifetime. The preflight
+records actual capacity and requires at least 700 GiB free for both data and
+Docker. The 72-hour contract, rates and deadlines stay unchanged. Its evidence
+records the larger host; a pass is evidence for that measured host.
+
+The two performance jobs run sequentially, against v1.0.5 (`ac9deff3`) and the
+contract's pinned Kafka image. Each five-round comparison stays on one worker
+and publishes before its job token expires. The soak gets a separate worker.
+Performance results remain in the run's Actions artifacts.
+Soak inputs, the host check and the final archive use the private
+`robot-head-krabka-broker-qualification` cloud bucket. Its runner identity can
+create and read objects, and the bucket retains them for 90 days. The worker
+checks storage with a write/read round trip before starting the load. Archive
+parts cannot replace existing objects, and the checksum index is written last.
+
+The publisher runs in a separate job, with a fresh GitHub token, because the
+normal job token expires after
+[24 hours](https://docs.github.com/en/actions/concepts/security/github_token).
+It checks each archive part before uploading it and retains the original input
+identity when the publisher alone is retried. A preflight leaves its evidence
+release in draft and makes no workload claim. A full run retains passing or
+failing evidence in a prerelease whose title states the outcome.
+
+The evidence archive is split into parts below the release asset size limit.
+Download every part and `SHA256SUMS`, check the hashes, then concatenate the
+parts in filename order and extract the gzip archive. Inspect `evidence.json`,
+`verdict.json`, the frozen candidate record and the raw telemetry together.

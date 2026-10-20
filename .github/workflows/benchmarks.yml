@@ -32,8 +32,8 @@ concurrency:
 
 jobs:
   # The broker performance budgets are judged on a dedicated host by
-  # `packaging/performance/qualify.sh budget`; no runner here can host the
-  # Kind cluster. This lane checks the predeclared contract instead: it must
+  # `packaging/performance/qualify.sh budget` in qualification-profile.yml.
+  # This nightly lane checks the predeclared contract instead: it must
   # parse and validate, and the digest the harness will record is printed so a
   # published verdict can be traced back to this commit's contract. The
   # evaluator's own tests run under `bazel test //...` in ci.yml.

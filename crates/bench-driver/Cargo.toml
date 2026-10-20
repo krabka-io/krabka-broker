@@ -49,14 +49,14 @@ anyhow = { workspace = true }
 bytes = { workspace = true }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 clap = { workspace = true, features = ["env"] }
-krabka-client-admin = { version = "0.6.0" }
-krabka-client-consumer = { version = "0.6.0" }
-krabka-client-core = { version = "0.6.0" }
-krabka-client-producer = { version = "0.6.0" }
-krabka-protocol = { version = "0.6.0", default-features = false }
+krabka-client-admin = { version = "0.7.0" }
+krabka-client-consumer = { version = "0.7.0" }
+krabka-client-core = { version = "0.7.0" }
+krabka-client-producer = { version = "0.7.0" }
+krabka-protocol = { version = "0.7.0", default-features = false }
 krabka-security = { workspace = true }
 krabka-units = { workspace = true }
-krabka-macros = { version = "1.0.6", path = "../macros" }
+krabka-macros = { version = "1.0.7", path = "../macros" }
 derive_more = { workspace = true }
 exponential-backoff = "2.1.1"
 futures = "0.3"
@@ -85,7 +85,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
-krabka-client-core = { version = "0.6.0", features = ["mock"] }
+krabka-client-core = { version = "0.7.0", features = ["mock"] }
 # Runs bench/scenarios/*.yaml as one test case per file, so a scenario that
 # stops parsing names itself.
 libtest-mimic = "0.8"
