@@ -23,6 +23,14 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-10-20
+
+1.0.6 fixes audit retention, diskless restore and replication, controller
+recovery, authentication and quota handling. It keeps the 1.x persisted
+formats; review the changed controller timeout defaults and the upgrade notes
+below before upgrading. Ecosystem qualification must pass on the frozen
+candidate before promotion.
+
 ### Added
 
 - The `krabka-java-regex` crate: the `java.util.regex` engine behind
@@ -512,8 +520,7 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   they used the kernel's minimum `O_DIRECT` alignment, often 512 bytes, or a
   few bytes for a buffer on NVMe, and ext4 sent almost every write down its
   unaligned path: an exclusive inode lock, a wait for the file's other direct
-  writes, and a separate zeroing write. On an ext4 test disk one partition's
-  direct append rate rose about threefold. The on-disk format does not
+  writes, and a separate zeroing write. The on-disk format does not
   change: the zeros an active segment can carry past its last batch stay
   within one block of at most 4 KiB, as `docs/persisted_formats.md` already
   states (#1370).
@@ -2123,7 +2130,8 @@ robot-head/crabka.
 - An audit stamp carries the value that its freeze signature covers.
 - The release publishes the image digest that cosign signed.
 
-[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v1.0.5...HEAD
+[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v1.0.6...HEAD
+[1.0.6]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.6
 [1.0.5]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.5
 [1.0.4]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.4
 [1.0.3]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.3
