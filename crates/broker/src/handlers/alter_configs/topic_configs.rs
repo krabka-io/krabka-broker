@@ -91,6 +91,13 @@ pub(super) fn topic_config_record(
     // refuses never reaches the policy.
     check(policy, &resource.resource_name, None, None, &overrides)
         .map_err(|reason| (codes::POLICY_VIOLATION, reason))?;
+    overrides.extend(
+        current
+            .into_iter()
+            .flatten()
+            .filter(|(key, _)| key.starts_with(config_keys::AUDIT_PLACEMENT_EPOCH_PREFIX))
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
     Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: resource.resource_name.clone(),
         overrides,
@@ -228,7 +235,10 @@ mod tests {
     fn topic_replacement_rejects_controller_managed_configs() {
         let image = image_with_topic("orders");
 
-        for key in config_keys::CONTROLLER_MANAGED_TOPIC_CONFIGS {
+        for key in config_keys::CONTROLLER_MANAGED_TOPIC_CONFIGS
+            .into_iter()
+            .chain(["krabka.audit.placement.epoch.3"])
+        {
             // A full replacement carries a value for every key it names, so
             // both a `true` and an empty value are a write of the key.
             for value in ["true", "false", ""] {
@@ -246,6 +256,27 @@ mod tests {
                 check!(!error.1.is_empty(), "key {key} value {value:?}");
             }
         }
+    }
+
+    #[test]
+    fn topic_replacement_preserves_the_controllers_audit_epoch() {
+        let topic = "__krabka_audit";
+        let image = image_with_topic_config(topic, &[
+            ("krabka.audit.placement.epoch.3", "17"),
+            (RETENTION_MS, "1000"),
+        ]);
+        let record =
+            topic_config_record(&topic_resource(topic, &[(RETENTION_MS, "2000")]), &image).unwrap();
+        assert!(
+            record
+                == MetadataRecord::V1TopicConfig(TopicConfigRecord {
+                    topic: topic.into(),
+                    overrides: maplit::btreemap! {
+                        "krabka.audit.placement.epoch.3".into() => "17".into(),
+                        RETENTION_MS.into() => "2000".into(),
+                    },
+                })
+        );
     }
 
     #[test]

@@ -94,6 +94,12 @@ The metadata partition directory is `<metadata_log_dir>/__cluster_metadata-0/`.
 
 `FeatureLevelRecord` persists the finalized `metadata.version` and the other feature levels. A `metadata.version` downgrade writes a snapshot at the lower level and discards the incompatible log prefix, as KIP-1155 describes.
 
+The audit topic stores `krabka.audit.placement.epoch.<broker-id>` as ordinary
+topic config records. Each value is the decimal broker registration epoch
+that received a partition. Reassignment keeps the marker, so a controller
+restart does not undo an evacuation. Only the controller writes these keys;
+both topic-config alter paths preserve them and refuse client writes.
+
 ### Krabka-private metadata records
 
 KIP-631 has no schema for some krabka records. Each one rides as the only tagged field of a Kafka `NoOpRecord` (apiKey 20), and the field body is a wincode `MetadataRecord`. Kafka's tools read the record as a `NoOpRecord` and keep the tag as an unknown tagged field. `crates/metadata/src/kraft_translate.rs` in krabka-protocol defines the tags.

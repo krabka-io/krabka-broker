@@ -134,7 +134,8 @@ pub(crate) use self::{
     },
     schema::resolve_schema_validation,
     topic_scope::{
-        WRITE_FREEZE, controller_managed_topic_config_message, is_controller_managed_topic_config,
+        AUDIT_PLACEMENT_EPOCH_PREFIX, WRITE_FREEZE, controller_managed_topic_config_message,
+        is_controller_managed_topic_config,
     },
     trunk_log::{
         RemoteCopyLag, log_max_decompressed_record, resolve_max_decompressed_record_bytes,
