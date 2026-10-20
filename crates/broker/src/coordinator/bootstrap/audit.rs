@@ -13,9 +13,10 @@
 //!   a broker it waits for this broker's partition to reach the local image.
 //! - [`spawn_audit_placement`] runs on every node with the controller role.
 //!   While the node leads the metadata quorum, it adds one partition for each
-//!   registered broker that holds no audit partition, as a `CreatePartitions`
+//!   new broker registration that holds no audit partition, as a `CreatePartitions`
 //!   would: one `PartitionRecord` at the next index, and no `TopicRecord`. A
 //!   broker that registers after the topic exists gets its partition this way.
+//!   Once placed for a registration epoch, an evacuated replica stays evacuated.
 //!
 //! Every partition has one replica, so the topic declares
 //! `min.insync.replicas=1`. With the cluster default of 2, every audit
@@ -158,7 +159,7 @@ async fn create_audit_topic(
 ///
 /// The task runs one placement pass whenever this node becomes the leader and
 /// on every metadata change while it leads. A pass adds a partition for each
-/// registered broker that holds none, and the `min.insync.replicas` override
+/// new broker registration that holds none, and the `min.insync.replicas` override
 /// when the topic lacks it; see [`audit_placement_records`]. A pass submits
 /// with `submit_change_if_image`, which the leader refuses when its image has
 /// moved on since the pass read it. Two passes therefore never place two
