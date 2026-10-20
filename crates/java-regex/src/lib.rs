@@ -53,8 +53,9 @@
 //! `(?<=\R?x)y`, and a counted repeat too large for the `regex` crate to
 //! build at its default size limit, such as `x{1,1000000000}`, in a
 //! look-behind or outside one. It counts the iterations of a repeat, so such
-//! a pattern compiles in milliseconds, but it tries every start of a
-//! look-behind, and a long input can take it past the step limit.
+//! a pattern compiles in milliseconds, but it tries every start in Java's
+//! window of a look-behind, which for such a repeat is the whole input, and a
+//! long input can take it past the step limit.
 //!
 //! [`JavaPattern::compile`] refuses the patterns below, which Java compiles,
 //! rather than match them another way. Each is a [`PatternError`].
@@ -78,6 +79,18 @@
 //! at least 2^30 and covers every start only up to that length, as in
 //! `(?<=a*b*c*x)`, an input of more UTF-16 units than the maximum is a
 //! [`MatchError`].
+//!
+//! Java reads a char past U+FFFF as two UTF-16 units, and its look-behind
+//! counts its window in units where the pattern has no such char from the
+//! look-behind on, so it may start between the two units and read a lone low
+//! surrogate there. An input with such a char goes to the backtracking matcher
+//! where the pattern has such a look-behind, and the matcher reads it as Java
+//! does. A group the look-behind starts or ends between the two units holds a
+//! lone surrogate in Java, which a Rust string cannot, so a replacement that
+//! takes its text is a [`MatchError`]. A search still starts at a char only,
+//! where Java's `Matcher.find` also tries the low surrogate of one: Java
+//! finds `(?<!^).` in `😀x` at the low surrogate and at `x`, and the crate at
+//! `x` only.
 
 mod backtrack;
 mod look_behind;
@@ -2672,6 +2685,47 @@ mod tests {
             replace_row("(?<=a*)c", "aac", "<$0>", "aa<c>"),
         ];
         check_replacements(cases, true, false);
+    }
+
+    /// Java's `Behind` counts its window in UTF-16 units, a class or `.` as
+    /// one, so over a char past U+FFFF it tries starts that `fancy_regex`,
+    /// which counts chars, does not: between the two units of the char, where
+    /// it reads a lone low surrogate that `.` and `[^a]` match and `\p{So}`
+    /// does not, and none before it for `(?<=..)`. With the char written in
+    /// the pattern from the look-behind on, Java's `BehindS` counts code
+    /// points. Each row is `replaceAll("<$0>")` on JDK 25.0.4.
+    #[test]
+    fn a_look_behind_over_a_char_past_u_ffff_matches_as_java_does() {
+        let cases = [
+            replace_row(".(?<=.)x", "😀x", "<$0>", "<😀x>"),
+            replace_row(".(?<=.)x", "a😀x", "<$0>", "a<😀x>"),
+            replace_row("a.(?<=a.)x", "a😀x", "<$0>", "a😀x"),
+            replace_row("(?<=..)x", "a😀x", "<$0>", "a😀x"),
+            replace_row("(?<=.{1,2})x", "a😀x", "<$0>", "a😀<x>"),
+            replace_row(".(?<=[^a])x", "a😀x", "<$0>", "a<😀x>"),
+            replace_row(".(?<=\\p{So})x", "a😀x", "<$0>", "a😀x"),
+            replace_row("(?<=\\x{1F600})x", "😀x", "<$0>", "😀x"),
+            replace_row("(?<!.)x", "😀x", "<$0>", "😀x"),
+            replace_row("(?<!\\p{So})x", "😀x", "<$0>", "😀<x>"),
+            replace_row("(?<=^.)x", "😀x", "<$0>", "😀x"),
+            replace_row("(?<=\\b.)x", "a😀x", "<$0>", "a😀x"),
+            // `BehindS`: the char in the pattern from the look-behind on.
+            replace_row("(?<=😀)x", "a😀x", "<$0>", "a😀<x>"),
+            replace_row("(?<=\\p{So})x😀?", "😀x", "<$0>", "😀<x>"),
+            // An input with no char past U+FFFF reads as before.
+            replace_row("(?<=..)x", "abx", "<$0>", "ab<x>"),
+        ];
+        check_replacements(cases, true, false);
+    }
+
+    /// A group the look-behind starts between the two UTF-16 units of a char
+    /// holds a lone surrogate in Java, which a Rust string cannot, so a
+    /// replacement that takes its text is an error. The match itself stands.
+    #[test]
+    fn a_group_holding_half_a_char_is_refused_in_a_replacement() {
+        let source = ".(?<=(.))x";
+        check!(pattern(source).replace("😀x", "<$0>", true).ok().as_deref() == Some("<😀x>"));
+        check!(pattern(source).replace("😀x", "<$1>", true).is_err());
     }
 
     /// A look-behind accepted with a wrapped maximum of at least 2^30 limits

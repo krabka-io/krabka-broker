@@ -28,3 +28,11 @@ release that contains `krabka-java-regex`.
 - A counted repeat too large for the `regex` crate to build, such as
   `x{1,1000000000}`, compiles and matches on the backtracking matcher,
   which counts its iterations. It was refused.
+- A look-behind over a char past U+FFFF in the input reads as Java's
+  `Behind` does, which counts its window in UTF-16 units and a class or `.`
+  as one: `a.(?<=a.)x` no longer matches `a😀x`, and `.(?<=.)x` matches
+  `😀x` by the lone low surrogate Java reads between the two units. Where
+  the pattern has such a char from the look-behind on, Java's `BehindS`
+  counts code points, and so does the crate. A wrapped look-behind maximum
+  is refused only for a `BehindS`, as `findSupplementary` decides, so
+  `😀x(?<=a*b*c*x)y` compiles.

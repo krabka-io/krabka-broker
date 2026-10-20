@@ -19,6 +19,7 @@ workspace = true
 [dependencies]
 fancy-regex = { workspace = true }
 regex = { workspace = true }
+regex-syntax = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

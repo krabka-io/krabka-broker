@@ -136,6 +136,9 @@ refined_type = "0.6"
 # support); diverges on lookahead/lookbehind which aren't in the KIP-848
 # operator-readable subset.
 regex = "1"
+# `krabka-java-regex` parses a class's text to find the lone surrogates Java
+# matches it against, which `regex` cannot test.
+regex-syntax = "0.8"
 ring = "0.17"
 # `process` is for `getrlimit` and `setrlimit`: the broker binary raises its
 # open-file limit at start, as the JVM does for a Kafka broker.
