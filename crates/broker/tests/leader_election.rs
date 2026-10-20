@@ -243,6 +243,12 @@ async fn isr_expand_on_catchup() {
 
     // 3. Capture the victim's config, then kill it.
     let (dead_h, mut reborn_cfg, _dead_dir) = cluster.remove(victim_idx);
+    // Reserve while the old listeners still hold their addresses.
+    let occupied = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("reserve the occupied client port");
+    reborn_cfg.listen_addr = occupied.local_addr().expect("occupied client address");
+    reborn_cfg.advertised_listener = reborn_cfg.listen_addr.to_string();
     dead_h.shutdown().await;
     cluster[0].0.wait_until_isr_len("expand", 0, 2).await;
 
@@ -260,9 +266,6 @@ async fn isr_expand_on_catchup() {
     // rather than passing the already-bound IP address back to the joiner.
     reborn_cfg.bootstrap_servers = vec![format!("localhost:{}", bootstrap_controller.port())];
     reborn_cfg.auto_join = true;
-    let occupied = tokio::net::TcpListener::bind(reborn_cfg.listen_addr)
-        .await
-        .expect("occupy the vacated port");
     let release = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(1)).await;
         drop(occupied);
