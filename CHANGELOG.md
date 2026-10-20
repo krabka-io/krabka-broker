@@ -194,6 +194,11 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   coordinator again after `COORDINATOR_NOT_AVAILABLE` and `NOT_COORDINATOR`, as
   Kafka's `AlterConsumerGroupOffsetsHandler` does. The restore runbook no
   longer tells the operator to run the command twice.
+- A successful `krabka-backup restore-offsets` no longer prints
+  `ERROR krabka_client_core::pool: error=connection closed` (issue #1515). The
+  Kafka client that the operator tools use logged every error it returned at
+  ERROR, even one its caller then retried. It now records them at DEBUG
+  (krabka-io/krabka-client-rs#187), and the workspace pins that revision.
 - A listener that cannot bind its port now says which listener, which address
   and which setting (issue #1517). A node whose controller port another
   process held exited with `storage: I/O: Address already in use`, which sent
