@@ -10,11 +10,11 @@ promote anything. [Releasing](releasing.md) is the release procedure, and it
 stays unchanged: a candidate that passes every gate here is released by that
 procedure, from a `vX.Y.Z` tag on `main`.
 
-**Status, 2026-10-20.** The next ecosystem candidate is v1.0.7. Its protocol
-and Rust client dependencies are published at 0.7.0, and its CLI is published
-at 0.4.5. The v1.0.6 safety baseline at `402edff3` passed
+**Status, 2026-10-20.** The next ecosystem candidate is v1.0.8. Its protocol
+dependency is published at 0.7.0, its Rust client at 0.7.1, and its CLI
+at 0.4.6. The v1.0.6 safety baseline at `402edff3` passed
 [main CI 39467563012](https://github.com/krabka-io/krabka-broker/actions/runs/39467563012).
-The final v1.0.7 commit, delivery image and website image pin still need to be
+The final v1.0.8 commit, delivery image and website image pin still need to be
 frozen together before qualification. The tables dated 2026-10-18 below are
 historical observations, not results for this candidate.
 
@@ -25,7 +25,7 @@ and the schema adapter's test ownership. Those fixes are merged in the website,
 CLI and broker. Broker [#1573](https://github.com/krabka-io/krabka-broker/pull/1573)
 also moves feature validation before recovery writes, so the loaded lifecycle
 uses the startup-safe v1.0.6 baseline. Every gate must run again on the final
-candidate; preflight passes do not qualify v1.0.7.
+candidate; preflight passes do not qualify v1.0.8.
 
 The cloud [qualification workflow](operations/performance-qualification.md#run-the-frozen-candidate-in-the-cloud)
 provides the performance and 72-hour soak workers. Independent pilot acceptance

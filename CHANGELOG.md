@@ -2210,7 +2210,8 @@ robot-head/crabka.
 - An audit stamp carries the value that its freeze signature covers.
 - The release publishes the image digest that cosign signed.
 
-[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v1.0.7...HEAD
+[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v1.0.8...HEAD
+[1.0.8]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.8
 [1.0.7]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.7
 [1.0.6]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.6
 [1.0.5]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.5

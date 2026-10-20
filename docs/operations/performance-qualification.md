@@ -81,9 +81,9 @@ manifest. First check the host and evidence publication, then execute:
 
 ```sh
 gh workflow run qualification-profile.yml --ref main \
-  -f manifest=qualification/ecosystem-v1.0.7.json -f execute=false
+  -f manifest=qualification/ecosystem-v1.0.8.json -f execute=false
 gh workflow run qualification-profile.yml --ref main \
-  -f manifest=qualification/ecosystem-v1.0.7.json -f execute=true
+  -f manifest=qualification/ecosystem-v1.0.8.json -f execute=true
 ```
 
 The existing `gcp-ubuntu-24-04-32core` template supplies 32 logical CPUs,
