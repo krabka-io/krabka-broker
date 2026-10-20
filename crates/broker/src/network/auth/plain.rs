@@ -58,7 +58,9 @@ pub fn handle_authenticate_plain<S: BuildHasher>(
         };
     }
     super::state::authenticate_with_reauth(auth, |auth| {
-        let parts: Vec<&[u8]> = req.auth_bytes.split(|&b| b == 0).collect();
+        // `PlainSaslServer` decodes the whole response before it splits it.
+        let response = java_utf8_lossy(&req.auth_bytes);
+        let parts: Vec<&str> = response.split('\0').collect();
         if parts.len() != 3 {
             // `PlainSaslServer.extractTokens` stops splitting at four tokens.
             return fail_authenticate_with(format!(
@@ -77,11 +79,8 @@ pub fn handle_authenticate_plain<S: BuildHasher>(
                 "Authentication failed: password not specified".to_owned(),
             );
         }
-        // A username that is not UTF-8 names no configured user.
-        let verified = std::str::from_utf8(username)
-            .ok()
-            .and_then(|user| krabka_security::verify_plain(plain_credentials, user, password).ok());
-        let Some(p) = verified else {
+        let Ok(p) = krabka_security::verify_plain(plain_credentials, username, password.as_bytes())
+        else {
             return fail_authenticate_with(
                 "Authentication failed: Invalid username or password".to_owned(),
             );
@@ -108,6 +107,39 @@ pub fn handle_authenticate_plain<S: BuildHasher>(
         };
         sasl_ok(bytes::Bytes::new(), session_lifetime_ms)
     })
+}
+
+/// Decodes `bytes` as Java's `new String(bytes, StandardCharsets.UTF_8)`
+/// does, replacing each malformed sequence with U+FFFD.
+///
+/// It matches Rust's [`String::from_utf8_lossy`] except on a UTF-8-encoded
+/// surrogate, `ED A0..BF`. Rust replaces each of those bytes on its own. The
+/// JDK 21 decoder reads `ED A0..BF` as the start of a three-byte character
+/// and replaces the whole character, with its continuation byte when one
+/// follows, by one U+FFFD. The tests hold vectors measured on JDK 21.
+fn java_utf8_lossy(bytes: &[u8]) -> String {
+    let mut decoded = String::with_capacity(bytes.len());
+    let mut rest = bytes;
+    loop {
+        match std::str::from_utf8(rest) {
+            Ok(valid) => {
+                decoded.push_str(valid);
+                return decoded;
+            }
+            Err(error) => {
+                let (valid, malformed) = rest.split_at(error.valid_up_to());
+                // `valid_up_to` marks the end of a well-formed prefix.
+                decoded.push_str(std::str::from_utf8(valid).unwrap_or_default());
+                decoded.push(char::REPLACEMENT_CHARACTER);
+                let replaced = match malformed {
+                    [0xED, 0xA0..=0xBF, 0x80..=0xBF, ..] => 3,
+                    [0xED, 0xA0..=0xBF, ..] => 2,
+                    _ => error.error_len().unwrap_or(malformed.len()),
+                };
+                rest = &malformed[replaced..];
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -273,7 +305,8 @@ mod tests {
                 message: "Authentication failed: password not specified",
             },
             Refusal {
-                case: "non-utf8 username",
+                // Kafka decodes `FF FE` to two U+FFFD, a user nobody configured.
+                case: "malformed utf-8 username",
                 bytes: vec![0, 0xff, 0xfe, 0, b'w', b'o'],
                 message: INVALID,
             },
@@ -309,6 +342,63 @@ mod tests {
             assert_failed_authenticate_response(&resp, Some(message));
             check!(!auth.is_authenticated(), "{case}");
         }
+    }
+
+    /// The decoder replaces malformed input exactly as JDK 21's
+    /// `new String(bytes, StandardCharsets.UTF_8)` does. Each expected value
+    /// was printed by that constructor on JDK 21. An encoded surrogate is the
+    /// one place where it differs from Rust's `String::from_utf8_lossy`.
+    #[yare::parameterized(
+        ascii = { &[0x61], "a" },
+        lone_continuation = { &[0x80], "\u{FFFD}" },
+        two_continuations = { &[0x80, 0x80], "\u{FFFD}\u{FFFD}" },
+        between_ascii = { &[0x61, 0x80, 0x62], "a\u{FFFD}b" },
+        c0_never_valid = { &[0xC0, 0x80], "\u{FFFD}\u{FFFD}" },
+        truncated_two_byte = { &[0xC2], "\u{FFFD}" },
+        two_byte_lead_before_ascii = { &[0xC3, 0x28], "\u{FFFD}(" },
+        overlong_three_byte = { &[0xE0, 0x80, 0x80], "\u{FFFD}\u{FFFD}\u{FFFD}" },
+        truncated_three_byte = { &[0xE0, 0xA0], "\u{FFFD}" },
+        truncated_three_byte_before_ascii = { &[0xE0, 0xA0, 0x41], "\u{FFFD}A" },
+        last_before_surrogates = { &[0xED, 0x9F, 0xBF], "\u{D7FF}" },
+        high_surrogate = { &[0xED, 0xA0, 0x80], "\u{FFFD}" },
+        low_surrogate = { &[0xED, 0xB0, 0x80], "\u{FFFD}" },
+        surrogate_pair = { &[0xED, 0xA0, 0x80, 0xED, 0xB0, 0x80], "\u{FFFD}\u{FFFD}" },
+        truncated_surrogate = { &[0xED, 0xA0], "\u{FFFD}" },
+        truncated_surrogate_before_ascii = { &[0xED, 0xBF, 0x41], "\u{FFFD}A" },
+        overlong_four_byte = { &[0xF0, 0x80, 0x80, 0x80], "\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}" },
+        truncated_four_byte = { &[0xF0, 0x90, 0x80], "\u{FFFD}" },
+        last_code_point = { &[0xF4, 0x8F, 0xBF, 0xBF], "\u{10FFFF}" },
+        past_last_code_point = { &[0xF4, 0x90, 0x80, 0x80], "\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}" },
+        five_byte_form = { &[0xF8, 0x88, 0x80, 0x80, 0x80], "\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}" },
+        never_valid_byte = { &[0xFF], "\u{FFFD}" },
+        literal_replacement_character = { &[0xEF, 0xBF, 0xBD], "\u{FFFD}" },
+    )]
+    fn java_utf8_lossy_decodes_as_jdk_21(bytes: &[u8], expected: &str) {
+        assert2::assert!(java_utf8_lossy(bytes) == expected);
+    }
+
+    /// Kafka compares the decoded username, password and authorization id,
+    /// so malformed bytes match a configured name or password that holds the
+    /// U+FFFD they decode to.
+    #[yare::parameterized(
+        username = { b"\0\xFFeve\0secret", "\u{FFFD}eve", "secret" },
+        password = { b"\0eve\0se\xED\xA0\x80cret", "eve", "se\u{FFFD}cret" },
+        authzid = { b"\xC0eve\0\xFFeve\0secret", "\u{FFFD}eve", "secret" },
+    )]
+    fn malformed_bytes_match_what_kafka_decodes_them_to(
+        bytes: &'static [u8],
+        user: &str,
+        password: &str,
+    ) {
+        let credentials = HashMap::from([(user.to_owned(), password.to_owned())]);
+        let req = SaslAuthenticateRequest {
+            auth_bytes: bytes::Bytes::from_static(bytes),
+            ..Default::default()
+        };
+        let mut auth = negotiating();
+        let resp = handle_authenticate_plain(&req, &mut auth, &credentials, None);
+        assert_success_authenticate_response(&resp, b"", 0);
+        assert2::assert!(auth.principal().map(|p| p.name.as_str()) == Some(user));
     }
 
     /// An authorization id equal to the username is accepted.
