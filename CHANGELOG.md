@@ -50,7 +50,9 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   records the result, the candidate gates and the proposed release blockers.
 - `aspect freeze-candidate` records a release candidate's commit, its
   `[patch.crates-io]` sibling pins and its delivery image digest, and lists
-  where a qualification manifest differs from those pins.
+  where a qualification manifest differs from those pins. Only a sibling that
+  `Cargo.lock` compiles in counts: a patch that nothing uses is recorded under
+  `unused_patches` and is not compared.
 
 - The controller exports Kafka's event-queue metrics:
   `controller_event_queue_time_seconds` and
@@ -160,6 +162,9 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   controlled shutdown, as Kafka's `ClusterControlManager.isActive` does after
   `activate`. Offset-aware recoveries the batch decides are handed to the
   Unclean Recovery Manager once the broker binds.
+- `krabka-schema-serde` is pinned to `krabka-schema-registry` `7e5115f7` on
+  its `main`. The earlier pin was a merge commit on a release branch, which the
+  ecosystem qualification workflow refuses. The crate's source is unchanged.
 - `KrabkaOfflinePartitions` no longer pages for every broker that is down,
   a planned stop in a rolling upgrade included (issue #1516). Each broker
   holds one single-replica partition of the audit topic, which has no leader

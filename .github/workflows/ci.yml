@@ -1067,6 +1067,61 @@ jobs:
             --test_output=streamed \
             //crates/broker:soak_docker_test
 
+  # The slow-follower fault of the 72-hour contract, `tc netem` in a broker's
+  # network namespace, had never run: no kernel the repository tested on had
+  # `sch_netem` (release blocker B7). `bench/soak/self-check-netem.yaml` is the
+  # self-check with that one fault changed, and this job runs it on a
+  # GitHub-hosted runner. The module is loaded first, so a runner without it
+  # fails here, by name, instead of as a fault the executor could not inject.
+  #
+  # Scheduled and dispatched only, like `soak`: the pull-request container
+  # matrix keeps the CPU-quota self-check, because its remote executors may
+  # lack the module. `--flaky_test_attempts=1` so that a failure is reported,
+  # not retried away.
+  netem:
+    name: netem · slow-follower self-check
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/reclaim-disk
+
+      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+        with:
+          bazelisk-cache: true
+          # Off explicitly, as in `soak`: the remote cache covers it.
+          disk-cache: false
+          repository-cache: true
+
+      - uses: ./.github/actions/remote-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          client-cert: ${{ secrets.BUILDBUDDY_CLIENT_CERT }}
+          client-key: ${{ secrets.BUILDBUDDY_CLIENT_KEY }}
+          upload: ${{ github.event_name != 'pull_request' }}
+
+      # As in `soak`: every broker advertises `host.docker.internal`.
+      - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
+
+      - name: load sch_netem
+        run: |
+          set -euo pipefail
+          sudo modprobe sch_netem
+          grep -w sch_netem /proc/modules
+
+      - name: netem self-check
+        run: |
+          set -euo pipefail
+          bazel test \
+            --config=docker \
+            --bes_backend= \
+            --flaky_test_attempts=1 \
+            --test_env=KRABKA_SOAK_CONTRACT=bench/soak/self-check-netem.yaml \
+            --test_output=streamed \
+            //crates/broker:soak_contract_docker_test
+
   # The external half of the link check.
   #
   # `checks` runs lychee with `--offline`, which resolves file-relative links
@@ -1399,7 +1454,7 @@ jobs:
   # point `mutants.yml`'s schedule at the same mechanism.
   nightly-report:
     name: nightly report
-    needs: [select, docker, gssapi, links, bench, soak, kubernetes, upgrade]
+    needs: [select, docker, gssapi, links, bench, soak, netem, kubernetes, upgrade]
     # `always()`: the whole point is to run when a dependency failed, and a
     # plain `needs` would skip this job exactly then.
     if: always() && github.event_name == 'schedule'
@@ -1435,7 +1490,7 @@ jobs:
 
       # `contains(needs.*.result, 'failure')` and nothing else. `needs.*.result`
       # also yields `skipped` and `cancelled`, and neither is a red lane:
-      # `gssapi` and `soak` are skipped on any event that is not a schedule or a
+      # `gssapi`, `soak` and `netem` are skipped on any event that is not a schedule or a
       # dispatch, `docker` is skipped when the suite selection is empty, and a
       # cancelled run means a human or the concurrency group stopped it.
       # (`links` and `bench` are the two dependencies that cannot be skipped
