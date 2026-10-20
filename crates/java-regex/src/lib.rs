@@ -50,7 +50,10 @@
 //! length overflows Java's `int`, such as `(?<=a*b*)`: Java then tries fewer
 //! starts. Where the overflowed maximum is still at least 2^30, as in
 //! `(?<=a*b*c*x)`, the pattern compiles, and an input of more UTF-16 units
-//! than that maximum is a [`MatchError`].
+//! than that maximum is a [`MatchError`]. A pattern with a char past U+FFFF
+//! anywhere in it is refused whenever such a maximum overflows, as in
+//! `😀x(?<=a*b*c*x)y`, though Java reads one with the char before the
+//! look-behind as it reads one without.
 
 mod backtrack;
 mod look_behind;
