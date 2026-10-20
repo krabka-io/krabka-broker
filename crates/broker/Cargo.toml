@@ -47,6 +47,7 @@ krabka-compression = { version = "0.6.0", default-features = false }
 krabka-raft = { version = "1.0.5", path = "../raft" }
 krabka-kraft-core = { version = "1.0.5", path = "../kraft-core" }
 krabka-verified = { version = "1.0.5", path = "../verified" }
+krabka-java-regex = { version = "1.0.5", path = "../java-regex" }
 # `#[derive(RegisterMetrics)]`: `BrokerMetrics` names, helps and constructs each
 # metric once, on its field.
 krabka-macros = { version = "1.0.5", path = "../macros" }
@@ -82,7 +83,6 @@ tokio-metrics = { workspace = true }
 toml = { workspace = true }
 dashmap = { workspace = true }
 derive_more = { workspace = true }
-fancy-regex = { workspace = true }
 regex = { workspace = true }
 refined_type = { workspace = true }
 tracing = { workspace = true }

@@ -186,7 +186,7 @@ impl Predicates {
     /// [`BatchDecision::Keep`] without decoding a single record. This is the
     /// common case for most restores, which run with no exclude flags at
     /// all.
-    fn keeps_everything_in(&self, partition: &PartitionRef) -> bool {
+    pub(crate) fn keeps_everything_in(&self, partition: &PartitionRef) -> bool {
         self.to_timestamp.is_none()
             && !self.to_offset.contains_key(partition)
             && self.exclude_key.is_empty()

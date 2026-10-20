@@ -1,10 +1,27 @@
-//! `java.util.regex` behaviour for the three configs that hand a user-written
-//! regular expression to Java: `ssl.principal.mapping.rules`, the Kerberos
-//! `auth_to_local` rules, and the `match` patterns of a KIP-714
-//! `CLIENT_METRICS` subscription.
+//! Java's `java.util.regex` in Rust: a [`JavaPattern`] compiles a
+//! `java.util.regex.Pattern` and answers `Matcher.matches()`,
+//! `String.replaceAll` and `String.replaceFirst` as JDK 25 does.
 //!
-//! The `regex` crate differs from Java in the two places these lean on. `Matcher.matches()` succeeds when *some* way of matching spans the
-//! whole input, including through backtracking and lazy quantifiers, where a
+//! Krabka reads three Apache Kafka configs whose values are Java regular
+//! expressions: `ssl.principal.mapping.rules`, the Kerberos `auth_to_local`
+//! rules, and the `match` patterns of a KIP-714 `CLIENT_METRICS`
+//! subscription. A rule that matches differently from Java maps a principal
+//! to another name, so the crate's job is Java's answer, quirks included.
+//!
+//! ```
+//! use {assert2::assert, krabka_java_regex::JavaPattern};
+//!
+//! let rule = JavaPattern::compile("CN=([^,]+),OU=(?i)ops.*")?;
+//! assert!(rule.matches("CN=alice,OU=OPS-EU")?);
+//! assert!(rule.replace("CN=alice,OU=ops", "$1", true)? == "alice");
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! # How it reads a pattern as Java does
+//!
+//! The `regex` crate differs from Java in the two places these lean on.
+//! `Matcher.matches()` succeeds when *some* way of matching spans the whole
+//! input, including through backtracking and lazy quantifiers, where a
 //! leftmost-first search stops at the first match it finds. And
 //! `Matcher.replaceAll` reads `$1_x` as group 1 followed by `_x`, where the
 //! `regex` crate reads a group named `1_x`. [`JavaPattern`] gives both the
@@ -15,15 +32,30 @@
 //! `(?u)` asks for Unicode case as well, so `(?i)service-` does not match
 //! `ſervice-` (long s). A backreference under a case flag, `\R`, and a group
 //! inside a look-around or an atomic group match in ways `fancy_regex` cannot
-//! give, so a pattern that has one runs on the matcher in [`backtrack`]
-//! instead.
+//! give, so a pattern that has one runs on the matcher in `backtrack`
+//! instead. A pattern Java's `Pattern.compile` refuses is refused.
+//!
+//! # Limits
+//!
+//! A search takes at most 1,000,000 backtracking steps, `fancy_regex`'s
+//! default, and the backtracking matcher keeps its alternatives on a stack of
+//! its own, so a long input cannot overflow the thread's. A search past the
+//! limit is a [`MatchError`], not a no match. Java answers such a search,
+//! however slowly.
+//!
+//! The rest of what the crate does not read as Java does, such as Unicode
+//! blocks and `\X`, it refuses at [`JavaPattern::compile`].
 
 mod backtrack;
 mod look_behind;
+mod translate;
 
 use {
-    self::{backtrack::Program, look_behind::look_behinds_bounded},
-    crate::client_metrics::config::{JavaTranslation, translate_java},
+    self::{
+        backtrack::Program,
+        look_behind::look_behinds_bounded,
+        translate::{JavaTranslation, translate_java},
+    },
     fancy_regex::{Expr, Regex},
     std::{collections::BTreeMap, fmt::Display, ops::Range, sync::Arc},
 };
@@ -31,7 +63,7 @@ use {
 /// A `java.util.regex.Pattern` compiled for `matches()` and
 /// `replaceAll`/`replaceFirst`.
 #[derive(Debug, Clone)]
-pub(crate) struct JavaPattern(Arc<Compiled>);
+pub struct JavaPattern(Arc<Compiled>);
 
 /// The engines behind a [`JavaPattern`], shared so that a rule holding one is
 /// small.
@@ -48,34 +80,48 @@ struct Compiled {
     backtrack: Option<Program>,
 }
 
-/// A replacement string Java's `Matcher.appendReplacement` refuses, which
-/// Java reports as `IllegalArgumentException` or `IndexOutOfBoundsException`,
-/// or a search the engine gave up on at its backtrack limit.
-#[derive(Debug, thiserror::Error)]
+/// A pattern Java's `Pattern.compile` refuses with a
+/// `PatternSyntaxException`, or one this crate cannot read as Java does.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
-pub(crate) struct ReplacementError(pub(crate) String);
+pub struct PatternError(String);
 
-impl ReplacementError {
+/// A match this crate gives no answer for: a replacement string Java's
+/// `Matcher.appendReplacement` refuses, which Java reports as
+/// `IllegalArgumentException` or `IndexOutOfBoundsException`, or a search
+/// that ran past the backtrack limit.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct MatchError(String);
+
+impl MatchError {
     /// A search that gave no answer, as the error a caller rejects the name
     /// by.
     fn search(error: impl Display) -> Self { Self(error.to_string()) }
 }
 
 impl JavaPattern {
-    /// Compiles `pattern`, or says why Java's `Pattern.compile` would not.
-    pub(crate) fn compile(pattern: &str) -> Result<Self, String> {
+    /// Compiles `pattern`, `Pattern.compile(pattern)`.
+    ///
+    /// # Errors
+    ///
+    /// [`PatternError`] for a pattern Java refuses, and for one this crate
+    /// cannot read as Java does, which it refuses rather than match it
+    /// another way.
+    pub fn compile(pattern: &str) -> Result<Self, PatternError> {
         let JavaTranslation {
             pattern: translated,
             backref_folds,
             linebreak_atoms,
         } = translate_java(pattern)
-            .ok_or_else(|| format!("{pattern:?} is not a java.util.regex pattern"))?;
+            .ok_or_else(|| PatternError(format!("{pattern:?} is not a java.util.regex pattern")))?;
         if Expr::parse_tree(&translated).is_ok_and(|tree| !look_behinds_bounded(&tree.expr)) {
-            return Err(format!(
+            return Err(PatternError(format!(
                 "{pattern:?} has a look-behind group with no obvious maximum length"
-            ));
+            )));
         }
-        let compile = |source: &str| Regex::new(source).map_err(|error| error.to_string());
+        let compile =
+            |source: &str| Regex::new(source).map_err(|error| PatternError(error.to_string()));
         let search = compile(&translated)?;
         let whole = compile(&format!("\\A(?:{translated})\\z"))?;
         let names = search
@@ -101,7 +147,8 @@ impl JavaPattern {
     }
 
     /// The number of capturing groups, `Matcher.groupCount()`.
-    pub(crate) fn group_count(&self) -> usize { self.0.search.captures_len() - 1 }
+    #[must_use]
+    pub fn group_count(&self) -> usize { self.0.search.captures_len() - 1 }
 
     /// `Matcher.matches()`.
     ///
@@ -113,14 +160,10 @@ impl JavaPattern {
     /// applies fall through to the next rule, or to `DEFAULT`, and map the
     /// principal to a name the operator never meant for it. A caller rejects
     /// the name instead.
-    pub(crate) fn matches(&self, input: &str) -> Result<bool, ReplacementError> {
+    pub fn matches(&self, input: &str) -> Result<bool, MatchError> {
         match &self.0.backtrack {
-            Some(program) => program.matches(input).map_err(ReplacementError::search),
-            None => self
-                .0
-                .whole
-                .is_match(input)
-                .map_err(ReplacementError::search),
+            Some(program) => program.matches(input).map_err(MatchError::search),
+            None => self.0.whole.is_match(input).map_err(MatchError::search),
         }
     }
 
@@ -134,17 +177,15 @@ impl JavaPattern {
         input: &str,
         from: usize,
         last: usize,
-    ) -> Result<Option<Vec<Option<Range<usize>>>>, ReplacementError> {
+    ) -> Result<Option<Vec<Option<Range<usize>>>>, MatchError> {
         if let Some(program) = &self.0.backtrack {
-            return program
-                .find(input, from, last)
-                .map_err(ReplacementError::search);
+            return program.find(input, from, last).map_err(MatchError::search);
         }
         let captures = self
             .0
             .search
             .captures_from_pos(input, from)
-            .map_err(ReplacementError::search)?;
+            .map_err(MatchError::search)?;
         Ok(captures.map(|captures| {
             captures
                 .iter()
@@ -162,12 +203,12 @@ impl JavaPattern {
     /// `"alice".replaceAll("(.*)", "$1x")` is `alicexx` in Java. After an empty
     /// match `find` starts one character on, and `\G` stays where that match
     /// ended.
-    pub(crate) fn replace(
-        &self,
-        input: &str,
-        replacement: &str,
-        all: bool,
-    ) -> Result<String, ReplacementError> {
+    ///
+    /// # Errors
+    ///
+    /// [`MatchError`] for a replacement Java refuses, and for a search past
+    /// the backtrack limit.
+    pub fn replace(&self, input: &str, replacement: &str, all: bool) -> Result<String, MatchError> {
         let mut out = String::with_capacity(input.len());
         let mut copied = 0;
         let mut search_from = 0;
@@ -206,8 +247,8 @@ impl JavaPattern {
         replacement: &str,
         input: &str,
         groups: &[Option<Range<usize>>],
-    ) -> Result<(), ReplacementError> {
-        let refuse = |message: &str| ReplacementError(message.to_owned());
+    ) -> Result<(), MatchError> {
+        let refuse = |message: &str| MatchError(message.to_owned());
         let group_count = self.group_count();
         let mut chars = replacement.chars().peekable();
         while let Some(character) = chars.next() {
@@ -236,14 +277,14 @@ impl JavaPattern {
                             .0
                             .names
                             .get(&name)
-                            .ok_or_else(|| ReplacementError(format!("no group with name {name}")))?
+                            .ok_or_else(|| MatchError(format!("no group with name {name}")))?
                     } else {
                         let mut group = first
                             .to_digit(10)
                             .ok_or_else(|| refuse("illegal group reference"))?
                             as usize;
                         if group > group_count {
-                            return Err(ReplacementError(format!("no group {group}")));
+                            return Err(MatchError(format!("no group {group}")));
                         }
                         while let Some(digit) = chars.peek().and_then(|next| next.to_digit(10)) {
                             let longer = group * 10 + digit as usize;

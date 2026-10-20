@@ -8,7 +8,7 @@
 //! - A backreference under a case flag, which the rewrite writes as
 //!   `(?i:\1)`, compares as `CIBackRef.match` does, by
 //!   [`BackrefFold::chars_match`]. `fancy_regex` compares by its own fold
-//!   (`java_fold` in `client_metrics::config` lists where they differ).
+//!   (`translate::java_fold` lists where they differ).
 //! - `\R` is Java's `LineEnding`, which gives back the `\n` of `\r\n` when the
 //!   rest of the pattern needs it: `\R\n` matches `\r\n`. `fancy_regex`'s
 //!   `\R` is atomic. Under a quantifier Java takes the first way only, as
@@ -45,7 +45,7 @@
 //! backtracking steps as `fancy_regex` takes by default.
 
 use {
-    crate::client_metrics::config::BackrefFold,
+    crate::translate::BackrefFold,
     fancy_regex::{Assertion, Expr, LookAround},
     regex::Regex,
     std::{ops::Range, slice::Iter},

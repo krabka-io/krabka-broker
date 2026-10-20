@@ -59,10 +59,14 @@ The label the manifests read the pod ordinal from needs Kubernetes 1.29 or
 later.
 
 The StatefulSet pins itself to amd64 nodes with
-`nodeSelector: kubernetes.io/arch: amd64`, because that is the only
-architecture the image is published for. On a mixed-architecture cluster that
-selector is what keeps a pod off a node it could never exec the image on;
-change it only when the image you point it at is built for something else.
+`nodeSelector: kubernetes.io/arch: amd64`. The image it names by default,
+`docker.io/krabka-io/krabka-broker:dev` from `//packaging:image_load`, is an
+amd64 image, and so is a per-commit delivery tag. On a mixed-architecture
+cluster the selector keeps a pod off a node that cannot run that image. A
+release tag or `latest` is an index for amd64 and arm64, as
+[Install](#install) says. When the manifest names one of those, remove the
+selector or set it to the architectures that your nodes run. For the
+`dev-arm64` image, set it to `arm64`.
 
 ```
 kubectl apply -f packaging/k8s/

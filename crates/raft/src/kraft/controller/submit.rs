@@ -183,7 +183,7 @@ impl Engine {
             let _ = reply.send(Ok(SubmitChangeResult::default()));
             return;
         }
-        self.on_submit_change_guarded(&records, reply, true);
+        self.on_submit_change_guarded(&records, reply, true, Submitter::Request);
     }
 
     fn consumption_matches_stored(
@@ -512,7 +512,19 @@ impl Engine {
         records: &[krabka_metadata::MetadataRecord],
         reply: oneshot::Sender<Result<SubmitChangeResult, RaftError>>,
     ) {
-        self.on_submit_change_guarded(records, reply, false);
+        self.on_submit_change_guarded(records, reply, false, Submitter::Request);
+    }
+
+    /// Append the activation batch of a log that holds no `metadata.version`.
+    ///
+    /// It is [`Self::on_submit_change`] except that it may reserve diskless
+    /// offsets before this leader's epoch commits. See [`Submitter::Activation`].
+    pub(super) fn on_activation_change(
+        &mut self,
+        records: &[krabka_metadata::MetadataRecord],
+        reply: oneshot::Sender<Result<SubmitChangeResult, RaftError>>,
+    ) {
+        self.on_submit_change_guarded(records, reply, false, Submitter::Activation);
     }
 
     fn on_submit_change_guarded(
@@ -520,6 +532,7 @@ impl Engine {
         records: &[krabka_metadata::MetadataRecord],
         reply: oneshot::Sender<Result<SubmitChangeResult, RaftError>>,
         delegation_token_guarded: bool,
+        submitter: Submitter,
     ) {
         if !self.core.role().is_leader() {
             let _ = reply.send(Err(RaftError::NotLeader {
@@ -533,11 +546,12 @@ impl Engine {
         // refusal is transient, as the refusal of a compare-and-set behind
         // an uncommitted tail is, so it is the same error. A broker then
         // tells the refusal apart from a failed reservation, and the forward
-        // path keeps it.
+        // path keeps it. The activation batch is the exception.
         if records
             .iter()
             .any(|record| matches!(record, MetadataRecord::V1PartitionOffsetAdvance(_)))
             && !epoch_ready
+            && submitter == Submitter::Request
         {
             let _ = reply.send(Err(RaftError::UncommittedTail));
             return;
@@ -955,6 +969,24 @@ fn replay_value_blobs(blobs: &[bytes::Bytes], image: &mut MetadataImage) -> Resu
         image.apply(&decoded);
     }
     Ok(())
+}
+
+/// Who appends a batch, which decides when the batch may reserve diskless
+/// offsets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Submitter {
+    /// A broker or client request. It reserves offsets only once this
+    /// leader's epoch commits, so every reservation an earlier leader left
+    /// uncommitted is committed and folded in, or truncated, first.
+    Request,
+    /// The activation batch: the bootstrap records of a log that holds no
+    /// `metadata.version`. It is this epoch's first write after its
+    /// `LeaderChange`, on a log that holds no earlier record, so no earlier
+    /// leader left a reservation for it to fold in. A restored cluster's
+    /// bootstrap starts each diskless partition's next offset at its
+    /// materialized end with a `V1PartitionOffsetAdvance` (#1524), and the
+    /// activation batch has to carry it.
+    Activation,
 }
 
 #[cfg(test)]
