@@ -368,42 +368,58 @@ where
             },
         };
         let correlation_id = frame.correlation_id;
-        let served = async {
-            let Some(reply) = answer_request(
-                frame,
-                &engine,
-                shard_router.as_deref(),
-                admin_router.as_deref(),
-                &context,
-                &clock_ms,
-            )
-            .await?
-            else {
-                return Ok(false);
-            };
-            // Kafka's `Selector.send` refreshes the idle clock when the
-            // response is queued, before a byte of it is written.
-            if let Some(watch) = &watch {
-                watch.refresh();
-            }
-            write_response(&mut stream, correlation_id, reply.body)
-                .include_tagged_fields(reply.tagged_fields)
-                .call()
-                .await?;
-            Ok::<bool, RaftError>(true)
-        };
-        let keep_open = match &watch {
+        let answer = answer_request(
+            frame,
+            &engine,
+            shard_router.as_deref(),
+            admin_router.as_deref(),
+            &context,
+            &clock_ms,
+        );
+        let mut answer = std::pin::pin!(answer);
+        let answered = match &watch {
             Some(watch) => tokio::select! {
-                served = served => served?,
+                biased;
+                answered = &mut answer => answered?,
+                () = watch.expired() => {
+                    log_idle_close(&context);
+                    // Kafka closes the channel and drops the response, but the
+                    // request handler runs on: cancelling it between two awaits
+                    // could leave a controller operation half applied. The
+                    // socket closes first, so the peer sees the close at once.
+                    drop(stream);
+                    if let Err(error) = answer.await {
+                        tracing::debug!(
+                            peer = %context.peer,
+                            %error,
+                            "request on an idle-closed controller connection failed"
+                        );
+                    }
+                    return Ok(());
+                }
+            },
+            None => answer.await?,
+        };
+        let Some(reply) = answered else {
+            return Ok(());
+        };
+        // Kafka's `Selector.send` refreshes the idle clock when the response
+        // is queued, before a byte of it is written.
+        if let Some(watch) = &watch {
+            watch.refresh();
+        }
+        let written = write_response(&mut stream, correlation_id, reply.body)
+            .include_tagged_fields(reply.tagged_fields)
+            .call();
+        match &watch {
+            Some(watch) => tokio::select! {
+                written = written => written?,
                 () = watch.expired() => {
                     log_idle_close(&context);
                     return Ok(());
                 }
             },
-            None => served.await?,
-        };
-        if !keep_open {
-            return Ok(());
+            None => written.await?,
         }
     }
 }

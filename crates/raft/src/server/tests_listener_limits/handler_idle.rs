@@ -97,7 +97,9 @@ async fn closed_at(connection: &mut tokio::task::JoinHandle<Result<(), RaftError
 
 /// A handler that answers inside the window is served. One that outlasts it
 /// closes the connection one window after the request's last byte, and the
-/// peer gets no response.
+/// peer gets no response. The handler is not cancelled: the connection task
+/// ends only once it has finished, as Kafka's handler threads finish a
+/// request whose channel closed.
 #[yare::parameterized(
     answers_inside_the_window = { Duration::from_millis(8), true },
     outlasts_the_window = { Duration::from_millis(15), false },
@@ -115,9 +117,10 @@ async fn the_idle_window_runs_while_a_handler_works(delay: Duration, served: boo
         check!(read_correlation_id(&mut client).await == 1);
         check!(!connection.is_finished());
     } else {
-        check!(closed_at(&mut connection).await - last_byte == WINDOW);
         let mut answer = Vec::new();
         check!(client.read_to_end(&mut answer).await.unwrap() == 0);
+        check!(Instant::now() - last_byte == WINDOW);
+        check!(closed_at(&mut connection).await - last_byte == delay);
     }
 }
 
