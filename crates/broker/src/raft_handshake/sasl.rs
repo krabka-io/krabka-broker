@@ -16,11 +16,12 @@ use {
     },
     crate::{
         codes::SASL_AUTHENTICATION_FAILED,
+        metadata_source::MetadataSource,
         network::{
             auth::{
-                ConnectionAuth, ReauthClock, generic_failure_message, handle_authenticate_gssapi,
-                handle_authenticate_oauthbearer_with_jwks_cache, handle_authenticate_plain,
-                handle_authenticate_scram, handle_handshake,
+                ConnectionAuth, ReauthClock, ScramDisconnect, generic_failure_message,
+                handle_authenticate_gssapi, handle_authenticate_oauthbearer_with_jwks_cache,
+                handle_authenticate_plain, handle_authenticate_scram, handle_handshake,
             },
             dispatch::sasl::{audit_principal, emit_authentication as emit_audit_authentication},
         },
@@ -31,6 +32,7 @@ use {
         Decode,
         owned::{
             sasl_authenticate_request::SaslAuthenticateRequest,
+            sasl_authenticate_response::SaslAuthenticateResponse,
             sasl_handshake_request::SaslHandshakeRequest,
         },
     },
@@ -38,6 +40,44 @@ use {
     krabka_security::SaslMechanism,
     std::net::SocketAddr,
 };
+
+/// The message of a SCRAM exchange that ends without a response.
+const SCRAM_PROOF_LENGTH_REASON: &str = "SCRAM client proof of the wrong length";
+
+/// Runs one SCRAM `SaslAuthenticate` round of a controller-listener exchange
+/// against the credentials in `source`.
+///
+/// Kafka closes the connection at once on a client proof that does not
+/// decode to the hash length, with no response and no failed-authentication
+/// delay. That outcome is audited as a failed authentication and returned as
+/// an error, so the caller closes without writing anything.
+fn controller_scram_round(
+    req: &SaslAuthenticateRequest,
+    auth: &mut ConnectionAuth,
+    source: &dyn MetadataSource,
+    cfg: &BrokerRaftHandshake,
+    peer: &SocketAddr,
+    mechanism: SaslMechanism,
+) -> Result<SaslAuthenticateResponse, RaftHandshakeError> {
+    handle_authenticate_scram(
+        req,
+        auth,
+        source,
+        cfg.delegation_token_secret_key.as_ref(),
+        CONTROLLER_MAX_REAUTH,
+    )
+    .map_err(|ScramDisconnect| {
+        emit_authentication(
+            cfg,
+            peer,
+            mechanism,
+            auth.principal(),
+            krabka_audit::AuditOutcome::Failure,
+            Some(SCRAM_PROOF_LENGTH_REASON.to_owned()),
+        );
+        RaftHandshakeError::Sasl(SCRAM_PROOF_LENGTH_REASON.into())
+    })
+}
 
 /// Initial per-connection auth state for an unauthenticated SASL peer.
 fn pre_auth_state() -> ConnectionAuth { ConnectionAuth::Anonymous }
@@ -213,27 +253,14 @@ pub(super) async fn run_inbound_sasl(
                                 "controller handle not initialised for SCRAM lookup".into(),
                             )
                         })?;
-                        let Ok(resp) = handle_authenticate_scram(
+                        controller_scram_round(
                             &req,
                             &mut auth,
                             controller.as_ref(),
-                            cfg.delegation_token_secret_key.as_ref(),
-                            CONTROLLER_MAX_REAUTH,
-                        ) else {
-                            // Kafka closes at once on a SCRAM proof of the wrong
-                            // length, with no response and no failed-auth delay.
-                            let reason = "SCRAM client proof of the wrong length";
-                            emit_authentication(
-                                cfg,
-                                peer,
-                                mech,
-                                auth.principal(),
-                                krabka_audit::AuditOutcome::Failure,
-                                Some(reason.to_owned()),
-                            );
-                            return Err(RaftHandshakeError::Sasl(reason.into()));
-                        };
-                        resp
+                            cfg,
+                            peer,
+                            mech,
+                        )?
                     }
                     SaslMechanism::OAuthBearer => {
                         handle_authenticate_oauthbearer_with_jwks_cache(
@@ -345,12 +372,126 @@ mod tests {
                 HandshakeApiVersion, HandshakeHeader, api_versions_body, read_response_frame,
                 request_frame, sasl_authenticate_body, sasl_handshake_body, sasl_test_config,
             },
+            test_support::FakeMetadataSource,
         },
-        assert2::assert,
-        krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse,
+        assert2::{assert, check},
         std::time::Duration,
         tokio::io::AsyncWriteExt,
     };
+
+    /// One controller-listener SCRAM-SHA-256 exchange whose client-final
+    /// proof is replaced by `proof`, and what the second round came to: the
+    /// error code it answered with, or the error that closed the connection
+    /// with no answer. The audit rows the round wrote come back beside it.
+    fn controller_scram_with_proof(
+        proof: &str,
+    ) -> (Result<i16, String>, Vec<krabka_audit::AuditEvent>) {
+        let mechanism = SaslMechanism::ScramSha256;
+        let password = b"controller-password";
+        let credential = krabka_security::scram::hash_scram_password_with_salt(
+            password,
+            mechanism,
+            4096,
+            b"salt".to_vec(),
+        );
+        let source = FakeMetadataSource::builder()
+            .records(&[krabka_metadata::MetadataRecord::V1ScramCredential(
+                krabka_metadata::ScramCredentialRecord {
+                    user: "broker".into(),
+                    mechanism,
+                    salt: credential.salt,
+                    stored_key: credential.stored_key,
+                    server_key: credential.server_key,
+                    iterations: credential.iterations,
+                },
+            )])
+            .build();
+        let AuditedConfig { mut cfg, mut rx } = audited_config();
+        cfg.enabled_sasl_mechanisms = vec![mechanism];
+        let mut auth = pre_auth_state();
+        let handshake = handle_handshake(
+            &SaslHandshakeRequest {
+                mechanism: mechanism.wire_name().into(),
+                ..Default::default()
+            },
+            &mut auth,
+            &cfg.enabled_sasl_mechanisms,
+            &mut ReauthClock {
+                now_ms: 0,
+                last_start_ms: &mut None,
+            },
+        );
+        assert!(handshake.response.error_code == 0);
+
+        let client = krabka_security::ScramClientExchange::new(
+            "broker".into(),
+            password.to_vec(),
+            mechanism,
+        );
+        let (client_first, client) = client.client_first().expect("client-first");
+        let round = |auth: &mut ConnectionAuth, auth_bytes: Vec<u8>| {
+            controller_scram_round(
+                &SaslAuthenticateRequest {
+                    auth_bytes: bytes::Bytes::from(auth_bytes),
+                    ..Default::default()
+                },
+                auth,
+                &source,
+                &cfg,
+                &test_peer(),
+                mechanism,
+            )
+        };
+        let server_first = round(&mut auth, client_first).expect("round 1 answers");
+        assert!(server_first.error_code == 0);
+        let (client_final, _client) = client.step(&server_first.auth_bytes).expect("client-final");
+        let client_final = String::from_utf8(client_final).expect("client-final is UTF-8");
+        let (without_proof, _) = client_final.rsplit_once(",p=").expect("client-final proof");
+        let outcome = round(&mut auth, format!("{without_proof},p={proof}").into_bytes())
+            .map(|response| response.error_code)
+            .map_err(|error| match error {
+                RaftHandshakeError::Sasl(message) => message,
+                other => other.to_string(),
+            });
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+        (outcome, events)
+    }
+
+    /// Kafka closes the controller connection at once on a SCRAM proof that
+    /// does not decode to the hash length, and audits nothing of its own. The
+    /// listener closes with no answer and writes one failed-authentication
+    /// row. A proof of the right length and the wrong value is an ordinary
+    /// error-58 answer, which the caller audits as it does every failure.
+    #[test]
+    fn a_controller_scram_proof_of_the_wrong_length_closes_with_no_answer() {
+        let (outcome, events) = controller_scram_with_proof("");
+        check!(outcome == Err(SCRAM_PROOF_LENGTH_REASON.to_owned()));
+        assert!(events.len() == 1);
+        assert_authentication_event(
+            &events[0],
+            krabka_audit::AuditOutcome::Failure,
+            "SCRAM-SHA-256",
+            krabka_audit::AuditPrincipal {
+                name: String::new(),
+                auth_method: format!(
+                    "{:?}",
+                    krabka_security::AuthMethod::from_sasl(SaslMechanism::ScramSha256)
+                ),
+            },
+            krabka_audit::AuditEndpoint {
+                ip: "192.0.2.11".into(),
+                port: 9093,
+            },
+            Some(SCRAM_PROOF_LENGTH_REASON.to_owned()),
+        );
+
+        let (outcome, events) = controller_scram_with_proof(&format!("{}=", "A".repeat(43)));
+        check!(outcome == Ok(SASL_AUTHENTICATION_FAILED));
+        check!(events.is_empty());
+    }
 
     fn test_peer() -> SocketAddr { "192.0.2.11:9093".parse().expect("peer addr") }
 
