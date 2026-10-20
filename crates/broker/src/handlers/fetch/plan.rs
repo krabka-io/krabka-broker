@@ -1626,6 +1626,15 @@ mod tests {
         assert!(!final_, "defers to the caller's own offline check");
     }
 
+    async fn install_two_replica_leader(partition: &Partition) {
+        use krabka_raft::NodeId;
+
+        partition.install_replication_target(None, 1, 0).await;
+        partition
+            .install_isr(&[NodeId(1), NodeId(2)], &[NodeId(1), NodeId(2)], NodeId(1))
+            .await;
+    }
+
     /// Kafka's `maybeIncrementLeaderHW` runs only while this broker still
     /// leads. The leader records a follower position only while the
     /// replication target that its leader checks passed under is installed.
@@ -1662,10 +1671,7 @@ mod tests {
 
         for (name, epoch_moved, want) in cases {
             let (_dir, partition) = epoch_checks_partition_with_history(&[0, 0]);
-            partition.install_replication_target(None, 1, 0).await;
-            partition
-                .install_isr(&[NodeId(1), NodeId(2)], &[NodeId(1), NodeId(2)], NodeId(1))
-                .await;
+            install_two_replica_leader(&partition).await;
             let position = super::FollowerPosition {
                 follower_id: 2,
                 broker_epoch: -1,
@@ -1712,10 +1718,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let partition = epoch_checks_partition_with_storage(dir.path(), storage);
         append_epoch_batches(&mut partition.log.lock().unwrap(), &[0, 0]);
-        partition.install_replication_target(None, 1, 0).await;
-        partition
-            .install_isr(&[NodeId(1), NodeId(2)], &[NodeId(1), NodeId(2)], NodeId(1))
-            .await;
+        install_two_replica_leader(&partition).await;
         partition
             .replica_state
             .lock()
