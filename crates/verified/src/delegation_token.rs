@@ -23,7 +23,6 @@ pub enum TokenApiAdmission {
 pub enum ScramCredentialSource {
     Regular,
     DelegationToken,
-    ExpiredDelegationToken,
     Unknown,
 }
 
@@ -100,9 +99,7 @@ pub use token_mutation_decision::{
 };
 
 mod token_is_active;
-pub use token_is_active::{
-    create_token_deadlines, expire_token_deadline, renew_token_expiry, token_is_active,
-};
+pub use token_is_active::{create_token_deadlines, expire_token_deadline, renew_token_expiry};
 
 #[cfg(test)]
 mod tests;

@@ -98,20 +98,17 @@ pub fn handle_authenticate_scram(
                     .delegation_token_by_id(&username)
                     .map(|token| (token, secret))
             });
-            let token_active = token.is_some_and(|(token, _)| {
-                krabka_verified::token_is_active(
-                    now_ms(),
-                    token.expiry_timestamp_ms,
-                    token.max_timestamp_ms,
-                )
-            });
+            // A stored token is a credential whether or not it has expired, as
+            // in Kafka's `ScramServerCallbackHandler`, which reads the token
+            // cache without an expiry check. Its expiry bounds the session
+            // below, so an expired token gets a lifetime of 0 and its next
+            // request closes the connection; the expiry sweep removes it.
             // The verified selector's `token_mechanism` input is whether the
             // token store may be read, which is the `tokenauth` extension.
             let (cred, principal, token_expiry_ms) = match scram_credential_source(
                 regular.is_some(),
                 token_requested,
                 token.is_some(),
-                token_active,
             ) {
                 ScramCredentialSource::Regular => (
                     regular.expect("verified regular source exists").clone(),
@@ -134,9 +131,6 @@ pub fn handle_authenticate_scram(
                         owner,
                         Some(token.expiry_timestamp_ms),
                     )
-                }
-                ScramCredentialSource::ExpiredDelegationToken => {
-                    return fail_authenticate("delegation token expired");
                 }
                 ScramCredentialSource::Unknown => {
                     return fail_authenticate("unknown user");
@@ -219,13 +213,10 @@ pub fn handle_authenticate_scram(
                     // `authenticated_via_token: true` and the value of
                     // `expires_at_ms` (the KIP-368 re-auth ceiling).
                     // For regular SCRAM, it's `None` and the
-                    // session has no expiry.
+                    // session has no expiry. A token that expired during
+                    // the exchange still completes it, as in Kafka, with a
+                    // session lifetime of 0.
                     let now = now_ms();
-                    if pending_token_expiry_ms
-                        .is_some_and(|e| !krabka_verified::token_is_active(now, e, e))
-                    {
-                        return fail_authenticate("delegation token expired");
-                    }
                     let SessionExpiry {
                         expires_at_ms,
                         session_lifetime_ms,

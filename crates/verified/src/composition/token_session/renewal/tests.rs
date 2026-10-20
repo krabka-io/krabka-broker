@@ -7,7 +7,7 @@ fn saturated(value: i128) -> i64 { i64::try_from(value.min(i128::from(i64::MAX))
 fn expected(
     issued: i64,
     periods: (i64, i64, i64, i64, i64),
-    delays: (i64, i64, i64),
+    delays: (i64, i64),
     cap: i64,
     tail: bool,
     api: i16,
@@ -38,24 +38,26 @@ fn expected(
     } else {
         TokenMutationDecision::Append
     };
-    let completed = i128::from(original) + i128::from(delays.1);
-    let session = if tail || completed >= i128::from(renewed) {
+    // The cleanup removes the token only at its maximum; a stored token
+    // authenticates whether or not it has expired.
+    let session = if cleanup == TokenMutationDecision::Append {
         None
     } else {
+        let stored = if tail { original } else { renewed };
+        let completed = saturated(i128::from(original) + i128::from(delays.0));
         let at = if cap > 0 {
-            saturated(completed + i128::from(cap)).min(renewed)
+            saturated(i128::from(completed) + i128::from(cap)).min(stored)
         } else {
-            renewed
+            stored
         };
-        let lifetime = i64::try_from(i128::from(at) - completed).unwrap();
-        let admitted = api == 17 || saturated(i128::from(original) + i128::from(delays.2)) <= at;
+        let lifetime = (at - completed).max(0);
+        let admitted = api == 17 || saturated(i128::from(original) + i128::from(delays.1)) <= at;
         Some((at, lifetime, admitted))
     };
     RenewalTrace {
         original_expiry: original,
         maximum,
         renewed_expiry: renewed,
-        boundary_authenticated: false,
         renewal,
         cleanup,
         session,
@@ -65,24 +67,44 @@ fn expected(
 #[test]
 fn renewal_at_exact_expiry_preserves_service_against_old_cleanup() {
     let periods = (0, 2000, 1000, 500, 500);
-    let trace = renewed_token_survives_captured_cleanup(0, periods, (0, 250, 499), 0, false, 0);
-    assert2::assert!(trace.original_expiry == 1000 && trace.renewed_expiry == 1500);
-    assert2::assert!(!trace.boundary_authenticated);
-    assert2::assert!(trace.renewal == TokenMutationDecision::Append);
-    assert2::assert!(trace.cleanup == TokenMutationDecision::Reject);
-    assert2::assert!(trace.session == Some((1500, 250, true)));
-    let deadline = renewed_token_survives_captured_cleanup(0, periods, (0, 250, 500), 0, false, 0);
-    assert2::assert!(deadline.session == Some((1500, 250, true)));
-    let expired = renewed_token_survives_captured_cleanup(0, periods, (0, 250, 501), 0, false, 0);
-    assert2::assert!(expired.session == Some((1500, 250, false)));
-    let bare_authenticate =
-        renewed_token_survives_captured_cleanup(0, periods, (0, 250, 501), 0, false, 36);
-    assert2::assert!(bare_authenticate.session == Some((1500, 250, false)));
-    let handshake =
-        renewed_token_survives_captured_cleanup(0, periods, (0, 250, 501), 0, false, 17);
-    assert2::assert!(handshake.session == Some((1500, 250, true)));
-    let late = renewed_token_survives_captured_cleanup(0, periods, (0, 500, 500), 0, false, 36);
-    assert2::assert!(late.session == None);
+    let trace = renewed_token_survives_captured_cleanup(0, periods, (250, 499), 0, false, 0);
+    assert2::assert!(
+        trace
+            == RenewalTrace {
+                original_expiry: 1000,
+                maximum: 2000,
+                renewed_expiry: 1500,
+                renewal: TokenMutationDecision::Append,
+                cleanup: TokenMutationDecision::Reject,
+                session: Some((1500, 250, true)),
+            }
+    );
+    // (delays, api) -> session: the request at the deadline is served, the
+    // one after it only when it begins a re-authentication.
+    for (delays, api, session) in [
+        ((250, 500), 0, Some((1500, 250, true))),
+        ((250, 501), 0, Some((1500, 250, false))),
+        ((250, 501), 36, Some((1500, 250, false))),
+        ((250, 501), 17, Some((1500, 250, true))),
+        // Round two at or after the renewed expiry still authenticates, with
+        // a lifetime of 0.
+        ((500, 500), 36, Some((1500, 0, true))),
+        ((500, 501), 36, Some((1500, 0, false))),
+        ((900, 900), 36, Some((1500, 0, false))),
+    ] {
+        let actual = renewed_token_survives_captured_cleanup(0, periods, delays, 0, false, api);
+        assert2::assert!(actual.session == session, "delays={delays:?} api={api}");
+    }
+    // An uncommitted tail refuses both mutations, so the original expiry
+    // stays stored and the session is already past it.
+    let tail = renewed_token_survives_captured_cleanup(0, periods, (250, 499), 0, true, 0);
+    assert2::assert!(tail.renewal == TokenMutationDecision::Reject);
+    assert2::assert!(tail.session == Some((1000, 0, false)));
+    // At the maximum the cleanup removes the token, so nothing authenticates.
+    let at_maximum =
+        renewed_token_survives_captured_cleanup(0, (0, 1000, 1000, 500, 500), (0, 0), 0, false, 0);
+    assert2::assert!(at_maximum.cleanup == TokenMutationDecision::Append);
+    assert2::assert!(at_maximum.session == None);
 }
 
 #[test]
@@ -95,14 +117,15 @@ fn token_renewal_schedules_match_independent_deadline_oracle() {
             (-1, i64::MAX, 1, 1, i64::MAX),
             (i64::MAX, i64::MAX, i64::MAX, i64::MAX, i64::MAX),
         ] {
-            let oracle = expected(issued, periods, (0, 0, 0), 0, false, 0);
+            let oracle = expected(issued, periods, (0, 0), 0, false, 0);
             let width = oracle.renewed_expiry - oracle.original_expiry;
             for delays in [
-                (0, 0, 0),
-                (0, 0, 1),
-                (0, 1, i64::MAX),
-                (0, width, width),
-                (0, width.saturating_sub(1).max(0), width),
+                (0, 0),
+                (0, 1),
+                (1, i64::MAX),
+                (width, width),
+                (width.saturating_sub(1).max(0), width),
+                (width.saturating_add(1), width.saturating_add(2)),
             ] {
                 for cap in [-1, 0, 1, 100, i64::MAX] {
                     for tail in [false, true] {
@@ -127,11 +150,10 @@ proptest! {
         issued in 0_i64..=i64::MAX, ceiling in 1_i64..=i64::MAX,
         initial in 1_i64..=i64::MAX, default in 1_i64..=i64::MAX,
         requested in any::<i64>(), renewal in any::<i64>(), cap in any::<i64>(),
-        d0 in 0_i64..=i64::MAX, d1 in 0_i64..=i64::MAX, d2 in 0_i64..=i64::MAX,
+        d0 in 0_i64..=i64::MAX, d1 in 0_i64..=i64::MAX,
         tail in any::<bool>(), api in any::<i16>(),
     ) {
-        let mut delays = [d0, d1, d2]; delays.sort_unstable();
-        let delays = (delays[0], delays[1], delays[2]);
+        let delays = (d0.min(d1), d0.max(d1));
         let periods = (requested, ceiling, initial, renewal, default);
         prop_assert_eq!(renewed_token_survives_captured_cleanup(issued, periods, delays, cap, tail, api),
             expected(issued, periods, delays, cap, tail, api));

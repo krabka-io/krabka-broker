@@ -169,7 +169,7 @@ The implication-shaped checks explicitly return true on rejected input. They pro
 | [checkpoint](../crates/verified/src/checkpoint.rs): `checkpoint_id_newer`, `latest_checkpoint_index`, `checkpoint_id_retained` | Selection + guard | Latest selection proves a global maximum independent of directory order. Keeping the selected/previous IDs is policy, not recovery safety; existence, integrity, and durable publication remain outside the contract. |
 | [compaction](../crates/verified/src/compaction.rs): `compaction_decode_step`, `compute_horizon`, `retain_decision` | Guard | Retention decisions protect live transactional markers and newest values given accurate metadata. Per-record decisions do not establish whole-log key preservation or a correct newest-key index; the compaction model provides the independent aggregate check. |
 | [consensus](../crates/verified/src/consensus.rs): `majority_size`, `election_has_quorum`, `failover_action`, `select_best_recovery_replica`, `lemma_hwm_threshold_has_member`, `lemma_hwm_member_maximal`, `election_jitter_ms`, `log_is_up_to_date`, `candidate_has_majority`, `recompute_high_watermark`, `majority_watermark` | Invariant + guard | Watermarks have quorum support, maximality, monotonicity, and epoch gating. These are strong contracts. Jitter proves only a range: returning zero always would pass. Vote counting assumes distinct members; the installed-WAL/Fetch composition now discharges that identity assumption, returns concrete supporters, and carries watermark maximality and the exact Fetch limit across the boundary. An unchanged inherited watermark and a floor raised only to log start carry no new support guarantee; these cases have runnable witnesses. |
-| [delegation_token](../crates/verified/src/delegation_token.rs): `scram_credential_source`, `token_describe_visible`, `token_api_admission`, `token_mutation_decision`, `token_deadline`, `bounded_period`, `create_token_deadlines`, `renew_token_expiry`, `token_is_active`, `expire_token_deadline` | Guard; completeness repaired | Mutation formerly specified only necessary conditions for Append/Retry, allowing Reject for every request. Both outcomes now have iff contracts, including validity of same-expiry renew retries. Deadline saturation is exact; authentication, committed generation equality, and persistence remain host obligations. |
+| [delegation_token](../crates/verified/src/delegation_token.rs): `scram_credential_source`, `token_describe_visible`, `token_api_admission`, `token_mutation_decision`, `token_deadline`, `bounded_period`, `create_token_deadlines`, `renew_token_expiry`, `expire_token_deadline` | Guard; completeness repaired | Mutation formerly specified only necessary conditions for Append/Retry, allowing Reject for every request. Both outcomes now have iff contracts, including validity of same-expiry renew retries. Deadline saturation is exact; authentication, committed generation equality, and persistence remain host obligations. |
 | [delivery](../crates/verified/src/delivery.rs): `scheduled_delivery_visible`, `delivery_watermark_advance`, `coalesce_delivery_range` | Invariant + guard | Checked deadlines fail closed and watermark advancement preserves the clamped log range. Coalescing pins endpoints. The maximum-time aggregate and complete-prefix compositions now connect actual batch deadlines to the candidate and consumer Fetch. Watermark bounds and identity on an admitted candidate are exported directly. Cached-state invalidation and a complete I/O walk remain host obligations. |
 | [directory](../crates/verified/src/directory.rs): `directory_assignment_decision`, `directory_response_decision` | Guard | Slot assignment and controller-response fencing are complete case tables. They prove no durable assignment, directory existence, or safe disk movement; compose the response fence with application rather than treating each variant as an independent safety theorem. |
 | [diskless](../crates/verified/src/diskless.rs): `diskless_retention_prefix`, `diskless_object_reclaimable`, `diskless_logical_range`, `diskless_span_extension`, `diskless_batch_step`, `diskless_trim_decision` | Invariant + guard | Retention is a maximal expirable prefix that keeps the newest range; logical selection and span extension pin membership and arithmetic; trim stays below durable/index bounds. The new reconciliation composition carries object coverage and safety lag through completed steps; the existing lag-normalization definition is open so callers can use the actual signed lag in their proofs. Reference absence, actual object bytes, fsync, and metadata commit are supplied by the host/model. |
@@ -2626,13 +2626,17 @@ bounds, and the candidate endpoints that prove progress. Production creation is
 unchanged.
 
 `created_token_session_bounds_requests` derives those deadlines, applies the
-production SCRAM credential classifier in round one, and repeats the captured
-expiry check used by round two. It then composes the shared session-deadline,
+production SCRAM credential classifier in round one, and binds the session at
+round two to the stored expiry. A stored token authenticates whether or not it
+has expired, as Kafka's `ScramServerCallbackHandler` reads its token cache
+without an expiry check; a token that expired before round two gets a
+lifetime of 0. The composition then applies the shared session-deadline,
 request-expiry, authentication-phase and token-API gates. Successful completion
 cannot extend the session past either token ceiling or a positive listener cap.
 The receipt records both deadlines, the advertised lifetime and the exact
-request admission. Ordinary requests fail at equality; handshake/authentication
-frames remain eligible for reauthentication. Every token API remains rejected.
+request admission. Ordinary requests are served at the deadline and refused
+after it; a `SaslHandshake` remains eligible to begin a reauthentication. Every
+token API remains rejected.
 The converse admission and exact failure conditions exclude rejecting all
 credentials or requests as a vacuous implementation.
 
@@ -2813,18 +2817,19 @@ renews at the original expiry and passes that concrete replacement through the
 controller's guarded mutation kernel. It derives the delayed cleanup's state
 from the resulting stored expiry, rather than accepting a supplied stale flag.
 A real extension must append and reject the old cleanup. At the maximum,
-renewal is an exact retry and cleanup can delete. An uncommitted metadata tail
-refuses both proposals and supplies no authenticated session. The retained
-expiry then drives SCRAM source selection, round-two liveness, session binding
-and the broker's ordinary-request/reauthentication gates.
+renewal is an exact retry and cleanup deletes the token, so no session
+follows. An uncommitted metadata tail refuses both proposals, so the original
+expiry stays stored. A token the cleanup leaves in the store authenticates
+whether or not it has expired, as in Kafka, and the stored expiry drives
+session binding and the broker's ordinary-request/reauthentication gates.
 
-For example, a token created at 0 with expiry 1000 and maximum 2000 cannot
-authenticate at 1000 before renewal. A renewal of 500 ms at 1000 installs 1500;
-cleanup expecting 1000 is stale. SCRAM completion at 1250 advertises 250 ms,
-admits an ordinary request at 1499, and refuses it at 1500. Completion at 1500
-cannot establish a session even for a reauthentication API. Exact admission
-and mutation classification exclude both rejecting every renewal and accepting
-every cleanup as vacuous alternatives.
+For example, a token created at 0 with expiry 1000 and maximum 2000 gets a
+renewal of 500 ms at 1000, which installs 1500; cleanup expecting 1000 is
+stale. SCRAM completion at 1250 advertises 250 ms, admits an ordinary request
+at 1500, and refuses it at 1501. Completion at 1500 or later advertises 0 ms,
+and every later ordinary request is refused. Exact admission and mutation
+classification exclude both rejecting every renewal and accepting every
+cleanup as vacuous alternatives.
 
 The schedule fixes one token identity and its immutable fields and changes
 only expiry. Actual metadata publication, commit ordering, faithful full-record

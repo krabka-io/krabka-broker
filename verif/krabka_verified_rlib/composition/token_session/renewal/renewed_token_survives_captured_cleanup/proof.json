@@ -19,7 +19,6 @@
         "prover": "alt-ergo",
         "time": 0.016
       },
-      "vc_token_is_active": { "prover": "alt-ergo", "time": 0.011 },
       "vc_token_mutation_decision": { "prover": "alt-ergo", "time": 0.021 }
     }
   }

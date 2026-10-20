@@ -108,6 +108,32 @@ impl KafkaScramClient {
         format!("{without_proof},p={}", B64.encode(proof)).into_bytes()
     }
 
+    /// The server-final message a correct server answers `client_final`
+    /// with, after `server_first`.
+    fn server_final(&self, server_first: &[u8], client_final: &[u8]) -> Vec<u8> {
+        let server_first = std::str::from_utf8(server_first).expect("server-first is UTF-8");
+        let client_final = std::str::from_utf8(client_final).expect("client-final is UTF-8");
+        let attribute = |name: &str| {
+            server_first
+                .split(',')
+                .find_map(|a| a.strip_prefix(name))
+                .expect("server-first attribute")
+        };
+        let salt = B64.decode(attribute("s=")).expect("salt is base64");
+        let iterations: u32 = attribute("i=").parse().expect("iterations");
+        let salted = krabka_security::scram::pbkdf2_salted(
+            &self.password,
+            self.mechanism,
+            iterations,
+            &salt,
+        );
+        let (without_proof, _) = client_final.rsplit_once(",p=").expect("client-final proof");
+        let auth_message = format!("{},{server_first},{without_proof}", self.client_first_bare);
+        let server_key = self.hmac(&salted, b"Server Key");
+        let signature = self.hmac(&server_key, auth_message.as_bytes());
+        format!("v={}", B64.encode(signature)).into_bytes()
+    }
+
     fn hmac(&self, key: &[u8], data: &[u8]) -> Vec<u8> {
         if self.mechanism == SaslMechanism::ScramSha256 {
             let mut mac = <Hmac<Sha256>>::new_from_slice(key).expect("any key length");
@@ -202,7 +228,7 @@ fn authenticate(
 }
 
 /// What one full exchange came to.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Outcome {
     /// Round 2 authenticated `principal`.
     Authenticated {
@@ -375,7 +401,7 @@ fn tokenauth_extension_selects_the_credential_store() {
                 sasl_name: "tok",
                 extensions: TOKEN_AUTH,
                 password: &token_pw,
-                expected: owner,
+                expected: owner.clone(),
             },
             ExchangeCase {
                 case: "tokenauth parsed as Java parseBoolean",
@@ -448,7 +474,9 @@ fn tokenauth_extension_selects_the_credential_store() {
                 sasl_name: "expired",
                 extensions: TOKEN_AUTH,
                 password: &expired_pw,
-                expected: Outcome::FirstRoundFailed(None),
+                // Kafka's token cache holds a token until the expiry sweep
+                // removes it, and authenticates it without an expiry check.
+                expected: owner,
             },
             ExchangeCase {
                 case: "escaped SASL name",
@@ -613,6 +641,83 @@ fn token_round_one_threads_the_token_expiry() {
         auth.token_api_admission(krabka_verified::delegation_token::TokenApi::Describe)
             == krabka_verified::delegation_token::TokenApiAdmission::Reject
     );
+}
+
+/// Kafka authenticates a token that is still in its cache whatever its
+/// expiry, and `SaslServerAuthenticator` sets the session lifetime to
+/// `max(0, expiry - now)`. An expired token therefore completes the exchange
+/// with a lifetime of 0, and its session is already past its deadline, so the
+/// next request that does not begin a re-authentication closes the connection.
+#[test]
+fn an_expired_token_authenticates_into_a_session_already_past_its_deadline() {
+    for mechanism in [SaslMechanism::ScramSha256, SaslMechanism::ScramSha512] {
+        let expiry = now_ms() - 1_000;
+        let source = FakeMetadataSource::builder()
+            .records(&[token("expired", expiry)])
+            .build();
+        let mut auth = ConnectionAuth::Negotiating {
+            mechanism,
+            exchange: SaslExchange::ScramPending,
+            pending_token_expiry_ms: None,
+        };
+        let FirstMessage {
+            client,
+            message: first,
+        } = KafkaScramClient::first(
+            mechanism,
+            None,
+            "expired",
+            ",tokenauth=true",
+            &token_password("expired"),
+        );
+        let round1 = authenticate(&source, Some(&token_secret()), &mut auth, first);
+        assert!(round1.error_code == 0, "{mechanism:?}");
+        let client_final = client.last(&round1.auth_bytes);
+        let round2 = authenticate(
+            &source,
+            Some(&token_secret()),
+            &mut auth,
+            client_final.clone(),
+        );
+        assert!(
+            round2
+                == SaslAuthenticateResponse {
+                    auth_bytes: client
+                        .server_final(&round1.auth_bytes, &client_final)
+                        .into(),
+                    error_message: None,
+                    session_lifetime_ms: 0,
+                    ..Default::default()
+                },
+            "{mechanism:?}"
+        );
+        assert!(let ConnectionAuth::Authenticated {
+            principal,
+            mechanism: authenticated_mechanism,
+            expires_at_ms,
+            authenticated_via_token,
+        } = &auth);
+        assert!(
+            (
+                principal,
+                *authenticated_mechanism,
+                *expires_at_ms,
+                *authenticated_via_token
+            ) == (
+                &self::principal(TOKEN_OWNER, mechanism),
+                mechanism,
+                Some(expiry),
+                true
+            ),
+            "{mechanism:?}"
+        );
+        // The next request closes the connection; a `SaslHandshake` that
+        // begins a re-authentication is the one request still admitted.
+        let now = now_ms();
+        assert!(auth.expired_for_request(3, now, None), "{mechanism:?}");
+        assert!(auth.expired_for_request(36, now, None), "{mechanism:?}");
+        assert!(!auth.expired_for_request(17, now, None), "{mechanism:?}");
+    }
 }
 
 /// The image keeps no token HMAC, as Kafka's metadata does not: a token's
