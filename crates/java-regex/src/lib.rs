@@ -110,6 +110,24 @@ struct Compiled {
     /// The most UTF-16 units of input the pattern is read for as Java reads
     /// it, for a look-behind whose maximum length wraps in Java's `int`.
     input_limit: Option<usize>,
+    /// What answers an input with a char past U+FFFF where `engine` is
+    /// `fancy_regex`.
+    wide_input: WideInput,
+}
+
+/// What answers an input with a char past U+FFFF, which Java reads as two
+/// UTF-16 units. A look-behind that Java counts in units (`Behind`) can then
+/// try a start that `fancy_regex`, which counts chars, does not, or start
+/// between the two units of the char.
+#[derive(Debug)]
+enum WideInput {
+    /// The engine, which reads such an input as Java does: the matcher, or
+    /// `fancy_regex` for a pattern with no look-behind Java counts in units.
+    Engine,
+    /// The matcher, in place of `fancy_regex`.
+    Program(Program),
+    /// Neither: the matcher does not know a node of the pattern.
+    Refused,
 }
 
 /// The engine that answers for a [`JavaPattern`].
@@ -199,10 +217,19 @@ impl JavaPattern {
         // A pattern `fancy_regex` reads as Java does, or one with a node the
         // matcher does not know, keeps `fancy_regex`. The matcher answers
         // for one `fancy_regex` cannot build.
-        let engine = match (fancy, program) {
-            (Ok(_), Some(program)) if program.differs_from_fancy() => Engine::Backtrack(program),
-            (Ok((search, whole)), _) => Engine::Fancy { search, whole },
-            (Err(FancyFailure::Unbuilt(_)), Some(program)) => Engine::Backtrack(program),
+        let counts_units = windows.iter().any(|window| !window.code_points);
+        let (engine, wide_input) = match (fancy, program) {
+            (Ok(_), Some(program)) if program.differs_from_fancy() => {
+                (Engine::Backtrack(program), WideInput::Engine)
+            }
+            (Ok((search, whole)), program) => (Engine::Fancy { search, whole }, match program {
+                _ if !counts_units => WideInput::Engine,
+                Some(program) => WideInput::Program(program),
+                None => WideInput::Refused,
+            }),
+            (Err(FancyFailure::Unbuilt(_)), Some(program)) => {
+                (Engine::Backtrack(program), WideInput::Engine)
+            }
             (Err(FancyFailure::Unbuilt(error) | FancyFailure::Refused(error)), _) => {
                 return Err(error);
             }
@@ -212,6 +239,7 @@ impl JavaPattern {
             groups,
             names,
             input_limit,
+            wide_input,
         })))
     }
 
@@ -234,9 +262,31 @@ impl JavaPattern {
     /// the crate's `# Limits`.
     pub fn matches(&self, input: &str) -> Result<bool, MatchError> {
         check_input_length(self.0.input_limit, input)?;
+        if let Some(program) = self.wide_program(input)? {
+            return program.matches(input).map_err(MatchError::search);
+        }
         match &self.0.engine {
             Engine::Backtrack(program) => program.matches(input).map_err(MatchError::search),
             Engine::Fancy { whole, .. } => whole.is_match(input).map_err(MatchError::search),
+        }
+    }
+
+    /// The matcher that answers `input` in place of `fancy_regex`: for an
+    /// input with a char past U+FFFF, where a look-behind Java counts in
+    /// UTF-16 units reads it otherwise. `None` where the engine answers.
+    fn wide_program(&self, input: &str) -> Result<Option<&Program>, MatchError> {
+        // A char past U+FFFF is the only one with a four-byte UTF-8 form.
+        if !input.bytes().any(|byte| byte >= 0xF0) {
+            return Ok(None);
+        }
+        match &self.0.wide_input {
+            WideInput::Engine => Ok(None),
+            WideInput::Program(program) => Ok(Some(program)),
+            WideInput::Refused => Err(MatchError(
+                "the input has a char past U+FFFF, which a look-behind of the pattern reads as \
+                 two UTF-16 units, and the backtracking matcher cannot run the pattern"
+                    .to_owned(),
+            )),
         }
     }
 
@@ -251,6 +301,9 @@ impl JavaPattern {
         from: usize,
         last: usize,
     ) -> Result<Option<Vec<Option<Range<usize>>>>, MatchError> {
+        if let Some(program) = self.wide_program(input)? {
+            return program.find(input, from, last).map_err(MatchError::search);
+        }
         let search = match &self.0.engine {
             Engine::Backtrack(program) => {
                 return program.find(input, from, last).map_err(MatchError::search);
@@ -373,7 +426,14 @@ impl JavaPattern {
                         group
                     };
                     if let Some(Some(text)) = groups.get(group) {
-                        out.push_str(&input[text.clone()]);
+                        // A look-behind may start a group between the two UTF-16
+                        // units of a char, which Java gives as a lone surrogate.
+                        out.push_str(input.get(text.clone()).ok_or_else(|| {
+                            MatchError(format!(
+                                "group {group} holds half of a char past U+FFFF, which a Rust \
+                                 string cannot hold"
+                            ))
+                        })?);
                     }
                 }
                 other => out.push(other),
