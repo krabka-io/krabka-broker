@@ -33,7 +33,9 @@
 //! `ſervice-` (long s). A backreference under a case flag, `\R`, and a group
 //! inside a look-around or an atomic group match in ways `fancy_regex` cannot
 //! give, so a pattern that has one runs on the matcher in `backtrack`
-//! instead. A pattern Java's `Pattern.compile` refuses is refused.
+//! instead. So does a pattern `fancy_regex` cannot compile, such as a
+//! look-behind that is not of one length with `\R` in it, or a very large
+//! counted repeat. A pattern Java's `Pattern.compile` refuses is refused.
 //!
 //! # Limits
 //!
@@ -43,6 +45,15 @@
 //! limit is a [`MatchError`], not a no match. Java answers such a search,
 //! however slowly.
 //!
+//! The matcher answers a pattern `fancy_regex` cannot compile, where it
+//! knows every node of it: a look-behind that is not of one length with
+//! `\R`, a look-around, an atomic group or a group in it, such as
+//! `(?<=\R?x)y`, and a counted repeat too large for the `regex` crate to
+//! build at its default size limit, such as `x{1,1000000000}`, in a
+//! look-behind or outside one. It counts the iterations of a repeat, so such
+//! a pattern compiles in milliseconds, but it tries every start of a
+//! look-behind, and a long input can take it past the step limit.
+//!
 //! [`JavaPattern::compile`] refuses the patterns below, which Java compiles,
 //! rather than match them another way. Each is a [`PatternError`].
 //!
@@ -50,8 +61,8 @@
 //! - A named char, `\N{name}`.
 //! - A quantifier of a look-around, such as `(?=(a))*`, which `fancy_regex`
 //!   cannot parse.
-//! - A counted repeat too large for the `regex` crate to build at its default
-//!   size limit, such as `x{1,1000000000}`, in a look-behind or outside one.
+//! - A backreference to a group the pattern does not have, such as `(a)\2`,
+//!   which `fancy_regex` refuses, and which never matches in Java.
 //! - A look-behind whose maximum length overflows Java's `int`, such as
 //!   `(?<=a*b*)`, where Java then tries fewer starts than the look-behind
 //!   allows. Where the overflowed maximum still covers every start, as in
@@ -72,10 +83,10 @@ mod translate;
 use {
     self::{
         backtrack::Program,
-        look_behind::check_look_behinds,
+        look_behind::{LookBehinds, Refusal, check_look_behinds},
         translate::{JavaTranslation, translate_java},
     },
-    fancy_regex::{Expr, Regex},
+    fancy_regex::{CompileError, Error as FancyError, Expr, Regex},
     std::{collections::BTreeMap, fmt::Display, ops::Range, sync::Arc},
 };
 
@@ -88,18 +99,30 @@ pub struct JavaPattern(Arc<Compiled>);
 /// small.
 #[derive(Debug)]
 struct Compiled {
-    /// The pattern as written, for `replaceAll` and `replaceFirst`.
-    search: Regex,
-    /// The pattern pinned to the whole input, for `matches()`.
-    whole: Regex,
+    /// The engine that answers.
+    engine: Engine,
+    /// The groups, group 0 included.
+    groups: usize,
     /// Group name to index, for `${name}` in a replacement.
     names: BTreeMap<String, usize>,
-    /// The matcher that answers in place of `search` and `whole`, for a
-    /// pattern that `fancy_regex` does not read as Java does.
-    backtrack: Option<Program>,
     /// The most UTF-16 units of input the pattern is read for as Java reads
     /// it, for a look-behind whose maximum length wraps in Java's `int`.
     input_limit: Option<usize>,
+}
+
+/// The engine that answers for a [`JavaPattern`].
+#[derive(Debug)]
+enum Engine {
+    /// `fancy_regex`, for a pattern it reads as Java does.
+    Fancy {
+        /// The pattern as written, for `replaceAll` and `replaceFirst`.
+        search: Regex,
+        /// The pattern pinned to the whole input, for `matches()`.
+        whole: Regex,
+    },
+    /// The backtracking matcher, for a pattern that `fancy_regex` does not
+    /// read as Java does, or cannot compile.
+    Backtrack(Program),
 }
 
 /// A pattern Java's `Pattern.compile` refuses with a
@@ -138,42 +161,58 @@ impl JavaPattern {
             group_repeats,
         } = translate_java(pattern)
             .ok_or_else(|| PatternError(format!("{pattern:?} is not a java.util.regex pattern")))?;
-        let input_limit = match Expr::parse_tree(&translated) {
-            Ok(tree) => check_look_behinds(pattern, &tree.expr)
-                .map_err(|refusal| PatternError(format!("{pattern:?} {}", refusal.reason())))?,
-            Err(_) => None,
+        let tree =
+            Expr::parse_tree(&translated).map_err(|error| PatternError(error.to_string()))?;
+        let groups = 1 + count_groups(&tree.expr);
+        // `fancy_regex` refuses a reference to a group the pattern does not
+        // have. It is not asked where a look-behind is too large for it, and
+        // the matcher does not refuse one, so the check is made here.
+        if let Some(group) = backref_past(&tree.expr, groups) {
+            let error = FancyError::CompileError(Box::new(CompileError::InvalidBackref(group)));
+            return Err(PatternError(error.to_string()));
+        }
+        let refuse = |refusal: Refusal| PatternError(format!("{pattern:?} {}", refusal.reason()));
+        // `fancy_regex` would take minutes to build a look-behind too large
+        // for the `regex` crate, so it is not asked to.
+        let LookBehinds {
+            input_limit,
+            too_large,
+        } = check_look_behinds(pattern, &tree.expr).map_err(refuse)?;
+        let fancy = if too_large {
+            Err(FancyFailure::Unbuilt(refuse(Refusal::TooLarge)))
+        } else {
+            compile_fancy(&translated)
         };
-        let compile =
-            |source: &str| Regex::new(source).map_err(|error| PatternError(error.to_string()));
-        let search = compile(&translated)?;
-        let whole = compile(&format!("\\A(?:{translated})\\z"))?;
-        let names = search
-            .capture_names()
-            .enumerate()
-            .filter_map(|(index, name)| Some((name?.to_owned(), index)))
-            .collect();
-        // A pattern `fancy_regex` reads as Java does, or one with a node the
-        // matcher does not know, keeps `fancy_regex`.
-        let backtrack = Program::new(
+        let names = tree.named_groups.into_iter().collect();
+        let program = Program::new(
             &translated,
-            search.captures_len(),
+            groups,
             &backref_folds,
             &linebreak_atoms,
             &group_repeats,
-        )
-        .filter(Program::differs_from_fancy);
+        );
+        // A pattern `fancy_regex` reads as Java does, or one with a node the
+        // matcher does not know, keeps `fancy_regex`. The matcher answers
+        // for one `fancy_regex` cannot build.
+        let engine = match (fancy, program) {
+            (Ok(_), Some(program)) if program.differs_from_fancy() => Engine::Backtrack(program),
+            (Ok((search, whole)), _) => Engine::Fancy { search, whole },
+            (Err(FancyFailure::Unbuilt(_)), Some(program)) => Engine::Backtrack(program),
+            (Err(FancyFailure::Unbuilt(error) | FancyFailure::Refused(error)), _) => {
+                return Err(error);
+            }
+        };
         Ok(Self(Arc::new(Compiled {
-            search,
-            whole,
+            engine,
+            groups,
             names,
-            backtrack,
             input_limit,
         })))
     }
 
     /// The number of capturing groups, `Matcher.groupCount()`.
     #[must_use]
-    pub fn group_count(&self) -> usize { self.0.search.captures_len() - 1 }
+    pub fn group_count(&self) -> usize { self.0.groups - 1 }
 
     /// `Matcher.matches()`.
     ///
@@ -190,9 +229,9 @@ impl JavaPattern {
     /// the crate's `# Limits`.
     pub fn matches(&self, input: &str) -> Result<bool, MatchError> {
         check_input_length(self.0.input_limit, input)?;
-        match &self.0.backtrack {
-            Some(program) => program.matches(input).map_err(MatchError::search),
-            None => self.0.whole.is_match(input).map_err(MatchError::search),
+        match &self.0.engine {
+            Engine::Backtrack(program) => program.matches(input).map_err(MatchError::search),
+            Engine::Fancy { whole, .. } => whole.is_match(input).map_err(MatchError::search),
         }
     }
 
@@ -207,12 +246,13 @@ impl JavaPattern {
         from: usize,
         last: usize,
     ) -> Result<Option<Vec<Option<Range<usize>>>>, MatchError> {
-        if let Some(program) = &self.0.backtrack {
-            return program.find(input, from, last).map_err(MatchError::search);
-        }
-        let captures = self
-            .0
-            .search
+        let search = match &self.0.engine {
+            Engine::Backtrack(program) => {
+                return program.find(input, from, last).map_err(MatchError::search);
+            }
+            Engine::Fancy { search, .. } => search,
+        };
+        let captures = search
             .captures_from_pos(input, from)
             .map_err(MatchError::search)?;
         Ok(captures.map(|captures| {
@@ -338,6 +378,66 @@ impl JavaPattern {
     }
 }
 
+/// Why `fancy_regex` gives no engine for a pattern, with the error the
+/// pattern is refused by where the matcher does not answer either.
+#[derive(Debug)]
+enum FancyFailure {
+    /// `fancy_regex` cannot build the pattern: a look-behind that is not of
+    /// one length with a node it runs itself in it, such as `\R` or a
+    /// look-ahead, or a part too large for the `regex` crate. The matcher
+    /// answers instead where it knows every node.
+    Unbuilt(PatternError),
+    /// `fancy_regex` refuses the pattern for another reason, such as a
+    /// backreference to a group the pattern does not have.
+    Refused(PatternError),
+}
+
+/// `fancy_regex`'s pair for `translated`: the pattern as written, and the
+/// pattern pinned to the whole input.
+fn compile_fancy(translated: &str) -> Result<(Regex, Regex), FancyFailure> {
+    let compile = |source: &str| {
+        Regex::new(source).map_err(|error| {
+            let unbuilt = matches!(
+                &error,
+                FancyError::CompileError(compile_error) if matches!(
+                    **compile_error,
+                    CompileError::FeatureNotYetSupported(_)
+                        | CompileError::LookBehindNotConst
+                        | CompileError::InnerError(_)
+                        | CompileError::DfaBuildError(..)
+                )
+            );
+            let error = PatternError(error.to_string());
+            if unbuilt {
+                FancyFailure::Unbuilt(error)
+            } else {
+                FancyFailure::Refused(error)
+            }
+        })
+    };
+    Ok((
+        compile(translated)?,
+        compile(&format!("\\A(?:{translated})\\z"))?,
+    ))
+}
+
+/// The first group past the last of `groups`, group 0 included, that a
+/// backreference in `expr` refers to. `fancy_regex` refuses such a pattern.
+fn backref_past(expr: &Expr, groups: usize) -> Option<usize> {
+    match expr {
+        Expr::Backref { group, .. } if *group >= groups => Some(*group),
+        _ => expr
+            .children_iter()
+            .find_map(|child| backref_past(child, groups)),
+    }
+}
+
+/// The capturing groups in `expr`, which the parser numbers in order.
+fn count_groups(expr: &Expr) -> usize {
+    usize::from(matches!(expr, Expr::Group(_)))
+        + expr.children_iter().map(count_groups).sum::<usize>()
+}
+
 /// Refuses an `input` of more UTF-16 units than `limit`, the most a pattern
 /// is read for as Java reads it. The UTF-8 length is never less than the
 /// UTF-16 one, so the units are counted only past it.
@@ -356,7 +456,7 @@ fn check_input_length(limit: Option<usize>, input: &str) -> Result<(), MatchErro
 #[cfg(test)]
 mod tests {
     use {
-        super::{look_behind::Refusal, *},
+        super::*,
         assert2::{assert, check},
     };
 
@@ -1984,6 +2084,9 @@ mod tests {
         unknown_named_group = { "(a)", "a", "${who}" },
         empty_named_group = { "(a)", "a", "${}" },
         unclosed_named_group = { "(a)", "a", "${who" },
+        group_number_on_the_matcher_alone = { "(?<=\\R?x)y", "xy", "$1" },
+        group_number_past_a_large_repeat = { "(?<n>x){1,1000000000}", "x", "$2" },
+        unknown_named_group_past_a_large_repeat = { "(?<n>x){1,1000000000}", "x", "${m}" },
     )]
     fn replace_all_refuses_what_java_throws_on(source: &str, input: &str, replacement: &str) {
         check!(
@@ -2515,6 +2618,10 @@ mod tests {
             ("(?<=a*b*c*x)y", Some(2_147_483_646)),
             ("(?<=(?:a*b*c*)?x)y", Some(2_147_483_646)),
             ("(?<=a*b*c*xy)z(?<=a*b*c*x)", Some(2_147_483_646)),
+            // Four greedy repeats wrap to -4, and the counted repeat brings it
+            // back to 1,099,999,996. The look-behind is too large for
+            // `fancy_regex` too, and keeps its limit on the matcher.
+            ("(?<=a*b*c*d*x{1,1100000000})y", Some(1_099_999_996)),
             ("(?<=a*b*c*)d", None),
             ("(?<=a*bc)d", None),
             ("(?<=a*)c", None),
@@ -2548,26 +2655,169 @@ mod tests {
         }
     }
 
-    /// A look-behind that `fancy_regex` would build as a reverse DFA with no
-    /// size limit, and that the `regex` crate finds too large at its default
-    /// one, is refused. JDK 25.0.4 compiles each row.
+    /// A look-behind that is not of one length, with a node in it that
+    /// `fancy_regex` runs itself, such as `\R`, a look-around, an atomic
+    /// group, a possessive quantifier, `\G` or a group, is one `fancy_regex`
+    /// cannot build. The matcher answers for it. Each row is
+    /// `String.replaceAll` on JDK 25.0.4.
+    #[test]
+    fn a_look_behind_fancy_regex_cannot_build_matches_as_java_does() {
+        // (pattern, input, replacement, replaceAll result)
+        let cases = [
+            replace_row("(?<=\\R?x)y", "xy", "<$0>", "x<y>"),
+            replace_row("(?<=\\R?x)y", "\nxy", "<$0>", "\nx<y>"),
+            replace_row("(?<=\\R?x)y", "\r\nxy", "<$0>", "\r\nx<y>"),
+            replace_row("(?<=\\R?x)y", "y", "<$0>", "y"),
+            replace_row("(?<=\\R?x)y", "zy", "<$0>", "zy"),
+            replace_row("(?<!\\R?x)y", "xy", "<$0>", "xy"),
+            replace_row("(?<!\\R?x)y", "\nxy", "<$0>", "\nxy"),
+            replace_row("(?<!\\R?x)y", "zy", "<$0>", "z<y>"),
+            replace_row("(?<!\\R?x)y", "y", "<$0>", "<y>"),
+            replace_row("(?<=\\Rx|y)z", "\nxz", "<$0>", "\nx<z>"),
+            replace_row("(?<=\\Rx|y)z", "\r\nxz", "<$0>", "\r\nx<z>"),
+            replace_row("(?<=\\Rx|y)z", "yz", "<$0>", "y<z>"),
+            replace_row("(?<=\\Rx|y)z", "xz", "<$0>", "xz"),
+            replace_row("(?<=\\R{1,2})x", "\r\nx", "<$0>", "\r\n<x>"),
+            replace_row("(?<=\\R{1,2})x", "\n\nx", "<$0>", "\n\n<x>"),
+            replace_row("(?<=\\R{1,2})x", "x", "<$0>", "x"),
+            replace_row("(?<=a\\R?)b", "a\r\nb", "<$0>", "a\r\n<b>"),
+            replace_row("(?<=a\\R?)b", "b", "<$0>", "b"),
+            replace_row("(?<=(?=a)ab?)c", "ac", "<$0>", "a<c>"),
+            replace_row("(?<=(?=a)ab?)c", "abc", "<$0>", "ab<c>"),
+            replace_row("(?<=(?=a)ab?)c", "bc", "<$0>", "bc"),
+            replace_row("(?<!(?=a)ab?)c", "abc", "<$0>", "abc"),
+            replace_row("(?<!(?=a)ab?)c", "bc", "<$0>", "b<c>"),
+            replace_row("(?<=a(?!b)c?)d", "acd", "<$0>", "ac<d>"),
+            replace_row("(?<=a(?!b)c?)d", "abd", "<$0>", "abd"),
+            replace_row("(?<=(?<=a)b?)c", "abc", "<$0>", "ab<c>"),
+            replace_row("(?<=(?<=a)b?)c", "bc", "<$0>", "bc"),
+            // The atomic group keeps its first way, so `ab` leaves no `b`.
+            replace_row("(?<=(?>a|ab)b?)c", "ac", "<$0>", "a<c>"),
+            replace_row("(?<=(?>a|ab)b?)c", "abc", "<$0>", "ab<c>"),
+            replace_row("(?<=(?>a|ab)b?)c", "abbc", "<$0>", "abbc"),
+            replace_row("(?<=(?>ab|a)b?)c", "abbc", "<$0>", "abb<c>"),
+            replace_row("(?<=a{1,3}+b?)c", "aabc", "<$0>", "aab<c>"),
+            replace_row("(?<=a{1,3}+b?)c", "bc", "<$0>", "bc"),
+            replace_row("(?<=\\Gab?)c", "acac", "<$0>", "a<c>a<c>"),
+            // A group in the look-behind keeps its text.
+            replace_row("(?<=(a)|bc)d", "ad", "[$1$0]", "a[ad]"),
+            replace_row("(?<=(a)|bc)d", "bcd", "[$1$0]", "bc[d]"),
+            replace_row("(?<=\\R?(x))(y)", "xy", "[$2$1]", "x[yx]"),
+            replace_row("(?<=\\R?(?<n>x))y", "\nxy", "[${n}$0]", "\nx[xy]"),
+        ];
+        check_replacements(cases, true, true);
+    }
+
+    /// A counted repeat too large for the `regex` crate at its default size
+    /// limit, in a look-behind or outside one, is one `fancy_regex` cannot
+    /// build, and in a look-behind would build for minutes. The matcher
+    /// counts the iterations instead. Each row is `Matcher.matches()` on
+    /// JDK 25.0.4.
+    #[test]
+    fn a_counted_repeat_too_large_to_build_matches_as_java_does() {
+        // (pattern, input, matches)
+        let cases = [
+            row("x{1,1000000000}", "xxx", true),
+            row("x{1,1000000000}", "x", true),
+            row("x{1,1000000000}", "", false),
+            row("x{1,1000000000}", "y", false),
+            row("x{1000000000}", "xxx", false),
+            row("x{2,1000000000}y", "xxy", true),
+            row("x{2,1000000000}y", "xy", false),
+            row("(?:ab){1,600000000}", "abab", true),
+            row("(?:ab){1,600000000}", "aba", false),
+            row("(x){1,1000000000}", "xxx", true),
+            row("(?i)x{1,1000000000}", "XXX", true),
+        ];
+        check_matches(cases, false);
+    }
+
+    /// A look-behind too large for `fancy_regex` to build, and a counted
+    /// repeat too large outside one, match on the matcher. Each row is
+    /// `String.replaceAll` on JDK 25.0.4.
+    #[test]
+    fn a_look_behind_too_large_to_build_matches_as_java_does() {
+        // (pattern, input, replacement, replaceAll result)
+        let cases = [
+            replace_row("(?<=x{1,1000000000})y", "xy", "<$0>", "x<y>"),
+            replace_row("(?<=x{1,1000000000})y", "xxy", "<$0>", "xx<y>"),
+            replace_row("(?<=x{1,1000000000})y", "y", "<$0>", "y"),
+            replace_row("(?<!x{1,1000000000})y", "xy", "<$0>", "xy"),
+            replace_row("(?<!x{1,1000000000})y", "y", "<$0>", "<y>"),
+            replace_row("(?<=(?:ab){1,600000000})y", "aby", "<$0>", "ab<y>"),
+            replace_row("(?<=(?:ab){1,600000000})y", "by", "<$0>", "by"),
+            replace_row("(?<=a{0,2147483647}b)c", "abc", "<$0>", "ab<c>"),
+            replace_row("(?<=a{0,2147483647}b)c", "bc", "<$0>", "b<c>"),
+            replace_row("(?<=a{0,2147483647}b)c", "c", "<$0>", "c"),
+            replace_row("(?<=a{1,2147483647})b", "ab", "<$0>", "a<b>"),
+            replace_row("(?<=a{1,2147483647})b", "b", "<$0>", "b"),
+            replace_row("(?<=[ab]{1,1500000000})c", "abc", "<$0>", "ab<c>"),
+            replace_row("(?<=[ab]{1,1500000000})c", "c", "<$0>", "c"),
+            replace_row("(?<=z|x{1,1000000000})y", "xy", "<$0>", "x<y>"),
+            replace_row("(?<=z|x{1,1000000000})y", "zy", "<$0>", "z<y>"),
+            replace_row("(?<=z|x{1,1000000000})y", "y", "<$0>", "y"),
+            replace_row("(?<=(?=x)x{1,1000000000})y", "xy", "<$0>", "x<y>"),
+            replace_row("(?<=(?=x)x{1,1000000000})y", "y", "<$0>", "y"),
+            replace_row("(?<=(?i)x{1,1000000000})y", "Xy", "<$0>", "X<y>"),
+            replace_row("(?<=x{1,1000000000})(y)", "xy", "[$1]", "x[y]"),
+            replace_row("(?:ab){1,600000000}", "aba", "<$0>", "<ab>a"),
+            replace_row("(x){1,1000000000}", "xxx", "[$1]", "[x]"),
+            replace_row("(?<n>x){1,1000000000}", "xxx", "[${n}]", "[x]"),
+        ];
+        check_replacements(cases, true, true);
+    }
+
+    /// A long input against a very large counted repeat ends in Java's
+    /// answer or in a [`MatchError`] at the backtrack limit, never in
+    /// another answer. Each `expected` is `Matcher.matches()` and
+    /// `String.replaceAll` on JDK 25.0.4, with `x` 3,000 times as the input.
+    #[test]
+    fn a_long_input_against_a_large_repeat_gives_java_s_answer_or_an_error() {
+        let xs = "x".repeat(3000);
+        let xs_y = format!("{xs}y");
+        // (pattern, input, matches, replaceAll result with `<$0>`)
+        let cases = [
+            ("x{1,1000000000}", xs.clone(), true, format!("<{xs}>")),
+            ("x{1,1000000000}y", xs.clone(), false, xs.clone()),
+            (
+                "(?<=x{1,1000000000})y",
+                xs_y.clone(),
+                false,
+                format!("{xs}<y>"),
+            ),
+            ("(?<!x{1,1000000000})y", xs_y.clone(), false, xs_y.clone()),
+        ];
+        for (source, input, matches, replaced) in cases {
+            let compiled = pattern(source);
+            check!(
+                compiled.matches(&input).ok() != Some(!matches),
+                "{source} matches"
+            );
+            check!(
+                compiled
+                    .replace(&input, "<$0>", true)
+                    .map_or(true, |out| out == replaced),
+                "{source} replaceAll"
+            );
+        }
+    }
+
+    /// A pattern `fancy_regex` refuses for a reason other than a size or a
+    /// look-behind it cannot build stays refused, the matcher answering or
+    /// not: here a backreference to a group the pattern does not have, which
+    /// JDK 25.0.4 compiles, and which never matches there.
     #[yare::parameterized(
-        positive = { "(?<=x{1,1000000000})y" },
-        negative = { "(?<!x{1,1000000000})y" },
-        group = { "(?<=(?:ab){1,600000000})y" },
-        before_a_literal = { "(?<=a{0,2147483647}b)c" },
-        largest_count = { "(?<=a{1,2147483647})b" },
-        class = { "(?<=[ab]{1,1500000000})c" },
-        alternative = { "(?<=z|x{1,1000000000})y" },
-        beside_a_look_ahead = { "(?<=(?=x)x{1,1000000000})y" },
+        alone = { "(a)\\2" },
+        beside_a_look_behind_too_large_to_build = { "(?<=x{1,1000000000})y(a)\\2" },
+        beside_a_look_behind_fancy_regex_cannot_build = { "(?<=\\R?x)y(a)\\2" },
+        after_a_large_repeat = { "x{1,1000000000}(a)\\2" },
     )]
-    fn a_look_behind_too_large_to_build_is_refused(source: &str) {
+    fn a_backreference_to_a_missing_group_is_refused(source: &str) {
         check!(
             JavaPattern::compile(source).err()
-                == Some(PatternError(format!(
-                    "{source:?} {}",
-                    Refusal::TooLarge.reason()
-                )))
+                == Some(PatternError(
+                    "Error compiling regex: Invalid back reference to group 2".to_owned()
+                ))
         );
     }
 

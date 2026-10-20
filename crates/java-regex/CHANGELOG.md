@@ -16,8 +16,15 @@ release that contains `krabka-java-regex`.
   string. The groups inside it keep their text when the match backtracks
   out of the repeat, as in Java: `(?:((a))*y|a)\2` matches `aa`.
 - A look-behind too large for the `regex` crate to build, such as
-  `(?<=x{1,1000000000})`, is refused in milliseconds. `fancy-regex` built it
-  for minutes.
+  `(?<=x{1,1000000000})`, compiles in milliseconds and matches on the
+  backtracking matcher. `fancy-regex` built it for minutes.
 - A look-behind whose maximum length overflows Java's `int`, such as
   `(?<=a*b*)`, is refused where Java then tries fewer starts than the pattern
   allows, instead of matching where Java does not.
+- A look-behind that is not of one length with `\R`, a look-around, an
+  atomic group or a group in it, such as `(?<=\R?x)y` or `(?<=(?=a)ab?)c`,
+  compiles and matches on the backtracking matcher. `fancy-regex` cannot
+  build it, so it was refused.
+- A counted repeat too large for the `regex` crate to build, such as
+  `x{1,1000000000}`, compiles and matches on the backtracking matcher,
+  which counts its iterations. It was refused.
