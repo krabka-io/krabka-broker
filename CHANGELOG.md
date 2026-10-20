@@ -122,6 +122,33 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Fixed
 
+- Audit records are kept for the audit topic's `retention.ms` (issue #1550).
+  The audit writer stored every batch with `CreateTime` 0, so time retention
+  took each closed segment of `__krabka_audit` as decades old and deleted it
+  at the next pass. On v1.0.5 the first 114 audit records of a test broker
+  were gone about five minutes after start, against a 7-day `retention.ms`.
+  The writer now stamps each batch with the wall clock, as Kafka stamps its
+  records. This release cannot recover audit records that an earlier release
+  wrote and retention already deleted. A segment that holds only records
+  written before the upgrade is still deleted at the first retention pass
+  after it closes. Export any audit records you need to keep before you
+  upgrade.
+- An audit hash chain continues across a broker restart (issue #1550). On
+  restart the writer searched for the chain's last record from offset 0. Once
+  retention had raised the log start, that read failed with `OffsetTooLow`,
+  the `ERROR` line reported in the issue. The writer then began a new chain:
+  sequence 0 with an all-zero `prev_hash`. It now reads from the log start. A
+  chain that an earlier release wrote may restart at a broker restart. A
+  verifier finds a break at sequence 0 with an all-zero `prev_hash` there.
+  Match each break against the broker's restart times.
+- Transaction, share-group and barrier state records carry the time they
+  were written, as Kafka's do. `__transaction_state`, `__share_group_state`
+  and `__barrier_state` stored every record with `CreateTime` 0. These topics
+  are compacted, so no record was lost. But a quiet partition's active
+  segment never rolled by `segment.ms`, so the cleaner did not compact it
+  until the segment reached `segment.bytes`. Records written before the
+  upgrade keep timestamp 0, and `kafka-dump-log` shows `CreateTime:0` for
+  them. The on-disk format does not change.
 - `KrabkaOfflinePartitions` no longer pages for every broker that is down,
   a planned stop in a rolling upgrade included (issue #1516). Each broker
   holds one single-replica partition of the audit topic, which has no leader
