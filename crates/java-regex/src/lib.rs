@@ -53,8 +53,9 @@
 //! `(?<=\R?x)y`, and a counted repeat too large for the `regex` crate to
 //! build at its default size limit, such as `x{1,1000000000}`, in a
 //! look-behind or outside one. It counts the iterations of a repeat, so such
-//! a pattern compiles in milliseconds, but it tries every start of a
-//! look-behind, and a long input can take it past the step limit.
+//! a pattern compiles in milliseconds, but it tries every start in Java's
+//! window of a look-behind, which for such a repeat is the whole input, and a
+//! long input can take it past the step limit.
 //!
 //! [`JavaPattern::compile`] refuses the patterns below, which Java compiles,
 //! rather than match them another way. Each is a [`PatternError`].
@@ -69,14 +70,27 @@
 //!   `(?<=a*b*)`, where Java then tries fewer starts than the look-behind
 //!   allows. Where the overflowed maximum still covers every start, as in
 //!   `(?<=a*bc)`, the pattern compiles.
-//! - A pattern with a char past U+FFFF anywhere in it, whenever a look-behind's
-//!   maximum overflows, as in `😀x(?<=a*b*c*x)y`. Java reads one with the char
-//!   before the look-behind as it reads one without.
+//! - A look-behind whose maximum overflows, in a pattern with a char past
+//!   U+FFFF from the look-behind on, as in `(?<=a*b*c*x)y😀`. Java then counts
+//!   the look-behind's window in code points (`BehindS`), with arithmetic the
+//!   crate does not follow.
 //!
 //! One more input limit applies at match time. Where an overflowed maximum is
 //! at least 2^30 and covers every start only up to that length, as in
 //! `(?<=a*b*c*x)`, an input of more UTF-16 units than the maximum is a
 //! [`MatchError`].
+//!
+//! Java reads a char past U+FFFF as two UTF-16 units, and its look-behind
+//! counts its window in units where the pattern has no such char from the
+//! look-behind on, so it may start between the two units and read a lone low
+//! surrogate there. An input with such a char goes to the backtracking matcher
+//! where the pattern has such a look-behind, and the matcher reads it as Java
+//! does. A group the look-behind starts or ends between the two units holds a
+//! lone surrogate in Java, which a Rust string cannot, so a replacement that
+//! takes its text is a [`MatchError`]. A search still starts at a char only,
+//! where Java's `Matcher.find` also tries the low surrogate of one: Java
+//! finds `(?<!^).` in `😀x` at the low surrogate and at `x`, and the crate at
+//! `x` only.
 
 mod backtrack;
 mod look_behind;
@@ -110,6 +124,24 @@ struct Compiled {
     /// The most UTF-16 units of input the pattern is read for as Java reads
     /// it, for a look-behind whose maximum length wraps in Java's `int`.
     input_limit: Option<usize>,
+    /// What answers an input with a char past U+FFFF where `engine` is
+    /// `fancy_regex`.
+    wide_input: WideInput,
+}
+
+/// What answers an input with a char past U+FFFF, which Java reads as two
+/// UTF-16 units. A look-behind that Java counts in units (`Behind`) can then
+/// try a start that `fancy_regex`, which counts chars, does not, or start
+/// between the two units of the char.
+#[derive(Debug)]
+enum WideInput {
+    /// The engine, which reads such an input as Java does: the matcher, or
+    /// `fancy_regex` for a pattern with no look-behind Java counts in units.
+    Engine,
+    /// The matcher, in place of `fancy_regex`.
+    Program(Program),
+    /// Neither: the matcher does not know a node of the pattern.
+    Refused,
 }
 
 /// The engine that answers for a [`JavaPattern`].
@@ -161,6 +193,7 @@ impl JavaPattern {
             backref_folds,
             linebreak_atoms,
             group_repeats,
+            look_behind_code_points,
         } = translate_java(pattern)
             .ok_or_else(|| PatternError(format!("{pattern:?} is not a java.util.regex pattern")))?;
         let tree =
@@ -179,7 +212,8 @@ impl JavaPattern {
         let LookBehinds {
             input_limit,
             too_large,
-        } = check_look_behinds(pattern, &tree.expr).map_err(refuse)?;
+            windows,
+        } = check_look_behinds(&tree.expr, &look_behind_code_points).map_err(refuse)?;
         let fancy = if too_large {
             Err(FancyFailure::Unbuilt(refuse(Refusal::TooLarge)))
         } else {
@@ -192,14 +226,24 @@ impl JavaPattern {
             &backref_folds,
             &linebreak_atoms,
             &group_repeats,
+            &windows,
         );
         // A pattern `fancy_regex` reads as Java does, or one with a node the
         // matcher does not know, keeps `fancy_regex`. The matcher answers
         // for one `fancy_regex` cannot build.
-        let engine = match (fancy, program) {
-            (Ok(_), Some(program)) if program.differs_from_fancy() => Engine::Backtrack(program),
-            (Ok((search, whole)), _) => Engine::Fancy { search, whole },
-            (Err(FancyFailure::Unbuilt(_)), Some(program)) => Engine::Backtrack(program),
+        let counts_units = windows.iter().any(|window| !window.code_points);
+        let (engine, wide_input) = match (fancy, program) {
+            (Ok(_), Some(program)) if program.differs_from_fancy() => {
+                (Engine::Backtrack(program), WideInput::Engine)
+            }
+            (Ok((search, whole)), program) => (Engine::Fancy { search, whole }, match program {
+                _ if !counts_units => WideInput::Engine,
+                Some(program) => WideInput::Program(program),
+                None => WideInput::Refused,
+            }),
+            (Err(FancyFailure::Unbuilt(_)), Some(program)) => {
+                (Engine::Backtrack(program), WideInput::Engine)
+            }
             (Err(FancyFailure::Unbuilt(error) | FancyFailure::Refused(error)), _) => {
                 return Err(error);
             }
@@ -209,6 +253,7 @@ impl JavaPattern {
             groups,
             names,
             input_limit,
+            wide_input,
         })))
     }
 
@@ -231,9 +276,31 @@ impl JavaPattern {
     /// the crate's `# Limits`.
     pub fn matches(&self, input: &str) -> Result<bool, MatchError> {
         check_input_length(self.0.input_limit, input)?;
+        if let Some(program) = self.wide_program(input)? {
+            return program.matches(input).map_err(MatchError::search);
+        }
         match &self.0.engine {
             Engine::Backtrack(program) => program.matches(input).map_err(MatchError::search),
             Engine::Fancy { whole, .. } => whole.is_match(input).map_err(MatchError::search),
+        }
+    }
+
+    /// The matcher that answers `input` in place of `fancy_regex`: for an
+    /// input with a char past U+FFFF, where a look-behind Java counts in
+    /// UTF-16 units reads it otherwise. `None` where the engine answers.
+    fn wide_program(&self, input: &str) -> Result<Option<&Program>, MatchError> {
+        // A char past U+FFFF is the only one with a four-byte UTF-8 form.
+        if !input.bytes().any(|byte| byte >= 0xF0) {
+            return Ok(None);
+        }
+        match &self.0.wide_input {
+            WideInput::Engine => Ok(None),
+            WideInput::Program(program) => Ok(Some(program)),
+            WideInput::Refused => Err(MatchError(
+                "the input has a char past U+FFFF, which a look-behind of the pattern reads as \
+                 two UTF-16 units, and the backtracking matcher cannot run the pattern"
+                    .to_owned(),
+            )),
         }
     }
 
@@ -248,6 +315,9 @@ impl JavaPattern {
         from: usize,
         last: usize,
     ) -> Result<Option<Vec<Option<Range<usize>>>>, MatchError> {
+        if let Some(program) = self.wide_program(input)? {
+            return program.find(input, from, last).map_err(MatchError::search);
+        }
         let search = match &self.0.engine {
             Engine::Backtrack(program) => {
                 return program.find(input, from, last).map_err(MatchError::search);
@@ -298,14 +368,7 @@ impl JavaPattern {
             if !all {
                 break;
             }
-            search_from = if whole.is_empty() {
-                input[whole.end..]
-                    .chars()
-                    .next()
-                    .map_or(input.len() + 1, |next| whole.end + next.len_utf8())
-            } else {
-                whole.end
-            };
+            search_from = next_search_start(input, &whole);
         }
         out.push_str(&input[copied..]);
         Ok(out)
@@ -370,7 +433,14 @@ impl JavaPattern {
                         group
                     };
                     if let Some(Some(text)) = groups.get(group) {
-                        out.push_str(&input[text.clone()]);
+                        // A look-behind may start a group between the two UTF-16
+                        // units of a char, which Java gives as a lone surrogate.
+                        out.push_str(input.get(text.clone()).ok_or_else(|| {
+                            MatchError(format!(
+                                "group {group} holds half of a char past U+FFFF, which a Rust \
+                                 string cannot hold"
+                            ))
+                        })?);
                     }
                 }
                 other => out.push(other),
@@ -452,6 +522,20 @@ fn check_input_length(limit: Option<usize>, input: &str) -> Result<(), MatchErro
             )))
         }
         _ => Ok(()),
+    }
+}
+
+/// Where `Matcher.find` starts after the match `whole` of `input`: where the
+/// match ended, or one char on after an empty match, and past the end after an
+/// empty match at the end.
+fn next_search_start(input: &str, whole: &Range<usize>) -> usize {
+    if whole.is_empty() {
+        input[whole.end..]
+            .chars()
+            .next()
+            .map_or(input.len() + 1, |next| whole.end + next.len_utf8())
+    } else {
+        whole.end
     }
 }
 
@@ -2608,6 +2692,47 @@ mod tests {
             replace_row("(?<=a*)c", "aac", "<$0>", "aa<c>"),
         ];
         check_replacements(cases, true, false);
+    }
+
+    /// Java's `Behind` counts its window in UTF-16 units, a class or `.` as
+    /// one, so over a char past U+FFFF it tries starts that `fancy_regex`,
+    /// which counts chars, does not: between the two units of the char, where
+    /// it reads a lone low surrogate that `.` and `[^a]` match and `\p{So}`
+    /// does not, and none before it for `(?<=..)`. With the char written in
+    /// the pattern from the look-behind on, Java's `BehindS` counts code
+    /// points. Each row is `replaceAll("<$0>")` on JDK 25.0.4.
+    #[test]
+    fn a_look_behind_over_a_char_past_u_ffff_matches_as_java_does() {
+        let cases = [
+            replace_row(".(?<=.)x", "😀x", "<$0>", "<😀x>"),
+            replace_row(".(?<=.)x", "a😀x", "<$0>", "a<😀x>"),
+            replace_row("a.(?<=a.)x", "a😀x", "<$0>", "a😀x"),
+            replace_row("(?<=..)x", "a😀x", "<$0>", "a😀x"),
+            replace_row("(?<=.{1,2})x", "a😀x", "<$0>", "a😀<x>"),
+            replace_row(".(?<=[^a])x", "a😀x", "<$0>", "a<😀x>"),
+            replace_row(".(?<=\\p{So})x", "a😀x", "<$0>", "a😀x"),
+            replace_row("(?<=\\x{1F600})x", "😀x", "<$0>", "😀x"),
+            replace_row("(?<!.)x", "😀x", "<$0>", "😀x"),
+            replace_row("(?<!\\p{So})x", "😀x", "<$0>", "😀<x>"),
+            replace_row("(?<=^.)x", "😀x", "<$0>", "😀x"),
+            replace_row("(?<=\\b.)x", "a😀x", "<$0>", "a😀x"),
+            // `BehindS`: the char in the pattern from the look-behind on.
+            replace_row("(?<=😀)x", "a😀x", "<$0>", "a😀<x>"),
+            replace_row("(?<=\\p{So})x😀?", "😀x", "<$0>", "😀<x>"),
+            // An input with no char past U+FFFF reads as before.
+            replace_row("(?<=..)x", "abx", "<$0>", "ab<x>"),
+        ];
+        check_replacements(cases, true, false);
+    }
+
+    /// A group the look-behind starts between the two UTF-16 units of a char
+    /// holds a lone surrogate in Java, which a Rust string cannot, so a
+    /// replacement that takes its text is an error. The match itself stands.
+    #[test]
+    fn a_group_holding_half_a_char_is_refused_in_a_replacement() {
+        let source = ".(?<=(.))x";
+        check!(pattern(source).replace("😀x", "<$0>", true).ok().as_deref() == Some("<😀x>"));
+        check!(pattern(source).replace("😀x", "<$1>", true).is_err());
     }
 
     /// A look-behind accepted with a wrapped maximum of at least 2^30 limits

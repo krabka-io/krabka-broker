@@ -3626,6 +3626,7 @@ dependencies = [
  "assert2",
  "fancy-regex",
  "regex",
+ "regex-syntax",
  "thiserror 2.0.21",
  "yare",
 ]

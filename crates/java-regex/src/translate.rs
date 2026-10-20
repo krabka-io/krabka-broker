@@ -27,6 +27,12 @@ pub(crate) struct JavaTranslation {
     /// the group itself. `(?:(x))*` has the tree of `(x)*` in `fancy_regex`,
     /// and Java repeats it with a `GroupCurly` that does not.
     pub(crate) group_repeats: Vec<bool>,
+    /// For each look-behind that `pattern` writes, in order, whether Java
+    /// counts its window in code points (`BehindS`), as it does where the
+    /// Java pattern has a supplementary char from the look-behind's `(` to its
+    /// end, or in UTF-16 units (`Behind`). A look-behind the rewrite writes
+    /// for `^`, `$` or `\b` counts in units.
+    pub(crate) look_behind_code_points: Vec<bool>,
 }
 
 /// Rewrite a `java.util.regex.Pattern` into `fancy_regex` syntax, or `None`
@@ -104,17 +110,70 @@ pub(crate) fn translate_java(pattern: &str) -> Option<JavaTranslation> {
         linebreak_atoms: Vec::new(),
         group_names: Vec::new(),
         group_repeats: vec![false],
+        last_supplementary: chars.iter().rposition(|&c| u32::from(c) >= 0x1_0000),
+        look_behinds: Vec::new(),
         quantified: Quantified::Start,
     };
     while translator.at < chars.len() {
         translator.step()?;
     }
+    let look_behind_code_points =
+        look_behind_code_points(&translator.out, &translator.look_behinds);
     Some(JavaTranslation {
         pattern: translator.out,
         backref_folds: translator.backref_folds,
         linebreak_atoms: translator.linebreak_atoms,
         group_repeats: translator.group_repeats,
+        look_behind_code_points,
     })
+}
+
+/// [`JavaTranslation::look_behind_code_points`] for `pattern`, the rewrite's
+/// output, given the Java pattern's own look-behinds in `java`: where each
+/// opens in `pattern`, and whether it counts in code points. Every other
+/// look-behind in `pattern` is one the rewrite wrote, and counts in UTF-16
+/// units.
+///
+/// The look-behinds are found in `pattern` itself, as `fancy_regex` reads its
+/// groups and classes, so that a look-behind written anywhere is counted, in
+/// the order `fancy_regex` parses it: by its opener, the outer one first. A
+/// `(?<=` in a class is class members, and `(?<name>` a named group.
+fn look_behind_code_points(pattern: &str, java: &[(usize, bool)]) -> Vec<bool> {
+    let bytes = pattern.as_bytes();
+    let mut java = java.iter().peekable();
+    let mut code_points = Vec::new();
+    // The depth of the classes open here, as `fancy_regex`'s `parse_class`
+    // nests them.
+    let mut nest = 0_usize;
+    let mut at = 0;
+    while at < bytes.len() {
+        at += match (bytes[at], nest) {
+            // An escape is its backslash and the byte after it. What follows
+            // that byte, such as the braces of `\x{85}`, holds no `(` or `[`.
+            (b'\\', _) => 2,
+            (b'(', 0)
+                if bytes[at + 1..].starts_with(b"?<=") || bytes[at + 1..].starts_with(b"?<!") =>
+            {
+                code_points.push(
+                    java.next_if(|&&(opens, _)| opens == at)
+                        .is_some_and(|&(_, code_points)| code_points),
+                );
+                4
+            }
+            // A `^` and then a `]` after the `[` are members.
+            (b'[', _) => {
+                nest += 1;
+                let after = usize::from(bytes.get(at + 1) == Some(&b'^'));
+                1 + after + usize::from(bytes.get(at + 1 + after) == Some(&b']'))
+            }
+            (b']', 1..) => {
+                nest -= 1;
+                1
+            }
+            _ => 1,
+        };
+    }
+    code_points
 }
 
 /// The state of one [`translate_java`] pass over a pattern.
@@ -147,6 +206,11 @@ struct Translator<'a> {
     group_names: Vec<String>,
     /// See [`JavaTranslation::group_repeats`].
     group_repeats: Vec<bool>,
+    /// The index in `chars` of the last supplementary char, if there is one.
+    last_supplementary: Option<usize>,
+    /// Each look-behind of the Java pattern written so far: where it opens in
+    /// `out`, and whether Java counts its window in code points.
+    look_behinds: Vec<(usize, bool)>,
     /// What the token before this one leaves a quantifier here.
     quantified: Quantified,
 }
@@ -702,7 +766,16 @@ impl Translator<'_> {
         let (opener, captures) = match rest.first() {
             Some(':' | '=' | '!' | '>') => (3, false),
             Some('<') => match rest.get(1) {
-                Some('=' | '!') => (4, false),
+                // Java's `group0` counts the window in code points where
+                // `findSupplementary` finds a supplementary char in `temp`, the
+                // pattern without its `\Q...\E` quoting, from the opener to the
+                // end of the pattern. `chars` is that `temp`, and no char a
+                // Rust `char` can hold is a surrogate.
+                Some('=' | '!') => {
+                    let code_points = self.last_supplementary.is_some_and(|last| last >= self.at);
+                    self.look_behinds.push((self.out.len(), code_points));
+                    (4, false)
+                }
                 Some(first) if first.is_ascii_alphabetic() => {
                     let name = rest[2..].iter().position(|c| !c.is_ascii_alphanumeric())?;
                     if rest[2 + name] != '>' {
@@ -1175,7 +1248,12 @@ impl FlagGroup {
 
 #[cfg(test)]
 mod tests {
-    use {super::translate_java, crate::JavaPattern, assert2::check};
+    use {
+        super::translate_java,
+        crate::JavaPattern,
+        assert2::check,
+        fancy_regex::{Expr, LookAround},
+    };
 
     /// One whole-input match: whether `source` matches all of `input`.
     struct MatchCase<'a> {
@@ -1318,5 +1396,55 @@ mod tests {
     fn group_repeats_marks_the_groups_a_group_curly_repeats(source: &str, expected: &[bool]) {
         let group_repeats = translate_java(source).map(|translation| translation.group_repeats);
         check!(group_repeats.as_deref() == Some(expected), "{source:?}");
+    }
+
+    /// Whether Java counts each look-behind's window in code points: where the
+    /// pattern without its `\Q...\E` quoting has a supplementary char from the
+    /// look-behind's `(` to its end. The look-behinds the rewrite writes for
+    /// `^`, `$`, `\b` and `\B` count in units: `(?m)^`, `\b` and `\B` write two
+    /// each, and `$` one.
+    #[yare::parameterized(
+        plain = { "(?<=a)b", &[false] },
+        supplementary_after = { "(?<=a)😀", &[true] },
+        supplementary_before = { "😀(?<=a)b", &[false] },
+        both_before_it = { "(?<=a)b(?<!c)😀", &[true, true] },
+        only_the_first_before_it = { "(?<=a)😀(?<!c)", &[true, false] },
+        escape_is_ascii = { r"(?<=\x{1F600})x", &[false] },
+        nested_outer_first = { "(?<=(?<=😀)a)b", &[true, true] },
+        quoted_before = { r"\Q😀\E(?<=a)", &[false] },
+        quoted_after = { r"(?<=a)\Q😀\E", &[true] },
+        quoted_opener = { r"\Q(?<=\Ea", &[] },
+        in_a_class = { "[(?<=]a", &[] },
+        in_a_nested_class = { "[a[(?<!]]b", &[] },
+        named_group = { "(?<n>a)(?<=b)", &[false] },
+        multiline_caret = { "(?m)^(?<=a)😀", &[false, false, true] },
+        word_boundary = { r"\b(?<=a)", &[false, false, false] },
+        not_word_boundary = { r"(?<=😀)\B", &[true, false, false] },
+        dollar = { "(?<=a)$😀", &[true, false] },
+        quantified_dollar = { "😀$?(?<!a)", &[false, false] },
+        none = { "abc", &[] },
+    )]
+    fn look_behind_code_points_follows_find_supplementary(source: &str, expected: &[bool]) {
+        let translation = translate_java(source);
+        let code_points = translation
+            .as_ref()
+            .map(|translation| translation.look_behind_code_points.as_slice());
+        check!(code_points == Some(expected), "{source:?}");
+        // One entry for each look-behind `fancy_regex` parses.
+        let tree = translation.map(|translation| Expr::parse_tree(&translation.pattern));
+        let look_behinds = match &tree {
+            Some(Ok(tree)) => Some(look_behinds_in(&tree.expr)),
+            _ => None,
+        };
+        check!(look_behinds == Some(expected.len()), "{source:?}");
+    }
+
+    /// The look-behinds in `expr` and below it.
+    fn look_behinds_in(expr: &Expr) -> usize {
+        let own = usize::from(matches!(
+            expr,
+            Expr::LookAround(_, LookAround::LookBehind | LookAround::LookBehindNeg)
+        ));
+        own + expr.children_iter().map(look_behinds_in).sum::<usize>()
     }
 }
