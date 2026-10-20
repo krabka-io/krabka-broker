@@ -127,7 +127,7 @@ each image covers. The rows below say when each client last ran.
 
 | Combination | Status | Evidence | Tested at | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| `v1.0.5` to `main`, single-broker smoke | `failing` | [Dispatch 39177946645, `upgrade · previous release`](https://github.com/krabka-io/krabka-broker/actions/runs/39177946645/job/117825489439) | `b0757f88` | The smoke read "The on-disk format does not change" in #1438's changelog entry as a declared format break. So it ran HEAD in the foreground, waiting for a refusal, and HEAD served the old directory. That hung the nightlies from 2026-10-16 to 2026-10-18 until the job limit. With the step time limits, it failed after 120 s here. [#1508](https://github.com/krabka-io/krabka-broker/issues/1508) has the fix, which reads only the `**Breaking, on-disk format.**` marker. No pass on `main` yet. |
+| `v1.0.5` to `main`, single-broker smoke | `historical` | [Nightly 39237543947, `upgrade · previous release`](https://github.com/krabka-io/krabka-broker/actions/runs/39237543947/job/118010181507) | `e0588325` | HEAD started on the volume `v1.0.5` wrote, read the record back and found the log start that `DeleteRecords` raised. From 2026-10-16 to 2026-10-18 the smoke hung until the job limit. It read "The on-disk format does not change" in #1438's changelog entry as a declared format break, so it ran HEAD in the foreground and waited for a refusal. HEAD served the old directory. That was a harness fault, not a broker fault. [#1508](https://github.com/krabka-io/krabka-broker/issues/1508) is fixed by #1527, and the smoke now reads only the `**Breaking, on-disk format.**` marker. |
 | Rolling upgrade under load, RF3 | `untested` | [#1396](https://github.com/krabka-io/krabka-broker/issues/1396) | none | |
 | Rollback before feature finalization | `untested` | [#1396](https://github.com/krabka-io/krabka-broker/issues/1396) | none | [Persisted formats](../persisted_formats.md) states the rule. No run exercises it. |
 | 0.x data directory read by 1.x | `unsupported` | [Persisted formats](../persisted_formats.md#the-contract) | none | Reformat and restore. |
@@ -188,10 +188,6 @@ its source. An item stays here until a linked change removes it.
 - **The four-hour soak fails its log-directory drift bound** on every
   nightly from 2026-10-08 to 2026-10-18. It is not diagnosed yet.
   [#1507](https://github.com/krabka-io/krabka-broker/issues/1507).
-- **The nightly upgrade smoke has no pass on `main` since 2026-10-15.** It
-  read a changelog sentence that denies a format change as a declared format
-  break. That was a harness fault, not a broker fault: HEAD opened the
-  `v1.0.5` directory. [#1508](https://github.com/krabka-io/krabka-broker/issues/1508).
 
 ### Kafka behavior differences
 
@@ -258,9 +254,10 @@ no run. This section stays empty until #1399 publishes consented results.
    ([#1393](https://github.com/krabka-io/krabka-broker/issues/1393)), and a
    fix for the four-hour soak's log-directory drift
    ([#1507](https://github.com/krabka-io/krabka-broker/issues/1507)).
-4. A pass of `upgrade · previous release` on `main` after the
-   [#1508](https://github.com/krabka-io/krabka-broker/issues/1508) fix, and loaded upgrade and rollback runs on
-   release images
+4. A pass of `upgrade · previous release` on the candidate. It passed on
+   `main` at `e0588325` after the
+   [#1508](https://github.com/krabka-io/krabka-broker/issues/1508) fix. Loaded upgrade and rollback runs on
+   release images are also needed
    ([#1396](https://github.com/krabka-io/krabka-broker/issues/1396)).
 5. Secured disaster recovery with measured RPO and RTO for a 1.x image
    ([#1397](https://github.com/krabka-io/krabka-broker/issues/1397)), and the
