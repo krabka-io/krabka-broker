@@ -323,7 +323,8 @@ jobs:
     name: cargo clippy · nextest
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Cold builds, the full suite and the post-job cache upload share this budget.
+    timeout-minutes: 90
     # This job builds the whole workspace twice into one target directory --
     # `clippy --all-targets`, then nextest's own `cargo test --no-run
     # --workspace` -- and `[profile.dev]` carries full debug info. That

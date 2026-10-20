@@ -48,7 +48,7 @@ mod wal_followers;
 pub(crate) use self::{
     desired_sets::{desired_follower_set, desired_local_set, desired_wal_placements},
     materialize::{MaterializePartitionConfig, materialize_partition},
-    topic_config::push_topic_configs,
+    topic_config::{push_topic_configs, topic_log_config},
 };
 use {
     self::dir_assignments::{AssignDirsReporter, NetworkAssignDirsReporter},
