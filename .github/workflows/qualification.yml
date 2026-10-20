@@ -1,329 +1,217 @@
-name: ecosystem qualification
+name: frozen candidate performance and 72-hour soak
 
 on:
   workflow_dispatch:
     inputs:
       manifest:
-        description: Repository-relative immutable candidate or historical manifest
-        required: true
-        default: qualification/ecosystem-eight-gate-baseline.json
+        description: Reviewed immutable ecosystem candidate manifest
         type: string
+        required: true
       execute:
-        description: Execute all candidate gates and publish a new qualification release
-        required: true
-        default: false
+        description: Run the performance budgets and 72-hour soak; false checks the host and publication only
         type: boolean
-      broker_revision:
-        description: Optional delivered broker commit override (requires broker_digest)
-        default: ""
-        type: string
-      broker_digest:
-        description: Optional sha256 delivery image digest override
-        default: ""
-        type: string
-      loaded_lifecycle:
-        description: Run the loaded lifecycle gate (needs broker_revision and broker_digest) without publishing
-        required: false
         default: false
-        type: boolean
-      dr_drill:
-        description: Run only the disaster-recovery gate under its declared load, and publish nothing
-        default: false
-        type: boolean
 
 permissions:
   contents: read
+  actions: read
+
+concurrency:
+  group: qualification-profile-${{ inputs.manifest }}
+  cancel-in-progress: false
 
 jobs:
-  immutable-set:
-    if: ${{ github.event_name != 'schedule' && !inputs.execute && !inputs.dr_drill }}
+  candidate:
+    if: github.ref == 'refs/heads/main' || (!inputs.execute && github.ref == 'refs/heads/release/cloud-profile-preflight')
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      MANIFEST: ${{ inputs.manifest || 'qualification/ecosystem-eight-gate-baseline.json' }}
+    outputs:
+      revision: ${{ steps.freeze.outputs.revision }}
+      image: ${{ steps.freeze.outputs.image }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
-      - name: require completed evidence
-        run: aspect check-qualification --manifest "${MANIFEST}" --final
-      - name: verify source revisions, branches and OCI digests still exist
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          jq -r '.components[] | [.repository, .revision, .default_branch] | @tsv' "${MANIFEST}" |
-            while IFS=$'\t' read -r repository revision default_branch; do
-              test "$(gh api "repos/${repository}" --jq .default_branch)" = "${default_branch}"
-              test "$(gh api "repos/${repository}/commits/${revision}" --jq .sha)" = "${revision}"
-              status="$(gh api "repos/${repository}/compare/${revision}...${default_branch}" --jq .status)"
-              test "${status}" = ahead -o "${status}" = identical
-            done
-          jq -r '.components[].artifacts[] | select(.kind == "image") | [.reference, .digest] | @tsv' "${MANIFEST}" |
-            while IFS=$'\t' read -r reference digest; do
-              docker buildx imagetools inspect "${reference}@${digest}" >/dev/null
-            done
-      - name: verify published artifacts, evidence and report bytes
-        run: |
-          set -euo pipefail
-          jq -r '
-            [.components[].artifacts[] | select(.kind != "image") | [.reference, .digest]],
-            [.gates[].evidence[] | [.url, .sha256]],
-            [[.report.url, .report.sha256]] |
-            .[] | @tsv
-          ' "${MANIFEST}" |
-            while IFS=$'\t' read -r url digest; do
-              file="$(mktemp)"
-              trap 'rm -f "${file}"' EXIT
-              curl --fail --location --silent --show-error "${url}" --output "${file}"
-              echo "${digest#sha256:}  ${file}" | sha256sum --check --status
-              rm -f "${file}"
-              trap - EXIT
-            done
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          name: verified-qualification
-          path: ${{ inputs.manifest }}
-          if-no-files-found: error
+          fetch-depth: 0
+      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87
+        with:
+          disk-cache: false
+      - name: Bind the manifest to successful main CI and its delivery artifact
+        id: freeze
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANIFEST: ${{ inputs.manifest }}
+        run: |
+          set -euo pipefail
+          aspect check-qualification --manifest "$MANIFEST"
+          revision=$(jq -er '.components[] | select(.repository == "krabka-io/krabka-broker") | .revision' "$MANIFEST")
+          digest=$(jq -er '.components[] | select(.repository == "krabka-io/krabka-broker") | .artifacts[] | select(.kind == "image") | .digest' "$MANIFEST")
+          git merge-base --is-ancestor "$revision" origin/main
+          ci_run=$(gh run list --workflow ci.yml --commit "$revision" --event push --branch main --status success --json databaseId --jq '.[0].databaseId')
+          test -n "$ci_run" && test "$ci_run" != null
+          mkdir -p "$RUNNER_TEMP/profile-input"
+          gh run download "$ci_run" --name delivery-image --dir "$RUNNER_TEMP/profile-input/delivery"
+          test "$(cat "$RUNNER_TEMP/profile-input/delivery/delivery-image.digest")" = "$digest"
+          aspect freeze-candidate --commit "$revision" \
+            --delivery-digest "$RUNNER_TEMP/profile-input/delivery/delivery-image.digest" \
+            --manifest "$MANIFEST" --output "$RUNNER_TEMP/profile-input/frozen-candidate.json"
+          jq -e '.manifest_drift == [] and (.siblings | length) == 3' "$RUNNER_TEMP/profile-input/frozen-candidate.json"
+          cp "$MANIFEST" "$RUNNER_TEMP/profile-input/input-manifest.json"
+          printf '%s\n' "$ci_run" > "$RUNNER_TEMP/profile-input/main-ci-run.txt"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/krabka-io/krabka-broker@$digest" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: qualification-profile-input
+          path: ${{ runner.temp }}/profile-input/
           retention-days: 90
 
-  candidate:
-    if: ${{ github.event_name == 'schedule' || inputs.execute || inputs.dr_drill }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
-      - name: freeze candidate inputs
-        env:
-          MANIFEST: ${{ inputs.manifest || 'qualification/ecosystem-eight-gate-baseline.json' }}
-          BROKER_REVISION: ${{ inputs.broker_revision }}
-          BROKER_DIGEST: ${{ inputs.broker_digest }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          aspect check-qualification --manifest "${MANIFEST}" --new-candidate .qualification-input.json
-          if [ -n "${BROKER_REVISION}" ] || [ -n "${BROKER_DIGEST}" ]; then
-            test -n "${BROKER_REVISION}" && test -n "${BROKER_DIGEST}"
-            jq --arg revision "${BROKER_REVISION}" --arg digest "${BROKER_DIGEST}" '
-              .components |= map(if .repository == "krabka-io/krabka-broker" then
-                .revision=$revision | .artifacts |= map(if .kind == "image" then .digest=$digest else . end)
-              else . end)
-            ' .qualification-input.json > .qualification-updated.json
-            mv .qualification-updated.json .qualification-input.json
-          fi
-          aspect check-qualification --manifest .qualification-input.json
-          jq -r '.components[] | [.repository, .revision, .default_branch] | @tsv' .qualification-input.json |
-            while IFS=$'\t' read -r repository revision branch; do
-              test "$(gh api "repos/${repository}/commits/${revision}" --jq .sha)" = "${revision}"
-              test "$(gh api "repos/${repository}" --jq .default_branch)" = "${branch}"
-              status="$(gh api "repos/${repository}/compare/${revision}...${branch}" --jq .status)"
-              test "${status}" = ahead -o "${status}" = identical
-            done
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: qualification-input
-          path: .qualification-input.json
-          include-hidden-files: true
-          overwrite: true
-          if-no-files-found: error
-
-  gate:
+  performance:
     needs: candidate
-    if: ${{ github.event_name == 'schedule' || inputs.execute }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 160
-    strategy:
-      fail-fast: false
-      matrix:
-        gate: [installation, operator-lifecycle, cli-admin, observability-recovery, disaster-recovery, schema-evolution, registry-migration, snapshot-retention]
+    if: ${{ inputs.execute }}
+    runs-on: [self-hosted, gcp-ubuntu-24-04-32core]
+    timeout-minutes: 720
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          name: qualification-input
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+          ref: ${{ needs.candidate.outputs.revision }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          bazelisk-cache: true
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
-        if: matrix.gate == 'installation' || matrix.gate == 'operator-lifecycle'
+          name: qualification-profile-input
+          path: ${{ runner.temp }}/profile-input
+      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87
+        with:
+          disk-cache: false
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa
         with:
           install_only: true
-      - name: install pinned Helm
-        if: matrix.gate == 'installation' || matrix.gate == 'operator-lifecycle'
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Run both predeclared five-round performance budgets on this host
         run: |
-          curl --fail --location --silent --show-error https://get.helm.sh/helm-v3.18.6-linux-amd64.tar.gz -o /tmp/qualification-helm.tar.gz
-          echo '3f43c0aa57243852dd542493a0f54f1396c0bc8ec7296bbb2c01e802010819ce  /tmp/qualification-helm.tar.gz' | sha256sum --check --status
-          tar -xzf /tmp/qualification-helm.tar.gz -C /tmp
-          sudo install /tmp/linux-amd64/helm /usr/local/bin/helm
-      - name: install JUnit XML reader
-        if: matrix.gate == 'installation'
-        run: sudo apt-get update && sudo apt-get install --yes libxml2-utils
-      - name: execute candidate acceptance
-        env:
-          GATE: ${{ matrix.gate }}
-        run: aspect check-qualification --manifest .qualification-input.json --gate "${GATE}" --output qualification-results
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/performance" "$RUNNER_TEMP/performance-tmp"
+          export TMPDIR="$RUNNER_TEMP/performance-tmp"
+          result=0
+          PERF_ARTIFACT_DIR="$RUNNER_TEMP/performance/before-after" \
+            packaging/performance/qualify.sh budget before_after ac9deff316d38418622b16c237c671df88f57c7a || result=1
+          PERF_ARTIFACT_DIR="$RUNNER_TEMP/performance/pinned-kafka" \
+            packaging/performance/qualify.sh budget pinned_kafka || result=1
+          exit "$result"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: qualification-${{ matrix.gate }}
-          path: qualification-results/${{ matrix.gate }}/
-          overwrite: true
-          if-no-files-found: error
+          name: qualification-performance
+          path: |
+            ${{ runner.temp }}/performance/
+            ${{ runner.temp }}/profile-input/
           retention-days: 90
+          if-no-files-found: error
 
-  # The disaster-recovery gate alone, on the frozen candidate, for a drill of a
-  # release under the declared load of bench/soak/dr-secured.yaml. Its
-  # evidence is an artifact of the run; it never publishes a qualification
-  # release, because one gate is not a qualification.
-  disaster-recovery-drill:
+  soak:
     needs: candidate
-    if: ${{ inputs.dr_drill && !inputs.execute }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 160
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: qualification-input
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
-        with:
-          bazelisk-cache: true
-      - name: execute the disaster-recovery drill
-        run: aspect check-qualification --manifest .qualification-input.json --gate disaster-recovery --output qualification-results
-      - name: summarize measured recovery
-        if: always()
-        run: |
-          set -euo pipefail
-          evidence=qualification-results/disaster-recovery
-          {
-            echo "## Disaster-recovery drill"
-            echo
-            jq -r '.components[] | select(.repository == "krabka-io/krabka-broker") | "Broker \(.revision), image \(.artifacts[] | select(.kind == "image") | .reference + "@" + .digest)"' .qualification-input.json
-            echo
-            if [ -f "${evidence}/rpo-rto.json" ]; then
-              echo '```json'
-              cat "${evidence}/rpo-rto.json"
-              echo '```'
-            fi
-            if [ -f "${evidence}/soak-judge.log" ]; then
-              echo '```'
-              cat "${evidence}/soak-judge.log"
-              echo '```'
-            fi
-            if [ -s "${evidence}/limits.txt" ]; then
-              echo "### Recorded limits"
-              sed 's/^/- /' "${evidence}/limits.txt"
-            fi
-            if [ -f "${evidence}/checks.txt" ]; then
-              echo "### Executed checks ($(wc -l < "${evidence}/checks.txt"))"
-              tr '\n' ' ' < "${evidence}/checks.txt"
-              echo
-            fi
-          } >> "${GITHUB_STEP_SUMMARY}"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
-        with:
-          name: qualification-disaster-recovery-drill
-          path: qualification-results/disaster-recovery/
-          overwrite: true
-          if-no-files-found: error
-          retention-days: 90
-
-  publish:
-    needs: [candidate, gate]
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: write
+    runs-on: [self-hosted, gcp-ubuntu-24-04-32core]
+    # 72 hours of load, its settle tail, build, read-back and evidence upload.
+    # The existing VM template expires after five days.
+    timeout-minutes: 5760
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      TAG: qualification-${{ github.run_id }}
+      BROKER_IMAGE: ${{ needs.candidate.outputs.image }}
+      EVIDENCE_TAG: qualification-soak-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          name: qualification-input
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+          ref: ${{ needs.candidate.outputs.revision }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          pattern: qualification-*
-          path: qualification-downloads
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
-      - name: assemble and validate exact candidate receipts
+          name: qualification-profile-input
+          path: ${{ runner.temp }}/profile-input
+      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87
+        with:
+          bazelisk-cache: false
+          repository-cache: false
+          disk-cache: false
+      - name: Check the actual host and prepare evidence on its data disk
         run: |
           set -euo pipefail
-          mkdir qualification-results
-          for gate in installation operator-lifecycle cli-admin observability-recovery disaster-recovery schema-evolution registry-migration snapshot-retention; do
-            mv "qualification-downloads/qualification-${gate}" "qualification-results/${gate}"
-          done
-          aspect check-qualification --manifest .qualification-input.json --assemble \
-            --output qualification-results \
-            --publish-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
-          aspect check-qualification --manifest qualification-results/manifest.json --final
-          cd qualification-results
-          sha256sum manifest.json report.md *.tar.gz > SHA256SUMS
-      - name: upload, verify and publish retained evidence
-        run: |
-          set -euo pipefail
-          if gh release view "${TAG}" --json isDraft >/tmp/qualification-release.json 2>/dev/null; then
-            jq -e '.isDraft == true' /tmp/qualification-release.json
-          else
-            gh release create "${TAG}" --target "${GITHUB_SHA}" --draft \
-              --title "Ecosystem qualification ${GITHUB_RUN_ID}" \
-              --notes-file qualification-results/report.md
+          mkdir -p "$RUNNER_TEMP/soak-evidence" "$RUNNER_TEMP/soak-data" "$RUNNER_TEMP/publication"
+          cp "$RUNNER_TEMP/profile-input/"*.json "$RUNNER_TEMP/soak-evidence/"
+          cp bench/soak/rf3-72h.yaml "$RUNNER_TEMP/soak-evidence/declared-contract.yaml"
+          grep -Fx 'duration: 72h' bench/soak/rf3-72h.yaml
+          docker pull "$BROKER_IMAGE"
+          docker image inspect "$BROKER_IMAGE" > "$RUNNER_TEMP/soak-evidence/broker-image.json"
+          if ! grep -Eq '^127\.0\.0\.1[[:space:]]+host\.docker\.internal' /etc/hosts; then
+            echo '127.0.0.1 host.docker.internal' | sudo tee -a /etc/hosts
           fi
-          gh release upload "${TAG}" qualification-results/manifest.json qualification-results/report.md \
-            qualification-results/*.tar.gz qualification-results/SHA256SUMS --clobber
-          mkdir qualification-published
-          gh release download "${TAG}" --dir qualification-published
-          (cd qualification-published && sha256sum --check SHA256SUMS)
-          gh release edit "${TAG}" --draft=false --prerelease --latest=false
-          gh release view "${TAG}" --json url --jq .url >> "${GITHUB_STEP_SUMMARY}"
-
-  # The loaded lifecycle of issue 1396, beside the eight gates: the newest
-  # 1.0.x release image that bench/soak/lifecycle.yaml pins, upgraded to the
-  # candidate broker by broker under the soak contract's load, rotated,
-  # reassigned and rolled back, and an unsupported rollback refused. It needs
-  # the candidate's delivery digest because the baseline manifest names a
-  # broker older than the source. docs/qualification.md states the contract.
-  loaded-lifecycle:
-    name: loaded lifecycle
-    if: ${{ inputs.loaded_lifecycle || inputs.execute }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 160
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ./.github/actions/reclaim-disk
-      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
-      # Each node advertises host.docker.internal to its peers and to the
-      # executor's clients, as in the ci.yml soak job.
-      - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
-      - name: freeze candidate inputs
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          info = json.loads(subprocess.check_output(['docker', 'info', '--format', '{{json .}}']))
+          free = lambda path: os.statvfs(path).f_bavail * os.statvfs(path).f_frsize
+          memory = int(next(row.split()[1] for row in pathlib.Path('/proc/meminfo').read_text().splitlines() if row.startswith('MemTotal:'))) * 1024
+          host = {'cpus': os.cpu_count(), 'memory_bytes': memory, 'data_free_bytes': free(os.environ['RUNNER_TEMP']), 'docker_free_bytes': free(info['DockerRootDir']), 'kernel': os.uname().release}
+          assert host['cpus'] >= 16 and memory >= 64 * 1024**3, host
+          assert min(host['data_free_bytes'], host['docker_free_bytes']) >= 700 * 1024**3, host
+          assert info['OSType'] == 'linux' and info['Architecture'] in ['amd64', 'x86_64'], info
+          assert info['KernelVersion'] == host['kernel'] and info['CgroupVersion'] == '2' and info['NCPU'] >= 16, info
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'soak-evidence', 'host-preflight.json').write_text(json.dumps(host, indent=2) + '\n')
+          PY
+      - name: Verify publication credentials before starting the long run
+        id: publication
         env:
-          MANIFEST: ${{ inputs.manifest }}
-          BROKER_REVISION: ${{ inputs.broker_revision }}
-          BROKER_DIGEST: ${{ inputs.broker_digest }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITHUB_TOKEN expires after 24 hours. This existing maintainer token
+          # is loaded only for evidence publication, before and after the run.
+          GH_TOKEN: ${{ secrets.SIBLING_SYNC_TOKEN }}
         run: |
           set -euo pipefail
-          test -n "${BROKER_REVISION}" && test -n "${BROKER_DIGEST}"
-          test "$(gh api "repos/krabka-io/krabka-broker/commits/${BROKER_REVISION}" --jq .sha)" = "${BROKER_REVISION}"
-          status="$(gh api "repos/krabka-io/krabka-broker/compare/${BROKER_REVISION}...main" --jq .status)"
-          test "${status}" = ahead -o "${status}" = identical
-          aspect check-qualification --manifest "${MANIFEST}" --new-candidate .qualification-input.json
-          jq --arg revision "${BROKER_REVISION}" --arg digest "${BROKER_DIGEST}" '
-            .components |= map(if .repository == "krabka-io/krabka-broker" then
-              .revision=$revision | .artifacts |= map(if .kind == "image" then .digest=$digest else . end)
-            else . end)
-          ' .qualification-input.json > .qualification-updated.json
-          mv .qualification-updated.json .qualification-input.json
-          aspect check-qualification --manifest .qualification-input.json
-      - name: execute loaded lifecycle
-        run: aspect check-qualification --manifest .qualification-input.json --gate loaded-lifecycle --output qualification-results
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
-        with:
-          name: qualification-loaded-lifecycle
-          path: qualification-results/loaded-lifecycle/
-          overwrite: true
-          if-no-files-found: error
-          retention-days: 90
+          test -n "$GH_TOKEN"
+          gh release create "$EVIDENCE_TAG" --draft --prerelease \
+            --target "${{ needs.candidate.outputs.revision }}" \
+            --title "72-hour qualification evidence: $GITHUB_RUN_ID" \
+            --notes "Input and host preflight for $BROKER_IMAGE. No passing qualification is claimed until the workload and judge complete."
+          gh release upload "$EVIDENCE_TAG" "$RUNNER_TEMP/soak-evidence/"*.json "$RUNNER_TEMP/soak-evidence/declared-contract.yaml"
+      - name: Build the frozen executor and judge
+        if: ${{ inputs.execute }}
+        run: |
+          set -euo pipefail
+          bazel build -c opt --jobs=8 --bes_backend= //crates/broker:soak_contract_docker_bin //crates/bench-driver:krabka-soak-check
+      - name: Execute the unchanged 72-hour contract
+        id: execute
+        if: ${{ inputs.execute }}
+        run: |
+          set -euo pipefail
+          executable=$(bazel cquery -c opt --bes_backend= //crates/broker:soak_contract_docker_bin --output=files)
+          env TMPDIR="$RUNNER_TEMP/soak-data" CARGO_MANIFEST_DIR="$PWD/crates/broker" \
+            KRABKA_BROKER_IMAGE="$BROKER_IMAGE" KRABKA_SOAK_CONTRACT="$PWD/bench/soak/rf3-72h.yaml" \
+            KRABKA_SOAK_EVIDENCE_DIR="$RUNNER_TEMP/soak-evidence" \
+            "$executable" --ignored --exact --nocapture the_sustained_load_contract_holds \
+            2>&1 | tee "$RUNNER_TEMP/soak-evidence/executor.log"
+      - name: Judge the complete read-back evidence
+        id: judge
+        if: ${{ always() && inputs.execute && steps.publication.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          executable=$(bazel cquery -c opt --bes_backend= //crates/bench-driver:krabka-soak-check --output=files)
+          "$executable" judge --contract bench/soak/rf3-72h.yaml \
+            --evidence "$RUNNER_TEMP/soak-evidence/evidence.json" --out "$RUNNER_TEMP/soak-evidence/verdict.json"
+      - name: Retain the outcome with credentials that survive a 72-hour job
+        if: ${{ always() && steps.publication.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ secrets.SIBLING_SYNC_TOKEN }}
+          PREFLIGHT: ${{ !inputs.execute }}
+          EXECUTION: ${{ steps.execute.outcome }}
+          JUDGEMENT: ${{ steps.judge.outcome }}
+        run: |
+          set -euo pipefail
+          tar -C "$RUNNER_TEMP/soak-evidence" -czf - . | \
+            split -b 1024M -d -a 3 - "$RUNNER_TEMP/publication/soak-evidence.tar.gz.part-"
+          (cd "$RUNNER_TEMP/publication" && sha256sum soak-evidence.tar.gz.part-* > SHA256SUMS)
+          gh release upload "$EVIDENCE_TAG" "$RUNNER_TEMP/publication/"*
+          if test "$PREFLIGHT" = false; then
+            outcome=failed
+            if test "$EXECUTION" = success && test "$JUDGEMENT" = success; then outcome=passed; fi
+            gh release edit "$EVIDENCE_TAG" --draft=false --prerelease --latest=false \
+              --title "72-hour qualification $outcome: $GITHUB_RUN_ID" \
+              --notes "Workload: $EXECUTION. Judge: $JUDGEMENT. Image: $BROKER_IMAGE. Reassemble the SHA256SUMS-verified archive parts to inspect the complete evidence."
+          fi
