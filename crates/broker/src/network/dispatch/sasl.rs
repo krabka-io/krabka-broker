@@ -19,9 +19,9 @@ use {
         metrics::{BrokerMetrics, UNKNOWN_LABEL},
         network::{
             auth::{
-                ConnectionAuth, ReauthClock, generic_failure_message, handle_authenticate_gssapi,
-                handle_authenticate_oauthbearer_with_jwks_cache, handle_authenticate_plain,
-                handle_authenticate_scram, handle_handshake,
+                ConnectionAuth, ReauthClock, ScramDisconnect, generic_failure_message,
+                handle_authenticate_gssapi, handle_authenticate_oauthbearer_with_jwks_cache,
+                handle_authenticate_plain, handle_authenticate_scram, handle_handshake,
             },
             request::ParsedRequest,
         },
@@ -320,7 +320,10 @@ pub(super) async fn handle_raw_sasl_token(
         auth_bytes: token.clone(),
         ..Default::default()
     };
-    let resp = run_authenticate(broker, &req, auth, listener.max_reauth, peer).await;
+    // A SCRAM proof of the wrong length closes at once, with no delay.
+    let resp = run_authenticate(broker, &req, auth, listener.max_reauth, peer)
+        .await
+        .ok()?;
     if resp.error_code != 0 {
         delay_failed_authentication(broker).await;
         return None;
@@ -383,8 +386,17 @@ pub(super) async fn try_handle_sasl_frame(
                     // hands it to `KafkaApis.handleSaslAuthenticateRequest`, which
                     // answers ILLEGAL_SASL_STATE and keeps the connection.
                     let (resp, close) = if auth.negotiated_mechanism().is_some() {
-                        let resp =
-                            run_authenticate(broker, &req, auth, listener.max_reauth, peer).await;
+                        let Ok(resp) =
+                            run_authenticate(broker, &req, auth, listener.max_reauth, peer).await
+                        else {
+                            // A SCRAM proof of the wrong length: Kafka closes at
+                            // once, with no response and no failed-auth delay.
+                            return Err(BrokerError::Protocol(
+                                krabka_protocol::ProtocolError::InvalidValue(
+                                    "SCRAM client proof of the wrong length",
+                                ),
+                            ));
+                        };
                         let close = resp.error_code != 0;
                         (resp, close)
                     } else if !auth.is_authenticated() {
@@ -479,22 +491,25 @@ fn non_sasl_listener_response(parsed: &ParsedRequest<'_>) -> Result<SaslFrameOut
 /// A mechanism failure that carries no client-facing text gets Kafka's
 /// generic invalid-credentials sentence here, where the mechanism and the
 /// phase are known.
+///
+/// A [`ScramDisconnect`] is accounted and audited as a failed authentication,
+/// then returned so the caller closes the connection with no response.
 async fn run_authenticate(
     broker: &Broker,
     req: &SaslAuthenticateRequest,
     auth: &mut ConnectionAuth,
     max_reauth: Option<krabka_units::Time>,
     peer: &SocketAddr,
-) -> SaslAuthenticateResponse {
+) -> Result<SaslAuthenticateResponse, ScramDisconnect> {
     let mech_opt = auth.negotiated_mechanism();
     let reauthentication = matches!(auth, ConnectionAuth::Reauthenticating { .. });
-    let mut resp = match mech_opt {
-        Some(SaslMechanism::Plain) => handle_authenticate_plain(
+    let outcome = match mech_opt {
+        Some(SaslMechanism::Plain) => Ok(handle_authenticate_plain(
             req,
             auth,
             broker.config.plain_credentials.as_map(),
             max_reauth,
-        ),
+        )),
         Some(SaslMechanism::ScramSha256 | SaslMechanism::ScramSha512) => handle_authenticate_scram(
             req,
             auth,
@@ -502,33 +517,37 @@ async fn run_authenticate(
             broker.config.delegation_token_secret_key.as_ref(),
             max_reauth,
         ),
-        Some(SaslMechanism::OAuthBearer) => {
-            handle_authenticate_oauthbearer_with_jwks_cache(
-                req,
-                auth,
-                &broker.config.oauthbearer_validator,
-                &broker.config.oauthbearer_jwks_cache_generation,
-                &broker.config.oauthbearer_jwks_last_successful_fetch_ms,
-                now_ms,
-                max_reauth,
-            )
-            .await
-        }
+        Some(SaslMechanism::OAuthBearer) => Ok(handle_authenticate_oauthbearer_with_jwks_cache(
+            req,
+            auth,
+            &broker.config.oauthbearer_validator,
+            &broker.config.oauthbearer_jwks_cache_generation,
+            &broker.config.oauthbearer_jwks_last_successful_fetch_ms,
+            now_ms,
+            max_reauth,
+        )
+        .await),
         Some(SaslMechanism::Gssapi) => {
             let cfg = broker
                 .config
                 .gssapi
                 .as_ref()
                 .expect("GSSAPI enabled without config");
-            handle_authenticate_gssapi(req, auth, cfg, max_reauth)
+            Ok(handle_authenticate_gssapi(req, auth, cfg, max_reauth))
         }
         // Callers only run an exchange a handshake started.
-        None => SaslAuthenticateResponse {
+        None => Ok(SaslAuthenticateResponse {
             error_code: codes::ILLEGAL_SASL_STATE,
             error_message: None,
             ..Default::default()
-        },
+        }),
     };
+    let disconnect = outcome.is_err();
+    let mut resp = outcome.unwrap_or_else(|ScramDisconnect| SaslAuthenticateResponse {
+        error_code: codes::SASL_AUTHENTICATION_FAILED,
+        error_message: Some("SCRAM client proof of the wrong length".to_owned()),
+        ..Default::default()
+    });
     if let Some(mech) = mech_opt
         && resp.error_code == codes::SASL_AUTHENTICATION_FAILED
         && resp.error_message.is_none()
@@ -560,7 +579,11 @@ async fn run_authenticate(
             resp.error_message.clone(),
         );
     }
-    resp
+    if disconnect {
+        Err(ScramDisconnect)
+    } else {
+        Ok(resp)
+    }
 }
 
 /// Writes one `Authentication` audit row.

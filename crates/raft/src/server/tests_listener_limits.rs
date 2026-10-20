@@ -18,6 +18,7 @@ use {
     tokio_util::sync::CancellationToken,
 };
 
+mod handler_idle;
 mod handshake_idle;
 mod session_expiry;
 

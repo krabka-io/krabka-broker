@@ -3286,7 +3286,7 @@
     },
     "connections_max_idle": {
       "default": null,
-      "description": "How long a connection may go without a complete request frame before\nthe broker closes it (Kafka `connections.max.idle.ms`). Absent leaves\nthe `BrokerConfig` default of ten minutes, which is Kafka's 600000. A\n`[[listeners]]` entry may carry its own `connections_max_idle`, which\nwins for that listener.",
+      "description": "How long a connection may go with no socket activity before the broker\ncloses it (Kafka `connections.max.idle.ms`). Each read and each response\nwrite restarts the window, and it keeps running while a request is in its\nhandler or a throttled connection is muted. Absent leaves the\n`BrokerConfig` default of ten minutes, which is Kafka's 600000. A\n`[[listeners]]` entry may carry its own `connections_max_idle`, which wins\nfor that listener.",
       "format": "duration",
       "type": [
         "string",

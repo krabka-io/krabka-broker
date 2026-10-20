@@ -12,32 +12,29 @@ use {
 /// broker passes the client-first `tokenauth` extension there, and leaves
 /// `has_regular_credential` false when it is set, so exactly one store is
 /// consulted, as in Kafka's `ScramSaslServer`.
+///
+/// A token in the store is a credential whether or not it has expired, as in
+/// Kafka's `ScramServerCallbackHandler`, which reads the token cache without
+/// an expiry check. An expired token's session has a lifetime of 0, so the
+/// connection's next request that does not begin a re-authentication closes
+/// it; the expiry sweep is what takes the token out of the store.
 #[ensures((result == ScramCredentialSource::Regular) == has_regular_credential)]
 #[ensures((result == ScramCredentialSource::DelegationToken) ==
-    (!has_regular_credential && token_mechanism && has_token && token_active))]
-#[ensures((result == ScramCredentialSource::ExpiredDelegationToken) ==
-    (!has_regular_credential && token_mechanism && has_token && !token_active))]
+    (!has_regular_credential && token_mechanism && has_token))]
 #[ensures((result == ScramCredentialSource::Unknown) ==
     (!has_regular_credential && (!token_mechanism || !has_token)))]
-#[allow(
-    clippy::fn_params_excessive_bools,
-    reason = "the proof classifies four independent credential lookup facts"
-)]
 #[must_use]
 pub fn scram_credential_source(
     has_regular_credential: bool,
     token_mechanism: bool,
     has_token: bool,
-    token_active: bool,
 ) -> ScramCredentialSource {
     if has_regular_credential {
         ScramCredentialSource::Regular
-    } else if !token_mechanism || !has_token {
-        ScramCredentialSource::Unknown
-    } else if token_active {
+    } else if token_mechanism && has_token {
         ScramCredentialSource::DelegationToken
     } else {
-        ScramCredentialSource::ExpiredDelegationToken
+        ScramCredentialSource::Unknown
     }
 }
 

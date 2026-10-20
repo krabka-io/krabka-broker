@@ -54,14 +54,21 @@ use {
 /// metadata image does not hold: it is recomputed under `secret_key`, the
 /// broker's `delegation.token.secret.key`. Without one no token can
 /// authenticate, as in Kafka, whose token cache stays empty.
+///
+/// # Errors
+///
+/// [`ScramDisconnect`] when the client-final proof does not decode to the
+/// mechanism's hash length. The caller closes the connection at once, with
+/// no response and no failed-authentication delay.
 pub fn handle_authenticate_scram(
     req: &SaslAuthenticateRequest,
     auth: &mut ConnectionAuth,
     controller: &dyn MetadataSource,
     secret_key: Option<&SecretBytes>,
     max_reauth: Option<Time>,
-) -> SaslAuthenticateResponse {
-    super::state::authenticate_with_reauth(auth, |auth| {
+) -> Result<SaslAuthenticateResponse, ScramDisconnect> {
+    let mut disconnect = false;
+    let response = super::state::authenticate_with_reauth(auth, |auth| {
         // Round-1 case: still in `ScramPending` — build the exchange now that
         // we have the client-first bytes (and thus the username).
         if let ConnectionAuth::Negotiating {
@@ -98,20 +105,17 @@ pub fn handle_authenticate_scram(
                     .delegation_token_by_id(&username)
                     .map(|token| (token, secret))
             });
-            let token_active = token.is_some_and(|(token, _)| {
-                krabka_verified::token_is_active(
-                    now_ms(),
-                    token.expiry_timestamp_ms,
-                    token.max_timestamp_ms,
-                )
-            });
+            // A stored token is a credential whether or not it has expired, as
+            // in Kafka's `ScramServerCallbackHandler`, which reads the token
+            // cache without an expiry check. Its expiry bounds the session
+            // below, so an expired token gets a lifetime of 0 and its next
+            // request closes the connection; the expiry sweep removes it.
             // The verified selector's `token_mechanism` input is whether the
             // token store may be read, which is the `tokenauth` extension.
             let (cred, principal, token_expiry_ms) = match scram_credential_source(
                 regular.is_some(),
                 token_requested,
                 token.is_some(),
-                token_active,
             ) {
                 ScramCredentialSource::Regular => (
                     regular.expect("verified regular source exists").clone(),
@@ -134,9 +138,6 @@ pub fn handle_authenticate_scram(
                         owner,
                         Some(token.expiry_timestamp_ms),
                     )
-                }
-                ScramCredentialSource::ExpiredDelegationToken => {
-                    return fail_authenticate("delegation token expired");
                 }
                 ScramCredentialSource::Unknown => {
                     return fail_authenticate("unknown user");
@@ -187,7 +188,9 @@ pub fn handle_authenticate_scram(
                 krabka_security::StepResult::Done(_, _) => {
                     fail_authenticate("SCRAM server completed in one round")
                 }
-                krabka_security::StepResult::Failed(_) => fail_authenticate("SCRAM step failed"),
+                // Only the client-final step can end without a response.
+                krabka_security::StepResult::Failed(_)
+                | krabka_security::StepResult::Disconnect => fail_authenticate("SCRAM step failed"),
             }
         } else if let ConnectionAuth::Negotiating {
             exchange: SaslExchange::Scram(_),
@@ -219,13 +222,10 @@ pub fn handle_authenticate_scram(
                     // `authenticated_via_token: true` and the value of
                     // `expires_at_ms` (the KIP-368 re-auth ceiling).
                     // For regular SCRAM, it's `None` and the
-                    // session has no expiry.
+                    // session has no expiry. A token that expired during
+                    // the exchange still completes it, as in Kafka, with a
+                    // session lifetime of 0.
                     let now = now_ms();
-                    if pending_token_expiry_ms
-                        .is_some_and(|e| !krabka_verified::token_is_active(now, e, e))
-                    {
-                        return fail_authenticate("delegation token expired");
-                    }
                     let SessionExpiry {
                         expires_at_ms,
                         session_lifetime_ms,
@@ -239,12 +239,31 @@ pub fn handle_authenticate_scram(
                     sasl_ok(bytes, session_lifetime_ms)
                 }
                 krabka_security::StepResult::Failed(_) => fail_authenticate("SCRAM proof failed"),
+                krabka_security::StepResult::Disconnect => {
+                    disconnect = true;
+                    fail_authenticate("SCRAM proof of the wrong length")
+                }
             }
         } else {
             fail_authenticate("not in SCRAM negotiation")
         }
-    })
+    });
+    if disconnect {
+        Err(ScramDisconnect)
+    } else {
+        Ok(response)
+    }
 }
+
+/// A SCRAM exchange that ends without a response.
+///
+/// The client-final proof did not decode to the mechanism's hash length, the
+/// empty proof included. Kafka's `ScramFormatter.xor` throws
+/// `IllegalArgumentException` on it. That is not an `AuthenticationException`,
+/// so `Selector.pollSelectionKeys` closes the connection at once: no
+/// `SaslAuthenticate` response and no `connection.failed.authentication.delay.ms`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScramDisconnect;
 
 /// The iteration count of a delegation token's SCRAM credential: Kafka's
 /// `DelegationTokenManager.prepareScramCredentials` uses each mechanism's

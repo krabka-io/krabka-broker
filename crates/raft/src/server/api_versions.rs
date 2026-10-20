@@ -260,6 +260,19 @@ pub(super) fn api_versions_response_body(req_version: i16, view: ApiVersionsView
     )
 }
 
+/// What a test Admin router that answers only `BrokerHeartbeat` advertises.
+#[cfg(test)]
+pub(super) const BROKER_HEARTBEAT_ONLY: &[ControllerApiVersion] = {
+    use krabka_protocol::owned::broker_heartbeat_request;
+    &[ControllerApiVersion {
+        api_key: broker_heartbeat_request::API_KEY,
+        min_version: broker_heartbeat_request::MIN_VERSION,
+        max_version: broker_heartbeat_request::MAX_VERSION,
+        released_max: Some(broker_heartbeat_request::MAX_VERSION),
+        flexible_min: broker_heartbeat_request::FLEXIBLE_MIN,
+    }]
+};
+
 #[cfg(test)]
 mod tests {
     use {
@@ -348,16 +361,7 @@ mod tests {
 
         struct HeartbeatRouter;
         impl ControllerAdminRouter for HeartbeatRouter {
-            fn api_versions(&self) -> &[ControllerApiVersion] {
-                use krabka_protocol::owned::broker_heartbeat_request;
-                &[ControllerApiVersion {
-                    api_key: broker_heartbeat_request::API_KEY,
-                    min_version: broker_heartbeat_request::MIN_VERSION,
-                    max_version: broker_heartbeat_request::MAX_VERSION,
-                    released_max: Some(broker_heartbeat_request::MAX_VERSION),
-                    flexible_min: broker_heartbeat_request::FLEXIBLE_MIN,
-                }]
-            }
+            fn api_versions(&self) -> &[ControllerApiVersion] { super::BROKER_HEARTBEAT_ONLY }
 
             fn route(&self, _request: ControllerAdminRequest) -> ControllerAdminRouteFuture<'_> {
                 Box::pin(async { Ok(None) })

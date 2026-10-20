@@ -1,52 +1,53 @@
-(* #"/workspace/crates/verified/src/composition/token_session.rs" 55 0 60 32 *)
+(* #"/workspace/crates/verified/src/composition/token_session.rs" 59 0 64 32 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/logic/ord.rs" 34 8 34 21
 let%span sacl_decision = "/workspace/crates/verified/src/authz/acl_decision.rs" 98 10 98 61
 let%span sacl_decision'0 = "/workspace/crates/verified/src/authz/acl_decision.rs" 99 10 99 55
 let%span sacl_decision'1 = "/workspace/crates/verified/src/authz/acl_decision.rs" 100 10 101 30
 let%span sacl_decision'2 = "/workspace/crates/verified/src/authz/acl_decision.rs" 102 10 103 48
+let%span smod = "/rustc/11177f2235f0c842b00f82c558ad9480c0c3a895/library/core/src/macros/mod.rs" 436 17 436 22
+let%span smod'0 = "/rustc/11177f2235f0c842b00f82c558ad9480c0c3a895/library/core/src/macros/mod.rs" 435 38 435 42
 let%span ssession = "/workspace/crates/verified/src/authz/session.rs" 5 10 6 64
 let%span ssession'0 = "/workspace/crates/verified/src/authz/session.rs" 7 10 10 1
 let%span ssession'1 = "/workspace/crates/verified/src/authz/session.rs" 11 10 14 1
 let%span ssession'2 = "/workspace/crates/verified/src/authz/session.rs" 15 10 21 1
 let%span ssession'3 = "/workspace/crates/verified/src/authz/session.rs" 22 10 27 1
 let%span ssession'4 = "/workspace/crates/verified/src/authz/session.rs" 87 10 93 3
-let%span stoken_mutation_decision = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 15 10 15 78
-let%span stoken_mutation_decision'0 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 16 10 17 77
-let%span stoken_mutation_decision'1 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 18 10 19 78
-let%span stoken_mutation_decision'2 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 20 10 21 65
+let%span sint_macros = "/rustc/11177f2235f0c842b00f82c558ad9480c0c3a895/library/core/src/num/int_macros.rs" 47 8 47 27
+let%span stoken_mutation_decision = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 21 10 21 78
+let%span stoken_mutation_decision'0 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 22 10 23 61
+let%span stoken_mutation_decision'1 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 24 10 25 65
+let%span stoken_mutation_decision'2 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 82 10 84 1
 let%span stoken_mutation_decision'3 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 85 10 87 1
-let%span stoken_mutation_decision'4 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 88 10 90 1
-let%span stoken_session = "/workspace/crates/verified/src/composition/token_session.rs" 62 8 62 72
-let%span stoken_session'0 = "/workspace/crates/verified/src/composition/token_session.rs" 66 17 70 5
-let%span stoken_session'1 = "/workspace/crates/verified/src/composition/token_session.rs" 72 32 72 37
-let%span stoken_session'2 = "/workspace/crates/verified/src/composition/token_session.rs" 72 39 72 43
-let%span stoken_session'3 = "/workspace/crates/verified/src/composition/token_session.rs" 72 45 72 49
-let%span stoken_session'4 = "/workspace/crates/verified/src/composition/token_session.rs" 72 8 72 58
-let%span stoken_session'5 = "/workspace/crates/verified/src/composition/token_session.rs" 78 8 78 64
-let%span stoken_session'6 = "/workspace/crates/verified/src/composition/token_session.rs" 81 31 81 98
-let%span stoken_session'7 = "/workspace/crates/verified/src/composition/token_session.rs" 85 19 85 83
-let%span stoken_session'8 = "/workspace/crates/verified/src/composition/token_session.rs" 86 12 86 73
-let%span stoken_session'9 = "/workspace/crates/verified/src/composition/token_session.rs" 85 19 86 73
-let%span stoken_session'10 = "/workspace/crates/verified/src/composition/token_session.rs" 87 46 87 50
-let%span stoken_session'11 = "/workspace/crates/verified/src/composition/token_session.rs" 87 52 87 56
-let%span stoken_session'12 = "/workspace/crates/verified/src/composition/token_session.rs" 87 26 87 68
-let%span stoken_session'13 = "/workspace/crates/verified/src/composition/token_session.rs" 28 11 29 51
-let%span stoken_session'14 = "/workspace/crates/verified/src/composition/token_session.rs" 30 10 33 61
-let%span stoken_session'15 = "/workspace/crates/verified/src/composition/token_session.rs" 34 10 45 1
-let%span stoken_session'16 = "/workspace/crates/verified/src/composition/token_session.rs" 46 10 54 1
+let%span stoken_session = "/workspace/crates/verified/src/composition/token_session.rs" 66 8 66 72
+let%span stoken_session'0 = "/workspace/crates/verified/src/composition/token_session.rs" 71 32 71 37
+let%span stoken_session'1 = "/workspace/crates/verified/src/composition/token_session.rs" 71 39 71 43
+let%span stoken_session'2 = "/workspace/crates/verified/src/composition/token_session.rs" 71 45 71 49
+let%span stoken_session'3 = "/workspace/crates/verified/src/composition/token_session.rs" 71 8 71 50
+let%span stoken_session'4 = "/workspace/crates/verified/src/composition/token_session.rs" 77 31 77 98
+let%span stoken_session'5 = "/workspace/crates/verified/src/composition/token_session.rs" 81 19 81 83
+let%span stoken_session'6 = "/workspace/crates/verified/src/composition/token_session.rs" 82 12 82 73
+let%span stoken_session'7 = "/workspace/crates/verified/src/composition/token_session.rs" 81 19 82 73
+let%span stoken_session'8 = "/workspace/crates/verified/src/composition/token_session.rs" 83 46 83 50
+let%span stoken_session'9 = "/workspace/crates/verified/src/composition/token_session.rs" 83 52 83 56
+let%span stoken_session'10 = "/workspace/crates/verified/src/composition/token_session.rs" 83 26 83 68
+let%span stoken_session'11 = "/workspace/crates/verified/src/composition/token_session.rs" 35 11 35 72
+let%span stoken_session'12 = "/workspace/crates/verified/src/composition/token_session.rs" 36 10 36 66
+let%span stoken_session'13 = "/workspace/crates/verified/src/composition/token_session.rs" 37 10 49 1
+let%span stoken_session'14 = "/workspace/crates/verified/src/composition/token_session.rs" 50 10 58 1
 let%span stoken_is_active = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 70 10 71 55
 let%span stoken_is_active'0 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 72 10 81 1
 let%span stoken_is_active'1 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 83 10 94 1
-let%span stoken_is_active'2 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 198 10 203 1
 
 use creusot.int.Int64
 use creusot.int.Int16
 use creusot.prelude.Any
 use int.Int
 
-type tup4_i64_i64_i64_i64 = { f0: Int64.t; f1: Int64.t; f2: Int64.t; f3: Int64.t }
+type tup3_i64_i64_i64 = { f0: Int64.t; f1: Int64.t; f2: Int64.t }
+
+type tup4_i64_i64_i64_i64 = { f0'0: Int64.t; f1'0: Int64.t; f2'0: Int64.t; f3'0: Int64.t }
 
 type t_TokenDeadlines = { max_timestamp_ms: Int64.t; initial_expiry_ms: Int64.t }
 
@@ -58,11 +59,11 @@ function bounded_period_model [#"/workspace/crates/verified/src/delegation_token
 
 function min_model [#"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 30 0 30 42] (left: int) (right: int) : int
 
-predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
 
 meta "rewrite_def" predicate gt_log_Int
 
-constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+constant const_MAX: Int64.t = [%#sint_macros] (9223372036854775807: Int64.t)
 
 let create_token_deadlines (now_ms: Int64.t) (requested_ms: Int64.t) (ceiling_ms: Int64.t)
   (default_renew_period_ms: Int64.t) (return (x: t_TokenCreateDecision)) = any
@@ -97,82 +98,66 @@ let create_token_deadlines (now_ms: Int64.t) (requested_ms: Int64.t) (ceiling_ms
 type t_TokenApiAdmission = Reject | Allow
 
 type tup6_i64_i64_i64_i64_bool_TokenApiAdmission = {
-  f0'0: Int64.t;
-  f1'0: Int64.t;
-  f2'0: Int64.t;
-  f3'0: Int64.t;
-  f4'0: bool;
-  f5'0: t_TokenApiAdmission }
+  f0'1: Int64.t;
+  f1'1: Int64.t;
+  f2'1: Int64.t;
+  f3'1: Int64.t;
+  f4'1: bool;
+  f5'1: t_TokenApiAdmission }
 
 type t_Option_tup6_i64_i64_i64_i64_bool_TokenApiAdmission = None | Some tup6_i64_i64_i64_i64_bool_TokenApiAdmission
 
-let elim_Create (_x: t_TokenCreateDecision) (return (f0'1: t_TokenDeadlines)) = any
-  [ _k (f0'1: t_TokenDeadlines) -> {Create f0'1 = _x} (! return {f0'1})
+let elim_Create (_x: t_TokenCreateDecision) (return (f0'2: t_TokenDeadlines)) = any
+  [ _k (f0'2: t_TokenDeadlines) -> {Create f0'2 = _x} (! return {f0'2})
   | _chk -> (! {[@expl:elim Create] match _x with
       | Create _ -> true
       | _ -> false
       end}
     any) ]
 
-predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
-
-meta "rewrite_def" predicate ge_log_Int
-
-let token_is_active (now_ms: Int64.t) (expiry_timestamp_ms: Int64.t) (max_timestamp_ms'0: Int64.t) (return (x: bool)) =
-any
-  [ return (result: bool) -> {[@stop_split] [@expl:token_is_active ensures] [%#stoken_is_active'2] result
-    = (ge_log_Int (Int64.to_int now_ms) 0
-    /\ gt_log_Int (Int64.to_int expiry_timestamp_ms) (Int64.to_int now_ms)
-    /\ gt_log_Int (Int64.to_int max_timestamp_ms'0) (Int64.to_int now_ms)
-    /\ Int64.to_int expiry_timestamp_ms <= Int64.to_int max_timestamp_ms'0)}
-    (! return {result}) ]
-
-type t_ScramCredentialSource = Regular | DelegationToken | ExpiredDelegationToken | Unknown
+type t_ScramCredentialSource = Regular | DelegationToken | Unknown
 
 let scram_credential_source (has_regular_credential: bool) (token_mechanism: bool) (has_token: bool)
-  (token_active: bool) (return (x: t_ScramCredentialSource)) = any
+  (return (x: t_ScramCredentialSource)) = any
   [ return (result: t_ScramCredentialSource) ->
   {[@stop_split] [@expl:scram_credential_source ensures] ([@stop_split] [@expl:scram_credential_source ensures #0] [%#stoken_mutation_decision] (result
         = Regular)
       = has_regular_credential)
     /\ ([@stop_split] [@expl:scram_credential_source ensures #1] [%#stoken_mutation_decision'0] (result
         = DelegationToken)
-      = (not has_regular_credential /\ token_mechanism /\ has_token /\ token_active))
-    /\ ([@stop_split] [@expl:scram_credential_source ensures #2] [%#stoken_mutation_decision'1] (result
-        = ExpiredDelegationToken)
-      = (not has_regular_credential /\ token_mechanism /\ has_token /\ not token_active))
-    /\ ([@stop_split] [@expl:scram_credential_source ensures #3] [%#stoken_mutation_decision'2] (result = Unknown)
+      = (not has_regular_credential /\ token_mechanism /\ has_token))
+    /\ ([@stop_split] [@expl:scram_credential_source ensures #2] [%#stoken_mutation_decision'1] (result = Unknown)
     = (not has_regular_credential /\ (not token_mechanism \/ not has_token)))}
     (! return {result}) ]
 
 type t_Option_i64 = None'0 | Some'0 Int64.t
 
-type tup2_Option_i64_i64 = { f0'1: t_Option_i64; f1'1: Int64.t }
+type tup2_Option_i64_i64 = { f0'2: t_Option_i64; f1'2: Int64.t }
 
-type tup2_Option_i64_Option_i64 = { f0'2: t_Option_i64; f1'2: t_Option_i64 }
+type tup2_Option_i64_Option_i64 = { f0'3: t_Option_i64; f1'3: t_Option_i64 }
 
 let sasl_session_expiry (now_ms: Int64.t) (credential_expiry_ms: t_Option_i64) (reauth_ms: t_Option_i64)
   (return (x: tup2_Option_i64_i64)) = any
   [ return (result: tup2_Option_i64_i64) ->
-  {[@stop_split] [@expl:sasl_session_expiry ensures] ([@stop_split] [@expl:sasl_session_expiry ensures #0] [%#ssession] (result.f0'1
+  {[@stop_split] [@expl:sasl_session_expiry ensures] ([@stop_split] [@expl:sasl_session_expiry ensures #0] [%#ssession] (result.f0'2
         = None'0)
       = (credential_expiry_ms = None'0
       /\ match reauth_ms with
         | None'0 -> true
         | Some'0 cap -> Int64.to_int cap <= 0
         end))
-    /\ ([@stop_split] [@expl:sasl_session_expiry ensures #1] [%#ssession'0] match { f0'2 = credential_expiry_ms;
-                                                                                    f1'2 = result.f0'1 } with
-        | {f0'2 = Some'0 credential; f1'2 = Some'0 at'} -> Int64.to_int at' <= Int64.to_int credential
+    /\ ([@stop_split] [@expl:sasl_session_expiry ensures #1] [%#ssession'0] match { f0'3 = credential_expiry_ms;
+                                                                                    f1'3 = result.f0'2 } with
+        | {f0'3 = Some'0 credential; f1'3 = Some'0 at'} -> Int64.to_int at' <= Int64.to_int credential
         | _ -> true
         end)
-    /\ ([@stop_split] [@expl:sasl_session_expiry ensures #2] [%#ssession'1] match { f0'2 = reauth_ms;
-                                                                                    f1'2 = result.f0'1 } with
-        | {f0'2 = Some'0 cap; f1'2 = Some'0 at'} -> gt_log_Int (Int64.to_int cap) 0
+    /\ ([@stop_split] [@expl:sasl_session_expiry ensures #2] [%#ssession'1] match { f0'3 = reauth_ms;
+                                                                                    f1'3 = result.f0'2 } with
+        | {f0'3 = Some'0 cap; f1'3 = Some'0 at'} -> gt_log_Int (Int64.to_int cap) 0
         -> Int64.to_int at' <= Int64.to_int now_ms + Int64.to_int cap
         | _ -> true
         end)
-    /\ ([@stop_split] [@expl:sasl_session_expiry ensures #3] [%#ssession'2] match result.f0'1 with
+    /\ ([@stop_split] [@expl:sasl_session_expiry ensures #3] [%#ssession'2] match result.f0'2 with
         | None'0 -> true
         | Some'0 at' -> credential_expiry_ms = Some'0 at'
         \/ match reauth_ms with
@@ -181,9 +166,9 @@ let sasl_session_expiry (now_ms: Int64.t) (credential_expiry_ms: t_Option_i64) (
           /\ (Int64.to_int at' = Int64.to_int now_ms + Int64.to_int cap \/ Int64.to_int at' = Int64.to_int const_MAX)
           end
         end)
-    /\ ([@stop_split] [@expl:sasl_session_expiry ensures #4] [%#ssession'3] match result.f0'1 with
-      | None'0 -> Int64.to_int result.f1'1 = 0
-      | Some'0 at' -> Int64.to_int result.f1'1
+    /\ ([@stop_split] [@expl:sasl_session_expiry ensures #4] [%#ssession'3] match result.f0'2 with
+      | None'0 -> Int64.to_int result.f1'2 = 0
+      | Some'0 at' -> Int64.to_int result.f1'2
       = (if Int64.to_int at' <= Int64.to_int now_ms then
         0
       else
@@ -196,8 +181,8 @@ let sasl_session_expiry (now_ms: Int64.t) (credential_expiry_ms: t_Option_i64) (
       end)}
     (! return {result}) ]
 
-let elim_Some (_x: t_Option_i64) (return (f0'3: Int64.t)) = any
-  [ _k (f0'3: Int64.t) -> {Some'0 f0'3 = _x} (! return {f0'3})
+let elim_Some (_x: t_Option_i64) (return (f0'4: Int64.t)) = any
+  [ _k (f0'4: Int64.t) -> {Some'0 f0'4 = _x} (! return {f0'4})
   | _chk -> (! {[@expl:elim Some] match _x with
       | Some'0 _ -> true
       | _ -> false
@@ -216,6 +201,10 @@ let request_auth_admission (state: t_RequestAuthState) (api_key: Int16.t) (retur
     /\ ([@stop_split] [@expl:request_auth_admission ensures #3] [%#sacl_decision'2] state = PreHandshake
     -> result = (Int16.to_int api_key = 17 \/ Int16.to_int api_key = 18))}
     (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
 
 let session_expired_for_request (expiry_ms: t_Option_i64) (api_key: Int16.t) (now_ms: Int64.t)
   (last_reauth_start_ms: t_Option_i64) (return (x: bool)) = any
@@ -236,10 +225,10 @@ type t_TokenApi = Create'0 | Renew'0 | Expire'0 | Describe'0
 let token_api_admission (has_authenticated_identity: bool) (authenticated_via_token: bool) (_api: t_TokenApi)
   (return (x: t_TokenApiAdmission)) = any
   [ return (result: t_TokenApiAdmission) ->
-  {[@stop_split] [@expl:token_api_admission ensures] ([@stop_split] [@expl:token_api_admission ensures #0] [%#stoken_mutation_decision'3] (result
+  {[@stop_split] [@expl:token_api_admission ensures] ([@stop_split] [@expl:token_api_admission ensures #0] [%#stoken_mutation_decision'2] (result
         = Allow)
       = (has_authenticated_identity /\ not authenticated_via_token))
-    /\ ([@stop_split] [@expl:token_api_admission ensures #1] [%#stoken_mutation_decision'4] (result = Reject)
+    /\ ([@stop_split] [@expl:token_api_admission ensures #1] [%#stoken_mutation_decision'3] (result = Reject)
     = (not has_authenticated_identity \/ authenticated_via_token))}
     (! return {result}) ]
 
@@ -247,131 +236,117 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let created_token_session_bounds_requests [#"/workspace/crates/verified/src/composition/token_session.rs" 55 0 60 32]
-  (times: tup4_i64_i64_i64_i64) (periods: tup4_i64_i64_i64_i64) (api_key: Int16.t) (token_api: t_TokenApi)
+let created_token_session_bounds_requests [#"/workspace/crates/verified/src/composition/token_session.rs" 59 0 64 32]
+  (times: tup3_i64_i64_i64) (periods: tup4_i64_i64_i64_i64) (api_key: Int16.t) (token_api: t_TokenApi)
   (return (x: t_Option_tup6_i64_i64_i64_i64_bool_TokenApiAdmission)) =
-{[@stop_split] [@expl:created_token_session_bounds_requests requires] [%#stoken_session'13] 0 <= Int64.to_int times.f0
-  /\ Int64.to_int times.f0 <= Int64.to_int times.f1
-  /\ Int64.to_int times.f1 <= Int64.to_int times.f2 /\ Int64.to_int times.f2 <= Int64.to_int times.f3}
+{[@stop_split] [@expl:created_token_session_bounds_requests requires] [%#stoken_session'11] 0 <= Int64.to_int times.f0
+  /\ Int64.to_int times.f0 <= Int64.to_int times.f1 /\ Int64.to_int times.f1 <= Int64.to_int times.f2}
   (! bb0
   [ bb0 = s0
-    [ s0 = create_token_deadlines [%#stoken_session] {times.f0} {periods.f0} {periods.f1} {periods.f2}
-        (fun (_x: t_TokenCreateDecision) -> [ &_32 <- _x ] s1)
-    | s1 = any [ br0 -> {_32 = Invalid} (! bb4) | br1 (x0: t_TokenDeadlines) -> {_32 = Create x0} (! bb3) ] ]
+    [ s0 = create_token_deadlines [%#stoken_session] {times.f0} {periods.f0'0} {periods.f1'0} {periods.f2'0}
+        (fun (_x: t_TokenCreateDecision) -> [ &_28 <- _x ] s1)
+    | s1 = any [ br0 -> {_28 = Invalid} (! bb4) | br1 (x0: t_TokenDeadlines) -> {_28 = Create x0} (! bb3) ] ]
   | bb4 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
   | bb3 = s0
-    [ s0 = elim_Create {_32} (fun (r0: t_TokenDeadlines) -> [ &deadlines <- r0 ] s1)
-    | s1 = token_is_active [%#stoken_session'0] {times.f1} {deadlines.initial_expiry_ms} {deadlines.max_timestamp_ms}
-        (fun (_x: bool) -> [ &active <- _x ] s2)
-    | s2 = scram_credential_source [%#stoken_session'4] {[%#stoken_session'1] false} {[%#stoken_session'2] true}
-        {[%#stoken_session'3] true} {active} (fun (_x: t_ScramCredentialSource) -> [ &_44 <- _x ] s3)
-    | s3 = any
-      [ br0 -> {_44 = Regular} (! bb7)
-      | br1 -> {_44 = DelegationToken} (! bb9)
-      | br2 -> {_44 = ExpiredDelegationToken} (! bb7)
-      | br3 -> {_44 = Unknown} (! bb7) ] ]
-  | bb7 = s0 [ s0 = [ &_43 <- false ] s1 | s1 = bb10 ]
-  | bb9 = s0 [ s0 = [ &_43 <- true ] s1 | s1 = bb10 ]
-  | bb10 = any [ br0 -> {_43 = false} (! bb11) | br1 -> {_43} (! bb12) ]
-  | bb12 = s0
+    [ s0 = elim_Create {_28} (fun (r0: t_TokenDeadlines) -> [ &deadlines <- r0 ] s1)
+    | s1 = scram_credential_source [%#stoken_session'3] {[%#stoken_session'0] false} {[%#stoken_session'1] true}
+        {[%#stoken_session'2] true} (fun (_x: t_ScramCredentialSource) -> [ &_36 <- _x ] s2)
+    | s2 = any
+      [ br0 -> {_36 = Regular} (! bb6) | br1 -> {_36 = DelegationToken} (! bb8) | br2 -> {_36 = Unknown} (! bb6) ] ]
+  | bb6 = s0 [ s0 = [ &_35 <- [%#smod] false ] s1 | s1 = bb9 ]
+  | bb8 = s0 [ s0 = [ &_35 <- [%#smod'0] true ] s1 | s1 = bb9 ]
+  | bb9 = any [ br0 -> {_35 = false} (! bb10) | br1 -> {_35} (! bb11) ]
+  | bb11 = s0
     [ s0 = [ &pending_expiry <- deadlines.initial_expiry_ms ] s1
-    | s1 = token_is_active [%#stoken_session'5] {times.f2} {pending_expiry} {pending_expiry}
-        (fun (_x: bool) -> [ &_50 <- _x ] s2)
-    | s2 = any [ br0 -> {_50 = false} (! bb15) | br1 -> {_50} (! bb14) ] ]
-  | bb14 = s0
-    [ s0 = [ &_60 <- Some'0 pending_expiry ] s1
-    | s1 = [ &_62 <- Some'0 (periods.f3) ] s2
-    | s2 = sasl_session_expiry [%#stoken_session'6] {times.f2} {_60} {_62}
-        (fun (_x: tup2_Option_i64_i64) -> [ &_58 <- _x ] s3)
-    | s3 = any [ br0 -> {_58.f0'1 = None'0} (! bb19) | br1 (x0: Int64.t) -> {_58.f0'1 = Some'0 x0} (! bb18) ] ]
-  | bb19 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
-  | bb18 = s0
-    [ s0 = elim_Some {_58.f0'1} (fun (r0: Int64.t) -> [ &at' <- r0 ] s1)
-    | s1 = [ &lifetime <- _58.f1'1 ] s2
-    | s2 = [ &_67 <- Authenticated ] s3
-    | s3 = request_auth_admission [%#stoken_session'7] {_67} {api_key} (fun (_x: bool) -> [ &_66 <- _x ] s4)
-    | s4 = any [ br0 -> {_66 = false} (! bb22) | br1 -> {_66} (! bb21) ] ]
-  | bb21 = s0
-    [ s0 = [ &_70 <- Some'0 at' ] s1
-    | s1 = [ &_74 <- None'0 ] s2
-    | s2 = session_expired_for_request [%#stoken_session'8] {_70} {api_key} {times.f3} {_74}
-        (fun (_x: bool) -> [ &_69 <- _x ] s3)
-    | s3 = [ &admitted <- not _69 ] s4
-    | s4 = bb24 ]
-  | bb22 = s0 [ s0 = [ &admitted <- [%#stoken_session'9] false ] s1 | s1 = bb24 ]
-  | bb24 = s0
-    [ s0 = token_api_admission [%#stoken_session'12] {[%#stoken_session'10] true} {[%#stoken_session'11] true}
-        {token_api} (fun (_x: t_TokenApiAdmission) -> [ &token_admission <- _x ] s1)
-    | s1 = [ &_77 <- { f0'0 = pending_expiry;
-                       f1'0 = deadlines.max_timestamp_ms;
-                       f2'0 = at';
-                       f3'0 = lifetime;
-                       f4'0 = admitted;
-                       f5'0 = token_admission } ] s2
-    | s2 = [ &_ret <- Some _77 ] s3
-    | s3 = return {_ret} ]
+    | s1 = [ &_45 <- Some'0 pending_expiry ] s2
+    | s2 = [ &_47 <- Some'0 (periods.f3'0) ] s3
+    | s3 = sasl_session_expiry [%#stoken_session'4] {times.f1} {_45} {_47}
+        (fun (_x: tup2_Option_i64_i64) -> [ &_43 <- _x ] s4)
+    | s4 = any [ br0 -> {_43.f0'2 = None'0} (! bb15) | br1 (x0: Int64.t) -> {_43.f0'2 = Some'0 x0} (! bb14) ] ]
   | bb15 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
-  | bb11 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ] ]
+  | bb14 = s0
+    [ s0 = elim_Some {_43.f0'2} (fun (r0: Int64.t) -> [ &at' <- r0 ] s1)
+    | s1 = [ &lifetime <- _43.f1'2 ] s2
+    | s2 = [ &_52 <- Authenticated ] s3
+    | s3 = request_auth_admission [%#stoken_session'5] {_52} {api_key} (fun (_x: bool) -> [ &_51 <- _x ] s4)
+    | s4 = any [ br0 -> {_51 = false} (! bb18) | br1 -> {_51} (! bb17) ] ]
+  | bb17 = s0
+    [ s0 = [ &_55 <- Some'0 at' ] s1
+    | s1 = [ &_59 <- None'0 ] s2
+    | s2 = session_expired_for_request [%#stoken_session'6] {_55} {api_key} {times.f2} {_59}
+        (fun (_x: bool) -> [ &_54 <- _x ] s3)
+    | s3 = [ &admitted <- not _54 ] s4
+    | s4 = bb20 ]
+  | bb18 = s0 [ s0 = [ &admitted <- [%#stoken_session'7] false ] s1 | s1 = bb20 ]
+  | bb20 = s0
+    [ s0 = token_api_admission [%#stoken_session'10] {[%#stoken_session'8] true} {[%#stoken_session'9] true} {token_api}
+        (fun (_x: t_TokenApiAdmission) -> [ &token_admission <- _x ] s1)
+    | s1 = [ &_62 <- { f0'1 = pending_expiry;
+                       f1'1 = deadlines.max_timestamp_ms;
+                       f2'1 = at';
+                       f3'1 = lifetime;
+                       f4'1 = admitted;
+                       f5'1 = token_admission } ] s2
+    | s2 = [ &_ret <- Some _62 ] s3
+    | s3 = return {_ret} ]
+  | bb10 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_Option_tup6_i64_i64_i64_i64_bool_TokenApiAdmission = Any.any_l ()
-  | & times: tup4_i64_i64_i64_i64 = times
+  | & times: tup3_i64_i64_i64 = times
   | & periods: tup4_i64_i64_i64_i64 = periods
   | & api_key: Int16.t = api_key
   | & token_api: t_TokenApi = token_api
   | & deadlines: t_TokenDeadlines = Any.any_l ()
-  | & _32: t_TokenCreateDecision = Any.any_l ()
-  | & active: bool = Any.any_l ()
-  | & _43: bool = Any.any_l ()
-  | & _44: t_ScramCredentialSource = Any.any_l ()
+  | & _28: t_TokenCreateDecision = Any.any_l ()
+  | & _35: bool = Any.any_l ()
+  | & _36: t_ScramCredentialSource = Any.any_l ()
   | & pending_expiry: Int64.t = Any.any_l ()
-  | & _50: bool = Any.any_l ()
   | & at': Int64.t = Any.any_l ()
   | & lifetime: Int64.t = Any.any_l ()
-  | & _58: tup2_Option_i64_i64 = Any.any_l ()
-  | & _60: t_Option_i64 = Any.any_l ()
-  | & _62: t_Option_i64 = Any.any_l ()
+  | & _43: tup2_Option_i64_i64 = Any.any_l ()
+  | & _45: t_Option_i64 = Any.any_l ()
+  | & _47: t_Option_i64 = Any.any_l ()
   | & admitted: bool = Any.any_l ()
-  | & _66: bool = Any.any_l ()
-  | & _67: t_RequestAuthState = Any.any_l ()
-  | & _69: bool = Any.any_l ()
-  | & _70: t_Option_i64 = Any.any_l ()
-  | & _74: t_Option_i64 = Any.any_l ()
+  | & _51: bool = Any.any_l ()
+  | & _52: t_RequestAuthState = Any.any_l ()
+  | & _54: bool = Any.any_l ()
+  | & _55: t_Option_i64 = Any.any_l ()
+  | & _59: t_Option_i64 = Any.any_l ()
   | & token_admission: t_TokenApiAdmission = Any.any_l ()
-  | & _77: tup6_i64_i64_i64_i64_bool_TokenApiAdmission = Any.any_l () ])
+  | & _62: tup6_i64_i64_i64_i64_bool_TokenApiAdmission = Any.any_l () ])
   [ return (result: t_Option_tup6_i64_i64_i64_i64_bool_TokenApiAdmission) ->
-  {[@stop_split] [@expl:created_token_session_bounds_requests ensures] ([@stop_split] [@expl:created_token_session_bounds_requests ensures #0] [%#stoken_session'14] (result
+  {[@stop_split] [@expl:created_token_session_bounds_requests ensures] ([@stop_split] [@expl:created_token_session_bounds_requests ensures #0] [%#stoken_session'12] (result
         = None)
-      = (Int64.to_int periods.f1 <= 0
-      \/ Int64.to_int periods.f2 <= 0
-      \/ Int64.to_int times.f2 = Int64.to_int const_MAX
-      \/ ge_log_Int (Int64.to_int times.f2) (Int64.to_int times.f0 + Int64.to_int periods.f1)
-      \/ ge_log_Int (Int64.to_int times.f2) (Int64.to_int times.f0 + Int64.to_int periods.f2)
-      \/ gt_log_Int (Int64.to_int periods.f0) 0
-      /\ ge_log_Int (Int64.to_int times.f2) (Int64.to_int times.f0 + Int64.to_int periods.f0)))
-    /\ ([@stop_split] [@expl:created_token_session_bounds_requests ensures #1] [%#stoken_session'15] match result with
+      = (Int64.to_int periods.f1'0 <= 0 \/ Int64.to_int periods.f2'0 <= 0))
+    /\ ([@stop_split] [@expl:created_token_session_bounds_requests ensures #1] [%#stoken_session'13] match result with
         | None -> true
-        | Some receipt -> Int64.to_int times.f2 < Int64.to_int receipt.f0'0
-        /\ Int64.to_int receipt.f0'0 <= Int64.to_int receipt.f1'0
-        /\ Int64.to_int receipt.f1'0 <= Int64.to_int times.f0 + Int64.to_int periods.f1
-        /\ (gt_log_Int (Int64.to_int periods.f0) 0
-          -> Int64.to_int receipt.f1'0 <= Int64.to_int times.f0 + Int64.to_int periods.f0)
-        /\ Int64.to_int receipt.f0'0 <= Int64.to_int times.f0 + Int64.to_int periods.f2
-        /\ Int64.to_int times.f2 < Int64.to_int receipt.f2'0
-        /\ Int64.to_int receipt.f2'0 <= Int64.to_int receipt.f0'0
-        /\ (gt_log_Int (Int64.to_int periods.f3) 0
-          -> Int64.to_int receipt.f2'0 <= Int64.to_int times.f2 + Int64.to_int periods.f3)
-        /\ Int64.to_int receipt.f3'0 = Int64.to_int receipt.f2'0 - Int64.to_int times.f2
-        /\ receipt.f4'0 = (Int16.to_int api_key = 17 \/ Int64.to_int times.f3 <= Int64.to_int receipt.f2'0)
-        /\ receipt.f5'0 = Reject
+        | Some receipt -> Int64.to_int times.f0 <= Int64.to_int receipt.f0'1
+        /\ Int64.to_int receipt.f0'1 <= Int64.to_int receipt.f1'1
+        /\ Int64.to_int receipt.f1'1 <= Int64.to_int times.f0 + Int64.to_int periods.f1'0
+        /\ (gt_log_Int (Int64.to_int periods.f0'0) 0
+          -> Int64.to_int receipt.f1'1 <= Int64.to_int times.f0 + Int64.to_int periods.f0'0)
+        /\ Int64.to_int receipt.f0'1 <= Int64.to_int times.f0 + Int64.to_int periods.f2'0
+        /\ Int64.to_int receipt.f2'1 <= Int64.to_int receipt.f0'1
+        /\ (gt_log_Int (Int64.to_int periods.f3'0) 0
+          -> Int64.to_int receipt.f2'1 <= Int64.to_int times.f1 + Int64.to_int periods.f3'0)
+        /\ Int64.to_int receipt.f3'1
+          = (if Int64.to_int receipt.f2'1 <= Int64.to_int times.f1 then
+            0
+          else
+            Int64.to_int receipt.f2'1 - Int64.to_int times.f1
+          )
+        /\ (ge_log_Int (Int64.to_int times.f1) (Int64.to_int receipt.f0'1) -> Int64.to_int receipt.f3'1 = 0)
+        /\ receipt.f4'1 = (Int16.to_int api_key = 17 \/ Int64.to_int times.f2 <= Int64.to_int receipt.f2'1)
+        /\ receipt.f5'1 = Reject
         end)
-    /\ ([@stop_split] [@expl:created_token_session_bounds_requests ensures #2] [%#stoken_session'16] match result with
+    /\ ([@stop_split] [@expl:created_token_session_bounds_requests ensures #2] [%#stoken_session'14] match result with
       | None -> true
-      | Some receipt -> (gt_log_Int (Int64.to_int times.f3) (Int64.to_int receipt.f0'0)
-          \/ gt_log_Int (Int64.to_int times.f3) (Int64.to_int receipt.f1'0)
-          \/ gt_log_Int (Int64.to_int periods.f3) 0
-          /\ gt_log_Int (Int64.to_int times.f3) (Int64.to_int times.f2 + Int64.to_int periods.f3)
-        -> receipt.f4'0 = (Int16.to_int api_key = 17))
-      /\ (Int64.to_int times.f3 <= Int64.to_int receipt.f0'0
-        /\ (Int64.to_int periods.f3 <= 0 \/ Int64.to_int times.f3 <= Int64.to_int times.f2 + Int64.to_int periods.f3)
-      -> receipt.f4'0)
+      | Some receipt -> (gt_log_Int (Int64.to_int times.f2) (Int64.to_int receipt.f0'1)
+          \/ gt_log_Int (Int64.to_int times.f2) (Int64.to_int receipt.f1'1)
+          \/ gt_log_Int (Int64.to_int periods.f3'0) 0
+          /\ gt_log_Int (Int64.to_int times.f2) (Int64.to_int times.f1 + Int64.to_int periods.f3'0)
+        -> receipt.f4'1 = (Int16.to_int api_key = 17))
+      /\ (Int64.to_int times.f2 <= Int64.to_int receipt.f0'1
+        /\ (Int64.to_int periods.f3'0 <= 0
+        \/ Int64.to_int times.f2 <= Int64.to_int times.f1 + Int64.to_int periods.f3'0) -> receipt.f4'1)
       end)}
     (! return {result}) ]

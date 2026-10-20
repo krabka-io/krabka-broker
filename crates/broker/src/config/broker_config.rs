@@ -863,14 +863,16 @@ krabka_macros::broker_config! {
         /// `usize::MAX`, which is unlimited.
         pub max_connections_per_ip: usize,
 
-        /// How long a connection may go without a complete request frame
-        /// before the broker closes it. Matches Apache Kafka's
+        /// How long a connection may go with no socket activity before the
+        /// broker closes it. Matches Apache Kafka's
         /// `connections.max.idle.ms`, whose default is 600000, ten
-        /// minutes. The deadline is armed the moment the per-connection
-        /// serve loop starts waiting for a frame and re-armed after every
-        /// frame it reads, so it reclaims a peer that completed the TCP
-        /// (and TLS) handshake and then sent nothing, and a peer that
-        /// vanished without a FIN. A non-positive value disables idle
+        /// minutes. As in Kafka's `Selector`, each read that brings bytes
+        /// and each response write restarts the window, and it keeps
+        /// running while a request is in its handler or a throttled
+        /// connection is muted. It reclaims a peer that completed the TCP
+        /// (and TLS) handshake and then sent nothing, a peer that vanished
+        /// without a FIN, and a request that outlasts it, whose response is
+        /// then dropped. A non-positive value disables idle
         /// expiry, the way Kafka arms no `IdleExpiryManager` for one.
         ///
         /// `None` is the operator having set nothing, and runs Kafka's

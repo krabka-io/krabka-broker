@@ -975,7 +975,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Broker,
             ConfigType::Long,
             Some("600000"),
-            "How long a client connection may go without a complete request frame before the broker closes it. The process reads it at startup, so no alter path can change it.",
+            "How long a client connection may go with no socket activity before the broker closes it, time a request spends in its handler included. The process reads it at startup, so no alter path can change it.",
             ValueCheck::NotAltered,
         )
     },

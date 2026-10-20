@@ -127,6 +127,10 @@ impl IdleWatch {
             timer.as_mut().reset(deadline);
         }
     }
+
+    /// Restarts the window without a byte moving, as Kafka's `Selector.send`
+    /// refreshes a channel's idle clock when a response is queued.
+    pub(crate) fn refresh(&self) { self.clock.progressed(); }
 }
 
 impl Drop for IdleWatch {

@@ -40,7 +40,7 @@ pub(crate) const OFFSETS_RETENTION_MINUTES: &str = "offsets.retention.minutes";
 /// read-only for the same reason as [`OFFSETS_RETENTION_MINUTES`].
 pub(crate) const OFFSETS_RETENTION_CHECK_INTERVAL_MS: &str = "offsets.retention.check.interval.ms";
 
-/// How long a client connection may go without a complete frame before the
+/// How long a client connection may go with no socket activity before the
 /// broker closes it. The process reads it from its static configuration at
 /// startup, so `DescribeConfigs` reports it read-only, at
 /// `STATIC_BROKER_CONFIG` when an operator named it and `DEFAULT_CONFIG` when

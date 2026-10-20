@@ -63,10 +63,10 @@ use {
         },
     },
     crate::{
-        AcceptingListener, ClusterGrants, ConnectionLimiter, ControllerAdminRouter,
-        ControllerApiVersions, HandshakeStream, ListenerLimits, RaftHandshakeError,
-        RaftListenerHandshake, RaftShardRouter, UnstableApiVersions, error::RaftError,
-        kraft::KraftController,
+        AcceptingListener, ClusterGrants, ConnectionLimiter, ControllerAdminRequest,
+        ControllerAdminRouter, ControllerApiVersions, HandshakeStream, ListenerLimits,
+        RaftHandshakeError, RaftListenerHandshake, RaftShardRouter, UnstableApiVersions,
+        error::RaftError, kraft::KraftController,
     },
 };
 
@@ -314,7 +314,7 @@ where
 }
 
 async fn handle_conn<S>(
-    mut stream: S,
+    stream: S,
     engine: KraftController,
     shutdown: CancellationToken,
     shard_router: Option<Arc<dyn RaftShardRouter>>,
@@ -332,6 +332,17 @@ where
     // takes to arrive.
     let max_request_bytes =
         usize::try_from(context.limits.max_request_size.bytes_u64()).unwrap_or(usize::MAX);
+    // The same clock keeps running while a request is answered. Kafka mutes a
+    // channel after each receive, so nothing refreshes its idle clock while a
+    // handler works until the response is queued or written, and a handler
+    // that outlasts the window loses its connection and its response.
+    let (mut stream, watch) = match context.limits.max_idle {
+        Some(window) => {
+            let (stream, watch) = HandshakeStream::watched(stream, window);
+            (stream, Some(watch))
+        }
+        None => (HandshakeStream::from(stream), None),
+    };
     loop {
         let request = read_one_request(
             &mut stream,
@@ -339,180 +350,245 @@ where
             max_request_bytes,
             context.limits.max_idle,
         );
-        tokio::select! {
+        let frame = tokio::select! {
             () = shutdown.cancelled() => return Ok(()),
-            res = request => {
-                let RequestFrame {
-                    api_key: api_key_n,
-                    api_version,
-                    correlation_id,
-                    client_id,
-                    body,
-                    flexible: response_flexible,
-                } = match res {
-                    Ok(v) => v,
-                    Err(e) => {
-                        if is_idle(&e) {
-                            tracing::debug!(
-                                peer = %context.peer,
-                                "controller connection idle past connections.max.idle.ms, closing"
-                            );
-                            return Ok(());
-                        }
-                        // Treat peer EOF as a clean shutdown of this conn.
-                        if is_eof(&e) {
-                            return Ok(());
-                        }
-                        return Err(e);
+            res = request => match res {
+                Ok(frame) => frame,
+                Err(e) => {
+                    if is_idle(&e) {
+                        log_idle_close(&context);
+                        return Ok(());
                     }
-                };
-                if let Some(expiry) = context.expires_at_ms
-                    && !krabka_verified::authz::controller_request_admission(
-                        Some(expiry), api_key_n.get(), clock_ms(),
-                    )
-                {
-                    tracing::debug!(peer = %context.peer, "controller credential expired, closing");
+                    // Treat peer EOF as a clean shutdown of this conn.
+                    if is_eof(&e) {
+                        return Ok(());
+                    }
+                    return Err(e);
+                }
+            },
+        };
+        let correlation_id = frame.correlation_id;
+        let answer = answer_request(
+            frame,
+            &engine,
+            shard_router.as_deref(),
+            admin_router.as_deref(),
+            &context,
+            &clock_ms,
+        );
+        let mut answer = std::pin::pin!(answer);
+        let answered = match &watch {
+            Some(watch) => tokio::select! {
+                biased;
+                answered = &mut answer => answered?,
+                () = watch.expired() => {
+                    log_idle_close(&context);
+                    // Kafka closes the channel and drops the response, but the
+                    // request handler runs on: cancelling it between two awaits
+                    // could leave a controller operation half applied. The
+                    // socket closes first, so the peer sees the close at once.
+                    drop(stream);
+                    if let Err(error) = answer.await {
+                        tracing::debug!(
+                            peer = %context.peer,
+                            %error,
+                            "request on an idle-closed controller connection failed"
+                        );
+                    }
                     return Ok(());
                 }
-                // ApiVersions (18) is the bootstrap handshake performed by
-                // `Connection::connect`. It arrives at v0 with a header v1 (no
-                // tagged-fields byte) and expects a ResponseHeader v0 reply (also
-                // no tagged-fields byte) — the documented Kafka asymmetry. We
-                // serialize it separately rather than poisoning the generic codec.
-                if api_key_n == API_KEY_API_VERSIONS {
-                    // ApiVersionsResponse always uses a v0 ResponseHeader (no
-                    // tagged-fields byte), but the BODY shape depends on the
-                    // request version: v0..=2 are non-flexible (i32 array), v3+
-                    // are flexible (compact array). Krabka's own client asks at
-                    // v0; the JVM controller asks at v4. The generated codec
-                    // speaks the raw `int16`, so unwrap the version here.
-                    let resp = answer_api_versions(
-                        &engine,
-                        admin_router.as_deref(),
-                        context.unstable,
-                        api_version.get(),
-                        &body,
-                    )?;
-                    write_response(&mut stream, correlation_id, resp).include_tagged_fields(false).call().await?;
-                    continue;
-                }
-                // Kafka's `Processor.parseRequestHeader` refuses a
-                // `latestVersionUnstable` version while
-                // `unstable.api.versions.enable` is off
-                // (`ApiKeys.isVersionEnabled`), and `SocketServer` closes the
-                // connection without a response.
-                if api_versions::is_disabled_version(
-                    api_key_n.get(),
-                    api_version.get(),
-                    admin_router.as_deref(),
-                    context.unstable.api_versions,
-                ) {
-                    tracing::debug!(
-                        peer = %context.peer,
-                        api_key = api_key_n.0,
-                        api_version = api_version.get(),
-                        "disabled unstable api version, closing controller connection"
-                    );
+            },
+            None => answer.await?,
+        };
+        let Some(reply) = answered else {
+            return Ok(());
+        };
+        // Kafka's `Selector.send` refreshes the idle clock when the response
+        // is queued, before a byte of it is written.
+        if let Some(watch) = &watch {
+            watch.refresh();
+        }
+        let written = write_response(&mut stream, correlation_id, reply.body)
+            .include_tagged_fields(reply.tagged_fields)
+            .call();
+        match &watch {
+            Some(watch) => tokio::select! {
+                written = written => written?,
+                () = watch.expired() => {
+                    log_idle_close(&context);
                     return Ok(());
                 }
-                // Kafka's `ControllerApis` authorizes every request with the
-                // cluster operation its api needs, and answers a denial in the
-                // shape of that api. The apis that the Admin router sends to a
-                // broker handler authorize in that handler.
-                if let Some(operation) = authorization::required_operation(api_key_n.0)
-                    && !context.grants.allows(operation)
-                {
-                    tracing::debug!(
-                        peer = %context.peer,
-                        principal = ?context.principal.as_ref().map(|p| p.name.as_str()),
-                        api_key = api_key_n.0,
-                        ?operation,
-                        "controller-listener request denied"
-                    );
-                    let resp = authorization::refusal(api_key_n.0, api_version.get(), &body)?;
-                    write_response(&mut stream, correlation_id, resp).include_tagged_fields(response_flexible).call()
-                        .await?;
-                    continue;
-                }
-                // DescribeCluster (60, KIP-919) is served here rather than in
-                // `dispatch` because it needs the request version (for the
-                // flexible body codec) and the controller's metadata image. The
-                // flexible v1 ResponseHeader is supplied by `write_response`.
-                if api_key_n == API_KEY_DESCRIBE_CLUSTER {
-                    let resp = describe_cluster_response_body(
-                        api_version.get(),
-                        &body,
-                        &engine,
-                        context.grants.as_ref(),
-                        CONTROLLER_LISTENER_NAME,
-                    )
-                    .await?;
-                    write_response(&mut stream, correlation_id, resp).call().await?;
-                    continue;
-                }
-                if matches!(
-                    api_key_n.0,
-                    API_KEY_DESCRIBE_QUORUM
-                        | API_KEY_ADD_RAFT_VOTER
-                        | API_KEY_REMOVE_RAFT_VOTER
-                        | API_KEY_UPDATE_RAFT_VOTER
-                ) {
-                    let resp = kip853_admin_response(
-                        api_key_n.0,
-                        api_version.get(),
-                        &body,
-                        &engine,
-                    )
-                    .await?;
-                    write_response(&mut stream, correlation_id, resp).call().await?;
-                    continue;
-                }
-                if sasl::is_sasl_api(api_key_n.0) {
-                    let resp = sasl::sasl_response(api_key_n.0, api_version.get(), &body)?;
-                    write_response(&mut stream, correlation_id, resp).include_tagged_fields(response_flexible).call()
-                        .await?;
-                    continue;
-                }
-                if registration::is_controller_api(api_key_n.0) {
-                    let resp = registration::dispatch(
-                        api_key_n.0,
-                        api_version.get(),
-                        &body,
-                        &engine,
-                    )
-                    .await?;
-                    write_response(&mut stream, correlation_id, resp).call().await?;
-                    continue;
-                }
-                if !is_native_raft_api(api_key_n.0)
-                    && let Some(router) = admin_router.as_deref()
-                    && let Some(response) = router
-                        .route(crate::ControllerAdminRequest {
-                            api_key: api_key_n.get(),
-                            api_version: api_version.get(),
-                            correlation_id,
-                            client_id,
-                            body: body.clone(),
-                            peer: context.peer,
-                            principal: context.principal.clone(),
-                            authenticated_via_token: context.authenticated_via_token,
-                        })
-                        .await?
-                {
-                    write_response(&mut stream, correlation_id, response.body).include_tagged_fields(response.flexible).call()
-                    .await?;
-                    continue;
-                }
-                let resp = dispatch_with_router(
-                    api_key_n,
-                    api_version.get(),
-                    body,
-                    &engine,
-                    shard_router.as_deref(),
-                    context.principal.as_ref(),
-                ).await?;
-                write_response(&mut stream, correlation_id, resp).include_tagged_fields(response_flexible).call().await?;
-            }
+            },
+            None => written.await?,
         }
     }
+}
+
+fn log_idle_close(context: &ConnectionContext) {
+    tracing::debug!(
+        peer = %context.peer,
+        "controller connection idle past connections.max.idle.ms, closing"
+    );
+}
+
+/// A response body for the request loop to write, with whether its
+/// `ResponseHeader` carries the tagged-fields byte.
+struct Reply {
+    body: bytes::Bytes,
+    tagged_fields: bool,
+}
+
+impl Reply {
+    fn new(body: bytes::Bytes, tagged_fields: bool) -> Self {
+        Self {
+            body,
+            tagged_fields,
+        }
+    }
+}
+
+/// Answers one request, or returns `None` when the connection closes without
+/// a response.
+async fn answer_request(
+    frame: RequestFrame,
+    engine: &KraftController,
+    shard_router: Option<&dyn RaftShardRouter>,
+    admin_router: Option<&dyn ControllerAdminRouter>,
+    context: &ConnectionContext,
+    clock_ms: &(impl Fn() -> i64 + Send),
+) -> Result<Option<Reply>, RaftError> {
+    let RequestFrame {
+        api_key: api_key_n,
+        api_version,
+        correlation_id,
+        client_id,
+        body,
+        flexible: response_flexible,
+    } = frame;
+    if let Some(expiry) = context.expires_at_ms
+        && !krabka_verified::authz::controller_request_admission(
+            Some(expiry),
+            api_key_n.get(),
+            clock_ms(),
+        )
+    {
+        tracing::debug!(peer = %context.peer, "controller credential expired, closing");
+        return Ok(None);
+    }
+    // ApiVersions (18) is the bootstrap handshake performed by
+    // `Connection::connect`. It arrives at v0 with a header v1 (no
+    // tagged-fields byte) and expects a ResponseHeader v0 reply (also no
+    // tagged-fields byte) — the documented Kafka asymmetry. We serialize it
+    // separately rather than poisoning the generic codec.
+    if api_key_n == API_KEY_API_VERSIONS {
+        // ApiVersionsResponse always uses a v0 ResponseHeader (no
+        // tagged-fields byte), but the BODY shape depends on the request
+        // version: v0..=2 are non-flexible (i32 array), v3+ are flexible
+        // (compact array). Krabka's own client asks at v0; the JVM controller
+        // asks at v4. The generated codec speaks the raw `int16`, so unwrap
+        // the version here.
+        let resp = answer_api_versions(
+            engine,
+            admin_router,
+            context.unstable,
+            api_version.get(),
+            &body,
+        )?;
+        return Ok(Some(Reply::new(resp, false)));
+    }
+    // Kafka's `Processor.parseRequestHeader` refuses a `latestVersionUnstable`
+    // version while `unstable.api.versions.enable` is off
+    // (`ApiKeys.isVersionEnabled`), and `SocketServer` closes the connection
+    // without a response.
+    if api_versions::is_disabled_version(
+        api_key_n.get(),
+        api_version.get(),
+        admin_router,
+        context.unstable.api_versions,
+    ) {
+        tracing::debug!(
+            peer = %context.peer,
+            api_key = api_key_n.0,
+            api_version = api_version.get(),
+            "disabled unstable api version, closing controller connection"
+        );
+        return Ok(None);
+    }
+    // Kafka's `ControllerApis` authorizes every request with the cluster
+    // operation its api needs, and answers a denial in the shape of that api.
+    // The apis that the Admin router sends to a broker handler authorize in
+    // that handler.
+    if let Some(operation) = authorization::required_operation(api_key_n.0)
+        && !context.grants.allows(operation)
+    {
+        tracing::debug!(
+            peer = %context.peer,
+            principal = ?context.principal.as_ref().map(|p| p.name.as_str()),
+            api_key = api_key_n.0,
+            ?operation,
+            "controller-listener request denied"
+        );
+        let resp = authorization::refusal(api_key_n.0, api_version.get(), &body)?;
+        return Ok(Some(Reply::new(resp, response_flexible)));
+    }
+    // DescribeCluster (60, KIP-919) is served here rather than in `dispatch`
+    // because it needs the request version (for the flexible body codec) and
+    // the controller's metadata image. The flexible v1 ResponseHeader is
+    // supplied by `write_response`.
+    if api_key_n == API_KEY_DESCRIBE_CLUSTER {
+        let resp = describe_cluster_response_body(
+            api_version.get(),
+            &body,
+            engine,
+            context.grants.as_ref(),
+            CONTROLLER_LISTENER_NAME,
+        )
+        .await?;
+        return Ok(Some(Reply::new(resp, true)));
+    }
+    if matches!(
+        api_key_n.0,
+        API_KEY_DESCRIBE_QUORUM
+            | API_KEY_ADD_RAFT_VOTER
+            | API_KEY_REMOVE_RAFT_VOTER
+            | API_KEY_UPDATE_RAFT_VOTER
+    ) {
+        let resp = kip853_admin_response(api_key_n.0, api_version.get(), &body, engine).await?;
+        return Ok(Some(Reply::new(resp, true)));
+    }
+    if sasl::is_sasl_api(api_key_n.0) {
+        let resp = sasl::sasl_response(api_key_n.0, api_version.get(), &body)?;
+        return Ok(Some(Reply::new(resp, response_flexible)));
+    }
+    if registration::is_controller_api(api_key_n.0) {
+        let resp = registration::dispatch(api_key_n.0, api_version.get(), &body, engine).await?;
+        return Ok(Some(Reply::new(resp, true)));
+    }
+    if !is_native_raft_api(api_key_n.0)
+        && let Some(router) = admin_router
+        && let Some(response) = router
+            .route(ControllerAdminRequest {
+                api_key: api_key_n.get(),
+                api_version: api_version.get(),
+                correlation_id,
+                client_id,
+                body: body.clone(),
+                peer: context.peer,
+                principal: context.principal.clone(),
+                authenticated_via_token: context.authenticated_via_token,
+            })
+            .await?
+    {
+        return Ok(Some(Reply::new(response.body, response.flexible)));
+    }
+    let resp = dispatch_with_router(
+        api_key_n,
+        api_version.get(),
+        body,
+        engine,
+        shard_router,
+        context.principal.as_ref(),
+    )
+    .await?;
+    Ok(Some(Reply::new(resp, response_flexible)))
 }

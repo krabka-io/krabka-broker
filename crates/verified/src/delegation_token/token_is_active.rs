@@ -193,18 +193,3 @@ pub fn expire_token_deadline(
 
     TokenExpireDecision::Update(token_deadline(now_ms, period_ms).min(max_timestamp_ms))
 }
-
-/// Whether a stored delegation token may authenticate at `now_ms`.
-#[ensures(result == (
-    now_ms@ >= 0
-        && expiry_timestamp_ms@ > now_ms@
-        && max_timestamp_ms@ > now_ms@
-        && expiry_timestamp_ms@ <= max_timestamp_ms@
-))]
-#[must_use]
-pub fn token_is_active(now_ms: i64, expiry_timestamp_ms: i64, max_timestamp_ms: i64) -> bool {
-    now_ms >= 0
-        && expiry_timestamp_ms > now_ms
-        && max_timestamp_ms > now_ms
-        && expiry_timestamp_ms <= max_timestamp_ms
-}

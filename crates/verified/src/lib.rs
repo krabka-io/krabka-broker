@@ -121,8 +121,7 @@ pub use {
     delegation_token::{
         TokenCreateDecision, TokenDeadlines, TokenExpireDecision, TokenMutationDecision,
         TokenMutationFacts, TokenMutationKind, TokenMutationState, TokenRenewDecision,
-        create_token_deadlines, expire_token_deadline, renew_token_expiry, token_is_active,
-        token_mutation_decision,
+        create_token_deadlines, expire_token_deadline, renew_token_expiry, token_mutation_decision,
     },
     delivery::{coalesce_delivery_range, delivery_watermark_advance, scheduled_delivery_visible},
     directory::{

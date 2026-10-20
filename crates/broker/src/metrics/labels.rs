@@ -327,9 +327,10 @@ pub struct BreakGlassActionLabel {
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, krabka_macros::EnumStr)]
 #[enum_str(case = "snake_case", all, label_value)]
 pub enum ConnectionCloseReason {
-    /// The connection went `connections.max.idle.ms` without a complete frame
-    /// — counting a TLS handshake it opened the socket for and never drove,
-    /// which Kafka's idle expiry covers for the same reason.
+    /// The connection went `connections.max.idle.ms` with no socket activity,
+    /// a request in its handler or a throttle mute included — counting a TLS
+    /// handshake it opened the socket for and never drove, which Kafka's idle
+    /// expiry covers for the same reason.
     Idle,
     /// KIP-368: the SASL session passed the token's expiry without an in-band
     /// re-authentication.

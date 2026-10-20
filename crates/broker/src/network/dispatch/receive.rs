@@ -1,10 +1,9 @@
 //! Reserve request bytes after the size prefix and before reading the body.
 
 use {
-    super::RequestByteBudget,
-    crate::time_util::sleep_until_opt,
+    super::{RequestByteBudget, idle_clock::IdleClock},
     bytes::{Bytes, BytesMut},
-    std::{io, time::Duration},
+    std::io,
     tokio::{
         io::{AsyncRead, AsyncReadExt as _},
         sync::OwnedSemaphorePermit,
@@ -50,53 +49,64 @@ impl RequestByteBudget {
 }
 
 /// An idle peer holds no capacity, and a waiting size prefix holds no body.
-/// Broker byte-budget waits do not consume the client's idle window.
+/// Broker byte-budget waits do not consume the client's idle window: the
+/// clock restarts once the body holds its budget.
 ///
 /// The idle window measures silence, as Kafka's `Selector` does by refreshing
 /// a channel's idle clock on every read it serves: each read that delivers a
-/// byte starts a fresh window, so a frame that arrives slowly but steadily is
-/// read however long it takes in all.
+/// byte moves `clock`, so a frame that arrives slowly but steadily is read
+/// however long it takes in all. The first read is held to the window that
+/// `clock` already runs, from the response written before it or the mute
+/// that followed.
 pub(super) async fn receive_request<S: AsyncRead + Unpin>(
     stream: &mut S,
     max_request_bytes: usize,
     budget: Option<&RequestByteBudget>,
-    idle: Option<Duration>,
+    clock: &mut IdleClock,
 ) -> Result<Option<RequestFrame>, ReceiveError> {
-    let Some(size) = read_size(stream, max_request_bytes, idle).await? else {
+    let Some(size) = read_size(stream, max_request_bytes, clock).await? else {
         return Ok(None);
     };
     let byte_permit = match budget {
-        Some(budget) => Some(budget.acquire(size).await?),
+        Some(budget) => {
+            let permit = budget.acquire(size).await?;
+            clock.touch();
+            Some(permit)
+        }
         None => None,
     };
     // Allocate only after the advertised body has reserved its whole budget.
-    let bytes = read_body(stream, size, idle).await?;
+    let bytes = read_body(stream, size, clock).await?;
     Ok(Some(RequestFrame { bytes, byte_permit }))
 }
 
-/// One read, given up once `idle` passes without it delivering anything.
+/// One read, given up once `clock`'s window passes without it delivering
+/// anything. A read that delivers bytes moves the clock.
 async fn read_within_idle<S: AsyncRead + Unpin>(
     stream: &mut S,
     buf: &mut [u8],
-    idle: Option<Duration>,
+    clock: &mut IdleClock,
 ) -> Result<usize, ReceiveError> {
-    let deadline = idle.map(|window| tokio::time::Instant::now() + window);
-    tokio::select! {
+    let read = tokio::select! {
         biased;
-        () = sleep_until_opt(deadline) => Err(ReceiveError::Idle),
-        result = stream.read(buf) => result.map_err(ReceiveError::Io),
+        () = clock.expired() => return Err(ReceiveError::Idle),
+        result = stream.read(buf) => result?,
+    };
+    if read > 0 {
+        clock.touch();
     }
+    Ok(read)
 }
 
-/// Fills `buf`, with a fresh idle window for each read.
+/// Fills `buf`, with a fresh idle window after each read.
 async fn fill_within_idle<S: AsyncRead + Unpin>(
     stream: &mut S,
     buf: &mut [u8],
-    idle: Option<Duration>,
+    clock: &mut IdleClock,
 ) -> Result<(), ReceiveError> {
     let mut filled = 0;
     while filled < buf.len() {
-        match read_within_idle(stream, &mut buf[filled..], idle).await? {
+        match read_within_idle(stream, &mut buf[filled..], clock).await? {
             0 => return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into()),
             read => filled += read,
         }
@@ -107,14 +117,14 @@ async fn fill_within_idle<S: AsyncRead + Unpin>(
 async fn read_size<S: AsyncRead + Unpin>(
     stream: &mut S,
     maximum: usize,
-    idle: Option<Duration>,
+    clock: &mut IdleClock,
 ) -> Result<Option<usize>, ReceiveError> {
     let mut prefix = [0_u8; 4];
-    let read = read_within_idle(stream, &mut prefix, idle).await?;
+    let read = read_within_idle(stream, &mut prefix, clock).await?;
     if read == 0 {
         return Ok(None);
     }
-    fill_within_idle(stream, &mut prefix[read..], idle).await?;
+    fill_within_idle(stream, &mut prefix[read..], clock).await?;
     let size = usize::try_from(i32::from_be_bytes(prefix))
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "negative Kafka frame size"))?;
     if size > maximum {
@@ -130,11 +140,11 @@ async fn read_size<S: AsyncRead + Unpin>(
 async fn read_body<S: AsyncRead + Unpin>(
     stream: &mut S,
     size: usize,
-    idle: Option<Duration>,
+    clock: &mut IdleClock,
 ) -> Result<Bytes, ReceiveError> {
     let mut body = BytesMut::with_capacity(size);
     body.resize(size, 0);
-    fill_within_idle(stream, &mut body, idle).await?;
+    fill_within_idle(stream, &mut body, clock).await?;
     Ok(body.freeze())
 }
 

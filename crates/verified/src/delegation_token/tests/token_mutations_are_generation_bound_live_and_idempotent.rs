@@ -139,12 +139,7 @@ fn expire_matches_kafka_delete_expiry_and_saturation(
 }
 
 #[test]
-fn active_tokens_require_both_live_ordered_deadlines() {
-    check!(token_is_active(0, 50, 100));
-    check!(!token_is_active(-1, 50, 100));
-    check!(token_is_active(100, 150, 200));
-    check!(!token_is_active(100, 100, 200));
-    check!(!token_is_active(100, 150, 100));
+fn expiry_and_renewal_stay_within_the_token_maximum() {
     check!(expire_token_deadline(100, 50, 200, 200) == TokenExpireDecision::Update(150));
     check!(renew_token_expiry(100, 50, 50, 200, 200) == TokenRenewDecision::Renew(150));
     let renew_at_max = TokenMutationFacts {
@@ -163,5 +158,4 @@ fn active_tokens_require_both_live_ordered_deadlines() {
         ..renew_at_max
     };
     check!(token_mutation_decision(renew_over_max) == TokenMutationDecision::Reject);
-    check!(!token_is_active(100, 201, 200));
 }
