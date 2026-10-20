@@ -213,13 +213,27 @@ pub(super) async fn run_inbound_sasl(
                                 "controller handle not initialised for SCRAM lookup".into(),
                             )
                         })?;
-                        handle_authenticate_scram(
+                        let Ok(resp) = handle_authenticate_scram(
                             &req,
                             &mut auth,
                             controller.as_ref(),
                             cfg.delegation_token_secret_key.as_ref(),
                             CONTROLLER_MAX_REAUTH,
-                        )
+                        ) else {
+                            // Kafka closes at once on a SCRAM proof of the wrong
+                            // length, with no response and no failed-auth delay.
+                            let reason = "SCRAM client proof of the wrong length";
+                            emit_authentication(
+                                cfg,
+                                peer,
+                                mech,
+                                auth.principal(),
+                                krabka_audit::AuditOutcome::Failure,
+                                Some(reason.to_owned()),
+                            );
+                            return Err(RaftHandshakeError::Sasl(reason.into()));
+                        };
+                        resp
                     }
                     SaslMechanism::OAuthBearer => {
                         handle_authenticate_oauthbearer_with_jwks_cache(

@@ -9,7 +9,7 @@ use {
     super::*,
     crate::{
         ControllerAdminRequest, ControllerAdminResponse, ControllerAdminRouteFuture,
-        ControllerAdminRouter, ControllerApiVersion,
+        ControllerAdminRouter, ControllerApiVersion, server::api_versions,
     },
     krabka_protocol::owned::broker_heartbeat_request,
     tokio::{io::DuplexStream, time::Instant},
@@ -32,15 +32,7 @@ struct SlowRouter {
 }
 
 impl ControllerAdminRouter for SlowRouter {
-    fn api_versions(&self) -> &[ControllerApiVersion] {
-        &[ControllerApiVersion {
-            api_key: broker_heartbeat_request::API_KEY,
-            min_version: broker_heartbeat_request::MIN_VERSION,
-            max_version: broker_heartbeat_request::MAX_VERSION,
-            released_max: Some(broker_heartbeat_request::MAX_VERSION),
-            flexible_min: broker_heartbeat_request::FLEXIBLE_MIN,
-        }]
-    }
+    fn api_versions(&self) -> &[ControllerApiVersion] { api_versions::BROKER_HEARTBEAT_ONLY }
 
     fn route(&self, _request: ControllerAdminRequest) -> ControllerAdminRouteFuture<'_> {
         let delay = self.delay;

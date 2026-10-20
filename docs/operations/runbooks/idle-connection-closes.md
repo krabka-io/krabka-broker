@@ -30,6 +30,10 @@ connect loop. The broker log records the peer address of each idle close at
    handshake. The broker sees an idle socket and closes it after the timeout.
 3. A client pool that opens more connections than it uses parks the extra
    ones, and they idle out on the broker's timer.
+4. A request whose handler, or a throttle mute after its response, outlasts
+   the window. As in Kafka, the window keeps running while the broker works
+   on a request, so a Fetch whose `fetch.max.wait.ms` exceeds
+   `connections_max_idle` is closed without its response.
 
 ## Fix
 

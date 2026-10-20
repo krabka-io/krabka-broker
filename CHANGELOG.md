@@ -115,6 +115,29 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Fixed
 
+- `connections.max.idle.ms` now keeps running while a request is in its
+  handler, while its response is written, and while a connection is muted
+  after a throttled response, on broker and controller listeners alike, as
+  Kafka's `Selector` does. The window measures time since the last read or
+  write that moved bytes, or since a response was queued. A handler or a
+  throttle mute that outlasts it closes the connection without the response.
+  A Fetch whose `fetch.max.wait.ms` exceeds the window is closed the same way
+  in Kafka; with the defaults, 500 ms against 10 min, this cannot happen
+  (#1390).
+- SASL/PLAIN decodes the credentials as Kafka does, with Java's lossy UTF-8:
+  each malformed sequence becomes U+FFFD before the payload is split and
+  compared. Before, krabka compared raw bytes and refused a username that was
+  not UTF-8 (#1390).
+- A SCRAM delegation token that has expired but is still in the token store
+  authenticates with `session_lifetime_ms` 0, as in Kafka, so its session is
+  already past its deadline and the next request that does not begin a
+  re-authentication closes the connection. The token expiry sweep removes it
+  as before (#1390).
+- SCRAM signs and verifies the `AuthMessage` that Kafka rebuilds from the
+  parsed messages, no longer checks `c=` against the GS2 header, and closes
+  the connection with no response and no failed-authentication delay when the
+  client proof does not decode to the hash length, as Kafka's
+  `ScramFormatter.xor` does (#1390, krabka-io/krabka-protocol#68).
 - `KrabkaOfflinePartitions` no longer pages for every broker that is down,
   a planned stop in a rolling upgrade included (issue #1516). Each broker
   holds one single-replica partition of the audit topic, which has no leader

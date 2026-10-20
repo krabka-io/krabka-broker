@@ -218,6 +218,69 @@ pub async fn drive_sasl_scram_session(
     metadata_probe(&mut stream, 5).await
 }
 
+/// Kafka's `ScramFormatter.xor` throws `IllegalArgumentException` on a
+/// client-final proof that does not decode to the hash length, and
+/// `Selector` then closes the connection with no `SaslAuthenticate`
+/// response. A proof of the right length and the wrong value still gets the
+/// usual error-58 answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_scram_proof_of_the_wrong_length_closes_with_no_response() {
+    for (case, proof, answered) in [
+        ("empty proof", String::new(), false),
+        // Valid base64 of 30 bytes; 43 characters would fail the grammar,
+        // which Kafka answers with error 58.
+        ("thirty bytes", "A".repeat(40), false),
+        (
+            "right length, wrong value",
+            format!("{}=", "A".repeat(43)),
+            true,
+        ),
+    ] {
+        let RetainedBroker {
+            log_dir: _log_dir,
+            handle,
+            addr,
+        } = scram_fixture(SaslMechanism::ScramSha256).await;
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        sasl_handshake_on()
+            .stream(&mut stream)
+            .correlation(1)
+            .mechanism(SaslMechanism::ScramSha256.wire_name())
+            .call()
+            .await
+            .unwrap();
+        let (client_first, client) = krabka_macros::scram_client_first!(
+            "alice",
+            alice_password().as_str(),
+            SaslMechanism::ScramSha256
+        )
+        .unwrap();
+        let first = sasl_authenticate_on()
+            .stream(&mut stream)
+            .auth_bytes(bytes::Bytes::from(client_first))
+            .correlation(2)
+            .call()
+            .await
+            .unwrap();
+        let (client_final, _client) = client.step(&first.auth_bytes).unwrap();
+        let client_final = String::from_utf8(client_final).unwrap();
+        let (without_proof, _) = client_final.rsplit_once(",p=").unwrap();
+        let result = sasl_authenticate_on()
+            .stream(&mut stream)
+            .auth_bytes(bytes::Bytes::from(format!("{without_proof},p={proof}")))
+            .correlation(3)
+            .call()
+            .await;
+        handle.shutdown().await;
+        let outcome = result.as_ref().map(|response| response.error_code);
+        if answered {
+            assert!(outcome.ok() == Some(58), "case {case}: {result:?}");
+        } else {
+            assert!(outcome.is_err(), "case {case}: {result:?}");
+        }
+    }
+}
+
 /// Runs the two RFC 5802 rounds on `stream` and returns the round-2
 /// response, whose `session_lifetime_ms` is the KIP-368 window.
 pub async fn scram_authenticate(

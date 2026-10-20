@@ -44,7 +44,7 @@ pub use self::{
     oauthbearer::handle_authenticate_oauthbearer_with_jwks_cache,
     plain::handle_authenticate_plain,
     response::generic_failure_message,
-    scram::handle_authenticate_scram,
+    scram::{ScramDisconnect, handle_authenticate_scram},
     ssl_principal_mapper::{SslPrincipalMapper, SslPrincipalRuleError},
     state::ConnectionAuth,
     subject_dn::{subject_alt_names, subject_dn_rfc2253},

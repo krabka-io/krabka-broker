@@ -54,14 +54,21 @@ use {
 /// metadata image does not hold: it is recomputed under `secret_key`, the
 /// broker's `delegation.token.secret.key`. Without one no token can
 /// authenticate, as in Kafka, whose token cache stays empty.
+///
+/// # Errors
+///
+/// [`ScramDisconnect`] when the client-final proof does not decode to the
+/// mechanism's hash length. The caller closes the connection at once, with
+/// no response and no failed-authentication delay.
 pub fn handle_authenticate_scram(
     req: &SaslAuthenticateRequest,
     auth: &mut ConnectionAuth,
     controller: &dyn MetadataSource,
     secret_key: Option<&SecretBytes>,
     max_reauth: Option<Time>,
-) -> SaslAuthenticateResponse {
-    super::state::authenticate_with_reauth(auth, |auth| {
+) -> Result<SaslAuthenticateResponse, ScramDisconnect> {
+    let mut disconnect = false;
+    let response = super::state::authenticate_with_reauth(auth, |auth| {
         // Round-1 case: still in `ScramPending` — build the exchange now that
         // we have the client-first bytes (and thus the username).
         if let ConnectionAuth::Negotiating {
@@ -181,7 +188,9 @@ pub fn handle_authenticate_scram(
                 krabka_security::StepResult::Done(_, _) => {
                     fail_authenticate("SCRAM server completed in one round")
                 }
-                krabka_security::StepResult::Failed(_) => fail_authenticate("SCRAM step failed"),
+                // Only the client-final step can end without a response.
+                krabka_security::StepResult::Failed(_)
+                | krabka_security::StepResult::Disconnect => fail_authenticate("SCRAM step failed"),
             }
         } else if let ConnectionAuth::Negotiating {
             exchange: SaslExchange::Scram(_),
@@ -230,12 +239,31 @@ pub fn handle_authenticate_scram(
                     sasl_ok(bytes, session_lifetime_ms)
                 }
                 krabka_security::StepResult::Failed(_) => fail_authenticate("SCRAM proof failed"),
+                krabka_security::StepResult::Disconnect => {
+                    disconnect = true;
+                    fail_authenticate("SCRAM proof of the wrong length")
+                }
             }
         } else {
             fail_authenticate("not in SCRAM negotiation")
         }
-    })
+    });
+    if disconnect {
+        Err(ScramDisconnect)
+    } else {
+        Ok(response)
+    }
 }
+
+/// A SCRAM exchange that ends without a response.
+///
+/// The client-final proof did not decode to the mechanism's hash length, the
+/// empty proof included. Kafka's `ScramFormatter.xor` throws
+/// `IllegalArgumentException` on it. That is not an `AuthenticationException`,
+/// so `Selector.pollSelectionKeys` closes the connection at once: no
+/// `SaslAuthenticate` response and no `connection.failed.authentication.delay.ms`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScramDisconnect;
 
 /// The iteration count of a delegation token's SCRAM credential: Kafka's
 /// `DelegationTokenManager.prepareScramCredentials` uses each mechanism's

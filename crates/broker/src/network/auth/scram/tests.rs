@@ -11,7 +11,7 @@ use {
     super::{ClientFirst, ScramExtension, decode_sasl_name},
     crate::{
         network::auth::{
-            ConnectionAuth, handle_authenticate_scram, state::SaslExchange,
+            ConnectionAuth, ScramDisconnect, handle_authenticate_scram, state::SaslExchange,
             test_support::assert_failed_authenticate_response,
         },
         test_support::FakeMetadataSource,
@@ -83,22 +83,8 @@ impl KafkaScramClient {
 
     /// The client-final message for `server_first`.
     fn last(&self, server_first: &[u8]) -> Vec<u8> {
-        let server_first = std::str::from_utf8(server_first).expect("server-first is UTF-8");
-        let attribute = |name: &str| {
-            server_first
-                .split(',')
-                .find_map(|a| a.strip_prefix(name))
-                .expect("server-first attribute")
-        };
-        let nonce = attribute("r=");
-        let salt = B64.decode(attribute("s=")).expect("salt is base64");
-        let iterations: u32 = attribute("i=").parse().expect("iterations");
-        let salted = krabka_security::scram::pbkdf2_salted(
-            &self.password,
-            self.mechanism,
-            iterations,
-            &salt,
-        );
+        let (server_first, salted) = self.salted(server_first);
+        let nonce = server_first_attribute(server_first, "r=");
         let without_proof = format!("c={},r={nonce}", B64.encode(&self.gs2_header));
         let auth_message = format!("{},{server_first},{without_proof}", self.client_first_bare);
         let client_key = self.hmac(&salted, b"Client Key");
@@ -111,27 +97,32 @@ impl KafkaScramClient {
     /// The server-final message a correct server answers `client_final`
     /// with, after `server_first`.
     fn server_final(&self, server_first: &[u8], client_final: &[u8]) -> Vec<u8> {
-        let server_first = std::str::from_utf8(server_first).expect("server-first is UTF-8");
+        let (server_first, salted) = self.salted(server_first);
         let client_final = std::str::from_utf8(client_final).expect("client-final is UTF-8");
-        let attribute = |name: &str| {
-            server_first
-                .split(',')
-                .find_map(|a| a.strip_prefix(name))
-                .expect("server-first attribute")
-        };
-        let salt = B64.decode(attribute("s=")).expect("salt is base64");
-        let iterations: u32 = attribute("i=").parse().expect("iterations");
+        let (without_proof, _) = client_final.rsplit_once(",p=").expect("client-final proof");
+        let auth_message = format!("{},{server_first},{without_proof}", self.client_first_bare);
+        let server_key = self.hmac(&salted, b"Server Key");
+        let signature = self.hmac(&server_key, auth_message.as_bytes());
+        format!("v={}", B64.encode(signature)).into_bytes()
+    }
+
+    /// `server_first` as text, and the password salted with its `s=` and
+    /// `i=`.
+    fn salted<'a>(&self, server_first: &'a [u8]) -> (&'a str, Vec<u8>) {
+        let server_first = std::str::from_utf8(server_first).expect("server-first is UTF-8");
+        let salt = B64
+            .decode(server_first_attribute(server_first, "s="))
+            .expect("salt is base64");
+        let iterations: u32 = server_first_attribute(server_first, "i=")
+            .parse()
+            .expect("iterations");
         let salted = krabka_security::scram::pbkdf2_salted(
             &self.password,
             self.mechanism,
             iterations,
             &salt,
         );
-        let (without_proof, _) = client_final.rsplit_once(",p=").expect("client-final proof");
-        let auth_message = format!("{},{server_first},{without_proof}", self.client_first_bare);
-        let server_key = self.hmac(&salted, b"Server Key");
-        let signature = self.hmac(&server_key, auth_message.as_bytes());
-        format!("v={}", B64.encode(signature)).into_bytes()
+        (server_first, salted)
     }
 
     fn hmac(&self, key: &[u8], data: &[u8]) -> Vec<u8> {
@@ -153,6 +144,15 @@ impl KafkaScramClient {
             Sha512::digest(data).to_vec()
         }
     }
+}
+
+/// The value of attribute `name` (`r=`, `s=` or `i=`) in a server-first
+/// message.
+fn server_first_attribute<'a>(server_first: &'a str, name: &str) -> &'a str {
+    server_first
+        .split(',')
+        .find_map(|a| a.strip_prefix(name))
+        .expect("server-first attribute")
 }
 
 fn scram_user(user: &str, mechanism: SaslMechanism) -> MetadataRecord {
@@ -209,12 +209,12 @@ fn token_password_under(secret_key: &[u8], token_id: &str) -> Vec<u8> {
 
 fn token_password(token_id: &str) -> Vec<u8> { token_password_under(TOKEN_SECRET_KEY, token_id) }
 
-fn authenticate(
+fn try_authenticate(
     source: &FakeMetadataSource,
     secret_key: Option<&SecretBytes>,
     auth: &mut ConnectionAuth,
     auth_bytes: Vec<u8>,
-) -> SaslAuthenticateResponse {
+) -> Result<SaslAuthenticateResponse, ScramDisconnect> {
     handle_authenticate_scram(
         &SaslAuthenticateRequest {
             auth_bytes: bytes::Bytes::from(auth_bytes),
@@ -225,6 +225,15 @@ fn authenticate(
         secret_key,
         None,
     )
+}
+
+fn authenticate(
+    source: &FakeMetadataSource,
+    secret_key: Option<&SecretBytes>,
+    auth: &mut ConnectionAuth,
+    auth_bytes: Vec<u8>,
+) -> SaslAuthenticateResponse {
+    try_authenticate(source, secret_key, auth, auth_bytes).expect("SCRAM answers the round")
 }
 
 /// What one full exchange came to.
@@ -588,6 +597,84 @@ fn a_credential_below_kafkas_iteration_floor_is_refused() {
 }
 
 /// A token session carries the token expiry from round 1 to round 2.
+/// A client-final proof that does not decode to the mechanism's hash length
+/// makes Kafka's `ScramFormatter.xor` throw `IllegalArgumentException`, and
+/// `Selector` closes the connection with no response. The handler reports
+/// that as [`ScramDisconnect`]; a proof of the right length but the wrong
+/// value is still an ordinary failed authentication.
+#[test]
+fn a_proof_of_the_wrong_length_ends_the_exchange_without_a_response() {
+    /// The proof a case puts in place of the client's real one.
+    enum Proof {
+        Empty,
+        Bytes(usize),
+    }
+    for (case, mechanism, proof, expected) in [
+        (
+            "sha256 empty",
+            SaslMechanism::ScramSha256,
+            Proof::Empty,
+            Err(ScramDisconnect),
+        ),
+        (
+            "sha256 short",
+            SaslMechanism::ScramSha256,
+            Proof::Bytes(31),
+            Err(ScramDisconnect),
+        ),
+        (
+            "sha256 long",
+            SaslMechanism::ScramSha256,
+            Proof::Bytes(33),
+            Err(ScramDisconnect),
+        ),
+        (
+            "sha512 sha256-sized",
+            SaslMechanism::ScramSha512,
+            Proof::Bytes(32),
+            Err(ScramDisconnect),
+        ),
+        (
+            "sha256 right length",
+            SaslMechanism::ScramSha256,
+            Proof::Bytes(32),
+            Ok(()),
+        ),
+        (
+            "sha512 right length",
+            SaslMechanism::ScramSha512,
+            Proof::Bytes(64),
+            Ok(()),
+        ),
+    ] {
+        let source = FakeMetadataSource::builder()
+            .records(&[scram_user("alice", mechanism)])
+            .build();
+        let mut auth = ConnectionAuth::Negotiating {
+            mechanism,
+            exchange: SaslExchange::ScramPending,
+            pending_token_expiry_ms: None,
+        };
+        let FirstMessage { client, message } =
+            KafkaScramClient::first(mechanism, None, "alice", "", USER_PASSWORD.as_bytes());
+        let round1 = authenticate(&source, None, &mut auth, message);
+        let client_final = String::from_utf8(client.last(&round1.auth_bytes)).unwrap();
+        let (without_proof, _) = client_final.rsplit_once(",p=").unwrap();
+        let proof = match proof {
+            Proof::Empty => String::new(),
+            Proof::Bytes(len) => B64.encode(vec![0x5a; len]),
+        };
+        let outcome = try_authenticate(
+            &source,
+            None,
+            &mut auth,
+            format!("{without_proof},p={proof}").into_bytes(),
+        )
+        .map(|response| assert_failed_authenticate_response(&response, None));
+        check!(outcome == expected, "case {case}");
+    }
+}
+
 #[test]
 fn token_round_one_threads_the_token_expiry() {
     let ActiveTokenSource { expiry, source } = active_token_source();
