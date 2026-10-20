@@ -24,8 +24,11 @@ cluster:
   brokers: 3
   replication_factor: 3
   min_insync_replicas: 2
-  # The broker's `controller_election_timeout` default: the follower fetch
-  # watchdog after which a silent controller leader is replaced.
+  # The cluster's `controller_fetch_timeout`, Kafka's
+  # `controller.quorum.fetch.timeout.ms`: the follower fetch watchdog after
+  # which a silent controller leader is replaced. The executor configures every
+  # node with this value, so the pause plans are checked against the timeout
+  # the cluster runs with, not the broker's 2 s default.
   check_quorum_window: 5s
   replica_lag_time_max: 30s
 
