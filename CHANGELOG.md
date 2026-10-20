@@ -132,6 +132,9 @@ candidate before promotion.
 
 ### Fixed
 
+- Bazel-built binaries report the workspace version instead of `0.0.0`.
+  The version also reaches the broker's metrics and client software metadata.
+
 - `connections.max.idle.ms` now keeps running while a request is in its
   handler, while its response is written, and while a connection is muted
   after a throttled response, on broker and controller listeners alike, as

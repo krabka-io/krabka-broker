@@ -164,6 +164,7 @@ def _crate(rule, name, srcs, clippy = True, **kwargs):
         package_metadata = [metadata],
         rustc_flags = WORKSPACE_RUSTC_FLAGS,
         visibility = ["//visibility:public"],
+        version = WORKSPACE_VERSION,
         deps = all_crate_deps(normal = True),
         **kwargs
     )
@@ -217,6 +218,7 @@ def crate_binary(name, crate_root, lib, tests = True, **kwargs):
         edition = edition(),
         rustc_flags = WORKSPACE_RUSTC_FLAGS,
         visibility = ["//visibility:public"],
+        version = WORKSPACE_VERSION,
         deps = all_crate_deps(normal = True) + [lib],
         **kwargs
     )
