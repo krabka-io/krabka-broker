@@ -1885,20 +1885,15 @@ mod tests {
         check_matches(cases, true);
     }
 
-    /// Java reads `(?i){2}` as a repeat of the empty match, and `(?i)*` as a
-    /// dangling quantifier. A flag group that leaves no text in the rewrite
-    /// would hand its quantifier to the text before it, or make the braces
-    /// text, so a quantifier after one is refused.
+    /// Java reads `(?i)*` as a dangling quantifier: inline flags are no node,
+    /// so nothing precedes the `*`.
     #[yare::parameterized(
-        repeat_after_case_flag = { "(?i){2}" },
-        repeat_before_literal_after_unicode_flags = { "(?iu){2}a" },
         star_after_unicode_flags = { "(?iu)*" },
         plus_after_case_flag = { "(?i)+a" },
         optional_after_dotall_flag = { "(?d)?" },
-        repeat_after_extended_flags = { "(?ix) {2}a" },
         star_after_extended_flags = { "(?ix) *" },
     )]
-    fn a_quantifier_after_a_flag_that_leaves_no_text_is_refused(source: &str) {
+    fn a_star_plus_or_question_mark_after_inline_flags_is_refused(source: &str) {
         check!(JavaPattern::compile(source).is_err(), "{source:?}");
     }
 

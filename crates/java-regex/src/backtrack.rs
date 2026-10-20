@@ -2,7 +2,7 @@
 //! `java.util.regex` does.
 //!
 //! [`Program`] takes the tree that `fancy_regex` parses from the rewritten
-//! pattern and runs it on a backtracking machine of its own. It reads six
+//! pattern and runs it on a backtracking machine of its own. It reads seven
 //! things as Java does and `fancy_regex` does not:
 //!
 //! - A backreference under a case flag, which the rewrite writes as
@@ -11,9 +11,10 @@
 //!   (`translate::java_fold` lists where they differ).
 //! - `\R` is Java's `LineEnding`, which gives back the `\n` of `\r\n` when the
 //!   rest of the pattern needs it: `\R\n` matches `\r\n`. `fancy_regex`'s
-//!   `\R` is atomic. Under a quantifier Java takes the first way only, as
-//!   its `Ques`, `Curly` and `GroupCurly` take each iteration's atom, so
-//!   `\R?\n` and `\R{2}` do not match `\r\n` there either.
+//!   `\R` is atomic. Under a quantifier of its own Java takes the first way
+//!   only, as its `Ques` and `Curly` take each iteration's atom, so `\R?\n`
+//!   and `\R{2}` do not match `\r\n` there either. Inside a repeated group
+//!   it gives back as anywhere else: `(\R\n)*` matches `\r\n`.
 //! - A group that matched inside a look-around or an atomic group, which a
 //!   possessive quantifier is, keeps its text when the match backtracks out
 //!   of it: Java's `GroupTail` restores a group only when the nodes after it
@@ -23,20 +24,30 @@
 //! - Java sets a group when it ends, so a backreference inside the group it
 //!   refers to sees the text the group had before: `(a|b\1)+` does not
 //!   match `abb`. `fancy_regex` sets the start when the group opens.
-//! - A repeat of a group with a group in it, which can match nothing, keeps
-//!   the groups its last iteration set when that iteration matched nothing:
-//!   Java's `Loop` ends the repeat there without undoing them, so
-//!   `"aa".replaceAll("(a*)*", "[$1]")` is `[][]`. `fancy_regex` takes no
-//!   such iteration. (Java's `GroupCurly`, for a group that only ever
-//!   matches nothing, such as `()*`, undoes its group instead. Its tree is
-//!   that of `(?:())*`, whose group Java keeps, so the machine keeps both.)
+//! - A repeat of a group that `TreeInfo.study` finds deterministic, with no
+//!   alternation and no quantifier with a range of counts in it, is Java's
+//!   `GroupCurly`. It matches each iteration the first way only, and nothing
+//!   after the repeat backtracks into one. The groups an iteration sets keep
+//!   their text when the match backtracks out of the repeat, so
+//!   `(?:((a))*y|a)\2` matches `aa`. The repeated group itself does not when
+//!   the quantifier follows its `)`, and `(?:(a)*y|a)\1` does not match `aa`.
+//!   Once the least count of iterations is made, one that matches nothing
+//!   fails and gives back the text of the repeated group, so `()*\1` does
+//!   not match the empty string and `(())*\2` does. `fancy_regex` undoes
+//!   every group it backtracks past, and keeps an iteration that matches
+//!   nothing.
+//! - Any other repeat of a group with a group in it, which can match
+//!   nothing, keeps the groups its last iteration set when that iteration
+//!   matched nothing: Java's `Loop` ends the repeat there without undoing
+//!   them, so `"aa".replaceAll("(a*)*", "[$1]")` is `[][]`. `fancy_regex`
+//!   takes no such iteration.
 //! - `\G` is `LastMatch`, where the last match ended, and the first search
 //!   started. After a match that is empty, the next search starts one char
 //!   on and `\G` stays where that match ended, so `"aa".replaceAll("\\G",
 //!   "-")` is `-aa`. `fancy_regex`'s `\G` is where each search starts.
 //!
 //! Every other node matches as `fancy_regex` matches it, and a pattern that
-//! has none of the six keeps `fancy_regex`. A tree with a node the machine
+//! has none of the seven keeps `fancy_regex`. A tree with a node the machine
 //! does not know is not compiled, and the pattern keeps `fancy_regex`'s
 //! answer. The rewrite of a pattern that `Pattern.compile` takes writes none.
 //!
@@ -66,8 +77,9 @@ pub(super) enum SearchError {
 /// A pattern compiled for the machine.
 #[derive(Debug)]
 pub(super) struct Program {
-    /// The instructions of the pattern, then those of each look-around and
-    /// atomic group. Each block ends in [`Inst::Match`].
+    /// The instructions of the pattern, then those of each look-around,
+    /// atomic group and iteration of a `GroupCurly`. Each block ends in
+    /// [`Inst::Match`].
     blocks: Vec<Vec<Inst>>,
     /// Two slots for each group, group 0 first, then the private slots of
     /// the groups and repeats.
@@ -125,6 +137,15 @@ enum Inst {
     },
     /// The first way the block matches here, which nothing backtracks into.
     Atomic(usize),
+    /// One iteration of Java's `GroupCurly`: the first way the block matches
+    /// here, which nothing backtracks into. The groups it sets keep their
+    /// text, but `group`, the repeated group when the quantifier follows its
+    /// `)`, gets back the text it had when the match backtracks past the
+    /// iteration.
+    Iteration {
+        block: usize,
+        group: Option<usize>,
+    },
     /// A repeat has made no iteration yet.
     RepeatStart {
         count: usize,
@@ -137,17 +158,19 @@ enum Inst {
         greedy: bool,
         exit: usize,
     },
-    /// The end of an iteration that started at the position in `start`. Once
-    /// `lo` iterations are made, one that matched nothing leaves the repeat,
-    /// so that an empty iteration cannot loop for ever. Before that it counts
-    /// toward `lo`, as in Java and `fancy_regex`. Either way it keeps the
-    /// groups it set, as Java's `Loop` does.
+    /// The end of an iteration that started at the position in `start`. One
+    /// that matched nothing counts toward `lo`, as in Java and `fancy_regex`.
+    /// Once `lo` iterations are made, such an iteration leaves the repeat and
+    /// keeps the groups it set, as Java's `Loop` does, so that it cannot loop
+    /// for ever. With `group_curly`, one past the `lo`th fails instead, as
+    /// Java's `GroupCurly` takes none.
     RepeatEnd {
         count: usize,
         lo: usize,
         start: usize,
         head: usize,
         exit: usize,
+        group_curly: bool,
     },
     Match,
 }
@@ -220,8 +243,10 @@ impl Program {
 
     /// Whether the pattern has a backreference under a case flag or inside the
     /// group it refers to, a `\R`, a group inside a look-around or an atomic
-    /// group, a repeat of a group with a group in it that can match nothing,
-    /// or a `\G`, which `fancy_regex` does not read as Java does.
+    /// group, a `GroupCurly` with a group in its iterations other than the
+    /// repeated one or with a repeated group that can match nothing, another
+    /// repeat of a group with a group in it that can match nothing, or a
+    /// `\G`, which `fancy_regex` does not read as Java does.
     pub(super) fn differs_from_fancy(&self) -> bool { self.differs }
 
     /// `Matcher.matches()`: whether some way of matching from the start spans
@@ -297,15 +322,25 @@ impl Compiler<'_> {
         self.slot_count - 1
     }
 
-    /// Compiles `expr` into a block of its own, a look-around or an atomic
-    /// group, and gives its index. A block backtracks inside itself, as the
-    /// condition of a Java look-around does, whatever quantifier it is under.
+    /// Compiles `expr` into the block of a look-around or an atomic group, and
+    /// gives its index.
+    fn nested_block(&mut self, expr: &Expr) -> Option<usize> {
+        let outer = self.nested;
+        self.nested = true;
+        let block = self.block(expr)?;
+        self.nested = outer;
+        Some(block)
+    }
+
+    /// Compiles `expr` into a block of its own, and gives its index. A block
+    /// backtracks inside itself, as the condition of a Java look-around and
+    /// the atom of a `GroupCurly` do, whatever quantifier it is under.
     fn block(&mut self, expr: &Expr) -> Option<usize> {
-        let outer = (self.nested, self.first_way);
-        (self.nested, self.first_way) = (true, false);
+        let outer = self.first_way;
+        self.first_way = false;
         let mut code = Vec::new();
         self.compile(expr, &mut code)?;
-        (self.nested, self.first_way) = outer;
+        self.first_way = outer;
         code.push(Inst::Match);
         self.blocks.push(code);
         Some(self.blocks.len() - 1)
@@ -349,7 +384,7 @@ impl Compiler<'_> {
                 code.push(Inst::Close { group, open });
             }
             Expr::LookAround(child, kind) => {
-                let block = self.block(child)?;
+                let block = self.nested_block(child)?;
                 let (behind, negated) = match kind {
                     LookAround::LookAhead => (false, false),
                     LookAround::LookAheadNeg => (false, true),
@@ -387,7 +422,7 @@ impl Compiler<'_> {
                 });
             }
             Expr::AtomicGroup(child) => {
-                let block = self.block(child)?;
+                let block = self.nested_block(child)?;
                 code.push(Inst::Atomic(block));
             }
             _ => return None,
@@ -431,9 +466,35 @@ impl Compiler<'_> {
         code: &mut Vec<Inst>,
     ) -> Option<()> {
         let (count, start) = (self.slot(), self.slot());
-        // Java's `Loop` keeps the groups of a last iteration that matched
-        // nothing, which `fancy_regex` never takes.
-        self.differs |= (lo, hi) != (0, 1) && has_group(child) && can_be_empty(child);
+        // `{0,1}` is Java's `Ques`, a `Branch` for a group, and a group's
+        // other quantifiers a `GroupCurly` when `TreeInfo.study` finds it
+        // deterministic. Of the trees a Java group gives, only these three can
+        // hold a group or a `\R`. A repeat is one only as the body of a group,
+        // `(?:x{2})*`: Java refuses `x{2}*` as a dangling quantifier.
+        let group_curly = (lo, hi) != (0, 1)
+            && matches!(
+                child,
+                Expr::Group(_) | Expr::Concat(_) | Expr::Repeat { .. }
+            )
+            && deterministic(child);
+        let repeated = match child {
+            Expr::Group(body) if group_curly => self
+                .group_repeats
+                .get(self.next_group)
+                .copied()
+                .unwrap_or(false)
+                .then_some((self.next_group, &**body)),
+            _ => None,
+        };
+        self.differs |= match repeated {
+            // The repeated group gives back the text of an iteration that
+            // matched nothing, and the groups inside it keep theirs.
+            Some((_, body)) => can_be_empty(child) || has_group(body),
+            None if group_curly => has_group(child),
+            // Java's `Loop` keeps the groups of a last iteration that matched
+            // nothing, which `fancy_regex` never takes.
+            None => (lo, hi) != (0, 1) && has_group(child) && can_be_empty(child),
+        };
         code.push(Inst::RepeatStart { count });
         let head = code.len();
         code.push(Inst::Repeat {
@@ -444,13 +505,21 @@ impl Compiler<'_> {
             exit: 0,
         });
         code.push(Inst::Save(start));
-        let outer = self.first_way;
-        // A `\R` that the quantifier binds to alone, as against `(?:\R)`.
-        let linebreak_atom = matches!(child, Expr::GeneralNewline { .. })
-            && self.linebreak_atoms.as_slice().first() == Some(&true);
-        self.first_way |= takes_first_way(child, lo, hi, linebreak_atom);
-        self.compile(child, code)?;
-        self.first_way = outer;
+        if group_curly {
+            let block = self.block(child)?;
+            code.push(Inst::Iteration {
+                block,
+                group: repeated.map(|(group, _)| group),
+            });
+        } else {
+            let outer = self.first_way;
+            // A `\R` that the quantifier binds to alone, as against `(?:\R)`.
+            let linebreak_atom = matches!(child, Expr::GeneralNewline { .. })
+                && self.linebreak_atoms.as_slice().first() == Some(&true);
+            self.first_way |= takes_first_way(child, lo, hi, linebreak_atom);
+            self.compile(child, code)?;
+            self.first_way = outer;
+        }
         let exit = code.len() + 1;
         code.push(Inst::RepeatEnd {
             count,
@@ -458,6 +527,7 @@ impl Compiler<'_> {
             start,
             head,
             exit,
+            group_curly,
         });
         if let Inst::Repeat { exit: target, .. } = &mut code[head] {
             *target = exit;
@@ -669,6 +739,23 @@ impl<'a> Machine<'a> {
                     self.keep(&mut stack, slots, &before);
                     after.map(|after| (pc + 1, after))
                 }
+                &Inst::Iteration { block, group } => {
+                    let before = slots.to_vec();
+                    let after = self.run(block, pos, None, slots)?;
+                    self.keep(&mut stack, slots, &before);
+                    for slot in group
+                        .into_iter()
+                        .flat_map(|group| [2 * group, 2 * group + 1])
+                    {
+                        if slots[slot] != before[slot] {
+                            stack.push(Frame::Undo {
+                                slot,
+                                value: before[slot],
+                            });
+                        }
+                    }
+                    after.map(|after| (pc + 1, after))
+                }
                 &Inst::RepeatStart { count } => {
                     set(&mut stack, slots, count, Some(0));
                     Some((pc + 1, pos))
@@ -699,15 +786,16 @@ impl<'a> Machine<'a> {
                     start,
                     head,
                     exit,
+                    group_curly,
                 } => {
                     let done = slots[count].unwrap_or(0) + 1;
                     set(&mut stack, slots, count, Some(done));
-                    let target = if done >= lo && slots[start] == Some(pos) {
-                        exit
-                    } else {
-                        head
-                    };
-                    Some((target, pos))
+                    let empty = slots[start] == Some(pos);
+                    match (group_curly, empty) {
+                        (true, true) if done > lo => None,
+                        (false, true) if done >= lo => Some((exit, pos)),
+                        _ => Some((head, pos)),
+                    }
                 }
                 Inst::Match if end.is_none_or(|end| end == pos) => return Ok(Some(pos)),
                 Inst::Match => None,
@@ -837,4 +925,167 @@ fn folded_backref(input: &str, at: usize, group: Range<usize>, fold: BackrefFold
         after += c1.len_utf8();
     }
     Some(after)
+}
+
+#[cfg(test)]
+mod tests {
+    use {super::*, assert2::check};
+
+    /// One whole-input match of a pattern in `fancy_regex` syntax, with the
+    /// `group_repeats` the rewrite gives it, one per group and group 0 first.
+    struct Case<'a> {
+        pattern: &'a str,
+        input: &'a str,
+        group_repeats: &'a [bool],
+        expected: bool,
+    }
+
+    /// A [`Case`] of `pattern` against `input`.
+    const fn row<'a>(
+        pattern: &'a str,
+        input: &'a str,
+        group_repeats: &'a [bool],
+        expected: bool,
+    ) -> Case<'a> {
+        Case {
+            pattern,
+            input,
+            group_repeats,
+            expected,
+        }
+    }
+
+    /// The program of `pattern`, whose `\R`s have the `linebreak_atoms` given.
+    fn program(pattern: &str, group_repeats: &[bool], linebreak_atoms: &[bool]) -> Program {
+        let compiled = Program::new(
+            pattern,
+            group_repeats.len(),
+            &[],
+            linebreak_atoms,
+            group_repeats,
+        );
+        compiled.unwrap_or_else(|| panic!("{pattern:?} does not compile"))
+    }
+
+    fn check_matches<'a>(cases: impl IntoIterator<Item = Case<'a>>, linebreak_atoms: &[bool]) {
+        for Case {
+            pattern,
+            input,
+            group_repeats,
+            expected,
+        } in cases
+        {
+            let program = program(pattern, group_repeats, linebreak_atoms);
+            check!(
+                program.matches(input).ok() == Some(expected),
+                "{pattern:?} against {input:?}"
+            );
+        }
+    }
+
+    /// Java's `GroupCurly` repeats a deterministic group: it takes no
+    /// iteration past the least count that matches nothing, and gives the
+    /// repeated group back the text it had before. `{0,1}` is a `Branch`, and
+    /// a group that is not deterministic a `Loop`, which keeps such an
+    /// iteration. Each row is `Pattern.matches` on JDK 25.0.4.
+    #[test]
+    fn a_group_curly_takes_no_empty_iteration_past_its_least_count() {
+        const REPEATED: &[bool] = &[false, true];
+        const OUTER_REPEATED: &[bool] = &[false, true, false];
+        const NONE_REPEATED: &[bool] = &[false, false];
+        // (pattern, input, group_repeats, matches)
+        let cases = [
+            row(r"()*\1", "", REPEATED, false),
+            row(r"()+\1", "", REPEATED, true),
+            row(r"(){2}\1", "", REPEATED, true),
+            row(r"(){0,3}\1", "", REPEATED, false),
+            row(r"()*?\1", "", REPEATED, false),
+            row(r"(?:())*\1", "", NONE_REPEATED, true),
+            row(r"(())*\2", "", OUTER_REPEATED, true),
+            row(r"(())*\1", "", OUTER_REPEATED, false),
+            row(r"(())*?\2", "", OUTER_REPEATED, false),
+            row(r"(())*?\1", "", OUTER_REPEATED, false),
+            row(r"(())*?x\2", "x", OUTER_REPEATED, false),
+            row(r"(()){0,1}\1", "", OUTER_REPEATED, true),
+            row(r"(()){0,2}\1", "", OUTER_REPEATED, false),
+            row(r"(()){1,3}\1", "", OUTER_REPEATED, true),
+            row(r"((?:)){2,}\1", "", REPEATED, true),
+            row(r"x()*\1", "x", REPEATED, false),
+            row(r"(\b)*\1", "", REPEATED, false),
+            row(r"(a|)*\1", "aa", REPEATED, true),
+            row(r"(b*)*\1", "", REPEATED, true),
+            row(r"(x?)*\1", "", REPEATED, true),
+        ];
+        check_matches(cases, &[]);
+    }
+
+    /// The groups inside an iteration of a `GroupCurly` keep their text when
+    /// the match backtracks out of the repeat, and the repeated group does
+    /// not. A possessive quantifier is an atomic group around the repeat, and
+    /// keeps them all. A `Loop` keeps none. Each row is `Pattern.matches` on
+    /// JDK 25.0.4.
+    #[test]
+    fn the_groups_inside_a_group_curly_keep_their_text_when_the_match_backtracks() {
+        const REPEATED: &[bool] = &[false, true];
+        const OUTER_REPEATED: &[bool] = &[false, true, false];
+        const NONE_REPEATED: &[bool] = &[false, false];
+        const NONE_OF_TWO_REPEATED: &[bool] = &[false, false, false];
+        // (pattern, input, group_repeats, matches)
+        let cases = [
+            row(r"(?:(?:(a))*y|a)\1", "aa", NONE_REPEATED, true),
+            row(r"(?:(())*?y|x)\2", "x", OUTER_REPEATED, true),
+            row(r"(?:(())*?y|x)\1", "x", OUTER_REPEATED, false),
+            row(r"(())*+\1", "", NONE_OF_TWO_REPEATED, true),
+            row(r"(?:((a))*y|a)\2", "aa", OUTER_REPEATED, true),
+            row(r"(?:(a)*y|a)\1", "aa", REPEATED, false),
+            row(r"(?:((a))*?y|a)\2", "aa", OUTER_REPEATED, true),
+            row(r"(?:((a))+y|a)\2", "aa", OUTER_REPEATED, true),
+            row(r"(?:(?>((a))*)y|a)\2", "aa", OUTER_REPEATED, true),
+            row(r"(?:((a))*+y|a)\2", "aa", NONE_OF_TWO_REPEATED, true),
+            row(r"(?:((a)|b)*y|a)\2", "aa", OUTER_REPEATED, false),
+            row(r"(?:(?:(a){2})*y|aa)\1", "aaa", REPEATED, true),
+        ];
+        check_matches(cases, &[]);
+    }
+
+    /// The atom of a `GroupCurly` backtracks inside itself, so its `\R` gives
+    /// back the `\n` of `\r\n`. A quantifier of a `\R` alone is a `Curly`,
+    /// which takes the first way, and so is one of `(?:\R)`, whose tree is the
+    /// same. Each row is `Pattern.matches` on JDK 25.0.4.
+    #[yare::parameterized(
+        group = { r"(\R\n)*", "\r\n", &[false, true], false, true },
+        non_capturing_group = { r"(?:\R\n)*", "\r\n", &[false], false, true },
+        after_a_char = { r"(?:a\R\n)*", "a\r\n", &[false], false, true },
+        in_a_counted_group = { r"(?:(?:\R\n){2})*", "\r\n\r\n", &[false], false, true },
+        alone = { r"\R*\n", "\r\n", &[false], true, false },
+        alone_in_a_group = { r"(?:\R)*\n", "\r\n", &[false], false, false },
+    )]
+    fn a_linebreak_in_a_group_curly_gives_back_its_newline(
+        pattern: &str,
+        input: &str,
+        group_repeats: &[bool],
+        linebreak_atom: bool,
+        expected: bool,
+    ) {
+        check_matches([row(pattern, input, group_repeats, expected)], &[
+            linebreak_atom,
+        ]);
+    }
+
+    /// A `GroupCurly` keeps `fancy_regex` unless a group inside its atom or
+    /// an empty iteration of its repeated group shows.
+    #[yare::parameterized(
+        one_char_group = { r"(a)*", &[false, true], false },
+        two_char_group = { r"(ab)+", &[false, true], false },
+        restored_group = { r"(?:(a)*y|a)\1", &[false, true], false },
+        empty_group = { r"()*", &[false, true], true },
+        nested_group = { r"(?:((a))*y|a)\2", &[false, true, false], true },
+    )]
+    fn a_group_curly_differs_from_fancy_only_where_it_shows(
+        pattern: &str,
+        group_repeats: &[bool],
+        expected: bool,
+    ) {
+        check!(program(pattern, group_repeats, &[]).differs_from_fancy() == expected);
+    }
 }
