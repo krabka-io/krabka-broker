@@ -1220,7 +1220,13 @@ check json-oracle jq -e 'length == 152' "$evidence/json_matrix.json"
 check serializer-cache grep -F 'jsonValidationResolvesRegistryReferences()' "$evidence/serializer.log"
 check serializer-avro-annotations grep -F 'avroRegistrationPreservesDefaultsAndDocumentation()' "$evidence/serializer.log"
 (cd "$broker" && bazel test //crates/broker:schema_validation_test --test_output=all --nocache_test_results) 2>&1 | tee "$evidence/broker-validation.log"
-check broker-validation grep -F 'rf_three_validation_survives_registry_and_broker_failover ... ok' "$evidence/broker-validation.log"
+check broker-validation grep -F 'test full_mode::full_mode_checks_the_body_and_id_mode_does_not ... ok' "$evidence/broker-validation.log"
+check broker-validation-rejection grep -F 'test rejected::records_that_fail_validation_are_rejected_and_not_appended ... ok' "$evidence/broker-validation.log"
+check broker-validation-fail-closed grep -F 'test registry_availability::a_registry_that_cannot_answer_fails_closed::registry_returns_500 ... ok' "$evidence/broker-validation.log"
+# The registry owns this supporting in-process RF=3 suite and its dev-broker
+# pin. The installed candidate's wire/restart checks below use broker_image.
+(cd "$registry" && bazel test //crates/schema-registry:live_registry_test --test_output=all --nocache_test_results) 2>&1 | tee "$evidence/registry-rf3.log"
+check registry-rf3 grep -F 'test rf_three_validation_survives_registry_and_broker_failover ... ok' "$evidence/registry-rf3.log"
 
 project=$scope-schema-evolution
 registry_pid=
