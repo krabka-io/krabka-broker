@@ -1,6 +1,6 @@
-//! The topic-scoped config key that only the controller writes: KFC-9's
-//! synthesised write-freeze key and the refusal that both alter paths give
-//! for it. This is the topic-side
+//! Topic-scoped keys that only the controller writes: KFC-9's synthesised
+//! write-freeze key and the audit placement epochs stored in topic metadata.
+//! This is the topic-side
 //! counterpart of [`super::broker_scope`].
 
 /// KFC-9: the write-freeze state of one topic.
@@ -21,6 +21,10 @@
 /// `kafka-configs --entity-type topics --describe`.
 pub(crate) const WRITE_FREEZE: &str = "write.freeze";
 
+/// Registration epochs whose brokers already received an audit partition.
+/// These controller-owned values use ordinary topic metadata records.
+pub(crate) const AUDIT_PLACEMENT_EPOCH_PREFIX: &str = "krabka.audit.placement.epoch.";
+
 /// Removed private ELR topic-config key, retained only for migration tests.
 #[cfg(test)]
 pub(crate) const ELIGIBLE_LEADER_REPLICAS: &str = "krabka.elr";
@@ -28,12 +32,13 @@ pub(crate) const ELIGIBLE_LEADER_REPLICAS: &str = "krabka.elr";
 /// Topic-scoped config keys that only the controller writes. This is the
 /// topic-side analogue of [`super::broker_scope::CONTROLLER_MANAGED_BROKER_CONFIGS`]:
 /// `AlterConfigs` and `IncrementalAlterConfigs` must reject every key in this
-/// list, and `DescribeConfigs` must report each one as read-only.
+/// list, and `DescribeConfigs` must report each one as read-only. The audit
+/// epoch namespace is recognized separately.
 pub(crate) const CONTROLLER_MANAGED_TOPIC_CONFIGS: [&str; 1] = [WRITE_FREEZE];
 
 /// `true` when `key` is a topic config that only the controller writes.
 pub(crate) fn is_controller_managed_topic_config(key: &str) -> bool {
-    CONTROLLER_MANAGED_TOPIC_CONFIGS.contains(&key)
+    CONTROLLER_MANAGED_TOPIC_CONFIGS.contains(&key) || key.starts_with(AUDIT_PLACEMENT_EPOCH_PREFIX)
 }
 
 /// The refusal both alter paths give for a controller-managed topic config.
@@ -43,6 +48,11 @@ pub(crate) fn is_controller_managed_topic_config(key: &str) -> bool {
 /// what does change the key. A refusal that names nothing leaves the operator
 /// with no next step.
 pub(crate) fn controller_managed_topic_config_message(key: &str) -> String {
+    if key.starts_with(AUDIT_PLACEMENT_EPOCH_PREFIX) {
+        return format!(
+            "topic config {key} is controller-managed and read-only; audit placement records the broker registration epoch"
+        );
+    }
     let remedy =
         "use `krabka-guard freeze set` to set it and `krabka-guard freeze clear` to clear it";
     format!("topic config {key} is controller-managed and read-only; {remedy}")
@@ -64,6 +74,7 @@ mod tests {
 
     #[yare::parameterized(
         write_freeze = { WRITE_FREEZE, true },
+        audit_epoch = { "krabka.audit.placement.epoch.3", true },
         removed_elr = { ELIGIBLE_LEADER_REPLICAS, false },
         ordinary_topic_key = { RETENTION_MS, false },
         broker_scoped_key = { BROKER_WITNESS, false },
@@ -78,7 +89,10 @@ mod tests {
     fn a_controller_managed_key_stays_outside_the_stored_whitelist() {
         // Both are written by the controller alone, so the validator must not
         // accept either as an ordinary override an alter path could set.
-        for key in CONTROLLER_MANAGED_TOPIC_CONFIGS {
+        for key in CONTROLLER_MANAGED_TOPIC_CONFIGS
+            .into_iter()
+            .chain(["krabka.audit.placement.epoch.3"])
+        {
             check!(!is_recognized(key), "{key}");
             check!(validate_topic_config(key, "true").is_err(), "{key}");
         }

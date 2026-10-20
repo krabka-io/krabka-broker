@@ -27,6 +27,7 @@ use {
     },
     krabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord},
     krabka_protocol::owned::incremental_alter_configs_request::AlterConfigsResource,
+    std::collections::BTreeMap,
 };
 
 /// Kafka's `ConfigurationControlManager` APPEND and SUBTRACT: a `LIST` key's
@@ -124,8 +125,11 @@ pub(super) fn topic_config_record(
     if let Err(invalid) = krabka_log::topic_name::validate_topic_name(topic) {
         return Err((codes::INVALID_TOPIC_EXCEPTION, invalid.to_string()));
     }
-    let merged = config_keys::canonical_topic_config_map(
-        &merged,
+    let (audit_epochs, user_configs): (BTreeMap<_, _>, _) = merged
+        .into_iter()
+        .partition(|(key, _)| key.starts_with(config_keys::AUDIT_PLACEMENT_EPOCH_PREFIX));
+    let mut merged = config_keys::canonical_topic_config_map(
+        &user_configs,
         &config_keys::TopicDefaults::from_image(image, unstable),
         remote_storage_system_enabled,
         unstable,
@@ -149,6 +153,7 @@ pub(super) fn topic_config_record(
     // refuses never reaches the policy.
     check_topic_policy(policy, topic, None, None, &merged)
         .map_err(|reason| (codes::POLICY_VIOLATION, reason))?;
+    merged.extend(audit_epochs);
     Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: resource.resource_name.clone(),
         overrides: merged,
@@ -200,7 +205,10 @@ mod tests {
             "60000",
         )]);
 
-        for key in config_keys::CONTROLLER_MANAGED_TOPIC_CONFIGS {
+        for key in config_keys::CONTROLLER_MANAGED_TOPIC_CONFIGS
+            .into_iter()
+            .chain(["krabka.audit.placement.epoch.3"])
+        {
             for (label, config) in [
                 ("a SET of the key", make_set_cfg(key, "true")),
                 (
@@ -256,6 +264,29 @@ mod tests {
             config_keys::SEGMENT_BYTES.to_string() => "1048576".to_string()},
         });
         assert!(record == expected);
+    }
+
+    #[test]
+    fn an_incremental_update_keeps_the_audit_placement_epoch() {
+        let image = image_with_topic_config("__krabka_audit", &[
+            StoredOverride::new("krabka.audit.placement.epoch.3", "17"),
+            StoredOverride::new(config_keys::RETENTION_MS, "1000"),
+        ]);
+        let resource = make_topic_resource("__krabka_audit", vec![make_set_cfg(
+            config_keys::RETENTION_MS,
+            "2000",
+        )]);
+        let MetadataRecord::V1TopicConfig(record) = topic_config_record(&resource, &image).unwrap()
+        else {
+            panic!("expected a topic config record");
+        };
+        assert!(
+            record.overrides
+                == overrides_map(&[
+                    StoredOverride::new("krabka.audit.placement.epoch.3", "17"),
+                    StoredOverride::new(config_keys::RETENTION_MS, "2000"),
+                ])
+        );
     }
 
     #[test]

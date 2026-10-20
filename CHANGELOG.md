@@ -137,6 +137,12 @@ candidate before promotion.
 
 ### Fixed
 
+- Audit placement records the broker registration epoch that received each
+  partition. Reassigning the audit replica away no longer creates another
+  partition on the same live broker and prevents operator scale-down.
+  A new registration without a replica still gets one. The controller-owned
+  epochs survive metadata snapshots and topic config changes.
+
 - A controller validates recovered feature levels before repairing downgrade
   checkpoints or starting its engine. Previously, an unsupported log could
   be changed by recovery or an election before startup refused it.

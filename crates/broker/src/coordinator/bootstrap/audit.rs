@@ -13,9 +13,10 @@
 //!   a broker it waits for this broker's partition to reach the local image.
 //! - [`spawn_audit_placement`] runs on every node with the controller role.
 //!   While the node leads the metadata quorum, it adds one partition for each
-//!   registered broker that holds no audit partition, as a `CreatePartitions`
+//!   new broker registration that holds no audit partition, as a `CreatePartitions`
 //!   would: one `PartitionRecord` at the next index, and no `TopicRecord`. A
 //!   broker that registers after the topic exists gets its partition this way.
+//!   Once placed for a registration epoch, an evacuated replica stays evacuated.
 //!
 //! Every partition has one replica, so the topic declares
 //! `min.insync.replicas=1`. With the cluster default of 2, every audit
@@ -26,7 +27,9 @@
 
 use {
     crate::{
-        config::BrokerConfig, config_keys::MIN_INSYNC_REPLICAS, error::BrokerError,
+        config::BrokerConfig,
+        config_keys::{AUDIT_PLACEMENT_EPOCH_PREFIX, MIN_INSYNC_REPLICAS},
+        error::BrokerError,
         handlers::forward_to_controller::guarded_operation_on_source,
         metadata_source::MetadataSource,
     },
@@ -120,13 +123,16 @@ async fn create_audit_topic(
     config: &BrokerConfig,
     controller: &dyn MetadataSource,
 ) -> Result<(), BrokerError> {
-    let replicas = {
+    let (replicas, image) = {
         let image = controller.current_image();
         // Already created (idempotent restart or another node beat us).
         if image.topic(&config.audit_topic).is_some() {
             return Ok(());
         }
-        audit_replicas(&image, config.is_broker().then_some(config.node_id))
+        (
+            audit_replicas(&image, config.is_broker().then_some(config.node_id)),
+            image,
+        )
     };
     if replicas.is_empty() {
         tracing::info!(
@@ -136,7 +142,12 @@ async fn create_audit_topic(
         return Ok(());
     }
 
-    let records = audit_topic_records(&config.audit_topic, krabka_format::random_uuid(), &replicas);
+    let records = audit_topic_records(
+        &config.audit_topic,
+        krabka_format::random_uuid(),
+        &replicas,
+        &image,
+    );
     match controller.submit_change(records).await {
         // Idempotent: another node or a restart already created it.
         Ok(_) | Err(RaftError::Metadata(MetadataError::TopicExists(_))) => Ok(()),
@@ -148,7 +159,7 @@ async fn create_audit_topic(
 ///
 /// The task runs one placement pass whenever this node becomes the leader and
 /// on every metadata change while it leads. A pass adds a partition for each
-/// registered broker that holds none, and the `min.insync.replicas` override
+/// new broker registration that holds none, and the `min.insync.replicas` override
 /// when the topic lacks it; see [`audit_placement_records`]. A pass submits
 /// with `submit_change_if_image`, which the leader refuses when its image has
 /// moved on since the pass read it. Two passes therefore never place two
@@ -224,9 +235,10 @@ async fn place_audit_partitions(topic: &str, controller: &dyn MetadataSource, de
 /// The records that complete the placement of an existing audit topic, or
 /// none when it is complete or missing.
 ///
-/// Each registered broker that is the replica of no audit partition gets one
-/// partition, in ascending node-id order, at the indices that follow the
-/// topic's last partition. Membership counts, not leadership: a restarted
+/// Each registration epoch gets at most one placement. Reassigning its audit
+/// replica away must not create another partition and undo broker evacuation.
+/// A new registration without a replica gets one partition at the next index.
+/// Membership counts, not leadership: a restarted
 /// broker that is still fenced leads nothing, but it keeps its partition.
 ///
 /// The topic config gets `min.insync.replicas=1` when it has no
@@ -240,20 +252,26 @@ fn audit_placement_records(image: &MetadataImage, topic: &str) -> Vec<MetadataRe
         .partitions_of(topic)
         .flat_map(|partition| partition.replicas.iter().copied())
         .collect();
-    let mut unplaced: Vec<NodeId> = image
-        .brokers()
-        .map(|broker| broker.node_id)
-        .filter(|node_id| !hosted.contains(node_id))
-        .collect();
+    let current = image.topic_config(topic);
+    let mut overrides = current.cloned().unwrap_or_default();
+    let mut unplaced = Vec::new();
+    for broker in image.brokers() {
+        let key = format!("{AUDIT_PLACEMENT_EPOCH_PREFIX}{}", broker.node_id.0);
+        let epoch = broker.broker_epoch.to_string();
+        if !hosted.contains(&broker.node_id) && overrides.get(&key) != Some(&epoch) {
+            unplaced.push(broker.node_id);
+        }
+        overrides.insert(key, epoch);
+    }
     unplaced.sort_unstable();
     let mut records: Vec<MetadataRecord> = (image.topic_partition_count(topic)..)
         .zip(unplaced)
         .map(|(partition, replica)| audit_partition_record(topic, partition, replica))
         .collect();
-    let overrides = image.topic_config(topic);
-    if !overrides.is_some_and(|overrides| overrides.contains_key(MIN_INSYNC_REPLICAS)) {
-        let mut overrides = overrides.cloned().unwrap_or_default();
-        overrides.extend(audit_topic_configs());
+    overrides
+        .entry(MIN_INSYNC_REPLICAS.to_owned())
+        .or_insert_with(|| "1".to_owned());
+    if current != Some(&overrides) {
         records.push(MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: topic.to_owned(),
             overrides,
@@ -293,6 +311,7 @@ fn audit_topic_records(
     topic: &str,
     topic_id: uuid::Uuid,
     replicas: &[NodeId],
+    image: &MetadataImage,
 ) -> Vec<MetadataRecord> {
     let topic_record = MetadataRecord::V1Topic(TopicRecord {
         name: topic.to_owned(),
@@ -303,9 +322,16 @@ fn audit_topic_records(
     let partition_records = (0_i32..)
         .zip(replicas)
         .map(|(partition, &replica)| audit_partition_record(topic, partition, replica));
+    let mut overrides = audit_topic_configs();
+    for node in replicas {
+        overrides.insert(
+            format!("{AUDIT_PLACEMENT_EPOCH_PREFIX}{}", node.0),
+            image.broker_epoch(*node).unwrap_or(0).to_string(),
+        );
+    }
     let config_record = MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: topic.to_owned(),
-        overrides: audit_topic_configs(),
+        overrides,
     });
     std::iter::once(topic_record)
         .chain(partition_records)

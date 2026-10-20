@@ -7,6 +7,7 @@ use {
     },
     assert2::{assert, check},
     krabka_metadata::BrokerRegistrationRecord,
+    krabka_raft::{deserialize_metadata_snapshot, serialize_metadata_snapshot},
     std::path::PathBuf,
 };
 
@@ -59,6 +60,19 @@ fn topic_config(overrides: &[(&str, &str)]) -> MetadataRecord {
 
 const MIN_ISR_ONE: (&str, &str) = ("min.insync.replicas", "1");
 
+fn topic_config_with_epochs(overrides: &[(&str, &str)], nodes: &[u64]) -> MetadataRecord {
+    let keys: Vec<_> = nodes
+        .iter()
+        .map(|node| format!("krabka.audit.placement.epoch.{node}"))
+        .collect();
+    let entries: Vec<_> = keys
+        .iter()
+        .map(|key| (key.as_str(), "0"))
+        .chain(overrides.iter().copied())
+        .collect();
+    topic_config(&entries)
+}
+
 /// The batch a 1.0 broker wrote to create the audit topic: no topic config.
 fn legacy_audit_batch(topic_id: uuid::Uuid, replicas: &[u64]) -> Vec<MetadataRecord> {
     let mut batch = vec![MetadataRecord::V1Topic(TopicRecord {
@@ -78,7 +92,7 @@ fn legacy_audit_batch(topic_id: uuid::Uuid, replicas: &[u64]) -> Vec<MetadataRec
 /// The batch this release writes to create the audit topic.
 fn audit_batch(topic_id: uuid::Uuid, replicas: &[u64]) -> Vec<MetadataRecord> {
     let mut batch = legacy_audit_batch(topic_id, replicas);
-    batch.push(topic_config(&[MIN_ISR_ONE]));
+    batch.push(topic_config_with_epochs(&[MIN_ISR_ONE], replicas));
     batch
 }
 
@@ -338,12 +352,19 @@ fn a_placement_pass_adds_only_what_the_audit_topic_lacks() {
         Case {
             name: "a broker that registered after the topic was created",
             image: [registrations(&[1, 2, 3]), audit_batch(topic_id, &[1, 2])].concat(),
-            expected: vec![partition(2, 3)],
+            expected: vec![
+                partition(2, 3),
+                topic_config_with_epochs(&[MIN_ISR_ONE], &[1, 2, 3]),
+            ],
         },
         Case {
             name: "two late brokers, in ascending node-id order",
             image: [registrations(&[4, 1, 3]), audit_batch(topic_id, &[1])].concat(),
-            expected: vec![partition(1, 3), partition(2, 4)],
+            expected: vec![
+                partition(1, 3),
+                partition(2, 4),
+                topic_config_with_epochs(&[MIN_ISR_ONE], &[1, 3, 4]),
+            ],
         },
         Case {
             name: "a restarted broker that leads nothing keeps its partition",
@@ -356,6 +377,25 @@ fn a_placement_pass_adds_only_what_the_audit_topic_lacks() {
             expected: vec![],
         },
         Case {
+            name: "a new registration that keeps its replica only updates the epoch",
+            image: [
+                registrations(&[1, 2]),
+                audit_batch(topic_id, &[1, 2]),
+                vec![MetadataRecord::V1BrokerRegistration(
+                    BrokerRegistrationRecord {
+                        broker_epoch: 1,
+                        incarnation_id: uuid::Uuid::from_u128(20),
+                        ..broker_registration(NodeId(2))
+                    },
+                )],
+            ]
+            .concat(),
+            expected: vec![topic_config_with_epochs(
+                &[MIN_ISR_ONE, ("krabka.audit.placement.epoch.2", "1")],
+                &[1, 2],
+            )],
+        },
+        Case {
             name: "a topic that a 1.0 broker created with only its leader",
             image: [
                 registrations(&[1, 2, 3]),
@@ -365,7 +405,7 @@ fn a_placement_pass_adds_only_what_the_audit_topic_lacks() {
             expected: vec![
                 partition(1, 1),
                 partition(2, 3),
-                topic_config(&[MIN_ISR_ONE]),
+                topic_config_with_epochs(&[MIN_ISR_ONE], &[1, 2, 3]),
             ],
         },
         Case {
@@ -376,7 +416,10 @@ fn a_placement_pass_adds_only_what_the_audit_topic_lacks() {
                 vec![topic_config(&[("retention.ms", "-1")])],
             ]
             .concat(),
-            expected: vec![topic_config(&[MIN_ISR_ONE, ("retention.ms", "-1")])],
+            expected: vec![topic_config_with_epochs(
+                &[MIN_ISR_ONE, ("retention.ms", "-1")],
+                &[1],
+            )],
         },
         Case {
             name: "an operator's minimum is kept",
@@ -386,7 +429,10 @@ fn a_placement_pass_adds_only_what_the_audit_topic_lacks() {
                 vec![topic_config(&[("min.insync.replicas", "2")])],
             ]
             .concat(),
-            expected: vec![],
+            expected: vec![topic_config_with_epochs(
+                &[("min.insync.replicas", "2")],
+                &[1],
+            )],
         },
     ];
     for Case {
@@ -428,7 +474,10 @@ async fn only_the_quorum_leader_completes_an_existing_audit_topic_at_startup() {
             node_id: 2,
             leads: true,
             image: late_broker(),
-            expected: vec![vec![partition(1, 2)]],
+            expected: vec![vec![
+                partition(1, 2),
+                topic_config_with_epochs(&[MIN_ISR_ONE], &[1, 2]),
+            ]],
         },
         Case {
             name: "a combined leader upgraded from 1.0",
@@ -436,7 +485,7 @@ async fn only_the_quorum_leader_completes_an_existing_audit_topic_at_startup() {
             node_id: 1,
             leads: true,
             image: [registrations(&[1]), legacy_audit_batch(topic_id, &[1])].concat(),
-            expected: vec![vec![topic_config(&[MIN_ISR_ONE])]],
+            expected: vec![vec![topic_config_with_epochs(&[MIN_ISR_ONE], &[1])]],
         },
         Case {
             name: "a controller-only leader under a late broker",
@@ -444,7 +493,10 @@ async fn only_the_quorum_leader_completes_an_existing_audit_topic_at_startup() {
             node_id: CONTROLLER.0,
             leads: true,
             image: late_broker(),
-            expected: vec![vec![partition(1, 2)]],
+            expected: vec![vec![
+                partition(1, 2),
+                topic_config_with_epochs(&[MIN_ISR_ONE], &[1, 2]),
+            ]],
         },
         Case {
             name: "a combined follower without a partition",
@@ -508,7 +560,13 @@ async fn a_placement_pass_that_lost_a_race_places_after_the_winner() {
 
     place_audit_partitions(AUDIT_TOPIC, &*fake, deadline).await;
 
-    assert!(fake.submitted() == vec![vec![partition(2, 3)]]);
+    assert!(
+        fake.submitted()
+            == vec![vec![
+                partition(2, 3),
+                topic_config_with_epochs(&[MIN_ISR_ONE], &[1, 2, 3])
+            ]]
+    );
 }
 
 // The leader's task places a broker that registers while it leads, and a node
@@ -542,7 +600,86 @@ async fn the_leader_places_every_broker_that_registers_after_the_topic() {
     shutdown.cancel();
 
     check!(as_follower == Vec::<Vec<MetadataRecord>>::new());
-    check!(fake.submitted() == vec![vec![partition(1, 2)], vec![partition(2, 3)]]);
+    check!(
+        fake.submitted()
+            == vec![
+                vec![
+                    partition(1, 2),
+                    topic_config_with_epochs(&[MIN_ISR_ONE], &[1, 2])
+                ],
+                vec![
+                    partition(2, 3),
+                    topic_config_with_epochs(&[MIN_ISR_ONE], &[1, 2, 3])
+                ],
+            ]
+    );
+}
+
+#[test]
+fn audit_evacuation_survives_a_snapshot_and_new_registrations_still_get_a_partition() {
+    let cluster_id = uuid::Uuid::nil();
+    let mut image = MetadataImage::from_records(
+        cluster_id,
+        &[
+            registrations(&[1, 2]),
+            legacy_audit_batch(uuid::Uuid::from_u128(7), &[1, 2]),
+        ]
+        .concat(),
+    );
+    let initialized = audit_placement_records(&image, AUDIT_TOPIC);
+    assert!(initialized == vec![topic_config_with_epochs(&[MIN_ISR_ONE], &[1, 2])]);
+    for record in &initialized {
+        image.apply(record);
+    }
+    image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+        partition_epoch: 1,
+        ..partition_record(AUDIT_TOPIC, PartitionIndex(1), NodeId(1))
+    }));
+    let snapshot = serialize_metadata_snapshot(&image, 0).unwrap();
+    let mut recovered = MetadataImage::from_records(
+        cluster_id,
+        &deserialize_metadata_snapshot(&snapshot).unwrap(),
+    );
+    assert!(audit_placement_records(&recovered, AUDIT_TOPIC).is_empty());
+
+    recovered.apply(&MetadataRecord::V1BrokerRegistration(
+        BrokerRegistrationRecord {
+            broker_epoch: 1,
+            incarnation_id: uuid::Uuid::from_u128(20),
+            ..broker_registration(NodeId(2))
+        },
+    ));
+    let records = audit_placement_records(&recovered, AUDIT_TOPIC);
+    assert!(
+        records
+            == vec![
+                partition(2, 2),
+                topic_config_with_epochs(
+                    &[MIN_ISR_ONE, ("krabka.audit.placement.epoch.2", "1")],
+                    &[1, 2]
+                ),
+            ]
+    );
+    for record in &records {
+        recovered.apply(record);
+    }
+    recovered.apply(&MetadataRecord::V1Partition(PartitionRecord {
+        partition_epoch: 1,
+        ..partition_record(AUDIT_TOPIC, PartitionIndex(2), NodeId(1))
+    }));
+    assert!(audit_placement_records(&recovered, AUDIT_TOPIC).is_empty());
+    recovered.apply(&registration(3));
+    let later = audit_placement_records(&recovered, AUDIT_TOPIC);
+    assert!(
+        later
+            == vec![
+                partition(3, 3),
+                topic_config_with_epochs(
+                    &[MIN_ISR_ONE, ("krabka.audit.placement.epoch.2", "1")],
+                    &[1, 2, 3]
+                ),
+            ]
+    );
 }
 
 #[tokio::test(start_paused = true)]
