@@ -27,6 +27,12 @@ pub(crate) struct JavaTranslation {
     /// the group itself. `(?:(x))*` has the tree of `(x)*` in `fancy_regex`,
     /// and Java repeats it with a `GroupCurly` that does not.
     pub(crate) group_repeats: Vec<bool>,
+    /// For each look-behind that `pattern` writes, in order, whether Java
+    /// counts its window in code points (`BehindS`), as it does where the
+    /// Java pattern has a supplementary char from the look-behind's `(` to its
+    /// end, or in UTF-16 units (`Behind`). A look-behind the rewrite writes
+    /// for `^`, `$` or `\b` counts in units.
+    pub(crate) look_behind_code_points: Vec<bool>,
 }
 
 /// Rewrite a `java.util.regex.Pattern` into `fancy_regex` syntax, or `None`
@@ -114,6 +120,7 @@ pub(crate) fn translate_java(pattern: &str) -> Option<JavaTranslation> {
         backref_folds: translator.backref_folds,
         linebreak_atoms: translator.linebreak_atoms,
         group_repeats: translator.group_repeats,
+        look_behind_code_points: Vec::new(),
     })
 }
 

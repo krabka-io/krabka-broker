@@ -63,7 +63,7 @@
 //! longest text its body matches, not the text before it.
 
 use {
-    crate::translate::BackrefFold,
+    crate::{look_behind::JavaWindow, translate::BackrefFold},
     fancy_regex::{Assertion, Expr, LookAround},
     regex::Regex,
     std::{iter, ops::Range, slice::Iter},
@@ -323,7 +323,9 @@ impl Program {
         folds: &[BackrefFold],
         linebreak_atoms: &[bool],
         group_repeats: &[bool],
+        windows: &[JavaWindow],
     ) -> Option<Self> {
+        let _ = windows;
         let tree = Expr::parse_tree(translated).ok()?;
         let mut compiler = Compiler {
             blocks: vec![Vec::new()],
@@ -1107,6 +1109,7 @@ mod tests {
             &[],
             linebreak_atoms,
             group_repeats,
+            &[],
         );
         compiled.unwrap_or_else(|| panic!("{pattern:?} does not compile"))
     }

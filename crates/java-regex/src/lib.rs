@@ -161,6 +161,7 @@ impl JavaPattern {
             backref_folds,
             linebreak_atoms,
             group_repeats,
+            look_behind_code_points,
         } = translate_java(pattern)
             .ok_or_else(|| PatternError(format!("{pattern:?} is not a java.util.regex pattern")))?;
         let tree =
@@ -179,7 +180,8 @@ impl JavaPattern {
         let LookBehinds {
             input_limit,
             too_large,
-        } = check_look_behinds(pattern, &tree.expr).map_err(refuse)?;
+            windows,
+        } = check_look_behinds(pattern, &tree.expr, &look_behind_code_points).map_err(refuse)?;
         let fancy = if too_large {
             Err(FancyFailure::Unbuilt(refuse(Refusal::TooLarge)))
         } else {
@@ -192,6 +194,7 @@ impl JavaPattern {
             &backref_folds,
             &linebreak_atoms,
             &group_repeats,
+            &windows,
         );
         // A pattern `fancy_regex` reads as Java does, or one with a node the
         // matcher does not know, keeps `fancy_regex`. The matcher answers

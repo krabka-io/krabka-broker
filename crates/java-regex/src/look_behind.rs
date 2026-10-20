@@ -107,7 +107,12 @@ impl TreeInfo {
 /// [`Refusal::NoObviousMaximum`] where Java refuses a look-behind, and
 /// [`Refusal::MaximumOverflows`] where its maximum wraps and krabka would
 /// match at a start Java does not try.
-pub(super) fn check_look_behinds(pattern: &str, expr: &Expr) -> Result<LookBehinds, Refusal> {
+pub(super) fn check_look_behinds(
+    pattern: &str,
+    expr: &Expr,
+    code_points: &[bool],
+) -> Result<LookBehinds, Refusal> {
+    let _ = code_points;
     let mut bodies = Vec::new();
     look_behind_bodies(expr, &mut bodies);
     let studied: Vec<(&Expr, TreeInfo)> = bodies
@@ -130,12 +135,27 @@ pub(super) fn check_look_behinds(pattern: &str, expr: &Expr) -> Result<LookBehin
     Ok(LookBehinds {
         input_limit,
         too_large: studied.iter().any(|(body, _)| too_large(body)),
+        windows: Vec::new(),
     })
 }
 
-/// What [`check_look_behinds`] finds in a pattern Java reads.
+/// The starts Java's `Behind` (or `BehindS`) tries for one look-behind: from
+/// `i - min` down to `max(i - max, 0)`, in Java's `int` arithmetic, where `min`
+/// and `max` are its `TreeInfo` lengths. In UTF-16 units, or with
+/// `code_points` in code points.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct JavaWindow {
+    pub(crate) min: i32,
+    pub(crate) max: i32,
+    pub(crate) code_points: bool,
+}
+
+/// What [`check_look_behinds`] finds in a pattern Java reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct LookBehinds {
+    /// Java's window of each look-behind, in the order `fancy_regex` parses
+    /// them, outer ones first.
+    pub(super) windows: Vec<JavaWindow>,
     /// The most UTF-16 units of input the pattern is read for as Java reads
     /// it, where a wrapped maximum bounds that, and `None` where nothing does.
     pub(super) input_limit: Option<usize>,
