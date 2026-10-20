@@ -1313,6 +1313,13 @@ mod tests {
             dirs: _dir,
         } = local_topic(TOPIC).await;
         let broker_arc = broker.broker_arc_for_test();
+        // This fixture installs a local epoch and watermark independently of
+        // metadata. Stop reconciliation before it can restore metadata's epoch
+        // checkpoint or recompute the deliberately lagging watermark.
+        broker_arc.supervisor_shutdown.cancel();
+        if let Some(supervisor) = broker_arc.supervisor_handle.lock().await.take() {
+            supervisor.await.expect("supervisor stopped");
+        }
         let partition = broker_arc
             .partitions
             .get(TOPIC, krabka_ids::PartitionIndex(0))

@@ -518,6 +518,12 @@ mod tests {
                 dirs: _dirs,
             } = remote_topic(TOPIC, vec![]).await;
             let broker = broker_handle.broker_arc_for_test();
+            // This fixture drives local delivery-mode changes with a manual clock.
+            // Join reconciliation before it can replace those synthetic settings.
+            broker.supervisor_shutdown.cancel();
+            if let Some(supervisor) = broker.supervisor_handle.lock().await.take() {
+                supervisor.await.expect("supervisor stopped");
+            }
             let logs = tempfile::tempdir().unwrap();
             let TieredDelivery {
                 timeline,
