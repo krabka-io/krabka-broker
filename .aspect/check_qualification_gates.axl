@@ -127,13 +127,42 @@ test "$client_revision" != "$bad_client_revision"
 grep -F "$protocol_revision" "$broker_source/Cargo.toml"
 grep -F "$client_revision" "$broker_source/Cargo.toml"
 sed -i -e "s/$protocol_revision/$bad_revision/g" -e "s/$client_revision/$bad_client_revision/g" "$broker_source/Cargo.toml"
-(cd "$broker_source" && cargo generate-lockfile) > "$evidence/negative-lock.log" 2>&1
+# The historical pins declare 0.4.0. Move their requirements too, or Cargo
+# ignores the patches and silently tests newer registry packages instead.
+python3 - "$broker_source" <<'PY'
+from pathlib import Path
+import re
+import sys
+import tomllib
+root = Path(sys.argv[1])
+patches = tomllib.loads((root / 'Cargo.toml').read_text())['patch']['crates-io']
+names = {name for name, patch in patches.items() if patch.get('git') in [
+    'https://github.com/krabka-io/krabka-protocol',
+    'https://github.com/krabka-io/krabka-client-rs',
+]}
+changed = 0
+for path in [root / 'Cargo.toml', *sorted((root / 'crates').glob('*/Cargo.toml'))]:
+    lines = path.read_text().splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        if line.split('=', 1)[0].strip() not in names:
+            continue
+        if '{' in line:
+            lines[index], count = re.subn(r'(\bversion\s*=\s*)"[^"]+"', r'\g<1>"0.4.0"', line)
+        else:
+            lines[index], count = re.subn(r'(=\s*)"[^"]+"', r'\g<1>"0.4.0"', line)
+        changed += count
+    path.write_text(''.join(lines))
+assert changed > 0, 'no protocol/client requirements found'
+PY
+(cd "$broker_source" && cargo metadata --format-version 1) > "$evidence/negative-metadata.json" 2> "$evidence/negative-lock.log"
+check negative-protocol-pin jq -e --arg revision "$bad_revision" '[.packages[] | select(.name == "krabka-protocol")] | length == 1 and (.[0].source | endswith("#" + $revision))' "$evidence/negative-metadata.json"
+check negative-client-pin jq -e --arg revision "$bad_client_revision" '[.packages[] | select(.name == "krabka-client-core")] | length == 1 and (.[0].source | endswith("#" + $revision))' "$evidence/negative-metadata.json"
 if (cd "$broker_source" && cargo check --locked -p krabka-broker) > "$evidence/negative-compat.log" 2>&1; then
   echo 'unsupported protocol revision unexpectedly compiled' >&2
   exit 1
 fi
 check negative-compat grep -E 'V1PartitionElr|V1PartitionRecovery' "$evidence/negative-compat.log"
-git -C "$broker_source" diff -- Cargo.toml Cargo.lock > "$evidence/negative-compat.patch"
+git -C "$broker_source" diff -- Cargo.toml Cargo.lock 'crates/*/Cargo.toml' > "$evidence/negative-compat.patch"
 docker compose -p "$project" -f "$work/compose.json" down -v
 
 kind create cluster --name "$cluster" --wait 120s
