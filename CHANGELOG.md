@@ -23,6 +23,26 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ## [Unreleased]
 
+## [1.0.8] - 2026-10-20
+
+1.0.8 includes the recovery fixes from #1578 and the published Rust client
+0.7.1 producer fixes. The 1.x persisted formats are unchanged. Full ecosystem
+qualification still requires evidence from the final frozen candidate.
+
+### Fixed
+
+- Keep metadata reconciliation moving while a log mutex or WAL quorum wait
+  is blocked. Record diskless promotion epochs so replicas can rejoin ISR.
+- Finish obsolete produce acknowledgements on leadership changes. Reject
+  follower diskless Produce requests with the current leader hint, preserve
+  WAL high-watermark authority, and wake WAL fetches when new data arrives.
+- Renew exhausted non-transactional producer identities and keep healthy
+  partitions flowing while another broker or metadata request stalls.
+- Disable Nagle on accepted controller sockets. Prepare consumer assignments
+  before the soak measurement clock and observe delivery receipts while
+  pacing later sends. The soak declares its independent five-second broker
+  session window; latency budgets and recovery deadlines are unchanged.
+
 ## [1.0.7] - 2026-10-20
 
 1.0.7 updates the broker's compiled protocol and Rust client libraries to their
