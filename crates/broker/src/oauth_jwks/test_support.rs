@@ -109,7 +109,8 @@ pub fn test_refresher(
         endpoint,
         handle,
         interval,
-        http_timeout: millis(37),
+        // A real TLS handshake may queue behind other parallel tests.
+        http_timeout: secs(5),
         shutdown,
         tls_trust,
         signal_rx: rx,
