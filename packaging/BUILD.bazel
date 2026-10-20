@@ -153,12 +153,14 @@ sh_test(
     args = select({
         ":linux_arm64": [
             "arm64",
+            native.module_version(),
             "$(rootpath :image_manifest_blob)",
             "$(rootpath :broker_layer)",
             "$(rootpath :tools_layer)",
         ],
         "//conditions:default": [
             "amd64",
+            native.module_version(),
             "$(rootpath :image_manifest_blob)",
             "$(rootpath :broker_layer)",
             "$(rootpath :tools_layer)",

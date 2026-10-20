@@ -19,8 +19,8 @@
 #     needs no daemon to make it.
 #
 # Argument 1 is the architecture the image manifest declares (IMAGE_ARCH in
-# //packaging/BUILD.bazel); argument 2 is the image manifest JSON; the rest are
-# the layer tarballs, all passed as runfiles by //packaging:image_binaries_test.
+# //packaging/BUILD.bazel); argument 2 is the version, argument 3 is the image
+# manifest JSON; the rest are layer tarballs, passed as runfiles.
 set -euo pipefail
 
 # The contract. A binary dropped from a layer, or renamed out of the spelling
@@ -37,8 +37,9 @@ expected=(
 )
 
 arch="$1"
-manifest="$2"
-shift 2
+expected_version="$2"
+manifest="$3"
+shift 3
 layers=("$@")
 
 # `e_machine`, the two bytes at offset 0x12 of an ELF header, little-endian for
@@ -126,5 +127,8 @@ for binary in "${expected[@]}"; do
     "${path}" --help >/dev/null 2>&1 || status=$?
     [[ "${status}" -eq 0 ]] || fail "${binary} --help exited ${status}"
 done
+
+version="$("${rootfs}/usr/bin/krabka-broker" --version)"
+[[ "${version}" == "krabka-broker ${expected_version}" ]] || fail "broker version [${version}], expected ${expected_version}"
 
 echo "image_binaries_test: ${#expected[@]} ${arch} binaries under /usr/bin, each answering --help"
