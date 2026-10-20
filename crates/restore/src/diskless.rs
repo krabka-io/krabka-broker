@@ -558,7 +558,57 @@ async fn fetch_object(
 
 #[cfg(test)]
 mod tests {
-    use {super::load, crate::RestoreError, assert2::check};
+    use {
+        super::{DisklessNextOffset, check_next_offsets, load},
+        crate::{
+            RestoreError,
+            report::{DisklessPartitionReport, DisklessRestoreReport},
+        },
+        assert2::check,
+        uuid::Uuid,
+    };
+
+    /// A restore whose materialized end differs from the next offset the
+    /// target was formatted with fails, because the restored metadata would
+    /// assign the partition's next write an offset its log does not end at.
+    #[yare::parameterized(
+        the_planned_end = { 712, true },
+        short_of_it = { 700, false },
+        past_it = { 713, false },
+    )]
+    fn a_partition_must_end_at_the_next_offset_its_metadata_starts_it_at(
+        materialized_end: i64,
+        accepted: bool,
+    ) {
+        let report = DisklessRestoreReport {
+            captured_at_ms: 0,
+            source_cutoffs: Vec::new(),
+            partitions: vec![DisklessPartitionReport {
+                topic: "orders".to_owned(),
+                partition: 0,
+                topic_id: Uuid::from_u128(1524),
+                delete_floor: 0,
+                recovery_cutoff: materialized_end,
+                objects: 1,
+                batches: 1,
+                records: 1,
+                records_dropped: 0,
+            }],
+            limitations: Vec::new(),
+        };
+        let planned = [DisklessNextOffset {
+            topic: "orders".to_owned(),
+            partition: 0,
+            next_offset: 712,
+        }];
+
+        let result = check_next_offsets(&report, &planned);
+
+        check!(result.is_ok() == accepted, "{result:?}");
+        if let Err(error) = result {
+            check!(matches!(error, RestoreError::Integrity(_)), "{error}");
+        }
+    }
 
     #[yare::parameterized(
         pre_1_0 = {

@@ -702,3 +702,87 @@ async fn the_restored_metadata_starts_a_diskless_partition_at_its_restored_end(
     );
     check_orders_offsets(target.path(), Offset(0), Offset(next_offset));
 }
+
+/// `--exclude-offset` drops a captured diskless record, and the batch that held
+/// it still holds its offsets, so the partition ends where the capture does
+/// and the restored metadata starts it there.
+#[yare::parameterized(
+    the_first_record = { "orders:0=0..1" },
+    the_last_record = { "orders:0=1..2" },
+)]
+#[test_macro(tokio::test)]
+async fn an_excluded_record_leaves_a_restored_diskless_partition_at_its_captured_end(
+    excluded: &str,
+) {
+    let UnwrittenFixture {
+        archive,
+        target,
+        capture_path,
+        mut capture,
+    } = unwritten_fixture(true, false);
+    capture.partitions[0].delete_floor = 0;
+    write_capture(&capture_path, &capture);
+
+    let report = restore(&capture_args(
+        archive.path(),
+        target.path(),
+        &capture_path,
+        &["--exclude-offset".to_owned(), excluded.to_owned()],
+    ))
+    .await
+    .unwrap();
+
+    let partition = &report.diskless.as_ref().unwrap().partitions[0];
+    check!(
+        (
+            partition.records,
+            partition.records_dropped,
+            partition.recovery_cutoff
+        ) == (1, 1, 2)
+    );
+    let advances: Vec<MetadataRecord> =
+        krabka_broker::bootstrap::load_bootstrap_records(target.path())
+            .unwrap()
+            .into_iter()
+            .filter(|record| matches!(record, MetadataRecord::V1PartitionOffsetAdvance(_)))
+            .collect();
+    check!(
+        advances
+            == vec![MetadataRecord::V1PartitionOffsetAdvance(
+                PartitionOffsetAdvanceRecord {
+                    topic: "orders".to_owned(),
+                    partition: 0,
+                    count: 2,
+                }
+            )]
+    );
+}
+
+/// A capture whose declared cutoff or run boundaries disagree with the batches
+/// in its WAL objects is refused before anything is formatted.
+#[yare::parameterized(
+    cutoff_past_the_batches = { 3, 1 },
+    run_ends_before_its_last_batch = { 2, 0 },
+)]
+#[test_macro(tokio::test)]
+async fn a_capture_that_disagrees_with_its_batches_is_refused(
+    recovery_cutoff: i64,
+    last_offset: i64,
+) {
+    let UnwrittenFixture {
+        archive,
+        target,
+        capture_path,
+        mut capture,
+    } = unwritten_fixture(true, false);
+    capture.partitions[0].recovery_cutoff = recovery_cutoff;
+    capture.partitions[0].ranges[0].entry.last_offset = last_offset;
+    assert_dry_run_error(
+        archive.path(),
+        target.path(),
+        &capture_path,
+        &capture,
+        DryRunExpectation::Integrity,
+    )
+    .await;
+}
