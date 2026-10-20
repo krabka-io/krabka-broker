@@ -102,17 +102,12 @@ impl TreeInfo {
 
 /// Checks every look-behind in `expr`, the tree of `pattern` as rewritten.
 ///
-/// Returns the most UTF-16 units of input the pattern is read for as Java
-/// reads it, where a wrapped maximum bounds that, and `None` where nothing
-/// does.
-///
 /// # Errors
 ///
-/// [`Refusal::NoObviousMaximum`] where Java refuses a look-behind,
+/// [`Refusal::NoObviousMaximum`] where Java refuses a look-behind, and
 /// [`Refusal::MaximumOverflows`] where its maximum wraps and krabka would
-/// match at a start Java does not try, and [`Refusal::TooLarge`] where
-/// `fancy_regex` would build it with no size limit.
-pub(super) fn check_look_behinds(pattern: &str, expr: &Expr) -> Result<Option<usize>, Refusal> {
+/// match at a start Java does not try.
+pub(super) fn check_look_behinds(pattern: &str, expr: &Expr) -> Result<LookBehinds, Refusal> {
     let mut bodies = Vec::new();
     look_behind_bodies(expr, &mut bodies);
     let studied: Vec<(&Expr, TreeInfo)> = bodies
@@ -132,10 +127,21 @@ pub(super) fn check_look_behinds(pattern: &str, expr: &Expr) -> Result<Option<us
             input_limit = Some(input_limit.map_or(limit, |least| least.min(limit)));
         }
     }
-    if studied.iter().any(|(body, _)| too_large(body)) {
-        return Err(Refusal::TooLarge);
-    }
-    Ok(input_limit)
+    Ok(LookBehinds {
+        input_limit,
+        too_large: studied.iter().any(|(body, _)| too_large(body)),
+    })
+}
+
+/// What [`check_look_behinds`] finds in a pattern Java reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct LookBehinds {
+    /// The most UTF-16 units of input the pattern is read for as Java reads
+    /// it, where a wrapped maximum bounds that, and `None` where nothing does.
+    pub(super) input_limit: Option<usize>,
+    /// Whether a look-behind is too large for `fancy_regex`, which would
+    /// build it with no size limit: [`Refusal::TooLarge`].
+    pub(super) too_large: bool,
 }
 
 /// Adds the body of each look-behind in `expr` to `bodies`, outer ones

@@ -1,6 +1,6 @@
 """A frozen candidate names every sibling pin and every manifest drift."""
 
-load("./freeze_candidate.axl", "freeze_record", "lock_digest", "patch_pins", "pin_drift")
+load("./freeze_candidate.axl", "compiled_repositories", "freeze_record", "lock_digest", "patch_pins", "pin_drift", "split_pins")
 load("./testing.axl", "check_eq", "suite", "suite_task")
 
 _PROTOCOL = "af4dc00a1f6502c5f67280f356c90768dabcf4c4"
@@ -64,6 +64,46 @@ def _test_drift_names_each_component_off_its_pin(_ctx):
         {"repository": "krabka-io/krabka-protocol", "pinned": _PROTOCOL, "manifest": ""},
     ])
 
+_OPERATOR = "b409b564a8f744be7cc87634e194b6249ed9b5b1"
+
+# The shape of krabka-broker's own Cargo.lock: compiled git packages, a
+# registry package, and patches that no dependency uses.
+_CARGO_LOCK = [
+    "version = 4",
+    "",
+    "[[package]]",
+    "name = \"krabka-client-core\"",
+    "version = \"0.6.0\"",
+    "source = \"git+https://github.com/krabka-io/krabka-client-rs?rev=%s#%s\"" % (_CLIENT, _CLIENT),
+    "",
+    "[[package]]",
+    "name = \"krabka-ids\"",
+    "source = \"git+https://github.com/krabka-io/krabka-protocol.git?rev=%s#%s\"" % (_PROTOCOL, _PROTOCOL),
+    "",
+    "[[package]]",
+    "name = \"bytes\"",
+    "source = \"registry+https://github.com/rust-lang/crates.io-index\"",
+    "",
+    "[[patch.unused]]",
+    "name = \"krabka-operator\"",
+    "source = \"git+https://github.com/krabka-io/krabka-operator?rev=%s#%s\"" % (_OPERATOR, _OPERATOR),
+]
+
+def _test_only_package_tables_are_compiled_in(_ctx):
+    check_eq("compiled repositories", compiled_repositories(_CARGO_LOCK), {
+        "krabka-io/krabka-client-rs": True,
+        "krabka-io/krabka-protocol": True,
+    })
+    check_eq("an empty lock", compiled_repositories([]), {})
+
+def _test_a_patch_nothing_uses_is_split_off(_ctx):
+    pins = dict(_PINS)
+    pins["krabka-io/krabka-operator"] = _OPERATOR
+    check_eq("pins against the lock", split_pins(pins, compiled_repositories(_CARGO_LOCK)), (
+        _PINS,
+        {"krabka-io/krabka-operator": _OPERATOR},
+    ))
+
 def _test_a_candidate_without_a_lock_pins_nothing(_ctx):
     check_eq("no Cargo.lock at the commit", lock_digest(False, ""), "")
     check_eq("empty Cargo.lock", lock_digest(True, "\n"), "")
@@ -71,12 +111,16 @@ def _test_a_candidate_without_a_lock_pins_nothing(_ctx):
 
 def _test_record_lists_siblings_in_order(_ctx):
     digest = "sha256:" + "a" * 64
-    check_eq("frozen record", freeze_record("e" * 40, digest, _PINS, "sha256:" + "f" * 64, []), {
-        "schema": 1,
+    unused = {"krabka-io/krabka-operator": _OPERATOR}
+    check_eq("frozen record", freeze_record("e" * 40, digest, _PINS, unused, "sha256:" + "f" * 64, []), {
+        "schema": 2,
         "broker": {"repository": "krabka-io/krabka-broker", "revision": "e" * 40, "image": "ghcr.io/krabka-io/krabka-broker", "digest": digest},
         "siblings": [
             {"repository": "krabka-io/krabka-client-rs", "revision": _CLIENT},
             {"repository": "krabka-io/krabka-protocol", "revision": _PROTOCOL},
+        ],
+        "unused_patches": [
+            {"repository": "krabka-io/krabka-operator", "revision": _OPERATOR},
         ],
         "cargo_lock_sha256": "sha256:" + "f" * 64,
         "manifest_drift": [],
@@ -87,6 +131,8 @@ freeze_candidate_tests = suite("freeze-candidate", [
     _test_a_sibling_pinned_twice_is_refused,
     _test_a_branch_or_short_rev_is_not_a_pin,
     _test_drift_names_each_component_off_its_pin,
+    _test_only_package_tables_are_compiled_in,
+    _test_a_patch_nothing_uses_is_split_off,
     _test_a_candidate_without_a_lock_pins_nothing,
     _test_record_lists_siblings_in_order,
 ])

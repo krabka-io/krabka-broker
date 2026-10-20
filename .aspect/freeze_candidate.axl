@@ -4,13 +4,17 @@ A release candidate is three things that must not move while it is qualified:
 
   * the krabka-broker commit, which main CI tested and `delivery` pushed,
   * every sibling repository revision that commit's `[patch.crates-io]` block
-    pins, because those revisions are compiled into the image,
+    pins and its `Cargo.lock` compiles in, because those revisions are in the
+    image,
   * the amd64 image digest that `delivery` recorded for the commit.
 
 This task reads all three at a commit, checks the digest artifact against the
-registry, and writes them as one record. Given a qualification manifest, it
-also lists each component whose revision differs from the pin the candidate
-compiles in. The ecosystem qualification workflow's `broker_revision` and
+registry, and writes them as one record. A patch that nothing in the dependency
+graph uses is not in the image: Cargo records it under `[[patch.unused]]` in
+`Cargo.lock`, not as a `[[package]]`. Such a pin is listed in the record as an
+unused patch and is not compared with the manifest. Given a qualification
+manifest, the task lists each component whose revision differs from the pin
+that the candidate compiles in. The ecosystem qualification workflow's `broker_revision` and
 `broker_digest` overrides replace the broker component only, so a drift line
 means the run would describe siblings that the image was not built from: give
 the workflow a reviewed manifest whose components name the pinned revisions.
@@ -88,6 +92,43 @@ def patch_pins(lines):
         pins[repository] = revision
     return pins, problems
 
+_PACKAGE_HEADER = "[[package]]"
+
+_GIT_SOURCE = "source = \"git+" + _GITHUB
+
+def compiled_repositories(lock_lines):
+    """The GitHub repositories that a `Cargo.lock` compiles a package from.
+
+    Only a `[[package]]` table is part of the build. Cargo keeps a patch that
+    no dependency uses in a `[[patch.unused]]` table instead, with the same
+    `source` line, so a pin of that repository compiles nothing.
+    """
+    repositories = {}
+    inside = False
+    for line in lock_lines:
+        stripped = line.strip()
+        if stripped.startswith("["):
+            inside = stripped == _PACKAGE_HEADER
+            continue
+        if not inside or not stripped.startswith(_GIT_SOURCE):
+            continue
+        rest = stripped.removeprefix(_GIT_SOURCE)
+        for separator in ["?", "#", "\""]:
+            rest = rest.split(separator, 1)[0]
+        repositories[rest.removesuffix(".git")] = True
+    return repositories
+
+def split_pins(pins, compiled):
+    """`(compiled pins, unused patches)`: `pins` divided by `compiled_repositories`."""
+    kept = {}
+    unused = {}
+    for repository in pins.keys():
+        if repository in compiled:
+            kept[repository] = pins[repository]
+        else:
+            unused[repository] = pins[repository]
+    return kept, unused
+
 def pin_drift(pins, manifest):
     """Components of `manifest` whose revision is not the candidate's pin.
 
@@ -111,12 +152,20 @@ def lock_digest(readable, text):
     digest.update(text)
     return "sha256:" + digest.hexdigest()
 
-def freeze_record(commit, digest, pins, lock_sha256, drift):
-    """The frozen candidate record."""
+def _listed(pins):
+    return [{"repository": repository, "revision": pins[repository]} for repository in sorted(pins.keys())]
+
+def freeze_record(commit, digest, pins, unused, lock_sha256, drift):
+    """The frozen candidate record.
+
+    Schema 2 adds `unused_patches`: the pins that `Cargo.lock` does not compile
+    in. Schema 1 listed them among the `siblings`.
+    """
     return {
-        "schema": 1,
+        "schema": 2,
         "broker": {"repository": BROKER, "revision": commit, "image": IMAGE, "digest": digest},
-        "siblings": [{"repository": repository, "revision": pins[repository]} for repository in sorted(pins.keys())],
+        "siblings": _listed(pins),
+        "unused_patches": _listed(unused),
         "cargo_lock_sha256": lock_sha256,
         "manifest_drift": drift,
     }
@@ -143,7 +192,10 @@ def _impl(ctx: TaskContext) -> int:
     pins, problems = patch_pins(manifest_text.splitlines())
     code, lock, _ = _exec(ctx, "git", ["show", commit + ":Cargo.lock"])
     lock_sha256 = lock_digest(code == 0, lock)
-    if not lock_sha256:
+    unused = {}
+    if lock_sha256:
+        pins, unused = split_pins(pins, compiled_repositories(lock.splitlines()))
+    else:
         problems.append("%s has no readable Cargo.lock, so the record cannot pin the dependency set" % commit)
 
     image_digest = ""
@@ -160,12 +212,14 @@ def _impl(ctx: TaskContext) -> int:
     if ctx.args.manifest:
         drift = pin_drift(pins, json.decode(ctx.std.fs.read_to_string(ctx.args.manifest)))
 
-    record = freeze_record(commit, image_digest, pins, lock_sha256, drift)
+    record = freeze_record(commit, image_digest, pins, unused, lock_sha256, drift)
     if ctx.args.output:
         ctx.std.fs.write(ctx.args.output, json.encode(record) + "\n")
     ctx.std.io.stdout.write("%s %s %s\n" % (BROKER, commit, image_digest or "(no verified digest)"))
     for repository in sorted(pins.keys()):
         ctx.std.io.stdout.write("  %s %s\n" % (repository, pins[repository]))
+    for repository in sorted(unused.keys()):
+        ctx.std.io.stdout.write("  unused patch, not compiled in: %s %s\n" % (repository, unused[repository]))
     for entry in drift:
         ctx.std.io.stdout.write("DRIFT %s: pinned %s, manifest %s\n" % (entry["repository"], entry["pinned"], entry["manifest"] or "(absent)"))
     for problem in problems:
