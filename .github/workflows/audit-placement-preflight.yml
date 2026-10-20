@@ -1,0 +1,35 @@
+name: audit placement release preflight
+on:
+  push:
+    branches: [release/negative-pin-preflight]
+    paths: [.github/workflows/audit-placement-preflight.yml]
+permissions:
+  contents: read
+jobs:
+  audit-placement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 33fc66e7e31769aa18e8af333064aa7431095d38
+      - uses: ./.github/actions/reclaim-disk
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          save-if: false
+      - name: Verify the three-broker audit placement
+        run: |
+          set -euo pipefail
+          cargo test --locked -p krabka-broker --test audit \
+            placement::every_combined_node_leads_one_audit_partition_with_a_minimum_isr_of_one \
+            -- --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/audit-placement.log"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: audit-placement-preflight
+          path: ${{ runner.temp }}/audit-placement.log
