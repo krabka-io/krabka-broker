@@ -18,13 +18,20 @@ makes no promise about the Rust API, so read the entries for that. Before
 The layout follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 The history before krabka-broker became its own repository is in
 [robot-head/crabka](https://github.com/robot-head/crabka). This repository
-publishes `krabka-log`, `krabka-verified` and `krabka-macros` to crates.io from
-the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
+publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
+`krabka-java-regex` to crates.io from the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ## [Unreleased]
 
 ### Added
 
+- The `krabka-java-regex` crate: the `java.util.regex` engine behind
+  `ssl.principal.mapping.rules`, Kerberos `auth_to_local` and KIP-714
+  `match` patterns, moved out of the broker so other projects can use it. It
+  answers `Matcher.matches()`, `replaceAll` and `replaceFirst` as JDK 25 does,
+  and refuses what `Pattern.compile` refuses. It publishes from the release
+  tag; its first release needs the crates.io token once
+  ([Releasing](docs/releasing.md#first-publish-of-a-crate-name)).
 - A [release support matrix](docs/operations/support-matrix.md) (issue
   #1400). Each client, broker build, security mode, storage mode, deployment
   and upgrade path has a status, a link to its evidence and the revision it ran
