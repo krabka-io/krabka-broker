@@ -4,7 +4,7 @@ use {
         config::{KafkaRlmmConfig, RemoteStorageBackend},
         diskless::index_log::DISKLESS_WAL_INDEX_TOPIC,
         handlers::test_support::replicated_partition,
-        metrics::BrokerMetrics,
+        metrics::{BrokerMetrics, MetadataPartitionLabel},
         test_support::replica_nodes,
     },
     assert2::{assert, check},
@@ -95,8 +95,10 @@ async fn rlmm_reconciler_applies_initial_and_changed_assignments() {
     let (set_tx, set_rx) = tokio::sync::watch::channel(vec![0, 2]);
     let shutdown = CancellationToken::new();
 
+    let metrics = BrokerMetrics::new();
     let reconciler = tokio::spawn(run_rlmm_reconciler(
         manager.clone(),
+        metrics.clone(),
         set_rx,
         std::time::Duration::from_secs(1),
         shutdown.clone(),
@@ -122,6 +124,132 @@ async fn rlmm_reconciler_applies_initial_and_changed_assignments() {
 
     shutdown.cancel();
     reconciler.await.expect("reconciler exits");
+    // The reconcile publishes before the loop observes shutdown, so the
+    // gauges name only the empty, ready partition 1.
+    assert!(
+        rlmm_gauges(&metrics, 0..3)
+            == vec![RlmmGauges {
+                metadata_partition: 1,
+                ready: Some(1),
+                target: Some(0),
+                applied: Some(-1),
+            }]
+    );
+}
+
+/// The three `tiered_storage_rlmm_partition_*` gauges of one metadata
+/// partition; `None` where the series does not exist.
+#[derive(Debug, PartialEq, Eq)]
+struct RlmmGauges {
+    metadata_partition: i32,
+    ready: Option<i64>,
+    target: Option<i64>,
+    applied: Option<i64>,
+}
+
+/// The gauges of every partition in `partitions` that has at least one series.
+fn rlmm_gauges(metrics: &BrokerMetrics, partitions: std::ops::Range<i32>) -> Vec<RlmmGauges> {
+    partitions
+        .map(|metadata_partition| {
+            let label = MetadataPartitionLabel { metadata_partition };
+            RlmmGauges {
+                metadata_partition,
+                ready: metrics
+                    .tiered_storage_rlmm_partition_ready
+                    .get(&label)
+                    .map(|gauge| gauge.get()),
+                target: metrics
+                    .tiered_storage_rlmm_partition_target_offset
+                    .get(&label)
+                    .map(|gauge| gauge.get()),
+                applied: metrics
+                    .tiered_storage_rlmm_partition_applied_offset
+                    .get(&label)
+                    .map(|gauge| gauge.get()),
+            }
+        })
+        .filter(|gauges| {
+            gauges.ready.is_some() || gauges.target.is_some() || gauges.applied.is_some()
+        })
+        .collect()
+}
+
+const fn readiness(
+    partition: i32,
+    target_offset: Option<i64>,
+    applied_offset: i64,
+    ready: bool,
+) -> MetadataPartitionReadiness {
+    MetadataPartitionReadiness {
+        partition,
+        target_offset,
+        applied_offset,
+        ready,
+    }
+}
+
+const fn gauges(metadata_partition: i32, ready: i64, target: i64, applied: i64) -> RlmmGauges {
+    RlmmGauges {
+        metadata_partition,
+        ready: Some(ready),
+        target: Some(target),
+        applied: Some(applied),
+    }
+}
+
+/// Successive reconciles publish their readiness onto one registry: each step
+/// sets the gauges of the partitions it names and releases the rest.
+#[test]
+fn publish_rlmm_readiness_sets_gauges_and_releases_dropped_partitions() {
+    struct Step {
+        name: &'static str,
+        readiness: Vec<MetadataPartitionReadiness>,
+        expected: Vec<RlmmGauges>,
+    }
+    let steps = [
+        Step {
+            name: "first assignment: one empty, one with an unknown HWM",
+            readiness: vec![
+                readiness(0, Some(0), -1, true),
+                readiness(2, None, 4, false),
+            ],
+            expected: vec![gauges(0, 1, 0, -1), gauges(2, 0, -1, 4)],
+        },
+        Step {
+            name: "refreshed HWM, still behind",
+            readiness: vec![
+                readiness(0, Some(0), -1, true),
+                readiness(2, Some(10), 7, false),
+            ],
+            expected: vec![gauges(0, 1, 0, -1), gauges(2, 0, 10, 7)],
+        },
+        Step {
+            name: "partition 0 unassigned, partition 2 caught up, partition 3 added",
+            readiness: vec![
+                readiness(2, Some(10), 9, true),
+                readiness(3, Some(5), -1, false),
+            ],
+            expected: vec![gauges(2, 1, 10, 9), gauges(3, 0, 5, -1)],
+        },
+        Step {
+            name: "everything unassigned",
+            readiness: vec![],
+            expected: vec![],
+        },
+    ];
+    let metrics = BrokerMetrics::new();
+    let mut published = BTreeSet::new();
+    for Step {
+        name,
+        readiness,
+        expected,
+    } in steps
+    {
+        published = publish_rlmm_readiness(&metrics, &readiness, &published);
+        let names: BTreeSet<i32> = readiness.iter().map(|entry| entry.partition).collect();
+        check!(published == names, "{name}");
+        check!(rlmm_gauges(&metrics, 0..4) == expected, "{name}");
+    }
 }
 
 #[test]
@@ -215,6 +343,7 @@ async fn topic_assignment_uses_discovered_count_after_config_changes() {
     let shutdown = CancellationToken::new();
     let assignment = tokio::spawn(run_topic_assignment(
         manager.clone(),
+        BrokerMetrics::new(),
         node,
         image_rx,
         std::time::Duration::from_secs(1),

@@ -13,6 +13,7 @@ use {
         partitioning::metadata_partition_for,
     },
     assert2::assert,
+    bytes::Bytes,
     krabka_ids::LeaderEpoch,
     krabka_remote_storage::{RemoteLogMetadataManager, RemoteStorageError, TopicIdPartition},
     std::sync::Arc,
@@ -51,6 +52,70 @@ impl MetadataEventLog for HwmFlakyLog {
             return Err(MetadataLogError::Other("injected HWM failure".into()));
         }
         self.inner.high_water_marks().await
+    }
+}
+
+/// Where [`HeldPublishLog`] parks a held publish.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hold {
+    /// Before the record reaches the log, so nothing can consume it yet.
+    BeforeAppend,
+    /// After the record reaches the log, so the pump can consume it before
+    /// the publisher learns its offset.
+    AfterAppend,
+}
+
+/// Test double that delegates to an inner [`InProcessMetadataEventLog`]
+/// but parks each `publish` while a [`Hold`] is set, until the test calls
+/// [`Self::release`]. A parked publish gives up after five seconds, so a
+/// regression fails the test instead of hanging it.
+pub struct HeldPublishLog {
+    pub inner: Arc<InProcessMetadataEventLog>,
+    hold: std::sync::Mutex<Option<Hold>>,
+    parked: tokio::sync::Notify,
+    released: tokio::sync::Semaphore,
+}
+
+impl HeldPublishLog {
+    pub fn new(partition_count: i32) -> Arc<Self> {
+        Arc::new(Self {
+            inner: InProcessMetadataEventLog::new(partition_count),
+            hold: std::sync::Mutex::new(None),
+            parked: tokio::sync::Notify::new(),
+            released: tokio::sync::Semaphore::new(0),
+        })
+    }
+
+    /// Park later publishes at `hold`, or stop parking them with `None`.
+    pub fn set_hold(&self, hold: Option<Hold>) { *self.hold.lock().unwrap() = hold; }
+
+    /// Wait until a publish is parked.
+    pub async fn wait_parked(&self) { self.parked.notified().await; }
+
+    /// Let one parked publish return.
+    pub fn release(&self) { self.released.add_permits(1); }
+
+    async fn park(&self, at: Hold) {
+        if *self.hold.lock().unwrap() == Some(at) {
+            self.parked.notify_one();
+            let released =
+                tokio::time::timeout(std::time::Duration::from_secs(5), self.released.acquire())
+                    .await;
+            if let Ok(permit) = released {
+                permit.unwrap().forget();
+            }
+        }
+    }
+}
+
+#[krabka_macros::metadata_log_delegate(crate)]
+#[async_trait::async_trait]
+impl MetadataEventLog for HeldPublishLog {
+    async fn publish(&self, partition: i32, event: Bytes) -> Result<i64, MetadataLogError> {
+        self.park(Hold::BeforeAppend).await;
+        let offset = self.inner.publish(partition, event).await?;
+        self.park(Hold::AfterAppend).await;
+        Ok(offset)
     }
 }
 

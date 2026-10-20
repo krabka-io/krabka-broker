@@ -5,10 +5,7 @@
 //! reconciler records. Both halves share the `ready_targets` map and the
 //! HWM-unknown sentinel, so they belong in one module.
 
-use {
-    super::TopicBasedRemoteLogMetadataManager, crate::log::PartitionStart,
-    krabka_remote_storage::RemoteStorageError, tracing::warn,
-};
+use {super::TopicBasedRemoteLogMetadataManager, crate::log::PartitionStart, tracing::warn};
 
 #[cfg(test)]
 mod tests;
@@ -19,7 +16,7 @@ mod tests;
 /// returned index. The gate treats the sentinel as `NotReady`, because a real
 /// applied offset can never reach `i64::MAX`. The next `reconcile_assignment`
 /// retries the HWM fetch and replaces the sentinel with the real target.
-const HWM_UNKNOWN: i64 = i64::MAX;
+pub(super) const HWM_UNKNOWN: i64 = i64::MAX;
 
 /// Outcome of the per-metadata-partition readiness check that gates the
 /// gated [`RemoteLogMetadataManager`](krabka_remote_storage::RemoteLogMetadataManager)
@@ -215,22 +212,16 @@ impl TopicBasedRemoteLogMetadataManager {
             }
         }
         for mp in have.difference(&want).copied() {
-            let mut waiters = self.mutation_waiters.lock().await;
-            self.assignment.remove(mp);
-            self.ready_targets
-                .lock()
-                .expect("ready_targets poisoned")
-                .remove(&mp);
-            let keys: Vec<_> = waiters
-                .keys()
-                .copied()
-                .filter(|key| key.partition == mp)
-                .collect();
-            for key in keys {
-                if let Some(reply) = waiters.remove(&key) {
-                    let _ = reply.send(Err(RemoteStorageError::NotReady { partition: mp }));
-                }
-            }
+            // Unassign under the waiter lock, so a publish either sees the
+            // partition unassigned or learns of the removal when it
+            // registers its offset.
+            self.mutation_waiters.remove_partition(mp, || {
+                self.assignment.remove(mp);
+                self.ready_targets
+                    .lock()
+                    .expect("ready_targets poisoned")
+                    .remove(&mp);
+            });
         }
     }
 }

@@ -30,6 +30,10 @@
 //!   [`krabka_client_admin`], persisting events in the
 //!   `__remote_log_metadata` topic. Reads use manual per-partition
 //!   `Fetch` loops over `krabka_client_core`, with no consumer group.
+//! - [`MetadataPartitionReadiness`] — the per-metadata-partition readiness
+//!   sample that
+//!   [`TopicBasedRemoteLogMetadataManager::metadata_partition_readiness`]
+//!   reports, which the broker exports as gauges.
 //! - [`SwappableRlmm`] — the hot-swap facade the broker boots behind so
 //!   it can start on the fail-closed `NotReadyRlmm` and upgrade to the
 //!   topic-backed manager once its listener is serving.
@@ -97,7 +101,7 @@ pub use {
         AssignmentHandle, InProcessMetadataEventLog, MetadataEventLog, MetadataEventRecord,
         MetadataEventStream, PartitionStart, RangeVisitor,
     },
-    manager::TopicBasedRemoteLogMetadataManager,
+    manager::{MetadataPartitionReadiness, TopicBasedRemoteLogMetadataManager},
     not_ready::NotReadyRlmm,
     partitioning::{metadata_partition_for, metadata_partitions_for},
     serde::MetadataEvent,
