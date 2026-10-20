@@ -523,6 +523,9 @@ async fn controlled_shutdown_timeout_stops_listener_and_reports_error() {
     let config = BrokerConfig::for_tests(dir.path().to_path_buf());
     let handle = Broker::start(config).await.unwrap();
     let addr = handle.listen_addr();
+    // An available controller can finish the drain before a zero timeout is polled.
+    handle.broker.controller.halt().await;
+    assert!(!*handle.should_shutdown_rx().borrow());
     let err = handle
         .controlled_shutdown(std::time::Duration::ZERO)
         .await
