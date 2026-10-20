@@ -157,7 +157,15 @@ impl ShareCoordinator {
         // Kafka's `share.coordinator.state.topic.compression.codec`. The
         // state topic keeps `compression.type=producer`, so the log stores
         // the batch in this codec.
-        let mut batch = RecordBatch::default();
+        // Kafka's coordinator runtime stamps each record with the wall clock.
+        // At timestamp 0 the segment never rolls by `segment.ms`, so a quiet
+        // partition's active segment is never sealed for the cleaner.
+        let now = self.now_ms();
+        let mut batch = RecordBatch {
+            base_timestamp: now,
+            max_timestamp: now,
+            ..RecordBatch::default()
+        };
         batch.attributes = batch
             .attributes
             .with_compression(self.config.state_topic_compression_codec);

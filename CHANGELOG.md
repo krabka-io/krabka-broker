@@ -145,6 +145,32 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   the connection with no response and no failed-authentication delay when the
   client proof does not decode to the hash length, as Kafka's
   `ScramFormatter.xor` does (#1390, krabka-io/krabka-protocol#68).
+- Audit records are kept for the audit topic's `retention.ms` (issue #1550).
+  The audit writer stored every batch with `CreateTime` 0, so time retention
+  took each closed segment of `__krabka_audit` as decades old and deleted it
+  at the next pass. On v1.0.5 the first 114 audit records of a test broker
+  were gone about five minutes after start, against a 7-day `retention.ms`.
+  The writer now stamps each batch with the wall clock, as Kafka stamps its
+  records. This release cannot recover audit records that an earlier release
+  wrote and retention already deleted. A segment that holds only records
+  written before the upgrade is still deleted at the first retention pass
+  after it closes.
+- An audit hash chain continues across a broker restart (issue #1550). On
+  restart the writer searched for the chain's last record from offset 0. Once
+  retention had raised the log start, that read failed with `OffsetTooLow`,
+  the `ERROR` line reported in the issue. The writer then began a new chain:
+  sequence 0 with an all-zero `prev_hash`. It now reads from the log start. A
+  chain that an earlier release wrote may restart at a broker restart. A
+  verifier finds a break at sequence 0 with an all-zero `prev_hash` there.
+  Match each break against the broker's restart times.
+- Transaction, share-group and barrier state records carry the time they
+  were written, as Kafka's do. `__transaction_state`, `__share_group_state`
+  and `__barrier_state` stored every record with `CreateTime` 0. These topics
+  are compacted, so no record was lost. But a quiet partition's active
+  segment never rolled by `segment.ms`, so the cleaner did not compact it
+  until the segment reached `segment.bytes`. Records written before the
+  upgrade keep timestamp 0, and `kafka-dump-log` shows `CreateTime:0` for
+  them. The on-disk format does not change.
 - A combined node that is killed and restarts inside its heartbeat session,
   and wins the controller election before its broker layer is up, no longer
   keeps its partition leaderships at the same leader epoch (issue #1442). Its
