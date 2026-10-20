@@ -5,7 +5,8 @@
 
 use {
     crate::{
-        metrics::BrokerMetrics, partition::ProduceBatchError, partition_registry::PartitionRegistry,
+        metrics::BrokerMetrics, partition::ProduceBatchError,
+        partition_registry::PartitionRegistry, time_util,
     },
     async_trait::async_trait,
     bytes::Bytes,
@@ -69,24 +70,7 @@ impl AuditSink for KafkaTopicAuditSink {
             )));
         }
 
-        let headers = record
-            .headers
-            .into_iter()
-            .map(|(k, v)| RecordHeader {
-                key: k,
-                value: Some(Bytes::from(v)),
-            })
-            .collect();
-        let mut batch = RecordBatch::default();
-        // `offset_delta`/`key` are left at their `Record::default()` values (0 /
-        // None) — a single audit record with no key. Spelling them out would only
-        // create equivalent "delete field" mutants.
-        batch.records.push(Record {
-            value: Some(Bytes::from(record.value)),
-            headers,
-            ..Default::default()
-        });
-        batch.last_offset_delta = 0;
+        let batch = audit_batch(record, time_util::now_ms());
 
         let result = if durable {
             partition.produce_batch_durable_outcome(batch).await
@@ -102,6 +86,37 @@ impl AuditSink for KafkaTopicAuditSink {
         }
         self.metrics.audit_events.inc();
         Ok(())
+    }
+}
+
+/// The single-record batch that carries `record`, stamped with `now_ms`.
+///
+/// The audit topic keeps `CreateTime`, so the batch timestamps are the ones the
+/// log stores. Time retention and time-based segment rolls read them. A batch
+/// left at timestamp 0 looks older than any `retention.ms`, and the next
+/// retention pass deletes its segment.
+fn audit_batch(record: AuditRecord, now_ms: i64) -> RecordBatch {
+    let headers = record
+        .headers
+        .into_iter()
+        .map(|(k, v)| RecordHeader {
+            key: k,
+            value: Some(Bytes::from(v)),
+        })
+        .collect();
+    // `offset_delta`/`key` are left at their `Record::default()` values (0 /
+    // None) — a single audit record with no key. Spelling them out would only
+    // create equivalent "delete field" mutants.
+    RecordBatch {
+        base_timestamp: now_ms,
+        max_timestamp: now_ms,
+        last_offset_delta: 0,
+        records: vec![Record {
+            value: Some(Bytes::from(record.value)),
+            headers,
+            ..Default::default()
+        }],
+        ..Default::default()
     }
 }
 
@@ -182,6 +197,57 @@ mod tests {
                 Some(&b"admin"[..]),
             )
         );
+    }
+
+    #[test]
+    fn audit_batch_carries_the_write_time() {
+        let batch = audit_batch(
+            AuditRecord {
+                class: krabka_audit::AuditEventClass::ApiActivity,
+                value: b"v".to_vec(),
+                headers: Vec::new(),
+            },
+            1_724_500_000_000,
+        );
+
+        assert!(
+            (
+                batch.base_timestamp,
+                batch.max_timestamp,
+                batch.records.len()
+            ) == (1_724_500_000_000, 1_724_500_000_000, 1)
+        );
+    }
+
+    /// A stored audit batch carries the time it was written. At timestamp 0,
+    /// time retention deleted every closed audit segment at its next pass.
+    #[tokio::test]
+    async fn write_stores_the_write_time_as_the_batch_timestamp() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let AuditPartition {
+            partition,
+            partitions,
+        } = audit_partition(dir.path());
+        let sink = audit_sink(partitions);
+
+        let before = time_util::now_ms();
+        sink.write(
+            AuditRecord {
+                class: krabka_audit::AuditEventClass::ApiActivity,
+                value: b"{}".to_vec(),
+                headers: Vec::new(),
+            },
+            true,
+        )
+        .await
+        .expect("write audit record");
+        let after = time_util::now_ms();
+
+        let out = partition
+            .read_log(Offset(0), mebibytes(1))
+            .expect("read audit partition");
+        let stamped = out.batches[0].max_timestamp;
+        assert!((before..=after).contains(&stamped), "stamped {stamped}");
     }
 
     #[tokio::test]
