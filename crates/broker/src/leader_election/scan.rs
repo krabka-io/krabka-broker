@@ -465,11 +465,10 @@ pub(crate) async fn compute_unclean_restart_changes(
     restart_plan(
         image,
         returning,
-        liveness,
+        &liveness.alive_node_ids().await,
         metrics,
         withdraw_elr_membership(image, returning),
     )
-    .await
 }
 
 /// The failover changes a new incarnation of `returning` needs when the
@@ -487,20 +486,24 @@ pub(crate) async fn compute_unclean_restart_changes(
 /// is the safe side of Kafka's clean branch, and a broker that stopped through
 /// controlled shutdown holds no ISR seat and no leadership, so nothing here
 /// touches it.
-pub(crate) async fn compute_reregistration_changes(
+///
+/// `alive` is the set of brokers that may take a leadership over: Kafka's
+/// `ClusterControlManager.isActive`. The caller reads it from its liveness
+/// registry, or, before it has one, from the registrations `image` holds.
+pub(crate) fn compute_reregistration_changes(
     image: &MetadataImage,
     returning: NodeId,
-    liveness: &ControllerLivenessState,
+    alive: &std::collections::HashSet<NodeId>,
     metrics: &BrokerMetrics,
 ) -> FailoverPlan {
-    restart_plan(image, returning, liveness, metrics, Vec::new()).await
+    restart_plan(image, returning, alive, metrics, Vec::new())
 }
 
 /// [`compute_unclean_restart_changes`] after `withdrawals`, its ELR half.
-async fn restart_plan(
+fn restart_plan(
     image: &MetadataImage,
     returning: NodeId,
-    liveness: &ControllerLivenessState,
+    alive: &std::collections::HashSet<NodeId>,
     metrics: &BrokerMetrics,
     withdrawals: Vec<MetadataRecord>,
 ) -> FailoverPlan {
@@ -512,11 +515,8 @@ async fn restart_plan(
         changes: withdrawals,
         ..Default::default()
     };
-    let ScanInputs {
-        alive,
-        witnesses,
-        mut elr,
-    } = scan_inputs(image, liveness).await;
+    let witnesses = witness_node_ids(image);
+    let mut elr = ScanElr::default();
     // The ISR removals below are the candidate set the next eligibility is
     // derived from, so the broker they remove has to be excluded from that
     // derivation too.
@@ -531,7 +531,7 @@ async fn restart_plan(
         match unclean_restart_one(
             pr,
             returning,
-            &alive,
+            alive,
             &witnesses,
             &elr_state,
             strategy,

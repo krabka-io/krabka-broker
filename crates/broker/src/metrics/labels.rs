@@ -112,6 +112,18 @@ pub struct WalVoterLabel {
     pub voter: u64,
 }
 
+/// One `__remote_log_metadata` partition, paired with the
+/// `tiered_storage_rlmm_partition_*` gauge families.
+///
+/// Cardinality is bounded by the metadata topic's partition count, 50 by
+/// default, and a series exists only while this broker is assigned the
+/// partition: the RLMM reconciler releases it when the assignment drops the
+/// partition. No client input reaches this label.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct MetadataPartitionLabel {
+    pub metadata_partition: i32,
+}
+
 /// Fleet-complete KIP-932 backlog for one share-group partition.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct ShareGroupLabel {
