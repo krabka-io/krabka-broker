@@ -43,17 +43,27 @@
 //! limit is a [`MatchError`], not a no match. Java answers such a search,
 //! however slowly.
 //!
-//! The rest of what the crate does not read as Java does, such as Unicode
-//! blocks and `\X`, it refuses at [`JavaPattern::compile`]. That includes a
-//! look-behind too large for the `regex` crate to build at its default size
-//! limit, such as `(?<=x{1,1000000000})`, and most look-behinds whose maximum
-//! length overflows Java's `int`, such as `(?<=a*b*)`: Java then tries fewer
-//! starts. Where the overflowed maximum is still at least 2^30, as in
-//! `(?<=a*b*c*x)`, the pattern compiles, and an input of more UTF-16 units
-//! than that maximum is a [`MatchError`]. A pattern with a char past U+FFFF
-//! anywhere in it is refused whenever such a maximum overflows, as in
-//! `😀x(?<=a*b*c*x)y`, though Java reads one with the char before the
-//! look-behind as it reads one without.
+//! [`JavaPattern::compile`] refuses the patterns below, which Java compiles,
+//! rather than match them another way. Each is a [`PatternError`].
+//!
+//! - A Unicode block, such as `\p{InGreek}`, and `\X`.
+//! - A named char, `\N{name}`.
+//! - A quantifier of a look-around, such as `(?=(a))*`, which `fancy_regex`
+//!   cannot parse.
+//! - A counted repeat too large for the `regex` crate to build at its default
+//!   size limit, such as `x{1,1000000000}`, in a look-behind or outside one.
+//! - A look-behind whose maximum length overflows Java's `int`, such as
+//!   `(?<=a*b*)`, where Java then tries fewer starts than the look-behind
+//!   allows. Where the overflowed maximum still covers every start, as in
+//!   `(?<=a*bc)`, the pattern compiles.
+//! - A pattern with a char past U+FFFF anywhere in it, whenever a look-behind's
+//!   maximum overflows, as in `😀x(?<=a*b*c*x)y`. Java reads one with the char
+//!   before the look-behind as it reads one without.
+//!
+//! One more input limit applies at match time. Where an overflowed maximum is
+//! at least 2^30 and covers every start only up to that length, as in
+//! `(?<=a*b*c*x)`, an input of more UTF-16 units than the maximum is a
+//! [`MatchError`].
 
 mod backtrack;
 mod look_behind;
