@@ -749,6 +749,7 @@ mod tests {
                             (krabka_audit::NodeId(1), 1),
                         )
                     },
+                    std::future::pending(),
                 )
                 .await
             }

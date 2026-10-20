@@ -15,7 +15,7 @@ use {
     super::{
         client::{
             Endpoint,
-            load::{CommitTracker, LoadContext, producer_name, start},
+            load::{CommitTracker, LoadContext, prepare, producer_name, start},
             now_ms,
             readback::{commit_checks, read_back, round_trip},
             windows::Windows,
@@ -127,12 +127,23 @@ pub fn read_load(path: &Path) -> Result<LoadRecord> {
 ///
 /// When `lost` completes first, every send in flight is abandoned, because no
 /// broker is left to answer it.
+///
+/// # Errors
+///
+/// Returns a consumer startup error, or source loss during startup, before
+/// starting the measured load.
 pub async fn run_load(
     contract: &Contract,
     endpoint: Endpoint,
     broker_image: String,
     lost: impl Future<Output = ()>,
-) -> LoadRecord {
+) -> Result<LoadRecord> {
+    tokio::pin!(lost);
+    let prepared = tokio::select! {
+        biased;
+        () = &mut lost => bail!("source cluster lost before the measured load started"),
+        prepared = prepare(contract, &endpoint) => prepared.context("prepare the drill consumers")?,
+    };
     let ctx = Arc::new(
         LoadContext::builder()
             .contract(contract.clone())
@@ -142,10 +153,10 @@ pub async fn run_load(
             .build(),
     );
     let started = now_ms();
-    let running = start(&ctx);
+    let running = start(&ctx, prepared);
     tracing::info!(contract = %contract.name, "drill load started");
     tokio::select! {
-        () = lost => {
+        () = &mut lost => {
             ctx.abandon();
             tracing::info!("the source cluster is lost; abandoning the sends in flight");
         }
@@ -158,7 +169,7 @@ pub async fn run_load(
     let trackers = running.trackers.clone();
     let outcome = running.finish().await;
     let paths = outcome.measurements(contract, Time::from_millis(ended - started));
-    LoadRecord {
+    Ok(LoadRecord {
         acks: outcome
             .producers
             .iter()
@@ -191,7 +202,7 @@ pub async fn run_load(
             paths,
             ..Evidence::default()
         },
-    }
+    })
 }
 
 /// Read every path of the restored cluster back, check each committing
@@ -233,7 +244,8 @@ pub async fn read_back_restored(
 ///
 /// # Errors
 ///
-/// The record cannot be written.
+/// Consumer preparation fails, the source is lost before load starts, or the
+/// record cannot be written.
 pub async fn record_load(
     contract: &Contract,
     endpoint: Endpoint,
@@ -241,7 +253,7 @@ pub async fn record_load(
     lost: impl Future<Output = ()>,
     out: &Path,
 ) -> Result<LoadRecord> {
-    let record = run_load(contract, endpoint, broker_image, lost).await;
+    let record = run_load(contract, endpoint, broker_image, lost).await?;
     for ledger in &record.run.producers {
         tracing::info!(
             producer = %ledger.producer,

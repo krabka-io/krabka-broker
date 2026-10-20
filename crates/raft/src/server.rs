@@ -173,6 +173,10 @@ pub(crate) async fn run(
             accept = listener.accept() => {
                 match accept {
                     Ok((stream, peer)) => {
+                        // Split response writes must not wait for the peer's delayed ACK.
+                        if let Err(error) = stream.set_nodelay(true) {
+                            tracing::debug!(%peer, %error, "TCP_NODELAY set failed on controller socket");
+                        }
                         // The quotas are resolved per accept, so a dynamic
                         // change applies to this listener as Kafka's
                         // controller `SocketServer` reconfigures it. Over a

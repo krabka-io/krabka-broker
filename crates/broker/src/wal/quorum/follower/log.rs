@@ -224,6 +224,10 @@ impl FollowerLog {
         let Some(records) = records else {
             return Ok(requested);
         };
+        // The prefix is already checkpointed; an append error reopens and recovers the log.
+        if records.payload_len() == 0 {
+            return Ok(requested);
+        }
         let mut encoded = BytesMut::with_capacity(records.payload_len());
         records
             .encode_to(&mut encoded)
@@ -323,6 +327,61 @@ mod tests {
             dir,
             follower: FollowerLog::for_log(log),
         }
+    }
+
+    #[tokio::test]
+    async fn empty_fetches_do_not_checkpoint_and_failed_appends_recover_before_retrying() {
+        let FreshFollower { dir, follower } = fresh_follower();
+        let checkpoint = std::fs::read(&follower.durable_offset_path).unwrap();
+        let temporary = follower
+            .durable_offset_path
+            .with_extension("checkpoint.tmp");
+        std::fs::create_dir(&temporary).unwrap();
+        for records in [
+            None,
+            Some(RecordsPayload::Raw(Bytes::new())),
+            Some(RecordsPayload::V2(vec![])),
+        ] {
+            assert!(
+                follower
+                    .append(Offset(0), Offset(0), records)
+                    .await
+                    .unwrap()
+                    == Offset(0)
+            );
+            assert!(std::fs::read(&follower.durable_offset_path).unwrap() == checkpoint);
+        }
+
+        // A real append must still publish its checkpoint before it can be acknowledged.
+        assert!(
+            follower
+                .append(
+                    Offset(0),
+                    Offset(1),
+                    Some(RecordsPayload::V2(vec![empty_batch(1)])),
+                )
+                .await
+                .is_err()
+        );
+        assert!(follower.end_offset() == Offset(1));
+        std::fs::remove_dir(temporary).unwrap();
+        drop(follower);
+
+        // The follower run loop reopens after any append error, discarding that unacknowledged tail.
+        let recovered =
+            FollowerLog::open_at(dir.path().to_path_buf(), &LogConfig::default()).unwrap();
+        assert_empty(&recovered);
+        assert!(
+            recovered
+                .append(
+                    Offset(0),
+                    Offset(0),
+                    Some(RecordsPayload::Raw(Bytes::new())),
+                )
+                .await
+                .unwrap()
+                == Offset(0)
+        );
     }
 
     fn assert_empty(follower: &FollowerLog) {

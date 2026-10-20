@@ -29,7 +29,7 @@ use {
     krabka_log::{Offset, VerbatimBatch},
     krabka_protocol::owned::produce_response::PartitionProduceResponse,
     std::sync::Arc,
-    tokio::sync::oneshot,
+    tokio::sync::{oneshot, watch},
 };
 
 /// The partition metadata-transition barrier a produce holds from the dedup
@@ -115,6 +115,36 @@ impl PendingAck {
         }
     }
 
+    /// Observe committed leadership independently of the transition barrier,
+    /// which this acknowledgement keeps locked until its producer state commits.
+    pub(super) fn leadership_changed(
+        &self,
+        mut images: watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
+    ) -> impl std::future::Future<Output = i16> + Send + 'static + use<> {
+        let topic = self.partition.topic.clone();
+        let partition = self.partition.index.0;
+        let target = *self.transition;
+        async move {
+            loop {
+                {
+                    let image = images.borrow_and_update();
+                    let Some(record) = image.partition(&topic, partition) else {
+                        return codes::UNKNOWN_TOPIC_OR_PARTITION;
+                    };
+                    let topic_id = image.topic(&topic).map(|topic| topic.topic_id);
+                    if !super::leadership::replication_target_matches_image(
+                        &target, topic_id, record,
+                    ) {
+                        return codes::NOT_LEADER_OR_FOLLOWER;
+                    }
+                }
+                if images.changed().await.is_err() {
+                    std::future::pending::<()>().await;
+                }
+            }
+        }
+    }
+
     /// Wait for the high watermark to cover this partition's append, then
     /// finish its row.
     ///
@@ -137,18 +167,24 @@ impl PendingAck {
         mut self,
         deadline: std::time::Instant,
         current_min_isr: impl FnOnce(&Partition, Option<uuid::Uuid>) -> Result<usize, i16>,
+        leadership_changed: impl std::future::Future<Output = i16>,
     ) -> PartitionProduceResponse {
-        let gate = self
-            .partition
-            .await_hw_at_least(self.target, deadline)
-            .await;
+        let gate = tokio::select! {
+            biased;
+            code = leadership_changed => Err(code),
+            gate = self.partition.await_hw_at_least(self.target, deadline) => {
+                gate.map_err(|_| codes::REQUEST_TIMED_OUT)
+            }
+        };
         let isr_size = match gate {
             Ok(()) => Some(self.partition.replica_state.lock().await.isr.len()),
-            Err(_timeout) => None,
+            Err(_) => None,
         };
         self.response.error_code = match current_min_isr(&self.partition, self.transition.topic_id)
         {
-            Ok(effective_min_isr) => ack_completion_code(isr_size, effective_min_isr),
+            Ok(effective_min_isr) => gate
+                .err()
+                .unwrap_or_else(|| ack_completion_code(isr_size, effective_min_isr)),
             Err(code) => code,
         };
         // The row's log start offset is read after the gate on both paths, the
@@ -453,7 +489,7 @@ pub(super) fn build_produce_data(prepared: PreparedBatch, leader_epoch: i32) -> 
 #[cfg(test)]
 mod tests {
     use {
-        super::PendingAck,
+        super::{AppendCommit, PendingAck},
         crate::{
             codes,
             error::BrokerError,
@@ -588,10 +624,14 @@ mod tests {
             );
             let mut asked_for = None;
             let row = pending
-                .finish(std::time::Instant::now(), |_, topic_id| {
-                    asked_for = Some(topic_id);
-                    case.current_min_isr
-                })
+                .finish(
+                    std::time::Instant::now(),
+                    |_, topic_id| {
+                        asked_for = Some(topic_id);
+                        case.current_min_isr
+                    },
+                    std::future::pending(),
+                )
                 .await;
             assert!(
                 (row, asked_for)
@@ -608,6 +648,144 @@ mod tests {
                 "{}",
                 case.name
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn leadership_change_finishes_old_acks_before_publishing_the_new_target() {
+        use {
+            crate::{
+                handlers::produce::test_support::image_with_topic,
+                producer_state::{Decision, SequenceContext},
+            },
+            krabka_metadata::MetadataRecord,
+            krabka_protocol::records::{Record, RecordBatch},
+            std::{sync::atomic::Ordering, time::Duration},
+        };
+
+        for (diskless, new_leader, recreated, already_durable) in [
+            (false, 2, false, false),
+            (true, 2, false, false),
+            (true, 1, false, false),
+            (false, 1, true, false),
+            (false, 2, false, true),
+        ] {
+            let (mut partition, _dir) = test_partition(Arc::new(tokio::sync::Notify::new()));
+            partition.diskless = diskless;
+            let partition = Arc::new(partition);
+            let mut image = image_with_topic("t", &[1, 2]);
+            let topic_id = image.topic("t").unwrap().topic_id;
+            partition
+                .install_replication_target(Some(topic_id), 1, 0)
+                .await;
+            partition
+                .install_isr(&[NodeId(1), NodeId(2)], &[NodeId(1), NodeId(2)], NodeId(1))
+                .await;
+            partition
+                .log
+                .lock()
+                .unwrap()
+                .append(&mut RecordBatch {
+                    producer_id: 42,
+                    producer_epoch: 0,
+                    base_sequence: 0,
+                    records: vec![Record::default()],
+                    ..Default::default()
+                })
+                .unwrap();
+            let producer_state = Arc::new(ProducerState::new());
+            let transition = partition.lock_produce_transition().await;
+            let pending = PendingAck::new(
+                PartitionProduceResponse {
+                    index: 0,
+                    base_offset: 0,
+                    ..Default::default()
+                },
+                Arc::clone(&partition),
+                Offset(1),
+                Some(AppendCommit {
+                    producer_state: Arc::clone(&producer_state),
+                    topic: "t".into(),
+                    partition: 0,
+                    pid: 42,
+                    epoch: 0,
+                    base_seq: 0,
+                    last_offset_delta: 0,
+                    max_timestamp: 0,
+                    is_transactional: false,
+                    base_offset: Offset(0),
+                }),
+                transition,
+            );
+            let (images, receiver) = tokio::sync::watch::channel(Arc::new(image.clone()));
+            let changed = pending.leadership_changed(receiver);
+            let waiting = pending.finish(
+                std::time::Instant::now() + Duration::from_secs(30),
+                |partition, _| {
+                    assert!(partition.current_leader.load(Ordering::Acquire) == 1);
+                    Ok(2)
+                },
+                changed,
+            );
+            tokio::pin!(waiting);
+            assert!(futures_util::poll!(waiting.as_mut()).is_pending());
+            let next_topic_id = if recreated {
+                uuid::Uuid::new_v4()
+            } else {
+                topic_id
+            };
+            let next_epoch = i32::from(!recreated);
+            let promotion =
+                partition.install_replication_target(Some(next_topic_id), new_leader, next_epoch);
+            tokio::pin!(promotion);
+            assert!(futures_util::poll!(promotion.as_mut()).is_pending());
+
+            // ISR-only metadata must neither finish the ack nor release its barrier.
+            let mut record = image.partition("t", 0).unwrap().clone();
+            record.partition_epoch += 1;
+            record.isr = vec![NodeId(1)];
+            image.apply(&MetadataRecord::V1Partition(record.clone()));
+            images.send_replace(Arc::new(image.clone()));
+            assert!(futures_util::poll!(waiting.as_mut()).is_pending());
+            assert!(futures_util::poll!(promotion.as_mut()).is_pending());
+
+            record.leader = NodeId(new_leader);
+            record.leader_epoch.0 = next_epoch;
+            record.partition_epoch += 1;
+            if recreated {
+                let mut topic = image.topic("t").unwrap().clone();
+                topic.topic_id = next_topic_id;
+                image.apply(&MetadataRecord::V1Topic(topic));
+            }
+            image.apply(&MetadataRecord::V1Partition(record));
+            if already_durable {
+                partition.replica_state.lock().await.hw = Offset(1);
+                partition.hw_advance_notify.notify_waiters();
+            }
+            images.send_replace(Arc::new(image));
+            let row = tokio::time::timeout(Duration::from_secs(1), waiting)
+                .await
+                .unwrap();
+            assert!(row.error_code == codes::NOT_LEADER_OR_FOLLOWER);
+            assert!(partition.high_watermark().await == Offset(i64::from(already_durable)));
+            assert!(
+                producer_state
+                    .check_batch(
+                        "t",
+                        krabka_ids::PartitionIndex(0),
+                        SequenceContext::RELEASED,
+                        (42, 0),
+                        (0, 0),
+                    )
+                    .await
+                    .decision
+                    == Decision::Duplicate { base_offset: 0 }
+            );
+            tokio::time::timeout(Duration::from_secs(1), promotion)
+                .await
+                .unwrap();
+            assert!(partition.current_leader_epoch.load(Ordering::Acquire) == next_epoch);
+            assert!(partition.lock_produce_transition().await.topic_id == Some(next_topic_id));
         }
     }
 

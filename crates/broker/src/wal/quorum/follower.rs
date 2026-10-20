@@ -22,8 +22,8 @@ use {
     self::{
         connection::{connect_with_backoff, sleep_or_cancel},
         fetch::{
-            FetchProgress, fetch_progress, response_partition, validate_diverging_epoch,
-            validate_fetch_frontiers, validate_reset_offset,
+            fetch_progress, response_partition, validate_diverging_epoch, validate_fetch_frontiers,
+            validate_reset_offset,
         },
         log::FollowerLog,
     },
@@ -141,13 +141,8 @@ async fn run_inner(config: &Config, follower: &FollowerLog) -> Result<(), String
                     .append(requested, frontiers.end, partition.records)
                     .await
                     .map_err(|error| error.to_string())?;
-                match fetch_progress(requested, appended)? {
-                    FetchProgress::Idle => {
-                        sleep_or_cancel(&config.shutdown, replication.throttle_exhausted_backoff)
-                            .await?;
-                    }
-                    FetchProgress::Advanced => {}
-                }
+                // Empty fetches already waited on the leader for data or max_wait_ms.
+                fetch_progress(requested, appended)?;
             }
             codes::OFFSET_OUT_OF_RANGE => {
                 let reset = validate_reset_offset(&partition)?;

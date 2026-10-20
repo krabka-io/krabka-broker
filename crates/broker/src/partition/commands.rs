@@ -392,7 +392,11 @@ impl Partition {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::partition::test_support::test_partition_with_writer, assert2::assert};
+    use {
+        super::*,
+        crate::partition::test_support::{test_partition, test_partition_with_writer},
+        assert2::assert,
+    };
 
     #[tokio::test]
     async fn config_changes_do_not_wait_behind_a_stalled_writer() {
@@ -427,9 +431,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_contended_config_swap_does_not_block_the_current_thread_runtime() {
-        let (part, _dir) = crate::partition::test_support::test_partition(std::sync::Arc::new(
-            tokio::sync::Notify::new(),
-        ));
+        let (part, _dir) = test_partition(std::sync::Arc::new(tokio::sync::Notify::new()));
         let base = part.log.lock().unwrap().config_snapshot();
         let log = part.log.clone();
         let (locked, lock_held) = tokio::sync::oneshot::channel();
