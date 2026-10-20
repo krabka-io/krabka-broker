@@ -38,13 +38,13 @@ krabka-security = { workspace = true }
 # so the backend mapping is the object-store layer the restore uses, not the
 # broker's TOML config: a backup runs beside a broker, and a restore runs when
 # there is none.
-krabka-object-store = { version = "1.0.5", path = "../object-store", features = ["clap"] }
-krabka-remote-storage = { version = "1.0.5", path = "../remote-storage" }
-krabka-remote-storage-topic = { version = "1.0.5", path = "../remote-storage-topic" }
+krabka-object-store = { version = "1.0.6", path = "../object-store", features = ["clap"] }
+krabka-remote-storage = { version = "1.0.6", path = "../remote-storage" }
+krabka-remote-storage-topic = { version = "1.0.6", path = "../remote-storage-topic" }
 # Decodes a format-time metadata checkpoint to tell a plain format, which
 # holds no topic, from a restore's seeded one, and reads a checkpoint's age.
 krabka-metadata = { version = "0.6.0" }
-krabka-raft = { version = "1.0.5", path = "../raft" }
+krabka-raft = { version = "1.0.6", path = "../raft" }
 
 bytes = { workspace = true }
 clap = { workspace = true, features = ["env"] }
@@ -58,7 +58,7 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 # `cli_main!` writes the binary's `main`.
-krabka-macros = { version = "1.0.5", path = "../macros" }
+krabka-macros = { version = "1.0.6", path = "../macros" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "time"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

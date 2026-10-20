@@ -94,7 +94,7 @@ WORKSPACE_RUSTC_FLAGS = ["-Funsafe_code"]
 # The root `Cargo.toml`'s `[workspace.package] version`. It reaches the release
 # artifacts through the purl `crate_library` stamps below, so a release bump
 # has to land here as well as in the manifest.
-WORKSPACE_VERSION = "1.0.5"
+WORKSPACE_VERSION = "1.0.6"
 
 def _features():
     return DEP_DATA[native.package_name()]["crate_features"]
@@ -164,6 +164,7 @@ def _crate(rule, name, srcs, clippy = True, **kwargs):
         package_metadata = [metadata],
         rustc_flags = WORKSPACE_RUSTC_FLAGS,
         visibility = ["//visibility:public"],
+        version = WORKSPACE_VERSION,
         deps = all_crate_deps(normal = True),
         **kwargs
     )
@@ -217,6 +218,7 @@ def crate_binary(name, crate_root, lib, tests = True, **kwargs):
         edition = edition(),
         rustc_flags = WORKSPACE_RUSTC_FLAGS,
         visibility = ["//visibility:public"],
+        version = WORKSPACE_VERSION,
         deps = all_crate_deps(normal = True) + [lib],
         **kwargs
     )
