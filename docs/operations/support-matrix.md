@@ -222,11 +222,11 @@ its source. An item stays here until a linked change removes it.
 
 ### Evidence gaps
 
-- **netem slow followers are untested.** The fault exists in the soak contract
-  with a digest-pinned image. No run has used it, because the sandbox kernel had
-  no `sch_netem`. The nightly `netem` job runs
-  `bench/soak/self-check-netem.yaml`, the self-check with that fault, on a
-  GitHub-hosted runner, and the 72-hour run uses it too.
+- **netem slow followers have run only in the five-minute self-check.** The
+  nightly `netem` job runs `bench/soak/self-check-netem.yaml` on a
+  GitHub-hosted runner, and its first run passed
+  ([job 118454690131](https://github.com/krabka-io/krabka-broker/actions/runs/39369741872/job/118454690131)).
+  The 72-hour run is the first to repeat the fault under sustained load.
   [#1551](https://github.com/krabka-io/krabka-broker/issues/1551).
 - **Diskless under sustained load** has one local self-check and no CI or
   72-hour run. [#1393](https://github.com/krabka-io/krabka-broker/issues/1393).
