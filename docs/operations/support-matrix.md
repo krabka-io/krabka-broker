@@ -224,7 +224,10 @@ its source. An item stays here until a linked change removes it.
 
 - **netem slow followers are untested.** The fault exists in the soak contract
   with a digest-pinned image. No run has used it, because the sandbox kernel had
-  no `sch_netem`. [#1436](https://github.com/krabka-io/krabka-broker/pull/1436).
+  no `sch_netem`. The nightly `netem` job runs
+  `bench/soak/self-check-netem.yaml`, the self-check with that fault, on a
+  GitHub-hosted runner, and the 72-hour run uses it too.
+  [#1551](https://github.com/krabka-io/krabka-broker/issues/1551).
 - **Diskless under sustained load** has one local self-check and no CI or
   72-hour run. [#1393](https://github.com/krabka-io/krabka-broker/issues/1393).
 - **read_committed across local eviction on a live cluster, and RF3
@@ -248,7 +251,7 @@ no run. This section stays empty until #1399 publishes consented results.
 2. One nightly in which every container group executes on the candidate. At
    `948e3cc8`, three groups did not.
 3. The 72-hour RF3 soak, including the diskless and netem faults
-   ([#1393](https://github.com/krabka-io/krabka-broker/issues/1393)), and a
+   ([#1551](https://github.com/krabka-io/krabka-broker/issues/1551)), and a
    pass of the four-hour soak on the candidate. Since the
    [#1507](https://github.com/krabka-io/krabka-broker/issues/1507) fix, it has
    passed at `2cf5551f`.
