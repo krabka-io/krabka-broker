@@ -69,15 +69,9 @@ pub(super) fn validate_partition_gate(
             current_leader: Some(leader),
         });
     };
-    // A witness replicates the partition and counts toward
-    // `min.insync.replicas`, but it serves no client traffic, so it accepts no
-    // Produce. The guard is explicit because the leader check below reads
-    // `record.leader != this_node_id && !partition.diskless`: a diskless
-    // partition skips the leader check outright, so without this guard a
-    // diskless Produce could land on a witness. NOT_LEADER_OR_FOLLOWER is the
-    // code that makes a Kafka client refresh its metadata and produce
-    // somewhere else.
-    if is_witness || (record.leader != this_node_id && !partition.diskless) {
+    // Diskless writes also need the metadata-selected WAL leader. A demoted
+    // broker cannot form that quorum and must redirect before reserving offsets.
+    if is_witness || record.leader != this_node_id {
         return Err(PartitionGateError {
             code: codes::NOT_LEADER_OR_FOLLOWER,
             current_leader: Some(leader),
@@ -622,7 +616,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn witness_refuses_every_produce_including_a_diskless_partition() {
+    async fn produce_requires_a_non_witness_leader_for_every_storage_mode() {
         // Node 1 leads `orders` at epoch 0 and node 2 follows. A refused row
         // carries the real leader, so a Kafka client re-targets without a full
         // Metadata round-trip.
@@ -643,9 +637,6 @@ mod tests {
                 false,
                 refused.clone(),
             ),
-            // The leader check reads `leader != this_node && !diskless`, so a
-            // diskless partition skips it. The witness guard is the only thing
-            // that refuses these two rows.
             (
                 "witness leads a diskless partition",
                 1,
@@ -668,11 +659,18 @@ mod tests {
                 None,
             ),
             (
+                "plain broker leads a diskless partition",
+                1,
+                false,
+                true,
+                None,
+            ),
+            (
                 "plain broker follows a diskless partition",
                 2,
                 false,
                 true,
-                None,
+                refused.clone(),
             ),
             (
                 "plain broker follows a classic partition",

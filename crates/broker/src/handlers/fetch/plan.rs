@@ -957,6 +957,7 @@ pub(super) async fn build_pending_reads(
 #[cfg(test)]
 mod tests {
     use {
+        super::{FollowerPosition, record_follower_position},
         crate::{
             broker::{Broker, BrokerHandle, spawn_partition},
             codes::{NONE, NOT_LEADER_OR_FOLLOWER, OFFSET_OUT_OF_RANGE},
@@ -977,7 +978,7 @@ mod tests {
         },
         assert2::assert,
         krabka_ids::PartitionIndex,
-        krabka_log::{Log, LogConfig},
+        krabka_log::{Log, LogConfig, Offset},
         std::sync::Arc,
     };
 
@@ -1706,7 +1707,7 @@ mod tests {
         expected_watermark: i64,
         expected_advance: bool,
     ) {
-        use krabka_raft::NodeId;
+        use {assert2::assert, krabka_raft::NodeId};
 
         let dir = tempfile::tempdir().unwrap();
         let partition = epoch_checks_partition_with_storage(dir.path(), storage);
@@ -1719,8 +1720,8 @@ mod tests {
             .replica_state
             .lock()
             .await
-            .recompute_hw_for_wal_durable(super::Offset(durable));
-        let position = super::FollowerPosition {
+            .recompute_hw_for_wal_durable(Offset(durable));
+        let position = FollowerPosition {
             follower_id: 2,
             broker_epoch: 7,
             log_start_offset: 0,
@@ -1731,20 +1732,16 @@ mod tests {
         tokio::pin!(changed);
         changed.as_mut().enable();
 
-        let advanced = super::record_follower_position(
-            &partition,
-            position,
-            read_log_end,
-            super::Offset(read_log_end),
-        )
-        .await;
+        let advanced =
+            record_follower_position(&partition, position, read_log_end, Offset(read_log_end))
+                .await;
 
         assert!(advanced == expected_advance);
-        assert!(partition.high_watermark().await == super::Offset(expected_watermark));
+        assert!(partition.high_watermark().await == Offset(expected_watermark));
         assert!(futures_util::poll!(changed.as_mut()).is_ready() == expected_advance);
         let state = partition.replica_state.lock().await;
         let (log_end, caught_up) = state.follower_progress(NodeId(2));
-        assert!(log_end == super::Offset(read_log_end));
+        assert!(log_end == Offset(read_log_end));
         assert!(caught_up.is_some());
     }
 
