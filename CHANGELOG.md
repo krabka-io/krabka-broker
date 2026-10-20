@@ -92,10 +92,12 @@ candidate before promotion.
   broker by reassignment, and rolls back to v1.0.5, all under the soak load.
   After each transition the executor reconciles the acknowledged records, the
   committed offsets and the configuration, and records which image each
-  broker runs and whether a rollback is still supported. The gate also proves
-  that v1.0.5 refuses a log finalized at a newer `metadata.version` before it
-  changes it. `docs/qualification.md` states the contract, and the
-  `loaded lifecycle` job of the qualification workflow runs it.
+  broker runs and whether a rollback is still supported. The gate requires
+  the previous release to refuse an unsupported `metadata.version` without
+  changing protected metadata. Qualification exposed a startup race in
+  v1.0.5 that violates this requirement; do not roll it back onto a log whose
+  feature levels it cannot serve. `docs/qualification.md` states the contract,
+  and the `loaded lifecycle` job of the qualification workflow runs it.
 - `qualify.sh budget` compares a candidate build with an earlier revision or
   with pinned Kafka 4.3.1 over a predeclared RF=3 workload matrix, in
   interleaved rounds. `krabka-parse-benches` assembles every raw trial into a
@@ -134,6 +136,10 @@ candidate before promotion.
   removing the unmaintained `basic-toml` dependency.
 
 ### Fixed
+
+- A controller validates recovered feature levels before repairing downgrade
+  checkpoints or starting its engine. Previously, an unsupported log could
+  be changed by recovery or an election before startup refused it.
 
 - A newly opened partition installs its topic and dynamic broker log settings
   before it can accept requests. Previously, a write just after topic creation

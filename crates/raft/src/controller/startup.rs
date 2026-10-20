@@ -173,19 +173,15 @@ impl Controller {
                 default_min_insync_replicas: config.default_min_insync_replicas,
             },
             Arc::clone(&config.event_queue_recorder),
+            |image| {
+                if let Some(refusal) =
+                    unsupported_feature_level(image, config.unstable_feature_versions)
+                {
+                    return Err(RaftError::FatalFault(refusal));
+                }
+                Ok(())
+            },
         )?;
-
-        // Kafka's `FeatureControlManager.replay(FeatureLevelRecord)` throws
-        // when a record's level is outside what this controller supports, so
-        // a log finalized at an unstable level does not start under a node that
-        // cannot serve it. The engine has replayed the log and the checkpoint
-        // by now, and `open` has published the image that replay left.
-        if let Some(refusal) =
-            unsupported_feature_level(&engine.current_image(), config.unstable_feature_versions)
-        {
-            engine.halt().await;
-            return Err(RaftError::FatalFault(refusal));
-        }
 
         let shutdown = CancellationToken::new();
         let leader_rx = engine.watch_leader();

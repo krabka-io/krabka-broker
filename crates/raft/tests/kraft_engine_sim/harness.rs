@@ -233,6 +233,7 @@ pub(crate) fn reopen_controller(
         metadata_log(),
         krabka_raft::kraft::Activation::default(),
         Arc::new(krabka_raft::NoEventQueueRecorder),
+        |_| Ok(()),
     )
     .expect("reopen")
 }

@@ -101,6 +101,7 @@ pub(super) fn test_engine_with_voters(
         },
         Activation::default(),
         std::sync::Arc::new(NoEventQueueRecorder),
+        |_| Ok(()),
     )
     .expect("open engine");
     (ctrl, dir)
