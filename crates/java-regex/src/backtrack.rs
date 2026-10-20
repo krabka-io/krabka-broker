@@ -53,7 +53,9 @@
 //!
 //! The machine keeps its alternatives on a stack of its own, so a long input
 //! cannot overflow the stack of the thread, and it gives up after as many
-//! backtracking steps as `fancy_regex` takes by default. A look-around, an
+//! steps as `fancy_regex` takes backtracking steps by default: each backtrack
+//! and each iteration of a repeat is one, so a repeat of something that
+//! matches nothing cannot run a billion times. A look-around, an
 //! atomic group and an iteration of a `GroupCurly` run on the same stack,
 //! above the frames of the block they are in, so none of them allocates. A
 //! look-behind tries only the starts that its body can match from, as the
@@ -904,6 +906,10 @@ impl<'a> Machine<'a> {
                     exit,
                     group_curly,
                 } => {
+                    // An iteration is a step too, so that a repeat of something that
+                    // matches nothing, such as `(){1000000000}`, stops at the limit
+                    // and does not grow the stack by a billion frames.
+                    self.spend()?;
                     let done = slots[count].unwrap_or(0) + 1;
                     set(&mut self.stack, slots, count, Some(done));
                     let empty = slots[start] == Some(pos);

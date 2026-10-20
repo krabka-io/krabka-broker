@@ -40,10 +40,12 @@
 //! # Limits
 //!
 //! A search takes at most 1,000,000 backtracking steps, `fancy_regex`'s
-//! default, and the backtracking matcher keeps its alternatives on a stack of
-//! its own, so a long input cannot overflow the thread's. A search past the
-//! limit is a [`MatchError`], not a no match. Java answers such a search,
-//! however slowly.
+//! default; on the backtracking matcher each iteration of a repeat is a step
+//! too, so `(){1000000000}` is an error and not a billion iterations. The
+//! backtracking matcher keeps its alternatives on a stack of its own, so a
+//! long input cannot overflow the thread's. A search past the limit is a
+//! [`MatchError`], not a no match. Java answers such a search, however
+//! slowly.
 //!
 //! The matcher answers a pattern `fancy_regex` cannot compile, where it
 //! knows every node of it: a look-behind that is not of one length with
@@ -2765,6 +2767,19 @@ mod tests {
             replace_row("(?<n>x){1,1000000000}", "xxx", "[${n}]", "[x]"),
         ];
         check_replacements(cases, true, true);
+    }
+
+    /// A very large repeat of something that matches nothing ends in a
+    /// [`MatchError`] at the step limit, and does not run a billion
+    /// iterations and fill memory with their frames. Java answers `true` for
+    /// each, after a billion iterations.
+    #[yare::parameterized(
+        empty_group = { "(){1000000000}" },
+        in_an_alternation = { "(?:x{1,1000000000}|(){1000000000})" },
+        empty_group_alone = { "(?:(){1000000000})+" },
+    )]
+    fn a_large_repeat_of_nothing_stops_at_the_step_limit(source: &str) {
+        check!(pattern(source).matches("").is_err(), "{source:?}");
     }
 
     /// A long input against a very large counted repeat ends in Java's
