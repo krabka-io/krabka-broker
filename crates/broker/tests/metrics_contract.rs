@@ -25,10 +25,10 @@ use {
         ApiKeyLabel, AuthorizationDeniedLabel, BarrierGroupLabel, BreakGlassAction,
         BreakGlassActionLabel, BreakGlassState, BreakGlassStateLabel, BrokerMetrics,
         CleanerFailureLabel, CleanerFailureReason, ClientSoftwareLabel, ConnectionCloseReason,
-        ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel, PartitionLabel,
-        QuotaEntityLabel, QuotaType, QuotaTypeLabel, RaftStateLabel, ReplicaLagLabel,
-        SaslMechanismLabel, SchemaRejectionLabel, ShareGroupIdLabel, ShareGroupLabel, TopicLabel,
-        WalShardLabel, WalVoterLabel,
+        ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel, MetadataPartitionLabel,
+        PartitionLabel, QuotaEntityLabel, QuotaType, QuotaTypeLabel, RaftStateLabel,
+        ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel, ShareGroupIdLabel,
+        ShareGroupLabel, TopicLabel, WalShardLabel, WalVoterLabel,
     },
     krabka_metadata::BreakGlassAction as GatedAction,
     prometheus_client::metrics::family::Family,
@@ -239,6 +239,9 @@ fn every_family_is_accounted_for(metrics: &BrokerMetrics) {
         request_errors: _,
         tiered_storage_rlmm_topic_backed: _,
         tiered_storage_rlmm_bootstrap_attempts: _,
+        tiered_storage_rlmm_partition_ready: _,
+        tiered_storage_rlmm_partition_target_offset: _,
+        tiered_storage_rlmm_partition_applied_offset: _,
         worm_manifests_sealed_total: _,
         worm_manifest_seal_failures_total: _,
         produce_message_conversions: _,
@@ -455,6 +458,16 @@ fn seed_single_families(metrics: &BrokerMetrics) {
             &metrics.share_group_dlq_records,
             &metrics.share_group_dlq_produce_requests,
             &metrics.share_group_dlq_failed_produce_requests,
+        ],
+    );
+    seed(
+        &MetadataPartitionLabel {
+            metadata_partition: 0,
+        },
+        &[
+            &metrics.tiered_storage_rlmm_partition_ready,
+            &metrics.tiered_storage_rlmm_partition_target_offset,
+            &metrics.tiered_storage_rlmm_partition_applied_offset,
         ],
     );
     drop(metrics.voted_directory.get_or_create(&DirectoryLabel {

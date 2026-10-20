@@ -284,6 +284,15 @@ krabka_broker_tiered_storage_rlmm_topic_backed 0
 # HELP krabka_broker_tiered_storage_rlmm_bootstrap_attempts Number of topic-backed RLMM bootstrap attempts; climbs while stuck retrying, flat once tiered_storage_rlmm_topic_backed flips to 1..
 # TYPE krabka_broker_tiered_storage_rlmm_bootstrap_attempts counter
 krabka_broker_tiered_storage_rlmm_bootstrap_attempts_total 0
+# HELP krabka_broker_tiered_storage_rlmm_partition_ready KIP-405: 1 when this broker answers remote-log metadata reads for the assigned __remote_log_metadata partition metadata_partition, 0 while they return the retriable NotReady because its consumer has not reached the assignment-time high-water mark. Sampled after every RLMM reconcile; the series exists only while the partition is assigned..
+# TYPE krabka_broker_tiered_storage_rlmm_partition_ready gauge
+krabka_broker_tiered_storage_rlmm_partition_ready{metadata_partition="0"} 0
+# HELP krabka_broker_tiered_storage_rlmm_partition_target_offset KIP-405: assignment-time high-water mark of the assigned __remote_log_metadata partition metadata_partition, which its consumer must reach before reads are answered; -1 while the high-water-mark fetch has failed and a later reconcile has not refreshed it. Sampled after every RLMM reconcile..
+# TYPE krabka_broker_tiered_storage_rlmm_partition_target_offset gauge
+krabka_broker_tiered_storage_rlmm_partition_target_offset{metadata_partition="0"} 0
+# HELP krabka_broker_tiered_storage_rlmm_partition_applied_offset KIP-405: offset of the last event this broker applied from the assigned __remote_log_metadata partition metadata_partition, -1 when none. Ready once it reaches tiered_storage_rlmm_partition_target_offset - 1. Sampled after every RLMM reconcile..
+# TYPE krabka_broker_tiered_storage_rlmm_partition_applied_offset gauge
+krabka_broker_tiered_storage_rlmm_partition_applied_offset{metadata_partition="0"} 0
 # HELP krabka_broker_produce_message_conversions Cumulative count of v0/v1 → v2 record-batch up-conversions on the Produce path, per topic. Mirrors Kafka's BrokerTopicMetrics.ProduceMessageConversionsPerSec; rate(...) lets operators spot the overhead of legacy producers in the cluster..
 # TYPE krabka_broker_produce_message_conversions counter
 krabka_broker_produce_message_conversions_total{topic="orders"} 0
