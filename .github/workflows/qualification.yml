@@ -22,13 +22,19 @@ concurrency:
 
 jobs:
   candidate:
-    if: github.ref == 'refs/heads/main' || (!inputs.execute && github.ref == 'refs/heads/release/cloud-profile-preflight')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
       revision: ${{ steps.freeze.outputs.revision }}
       image: ${{ steps.freeze.outputs.image }}
+      artifact: ${{ steps.freeze.outputs.artifact }}
+      prefix: ${{ steps.freeze.outputs.prefix }}
     steps:
+      - name: Require the reviewed workflow on main
+        run: |
+          test "$GITHUB_REF" = refs/heads/main || {
+            test '${{ inputs.execute }}' = false && test "$GITHUB_REF" = refs/heads/release/cloud-profile-preflight
+          }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
@@ -56,12 +62,15 @@ jobs:
             --manifest "$MANIFEST" --output "$RUNNER_TEMP/profile-input/frozen-candidate.json"
           jq -e '.manifest_drift == [] and (.siblings | length) == 3' "$RUNNER_TEMP/profile-input/frozen-candidate.json"
           cp "$MANIFEST" "$RUNNER_TEMP/profile-input/input-manifest.json"
+          git show "$revision:bench/soak/rf3-72h.yaml" > "$RUNNER_TEMP/profile-input/declared-contract.yaml"
           printf '%s\n' "$ci_run" > "$RUNNER_TEMP/profile-input/main-ci-run.txt"
           echo "revision=$revision" >> "$GITHUB_OUTPUT"
           echo "image=ghcr.io/krabka-io/krabka-broker@$digest" >> "$GITHUB_OUTPUT"
+          echo "artifact=qualification-profile-input-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          echo "prefix=gs://robot-head-krabka-broker-qualification/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: qualification-profile-input
+          name: ${{ steps.freeze.outputs.artifact }}
           path: ${{ runner.temp }}/profile-input/
           retention-days: 90
 
@@ -77,7 +86,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          name: qualification-profile-input
+          name: ${{ needs.candidate.outputs.artifact }}
           path: ${{ runner.temp }}/profile-input
       - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87
         with:
@@ -103,7 +112,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: qualification-performance
+          name: qualification-performance-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/performance/
             ${{ runner.temp }}/profile-input/
@@ -118,7 +127,8 @@ jobs:
     timeout-minutes: 5760
     env:
       BROKER_IMAGE: ${{ needs.candidate.outputs.image }}
-      EVIDENCE_TAG: qualification-soak-${{ github.run_id }}-${{ github.run_attempt }}
+      CLOUD_PREFIX: ${{ needs.candidate.outputs.prefix }}
+      CLOUDSDK_STORAGE_PARALLEL_COMPOSITE_UPLOAD_ENABLED: 'false'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -126,7 +136,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          name: qualification-profile-input
+          name: ${{ needs.candidate.outputs.artifact }}
           path: ${{ runner.temp }}/profile-input
       - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87
         with:
@@ -157,30 +167,14 @@ jobs:
           assert info['KernelVersion'] == host['kernel'] and info['CgroupVersion'] == '2' and info['NCPU'] >= 16, info
           pathlib.Path(os.environ['RUNNER_TEMP'], 'soak-evidence', 'host-preflight.json').write_text(json.dumps(host, indent=2) + '\n')
           PY
-      - name: Verify publication credentials before starting the long run
-        id: publication
-        env:
-          # GITHUB_TOKEN expires after 24 hours. This existing maintainer token
-          # is loaded only for evidence publication, before and after the run.
-          GH_TOKEN: ${{ secrets.SIBLING_SYNC_TOKEN }}
+      - name: Verify private evidence storage before starting the long run
+        id: storage
         run: |
           set -euo pipefail
-          test -n "$GH_TOKEN"
-          python3 - <<'PYTOKEN'
-          import datetime, json, os, pathlib, urllib.request
-          request = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'], headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'})
-          with urllib.request.urlopen(request, timeout=30) as response:
-              expiration = response.headers.get('GitHub-Authentication-Token-Expiration')
-          if expiration:
-              expires = datetime.datetime.fromisoformat(expiration.replace(' UTC', '+00:00').replace('Z', '+00:00'))
-              assert expires >= datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=96), 'publication credential expires before the long-job deadline'
-          pathlib.Path(os.environ['RUNNER_TEMP'], 'soak-evidence', 'publication-credential.json').write_text(json.dumps({'expiration': expiration or 'not advertised by GitHub'}) + '\n')
-          PYTOKEN
-          gh release create "$EVIDENCE_TAG" --draft --prerelease \
-            --target "${{ needs.candidate.outputs.revision }}" \
-            --title "72-hour qualification evidence: $GITHUB_RUN_ID" \
-            --notes "Input and host preflight for $BROKER_IMAGE. No passing qualification is claimed until the workload and judge complete."
-          gh release upload "$EVIDENCE_TAG" "$RUNNER_TEMP/soak-evidence/"*.json "$RUNNER_TEMP/soak-evidence/declared-contract.yaml"
+          gcloud storage cp --if-generation-match=0 "$RUNNER_TEMP/soak-evidence/"*.json \
+            "$RUNNER_TEMP/soak-evidence/declared-contract.yaml" "$CLOUD_PREFIX/inputs/"
+          gcloud storage cp "$CLOUD_PREFIX/inputs/host-preflight.json" "$RUNNER_TEMP/host-roundtrip.json"
+          cmp "$RUNNER_TEMP/soak-evidence/host-preflight.json" "$RUNNER_TEMP/host-roundtrip.json"
       - name: Build the frozen executor and judge
         if: ${{ inputs.execute }}
         run: |
@@ -199,29 +193,94 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/soak-evidence/executor.log"
       - name: Judge the complete read-back evidence
         id: judge
-        if: ${{ always() && inputs.execute && steps.publication.outcome == 'success' }}
+        if: ${{ always() && inputs.execute && steps.storage.outcome == 'success' }}
         run: |
           set -euo pipefail
           executable=$(bazel cquery -c opt --bes_backend= //crates/bench-driver:krabka-soak-check --output=files)
           "$executable" judge --contract bench/soak/rf3-72h.yaml \
             --evidence "$RUNNER_TEMP/soak-evidence/evidence.json" --out "$RUNNER_TEMP/soak-evidence/verdict.json"
-      - name: Retain the outcome with credentials that survive a 72-hour job
-        if: ${{ always() && steps.publication.outcome == 'success' }}
+      - name: Retain the outcome with the worker's renewable cloud identity
+        if: ${{ always() && steps.storage.outcome == 'success' }}
         env:
-          GH_TOKEN: ${{ secrets.SIBLING_SYNC_TOKEN }}
-          PREFLIGHT: ${{ !inputs.execute }}
+          EXECUTE: ${{ inputs.execute }}
           EXECUTION: ${{ steps.execute.outcome }}
           JUDGEMENT: ${{ steps.judge.outcome }}
         run: |
           set -euo pipefail
+          jq -n --arg execute "$EXECUTE" --arg execution "$EXECUTION" --arg judge "$JUDGEMENT" \
+            --arg image "$BROKER_IMAGE" --arg revision "$(git rev-parse HEAD)" \
+            '{execute: ($execute == "true"), execution: $execution, judge: $judge, image: $image, revision: $revision}' \
+            > "$RUNNER_TEMP/publication/outcome.json"
           tar -C "$RUNNER_TEMP/soak-evidence" -czf - . | \
             split -b 1024M -d -a 3 - "$RUNNER_TEMP/publication/soak-evidence.tar.gz.part-"
-          (cd "$RUNNER_TEMP/publication" && sha256sum soak-evidence.tar.gz.part-* > SHA256SUMS)
-          gh release upload "$EVIDENCE_TAG" "$RUNNER_TEMP/publication/"*
-          if test "$PREFLIGHT" = false; then
+          (cd "$RUNNER_TEMP/publication" && sha256sum soak-evidence.tar.gz.part-* outcome.json > SHA256SUMS)
+          gcloud storage cp --if-generation-match=0 "$RUNNER_TEMP/publication/"*.part-* \
+            "$RUNNER_TEMP/publication/outcome.json" "$CLOUD_PREFIX/evidence/"
+          # The checksum index is the completion marker and is written last.
+          gcloud storage cp --if-generation-match=0 "$RUNNER_TEMP/publication/SHA256SUMS" "$CLOUD_PREFIX/evidence/SHA256SUMS"
+
+  publish:
+    needs: [candidate, soak]
+    if: ${{ always() && !cancelled() && needs.candidate.result == 'success' }}
+    runs-on: gcp-ubuntu-24-04
+    timeout-minutes: 360
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CLOUD_PREFIX: ${{ needs.candidate.outputs.prefix }}
+      BROKER_IMAGE: ${{ needs.candidate.outputs.image }}
+      BROKER_REVISION: ${{ needs.candidate.outputs.revision }}
+      EVIDENCE_TAG: qualification-soak-${{ github.run_id }}-${{ github.run_attempt }}
+      EXECUTE: ${{ inputs.execute }}
+      WORKER_RESULT: ${{ needs.soak.result }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: ${{ needs.candidate.outputs.artifact }}
+          path: ${{ runner.temp }}/profile-input
+      - name: Verify stored evidence and publish it with a fresh job token
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/stored-inputs" "$RUNNER_TEMP/publication"
+          gh release create "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" --draft --prerelease \
+            --target "$BROKER_REVISION" --title "Cloud qualification evidence: $GITHUB_RUN_ID" \
+            --notes "Source: $BROKER_REVISION. Image: $BROKER_IMAGE. Worker: $WORKER_RESULT."
+          gh release upload "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" "$RUNNER_TEMP/profile-input/"*.json \
+            "$RUNNER_TEMP/profile-input/declared-contract.yaml" "$RUNNER_TEMP/profile-input/main-ci-run.txt"
+          stored_inputs=false
+          if gcloud storage cp "$CLOUD_PREFIX/inputs/*" "$RUNNER_TEMP/stored-inputs/"; then
+            cmp "$RUNNER_TEMP/profile-input/frozen-candidate.json" "$RUNNER_TEMP/stored-inputs/frozen-candidate.json"
+            cmp "$RUNNER_TEMP/profile-input/declared-contract.yaml" "$RUNNER_TEMP/stored-inputs/declared-contract.yaml"
+            gh release upload "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" \
+              "$RUNNER_TEMP/stored-inputs/host-preflight.json" "$RUNNER_TEMP/stored-inputs/broker-image.json"
+            stored_inputs=true
+          fi
+          complete=false
+          if gcloud storage cp "$CLOUD_PREFIX/evidence/SHA256SUMS" "$RUNNER_TEMP/publication/SHA256SUMS"; then
+            while read -r digest name; do
+              [[ "$digest" =~ ^[0-9a-f]{64}$ && "$name" =~ ^[A-Za-z0-9._-]+$ ]]
+              gcloud storage cp "$CLOUD_PREFIX/evidence/$name" "$RUNNER_TEMP/publication/$name"
+              (cd "$RUNNER_TEMP/publication" && echo "$digest  $name" | sha256sum --check --status)
+              gh release upload "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" "$RUNNER_TEMP/publication/$name"
+              if test "$name" != outcome.json; then rm "$RUNNER_TEMP/publication/$name"; fi
+            done < "$RUNNER_TEMP/publication/SHA256SUMS"
+            gh release upload "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" "$RUNNER_TEMP/publication/SHA256SUMS"
+            jq -e --arg revision "$BROKER_REVISION" --arg image "$BROKER_IMAGE" \
+              '.revision == $revision and .image == $image' "$RUNNER_TEMP/publication/outcome.json"
+            complete=true
+          fi
+          if test "$WORKER_RESULT" = success; then
+            test "$stored_inputs" = true && test "$complete" = true
+          fi
+          if test "$EXECUTE" = true; then
             outcome=failed
-            if test "$EXECUTION" = success && test "$JUDGEMENT" = success; then outcome=passed; fi
-            gh release edit "$EVIDENCE_TAG" --draft=false --prerelease --latest=false \
+            if test "$WORKER_RESULT" = success && test "$complete" = true && \
+              jq -e '.execute and .execution == "success" and .judge == "success"' "$RUNNER_TEMP/publication/outcome.json"; then
+              outcome=passed
+            fi
+            gh release edit "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false \
               --title "72-hour qualification $outcome: $GITHUB_RUN_ID" \
-              --notes "Workload: $EXECUTION. Judge: $JUDGEMENT. Image: $BROKER_IMAGE. Reassemble the SHA256SUMS-verified archive parts to inspect the complete evidence."
+              --notes "Worker: $WORKER_RESULT. Image: $BROKER_IMAGE. Reassemble the SHA256SUMS-verified archive parts to inspect the complete evidence."
           fi
