@@ -91,41 +91,36 @@ impl Partition {
         ))
     }
 
-    /// Push `overrides` through the writer actor so the partition's `Log`
-    /// picks up the new `retention.ms`, `retention.bytes`, and
-    /// `segment.bytes` on the next retention or roll tick. The caller has
-    /// already validated `overrides`; see `config_keys`. The call is
-    /// idempotent, so the same map pushed twice is a cheap noop.
-    /// `ReplicatorSupervisor::reconcile` calls this every time the metadata
-    /// image changes.
+    /// Atomically install validated topic overrides off the async poller, then
+    /// wake an idle writer so it recalculates its flush deadline. A writer
+    /// waiting for WAL quorum must not block metadata reconciliation.
     ///
     /// # Errors
-    ///
-    /// Returns `BrokerError::Replication` if a changed policy cannot reach
-    /// the writer or its acknowledgement is dropped.
+    /// Returns an error if the blocking task cannot complete.
     pub(crate) async fn apply_log_config_overrides(
         &self,
         overrides: &std::collections::BTreeMap<String, String>,
         base: &krabka_log::LogConfig,
     ) -> Result<(), BrokerError> {
         let merged = apply_to_log_config(overrides, base);
-        // Reconcile calls these serially. An unchanged policy must not wait behind
-        // a diskless writer's WAL quorum wait and block metadata propagation.
-        if self
-            .log
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .config_snapshot()
-            == merged
-        {
-            return Ok(());
-        }
-        self.ask_writer(|ack| WriterMessage::SetLogConfig {
-            config: merged,
-            ack,
+        let log = self.log.clone();
+        let writer = self.writer_tx.clone();
+        run_blocking(move || {
+            let log = log
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if log.config_snapshot() == merged {
+                return;
+            }
+            log.set_config(merged);
+            drop(log);
+            // A full queue already wakes the writer; a stopped writer has no timer.
+            let _ = writer.try_send(WriterMessage::ConfigChanged);
         })
-        .await?;
-        Ok(())
+        .await
+        .map_err(|error| {
+            BrokerError::Replication(format!("log configuration task failed: {error}"))
+        })
     }
 
     /// Append a leader-assigned batch to the local log and keep its
@@ -397,37 +392,70 @@ impl Partition {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::partition::test_support::test_partition_with_writer, assert2::assert};
+    use {
+        super::*,
+        crate::partition::test_support::{test_partition, test_partition_with_writer},
+        assert2::assert,
+    };
 
     #[tokio::test]
-    async fn unchanged_config_does_not_wait_behind_a_blocked_writer() {
-        let (mut partition, _dir) = test_partition_with_writer();
+    async fn config_changes_do_not_wait_behind_a_stalled_writer() {
+        let (mut part, _dir) = test_partition_with_writer();
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        partition.writer_tx = tx;
-        let base = partition.log.lock().unwrap().config_snapshot();
-        let unchanged = std::collections::BTreeMap::new();
-        let same = partition.apply_log_config_overrides(&unchanged, &base);
-        tokio::pin!(same);
-        assert!(matches!(
-            futures_util::poll!(same.as_mut()),
-            std::task::Poll::Ready(Ok(()))
-        ));
-        assert!(
-            rx.try_recv().is_err(),
-            "no command may queue behind the WAL wait"
-        );
+        part.writer_tx = tx;
+        let base = part.log.lock().unwrap().config_snapshot();
+        part.apply_log_config_overrides(&std::collections::BTreeMap::new(), &base)
+            .await
+            .unwrap();
+        assert!(rx.try_recv().is_err());
 
-        // A real change still crosses the writer barrier and waits for its ack.
-        let changed = std::collections::BTreeMap::from([("retention.ms".into(), "120000".into())]);
-        let update = partition.apply_log_config_overrides(&changed, &base);
+        // The first notification fills the paused writer's queue. A newer
+        // config must still apply, and no queued config may roll it back.
+        for size in [1, 2] {
+            let bytes = 1_048_576 * size;
+            let overrides = [("segment.bytes".to_owned(), bytes.to_string())].into();
+            part.apply_log_config_overrides(&overrides, &base)
+                .await
+                .unwrap();
+            assert!(
+                part.log.lock().unwrap().config_snapshot()
+                    == krabka_log::LogConfig {
+                        segment_size: krabka_units::mebibytes(size),
+                        ..base.clone()
+                    }
+            );
+        }
+        assert!(matches!(rx.try_recv(), Ok(WriterMessage::ConfigChanged)));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn a_contended_config_swap_does_not_block_the_current_thread_runtime() {
+        let (part, _dir) = test_partition(std::sync::Arc::new(tokio::sync::Notify::new()));
+        let base = part.log.lock().unwrap().config_snapshot();
+        let log = part.log.clone();
+        let (locked, lock_held) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _guard = log.lock().unwrap();
+            locked.send(()).unwrap();
+            released
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .is_ok()
+        });
+        lock_held.await.unwrap();
+        let overrides = [("segment.bytes".into(), "1048576".into())].into();
+        let update = part.apply_log_config_overrides(&overrides, &base);
         tokio::pin!(update);
         assert!(futures_util::poll!(update.as_mut()).is_pending());
-        let Ok(WriterMessage::SetLogConfig { config, ack }) = rx.try_recv() else {
-            panic!("changed policy must reach the writer");
-        };
-        assert!(config.retention == Some(krabka_units::minutes(2)));
-        ack.send(()).unwrap();
-        update.await.expect("writer acknowledged the update");
+        // This task must run while the blocking pool waits for the log lock.
+        assert!(tokio::spawn(async { 7 }).await.unwrap() == 7);
+        release.send(()).unwrap();
+        update.await.unwrap();
+        assert!(holder.join().unwrap());
+        assert!(
+            part.log.lock().unwrap().config_snapshot().segment_size == krabka_units::mebibytes(1)
+        );
     }
 
     #[tokio::test]

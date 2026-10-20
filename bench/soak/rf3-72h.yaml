@@ -30,6 +30,9 @@ cluster:
   # node with this value, so the pause plans are checked against the timeout
   # the cluster runs with, not the broker's 2 s default.
   check_quorum_window: 5s
+  # A new controller grants a fresh broker session. Both windows and the
+  # default 1s liveness sweep must fit inside a 12s pause and the 15s deadline.
+  broker_session_timeout: 5s
   replica_lag_time_max: 30s
 
 clients:

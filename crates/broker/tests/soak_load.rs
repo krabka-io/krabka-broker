@@ -22,7 +22,7 @@ use {
     krabka_bench_driver::soak::{
         client::{
             Endpoint,
-            load::{LoadContext, producer_name, record_value, start},
+            load::{LoadContext, prepare, producer_name, record_value, start},
             readback::{commit_checks, read_back, round_trip, wait_stable},
             windows::Windows,
         },
@@ -59,6 +59,7 @@ async fn an_undisturbed_load_reads_back_once_and_hides_what_it_aborted() {
     }
     let endpoint = Endpoint::plaintext(bootstrap);
 
+    let prepared = prepare(&contract, &endpoint).await.unwrap();
     let ctx = Arc::new(
         LoadContext::builder()
             .contract(contract.clone())
@@ -66,7 +67,7 @@ async fn an_undisturbed_load_reads_back_once_and_hides_what_it_aborted() {
             .windows(Arc::new(Windows::new(Vec::new())))
             .build(),
     );
-    let running = start(&ctx);
+    let running = start(&ctx, prepared);
     let trackers = running.trackers.clone();
     tokio::time::sleep(LOAD).await;
     ctx.stop();

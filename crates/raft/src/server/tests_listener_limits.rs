@@ -8,7 +8,10 @@ use {
         ConnectionContext, Unstable, handle_conn, run, test_support::single_voter_engine,
         upgrade_within_idle_window,
     },
-    crate::{AllowAllGrants, ListenerLimits, RaftError, kraft::KraftController},
+    crate::{
+        AllowAllGrants, ControllerApiVersions, HandshakeStream, ListenerLimits, RaftConnection,
+        RaftError, RaftHandshakeError, RaftListenerHandshake, kraft::KraftController,
+    },
     assert2::check,
     std::{sync::Arc, time::Duration},
     tokio::{
@@ -21,6 +24,57 @@ use {
 mod handler_idle;
 mod handshake_idle;
 mod session_expiry;
+
+#[tokio::test]
+async fn accepted_controller_sockets_disable_nagle_before_the_handshake() {
+    struct CheckSocket;
+
+    #[async_trait::async_trait]
+    impl RaftListenerHandshake for CheckSocket {
+        async fn upgrade(
+            &self,
+            stream: HandshakeStream,
+            _: &dyn ControllerApiVersions,
+        ) -> Result<RaftConnection, RaftHandshakeError> {
+            assert2::assert!(stream.get_ref().nodelay().unwrap());
+            Ok(RaftConnection {
+                stream: Box::new(stream),
+                principal: None,
+                authenticated_via_token: false,
+                expires_at_ms: None,
+                grants: Arc::new(AllowAllGrants),
+            })
+        }
+    }
+
+    let (engine, _dir) = single_voter_engine();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let shutdown = CancellationToken::new();
+    let listener_task = tokio::spawn(run(
+        listener,
+        engine,
+        shutdown.clone(),
+        Some(Arc::new(CheckSocket)),
+        None,
+        None,
+        (Unstable::default(), ListenerLimits::default()),
+    ));
+    let mut client = TcpStream::connect(addr).await.unwrap();
+    for correlation_id in [1, 2] {
+        client
+            .write_all(&api_versions_request(correlation_id))
+            .await
+            .unwrap();
+        let reply = tokio::time::timeout(Duration::from_secs(5), read_correlation_id(&mut client))
+            .await
+            .expect("the accepted socket serves a complete response");
+        check!(reply == correlation_id);
+    }
+
+    shutdown.cancel();
+    listener_task.await.unwrap();
+}
 
 /// An `ApiVersions` v0 request frame: a v1 header, `client_id` "c", no body.
 fn api_versions_request(correlation_id: i32) -> Vec<u8> {

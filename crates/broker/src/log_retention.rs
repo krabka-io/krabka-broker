@@ -50,9 +50,8 @@ pub(crate) async fn run(
     // Kafka delays `cleanupLogs` past startup for the same reason (its
     // `log.initial.task.delay.ms`), and here the reason is sharper than
     // politeness: a partition's `LogConfig` is the broker-wide default until
-    // `ReplicatorSupervisor::reconcile` pushes the topic's overrides through
-    // `WriterMessage::SetLogConfig`. A sweep at t=0 would apply the default
-    // seven-day `retention.ms` to a topic configured `retention.ms=-1`, and
+    // `ReplicatorSupervisor::reconcile` installs the topic's overrides. A sweep
+    // at t=0 would apply the default seven-day `retention.ms` to a topic configured `retention.ms=-1`, and
     // deleting a segment is not a decision to make on a config that has not
     // arrived yet. Compaction has no such hazard, which is why the cleaner
     // still fires immediately.

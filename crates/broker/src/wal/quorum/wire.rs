@@ -36,6 +36,8 @@ pub(crate) struct WalFetchRequest {
     pub(crate) last_fetched_epoch: i32,
     pub(crate) fetch_offset: i64,
     pub(crate) max_size: ByteSize,
+    pub(crate) max_wait_ms: i32,
+    pub(crate) min_bytes: i32,
 }
 
 impl QuorumGroup {
@@ -114,6 +116,8 @@ pub(crate) fn decode_fetch_request(request: &FetchRequest) -> Option<WalFetchReq
         last_fetched_epoch: partition.last_fetched_epoch,
         fetch_offset: partition.fetch_offset,
         max_size: ByteSize::from_bytes(u64::from(max_bytes.get())),
+        max_wait_ms: request.max_wait_ms,
+        min_bytes: request.min_bytes,
     })
 }
 

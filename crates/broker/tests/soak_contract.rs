@@ -121,7 +121,7 @@ use {
     krabka_bench_driver::soak::{
         client::{
             Endpoint,
-            load::{LoadContext, producer_name, start},
+            load::{LoadContext, prepare, producer_name, start},
             readback::{commit_checks, read_back, wait_stable},
             windows::{Span, Windows, planned_span, steady_millis},
         },
@@ -593,6 +593,10 @@ async fn the_sustained_load_contract_holds() {
     }
     write_json(&dir, "schedule.json", &schedule);
 
+    let endpoint = Endpoint::plaintext(bootstrap.clone());
+    let prepared = prepare(&contract, &endpoint)
+        .await
+        .expect("prepare the load consumers");
     let load_start = now_ms();
     evidence.started_unix_ms = load_start;
     let recorders = Recorders::start(&nodes, &dir, load_start);
@@ -602,7 +606,6 @@ async fn the_sustained_load_contract_holds() {
             .map(|fault| planned_span(&contract, fault, load_start))
             .collect(),
     ));
-    let endpoint = Endpoint::plaintext(bootstrap.clone());
     let ctx = Arc::new(
         LoadContext::builder()
             .contract(contract.clone())
@@ -610,7 +613,7 @@ async fn the_sustained_load_contract_holds() {
             .windows(Arc::clone(&windows))
             .build(),
     );
-    let load = start(&ctx);
+    let load = start(&ctx, prepared);
     let trackers = load.trackers.clone();
 
     let executor = Executor {

@@ -31,7 +31,11 @@ use {
         },
     },
     bytes::Bytes,
-    futures::{StreamExt as _, stream::FuturesUnordered},
+    futures::{
+        StreamExt as _,
+        future::{OptionFuture, try_join_all},
+        stream::FuturesUnordered,
+    },
     krabka_client_consumer::{
         AutoOffsetReset, Consumer, ConsumerError, IsolationLevel, OffsetAndMetadata,
     },
@@ -40,7 +44,7 @@ use {
     },
     krabka_units::prelude::*,
     std::{
-        collections::{BTreeMap, HashMap},
+        collections::{BTreeMap, HashMap, VecDeque},
         future::Future,
         pin::Pin,
         sync::{
@@ -265,6 +269,7 @@ async fn connect_producer(ctx: &LoadContext, name: &str, transactional: bool) ->
 /// when it was enqueued, and how it ended.
 type Delivery =
     Pin<Box<dyn Future<Output = (u64, u32, i64, Result<RecordMetadata, ProducerError>)> + Send>>;
+type Admission<'a> = Pin<Box<dyn Future<Output = Delivery> + Send + 'a>>;
 
 async fn enqueue(producer: &Producer, record: ProducerRecord, seq: u64, attempt: u32) -> Delivery {
     let sent = now_ms();
@@ -336,16 +341,31 @@ pub async fn run_idempotent(ctx: Arc<LoadContext>, path: LoadPath) -> ProducerOu
     let mut ticker = pipelined_ticker(path.rate.period().to_std());
     let mut inflight: FuturesUnordered<Delivery> = FuturesUnordered::new();
     let mut next_seq = 0_u64;
+    let mut admission: Option<Admission<'_>> = None;
+    let mut retries = VecDeque::new();
     loop {
-        if !ctx.running() && inflight.is_empty() {
+        if admission.is_none()
+            && let Some((seq, attempt)) = retries.pop_front()
+        {
+            admission = Some(Box::pin(enqueue(
+                &producer,
+                record(&path, &name, seq),
+                seq,
+                attempt,
+            )));
+        }
+        if !ctx.running() && inflight.is_empty() && admission.is_none() {
             break;
         }
         tokio::select! {
             () = ctx.abandoned() => break,
-            _ = ticker.tick(), if ctx.running() => {
+            _ = ticker.tick(), if ctx.running() && admission.is_none() => {
                 let seq = next_seq;
                 next_seq += 1;
-                let delivery = enqueue(&producer, record(&path, &name, seq), seq, 1).await;
+                admission = Some(Box::pin(enqueue(&producer, record(&path, &name, seq), seq, 1)));
+            }
+            Some(delivery) = OptionFuture::from(admission.as_mut()), if admission.is_some() => {
+                admission = None;
                 inflight.push(delivery);
             }
             Some((seq, attempt, sent, result)) = inflight.next() => {
@@ -367,8 +387,7 @@ pub async fn run_idempotent(ctx: Arc<LoadContext>, path: LoadPath) -> ProducerOu
                         if attempt < max_attempts && !stale {
                             eprintln!("soak-contract: {name}: send {seq} attempt {attempt} failed, resending: {error}");
                             output.ledger.retried.insert(seq);
-                            let delivery = enqueue(&producer, record(&path, &name, seq), seq, attempt + 1).await;
-                            inflight.push(delivery);
+                            retries.push_back((seq, attempt + 1));
                         } else {
                             eprintln!("soak-contract: {name}: send {seq} attempt {attempt} failed: {error}");
                         }
@@ -378,6 +397,7 @@ pub async fn run_idempotent(ctx: Arc<LoadContext>, path: LoadPath) -> ProducerOu
         }
     }
     output.ledger.attempted = next_seq;
+    drop(admission);
     // A producer of an abandoned cluster is dropped, not closed: closing waits
     // for the sends in flight, which can no longer be answered.
     if !ctx.is_abandoned() {
@@ -449,7 +469,7 @@ impl TransactionalRun {
         producer: &Producer,
     ) -> bool {
         let settings = &ctx.contract.clients.transactions;
-        let name = &self.name;
+        let name = self.name.clone();
         let transaction = match producer.begin_transaction().await {
             Ok(transaction) => transaction,
             Err(error) => {
@@ -458,37 +478,11 @@ impl TransactionalRun {
             }
         };
         let start = self.next_seq;
-        let mut deliveries: FuturesUnordered<Delivery> = FuturesUnordered::new();
-        for _ in 0..settings.records_per_transaction {
-            self.ticker.tick().await;
-            if !ctx.running() {
-                break;
-            }
-            let seq = self.next_seq;
-            self.next_seq += 1;
-            let delivery = enqueue(producer, record(path, name, seq), seq, 1).await;
-            deliveries.push(delivery);
-        }
-        let mut failed = false;
-        while let Some((seq, _, sent, result)) = deliveries.next().await {
-            let at = now_ms();
-            match result {
-                Ok(_) => {
-                    self.ledger.acked.insert(seq);
-                    ctx.acknowledge(&path.name, seq);
-                    self.latencies
-                        .record(ctx.windows.disturbed(at), Time::from_millis(at - sent));
-                    if ctx.record_ack_times {
-                        self.acked_at.push(Ack { seq, unix_ms: at });
-                    }
-                }
-                Err(error) => {
-                    eprintln!("soak-contract: {name}: transactional send {seq} failed: {error}");
-                    self.ledger.failed.insert(seq);
-                    failed = true;
-                }
-            }
-        }
+        let failed = self
+            .deliveries(ctx, path, |seq| {
+                enqueue(producer, record(path, &name, seq), seq, 1)
+            })
+            .await;
         let index = self.index;
         let (outcome, usable) = if failed || aborted_on_purpose(index, settings.abort_every) {
             match transaction.abort().await {
@@ -514,6 +508,62 @@ impl TransactionalRun {
         });
         self.index += 1;
         usable
+    }
+
+    /// Observe acknowledgements alongside pacing, rather than after filling
+    /// the transaction, so the measured latency excludes the driver's wait.
+    async fn deliveries<F: Future<Output = Delivery> + Send>(
+        &mut self,
+        ctx: &LoadContext,
+        path: &LoadPath,
+        mut enqueue_record: impl FnMut(u64) -> F + Send,
+    ) -> bool {
+        let mut deliveries = FuturesUnordered::new();
+        let mut admission: Option<Pin<Box<F>>> = None;
+        let mut admitted = 0;
+        let count = ctx.contract.clients.transactions.records_per_transaction;
+        let mut failed = false;
+        loop {
+            if (admitted == count || !ctx.running()) && deliveries.is_empty() && admission.is_none()
+            {
+                break;
+            }
+            tokio::select! {
+                _ = self.ticker.tick(), if admitted < count && ctx.running() && admission.is_none() => {
+                    if !ctx.running() {
+                        continue;
+                    }
+                    let seq = self.next_seq;
+                    self.next_seq += 1;
+                    admitted += 1;
+                    admission = Some(Box::pin(enqueue_record(seq)));
+                }
+                Some(delivery) = OptionFuture::from(admission.as_mut()), if admission.is_some() => {
+                    admission = None;
+                    deliveries.push(delivery);
+                }
+                Some((seq, _, sent, result)) = deliveries.next(), if !deliveries.is_empty() => {
+                    let at = now_ms();
+                    match result {
+                        Ok(_) => {
+                            self.ledger.acked.insert(seq);
+                            ctx.acknowledge(&path.name, seq);
+                            self.latencies.record(ctx.windows.disturbed(at), Time::from_millis(at - sent));
+                            if ctx.record_ack_times {
+                                self.acked_at.push(Ack { seq, unix_ms: at });
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("soak-contract: {}: transactional send {seq} failed: {error}", self.name);
+                            self.ledger.failed.insert(seq);
+                            failed = true;
+                        }
+                    }
+                }
+                else => break,
+            }
+        }
+        failed
     }
 }
 
@@ -571,14 +621,15 @@ impl CommitTracker {
 }
 
 async fn build_consumer(
-    ctx: &LoadContext,
+    contract: &Contract,
+    endpoint: &Endpoint,
     path: &LoadPath,
     isolation: Isolation,
 ) -> Result<Consumer, ConsumerError> {
-    let consumer = &ctx.contract.clients.consumer;
+    let consumer = &contract.clients.consumer;
     Consumer::builder()
-        .bootstrap(ctx.endpoint.bootstrap.clone())
-        .maybe_security(ctx.endpoint.security.clone())
+        .bootstrap(endpoint.bootstrap.clone())
+        .maybe_security(endpoint.security.clone())
         .client_id(group_name(&path.name, isolation))
         .group_id(group_name(&path.name, isolation))
         .subscribe(vec![path.name.clone()])
@@ -609,23 +660,11 @@ pub async fn run_consumer(
     path: LoadPath,
     isolation: Isolation,
     tracker: Option<Arc<CommitTracker>>,
+    mut consumer: Consumer,
 ) -> Latencies {
     let mut latencies = Latencies::new();
     let settings = ctx.contract.clients.consumer.clone();
     let group = group_name(&path.name, isolation);
-    let mut consumer = None;
-    while consumer.is_none() && ctx.running() {
-        match build_consumer(&ctx, &path, isolation).await {
-            Ok(built) => consumer = Some(built),
-            Err(error) => {
-                eprintln!("soak-contract: {group}: build consumer: {error}");
-                tokio::time::sleep(RECONNECT_BACKOFF).await;
-            }
-        }
-    }
-    let Some(mut consumer) = consumer else {
-        return latencies;
-    };
     let mut positions: BTreeMap<i32, i64> = BTreeMap::new();
     let mut committed: BTreeMap<i32, i64> = BTreeMap::new();
     let mut last_commit = Instant::now();
@@ -699,10 +738,36 @@ pub struct LoadOutcome {
     pub consume_latency: BTreeMap<String, Latencies>,
 }
 
+/// Consumers whose group assignment completed before the measured load.
+pub struct PreparedLoad {
+    consumers: Vec<(LoadPath, Isolation, Consumer)>,
+}
+
+/// Join every consumer group before starting the measured load and its fault
+/// clock, so coordinator startup does not age the first produced records.
+///
+/// # Errors
+///
+/// Returns a consumer startup error before any producer starts.
+pub async fn prepare(
+    contract: &Contract,
+    endpoint: &Endpoint,
+) -> Result<PreparedLoad, ConsumerError> {
+    let consumers = contract.paths.iter().flat_map(|path| {
+        path.consumers.iter().map(move |&isolation| async move {
+            let consumer = build_consumer(contract, endpoint, path, isolation).await?;
+            Ok::<_, ConsumerError>((path.clone(), isolation, consumer))
+        })
+    });
+    Ok(PreparedLoad {
+        consumers: try_join_all(consumers).await?,
+    })
+}
+
 /// Start the load `ctx` declares. It runs until [`LoadContext::stop`] or
 /// [`LoadContext::abandon`], and [`RunningLoad::finish`] then collects it.
 #[must_use]
-pub fn start(ctx: &Arc<LoadContext>) -> RunningLoad {
+pub fn start(ctx: &Arc<LoadContext>, prepared: PreparedLoad) -> RunningLoad {
     let contract = &ctx.contract;
     let producers = contract
         .paths
@@ -718,28 +783,27 @@ pub fn start(ctx: &Arc<LoadContext>) -> RunningLoad {
         .collect();
     let mut trackers = Vec::new();
     let mut consumers = Vec::new();
-    for path in &contract.paths {
-        for &isolation in &path.consumers {
-            let tracker = path.commit_offsets.then(|| {
-                Arc::new(CommitTracker::new(
-                    group_name(&path.name, isolation),
-                    path.name.clone(),
-                    path.partitions,
-                ))
-            });
-            if let Some(tracker) = &tracker {
-                trackers.push(Arc::clone(tracker));
-            }
-            consumers.push((
+    for (path, isolation, consumer) in prepared.consumers {
+        let tracker = path.commit_offsets.then(|| {
+            Arc::new(CommitTracker::new(
+                group_name(&path.name, isolation),
                 path.name.clone(),
-                tokio::spawn(run_consumer(
-                    Arc::clone(ctx),
-                    path.clone(),
-                    isolation,
-                    tracker,
-                )),
-            ));
+                path.partitions,
+            ))
+        });
+        if let Some(tracker) = &tracker {
+            trackers.push(Arc::clone(tracker));
         }
+        consumers.push((
+            path.name.clone(),
+            tokio::spawn(run_consumer(
+                Arc::clone(ctx),
+                path,
+                isolation,
+                tracker,
+                consumer,
+            )),
+        ));
     }
     RunningLoad {
         ctx: Arc::clone(ctx),
@@ -802,16 +866,111 @@ impl LoadOutcome {
 mod tests {
     use {
         super::{
-            aborted_on_purpose, compacted_key, key_index, pipelined_ticker, record_value,
-            superseded, transactional_ticker,
+            Delivery, Endpoint, Latencies, LoadContext, ProducerError, RecordMetadata,
+            TransactionalRun, Windows, aborted_on_purpose, compacted_key, empty_ledger, key_index,
+            now_ms, pipelined_ticker, record_value, superseded, transactional_ticker,
         },
-        crate::soak::evidence::parse_record_tag,
+        crate::soak::{
+            contract::{Semantics, fixture},
+            evidence::parse_record_tag,
+            ledger::SeqSet,
+        },
         assert2::check,
-        std::time::Duration,
+        futures::FutureExt as _,
+        std::{
+            sync::{Arc, Mutex},
+            time::Duration,
+        },
         tokio::time::{Instant, Interval},
     };
 
     const PERIOD: Duration = Duration::from_millis(10);
+
+    #[yare::parameterized(
+        acknowledged = { false, false },
+        rejected = { true, false },
+        stalled_admission = { false, true },
+    )]
+    #[test_macro(tokio::test(start_paused = true))]
+    async fn transaction_deliveries_are_observed_before_the_next_paced_send(
+        reject_last: bool,
+        stall_admission: bool,
+    ) {
+        let mut contract = fixture::self_check();
+        contract.clients.transactions.records_per_transaction = 3;
+        let path = contract
+            .paths
+            .iter()
+            .find(|path| path.semantics == Semantics::Transactional)
+            .unwrap()
+            .clone();
+        let ctx = LoadContext::builder()
+            .contract(contract)
+            .endpoint(Endpoint::plaintext("unused:9092"))
+            .windows(Arc::new(Windows::new(Vec::new())))
+            .build();
+        let mut run = TransactionalRun {
+            name: "paced".into(),
+            ledger: empty_ledger(&path, "paced"),
+            latencies: Latencies::new(),
+            acked_at: Vec::new(),
+            ticker: transactional_ticker(PERIOD),
+            next_seq: 0,
+            index: 0,
+        };
+        let start = Instant::now();
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let failed = run
+            .deliveries(&ctx, &path, |seq| {
+                let observed = observed.clone();
+                let delay = if stall_admission && seq == 1 {
+                    PERIOD * 3
+                } else {
+                    Duration::ZERO
+                };
+                tokio::time::sleep(delay).map(move |()| {
+                    let ready_at = Instant::now() + PERIOD / 2;
+                    let delivery: Delivery = Box::pin(async move {
+                        tokio::time::sleep_until(ready_at).await;
+                        observed.lock().unwrap().push(start.elapsed());
+                        let result = if reject_last && seq == 2 {
+                            Err(ProducerError::Server(19))
+                        } else {
+                            Ok(RecordMetadata {
+                                topic: "paced".into(),
+                                partition: 0,
+                                offset: i64::try_from(seq).unwrap(),
+                                timestamp_ms: 0,
+                                serialized_key_size: -1,
+                                serialized_value_size: 1,
+                            })
+                        };
+                        (seq, 1, now_ms(), result)
+                    });
+                    delivery
+                })
+            })
+            .await;
+        check!(
+            *observed.lock().unwrap()
+                == if stall_admission {
+                    vec![PERIOD / 2, PERIOD * 4 + PERIOD / 2, PERIOD * 4 + PERIOD / 2]
+                } else {
+                    vec![PERIOD / 2, PERIOD + PERIOD / 2, PERIOD * 2 + PERIOD / 2]
+                }
+        );
+        check!(failed == reject_last);
+        check!(run.ledger.acked == SeqSet::range(0, if reject_last { 2 } else { 3 }));
+        check!(
+            run.ledger.failed
+                == if reject_last {
+                    SeqSet::range(2, 3)
+                } else {
+                    SeqSet::new()
+                }
+        );
+        check!(run.latencies.steady_count == if reject_last { 2 } else { 3 });
+    }
 
     /// How long ten ticks take when the ticker stalls for five periods after
     /// the first, as a transactional producer does while a transaction ends.

@@ -49,10 +49,14 @@ impl ReplicatorSupervisor {
             let topic_id = image.topic(&key.0).map(|topic| topic.topic_id);
             let promoting_diskless = part.diskless
                 && part_record.leader == self.node_id
-                && part
+                && (part
                     .current_leader
                     .load(std::sync::atomic::Ordering::Acquire)
-                    != self.node_id.0;
+                    != self.node_id.0
+                    || part
+                        .current_leader_epoch
+                        .load(std::sync::atomic::Ordering::Acquire)
+                        != part_record.leader_epoch.0);
             if promoting_diskless {
                 let Some(topic_id) = topic_id else {
                     warn!(
@@ -88,6 +92,12 @@ impl ReplicatorSupervisor {
                                     log.log_end_offset(),
                                 );
                             }
+                            // ISR re-admission needs this epoch's start, after hydration.
+                            let log_end = log.log_end_offset();
+                            log.assign_epoch_start_offset(
+                                krabka_ids::LeaderEpoch(part_record.leader_epoch.0),
+                                log_end,
+                            )?;
                             Ok(log.recovered_producers())
                         },
                         |snapshot| {
@@ -100,6 +110,7 @@ impl ReplicatorSupervisor {
                     )
                     .await;
                 if let Err(error) = result {
+                    flag_storage_failure(&error, &part.log_dir, &self.log_dir_status);
                     warn!(
                         topic = %key.0,
                         partition = key.1,
@@ -270,31 +281,47 @@ mod tests {
     /// no-op) on a reconcile that changes nothing.
     #[tokio::test]
     async fn reconcile_records_a_promoted_leader_epoch_at_the_log_end() {
-        let (as_follower, as_leader) = follower_promotion_images();
-        let ((supervisor, _partitions, _reporter, _dir), part) =
-            reconciled_partition(&as_follower, "local follower materialized").await;
-        for _ in 0..2 {
-            let mut batch = krabka_protocol::records::RecordBatch {
-                partition_leader_epoch: 3,
-                records: vec![krabka_protocol::records::Record::default()],
-                ..Default::default()
-            };
-            part.log.lock().unwrap().append(&mut batch).unwrap();
-        }
-        let history = || part.epoch_history();
-        assert!(
-            history() == [(3, 0)],
-            "a follower records only what it wrote"
-        );
-
-        for pass in ["promotion", "unchanged reconcile"] {
-            supervisor.reconcile(&as_leader).await;
-            assert!(history() == [(3, 0), (7, 2)], "{pass}");
-            assert!(part.current_leader.load(Ordering::Acquire) == 2, "{pass}");
+        for diskless in [false, true] {
+            let (mut as_follower, mut as_leader) = follower_promotion_images();
+            if diskless {
+                let config = MetadataRecord::V1TopicConfig(krabka_metadata::TopicConfigRecord {
+                    topic: "t".into(),
+                    overrides: [("krabka.diskless".into(), "true".into())].into(),
+                });
+                as_follower.apply(&config);
+                as_leader.apply(&config);
+            }
+            let ((supervisor, _partitions, _reporter, _dir), part) =
+                reconciled_partition(&as_follower, "local follower materialized").await;
+            for _ in 0..2 {
+                let mut batch = krabka_protocol::records::RecordBatch {
+                    partition_leader_epoch: 3,
+                    records: vec![krabka_protocol::records::Record::default()],
+                    ..Default::default()
+                };
+                part.log.lock().unwrap().append(&mut batch).unwrap();
+            }
+            let history = || part.epoch_history();
             assert!(
-                part.current_leader_epoch.load(Ordering::Acquire) == 7,
-                "{pass}"
+                history() == [(3, 0)],
+                "a follower records only what it wrote"
             );
+
+            for pass in ["promotion", "unchanged reconcile"] {
+                supervisor.reconcile(&as_leader).await;
+                assert!(history() == [(3, 0), (7, 2)], "{pass}");
+                assert!(part.current_leader.load(Ordering::Acquire) == 2, "{pass}");
+                assert!(
+                    part.current_leader_epoch.load(Ordering::Acquire) == 7,
+                    "{pass}"
+                );
+            }
+            let mut record = as_leader.partition("t", 0).unwrap().clone();
+            record.leader_epoch.0 = 8;
+            record.partition_epoch += 1;
+            as_leader.apply(&MetadataRecord::V1Partition(record));
+            supervisor.reconcile(&as_leader).await;
+            assert!(history() == [(3, 0), (8, 2)]);
         }
     }
 

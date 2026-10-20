@@ -1,6 +1,7 @@
 use {
-    super::{Objectives, PathShape, load_contract, objectives, read_load, write_json},
+    super::{Objectives, PathShape, load_contract, objectives, read_load, run_load, write_json},
     crate::soak::{
+        client::Endpoint,
         contract::{Contract, fixture},
         evidence::Evidence,
         recovery::{Ack, CommitAck, CommitHistory, LoadRecord, ProducerAcks},
@@ -110,4 +111,29 @@ fn a_load_record_that_is_not_one_is_refused_by_name() {
     std::fs::write(&path, "{\"run\": 7}").unwrap();
     let error = read_load(&path).unwrap_err().to_string();
     check!(error.contains("parse load record"), "{error}");
+}
+
+#[tokio::test]
+async fn source_loss_interrupts_consumer_preparation() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = Endpoint::plaintext(listener.local_addr().unwrap().to_string());
+    let (accepted, connected) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        accepted.send(()).unwrap();
+        socket
+    });
+    let lost = async {
+        connected.await.unwrap();
+    };
+    let record = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        run_load(&fixture::drill(), endpoint, "test".into(), lost),
+    )
+    .await
+    .expect("loss interrupts a server that never finishes startup");
+    check!(
+        record.unwrap_err().to_string() == "source cluster lost before the measured load started"
+    );
+    drop(server.await.unwrap());
 }

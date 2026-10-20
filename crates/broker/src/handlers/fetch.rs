@@ -252,7 +252,8 @@ pub(crate) async fn handle(
         let routing_start = std::time::Instant::now();
         if let Some(response) = broker
             .wal_shards
-            .route_fetch_request(&req, authenticated_node)
+            .route_fetch_request_wait(&req, authenticated_node)
+            .await
         {
             // A routed WAL fetch is served straight out of this broker's own
             // shard engine, so the round trip is local work like any other

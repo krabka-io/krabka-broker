@@ -163,12 +163,15 @@ pub(crate) async fn record_follower_position(
         // KIP-841: the ISR-expansion eligibility check compares this with the
         // broker's registered epoch before `update_follower_leo` reads it.
         state.record_follower_broker_epoch(follower, position.broker_epoch);
-        state.update_follower_leo(
-            follower,
-            Offset(fetch_offset),
-            leader_log_end,
-            std::time::Instant::now(),
-        ) > previous
+        let now = std::time::Instant::now();
+        if partition.diskless {
+            // Canonical replica progress must neither replace nor rewind the WAL watermark.
+            state.record_follower_fetch(follower, Offset(fetch_offset), leader_log_end, now);
+            false
+        } else {
+            state.update_follower_leo(follower, Offset(fetch_offset), leader_log_end, now)
+                > previous
+        }
     };
     drop(transition);
     if advanced {
@@ -954,6 +957,7 @@ pub(super) async fn build_pending_reads(
 #[cfg(test)]
 mod tests {
     use {
+        super::{FollowerPosition, record_follower_position},
         crate::{
             broker::{Broker, BrokerHandle, spawn_partition},
             codes::{NONE, NOT_LEADER_OR_FOLLOWER, OFFSET_OUT_OF_RANGE},
@@ -974,7 +978,7 @@ mod tests {
         },
         assert2::assert,
         krabka_ids::PartitionIndex,
-        krabka_log::{Log, LogConfig},
+        krabka_log::{Log, LogConfig, Offset},
         std::sync::Arc,
     };
 
@@ -1622,6 +1626,15 @@ mod tests {
         assert!(!final_, "defers to the caller's own offline check");
     }
 
+    async fn install_two_replica_leader(partition: &Partition) {
+        use krabka_raft::NodeId;
+
+        partition.install_replication_target(None, 1, 0).await;
+        partition
+            .install_isr(&[NodeId(1), NodeId(2)], &[NodeId(1), NodeId(2)], NodeId(1))
+            .await;
+    }
+
     /// Kafka's `maybeIncrementLeaderHW` runs only while this broker still
     /// leads. The leader records a follower position only while the
     /// replication target that its leader checks passed under is installed.
@@ -1658,10 +1671,7 @@ mod tests {
 
         for (name, epoch_moved, want) in cases {
             let (_dir, partition) = epoch_checks_partition_with_history(&[0, 0]);
-            partition.install_replication_target(None, 1, 0).await;
-            partition
-                .install_isr(&[NodeId(1), NodeId(2)], &[NodeId(1), NodeId(2)], NodeId(1))
-                .await;
+            install_two_replica_leader(&partition).await;
             let position = super::FollowerPosition {
                 follower_id: 2,
                 broker_epoch: -1,
@@ -1689,6 +1699,55 @@ mod tests {
             assert!(recorded == want, "{name}");
         }
     }
+
+    #[yare::parameterized(
+        stale_fetch_cannot_rewind_wal_durability = { StorageMode::Diskless, 2, 1, 2, false },
+        replica_progress_cannot_replace_wal_durability = { StorageMode::Diskless, 1, 2, 1, false },
+        classic_replication_still_advances_the_watermark = { StorageMode::Local, 1, 2, 2, true },
+    )]
+    #[test_macro(tokio::test)]
+    async fn follower_fetches_preserve_the_storage_durability_authority(
+        storage: StorageMode,
+        durable: i64,
+        read_log_end: i64,
+        expected_watermark: i64,
+        expected_advance: bool,
+    ) {
+        use {assert2::assert, krabka_raft::NodeId};
+
+        let dir = tempfile::tempdir().unwrap();
+        let partition = epoch_checks_partition_with_storage(dir.path(), storage);
+        append_epoch_batches(&mut partition.log.lock().unwrap(), &[0, 0]);
+        install_two_replica_leader(&partition).await;
+        partition
+            .replica_state
+            .lock()
+            .await
+            .recompute_hw_for_wal_durable(Offset(durable));
+        let position = FollowerPosition {
+            follower_id: 2,
+            broker_epoch: 7,
+            log_start_offset: 0,
+            target: *partition.replication_target.read().await,
+            leader_throttled: false,
+        };
+        let changed = partition.hw_advance_notify.notified();
+        tokio::pin!(changed);
+        changed.as_mut().enable();
+
+        let advanced =
+            record_follower_position(&partition, position, read_log_end, Offset(read_log_end))
+                .await;
+
+        assert!(advanced == expected_advance);
+        assert!(partition.high_watermark().await == Offset(expected_watermark));
+        assert!(futures_util::poll!(changed.as_mut()).is_ready() == expected_advance);
+        let state = partition.replica_state.lock().await;
+        let (log_end, caught_up) = state.follower_progress(NodeId(2));
+        assert!(log_end == Offset(read_log_end));
+        assert!(caught_up.is_some());
+    }
+
     /// Whether the epoch gate decided the row, and the row it left.
     struct EpochCheck {
         is_final: bool,

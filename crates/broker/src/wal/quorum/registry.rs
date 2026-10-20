@@ -9,9 +9,10 @@ use {
             fetch_response, unknown_shard_fetch_response,
         },
     },
-    crate::{BrokerError, metrics::BrokerMetrics},
+    crate::{BrokerError, codes::INVALID_REQUEST, metrics::BrokerMetrics},
     dashmap::DashMap,
     krabka_ids::PartitionIndex,
+    krabka_protocol::records::RecordsPayload,
     krabka_verified::wal::{WalFetchAdmission, wal_fetch_admission},
     std::{
         collections::HashMap,
@@ -24,6 +25,21 @@ use {
 pub(crate) struct ShardId {
     pub(crate) topic_id: uuid::Uuid,
     pub(crate) partition: PartitionIndex,
+}
+
+impl ShardId {
+    fn from_group(group: QuorumGroup) -> Option<Self> {
+        match group {
+            QuorumGroup::Metadata => None,
+            QuorumGroup::DisklessWal {
+                topic_id,
+                partition,
+            } => Some(Self {
+                topic_id,
+                partition,
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,6 +133,11 @@ impl WalShardRegistry {
             .placements
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for entry in &self.engines {
+            if current.get(entry.key()) != placements.get(entry.key()) {
+                entry.value().wake_fetches();
+            }
+        }
         current.clone_from(placements);
         for entry in &self.engines {
             let voters = current
@@ -185,6 +206,7 @@ impl WalShardRegistry {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn route_fetch_request(
         &self,
         request: &krabka_protocol::owned::fetch_request::FetchRequest,
@@ -193,22 +215,57 @@ impl WalShardRegistry {
         self.route_decoded_fetch(decode_fetch_request(request)?, Some(authenticated_from))
     }
 
+    pub(crate) async fn route_fetch_request_wait(
+        &self,
+        request: &krabka_protocol::owned::fetch_request::FetchRequest,
+        authenticated_from: krabka_raft::NodeId,
+    ) -> Option<Result<krabka_protocol::owned::fetch_response::FetchResponse, BrokerError>> {
+        self.route_decoded_fetch_wait(decode_fetch_request(request)?, Some(authenticated_from))
+            .await
+    }
+
+    async fn route_decoded_fetch_wait(
+        &self,
+        request: WalFetchRequest,
+        authenticated_from: Option<krabka_raft::NodeId>,
+    ) -> Option<Result<krabka_protocol::owned::fetch_response::FetchResponse, BrokerError>> {
+        let Some(engine) = self.get(ShardId::from_group(request.group)?) else {
+            return self.route_decoded_fetch(request, authenticated_from);
+        };
+        let deadline = tokio::time::Instant::now()
+            + std::time::Duration::from_millis(u64::try_from(request.max_wait_ms).unwrap_or(0));
+        loop {
+            let progress = engine.fetch_progress_changed();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+            let response = self.route_decoded_fetch(request, authenticated_from)?;
+            let Ok(response) = response else {
+                return Some(response);
+            };
+            let row = &response.responses[0].partitions[0];
+            let bytes = row.records.as_ref().map_or(0, RecordsPayload::payload_len);
+            if row.error_code != 0
+                || row.diverging_epoch.end_offset >= 0
+                || bytes >= usize::try_from(request.min_bytes).unwrap_or(0)
+                || tokio::time::Instant::now() >= deadline
+            {
+                return Some(Ok(response));
+            }
+            tokio::select! {
+                () = &mut progress => {},
+                () = tokio::time::sleep_until(deadline) => {
+                    return self.route_decoded_fetch(request, authenticated_from);
+                }
+            }
+        }
+    }
+
     fn route_decoded_fetch(
         &self,
         request: WalFetchRequest,
         authenticated_from: Option<krabka_raft::NodeId>,
     ) -> Option<Result<krabka_protocol::owned::fetch_response::FetchResponse, BrokerError>> {
-        let QuorumGroup::DisklessWal {
-            topic_id,
-            partition,
-        } = request.group
-        else {
-            return None;
-        };
-        let shard = ShardId {
-            topic_id,
-            partition,
-        };
+        let shard = ShardId::from_group(request.group)?;
         let placement = self
             .placements
             .read()
@@ -230,6 +287,17 @@ impl WalShardRegistry {
         );
         if admission == WalFetchAdmission::Denied {
             return Some(Ok(unknown_shard_fetch_response(request.group)));
+        }
+        if request.max_wait_ms < 0 || request.min_bytes < 0 {
+            return Some(Ok(fetch_response(
+                request.group,
+                0,
+                0,
+                0,
+                bytes::Bytes::new(),
+                INVALID_REQUEST,
+                None,
+            )));
         }
         #[cfg(any(test, feature = "test-helpers"))]
         self.follower_fetchers
@@ -322,7 +390,8 @@ impl krabka_raft::RaftShardRouter for WalShardRouter {
             };
             let Some(response) = self
                 .registry
-                .route_decoded_fetch(request, authenticated_from)
+                .route_decoded_fetch_wait(request, authenticated_from)
+                .await
             else {
                 return Ok(None);
             };
@@ -353,8 +422,15 @@ mod tests {
             records::{Record, RecordBatch},
         },
         krabka_raft::RaftShardRouter,
+        std::{future::Future, pin::Pin},
         tempfile::tempdir,
     };
+
+    async fn assert_pending<F: Future>(future: F) -> Pin<Box<F>> {
+        let mut future = Box::pin(future);
+        assert2::assert!(futures_util::poll!(future.as_mut()).is_pending());
+        future
+    }
 
     fn value_batch() -> RecordBatch {
         RecordBatch {
@@ -629,6 +705,126 @@ mod tests {
 
             assert2::assert!((response.responses[0].partitions[0].error_code) == (expected));
             assert2::assert!((engine.durable_watermark()) == (Offset(0)));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wal_fetch_waits_for_append_or_deadline_and_rechecks_placement() {
+        use {krabka_raft::NodeId, std::time::Duration};
+        let dir = tempdir().unwrap();
+        let source = open_log(dir.path());
+        let engine = Arc::new(WalShardEngine::new_distributed(Arc::clone(&source), 3).unwrap());
+        let registry = WalShardRegistry::new(NodeId(1));
+        let shard = ShardId {
+            topic_id: uuid::Uuid::from_u128(199),
+            partition: PartitionIndex(0),
+        };
+        let voters = vec![NodeId(1), NodeId(2), NodeId(3)];
+        registry.replace_placements(&HashMap::from([(shard, placement(voters.clone(), 0))]));
+        registry.insert(shard, Arc::clone(&engine));
+        let mut request = fetch_request(
+            QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
+            NodeId(2),
+            0,
+            -1,
+            0,
+            krabka_units::mebibytes(1),
+        );
+        request.max_wait_ms = 500;
+        request.min_bytes = 1;
+        {
+            let waiting =
+                assert_pending(registry.route_fetch_request_wait(&request, NodeId(2))).await;
+            source.lock().unwrap().append(&mut value_batch()).unwrap();
+            let syncing = engine.replicate_and_sync(&source, Offset(1));
+            tokio::pin!(syncing);
+            // The real durability path announces data before waiting for the remote fsync vote.
+            assert2::assert!(futures_util::poll!(syncing.as_mut()).is_pending());
+            let response = waiting.await.unwrap().unwrap();
+            assert2::assert!(
+                response.responses[0].partitions[0]
+                    .records
+                    .as_ref()
+                    .unwrap()
+                    .payload_len()
+                    > 0
+            );
+            assert2::assert!(engine.durable_watermark() == Offset(0));
+            let mut ack = request.clone();
+            ack.topics[0].partitions[0].fetch_offset = 1;
+            ack.min_bytes = 0;
+            registry
+                .route_fetch_request_wait(&ack, NodeId(2))
+                .await
+                .unwrap()
+                .unwrap();
+            assert2::assert!(syncing.await.unwrap() == Offset(1));
+        }
+        // Existing records do not wait when they meet the requested minimum.
+        {
+            let immediate = registry.route_fetch_request_wait(&request, NodeId(2));
+            tokio::pin!(immediate);
+            assert2::assert!(futures_util::poll!(immediate.as_mut()).is_ready());
+            let mut larger_minimum = request.clone();
+            larger_minimum.min_bytes = i32::MAX;
+            let waiting =
+                assert_pending(registry.route_fetch_request_wait(&larger_minimum, NodeId(2))).await;
+            tokio::time::advance(Duration::from_millis(500)).await;
+            assert2::assert!(
+                waiting.await.unwrap().unwrap().responses[0].partitions[0]
+                    .records
+                    .as_ref()
+                    .unwrap()
+                    .payload_len()
+                    > 0
+            );
+        }
+
+        request.topics[0].partitions[0].fetch_offset = 1;
+        {
+            let mut waiting =
+                assert_pending(registry.route_fetch_request_wait(&request, NodeId(2))).await;
+            tokio::time::advance(Duration::from_millis(400)).await;
+            engine.wake_fetches();
+            assert2::assert!(futures_util::poll!(waiting.as_mut()).is_pending());
+            tokio::time::advance(Duration::from_millis(100)).await;
+            let response = waiting.await.unwrap().unwrap();
+            assert2::assert!(
+                response.responses[0].partitions[0]
+                    .records
+                    .as_ref()
+                    .unwrap()
+                    .payload_len()
+                    == 0
+            );
+        }
+        for (next_voters, epoch, code) in [
+            (voters.clone(), 1, FENCED_LEADER_EPOCH),
+            (vec![NodeId(2), NodeId(1), NodeId(3)], 0, 3),
+        ] {
+            registry.replace_placements(&HashMap::from([(shard, placement(voters.clone(), 0))]));
+            let waiting =
+                assert_pending(registry.route_fetch_request_wait(&request, NodeId(2))).await;
+            registry.replace_placements(&HashMap::from([(shard, placement(next_voters, epoch))]));
+            let response = waiting.await.unwrap().unwrap();
+            assert2::assert!(response.responses[0].partitions[0].error_code == code);
+        }
+        for field in ["max_wait_ms", "min_bytes"] {
+            let mut invalid = request.clone();
+            if field == "max_wait_ms" {
+                invalid.max_wait_ms = -1;
+            } else {
+                invalid.min_bytes = -1;
+            }
+            registry.replace_placements(&HashMap::from([(shard, placement(voters.clone(), 0))]));
+            let response = registry
+                .route_fetch_request_wait(&invalid, NodeId(2))
+                .await
+                .unwrap()
+                .unwrap();
+            assert2::assert!(
+                response.responses[0].partitions[0].error_code == crate::codes::INVALID_REQUEST
+            );
         }
     }
 

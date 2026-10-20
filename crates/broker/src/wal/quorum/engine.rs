@@ -223,6 +223,12 @@ impl WalShardEngine {
         Self::new(replicas, OpenMode::Recover).expect("test WAL quorum recovers")
     }
 
+    pub(crate) fn fetch_progress_changed(&self) -> tokio::sync::futures::Notified<'_> {
+        self.durable_advanced.notified()
+    }
+
+    pub(crate) fn wake_fetches(&self) { self.durable_advanced.notify_waiters(); }
+
     #[must_use]
     pub(crate) fn durable_watermark(&self) -> Offset {
         Offset(self.durable_watermark.load(Ordering::Acquire))
@@ -367,6 +373,8 @@ impl WalShardEngine {
             )));
         }
 
+        // Followers must fetch and fsync the new tail before quorum durability can advance.
+        self.wake_fetches();
         if self.distributed_required.load(Ordering::Acquire) {
             // The local fsync comes first, placement or not: the leader votes
             // with the offset it has fsynced, and `configure_distributed`
