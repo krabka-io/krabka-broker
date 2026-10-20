@@ -31,10 +31,7 @@ jobs:
       prefix: ${{ steps.freeze.outputs.prefix }}
     steps:
       - name: Require the reviewed workflow on main
-        run: |
-          test "$GITHUB_REF" = refs/heads/main || {
-            test '${{ inputs.execute }}' = false && test "$GITHUB_REF" = refs/heads/release/cloud-profile-preflight
-          }
+        run: test "$GITHUB_REF" = refs/heads/main || { test "$GITHUB_REF" = refs/heads/release/cloud-profile-preflight && test "${{ inputs.execute }}" = false; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
@@ -76,8 +73,15 @@ jobs:
 
   performance:
     needs: candidate
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        mode: ${{ fromJSON(inputs.execute && '["before_after", "pinned_kafka"]' || '["preflight"]') }}
     runs-on: ${{ inputs.execute && 'gcp-ubuntu-24-04-32core' || 'gcp-ubuntu-24-04-16core' }}
-    timeout-minutes: 720
+    # Each mode has about 20 hours of declared timeouts; upload before the
+    # 24-hour job token expires. Comparisons stay interleaved on one host.
+    timeout-minutes: 1380
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -101,6 +105,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/performance"
+          if test "$(cat /proc/sys/fs/inotify/max_user_instances)" -lt 512; then
+            sudo sysctl -w fs.inotify.max_user_instances=512
+          fi
           result=0
           for program in awk bazel docker getconf git javac jq kind kubectl nproc realpath sed sha256sum timeout; do
             if ! command -v "$program"; then echo "missing benchmark prerequisite: $program"; result=1; fi
@@ -110,22 +117,22 @@ jobs:
           { nproc; grep '^MemTotal:' /proc/meminfo; df -T .; echo "inotify_instances=$instances"; } \
             > "$RUNNER_TEMP/performance/host-prerequisites.txt"
           exit "$result"
-      - name: Run both predeclared five-round performance budgets on this host
+      - name: Run the predeclared five-round performance comparison on this host
         if: ${{ inputs.execute }}
+        env:
+          BUDGET_MODE: ${{ matrix.mode }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/performance" "$RUNNER_TEMP/performance-tmp"
           export TMPDIR="$RUNNER_TEMP/performance-tmp"
-          result=0
-          PERF_ARTIFACT_DIR="$RUNNER_TEMP/performance/before-after" \
-            packaging/performance/qualify.sh budget before_after ac9deff316d38418622b16c237c671df88f57c7a || result=1
-          PERF_ARTIFACT_DIR="$RUNNER_TEMP/performance/pinned-kafka" \
-            packaging/performance/qualify.sh budget pinned_kafka || result=1
-          exit "$result"
+          reference=()
+          if test "$BUDGET_MODE" = before_after; then reference=(ac9deff316d38418622b16c237c671df88f57c7a); fi
+          PERF_ARTIFACT_DIR="$RUNNER_TEMP/performance/$BUDGET_MODE" \
+            packaging/performance/qualify.sh budget "$BUDGET_MODE" "${reference[@]}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: qualification-performance-${{ github.run_attempt }}
+          name: qualification-performance-${{ matrix.mode }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/performance/
             ${{ runner.temp }}/profile-input/
