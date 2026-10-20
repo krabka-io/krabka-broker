@@ -58,22 +58,24 @@ performance, operator lifecycle and ecosystem qualification harnesses.
 | Feb 14 to Mar 14 | 2027-03-14 | [M29: Test adoption with independent operators](https://github.com/krabka-io/krabka-broker/milestone/29) | Run two pilot workloads with different access patterns. Operators install, migrate and complete a recovery drill without maintainer intervention. Record and verify pilot fixes. If external pilots are unavailable, use independent acceptance runs and label the evidence accordingly. |
 | Mar 14 to Apr 14 | 2027-04-14 | [M30: Qualify the release and publish operating limits](https://github.com/krabka-io/krabka-broker/milestone/30) | Repeat compatibility, recovery and performance checks on the release candidate. Publish a support matrix, measured capacity limits, upgrade instructions and known limitations. Bind evidence to shipped artifacts and close agreed release blockers before promotion. |
 
-### Status on 2026-10-18
+### Status on 2026-10-20
 
 The counts come from the GitHub milestones. A closed issue records finished
 scope. It does not qualify a later candidate. The
 [support matrix](operations/support-matrix.md) gives the evidence for each
-supported combination and the revision it ran at.
+supported combination and the revision it ran at, and
+[Release candidate qualification](release-candidate-qualification.md) lists
+the release blockers.
 
 | Milestone | Open | Closed | Done | Still open |
 | :--- | ---: | ---: | :--- | :--- |
-| [M24](https://github.com/krabka-io/krabka-broker/milestone/24) | 4 | 5 | The month-one baseline record at `3cf42388`, with a green `main` run. Fetch limits, replication throttles and RE2J quoting are fixed, and the nightly upgrade script is repaired. | [#1344](https://github.com/krabka-io/krabka-broker/issues/1344), [#1352](https://github.com/krabka-io/krabka-broker/issues/1352), [#1388](https://github.com/krabka-io/krabka-broker/issues/1388), [#1389](https://github.com/krabka-io/krabka-broker/issues/1389). #1389 waits on a nightly upgrade pass on `main` and the RF3 benchmark rerun for #1352. |
-| [M25](https://github.com/krabka-io/krabka-broker/milestone/25) | 1 | 12 | Live broker configuration is verified, and the authentication and admission follow-ups are fixed. | [#1390](https://github.com/krabka-io/krabka-broker/issues/1390). |
-| [M26](https://github.com/krabka-io/krabka-broker/milestone/26) | 3 | 12 | The sustained-load contract and its judge, the KIP-835 quorum metrics, and the failover and tiered-floor defects that the soak harness found. | [#1393](https://github.com/krabka-io/krabka-broker/issues/1393), [#1442](https://github.com/krabka-io/krabka-broker/issues/1442), [#1448](https://github.com/krabka-io/krabka-broker/issues/1448). The 72-hour soak has not run. |
+| [M24](https://github.com/krabka-io/krabka-broker/milestone/24) | 4 | 6 | The month-one baseline record at `3cf42388`, with a green `main` run. Fetch limits, replication throttles and RE2J quoting are fixed. The nightly upgrade lane passes on `main` again, at `e0588325`. | [#1344](https://github.com/krabka-io/krabka-broker/issues/1344), [#1352](https://github.com/krabka-io/krabka-broker/issues/1352), [#1388](https://github.com/krabka-io/krabka-broker/issues/1388), [#1389](https://github.com/krabka-io/krabka-broker/issues/1389). #1389 waits on the RF3 benchmark rerun for #1352. |
+| [M25](https://github.com/krabka-io/krabka-broker/milestone/25) | 0 | 13 | Live broker configuration is verified, and the authentication and admission follow-ups are fixed. | None. |
+| [M26](https://github.com/krabka-io/krabka-broker/milestone/26) | 1 | 17 | The sustained-load contract, its judge and its evidence harness; the KIP-835 quorum metrics; the failover, tiered-floor, remote-band Fetch and RLMM defects the soak found; the four-hour soak passes again; the `netem` fault has run. | [#1551](https://github.com/krabka-io/krabka-broker/issues/1551), the 72-hour run. A host is available. |
 | [M27](https://github.com/krabka-io/krabka-broker/milestone/27) | 3 | 0 | The regression-budget machinery and the first profiling fixes are merged, measured on a VM only. | [#1370](https://github.com/krabka-io/krabka-broker/issues/1370), [#1394](https://github.com/krabka-io/krabka-broker/issues/1394), [#1395](https://github.com/krabka-io/krabka-broker/issues/1395). All three need benchmark-host runs. |
-| [M28](https://github.com/krabka-io/krabka-broker/milestone/28) | 2 | 0 | Nothing yet. | [#1396](https://github.com/krabka-io/krabka-broker/issues/1396), [#1397](https://github.com/krabka-io/krabka-broker/issues/1397). |
-| [M29](https://github.com/krabka-io/krabka-broker/milestone/29) | 2 | 0 | Nothing yet. | [#1398](https://github.com/krabka-io/krabka-broker/issues/1398), [#1399](https://github.com/krabka-io/krabka-broker/issues/1399). |
-| [M30](https://github.com/krabka-io/krabka-broker/milestone/30) | 2 | 0 | The support matrix and the measured envelope are published with their gaps. | [#1400](https://github.com/krabka-io/krabka-broker/issues/1400), [#1401](https://github.com/krabka-io/krabka-broker/issues/1401). No candidate is frozen. |
+| [M28](https://github.com/krabka-io/krabka-broker/milestone/28) | 2 | 5 | The loaded upgrade and rollback passed on release images at `948e3cc8`. The secured DR drill runs under a declared load, and five restore defects it found are fixed. | [#1396](https://github.com/krabka-io/krabka-broker/issues/1396), [#1397](https://github.com/krabka-io/krabka-broker/issues/1397). No DR drill has passed end to end: the one at `f7d824ab` judged PASS and failed on [#1524](https://github.com/krabka-io/krabka-broker/issues/1524), since fixed. |
+| [M29](https://github.com/krabka-io/krabka-broker/milestone/29) | 2 | 17 | Both pilot acceptance plans are written, and the doc gaps they found and the defects an agent's dry run found are fixed. | [#1398](https://github.com/krabka-io/krabka-broker/issues/1398), [#1399](https://github.com/krabka-io/krabka-broker/issues/1399). They wait on named operators. |
+| [M30](https://github.com/krabka-io/krabka-broker/milestone/30) | 2 | 0 | The support matrix and the measured envelope are published with their gaps, and the matrix is current as of 2026-10-20. | [#1400](https://github.com/krabka-io/krabka-broker/issues/1400), [#1401](https://github.com/krabka-io/krabka-broker/issues/1401). No candidate is frozen. |
 
 ### Issues by milestone
 

@@ -126,16 +126,12 @@ async fn lifecycle_metadata_survives_restart() {
     {
         let (broker, client) = rejoin(log_dir).await;
 
-        // The recovered ShareCoordinator replays __share_group_state, so the
-        // summary is present immediately after restart.
+        // The recovered ShareCoordinator replays __share_group_state once it
+        // becomes active for the state partition, which happens after
+        // `Broker::start` returns. Until then a read answers an error, not
+        // the summary, so wait for the recovery rather than read at once.
         for p in 0..2 {
-            assert!(
-                broker
-                    .share_state_summary_for_test("g6", tid, p)
-                    .await
-                    .is_some(),
-                "partition {p} share-state recovered after restart"
-            );
+            broker.wait_for_share_state_summary("g6", tid, p).await;
         }
 
         // Re-join the recovered group; the coordinator's recovered
