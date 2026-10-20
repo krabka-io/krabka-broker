@@ -384,7 +384,8 @@ mod tests {
             error::BrokerError,
             time_util,
             txn::{
-                bootstrap, coordinator::test_support::live_coordinator, state::TxnEntry,
+                coordinator::test_support::{live_coordinator, state_partition},
+                state::TxnEntry,
                 version::TxnVersion,
             },
         },
@@ -411,10 +412,7 @@ mod tests {
     async fn a_transactional_id_over_32767_bytes_is_not_persisted(length: usize, persisted: bool) {
         let dir = tempfile::tempdir().unwrap();
         let (coordinator, _data) = live_coordinator(dir.path()).await;
-        let log = coordinator
-            .partitions
-            .get(bootstrap::TOPIC, PartitionIndex(0))
-            .expect("the state partition");
+        let log = state_partition(&coordinator);
         let tid = "t".repeat(length);
         let entry = TxnEntry::new_empty(tid.clone(), ProducerId(7), 0, 60_000, 0);
 
@@ -451,10 +449,7 @@ mod tests {
     async fn a_persisted_transaction_carries_the_write_time() {
         let dir = tempfile::tempdir().unwrap();
         let (coordinator, _data) = live_coordinator(dir.path()).await;
-        let log = coordinator
-            .partitions
-            .get(bootstrap::TOPIC, PartitionIndex(0))
-            .expect("the state partition");
+        let log = state_partition(&coordinator);
         let entry = TxnEntry::new_empty("t".to_owned(), ProducerId(7), 0, 60_000, 0);
 
         let before = time_util::now_ms();
@@ -513,10 +508,7 @@ mod tests {
         let replay = |batches: Vec<RecordBatch>| async move {
             let dir = tempfile::tempdir().unwrap();
             let (coordinator, _data) = live_coordinator(dir.path()).await;
-            let part = coordinator
-                .partitions
-                .get(bootstrap::TOPIC, PartitionIndex(0))
-                .expect("the state partition");
+            let part = state_partition(&coordinator);
             {
                 let mut log = part.log.lock().unwrap();
                 for mut batch in batches {

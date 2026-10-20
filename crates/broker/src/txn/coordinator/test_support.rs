@@ -197,3 +197,11 @@ pub(super) fn entry(
     e.next_producer_epoch = setup.next_epoch.0;
     e
 }
+
+/// The coordinator's `__transaction_state` partition 0.
+pub(super) fn state_partition(coordinator: &TxnCoordinator) -> Arc<Partition> {
+    coordinator
+        .partitions
+        .get(bootstrap::TOPIC, PartitionIndex(0))
+        .expect("the state partition")
+}
