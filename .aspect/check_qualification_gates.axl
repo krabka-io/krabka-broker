@@ -135,6 +135,10 @@ import re
 import sys
 import tomllib
 root = Path(sys.argv[1])
+# The old protocol predates the separate, unused codegen package.
+manifest = root / 'Cargo.toml'
+manifest.write_text(''.join(line for line in manifest.read_text().splitlines(keepends=True)
+                           if not line.startswith('krabka-protocol-codegen = ')))
 patches = tomllib.loads((root / 'Cargo.toml').read_text())['patch']['crates-io']
 names = {name for name, patch in patches.items() if patch.get('git') in [
     'https://github.com/krabka-io/krabka-protocol',
