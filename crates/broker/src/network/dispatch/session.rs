@@ -31,7 +31,7 @@ use {
     },
     crate::{
         config::BrokerConfig,
-        metrics::BrokerMetrics,
+        metrics::{BrokerMetrics, ConnectionCloseReason},
         network::{
             auth::ConnectionAuth,
             codec::{KafkaCodec, is_invalid_receive},
@@ -171,7 +171,7 @@ impl FrameWaitPolicy {
             "connection idle past connections.max.idle.ms, closing"
         );
         self.metrics
-            .record_connection_close(crate::metrics::ConnectionCloseReason::Idle);
+            .record_connection_close(ConnectionCloseReason::Idle);
     }
 }
 
