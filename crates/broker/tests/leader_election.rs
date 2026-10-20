@@ -419,6 +419,14 @@ async fn a_leader_restarted_inside_its_session_is_fenced_and_loses_leadership() 
             })
             .await;
     }
+    // The image names the victim leader before its partition runtime installs
+    // that leadership, and until it does a Produce answers
+    // NOT_LEADER_OR_FOLLOWER, as Kafka's does while ReplicaManager applies the
+    // delta. The acks below must not race that.
+    cluster[victim_idx]
+        .0
+        .wait_until_local_partition_leader(TOPIC, 0, victim)
+        .await;
     let observer = &cluster[controller].0;
 
     let mut acked = Vec::new();
