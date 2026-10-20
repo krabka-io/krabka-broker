@@ -89,7 +89,7 @@ the first schema-2 eight-gate manifest is checked in as the immutable baseline.
 ## Loaded lifecycle
 
 The eight gates qualify the ecosystem around one broker image. The loaded
-lifecycle gate qualifies the move between two broker images: the newest
+lifecycle gate qualifies the move between two broker images: the previous
 published 1.0.x release and the candidate. It runs under the sustained load of
 the soak contract's executor, and the soak judge grades it. Issue 1396 owns it.
 
@@ -114,18 +114,25 @@ the soak contract's executor, and the soak judge grades it. Issue 1396 owns it.
 
 | | Value |
 | :--- | :--- |
-| Source | `v1.0.5`, `ghcr.io/krabka-io/krabka-broker@sha256:2a81d1ba38de4e8ffb032fedf67952845185158a7607ac76ba38fa162dc37e50`, the multi-platform index that the release workflow signed |
+| Source | `v1.0.6`, `ghcr.io/krabka-io/krabka-broker@sha256:ad5195370c6e55fbb9bb5c31a2dd244c62e5b407f9f6f6e89c01a45aee2e4222`, the multi-platform index that the release workflow signed |
 | Target | The candidate: the `broker_digest` of a successful delivery run of a `main` commit |
 | Cluster | Four nodes, each a controller and a broker, RF=3, `min.insync.replicas=2`, one TLS listener per node |
 | Load | Three classic paths: idempotent, transactional and compacted, at 40 records per second each, with committing consumers at both isolation levels |
 | Transitions | Upgrade brokers 0 to 3 to the target, one at a time. Rotate the TLS certificate of brokers 0 to 3, one at a time. Drain broker 3 of `classic-idempotent` by reassignment: each of its replicas moves to the broker that holds none of that partition. Roll brokers 0 to 3 back to the source, one at a time. |
 | After each transition | The image that each node runs, the finalized feature levels, whether a rollback is still supported, every record that a producer had been acknowledged, the committed offsets of every group, the topic configuration, and the dynamic listener configuration of every rotated broker |
-| Deadlines | Leader failover 25s, ISR rejoin 60s, controller failover 30s, certificate served 30s, reassignment complete 180s. The controller deadline covers the source: a `v1.0.5` controller leader that stops gracefully does not resign (#1446, fixed after `v1.0.5`), so the quorum replaces it only after its fetch timeouts. |
+| Deadlines | Leader failover 25s, ISR rejoin 60s, controller failover 30s, certificate served 30s, reassignment complete 180s. These budgets are unchanged. The controller deadline covers quorum fetch timeouts; v1.0.6 also includes the controlled controller resignation fix (#1446). |
 
 The source declares the feature ranges that it advertises in `ApiVersions`. The
 executor reads the ranges back from the running source, and the judge compares
-them. For `v1.0.5`, `metadata.version` is 7 to 30 and `krabka.version` is 0 to
+them. For `v1.0.6`, `metadata.version` is 7 to 30 and `krabka.version` is 0 to
 1, and the candidate advertises the same ranges.
+
+The [outside verification record](../qualification/release-verification-v1.0.6.json)
+binds the source's signature, SLSA provenance and SBOM to the tested amd64 image.
+The baseline validates the complete recovered metadata image before any engine
+starts or recovery repairs write. Earlier source images can refuse unsupported
+features after a recovery write, which cannot satisfy the unchanged metadata
+byte-preservation check.
 
 To move the source to a newer release, change the `lifecycle.source` section of
 the contract: the version, the digest of the release's signed index, and the
