@@ -143,6 +143,10 @@ candidate before promotion.
 - Bazel-built binaries report the workspace version instead of `0.0.0`.
   The version also reaches the broker's metrics and client software metadata.
 
+- A decoded read at or beyond the log end returns without taking the log
+  configuration lock. Offset-boundary validation still runs before the empty
+  result; reads that need data take the current buffer cap as before.
+
 - `connections.max.idle.ms` now keeps running while a request is in its
   handler, while its response is written, and while a connection is muted
   after a throttled response, on broker and controller listeners alike, as

@@ -303,7 +303,6 @@ impl Log {
     /// # Panics
     /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn read(&self, offset: Offset, max_size: ByteSize) -> Result<ReadOutput, LogError> {
-        let read_buffer_cap = self.config.read().unwrap().read_buffer_cap;
         let log_end = self.log_end_offset();
         self.check_locally_readable(offset)?;
         if offset >= log_end {
@@ -313,6 +312,7 @@ impl Log {
             });
         }
 
+        let read_buffer_cap = self.config.read().unwrap().read_buffer_cap;
         let mut batches: Vec<RecordBatch> = Vec::new();
         let mut current_offset = offset;
         let mut remaining = max_size;
