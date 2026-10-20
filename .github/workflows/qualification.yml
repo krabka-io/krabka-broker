@@ -76,8 +76,7 @@ jobs:
 
   performance:
     needs: candidate
-    if: ${{ inputs.execute }}
-    runs-on: gcp-ubuntu-24-04-32core
+    runs-on: ${{ inputs.execute && 'gcp-ubuntu-24-04-32core' || 'gcp-ubuntu-24-04-16core' }}
     timeout-minutes: 720
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -98,7 +97,21 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+      - name: Check every benchmark host prerequisite before measurement
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/performance"
+          result=0
+          for program in awk bazel docker getconf git javac jq kind kubectl nproc realpath sed sha256sum timeout; do
+            if ! command -v "$program"; then echo "missing benchmark prerequisite: $program"; result=1; fi
+          done
+          instances=$(cat /proc/sys/fs/inotify/max_user_instances)
+          if test "$instances" -lt 512; then echo "fs.inotify.max_user_instances=$instances; need at least 512"; result=1; fi
+          { nproc; grep '^MemTotal:' /proc/meminfo; df -T .; echo "inotify_instances=$instances"; } \
+            > "$RUNNER_TEMP/performance/host-prerequisites.txt"
+          exit "$result"
       - name: Run both predeclared five-round performance budgets on this host
+        if: ${{ inputs.execute }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/performance" "$RUNNER_TEMP/performance-tmp"
@@ -122,6 +135,9 @@ jobs:
   soak:
     needs: candidate
     runs-on: gcp-ubuntu-24-04-32core
+    outputs:
+      inputs_retained: ${{ steps.storage.outcome }}
+      archive_retained: ${{ steps.retain.outcome }}
     # 72 hours of load, its settle tail, build, read-back and evidence upload.
     # The existing VM template expires after five days.
     timeout-minutes: 5760
@@ -200,6 +216,7 @@ jobs:
           "$executable" judge --contract bench/soak/rf3-72h.yaml \
             --evidence "$RUNNER_TEMP/soak-evidence/evidence.json" --out "$RUNNER_TEMP/soak-evidence/verdict.json"
       - name: Retain the outcome with the worker's renewable cloud identity
+        id: retain
         if: ${{ always() && steps.storage.outcome == 'success' }}
         env:
           EXECUTE: ${{ inputs.execute }}
@@ -235,11 +252,17 @@ jobs:
       EVIDENCE_TAG: qualification-soak-${{ github.run_id }}-${{ github.run_attempt }}
       EXECUTE: ${{ inputs.execute }}
       WORKER_RESULT: ${{ needs.soak.result }}
+      INPUTS_RETAINED: ${{ needs.soak.outputs.inputs_retained }}
+      ARCHIVE_RETAINED: ${{ needs.soak.outputs.archive_retained }}
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: ${{ needs.candidate.outputs.artifact }}
           path: ${{ runner.temp }}/profile-input
+      - name: Install the publication client
+        run: |
+          sudo apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install --yes gh
       - name: Verify stored evidence and publish it with a fresh job token
         run: |
           set -euo pipefail
@@ -250,7 +273,8 @@ jobs:
           gh release upload "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" "$RUNNER_TEMP/profile-input/"*.json \
             "$RUNNER_TEMP/profile-input/declared-contract.yaml" "$RUNNER_TEMP/profile-input/main-ci-run.txt"
           stored_inputs=false
-          if gcloud storage cp "$CLOUD_PREFIX/inputs/*" "$RUNNER_TEMP/stored-inputs/"; then
+          if test "$INPUTS_RETAINED" = success; then
+            gcloud storage cp "$CLOUD_PREFIX/inputs/*" "$RUNNER_TEMP/stored-inputs/"
             cmp "$RUNNER_TEMP/profile-input/frozen-candidate.json" "$RUNNER_TEMP/stored-inputs/frozen-candidate.json"
             cmp "$RUNNER_TEMP/profile-input/declared-contract.yaml" "$RUNNER_TEMP/stored-inputs/declared-contract.yaml"
             gh release upload "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" \
@@ -258,17 +282,19 @@ jobs:
             stored_inputs=true
           fi
           complete=false
-          if gcloud storage cp "$CLOUD_PREFIX/evidence/SHA256SUMS" "$RUNNER_TEMP/publication/SHA256SUMS"; then
+          if test "$ARCHIVE_RETAINED" = success; then
+            gcloud storage cp "$CLOUD_PREFIX/evidence/SHA256SUMS" "$RUNNER_TEMP/publication/SHA256SUMS"
             while read -r digest name; do
               [[ "$digest" =~ ^[0-9a-f]{64}$ && "$name" =~ ^[A-Za-z0-9._-]+$ ]]
+              test "$name" != . && test "$name" != ..
               gcloud storage cp "$CLOUD_PREFIX/evidence/$name" "$RUNNER_TEMP/publication/$name"
               (cd "$RUNNER_TEMP/publication" && echo "$digest  $name" | sha256sum --check --status)
               gh release upload "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" "$RUNNER_TEMP/publication/$name"
               if test "$name" != outcome.json; then rm "$RUNNER_TEMP/publication/$name"; fi
             done < "$RUNNER_TEMP/publication/SHA256SUMS"
             gh release upload "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" "$RUNNER_TEMP/publication/SHA256SUMS"
-            jq -e --arg revision "$BROKER_REVISION" --arg image "$BROKER_IMAGE" \
-              '.revision == $revision and .image == $image' "$RUNNER_TEMP/publication/outcome.json"
+            jq -e --arg revision "$BROKER_REVISION" --arg image "$BROKER_IMAGE" --argjson execute "$EXECUTE" \
+              '.revision == $revision and .image == $image and .execute == $execute' "$RUNNER_TEMP/publication/outcome.json"
             complete=true
           fi
           if test "$WORKER_RESULT" = success; then
