@@ -31,19 +31,24 @@
 //! `DUPLICATE_BROKER_REGISTRATION` while the previous one still heartbeats,
 //! stays with the handler. A self-registration is never refused for it: the
 //! batch that registers the new process retires the old one instead.
+//!
+//! A combined node registers its broker before its broker layer exists, and a
+//! restarted node can win the controller election first. Its own registration
+//! then reaches the admission before the broker binds, and is retired against
+//! the image alone (krabka-io/krabka-broker#1442); see
+//! [`BrokerRegistrationAdmission::before_bind`].
 
 use {
     crate::{
         config_keys::RecoveryStrategy,
         controller_admin::BrokerControllerAdminRouter,
-        heartbeat::controller_state::ControllerLivenessState,
         leader_election::compute_reregistration_changes,
         metrics::BrokerMetrics,
         unclean_recovery::{RecoveryJob, UncleanRecoveryHandle},
     },
     krabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord, NodeId},
     krabka_raft::{RaftError, RegistrationAdmission, RegistrationAdmissionFuture},
-    std::{sync::Arc, time::Duration},
+    std::{collections::HashSet, sync::Arc, time::Duration},
     uuid::Uuid,
 };
 
@@ -98,10 +103,12 @@ fn new_incarnation<'a>(
 /// registration in the same batch, are not written twice. A registration with
 /// the incarnation the image holds is the same process registering again and
 /// adds nothing, as Kafka's amend does not.
-pub(crate) async fn admit(
+///
+/// `alive` is the set of brokers an election may pick.
+pub(crate) fn admit(
     image: &MetadataImage,
     records: Vec<MetadataRecord>,
-    liveness: &ControllerLivenessState,
+    alive: &HashSet<NodeId>,
     metrics: &BrokerMetrics,
 ) -> Admitted {
     let mut scratch = image.clone();
@@ -109,7 +116,7 @@ pub(crate) async fn admit(
     for record in records {
         if let Some(registration) = new_incarnation(&scratch, &record) {
             let node = registration.node_id;
-            let plan = compute_reregistration_changes(&scratch, node, liveness, metrics).await;
+            let plan = compute_reregistration_changes(&scratch, node, alive, metrics);
             for (topic, partition) in &plan.unavailable {
                 tracing::warn!(
                     %topic, partition, node_id = node.0,
@@ -131,6 +138,27 @@ pub(crate) async fn admit(
     admitted
 }
 
+/// The brokers other than `returning` that a controller which has just taken
+/// over may elect, before any of them has heartbeated it: every registration
+/// in `image` that is neither fenced nor in controlled shutdown.
+///
+/// It is what [`seed_term`] leaves active in a new controller's registry, and
+/// what Kafka's `ClusterControlManager.isActive` answers from the replayed
+/// registrations once `activate` has run. `returning` is left out whatever
+/// its registration says, as `handleBrokerShutdown` never elects the broker it
+/// retires.
+///
+/// [`seed_term`]: crate::heartbeat::controller_state::ControllerLivenessState::seed_term
+fn active_on_activation(image: &MetadataImage, returning: NodeId) -> HashSet<NodeId> {
+    image
+        .brokers()
+        .filter(|broker| {
+            broker.node_id != returning && !broker.fenced && !broker.in_controlled_shutdown
+        })
+        .map(|broker| broker.node_id)
+        .collect()
+}
+
 /// Late-bound bridge from the raft leader, which starts before the broker, to
 /// the heartbeat registry and the election ladder the admission decides with.
 /// It reaches the broker through the controller listener's
@@ -139,9 +167,11 @@ pub(crate) struct BrokerRegistrationAdmission {
     /// This controller's own node id.
     node_id: NodeId,
     /// The controller's published image, which the answer before the broker
-    /// binds reads.
+    /// binds reads, and the recovery hand-off waits on.
     images: tokio::sync::watch::Receiver<Arc<MetadataImage>>,
     router: Arc<BrokerControllerAdminRouter>,
+    /// The metrics the unclean elections a retirement makes are counted in.
+    metrics: BrokerMetrics,
 }
 
 impl BrokerRegistrationAdmission {
@@ -149,11 +179,13 @@ impl BrokerRegistrationAdmission {
         node_id: NodeId,
         images: tokio::sync::watch::Receiver<Arc<MetadataImage>>,
         router: Arc<BrokerControllerAdminRouter>,
+        metrics: BrokerMetrics,
     ) -> Self {
         Self {
             node_id,
             images,
             router,
+            metrics,
         }
     }
 
@@ -161,17 +193,31 @@ impl BrokerRegistrationAdmission {
     ///
     /// A batch that retires another broker's incarnation is refused, and the
     /// registering broker retries it: admitting it unchanged would leave that
-    /// broker's leaderships with the new process. This node's own registration
-    /// is the one this node's startup is waiting on, and its previous
-    /// incarnation is the process this one replaced, so it goes through as it
-    /// was submitted.
-    fn before_bind(&self, records: Vec<MetadataRecord>) -> Result<Vec<MetadataRecord>, RaftError> {
-        if retires_another_broker(&self.images.borrow(), self.node_id, &records) {
+    /// broker's leaderships with the new process.
+    ///
+    /// This node's own registration is the one this node's startup is waiting
+    /// on, so it is never refused, and it reaches here when this node won the
+    /// controller election before its broker bound
+    /// (krabka-io/krabka-broker#1442). Its previous incarnation is retired in
+    /// the same batch, as for any broker, against the registrations of the
+    /// image, which is all a controller that has just taken over knows of
+    /// liveness: see [`active_on_activation`].
+    ///
+    /// No heartbeat session needs replacing. This node's registry is built
+    /// after its registration commits, and the first seed of a term reads the
+    /// new incarnation's registration, which starts fenced and without a
+    /// session, as [`ControllerLivenessState::replace_incarnation`] leaves it.
+    ///
+    /// [`ControllerLivenessState::replace_incarnation`]: crate::heartbeat::controller_state::ControllerLivenessState::replace_incarnation
+    fn before_bind(&self, records: Vec<MetadataRecord>) -> Result<Admitted, RaftError> {
+        let image = Arc::clone(&self.images.borrow());
+        if retires_another_broker(&image, self.node_id, &records) {
             return Err(RaftError::ControllerAdmin(
                 "broker startup is incomplete".into(),
             ));
         }
-        Ok(records)
+        let alive = active_on_activation(&image, self.node_id);
+        Ok(admit(&image, records, &alive, &self.metrics))
     }
 }
 
@@ -190,11 +236,12 @@ fn retires_another_broker(
 
 /// Hand `recoveries` to the Unclean Recovery Manager once `images` shows
 /// `incarnation` registered as `node`, which is when the batch that decided
-/// them has committed. The returned task ends once it has handed them over, or
-/// given them up.
+/// them has committed, and once `recovery` yields the manager, which is when
+/// this node's broker has bound. The returned task ends once it has handed
+/// them over, or given them up.
 fn hand_off_recoveries(
     mut images: tokio::sync::watch::Receiver<Arc<MetadataImage>>,
-    recovery: UncleanRecoveryHandle,
+    recovery: impl Future<Output = Option<UncleanRecoveryHandle>> + Send + 'static,
     (node, incarnation): (NodeId, Uuid),
     recoveries: Vec<(String, i32, RecoveryStrategy)>,
 ) -> Option<tokio::task::JoinHandle<()>> {
@@ -220,6 +267,9 @@ fn hand_off_recoveries(
         if committed != Ok(true) {
             return;
         }
+        let Some(recovery) = recovery.await else {
+            return;
+        };
         for (topic, partition, strategy) in recoveries {
             recovery
                 .enqueue(RecoveryJob {
@@ -239,24 +289,30 @@ fn hand_off_recoveries(
 impl RegistrationAdmission for BrokerRegistrationAdmission {
     fn admit(&self, records: Vec<MetadataRecord>) -> RegistrationAdmissionFuture<'_> {
         Box::pin(async move {
-            let Some(broker) = self.router.broker() else {
-                return self.before_bind(records);
-            };
-            let image = broker.controller.current_image();
             let Admitted {
                 records,
                 new_incarnations,
                 recoveries,
-            } = admit(&image, records, &broker.liveness, &broker.metrics).await;
-            // `ClusterControlManager.registerBroker` removes the session of the
-            // previous incarnation and registers the new one fenced.
-            for (node, _) in &new_incarnations {
-                broker.liveness.replace_incarnation(node.0).await;
-            }
+            } = match self.router.broker() {
+                Some(broker) => {
+                    let image = broker.controller.current_image();
+                    let alive = broker.liveness.alive_node_ids().await;
+                    let admitted = admit(&image, records, &alive, &self.metrics);
+                    // `ClusterControlManager.registerBroker` removes the session
+                    // of the previous incarnation and registers the new one
+                    // fenced.
+                    for (node, _) in &admitted.new_incarnations {
+                        broker.liveness.replace_incarnation(node.0).await;
+                    }
+                    admitted
+                }
+                None => self.before_bind(records)?,
+            };
             if let Some(first) = new_incarnations.first() {
+                let bound = self.router.bound();
                 hand_off_recoveries(
-                    broker.controller.watch_image(),
-                    broker.unclean_recovery.clone(),
+                    self.images.clone(),
+                    async move { bound.await.map(|broker| broker.unclean_recovery.clone()) },
                     *first,
                     recoveries,
                 );

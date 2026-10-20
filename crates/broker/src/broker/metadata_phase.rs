@@ -282,6 +282,7 @@ async fn start_metadata_source(
                     config.node_id,
                     controller.watch_image(),
                     Arc::clone(router),
+                    metrics.clone(),
                 )))
                 .map_err(|error| BrokerError::Startup(error.into()))?;
         }

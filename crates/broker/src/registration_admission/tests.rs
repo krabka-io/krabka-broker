@@ -5,9 +5,8 @@ use {
     super::*,
     crate::{
         handlers::forward_to_controller::is_active_controller,
-        leader_election::test_support::{
-            expected_partition, img_with_partition, liveness_with_alive, register_brokers,
-        },
+        heartbeat::controller_state::{ControllerLivenessState, replicated_registrations},
+        leader_election::test_support::{expected_partition, img_with_partition, register_brokers},
         test_support::{broker_registration, start_broker_with},
     },
     assert2::check,
@@ -77,8 +76,8 @@ struct Case {
 /// the `RegisterBrokerRecord`. The same process registering again adds
 /// nothing, and neither does a first registration or a batch whose changes
 /// already retired the broker.
-#[tokio::test]
-async fn a_new_incarnation_leaves_its_isrs_and_leaderships_in_its_registration_batch() {
+#[test]
+fn a_new_incarnation_leaves_its_isrs_and_leaderships_in_its_registration_batch() {
     let cases = [
         Case {
             what: "a restarted leader",
@@ -119,41 +118,87 @@ async fn a_new_incarnation_leaves_its_isrs_and_leaderships_in_its_registration_b
     for case in cases {
         let mut image = img_with_partition().leader(NodeId(case.leader)).call();
         register_brokers(&mut image, case.registered);
-        let liveness = liveness_with_alive(&[1, 2]).await;
+        let alive = HashSet::from([NodeId(1), NodeId(2)]);
 
-        let admitted = admit(&image, case.submitted, &liveness, &BrokerMetrics::new()).await;
+        let admitted = admit(&image, case.submitted, &alive, &BrokerMetrics::new());
 
         check!(admitted == case.expected, "{}", case.what);
     }
 }
 
-/// Before this node's broker layer exists, a batch that would retire another
-/// registered broker's incarnation is refused, so its broker retries it once
-/// the admission can retire it. This node's own registration, and a broker
-/// that registers for the first time, go through as they were submitted.
+/// Broker `node`'s registration in `image`, fenced.
+fn fence(image: &mut MetadataImage, node: u64) {
+    image.apply(&MetadataRecord::V1BrokerRegistration(
+        BrokerRegistrationRecord {
+            fenced: true,
+            ..image.broker(NodeId(node)).expect("registered").clone()
+        },
+    ));
+}
+
+/// krabka-io/krabka-broker#1442: before this node's broker layer exists, a
+/// batch that would retire another registered broker's incarnation is refused,
+/// so its broker retries it once the admission can retire it. This node's own
+/// restart, which won the controller election before its broker bound, is
+/// never refused, since its startup waits on it: it leaves `t`-0's ISR and
+/// leadership in its registration batch, and the leader moves to the first
+/// replica the image holds unfenced, at a new leader epoch. A first
+/// registration goes through as it was submitted.
 #[yare::parameterized(
-    another_brokers_restart = { 1, &[1, 2, 3], false },
-    first_registration = { 1, &[1, 2], true },
-    this_nodes_restart = { 3, &[1, 2, 3], true },
+    this_nodes_restart = { 3, &[1, 2, 3], &[], Some(vec![without_broker_3(1, 6), registration(RESTARTED)]) },
+    this_nodes_restart_past_a_fenced_replica = { 3, &[1, 2, 3], &[1], Some(vec![without_broker_3(2, 6), registration(RESTARTED)]) },
+    this_nodes_first_registration = { 3, &[1, 2], &[], Some(vec![registration(RESTARTED)]) },
+    another_brokers_first_registration = { 1, &[1, 2], &[], Some(vec![registration(RESTARTED)]) },
+    another_brokers_restart = { 1, &[1, 2, 3], &[], None },
 )]
 #[test_macro(tokio::test)]
-async fn an_unbound_admission_refuses_only_another_brokers_restart(
+async fn an_unbound_admission_retires_this_nodes_restart_and_refuses_another_brokers(
     this_node: u64,
     registered: &[u64],
-    admitted: bool,
+    fenced: &[u64],
+    expected: Option<Vec<MetadataRecord>>,
 ) {
-    let mut image = img_with_partition().call();
+    let mut image = img_with_partition().leader(NodeId(3)).call();
     register_brokers(&mut image, registered);
+    for &node in fenced {
+        fence(&mut image, node);
+    }
     let (_images, receiver) = tokio::sync::watch::channel(Arc::new(image));
     let admission = BrokerRegistrationAdmission::new(
         NodeId(this_node),
         receiver,
         Arc::new(BrokerControllerAdminRouter::new()),
+        BrokerMetrics::new(),
     );
 
     let answer = RegistrationAdmission::admit(&admission, vec![registration(RESTARTED)]).await;
 
-    check!(answer.ok() == admitted.then(|| vec![registration(RESTARTED)]));
+    check!(answer.ok() == expected);
+}
+
+/// The brokers an admission before bind may elect are the ones a new
+/// controller's freshly seeded registry holds active, without the returning
+/// broker: neither a fenced broker nor one in controlled shutdown is.
+#[tokio::test]
+async fn the_brokers_active_on_activation_are_the_ones_a_new_term_seeds_active() {
+    let mut image = img_with_partition().call();
+    register_brokers(&mut image, &[1, 2, 3, 4]);
+    fence(&mut image, 2);
+    image.apply(&MetadataRecord::V1BrokerRegistration(
+        BrokerRegistrationRecord {
+            in_controlled_shutdown: true,
+            ..image.broker(NodeId(3)).expect("registered").clone()
+        },
+    ));
+    let liveness = ControllerLivenessState::new(krabka_units::secs(10));
+    liveness
+        .seed_term(Some(1), replicated_registrations(&image))
+        .await;
+    let mut seeded = liveness.alive_node_ids().await;
+    seeded.remove(&NodeId(4));
+
+    check!(active_on_activation(&image, NodeId(4)) == seeded);
+    check!(seeded == HashSet::from([NodeId(1)]));
 }
 
 /// The bound admission on a running controller: broker 2, which leads `t`-0
@@ -235,17 +280,26 @@ async fn a_controller_retires_a_restarted_leader_in_its_registration_batch() {
 
 /// The offset-aware recoveries a re-registration decides reach the Unclean
 /// Recovery Manager only once the image holds the new incarnation, which is
-/// when the batch that decided them has committed.
-#[tokio::test]
-async fn recoveries_are_handed_off_once_the_new_incarnation_is_registered() {
+/// when the batch that decided them has committed, and once this node's
+/// broker has bound and so has a manager to hand them to. A broker that never
+/// binds hands nothing over.
+#[yare::parameterized(
+    binds = { true },
+    never_binds = { false },
+)]
+#[test_macro(tokio::test)]
+async fn recoveries_are_handed_off_once_the_new_incarnation_is_registered_and_the_broker_bound(
+    binds: bool,
+) {
     let mut image = img_with_partition().call();
     register_brokers(&mut image, &[1, 2, 3]);
     let (images, receiver) = tokio::sync::watch::channel(Arc::new(image.clone()));
     let (sender, mut jobs) = tokio::sync::mpsc::channel(4);
+    let (bind, bound) = tokio::sync::oneshot::channel();
 
     let task = hand_off_recoveries(
         receiver,
-        UncleanRecoveryHandle::for_tests(sender),
+        async move { bound.await.ok() },
         (NodeId(3), Uuid::from_u128(RESTARTED)),
         vec![("t".to_string(), 0, RecoveryStrategy::Balanced)],
     )
@@ -258,17 +312,28 @@ async fn recoveries_are_handed_off_once_the_new_incarnation_is_registered() {
 
     image.apply(&registration(RESTARTED));
     images.send_replace(Arc::new(image));
+    tokio::task::yield_now().await;
+    check!(jobs.try_recv().is_err(), "nothing before the broker binds");
+
+    if binds {
+        check!(
+            bind.send(UncleanRecoveryHandle::for_tests(sender)).is_ok(),
+            "the hand-off waits for the bind"
+        );
+    } else {
+        drop((bind, sender));
+    }
     task.await.expect("hand-off task");
 
-    let job = jobs.try_recv().expect("the handed-off recovery");
-    check!(
+    let job = jobs.try_recv().ok().map(|job| {
         (
-            job.topic.as_str(),
+            job.topic,
             job.partition,
             job.strategy,
-            job.proposal.is_none()
-        ) == ("t", 0, RecoveryStrategy::Balanced, true)
-    );
+            job.proposal.is_none(),
+        )
+    });
+    check!(job == binds.then(|| ("t".to_string(), 0, RecoveryStrategy::Balanced, true)));
 }
 
 /// No recovery to hand off starts no task.
@@ -280,7 +345,7 @@ fn no_recoveries_start_no_hand_off() {
     check!(
         hand_off_recoveries(
             receiver,
-            UncleanRecoveryHandle::for_tests(sender),
+            std::future::ready(Some(UncleanRecoveryHandle::for_tests(sender))),
             (NodeId(3), Uuid::from_u128(RESTARTED)),
             vec![],
         )
