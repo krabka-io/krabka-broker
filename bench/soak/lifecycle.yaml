@@ -1,5 +1,5 @@
 # The lifecycle contract of a release candidate: a cluster formatted and
-# loaded on the newest 1.0.x release is upgraded to the candidate broker by
+# loaded on the previous 1.0.x release is upgraded to the candidate broker by
 # broker, has every broker's TLS certificate rotated, has one broker
 # drained of a path by reassignment, and is rolled back to the release broker by broker, all under
 # the same sustained load. After every transition the executor reconciles the
@@ -53,12 +53,13 @@ clients:
     poll_timeout: 200ms
 
 lifecycle:
-  # v1.0.5, the newest 1.0.x release: the multi-platform index its release
-  # workflow signed. `ApiVersions` from this image advertises these ranges;
+  # v1.0.6 validates recovered features before any recovery write. This is
+  # the multi-platform index its release workflow signed.
+  # `ApiVersions` from this image advertises these ranges;
   # the executor reads them back and the judge compares.
   source:
-    version: v1.0.5
-    image: ghcr.io/krabka-io/krabka-broker@sha256:2a81d1ba38de4e8ffb032fedf67952845185158a7607ac76ba38fa162dc37e50
+    version: v1.0.6
+    image: ghcr.io/krabka-io/krabka-broker@sha256:ad5195370c6e55fbb9bb5c31a2dd244c62e5b407f9f6f6e89c01a45aee2e4222
     supports:
       eligible.leader.replicas.version: {min: 0, max: 1}
       group.version: {min: 0, max: 1}
@@ -106,10 +107,10 @@ paths:
 
 # A roll stops its broker with a controlled shutdown and starts it on the
 # other image after its duration: the deadlines are the self-check's for a
-# graceful restart, but for the controller's. A v1.0.5 controller leader that
-# stops gracefully does not resign (#1446, fixed after it), so the quorum
-# replaces it only after its fetch timeouts: 20 to 24 s on a shared runner. A
-# rotation is served within seconds; a reassignment copies a few minutes of
+# graceful restart, but for the controller's. Keep the existing 30 s controller
+# budget, which covers quorum fetch timeouts. v1.0.6 also includes the
+# controlled controller resignation fix (#1446). A rotation is served within
+# seconds; a reassignment copies a few minutes of
 # one path at most.
 deadlines:
   leader_failover: 25s

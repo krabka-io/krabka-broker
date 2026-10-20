@@ -31,11 +31,11 @@ derive_more = { workspace = true }
 bon = { workspace = true }
 maplit = { workspace = true }
 assert2 = { workspace = true }
-krabka-ids = { version = "0.6.0" }
-krabka-macros = { version = "1.0.6", path = "../macros" }
-krabka-protocol = { version = "0.6.0", default-features = false }
-krabka-compression = { version = "0.6.0", default-features = false }
-krabka-verified = { version = "1.0.6", path = "../verified" }
+krabka-ids = { version = "0.7.0" }
+krabka-macros = { version = "1.0.7", path = "../macros" }
+krabka-protocol = { version = "0.7.0", default-features = false }
+krabka-compression = { version = "0.7.0", default-features = false }
+krabka-verified = { version = "1.0.7", path = "../verified" }
 krabka-units = { workspace = true }
 bytes = { workspace = true }
 crc32c = { workspace = true }
@@ -58,7 +58,7 @@ bon = { workspace = true }
 yare = { workspace = true }
 # The lookup and compaction tests of `max.decompressed.message.bytes` write
 # compressed batches, and the library itself carries no codec.
-krabka-compression = { version = "0.6.0", default-features = false, features = ["gzip"] }
+krabka-compression = { version = "0.7.0", default-features = false, features = ["gzip"] }
 mutants = { workspace = true }
 proptest = { workspace = true }
 # Exhaustive enumeration of the leader-epoch truncation core

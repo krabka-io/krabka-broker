@@ -25,9 +25,9 @@ bon = { workspace = true }
 assert2 = { workspace = true }
 creusot-std = "0.14.0"
 derive_more = { workspace = true }
-krabka-ids = { version = "0.6.0" }
+krabka-ids = { version = "0.7.0" }
 
-krabka-macros = { version = "1.0.6", path = "../macros" }
+krabka-macros = { version = "1.0.7", path = "../macros" }
 
 [dev-dependencies]
 bon = { workspace = true }

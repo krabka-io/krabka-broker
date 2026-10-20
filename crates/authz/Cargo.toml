@@ -19,9 +19,9 @@ workspace = true
 [dependencies]
 bon = { workspace = true }
 assert2 = { workspace = true }
-krabka-metadata = { version = "0.6.0" }
-krabka-security = { version = "0.6.0" }
-krabka-verified = { version = "1.0.6", path = "../verified" }
+krabka-metadata = { version = "0.7.0" }
+krabka-security = { version = "0.7.0" }
+krabka-verified = { version = "1.0.7", path = "../verified" }
 tracing = { workspace = true }
 
 [dev-dependencies]

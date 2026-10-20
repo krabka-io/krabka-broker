@@ -29,7 +29,7 @@ clap = { workspace = true, features = ["env"] }
 derive_more = { workspace = true }
 futures-util = { workspace = true }
 krabka-units = { workspace = true }
-krabka-protocol = { version = "0.6.0", default-features = false }
+krabka-protocol = { version = "0.7.0", default-features = false }
 prometheus-client = { workspace = true }
 refined_type = { workspace = true }
 schemars = { workspace = true }
