@@ -7,7 +7,7 @@
 
 use super::{
     TopicBasedRemoteLogMetadataManager,
-    assignment::{HWM_UNKNOWN, ReadGate},
+    assignment::{HWM_UNKNOWN, ReadGate, read_gate},
 };
 
 /// Readiness of one assigned `__remote_log_metadata` partition, as
@@ -36,7 +36,8 @@ impl TopicBasedRemoteLogMetadataManager {
     /// manager is assigned, sorted by partition. An unassigned partition has
     /// no entry.
     ///
-    /// `ready` comes from the same gate that every gated read consults.
+    /// `ready` comes from the same rule that every gated read applies, over
+    /// the target and applied offset the entry reports.
     ///
     /// # Panics
     ///
@@ -54,19 +55,14 @@ impl TopicBasedRemoteLogMetadataManager {
         targets
             .into_iter()
             .map(|(partition, target)| {
-                let applied_offset = usize::try_from(partition).ok().map_or(-1, |index| {
-                    self.applied
-                        .lock()
-                        .expect("applied mutex poisoned")
-                        .get(index)
-                        .copied()
-                        .unwrap_or(-1)
-                });
+                // `ready` comes from the offsets this sample reports, so a
+                // pump that advances meanwhile cannot make it contradict them.
+                let applied = self.applied_offset(partition);
                 MetadataPartitionReadiness {
                     partition,
                     target_offset: (target != HWM_UNKNOWN).then_some(target),
-                    applied_offset,
-                    ready: matches!(self.metadata_partition_gate(partition), ReadGate::Ready),
+                    applied_offset: applied.unwrap_or(-1),
+                    ready: matches!(read_gate(target, applied), ReadGate::Ready),
                 }
             })
             .collect()

@@ -1,6 +1,7 @@
 //! Local mutation outcomes and completion when consumption stops.
 
 use {
+    super::{MutationKey, MutationWaiters},
     crate::{
         error::MetadataLogError,
         log::{
@@ -221,6 +222,20 @@ async fn released(log: &HeldPublishLog, mutation: Mutation) -> Result<(), Remote
         .unwrap()
 }
 
+/// Release the parked publish and check what the publisher learned, then
+/// that no mutation state is left behind.
+async fn expect_released(
+    manager: &TopicBasedRemoteLogMetadataManager,
+    log: &HeldPublishLog,
+    mutation: Mutation,
+    expected: fn(&Result<(), RemoteStorageError>) -> bool,
+) {
+    let result = released(log, mutation).await;
+    assert!(expected(&result), "{result:?}");
+    assert!(manager.mutation_waiters.is_idle());
+    manager.shutdown();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_pending_publish_does_not_stall_the_pump() {
     let HeldManager {
@@ -280,10 +295,7 @@ async fn an_outcome_applied_before_the_acknowledgement_reaches_the_publisher(
     wait_applied(&manager, &log, partition).await;
     // The pump applied the record before the publisher registered its offset.
     assert2::assert!(manager.mutation_waiters.registered() == 0);
-    let result = released(&log, mutation).await;
-    assert2::assert!(expected(&result), "{result:?}");
-    assert2::assert!(manager.mutation_waiters.is_idle());
-    manager.shutdown();
+    expect_released(&manager, &log, mutation, expected).await;
 }
 
 #[yare::parameterized(
@@ -305,8 +317,105 @@ async fn unassigning_a_partition_completes_a_publish_in_flight_on_it(
         wait_applied(&manager, &log, partition).await;
     }
     manager.reconcile_assignment(&[1 - partition]).await;
-    let result = released(&log, mutation).await;
-    assert2::assert!(expected(&result), "{result:?}");
-    assert2::assert!(manager.mutation_waiters.is_idle());
-    manager.shutdown();
+    expect_released(&manager, &log, mutation, expected).await;
+}
+
+/// One step the pump or the reconciler takes while a publish on partition 0
+/// is in flight.
+#[derive(Clone, Copy)]
+enum Step {
+    /// The pump applies the record at this offset, accepted or rejected.
+    Apply(i64, bool),
+    /// The reconciler unassigns partition 0.
+    Unassign,
+}
+
+const PUBLISHED: i64 = 5;
+
+fn apply(waiters: &MutationWaiters, offset: i64, accepted: bool) {
+    waiters.complete(
+        MutationKey {
+            partition: 0,
+            offset,
+        },
+        || {
+            if accepted {
+                Ok(())
+            } else {
+                Err(RemoteStorageError::InvalidArgument("rejected".into()))
+            }
+        },
+    );
+}
+
+fn run(waiters: &MutationWaiters, steps: &[Step]) {
+    for step in steps {
+        match *step {
+            Step::Apply(offset, accepted) => apply(waiters, offset, accepted),
+            Step::Unassign => waiters.remove_partition(0, || {}),
+        }
+    }
+}
+
+/// What the publisher of the record at [`PUBLISHED`] learns.
+fn outcome(
+    reply: &mut tokio::sync::oneshot::Receiver<Result<(), RemoteStorageError>>,
+) -> &'static str {
+    match reply.try_recv() {
+        Ok(Ok(())) => "ok",
+        Ok(Err(RemoteStorageError::InvalidArgument(_))) => "rejected",
+        Ok(Err(RemoteStorageError::NotReady { .. })) => "not ready",
+        Ok(Err(_)) => "other error",
+        Err(_) => "pending",
+    }
+}
+
+#[yare::parameterized(
+    applied_before_the_acknowledgement = { &[Step::Apply(PUBLISHED, true)], "ok" },
+    rejected_before_the_acknowledgement = { &[Step::Apply(PUBLISHED, false)], "rejected" },
+    replay_keeps_the_first_outcome = { &[Step::Apply(PUBLISHED, true), Step::Apply(PUBLISHED, false)], "ok" },
+    not_yet_applied = { &[Step::Apply(PUBLISHED - 1, true)], "pending" },
+    applied_then_unassigned = { &[Step::Apply(PUBLISHED, true), Step::Unassign], "ok" },
+    rejected_then_unassigned = { &[Step::Apply(PUBLISHED, false), Step::Unassign], "rejected" },
+    unassigned_unapplied = { &[Step::Unassign], "not ready" },
+    unassigned_then_applied = { &[Step::Unassign, Step::Apply(PUBLISHED, true)], "not ready" },
+    unassigned_then_rejected = { &[Step::Unassign, Step::Apply(PUBLISHED, false)], "not ready" },
+    applied_after_two_unassignments = { &[Step::Unassign, Step::Unassign, Step::Apply(PUBLISHED, true)], "not ready" },
+)]
+fn a_publish_takes_the_outcome_applied_before_it_registers(steps: &[Step], expected: &str) {
+    let waiters = MutationWaiters::default();
+    let publish = waiters.begin_publish(0, || true).unwrap();
+    run(&waiters, steps);
+    let mut reply = publish.register(PUBLISHED);
+    assert2::assert!(outcome(&mut reply) == expected);
+    if expected == "pending" {
+        apply(&waiters, PUBLISHED, true);
+        assert2::assert!(outcome(&mut reply) == "ok");
+    }
+    assert2::assert!(waiters.is_idle());
+}
+
+#[test]
+fn a_pending_publish_keeps_only_first_rejections_on_its_partition() {
+    let waiters = MutationWaiters::default();
+    let publish = waiters.begin_publish(0, || true).unwrap();
+    for offset in 0..1_000 {
+        apply(&waiters, offset, offset % 100 != 0);
+        // A record on a partition with no publish in flight keeps nothing.
+        waiters.complete(
+            MutationKey {
+                partition: 1,
+                offset,
+            },
+            || Err(RemoteStorageError::InvalidArgument("rejected".into())),
+        );
+    }
+    // Replays after a reassignment keep nothing either.
+    for offset in 0..1_000 {
+        apply(&waiters, offset, false);
+    }
+    assert!(waiters.kept() == 10);
+    let mut reply = publish.register(2_000);
+    assert!(outcome(&mut reply) == "pending");
+    assert!(waiters.kept() == 0);
 }

@@ -1,6 +1,6 @@
 # Topic-backed RLMM partition not ready
 
-**Alert:** `KrabkaRlmmPartitionNotReady`, `krabka_broker_tiered_storage_rlmm_partition_ready == 0 and (krabka_broker_tiered_storage_rlmm_partition_target_offset == -1 or changes(krabka_broker_tiered_storage_rlmm_partition_applied_offset[10m]) == 0)` for 10m.
+**Alert:** `KrabkaRlmmPartitionNotReady`, `krabka_broker_tiered_storage_rlmm_partition_ready == 0 and (krabka_broker_tiered_storage_rlmm_partition_target_offset == -1 or changes(krabka_broker_tiered_storage_rlmm_partition_applied_offset[5m]) == 0)` for 5m.
 
 ## What it means
 
@@ -10,12 +10,13 @@ partition, it reads that partition's high-water mark. Until its consumer has
 applied every event up to that mark, the broker answers reads for the
 partition with the retriable `NotReady`. Catch-up normally takes seconds.
 
-The alert fires when one assigned metadata partition stays not ready for 10
-minutes and one of these is also true:
+The alert fires when one assigned metadata partition is not ready and one of
+these is also true:
 
-- The high-water mark is unknown (`target_offset` is -1), because the
-  `ListOffsets` call that reads it keeps failing.
-- The consumer has applied no new event for 10 minutes.
+- The high-water mark has been unknown (`target_offset` is -1) for 5 minutes,
+  because the `ListOffsets` call that reads it keeps failing.
+- The consumer has applied no new event for 10 minutes: a 5-minute window
+  with no change, held for 5 minutes.
 
 A partition that is catching up moves its applied offset on each reconcile,
 so a slow replay after a restart or a new assignment does not fire the alert.
@@ -45,7 +46,7 @@ krabka_broker_tiered_storage_rlmm_partition_applied_offset
 The broker log repeats a `WARN` line with the `NotReady` message above for the
 same `partition`. The reconciler samples the gauges after each reconcile, on
 each assignment change and each `rlmm_reconcile_tick` (30s by default). If you
-set the tick above 10 minutes, the applied offset can look flat while the
+set the tick above 5 minutes, the applied offset can look flat while the
 consumer moves.
 
 ## Diagnose

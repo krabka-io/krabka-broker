@@ -7,13 +7,18 @@
 //! close that race, but would stall the pump for every metadata partition for
 //! as long as one produce takes.
 //!
-//! Instead, [`MutationWaiters`] counts the publishes in flight on each
-//! metadata partition. While a partition has one, the pump keeps the outcome
-//! of each record it applies there that no waiter claimed, and the publisher
-//! takes its outcome from those once it knows its offset. When the last
-//! publish on a partition registers, the kept outcomes for it are dropped,
-//! because no one can claim them any more. The lock is never held across an
-//! `.await`.
+//! Instead, [`MutationWaiters`] tracks the highest offset the pump has applied
+//! on each metadata partition, and counts the publishes in flight on each.
+//! While a partition has one, the pump keeps each rejection it applies there
+//! that no waiter claimed. A publisher whose offset is already applied takes
+//! the kept rejection for it, or succeeds when there is none. Only rejections
+//! are kept, so a busy partition does not grow the state while a publish is
+//! slow. When the last publish on a partition registers, the kept rejections
+//! for it are dropped, because no one can claim them any more. The lock is
+//! never held across an `.await`.
+//!
+//! An unassignment while a publish is in flight fails it with `NotReady`,
+//! unless the pump applied its record before the unassignment.
 
 use {
     super::{TopicBasedRemoteLogMetadataManager, assignment::ReadGate},
@@ -55,16 +60,51 @@ struct WaiterState {
     /// Publishes started on each metadata partition whose offset is not yet
     /// registered. A partition with none has no entry.
     in_flight: HashMap<i32, usize>,
-    /// Outcomes the pump applied on a partition with a publish in flight and
-    /// no waiter for the record yet.
-    early: HashMap<MutationKey, Outcome>,
+    /// The highest offset the pump has applied on each metadata partition.
+    applied: HashMap<i32, i64>,
+    /// Rejections the pump applied on a partition with a publish in flight
+    /// and no waiter for the record yet, with the partition's removal count
+    /// when the pump applied them.
+    rejected: HashMap<MutationKey, (u64, RemoteStorageError)>,
     /// How many times each metadata partition has been unassigned.
     removals: HashMap<i32, u64>,
+    /// The highest offset applied on a partition when it was unassigned with
+    /// a publish in flight, by the partition and the removal count that the
+    /// unassignment reached.
+    applied_at_removal: HashMap<(i32, u64), i64>,
 }
 
 impl WaiterState {
     fn removals(&self, partition: i32) -> u64 {
         self.removals.get(&partition).copied().unwrap_or_default()
+    }
+
+    fn applied(&self, partition: i32) -> i64 { self.applied.get(&partition).copied().unwrap_or(-1) }
+
+    /// The outcome of the record at `key` for a publish that started when
+    /// the partition's removal count was `removals`, or `None` while the pump
+    /// has not applied it and the partition is still assigned.
+    fn outcome(&mut self, key: MutationKey, removals: u64) -> Option<Outcome> {
+        let partition = key.partition;
+        let unassigned = self.removals(partition) != removals;
+        // Only what the pump applied before the first unassignment since the
+        // publish started is visible to gated reads.
+        let applied_through = if unassigned {
+            self.applied_at_removal
+                .get(&(partition, removals + 1))
+                .copied()
+                .unwrap_or(-1)
+        } else {
+            self.applied(partition)
+        };
+        match self.rejected.remove(&key) {
+            Some((at, error)) if at == removals => Some(Err(error)),
+            _ if key.offset <= applied_through => Some(Ok(())),
+            // The partition was unassigned during the publish, so the pump
+            // may never consume this record.
+            _ if unassigned => Some(Err(RemoteStorageError::NotReady { partition })),
+            _ => None,
+        }
     }
 
     /// End one in-flight publish on `partition`.
@@ -75,7 +115,9 @@ impl WaiterState {
         *count.get_mut() -= 1;
         if *count.get() == 0 {
             count.remove();
-            self.early.retain(|key, _| key.partition != partition);
+            self.rejected.retain(|key, _| key.partition != partition);
+            self.applied_at_removal
+                .retain(|&(removed, _), _| removed != partition);
         }
     }
 }
@@ -105,19 +147,28 @@ impl MutationWaiters {
     }
 
     /// Apply the consumed record at `key` with `apply` and deliver the
-    /// outcome to its waiter, or keep it while a publish on its partition is
-    /// in flight.
+    /// outcome to its waiter, or keep a rejection while a publish on its
+    /// partition is in flight.
     ///
     /// `apply` and the delivery run together under the lock.
     pub(super) fn complete(&self, key: MutationKey, apply: impl FnOnce() -> Outcome) {
         let mut state = self.state();
         let outcome = apply();
+        let applied = state.applied.entry(key.partition).or_insert(-1);
+        // The first application is the record's outcome; a replay after
+        // reassignment does not replace it.
+        let first = key.offset > *applied;
+        if first {
+            *applied = key.offset;
+        }
         if let Some(reply) = state.waiters.remove(&key) {
             let _ = reply.send(outcome);
-        } else if state.in_flight.contains_key(&key.partition) {
-            // The first application is the record's outcome; a replay after
-            // reassignment does not replace it.
-            state.early.entry(key).or_insert(outcome);
+        } else if let Err(error) = outcome
+            && first
+            && state.in_flight.contains_key(&key.partition)
+        {
+            let removals = state.removals(key.partition);
+            state.rejected.insert(key, (removals, error));
         }
     }
 
@@ -130,7 +181,14 @@ impl MutationWaiters {
     pub(super) fn remove_partition(&self, partition: i32, unassign: impl FnOnce()) {
         let mut state = self.state();
         unassign();
-        *state.removals.entry(partition).or_default() += 1;
+        let removals = state.removals(partition) + 1;
+        state.removals.insert(partition, removals);
+        if state.in_flight.contains_key(&partition) {
+            let applied = state.applied(partition);
+            state
+                .applied_at_removal
+                .insert((partition, removals), applied);
+        }
         let removed = state
             .waiters
             .extract_if(|key, _| key.partition == partition)
@@ -151,8 +209,15 @@ impl MutationWaiters {
     #[cfg(test)]
     pub(super) fn is_idle(&self) -> bool {
         let state = self.state();
-        state.waiters.is_empty() && state.in_flight.is_empty() && state.early.is_empty()
+        state.waiters.is_empty()
+            && state.in_flight.is_empty()
+            && state.rejected.is_empty()
+            && state.applied_at_removal.is_empty()
     }
+
+    /// The number of rejections kept for publishes in flight.
+    #[cfg(test)]
+    pub(super) fn kept(&self) -> usize { self.state().rejected.len() }
 
     /// The number of registered waiters.
     #[cfg(test)]
@@ -179,14 +244,13 @@ impl InFlightPublish<'_> {
         let partition = self.partition;
         let key = MutationKey { partition, offset };
         let mut state = waiters.state();
-        if let Some(outcome) = state.early.remove(&key) {
-            let _ = send.send(outcome);
-        } else if state.removals(partition) == self.removals {
-            state.waiters.insert(key, send);
-        } else {
-            // The partition was unassigned during the publish, so the pump
-            // may never consume this record.
-            let _ = send.send(Err(RemoteStorageError::NotReady { partition }));
+        match state.outcome(key, self.removals) {
+            Some(outcome) => {
+                let _ = send.send(outcome);
+            }
+            None => {
+                state.waiters.insert(key, send);
+            }
         }
         state.end_publish(partition);
         receive
