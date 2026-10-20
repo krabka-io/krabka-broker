@@ -60,12 +60,19 @@ async fn every_combined_node_leads_one_audit_partition_with_a_minimum_isr_of_one
             "node {}",
             config.node_id.0
         );
+        let mut expected_config =
+            BTreeMap::from([("min.insync.replicas".to_owned(), "1".to_owned())]);
+        for node in 1..=3 {
+            expected_config.insert(
+                format!("krabka.audit.placement.epoch.{node}"),
+                image
+                    .broker_epoch(NodeId(node))
+                    .expect("registered broker")
+                    .to_string(),
+            );
+        }
         check!(
-            image.topic_config(AUDIT_TOPIC)
-                == Some(&BTreeMap::from([(
-                    "min.insync.replicas".to_owned(),
-                    "1".to_owned()
-                )])),
+            image.topic_config(AUDIT_TOPIC) == Some(&expected_config),
             "node {}",
             config.node_id.0
         );
