@@ -204,6 +204,7 @@ pub fn open_test_controller_with(
     #[builder(default = voter_set (& [NodeId (1)]))] voters: VoterSet,
     #[builder(default = TEST_ELECTION_TIMEOUT)] election_timeout: krabka_units::Time,
     #[builder(default)] activation: Activation,
+    #[builder(default = |_| Ok(()))] validate_image: fn(&MetadataImage) -> Result<(), RaftError>,
 ) -> Result<KraftController, RaftError> {
     let setup = ControllerOpenSetup {
         cluster_id,
@@ -239,6 +240,7 @@ pub fn open_test_controller_with(
         test_metadata_log(),
         activation,
         Arc::new(NoEventQueueRecorder),
+        validate_image,
     )
 }
 

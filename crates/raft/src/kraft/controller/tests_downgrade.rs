@@ -11,7 +11,7 @@ use {
             recovery::replay_committed,
             test_support::{
                 EngineInDir, EngineSetup, build_engine_only, elect_single_voter_engine,
-                open_test_controller, topic_record, voter_set,
+                open_test_controller, open_test_controller_with, topic_record, voter_set,
             },
         },
         snapshot::{SnapshotReader, SnapshotWriter},
@@ -222,6 +222,45 @@ async fn restart_recovers_checkpoint_written_before_downgrade_prune() {
     let log_cfg = MetadataLogConfig::default();
     let recovered_log = KraftLog::open(dir.path(), &log_cfg).expect("inspect recovered log");
     assert2::assert!(recovered_log.log_start_offset() == pending.end_offset);
+}
+
+#[tokio::test]
+async fn recovered_image_validation_precedes_downgrade_repair() {
+    let EngineInDir { engine, dir } = uncheckpointed_downgrade();
+    let data_dir = dir.path().to_path_buf();
+    let pending = engine
+        .downgrade_snapshot_pending
+        .clone()
+        .expect("the downgrade checkpoint is still pending");
+    drop(engine);
+
+    let blocked = data_dir.join(format!(
+        "{:020}-{:010}.tmp",
+        pending.end_offset.0, pending.epoch
+    ));
+    std::fs::create_dir(&blocked).expect("block checkpoint repair");
+    let result = open_test_controller_with()
+        .data_dir(data_dir.clone())
+        .validate_image(|image| {
+            assert!(image.finalized_metadata_version() == Some(16));
+            Err(RaftError::FatalFault("recovered image rejected".into()))
+        })
+        .call();
+    assert!(
+        matches!(result, Err(RaftError::FatalFault(message)) if message == "recovered image rejected")
+    );
+    assert!(load_latest_checkpoint(&data_dir).unwrap().is_none());
+    let log = KraftLog::open(&data_dir, &MetadataLogConfig::default()).unwrap();
+    assert!(log.log_start_offset() < pending.end_offset);
+    drop(log);
+
+    std::fs::remove_dir(blocked).expect("allow checkpoint repair");
+    let controller = reopen_single_voter(data_dir.clone()).expect("allowed recovery completes");
+    assert!(controller.current_image().finalized_metadata_version() == Some(16));
+    controller.shutdown().await;
+    let log = KraftLog::open(&data_dir, &MetadataLogConfig::default()).unwrap();
+    assert!(log.log_start_offset() == pending.end_offset);
+    assert!(load_latest_checkpoint(&data_dir).unwrap().is_some());
 }
 
 #[tokio::test]

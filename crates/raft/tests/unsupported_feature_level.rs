@@ -11,10 +11,14 @@ use {
     krabka_metadata::{FeatureLevelRecord, MetadataRecord, NodeId},
     krabka_raft::{
         BootstrapMode, Controller, ControllerConfig, ControllerHandle, RaftError,
-        UnstableFeatureVersions,
+        UnstableFeatureVersions, metadata_partition_dir,
     },
     krabka_units::prelude::{Time, millis},
-    std::time::{Duration, Instant},
+    std::{
+        collections::BTreeMap,
+        path::{Path, PathBuf},
+        time::{Duration, Instant},
+    },
     tempfile::TempDir,
     uuid::Uuid,
 };
@@ -80,6 +84,24 @@ fn finalize_unstable_metadata_version() -> Vec<MetadataRecord> {
     })]
 }
 
+fn protected_metadata_files(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    std::fs::read_dir(dir)
+        .expect("read metadata directory")
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.is_file()
+                && !matches!(
+                    path.extension().and_then(|extension| extension.to_str()),
+                    Some("snapshot" | "index" | "timeindex")
+                )
+        })
+        .map(|path| {
+            let bytes = std::fs::read(&path).expect("read protected metadata file");
+            (path, bytes)
+        })
+        .collect()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_log_finalized_at_an_unstable_level_starts_only_with_the_flag_on() {
     let dir = TempDir::new().unwrap();
@@ -102,6 +124,10 @@ async fn a_log_finalized_at_an_unstable_level_starts_only_with_the_flag_on() {
         .expect("finalize the unstable level");
     controller.shutdown().await;
 
+    let metadata_dir = metadata_partition_dir(dir.path());
+    let before = protected_metadata_files(&metadata_dir);
+    assert!(!before.is_empty());
+
     // With the flag off the node refuses the log, with Kafka's message.
     let Err(refused) = Controller::start(
         config()
@@ -116,6 +142,7 @@ async fn a_log_finalized_at_an_unstable_level_starts_only_with_the_flag_on() {
     };
     check!(matches!(&refused, RaftError::FatalFault(message) if message == REFUSAL));
     check!(refused.to_string() == format!("Encountered fatal fault: {REFUSAL}"));
+    check!(protected_metadata_files(&metadata_dir) == before);
 
     // The refusal changed nothing on disk: the same log starts with the flag on.
     let controller = Controller::start(

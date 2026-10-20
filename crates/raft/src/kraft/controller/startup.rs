@@ -280,7 +280,9 @@ impl KraftController {
     /// `QuorumController.handleLoadBootstrap` keeps them for its activation.
     ///
     /// # Errors
-    /// Returns [`RaftError`] if the log/checkpoint cannot be opened or read.
+    /// Returns [`RaftError`] if the log/checkpoint cannot be opened or read, or
+    /// `validate_image` refuses the recovered metadata before checkpoint repair
+    /// or an engine task can start.
     #[tracing::instrument(
         level = "info",
         skip_all,
@@ -310,6 +312,7 @@ impl KraftController {
         metadata_log: MetadataLogConfig,
         mut activation: Activation,
         event_queue_recorder: Arc<dyn EventQueueRecorder>,
+        validate_image: impl FnOnce(&MetadataImage) -> Result<(), RaftError>,
     ) -> Result<Self, RaftError> {
         std::fs::create_dir_all(&data_dir).map_err(krabka_log::LogError::Io)?;
         let log = KraftLog::open(&data_dir, &metadata_log)?;
@@ -430,6 +433,8 @@ impl KraftController {
         image.apply(&MetadataRecord::V1Voters(VotersRecord {
             voters: initial_state.voters.clone(),
         }));
+
+        validate_image(&image)?;
 
         Self::spawn_with_image(
             KraftConfig {
