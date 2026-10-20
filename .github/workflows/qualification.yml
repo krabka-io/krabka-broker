@@ -68,7 +68,7 @@ jobs:
   performance:
     needs: candidate
     if: ${{ inputs.execute }}
-    runs-on: [self-hosted, gcp-ubuntu-24-04-32core]
+    runs-on: gcp-ubuntu-24-04-32core
     timeout-minutes: 720
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -112,7 +112,7 @@ jobs:
 
   soak:
     needs: candidate
-    runs-on: [self-hosted, gcp-ubuntu-24-04-32core]
+    runs-on: gcp-ubuntu-24-04-32core
     # 72 hours of load, its settle tail, build, read-back and evidence upload.
     # The existing VM template expires after five days.
     timeout-minutes: 5760
@@ -166,6 +166,16 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$GH_TOKEN"
+          python3 - <<'PYTOKEN'
+          import datetime, json, os, pathlib, urllib.request
+          request = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'], headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'})
+          with urllib.request.urlopen(request, timeout=30) as response:
+              expiration = response.headers.get('GitHub-Authentication-Token-Expiration')
+          if expiration:
+              expires = datetime.datetime.fromisoformat(expiration.replace(' UTC', '+00:00').replace('Z', '+00:00'))
+              assert expires >= datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=96), 'publication credential expires before the long-job deadline'
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'soak-evidence', 'publication-credential.json').write_text(json.dumps({'expiration': expiration or 'not advertised by GitHub'}) + '\n')
+          PYTOKEN
           gh release create "$EVIDENCE_TAG" --draft --prerelease \
             --target "${{ needs.candidate.outputs.revision }}" \
             --title "72-hour qualification evidence: $GITHUB_RUN_ID" \
