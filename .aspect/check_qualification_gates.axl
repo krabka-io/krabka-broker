@@ -205,6 +205,10 @@ test "$(sha256sum "$demo/demo/observability/docker-compose.yml" | cut -d' ' -f1)
 export KRABKA_BROKER_IMAGE="$broker_image"
 export KRABKA_O11Y_IMAGE="$(image_ref krabka-o11y)"
 export KRABKA_DEMO_IMAGE="$(image_ref krabka-o11y-demo)"
+unset KRABKA_CLI_IMAGE
+if artifact_fields krabka-cli image > /dev/null; then
+  export KRABKA_CLI_IMAGE="$(image_ref krabka-cli)"
+fi
 # The candidate images publish linux/amd64 only; the compose defaults to arm64.
 export KRABKA_PLATFORM=linux/amd64
 export KRABKA_REVISION="$(revision krabka-o11y-demo)"
@@ -220,6 +224,9 @@ docker compose config --format json > "$evidence/compose.json"
 check candidate-broker jq -e --arg image "$KRABKA_BROKER_IMAGE" '.services.broker.image == $image' "$evidence/compose.json"
 check candidate-o11y jq -e --arg image "$KRABKA_O11Y_IMAGE" '.services["metrics-distributor"].image == $image' "$evidence/compose.json"
 check candidate-demo jq -e --arg image "$KRABKA_DEMO_IMAGE" '.services["demo-stream"].image == $image' "$evidence/compose.json"
+if [ -n "${KRABKA_CLI_IMAGE:-}" ]; then
+  check candidate-cli jq -e --arg image "$KRABKA_CLI_IMAGE" '.services["gres-setup"].image == $image' "$evidence/compose.json"
+fi
 docker compose up -d --wait --wait-timeout 600
 check observability-recovery bash -o pipefail ./qualify-failover.sh
 for file in reconciliation.txt alerts-firing.json alerts-resolved.json seed-log-before.json seed-log-after.json seed-trace-before.pb seed-trace-after.pb profiles-before.json profiles-after.json; do
