@@ -1494,7 +1494,7 @@ fn folded_backref(input: &str, at: usize, group: Range<usize>, fold: BackrefFold
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check};
+    use {super::*, crate::next_search_start, assert2::check};
 
     /// One whole-input match of a pattern in `fancy_regex` syntax, with the
     /// `group_repeats` the rewrite gives it, one per group and group 0 first.
@@ -1767,6 +1767,15 @@ mod tests {
         compiled.unwrap_or_else(|| panic!("{pattern:?} does not compile"))
     }
 
+    /// That `pattern`, with one group and the look-behind `windows` given,
+    /// marks `input` as `expected`, `replaceAll("<$0>")` on JDK 25.0.4 does.
+    fn check_marks(pattern: &str, windows: &[JavaWindow], input: &str, expected: &str) {
+        check!(
+            mark_matches(&windowed(pattern, 1, windows), input) == expected,
+            "{pattern:?} against {input:?}"
+        );
+    }
+
     /// `Matcher.replaceAll("<$0>")` of `program` on `input`.
     fn mark_matches(program: &Program, input: &str) -> String {
         let (mut out, mut copied, mut from) = (String::new(), 0, 0);
@@ -1784,14 +1793,7 @@ mod tests {
             out.push_str(&input[whole.clone()]);
             out.push('>');
             copied = whole.end;
-            from = if whole.is_empty() {
-                input[whole.end..]
-                    .chars()
-                    .next()
-                    .map_or(input.len() + 1, |next| whole.end + next.len_utf8())
-            } else {
-                whole.end
-            };
+            from = next_search_start(input, &whole);
         }
         out.push_str(&input[copied..]);
         out
@@ -1857,10 +1859,7 @@ mod tests {
         input: &str,
         expected: &str,
     ) {
-        check!(
-            mark_matches(&windowed(pattern, 1, windows), input) == expected,
-            "{pattern:?} against {input:?}"
-        );
+        check_marks(pattern, windows, input, expected);
     }
 
     /// The rewrite writes Java's `\b`, `\B`, `$` and `^` under `(?m)` with
@@ -1937,10 +1936,7 @@ mod tests {
         input: &str,
         expected: &str,
     ) {
-        check!(
-            mark_matches(&windowed(pattern, 1, windows), input) == expected,
-            "{pattern:?} against {input:?}"
-        );
+        check_marks(pattern, windows, input, expected);
     }
 
     /// A group inside a look-behind may start or end between the units of a

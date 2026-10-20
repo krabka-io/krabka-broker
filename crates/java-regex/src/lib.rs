@@ -368,14 +368,7 @@ impl JavaPattern {
             if !all {
                 break;
             }
-            search_from = if whole.is_empty() {
-                input[whole.end..]
-                    .chars()
-                    .next()
-                    .map_or(input.len() + 1, |next| whole.end + next.len_utf8())
-            } else {
-                whole.end
-            };
+            search_from = next_search_start(input, &whole);
         }
         out.push_str(&input[copied..]);
         Ok(out)
@@ -529,6 +522,20 @@ fn check_input_length(limit: Option<usize>, input: &str) -> Result<(), MatchErro
             )))
         }
         _ => Ok(()),
+    }
+}
+
+/// Where `Matcher.find` starts after the match `whole` of `input`: where the
+/// match ended, or one char on after an empty match, and past the end after an
+/// empty match at the end.
+fn next_search_start(input: &str, whole: &Range<usize>) -> usize {
+    if whole.is_empty() {
+        input[whole.end..]
+            .chars()
+            .next()
+            .map_or(input.len() + 1, |next| whole.end + next.len_utf8())
+    } else {
+        whole.end
     }
 }
 
