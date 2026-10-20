@@ -131,8 +131,7 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   records. This release cannot recover audit records that an earlier release
   wrote and retention already deleted. A segment that holds only records
   written before the upgrade is still deleted at the first retention pass
-  after it closes. Export any audit records you need to keep before you
-  upgrade.
+  after it closes.
 - An audit hash chain continues across a broker restart (issue #1550). On
   restart the writer searched for the chain's last record from offset 0. Once
   retention had raised the log start, that read failed with `OffsetTooLow`,
