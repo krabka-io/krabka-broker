@@ -44,7 +44,13 @@
 //! however slowly.
 //!
 //! The rest of what the crate does not read as Java does, such as Unicode
-//! blocks and `\X`, it refuses at [`JavaPattern::compile`].
+//! blocks and `\X`, it refuses at [`JavaPattern::compile`]. That includes a
+//! look-behind too large for the `regex` crate to build at its default size
+//! limit, such as `(?<=x{1,1000000000})`, and most look-behinds whose maximum
+//! length overflows Java's `int`, such as `(?<=a*b*)`: Java then tries fewer
+//! starts. Where the overflowed maximum is still at least 2^30, as in
+//! `(?<=a*b*c*x)`, the pattern compiles, and an input of more UTF-16 units
+//! than that maximum is a [`MatchError`].
 
 mod backtrack;
 mod look_behind;
@@ -53,7 +59,7 @@ mod translate;
 use {
     self::{
         backtrack::Program,
-        look_behind::look_behinds_bounded,
+        look_behind::check_look_behinds,
         translate::{JavaTranslation, translate_java},
     },
     fancy_regex::{Expr, Regex},
@@ -78,6 +84,9 @@ struct Compiled {
     /// The matcher that answers in place of `search` and `whole`, for a
     /// pattern that `fancy_regex` does not read as Java does.
     backtrack: Option<Program>,
+    /// The most UTF-16 units of input the pattern is read for as Java reads
+    /// it, for a look-behind whose maximum length wraps in Java's `int`.
+    input_limit: Option<usize>,
 }
 
 /// A pattern Java's `Pattern.compile` refuses with a
@@ -116,11 +125,11 @@ impl JavaPattern {
             group_repeats,
         } = translate_java(pattern)
             .ok_or_else(|| PatternError(format!("{pattern:?} is not a java.util.regex pattern")))?;
-        if Expr::parse_tree(&translated).is_ok_and(|tree| !look_behinds_bounded(&tree.expr)) {
-            return Err(PatternError(format!(
-                "{pattern:?} has a look-behind group with no obvious maximum length"
-            )));
-        }
+        let input_limit = match Expr::parse_tree(&translated) {
+            Ok(tree) => check_look_behinds(pattern, &tree.expr)
+                .map_err(|refusal| PatternError(format!("{pattern:?} {}", refusal.reason())))?,
+            Err(_) => None,
+        };
         let compile =
             |source: &str| Regex::new(source).map_err(|error| PatternError(error.to_string()));
         let search = compile(&translated)?;
@@ -145,6 +154,7 @@ impl JavaPattern {
             whole,
             names,
             backtrack,
+            input_limit,
         })))
     }
 
@@ -162,7 +172,11 @@ impl JavaPattern {
     /// applies fall through to the next rule, or to `DEFAULT`, and map the
     /// principal to a name the operator never meant for it. A caller rejects
     /// the name instead.
+    ///
+    /// An input longer than the pattern's input limit is an error too: see
+    /// the crate's `# Limits`.
     pub fn matches(&self, input: &str) -> Result<bool, MatchError> {
+        check_input_length(self.0.input_limit, input)?;
         match &self.0.backtrack {
             Some(program) => program.matches(input).map_err(MatchError::search),
             None => self.0.whole.is_match(input).map_err(MatchError::search),
@@ -208,9 +222,11 @@ impl JavaPattern {
     ///
     /// # Errors
     ///
-    /// [`MatchError`] for a replacement Java refuses, and for a search past
-    /// the backtrack limit.
+    /// [`MatchError`] for a replacement Java refuses, for a search past the
+    /// backtrack limit, and for an input longer than the pattern's input
+    /// limit.
     pub fn replace(&self, input: &str, replacement: &str, all: bool) -> Result<String, MatchError> {
+        check_input_length(self.0.input_limit, input)?;
         let mut out = String::with_capacity(input.len());
         let mut copied = 0;
         let mut search_from = 0;
@@ -309,10 +325,25 @@ impl JavaPattern {
     }
 }
 
+/// Refuses an `input` of more UTF-16 units than `limit`, the most a pattern
+/// is read for as Java reads it. The UTF-8 length is never less than the
+/// UTF-16 one, so the units are counted only past it.
+fn check_input_length(limit: Option<usize>, input: &str) -> Result<(), MatchError> {
+    match limit {
+        Some(limit) if input.len() > limit && input.encode_utf16().count() > limit => {
+            Err(MatchError(format!(
+                "the input is longer than the {limit} UTF-16 units that krabka reads a \
+                 look-behind of this pattern for as Java does"
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use {
-        super::*,
+        super::{look_behind::Refusal, *},
         assert2::{assert, check},
     };
 
@@ -2375,5 +2406,167 @@ mod tests {
             replace_row("a*?\\G", "aa", "-", "-aa"),
         ];
         check_replacements(cases, true, true);
+    }
+
+    /// A look-behind whose maximum length wraps in Java's `int`, and whose
+    /// window then leaves out starts the body can match from, is refused. The
+    /// comment on each row gives its `replaceAll("<$0>")` on JDK 25.0.4, and
+    /// then what the look-behind read without the wrap gives.
+    #[yare::parameterized(
+        // `rmax` wraps to -2: `abc`, not `ab<c>`.
+        two_greedy_repeats = { "(?<=a*b*)c" },
+        // `ab<c>`, not `abc`.
+        two_greedy_repeats_negated = { "(?<!a*b*)c" },
+        // `ab`, not `<>a<>b<>`.
+        two_greedy_repeats_alone = { "(?<=a*b*)" },
+        // `rmax` wraps to 1, under `rmin` 3: `cdef`, not `cde<f>`.
+        wrapped_below_the_minimum = { "(?<=a*b*cde)f" },
+        // `rmax` wraps to 0: `cdf`, not `cd<f>`.
+        wrapped_to_zero = { "(?<=a*b*cd)f" },
+        // `rmax` wraps to -1: `cf`, not `c<f>`.
+        wrapped_to_minus_one = { "(?<=a*b*c)f" },
+        // `de`, not `d<e>`.
+        four_greedy_repeats = { "(?<=a*b*c*d*)e" },
+        // `1x`, not `1<x>`.
+        two_greedy_classes = { "(?<=\\w*\\d*)x" },
+        // `abcd`, not `abc<d>`.
+        four_greedy_repeats_with_a_class = { "(?<=a*b*c*\\w*)d" },
+        // `rmax` wraps to 0, under `rmin` 2: `1bcd`, not `1bc<d>`.
+        wrapped_to_zero_below_the_minimum = { "(?<=a*\\d*bc)d" },
+        // The branch's maximum is 2: `cdef`, not `cde<f>`.
+        wrapped_branch = { "(?<=xy|a*b*cde)f" },
+        // Java counts the window in code points: `bc😀d`, not `bc😀<d>`.
+        supplementary_literal = { "(?<=a*bc😀)d" },
+        // `abc😀<d>`, as without the wrap, but counted in code points.
+        supplementary_literal_wrapped_to_a_large_maximum = { "(?<=a*b*c*😀)d" },
+    )]
+    fn a_look_behind_whose_maximum_wraps_is_refused_where_java_reads_it_otherwise(source: &str) {
+        check!(
+            JavaPattern::compile(source).err()
+                == Some(PatternError(format!(
+                    "{source:?} {}",
+                    Refusal::MaximumOverflows.reason()
+                )))
+        );
+    }
+
+    /// A look-behind whose maximum length wraps in Java's `int` still compiles
+    /// where Java's window holds every start the body can match from: the
+    /// body matches the empty string anywhere, the wrapped maximum is at
+    /// least 2^30, or it is negative and the body is longer than the last `i`
+    /// with an empty window. Each row is `String.replaceAll` on JDK 25.0.4.
+    #[test]
+    fn a_look_behind_whose_maximum_wraps_matches_as_java_does() {
+        // (pattern, input, replacement, replaceAll result)
+        let cases = [
+            // The body matches the empty string at `i`.
+            replace_row("(?<=a*b*c*)d", "abcd", "<$0>", "abc<d>"),
+            replace_row("(?<=a*b*c*)d", "xd", "<$0>", "x<d>"),
+            replace_row("(?<!a*b*c*)d", "abcd", "<$0>", "abcd"),
+            replace_row("(?<!a*b*c*)d", "d", "<$0>", "d"),
+            replace_row("(?<=b|a*c*)d", "bd", "<$0>", "b<d>"),
+            replace_row("(?<=x|a*b*)c", "c", "<$0>", "<c>"),
+            replace_row("(?<=x|a*b*)c", "abc", "<$0>", "ab<c>"),
+            // `rmax` wraps to 2147483646.
+            replace_row("(?<=a*b*c*x)y", "abcxy", "<$0>", "abcx<y>"),
+            replace_row("(?<=a*b*c*x)y", "xy", "<$0>", "x<y>"),
+            replace_row("(?<=a*b*c*x)y", "y", "<$0>", "y"),
+            replace_row("(?<=(?:a*b*c*)?x)y", "xy", "<$0>", "x<y>"),
+            // An escape is not a supplementary char of the pattern, so Java
+            // counts in UTF-16 units.
+            replace_row("(?<=a*b*c*\\x{1F600})d", "abc😀d", "<$0>", "abc😀<d>"),
+            // `rmax` wraps to `i32::MIN + 1`, so the window is empty only at
+            // `i` 0, where `bc` cannot end.
+            replace_row("(?<=a*bc)d", "bcd", "<$0>", "bc<d>"),
+            replace_row("(?<=a*bc)d", "d", "<$0>", "d"),
+            replace_row("(?<!a*bc)d", "d", "<$0>", "<d>"),
+            replace_row("(?<!a*bc)d", "abcd", "<$0>", "abcd"),
+            replace_row("(?<!a*bc)d", "bdd", "<$0>", "b<d><d>"),
+            replace_row("(?<=a*bc\\x{1F600})d", "bc😀d", "<$0>", "bc😀<d>"),
+            // `rmax` wraps to `i32::MIN`, so the window is empty only below
+            // `i` 0.
+            replace_row("(?<=a??b*)c", "c", "<$0>", "<c>"),
+            // No wrap.
+            replace_row("(?<=a*)c", "aac", "<$0>", "aa<c>"),
+        ];
+        check_replacements(cases, true, false);
+    }
+
+    /// A look-behind accepted with a wrapped maximum of at least 2^30 limits
+    /// the input to that many UTF-16 units, the smallest such maximum where
+    /// there are several.
+    #[test]
+    fn a_wrapped_look_behind_maximum_limits_the_input() {
+        // (pattern, input limit)
+        let cases = [
+            ("(?<=a*b*c*x)y", Some(2_147_483_646)),
+            ("(?<=(?:a*b*c*)?x)y", Some(2_147_483_646)),
+            ("(?<=a*b*c*xy)z(?<=a*b*c*x)", Some(2_147_483_646)),
+            ("(?<=a*b*c*)d", None),
+            ("(?<=a*bc)d", None),
+            ("(?<=a*)c", None),
+        ];
+        for (source, expected) in cases {
+            check!(pattern(source).0.input_limit == expected, "{source}");
+        }
+    }
+
+    /// An input of more UTF-16 units than the limit is refused. A char past
+    /// U+FFFF is two units in four bytes.
+    #[test]
+    fn an_input_past_the_limit_is_refused() {
+        // (input limit, input, refused)
+        let cases = [
+            (None, "abc", false),
+            (Some(3), "abc", false),
+            (Some(2), "abc", true),
+            (Some(0), "", false),
+            (Some(1), "é", false),
+            (Some(2), "😀", false),
+            (Some(1), "😀", true),
+            (Some(3), "a😀", false),
+            (Some(2), "a😀", true),
+        ];
+        for (limit, input, refused) in cases {
+            check!(
+                check_input_length(limit, input).is_err() == refused,
+                "{limit:?} {input}"
+            );
+        }
+    }
+
+    /// A look-behind that `fancy_regex` would build as a reverse DFA with no
+    /// size limit, and that the `regex` crate finds too large at its default
+    /// one, is refused. JDK 25.0.4 compiles each row.
+    #[yare::parameterized(
+        positive = { "(?<=x{1,1000000000})y" },
+        negative = { "(?<!x{1,1000000000})y" },
+        group = { "(?<=(?:ab){1,600000000})y" },
+        before_a_literal = { "(?<=a{0,2147483647}b)c" },
+        largest_count = { "(?<=a{1,2147483647})b" },
+        class = { "(?<=[ab]{1,1500000000})c" },
+        alternative = { "(?<=z|x{1,1000000000})y" },
+        beside_a_look_ahead = { "(?<=(?=x)x{1,1000000000})y" },
+    )]
+    fn a_look_behind_too_large_to_build_is_refused(source: &str) {
+        check!(
+            JavaPattern::compile(source).err()
+                == Some(PatternError(format!(
+                    "{source:?} {}",
+                    Refusal::TooLarge.reason()
+                )))
+        );
+    }
+
+    /// A large look-behind under the size limit still compiles. Each row is
+    /// `String.replaceAll` on JDK 25.0.4.
+    #[test]
+    fn a_large_look_behind_under_the_size_limit_matches_as_java_does() {
+        // (pattern, input, replacement, replaceAll result)
+        let cases = [
+            replace_row("(?<=x{2,20000})y", "xxy", "<$0>", "xx<y>"),
+            replace_row("(?<=x{2,20000})y", "xy", "<$0>", "xy"),
+        ];
+        check_replacements(cases, true, false);
     }
 }

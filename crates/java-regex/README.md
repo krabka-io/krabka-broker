@@ -25,10 +25,10 @@ Three Apache Kafka configs take a Java regular expression: `ssl.principal.mappin
 - Java's matcher, where `fancy-regex` differs:
   - backreferences under a case flag
   - `\R` giving back the `\n` of `\r\n`
-  - groups that keep their text after a look-around, an atomic group or a possessive quantifier
-  - empty last iterations of a repeated group
+  - groups that keep their text after a look-around, an atomic group, a possessive quantifier or an iteration of a repeated group
+  - empty iterations of a repeated group: kept by Java's `Loop`, and skipped by its `GroupCurly` past the least count
   - `\G` after an empty match
-- `JavaPattern::compile` refuses what `Pattern.compile` refuses: duplicate group names, a dangling quantifier, a backwards repeat range, an unknown property name, a look-behind with no obvious maximum length, and the rest. It also refuses the few constructs it cannot read as Java does, such as Unicode blocks and `\X`, rather than match them another way.
+- `JavaPattern::compile` refuses what `Pattern.compile` refuses: duplicate group names, a dangling quantifier, a backwards repeat range, an unknown property name, a look-behind with no obvious maximum length, and the rest. It also refuses the few constructs it cannot read as Java does, such as Unicode blocks and `\X`, a look-behind too large to build, and a look-behind whose maximum length overflows Java's `int` and so tries fewer starts, rather than match them another way. Where such a look-behind still tries every start, an input longer than its maximum length is an error.
 - A search takes at most 1,000,000 backtracking steps. One past the limit is an error, not a no match, so a mapping rule cannot fall through to the next rule when Java would have applied it. The backtracking matcher keeps its own stack, so a long input cannot overflow the thread's.
 
 ## Usage
