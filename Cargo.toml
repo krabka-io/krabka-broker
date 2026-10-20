@@ -248,7 +248,7 @@ krabka-remote-storage = { path = "crates/remote-storage" }
 krabka-remote-storage-topic = { path = "crates/remote-storage-topic" }
 krabka-replicator = { git = "https://github.com/krabka-io/krabka-connect", rev = "ecd5fd77656bc24addb087e714477b9201053a28" }
 krabka-restore = { path = "crates/restore" }
-krabka-schema-serde = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "7e5115f74eaba368acf086b2d127230422db8fd6" }
+krabka-schema-serde = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "ac4fe56eb1543df7c947393df2b9e893367e79ae" }
 krabka-sdk-conformance = { git = "https://github.com/krabka-io/krabka-gateway", rev = "49870fd8e5f708274ff69a3e64a092844e2f8809" }
 krabka-security = { git = "https://github.com/krabka-io/krabka-protocol", rev = "1b282837ae06d002adba91a4f28c426ba9ec6995" }
 krabka-telemetry = { path = "crates/telemetry" }

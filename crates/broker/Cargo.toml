@@ -144,7 +144,7 @@ exponential-backoff = "2.1.1"
 hostname = { workspace = true }
 # KFC-7 broker-side schema validation: the Confluent wire framing, the
 # registry REST client, and the untyped body validators.
-krabka-schema-serde = { version = "0.4.1", features = ["avro", "protobuf", "json"] }
+krabka-schema-serde = { version = "0.4.3", features = ["avro", "protobuf", "json"] }
 apache-avro = { workspace = true }
 jsonschema = { workspace = true }
 # Fetch the OAUTHBEARER JWKS over HTTP(S). The `rustls` feature reuses the
