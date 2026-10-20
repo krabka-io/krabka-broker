@@ -271,6 +271,7 @@ mod tests {
                 config.heartbeat_timeout
                     == contract.cluster.broker_session_timeout.unwrap_or(secs(9))
             );
+            check!(config.liveness_tick_interval == secs(1));
             check!(config.replica_lag_time_max == contract.cluster.replica_lag_time_max);
             check!(config.default_min_insync_replicas == 2);
             check!(config.offsets_topic_replication_factor == 3);

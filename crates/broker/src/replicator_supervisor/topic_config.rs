@@ -12,6 +12,7 @@ use {
     krabka_log::LogConfig,
     krabka_metadata::MetadataImage,
     std::collections::{BTreeMap, HashSet},
+    tracing::warn,
 };
 
 /// Resolve the same effective settings before opening a log and on later updates.
@@ -47,7 +48,7 @@ pub(crate) fn topic_log_config(
 /// the cluster default, and only when `unstable` says the broker serves trunk's
 /// topic keys: under Kafka 4.3.1 a stored value of it is an unknown key that
 /// nothing reads, so the log runs with no limit.
-pub(crate) fn push_topic_configs(
+pub(crate) async fn push_topic_configs(
     desired: &HashSet<TopicPartition>,
     partitions: &PartitionRegistry,
     image: &MetadataImage,
@@ -68,7 +69,12 @@ pub(crate) fn push_topic_configs(
             max_decompressed_record: log_max_decompressed_record(image, node, topic, unstable),
             ..base.clone()
         };
-        part.apply_log_config_overrides(overrides, &topic_base);
+        if let Err(error) = part
+            .apply_log_config_overrides(overrides, &topic_base)
+            .await
+        {
+            warn!(topic = %topic, partition, %error, "supervisor: log configuration update failed");
+        }
     }
 }
 
@@ -128,7 +134,7 @@ mod tests {
         } = setup;
         let (_dir, partitions) = materialized_partition_with_config(base);
         let desired = HashSet::from([("t".to_owned(), 0)]);
-        push_topic_configs(&desired, &partitions, image, base, NodeId(1), unstable);
+        push_topic_configs(&desired, &partitions, image, base, NodeId(1), unstable).await;
         let part = partitions.get("t", PartitionIndex(0)).expect("partition");
         await_until(what, || {
             ready(&part.log.lock().expect("log lock").config_snapshot())

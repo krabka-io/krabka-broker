@@ -20,6 +20,9 @@ use {
     std::{collections::BTreeSet, fmt, path::Path},
 };
 
+// The executor uses the broker's default liveness sweep; its config test pins this cadence.
+const EXECUTOR_LIVENESS_TICK_INTERVAL: Time = secs(1);
+
 /// Whether a contract is a soak or the short self-check of the soak machinery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -838,11 +841,14 @@ impl Contract {
                 FaultKind::Pause {
                     intends_failover: true,
                 } if self.cluster.broker_session_timeout.is_some_and(|session| {
-                    plan.duration <= session + self.cluster.check_quorum_window
+                    plan.duration
+                        <= session
+                            + self.cluster.check_quorum_window
+                            + EXECUTOR_LIVENESS_TICK_INTERVAL
                 }) =>
                 {
                     fail(format!(
-                        "fault `{name}` must outlast controller election plus the declared broker session timeout"
+                        "fault `{name}` must outlast controller election plus the declared broker session timeout and the executor's 1s liveness sweep"
                     ));
                 }
                 FaultKind::Pause {
@@ -1438,14 +1444,18 @@ mod tests {
     }
 
     #[test]
-    fn a_failover_pause_outlasts_both_controller_and_broker_timeouts() {
+    fn a_failover_pause_outlasts_controller_broker_and_liveness_sweep_timeouts() {
         let mut contract = fixture::self_check();
         contract.cluster.broker_session_timeout = Some(secs(5));
         contract.faults[0].fault = FaultKind::Pause {
             intends_failover: true,
         };
         contract.faults[0].target = Target::Controller;
-        for (duration, refused) in [(secs(7), true), (secs(8), false)] {
+        for (duration, refused) in [
+            (millis(7_999), true),
+            (secs(8), true),
+            (millis(8_001), false),
+        ] {
             contract.faults[0].duration = duration;
             check!(
                 messages(&contract)

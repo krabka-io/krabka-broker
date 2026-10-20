@@ -42,7 +42,8 @@ bench/soak/<contract>.yaml ──► executor ──► evidence.json, faults.js
 Controller election and broker session expiry are separate waits. A new
 controller grants brokers a fresh session, so the 12-second failover pauses
 declare a five-second broker session as well as a five-second controller
-window. Contracts that omit `broker_session_timeout` retain the executor's
+window. Validation also budgets the executor's one-second liveness sweep:
+a failover pause must exceed all three waits together. Contracts that omit `broker_session_timeout` retain the executor's
 default and their original digest. Changing the declaration requires fresh
 run evidence; it does not change a saved run's verdict.
 

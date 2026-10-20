@@ -91,26 +91,36 @@ impl Partition {
         ))
     }
 
-    /// Atomically install validated topic overrides under the log lock, then
+    /// Atomically install validated topic overrides off the async poller, then
     /// wake an idle writer so it recalculates its flush deadline. A writer
     /// waiting for WAL quorum must not block metadata reconciliation.
-    pub(crate) fn apply_log_config_overrides(
+    ///
+    /// # Errors
+    /// Returns an error if the blocking task cannot complete.
+    pub(crate) async fn apply_log_config_overrides(
         &self,
         overrides: &std::collections::BTreeMap<String, String>,
         base: &krabka_log::LogConfig,
-    ) {
+    ) -> Result<(), BrokerError> {
         let merged = apply_to_log_config(overrides, base);
-        let log = self
-            .log
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if log.config_snapshot() == merged {
-            return;
-        }
-        log.set_config(merged);
-        drop(log);
-        // A full queue already wakes the writer; a stopped writer has no timer.
-        let _ = self.writer_tx.try_send(WriterMessage::ConfigChanged);
+        let log = self.log.clone();
+        let writer = self.writer_tx.clone();
+        run_blocking(move || {
+            let log = log
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if log.config_snapshot() == merged {
+                return;
+            }
+            log.set_config(merged);
+            drop(log);
+            // A full queue already wakes the writer; a stopped writer has no timer.
+            let _ = writer.try_send(WriterMessage::ConfigChanged);
+        })
+        .await
+        .map_err(|error| {
+            BrokerError::Replication(format!("log configuration task failed: {error}"))
+        })
     }
 
     /// Append a leader-assigned batch to the local log and keep its
@@ -390,7 +400,9 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         part.writer_tx = tx;
         let base = part.log.lock().unwrap().config_snapshot();
-        part.apply_log_config_overrides(&std::collections::BTreeMap::new(), &base);
+        part.apply_log_config_overrides(&std::collections::BTreeMap::new(), &base)
+            .await
+            .unwrap();
         assert!(rx.try_recv().is_err());
 
         // The first notification fills the paused writer's queue. A newer
@@ -398,7 +410,9 @@ mod tests {
         for size in [1, 2] {
             let bytes = 1_048_576 * size;
             let overrides = [("segment.bytes".to_owned(), bytes.to_string())].into();
-            part.apply_log_config_overrides(&overrides, &base);
+            part.apply_log_config_overrides(&overrides, &base)
+                .await
+                .unwrap();
             assert!(
                 part.log.lock().unwrap().config_snapshot()
                     == krabka_log::LogConfig {
@@ -409,6 +423,37 @@ mod tests {
         }
         assert!(matches!(rx.try_recv(), Ok(WriterMessage::ConfigChanged)));
         assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn a_contended_config_swap_does_not_block_the_current_thread_runtime() {
+        let (part, _dir) = crate::partition::test_support::test_partition(std::sync::Arc::new(
+            tokio::sync::Notify::new(),
+        ));
+        let base = part.log.lock().unwrap().config_snapshot();
+        let log = part.log.clone();
+        let (locked, lock_held) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _guard = log.lock().unwrap();
+            locked.send(()).unwrap();
+            released
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .is_ok()
+        });
+        lock_held.await.unwrap();
+        let overrides = [("segment.bytes".into(), "1048576".into())].into();
+        let update = part.apply_log_config_overrides(&overrides, &base);
+        tokio::pin!(update);
+        assert!(futures_util::poll!(update.as_mut()).is_pending());
+        // This task must run while the blocking pool waits for the log lock.
+        assert!(tokio::spawn(async { 7 }).await.unwrap() == 7);
+        release.send(()).unwrap();
+        update.await.unwrap();
+        assert!(holder.join().unwrap());
+        assert!(
+            part.log.lock().unwrap().config_snapshot().segment_size == krabka_units::mebibytes(1)
+        );
     }
 
     #[tokio::test]
