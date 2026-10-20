@@ -130,7 +130,15 @@ candidate before promotion.
   should move that value to `controller_fetch_timeout`, and one whose
   controller links need more than 2 s should raise it (#1477).
 
+- Benchmark report templating excludes unused TOML configuration parsing,
+  removing the unmaintained `basic-toml` dependency.
+
 ### Fixed
+
+- A newly opened partition installs its topic and dynamic broker log settings
+  before it can accept requests. Previously, a write just after topic creation
+  could use the default segment size until the supervisor applied overrides,
+  accepting a batch larger than the topic's `segment.bytes`.
 
 - Bazel-built binaries report the workspace version instead of `0.0.0`.
   The version also reaches the broker's metrics and client software metadata.
@@ -604,6 +612,9 @@ candidate before promotion.
   leadership and `COORDINATOR_NOT_AVAILABLE` after a timeout. Before, every
   failed write answered `COORDINATOR_LOAD_IN_PROGRESS`, so a client retried
   the old coordinator instead of looking up the new one.
+
+- Keep metadata reconciliation moving when an unchanged log policy would
+  otherwise queue behind a diskless writer waiting for its WAL quorum.
 
 ## [1.0.5] - 2026-10-14
 

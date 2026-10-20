@@ -6,6 +6,7 @@ use {
     super::{
         ReplicatorSupervisor, TopicPartition,
         materialize::{MaterializePartitionConfig, materialize_partition_with_replication_target},
+        topic_log_config,
     },
     crate::{
         config_keys::resolve_diskless,
@@ -172,6 +173,13 @@ impl ReplicatorSupervisor {
         topic: &str,
         partition: i32,
     ) -> Result<(), String> {
+        let log_config = topic_log_config(
+            image,
+            &self.log_config,
+            self.node_id,
+            topic,
+            self.unstable_api_versions,
+        );
         let diskless = resolve_diskless(image.topic_config(topic));
         let topic_id = image.topic(topic).map(|topic| topic.topic_id);
         let initial_target = if diskless {
@@ -192,7 +200,7 @@ impl ReplicatorSupervisor {
                 topic_id,
                 partition,
                 log_dirs: &self.log_dirs,
-                log_config: &self.log_config,
+                log_config: &log_config,
                 log_dir_status: &self.log_dir_status,
                 producer_state: &self.producer_state,
                 runtime: PartitionRuntimeConfig::new(
@@ -373,6 +381,45 @@ mod tests {
             .unwrap();
 
         assert!(partitions.contains("t", PartitionIndex(0)));
+    }
+
+    #[tokio::test]
+    async fn materialization_installs_config_before_registry_visibility() {
+        use {
+            krabka_metadata::{BrokerConfigRecord, TopicConfigRecord},
+            krabka_units::{bytes, minutes},
+            std::collections::BTreeMap,
+        };
+
+        for leader in [NodeId(1), NodeId(2)] {
+            let mut image = three_replica_image(leader, krabka_metadata::LeaderEpoch(7));
+            image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+                node_id: NodeId(2),
+                config_name: "log.retention.ms".into(),
+                config_value: Some("120000".into()),
+            }));
+            image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+                topic: "t".into(),
+                overrides: BTreeMap::from([
+                    ("segment.bytes".into(), "1048576".into()),
+                    ("max.message.bytes".into(), "2097152".into()),
+                ]),
+            }));
+            let (supervisor, partitions, _reporter, _dir) = supervisor_fixture(image.clone());
+
+            // Inspect before any reconcile can repair the initial defaults.
+            supervisor
+                .materialize_local_partition(&image, "t", 0)
+                .expect("materialize");
+
+            let partition = partitions
+                .get("t", PartitionIndex(0))
+                .expect("visible partition");
+            let config = partition.log.lock().expect("log lock").config_snapshot();
+            assert!(config.segment_size == bytes(1_048_576));
+            assert!(config.max_message_size == bytes(2_097_152));
+            assert!(config.retention == Some(minutes(2)));
+        }
     }
 
     #[tokio::test]

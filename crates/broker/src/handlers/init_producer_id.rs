@@ -27,7 +27,7 @@ use {
         broker::Broker,
         handlers::{ApiVersion, RequestContext, acl_wire::CLUSTER_RESOURCE_NAME},
         partition::PartitionRuntimeConfig,
-        replicator_supervisor::MaterializePartitionConfig,
+        replicator_supervisor::{MaterializePartitionConfig, topic_log_config},
         txn::{
             bootstrap::TOPIC as TRANSACTION_STATE_TOPIC, two_pc::resolve_txn_timeout,
             version::resolve_txn_version,
@@ -73,7 +73,6 @@ pub(crate) async fn handle(
     let coord = broker.txn_coordinator.clone();
     let controller = broker.controller.clone();
     let log_dirs = broker.config.all_log_dirs();
-    let log_config = broker.config.log_config.clone();
     let log_dir_status = broker.log_dir_status.clone();
 
     // ── ACL preamble ────────────────────────────────────────
@@ -237,6 +236,13 @@ pub(crate) async fn handle(
                 // refresh again so the load starts. `materialize_partition`
                 // uses `DashMap::entry()` to check and insert atomically, so
                 // two concurrent calls cannot both spawn a writer task.
+                let log_config = topic_log_config(
+                    &image,
+                    &broker.config.log_config,
+                    broker.config.node_id,
+                    TRANSACTION_STATE_TOPIC,
+                    broker.config.features.unstable_api_versions,
+                );
                 materialize_partition(MaterializePartitionConfig {
                     partitions: &coord.partitions,
                     topic: TRANSACTION_STATE_TOPIC,

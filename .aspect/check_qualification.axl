@@ -243,7 +243,13 @@ def manifest_problems(document, final = False):
         if not component.get("default_branch"):
             problems.append("%s: default_branch is empty" % repository)
         artifacts = component.get("artifacts", [])
-        if repository in artifact_kinds and sorted([artifact.get("kind", "") for artifact in artifacts]) != artifact_kinds[repository]:
+        kinds = sorted([artifact.get("kind", "") for artifact in artifacts])
+
+        # Older schema-2 manifests bind only the CLI binary; new sets can also
+        # bind the image used by the observability recipe's Gres setup.
+        if candidate and repository == "krabka-io/krabka-cli" and kinds == ["binary", "image"]:
+            kinds = ["binary"]
+        if repository in artifact_kinds and kinds != artifact_kinds[repository]:
             problems.append("%s: artifacts must preserve the %s slot" % (repository, ", ".join(artifact_kinds[repository])))
         for artifact in artifacts:
             if not artifact.get("kind") or not artifact.get("reference"):

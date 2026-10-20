@@ -101,14 +101,25 @@ impl Partition {
     ///
     /// # Errors
     ///
-    /// Returns `BrokerError::Replication` if the writer is dead or the
-    /// ack is dropped.
+    /// Returns `BrokerError::Replication` if a changed policy cannot reach
+    /// the writer or its acknowledgement is dropped.
     pub(crate) async fn apply_log_config_overrides(
         &self,
         overrides: &std::collections::BTreeMap<String, String>,
         base: &krabka_log::LogConfig,
     ) -> Result<(), BrokerError> {
         let merged = apply_to_log_config(overrides, base);
+        // Reconcile calls these serially. An unchanged policy must not wait behind
+        // a diskless writer's WAL quorum wait and block metadata propagation.
+        if self
+            .log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .config_snapshot()
+            == merged
+        {
+            return Ok(());
+        }
         self.ask_writer(|ack| WriterMessage::SetLogConfig {
             config: merged,
             ack,
@@ -387,6 +398,37 @@ impl Partition {
 #[cfg(test)]
 mod tests {
     use {super::*, crate::partition::test_support::test_partition_with_writer, assert2::assert};
+
+    #[tokio::test]
+    async fn unchanged_config_does_not_wait_behind_a_blocked_writer() {
+        let (mut partition, _dir) = test_partition_with_writer();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        partition.writer_tx = tx;
+        let base = partition.log.lock().unwrap().config_snapshot();
+        let unchanged = std::collections::BTreeMap::new();
+        let same = partition.apply_log_config_overrides(&unchanged, &base);
+        tokio::pin!(same);
+        assert!(matches!(
+            futures_util::poll!(same.as_mut()),
+            std::task::Poll::Ready(Ok(()))
+        ));
+        assert!(
+            rx.try_recv().is_err(),
+            "no command may queue behind the WAL wait"
+        );
+
+        // A real change still crosses the writer barrier and waits for its ack.
+        let changed = std::collections::BTreeMap::from([("retention.ms".into(), "120000".into())]);
+        let update = partition.apply_log_config_overrides(&changed, &base);
+        tokio::pin!(update);
+        assert!(futures_util::poll!(update.as_mut()).is_pending());
+        let Ok(WriterMessage::SetLogConfig { config, ack }) = rx.try_recv() else {
+            panic!("changed policy must reach the writer");
+        };
+        assert!(config.retention == Some(krabka_units::minutes(2)));
+        ack.send(()).unwrap();
+        update.await.expect("writer acknowledged the update");
+    }
 
     #[tokio::test]
     async fn test_set_log_start_updates_log_start_through_writer() {
