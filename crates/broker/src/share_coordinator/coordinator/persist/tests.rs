@@ -10,7 +10,7 @@ use {
         share_coordinator::{
             config::ShareCoordinatorConfig,
             coordinator::test_support::{
-                ConfiguredCoordinator, configured_coordinator, image_with_topic,
+                ConfiguredCoordinator, NOW_MS, configured_coordinator, image_with_topic,
             },
             persistence::KEY_SHARE_SNAPSHOT,
         },
@@ -106,6 +106,41 @@ fn logged_epochs(part: &Partition) -> Vec<i32> {
         .iter()
         .map(|batch| batch.partition_leader_epoch)
         .collect()
+}
+
+/// A share-state record carries the coordinator's wall-clock time, as Kafka's
+/// coordinator runtime stamps it. At timestamp 0 the partition's segment never
+/// rolled by `segment.ms`.
+#[tokio::test]
+async fn a_persisted_record_carries_the_coordinator_time() {
+    let dir = tempdir().unwrap();
+    let OnePartition { coord, part } = one_partition(dir.path(), Duration::from_secs(30));
+    part.install_leader_change(1, 4).await;
+    let term = Term {
+        leader_epoch: 4,
+        ..TERM
+    };
+    let key = ShareStateKey {
+        record_type: KEY_SHARE_SNAPSHOT,
+        group_id: "g".into(),
+        topic_id: uuid::Uuid::from_bytes([3; 16]),
+        partition: 0,
+    };
+
+    coord
+        .persist_record(term, key, Some(Bytes::from_static(b"v")))
+        .await
+        .expect("persist the record");
+
+    let read = part
+        .read_log(Offset(0), krabka_units::mebibytes(1))
+        .expect("read the state partition");
+    let stamped: Vec<(i64, i64)> = read
+        .batches
+        .iter()
+        .map(|batch| (batch.base_timestamp, batch.max_timestamp))
+        .collect();
+    assert!(stamped == vec![(NOW_MS, NOW_MS)]);
 }
 
 /// Kafka's `Partition.appendRecordsToLeader`: a broker appends only as the

@@ -63,6 +63,7 @@ use crate::{
     coordinator::unified::persistence::MAX_STRING_BYTES,
     metadata_source::MetadataSource,
     partition_registry::PartitionRegistry,
+    time_util,
 };
 
 /// The fan-out deadline a request gets.
@@ -297,7 +298,13 @@ impl BarrierCoordinator {
                 BarrierError::InvalidDefinition("too many records for one append".to_owned())
             })?
             .saturating_sub(1);
+        // Stamp the wall clock, as Kafka stamps coordinator records. At
+        // timestamp 0 the segment never rolls by `segment.ms`, so a quiet
+        // partition's active segment is never sealed for the cleaner.
+        let now = time_util::now_ms();
         let mut batch = RecordBatch {
+            base_timestamp: now,
+            max_timestamp: now,
             last_offset_delta: last,
             records: Vec::with_capacity(records.len()),
             ..RecordBatch::default()
@@ -516,6 +523,38 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// Every `__barrier_state` batch carries the time it was written, as
+    /// Kafka's coordinators stamp theirs. At timestamp 0 the partition's
+    /// segment never rolled by `segment.ms`.
+    #[tokio::test]
+    async fn a_state_record_carries_the_write_time() {
+        let fixture = Fixture::new();
+        let coordinator = fixture.coordinator().await;
+
+        let before = time_util::now_ms();
+        coordinator
+            .create_group(GROUP, spec().call())
+            .await
+            .expect("the group is created");
+        let after = time_util::now_ms();
+
+        let partition = fixture
+            .registry
+            .get(STATE_TOPIC, coordinator.state_partition_for(GROUP))
+            .expect("the state partition is open");
+        let read = partition
+            .read_log(Offset(0), krabka_units::mebibytes(1))
+            .expect("read the log back");
+        check!(!read.batches.is_empty());
+        for batch in &read.batches {
+            check!(
+                (before..=after).contains(&batch.max_timestamp),
+                "stamped {}",
+                batch.max_timestamp
+            );
+        }
     }
 
     #[tokio::test]

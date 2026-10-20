@@ -13,6 +13,7 @@ use {
     crate::{
         error::BrokerError,
         partition::Partition,
+        time_util,
         txn::{
             log_record::{decode_key, decode_value, encode_key, encode_value},
             state::TxnEntry,
@@ -111,14 +112,11 @@ impl TxnCoordinator {
         let key = encode_key(&tid)?;
         let value = encode_value(&entry, format_txnv, self.persist_last_producer_epoch);
 
-        let mut batch = RecordBatch::default();
-        batch.records.push(Record {
-            offset_delta: 0,
-            key: Some(Bytes::from(key)),
-            value: Some(Bytes::from(value)),
-            ..Default::default()
-        });
-        batch.last_offset_delta = 0;
+        let batch = state_batch(
+            Bytes::from(key),
+            Some(Bytes::from(value)),
+            time_util::now_ms(),
+        );
 
         self.append_committed(
             term,
@@ -192,14 +190,7 @@ impl TxnCoordinator {
         let p = self.partition_for(tid);
         let term = self.loaded_term(p).await?;
 
-        let mut batch = RecordBatch::default();
-        batch.records.push(Record {
-            offset_delta: 0,
-            key: Some(Bytes::from(encode_key(tid)?)),
-            value: None,
-            ..Default::default()
-        });
-        batch.last_offset_delta = 0;
+        let batch = state_batch(Bytes::from(encode_key(tid)?), None, time_util::now_ms());
 
         self.append_committed(term, batch, super::commit::TOMBSTONE_TIMEOUT)
             .await?;
@@ -363,12 +354,35 @@ fn recovery_next_offset(base: i64, last_delta: i32) -> Result<Offset, BrokerErro
     Ok(Offset(next))
 }
 
+/// The single-record `__transaction_state` batch for `key` and `value`, stamped
+/// with `now_ms`.
+///
+/// Kafka's `TransactionStateManager.appendTransactionToLog` stamps each record
+/// with the wall clock. A batch left at timestamp 0 never rolls its segment by
+/// `segment.ms`, because the gap to the segment's first record stays 0, so a
+/// quiet partition's active segment is never sealed for the cleaner.
+fn state_batch(key: Bytes, value: Option<Bytes>, now_ms: i64) -> RecordBatch {
+    RecordBatch {
+        base_timestamp: now_ms,
+        max_timestamp: now_ms,
+        last_offset_delta: 0,
+        records: vec![Record {
+            offset_delta: 0,
+            key: Some(key),
+            value,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use {
         super::{Offset, recovery_next_offset},
         crate::{
             error::BrokerError,
+            time_util,
             txn::{
                 bootstrap, coordinator::test_support::live_coordinator, state::TxnEntry,
                 version::TxnVersion,
@@ -415,6 +429,47 @@ mod tests {
         );
         assert2::assert!(coordinator.state.contains_key(&tid) == persisted);
         assert2::assert!(log.log_end_offset().0 == i64::from(persisted));
+    }
+
+    #[test]
+    fn state_batch_carries_the_write_time() {
+        let batch = super::state_batch(bytes::Bytes::from_static(b"k"), None, 1_724_500_000_000);
+
+        assert!(
+            (
+                batch.base_timestamp,
+                batch.max_timestamp,
+                batch.records.len()
+            ) == (1_724_500_000_000, 1_724_500_000_000, 1)
+        );
+    }
+
+    /// A stored transaction-state record carries the time it was written, as
+    /// in Kafka. At timestamp 0 the partition's segment never rolled by
+    /// `segment.ms`.
+    #[tokio::test]
+    async fn a_persisted_transaction_carries_the_write_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let (coordinator, _data) = live_coordinator(dir.path()).await;
+        let log = coordinator
+            .partitions
+            .get(bootstrap::TOPIC, PartitionIndex(0))
+            .expect("the state partition");
+        let entry = TxnEntry::new_empty("t".to_owned(), ProducerId(7), 0, 60_000, 0);
+
+        let before = time_util::now_ms();
+        coordinator
+            .put_under_state_partition_lock(entry, TxnVersion::Classic)
+            .await
+            .expect("persist the transaction");
+        let after = time_util::now_ms();
+
+        let stamped = log
+            .read_log(Offset(0), krabka_units::mebibytes(1))
+            .expect("read the state partition")
+            .batches[0]
+            .max_timestamp;
+        assert!((before..=after).contains(&stamped), "stamped {stamped}");
     }
 
     /// The replay follows Kafka's `TransactionStateManager.loadTransactionMetadata`.
