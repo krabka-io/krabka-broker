@@ -5,15 +5,30 @@ use {
     super::TopicPartition,
     crate::{
         api_catalog::UnstableApiVersions,
-        config_keys::{dynamic_log_base, log_max_decompressed_record},
+        config_keys::{apply_to_log_config, dynamic_log_base, log_max_decompressed_record},
         partition_registry::PartitionRegistry,
     },
     krabka_ids::PartitionIndex,
     krabka_log::LogConfig,
     krabka_metadata::MetadataImage,
-    std::collections::HashSet,
+    std::collections::{BTreeMap, HashSet},
     tracing::warn,
 };
+
+/// Resolve the same effective settings before opening a log and on later updates.
+pub(crate) fn topic_log_config(
+    image: &MetadataImage,
+    base: &LogConfig,
+    node: krabka_metadata::NodeId,
+    topic: &str,
+    unstable: UnstableApiVersions,
+) -> LogConfig {
+    let base = LogConfig {
+        max_decompressed_record: log_max_decompressed_record(image, node, topic, unstable),
+        ..dynamic_log_base(image, node, base)
+    };
+    apply_to_log_config(image.topic_config(topic).unwrap_or(&BTreeMap::new()), &base)
+}
 
 /// Push topic-config overrides onto every locally-hosted partition in
 /// `desired`. The call is idempotent, because the same `LogConfig` sent twice

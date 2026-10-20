@@ -124,6 +124,11 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Fixed
 
+- A newly opened partition installs its topic and dynamic broker log settings
+  before it can accept requests. Previously, a write just after topic creation
+  could use the default segment size until the supervisor applied overrides,
+  accepting a batch larger than the topic's `segment.bytes`.
+
 - `connections.max.idle.ms` now keeps running while a request is in its
   handler, while its response is written, and while a connection is muted
   after a throttled response, on broker and controller listeners alike, as
