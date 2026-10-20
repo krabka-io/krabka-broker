@@ -117,7 +117,7 @@ each image covers. The rows below say when each client last ran.
 | :--- | :--- | :--- | :--- | :--- |
 | Single node, combined broker and controller | `historical` | [Push CI 39058863421, `build · lint · format · test · docgen`](https://github.com/krabka-io/krabka-broker/actions/runs/39058863421/job/117472458106) | `948e3cc8` | The in-process suites and `cli_smoke`. |
 | Three nodes, RF3, Docker | `historical` | [Push CI 39058863421, `container · soak_contract`](https://github.com/krabka-io/krabka-broker/actions/runs/39058863421/job/117472677079) | `948e3cc8` | The self-check runs for about five minutes. It is not the 72-hour soak. |
-| Three nodes, RF3, four-hour soak | `failing` | [Nightly 39114726914, `soak · four hours`](https://github.com/krabka-io/krabka-broker/actions/runs/39114726914/job/117638077308) | `948e3cc8` | Every broker's log directory rose about 4.9 MB in the second half, against a 4 MiB allowance. No acknowledged record was lost. It failed the same way on every nightly in which the soak finished, from 2026-10-08 on, and the job then reads cancelled. [#1507](https://github.com/krabka-io/krabka-broker/issues/1507). |
+| Three nodes, RF3, four-hour soak | `historical` | [Dispatch 39288583006, `soak · four hours`](https://github.com/krabka-io/krabka-broker/actions/runs/39288583006/job/118185682689) | `2cf5551f` | Passed, on the head of [#1537](https://github.com/krabka-io/krabka-broker/pull/1537), which fixed [#1507](https://github.com/krabka-io/krabka-broker/issues/1507). Every nightly from 2026-10-06 to 2026-10-18, the last at `948e3cc8`, failed the log-directory drift bound: each broker's log directory rose about 4.9 MB in the second half, against a 4 MiB allowance, and no acknowledged record was lost. The rise came from `soak-verify`, the offsets topic and the metadata log, which Kafka's defaults do not reclaim within four hours. Rolling the last two each minute exposed two broker leaks that #1537 fixed: compaction left the producer snapshots of merged segments, and the metadata log never deleted its retired segments. |
 | Three nodes, RF3, 72-hour soak | `untested` | [#1393](https://github.com/krabka-io/krabka-broker/issues/1393) | none | The contract is `bench/soak/rf3-72h.yaml`. No host is chosen. |
 | Kubernetes StatefulSet on Kind | `historical` | [Nightly 39114726914, `kubernetes · kind`](https://github.com/krabka-io/krabka-broker/actions/runs/39114726914/job/117638077033) | `948e3cc8` | `packaging/k8s/kind-smoke.sh`: three pods, RF3 produce, rolling restart, readback. |
 | krabka-operator on Kind | `historical` | [qualification-36293960620](https://github.com/krabka-io/krabka-broker/releases/tag/qualification-36293960620) | `v0.6.1` (`d7e46cfe`) | Operator v0.4.1: upgrade, disruption, scale-down and certificate rotation. No 1.x build has run it. |
@@ -185,9 +185,6 @@ its source. An item stays here until a linked change removes it.
 - **`COORDINATOR_NOT_AVAILABLE` under max-rate RF3 load.** #1410 fixed two
   follower-fetch causes. The storage-stall candidate needs a benchmark-host
   rerun. [#1352](https://github.com/krabka-io/krabka-broker/issues/1352) is open.
-- **The four-hour soak fails its log-directory drift bound** on every
-  nightly from 2026-10-08 to 2026-10-18. It is not diagnosed yet.
-  [#1507](https://github.com/krabka-io/krabka-broker/issues/1507).
 
 ### Kafka behavior differences
 
@@ -252,8 +249,9 @@ no run. This section stays empty until #1399 publishes consented results.
    `948e3cc8`, three groups did not.
 3. The 72-hour RF3 soak, including the diskless and netem faults
    ([#1393](https://github.com/krabka-io/krabka-broker/issues/1393)), and a
-   fix for the four-hour soak's log-directory drift
-   ([#1507](https://github.com/krabka-io/krabka-broker/issues/1507)).
+   pass of the four-hour soak on the candidate. Since the
+   [#1507](https://github.com/krabka-io/krabka-broker/issues/1507) fix, it has
+   passed at `2cf5551f`.
 4. A pass of `upgrade · previous release` on the candidate. It passed on
    `main` at `e0588325` after the
    [#1508](https://github.com/krabka-io/krabka-broker/issues/1508) fix. Loaded upgrade and rollback runs on
