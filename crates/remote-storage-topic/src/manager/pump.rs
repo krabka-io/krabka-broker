@@ -34,43 +34,48 @@ pub async fn pump_loop(
             n = stream.next() => n,
         };
         let Some(record) = next else { return };
-        let mut waiters = tokio::select! {
-            biased;
-            () = shutdown.cancelled() => return,
-            waiters = mutation_waiters.lock() => waiters,
-        };
-        let outcome = if record.tombstone {
-            Ok(())
-        } else {
-            match MetadataEvent::decode(&record.payload) {
-                Ok(MetadataEvent::AddSegment(md)) => inner.add_remote_log_segment_metadata(md),
-                Ok(MetadataEvent::UpdateSegment(u)) => inner.update_remote_log_segment_metadata(u),
-                Ok(MetadataEvent::PartitionDelete(d)) => {
-                    inner.put_remote_partition_delete_metadata(d)
-                }
-                Err(error) => Err(RemoteStorageError::InvalidArgument(error.to_string())),
-            }
-        };
-        if let Err(error) = &outcome {
-            warn!(
-                ?error,
-                partition = record.partition,
-                offset = record.offset,
-                "topic-based RLMM: replay rejected"
-            );
-        }
-        if let Ok(idx) = usize::try_from(record.partition) {
-            let mut a = applied.lock().expect("applied mutex poisoned");
-            if idx < a.len() && record.offset > a[idx] {
-                a[idx] = record.offset;
-            }
-        }
-        if let Some(reply) = waiters.remove(&MutationKey {
+        let key = MutationKey {
             partition: record.partition,
             offset: record.offset,
-        }) {
-            let _ = reply.send(outcome);
-        }
+        };
+        // A test can hold the pump here before it applies the record.
+        #[cfg(test)]
+        let _applying = tokio::select! {
+            biased;
+            () = shutdown.cancelled() => return,
+            applying = mutation_waiters.stall_pump() => applying,
+        };
+        mutation_waiters.complete(key, || {
+            let outcome = if record.tombstone {
+                Ok(())
+            } else {
+                match MetadataEvent::decode(&record.payload) {
+                    Ok(MetadataEvent::AddSegment(md)) => inner.add_remote_log_segment_metadata(md),
+                    Ok(MetadataEvent::UpdateSegment(u)) => {
+                        inner.update_remote_log_segment_metadata(u)
+                    }
+                    Ok(MetadataEvent::PartitionDelete(d)) => {
+                        inner.put_remote_partition_delete_metadata(d)
+                    }
+                    Err(error) => Err(RemoteStorageError::InvalidArgument(error.to_string())),
+                }
+            };
+            if let Err(error) = &outcome {
+                warn!(
+                    ?error,
+                    partition = record.partition,
+                    offset = record.offset,
+                    "topic-based RLMM: replay rejected"
+                );
+            }
+            if let Ok(idx) = usize::try_from(record.partition) {
+                let mut a = applied.lock().expect("applied mutex poisoned");
+                if idx < a.len() && record.offset > a[idx] {
+                    a[idx] = record.offset;
+                }
+            }
+            outcome
+        });
     }
 }
 

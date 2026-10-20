@@ -38,10 +38,12 @@ mod assignment;
 mod mutations;
 mod persistence;
 mod pump;
+mod readiness;
 mod rlmm;
 #[cfg(test)]
 pub(crate) mod test_support;
 
+pub use self::readiness::MetadataPartitionReadiness;
 use {
     self::{mutations::MutationWaiters, persistence::ResumePlan, pump::pump_loop},
     crate::{
