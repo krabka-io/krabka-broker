@@ -1,0 +1,52 @@
+name: negative-pin release preflight
+on:
+  push:
+    branches: [release/negative-pin-preflight]
+permissions:
+  contents: read
+jobs:
+  negative-pin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/reclaim-disk
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: cargo
+          save-if: false
+      - name: Execute the actual adapter's negative probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          export broker_source=$PWD
+          export evidence=$RUNNER_TEMP/negative-pin-evidence
+          mkdir -p "$evidence"
+          revision() {
+            case "$1" in
+              krabka-protocol) echo 1b282837ae06d002adba91a4f28c426ba9ec6995 ;;
+              krabka-client-rs) echo ea0a2589b396eba6eb3a48e4fe90739434d4233e ;;
+              *) return 1 ;;
+            esac
+          }
+          check() { local name=$1; shift; "$@"; printf '%s\n' "$name" >> "$evidence/checks.txt"; }
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          text = Path('.aspect/check_qualification_gates.axl').read_text()
+          body = text.split('_INSTALLATION = r"""', 1)[1].split('"""', 1)[0]
+          start = body.index('protocol_revision=$(revision krabka-protocol)')
+          end = body.index('docker compose -p "$project"', start)
+          Path(os.environ['RUNNER_TEMP'], 'negative-probe.sh').write_text(body[start:end])
+          PY
+          source "$RUNNER_TEMP/negative-probe.sh"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: negative-pin-evidence
+          path: ${{ runner.temp }}/negative-pin-evidence
