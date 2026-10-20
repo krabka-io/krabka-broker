@@ -69,9 +69,10 @@
 //!   `(?<=a*b*)`, where Java then tries fewer starts than the look-behind
 //!   allows. Where the overflowed maximum still covers every start, as in
 //!   `(?<=a*bc)`, the pattern compiles.
-//! - A pattern with a char past U+FFFF anywhere in it, whenever a look-behind's
-//!   maximum overflows, as in `😀x(?<=a*b*c*x)y`. Java reads one with the char
-//!   before the look-behind as it reads one without.
+//! - A look-behind whose maximum overflows, in a pattern with a char past
+//!   U+FFFF from the look-behind on, as in `(?<=a*b*c*x)y😀`. Java then counts
+//!   the look-behind's window in code points (`BehindS`), with arithmetic the
+//!   crate does not follow.
 //!
 //! One more input limit applies at match time. Where an overflowed maximum is
 //! at least 2^30 and covers every start only up to that length, as in
@@ -199,7 +200,7 @@ impl JavaPattern {
             input_limit,
             too_large,
             windows,
-        } = check_look_behinds(pattern, &tree.expr, &look_behind_code_points).map_err(refuse)?;
+        } = check_look_behinds(&tree.expr, &look_behind_code_points).map_err(refuse)?;
         let fancy = if too_large {
             Err(FancyFailure::Unbuilt(refuse(Refusal::TooLarge)))
         } else {
