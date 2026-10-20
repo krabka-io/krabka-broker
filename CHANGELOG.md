@@ -130,6 +130,9 @@ candidate before promotion.
   should move that value to `controller_fetch_timeout`, and one whose
   controller links need more than 2 s should raise it (#1477).
 
+- Benchmark report templating excludes unused TOML configuration parsing,
+  removing the unmaintained `basic-toml` dependency.
+
 ### Fixed
 
 - Bazel-built binaries report the workspace version instead of `0.0.0`.
