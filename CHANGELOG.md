@@ -613,6 +613,9 @@ candidate before promotion.
   failed write answered `COORDINATOR_LOAD_IN_PROGRESS`, so a client retried
   the old coordinator instead of looking up the new one.
 
+- Keep metadata reconciliation moving when an unchanged log policy would
+  otherwise queue behind a diskless writer waiting for its WAL quorum.
+
 ## [1.0.5] - 2026-10-14
 
 1.0.5 changes no on-disk format and adds no setting, so it upgrades from any
