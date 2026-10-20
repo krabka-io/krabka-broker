@@ -1,11 +1,11 @@
 name: publish
 
-# Publish `krabka-log` and `krabka-verified` to crates.io, with the workspace
-# crates they need as a normal dependency.
+# Publish `krabka-log`, `krabka-verified` and `krabka-java-regex` to crates.io,
+# with the workspace crates they need as a normal dependency.
 #
 # Every member crate without `publish = false` is published. Today those are
-# `krabka-macros`, `krabka-verified` and `krabka-log`; the broker and every
-# other member set `publish = false`.
+# `krabka-macros`, `krabka-verified`, `krabka-log` and `krabka-java-regex`; the
+# broker and every other member set `publish = false`.
 #
 # A `v*` tag push publishes. A manual run is a dry run unless `dry_run` is off,
 # and a manual run that publishes must be started from a `v*` tag.

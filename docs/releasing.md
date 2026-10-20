@@ -268,6 +268,7 @@ a tag that `release.yml` refuses publishes nothing either.
 | `krabka-macros` | | `krabka-log` derives with it |
 | `krabka-verified` | | Library for other repositories |
 | `krabka-log` | `krabka-macros`, `krabka-verified` | Library for other repositories |
+| `krabka-java-regex` | | Library for other repositories |
 
 Every other member sets `publish = false`, the broker among them. A new member
 crate is published unless its manifest sets `publish = false`, so a crate that
@@ -308,7 +309,7 @@ Before you merge the release pull request, run a dry run from its branch: start
 and builds it from the packaged sources, as crates.io users get them. Locally:
 
 ```sh
-cargo publish --dry-run --locked -p krabka-macros -p krabka-verified -p krabka-log
+cargo publish --dry-run --locked -p krabka-macros -p krabka-verified -p krabka-log -p krabka-java-regex
 ```
 
 ### What the workflow does
@@ -365,14 +366,14 @@ reviewers if a person should approve each publish.
 1. Sign in to crates.io with the account that will own the crates. Under
    **Account Settings**, open **API Tokens** and create a token with the
    `publish-new` and `publish-update` scopes. Limit it to the crate names
-   `krabka-macros`, `krabka-verified` and `krabka-log`, or the pattern
+   `krabka-macros`, `krabka-verified`, `krabka-log` and `krabka-java-regex`, or the pattern
    `krabka-*`, and give it a short expiry.
 2. Add the token to the `crates-io` environment as the secret
    `CARGO_REGISTRY_TOKEN`.
 3. Push the release tag, or start `publish.yml` on it with `dry_run` off.
 
 crates.io limits new crate names to a burst of five, then one every ten
-minutes, so the three names go up in one burst. On a `429` answer the job waits
+minutes, so the four names go up in one burst. On a `429` answer the job waits
 ten minutes and tries again.
 
 #### Then: trusted publishing for each crate
@@ -387,7 +388,7 @@ For each published crate:
    - Workflow filename: `publish.yml`
    - Environment: `crates-io`
 
-When all three crates have a publisher, delete the `CARGO_REGISTRY_TOKEN`
+When all four crates have a publisher, delete the `CARGO_REGISTRY_TOKEN`
 secret, and revoke the token on crates.io. The next release uses trusted
 publishing. Its log says "publishing through trusted publishing".
 
