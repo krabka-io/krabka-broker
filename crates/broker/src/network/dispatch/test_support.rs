@@ -50,6 +50,10 @@ pub(super) async fn serve_loop(
         serve: async move {
             for _ in 0..connections {
                 let (stream, peer) = listener.accept().await.expect("accept");
+                // The broker's accept loop sets `TCP_NODELAY` on every socket
+                // it serves, so a response written as several small writes,
+                // as a fetch plan is, leaves at once rather than behind Nagle.
+                stream.set_nodelay(true).expect("TCP_NODELAY");
                 super::serve_connection_stream(
                     broker.clone(),
                     stream,

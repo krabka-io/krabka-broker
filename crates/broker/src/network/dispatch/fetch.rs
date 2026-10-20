@@ -3,13 +3,14 @@
 //! rather than one contiguous buffer, so that records regions stay zero-copy.
 
 use {
-    super::{AfterResponse, response::encode_response, session::principal_or_anonymous},
+    super::{AfterResponse, Reply, response::encode_response, session::principal_or_anonymous},
     crate::{
         error::BrokerError,
         handlers::{
             RequestContext,
             fetch::{encode_fetch_response, handle},
         },
+        metrics::BrokerMetrics,
         network::{
             codec::{KafkaCodec, response_frame_length},
             fetch_writer::{SendfileSink, WriteOp, resolve_records_inline, write_fetch_plan},
@@ -25,51 +26,57 @@ use {
 /// A finished fetch: the ordered write plan for its response, and the KIP-219
 /// window the fetch quotas charged. The connection loop writes the plan first
 /// and mutes for the window afterwards.
-struct FetchPlan {
+pub(super) struct FetchPlan {
     operations: Vec<WriteOp>,
     throttle: krabka_units::Time,
 }
 
-pub(super) async fn dispatch_fetch<S>(
-    framed: &mut Framed<S, KafkaCodec>,
+/// Runs the `Fetch` handler and returns its response as a write plan, which
+/// the connection loop writes with [`write_plan`] once the handler is done.
+pub(super) async fn fetch_reply(
     context: super::registry::DispatchContext<'_, '_>,
     request_span: tracing::Span,
-) -> AfterResponse
-where
-    S: AsyncRead + AsyncWrite + Unpin + SendfileSink,
-{
-    let sendfile_capable = SendfileSink::is_sendfile_capable(framed.get_ref());
+    sendfile_capable: bool,
+) -> Reply {
     match handle_fetch_frame_from_parsed(context, sendfile_capable)
         .instrument(request_span)
         .await
     {
-        Ok(FetchPlan {
-            operations,
-            throttle,
-        }) => {
-            if let Err(error) = SinkExt::<Bytes>::flush(framed).await {
-                tracing::warn!(%error, "framed.flush error before fetch plan, closing");
-                return AfterResponse::Close;
-            }
-            if let Err(error) =
-                write_fetch_plan(framed.get_mut(), operations, &context.broker.metrics).await
-            {
-                tracing::warn!(%error, "fetch plan write error, closing");
-                return AfterResponse::Close;
-            }
-            // KIP-219: the records are on the wire; the KIP-13 consumer and
-            // KIP-124 request quotas are enforced by muting from here.
-            AfterResponse::Mute(throttle)
-        }
+        Ok(plan) => Reply::Fetch(plan),
         Err(error) => {
             context
                 .broker
                 .metrics
                 .record_request_error(context.parsed.api_key);
             tracing::warn!(%error, "Fetch dispatch error, closing connection");
-            AfterResponse::Close
+            Reply::Done(AfterResponse::Close)
         }
     }
+}
+
+/// Writes a fetch's response plan, then mutes for the window it charged.
+pub(super) async fn write_plan<S>(
+    framed: &mut Framed<S, KafkaCodec>,
+    FetchPlan {
+        operations,
+        throttle,
+    }: FetchPlan,
+    metrics: &BrokerMetrics,
+) -> AfterResponse
+where
+    S: AsyncRead + AsyncWrite + Unpin + SendfileSink,
+{
+    if let Err(error) = SinkExt::<Bytes>::flush(framed).await {
+        tracing::warn!(%error, "framed.flush error before fetch plan, closing");
+        return AfterResponse::Close;
+    }
+    if let Err(error) = write_fetch_plan(framed.get_mut(), operations, metrics).await {
+        tracing::warn!(%error, "fetch plan write error, closing");
+        return AfterResponse::Close;
+    }
+    // KIP-219: the records are on the wire; the KIP-13 consumer and KIP-124
+    // request quotas are enforced by muting from here.
+    AfterResponse::Mute(throttle)
 }
 
 /// Decodes and dispatches a `Fetch` (`api_key` 1) frame.

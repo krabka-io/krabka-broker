@@ -147,7 +147,16 @@ pub async fn serve_connection_on_listener(
         else {
             return;
         };
-        serve_connection_stream(broker, tls_stream, spec, peer, mtls_principal).await;
+        // Boxed: the userspace TLS stream makes this the largest serve-loop
+        // future, past `clippy::large_futures`.
+        Box::pin(serve_connection_stream(
+            broker,
+            tls_stream,
+            spec,
+            peer,
+            mtls_principal,
+        ))
+        .await;
     } else {
         serve_connection_plaintext(broker, stream, spec, peer).await;
     }

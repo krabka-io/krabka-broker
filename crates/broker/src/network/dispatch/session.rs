@@ -1,23 +1,23 @@
 //! Per-connection session state. It derives the initial `ConnectionAuth` for
 //! a listener, borrows the connection's principal, holds the read off for the
-//! KIP-219 mute window a throttled request earned, and arms the one deadline
-//! that races the next frame read: the `connections.max.idle.ms` idle window.
+//! KIP-219 mute window a throttled request earned, and races the next frame
+//! read against the `connections.max.idle.ms` idle window.
 //!
-//! The idle deadline is a property of the listener, applies whatever the
-//! connection's auth state, and is re-armed from `Instant::now()` on every
-//! prefix and body read. Waiting for the broker byte budget pauses the idle window.
+//! The idle window is a property of the listener and applies whatever the
+//! connection's auth state. It runs from the connection's last socket
+//! activity, which [`IdleClock`] records: every prefix and body read that
+//! delivers bytes, and every response write that completes. A KIP-219 mute
+//! spends it, as a muted channel spends it in Kafka's `Selector`, and so does
+//! the time a request spends in its handler, which the dispatch loop races
+//! against the same clock. Waiting for the broker byte budget restarts it.
 //! Response writes have the same no-progress window, enforced by `WriteIdle`
 //! and the sendfile drainer; a client that stops reading cannot retain queue
-//! permits forever. Successful writes re-arm it, and handler time is excluded.
+//! permits forever.
 //!
 //! The KIP-368 SASL session deadline is deliberately not armed here. Kafka
 //! runs no timer against it either: an expired session closes on the next
 //! request that is not part of a re-authentication, which the dispatch loop
 //! enforces through `ConnectionAuth::expired_for_request`.
-//!
-//! The idle window is armed after the mute rather than before it, so a pause
-//! the broker itself imposed to shed load never counts as the client falling
-//! silent.
 //!
 //! On a TLS listener the handshake that runs before this loop is held to the
 //! same window by `accept::handshake_within_idle_window`, so a peer that opens
@@ -26,6 +26,7 @@
 use {
     super::{
         RequestByteBudget,
+        idle_clock::IdleClock,
         receive::{ReceiveError, RequestFrame, receive_request},
     },
     crate::{
@@ -145,21 +146,33 @@ impl RequestLimits {
 }
 
 /// What the connection is held to while it waits for its next frame: the
-/// listener's idle window, the peer it belongs to, and the metrics handle the
-/// close is counted on.
-///
-/// The idle window is `None` when the listener expires no connection, which is
-/// what a non-positive `connections.max.idle.ms` asks for.
+/// peer it belongs to, and the metrics handle a close is counted on. The idle
+/// window itself is the connection's [`IdleClock`].
 ///
 /// A peer that has not finished authenticating and sends a frame over
 /// `sasl.server.max.receive.size` fails its authentication, which is counted
 /// and audited, and closes only after `failed_authentication_delay`.
 pub(super) struct FrameWaitPolicy {
-    pub(super) idle: Option<std::time::Duration>,
     pub(super) peer: std::net::SocketAddr,
     pub(super) metrics: BrokerMetrics,
     pub(super) audit_log: std::sync::Arc<krabka_audit::AuditLog>,
     pub(super) failed_authentication_delay: std::time::Duration,
+}
+
+impl FrameWaitPolicy {
+    /// Logs and counts a close for an idle window that passed, whether the
+    /// connection was waiting for a frame, muted, or had a request in its
+    /// handler.
+    pub(super) fn record_idle_close(&self, auth: &ConnectionAuth, clock: &IdleClock) {
+        tracing::debug!(
+            principal = principal_or_anonymous(auth).name.as_str(),
+            peer = %self.peer,
+            idle_ms = clock.window().unwrap_or_default().as_millis(),
+            "connection idle past connections.max.idle.ms, closing"
+        );
+        self.metrics
+            .record_connection_close(crate::metrics::ConnectionCloseReason::Idle);
+    }
 }
 
 /// The size a frame may have and the byte budget that it is charged against.
@@ -179,15 +192,20 @@ pub(super) struct FrameSizeLimit<'a> {
 /// a throttled client from timing out its in-flight request and retrying into
 /// the quota that is shedding load.
 ///
-/// The idle window is armed once the mute has drained and again after the
-/// byte-budget wait, so broker backpressure does not spend the client's idle budget. The KIP-368 session
-/// deadline is not armed here at all: Kafka closes an expired session on the
-/// request that arrives past it, which the dispatch loop does with
-/// `ConnectionAuth::expired_for_request`.
+/// The mute does not pause the idle window. Kafka's `Selector` never selects a
+/// muted channel for reading, so its idle clock stands still through the mute,
+/// and a mute that outlasts the window closes the connection. `clock` measures
+/// from the response written before the mute, and the read after it is held
+/// to whatever is left of that window. The byte-budget wait restarts the
+/// window, so broker backpressure does not spend the client's idle budget. The
+/// KIP-368 session deadline is not armed here at all: Kafka closes an expired
+/// session on the request that arrives past it, which the dispatch loop does
+/// with `ConnectionAuth::expired_for_request`.
 pub(super) async fn next_connection_frame<S>(
     framed: &mut Framed<S, KafkaCodec>,
     auth: &ConnectionAuth,
     mute_until: Option<tokio::time::Instant>,
+    clock: &mut IdleClock,
     policy: &FrameWaitPolicy,
     FrameSizeLimit { maximum, budget }: FrameSizeLimit<'_>,
 ) -> Option<RequestFrame>
@@ -196,22 +214,22 @@ where
 {
     use crate::metrics::ConnectionCloseReason;
 
-    if let Some(mute_until) = mute_until {
-        tokio::time::sleep_until(mute_until).await;
-    }
-    let frame_result = receive_request(framed.get_mut(), maximum, budget, policy.idle).await;
+    let frame_result = match mute_until {
+        Some(mute_until) => tokio::select! {
+            biased;
+            () = clock.expired() => Err(ReceiveError::Idle),
+            () = tokio::time::sleep_until(mute_until) => Ok(()),
+        },
+        None => Ok(()),
+    };
+    let frame_result = match frame_result {
+        Ok(()) => receive_request(framed.get_mut(), maximum, budget, clock).await,
+        Err(error) => Err(error),
+    };
     match frame_result {
         Ok(Some(frame)) => Some(frame),
         Err(ReceiveError::Idle) => {
-            tracing::debug!(
-                principal = principal_or_anonymous(auth).name.as_str(),
-                peer = %policy.peer,
-                idle_ms = policy.idle.unwrap_or_default().as_millis(),
-                "connection idle past connections.max.idle.ms, closing"
-            );
-            policy
-                .metrics
-                .record_connection_close(ConnectionCloseReason::Idle);
+            policy.record_idle_close(auth, clock);
             None
         }
         Err(ReceiveError::Io(error)) => {
