@@ -48,6 +48,23 @@ pub fn start_two_dir_broker()
 }
 
 /// Current segment objects, including legacy objects named `log`, in walk order.
+/// The base offsets of the segments in `partition_dir`, ascending.
+pub fn local_segment_bases(partition_dir: &std::path::Path) -> Vec<i64> {
+    let mut bases: Vec<i64> = std::fs::read_dir(partition_dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter_map(|entry| {
+                    let name = entry.file_name().into_string().ok()?;
+                    name.strip_suffix(".log")?.parse().ok()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    bases.sort_unstable();
+    bases
+}
+
 pub fn remote_log_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
     fn walk(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {

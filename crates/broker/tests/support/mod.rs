@@ -104,6 +104,9 @@ pub mod wire;
 // A cut-and-heal TCP relay for partition tests. Declared here so every suite
 // that pulls in `support` can reach it as `support::relay`.
 pub mod relay;
+// Three brokers whose data listeners each sit behind a relay, for the suites
+// that build a replication barrier.
+pub mod relayed_cluster;
 
 // Each suite declares `mod support;` and reaches the helpers it needs through
 // this one re-export, so every binary compiles the whole surface and uses only
