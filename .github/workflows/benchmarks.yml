@@ -30,7 +30,7 @@ jobs:
           for variant in reference original lazy; do
             revision=3831a25de74804460f32d921b711e0cacef48deb
             if [[ "$variant" = reference ]]; then revision=ac9deff316d38418622b16c237c671df88f57c7a; fi
-            if [[ "$variant" = lazy ]]; then revision=d706008497e09c20cd4784765853ce246e84e671; fi
+            if [[ "$variant" = lazy ]]; then revision=8f77f837a454e1195dd209aea3367d4554e7e1cf; fi
             git worktree add --detach "$RUNNER_TEMP/produce-acks-sources/$variant" "$revision"
           done
           for variant in reference original lazy; do
@@ -54,7 +54,10 @@ jobs:
           export CARGO_TARGET_DIR="$RUNNER_TEMP/produce-acks-target"
           export TMPDIR="$RUNNER_TEMP/produce-acks-tmp"
           source="$RUNNER_TEMP/produce-acks-sources/lazy"
-          (cd "$source" && cargo test --locked -p krabka-broker --lib handlers::produce::append::tests -- --nocapture) > evidence/lazy.tests.log 2>&1
+          if ! (cd "$source" && cargo test --locked -p krabka-broker --lib handlers::produce:: -- --nocapture) > evidence/lazy.tests.log 2>&1; then
+            tail -80 evidence/lazy.tests.log
+            exit 1
+          fi
           grep -E 'test result: ok\. [1-9][0-9]* passed;' evidence/lazy.tests.log
           python3 - "$source" <<'PY'
           import sys
