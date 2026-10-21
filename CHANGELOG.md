@@ -23,6 +23,29 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ## [Unreleased]
 
+### Fixed
+
+- Store a produced `CreateTime` batch with its largest record timestamp as
+  `max_timestamp`, as Kafka's `LogValidator` does, on the verbatim and the
+  owned path. The producer's header value was kept, so an LZ4 batch with
+  header 7777 over one record at 0 was stored as 7777 where Kafka stores 0.
+  A batch whose header already agrees keeps its zero-copy append. A KFC-1
+  `delivery.mode=scheduled` topic keeps the header, which is its delivery
+  time (#1388).
+- Compute the `message.timestamp.{before,after}.max.ms` window, its error
+  message and record timestamps in Java's wrapping `long` arithmetic, as
+  Kafka does. A stock topic admitted a `Long.MIN_VALUE` timestamp that Kafka
+  refuses, and a topic that bounds only the past refused one that Kafka
+  admits (#1388).
+- Skip a remote segment outside the partition's leader-epoch lineage in a
+  by-timestamp `ListOffsets`, as Kafka's `isRemoteSegmentWithinLeaderEpochs`
+  does, so a deposed leader's copy left by an unclean election cannot answer
+  the seek (#1388).
+- Resolve the remote segment of a `read_committed` `Fetch`'s aborted
+  transactions as the data read resolves it. A finished segment nested inside
+  the covering one made the abort lookup answer none while the read still
+  served the batches (#1388).
+
 ## [1.0.8] - 2026-10-20
 
 1.0.8 includes the recovery fixes from #1578 and the published Rust client

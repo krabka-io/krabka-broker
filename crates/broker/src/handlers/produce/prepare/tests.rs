@@ -85,6 +85,12 @@ mod verbatim;
 // the owned fallback, which reads them off the decoded batch.
 mod timestamp_window;
 
+// ── the stored max_timestamp ──────────────────────────────────────────────
+//
+// Kafka's `LogValidator` stores the largest record timestamp of a `CreateTime`
+// batch, not the producer's header value, on both append shapes.
+mod max_timestamp;
+
 // ── compacted topic: the key check ─────────────────────────────────────
 //
 // Kafka's `LogValidator.validateKey` runs before the timestamp check of the

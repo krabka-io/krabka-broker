@@ -10,8 +10,11 @@ use {
         sentinels::{UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP},
     },
     crate::{
-        broker::Broker, codes, diskless::read::DisklessReadHandle, partition::Partition,
-        remote_reader::RemoteReader,
+        broker::Broker,
+        codes,
+        diskless::read::DisklessReadHandle,
+        partition::Partition,
+        remote_reader::{RemoteReader, lineage::EpochLineage},
     },
     krabka_ids::Offset,
     krabka_remote_storage::{RemoteStorageError, TopicIdPartition},
@@ -121,9 +124,12 @@ pub(crate) async fn resolve_timestamp_with_sources(
         None
     };
     let remote = remote_reader.map(|reader| {
+        // Kafka's `findOffsetByTimestamp` reads the leader-epoch cache and the
+        // log end offset when the lookup starts.
+        let lineage = EpochLineage::of(&partition.log.lock().expect("log mutex poisoned"));
         move |max_record_body| async move {
             reader
-                .offset_for_timestamp(tp, timestamp, minimum, max_record_body)
+                .offset_for_timestamp(tp, timestamp, minimum, max_record_body, &lineage)
                 .await
         }
     });
