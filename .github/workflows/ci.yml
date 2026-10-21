@@ -1228,6 +1228,15 @@ jobs:
             free -b
             df -B1 .
           } > benchmark-artifacts/environment.txt
+          # Both Bazel release graphs enable tracing/log. Cargo dev dependencies
+          # enable it only on some revisions, so match it explicitly on both sides.
+          for side in reference candidate; do
+            source_dir="${reference_dir}"
+            if [ "${side}" = candidate ]; then source_dir="${GITHUB_WORKSPACE}"; fi
+            (cd "${source_dir}" && cargo tree --locked -p krabka-broker -p krabka-log \
+              --features tracing/log -e features -i tracing) \
+              > "benchmark-artifacts/${side}/tracing-features.txt"
+          done
           for run in 1 2 3 4; do
             sides=(reference candidate)
             if ((run % 2 == 0)); then
@@ -1246,7 +1255,7 @@ jobs:
               (
                 cd "${source_dir}"
                 CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/target" cargo bench \
-                  -p krabka-broker -p krabka-log --bench '*' -- \
+                  -p krabka-broker -p krabka-log --features tracing/log --bench '*' -- \
                   --output-format bencher --noplot --sample-size 20 --measurement-time 2
               ) | tee "${run_dir}/raw.txt"
               cargo run -p krabka-parse-benches -- \
