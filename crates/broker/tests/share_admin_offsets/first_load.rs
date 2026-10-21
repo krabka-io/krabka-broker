@@ -11,10 +11,11 @@
 use {
     crate::{
         describe::describe_offsets,
-        harness::{NONE, broker_config, connect, join, produce_n, restart_directory},
+        harness::{NONE, broker_config, join, produce_n, restart_directory},
         support::share::{
             FetchSessionMode, ShareAck, ShareSessionSetup, acknowledge_success, fetch_row,
-            fetch_until_acquired, set_auto_offset_reset, share_fetch_req, start_topic, wire,
+            fetch_until_acquired, restart_broker, set_auto_offset_reset, share_fetch_req,
+            start_topic, wire,
         },
     },
     assert2::assert,
@@ -26,7 +27,6 @@ use {
         },
         share_fetch_response::AcquiredRecords,
     },
-    std::sync::Arc,
 };
 
 const GROUP: &str = "g1";
@@ -93,18 +93,6 @@ async fn join_and_load(
     member
 }
 
-/// Restarts the broker on `log_dir` without touching the group's
-/// `share.auto.offset.reset`, which the metadata log keeps.
-async fn restart(log_dir: std::path::PathBuf) -> (krabka_broker::BrokerHandle, Arc<Client>) {
-    let mut cfg = broker_config(log_dir);
-    cfg.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
-    let broker = krabka_broker::Broker::start(cfg).await.unwrap();
-    let client = connect(&broker.listen_addr().to_string()).await;
-    broker.wait_until_group_coordinator_ready().await;
-    broker.wait_until_share_coordinator_ready().await;
-    (broker, client)
-}
-
 /// `latest`, loaded on one leader and never acknowledged there, is resolved
 /// again by the next leader against the high watermark it finds, and the
 /// first acknowledgement persists that second resolution.
@@ -162,7 +150,8 @@ async fn an_unwritten_start_is_resolved_again_and_the_first_ack_persists_it() {
         broker.shutdown().await;
     }
 
-    let (broker, client) = restart(log_dir).await;
+    // The restart keeps the group's `share.auto.offset.reset=latest`.
+    let (broker, client) = restart_broker(log_dir).await;
     let member = join_and_load(&broker, &client, tid).await;
     assert!(persisted_start(&broker, tid).await.0 == UNINITIALIZED_START_OFFSET);
     produce_n()

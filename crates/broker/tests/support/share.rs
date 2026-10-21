@@ -693,11 +693,25 @@ pub async fn rejoin_group(
     log_dir: std::path::PathBuf,
     group: &str,
 ) -> (krabka_broker::BrokerHandle, Arc<Client>) {
+    let (broker, client) = restart_broker(log_dir).await;
+    set_auto_offset_reset_earliest(&client, group).await;
+    (broker, client)
+}
+
+/// Restart a broker on `log_dir` and wait for its group and share
+/// coordinators, leaving every group config as the metadata log holds it.
+///
+/// # Panics
+/// Panics if the broker or client cannot restart from the supplied directory.
+pub async fn restart_broker(
+    log_dir: std::path::PathBuf,
+) -> (krabka_broker::BrokerHandle, Arc<Client>) {
     let mut cfg = broker_config(log_dir);
     cfg.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
     let broker = krabka_broker::Broker::start(cfg).await.unwrap();
     let client = connect(&broker.listen_addr().to_string()).await;
-    bootstrap_share_state(&broker, &client, group).await;
+    broker.wait_until_group_coordinator_ready().await;
+    broker.wait_until_share_coordinator_ready().await;
     (broker, client)
 }
 
