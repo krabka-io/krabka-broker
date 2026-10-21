@@ -16,10 +16,14 @@
 //! expected: the segment knows its logical size and removes the padding when
 //! it seals the file.
 //!
-//! An append does not wait for its write: [`DirectWriter`] queues it, and a
-//! small pool of threads shared by every segment puts each segment's writes
-//! on the disk in order. The produce path thus pays for a copy, not for the
-//! device, as it does through the page cache.
+//! An append does not wait for its write: [`DirectWriter`] queues it, and the
+//! writes of every segment go to the disk from one `io_uring`, each submitted as
+//! soon as it is queued. The produce path thus pays for a copy, not for the
+//! device, as it does through the page cache. Where the kernel refuses an
+//! `io_uring`, and for a test's [`LogIo`] that sees each write, a small pool of
+//! threads shared by every segment makes the writes with synchronous
+//! `pwrite`s instead. Both start a segment's writes in file order and put the
+//! same bytes at the same offsets.
 //!
 //! The page cache does not hold what an `O_DIRECT` write put on disk, so a
 //! consumer that reads right behind the producer would go to the device for
@@ -37,6 +41,9 @@ use {
         sync::{Arc, Condvar, Mutex},
     },
 };
+
+#[cfg(target_os = "linux")]
+mod ring;
 
 /// The `O_DIRECT` alignment rules of one file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +119,27 @@ impl AlignedBuf {
 
     pub(crate) fn as_slice(&self) -> &[u8] { &self.storage[self.offset..self.offset + self.len] }
 
+    /// Lend the storage out for a write that must own its buffer: the
+    /// `Vec`, and where the contents start in it and how long they are.
+    /// [`Self::restore`] takes it back; until then the buffer is empty, and
+    /// a buffer whose storage never comes back stays a valid empty one.
+    #[cfg(target_os = "linux")]
+    fn lend(&mut self) -> (Vec<u8>, usize, usize) {
+        let lent = (std::mem::take(&mut self.storage), self.offset, self.len);
+        self.offset = 0;
+        self.len = 0;
+        lent
+    }
+
+    /// Take back what [`Self::lend`] lent. The `Vec` is the same allocation,
+    /// so the contents are still aligned.
+    #[cfg(target_os = "linux")]
+    fn restore(&mut self, (storage, offset, len): (Vec<u8>, usize, usize)) {
+        self.storage = storage;
+        self.offset = offset;
+        self.len = len;
+    }
+
     fn capacity(&self) -> usize { self.storage.len() - self.offset }
 
     /// Make room for `needed` bytes after the aligned start.
@@ -148,6 +176,11 @@ const QUEUE_LIMIT: usize = 8 * 1024 * 1024;
 /// below what the device takes; the kernel's own writeback keeps several in
 /// flight too.
 const WRITES_IN_FLIGHT: usize = 4;
+
+/// How many of one segment's writes may be submitted to `io_uring` at the same
+/// time. A submission costs no thread, so the bound is the queue limit's,
+/// not the pool's.
+const RING_WRITES_IN_FLIGHT: usize = 16;
 
 /// How many threads write queued appends to the disk, for every segment in
 /// the process together.
@@ -212,6 +245,9 @@ struct Queue {
     ready: bool,
     /// Buffers of finished writes, for the next appends to fill.
     spare: Vec<AlignedBuf>,
+    /// Whether the `io_uring` submitter makes this segment's writes, rather
+    /// than the write threads.
+    ring: bool,
 }
 
 /// One aligned write of whole blocks: `buf` at `at`.
@@ -229,6 +265,17 @@ enum Work {
         at: u64,
         end: u64,
     },
+}
+
+impl Work {
+    /// The buffer to write and the file offset to write it at.
+    #[cfg(target_os = "linux")]
+    fn buf_mut(&mut self) -> (&mut AlignedBuf, u64) {
+        match self {
+            Self::Blocks(job) => (&mut job.buf, job.at),
+            Self::Tail { buf, at, .. } => (buf, *at),
+        }
+    }
 }
 
 impl Queue {
@@ -256,7 +303,12 @@ impl Queue {
             return false;
         }
         if !self.jobs.is_empty() {
-            return self.in_flight < WRITES_IN_FLIGHT;
+            let limit = if self.ring {
+                RING_WRITES_IN_FLIGHT
+            } else {
+                WRITES_IN_FLIGHT
+            };
+            return self.in_flight < limit;
         }
         self.in_flight == 0 && !self.tail.is_empty() && self.written < self.end
     }
@@ -278,7 +330,7 @@ impl Queue {
     }
 
     fn give_back(&mut self, buf: AlignedBuf) {
-        if self.spare.len() < WRITES_IN_FLIGHT {
+        if self.spare.len() < RING_WRITES_IN_FLIGHT {
             self.spare.push(buf);
         }
     }
@@ -306,7 +358,7 @@ impl DirectWriter {
     ) -> std::io::Result<Self> {
         align.validate()?;
         check_tail(align, end, &tail)?;
-        Pool::shared()?;
+        let ring = Pool::shared()?.takes(io.as_ref());
         Ok(Self {
             align,
             end,
@@ -328,6 +380,7 @@ impl DirectWriter {
                     failure: None,
                     ready: false,
                     spare: Vec::new(),
+                    ring,
                 }),
                 changed: Condvar::new(),
             }),
@@ -343,7 +396,13 @@ impl DirectWriter {
     pub(crate) fn block(&self) -> usize { self.align.block }
 
     /// Write the next appends through `io`.
-    pub(crate) fn set_io(&self, io: Arc<dyn LogIo>) { *self.shared.io.lock().unwrap() = io; }
+    pub(crate) fn set_io(&self, io: Arc<dyn LogIo>) {
+        let ring = Pool::shared()
+            .expect("the write threads started when the writer was made")
+            .takes(io.as_ref());
+        *self.shared.io.lock().unwrap() = io;
+        self.shared.queue.lock().unwrap().ring = ring;
+    }
 
     /// Every byte below this is on the disk.
     pub(crate) fn written(&self) -> u64 { self.shared.queue.lock().unwrap().written }
@@ -485,10 +544,15 @@ impl Drop for DirectWriter {
     fn drop(&mut self) { drop(self.settle()); }
 }
 
-/// The threads that write every segment's queued appends.
+/// The threads that write every segment's queued appends, and the `io_uring`
+/// submitter that writes them instead for the real file I/O.
 struct Pool {
     ready: Mutex<VecDeque<Arc<Shared>>>,
     changed: Condvar,
+    /// None where `io_uring` is unavailable: the kernel lacks it, or a
+    /// seccomp filter or `kernel.io_uring_disabled` refuses it.
+    #[cfg(target_os = "linux")]
+    ring: Option<ring::Ring>,
 }
 
 static POOL: Mutex<Option<Arc<Pool>>> = Mutex::new(None);
@@ -502,6 +566,8 @@ impl Pool {
         let started = Arc::new(Self {
             ready: Mutex::new(VecDeque::new()),
             changed: Condvar::new(),
+            #[cfg(target_os = "linux")]
+            ring: ring::Ring::start(),
         });
         for index in 0..WRITE_THREADS {
             let worker = Arc::clone(&started);
@@ -515,7 +581,25 @@ impl Pool {
         Ok(started)
     }
 
-    fn push(&self, segment: Arc<Shared>) {
+    /// Whether the `io_uring` submitter makes the writes of a segment under
+    /// `io`.
+    fn takes(&self, io: &dyn LogIo) -> bool {
+        #[cfg(target_os = "linux")]
+        return io.submits_direct_writes() && self.ring.is_some();
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (self, io);
+            false
+        }
+    }
+
+    fn push(&self, segment: Arc<Shared>, ring: bool) {
+        #[cfg(target_os = "linux")]
+        if ring && let Some(submitter) = &self.ring {
+            submitter.push(segment);
+            return;
+        }
+        let _ = ring;
         self.ready.lock().unwrap().push_back(segment);
         self.changed.notify_one();
     }
@@ -545,16 +629,36 @@ impl Shared {
         queue.ready = true;
         Pool::shared()
             .expect("the write threads started when the writer was made")
-            .push(Arc::clone(self));
+            .push(Arc::clone(self), queue.ring);
     }
 
-    /// Start one write, and put the segment back on the ready list first if
-    /// another can run beside it.
+    /// Make one write on this thread, through [`LogIo::write_direct`].
     fn write_one(self: &Arc<Self>) {
+        let Some(work) = self.take_work() else {
+            return;
+        };
+        let (buf, at) = match &work {
+            Work::Blocks(job) => (job.buf.as_slice(), job.at),
+            Work::Tail { buf, at, .. } => (buf.as_slice(), *at),
+        };
+        let io = Arc::clone(&self.io.lock().unwrap());
+        let step = self.align.step();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            write_aligned(&self.file, buf, at, step, |file, buf, offset| {
+                io.write_direct(file, buf, offset)
+            })
+        }))
+        .unwrap_or_else(|_| Err(Error::other("O_DIRECT write panicked")));
+        self.complete(work, result);
+    }
+
+    /// Take the next write to start, and put the segment back on the ready
+    /// list first if another can run beside it.
+    fn take_work(self: &Arc<Self>) -> Option<Work> {
         let mut queue = self.queue.lock().unwrap();
         queue.ready = false;
         if !queue.has_work() {
-            return;
+            return None;
         }
         let work = if let Some(job) = queue.jobs.pop_front() {
             Work::Blocks(job)
@@ -577,23 +681,17 @@ impl Shared {
         };
         queue.in_flight += 1;
         self.schedule(&mut queue);
-        drop(queue);
+        Some(work)
+    }
 
-        let (buf, at) = match &work {
-            Work::Blocks(job) => (job.buf.as_slice(), job.at),
-            Work::Tail { buf, at, .. } => (buf.as_slice(), *at),
-        };
-        let io = Arc::clone(&self.io.lock().unwrap());
-        let step = self.align.step();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            write_aligned(&self.file, buf, at, step, |file, buf, offset| {
-                io.write_direct(file, buf, offset)
-            })
-        }))
-        .unwrap_or_else(|_| Err(Error::other("O_DIRECT write panicked")));
-
+    /// Record the outcome of a write [`Self::take_work`] handed out.
+    fn complete(self: &Arc<Self>, work: Work, result: std::io::Result<()>) {
         let mut queue = self.queue.lock().unwrap();
         queue.in_flight -= 1;
+        let at = match &work {
+            Work::Blocks(job) => job.at,
+            Work::Tail { at, .. } => *at,
+        };
         let buf = match work {
             Work::Blocks(job) => {
                 let len = job.buf.as_slice().len();
@@ -645,31 +743,46 @@ fn write_aligned(
     let mut done = 0;
     while done < buf.len() {
         match write(file, &buf[done..], offset + to_u64(done)) {
-            Ok(written) => {
-                let reached = done.saturating_add(written).min(buf.len());
-                // The end of the buffer is block-aligned, and a write that
-                // reaches it ends the loop, so only a short write rounds.
-                let next = if reached == buf.len() {
-                    reached
-                } else {
-                    reached - reached % step
-                };
-                if next <= done {
-                    return Err(Error::new(
-                        ErrorKind::WriteZero,
-                        format!(
-                            "O_DIRECT write at {} made no aligned progress",
-                            offset + to_u64(done)
-                        ),
-                    ));
-                }
-                done = next;
-            }
+            Ok(written) => done = aligned_progress(done, written, buf.len(), offset, step)?,
             Err(error) if error.kind() == ErrorKind::Interrupted => {}
             Err(error) => return Err(error),
         }
     }
     Ok(())
+}
+
+/// Where a write of `len` bytes at `offset` goes on after one positioned
+/// write, started `done` bytes in, wrote `written`: the end, or the last
+/// aligned position, a multiple of `step`, that it reached.
+///
+/// # Errors
+///
+/// `WriteZero` when that is no further than `done`.
+fn aligned_progress(
+    done: usize,
+    written: usize,
+    len: usize,
+    offset: u64,
+    step: usize,
+) -> std::io::Result<usize> {
+    let reached = done.saturating_add(written).min(len);
+    // The end of the buffer is block-aligned, and a write that reaches it
+    // ends the loop, so only a short write rounds.
+    let next = if reached == len {
+        reached
+    } else {
+        reached - reached % step
+    };
+    if next <= done {
+        return Err(Error::new(
+            ErrorKind::WriteZero,
+            format!(
+                "O_DIRECT write at {} made no aligned progress",
+                offset + to_u64(done)
+            ),
+        ));
+    }
+    Ok(next)
 }
 
 fn check_tail(align: DioAlign, end: u64, tail: &[u8]) -> std::io::Result<()> {
@@ -894,6 +1007,7 @@ impl TailCache {
 mod tests {
     use {
         super::*,
+        crate::io::FileIo,
         assert2::{assert, check},
         std::{cell::Cell, os::unix::fs::FileExt},
     };
@@ -1149,6 +1263,7 @@ mod tests {
             failure: None,
             ready: false,
             spare: Vec::new(),
+            ring: false,
         };
         queue.finish(2048, 3072);
         queue.finish(1024, 2048);
@@ -1203,6 +1318,37 @@ mod tests {
         check!(io.most.load(std::sync::atomic::Ordering::SeqCst) <= WRITES_IN_FLIGHT);
         check!(writer.written() == 8192);
         check!(file_contents(writer.file()) == logical);
+    }
+
+    /// The real file I/O hands its writes to the `io_uring` submitter where the
+    /// kernel offers one, and to the write threads where it does not. Either
+    /// way, appends of assorted sizes with the queue's worth of writes in
+    /// flight through a real `O_DIRECT` handle leave exactly the bytes they
+    /// appended, zero-padded to the block. A filesystem without `O_DIRECT`,
+    /// such as tmpfs, has no handle to write through and is not tested.
+    #[test]
+    fn the_real_io_puts_every_append_on_a_direct_handle() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("00000000000000000000.log");
+        File::create(&path).unwrap();
+        let io: Arc<dyn LogIo> = Arc::new(FileIo);
+        let Ok(direct) = io.open_direct(&path) else {
+            return;
+        };
+        let align = DioAlign {
+            mem: direct.mem_align,
+            block: direct.block,
+        };
+        let mut writer = DirectWriter::new(direct.file, align, 0, Vec::new(), io).unwrap();
+        let mut logical = Vec::new();
+        for seed in 0..=u8::MAX {
+            let bytes = pattern(seed, 1 + usize::from(seed) * 997 % 70_000);
+            writer.append(&[&bytes]).unwrap();
+            logical.extend_from_slice(&bytes);
+        }
+        writer.drain().unwrap();
+        check!(writer.written() == to_u64(logical.len()));
+        check!(std::fs::read(&path).unwrap() == padded(&logical, align.block));
     }
 
     /// The bytes of a failed write were already acknowledged, so the writer

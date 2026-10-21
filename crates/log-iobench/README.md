@@ -190,3 +190,29 @@ with a write of its own. One, two, four or eight of a segment's writes in
 flight made no consistent difference here. Every write extends the file, which
 ext4 serializes under the same lock.
 
+
+### io_uring submission (ext4 on a virtio disk, cloud VM, 2026-10)
+
+The same VM after #1370's next step: the real file I/O submits a segment's
+direct writes to one io_uring, up to 16 at a time, in place of synchronous
+`pwrite`s from the write threads. Builds run interleaved, 1 GiB per run. The
+figures are median MB/s; the thread columns are 12 runs, the control 6. The
+control is the thread path with eight writes in flight rather than four.
+
+| Batch | Threads, 4 in flight | Threads, 8 in flight | io_uring |
+|---|---:|---:|---:|
+| 1 MiB | 884 | 878 | 890 |
+| 256 KiB | 792 | 795 | 813 |
+| 64 KiB | 548 | 537 | 690 |
+
+Raw 1 MiB direct writes reach about 850-1000 MB/s on this disk, whether from
+one thread, four, or an io_uring with 16 in flight, so the 1 MiB batch is at
+the device's rate on either path. More threads in flight change nothing, so
+the 64 KiB gain comes from the submission, not the depth. Every write still
+extends the file, which ext4 serializes. The likely difference is that the
+io_uring's worker queues one file's writes in order instead of leaving
+threads to contend for the inode lock. That is not confirmed. Device requests
+were the same size on both paths (about 513 KiB at 1 MiB batches, the
+virtio limit). The average device time per request rose, from 0.10 to 0.13
+ms at 64 KiB and from 0.30 to 0.40 ms at 256 KiB, because more requests
+were queued at the device at once.

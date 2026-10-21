@@ -52,6 +52,10 @@ rustix = { workspace = true }
 # and the `fallocate` block reservation of `preallocate`.
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { workspace = true }
+# The io_uring submitter of the `O_DIRECT` writes of `preallocate`: owned
+# buffers make its submission safe, which `forbid(unsafe_code)` needs.
+tokio = { workspace = true, features = ["sync"] }
+tokio-uring = "0.5"
 
 [dev-dependencies]
 bon = { workspace = true }
