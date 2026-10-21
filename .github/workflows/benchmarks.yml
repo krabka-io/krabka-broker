@@ -1,106 +1,140 @@
-name: benchmarks
-
+name: Intel produce-acks CPU profile
 on:
-  pull_request:
-    paths:
-      - "crates/log/**"
-      - "crates/verified/**"
-      - "crates/parse-benches/**"
-      - "packaging/performance/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/benchmarks.yml"
-  push:
-    branches: [main]
-    paths:
-      - "crates/log/**"
-      - "crates/verified/**"
-      - "crates/parse-benches/**"
-      - "packaging/performance/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/benchmarks.yml"
-  workflow_dispatch:
-
+  workflow_dispatch: null
 permissions:
   contents: read
-
-# Cancel superseded PR runs; let pushes to main run to completion.
-concurrency:
-  group: bench-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
-
 jobs:
-  # The broker performance budgets are judged on a dedicated host by
-  # `packaging/performance/qualify.sh budget` in qualification-profile.yml.
-  # This nightly lane checks the predeclared contract instead: it must
-  # parse and validate, and the digest the harness will record is printed so a
-  # published verdict can be traced back to this commit's contract. The
-  # evaluator's own tests run under `bazel test //...` in ci.yml.
-  performance-budget-contract:
-    name: broker · performance budget contract
+  compare:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 120
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          key: bench-broker
-      - name: Validate regression contract
-        shell: bash
+          fetch-depth: 0
+      - name: Require the failed runner CPU model
+        id: cpu
+        run: |-
+          mkdir -p evidence
+          lscpu > evidence/cpu.txt
+          if lscpu | grep -Fq 'INTEL(R) XEON(R) PLATINUM 8573C'; then
+            echo 'matched=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'matched=false' >> "$GITHUB_OUTPUT"
+            echo 'Hardware mismatch; no profiling or performance verdict.' > evidence/profile-scope.txt
+          fi
+      - uses: ./.github/actions/reclaim-disk
+        if: steps.cpu.outputs.matched == 'true'
+      - id: toolchain
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          test -n "$channel"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+        if: steps.cpu.outputs.matched == 'true'
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+        if: steps.cpu.outputs.matched == 'true'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          cache-targets: false
+        if: steps.cpu.outputs.matched == 'true'
+      - name: prepare exact sources and recorded counterfactuals
         run: |
           set -euo pipefail
-          cargo run -p krabka-parse-benches -- check-contract \
-            packaging/performance/regression-contract.json | tee -a "${GITHUB_STEP_SUMMARY}"
-
-  # Automated storage microbenchmarks for krabka-log.
-  # Bazel's crate_bench macro compiles and lints this suite. This lane measures
-  # it through Cargo using the repository's pinned toolchain.
-  micro-benchmarks:
-    name: broker · storage microbenchmarks
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # Omitting an explicit rust-toolchain action relies on ubuntu-latest's pre-installed
-      # rustup, which automatically reads rust-toolchain.toml (channel = "1.98.0") as the
-      # single source of truth and eliminates an unpinned third-party action step.
-      # Note: ubuntu-latest's pre-installed stable toolchain still appears in the
-      # rust-cache environment inventory alongside the pinned 1.98.0 toolchain.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: bench-broker
-
-      # `shell: bash` enforces pipefail so any cargo bench or compilation
-      # failure exits non-zero instead of being masked by `tee`.
-      # Pipe stdout to tee so the benchmark log receives clean output, leaving
-      # stderr diagnostic messages in the console.
-      # `rm -rf target/criterion` clears stale baseline samples from warm cache runs.
-      # `--noplot` prevents Criterion from rendering uncollected gnuplot charts.
-      - name: Run Log Engine Benches
-        shell: bash
+          mkdir -p evidence "$RUNNER_TEMP/produce-acks-sources" "$RUNNER_TEMP/produce-acks-tmp"
+          for variant in reference original; do
+            revision=3831a25de74804460f32d921b711e0cacef48deb
+            if [[ "$variant" = reference ]]; then revision=ac9deff316d38418622b16c237c671df88f57c7a; fi
+            git worktree add --detach "$RUNNER_TEMP/produce-acks-sources/$variant" "$revision"
+          done
+          python3 - <<'PY_PATCH'
+          import os
+          from pathlib import Path
+          for variant in ['reference','original']:
+              path=Path(os.environ['RUNNER_TEMP'])/'produce-acks-sources'/variant/'crates/broker/benches/produce.rs'
+              text=path.read_text()
+              needle='    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))'
+              assert text.count(needle)==1
+              text=text.replace(needle,'    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());\n    config.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());\n    let broker = Broker::start(config)')
+              needle='    let fixture = runtime.block_on(boot_bench_broker());'
+              assert text.count(needle)==1
+              text=text.replace(needle,needle+'\n    if let Some(path) = std::env::var_os("KRABKA_PROFILE_ADDRESS_FILE") {\n        std::fs::write(path, fixture.broker.metrics_addr().unwrap().to_string()).unwrap();\n    }')
+              path.write_text(text)
+          PY_PATCH
+          for variant in reference original; do
+            source="$RUNNER_TEMP/produce-acks-sources/$variant"
+            git -C "$source" rev-parse HEAD > "evidence/$variant.base-commit"
+            git -C "$source" diff --binary > "evidence/$variant.patch"
+            sha256sum "$source/crates/broker/src/handlers/produce.rs" > "evidence/$variant.source-sha256"
+          done
+          {
+            echo 'Diagnostic only; modified worktrees are counterfactuals, not qualified source.'
+            rustc -Vv
+            uname -a
+            lscpu
+          } > evidence/environment.txt
+        if: steps.cpu.outputs.matched == 'true'
+      - name: compile each variant once
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.toolchain.outputs.channel }}
         run: |
-          mkdir -p bench-results
-          rm -rf target/criterion
-          cargo bench -p krabka-log --bench log -- --output-format bencher --noplot | tee bench-results/log-engine.txt
-
-      # Parses Criterion bencher output into a structured JSON summary artifact.
-      # This utility lives in crates/parse-benches and can be migrated to a shared
-      # krabka-tools repository if cross-repo tooling is extracted in the future.
-      - name: Generate Summary JSON
-        run: cargo run -p krabka-parse-benches -- --results-dir bench-results --suite krabka-broker
-
-      # Benchmark summary JSON and raw logs are archived as build artifacts for
-      # historical trend tracking and comparative regression analysis across PRs.
-      # This per-pull-request lane archives measurements without a regression
-      # verdict because shared-runner wall-clock times vary by up to ±24%.
-      # The nightly/manual `bench` job in ci.yml alternates four reference and
-      # candidate runs on one host, then fails on regressions beyond its
-      # variance-calibrated tolerance with a 10% floor.
-      - name: Upload Benchmark Results
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+          set -euo pipefail
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/produce-acks-target"
+          export TMPDIR="$RUNNER_TEMP/produce-acks-tmp"
+          for variant in reference original; do
+            source="$RUNNER_TEMP/produce-acks-sources/$variant"
+            (cd "$source" && cargo bench --locked -p krabka-broker -p krabka-log --bench '*' --no-run) > "evidence/$variant.build.log" 2>&1
+            python3 - "$source" "$GITHUB_WORKSPACE/evidence/$variant.bench" <<'PY'
+          import hashlib,json,os,subprocess,sys
+          from pathlib import Path
+          # Cargo emits the executable path in machine-readable compiler artifacts.
+          output=subprocess.check_output(['cargo','bench','--locked','-p','krabka-broker','-p','krabka-log','--bench','*','--no-run','--message-format=json'],cwd=sys.argv[1],text=True)
+          bins=[row for line in output.splitlines() if line.startswith('{') for row in [json.loads(line)] if row.get('reason')=='compiler-artifact' and row.get('executable') and row.get('target',{}).get('kind')==['bench'] and row.get('target',{}).get('name')=='produce']
+          assert len(bins)==1,bins
+          assert Path(bins[0]['target']['src_path']).is_relative_to(Path(sys.argv[1])),bins[0]
+          destination=Path(sys.argv[2]);binary=Path(bins[0]['executable']).read_bytes();destination.write_bytes(binary);destination.chmod(0o755)
+          destination.with_suffix('.binary-sha256').write_text(hashlib.sha256(binary).hexdigest()+'\n')
+          PY
+          done
+        if: steps.cpu.outputs.matched == 'true'
+      - name: capture paired 30-second CPU profiles
+        run: |
+          set -euo pipefail
+          go version > evidence/profile-toolchain.txt
+          for variant in reference original; do
+            address_file="$GITHUB_WORKSPACE/evidence/$variant.address"
+            KRABKA_PROFILE_ADDRESS_FILE="$address_file" "evidence/$variant.bench" --bench 'broker/produce_acks/32part/acks_all' --profile-time 60 > "evidence/$variant.profile.log" 2>&1 &
+            bench_pid=$!
+            for attempt in $(seq 1 120); do
+              if [[ -s "$address_file" ]]; then break; fi
+              kill -0 "$bench_pid"
+              sleep 0.25
+            done
+            test -s "$address_file"
+            address=$(cat "$address_file")
+            curl --noproxy '*' --fail --silent --show-error --max-time 50 "http://$address/debug/pprof/profile?seconds=30" > "evidence/$variant.pprof"
+            wait "$bench_pid"
+            go tool pprof -top -nodecount=80 "evidence/$variant.bench" "evidence/$variant.pprof" > "evidence/$variant.cpu-flat.txt"
+            go tool pprof -top -cum -nodecount=80 "evidence/$variant.bench" "evidence/$variant.pprof" > "evidence/$variant.cpu-cumulative.txt"
+          done
+          echo 'Diagnostic CPU profiles only; no qualification verdict or modified product publication.' > evidence/profile-scope.txt
+        if: steps.cpu.outputs.matched == 'true'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
         with:
-          name: broker-benchmark-results
-          path: bench-results/
-          retention-days: 30
+          name: intel-produce-profile-${{ github.run_id }}-${{ matrix.attempt }}
+          path: |
+            evidence/*.txt
+            evidence/*.json
+            evidence/*.patch
+            evidence/*.base-commit
+            evidence/*.source-sha256
+            evidence/*.binary-sha256
+            evidence/*.log
+            evidence/*.pprof
+          if-no-files-found: error
+    strategy:
+      matrix:
+        attempt:
+          - 1
+          - 2
