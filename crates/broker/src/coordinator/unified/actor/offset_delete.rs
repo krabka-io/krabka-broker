@@ -67,7 +67,9 @@ pub(super) fn offset_delete_guard(group: &CoordinatorGroup) -> Result<Subscribed
 /// the keys of `requested` for which the group holds a committed offset
 /// (`hasCommittedOffset`) or an unresolved transactional one
 /// (`hasPendingTransactionalOffsets`), in request order, and then drops them
-/// from the group.
+/// from the group. A commit still waiting for the high watermark counts as
+/// committed, as Kafka's write operations read the newest state, and the
+/// tombstone supersedes it.
 ///
 /// Reading the group and appending in one actor turn keeps a concurrent
 /// commit from landing between the check and the write. An unresolved
@@ -83,9 +85,10 @@ pub(super) async fn delete_held_offsets(
     requested: &[(String, i32)],
 ) -> Result<(), ErrorCode> {
     let pending = group.unresolved_txn_keys();
+    let latest = group.latest_offsets();
     let held: Vec<(String, i32)> = requested
         .iter()
-        .filter(|key| group.committed_offsets.contains_key(*key) || pending.contains(*key))
+        .filter(|key| latest.contains_key(*key) || pending.contains(*key))
         .cloned()
         .collect();
     if held.is_empty() {

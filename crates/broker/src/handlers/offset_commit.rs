@@ -518,6 +518,9 @@ fn commit_records(
 /// queued update still in flight. Sending both halves as one message puts the
 /// commit and the sweep in one order.
 ///
+/// The actor answers once the high watermark covers the write, but does not
+/// hold its turn while it waits: the group's other requests run meanwhile.
+///
 /// Returns `Err(error_code)` when the append failed or the actor is gone.
 async fn commit_through_actor(
     handle: &Arc<GroupActorHandle>,
