@@ -82,6 +82,11 @@ pub async fn bootstrap_share_state(
 }
 
 pub async fn set_auto_offset_reset_earliest(client: &Client, group: &str) {
+    set_auto_offset_reset(client, group, "earliest").await;
+}
+
+/// Sets the group config `share.auto.offset.reset` of `group` to `value`.
+pub async fn set_auto_offset_reset(client: &Client, group: &str, value: &str) {
     let resp = client
         .send(
             incremental_request()
@@ -90,7 +95,7 @@ pub async fn set_auto_offset_reset_earliest(client: &Client, group: &str) {
                     group,
                     vec![incremental_config(
                         "share.auto.offset.reset",
-                        Some("earliest".into()),
+                        Some(value.into()),
                         crate::support::configs::ConfigOperation::Set,
                     )],
                 )])
@@ -100,7 +105,7 @@ pub async fn set_auto_offset_reset_earliest(client: &Client, group: &str) {
         .expect("IncrementalAlterConfigs(group)");
     assert!(
         resp.responses[0].error_code == 0,
-        "share.auto.offset.reset=earliest rejected: {:?}",
+        "share.auto.offset.reset={value} rejected: {:?}",
         resp.responses[0].error_message
     );
 }
