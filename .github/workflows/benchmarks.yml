@@ -89,7 +89,7 @@ jobs:
             variants=(reference original inline config-before)
             if ((round % 2 == 0)); then variants=(config-before inline original reference); fi
             for variant in "${variants[@]}"; do
-              "evidence/$variant.bench" 'log/read/past_end_returns_empty' \
+              "evidence/$variant.bench" --bench 'log/read/past_end_returns_empty' \
                 --output-format bencher --noplot --sample-size 20 --measurement-time 2 \
                 | tee "evidence/$variant.round-$round.txt"
             done
