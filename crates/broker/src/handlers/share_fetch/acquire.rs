@@ -569,10 +569,12 @@ async fn acquire_pass(
         };
 
         p.out.error_code = codes::NONE;
-        // The acquisition itself is not durable state (an acquired record
-        // persists as available), so a failed write keeps the state dirty for
-        // a retry. A fenced write drops the cell, and the records acquired on
-        // it must not reach the client.
+        // The acquisition itself writes nothing, as in Kafka's
+        // `SharePartition.acquire`. The pass may still have dirtied the state,
+        // through an expired lock or an archived poison pill, and that write
+        // happens here. A failed write keeps the state dirty for a retry. A
+        // fenced write drops the cell, and the records acquired on it must not
+        // reach the client.
         match mgr
             .persist_if_dirty(group, p.topic_id, p.partition_index, Some(&cell), &mut st)
             .await

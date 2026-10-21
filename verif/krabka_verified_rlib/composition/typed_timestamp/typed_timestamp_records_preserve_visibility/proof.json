@@ -11,9 +11,9 @@
       "vc_len_tup2_i32_i64": { "prover": "alt-ergo", "time": 0.018 },
       "vc_new_tup2_i64_i64": { "prover": "alt-ergo", "time": 0.013 },
       "vc_push_tup2_i64_i64": { "prover": "alt-ergo", "time": 0.013 },
-      "vc_tiered_timestamp_lookup_preserves_first": {
+      "vc_tiered_timestamp_lookup_answers_first_candidate": {
         "prover": "alt-ergo",
-        "time": 0.013
+        "time": 0.03
       },
       "vc_timestamp_record_coordinates": {
         "prover": "alt-ergo",

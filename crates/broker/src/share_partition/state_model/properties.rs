@@ -13,7 +13,7 @@ use {
             assert_transition, delivery_complete_count_is_terminal_in_window, lock_consistency,
             mutual_exclusion, window_integrity,
         },
-        observe::{acquired_runs, deferred_offsets, offset_state},
+        observe::{acquired_runs, deferred_offsets, offset_dc, offset_state, written},
         state::{ShareAction, ShareState},
     },
     crate::share_partition::state::{AckType, AcquisitionState, RecordState},
@@ -115,25 +115,25 @@ impl Model for ShareModel {
             }
             ShareAction::Reload => {
                 let deferred = deferred_offsets(&state.sm);
-                let window = (state.sm.start_offset, state.sm.end_offset);
-                let (start, _, batches) = state.sm.to_persist_batches();
-                let mut fresh = AcquisitionState::new(start);
-                fresh.load_from(start, state.sm.state_epoch, state.sm.leader_epoch, &batches);
+                let mut fresh = state.durable.clone();
+                // The fetch that follows the load moves the SPSO past the log
+                // start again, as the handler does on every pass.
+                fresh.advance_past_log_start(state.log_start);
                 // KFC-1: `Deferred` persists as `Available`, so the new leader
                 // re-derives it from the log and its own clock. The model's
-                // clock has not moved, so the same offsets come back deferred,
-                // and the round trip must lose none of them.
-                for off in &deferred {
+                // clock has not moved, so every deferred offset the reloaded
+                // window still offers comes back deferred. An offset past the
+                // last written window is materialized again before it is read.
+                let redeferred: Vec<Offset> = deferred
+                    .into_iter()
+                    .filter(|off| offset_state(&fresh, *off) == Some(RecordState::Available))
+                    .collect();
+                for off in &redeferred {
                     fresh.defer_internal(*off, *off);
                 }
                 assert!(
-                    (fresh.start_offset, fresh.end_offset) == window,
-                    "reload lost part of the window: {window:?} -> {:?}",
-                    (fresh.start_offset, fresh.end_offset)
-                );
-                assert!(
-                    deferred_offsets(&fresh) == deferred,
-                    "reload lost the deferral: {deferred:?} -> {:?}",
+                    deferred_offsets(&fresh) == redeferred,
+                    "reload lost the deferral: {redeferred:?} -> {:?}",
                     deferred_offsets(&fresh)
                 );
                 state.sm = fresh;
@@ -146,6 +146,22 @@ impl Model for ShareModel {
                 state.log_start = new_start;
             }
         }
+        if state.sm.dirty {
+            state.sm.dirty = false;
+            // Only a reload reads the written state back, so a config without
+            // one keeps the initial state there rather than split its search
+            // on a field nothing reads.
+            if self.allow_reload {
+                let durable = written(&state.sm);
+                let window = (state.sm.start_offset, state.sm.end_offset);
+                assert!(
+                    (durable.start_offset, durable.end_offset) == window,
+                    "the write lost part of the window: {window:?} -> {:?}",
+                    (durable.start_offset, durable.end_offset)
+                );
+                state.durable = durable;
+            }
+        }
         assert_transition(&last.sm, &state.sm, action);
         Some(state)
     }}
@@ -156,6 +172,7 @@ impl Model for ShareModel {
             clock: 0,
             hwm: Offset(0),
             log_start: Offset(0),
+            durable: AcquisitionState::new(Offset(0)),
         }]
     }
 
@@ -326,6 +343,20 @@ impl Model for ShareModel {
                 "window_within_record_lock_limit",
                 |m: &ShareModel, s: &ShareState| {
                     s.sm.end_offset.0 - s.sm.start_offset.0 <= i64::from(m.max_inflight)
+                },
+            ));
+        }
+        if self.allow_reload {
+            // An acquisition is not written, as in Kafka: the search reaches a
+            // state whose live delivery count is ahead of the written one, so a
+            // reload there exercises the lost increment.
+            properties.push(Property::sometimes(
+                "can_hold_an_unwritten_acquisition",
+                |_, s: &ShareState| {
+                    (s.sm.start_offset.0..s.sm.end_offset.0).any(|raw| {
+                        let off = Offset(raw);
+                        offset_dc(&s.sm, off).unwrap_or(0) > offset_dc(&s.durable, off).unwrap_or(0)
+                    })
                 },
             ));
         }

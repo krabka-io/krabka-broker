@@ -65,6 +65,7 @@ use {
         net::SocketAddr,
         time::{Duration, Instant},
     },
+    tokio::task::JoinHandle,
 };
 
 mod support;
@@ -503,9 +504,13 @@ async fn acknowledged_offsets_survive_a_coordinator_failover_behind_a_replicatio
         .await;
 
     // A read sent while both commits wait for the high watermark is served
-    // at the last committed offset of the partition.
+    // at the last committed offset of the partition, at once: Kafka's
+    // `scheduleReadOperation` does not queue behind a pending write, so the
+    // answer comes while both commits still wait, well inside their write
+    // timeout.
     let read_while_pending = fetch(&to_coordinator, topic_id).await;
     assert!(read_while_pending == fetch_answer(topic_id, ACKNOWLEDGED));
+    assert!(!timed_out.iter().any(JoinHandle::is_finished));
 
     for commit in timed_out {
         let answered = commit.await.expect("the OffsetCommit task");

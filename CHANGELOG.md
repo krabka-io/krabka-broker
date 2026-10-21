@@ -23,8 +23,46 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ## [Unreleased]
 
+### Added
+
+- `packaging/k8s/profiles/krabka-io-uring.json`, a seccomp profile for the
+  reference StatefulSet. It is containerd v2.4.2's `RuntimeDefault` profile
+  plus the three io_uring system calls, which the default profiles of
+  containerd 2.x and CRI-O refuse. The StatefulSet keeps `RuntimeDefault`
+  and has the `Localhost` lines as a comment. [Deploy](docs/operations/deploy.md#seccomp-and-io_uring)
+  tells how to install the profile and how to see that the
+  `preallocate=true` writes use io_uring (#1582).
+- `krabka-log` gains `Log::fence`, `Log::append_may_block` and
+  `Log::written_since_open_from`, and `LogError` gains a `Fenced` variant. A
+  fenced log refuses every append with `LogError::Fenced`, which the broker
+  answers with `NOT_LEADER_OR_FOLLOWER`. The broker fences a partition's log
+  when it retires the partition, so an append that raced the retirement cannot
+  land after it. `LogError` is not `#[non_exhaustive]`, so an exhaustive
+  `match` on it outside this repository needs a new arm.
+
 ### Changed
 
+- A produce append runs on the request's own task when it only writes to the
+  page cache. The partition writer task used to take every produce, so each
+  one paid two cross-thread wakes before its write. The request task now takes
+  the writer's gate, appends under the log lock and finishes the group, and
+  falls back to the writer task when the writer is busy, the lock is
+  contended, a flush policy is set, the append would roll a segment, or the
+  log has `preallocate`, whose `O_DIRECT` writes can wait. The same rule
+  places a follower's replica append and a fetch that reads only data this
+  broker wrote since it opened the log: work that stays in the page cache runs
+  inline, and work that may wait on the disk goes to the blocking pool.
+- A follower fetches from its leader over a dedicated link that hands the
+  response's record bytes to the replica append without copying them, instead
+  of through the general client connection.
+
+- A small fetch from the page cache looks its run up once. A fetch on a
+  `sendfile`-capable connection first describes its run of batches; when the
+  run is too short for `sendfile`, the broker used to read it with the
+  byte-copy path, which looked the same run up a second time: another offset
+  index floor, header scan and readahead hint under the log lock. It now
+  reads the regions the first walk found. Followers and consumers at the tail
+  of a log make this fetch on every round trip.
 - Less work per request on the produce and fetch paths:
   - Dispatch reads a Produce request's `acks` from its leading fields to
     decide whether a response is owed, instead of decoding the request a
@@ -61,6 +99,14 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   transactions as the data read resolves it. A finished segment nested inside
   the covering one made the abort lookup answer none while the read still
   served the batches (#1388).
+- Answer a by-timestamp `ListOffsets` from the first candidate segment only,
+  as Kafka 4.3.1 does: locally the first segment whose largest timestamp
+  reaches the target, remotely the first finished, lineage-admitted segment
+  whose max timestamp and end offset reach the target and the log start. When
+  that segment's matching records all sit below the log start, the answer is
+  `-1`/`-1`, where the seek went on to a later segment before. A remote
+  candidate at or above the first local segment's base is answered from the
+  local log, as Kafka's `findOffsetByTimestamp` does (#1388).
 
 ## [1.0.8] - 2026-10-20
 

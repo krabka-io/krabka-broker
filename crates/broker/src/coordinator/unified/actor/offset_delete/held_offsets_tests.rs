@@ -17,6 +17,7 @@ use {
         },
     },
     assert2::check,
+    krabka_protocol::records::RecordBatch,
     std::collections::{HashMap, HashSet},
 };
 
@@ -157,4 +158,43 @@ async fn delete_offsets_tombstones_only_offsets_the_group_holds() {
             row.name
         );
     }
+}
+
+/// A commit still waiting for the high watermark is held: Kafka's
+/// `deleteOffsets` is a write operation and reads the newest state. Its
+/// tombstone comes later in the log, so the commit does not come back once it
+/// completes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delete_offsets_tombstones_a_commit_that_is_still_replicating() {
+    let (coordinator, log) = make_coordinator();
+    coordinator.seed_classic("g", Box::new(group_holding_offsets()));
+    let handle = coordinator.find("g").unwrap();
+    log.hold_commits();
+    let commit = rpc::begin(&handle, |reply| GroupActorMessage::CommitOffsets {
+        batch: RecordBatch::default(),
+        entries: vec![(key("t", 5), offset_entry(50))],
+        reply,
+    })
+    .await;
+    let delete = rpc::begin(&handle, |reply| GroupActorMessage::DeleteOffsets {
+        keys: vec![key("t", 5)],
+        reply,
+    })
+    .await;
+    while log.batches().await.len() < 2 {
+        tokio::task::yield_now().await;
+    }
+
+    log.release_commits();
+    check!(commit.await.unwrap() == Ok(()));
+    check!(delete.await.unwrap() == Ok(()));
+    check!(parsed_offset_records(&log.batches().await) == vec![tombstone("t", 5)]);
+    check!(
+        rpc::fetch_offsets(&handle)
+            .await
+            .committed
+            .into_keys()
+            .collect::<HashSet<_>>()
+            == HashSet::from([key("t", 0), key("t", 2)])
+    );
 }

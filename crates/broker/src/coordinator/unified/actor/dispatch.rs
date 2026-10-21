@@ -16,6 +16,7 @@ use {
         messages::{LeaveResult, classic_leave_result},
         metadata_update::on_metadata_update,
         offset_delete::{delete_held_offsets, offset_delete_guard},
+        pending_commits::CommitWaits,
         retention::handle_reap_message,
         seed::apply_seed,
         topic_deletion::reply_delete_topic_offsets,
@@ -24,14 +25,10 @@ use {
     },
     crate::{
         codes,
-        coordinator::unified::{
-            ClientIdentity, classic_ops, classic_state::OffsetEntry, group::CoordinatorGroup,
-            migration, offsets_log::OffsetsLog,
-        },
+        coordinator::unified::{ClientIdentity, classic_ops, group::CoordinatorGroup, migration},
     },
-    krabka_protocol::{
-        owned::{heartbeat_request::HeartbeatRequest, leave_group_request::LeaveGroupRequest},
-        records::RecordBatch,
+    krabka_protocol::owned::{
+        heartbeat_request::HeartbeatRequest, leave_group_request::LeaveGroupRequest,
     },
     tokio::sync::oneshot,
 };
@@ -66,29 +63,10 @@ async fn reply_classic_leave(
     keep_running
 }
 
-/// Appends an `OffsetCommit` batch, and records its offsets in the group
-/// only when the append is durable.
-async fn commit_offsets(
-    group: &mut CoordinatorGroup,
-    offsets_log: &dyn OffsetsLog,
-    batch: RecordBatch,
-    entries: Vec<((String, i32), OffsetEntry)>,
-) -> Result<(), ErrorCode> {
-    match offsets_log.append(&group.group_id, batch).await {
-        Ok(()) => {
-            group.committed_offsets.extend(entries);
-            Ok(())
-        }
-        Err(error) => {
-            tracing::error!(group_id = %group.group_id, %error, "OffsetCommit append failed");
-            Err(codes::from_broker_error(&error))
-        }
-    }
-}
-
 pub(super) async fn handle_actor_message(
     group: &mut CoordinatorGroup,
     parked: &mut ParkedWaiters,
+    commits: &mut CommitWaits,
     services: ActorServices<'_>,
     message: GroupActorMessage,
 ) -> bool {
@@ -182,8 +160,9 @@ pub(super) async fn handle_actor_message(
             entries,
             reply,
         } => {
-            let result = commit_offsets(group, services.offsets_log, batch, entries).await;
-            let _ = reply.send(result);
+            commits
+                .begin(group, services.offsets_log, batch, entries, reply)
+                .await;
             true
         }
         GroupActorMessage::UpdateCommitted { entries, reply } => {
@@ -200,9 +179,7 @@ pub(super) async fn handle_actor_message(
             true
         }
         GroupActorMessage::RemoveCommitted { keys, reply } => {
-            for key in keys {
-                group.committed_offsets.remove(&key);
-            }
+            group.remove_committed(&keys);
             let _ = reply.send(());
             true
         }
@@ -234,7 +211,7 @@ pub(super) async fn handle_actor_message(
             committed,
             reply,
         } => {
-            group.committed_offsets.extend(committed);
+            group.publish_txn_offsets(resolved_through, committed);
             group.resolve_pending_txn_offsets(producer_id, resolved_through);
             let _ = reply.send(());
             true
@@ -270,8 +247,10 @@ pub(super) async fn handle_actor_message(
             // Kafka's `GroupMetadataManager.onUnloaded`: a parked `JoinGroup`
             // or `SyncGroup` learns that this broker no longer coordinates the
             // group, so its client looks the coordinator up again instead of
-            // retrying here.
+            // retrying here. Its runtime fails the shard's pending writes the
+            // same way, so a commit still replicating answers `NOT_COORDINATOR`.
             drain_parked_for_unload(&mut parked.joiners, &mut parked.followers);
+            commits.fail_all();
             let _ = reply.send(());
             false
         }
@@ -292,11 +271,25 @@ pub(super) async fn handle_actor_message(
 mod tests {
     use {
         super::*,
-        crate::coordinator::unified::actor::test_support::{
-            classic_member, make_coordinator, rpc, seed_completing_classic,
+        crate::coordinator::{
+            test_support::offset_entry,
+            unified::{
+                GroupCoordinator,
+                actor::{
+                    GroupActorHandle,
+                    test_support::{
+                        classic_member, make_coordinator, rpc, seed_completing_classic,
+                    },
+                },
+                classic_state::OffsetEntry,
+                offsets_log::fake::InMemoryOffsetsLog,
+            },
         },
         assert2::assert,
         krabka_log::Offset,
+        krabka_protocol::records::RecordBatch,
+        std::{collections::HashMap, sync::Arc, time::Duration},
+        tokio::sync::oneshot::{Receiver, error::TryRecvError},
     };
 
     /// Kafka's `GroupMetadataManager.onUnloaded` answers every awaiting
@@ -393,5 +386,164 @@ mod tests {
         assert!(
             coord.delete_group("g").await == Err(crate::coordinator::DeleteGroupError::NonEmpty)
         );
+    }
+
+    /// How long a message may take to answer while a commit replicates. It is
+    /// far below the 5 s write timeout the actor used to hold its turn for.
+    const PROMPT: Duration = Duration::from_secs(1);
+
+    /// Sends an `OffsetCommit` of `offset` for partition `t-partition` and
+    /// returns its pending answer.
+    async fn begin_commit(
+        handle: &GroupActorHandle,
+        partition: i32,
+        offset: i64,
+    ) -> Receiver<Result<(), ErrorCode>> {
+        rpc::begin(handle, |reply| GroupActorMessage::CommitOffsets {
+            batch: RecordBatch::default(),
+            entries: vec![(("t".to_string(), partition), offset_entry(offset))],
+            reply,
+        })
+        .await
+    }
+
+    /// A classic group `g` whose offsets log holds back its high watermark,
+    /// with one commit of `t-0` in the log and waiting for it.
+    struct HeldCommit {
+        coord: Arc<GroupCoordinator>,
+        log: Arc<InMemoryOffsetsLog>,
+        handle: Arc<GroupActorHandle>,
+        pending: Receiver<Result<(), ErrorCode>>,
+    }
+
+    /// Commits `offset` to `t-0` of a fresh group whose high watermark is
+    /// held, and returns once the commit is in the log, still invisible.
+    async fn held_commit(offset: i64) -> HeldCommit {
+        let (coord, log) = make_coordinator();
+        let handle = coord.get_or_create_classic("g");
+        log.hold_commits();
+        let pending = begin_commit(&handle, 0, offset).await;
+        // The fetch is answered after the commit's turn, so the record is in
+        // the log by the time it returns.
+        assert!(committed_now(&handle).await == offsets(&[]));
+        HeldCommit {
+            coord,
+            log,
+            handle,
+            pending,
+        }
+    }
+
+    async fn committed_now(handle: &GroupActorHandle) -> HashMap<(String, i32), OffsetEntry> {
+        tokio::time::timeout(PROMPT, rpc::fetch_committed(handle))
+            .await
+            .expect("OffsetFetch answers while a commit replicates")
+    }
+
+    fn offsets(entries: &[(i32, i64)]) -> HashMap<(String, i32), OffsetEntry> {
+        entries
+            .iter()
+            .map(|&(partition, offset)| (("t".to_string(), partition), offset_entry(offset)))
+            .collect()
+    }
+
+    /// Kafka's `CoordinatorRuntime` keeps serving a group while one of its
+    /// writes waits for the high watermark: `OffsetFetch` reads the state as
+    /// of the last committed offset, so it answers at once with the offsets
+    /// the group last acknowledged, and a heartbeat is not queued behind the
+    /// commit either. The commit's own answer waits for the high watermark.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_fetch_and_a_heartbeat_answer_while_a_commit_replicates() {
+        let (coord, log) = make_coordinator();
+        let handle = coord.get_or_create_consumer("g");
+        let joined = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;
+        assert!(joined.error_code == codes::NONE);
+        let member_id = joined.member_id.clone().expect("a joined member has an id");
+        assert!(begin_commit(&handle, 0, 5).await.await.unwrap() == Ok(()));
+
+        log.hold_commits();
+        let mut pending = begin_commit(&handle, 0, 9).await;
+
+        assert!(committed_now(&handle).await == offsets(&[(0, 5)]));
+        let heartbeat = tokio::time::timeout(
+            PROMPT,
+            rpc::consumer_heartbeat(&handle, &member_id, joined.member_epoch, Some("t")),
+        )
+        .await
+        .expect("a heartbeat answers while a commit replicates");
+        assert!(heartbeat.error_code == codes::NONE);
+        assert!(pending.try_recv() == Err(TryRecvError::Empty));
+
+        log.release_commits();
+        assert!(pending.await.unwrap() == Ok(()));
+        assert!(committed_now(&handle).await == offsets(&[(0, 9)]));
+    }
+
+    /// Two commits of one partition replicate together. Whichever wait the
+    /// actor sees end first, the offsets are published in log order, so the
+    /// later commit's offset is the one that stays.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn commits_that_replicate_together_publish_in_log_order() {
+        let earlier = held_commit(5).await;
+        let later = begin_commit(&earlier.handle, 0, 9).await;
+        assert!(committed_now(&earlier.handle).await == offsets(&[]));
+
+        earlier.log.release_commits();
+        assert!(later.await.unwrap() == Ok(()));
+        assert!(earlier.pending.await.unwrap() == Ok(()));
+        assert!(committed_now(&earlier.handle).await == offsets(&[(0, 9)]));
+    }
+
+    /// A commit that times out answers `COORDINATOR_NOT_AVAILABLE` and stays
+    /// invisible, but its record is in the log. Once the high watermark passes
+    /// it after all, Kafka shows it, with no further write needed: so does the
+    /// actor.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_timed_out_commit_becomes_visible_once_the_high_watermark_passes_it() {
+        let timed_out = held_commit(7).await;
+        timed_out.log.time_out_uncommitted();
+        assert!(timed_out.pending.await.unwrap() == Err(codes::COORDINATOR_NOT_AVAILABLE));
+        assert!(committed_now(&timed_out.handle).await == offsets(&[]));
+
+        timed_out.log.release_commits();
+        tokio::time::timeout(PROMPT, async {
+            while committed_now(&timed_out.handle).await != offsets(&[(0, 7)]) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the timed-out commit is published once it commits");
+    }
+
+    /// `DeleteGroups` of an empty group while a commit of it replicates: the
+    /// group's tombstones come later in the log, so once they commit the
+    /// commit has too. Kafka answers the commit by its own write's outcome,
+    /// and only an unload fails it, so the client is not told to retry a
+    /// commit that landed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_commit_replicating_under_a_group_delete_answers_its_own_outcome() {
+        let commit = held_commit(7).await;
+        let delete = tokio::spawn({
+            let coord = Arc::clone(&commit.coord);
+            async move { coord.delete_group("g").await }
+        });
+        // The delete's tombstones are in the log once a second batch is.
+        while commit.log.batches().await.len() < 2 {
+            tokio::task::yield_now().await;
+        }
+
+        commit.log.release_commits();
+        assert!(delete.await.unwrap() == Ok(()));
+        assert!(commit.pending.await.unwrap() == Ok(()));
+    }
+
+    /// Kafka's runtime fails the pending writes of a shard it unloads with
+    /// `NOT_COORDINATOR`. A commit still replicating when the actor stops gets
+    /// that answer rather than a dropped reply.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_commit_still_replicating_at_shutdown_answers_not_coordinator() {
+        let unloaded = held_commit(7).await;
+        rpc::shutdown(&unloaded.handle).await;
+        assert!(unloaded.pending.await.unwrap() == Err(codes::NOT_COORDINATOR));
     }
 }

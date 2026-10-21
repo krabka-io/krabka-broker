@@ -2,8 +2,8 @@
 //! move between two states.
 //!
 //! The two types sit apart from the transitions so that a reader can see the
-//! whole search space, which is the real `AcquisitionState` plus a two-field
-//! envelope, on one screen.
+//! whole search space, which is the real `AcquisitionState`, the state it last
+//! wrote, and a small envelope, on one screen.
 
 use {
     crate::share_partition::state::{AckType, AcquisitionState},
@@ -22,6 +22,12 @@ pub(super) struct ShareState {
     /// `AdvanceLogStart` is the one action that moves it, calling
     /// `sm.advance_past_log_start` with the new value.
     pub(super) log_start: Offset,
+    /// What a reload reads back: `sm` as of its last `WriteShareGroupState`,
+    /// already round-tripped through `to_persist_batches` and `load_from`.
+    /// A transition that leaves `sm` dirty writes it at once, as the
+    /// acknowledgement path, the fetch handler and the lock sweeper do; one
+    /// that leaves it clean, such as an acquisition, writes nothing.
+    pub(super) durable: AcquisitionState,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -55,8 +61,9 @@ pub(super) enum ShareAction {
     ExpireLocks,
     /// Advance the logical clock by one lock-duration.
     Tick,
-    /// Leader failover: persist and reload. Acquired drops to Available, and
-    /// the locks are lost.
+    /// Leader failover: the new leader loads the last written state. Acquired
+    /// drops to Available, the locks are lost, and a change that was never
+    /// written, such as an acquisition's delivery count, is lost with them.
     Reload,
     /// The log start offset (retention / `DeleteRecords`) moves to
     /// `new_start`, past the current SPSO. Archives `Available`/`Deferred`
