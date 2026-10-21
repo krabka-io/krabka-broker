@@ -30,9 +30,11 @@ jobs:
   cpd:
     name: jscpd · zero repeats at 52 tokens
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -70,9 +72,11 @@ jobs:
   ci:
     name: build · lint · format · test · docgen
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Change detection needs the merge base, not just the tip.
@@ -236,9 +240,11 @@ jobs:
     name: coverage
     needs: select
     if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || needs.select.outputs.rust == 'true')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       # No `fetch-depth: 0`: nothing here reads the merge base -- the report
       # covers every target under //crates/..., not the impacted ones.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -292,9 +298,11 @@ jobs:
   supply-chain:
     name: cargo deny
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
@@ -322,7 +330,7 @@ jobs:
   cargo:
     name: cargo clippy · nextest
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Cold builds, the full suite and the post-job cache upload share this budget.
     timeout-minutes: 90
     # This job builds the whole workspace twice into one target directory --
@@ -341,6 +349,8 @@ jobs:
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: ./.github/actions/reclaim-disk
@@ -406,9 +416,11 @@ jobs:
   wasm:
     name: cargo clippy · wasm32-wasip1
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - id: toolchain
@@ -466,11 +478,13 @@ jobs:
   checks:
     name: checks
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # The longest of the four (`docs checks`, whose lychee step walks every
     # markdown file); the other three wanted 10.
     timeout-minutes: 45
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
       - uses: ./.github/actions/remote-cache
@@ -613,7 +627,7 @@ jobs:
   proofs:
     name: creusot proofs
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     permissions:
       contents: read
@@ -627,6 +641,8 @@ jobs:
       # Must match `image_push`'s registry and repository in //tools/creusot.
       REGISTRY_IMAGE: ghcr.io/krabka-io/creusot
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The CLI alone, and unconditionally: the tag below is what decides
@@ -755,7 +771,7 @@ jobs:
   # all, which is what lets `coverage` sit out a docs-only pull request.
   select:
     name: select
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     outputs:
       suites: ${{ steps.select.outputs.suites }}
@@ -765,6 +781,8 @@ jobs:
       BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
       FULL_MATRIX: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # rdeps needs the merge base, not just the tip.
@@ -815,7 +833,7 @@ jobs:
     name: container · ${{ matrix.suite.name }}
     needs: select
     if: needs.select.outputs.any == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     strategy:
       # One group failing should not cancel the rest -- the point of the shard
@@ -824,6 +842,8 @@ jobs:
       matrix:
         suite: ${{ fromJSON(needs.select.outputs.suites) }}
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
         with:
@@ -906,9 +926,11 @@ jobs:
 
   kubernetes:
     name: kubernetes · kind
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
         with:
@@ -930,12 +952,14 @@ jobs:
   upgrade:
     name: upgrade · previous release
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     permissions:
       contents: read
       packages: read
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -957,9 +981,11 @@ jobs:
   gssapi:
     name: container · gssapi
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
         with:
@@ -1020,11 +1046,13 @@ jobs:
   soak:
     name: soak · four hours
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # The soak itself is four hours; the rest is the compile, the image and the
     # verification pass.
     timeout-minutes: 330
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: ./.github/actions/reclaim-disk
@@ -1082,9 +1110,11 @@ jobs:
   netem:
     name: netem · slow-follower self-check
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: ./.github/actions/reclaim-disk
@@ -1146,9 +1176,11 @@ jobs:
   links:
     name: external links
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: markdown links (external)
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
@@ -1166,12 +1198,14 @@ jobs:
   bench:
     name: variance-calibrated criterion benches
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Four alternating reference/candidate passes over all seven suites.
     timeout-minutes: 360
     permissions:
       contents: read
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -1304,12 +1338,14 @@ jobs:
     name: delivery
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: [ci, coverage, supply-chain]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     permissions:
       contents: read
       packages: write
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -1405,9 +1441,11 @@ jobs:
       - select
       - docker
       - kubernetes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - name: require every dependency to have succeeded
         env:
           NEEDS: ${{ toJSON(needs) }}
@@ -1459,7 +1497,7 @@ jobs:
     # `always()`: the whole point is to run when a dependency failed, and a
     # plain `needs` would skip this job exactly then.
     if: always() && github.event_name == 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     # The workflow-level block is `contents: read` + `id-token: write`. This is
     # the only job that writes issues, so the grant stays here rather than
@@ -1476,6 +1514,8 @@ jobs:
       NEEDS: ${{ toJSON(needs) }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       # `gh issue create --label` fails outright when the label does not exist,
       # which would turn "the nightly is red" into "the reporting job is red"
       # with nothing filed. Creating it here keeps the workflow self-sufficient:
