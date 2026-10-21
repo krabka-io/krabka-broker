@@ -14,6 +14,7 @@ use {
         share::actor::{ShareGroupActorHandle, ShareGroupActorMessage},
         streams::actor::{StreamsGroupActorHandle, StreamsGroupActorMessage},
     },
+    dashmap::Entry,
     std::sync::Arc,
 };
 
@@ -187,14 +188,49 @@ impl GroupCoordinator {
     /// Unlike [`find_streams`](Self::find_streams), it never returns the
     /// closed handle of an actor that exited after a failed write: it
     /// respawns that actor from the group's replayed state, as
-    /// [`get_or_create_streams`](Self::get_or_create_streams) does.
+    /// [`get_or_create_streams`](Self::get_or_create_streams) does. It never
+    /// creates a group: one deleted or converted after the lookup stays gone.
     #[must_use]
     pub fn find_live_streams(
         self: &Arc<Self>,
         group_id: &str,
     ) -> Option<Arc<StreamsGroupActorHandle>> {
-        self.find_streams(group_id)
-            .map(|_| self.get_or_create_streams(group_id))
+        let found = self.find_streams(group_id)?;
+        if found.tx.is_closed() {
+            self.respawn_closed_streams(group_id, &found)
+        } else {
+            Some(found)
+        }
+    }
+
+    /// Replaces the closed actor `closed` of `group_id` with a fresh one,
+    /// seeded from the group's replayed state, only while the registry still
+    /// holds `closed`. A group removed since answers `None`, and an actor
+    /// that replaced `closed` since is returned as it is.
+    fn respawn_closed_streams(
+        self: &Arc<Self>,
+        group_id: &str,
+        closed: &Arc<StreamsGroupActorHandle>,
+    ) -> Option<Arc<StreamsGroupActorHandle>> {
+        let respawned = match self.streams_groups.entry(group_id.into()) {
+            Entry::Vacant(_) => return None,
+            Entry::Occupied(entry) if !Arc::ptr_eq(entry.get(), closed) => {
+                return Some(entry.get().clone());
+            }
+            Entry::Occupied(mut entry) => {
+                let respawned = Arc::new(StreamsGroupActorHandle::spawn(
+                    group_id.into(),
+                    self.streams_config.clone(),
+                    self.clone(),
+                ));
+                entry.insert(respawned.clone());
+                respawned
+            }
+        };
+        if let Some(seed) = self.cached_streams_seed(group_id) {
+            let _ = respawned.tx.try_send(StreamsGroupActorMessage::Seed(seed));
+        }
+        Some(respawned)
     }
 
     /// Snapshot the ids of every live streams group, per KIP-1071.
@@ -295,7 +331,7 @@ mod tests {
             config::NextGenConfig,
             share::config::ShareGroupConfig,
             streams::config::StreamsGroupConfig,
-            test_support::{ImageMetadatalessProvider, make_coord},
+            test_support::{ImageMetadatalessProvider, make_coord, stop_streams_actor},
         },
         assert2::{assert, check},
     };
@@ -376,5 +412,67 @@ mod tests {
         assert!(streams_ids == vec!["streams-a".to_string()]);
 
         coord.shutdown_all().await;
+    }
+
+    /// What the registry holds for the group when `respawn_closed_streams`
+    /// runs, after a lookup found its closed actor.
+    #[derive(Debug, Clone, Copy)]
+    enum SinceLookup {
+        Unchanged,
+        Removed,
+        Replaced,
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_closed_streams_actor_respawns_only_while_still_registered() {
+        for since in [
+            SinceLookup::Unchanged,
+            SinceLookup::Removed,
+            SinceLookup::Replaced,
+        ] {
+            let coord = make_coord();
+            let _ = coord.get_or_create_streams("g");
+            stop_streams_actor(&coord, "g").await;
+            let closed = coord.find_streams("g").expect("the closed actor");
+            let replacement = match since {
+                SinceLookup::Unchanged => None,
+                SinceLookup::Removed => {
+                    coord.streams_groups.remove("g");
+                    None
+                }
+                SinceLookup::Replaced => Some(coord.get_or_create_streams("g")),
+            };
+
+            let answer = coord.respawn_closed_streams("g", &closed);
+
+            let registered = coord.find_streams("g");
+            match since {
+                SinceLookup::Unchanged => {
+                    let answer = answer.expect("a respawned actor");
+                    check!(!answer.tx.is_closed(), "{since:?}");
+                    check!(!Arc::ptr_eq(&answer, &closed), "{since:?}");
+                    check!(
+                        registered.is_some_and(|r| Arc::ptr_eq(&r, &answer)),
+                        "{since:?}"
+                    );
+                }
+                SinceLookup::Removed => {
+                    check!(answer.is_none(), "{since:?}");
+                    check!(registered.is_none(), "{since:?}");
+                }
+                SinceLookup::Replaced => {
+                    let replacement = replacement.expect("the replacement");
+                    check!(
+                        answer.is_some_and(|a| Arc::ptr_eq(&a, &replacement)),
+                        "{since:?}"
+                    );
+                    check!(
+                        registered.is_some_and(|r| Arc::ptr_eq(&r, &replacement)),
+                        "{since:?}"
+                    );
+                }
+            }
+            coord.shutdown_all().await;
+        }
     }
 }
