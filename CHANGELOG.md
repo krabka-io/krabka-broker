@@ -25,6 +25,13 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Added
 
+- `packaging/k8s/profiles/krabka-io-uring.json`, a seccomp profile for the
+  reference StatefulSet. It is containerd v2.4.2's `RuntimeDefault` profile
+  plus the three io_uring system calls, which the default profiles of
+  containerd 2.x and CRI-O refuse. The StatefulSet keeps `RuntimeDefault`
+  and has the `Localhost` lines as a comment. [Deploy](docs/operations/deploy.md#seccomp-and-io_uring)
+  tells how to install the profile and how to see that the
+  `preallocate=true` writes use io_uring (#1582).
 - `krabka-log` gains `Log::fence`, `Log::append_may_block` and
   `Log::written_since_open_from`, and `LogError` gains a `Fenced` variant. A
   fenced log refuses every append with `LogError::Fenced`, which the broker
