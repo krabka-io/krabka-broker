@@ -165,9 +165,13 @@ impl PendingAck {
                 tokio::select! {
                     biased;
                     gate = &mut committed => {
-                        // A leadership change must win when both branches are ready.
-                        break self.check_leadership(&images.borrow())
-                            .and(gate.map_err(|_| codes::REQUEST_TIMED_OUT));
+                        // An unchanged watch version preserves the initial leadership check.
+                        let leadership = if images.has_changed().unwrap_or(true) {
+                            self.check_leadership(&images.borrow())
+                        } else {
+                            Ok(())
+                        };
+                        break leadership.and(gate.map_err(|_| codes::REQUEST_TIMED_OUT));
                     }
                     changed = images.changed(), if watching => {
                         watching = changed.is_ok();
