@@ -1,5 +1,5 @@
 use {
-    super::tiered_timestamp_lookup_preserves_first,
+    super::tiered_timestamp_lookup_answers_first_candidate,
     crate::{
         list_offsets::ListOffsetsSelectionDecision,
         timestamp::{timestamp_record_coordinates, timestamp_record_time},
@@ -11,7 +11,10 @@ use {
 /// visibility preserve the first record's actual wire timestamp. Append-time
 /// lookup ignores producer-time overflow; `CreateTime` requires valid sums.
 /// Decoding, timestamp-type projection, and complete batch enumeration are
-/// host obligations. This trace contains one complete decoded data batch.
+/// host obligations. This trace contains one complete decoded data batch, the
+/// local tier's only segment. Its largest timestamp is supplied as `i64::MAX`,
+/// an upper bound of every record time: a segment whose real maximum falls
+/// short of the target holds no match, so it answers `Unknown` either way.
 #[requires(base@ >= 0 && request.0@ >= 0 && request.1@ >= 0 && request.2@ >= 0 && epoch@ >= -1)]
 #[requires(forall<i: Int> 0 <= i && i < records@.len()
     ==> records@[i].0@ >= 0 && base@ + records@[i].0@ <= i64::MAX@)]
@@ -61,5 +64,14 @@ pub(super) fn typed_timestamp_records_preserve_visibility(
         );
         index += 1;
     }
-    tiered_timestamp_lookup_preserves_first(&[], &decoded, target, minimum, bound, epoch)
+    let records: &[(i64, i64)] = &decoded;
+    let segments = [records];
+    tiered_timestamp_lookup_answers_first_candidate(
+        (&[], &[]),
+        (&segments, &[i64::MAX]),
+        target,
+        minimum,
+        bound,
+        epoch,
+    )
 }

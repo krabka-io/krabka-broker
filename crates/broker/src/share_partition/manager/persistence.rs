@@ -251,6 +251,9 @@ mod tests {
         let mgr = manager();
         let tid = uuid::Uuid::from_bytes([25; 16]);
         let mut st = acquired_state(krabka_log::Offset(4));
+        // Acquisition alone writes nothing; an acknowledgement does.
+        st.acknowledge("m1", Offset(0), Offset(3), AckType::Accept, 5)
+            .expect("m1 holds 0-3");
 
         let result = mgr.persist_if_dirty("g1", tid, 0, None, &mut st).await;
 

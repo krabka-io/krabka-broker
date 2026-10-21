@@ -124,13 +124,15 @@ impl AcquisitionState {
     /// jump straight to `log_start`, matching Kafka's unconditional
     /// `startOffset = newLogStartOffset` assignment for the un-cached region.
     ///
-    /// Does nothing when `log_start` is at or below the current SPSO.
+    /// Does nothing when `log_start` is at or below the current SPSO. It does
+    /// not mark the state dirty: as Kafka's `updateCacheAndOffsets` says, the
+    /// new start offset is written lazily by the next acknowledgement, release
+    /// or lock timeout, and the archived batches are not written at all.
     pub fn advance_past_log_start(&mut self, log_start: Offset) {
         if log_start <= self.start_offset {
             return;
         }
         self.split_at_offset(log_start);
-        let mut changed = false;
         for batch in &mut self.batches {
             if batch.first_offset >= log_start {
                 break;
@@ -139,11 +141,7 @@ impl AcquisitionState {
                 batch.archive_terminal(&mut self.delivery_complete_count);
                 batch.acquired_by = None;
                 batch.lock_deadline = None;
-                changed = true;
             }
-        }
-        if changed {
-            self.dirty = true;
         }
         self.advance_spso();
         // Nothing left in the window blocks the rest of the advance (either no
@@ -157,7 +155,6 @@ impl AcquisitionState {
             .is_some_and(|b| b.first_offset < log_start);
         if !blocked && self.start_offset < log_start {
             self.start_offset = log_start;
-            self.dirty = true;
         }
         if self.end_offset < self.start_offset {
             self.end_offset = self.start_offset;
@@ -270,6 +267,7 @@ impl AcquisitionState {
         let mut remaining = i64::from(shape.max_records.max(0));
         let mut i = 0;
         let mut any_change = false;
+        let mut archived = false;
         while i < self.batches.len() {
             if remaining <= 0 {
                 break;
@@ -286,6 +284,7 @@ impl AcquisitionState {
                 let (batches, mut archive) = self.runs_and_sink();
                 archive.archive(&mut batches[i], DlqCause::DeliveryCountExceeded);
                 any_change = true;
+                archived = true;
                 i += 1;
                 continue;
             }
@@ -331,8 +330,15 @@ impl AcquisitionState {
                 break;
             }
         }
-        if any_change {
+        // Acquisition alone is not written: Kafka's `SharePartition.acquire`
+        // changes memory and schedules the lock timer, and the next
+        // acknowledgement, release or lock timeout writes the delivery count.
+        // An archived poison pill is written, so its dead-letter record waits
+        // on a durable `Archiving` state (KIP-1191).
+        if archived {
             self.dirty = true;
+        }
+        if any_change {
             self.advance_spso();
         }
         acquired
@@ -369,6 +375,70 @@ mod tests {
         );
         assert!(acq.is_empty()); // archived, not redelivered
         assert!(s.start_offset == 1); // SPSO advanced past the poison pill
+    }
+
+    /// Which transitions mark the state for a `WriteShareGroupState`.
+    ///
+    /// Kafka 4.3.1's `SharePartition` writes on an acknowledgement, a release
+    /// and a lock timeout only. `acquire` changes memory and schedules the
+    /// lock timer, and `updateCacheAndOffsets` writes a log-start move lazily.
+    /// An archived poison pill is written, so its dead-letter record follows
+    /// a durable `Archiving` state.
+    #[test]
+    fn only_a_settled_transition_marks_the_state_dirty() {
+        type Transition = fn(&mut AcquisitionState);
+        let cases: [(&str, Transition); 5] = [
+            ("an acquisition", |s| {
+                let _ = s.acquire("m1", 10, Offset(i64::MAX), t0(), LOCK, 5);
+            }),
+            ("a log-start move that archives available records", |s| {
+                s.advance_past_log_start(Offset(3));
+            }),
+            ("an acknowledgement", |s| {
+                let _ = s.acquire("m1", 10, Offset(i64::MAX), t0(), LOCK, 5);
+                s.dirty = false;
+                s.acknowledge("m1", Offset(0), Offset(4), AckType::Accept, 5)
+                    .expect("m1 holds 0-4");
+            }),
+            ("a lock timeout", |s| {
+                let _ = s.acquire("m1", 10, Offset(i64::MAX), t0(), LOCK, 5);
+                s.expire_locks(t0() + Duration::from_secs(31), 5);
+            }),
+            ("a poison pill archived on acquire", |s| {
+                let _ = s.acquire("m1", 10, Offset(i64::MAX), t0(), LOCK, 1);
+                s.expire_locks(t0() + Duration::from_secs(31), 2);
+                s.dirty = false;
+                let _ = s.acquire(
+                    "m1",
+                    10,
+                    Offset(i64::MAX),
+                    t0() + Duration::from_secs(31),
+                    LOCK,
+                    1,
+                );
+            }),
+        ];
+
+        let actual: Vec<_> = cases
+            .iter()
+            .map(|(name, transition)| {
+                let mut s = AcquisitionState::new(Offset(0));
+                s.materialize(Offset(5), 100);
+                transition(&mut s);
+                (*name, s.dirty)
+            })
+            .collect();
+
+        assert!(
+            actual
+                == vec![
+                    ("an acquisition", false),
+                    ("a log-start move that archives available records", false),
+                    ("an acknowledgement", true),
+                    ("a lock timeout", true),
+                    ("a poison pill archived on acquire", true),
+                ]
+        );
     }
 
     #[test]

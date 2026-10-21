@@ -147,6 +147,15 @@ pub enum GroupActorMessage {
         keys: Vec<(String, i32)>,
         reply: oneshot::Sender<()>,
     },
+    /// `OffsetDelete`'s write: tombstone each of `keys` that the group holds
+    /// a committed or an unresolved transactional offset for, then drop those
+    /// keys from the group, all in one turn. A key the group holds nothing
+    /// for writes nothing, and when no key needs a tombstone nothing is
+    /// appended. Replies with the append's error code when the write fails.
+    DeleteOffsets {
+        keys: Vec<(String, i32)>,
+        reply: oneshot::Sender<Result<(), ErrorCode>>,
+    },
     /// KIP-211: tombstone every committed offset that has fallen out of
     /// retention, and the group with them when it keeps none. The sweep in
     /// `coordinator::retention` sends it to each group whose

@@ -3,14 +3,51 @@
 //!
 //! Each search reads sealed segments oldest-first and then the active
 //! segment, and ties resolve to the earliest offset as KIP-734 requires.
+//!
+//! A `ListOffsets` seek answers from the first segment whose largest timestamp
+//! reaches the target, even when none of that segment's retained records
+//! does, as Kafka 4.3.1's `UnifiedLog.searchOffsetInLocalLog` does:
+//!
+//! ```java
+//! for (LogSegment segment : segments) {
+//!     if (segment.largestTimestamp() >= targetTimestamp) {
+//!         return segment.findOffsetByTimestamp(targetTimestamp, startOffset);
+//!     }
+//! }
+//! ```
 
 use {
     super::Log,
     crate::{error::LogError, name, retention, segment::Segment},
     krabka_ids::Offset,
     krabka_units::prelude::{ByteSize, ByteSizeExt as _},
+    krabka_verified::timestamp::first_timestamp_index,
     std::time::SystemTime,
 };
+
+/// How far a by-timestamp search goes.
+#[derive(Clone, Copy)]
+enum Seek {
+    /// Answer from the first segment whose largest timestamp reaches the
+    /// target, as Kafka's `ListOffsets` does.
+    FirstCandidate,
+    /// Go on past segments with no retained match, to the first retained
+    /// record at or after the target anywhere in the log.
+    FirstRetained,
+}
+
+/// Kafka 4.3.1's `LogSegment.largestTimestamp`: the segment's largest record
+/// timestamp, or the `.log` file's modification time when the segment has
+/// none (`maxTimestampSoFar < 0`, an empty segment or one whose batches carry
+/// no timestamp). Java's `File.lastModified` reads 0 when the filesystem
+/// cannot report it.
+fn largest_timestamp(segment: &Segment) -> i64 {
+    let max = segment.max_timestamp();
+    if max >= 0 {
+        return max;
+    }
+    segment.last_modified().map_or(0, retention::now_ms)
+}
 
 /// The scan window and the record limit of a log's configuration.
 struct TimestampScanSettings {
@@ -84,14 +121,15 @@ impl Log {
     /// `>= target_ts`, excluding records below the logical log start.
     ///
     /// The search reads sealed segments oldest-first and then the active
-    /// segment. The first segment whose `max_timestamp >= target_ts` holds
-    /// the answer. The per-segment helper does the index lookup and the
-    /// forward scan. The result is `None` when no local record qualifies,
-    /// including the case of an empty log.
+    /// segment, and goes past a segment whose `max_timestamp >= target_ts`
+    /// comes only from records below the log start. The per-segment helper
+    /// does the index lookup and the forward scan. The result is `None` when
+    /// no retained local record qualifies, including the case of an empty log.
     ///
     /// This is the lookup the log's own bookkeeping uses, and it applies no
     /// `max.decompressed.message.bytes`. A `ListOffsets` answer goes through
-    /// [`Self::offset_for_timestamp_checked`], which does.
+    /// [`Self::offset_for_timestamp_checked`], which does, and which stops at
+    /// the first candidate segment as Kafka does.
     ///
     /// # Panics
     ///
@@ -100,9 +138,15 @@ impl Log {
     pub fn offset_for_timestamp(&self, target_ts: i64) -> Option<(Offset, i64)> {
         let scan_window = self.config.read().unwrap().timestamp_scan_window;
         // With no limit the scan has nothing to refuse.
-        self.scan_offset_for_timestamp(target_ts, scan_window, None, self.log_start_offset())
-            .ok()
-            .flatten()
+        self.scan_offset_for_timestamp(
+            target_ts,
+            scan_window,
+            None,
+            self.log_start_offset(),
+            Seek::FirstRetained,
+        )
+        .ok()
+        .flatten()
     }
 
     /// [`Self::offset_for_timestamp`] under the log's
@@ -112,6 +156,15 @@ impl Log {
     /// Kafka's scan decompresses a compressed batch whose max timestamp reaches
     /// the target, up to the record it returns, and fails on a record above the
     /// limit. A lookup that never reads the oversized record is unaffected.
+    ///
+    /// The answer comes from the first segment whose largest timestamp
+    /// reaches `target_ts` (Kafka's `LogSegment.largestTimestamp`, which falls
+    /// back to the file's modification time for a segment with no record
+    /// timestamp). When that segment holds no retained match the answer is
+    /// `None`, even if a later segment holds one: Kafka 4.3.1's
+    /// `UnifiedLog.searchOffsetInLocalLog` returns
+    /// `segment.findOffsetByTimestamp(target, startOffset)` from that first
+    /// segment and reads no other.
     ///
     /// # Errors
     ///
@@ -148,7 +201,7 @@ impl Log {
         minimum: Offset,
     ) -> Result<Option<(Offset, i64)>, LogError> {
         let TimestampScanSettings { scan_window, limit } = self.timestamp_scan_settings();
-        self.scan_offset_for_timestamp(target_ts, scan_window, limit, minimum)
+        self.scan_offset_for_timestamp(target_ts, scan_window, limit, minimum, Seek::FirstCandidate)
     }
 
     /// The scan window and the record limit of the log's current configuration.
@@ -160,41 +213,64 @@ impl Log {
         }
     }
 
+    /// The by-timestamp search. [`Seek::FirstCandidate`] answers from the first
+    /// segment whose largest timestamp reaches `target_ts`, as `ListOffsets`
+    /// does; [`Seek::FirstRetained`] goes on until it finds a retained record.
     fn scan_offset_for_timestamp(
         &self,
         target_ts: i64,
         scan_window: ByteSize,
         limit: Option<ByteSize>,
         minimum: Offset,
+        seek: Seek,
     ) -> Result<Option<(Offset, i64)>, LogError> {
         let minimum = self.log_start_offset().max(minimum);
-        for seg in &self.segments {
-            // A sealed segment restores its maximum on open, so the unknown
-            // sentinel survives only where the segment holds no readable
-            // batch. There is nothing in such a segment to find.
-            if seg.last_offset() >= minimum
-                && seg.max_timestamp() >= target_ts
-                && let Some(hit) = seg.offset_for_timestamp_with_window_from(
+        match seek {
+            Seek::FirstCandidate => {
+                let segments: Vec<&Segment> =
+                    self.segments.iter().chain(self.active.as_ref()).collect();
+                let largest: Vec<i64> = segments.iter().map(|seg| largest_timestamp(seg)).collect();
+                let Some(candidate) = first_timestamp_index(&largest, target_ts) else {
+                    return Ok(None);
+                };
+                segments[candidate].offset_for_timestamp_with_window_from(
                     target_ts,
                     scan_window,
                     limit,
                     minimum,
-                )?
-            {
-                return Ok(Some(hit));
+                )
+            }
+            Seek::FirstRetained => {
+                for seg in &self.segments {
+                    // A sealed segment restores its maximum on open, so the
+                    // unknown sentinel survives only where the segment holds
+                    // no readable batch. There is nothing in such a segment
+                    // to find.
+                    if seg.last_offset() >= minimum
+                        && seg.max_timestamp() >= target_ts
+                        && let Some(hit) = seg.offset_for_timestamp_with_window_from(
+                            target_ts,
+                            scan_window,
+                            limit,
+                            minimum,
+                        )?
+                    {
+                        return Ok(Some(hit));
+                    }
+                }
+                if let Some(active) = &self.active
+                    && active.max_timestamp() >= target_ts
+                {
+                    return active.offset_for_timestamp_with_window_from(
+                        target_ts,
+                        scan_window,
+                        limit,
+                        minimum,
+                    );
+                }
+                Ok(None)
             }
         }
-        if let Some(active) = &self.active
-            && active.max_timestamp() >= target_ts
-        {
-            return active.offset_for_timestamp_with_window_from(
-                target_ts,
-                scan_window,
-                limit,
-                minimum,
-            );
-        }
-        Ok(None)
     }
 
     /// Offset and timestamp of the record that carries the partition's
@@ -338,34 +414,125 @@ mod tests {
         drop(dir);
     }
 
-    /// Pins the "first retained match" contract (#1263) where it departs from
-    /// Kafka 4.3.1, which #1388 records for a maintainer decision.
-    ///
-    /// Segment 0 holds timestamps 100, 500, 150, 160 and 170 at offsets 0 to
-    /// 4, and segment 1 holds 600 at offset 5. `DeleteRecords` moves the log
-    /// start to 2, and the seek is for 400. Kafka's
-    /// `UnifiedLog.searchOffsetInLocalLog` returns
-    /// `segment.findOffsetByTimestamp(400, 2)` from the first segment whose
-    /// `largestTimestamp` reaches 400. That is segment 0, on the strength of
-    /// the deleted record at offset 1, and none of its retained records reach
-    /// 400, so Kafka answers -1/-1. This log goes on to segment 1 and answers
-    /// 5/600, the first retained record at or after 400.
-    /// `RemoteLogManager.findOffsetByTimestamp` stops at its first candidate
-    /// segment in the same way, and the remote reader goes on too.
-    #[test]
-    fn a_seek_goes_past_a_first_candidate_segment_that_holds_no_retained_match() {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
-        for ts in [100, 500, 150, 160, 170] {
-            log.append(&mut ts_batch(ts)).unwrap();
-        }
-        assert2::assert!(log.roll().unwrap());
-        log.append(&mut ts_batch(600)).unwrap();
-        log.set_log_start_offset(Offset(2)).unwrap();
+    /// The two answers a by-timestamp search gives: the `ListOffsets` lookup's
+    /// and the log's own bookkeeping lookup's.
+    #[derive(Debug, PartialEq, Eq)]
+    struct Answers {
+        list_offsets: Option<(Offset, i64)>,
+        bookkeeping: Option<(Offset, i64)>,
+    }
 
-        // Kafka 4.3.1 answers `None` here.
-        check!(log.offset_for_timestamp(400) == Some((Offset(5), 600)));
-        log.close();
+    /// #1388: a `ListOffsets` seek answers from the first segment whose largest
+    /// timestamp reaches the target, even when none of that segment's retained
+    /// records does, as Kafka 4.3.1's `UnifiedLog.searchOffsetInLocalLog`
+    /// returns `segment.findOffsetByTimestamp(target, startOffset)` from that
+    /// segment. Kafka reads every segment the log still holds, so one wholly
+    /// below the log start that retention has not yet removed can be that
+    /// segment. A segment with no record timestamp has the file's
+    /// modification time as its `largestTimestamp`, which reaches any target
+    /// below the present. The log's own bookkeeping lookup goes on to the
+    /// first retained record.
+    #[test]
+    fn a_list_offsets_seek_answers_from_the_first_candidate_segment_only() {
+        struct Case {
+            name: &'static str,
+            /// Each segment's record timestamps, one record per batch.
+            segments: &'static [&'static [i64]],
+            log_start: i64,
+            target: i64,
+            want: Answers,
+        }
+        let cases = [
+            Case {
+                name: "the first candidate holds the match",
+                segments: &[&[100, 500, 150, 160, 170], &[600]],
+                log_start: 0,
+                target: 400,
+                want: Answers {
+                    list_offsets: Some((Offset(1), 500)),
+                    bookkeeping: Some((Offset(1), 500)),
+                },
+            },
+            Case {
+                name: "a segment below the target is no candidate",
+                segments: &[&[100, 200], &[300, 600], &[700]],
+                log_start: 0,
+                target: 400,
+                want: Answers {
+                    list_offsets: Some((Offset(3), 600)),
+                    bookkeeping: Some((Offset(3), 600)),
+                },
+            },
+            Case {
+                name: "the first candidate's only match is below the log start",
+                segments: &[&[100, 500, 150, 160, 170], &[600]],
+                log_start: 2,
+                target: 400,
+                want: Answers {
+                    list_offsets: None,
+                    bookkeeping: Some((Offset(5), 600)),
+                },
+            },
+            Case {
+                name: "the first candidate is wholly below the log start",
+                segments: &[&[100, 500], &[150, 160], &[600]],
+                log_start: 2,
+                target: 400,
+                want: Answers {
+                    list_offsets: None,
+                    bookkeeping: Some((Offset(4), 600)),
+                },
+            },
+            Case {
+                name: "a segment with no record timestamp is a candidate by its file time",
+                segments: &[&[-1], &[600]],
+                log_start: 0,
+                target: 400,
+                want: Answers {
+                    list_offsets: None,
+                    bookkeeping: Some((Offset(1), 600)),
+                },
+            },
+            Case {
+                name: "the active segment is the first candidate",
+                segments: &[&[100, 200], &[150, 600]],
+                log_start: 0,
+                target: 400,
+                want: Answers {
+                    list_offsets: Some((Offset(3), 600)),
+                    bookkeeping: Some((Offset(3), 600)),
+                },
+            },
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for Case {
+            name,
+            segments,
+            log_start,
+            target,
+            want,
+        } in cases
+        {
+            let dir = tempdir().unwrap();
+            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+            for (index, timestamps) in segments.iter().enumerate() {
+                if index > 0 {
+                    assert2::assert!(log.roll().unwrap());
+                }
+                for &ts in *timestamps {
+                    log.append(&mut ts_batch(ts)).unwrap();
+                }
+            }
+            log.set_log_start_offset(Offset(log_start)).unwrap();
+            actual.push((name, Answers {
+                list_offsets: log.offset_for_timestamp_checked(target).unwrap(),
+                bookkeeping: log.offset_for_timestamp(target),
+            }));
+            expected.push((name, want));
+            log.close();
+        }
+        check!(actual == expected);
     }
 
     #[test]

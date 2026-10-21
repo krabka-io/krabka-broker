@@ -139,6 +139,9 @@ impl Log {
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub fn append(&mut self, batch: &mut RecordBatch) -> Result<(Offset, Option<i64>), LogError> {
+        // A fenced log refuses every append with `Fenced`, before any of
+        // the append's own validation can report a different error.
+        self.ensure_unfenced()?;
         // KFC-1, before an offset is assigned and before anything is written,
         // so a refused batch leaves the log exactly as it found it.
         self.reject_backwards_schedule(batch.max_timestamp)?;
@@ -287,6 +290,9 @@ impl Log {
         batch: &mut RecordBatch,
         stamp: u64,
     ) -> Result<Offset, LogError> {
+        // A fenced log refuses every append with `Fenced`, before any of
+        // the append's own validation can report a different error.
+        self.ensure_unfenced()?;
         self.validate_commit_stamp_batch(batch)?;
         let assigned_base = self.append_at_expected_offset();
         batch.base_offset = assigned_base.0;
@@ -363,6 +369,9 @@ impl Log {
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub fn append_at(&mut self, batch: &mut RecordBatch, offset: Offset) -> Result<(), LogError> {
+        // A fenced log refuses every append with `Fenced`, before any of
+        // the append's own validation can report a different error.
+        self.ensure_unfenced()?;
         self.admit_append_at(offset)?;
         // `partition_leader_epoch` is the raw KIP-320 wire `int32`; wrap it here.
         let leader_epoch = LeaderEpoch(batch.partition_leader_epoch);
@@ -386,6 +395,9 @@ impl Log {
         offset: Offset,
         stamp: u64,
     ) -> Result<(), LogError> {
+        // A fenced log refuses every append with `Fenced`, before any of
+        // the append's own validation can report a different error.
+        self.ensure_unfenced()?;
         self.admit_append_at(offset)?;
         self.validate_commit_stamp_batch(batch)?;
         batch.base_offset = offset.0;
@@ -417,6 +429,7 @@ impl Log {
         transaction_stamp: Option<u64>,
         verbatim: Option<&[u8]>,
     ) -> Result<(), LogError> {
+        self.ensure_unfenced()?;
         self.rollover_flusher.check()?;
         let base_offset = Offset(batch.base_offset);
         let Some((last_offset, _)) = krabka_verified::local_append_coordinates(

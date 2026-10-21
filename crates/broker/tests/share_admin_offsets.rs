@@ -23,8 +23,10 @@
 //!
 //! The suite is split by admin surface. `harness` holds the cluster and
 //! share-consume helpers that every surface shares, `describe`, `alter`, and
-//! `delete` hold the tests of one RPC each, and `state_restore` holds the
-//! restart-durability test of the share-state summary.
+//! `delete` hold the tests of one RPC each, `state_restore` holds the
+//! restart-durability test of the share-state summary, and `first_load` holds
+//! the test of when a share partition's resolved start offset becomes
+//! durable.
 
 mod support;
 
@@ -37,5 +39,7 @@ mod alter;
 mod delete;
 #[path = "share_admin_offsets/describe.rs"]
 mod describe;
+#[path = "share_admin_offsets/first_load.rs"]
+mod first_load;
 #[path = "share_admin_offsets/state_restore.rs"]
 mod state_restore;

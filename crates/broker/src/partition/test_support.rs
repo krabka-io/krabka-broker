@@ -11,8 +11,8 @@ use {
     crate::{
         delivery::DeliveryHandles,
         partition::{
-            Partition, WriterMessage, empty_marker_materialization, initial_replication_target,
-            unreported_leader_log_start,
+            Partition, WriterGate, WriterMessage, empty_marker_materialization,
+            initial_replication_target, unreported_leader_log_start,
         },
         partition_writer::{WriterServices, run},
         replica_state::ReplicaState,
@@ -47,6 +47,7 @@ pub(crate) fn test_partition(hw_advance_notify: Arc<Notify>) -> (Partition, temp
         append_notify: Arc::new(Notify::new()),
         replica_state: Arc::new(tokio::sync::Mutex::new(ReplicaState::new())),
         hw_advance_notify,
+        writer_gate: WriterGate::shared(false),
         current_leader: Arc::new(AtomicU64::new(0)),
         current_leader_epoch: Arc::new(AtomicI32::new(0)),
         delivery: DeliveryHandles::new(),
