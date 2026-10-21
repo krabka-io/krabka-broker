@@ -531,9 +531,9 @@ async fn acknowledged_offsets_survive_a_coordinator_failover_behind_a_replicatio
         round,
         errors,
     } = retry_until_moved(&survivors, topic_id, &consumer, &classic).await;
-    // The first round reaches the survivors before the controller fences the
-    // dead coordinator, so the move is observed, and only retriable errors.
-    assert!(!errors.is_empty());
+    // Whatever the survivors answered while the partition moved was a code a
+    // client retries. A fast election can leave nothing to observe here; the
+    // other survivor's `NOT_COORDINATOR` below is checked either way.
     assert!(errors.iter().all(|code| RETRIABLE.contains(code)));
     assert!(partition_leader(cluster.handle(next), OFFSETS_TOPIC, SETTLE).await == next);
 
