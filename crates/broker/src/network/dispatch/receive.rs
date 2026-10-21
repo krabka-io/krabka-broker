@@ -150,10 +150,11 @@ async fn read_body<S: AsyncRead + Unpin>(
     let mut body = BytesMut::with_capacity(size);
     while body.len() < size {
         let remaining = u64::try_from(size - body.len()).unwrap_or(u64::MAX);
+        let mut frame_rest = (&mut *stream).take(remaining);
         let read = tokio::select! {
             biased;
             () = clock.expired() => return Err(ReceiveError::Idle),
-            result = (&mut *stream).take(remaining).read_buf(&mut body) => result?,
+            result = frame_rest.read_buf(&mut body) => result?,
         };
         if read == 0 {
             return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into());

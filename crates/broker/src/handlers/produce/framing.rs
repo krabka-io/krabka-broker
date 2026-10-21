@@ -376,8 +376,16 @@ pub(crate) fn produce_acks(body: &[u8], version: i16) -> Result<i16, BrokerError
         let length = usize::try_from(get_uvarint(&mut cursor)?).unwrap_or(usize::MAX);
         skip(&mut cursor, length.saturating_sub(1))?;
     } else if version >= 3 {
-        let length = usize::try_from(get_i16(&mut cursor)?).unwrap_or(0);
-        skip(&mut cursor, length)?;
+        // A nullable string: -1 is null, and any other negative length is
+        // malformed, as the full decode would find.
+        match get_i16(&mut cursor)? {
+            -1 => {}
+            length => {
+                let length = usize::try_from(length)
+                    .map_err(|_| ProtocolError::InvalidValue("negative transactional id length"))?;
+                skip(&mut cursor, length)?;
+            }
+        }
     }
     Ok(get_i16(&mut cursor)?)
 }
@@ -495,5 +503,10 @@ mod tests {
                 assert!(produce_acks(&body[..body.len().min(2) - 1], version).is_err());
             }
         }
+        // Before the compact encoding, a length below -1 is malformed rather
+        // than null.
+        let mut malformed = (-2_i16).to_be_bytes().to_vec();
+        malformed.extend_from_slice(&(-1_i16).to_be_bytes());
+        assert!(produce_acks(&malformed, 3).is_err());
     }
 }
