@@ -15,6 +15,7 @@ use {
         coordinator::{
             bootstrap::OFFSETS_TOPIC,
             partitioner::local_partition_for_group,
+            test_support::offset_entry,
             unified::{
                 classic_state::{ClassicGroup, Member},
                 consumer_state::{
@@ -29,7 +30,10 @@ use {
     },
     assert2::check,
     bytes::Bytes,
-    krabka_protocol::owned::offset_delete_response::{self, OffsetDeleteResponse},
+    krabka_protocol::owned::{
+        offset_delete_request::OffsetDeleteRequest,
+        offset_delete_response::{self, OffsetDeleteResponse},
+    },
     std::{collections::HashMap, sync::Arc, time::Duration},
 };
 
@@ -111,7 +115,12 @@ async fn offset_delete_matches_kafka_whole_responses() {
     let coordinator = allowed.broker_arc_for_test().group_coordinator.clone();
     for group in [
         classic_group("connect-g", "connect", Bytes::from_static(b"opaque")),
-        classic_group("classic-g", "consumer", subscription(&["t", "ghost"])),
+        // `u-0` holds an offset, so its delete writes the tombstone below.
+        CoordinatorGroup::seeded(
+            "classic-g",
+            classic_group("classic-g", "consumer", subscription(&["t", "ghost"])).kind,
+            HashMap::from([(("u".to_string(), 0), offset_entry(5))]),
+        ),
         classic_group("garbled-g", "consumer", Bytes::from_static(b"\x00")),
         consumer_group("kip848-g", "t.*", &["t"]),
     ] {
@@ -242,7 +251,7 @@ async fn offset_delete_matches_kafka_whole_responses() {
         want,
     } in rows
     {
-        let req = krabka_protocol::owned::offset_delete_request::OffsetDeleteRequest {
+        let req = OffsetDeleteRequest {
             group_id: group_id.into(),
             ..req_with_topics(topics)
         };
@@ -276,4 +285,140 @@ async fn offset_delete_matches_kafka_whole_responses() {
 
     allowed.shutdown().await;
     denied.shutdown().await;
+}
+
+/// The log end offset of the `__consumer_offsets` partition of `group_id`.
+fn offsets_log_end(broker: &BrokerHandle, group_id: &str) -> i64 {
+    let broker = broker.broker_arc_for_test();
+    let partition = local_partition_for_group(
+        &broker.controller.current_image(),
+        broker.config.node_id,
+        group_id,
+    )
+    .expect("this broker coordinates the group");
+    let part = broker
+        .partitions
+        .get(OFFSETS_TOPIC, krabka_ids::PartitionIndex(partition))
+        .expect("the offsets partition");
+    part.log.lock().expect("offsets log").log_end_offset().0
+}
+
+/// One `OffsetDelete` against an empty classic group that holds a committed
+/// offset for `t-0` and a pending transactional offset for `t-1`: the request,
+/// the whole expected response, and how many tombstones it writes.
+struct HeldOffsetsRow {
+    name: &'static str,
+    topics: &'static [RequestTopic<'static>],
+    want: OffsetDeleteResponse,
+    tombstones: i64,
+}
+
+/// Kafka's `OffsetMetadataManager.deleteOffsets` answers `NONE` for every
+/// partition the group does not subscribe to, but writes a tombstone only for
+/// one where `hasCommittedOffset` or `hasPendingTransactionalOffsets` holds.
+#[tokio::test]
+async fn offset_delete_tombstones_only_offsets_the_group_holds() {
+    let rows = [
+        HeldOffsetsRow {
+            name: "a committed offset",
+            topics: &[RequestTopic {
+                name: "t",
+                partitions: &[0],
+            }],
+            want: OffsetDeleteResponse {
+                topics: vec![expected_topic("t", vec![expected_row(0, codes::NONE)])],
+                ..whole(codes::NONE)
+            },
+            tombstones: 1,
+        },
+        HeldOffsetsRow {
+            name: "no offset",
+            topics: &[RequestTopic {
+                name: "t",
+                partitions: &[2],
+            }],
+            want: OffsetDeleteResponse {
+                topics: vec![expected_topic("t", vec![expected_row(2, codes::NONE)])],
+                ..whole(codes::NONE)
+            },
+            tombstones: 0,
+        },
+        HeldOffsetsRow {
+            name: "only a pending transactional offset",
+            topics: &[RequestTopic {
+                name: "t",
+                partitions: &[1],
+            }],
+            want: OffsetDeleteResponse {
+                topics: vec![expected_topic("t", vec![expected_row(1, codes::NONE)])],
+                ..whole(codes::NONE)
+            },
+            tombstones: 1,
+        },
+        HeldOffsetsRow {
+            name: "mixed",
+            topics: &[RequestTopic {
+                name: "t",
+                partitions: &[2, 1, 0],
+            }],
+            want: OffsetDeleteResponse {
+                topics: vec![expected_topic("t", vec![
+                    expected_row(2, codes::NONE),
+                    expected_row(1, codes::NONE),
+                    expected_row(0, codes::NONE),
+                ])],
+                ..whole(codes::NONE)
+            },
+            tombstones: 2,
+        },
+    ];
+
+    let HandlerStartedBroker { broker, dir: _dir } =
+        start_group_broker_no_audit(Arc::new(AllowAllAuthorizer)).await;
+    create_topic_from_test_support()
+        .broker(&broker)
+        .client_id("offset-delete-test")
+        .name("t")
+        .partitions(3)
+        .call()
+        .await;
+    let coordinator = broker.broker_arc_for_test().group_coordinator.clone();
+
+    krabka_macros::request_test_identity! {
+        bind(principal, peer, ctx);
+        user ["alice"];
+        client ["offset-delete-client"];
+    };
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (i, row) in rows.into_iter().enumerate() {
+        let group_id = format!("held-{i}");
+        let mut group = CoordinatorGroup::seeded(
+            group_id.as_str(),
+            GroupKind::Classic(ClassicGroup::new(group_id.as_str())),
+            HashMap::from([(("t".to_string(), 0), offset_entry(5))]),
+        );
+        group.add_pending_txn_offsets(7, 0, [("t".to_string(), 1)]);
+        coordinator.seed_classic(&group_id, Box::new(group));
+
+        let before = offsets_log_end(&broker, &group_id);
+        let req = OffsetDeleteRequest {
+            group_id: group_id.clone(),
+            ..req_with_topics(row.topics)
+        };
+        let resp = handle(
+            &broker.broker_arc_for_test(),
+            req,
+            offset_delete_response::MAX_VERSION,
+            &ctx,
+        )
+        .await
+        .expect("OffsetDelete");
+        let tombstones = offsets_log_end(&broker, &group_id) - before;
+        actual.push((row.name, resp, tombstones));
+        expected.push((row.name, row.want, row.tombstones));
+    }
+    check!(actual == expected);
+
+    broker.shutdown().await;
 }

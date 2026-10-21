@@ -3,17 +3,24 @@
 //!
 //! Deleting a committed offset is a write, not a metadata edit. Kafka runs it
 //! as a `CoordinatorRuntime` write operation, which appends as the partition
-//! leader and completes once the high watermark covers the records, so the
-//! tombstones go through the group coordinator's offsets log, which does the
-//! same. The error mapping for a write that fails lives here with it.
+//! leader and completes once the high watermark covers the records. The group
+//! actor does the same through the coordinator's offsets log, and decides in
+//! the same turn which keys need a tombstone at all: Kafka writes one only for
+//! an offset the group holds. The error mapping for a write that fails lives
+//! here.
 
 use {
-    crate::{broker::Broker, codes},
-    krabka_protocol::records::RecordBatch,
+    crate::{
+        codes,
+        coordinator::unified::actor::{GroupActorHandle, GroupActorMessage},
+    },
+    tokio::sync::oneshot,
 };
 
-/// Append `batch` to the `__consumer_offsets` partition of `group_id`, and
-/// return once it is committed.
+/// Ask the group actor behind `group_handle` to tombstone those of `keys` it
+/// holds an offset for, and return once the tombstones are committed.
+///
+/// An actor that stopped holds no offset, so nothing is written for it.
 ///
 /// # Errors
 ///
@@ -21,20 +28,20 @@ use {
 /// for the failed write: `NOT_COORDINATOR` when this broker does not lead the
 /// partition or stops leading it first, and `COORDINATOR_NOT_AVAILABLE` when
 /// the write does not commit in time.
-pub(super) async fn append_tombstones(
-    broker: &Broker,
-    group_id: &str,
-    batch: RecordBatch,
+pub(super) async fn delete_held_offsets(
+    group_handle: &GroupActorHandle,
+    keys: Vec<(String, i32)>,
 ) -> Result<(), i16> {
-    broker
-        .group_coordinator
-        .offsets_log
-        .append(group_id, batch)
+    let (reply, rx) = oneshot::channel();
+    if group_handle
+        .tx
+        .send(GroupActorMessage::DeleteOffsets { keys, reply })
         .await
-        .map_err(|error| {
-            tracing::warn!(group_id, %error, "OffsetDelete: the tombstone write failed");
-            operation_error_code(codes::from_broker_error(&error))
-        })
+        .is_err()
+    {
+        return Ok(());
+    }
+    rx.await.unwrap_or(Ok(())).map_err(operation_error_code)
 }
 
 /// Kafka's `CoordinatorOperationExceptionHelper.handleOperationException`: the
