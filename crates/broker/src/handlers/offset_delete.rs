@@ -14,6 +14,12 @@
 //!   - a non-empty classic group that does not use the consumer protocol →
 //!     `NON_EMPTY_GROUP`
 //!
+//! A streams group (KIP-1071) keeps its members and topology in its streams
+//! actor and its committed offsets in a group actor of the same id. The
+//! streams actor decides the subscribed topics, as
+//! `StreamsGroup.isSubscribedToTopic`, and a streams group that has never
+//! committed an offset is found all the same.
+//!
 //! Each of those is a group-level refusal with only the top-level code.
 //! Otherwise every requested partition gets a row: `Read` on `Topic(name)`
 //! denied → `TOPIC_AUTHORIZATION_FAILED`; a missing topic or partition →
@@ -24,6 +30,8 @@
 //! entry only when it holds a committed or a pending transactional offset
 //! for it, as Kafka's `deleteOffsets` checks `hasCommittedOffset` and
 //! `hasPendingTransactionalOffsets`. When it holds none, nothing is written.
+//! A group with no offsets actor holds no offset, so nothing is written for
+//! it either.
 //!
 //! This file is the module root and holds the wire entry point: decode,
 //! authorize, consult the group actor, then delegate. Each child holds one
@@ -61,7 +69,12 @@ use {
         tombstone::delete_held_offsets,
     },
     crate::{
-        codes, coordinator::unified::actor::GroupActorMessage, handlers::ErrorCodeResponse as _,
+        codes,
+        coordinator::unified::{
+            actor::{GroupActorHandle, GroupActorMessage, SubscribedTopics},
+            streams::actor::streams_offset_delete_guard,
+        },
+        handlers::ErrorCodeResponse as _,
     },
 };
 
@@ -96,29 +109,20 @@ pub(crate) async fn handle(
     }
 
     // The group must exist and pass Kafka's `validateOffsetDelete`; its
-    // answer also names the topics it subscribes to.
-    let Some(group_handle) = broker.group_coordinator.find(&req.group_id) else {
-        return Ok(OffsetDeleteResponse::error(codes::GROUP_ID_NOT_FOUND));
+    // answer also names the topics it subscribes to. A streams group answers
+    // from its streams actor, whose offsets actor may not exist yet.
+    let offsets_home = broker.group_coordinator.find(&req.group_id);
+    let guard = match (
+        broker.group_coordinator.find_live_streams(&req.group_id),
+        &offsets_home,
+    ) {
+        (Some(streams), _) => streams_offset_delete_guard(&streams).await,
+        (None, Some(group_handle)) => group_offset_delete_guard(group_handle).await,
+        (None, None) => Err(codes::GROUP_ID_NOT_FOUND),
     };
-    let subscribed_topics = {
-        let (tx, rx) = oneshot::channel();
-        let sent = group_handle
-            .tx
-            .send(GroupActorMessage::OffsetDeleteGuard { reply: tx })
-            .await
-            .is_ok();
-        // An actor that stopped holds no group any more.
-        let guard = if sent {
-            rx.await.unwrap_or(Err(codes::GROUP_ID_NOT_FOUND))
-        } else {
-            Err(codes::GROUP_ID_NOT_FOUND)
-        };
-        match guard {
-            Ok(topics) => topics,
-            Err(code) => {
-                return Ok(OffsetDeleteResponse::error(code));
-            }
-        }
+    let subscribed_topics = match guard {
+        Ok(topics) => topics,
+        Err(code) => return Ok(OffsetDeleteResponse::error(code)),
     };
 
     // Per-topic `Read` ACL — per-partition `TOPIC_AUTHORIZATION_FAILED` on Deny.
@@ -149,8 +153,10 @@ pub(crate) async fn handle(
     // A failed coordinator write replaces the whole response, as
     // `OffsetDeleteResponse.Builder.merge` does with a top-level error. The
     // answer waits for the tombstones to commit, as Kafka's
-    // `CoordinatorRuntime` completes the write only then.
-    if !to_delete.is_empty()
+    // `CoordinatorRuntime` completes the write only then. A group with no
+    // offsets actor holds no offset to tombstone.
+    if let Some(group_handle) = offsets_home
+        && !to_delete.is_empty()
         && let Err(code) = delete_held_offsets(&group_handle, to_delete).await
     {
         return Ok(OffsetDeleteResponse::error(code));
@@ -162,4 +168,21 @@ pub(crate) async fn handle(
         topics,
         ..Default::default()
     })
+}
+
+/// Asks a classic or consumer group actor for Kafka's `validateOffsetDelete`
+/// and its subscribed topics. An actor that stopped holds no group any more.
+async fn group_offset_delete_guard(
+    group_handle: &GroupActorHandle,
+) -> Result<SubscribedTopics, i16> {
+    let (tx, rx) = oneshot::channel();
+    if group_handle
+        .tx
+        .send(GroupActorMessage::OffsetDeleteGuard { reply: tx })
+        .await
+        .is_err()
+    {
+        return Err(codes::GROUP_ID_NOT_FOUND);
+    }
+    rx.await.unwrap_or(Err(codes::GROUP_ID_NOT_FOUND))
 }
