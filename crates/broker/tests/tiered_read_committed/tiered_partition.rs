@@ -8,6 +8,7 @@ use {
         init_tracing,
         offsets::{list_offset_partition, single_partition_list_offsets},
         share::{bootstrap_share_state, broker_config, topic_id, wire},
+        storage::local_segment_bases,
         tiered::create_configured_topic,
         topics::topic_configs,
     },
@@ -16,7 +17,7 @@ use {
     krabka_client_core::Client,
     krabka_protocol::{owned::list_offsets_request::ListOffsetsRequest, primitives::uuid::Uuid},
     std::{
-        path::{Path, PathBuf},
+        path::PathBuf,
         sync::Arc,
         time::{Duration, Instant},
     },
@@ -195,19 +196,4 @@ impl TieredPartition {
         assert!(row.error_code == 0, "{row:?}");
         row.offset
     }
-}
-
-/// The base offsets of the segments in `partition_dir`.
-fn local_segment_bases(partition_dir: &Path) -> Vec<i64> {
-    std::fs::read_dir(partition_dir)
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter_map(|entry| {
-                    let name = entry.file_name().into_string().ok()?;
-                    name.strip_suffix(".log")?.parse().ok()
-                })
-                .collect()
-        })
-        .unwrap_or_default()
 }

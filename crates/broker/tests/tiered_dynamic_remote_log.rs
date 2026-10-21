@@ -29,7 +29,7 @@ use {
         configs::{ConfigMutation, ConfigOperation, broker_alter_request},
         fetch::{FetchLimits, RequestWaitMillis, fetch_partition, single_partition_fetch},
         start_configured,
-        storage::topic_remote_log_files,
+        storage::{local_segment_bases, topic_remote_log_files},
         tiered::{await_tiered_replicas, create_configured_topic, tiered_configs},
         topic_id_for,
     },
@@ -117,23 +117,6 @@ async fn tiered_topic_with_records(tiered: &TieredBroker, topic: &str) -> WireUu
         .await
         .expect("produce records");
     topic_id_for(&tiered.client, topic).await
-}
-
-/// The base offsets of the segments in `partition_dir`, ascending.
-fn local_segment_bases(partition_dir: &Path) -> Vec<i64> {
-    let mut bases: Vec<i64> = std::fs::read_dir(partition_dir)
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter_map(|entry| {
-                    let name = entry.file_name().into_string().ok()?;
-                    name.strip_suffix(".log")?.parse().ok()
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    bases.sort_unstable();
-    bases
 }
 
 /// Waits until local retention has evicted offset 0, so only the archive
