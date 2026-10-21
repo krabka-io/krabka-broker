@@ -53,9 +53,12 @@ rustix = { workspace = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { workspace = true }
 # The io_uring submitter of the `O_DIRECT` writes of `preallocate`: owned
-# buffers make its submission safe, which `forbid(unsafe_code)` needs.
+# buffers and shared handles make its submission safe, which
+# `forbid(unsafe_code)` needs. compio without its `polling` driver, so a kernel
+# without io_uring leaves the writes on the write threads. tokio for the
+# runtime-agnostic channel and semaphore that feed the submitter.
+compio = { version = "0.19.2", default-features = false, features = ["runtime", "io-uring"] }
 tokio = { workspace = true, features = ["sync"] }
-tokio-uring = "0.5"
 
 [dev-dependencies]
 bon = { workspace = true }

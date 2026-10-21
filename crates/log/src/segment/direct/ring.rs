@@ -2,15 +2,20 @@
 //!
 //! The write threads make one synchronous `pwrite` each, so a segment has at
 //! most as many writes at the device as threads hold it. One thread here runs
-//! an `io_uring` and submits every segment's writes as they are queued, each
-//! from a buffer it owns until the write completes, which is what keeps the
-//! submission free of `unsafe`. The queue bookkeeping is the write threads':
-//! a write is taken with `Shared::take_work` and recorded with
-//! `Shared::complete`, so the two paths put the same bytes at the same
-//! offsets.
+//! a compio runtime on an `io_uring` and submits every segment's writes as
+//! they are queued. Each write owns its buffer and a shared reference to the
+//! segment's handle until it completes, which is what keeps the submission
+//! free of `unsafe`. The queue bookkeeping is the write threads': a write is
+//! taken with `Shared::take_work` and recorded with `Shared::complete`, so
+//! the two paths put the same bytes at the same offsets.
 
 use {
     super::{AlignedBuf, Shared, Work, aligned_progress, to_u64},
+    compio::{
+        buf::{IntoInner as _, IoBuf as _},
+        driver::{ProactorBuilder, SharedFd, op::WriteAt},
+        runtime::{Runtime, RuntimeBuilder},
+    },
     std::{
         fs::File,
         io::{Error, ErrorKind},
@@ -21,14 +26,13 @@ use {
         Semaphore,
         mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
     },
-    tokio_uring::buf::BoundedBuf as _,
 };
 
 /// Submission queue entries of the ring, and the most writes the ring has
-/// started at once, for every segment together. Each started write holds a
-/// duplicate of its segment's descriptor, so the bound keeps a burst across
-/// thousands of partitions from running the process out of descriptors. A
-/// write past it waits before it is taken from its segment's queue.
+/// started at once, for every segment together. A burst across thousands of
+/// partitions then waits in the segments' own queues, in file order, rather
+/// than in the kernel's. A write past it waits before it is taken from its
+/// segment's queue.
 pub(super) const ENTRIES: u32 = 256;
 
 /// The thread that owns the `io_uring`, and the channel segments with work to
@@ -46,14 +50,12 @@ impl Ring {
         let (started, outcome) = std::sync::mpsc::channel();
         let spawned = std::thread::Builder::new()
             .name("log-direct-uring".to_owned())
-            .spawn(move || {
-                match tokio_uring::Runtime::new(tokio_uring::builder().entries(entries)) {
-                    Ok(runtime) => {
-                        let _ = started.send(Ok(()));
-                        runtime.block_on(serve(receiver));
-                    }
-                    Err(error) => drop(started.send(Err(error))),
+            .spawn(move || match runtime(entries) {
+                Ok(runtime) => {
+                    let _ = started.send(Ok(()));
+                    runtime.block_on(serve(receiver));
                 }
+                Err(error) => drop(started.send(Err(error))),
             });
         let outcome = spawned.and_then(|_| {
             outcome
@@ -77,11 +79,20 @@ impl Ring {
     }
 }
 
+/// A compio runtime on an `io_uring` of `entries`. The crate is built
+/// without compio's `polling` driver, so a kernel that refuses the ring
+/// fails here rather than falling back to readiness polling.
+fn runtime(entries: u32) -> std::io::Result<Runtime> {
+    RuntimeBuilder::new()
+        .with_proactor(ProactorBuilder::new().capacity(entries).to_owned())
+        .build()
+}
+
 /// Start one write task for every segment that arrives.
 async fn serve(mut segments: UnboundedReceiver<Arc<Shared>>) {
     let started = Rc::new(Semaphore::new(ENTRIES as usize));
     while let Some(segment) = segments.recv().await {
-        tokio_uring::spawn(write_one(segment, Rc::clone(&started)));
+        compio::runtime::spawn(write_one(segment, Rc::clone(&started))).detach();
     }
 }
 
@@ -125,28 +136,26 @@ async fn write_one(segment: Arc<Shared>, started: Rc<Semaphore>) {
 
 /// Put all of `buf` on the disk at `offset`, as `write_aligned` does, through
 /// the ring. `buf` lends its storage to each write and has it back after.
+/// Each write holds a reference to `file`, so the handle stays open until
+/// the kernel is done with it, and no write needs a descriptor of its own.
 async fn write_owned(
-    file: &File,
+    file: &Arc<File>,
     buf: &mut AlignedBuf,
     offset: u64,
     step: usize,
 ) -> std::io::Result<()> {
-    // The ring owns the handle it writes through and closes it after, so it
-    // gets its own descriptor on the segment's file.
-    let file = tokio_uring::fs::File::from_std(file.try_clone()?);
     let (mut storage, start, len) = buf.lend();
     let mut done = 0;
     let result = loop {
         if done == len {
             break Ok(());
         }
-        let (written, slice) = file
-            .write_at(
-                storage.slice(start + done..start + len),
-                offset + to_u64(done),
-            )
-            .submit()
-            .await;
+        let write = WriteAt::new(
+            SharedFd::new(Arc::clone(file)),
+            offset + to_u64(done),
+            storage.slice(start + done..start + len),
+        );
+        let compio::BufResult(written, slice) = compio::runtime::submit(write).await.into_inner();
         storage = slice.into_inner();
         match written {
             Ok(written) => match aligned_progress(done, written, len, offset, step) {
@@ -158,9 +167,6 @@ async fn write_owned(
         }
     };
     buf.restore((storage, start, len));
-    // A close error on a duplicate descriptor says nothing about the data,
-    // which the write results already did.
-    let _ = file.close().await;
     result
 }
 
@@ -186,11 +192,11 @@ mod tests {
     /// with the kernel's error, and the buffer has its contents back.
     #[test]
     fn a_refused_write_fails_and_gives_the_buffer_back() {
-        let Ok(runtime) = tokio_uring::Runtime::new(&tokio_uring::builder()) else {
+        let Ok(runtime) = runtime(ENTRIES) else {
             return;
         };
         let file = tempfile::NamedTempFile::new().unwrap();
-        let read_only = File::open(file.path()).unwrap();
+        let read_only = Arc::new(File::open(file.path()).unwrap());
         let mut buf = AlignedBuf::new(512);
         buf.extend_from_slice(&[7; 1024]);
 

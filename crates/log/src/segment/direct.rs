@@ -212,7 +212,9 @@ pub(crate) struct DirectWriter {
 
 /// What a segment's writer shares with the write threads.
 struct Shared {
-    file: File,
+    /// Shared with the `io_uring` writes in flight, which hold it until the
+    /// kernel is done with them.
+    file: Arc<File>,
     align: DioAlign,
     io: Mutex<Arc<dyn LogIo>>,
     queue: Mutex<Queue>,
@@ -365,7 +367,7 @@ impl DirectWriter {
             tail: tail.clone(),
             queue_limit: QUEUE_LIMIT,
             shared: Arc::new(Shared {
-                file,
+                file: Arc::new(file),
                 align,
                 io: Mutex::new(io),
                 queue: Mutex::new(Queue {

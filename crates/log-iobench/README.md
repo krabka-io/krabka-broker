@@ -216,3 +216,16 @@ were the same size on both paths (about 513 KiB at 1 MiB batches, the
 virtio limit). The average device time per request rose, from 0.10 to 0.13
 ms at 64 KiB and from 0.30 to 0.40 ms at 256 KiB, because more requests
 were queued at the device at once.
+
+The table above measured the submitter on `tokio-uring`. It now runs on
+compio, which is maintained, and each write holds a reference to the
+segment's own handle rather than a duplicate descriptor. A later round on the
+same VM, six runs per build interleaved, found the two runtimes within noise
+of each other. The disk ran slower overall that round, so compare the
+columns, not the rounds:
+
+| Batch | Threads, 4 in flight | `tokio-uring` | compio |
+|---|---:|---:|---:|
+| 1 MiB | 847 | 830 | 821 |
+| 256 KiB | 726 | 748 | 759 |
+| 64 KiB | 519 | 658 | 638 |
