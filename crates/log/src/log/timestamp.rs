@@ -338,6 +338,36 @@ mod tests {
         drop(dir);
     }
 
+    /// Pins the "first retained match" contract (#1263) where it departs from
+    /// Kafka 4.3.1, which #1388 records for a maintainer decision.
+    ///
+    /// Segment 0 holds timestamps 100, 500, 150, 160 and 170 at offsets 0 to
+    /// 4, and segment 1 holds 600 at offset 5. `DeleteRecords` moves the log
+    /// start to 2, and the seek is for 400. Kafka's
+    /// `UnifiedLog.searchOffsetInLocalLog` returns
+    /// `segment.findOffsetByTimestamp(400, 2)` from the first segment whose
+    /// `largestTimestamp` reaches 400. That is segment 0, on the strength of
+    /// the deleted record at offset 1, and none of its retained records reach
+    /// 400, so Kafka answers -1/-1. This log goes on to segment 1 and answers
+    /// 5/600, the first retained record at or after 400.
+    /// `RemoteLogManager.findOffsetByTimestamp` stops at its first candidate
+    /// segment in the same way, and the remote reader goes on too.
+    #[test]
+    fn a_seek_goes_past_a_first_candidate_segment_that_holds_no_retained_match() {
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        for ts in [100, 500, 150, 160, 170] {
+            log.append(&mut ts_batch(ts)).unwrap();
+        }
+        assert2::assert!(log.roll().unwrap());
+        log.append(&mut ts_batch(600)).unwrap();
+        log.set_log_start_offset(Offset(2)).unwrap();
+
+        // Kafka 4.3.1 answers `None` here.
+        check!(log.offset_for_timestamp(400) == Some((Offset(5), 600)));
+        log.close();
+    }
+
     #[test]
     fn reopened_log_scans_sealed_segments_with_unknown_max_timestamp() {
         let dir = tempdir().unwrap();

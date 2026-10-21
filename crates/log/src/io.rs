@@ -211,6 +211,14 @@ pub trait LogIo: Debug + Send + Sync {
     fn write_direct(&self, file: &File, buf: &[u8], offset: u64) -> std::io::Result<usize> {
         write_direct(file, buf, offset)
     }
+
+    /// Whether the direct writes of a segment under this I/O go to the
+    /// shared `io_uring` submitter, which writes the file itself, rather than
+    /// through [`LogIo::write_direct`] on the write threads.
+    ///
+    /// Only the real file I/O answers true. Every other implementation keeps
+    /// the threads, so an override of [`LogIo::write_direct`] sees each write.
+    fn submits_direct_writes(&self) -> bool { false }
 }
 
 /// A `.log` handle that bypasses the page cache, and what it requires of a
@@ -446,7 +454,9 @@ pub(crate) fn write_atomic(
 #[derive(Debug)]
 pub(crate) struct FileIo;
 
-impl LogIo for FileIo {}
+impl LogIo for FileIo {
+    fn submits_direct_writes(&self) -> bool { true }
+}
 
 /// The shared handle every structure defaults to before a test installs its
 /// own.

@@ -16,13 +16,13 @@
 use {
     crate::{
         support::{
-            self, ClusterBootstrapSetup, NodeIndex,
+            self,
             client::connect_owned,
             offsets::{
                 offset_commit_partition, offset_commit_topic, offset_delete_partition,
                 offset_delete_request, offset_delete_topic,
             },
-            relay::Relay,
+            relayed_cluster::RelayedCluster,
             shutdown_cluster,
             topics::AssignedTopicSetup,
             transaction_wire::{
@@ -37,7 +37,7 @@ use {
         txn_harness::registered_transaction_cluster,
     },
     assert2::assert,
-    krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerError, BrokerHandle, NodeId},
+    krabka_broker::{BrokerConfig, BrokerHandle, NodeId},
     krabka_client_core::{Client, Connection, ConnectionOptions},
     krabka_protocol::{
         owned::{
@@ -54,7 +54,6 @@ use {
         net::SocketAddr,
         time::{Duration, Instant},
     },
-    tempfile::TempDir,
 };
 
 const TID: &str = "txn-uncommitted-writes";
@@ -231,143 +230,6 @@ async fn describe_until(connection: &Connection, expected: &Described) -> Option
 
 async fn read_committed(bootstrap: SocketAddr, last: &str) -> Vec<String> {
     read_committed_through(&bootstrap.to_string(), TOPIC, last, SETTLE).await
-}
-
-/// Three brokers whose data listeners each sit behind a [`Relay`]: every
-/// broker advertises its relay, and binds its real listener behind it. A cut
-/// relay takes that broker off the data plane as its peers see it, while it
-/// runs and while its controller plane, which no relay fronts, keeps its
-/// session and its leaderships.
-struct RelayedCluster {
-    brokers: Vec<Option<BrokerHandle>>,
-    configs: Vec<BrokerConfig>,
-    relays: Vec<Relay>,
-    _dirs: Vec<TempDir>,
-}
-
-impl RelayedCluster {
-    async fn start(configure: impl Fn(&mut BrokerConfig)) -> Self {
-        let mut last_error = None;
-        for attempt in 1..=3 {
-            match Self::try_start(&configure).await {
-                Ok(cluster) => return cluster,
-                Err(error) => {
-                    tracing::warn!(attempt, %error, "relayed cluster start failed");
-                    last_error = Some(error);
-                    // intentional: a fresh start needs the failed one's ports
-                    // released, which has no awaiter.
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                }
-            }
-        }
-        panic!("relayed cluster start failed after 3 attempts: {last_error:?}");
-    }
-
-    async fn try_start(configure: &impl Fn(&mut BrokerConfig)) -> Result<Self, BrokerError> {
-        support::init_tracing();
-        let (client_addrs, controller_addrs, client_listeners, controller_listeners) =
-            support::bind_and_hold_ports(3).await;
-        let mut relays = Vec::with_capacity(3);
-        for address in &client_addrs {
-            relays.push(Relay::start(*address).await);
-        }
-        let voters: Vec<_> = (0..3)
-            .map(|index| (u64::try_from(index + 1).unwrap(), controller_addrs[index]))
-            .collect();
-        let topology = support::RoleTopology::new(&client_addrs, &controller_addrs, &voters);
-
-        let mut starts = Vec::with_capacity(3);
-        let mut metas = Vec::with_capacity(3);
-        for (index, (data, controller)) in
-            support::listener_pairs(client_listeners, controller_listeners)
-        {
-            let dir = TempDir::new().expect("tempdir");
-            let node = topology.node_setup(ClusterBootstrapSetup {
-                index: NodeIndex(index),
-                ..Default::default()
-            });
-            let mut config = support::broker_config()
-                .log_dir(dir.path())
-                .index(index)
-                .client_addrs(node.client_addrs)
-                .controller_addrs(node.controller_addrs)
-                .voters(node.voters)
-                .mode(node.mode)
-                .call()
-                .with_internal_topics_for(3);
-            config.advertised_listener = relays[index].addr().to_string();
-            config.directory_id = uuid::Uuid::from_u128(u128::from(config.node_id.0));
-            config.auto_join = false;
-            config.bootstrap_servers = vec![];
-            configure(&mut config);
-            let spawned = config.clone();
-            starts.push(tokio::spawn(async move {
-                Broker::start_with_listeners(spawned, Some(controller), Some(data)).await
-            }));
-            metas.push((config, dir));
-        }
-        let mut brokers = Vec::with_capacity(3);
-        let mut configs = Vec::with_capacity(3);
-        let mut dirs = Vec::with_capacity(3);
-        for (start, (config, dir)) in starts.into_iter().zip(metas) {
-            let handle = support::await_broker_start(start).await?;
-            brokers.push(Some(handle));
-            configs.push(config);
-            dirs.push(dir);
-        }
-        for handle in brokers.iter().flatten() {
-            handle.wait_until_brokers_registered(3).await;
-        }
-        Ok(Self {
-            brokers,
-            configs,
-            relays,
-            _dirs: dirs,
-        })
-    }
-
-    fn index_of(&self, node: u64) -> usize {
-        self.configs
-            .iter()
-            .position(|config| config.node_id == NodeId(node))
-            .expect("a cluster member")
-    }
-
-    fn handle(&self, node: u64) -> &BrokerHandle {
-        self.brokers[self.index_of(node)]
-            .as_ref()
-            .expect("the broker runs")
-    }
-
-    /// The real listen address of `node`, past its relay.
-    fn address(&self, node: u64) -> SocketAddr { self.configs[self.index_of(node)].listen_addr }
-
-    fn relay(&self, node: u64) -> &Relay { &self.relays[self.index_of(node)] }
-
-    fn take(&mut self, node: u64) -> BrokerHandle {
-        let index = self.index_of(node);
-        self.brokers[index].take().expect("the broker runs")
-    }
-
-    /// Start `node` again on the addresses it vacated, from the logs it left.
-    async fn restart(&mut self, node: u64) {
-        let index = self.index_of(node);
-        assert!(self.brokers[index].is_none(), "broker {node} still runs");
-        let mut config = self.configs[index].clone();
-        config.bootstrap_mode = BootstrapMode::Rejoin;
-        let handle = support::start_reusing_addrs(&config, &format!("restart broker {node}")).await;
-        handle.wait_until_brokers_registered(3).await;
-        self.brokers[index] = Some(handle);
-    }
-
-    async fn shutdown(mut self) {
-        for handle in self.brokers.drain(..).flatten() {
-            handle.shutdown().await;
-        }
-        for relay in self.relays.drain(..) {
-            relay.shutdown().await;
-        }
-    }
 }
 
 /// A connection to a coordinator, and the producer whose transaction it holds.

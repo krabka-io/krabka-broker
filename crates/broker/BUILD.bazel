@@ -128,12 +128,18 @@ crate_tests(
     # boots three brokers with the production raft timings, stops the active
     # controller and bounds the time until the survivors elect and serve a
     # mutation. That bound is an elapsed wall-clock time across a quorum.
+    #
+    # `group_coordinator_failover` joins on that shape too, ahead of any
+    # failure: three brokers, the group coordinator killed behind a cut relay,
+    # and a bounded deadline for a survivor to lead `__consumer_offsets-0`,
+    # load it and serve both groups again.
     cpu_heavy = [
         "compaction",
         "controller_failover",
         "diskless_e2e",
         "durability",
         "elect_leaders",
+        "group_coordinator_failover",
         "ip_quotas",
         "leader_election",
         "sharegroup_backlog",

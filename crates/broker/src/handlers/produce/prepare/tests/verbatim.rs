@@ -60,6 +60,7 @@ fn plain_batch() -> RecordBatch {
         base_offset: 0,
         partition_leader_epoch: -1,
         last_offset_delta: 0,
+        base_timestamp: 42,
         max_timestamp: 42,
         producer_id: -1,
         records: vec![Record {
@@ -446,13 +447,15 @@ fn transactional_batch_can_pass_through() {
 /// The stored `Verbatim.bytes` equal the compressed wire bytes, which
 /// are much smaller than the decompressed payload. The header fields
 /// `last_offset_delta` and `max_timestamp` come straight from the v2
-/// header. This test pins the no-reencoding guarantee.
+/// header, which agrees with the batch's one record, so the bytes need no
+/// `max_timestamp` rewrite. This test pins the no-reencoding guarantee.
 #[test]
 fn lz4_batch_passes_through_without_reencoding() {
     // 100 KiB of highly-compressible payload across many records.
     let big = vec![b'A'; 100 * 1024];
     let mut b = RecordBatch {
         last_offset_delta: 0,
+        base_timestamp: 7_777,
         max_timestamp: 7_777,
         producer_id: -1,
         ..RecordBatch::default()
@@ -507,6 +510,7 @@ fn header_fields_drive_dedup_on_verbatim_path() {
     b.producer_epoch = 9;
     b.base_sequence = 17;
     b.last_offset_delta = 2;
+    b.base_timestamp = 555;
     b.max_timestamp = 555;
     b.records.extend([
         Record {

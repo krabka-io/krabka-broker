@@ -825,6 +825,56 @@ pub(crate) fn check_replay_cases<R, S: PartialEq + std::fmt::Debug>(
     }
 }
 
+/// Seeds the streams group `group_id` with member `m1` at `member_epoch`, and
+/// `topology` when given, the way the bootstrap replay hydrates one from
+/// `__consumer_offsets` records.
+#[bon::builder]
+pub(crate) async fn seed_streams_group(
+    coordinator: &Arc<GroupCoordinator>,
+    group_id: &str,
+    #[builder(default = 5)] member_epoch: i32,
+    topology: Option<streams::persistence::StreamsGroupTopologyValue>,
+) {
+    coordinator.mark_streams(group_id);
+    coordinator
+        .get_or_create_streams(group_id)
+        .tx
+        .send(streams::actor::StreamsGroupActorMessage::Seed(
+            super::StreamsGroupSeed {
+                topology,
+                members: [("m1".to_string(), plain_streams_member(1))].into(),
+                current_per_member: [(
+                    "m1".to_string(),
+                    streams::persistence::StreamsGroupCurrentMemberAssignmentValue {
+                        member_epoch,
+                        ..Default::default()
+                    },
+                )]
+                .into(),
+                ..Default::default()
+            },
+        ))
+        .await
+        .expect("seed streams group");
+}
+
+/// Stops the streams actor of `group_id` and waits until its mailbox is
+/// closed, as an actor exits after a failed write. The registry keeps the
+/// closed handle.
+pub(crate) async fn stop_streams_actor(coordinator: &GroupCoordinator, group_id: &str) {
+    let stopped = coordinator
+        .find_streams(group_id)
+        .expect("a streams actor to stop");
+    let (reply, stopping) = tokio::sync::oneshot::channel();
+    stopped
+        .tx
+        .send(streams::actor::StreamsGroupActorMessage::Shutdown(reply))
+        .await
+        .expect("send Shutdown");
+    stopping.await.expect("the actor stops");
+    stopped.tx.closed().await;
+}
+
 /// Streams member without instance/rack/endpoint/tags, for persisted seeds.
 pub(crate) fn plain_streams_member(
     topology_epoch: i32,

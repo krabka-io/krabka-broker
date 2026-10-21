@@ -23,6 +23,63 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ## [Unreleased]
 
+### Added
+
+- `krabka-log` gains `Log::fence`, `Log::append_may_block` and
+  `Log::written_since_open_from`, and `LogError` gains a `Fenced` variant. A
+  fenced log refuses every append with `LogError::Fenced`, which the broker
+  answers with `NOT_LEADER_OR_FOLLOWER`. The broker fences a partition's log
+  when it retires the partition, so an append that raced the retirement cannot
+  land after it. `LogError` is not `#[non_exhaustive]`, so an exhaustive
+  `match` on it outside this repository needs a new arm.
+
+### Changed
+
+- A produce append runs on the request's own task when it only writes to the
+  page cache. The partition writer task used to take every produce, so each
+  one paid two cross-thread wakes before its write. The request task now takes
+  the writer's gate, appends under the log lock and finishes the group, and
+  falls back to the writer task when the writer is busy, the lock is
+  contended, a flush policy is set, the append would roll a segment, or the
+  log has `preallocate`, whose `O_DIRECT` writes can wait. The same rule
+  places a follower's replica append and a fetch that reads only data this
+  broker wrote since it opened the log: work that stays in the page cache runs
+  inline, and work that may wait on the disk goes to the blocking pool.
+- A follower fetches from its leader over a dedicated link that hands the
+  response's record bytes to the replica append without copying them, instead
+  of through the general client connection.
+
+- A small fetch from the page cache looks its run up once. A fetch on a
+  `sendfile`-capable connection first describes its run of batches; when the
+  run is too short for `sendfile`, the broker used to read it with the
+  byte-copy path, which looked the same run up a second time: another offset
+  index floor, header scan and readahead hint under the log lock. It now
+  reads the regions the first walk found. Followers and consumers at the tail
+  of a log make this fetch on every round trip.
+
+### Fixed
+
+- Store a produced `CreateTime` batch with its largest record timestamp as
+  `max_timestamp`, as Kafka's `LogValidator` does, on the verbatim and the
+  owned path. The producer's header value was kept, so an LZ4 batch with
+  header 7777 over one record at 0 was stored as 7777 where Kafka stores 0.
+  A batch whose header already agrees keeps its zero-copy append. A KFC-1
+  `delivery.mode=scheduled` topic keeps the header, which is its delivery
+  time (#1388).
+- Compute the `message.timestamp.{before,after}.max.ms` window, its error
+  message and record timestamps in Java's wrapping `long` arithmetic, as
+  Kafka does. A stock topic admitted a `Long.MIN_VALUE` timestamp that Kafka
+  refuses, and a topic that bounds only the past refused one that Kafka
+  admits (#1388).
+- Skip a remote segment outside the partition's leader-epoch lineage in a
+  by-timestamp `ListOffsets`, as Kafka's `isRemoteSegmentWithinLeaderEpochs`
+  does, so a deposed leader's copy left by an unclean election cannot answer
+  the seek (#1388).
+- Resolve the remote segment of a `read_committed` `Fetch`'s aborted
+  transactions as the data read resolves it. A finished segment nested inside
+  the covering one made the abort lookup answer none while the read still
+  served the batches (#1388).
+
 ## [1.0.8] - 2026-10-20
 
 1.0.8 includes the recovery fixes from #1578 and the published Rust client

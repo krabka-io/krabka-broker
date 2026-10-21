@@ -6,10 +6,7 @@
 //! checkable by reading one file.
 
 use {
-    super::{
-        SharePartitionLeaderManager,
-        persistence::{fences_the_partition, persister_error_code},
-    },
+    super::{SharePartitionLeaderManager, persistence::persister_error_code},
     crate::{
         codes::{KAFKA_STORAGE_ERROR, OFFSET_NOT_AVAILABLE, REQUEST_TIMED_OUT, from_broker_error},
         config_keys::resolve_remote_list_offsets_timeout,
@@ -35,9 +32,12 @@ impl SharePartitionLeaderManager {
     /// initializes the state of every assigned share partition first (Kafka's
     /// Initialize-first flow). When that state has no start offset yet
     /// (`-1`), the group's `share.auto.offset.reset` decides where the empty
-    /// window starts, and the method persists that decision so a later leader
-    /// does not resolve it again against a moved log or a moved clock. The
-    /// persister refuses a read of a key that has no state. The
+    /// window starts. That start stays in memory: as in Kafka's
+    /// `SharePartition.maybeInitialize`, the persisted start offset stays `-1`
+    /// until the first state write (an acknowledgement, a release or a lock
+    /// timeout), so a later leader that loads before then resolves the
+    /// strategy again. The persister refuses a read of a key that has no
+    /// state. The
     /// method drops the `DashMap` guard before the load `.await`. A concurrent
     /// loader that loses the insert race adopts the cell of the winner.
     ///
@@ -64,7 +64,7 @@ impl SharePartitionLeaderManager {
 
         // Miss: load from the persister WITHOUT holding any DashMap guard.
         let leader_epoch = self.leader_epoch_for(topic_id, partition);
-        let mut loaded = match self
+        let loaded = match self
             .persister
             .read_state(group, topic_id, partition, leader_epoch)
             .await
@@ -104,10 +104,6 @@ impl SharePartitionLeaderManager {
                 // advance in memory.
                 st.state_epoch = registered.state_epoch;
                 st.leader_epoch = leader_epoch;
-                // The resolved start is durable state: persist it now so the
-                // next leader inherits it instead of re-resolving a `latest`
-                // or `by_duration` strategy against a log that has moved on.
-                st.dirty = true;
                 st
             }
             Err(e) => {
@@ -121,16 +117,6 @@ impl SharePartitionLeaderManager {
             }
         };
 
-        // The resolved start of a partition with no state is best-effort
-        // durable: a failed write keeps `dirty` set for a retry. A fenced
-        // write means another writer owns the state, so no cell is cached.
-        if let Err(code) = self
-            .persist_if_dirty(group, topic_id, partition, None, &mut loaded)
-            .await
-            && fences_the_partition(code)
-        {
-            return Err(code);
-        }
         let cell = Arc::new(Mutex::new(loaded));
         // Adopt the winner if another task loaded the same key concurrently.
         let cell = self

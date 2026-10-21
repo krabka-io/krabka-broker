@@ -394,6 +394,136 @@ fn remote_segment_reader(
 
 pub fn sparse_remote_segment_reader() -> ReaderWithDir { sparse_reader_with_max_timestamp(2_400) }
 
+/// One finished remote segment of [`tier_reader`]: its batches, in offset
+/// order, and the leader epochs its metadata records.
+pub struct TierSegment {
+    pub batches: Vec<krabka_protocol::records::RecordBatch>,
+    pub epochs: std::collections::BTreeMap<LeaderEpoch, i64>,
+}
+
+/// A tier holding `segments`, each copied with the indexes Kafka writes at an
+/// index interval of one batch, as `remote_segment_reader` does for one.
+/// A segment spans its first batch's base offset to its last batch's last
+/// offset, and its max timestamp is its largest record timestamp.
+pub fn tier_reader(segments: &[TierSegment]) -> ReaderWithDir {
+    let remote_dir = tempfile::tempdir().unwrap();
+    let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
+    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
+    for segment in segments {
+        let source_dir = tempfile::tempdir().unwrap();
+        let first = segment.batches.first().expect("a segment holds a batch");
+        let base = first.base_offset;
+        let mut log_bytes = bytes::BytesMut::new();
+        let mut offsets = Vec::new();
+        let mut times = Vec::new();
+        let mut max_timestamp = i64::MIN;
+        let mut end = base;
+        for batch in &segment.batches {
+            let position = u32::try_from(log_bytes.len()).unwrap();
+            batch.encode(&mut log_bytes).unwrap();
+            end = batch.base_offset + i64::from(batch.last_offset_delta);
+            let relative_offset = u32::try_from(end - base).unwrap();
+            offsets.push(OffsetIndexEntry {
+                relative_offset,
+                position,
+            });
+            let batch_max = batch
+                .records
+                .iter()
+                .map(|record| batch.base_timestamp + record.timestamp_delta)
+                .max()
+                .unwrap_or(-1);
+            if batch_max > max_timestamp {
+                max_timestamp = batch_max;
+                times.push(TimeIndexEntry {
+                    timestamp: batch_max,
+                    relative_offset,
+                });
+            }
+        }
+        let name = format!("{base:020}");
+        let data = krabka_remote_storage::LogSegmentData {
+            log_segment: write_test_file(source_dir.path(), &format!("{name}.log"), &log_bytes),
+            offset_index: write_test_file(
+                source_dir.path(),
+                &format!("{name}.index"),
+                &offset_index_bytes(&offsets),
+            ),
+            time_index: write_test_file(
+                source_dir.path(),
+                &format!("{name}.timeindex"),
+                &time_index_bytes(&times),
+            ),
+            transaction_index: None,
+            producer_snapshot_index: None,
+            leader_epoch_index: bytes::Bytes::from_static(b"0\n0\n"),
+        };
+        let id = krabka_remote_storage::RemoteLogSegmentId::new(tp(), Uuid::new_v4());
+        let md = RemoteLogSegmentMetadata::new(
+            id.clone(),
+            base,
+            end,
+            max_timestamp,
+            1,
+            max_timestamp,
+            krabka_remote_storage::RemoteLogSegmentDetails::new(
+                i32::try_from(log_bytes.len()).unwrap(),
+                RemoteLogSegmentState::CopySegmentStarted,
+                segment.epochs.clone(),
+            ),
+        )
+        .unwrap();
+        rlmm.add_remote_log_segment_metadata(md.clone()).unwrap();
+        rsm.copy_log_segment_data(&md, &data).unwrap();
+        rlmm.update_remote_log_segment_metadata(
+            krabka_remote_storage::RemoteLogSegmentMetadataUpdate {
+                remote_log_segment_id: id,
+                event_timestamp_ms: max_timestamp,
+                custom_metadata: None,
+                state: RemoteLogSegmentState::CopySegmentFinished,
+                broker_id: 1,
+            },
+        )
+        .unwrap();
+    }
+    ReaderWithDir {
+        reader: RemoteReader::new(rsm, rlmm),
+        dir: remote_dir,
+    }
+}
+
+/// A tier an unclean leader election left behind. The current lineage is
+/// epoch 0 from offset 0 and epoch 1 from offset 5, with the log end at 10:
+/// - offsets 0 to 4 in epoch 0, timestamps 100 to 140;
+/// - a deposed leader's copy of offsets 3 to 9, all in epoch 0, which the
+///   lineage gives to epoch 1 from offset 5 on: its offset 5 has timestamp
+///   1 000;
+/// - offsets 5 to 9 in epoch 1, timestamps 900, 950, then 1 100 at offset 7.
+pub fn divergent_tier_reader() -> ReaderWithDir {
+    tier_reader(&[
+        TierSegment {
+            batches: vec![timestamped_batch_at(0, &[100, 110, 120, 130, 140], b'a')],
+            epochs: maplit::btreemap! {LeaderEpoch(0) => 0},
+        },
+        TierSegment {
+            batches: vec![timestamped_batch_at(
+                3,
+                &[130, 140, 1_000, 1_010, 1_020, 1_030, 1_040],
+                b'x',
+            )],
+            epochs: maplit::btreemap! {LeaderEpoch(0) => 3},
+        },
+        TierSegment {
+            batches: vec![timestamped_batch_at(
+                5,
+                &[900, 950, 1_100, 1_110, 1_120],
+                b'b',
+            )],
+            epochs: maplit::btreemap! {LeaderEpoch(1) => 5},
+        },
+    ])
+}
+
 /// Builds a log rolled into several sealed segments under `dir`, then
 /// copies every sealed segment into a fresh `LocalTieredStorage` and
 /// `InmemoryRemoteLogMetadataManager`. It returns the constructed reader
@@ -403,16 +533,20 @@ pub fn populated_reader(
     log_dir: &std::path::Path,
     remote_dir: &std::path::Path,
 ) -> PopulatedReader {
-    let log = populated_log(log_dir);
+    let log = populated_log(log_dir, SEGMENT_BYTES);
     PopulatedReader {
         reader: copy_log_to_reader(&log, remote_dir),
         log,
     }
 }
 
-fn populated_log(log_dir: &std::path::Path) -> Log {
+/// The segment size of [`populated_reader`]'s log, which seals one two-record
+/// batch per segment.
+const SEGMENT_BYTES: u32 = 256;
+
+fn populated_log(log_dir: &std::path::Path, segment_bytes: u32) -> Log {
     let mut log = Log::open(log_dir, LogConfig {
-        segment_size: krabka_units::bytes(256),
+        segment_size: krabka_units::bytes(segment_bytes),
         ..LogConfig::default()
     })
     .unwrap();
@@ -493,7 +627,18 @@ pub fn populated_reader_with_abort(
     log_dir: &std::path::Path,
     remote_dir: &std::path::Path,
 ) -> (RemoteReader, Log, (i64, i64, i64)) {
-    let log = populated_log(log_dir);
+    reader_with_abort_in_segments_of(log_dir, remote_dir, SEGMENT_BYTES)
+}
+
+/// [`populated_reader_with_abort`] over a log whose segments are
+/// `segment_bytes` long, so a test can ask for segments that hold several
+/// batches.
+pub fn reader_with_abort_in_segments_of(
+    log_dir: &std::path::Path,
+    remote_dir: &std::path::Path,
+    segment_bytes: u32,
+) -> (RemoteReader, Log, (i64, i64, i64)) {
+    let log = populated_log(log_dir, segment_bytes);
     let exports = log.tierable_segments();
 
     // Write a `.txnindex` next to the first sealed segment's `.log` so the
@@ -518,6 +663,41 @@ pub fn populated_reader_with_abort(
     );
 
     (copy_log_to_reader(&log, remote_dir), log, abort)
+}
+
+/// Registers a finished epoch-0 segment over `start..=end` in the reader's
+/// metadata and uploads nothing for it, so its index objects are missing.
+///
+/// Placed inside a segment that is already there, it is the nested segment
+/// that shadows its host in the RLMM's floor-by-start lookup for every offset
+/// of the host above `end`.
+pub fn nest_finished_segment(reader: &RemoteReader, start: i64, end: i64) {
+    let id = krabka_remote_storage::RemoteLogSegmentId::new(tp(), Uuid::new_v4());
+    let md = RemoteLogSegmentMetadata::new(
+        id.clone(),
+        start,
+        end,
+        0,
+        1,
+        0,
+        krabka_remote_storage::RemoteLogSegmentDetails::new(
+            1,
+            RemoteLogSegmentState::CopySegmentStarted,
+            maplit::btreemap! {LeaderEpoch(0_i32) => start},
+        ),
+    )
+    .unwrap();
+    reader.rlmm.add_remote_log_segment_metadata(md).unwrap();
+    reader
+        .rlmm
+        .update_remote_log_segment_metadata(krabka_remote_storage::RemoteLogSegmentMetadataUpdate {
+            remote_log_segment_id: id,
+            event_timestamp_ms: 0,
+            custom_metadata: None,
+            state: RemoteLogSegmentState::CopySegmentFinished,
+            broker_id: 1,
+        })
+        .unwrap();
 }
 
 // `NotReady` from the RLMM must propagate out of the reader
