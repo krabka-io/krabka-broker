@@ -1,6 +1,4 @@
 name: Intel test-dependency feature diagnostic
-true:
-  workflow_dispatch: null
 permissions:
   contents: read
 jobs:
@@ -58,3 +56,5 @@ jobs:
         attempt:
         - 1
         - 2
+'on':
+  workflow_dispatch: null
