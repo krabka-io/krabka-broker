@@ -78,8 +78,12 @@ jobs:
       # stderr diagnostic messages in the console.
       # `rm -rf target/criterion` clears stale baseline samples from warm cache runs.
       # `--noplot` prevents Criterion from rendering uncollected gnuplot charts.
+      # `TMPDIR` moves the bench logs off `/tmp`, which ubuntu-26.04 mounts as a
+      # quota-limited tmpfs that the append benches fill (EDQUOT).
       - name: Run Log Engine Benches
         shell: bash
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: |
           mkdir -p bench-results
           rm -rf target/criterion
