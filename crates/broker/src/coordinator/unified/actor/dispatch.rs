@@ -15,7 +15,7 @@ use {
         heartbeat::handle_actor_heartbeat,
         messages::{LeaveResult, classic_leave_result},
         metadata_update::on_metadata_update,
-        offset_delete::offset_delete_guard,
+        offset_delete::{delete_held_offsets, offset_delete_guard},
         retention::handle_reap_message,
         seed::apply_seed,
         topic_deletion::reply_delete_topic_offsets,
@@ -204,6 +204,10 @@ pub(super) async fn handle_actor_message(
                 group.committed_offsets.remove(&key);
             }
             let _ = reply.send(());
+            true
+        }
+        GroupActorMessage::DeleteOffsets { keys, reply } => {
+            let _ = reply.send(delete_held_offsets(group, services.offsets_log, &keys).await);
             true
         }
         GroupActorMessage::DeleteTopicOffsets { topics, reply } => {
