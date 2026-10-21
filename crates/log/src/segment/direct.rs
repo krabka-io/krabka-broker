@@ -567,7 +567,7 @@ impl Pool {
             ready: Mutex::new(VecDeque::new()),
             changed: Condvar::new(),
             #[cfg(target_os = "linux")]
-            ring: ring::Ring::start(),
+            ring: ring::Ring::start(ring::ENTRIES),
         });
         for index in 0..WRITE_THREADS {
             let worker = Arc::clone(&started);
@@ -1319,6 +1319,31 @@ mod tests {
         check!(io.most.load(std::sync::atomic::Ordering::SeqCst) <= WRITES_IN_FLIGHT);
         check!(writer.written() == 8192);
         check!(file_contents(writer.file()) == logical);
+    }
+
+    /// A writer whose I/O changes writes the next appends through the new
+    /// one: after a switch from a test's I/O to the real file I/O, the test's
+    /// sees no more writes, and the file holds every append either way.
+    #[test]
+    fn a_new_io_makes_the_writes_after_it() {
+        let (mut writer, io) = writer(512);
+        let first = pattern(1, 700);
+        writer.append(&[&first]).unwrap();
+        writer.drain().unwrap();
+        check!(!io.take_calls().is_empty());
+
+        writer.set_io(Arc::new(FileIo));
+        let mut logical = first;
+        for seed in 2..40 {
+            let bytes = pattern(seed, 300 * usize::from(seed));
+            writer.append(&[&bytes]).unwrap();
+            logical.extend_from_slice(&bytes);
+        }
+        writer.drain().unwrap();
+
+        check!(io.take_calls().is_empty());
+        check!(writer.written() == to_u64(logical.len()));
+        check!(file_contents(writer.file()) == padded(&logical, 512));
     }
 
     /// The real file I/O hands its writes to the `io_uring` submitter where the

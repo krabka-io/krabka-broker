@@ -29,7 +29,7 @@ use {
 /// duplicate of its segment's descriptor, so the bound keeps a burst across
 /// thousands of partitions from running the process out of descriptors. A
 /// write past it waits before it is taken from its segment's queue.
-const ENTRIES: u32 = 256;
+pub(super) const ENTRIES: u32 = 256;
 
 /// The thread that owns the `io_uring`, and the channel segments with work to
 /// start reach it by.
@@ -38,38 +38,34 @@ pub(super) struct Ring {
 }
 
 impl Ring {
-    /// Start the submitter thread. None when the kernel refuses an `io_uring`
-    /// or the thread does not start, and the write threads do every write.
-    pub(super) fn start() -> Option<Self> {
+    /// Start the submitter thread on a ring of `entries`. None when the
+    /// kernel refuses the `io_uring` or the thread does not start, and the
+    /// write threads do every write.
+    pub(super) fn start(entries: u32) -> Option<Self> {
         let (segments, receiver) = unbounded_channel();
         let (started, outcome) = std::sync::mpsc::channel();
         let spawned = std::thread::Builder::new()
             .name("log-direct-uring".to_owned())
             .spawn(move || {
-                let runtime = tokio_uring::Runtime::new(tokio_uring::builder().entries(ENTRIES));
-                let runtime = match runtime {
+                match tokio_uring::Runtime::new(tokio_uring::builder().entries(entries)) {
                     Ok(runtime) => {
                         let _ = started.send(Ok(()));
-                        runtime
+                        runtime.block_on(serve(receiver));
                     }
-                    Err(error) => {
-                        let _ = started.send(Err(error));
-                        return;
-                    }
-                };
-                runtime.block_on(serve(receiver));
+                    Err(error) => drop(started.send(Err(error))),
+                }
             });
-        if let Err(error) = spawned {
-            tracing::warn!(%error, "no io_uring submitter thread; direct writes use the write threads");
-            return None;
-        }
-        match outcome.recv() {
-            Ok(Ok(())) => Some(Self { segments }),
-            Ok(Err(error)) => {
-                tracing::info!(%error, "io_uring unavailable; direct writes use the write threads");
+        let outcome = spawned.and_then(|_| {
+            outcome
+                .recv()
+                .unwrap_or_else(|_| Err(Error::other("the io_uring thread exited")))
+        });
+        match outcome {
+            Ok(()) => Some(Self { segments }),
+            Err(error) => {
+                tracing::info!(%error, "no io_uring; direct writes use the write threads");
                 None
             }
-            Err(_) => None,
         }
     }
 
@@ -166,4 +162,81 @@ async fn write_owned(
     // which the write results already did.
     let _ = file.close().await;
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::*,
+        crate::{
+            io::FileIo,
+            segment::direct::{DioAlign, DirectWriter, Job},
+        },
+        assert2::check,
+    };
+
+    /// A ring the kernel refuses, here one of no entries, starts no
+    /// submitter, and the write threads make every write.
+    #[test]
+    fn a_ring_the_kernel_refuses_starts_no_submitter() {
+        check!(Ring::start(0).is_none());
+    }
+
+    /// A write the kernel refuses, here to a handle opened read-only, fails
+    /// with the kernel's error, and the buffer has its contents back.
+    #[test]
+    fn a_refused_write_fails_and_gives_the_buffer_back() {
+        let Ok(runtime) = tokio_uring::Runtime::new(&tokio_uring::builder()) else {
+            return;
+        };
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let read_only = File::open(file.path()).unwrap();
+        let mut buf = AlignedBuf::new(512);
+        buf.extend_from_slice(&[7; 1024]);
+
+        let result = runtime.block_on(write_owned(&read_only, &mut buf, 0, 512));
+
+        check!(result.is_err());
+        check!(buf.as_slice() == [7; 1024]);
+        check!(std::fs::read(file.path()).unwrap().is_empty());
+    }
+
+    /// A write task that ends without recording its write, as a panicking
+    /// one does, records a failure: the segment fails from then on rather
+    /// than waiting for the write forever.
+    #[test]
+    fn a_write_dropped_unrecorded_fails_the_segment() {
+        let align = DioAlign {
+            mem: 512,
+            block: 512,
+        };
+        let writer = DirectWriter::new(
+            tempfile::tempfile().unwrap(),
+            align,
+            0,
+            Vec::new(),
+            Arc::new(FileIo),
+        )
+        .unwrap();
+        let shared = Arc::clone(&writer.shared);
+        let mut buf = AlignedBuf::new(align.mem);
+        buf.resize(512);
+        {
+            // Queued without a schedule, so only this test takes it.
+            let mut queue = shared.queue.lock().unwrap();
+            queue.jobs.push_back(Job { buf, at: 0 });
+            queue.queued_end = 512;
+            queue.end = 512;
+        }
+        let work = shared.take_work().unwrap();
+
+        drop(Pending {
+            segment: Arc::clone(&shared),
+            work: Some(work),
+        });
+
+        let error = writer.drain().unwrap_err();
+        check!(error.to_string() == "O_DIRECT write panicked");
+        check!(writer.written() == 0);
+    }
 }
