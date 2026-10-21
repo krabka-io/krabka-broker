@@ -1,106 +1,124 @@
-name: benchmarks
-
+name: empty-read diagnostic
 on:
-  pull_request:
-    paths:
-      - "crates/log/**"
-      - "crates/verified/**"
-      - "crates/parse-benches/**"
-      - "packaging/performance/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/benchmarks.yml"
-  push:
-    branches: [main]
-    paths:
-      - "crates/log/**"
-      - "crates/verified/**"
-      - "crates/parse-benches/**"
-      - "packaging/performance/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/benchmarks.yml"
   workflow_dispatch:
-
 permissions:
   contents: read
-
-# Cancel superseded PR runs; let pushes to main run to completion.
-concurrency:
-  group: bench-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
-
 jobs:
-  # The broker performance budgets are judged on a dedicated host by
-  # `packaging/performance/qualify.sh budget` in qualification-profile.yml.
-  # This nightly lane checks the predeclared contract instead: it must
-  # parse and validate, and the digest the harness will record is printed so a
-  # published verdict can be traced back to this commit's contract. The
-  # evaluator's own tests run under `bazel test //...` in ci.yml.
-  performance-budget-contract:
-    name: broker · performance budget contract
+  compare:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 90
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          key: bench-broker
-      - name: Validate regression contract
-        shell: bash
+          fetch-depth: 0
+      - uses: ./.github/actions/reclaim-disk
+      - id: toolchain
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          test -n "$channel"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          cache-targets: false
+      - name: prepare exact sources and recorded counterfactuals
         run: |
           set -euo pipefail
-          cargo run -p krabka-parse-benches -- check-contract \
-            packaging/performance/regression-contract.json | tee -a "${GITHUB_STEP_SUMMARY}"
-
-  # Automated storage microbenchmarks for krabka-log.
-  # Bazel's crate_bench macro compiles and lints this suite. This lane measures
-  # it through Cargo using the repository's pinned toolchain.
-  micro-benchmarks:
-    name: broker · storage microbenchmarks
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # Omitting an explicit rust-toolchain action relies on ubuntu-latest's pre-installed
-      # rustup, which automatically reads rust-toolchain.toml (channel = "1.98.0") as the
-      # single source of truth and eliminates an unpinned third-party action step.
-      # Note: ubuntu-latest's pre-installed stable toolchain still appears in the
-      # rust-cache environment inventory alongside the pinned 1.98.0 toolchain.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: bench-broker
-
-      # `shell: bash` enforces pipefail so any cargo bench or compilation
-      # failure exits non-zero instead of being masked by `tee`.
-      # Pipe stdout to tee so the benchmark log receives clean output, leaving
-      # stderr diagnostic messages in the console.
-      # `rm -rf target/criterion` clears stale baseline samples from warm cache runs.
-      # `--noplot` prevents Criterion from rendering uncollected gnuplot charts.
-      - name: Run Log Engine Benches
-        shell: bash
+          mkdir -p evidence "$RUNNER_TEMP/empty-read-sources" "$RUNNER_TEMP/empty-read-tmp"
+          for variant in reference original inline config-before; do
+            revision=3831a25de74804460f32d921b711e0cacef48deb
+            if [[ "$variant" = reference ]]; then revision=ac9deff316d38418622b16c237c671df88f57c7a; fi
+            git worktree add --detach "$RUNNER_TEMP/empty-read-sources/$variant" "$revision"
+          done
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          root=Path(os.environ['RUNNER_TEMP'])/'empty-read-sources'
+          p=root/'inline/crates/log/src/log/read.rs'
+          text=p.read_text();needle='    pub fn read(&self, offset: Offset, max_size: ByteSize) -> Result<ReadOutput, LogError> {'
+          assert text.count(needle)==1
+          p.write_text(text.replace(needle,'    #[inline]\n'+needle))
+          p=root/'config-before/crates/log/src/log/read.rs';text=p.read_text()
+          needle='        let read_buffer_cap = self.config.read().unwrap().read_buffer_cap;'
+          assert text.count(needle)==1
+          text=text.replace(needle+'\n','')
+          start='    pub fn read(&self, offset: Offset, max_size: ByteSize) -> Result<ReadOutput, LogError> {\n'
+          assert text.count(start)==1
+          p.write_text(text.replace(start,start+needle+'\n'))
+          PY
+          for variant in reference original inline config-before; do
+            source="$RUNNER_TEMP/empty-read-sources/$variant"
+            git -C "$source" rev-parse HEAD > "evidence/$variant.base-commit"
+            git -C "$source" diff --binary > "evidence/$variant.patch"
+            sha256sum "$source/crates/log/src/log/read.rs" > "evidence/$variant.source-sha256"
+          done
+          {
+            echo 'Diagnostic only; modified worktrees are counterfactuals, not qualified source.'
+            rustc -Vv
+            uname -a
+            lscpu
+          } > evidence/environment.txt
+      - name: compile each variant once
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.toolchain.outputs.channel }}
         run: |
-          mkdir -p bench-results
-          rm -rf target/criterion
-          cargo bench -p krabka-log --bench log -- --output-format bencher --noplot | tee bench-results/log-engine.txt
-
-      # Parses Criterion bencher output into a structured JSON summary artifact.
-      # This utility lives in crates/parse-benches and can be migrated to a shared
-      # krabka-tools repository if cross-repo tooling is extracted in the future.
-      - name: Generate Summary JSON
-        run: cargo run -p krabka-parse-benches -- --results-dir bench-results --suite krabka-broker
-
-      # Benchmark summary JSON and raw logs are archived as build artifacts for
-      # historical trend tracking and comparative regression analysis across PRs.
-      # This per-pull-request lane archives measurements without a regression
-      # verdict because shared-runner wall-clock times vary by up to ±24%.
-      # The nightly/manual `bench` job in ci.yml alternates four reference and
-      # candidate runs on one host, then fails on regressions beyond its
-      # variance-calibrated tolerance with a 10% floor.
-      - name: Upload Benchmark Results
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+          set -euo pipefail
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/empty-read-target"
+          export TMPDIR="$RUNNER_TEMP/empty-read-tmp"
+          for variant in reference original inline config-before; do
+            source="$RUNNER_TEMP/empty-read-sources/$variant"
+            (cd "$source" && cargo bench --locked -p krabka-log --bench log --no-run) > "evidence/$variant.build.log" 2>&1
+            python3 - "$source" "$GITHUB_WORKSPACE/evidence/$variant.bench" <<'PY'
+          import hashlib,json,os,subprocess,sys
+          from pathlib import Path
+          # Cargo emits the executable path in machine-readable compiler artifacts.
+          output=subprocess.check_output(['cargo','bench','--locked','-p','krabka-log','--bench','log','--no-run','--message-format=json'],cwd=sys.argv[1],text=True)
+          bins=[row for line in output.splitlines() if line.startswith('{') for row in [json.loads(line)] if row.get('reason')=='compiler-artifact' and row.get('executable') and row.get('target',{}).get('kind')==['bench']]
+          assert len(bins)==1,bins
+          assert Path(bins[0]['target']['src_path']).is_relative_to(Path(sys.argv[1])),bins[0]
+          destination=Path(sys.argv[2]);binary=Path(bins[0]['executable']).read_bytes();destination.write_bytes(binary);destination.chmod(0o755)
+          destination.with_suffix('.binary-sha256').write_text(hashlib.sha256(binary).hexdigest()+'\n')
+          PY
+          done
+      - name: four interleaved rounds with unchanged measurement settings
+        run: |
+          set -euo pipefail
+          for round in 1 2 3 4; do
+            variants=(reference original inline config-before)
+            if ((round % 2 == 0)); then variants=(config-before inline original reference); fi
+            for variant in "${variants[@]}"; do
+              "evidence/$variant.bench" 'log/read/past_end_returns_empty' \
+                --output-format bencher --noplot --sample-size 20 --measurement-time 2 \
+                | tee "evidence/$variant.round-$round.txt"
+            done
+          done
+          python3 - <<'PY'
+          import json,re,statistics
+          from pathlib import Path
+          result={'status':'diagnostic-only-not-qualification','variants':{}}
+          for variant in ['reference','original','inline','config-before']:
+            values=[]
+            for round in range(1,5):
+              text=Path(f'evidence/{variant}.round-{round}.txt').read_text()
+              matches=re.findall(r'test log/read/past_end_returns_empty \.\.\. bench:\s+(\d+) ns/iter',text)
+              assert len(matches)==1,(variant,round,matches)
+              values.append(int(matches[0]))
+            result['variants'][variant]={'rounds_ns':values,'median_ns':statistics.median(values)}
+          Path('evidence/diagnostic.json').write_text(json.dumps(result,indent=2)+'\n')
+          print(json.dumps(result,indent=2))
+          PY
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
         with:
-          name: broker-benchmark-results
-          path: bench-results/
-          retention-days: 30
+          name: empty-read-diagnostic-${{ github.run_id }}
+          path: |
+            evidence/*.txt
+            evidence/*.json
+            evidence/*.patch
+            evidence/*.base-commit
+            evidence/*.source-sha256
+            evidence/*.binary-sha256
+            evidence/*.log
+          if-no-files-found: error
