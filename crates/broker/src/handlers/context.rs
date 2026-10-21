@@ -83,10 +83,9 @@ pub(crate) struct RequestContext<'a> {
 }
 
 /// Connection attributes a KIP-714 telemetry handler needs to match a
-/// client to a subscription. Telemetry RPCs are unauthenticated, so this
-/// carries no principal. It carries only the wire-derived and
-/// connection-derived fields.
+/// client to a subscription and authorize telemetry ingestion.
 pub(crate) struct TelemetryContext<'a> {
+    pub principal: &'a Principal,
     pub connection_id: &'a str,
     pub client_id: &'a str,
     pub peer: &'a std::net::SocketAddr,
@@ -191,10 +190,9 @@ impl<'a> RequestContext<'a> {
         handler_time: std::time::Duration,
     ) -> i32 {
         let request_delay = self.charge_request_quota(broker, image, handler_time);
-        let delay =
-            broker
-                .metrics
-                .record_applied_throttle(api_key, &[(QuotaType::Request, request_delay).into()]);
+        let delay = broker
+            .metrics
+            .record_applied_throttle(api_key, &[(QuotaType::Request, request_delay).into()]);
         // KIP-219: the response goes out now and the connection is muted for
         // the window afterwards.
         self.record_throttle(delay);
@@ -211,11 +209,15 @@ impl<'a> RequestContext<'a> {
     /// Leaves a quota charge for the dispatch loop to resolve with the request
     /// quota in one metrics call, and records its window. See
     /// [`crate::quota::ThrottleSlot::defer`].
-    pub(crate) fn defer_quota_charge(&self, charge: QuotaCharge) { self.throttle.defer(charge); }
+    pub(crate) fn defer_quota_charge(&self, charge: QuotaCharge) {
+        self.throttle.defer(charge);
+    }
 
     /// Drains the recorded KIP-219 window. It returns a zero extent when no
     /// quota charged this request.
-    pub(crate) fn take_throttle(&self) -> krabka_units::Time { self.throttle.take() }
+    pub(crate) fn take_throttle(&self) -> krabka_units::Time {
+        self.throttle.take()
+    }
 
     /// Marks this request's connection to be closed once its (suppressed)
     /// response has been written. Only an `acks=0` `Produce` whose response
@@ -255,6 +257,7 @@ impl<'a> RequestContext<'a> {
 
 impl<'a> TelemetryContext<'a> {
     pub(crate) fn new(
+        principal: &'a Principal,
         connection_id: &'a str,
         peer: &'a SocketAddr,
         client_id: &'a str,
@@ -262,6 +265,7 @@ impl<'a> TelemetryContext<'a> {
         software_version: &'a str,
     ) -> Self {
         Self {
+            principal,
             connection_id,
             client_id,
             peer,
@@ -377,8 +381,16 @@ mod tests {
     #[test]
     fn telemetry_context_new_preserves_client_identity_fields() {
         let peer = peer();
+        let principal = principal();
 
-        let ctx = TelemetryContext::new("connection-a", &peer, "client-a", "krabka-test", "1.2.3");
+        let ctx = TelemetryContext::new(
+            &principal,
+            "connection-a",
+            &peer,
+            "client-a",
+            "krabka-test",
+            "1.2.3",
+        );
 
         assert!(ctx.connection_id == "connection-a");
         assert!(ctx.peer == &peer);
@@ -421,8 +433,10 @@ mod tests {
                 "1.2.3.4",
             ),
         ];
+        let principal = principal();
         for (name, peer, expected) in rows {
-            let ctx = TelemetryContext::new("connection-a", &peer, "client-a", "sw", "1");
+            let ctx =
+                TelemetryContext::new(&principal, "connection-a", &peer, "client-a", "sw", "1");
             assert!(ctx.source_address() == expected, "row {name}");
         }
     }

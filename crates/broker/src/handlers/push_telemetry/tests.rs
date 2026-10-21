@@ -19,13 +19,16 @@ use {
             },
         },
         handlers::push_telemetry::test_support::{gauge_metric, metrics_data},
-        test_support::{self as broker_fixture_support, KafkaErrorCode, peer, start_broker_with},
+        test_support::{
+            self as broker_fixture_support, DenyAll, KafkaErrorCode, peer, start_broker_with,
+        },
     },
     assert2::assert,
     bytes::Bytes,
     krabka_protocol::{owned::push_telemetry_response, primitives::uuid::Uuid as ProtoUuid},
     opentelemetry_proto::tonic::metrics::v1::number_data_point,
     uuid::Uuid,
+    std::sync::Arc,
 };
 
 krabka_macros::wire_codec_helpers! {
@@ -36,6 +39,47 @@ krabka_macros::wire_codec_helpers! {
 
 const GZIP: i8 = 1;
 const NONE: i8 = 0;
+
+#[tokio::test]
+async fn push_requires_cluster_action_and_an_enabled_receiver() {
+    for (name, enable, expected) in [
+        ("disabled receiver", false, codes::UNSUPPORTED_VERSION),
+        (
+            "principal without ClusterAction",
+            true,
+            codes::CLUSTER_AUTHORIZATION_FAILED,
+        ),
+    ] {
+        let started = broker_fixture_support::start_broker_no_audit_with(move |cfg| {
+            cfg.client_metrics_enable = enable;
+            cfg.authorizer = Arc::new(DenyAll);
+        })
+        .await;
+        let broker = started.broker.broker_arc_for_test();
+        let peer = peer();
+        let principal = broker_fixture_support::principal("untrusted");
+        let ctx = TelemetryContext {
+            principal: &principal,
+            connection_id: "connection-a",
+            client_id: "client-a",
+            peer: &peer,
+            software_name: "test-client",
+            software_version: "1",
+        };
+        let response = decode_response(
+            &handle(
+                &broker,
+                push_telemetry_response::MAX_VERSION,
+                1,
+                &encode_request(&PushTelemetryRequest::default()),
+                &ctx,
+            )
+            .expect("push response"),
+        );
+        assert!(response.error_code == expected, "row {name}");
+        started.broker.shutdown().await;
+    }
+}
 
 #[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
 struct SubscriptionId(i32);
@@ -177,14 +221,17 @@ async fn push_after_get_checks(unstable: UnstableApiVersions) {
         dir: _dir,
     } = start_broker_with(|cfg| {
         cfg.client_metrics_telemetry_max = krabka_units::kibibytes(1);
+        cfg.client_metrics_enable = true;
         cfg.features.unstable_api_versions = unstable;
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
     let peer = peer();
+    let principal = broker_fixture_support::principal("telemetry-client");
     let client = Client {
         broker: &broker,
         ctx: TelemetryContext {
+            principal: &principal,
             connection_id: "connection-a",
             client_id: "client-a",
             peer: &peer,
@@ -203,13 +250,13 @@ async fn push_after_get_checks(unstable: UnstableApiVersions) {
             "gzip OTLP",
             TelemetryCompression::Gzip,
             gzip(&otlp()),
-            KafkaErrorCode(codes::NONE),
+            KafkaErrorCode(codes::INVALID_RECORD),
         ),
         (
             "uncompressed OTLP",
             TelemetryCompression::Uncompressed,
             Bytes::from(otlp()),
-            KafkaErrorCode(codes::NONE),
+            KafkaErrorCode(codes::INVALID_RECORD),
         ),
         (
             "empty payload",
@@ -283,10 +330,12 @@ async fn push_after_get_checks(unstable: UnstableApiVersions) {
 async fn push_without_a_get_builds_the_instance() {
     krabka_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
-        boot [broker_fixture_support::start_broker_with(|_cfg| {})];
+        boot [broker_fixture_support::start_broker_with(|cfg| cfg.client_metrics_enable = true)];
     };
     let peer_addr = peer();
+    let principal = broker_fixture_support::principal("telemetry-client");
     let client_ctx = TelemetryContext {
+        principal: &principal,
         connection_id: "connection-a",
         client_id: "client-a",
         peer: &peer_addr,

@@ -25,6 +25,11 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Fixed
 
+- Require `ClusterAction` for `PushTelemetry`, refuse both client-telemetry
+  RPCs when no receiver is enabled, reject unsubscribed or structurally
+  excessive OTLP metrics, and cap retained Prometheus client series globally
+  and per client/instance. Disconnects now release an instance's series
+  immediately (#1592).
 - Store a produced `CreateTime` batch with its largest record timestamp as
   `max_timestamp`, as Kafka's `LogValidator` does, on the verbatim and the
   owned path. The producer's header value was kept, so an LZ4 batch with

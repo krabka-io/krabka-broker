@@ -49,4 +49,10 @@ impl ClientMetrics {
     }
 
     pub(crate) async fn shutdown(&self) { self.otlp.shutdown().await; }
+
+    pub(crate) fn connection_closed(&self, connection_id: &str) {
+        if let Some(instance) = self.manager.connection_closed(connection_id) {
+            self.prometheus.remove_instance(instance);
+        }
+    }
 }

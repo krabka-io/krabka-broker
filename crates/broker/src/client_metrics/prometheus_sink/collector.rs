@@ -13,7 +13,15 @@ use {
         sync::Mutex,
         time::{Duration, Instant},
     },
+    uuid::Uuid,
 };
+
+/// Hard ceilings keep the retained snapshot deterministic even when clients
+/// reconnect with fresh instance ids. These include existing series updates;
+/// new series beyond either ceiling are discarded atomically.
+pub(crate) const MAX_RETAINED_SERIES: usize = 10_000;
+pub(crate) const MAX_RETAINED_SERIES_PER_CLIENT: usize = 1_000;
+pub(crate) const MAX_RETAINED_SERIES_PER_INSTANCE: usize = 500;
 
 #[derive(Debug)]
 pub(super) struct StoredPoint {
@@ -39,7 +47,9 @@ pub(crate) struct ClientMetricsCollector {
 }
 
 impl ClientMetricsCollector {
-    pub(super) fn is_live(age: Duration, ttl: Duration) -> bool { age < ttl }
+    pub(super) fn is_live(age: Duration, ttl: Duration) -> bool {
+        age < ttl
+    }
 
     pub(crate) fn new(ttl: Duration) -> Self {
         Self {
@@ -57,6 +67,15 @@ impl ClientMetricsCollector {
             guard.clear();
             return;
         }
+        guard.retain(|_, sp| Self::is_live(now.duration_since(sp.at), self.ttl));
+        let mut client_counts = HashMap::<String, usize>::new();
+        let mut instance_counts = HashMap::<String, usize>::new();
+        for key in guard.keys() {
+            *client_counts.entry(key.client_id.clone()).or_default() += 1;
+            *instance_counts
+                .entry(key.client_instance_id.clone())
+                .or_default() += 1;
+        }
         for p in points {
             let key = SeriesKey {
                 metric: p.metric.clone(),
@@ -64,6 +83,23 @@ impl ClientMetricsCollector {
                 client_id: p.client_id.clone(),
                 attributes: p.attributes.clone(),
             };
+            if !guard.contains_key(&key) {
+                let client_count = client_counts.get(&key.client_id).copied().unwrap_or(0);
+                let instance_count = instance_counts
+                    .get(&key.client_instance_id)
+                    .copied()
+                    .unwrap_or(0);
+                if guard.len() >= MAX_RETAINED_SERIES
+                    || client_count >= MAX_RETAINED_SERIES_PER_CLIENT
+                    || instance_count >= MAX_RETAINED_SERIES_PER_INSTANCE
+                {
+                    continue;
+                }
+                *client_counts.entry(key.client_id.clone()).or_default() += 1;
+                *instance_counts
+                    .entry(key.client_instance_id.clone())
+                    .or_default() += 1;
+            }
             if let Some(start) = p.delta_start
                 && let Some(stored) = guard.get_mut(&key)
                 && stored
@@ -75,14 +111,26 @@ impl ClientMetricsCollector {
                 stored.at = now;
                 continue;
             }
-            guard.insert(key, StoredPoint {
-                attributes: p.attributes.clone(),
-                value: p.value.clone(),
-                delta_start: p.delta_start,
-                at: now,
-            });
+            guard.insert(
+                key,
+                StoredPoint {
+                    attributes: p.attributes.clone(),
+                    value: p.value.clone(),
+                    delta_start: p.delta_start,
+                    at: now,
+                },
+            );
         }
-        guard.retain(|_, sp| Self::is_live(now.duration_since(sp.at), self.ttl));
+    }
+
+    /// Drops every retained series belonging to a disconnected client
+    /// instance, preventing reconnect churn from occupying the cache until TTL.
+    pub(crate) fn remove_instance(&self, instance: Uuid) {
+        let instance = instance.to_string();
+        self.points
+            .lock()
+            .expect("prom sink mutex poisoned")
+            .retain(|key, _| key.client_instance_id != instance);
     }
 
     /// The count of points that are not stale. This method also removes the
@@ -102,6 +150,28 @@ mod tests {
         super::{super::test_support::data_point, *},
         std::time::Duration,
     };
+
+    #[test]
+    fn attacker_controlled_series_are_bounded_and_disconnect_releases_them() {
+        let sink = ClientMetricsCollector::new(Duration::from_mins(1));
+        let instance = Uuid::from_u128(7);
+        let points = (0..MAX_RETAINED_SERIES_PER_INSTANCE + 100)
+            .map(|index| {
+                data_point()
+                    .metric(format!("attacker_metric_{index}"))
+                    .client_instance_id(instance.to_string())
+                    .client_id("attacker".into())
+                    .value(PointValue::Gauge(index as f64))
+                    .call()
+            })
+            .collect::<Vec<_>>();
+
+        sink.ingest(&points);
+        assert2::assert!(sink.live_point_count() == MAX_RETAINED_SERIES_PER_INSTANCE);
+
+        sink.remove_instance(instance);
+        assert2::assert!(sink.live_point_count() == 0);
+    }
 
     #[test]
     fn delta_points_accumulate_per_series() {

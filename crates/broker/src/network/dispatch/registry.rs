@@ -184,6 +184,7 @@ async fn dispatch_registered_bytes(
         }
         DispatchKind::Telemetry(handler) => {
             let ctx = TelemetryContext::new(
+                principal_or_anonymous(auth),
                 connection_id,
                 peer,
                 parsed.client_id.unwrap_or(""),

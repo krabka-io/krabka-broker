@@ -69,7 +69,9 @@ impl RequestByteBudget {
     /// The permits not currently spent. Test-only: what production code cares
     /// about is whether a frame is admitted, not how much room is left.
     #[cfg(test)]
-    pub(crate) fn available(&self) -> usize { self.permits.available_permits() }
+    pub(crate) fn available(&self) -> usize {
+        self.permits.available_permits()
+    }
 }
 
 #[cfg(test)]
@@ -750,9 +752,6 @@ async fn serve_connection_stream<S>(
     // KIP-714: Kafka registers `ClientMetricsManager.connectionDisconnectListener`
     // with the socket server, which drops the client instance that this
     // connection created.
-    broker
-        .client_metrics
-        .manager
-        .connection_closed(&connection_id);
+    broker.client_metrics.connection_closed(&connection_id);
     tracing::debug!("connection closed");
 }

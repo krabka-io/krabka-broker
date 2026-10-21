@@ -10,6 +10,13 @@
 
 use crate::client_metrics::prometheus_sink::{DataPoint, PointValue};
 
+const MAX_POINTS_PER_PUSH: usize = 1_000;
+const MAX_ATTRIBUTES_PER_POINT: usize = 32;
+const MAX_METRIC_NAME_BYTES: usize = 256;
+const MAX_ATTRIBUTE_KEY_BYTES: usize = 256;
+const MAX_ATTRIBUTE_VALUE_BYTES: usize = 1_024;
+const MAX_HISTOGRAM_BUCKETS: usize = 128;
+
 /// Flattens an OTLP `MetricsData` into Prometheus data points. Sum and Gauge
 /// become numbers, and a Histogram becomes count and sum gauges. The function
 /// is best-effort and skips unknown shapes.
@@ -17,7 +24,7 @@ pub(super) fn flatten_for_prometheus(
     md: &opentelemetry_proto::tonic::metrics::v1::MetricsData,
     instance: &str,
     client_id: &str,
-) -> Vec<DataPoint> {
+) -> Result<Vec<DataPoint>, ()> {
     use opentelemetry_proto::tonic::{
         common::v1::{AnyValue, KeyValue, any_value::Value as AnyValueKind},
         metrics::v1::{AggregationTemporality, metric::Data, number_data_point::Value},
@@ -44,7 +51,10 @@ pub(super) fn flatten_for_prometheus(
             | AnyValueKind::StringValueStrindex(_) => None,
         }
     };
-    let attributes = |sets: &[&[KeyValue]]| {
+    let attributes = |sets: &[&[KeyValue]]| -> Result<Vec<(String, String)>, ()> {
+        if sets.iter().map(|set| set.len()).sum::<usize>() > MAX_ATTRIBUTES_PER_POINT {
+            return Err(());
+        }
         let mut labels = sets
             .iter()
             .flat_map(|set| set.iter())
@@ -53,37 +63,46 @@ pub(super) fn flatten_for_prometheus(
                 if matches!(name.as_str(), "client_id" | "client_instance_id") {
                     return None;
                 }
-                Some((name, attribute_value(attribute.value.as_ref()?)?))
+                let value = attribute_value(attribute.value.as_ref()?)?;
+                (attribute.key.len() <= MAX_ATTRIBUTE_KEY_BYTES
+                    && value.len() <= MAX_ATTRIBUTE_VALUE_BYTES)
+                    .then_some((name, value))
             })
             .collect::<Vec<_>>();
         labels.sort();
         labels.dedup_by(|left, right| left.0 == right.0);
-        labels
+        Ok(labels)
     };
     for rm in &md.resource_metrics {
         for sm in &rm.scope_metrics {
             for m in &sm.metrics {
-                let point = |point_attributes: &[KeyValue], value, delta_start| DataPoint {
-                    metric: m.name.clone(),
-                    client_instance_id: instance.to_string(),
-                    client_id: client_id.to_string(),
-                    attributes: attributes(&[
-                        rm.resource
-                            .as_ref()
-                            .map_or(&[], |r| r.attributes.as_slice()),
-                        sm.scope.as_ref().map_or(&[], |s| s.attributes.as_slice()),
-                        point_attributes,
-                    ]),
-                    value,
-                    delta_start,
-                };
+                if m.name.is_empty() || m.name.len() > MAX_METRIC_NAME_BYTES {
+                    return Err(());
+                }
+                let point =
+                    |point_attributes: &[KeyValue], value, delta_start| -> Result<DataPoint, ()> {
+                        Ok(DataPoint {
+                            metric: m.name.clone(),
+                            client_instance_id: instance.to_string(),
+                            client_id: client_id.to_string(),
+                            attributes: attributes(&[
+                                rm.resource
+                                    .as_ref()
+                                    .map_or(&[], |r| r.attributes.as_slice()),
+                                sm.scope.as_ref().map_or(&[], |s| s.attributes.as_slice()),
+                                point_attributes,
+                            ])?,
+                            value,
+                            delta_start,
+                        })
+                    };
                 let mut numbers =
                     |points: &[opentelemetry_proto::tonic::metrics::v1::NumberDataPoint],
                      monotonic: bool,
                      delta: bool| {
                         out.extend(points.iter().filter_map(|dp| {
                             let value = num(dp.value.as_ref()?);
-                            Some(point(
+                            point(
                                 &dp.attributes,
                                 if monotonic {
                                     PointValue::Counter(value)
@@ -91,7 +110,8 @@ pub(super) fn flatten_for_prometheus(
                                     PointValue::Gauge(value)
                                 },
                                 delta.then_some(dp.start_time_unix_nano),
-                            ))
+                            )
+                            .ok()
                         }));
                     };
                 match &m.data {
@@ -103,6 +123,11 @@ pub(super) fn flatten_for_prometheus(
                     ),
                     Some(Data::Histogram(h)) => {
                         for dp in &h.data_points {
+                            if dp.explicit_bounds.len() > MAX_HISTOGRAM_BUCKETS
+                                || dp.bucket_counts.len() > MAX_HISTOGRAM_BUCKETS + 1
+                            {
+                                return Err(());
+                            }
                             let Some(sum) = dp.sum else {
                                 continue;
                             };
@@ -124,15 +149,18 @@ pub(super) fn flatten_for_prometheus(
                                 },
                                 (h.aggregation_temporality == AggregationTemporality::Delta as i32)
                                     .then_some(dp.start_time_unix_nano),
-                            ));
+                            )?);
                         }
                     }
                     _ => {}
                 }
+                if out.len() > MAX_POINTS_PER_PUSH {
+                    return Err(());
+                }
             }
         }
     }
-    out
+    Ok(out)
 }
 
 fn sanitize_prometheus_label(label: &str) -> String {
@@ -167,6 +195,21 @@ mod tests {
             resource::v1::Resource,
         },
     };
+
+    #[test]
+    fn flatten_rejects_resource_amplification_before_allocating_unbounded_series() {
+        let metric = Metric {
+            name: "attacker.metric".into(),
+            data: Some(metric::Data::Gauge(Gauge {
+                data_points: (0..=MAX_POINTS_PER_PUSH)
+                    .map(|value| number_point(number_data_point::Value::AsInt(value as i64)))
+                    .collect(),
+            })),
+            ..Default::default()
+        };
+
+        assert!(flatten_for_prometheus(&metrics_data(vec![metric]), "i", "c").is_err());
+    }
 
     #[test]
     fn flatten_for_prometheus_preserves_gauge_sum_and_histogram_points() {
@@ -211,7 +254,7 @@ mod tests {
             },
         ]);
 
-        let points = flatten_for_prometheus(&md, "instance-1", "client-a");
+        let points = flatten_for_prometheus(&md, "instance-1", "client-a").unwrap();
 
         assert!(points.len() == 3, "{points:?}");
         check!(
@@ -279,7 +322,7 @@ mod tests {
             }],
         };
 
-        let points = flatten_for_prometheus(&md, "instance", "client");
+        let points = flatten_for_prometheus(&md, "instance", "client").unwrap();
 
         assert!(
             points[0].attributes

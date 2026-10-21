@@ -256,7 +256,9 @@ pub(crate) const ACCEPTED_COMPRESSION_TYPES: [i8; 4] = [4, 3, 1, 2];
 
 /// Kafka's `Uuid.RESERVED`: the zero UUID and `Uuid.ONE_UUID`, which no
 /// client instance may use.
-fn is_reserved_instance_id(id: Uuid) -> bool { id.is_nil() || id == Uuid::from_u128(1) }
+fn is_reserved_instance_id(id: Uuid) -> bool {
+    id.is_nil() || id == Uuid::from_u128(1)
+}
 
 impl ClientMetricsManager {
     pub(crate) fn new(telemetry_max: ByteSize, default_interval_ms: i32) -> Self {
@@ -274,11 +276,15 @@ impl ClientMetricsManager {
 
     /// The KIP-714 `telemetry.max.bytes` ceiling: the largest compressed push,
     /// and the largest payload a push may decompress to.
-    pub(crate) fn telemetry_max(&self) -> ByteSize { self.telemetry_max }
+    pub(crate) fn telemetry_max(&self) -> ByteSize {
+        self.telemetry_max
+    }
 
     /// The KIP-714 `PushTelemetry` size ceiling in the `int32` byte form the
     /// wire response carries.
-    pub(crate) fn telemetry_max_bytes(&self) -> i32 { self.telemetry_max.bytes_i32() }
+    pub(crate) fn telemetry_max_bytes(&self) -> i32 {
+        self.telemetry_max.bytes_i32()
+    }
 
     /// Kafka's `processGetTelemetrySubscriptionRequest`. A zero
     /// `attrs.client_instance_id` asks for a new id, and the assignment
@@ -424,11 +430,13 @@ impl ClientMetricsManager {
     /// connection that created an instance drops the instance, so a client
     /// that reconnects starts from a new one and its first
     /// `GetTelemetrySubscriptions` passes the throttle check.
-    pub(crate) fn connection_closed(&self, connection_id: &str) {
+    pub(crate) fn connection_closed(&self, connection_id: &str) -> Option<Uuid> {
         let mut state = self.state.lock().expect("client-metrics mutex poisoned");
-        if let Some(id) = state.connections.remove(connection_id) {
+        let id = state.connections.remove(connection_id);
+        if let Some(id) = id {
             state.instances.remove(&id);
         }
+        id
     }
 }
 
@@ -963,16 +971,22 @@ mod tests {
     fn get_answers_with_the_instance_id_it_used() {
         let m = manager();
         let img = MetadataImage::new(Uuid::nil());
-        let fresh = expect_assignment(m.get_subscription(&img, &ClientAttributes {
-            client_instance_id: Uuid::nil(),
-            ..attrs()
-        }));
+        let fresh = expect_assignment(m.get_subscription(
+            &img,
+            &ClientAttributes {
+                client_instance_id: Uuid::nil(),
+                ..attrs()
+            },
+        ));
         assert!(!fresh.client_instance_id.is_nil());
         for id in [Uuid::from_u128(1), Uuid::from_u128(42)] {
-            let assigned = expect_assignment(m.get_subscription(&img, &ClientAttributes {
-                client_instance_id: id,
-                ..attrs()
-            }));
+            let assigned = expect_assignment(m.get_subscription(
+                &img,
+                &ClientAttributes {
+                    client_instance_id: id,
+                    ..attrs()
+                },
+            ));
             assert!(assigned.client_instance_id == id);
         }
     }
