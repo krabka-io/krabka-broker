@@ -1,0 +1,38 @@
+# Default-deny the broker pods, then open each endpoint only to its intended
+# callers. Namespace-local applications opt into Kafka access with the label
+# `krabka.io/client=true`; monitoring pods use `krabka.io/monitor=true`.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: krabka-ingress
+  labels:
+    app.kubernetes.io/name: krabka
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: krabka
+  policyTypes: [Ingress]
+  ingress:
+    # Controller and inter-broker traffic is broker-to-broker only.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: krabka
+      ports:
+        - {protocol: TCP, port: 9092}
+        - {protocol: TCP, port: 9093}
+    # Client access is an explicit namespace-local opt-in.
+    - from:
+        - podSelector:
+            matchLabels:
+              krabka.io/client: "true"
+      ports:
+        - {protocol: TCP, port: 9092}
+    # Metrics are not part of either Service and are scrapeable only by
+    # explicitly labelled monitoring pods in this namespace.
+    - from:
+        - podSelector:
+            matchLabels:
+              krabka.io/monitor: "true"
+      ports:
+        - {protocol: TCP, port: 9404}

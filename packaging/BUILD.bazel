@@ -252,3 +252,18 @@ image_push(
     registry = "ghcr.io",
     repository = "krabka-io/krabka-broker",
 )
+
+# Static security contract for the reference Kubernetes deployment. This stays
+# daemon-free and catches regressions before an image or cluster is available.
+sh_test(
+    name = "k8s_security_test",
+    size = "small",
+    srcs = ["k8s/validate-security-test.sh"],
+    data = [
+        "k8s/configmap.yaml",
+        "k8s/networkpolicy.yaml",
+        "k8s/service.yaml",
+        "k8s/statefulset.yaml",
+        "k8s/validate-security.py",
+    ],
+)
