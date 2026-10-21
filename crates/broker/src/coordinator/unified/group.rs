@@ -21,7 +21,7 @@ pub(crate) use crate::coordinator::unified::{
 };
 use {
     crate::codes::{ILLEGAL_GENERATION, STALE_MEMBER_EPOCH, UNKNOWN_MEMBER_ID},
-    std::collections::{HashMap, HashSet},
+    std::collections::{HashMap, HashSet, VecDeque},
 };
 
 /// Which protocol the members of a [`Group`] speak. The variant carries that
@@ -74,6 +74,30 @@ pub struct CoordinatorGroup {
     /// Grouping by producer is what lets one producer's marker resolve its own
     /// keys while another producer's in-flight transaction keeps its own.
     pending_txn_offsets: HashMap<i64, ProducerTxnOffsets>,
+    /// `OffsetCommit` writes that are in the offsets log but that the high
+    /// watermark has not covered yet, in log order.
+    ///
+    /// Kafka's `CoordinatorRuntime` applies a write to the shard's timeline
+    /// when it appends it, serves later writes from that newest state, and
+    /// serves a read such as `OffsetFetch` from the state as of the last
+    /// committed offset. `committed_offsets` is that last committed state,
+    /// and this queue is what the newest state adds to it: a write path that
+    /// decides from the offsets (the retention sweep, `DeleteGroups`, topic
+    /// deletion) reads both through
+    /// [`latest_offsets`](Self::latest_offsets).
+    pending_commits: VecDeque<PendingCommit>,
+}
+
+/// One `OffsetCommit` write in the offsets log that is not committed yet.
+#[derive(Debug)]
+struct PendingCommit {
+    /// The offset after the write's last record.
+    end_offset: i64,
+    /// The leader epoch it was appended under.
+    leader_epoch: i32,
+    /// The offsets it commits, less any key a later write in the log has
+    /// already superseded.
+    entries: Vec<((String, i32), OffsetEntry)>,
 }
 
 /// One producer's KIP-447 state on this group: the keys of its open
@@ -141,6 +165,7 @@ impl CoordinatorGroup {
             group_id,
             committed_offsets: HashMap::new(),
             pending_txn_offsets: HashMap::new(),
+            pending_commits: VecDeque::new(),
             empty_since_ms: None,
         }
     }
@@ -153,6 +178,7 @@ impl CoordinatorGroup {
             group_id,
             committed_offsets: HashMap::new(),
             pending_txn_offsets: HashMap::new(),
+            pending_commits: VecDeque::new(),
             empty_since_ms: None,
         }
     }
@@ -171,6 +197,7 @@ impl CoordinatorGroup {
             kind,
             committed_offsets,
             pending_txn_offsets: HashMap::new(),
+            pending_commits: VecDeque::new(),
             empty_since_ms: None,
         }
     }
@@ -314,12 +341,120 @@ impl CoordinatorGroup {
     /// Kafka's `OffsetMetadataManager.replay` does the same for a tombstone:
     /// it removes the offset and the key's pending transactional offsets.
     pub fn drop_offsets(&mut self, keys: &[(String, i32)]) {
+        self.remove_committed(keys);
         for key in keys {
-            self.committed_offsets.remove(key);
             for producer in self.pending_txn_offsets.values_mut() {
                 producer.keys.remove(key);
             }
         }
+    }
+
+    /// Removes `keys` from the committed offsets and from every commit that
+    /// is still waiting for the high watermark, after their tombstones are
+    /// durable.
+    ///
+    /// The tombstones were appended after those commits, so they are the
+    /// newer write for the keys whether or not the commits ever complete.
+    pub fn remove_committed(&mut self, keys: &[(String, i32)]) {
+        for key in keys {
+            self.committed_offsets.remove(key);
+        }
+        self.supersede_pending_commits(i64::MAX, |key| keys.contains(key));
+    }
+
+    /// Stages an `OffsetCommit` that is in the offsets log at `end_offset`,
+    /// under `leader_epoch`, until the high watermark covers it.
+    ///
+    /// A commit of an earlier epoch that is still staged cannot be published
+    /// any more: its own wait fails once the epoch ends, and a commit of the
+    /// new epoch proves nothing about it, because the leadership may have
+    /// moved away and back and truncated it. It is dropped here.
+    pub fn stage_commit(
+        &mut self,
+        end_offset: i64,
+        leader_epoch: i32,
+        entries: Vec<((String, i32), OffsetEntry)>,
+    ) {
+        self.pending_commits
+            .retain(|pending| pending.leader_epoch == leader_epoch);
+        self.pending_commits.push_back(PendingCommit {
+            end_offset,
+            leader_epoch,
+            entries,
+        });
+    }
+
+    /// Publishes, in log order, every staged commit of `leader_epoch` that
+    /// ends at or below `end_offset`: the high watermark has covered a write
+    /// of that epoch ending there, so it covers them too.
+    ///
+    /// A commit whose own wait timed out stays staged, and is published here
+    /// once a later write proves it committed after all, as Kafka makes a
+    /// timed-out write visible when the high watermark passes it.
+    pub fn publish_commits_through(&mut self, end_offset: i64, leader_epoch: i32) {
+        while let Some(pending) = self.pending_commits.front()
+            && pending.leader_epoch == leader_epoch
+            && pending.end_offset <= end_offset
+        {
+            if let Some(pending) = self.pending_commits.pop_front() {
+                self.committed_offsets.extend(pending.entries);
+            }
+        }
+    }
+
+    /// Drops every staged commit: the leadership term they were written in
+    /// ended, so none of them may be in the log of the next leader.
+    pub fn abandon_pending_commits(&mut self) { self.pending_commits.clear(); }
+
+    /// `true` while a commit waits for the high watermark.
+    #[must_use]
+    pub fn has_pending_commits(&self) -> bool { !self.pending_commits.is_empty() }
+
+    /// Removes the keys `superseded` holds from every staged commit that ends
+    /// at or below `written_at`, the log position of a newer write for them
+    /// that is already applied.
+    fn supersede_pending_commits(
+        &mut self,
+        written_at: i64,
+        superseded: impl Fn(&(String, i32)) -> bool,
+    ) {
+        for pending in &mut self.pending_commits {
+            if pending.end_offset <= written_at {
+                pending.entries.retain(|(key, _)| !superseded(key));
+            }
+        }
+    }
+
+    /// Publishes the offsets a transaction's commit marker at offsets-log
+    /// position `resolved_through` commits.
+    ///
+    /// A plain commit staged below the marker is older in the log, so the
+    /// marker's offsets supersede it for the keys they share; one staged
+    /// above the marker is newer, and still wins when it is published.
+    pub fn publish_txn_offsets(
+        &mut self,
+        resolved_through: i64,
+        committed: Vec<((String, i32), OffsetEntry)>,
+    ) {
+        self.supersede_pending_commits(resolved_through, |key| {
+            committed.iter().any(|(own, _)| own == key)
+        });
+        self.committed_offsets.extend(committed);
+    }
+
+    /// The newest offset of every key: the committed offsets with the staged
+    /// commits applied over them in log order. This is the state Kafka's
+    /// write operations read.
+    #[must_use]
+    pub fn latest_offsets(&self) -> HashMap<&(String, i32), &OffsetEntry> {
+        self.committed_offsets
+            .iter()
+            .chain(
+                self.pending_commits
+                    .iter()
+                    .flat_map(|pending| pending.entries.iter().map(|(key, entry)| (key, entry))),
+            )
+            .collect()
     }
 
     /// Kafka's `validateOffsetFetch` for the member fields of an
@@ -378,7 +513,7 @@ impl CoordinatorGroup {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check};
+    use {super::*, crate::coordinator::test_support::offset_entry, assert2::check};
 
     #[test]
     fn classic_container_exposes_classic_state_only() {
@@ -592,5 +727,73 @@ mod tests {
         // Another producer's marker cannot resolve it.
         g.resolve_pending_txn_offsets(9, 70);
         check!(g.offsets().pending_txn == HashSet::from([("orders".to_string(), 1)]));
+    }
+
+    fn key(partition: i32) -> (String, i32) { ("t".to_string(), partition) }
+
+    fn commits(entries: &[(i32, i64)]) -> Vec<((String, i32), OffsetEntry)> {
+        entries
+            .iter()
+            .map(|&(partition, offset)| (key(partition), offset_entry(offset)))
+            .collect()
+    }
+
+    fn committed(group: &CoordinatorGroup) -> HashMap<(String, i32), OffsetEntry> {
+        group.committed_offsets.clone()
+    }
+
+    /// Staged commits reach the committed offsets in log order only, and a
+    /// newer write for a key that lands first — a transaction's commit marker
+    /// or a tombstone — is not overwritten by an older commit that finishes
+    /// late.
+    #[test]
+    fn staged_commits_publish_in_log_order() {
+        let mut group = CoordinatorGroup::new_classic("g");
+        group.stage_commit(1, 0, commits(&[(0, 5)]));
+        group.stage_commit(2, 0, commits(&[(0, 9), (1, 1)]));
+        check!(committed(&group) == HashMap::new());
+        check!(
+            group.latest_offsets()
+                == HashMap::from([(&key(0), &offset_entry(9)), (&key(1), &offset_entry(1))])
+        );
+
+        // The later write commits first: both are published, in log order.
+        group.publish_commits_through(2, 0);
+        check!(committed(&group) == commits(&[(0, 9), (1, 1)]).into_iter().collect());
+        // The earlier write's own wait ends afterwards and changes nothing.
+        group.publish_commits_through(1, 0);
+        check!(committed(&group) == commits(&[(0, 9), (1, 1)]).into_iter().collect());
+
+        // A commit below a transaction's marker loses the keys the marker
+        // commits; one above it keeps them.
+        group.stage_commit(3, 0, commits(&[(0, 10), (1, 2)]));
+        group.stage_commit(5, 0, commits(&[(1, 4)]));
+        group.publish_txn_offsets(4, commits(&[(0, 20), (1, 20)]));
+        group.publish_commits_through(5, 0);
+        check!(committed(&group) == commits(&[(0, 20), (1, 4)]).into_iter().collect());
+
+        // A tombstone supersedes a staged commit of its key.
+        group.stage_commit(6, 0, commits(&[(0, 30), (1, 30)]));
+        group.drop_offsets(&[key(0)]);
+        group.publish_commits_through(6, 0);
+        check!(committed(&group) == commits(&[(1, 30)]).into_iter().collect());
+        check!(!group.has_pending_commits());
+    }
+
+    /// A commit of an earlier leader epoch is never published by a write of a
+    /// later one, which proves nothing about it.
+    #[test]
+    fn a_new_epoch_drops_commits_staged_under_the_old_one() {
+        let mut group = CoordinatorGroup::new_classic("g");
+        group.stage_commit(1, 0, commits(&[(0, 5)]));
+        group.stage_commit(2, 1, commits(&[(1, 7)]));
+        group.publish_commits_through(2, 1);
+        check!(committed(&group) == commits(&[(1, 7)]).into_iter().collect());
+        check!(!group.has_pending_commits());
+
+        group.stage_commit(3, 1, commits(&[(0, 9)]));
+        group.abandon_pending_commits();
+        group.publish_commits_through(3, 1);
+        check!(committed(&group) == commits(&[(1, 7)]).into_iter().collect());
     }
 }

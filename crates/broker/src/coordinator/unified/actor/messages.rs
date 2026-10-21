@@ -111,16 +111,22 @@ pub enum GroupActorMessage {
     },
 
     // ── committed offsets (protocol-agnostic; on `Group.committed_offsets`) ──
-    /// Append one `OffsetCommit`'s records to `__consumer_offsets` and apply
-    /// them to the group, both inside the actor.
+    /// Append one `OffsetCommit`'s records to `__consumer_offsets` and stage
+    /// them in the group, inside the actor; publish them and reply once the
+    /// high watermark covers the write.
     ///
     /// The append cannot happen outside the mailbox. The KIP-211 sweep decides
-    /// what to tombstone from the in-memory map and appends its tombstones in
-    /// the same turn, so a commit that wrote its record first and queued the
-    /// in-memory update afterwards could have the sweep read the stale map,
-    /// tombstone the offset it had just acknowledged, and stop the actor
-    /// before the update was ever applied. One message keeps the two appends
-    /// in one order.
+    /// what to tombstone from the group's newest offsets and appends its
+    /// tombstones in the same turn, so a commit that wrote its record first and
+    /// queued the in-memory update afterwards could have the sweep read a
+    /// stale map, tombstone the offset it had just acknowledged, and stop the
+    /// actor before the update was ever applied. One message keeps the two
+    /// appends in one order.
+    ///
+    /// The wait for the high watermark is not part of the turn: the actor
+    /// serves other messages meanwhile, and `FetchOffsets` answers with the
+    /// offsets the group last acknowledged, as Kafka's `CoordinatorRuntime`
+    /// does. See `pending_commits`.
     CommitOffsets {
         batch: RecordBatch,
         entries: Vec<((String, i32), OffsetEntry)>,

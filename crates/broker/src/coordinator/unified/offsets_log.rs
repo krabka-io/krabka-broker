@@ -10,6 +10,7 @@ use {
         partition_registry::PartitionRegistry,
     },
     async_trait::async_trait,
+    futures_util::future::BoxFuture,
     krabka_ids::{LeaderEpoch, Offset, PartitionIndex},
     krabka_metadata::{MetadataImage, NodeId},
     krabka_protocol::records::RecordBatch,
@@ -29,7 +30,64 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[async_trait]
 pub trait OffsetsLog: Send + Sync + std::fmt::Debug {
-    async fn append(&self, group_id: &str, batch: RecordBatch) -> Result<(), BrokerError>;
+    /// Append `batch` to the `__consumer_offsets` partition of `group_id`, and
+    /// return once it is in this broker's log, with the write's commit still
+    /// to come.
+    ///
+    /// This is the append half of a `CoordinatorRuntime` write: the runtime
+    /// applies the write to the shard's state as soon as it is appended, and
+    /// completes the operation only when the high watermark passes it. A
+    /// caller that must not wait for the second half in the meantime awaits
+    /// [`PendingWrite::committed`] elsewhere.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`append_as_leader`] for the production log.
+    async fn append_pending(
+        &self,
+        group_id: &str,
+        batch: RecordBatch,
+    ) -> Result<PendingWrite, BrokerError>;
+
+    /// Append `batch` and wait until the write is committed.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`append_pending`](Self::append_pending), and those of
+    /// [`PendingWrite::committed`].
+    async fn append(&self, group_id: &str, batch: RecordBatch) -> Result<(), BrokerError> {
+        self.append_pending(group_id, batch).await?.committed.await
+    }
+}
+
+/// A group coordinator write that is in the log of its `__consumer_offsets`
+/// partition and that may not be committed yet.
+#[derive(derive_more::Debug)]
+pub struct PendingWrite {
+    /// The offset after the write's last record. The high watermark covers
+    /// the write once it reaches this offset.
+    pub end_offset: i64,
+    /// The leader epoch the write was appended under. Two writes of one epoch
+    /// sit in the log in the order they were appended, so the commit of the
+    /// later one proves the earlier one committed too.
+    pub leader_epoch: i32,
+    /// Completes when the high watermark covers the write while the epoch
+    /// still holds, and fails as [`LeaderAppend::committed`] does: with
+    /// `NOT_COORDINATOR` when the term ends first, and with
+    /// `COORDINATOR_NOT_AVAILABLE` after the write timeout. It borrows
+    /// nothing, so it may be awaited outside the turn that appended it.
+    #[debug(skip)]
+    pub committed: BoxFuture<'static, Result<(), BrokerError>>,
+}
+
+/// `true` when `error` is a write that timed out waiting for the high
+/// watermark: the record stays in the log and may still commit.
+#[must_use]
+pub fn write_timed_out(error: &BrokerError) -> bool {
+    matches!(error, BrokerError::CoordinatorWriteUncommitted {
+        code: codes::COORDINATOR_NOT_AVAILABLE,
+        ..
+    })
 }
 
 /// Resolves the group-id's live `__consumer_offsets` partition at every
@@ -68,17 +126,24 @@ impl ProductionOffsetsLog {
 
 #[async_trait]
 impl OffsetsLog for ProductionOffsetsLog {
-    async fn append(&self, group_id: &str, batch: RecordBatch) -> Result<(), BrokerError> {
+    async fn append_pending(
+        &self,
+        group_id: &str,
+        batch: RecordBatch,
+    ) -> Result<PendingWrite, BrokerError> {
         let partition_id = partition_for_group(&self.controller.current_image(), group_id);
-        append_as_leader(
+        let append = append_as_leader(
             (&self.partitions, &*self.controller, self.node_id),
             partition_id,
             batch,
             None,
         )
-        .await?
-        .committed()
-        .await
+        .await?;
+        Ok(PendingWrite {
+            end_offset: append.end_offset.0,
+            leader_epoch: append.term.epoch.get(),
+            committed: Box::pin(append.committed()),
+        })
     }
 }
 
@@ -277,10 +342,11 @@ pub(crate) fn write_failure_code(error: &BrokerError) -> i16 {
 
 pub mod fake {
     use {
-        super::{BrokerError, OFFSETS_TOPIC, OffsetsLog, async_trait},
-        crate::coordinator::unified::persistence_next_gen::NextGenKey,
+        super::{BrokerError, OFFSETS_TOPIC, OffsetsLog, PendingWrite, async_trait},
+        crate::{codes, coordinator::unified::persistence_next_gen::NextGenKey},
         krabka_protocol::records::RecordBatch,
-        tokio::sync::Mutex,
+        std::sync::{Arc, PoisonError},
+        tokio::sync::{Mutex, Notify},
     };
 
     /// Which classic metadata operation a test expects in the append log.
@@ -296,15 +362,70 @@ pub mod fake {
         pub fail_next: std::sync::atomic::AtomicBool,
         /// The error the next append fails with, ahead of `fail_next`.
         pub fail_next_with: std::sync::Mutex<Option<BrokerError>>,
+        /// The simulated high watermark, which every append moves past itself
+        /// unless a test holds it back.
+        commit_gate: Arc<CommitGate>,
+    }
+
+    /// The simulated replication of [`InMemoryOffsetsLog`]. Each appended
+    /// batch takes one offset, so a batch's end offset is the log's length
+    /// after it.
+    #[derive(Debug, Default)]
+    struct CommitGate {
+        state: std::sync::Mutex<GateState>,
+        changed: Notify,
+    }
+
+    #[derive(Debug, Default)]
+    struct GateState {
+        /// While `true`, an append does not move the high watermark.
+        held: bool,
+        log_end: i64,
+        high_watermark: i64,
+        /// Writes that end at or below it and are not committed fail as a
+        /// timed-out write does.
+        timed_out_through: i64,
+    }
+
+    impl CommitGate {
+        fn update(&self, change: impl FnOnce(&mut GateState)) {
+            change(&mut self.state.lock().unwrap_or_else(PoisonError::into_inner));
+            self.changed.notify_waiters();
+        }
+
+        async fn committed(&self, end_offset: i64) -> Result<(), BrokerError> {
+            loop {
+                let changed = self.changed.notified();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
+                {
+                    let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+                    if state.high_watermark >= end_offset {
+                        return Ok(());
+                    }
+                    if state.timed_out_through >= end_offset {
+                        return Err(BrokerError::CoordinatorWriteUncommitted {
+                            partition: 0,
+                            code: codes::COORDINATOR_NOT_AVAILABLE,
+                        });
+                    }
+                }
+                changed.await;
+            }
+        }
     }
 
     #[async_trait]
     impl OffsetsLog for InMemoryOffsetsLog {
-        async fn append(&self, _group_id: &str, batch: RecordBatch) -> Result<(), BrokerError> {
+        async fn append_pending(
+            &self,
+            _group_id: &str,
+            batch: RecordBatch,
+        ) -> Result<PendingWrite, BrokerError> {
             let failure = self
                 .fail_next_with
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .take();
             if let Some(error) = failure {
                 return Err(error);
@@ -318,12 +439,45 @@ pub mod fake {
                     partition: 0,
                 });
             }
-            self.appended.lock().await.push(batch);
-            Ok(())
+            let mut appended = self.appended.lock().await;
+            appended.push(batch);
+            let end_offset = i64::try_from(appended.len()).unwrap_or(i64::MAX);
+            drop(appended);
+            self.commit_gate.update(|state| {
+                state.log_end = end_offset;
+                if !state.held {
+                    state.high_watermark = end_offset;
+                }
+            });
+            let gate = Arc::clone(&self.commit_gate);
+            Ok(PendingWrite {
+                end_offset,
+                leader_epoch: 0,
+                committed: Box::pin(async move { gate.committed(end_offset).await }),
+            })
         }
     }
 
     impl InMemoryOffsetsLog {
+        /// Keep the high watermark where it is: later appends stay in the log
+        /// uncommitted, as with a follower that stopped replicating.
+        pub fn hold_commits(&self) { self.commit_gate.update(|state| state.held = true); }
+
+        /// Move the high watermark to the end of the log and stop holding it.
+        pub fn release_commits(&self) {
+            self.commit_gate.update(|state| {
+                state.held = false;
+                state.high_watermark = state.log_end;
+            });
+        }
+
+        /// Time out every write in the log that is not committed yet, while
+        /// its records stay in the log.
+        pub fn time_out_uncommitted(&self) {
+            self.commit_gate
+                .update(|state| state.timed_out_through = state.log_end);
+        }
+
         /// Refuse the next append with the selected error, or the default failure.
         ///
         /// # Panics

@@ -32,6 +32,7 @@ mod member_state;
 mod messages;
 mod metadata_update;
 mod offset_delete;
+mod pending_commits;
 mod pending_records;
 mod persistence;
 mod regex_resolution;
@@ -68,6 +69,7 @@ pub use self::{
 use {
     self::{
         dispatch::handle_actor_message,
+        pending_commits::CommitWaits,
         tick::{handle_actor_tick, handle_classic_sync_expiry},
         waiters::complete_classic_rebalance,
     },
@@ -245,6 +247,7 @@ async fn run_actor(
         GroupKindTag::Consumer => CoordinatorGroup::new_consumer(group_id),
     };
     let mut parked = ParkedWaiters::default();
+    let mut commits = CommitWaits::default();
     // A single configured session-expiry tick, kind-agnostic. The tick arm
     // dispatches on the live `group.kind`, so the cadence must not depend on
     // the spawn-time kind. Expiry is a
@@ -303,9 +306,15 @@ async fn run_actor(
                 Some(msg) => {
                     let effective = effective_config(&config, &coordinator, &group.group_id);
                     let services = ActorServices { config: &effective, ..services };
-                    handle_actor_message(&mut group, &mut parked, services, msg).await
+                    handle_actor_message(&mut group, &mut parked, &mut commits, services, msg).await
                 }
             },
+            outcome = commits.next() => {
+                // An `OffsetCommit` appended in an earlier turn committed, or
+                // failed to. The mailbox kept running while it replicated.
+                commits.complete(&mut group, outcome);
+                true
+            }
             outcome = &mut tick => {
                 // A ticker that failed, or that cannot be armed again, takes
                 // this actor's session-expiry sweep with it. Report it as
@@ -375,6 +384,9 @@ async fn run_actor(
             break;
         }
     }
+    // No turn is left to publish a commit that is still replicating, so its
+    // client hears now rather than waiting on a dead actor.
+    commits.fail_all();
     // A sender can enqueue using a permit reserved before closure. Drain those
     // sends too, dropping their replies, so callers cannot wait on a dead actor.
     rx.close();
