@@ -242,7 +242,9 @@ pub(crate) async fn handle(
     // v6 answers `GROUP_ID_NOT_FOUND` (KIP-1319) and older versions
     // `ILLEGAL_GENERATION`.
     let existing = broker.group_coordinator.find(&req.group_id);
-    let streams = broker.group_coordinator.find_streams(&req.group_id);
+    // A streams actor that exited after a failed write is respawned, so it
+    // never refuses the commit with `UNKNOWN_SERVER_ERROR`.
+    let streams = broker.group_coordinator.find_live_streams(&req.group_id);
     if existing.is_none() && streams.is_none() && req.generation_id_or_member_epoch >= 0 {
         return respond(if version >= FIRST_TOPIC_ID_VERSION {
             codes::GROUP_ID_NOT_FOUND
@@ -279,6 +281,7 @@ pub(crate) async fn handle(
             validate_streams_group_commit(
                 &streams,
                 &req.member_id,
+                req.group_instance_id.as_deref(),
                 req.generation_id_or_member_epoch,
                 reserved
                     .iter()

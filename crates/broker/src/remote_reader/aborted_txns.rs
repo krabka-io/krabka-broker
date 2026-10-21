@@ -22,6 +22,11 @@ impl RemoteReader {
     /// Returns an empty `Vec` if no finished segment covers the offset or no
     /// available transaction index contains an overlapping entry. Missing
     /// optional indexes (`SegmentNotFound` from `fetch_index`) are skipped.
+    ///
+    /// The covering segment is resolved exactly as the data read
+    /// ([`RemoteReader::fetch_raw`]) resolves it, fallback included, so a
+    /// `read_committed` `Fetch` never gets batches the tier served without
+    /// the aborts that cover them.
     pub(crate) async fn aborted_transactions(
         &self,
         tp: &TopicIdPartition,
@@ -29,13 +34,10 @@ impl RemoteReader {
         from_offset: LogOffset,
         to_offset: LogOffset,
     ) -> Result<Vec<AbortedTxnEntry>, RemoteStorageError> {
-        let Some(metadata) =
-            self.rlmm
-                .remote_log_segment_metadata(tp, leader_epoch, from_offset)?
-        else {
-            return Ok(Vec::new());
-        };
-        if metadata.state() != RemoteLogSegmentState::CopySegmentFinished {
+        if self
+            .segment_covering(tp, leader_epoch, from_offset)?
+            .is_none()
+        {
             return Ok(Vec::new());
         }
 
@@ -78,7 +80,8 @@ mod tests {
     use {
         super::*,
         crate::remote_reader::test_support::{
-            ReaderFixture, empty_reader, populated_reader_with_abort, reader_fixture, tp,
+            ReaderFixture, empty_reader, nest_finished_segment, populated_reader_with_abort,
+            reader_fixture, reader_with_abort_in_segments_of, tp,
         },
         assert2::assert,
     };
@@ -101,6 +104,55 @@ mod tests {
             producer_id: pid,
         }];
         assert!(got == expected, "the copied abort is returned");
+    }
+
+    /// #1388: the abort lookup resolves the covering segment as the data read
+    /// does. A finished segment nested inside the first one, above its base,
+    /// shadows that segment in the RLMM's floor-by-start lookup for every
+    /// later offset. The data read then finds the first segment through its
+    /// list-scan fallback; the abort lookup took only the epoch-indexed lookup
+    /// and answered no aborts, so a `read_committed` consumer was handed the
+    /// aborted batches as committed.
+    #[tokio::test]
+    async fn the_abort_lookup_covers_every_offset_the_data_read_serves() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let remote_dir = tempfile::tempdir().unwrap();
+        // Segments of several batches each, so one can hold a nested segment.
+        let (reader, _log, (start, last, producer_id)) =
+            reader_with_abort_in_segments_of(log_dir.path(), remote_dir.path(), 768);
+        assert!(
+            last > start + 1,
+            "the first segment must outlast the nested one: {start}..={last}"
+        );
+        nest_finished_segment(&reader, start + 1, start + 1);
+
+        let abort = vec![AbortedTxnEntry {
+            start_offset: start,
+            last_offset: last,
+            producer_id,
+        }];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (offset, label) in [
+            (start, "the epoch-indexed lookup finds the first segment"),
+            (
+                last,
+                "the nested segment shadows it; only the fallback finds it",
+            ),
+        ] {
+            let served = reader
+                .fetch_raw(&tp(), LeaderEpoch(0), offset, 0)
+                .await
+                .expect("the tier answers")
+                .is_some();
+            let aborts = reader
+                .aborted_transactions(&tp(), LeaderEpoch(0), offset, last)
+                .await
+                .expect("the tier answers");
+            actual.push((label, served, aborts));
+            expected.push((label, true, abort.clone()));
+        }
+        assert!(actual == expected);
     }
 
     #[tokio::test]

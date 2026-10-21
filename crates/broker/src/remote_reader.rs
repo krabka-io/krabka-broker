@@ -24,6 +24,7 @@ mod aborted_txns;
 mod blocking;
 mod delivery;
 mod fetch;
+pub(crate) mod lineage;
 mod partition_read;
 mod pool;
 #[cfg(test)]

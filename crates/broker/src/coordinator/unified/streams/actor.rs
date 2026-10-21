@@ -29,7 +29,10 @@ use {
         streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
         streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
     },
-    std::{collections::BTreeMap, sync::Arc},
+    std::{
+        collections::{BTreeMap, HashSet},
+        sync::Arc,
+    },
     tokio::{
         sync::{mpsc, oneshot},
         task::JoinHandle,
@@ -65,12 +68,12 @@ use {
             DescriptionEpochs, SolicitationBackoff, StoredDescription, TopologyDescription,
         },
         persistence::StreamsGroupTopologyValue,
-        state::{self, StreamsGroupState},
+        state::{self, StreamsGroupState, StreamsGroupStatePhase},
     },
     crate::{
         codes,
         coordinator::unified::{
-            actor::CommitFence,
+            actor::{CommitFence, SubscribedTopics},
             offsets_log::{OffsetsLog, write_failure_code},
         },
         metadata_source::MetadataSource,
@@ -98,6 +101,10 @@ pub enum StreamsGroupActorMessage {
     /// does. `Ok(())` allows the commit, and `Err(code)` rejects it.
     ValidateCommit {
         member_id: String,
+        /// The request's `group_instance_id`. Only a `TxnOffsetCommit` reads
+        /// it: one that names an instance id is checked even with no member
+        /// id and the unknown generation.
+        group_instance_id: Option<String>,
         /// The request's `generation_id_or_member_epoch` field, interpreted as
         /// the streams `member_epoch`.
         member_epoch: i32,
@@ -114,6 +121,11 @@ pub enum StreamsGroupActorMessage {
         member_id: Option<String>,
         member_epoch: i32,
         reply: oneshot::Sender<Result<(), i16>>,
+    },
+    /// Answers the topics whose offsets `OffsetDelete` must not remove, as
+    /// Kafka's `StreamsGroup.isSubscribedToTopic` decides them.
+    OffsetDeleteGuard {
+        reply: oneshot::Sender<SubscribedTopics>,
     },
     /// KIP-1331: a member's `StreamsGroupTopologyDescriptionUpdate`, past the
     /// handler's protocol gate, group `Read` grant and request checks.
@@ -217,14 +229,18 @@ impl StreamsGroupActorHandle {
 pub(crate) async fn validate_streams_group_commit(
     handle: &StreamsGroupActorHandle,
     member_id: &str,
+    group_instance_id: Option<&str>,
     member_epoch: i32,
     partitions: Vec<(String, i32)>,
 ) -> Option<i16> {
     send_validate_commit(
         handle,
-        member_id,
-        member_epoch,
-        CommitFence::Transactional,
+        CommitIdentity {
+            member_id,
+            group_instance_id,
+            member_epoch,
+            fence: CommitFence::Transactional,
+        },
         partitions,
     )
     .await
@@ -245,28 +261,39 @@ pub(crate) async fn validate_streams_group_offset_commit(
 ) -> Option<i16> {
     send_validate_commit(
         handle,
-        member_id,
-        member_epoch,
-        CommitFence::Offset { api_version },
+        CommitIdentity {
+            member_id,
+            group_instance_id: None,
+            member_epoch,
+            fence: CommitFence::Offset { api_version },
+        },
         partitions,
     )
     .await
 }
 
+/// Who a commit says it comes from, and which API sent it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CommitIdentity<'a> {
+    pub member_id: &'a str,
+    pub group_instance_id: Option<&'a str>,
+    pub member_epoch: i32,
+    pub fence: CommitFence,
+}
+
 async fn send_validate_commit(
     handle: &StreamsGroupActorHandle,
-    member_id: &str,
-    member_epoch: i32,
-    fence: CommitFence,
+    identity: CommitIdentity<'_>,
     partitions: Vec<(String, i32)>,
 ) -> Option<i16> {
     let (tx, rx) = oneshot::channel();
     if handle
         .tx
         .send(StreamsGroupActorMessage::ValidateCommit {
-            member_id: member_id.to_string(),
-            member_epoch,
-            fence,
+            member_id: identity.member_id.to_string(),
+            group_instance_id: identity.group_instance_id.map(str::to_string),
+            member_epoch: identity.member_epoch,
+            fence: identity.fence,
             partitions,
             reply: tx,
         })
@@ -339,6 +366,58 @@ pub(crate) fn validate_offset_fetch(
     }
 }
 
+/// Asks a streams group which topics `OffsetDelete` must leave alone, as
+/// Kafka's `OffsetMetadataManager.deleteOffsets` asks
+/// `StreamsGroup.isSubscribedToTopic`. `StreamsGroup.validateOffsetDelete`
+/// accepts every group.
+///
+/// # Errors
+///
+/// `GROUP_ID_NOT_FOUND` when the actor has stopped, as the classic and
+/// consumer paths answer for theirs.
+pub(crate) async fn streams_offset_delete_guard(
+    handle: &StreamsGroupActorHandle,
+) -> Result<SubscribedTopics, i16> {
+    let (tx, rx) = oneshot::channel();
+    if handle
+        .tx
+        .send(StreamsGroupActorMessage::OffsetDeleteGuard { reply: tx })
+        .await
+        .is_err()
+    {
+        return Err(codes::GROUP_ID_NOT_FOUND);
+    }
+    rx.await.map_err(|_| codes::GROUP_ID_NOT_FOUND)
+}
+
+/// Kafka's `StreamsGroup.isSubscribedToTopic`, for every topic at once.
+///
+/// An empty group subscribes to nothing, so that its offsets can be deleted
+/// and expire. Otherwise the group subscribes to the source and repartition
+/// source topics of its stored topology (`StreamsTopology.sourceTopicMap`),
+/// and to nothing before it has one.
+pub(crate) fn subscribed_topics(
+    state: &StreamsGroupState,
+    topology: Option<&StreamsGroupTopologyValue>,
+) -> SubscribedTopics {
+    let topics = match topology {
+        Some(topology) if state.phase != StreamsGroupStatePhase::Empty => topology
+            .subtopologies
+            .iter()
+            .flat_map(|subtopology| {
+                subtopology.source_topics.iter().cloned().chain(
+                    subtopology
+                        .repartition_source_topics
+                        .iter()
+                        .map(|topic| topic.name.clone()),
+                )
+            })
+            .collect(),
+        _ => HashSet::new(),
+    };
+    SubscribedTopics::Named(topics)
+}
+
 /// The first `OffsetCommit` version that a member of the streams protocol may
 /// use.
 const FIRST_STREAMS_PROTOCOL_COMMIT_VERSION: i16 = 9;
@@ -347,11 +426,10 @@ const FIRST_STREAMS_PROTOCOL_COMMIT_VERSION: i16 = 9;
 ///
 /// A negative epoch commits on a group with no members: that is the admin
 /// client or a consumer that does not use group management. A
-/// `TxnOffsetCommit` with no member id and the unknown generation carries no
-/// member to check. Otherwise the member must exist, an `OffsetCommit` must be
-/// v9 or later, and the member's own epoch commits every partition; a newer
-/// epoch is `STALE_MEMBER_EPOCH`. `TxnOffsetCommit` passes no group instance
-/// id here, so the transactional skip does not check it.
+/// `TxnOffsetCommit` with no member id, the unknown generation and no group
+/// instance id carries no member to check. Otherwise the member must exist,
+/// an `OffsetCommit` must be v9 or later, and the member's own epoch commits
+/// every partition; a newer epoch is `STALE_MEMBER_EPOCH`.
 ///
 /// An older epoch goes through Kafka's `createAssignmentEpochValidator`
 /// (KIP-1251) over `partitions`, each a `(topic name, partition)`: see
@@ -364,15 +442,23 @@ const FIRST_STREAMS_PROTOCOL_COMMIT_VERSION: i16 = 9;
 pub(crate) fn validate_offset_commit(
     state: &StreamsGroupState,
     topology: Option<&StreamsGroupTopologyValue>,
-    member_id: &str,
-    member_epoch: i32,
-    fence: CommitFence,
+    identity: CommitIdentity<'_>,
     partitions: &[(String, i32)],
 ) -> Result<(), i16> {
+    let CommitIdentity {
+        member_id,
+        group_instance_id,
+        member_epoch,
+        fence,
+    } = identity;
     if member_epoch < 0 && state.members.is_empty() {
         return Ok(());
     }
-    if fence == CommitFence::Transactional && member_epoch == -1 && member_id.is_empty() {
+    if fence == CommitFence::Transactional
+        && member_epoch == -1
+        && member_id.is_empty()
+        && group_instance_id.is_none()
+    {
         return Ok(());
     }
     let member = state
@@ -904,6 +990,7 @@ async fn handle_message(
         }
         StreamsGroupActorMessage::ValidateCommit {
             member_id,
+            group_instance_id,
             member_epoch,
             fence,
             partitions,
@@ -912,11 +999,17 @@ async fn handle_message(
             let _ = reply.send(validate_offset_commit(
                 &actor.state,
                 actor.topology.as_ref(),
-                &member_id,
-                member_epoch,
-                fence,
+                CommitIdentity {
+                    member_id: &member_id,
+                    group_instance_id: group_instance_id.as_deref(),
+                    member_epoch,
+                    fence,
+                },
                 &partitions,
             ));
+        }
+        StreamsGroupActorMessage::OffsetDeleteGuard { reply } => {
+            let _ = reply.send(subscribed_topics(&actor.state, actor.topology.as_ref()));
         }
         StreamsGroupActorMessage::ValidateFetch {
             member_id,

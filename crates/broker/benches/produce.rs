@@ -74,8 +74,10 @@ fn settings(metrics: &BrokerMetrics) -> HotPathSettings<'_> {
         // Producer pass-through: the topic asks for no recompression, which is
         // the configuration the verbatim path needs.
         topic_compression: None,
-        // Kafka's timestamp defaults: the producer's own clock, and neither
-        // window bounded, so no batch pays for a walk over record timestamps.
+        // Kafka's timestamp defaults with neither window bounded: the
+        // producer's own clock, and `max_timestamp` folded from the records in
+        // the walk that validates them. Every batch here agrees with its
+        // header, so none pays for the header rewrite.
         timestamps: TimestampPolicy::default(),
         decompression_policy: RecordDecompressionPolicy::default(),
         metrics,
