@@ -274,6 +274,7 @@ mod tests {
         crate::coordinator::{
             test_support::offset_entry,
             unified::{
+                GroupCoordinator,
                 actor::{
                     GroupActorHandle,
                     test_support::{
@@ -281,12 +282,13 @@ mod tests {
                     },
                 },
                 classic_state::OffsetEntry,
+                offsets_log::fake::InMemoryOffsetsLog,
             },
         },
         assert2::assert,
         krabka_log::Offset,
         krabka_protocol::records::RecordBatch,
-        std::{collections::HashMap, time::Duration},
+        std::{collections::HashMap, sync::Arc, time::Duration},
         tokio::sync::oneshot::{Receiver, error::TryRecvError},
     };
 
@@ -405,6 +407,33 @@ mod tests {
         .await
     }
 
+    /// A classic group `g` whose offsets log holds back its high watermark,
+    /// with one commit of `t-0` in the log and waiting for it.
+    struct HeldCommit {
+        coord: Arc<GroupCoordinator>,
+        log: Arc<InMemoryOffsetsLog>,
+        handle: Arc<GroupActorHandle>,
+        pending: Receiver<Result<(), ErrorCode>>,
+    }
+
+    /// Commits `offset` to `t-0` of a fresh group whose high watermark is
+    /// held, and returns once the commit is in the log, still invisible.
+    async fn held_commit(offset: i64) -> HeldCommit {
+        let (coord, log) = make_coordinator();
+        let handle = coord.get_or_create_classic("g");
+        log.hold_commits();
+        let pending = begin_commit(&handle, 0, offset).await;
+        // The fetch is answered after the commit's turn, so the record is in
+        // the log by the time it returns.
+        assert!(committed_now(&handle).await == offsets(&[]));
+        HeldCommit {
+            coord,
+            log,
+            handle,
+            pending,
+        }
+    }
+
     async fn committed_now(handle: &GroupActorHandle) -> HashMap<(String, i32), OffsetEntry> {
         tokio::time::timeout(PROMPT, rpc::fetch_committed(handle))
             .await
@@ -455,17 +484,14 @@ mod tests {
     /// later commit's offset is the one that stays.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn commits_that_replicate_together_publish_in_log_order() {
-        let (coord, log) = make_coordinator();
-        let handle = coord.get_or_create_classic("g");
-        log.hold_commits();
-        let earlier = begin_commit(&handle, 0, 5).await;
-        let later = begin_commit(&handle, 0, 9).await;
-        assert!(committed_now(&handle).await == offsets(&[]));
+        let earlier = held_commit(5).await;
+        let later = begin_commit(&earlier.handle, 0, 9).await;
+        assert!(committed_now(&earlier.handle).await == offsets(&[]));
 
-        log.release_commits();
+        earlier.log.release_commits();
         assert!(later.await.unwrap() == Ok(()));
-        assert!(earlier.await.unwrap() == Ok(()));
-        assert!(committed_now(&handle).await == offsets(&[(0, 9)]));
+        assert!(earlier.pending.await.unwrap() == Ok(()));
+        assert!(committed_now(&earlier.handle).await == offsets(&[(0, 9)]));
     }
 
     /// A commit that times out answers `COORDINATOR_NOT_AVAILABLE` and stays
@@ -474,20 +500,14 @@ mod tests {
     /// actor.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_timed_out_commit_becomes_visible_once_the_high_watermark_passes_it() {
-        let (coord, log) = make_coordinator();
-        let handle = coord.get_or_create_classic("g");
-        log.hold_commits();
-        let timed_out = begin_commit(&handle, 0, 7).await;
-        // The fetch is answered after the commit's turn, so its record is in
-        // the log before the timeout below covers it.
-        assert!(committed_now(&handle).await == offsets(&[]));
-        log.time_out_uncommitted();
-        assert!(timed_out.await.unwrap() == Err(codes::COORDINATOR_NOT_AVAILABLE));
-        assert!(committed_now(&handle).await == offsets(&[]));
+        let timed_out = held_commit(7).await;
+        timed_out.log.time_out_uncommitted();
+        assert!(timed_out.pending.await.unwrap() == Err(codes::COORDINATOR_NOT_AVAILABLE));
+        assert!(committed_now(&timed_out.handle).await == offsets(&[]));
 
-        log.release_commits();
+        timed_out.log.release_commits();
         tokio::time::timeout(PROMPT, async {
-            while committed_now(&handle).await != offsets(&[(0, 7)]) {
+            while committed_now(&timed_out.handle).await != offsets(&[(0, 7)]) {
                 tokio::task::yield_now().await;
             }
         })
@@ -502,23 +522,19 @@ mod tests {
     /// commit that landed.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_commit_replicating_under_a_group_delete_answers_its_own_outcome() {
-        let (coord, log) = make_coordinator();
-        let handle = coord.get_or_create_classic("g");
-        log.hold_commits();
-        let pending = begin_commit(&handle, 0, 7).await;
-        assert!(committed_now(&handle).await == offsets(&[]));
+        let commit = held_commit(7).await;
         let delete = tokio::spawn({
-            let coord = std::sync::Arc::clone(&coord);
+            let coord = Arc::clone(&commit.coord);
             async move { coord.delete_group("g").await }
         });
         // The delete's tombstones are in the log once a second batch is.
-        while log.batches().await.len() < 2 {
+        while commit.log.batches().await.len() < 2 {
             tokio::task::yield_now().await;
         }
 
-        log.release_commits();
+        commit.log.release_commits();
         assert!(delete.await.unwrap() == Ok(()));
-        assert!(pending.await.unwrap() == Ok(()));
+        assert!(commit.pending.await.unwrap() == Ok(()));
     }
 
     /// Kafka's runtime fails the pending writes of a shard it unloads with
@@ -526,11 +542,8 @@ mod tests {
     /// that answer rather than a dropped reply.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_commit_still_replicating_at_shutdown_answers_not_coordinator() {
-        let (coord, log) = make_coordinator();
-        let handle = coord.get_or_create_classic("g");
-        log.hold_commits();
-        let pending = begin_commit(&handle, 0, 7).await;
-        rpc::shutdown(&handle).await;
-        assert!(pending.await.unwrap() == Err(codes::NOT_COORDINATOR));
+        let unloaded = held_commit(7).await;
+        rpc::shutdown(&unloaded.handle).await;
+        assert!(unloaded.pending.await.unwrap() == Err(codes::NOT_COORDINATOR));
     }
 }
