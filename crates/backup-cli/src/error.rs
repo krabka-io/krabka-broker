@@ -53,6 +53,12 @@ pub enum BackupError {
     /// The cluster could not be reached, or refused a request.
     #[error("cluster: {0}")]
     Cluster(String),
+
+    /// The node's newest metadata checkpoint is the one `krabka format`
+    /// wrote. It holds no topic, so a restore from it would bring back no
+    /// topic configuration and say nothing about it.
+    #[error("stale metadata checkpoint: {0}")]
+    StaleMetadata(String),
 }
 
 /// Exit code for a bad argument, or a flag set that contradicts itself.
@@ -63,6 +69,8 @@ pub const EXIT_UNREADABLE: i32 = 4;
 pub const EXIT_INTEGRITY: i32 = 5;
 /// Exit code for a cluster that could not be reached, or that refused.
 pub const EXIT_CLUSTER: i32 = 6;
+/// Exit code for a node whose only metadata checkpoint is the format-time one.
+pub const EXIT_STALE_METADATA: i32 = 7;
 
 /// A contradictory `--archive-*` flag set is a bad argument like any other.
 impl From<krabka_object_store::ArchiveArgsError> for BackupError {
@@ -94,6 +102,7 @@ impl BackupError {
             | Self::NoSuchCapture(_) => EXIT_UNREADABLE,
             Self::Integrity(_) => EXIT_INTEGRITY,
             Self::Cluster(_) => EXIT_CLUSTER,
+            Self::StaleMetadata(_) => EXIT_STALE_METADATA,
         }
     }
 }
@@ -101,7 +110,10 @@ impl BackupError {
 #[cfg(test)]
 mod tests {
     use {
-        super::{BackupError, EXIT_BAD_ARGUMENT, EXIT_CLUSTER, EXIT_INTEGRITY, EXIT_UNREADABLE},
+        super::{
+            BackupError, EXIT_BAD_ARGUMENT, EXIT_CLUSTER, EXIT_INTEGRITY, EXIT_STALE_METADATA,
+            EXIT_UNREADABLE,
+        },
         assert2::check,
     };
 
@@ -115,6 +127,7 @@ mod tests {
         },
         integrity = { BackupError::Integrity("digest".to_owned()), EXIT_INTEGRITY },
         cluster = { BackupError::Cluster("refused".to_owned()), EXIT_CLUSTER },
+        stale_metadata = { BackupError::StaleMetadata("format-time".to_owned()), EXIT_STALE_METADATA },
     )]
     fn every_variant_maps_onto_its_documented_exit_code(error: BackupError, expected: i32) {
         check!(error.exit_code() == expected, "for {error}");

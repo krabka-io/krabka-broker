@@ -41,6 +41,14 @@ pub(crate) fn record(voters: Vec<WireVoter>) -> WireVotersRecord {
     }
 }
 
+pub(crate) fn endpoint(name: &str, host: &str, port: u16) -> VoterEndpoint {
+    VoterEndpoint {
+        name: name.to_owned(),
+        host: host.to_owned(),
+        port,
+    }
+}
+
 pub(crate) fn from_wire(
     voter: &WireVoter,
     id: NodeId,
@@ -53,11 +61,7 @@ pub(crate) fn from_wire(
         endpoints: voter
             .endpoints
             .iter()
-            .map(|endpoint| VoterEndpoint {
-                name: endpoint.name.clone(),
-                host: endpoint.host.clone(),
-                port: endpoint.port,
-            })
+            .map(|endpoint| self::endpoint(&endpoint.name, &endpoint.host, endpoint.port))
             .collect(),
         kraft_version,
     }

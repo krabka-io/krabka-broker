@@ -24,24 +24,24 @@ path = "src/main.rs"
 [dependencies]
 # `parse_barrier_marker` reads a marker back out of a fetched batch. The decoder
 # lives with the injector so the two cannot drift.
-krabka-broker = { version = "1.0.5", path = "../broker" }
-krabka-client-core = { version = "0.6.0" }
-krabka-protocol = { version = "0.6.0" }
+krabka-broker = { version = "1.0.8", path = "../broker" }
+krabka-client-core = { version = "0.7.1" }
+krabka-protocol = { version = "0.7.0" }
 krabka-units = { workspace = true }
 
 clap = { workspace = true, features = ["env"] }
 bytes = { workspace = true }
 # `cli_main!` writes the binary's `main`.
-krabka-macros = { version = "1.0.5", path = "../macros" }
+krabka-macros = { version = "1.0.8", path = "../macros" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 assert2 = { workspace = true }
-krabka-client-admin = { version = "0.6.0" }
+krabka-client-admin = { version = "0.7.1" }
 # BrokerConfig::for_tests lives behind the broker's own test-helpers feature
 # now that the facade crate is gone.
-krabka-broker = { version = "1.0.5", path = "../broker", features = ["test-helpers"] }
+krabka-broker = { version = "1.0.8", path = "../broker", features = ["test-helpers"] }
 tempfile = { workspace = true }
 yare = { workspace = true }

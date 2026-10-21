@@ -3,7 +3,7 @@
 //! These synchronous kernels have Creusot contracts proved under their stated
 //! preconditions. Host state, concurrency, and I/O remain outside that boundary.
 //! See `docs/verification.md` and `docs/proof-contract-audit.md`.
-#![doc(html_root_url = "https://docs.rs/krabka-verified/1.0.5")]
+#![doc(html_root_url = "https://docs.rs/krabka-verified/1.0.8")]
 // Rust's backend does not see names used only in Creusot contracts, and treats
 // the grouping parentheses in Pearlite expressions as redundant Rust syntax.
 #![cfg_attr(creusot, allow(unused_imports, unused_parens))]
@@ -121,8 +121,7 @@ pub use {
     delegation_token::{
         TokenCreateDecision, TokenDeadlines, TokenExpireDecision, TokenMutationDecision,
         TokenMutationFacts, TokenMutationKind, TokenMutationState, TokenRenewDecision,
-        create_token_deadlines, expire_token_deadline, renew_token_expiry, token_is_active,
-        token_mutation_decision,
+        create_token_deadlines, expire_token_deadline, renew_token_expiry, token_mutation_decision,
     },
     delivery::{coalesce_delivery_range, delivery_watermark_advance, scheduled_delivery_visible},
     directory::{

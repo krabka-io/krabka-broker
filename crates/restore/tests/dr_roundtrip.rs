@@ -13,10 +13,14 @@
 //!    captured snapshots, and a broker boots on it.
 //! 5. The restored cluster has the archived records and the restored topic
 //!    configuration, and NO committed offsets: `__consumer_offsets` is
-//!    compacted and never tiered, so nothing in the archive holds them. A
-//!    consumer here would start from `auto.offset.reset`.
-//! 6. `krabka-backup restore-offsets` commits the captured offsets, and the
-//!    group's position is the position it had before the disaster.
+//!    compacted and never tiered, so nothing in the archive holds them, and
+//!    the restored cluster does not have the topic at all. A consumer here
+//!    would start from `auto.offset.reset`.
+//! 6. `krabka-backup restore-offsets` commits the captured offsets at once,
+//!    as step 4 of the runbook does, and the group's position is the position
+//!    it had before the disaster. Its `FindCoordinator` is the broker's first,
+//!    so the broker answers `COORDINATOR_NOT_AVAILABLE` while it creates
+//!    `__consumer_offsets` and the tool has to retry (#1515).
 //!
 //! Step 5 is the assertion that matters most, because it is the failure this
 //! suite exists to keep fixed: it fails if committed offsets ever start
@@ -55,12 +59,8 @@ use {
     krabka_backup::{archive::ArchiveArgs, capture::capture_key, manifest::RLMM_SNAPSHOT, run},
     krabka_broker::{BrokerConfig, BrokerHandle},
     krabka_client_admin::AdminClient,
-    krabka_client_core::{
-        Client, CoordinatorKeyType, build_find_coordinator, coordinator_endpoint,
-    },
+    krabka_client_core::Client,
     krabka_metadata::{MetadataImage, MetadataRecord, NodeId, TopicConfigRecord, TopicRecord},
-    krabka_remote_storage::{PartitionDump, RlmmCacheDump, TopicIdPartition},
-    krabka_remote_storage_topic::Snapshot,
     krabka_restore::restore,
     std::collections::BTreeMap,
     uuid::Uuid,
@@ -89,34 +89,12 @@ const RETENTION_MS: &str = "604800000";
 /// the value that makes a consumer fall back to `auto.offset.reset`.
 const NO_COMMITTED_OFFSET: i64 = -1;
 
-/// Build the RLMM snapshot the fixture's own archive is consistent with.
-///
-/// A restore reconciles the bucket scan against this file and stops on any
-/// disagreement, so it has to name every archived segment and no other.
-fn rlmm_snapshot(fixture: &Fixture) -> Vec<u8> {
-    let partitions = fixture
-        .partitions()
-        .into_iter()
-        .map(|partition| PartitionDump {
-            topic_id_partition: TopicIdPartition::new(
-                partition.topic_id,
-                partition.topic,
-                partition.partition,
-            ),
-            segments: partition
-                .segments
-                .iter()
-                .map(|segment| segment.metadata.clone())
-                .collect(),
-            delete_state: None,
-        })
-        .collect();
-    Snapshot {
-        committed_offsets: vec![0],
-        dump: RlmmCacheDump { partitions },
-    }
-    .encode()
-}
+/// Kafka's `UNKNOWN_TOPIC_OR_PARTITION`, the `Metadata` answer for a topic
+/// that does not exist.
+const UNKNOWN_TOPIC_OR_PARTITION: i16 = 3;
+
+/// The topic that holds committed offsets.
+const OFFSETS_TOPIC: &str = "__consumer_offsets";
 
 /// Build the controller metadata checkpoint the pre-disaster cluster would
 /// have written, carrying the topic configuration a restore must bring back.
@@ -149,7 +127,8 @@ fn metadata_checkpoint(fixture: &Fixture) -> Vec<u8> {
 fn write_node_files(log_dir: &std::path::Path, fixture: &Fixture) {
     let rlmm = log_dir.join("remote-log-metadata");
     std::fs::create_dir_all(&rlmm).expect("create the rlmm dir");
-    std::fs::write(rlmm.join("snapshot"), rlmm_snapshot(fixture)).expect("write the rlmm snapshot");
+    std::fs::write(rlmm.join("snapshot"), fixture.rlmm_snapshot(|_, _| true))
+        .expect("write the rlmm snapshot");
 
     let metadata = krabka_raft::metadata_partition_dir(log_dir);
     std::fs::create_dir_all(&metadata).expect("create the metadata dir");
@@ -186,56 +165,38 @@ async fn boot(controller: &mut ControllerListener, log_dir: std::path::PathBuf) 
     BootedBroker { broker, client }
 }
 
-/// The topic id the cluster gave `orders`. `OffsetCommit` v10 puts the id on
-/// the wire instead of the name, so a commit without it reaches no partition.
-async fn topic_id(bootstrap: &str) -> BTreeMap<String, krabka_protocol::primitives::uuid::Uuid> {
+/// Commit one offset for the group, as `kafka-consumer-groups --reset-offsets`
+/// would before the disaster.
+async fn commit_position(bootstrap: &str, offset: i64) {
     let mut admin = AdminClient::connect(&[bootstrap.to_owned()])
         .await
         .expect("admin client");
-    admin
-        .metadata(&[TOPIC])
-        .await
-        .expect("Metadata")
-        .topics
-        .into_iter()
-        .filter_map(|topic| {
-            topic.topic_id.map(|id| {
-                (
-                    topic.name,
-                    krabka_protocol::primitives::uuid::Uuid(id.into_bytes()),
-                )
-            })
-        })
-        .collect()
-}
-
-/// Commit one offset for the group, the way a running consumer would.
-async fn commit_position(client: &Client, bootstrap: &str, offset: i64) {
-    let group = krabka_backup::offsets::GroupOffsets {
-        group: GROUP.to_owned(),
-        offsets: vec![krabka_backup::offsets::CommittedOffset {
-            topic: TOPIC.to_owned(),
-            partition: PARTITION,
-            offset,
-        }],
-    };
-    let found = client
-        .send(build_find_coordinator(GROUP, CoordinatorKeyType::Group))
-        .await
-        .expect("FindCoordinator");
-    let coordinator = coordinator_endpoint(GROUP, found).expect("a group coordinator");
-    let response = client
-        .broker(coordinator.node_id)
-        .send(krabka_backup::offsets::commit_request(
-            &group,
-            &topic_id(bootstrap).await,
-        ))
+    let outcomes = admin
+        .alter_consumer_group_offsets(
+            GROUP,
+            &BTreeMap::from([((TOPIC.to_owned(), PARTITION), offset)]),
+        )
         .await
         .expect("OffsetCommit");
     assert!(
-        krabka_backup::offsets::commit_refusals(&response).is_empty(),
-        "the pre-disaster commit was refused: {response:?}"
+        outcomes.iter().all(|outcome| outcome.error.is_none()),
+        "the pre-disaster commit was refused: {outcomes:?}"
     );
+}
+
+/// The error `Metadata` answers for `__consumer_offsets`, or `None` when the
+/// topic exists. The admin client does not ask the broker to create it.
+async fn offsets_topic_error(bootstrap: &str) -> Option<i16> {
+    let mut admin = AdminClient::connect(&[bootstrap.to_owned()])
+        .await
+        .expect("admin client");
+    let metadata = admin.metadata(&[OFFSETS_TOPIC]).await.expect("Metadata");
+    let topic = metadata
+        .topics
+        .into_iter()
+        .find(|topic| topic.name == OFFSETS_TOPIC)
+        .expect("Metadata answers for the topic it was asked about");
+    topic.error.map(|error| error.code)
 }
 
 /// The group's committed offset for `orders-0`, as `OffsetFetch` answers it.
@@ -283,7 +244,7 @@ async fn a_captured_cluster_restores_with_its_configuration_and_its_group_positi
     // before a test commits an offset.
     pre_broker.wait_until_group_coordinator_ready().await;
     let pre_bootstrap = pre_broker.listen_addr().to_string();
-    commit_position(&pre_client, &pre_bootstrap, COMMITTED_OFFSET).await;
+    commit_position(&pre_bootstrap, COMMITTED_OFFSET).await;
     check!(committed_offset(&pre_bootstrap).await == COMMITTED_OFFSET);
 
     // 2. The capture, and the check that it is whole.
@@ -328,14 +289,16 @@ async fn a_captured_cluster_restores_with_its_configuration_and_its_group_positi
     post_broker
         .wait_until_partition_present(TOPIC, PARTITION)
         .await;
-    post_broker.wait_until_group_coordinator_ready().await;
     let post_bootstrap = post_broker.listen_addr().to_string();
 
     // 5. The restored cluster has the configuration back and the group's
-    //    position gone. Nothing in a KIP-405 archive holds a committed offset.
+    //    position gone. Nothing in a KIP-405 archive holds a committed offset,
+    //    so the restored cluster has no `__consumer_offsets` to hold one.
+    //    `Metadata` does not create the topic, where an `OffsetFetch` would:
+    //    the group coordinator stays cold for step 6, as it is on a broker an
+    //    operator has just booted.
     check_topic_configuration(&post_client, TOPIC, "retention.ms", RETENTION_MS).await;
-
-    check!(committed_offset(&post_bootstrap).await == NO_COMMITTED_OFFSET);
+    check!(offsets_topic_error(&post_bootstrap).await == Some(UNKNOWN_TOPIC_OR_PARTITION));
 
     // 6. The offsets go back, and the group is where it was.
     let committed = run::restore_offsets(&capture, &post_bootstrap, false, &backup)

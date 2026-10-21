@@ -22,6 +22,7 @@ mod election;
 mod leadership;
 mod membership;
 mod replication;
+mod shutdown;
 mod vote_request;
 
 #[cfg(test)]
@@ -73,7 +74,28 @@ pub struct QuorumStateMachine {
     /// explores. Whole milliseconds is also the domain of the verified jitter
     /// kernel. [`QuorumStateMachine::new`] converts at that boundary.
     election_timeout_ms: u64,
+    /// Follower and observer fetch timeout, in whole milliseconds, for the same
+    /// reason. It is apart from the election timeout because Kafka keeps the
+    /// two apart: a lost leader goes unnoticed for one fetch timeout, and a
+    /// split vote after that is retried one election timeout later.
+    fetch_timeout_ms: u64,
 }
+
+/// The two timer extents of a [`QuorumStateMachine`], as Kafka's `QuorumConfig`
+/// holds them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct QuorumTimeouts {
+    /// Kafka's `controller.quorum.election.timeout.ms`: the base of a
+    /// prospective's, a candidate's and an unattached voter's election timer,
+    /// before the per-(node, epoch) jitter.
+    pub election: Time,
+    /// Kafka's `controller.quorum.fetch.timeout.ms`: the follower and observer
+    /// fetch watchdog, and the base of the leader's check-quorum window.
+    pub fetch: Time,
+}
+
+/// An extent as the whole milliseconds the deadline timeline is kept in.
+fn whole_millis(extent: Time) -> u64 { u64::try_from(extent.millis_i64()).unwrap_or(0) }
 
 #[derive(Clone, Copy)]
 struct VoteRequest {
@@ -89,13 +111,14 @@ struct VoteRequest {
 }
 
 impl QuorumStateMachine {
-    /// `election_timeout` is the base extent of an election timer, before
-    /// jitter; callers vary it per node for liveness.
+    /// `timeouts.election` is the base extent of an election timer, before
+    /// jitter, and callers vary it per node for liveness. `timeouts.fetch` is
+    /// the fetch watchdog.
     ///
-    /// This constructor rounds the value to whole milliseconds. That is the
+    /// This constructor rounds both values to whole milliseconds. That is the
     /// domain of both the verified jitter kernel and the [`SimInstant`] clock.
     #[must_use]
-    pub fn new(me: NodeId, state: QuorumState, election_timeout: Time) -> Self {
+    pub fn new(me: NodeId, state: QuorumState, timeouts: QuorumTimeouts) -> Self {
         let observer = !state.voters.contains(me);
         let role = if observer {
             Role::Observer {
@@ -110,7 +133,8 @@ impl QuorumStateMachine {
             state,
             adjacent_voters: None,
             role,
-            election_timeout_ms: u64::try_from(election_timeout.millis_i64()).unwrap_or(0),
+            election_timeout_ms: whole_millis(timeouts.election),
+            fetch_timeout_ms: whole_millis(timeouts.fetch),
         }
     }
 
@@ -123,6 +147,22 @@ impl QuorumStateMachine {
 
     #[must_use]
     pub fn role(&self) -> &Role { &self.role }
+
+    /// The leader this replica knows for its epoch: the one it follows, or the
+    /// one a prospective gave up on when it began its pre-vote.
+    ///
+    /// This is Kafka's `QuorumState.hasLeader`, which counts a
+    /// `ProspectiveState`'s retained leader. A response that names the leader
+    /// of the current epoch moves a replica to it only while this is `None`.
+    #[must_use]
+    pub fn known_leader(&self) -> Option<NodeId> {
+        match &self.role {
+            Role::Prospective {
+                abandoned_leader, ..
+            } => self.state.leader_id.or(*abandoned_leader),
+            _ => self.state.leader_id,
+        }
+    }
 
     #[must_use]
     pub fn is_voter(&self) -> bool { self.state.voters.contains(self.me) }
@@ -144,21 +184,52 @@ impl QuorumStateMachine {
     /// integer kernel, and [`SimInstant`] is a coordinate on a millisecond
     /// timeline and not an extent.
     fn election_deadline(&self, now: SimInstant) -> SimInstant {
+        self.election_deadline_in(self.state.leader_epoch, now)
+    }
+
+    /// [`Self::election_deadline`] for a timer armed in `epoch`, which may be
+    /// newer than the epoch this replica holds.
+    fn election_deadline_in(&self, epoch: Epoch, now: SimInstant) -> SimInstant {
         now.saturating_add_ms(
-            self.election_timeout_ms
-                + election_jitter_ms(self.me, self.state.leader_epoch, self.election_timeout_ms),
+            self.election_timeout_ms + election_jitter_ms(self.me, epoch, self.election_timeout_ms),
         )
+    }
+
+    /// The election deadline of a voter that a newer `epoch` moves to
+    /// `Unattached`: Kafka's `QuorumState.transitionToUnattached`.
+    ///
+    /// A replica that is already counting down to an election keeps the time
+    /// it has left. That is a candidate, a prospective, or an unattached or
+    /// voted replica. Any other replica draws a fresh election timeout in the
+    /// new epoch. A resigned replica draws one too, because krabka's
+    /// `Role::Resigned` carries no deadline of its own.
+    ///
+    /// A candidate that a newer epoch fences therefore does not start its next
+    /// election at once. It waits out the timeout it drew, so two voters that
+    /// lost the same election do not both run again at the same instant.
+    fn unattached_election_deadline(&self, epoch: Epoch, now: SimInstant) -> SimInstant {
+        match self.role {
+            Role::Unattached { election_deadline }
+            | Role::Voted { election_deadline }
+            | Role::Prospective {
+                election_deadline, ..
+            }
+            | Role::Candidate {
+                election_deadline, ..
+            } => election_deadline,
+            Role::Follower { .. }
+            | Role::Observer { .. }
+            | Role::Leader { .. }
+            | Role::Resigned => self.election_deadline_in(epoch, now),
+        }
     }
 
     /// The deadline for a check-quorum timer armed at `now`.
     ///
-    /// The extent is Kafka's 1.5x the fetch timeout. Krabka derives the
-    /// follower fetch deadline from the same configured election timeout (see
-    /// [`QuorumStateMachine::handle_fetch_response`]), so that one extent is
-    /// the fetch timeout this factor multiplies.
+    /// The extent is Kafka's 1.5x the fetch timeout.
     pub(super) fn check_quorum_deadline(&self, now: SimInstant) -> SimInstant {
         now.saturating_add_ms(
-            self.election_timeout_ms
+            self.fetch_timeout_ms
                 .saturating_mul(CHECK_QUORUM_FACTOR_NUM)
                 .div_euclid(CHECK_QUORUM_FACTOR_DEN),
         )
@@ -254,7 +325,28 @@ impl QuorumStateMachine {
                 diverging,
             } => self.handle_fetch_response(log, leader_id, leader_epoch, diverging, now),
             Event::FetchTimeout => self.handle_fetch_timeout(log, now),
+            Event::ReceiveLeaderlessEpoch { epoch } => self.handle_leaderless_epoch(epoch, now),
         }
+    }
+
+    /// Wait in this epoch, with no leader, for an election at
+    /// `election_deadline`: `Voted` if this replica cast its vote in the
+    /// epoch, `Unattached` otherwise. Kafka keeps both in one
+    /// `UnattachedState`, with or without a voted key.
+    fn await_election(&mut self, election_deadline: SimInstant) -> Vec<Action> {
+        self.role = if self.state.voted_key.is_some() {
+            Role::Voted { election_deadline }
+        } else {
+            Role::Unattached { election_deadline }
+        };
+        vec![
+            Action::PersistQuorumState,
+            Action::TransitionedTo(self.role.name()),
+            Action::ResetTimer {
+                kind: TimerKind::Election,
+                deadline: election_deadline,
+            },
+        ]
     }
 
     #[tracing::instrument(
@@ -309,7 +401,12 @@ mod tests {
                 uuid::Uuid::nil(),
                 voters(&[NodeId(1), NodeId(2), NodeId(3)]),
             ),
-            timeout,
+            // A fetch timeout unlike the election timeout shows which one the
+            // election timer is drawn from.
+            QuorumTimeouts {
+                election: timeout,
+                fetch: secs(7),
+            },
         );
         let log = FakeLog {
             end: 5,

@@ -1,23 +1,15 @@
 use {
-    krabka_metadata::{KRaftVersionRange, Voter, VoterEndpoint},
+    krabka_metadata::Voter,
     krabka_raft::{
         NodeId,
         reconfig::{AddVoter, RemoveVoter, UpdateVoter, VoterChange},
     },
 };
 
-fn voter(id: u64) -> Voter {
-    Voter {
-        id: NodeId(id),
-        directory_id: uuid::Uuid::from_u128(id.into()),
-        endpoints: vec![VoterEndpoint {
-            name: "CONTROLLER".into(),
-            host: "127.0.0.1".into(),
-            port: 9093,
-        }],
-        kraft_version: KRaftVersionRange { min: 0, max: 1 },
-    }
-}
+#[path = "support/voter.rs"]
+mod voter_fixture;
+
+fn voter(id: u64) -> Voter { voter_fixture::voter(id, uuid::Uuid::from_u128(id.into())) }
 
 #[test]
 fn voter_changes_preserve_exact_request_identity() {

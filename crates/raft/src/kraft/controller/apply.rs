@@ -7,8 +7,12 @@ use {
         Engine, PendingDowngradeSnapshot,
         offsets::{
             batch_base_in_apply_window, expected_hwm_after_advance, hwm_advanced_as_expected,
+            leader_alone_is_majority,
         },
-        records::{decode_committed_value, is_kip835_noop, next_batch_offset},
+        records::{
+            batch_last_offset, decode_committed_value, is_features_delta, is_kip835_noop,
+            next_batch_offset,
+        },
     },
     krabka_ids::Offset,
     krabka_metadata::{MetadataImage, MetadataRecord, VotersRecord},
@@ -16,6 +20,20 @@ use {
 };
 
 impl Engine {
+    /// Publish the applied image, then its finalized-features epoch. The
+    /// order keeps a reader that takes the epoch first from seeing it run
+    /// ahead of the features.
+    pub(super) fn publish_image(&self) {
+        let _ = self.image_tx.send(Arc::new(self.image.clone()));
+        self.features_epoch_tx.send_replace(self.features_epoch);
+    }
+
+    pub(super) fn advance_if_single_voter(&mut self) {
+        if leader_alone_is_majority(self.core.quorum_state().majority(), self.core.is_voter()) {
+            self.advance_and_apply(self.log.log_end_offset());
+        }
+    }
+
     /// Advance the HWM and apply the records newly committed by it to the
     /// [`MetadataImage`], then publish and resolve any satisfied waiters.
     #[tracing::instrument(
@@ -86,6 +104,7 @@ impl Engine {
                             self.last_applied_record_timestamp_ms = batch.max_timestamp;
                             continue;
                         }
+                        let mut features_delta = false;
                         for rec in &batch.records {
                             let Some(value) = rec.value.as_ref() else {
                                 continue;
@@ -120,6 +139,7 @@ impl Engine {
                                                     .finalized_metadata_version()
                                                     .is_some_and(|current| feature.level < current)
                                     );
+                                    features_delta |= is_features_delta(&meta);
                                     self.image.apply(&meta);
                                     if is_metadata_version_downgrade
                                         && self.downgrade_snapshot_pending.is_none()
@@ -161,6 +181,9 @@ impl Engine {
                                 }
                             }
                         }
+                        if features_delta {
+                            self.features_epoch = batch_last_offset(batch);
+                        }
                         // The batch has been consumed completely by this
                         // apply pass. Track its timestamp separately from the
                         // quorum high watermark, which may already be ahead.
@@ -178,7 +201,7 @@ impl Engine {
             }
         }
         if changed && !metadata_version_downgraded && self.downgrade_snapshot_pending.is_none() {
-            let _ = self.image_tx.send(Arc::new(self.image.clone()));
+            self.publish_image();
         }
         // KIP-835 measures the time to consume a set of pending committed
         // records, not the age of the records (reported separately by the

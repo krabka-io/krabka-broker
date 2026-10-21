@@ -76,6 +76,15 @@ pub fn sample_log(config: LogConfig, batches: usize, records: i32) -> TempLog {
     TempLog { dir, log }
 }
 
+pub fn log_with_three_then_two_records() -> TempLog {
+    let TempLog { dir, mut log } = test_log();
+    for records in [3, 2] {
+        let mut batch = sample_batch(records);
+        log.append(&mut batch).expect("append sample batch");
+    }
+    TempLog { dir, log }
+}
+
 /// A refused append must not create offsets, transactions, or producer state.
 pub fn assert_empty_append_state(log: &Log) {
     assert2::assert!(log.log_end_offset() == Offset(0));

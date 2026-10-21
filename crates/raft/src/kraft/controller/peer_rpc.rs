@@ -3,10 +3,7 @@
 //! from ever awaiting a peer inline.
 
 use {
-    super::{
-        Engine, engine_loop::response_to_event, replication::fetch_epoch_for_request,
-        timing::election_timeout_ms,
-    },
+    super::{Engine, replication::fetch_epoch_for_request, timing::whole_millis},
     crate::kraft::{
         snapshot_fetch::SnapshotId,
         transport::{Command, api_key, wire},
@@ -22,10 +19,10 @@ const MAX_FETCH_WAIT_MS: u64 = 500;
 /// The `MaxWaitMs` of this replica's Fetch: Kafka's 500 ms, or a quarter of
 /// the fetch timer when that is shorter. Kafka holds a Fetch for a quarter of
 /// its default fetch timeout (500 ms of 2 s), so a held Fetch is answered well
-/// before the timer counts it as a miss; a krabka replica runs its fetch timer
-/// on the election timeout, which can be far shorter.
-fn fetch_max_wait_ms(election_timeout: krabka_units::prelude::Time) -> i32 {
-    let quarter_timer = election_timeout_ms(election_timeout) / 4;
+/// before the timer counts it as a miss, and a krabka fetch timeout can be far
+/// shorter than Kafka's default.
+fn fetch_max_wait_ms(fetch_timeout: krabka_units::prelude::Time) -> i32 {
+    let quarter_timer = whole_millis(fetch_timeout) / 4;
     i32::try_from(MAX_FETCH_WAIT_MS.min(quarter_timer)).unwrap_or(0)
 }
 
@@ -181,7 +178,7 @@ impl Engine {
         let body = wire::PeerRequest::Fetch {
             cluster_id: Some(self.core.quorum_state().cluster_id),
             from: self.me,
-            max_wait_ms: fetch_max_wait_ms(self.election_timeout),
+            max_wait_ms: fetch_max_wait_ms(self.timeouts.fetch),
             current_leader_epoch: i32::try_from(self.core.quorum_state().leader_epoch)
                 .unwrap_or(i32::MAX),
             fetch_epoch,
@@ -224,8 +221,10 @@ impl Engine {
                 Ok(resp_body) => {
                     // A Fetch response carries log records the follower must
                     // truncate/append/apply before the core sees it, so it goes
-                    // through the dedicated `FetchResponse` command. Every other
-                    // response decodes to a pure `Receive*Response` event.
+                    // through the dedicated `FetchResponse` command. A Vote
+                    // response names the voter's leader, which the engine acts
+                    // on before the core counts the grant. Begin/End acks
+                    // produce nothing.
                     if api_key == self::api_key::FETCH {
                         let _ = cmd_tx
                             .send(Command::FetchResponse {
@@ -243,8 +242,13 @@ impl Engine {
                                 body: resp_body,
                             })
                             .await;
-                    } else if let Some(event) = response_to_event(peer, api_key, &resp_body) {
-                        let _ = cmd_tx.send(Command::Event(event)).await;
+                    } else if api_key == self::api_key::VOTE {
+                        let _ = cmd_tx
+                            .send(Command::VoteResponse {
+                                from: peer,
+                                body: resp_body,
+                            })
+                            .await;
                     }
                 }
                 Err(e) => tracing::debug!(peer = peer.0, ?e, "kraft: peer send failed"),

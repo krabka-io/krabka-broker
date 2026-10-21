@@ -205,6 +205,16 @@ impl DispatchRegistry {
         entry.quota_policy = RequestQuotaPolicy::InlineExempt;
     }
 
+    /// Marks a registered api as one whose handler charges the request quota
+    /// and sets `ThrottleTimeMs` itself.
+    pub(crate) fn self_account_request_quota(&mut self, api_key: ApiKeyCode) {
+        let entry = self
+            .table
+            .get_mut(&api_key)
+            .unwrap_or_else(|| panic!("self-accounted api_key {api_key} is not registered"));
+        entry.quota_policy = RequestQuotaPolicy::SelfAccounted;
+    }
+
     pub(crate) fn get(&self, api_key: ApiKeyCode) -> Option<DispatchEntry> {
         self.table.get(&api_key).copied()
     }

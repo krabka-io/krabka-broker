@@ -15,6 +15,7 @@ use {
     crate::{error::RaftError, kraft::snapshot_fetch::SnapshotId, snapshot::SnapshotReader},
     krabka_ids::Offset,
     krabka_units::prelude::{ByteSize, ByteSizeExt as _, Time, TimeExt as _},
+    std::time::SystemTime,
 };
 
 /// One snapshot the cleaning weighs: its `(end_offset, epoch)` id and the
@@ -60,12 +61,17 @@ fn retained_snapshots(dir: &std::path::Path, log_start: Offset) -> Vec<RetainedS
 
 impl Engine {
     /// Kafka's `KafkaRaftLog.maybeClean`: apply the size rule, then the age
-    /// rule. Returns `true` when it deleted a snapshot or a segment.
+    /// rule. Returns `true` when it deleted a snapshot or a segment. It first
+    /// deletes the files of the segments that an earlier cleaning retired and
+    /// whose delete delay has passed.
     ///
     /// # Errors
-    /// Returns the [`RaftError`] of a log trim that failed. The snapshots that
-    /// the failed step was to delete stay on disk.
+    /// Returns the [`RaftError`] of a log trim or a retired-file deletion that
+    /// failed. The snapshots that the failed step was to delete stay on disk.
     pub fn maybe_clean(&mut self) -> Result<bool, RaftError> {
+        // The segments an earlier cleaning retired, once their
+        // `file.delete.delay.ms` has passed: Kafka's scheduled deletion.
+        self.log.reap_retired_files(SystemTime::now())?;
         if self.downgrade_snapshot_pending.is_some() {
             return Ok(false);
         }

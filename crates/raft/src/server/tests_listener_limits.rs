@@ -4,8 +4,14 @@
 //! `max.connections.per.ip`.
 
 use {
-    super::{ConnectionContext, Unstable, handle_conn, run, test_support::single_voter_engine},
-    crate::{AllowAllGrants, ListenerLimits, RaftError, kraft::KraftController},
+    super::{
+        ConnectionContext, Unstable, handle_conn, run, test_support::single_voter_engine,
+        upgrade_within_idle_window,
+    },
+    crate::{
+        AllowAllGrants, ControllerApiVersions, HandshakeStream, ListenerLimits, RaftConnection,
+        RaftError, RaftHandshakeError, RaftListenerHandshake, kraft::KraftController,
+    },
     assert2::check,
     std::{sync::Arc, time::Duration},
     tokio::{
@@ -15,7 +21,60 @@ use {
     tokio_util::sync::CancellationToken,
 };
 
+mod handler_idle;
+mod handshake_idle;
 mod session_expiry;
+
+#[tokio::test]
+async fn accepted_controller_sockets_disable_nagle_before_the_handshake() {
+    struct CheckSocket;
+
+    #[async_trait::async_trait]
+    impl RaftListenerHandshake for CheckSocket {
+        async fn upgrade(
+            &self,
+            stream: HandshakeStream,
+            _: &dyn ControllerApiVersions,
+        ) -> Result<RaftConnection, RaftHandshakeError> {
+            assert2::assert!(stream.get_ref().nodelay().unwrap());
+            Ok(RaftConnection {
+                stream: Box::new(stream),
+                principal: None,
+                authenticated_via_token: false,
+                expires_at_ms: None,
+                grants: Arc::new(AllowAllGrants),
+            })
+        }
+    }
+
+    let (engine, _dir) = single_voter_engine();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let shutdown = CancellationToken::new();
+    let listener_task = tokio::spawn(run(
+        listener,
+        engine,
+        shutdown.clone(),
+        Some(Arc::new(CheckSocket)),
+        None,
+        None,
+        (Unstable::default(), ListenerLimits::default()),
+    ));
+    let mut client = TcpStream::connect(addr).await.unwrap();
+    for correlation_id in [1, 2] {
+        client
+            .write_all(&api_versions_request(correlation_id))
+            .await
+            .unwrap();
+        let reply = tokio::time::timeout(Duration::from_secs(5), read_correlation_id(&mut client))
+            .await
+            .expect("the accepted socket serves a complete response");
+        check!(reply == correlation_id);
+    }
+
+    shutdown.cancel();
+    listener_task.await.unwrap();
+}
 
 /// An `ApiVersions` v0 request frame: a v1 header, `client_id` "c", no body.
 fn api_versions_request(correlation_id: i32) -> Vec<u8> {
@@ -214,4 +273,48 @@ async fn the_accept_loop_closes_connections_over_the_ceiling(
 
     shutdown.cancel();
     listener_task.await.unwrap();
+}
+
+/// `connections.max.idle.ms` measures silence, not how long a frame takes:
+/// Kafka's `Selector` refreshes a channel's idle clock on every read, so a
+/// request whose bytes each arrive inside the window is served however long
+/// the whole frame takes, and a peer that stops mid-frame is closed one
+/// window after its last byte.
+#[tokio::test(start_paused = true)]
+async fn the_idle_window_restarts_on_every_byte_of_a_request() {
+    let (engine, _dir) = single_voter_engine();
+    let window = Duration::from_millis(10);
+    let gap = Duration::from_millis(6);
+    let limits = ListenerLimits {
+        max_idle: Some(window),
+        ..ListenerLimits::default()
+    };
+    let DuplexConnection {
+        mut client,
+        mut connection,
+    } = duplex_connection(engine, limits);
+
+    // Seventeen bytes six milliseconds apart: about a tenth of a second for
+    // the frame, ten times the window.
+    let request = api_versions_request(1);
+    for byte in &request {
+        tokio::time::sleep(gap).await;
+        client.write_all(std::slice::from_ref(byte)).await.unwrap();
+    }
+    check!(read_correlation_id(&mut client).await == 1);
+    check!(!connection.is_finished());
+
+    // Half a frame, then silence.
+    let request = api_versions_request(2);
+    for byte in &request[..request.len() / 2] {
+        tokio::time::sleep(gap).await;
+        client.write_all(std::slice::from_ref(byte)).await.unwrap();
+    }
+    let last_byte = tokio::time::Instant::now();
+    let outcome = tokio::time::timeout(Duration::from_secs(5), &mut connection)
+        .await
+        .expect("the listener closes the stalled connection")
+        .expect("the connection task does not panic");
+    check!(outcome.is_ok());
+    check!(last_byte.elapsed() == window);
 }

@@ -133,6 +133,28 @@ pub fn valid_wire_listeners<'a>(listeners: impl IntoIterator<Item = ListenerAddr
     count != 0
 }
 
+fn valid_voter_identity<'a>(
+    voter_id: i32,
+    directory_id: WireUuid,
+    listeners: impl IntoIterator<Item = ListenerAddress<'a>>,
+) -> bool {
+    voter_id >= 0 && directory_id != WireUuid::ZERO && valid_wire_listeners(listeners)
+}
+
+macro_rules! request_identity_is_valid {
+    ($request:expr) => {
+        valid_voter_identity(
+            $request.voter_id,
+            $request.voter_directory_id,
+            $request.listeners.iter().map(|listener| ListenerAddress {
+                name: listener.name.as_str(),
+                host: listener.host.as_str(),
+                port: listener.port,
+            }),
+        )
+    };
+}
+
 fn leader_request_refusal(
     request_cluster: Option<&str>,
     cluster_id: &str,
@@ -165,15 +187,7 @@ pub fn add_voter_refusal(
         request.cluster_id.as_deref(),
         cluster_id,
         quorum,
-        || {
-            request.voter_id >= 0
-                && request.voter_directory_id != WireUuid::ZERO
-                && valid_wire_listeners(request.listeners.iter().map(|listener| ListenerAddress {
-                    name: listener.name.as_str(),
-                    host: listener.host.as_str(),
-                    port: listener.port,
-                }))
-        },
+        || request_identity_is_valid!(request),
         "Add voter request didn't include a valid voter",
     ) {
         return Some(refusal);
@@ -272,15 +286,9 @@ pub fn update_voter_refusal(
         return Some(NOT_LEADER_OR_FOLLOWER);
     }
     let feature = &request.k_raft_version_feature;
-    if request.voter_id < 0
-        || request.voter_directory_id == WireUuid::ZERO
+    if !request_identity_is_valid!(request)
         || feature.min_supported_version < 0
         || feature.max_supported_version < feature.min_supported_version
-        || !valid_wire_listeners(request.listeners.iter().map(|listener| ListenerAddress {
-            name: listener.name.as_str(),
-            host: listener.host.as_str(),
-            port: listener.port,
-        }))
         || !carries_leader_listener(
             quorum,
             request

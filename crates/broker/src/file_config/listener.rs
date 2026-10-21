@@ -43,12 +43,12 @@ pub struct FileTlsConfig {
     /// rules are tried in order and the first match wins. Defaults to
     /// `["DEFAULT"]`, so a listener that says nothing keeps Kafka's behaviour
     /// of using the full DN. A malformed entry is rejected at startup.
-    /// Case-insensitive backreferences have a Unicode compatibility edge:
-    /// under `(?i)`, non-ASCII case pairs may match here when Java rejects
-    /// them (for example `é` and `É`); under `(?iu)`, pairs Java accepts may
-    /// fail here (for example `i` and `İ`, or `s` and `ſ`). Ordinary ASCII
-    /// DNs are unaffected. Keep both captured and referenced text ASCII, or
-    /// avoid case-insensitive backreferences when exact Java behavior matters.
+    /// A case-insensitive backreference compares as Java does: under `(?i)`
+    /// by ASCII case only, so `é` does not match `É`, and under `(?iu)` by
+    /// Java's simple case mapping, one code point for one, so `i` matches `İ`
+    /// and `ı`, and `s` matches `ſ`. `\R` gives back the `\n` of `\r\n` where
+    /// Java does, and a group that matched inside a look-around keeps its
+    /// text after the match backtracks out of it, as in Java.
     #[serde(default = "default_principal_mapping_rules")]
     pub principal_mapping_rules: Vec<String>,
 }

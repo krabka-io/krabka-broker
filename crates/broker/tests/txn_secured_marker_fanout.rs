@@ -43,6 +43,7 @@ use {
     assert2::assert,
     krabka_broker::{
         BootstrapMode, Broker, BrokerConfig, BrokerError, BrokerHandle,
+        codes::NOT_CONTROLLER,
         config::{InterBrokerCredentials, ListenerSpec},
     },
     krabka_client_core::{
@@ -56,6 +57,7 @@ use {
                 AddPartitionsToTxnRequest, AddPartitionsToTxnTransaction,
             },
             common::add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
+            create_topics_response::CreateTopicsResponse,
             find_coordinator_request::FindCoordinatorRequest,
             init_producer_id_response::InitProducerIdResponse,
             produce_request::ProduceRequest,
@@ -254,6 +256,30 @@ async fn start_two_sasl_with_retry(
     panic!("SASL cluster boot failed after 3 attempts: {last:?}");
 }
 
+/// Create `topic` with two partitions, retrying `NOT_CONTROLLER`.
+///
+/// The two-voter controller quorum can be between leaders when the request
+/// lands, and the broker then answers `NOT_CONTROLLER` without creating
+/// anything. Kafka's admin client retries that code, so this does too, for up
+/// to 30 seconds. Any other answer is returned to the caller to judge.
+async fn create_two_partition_topic(admin: &Client, topic: &str) -> CreateTopicsResponse {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let created = admin
+            .send(create_topic_request(
+                creatable_topic().name(topic.into()).partitions(2).call(),
+            ))
+            .await
+            .expect("create topic");
+        if created.topics[0].error_code != NOT_CONTROLLER || Instant::now() >= deadline {
+            return created;
+        }
+        // intentional: the client has no awaiter for a controller election;
+        // back off before asking again, as Kafka's admin client does.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 /// Wait until every broker's metadata image lists both peers, so `CreateTopics`
 /// round-robins partition leadership across the two brokers.
 async fn wait_both_registered(cluster: &[(BrokerHandle, BrokerConfig, TempDir)]) {
@@ -381,12 +407,7 @@ async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {
 
     // Topic with 2 partitions, RF=1. Round-robin places P0 on node 1 and P1 on
     // node 2.
-    let cr = admin
-        .send(create_topic_request(
-            creatable_topic().name((TOPIC).into()).partitions(2).call(),
-        ))
-        .await
-        .expect("create topic");
+    let cr = create_two_partition_topic(&admin, TOPIC).await;
     assert!(
         cr.topics[0].error_code == 0 || cr.topics[0].error_code == 36,
         "create_topic: error_code={}",
@@ -414,15 +435,7 @@ async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {
     // Connect to the coordinator and run the transaction control plane.
     let coord = sasl_client(&format!("{}:{}", coordinator.host, coordinator.port)).await;
 
-    let init = coord
-        .send(
-            init_producer_request()
-                .maybe_transactional_id(Some(TID.into()))
-                .call(),
-        )
-        .await
-        .expect("init producer id");
-    assert!(init.error_code == 0, "InitProducerId failed: {init:?}");
+    let init = init_producer(&coord, TID).await;
     let (pid, epoch) = (init.producer_id, init.producer_epoch);
 
     // AddPartitionsToTxn for the remote-led partition. Fill both the v4+
@@ -617,15 +630,7 @@ async fn a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_
     let mut actual = Vec::new();
     let mut expected = Vec::new();
     for case in cases {
-        let created = admin
-            .send(create_topic_request(
-                creatable_topic()
-                    .name((case.name).into())
-                    .partitions(2)
-                    .call(),
-            ))
-            .await
-            .expect("create topic");
+        let created = create_two_partition_topic(&admin, case.name).await;
         assert!(
             created.topics[0].error_code == 0,
             "{}: {created:?}",

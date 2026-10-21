@@ -93,6 +93,21 @@ def _test_only_schema_two_requires_the_demo_image_slot(_ctx):
             component["artifacts"] = [artifact for artifact in component["artifacts"] if artifact["kind"] != "image"]
     check_eq("candidate demo image", [problem for problem in manifest_problems(candidate) if "preserve" in problem], ["krabka-io/krabka-o11y-demo: artifacts must preserve the compose, image slot"])
 
+def _test_candidates_can_bind_the_cli_binary_and_image(_ctx):
+    for kinds, failures in [
+        (["binary"], 0),
+        (["binary", "image"], 0),
+        (["image"], 1),
+        (["binary", "image", "image"], 1),
+        (["binary", "archive"], 1),
+    ]:
+        candidate = _candidate()
+        for component in candidate["components"]:
+            if component["repository"] == "krabka-io/krabka-cli":
+                component["artifacts"] = [{"kind": kind, "reference": "https://example.test/artifact", "digest": _DIGEST} for kind in kinds]
+        problems = [problem for problem in manifest_problems(candidate) if "preserve" in problem]
+        check_eq("CLI slots %s" % kinds, len(problems), failures)
+
 def _test_a_passed_gate_requires_complete_evidence(_ctx):
     manifest = _manifest()
     manifest["gates"][0]["status"] = "passed"
@@ -202,9 +217,38 @@ def _test_schema_one_stays_historical_and_schema_two_requires_disaster_recovery(
     check_eq("schema two missing DR", len([problem for problem in manifest_problems(candidate) if "exactly once" in problem]), 1)
 
 def _test_all_adapters_are_executable_shell(ctx):
-    for name in _EVIDENCE:
+    for name in list(_EVIDENCE.keys()) + ["loaded-lifecycle"]:
         result = ctx.std.process.command("bash").args(["-n", "-c", gate_script(name)]).spawn().wait()
         check_eq(name, result.code, 0)
+
+def _test_the_loaded_lifecycle_runs_beside_the_manifest_gates(_ctx):
+    # An eight-gate candidate is complete without it, and cannot list it as
+    # one of its schema's gates.
+    candidate = _candidate()
+    check_eq("eight-gate candidate", manifest_problems(candidate), [])
+    candidate["gates"].append({"name": "loaded-lifecycle", "issue": 1396, "status": "pending", "evidence": []})
+    problems = manifest_problems(candidate)
+    check_eq("not a schema gate", len([problem for problem in problems if problem.startswith("loaded-lifecycle: gate does not name")]), 1)
+
+def _test_the_loaded_lifecycle_fails_when_its_contract_is_missing(ctx):
+    # The adapter refuses an adapter tree without the lifecycle contract
+    # before it pulls or runs anything, and leaves no executed check.
+    tree = temp_tree(ctx, {"README.md": "no contract here\n"})
+    evidence = tree + "/evidence"
+    work = tree + "/work"
+    script = gate_script("loaded-lifecycle")
+    body = script[script.find("adapter=$4"):]
+    result = ctx.std.process.command("bash").args([
+        "-c",
+        "set -euo pipefail; evidence=$2; work=$3; mkdir -p \"$evidence\"; : > \"$evidence/checks.txt\"; check() { local name=$1; shift; \"$@\"; printf '%s\\n' \"$name\" >> \"$evidence/checks.txt\"; }; " + body,
+        "loaded-lifecycle",
+        tree + "/candidate.json",
+        evidence,
+        work,
+        tree,
+    ]).spawn().wait()
+    check_eq("refused", result.code != 0, True)
+    check_eq("no checks", ctx.std.fs.read_to_string(evidence + "/checks.txt"), "")
 
 def _test_installation_enables_the_streams_protocol(_ctx):
     commands = gate_script("installation")
@@ -249,8 +293,51 @@ def _test_disaster_recovery_uses_the_packaged_secured_loss_path(_ctx):
         "invalid-certificate",
         "denied-acl",
         "no-manifest",
+        "krabka-soak-drill",
+        "krabka-soak-check",
+        "bench/soak/dr-secured.yaml",
+        "capture-tampered",
+        "capture-missing",
+        "acls-restored",
+        "scram-users-restored",
+        "denied-access-restored",
+        "unlisted-topic-restored",
+        "soak-judge",
     ]:
         check_eq(requirement, requirement in commands, True)
+
+def _test_disaster_recovery_runs_under_its_declared_load(_ctx):
+    commands = gate_script("disaster-recovery")
+    marks = [
+        ("load starts", "load --contract /work/dr-contract.yaml"),
+        ("denied on the source", "denied_probe source denied-access-source"),
+        ("source settings", "settings_listing source\n"),
+        ("capture boundary", "capture_started_ms=$(date"),
+        ("capture", "--log-dir /var/lib/krabka --bootstrap-server \"$group_coordinator:9095\""),
+        ("still loading", "check capture-under-load"),
+        ("post-capture load", "post_capture_load_ms)) ]"),
+        ("loss", "docker kill \"$scope-source-1\""),
+        ("disaster", "disaster_ms=$(date"),
+        ("load abandoned", "docker stop --time 120 \"$scope-drill\""),
+        ("data destroyed", "check source-volumes-destroyed"),
+        ("heads after the loss", "> \"$evidence/worm-verified.txt\""),
+        ("restore", "--entrypoint /usr/bin/krabka-restore"),
+        ("authenticated round trip", "probe --topic \"$name\""),
+        ("declared-load read-back", "readback --contract /work/dr-contract.yaml"),
+        ("recovered", "restore_ready_ms=$(date"),
+        ("measured before any proof", "check measured-rpo-rto"),
+        ("settings proof", "check \"$topic-settings\""),
+        ("access controls", "check acls-restored"),
+        ("denied after restore", "denied_probe restored denied-access-restored"),
+        ("soak judge", "check soak-judge"),
+        ("drill complete", "drill_complete_ms=$(date"),
+        ("tampered capture", "capture-tampered-restore-offsets-refused"),
+    ]
+    positions = [commands.find(needle) for _label, needle in marks]
+    for index, (label, _needle) in enumerate(marks):
+        check_eq(label + " exists", positions[index] >= 0, True)
+        if index > 0:
+            check_eq(label + " follows " + marks[index - 1][0], positions[index] > positions[index - 1], True)
 
 def _test_disaster_recovery_times_recovery_and_not_its_proof(_ctx):
     commands = gate_script("disaster-recovery")
@@ -274,6 +361,25 @@ def _test_disaster_recovery_times_recovery_and_not_its_proof(_ctx):
         check_eq(label + " exists", positions[index] >= 0, True)
         if index > 0:
             check_eq(label + " follows " + marks[index - 1][0], positions[index] > positions[index - 1], True)
+
+def _test_disaster_recovery_never_rewrites_the_read_back_s_own_files(_ctx):
+    # The read-back runs in a container as root, so the files it writes under
+    # `$work/drill` are root's. A runner command that rewrites one fails with
+    # `Permission denied` and stops the gate before the judge runs. The judge
+    # reads the runner's own merged copy under `$evidence` instead.
+    commands = gate_script("disaster-recovery")
+    read_back = commands.find("readback --contract /work/dr-contract.yaml")
+    judge = commands.find("judge --contract")
+    check_eq("read-back exists", read_back >= 0, True)
+    check_eq("judge follows the read-back", judge > read_back, True)
+    after = commands[read_back:]
+    for write in ["> \"$work/drill/", "cp \"$evidence/drill-evidence.json\" \"$work/drill/"]:
+        check_eq("no runner write: " + write, write in after, False)
+    check_eq(
+        "judge reads the merged evidence",
+        "judge --contract \"$work/dr-contract.yaml\" --evidence \"$evidence/drill-evidence.json\"" in after,
+        True,
+    )
 
 def _test_registry_migration_resolves_the_advertised_host_before_the_handoffs(_ctx):
     commands = gate_script("registry-migration")
@@ -336,6 +442,7 @@ check_qualification_tests = suite("check-qualification", [
     _test_qualified_status_is_strict_without_the_flag,
     _test_a_draft_preserves_artifact_slots,
     _test_only_schema_two_requires_the_demo_image_slot,
+    _test_candidates_can_bind_the_cli_binary_and_image,
     _test_a_passed_gate_requires_complete_evidence,
     _test_timestamps_are_calendar_valid,
     _test_a_qualified_manifest_is_valid,
@@ -346,10 +453,14 @@ check_qualification_tests = suite("check-qualification", [
     _test_final_candidate_requires_all_five_fresh_receipts,
     _test_schema_one_stays_historical_and_schema_two_requires_disaster_recovery,
     _test_all_adapters_are_executable_shell,
+    _test_the_loaded_lifecycle_runs_beside_the_manifest_gates,
+    _test_the_loaded_lifecycle_fails_when_its_contract_is_missing,
     _test_installation_enables_the_streams_protocol,
     _test_installation_finalizes_topics_before_the_cluster,
     _test_disaster_recovery_uses_the_packaged_secured_loss_path,
+    _test_disaster_recovery_runs_under_its_declared_load,
     _test_disaster_recovery_times_recovery_and_not_its_proof,
+    _test_disaster_recovery_never_rewrites_the_read_back_s_own_files,
     _test_registry_migration_resolves_the_advertised_host_before_the_handoffs,
     _test_a_failed_smoke_pipeline_cannot_pass,
     _test_retained_evidence_cannot_be_substituted,

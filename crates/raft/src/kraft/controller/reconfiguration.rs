@@ -6,7 +6,7 @@ use {
     super::{
         Engine, KraftController, PendingReconfig,
         control_state::{voter_set_to_wire, voter_supports_version},
-        offsets::{hwm_reaches_waiter, leader_alone_is_majority, validate_append_result},
+        offsets::{hwm_reaches_waiter, validate_append_result},
         records::{decode_control_record, start_of_epoch_batch, typed_control_batch},
     },
     crate::{
@@ -426,9 +426,7 @@ impl Engine {
             removed_local_leader,
         });
 
-        if leader_alone_is_majority(self.core.quorum_state().majority(), self.core.is_voter()) {
-            self.advance_and_apply(self.log.log_end_offset());
-        }
+        self.advance_if_single_voter();
         self.publish_leader();
     }
 
@@ -498,7 +496,7 @@ impl Engine {
             voters: self.controls.committed_voters.clone(),
         }));
         if self.downgrade_snapshot_pending.is_none() {
-            let _ = self.image_tx.send(Arc::new(self.image.clone()));
+            self.publish_image();
         }
     }
 

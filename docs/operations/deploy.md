@@ -36,12 +36,16 @@ copy it out. That path builds for the host it runs on, so it works anywhere the
 Rust toolchain does:
 
 ```
-bazel build //:broker_bin //:format_bin
-cp bazel-bin/crates/broker/krabka-broker bazel-bin/crates/format/krabka-format /usr/local/bin/
+bazel build //:broker_bin //:format_bin //:restore_bin //crates/backup-cli:krabka-backup
+cp bazel-bin/crates/broker/krabka-broker bazel-bin/crates/format/krabka-format \
+    bazel-bin/crates/restore/krabka-restore bazel-bin/crates/backup-cli/krabka-backup \
+    /usr/local/bin/
 ```
 
-Both binaries link glibc and nothing else. The image's Wolfi base supplies
-glibc and the CA bundle.
+`krabka-backup` and `krabka-restore` are the tools that
+[Backup and restore](backup-restore.md) uses. Install them on every host that
+captures restore inputs or runs a restore. The binaries link glibc and nothing
+else. The image's Wolfi base supplies glibc and the CA bundle.
 
 ### Kubernetes
 
@@ -55,10 +59,14 @@ The label the manifests read the pod ordinal from needs Kubernetes 1.29 or
 later.
 
 The StatefulSet pins itself to amd64 nodes with
-`nodeSelector: kubernetes.io/arch: amd64`, because that is the only
-architecture the image is published for. On a mixed-architecture cluster that
-selector is what keeps a pod off a node it could never exec the image on;
-change it only when the image you point it at is built for something else.
+`nodeSelector: kubernetes.io/arch: amd64`. The image it names by default,
+`docker.io/krabka-io/krabka-broker:dev` from `//packaging:image_load`, is an
+amd64 image, and so is a per-commit delivery tag. On a mixed-architecture
+cluster the selector keeps a pod off a node that cannot run that image. A
+release tag or `latest` is an index for amd64 and arm64, as
+[Install](#install) says. When the manifest names one of those, remove the
+selector or set it to the architectures that your nodes run. For the
+`dev-arm64` image, set it to `arm64`.
 
 ```
 kubectl apply -f packaging/k8s/
@@ -89,19 +97,203 @@ The parts that carry the design:
 - The PodDisruptionBudget sets `minAvailable: 2`, the majority of three. Scale
   the StatefulSet and move the budget with it.
 
+### Kubernetes operator
+
+[krabka-operator](https://github.com/krabka-io/krabka-operator) is the other
+Kubernetes path. It reconciles a cluster from custom resources in the group
+`krabka.io`, version `v1alpha1`. It formats each node, finds the controllers,
+issues the certificates, rolls pods one at a time and owns each StatefulSet
+and its claims. Use the operator or the reference manifests above for a
+cluster, not both.
+
+Install the chart and the operator image that a qualified manifest names, by
+digest. [Ecosystem qualification](../qualification.md) describes the
+manifests. The component `krabka-io/krabka-operator` in the manifest gives
+the chart URL and SHA-256 and the image digest. The component
+`krabka-io/krabka-broker` gives the broker image digest.
+
+```
+curl -fsSLo krabka-operator.tgz "<chart url from the manifest>"
+echo "<chart sha256 from the manifest>  krabka-operator.tgz" | sha256sum -c -
+helm install krabka-operator ./krabka-operator.tgz \
+    --namespace krabka-system --create-namespace --wait \
+    --set image.digest=<operator image digest> \
+    --set brokerImage.digest=<broker image digest>
+```
+
+A digest in `image.digest` or `brokerImage.digest` wins over the tag. The
+broker image is the default for every `KafkaNodePool` that sets no
+`spec.image`. `watchNamespaces` limits the operator to a list of namespaces;
+empty means the whole cluster.
+
+Helm creates the CRDs from the chart's `crds/` directory on install. It does
+not change them on `helm upgrade`. After an upgrade, apply that directory from
+the same chart archive:
+
+```
+mkdir -p /tmp/krabka-operator-chart
+tar -xzf krabka-operator.tgz -C /tmp/krabka-operator-chart
+kubectl apply -f /tmp/krabka-operator-chart/krabka-operator/crds
+```
+
+A cluster is one `Kafka` resource and one or more `KafkaNodePool` resources.
+Each pool carries the label `krabka.io/cluster: <Kafka name>`. This example
+is a three-node combined-role cluster with a mutual-TLS replication listener,
+a SASL/SCRAM client listener over TLS, the ACL authorizer and S3 tiered
+storage:
+
+```yaml
+apiVersion: krabka.io/v1alpha1
+kind: Kafka
+metadata:
+  name: prod
+spec:
+  kafkaVersion: "4.0.0"
+  listeners:
+    - name: REPLICATION
+      port: 9091
+      type: internal
+      tls: true
+      authentication:
+        type: tls
+    - name: CLIENTS
+      port: 9092
+      type: internal
+      tls: true
+      authentication:
+        type: scram-sha-512
+  interBrokerListenerName: REPLICATION
+  authorization:
+    type: simple
+    superUsers: ["User:admin"]
+  tieredStorage:
+    type: S3
+    s3:
+      bucket: krabka-tier
+      region: eu-west-1
+      prefix: prod/
+  metricsConfig: {}
+---
+apiVersion: krabka.io/v1alpha1
+kind: KafkaNodePool
+metadata:
+  name: nodes
+  labels:
+    krabka.io/cluster: prod
+spec:
+  roles: [Controller, Broker]
+  replicas: 3
+  nodeIdStart: 0
+  storage:
+    type: PersistentClaim
+    size: 500Gi
+    deleteClaim: false
+```
+
+The parts that matter for operation:
+
+- Port 9093 is the controller listener on every node. Do not give a
+  `listeners` entry that port.
+- `tls: true` uses a broker certificate that the cluster CA signs. The
+  operator generates the cluster CA and the clients CA unless
+  `spec.clusterCa` and `spec.clientsCa` say otherwise.
+- With `authorization` set, the operator adds its own principal,
+  `User:CN=krabka-operator@internal`, to the super users. Name every other
+  super user yourself.
+- `tieredStorage` renders `[remote_storage]`. Leave
+  `tieredStorage.s3.credentials` unset to use the pod's cloud identity, or
+  name a Secret for `accessKeyId` and `secretAccessKey`. The metadata manager
+  defaults to the topic-based one, which survives a restart. Enable a topic
+  with `remote.storage.enable: "true"` in its configuration.
+- `metricsConfig: {}` opens `/metrics` on 9404. Without it the brokers serve
+  no metrics.
+- `spec.config` passes `server.properties` keys to the broker's
+  `[server_properties]` table. The resources have no field for a raw TOML
+  section. A setting that no field carries, such as `principal_mapping_rules`,
+  `[audit]` or `[schema_registry]`, cannot be set through the operator. Use
+  the image path for a cluster that needs one.
+- `deleteClaim: false` keeps the claims when the pool is deleted.
+
+Wait for both resources to report `Ready`:
+
+```
+kubectl wait kafkanodepool/nodes \
+    --for=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'=True --timeout=10m
+kubectl wait kafka/prod \
+    --for=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'=True --timeout=10m
+```
+
+Declare topics and principals as resources too. A `KafkaUser` with
+`authentication: {type: scram-sha-512}` gets a Secret with the same name. The
+Secret holds the generated `password` and a ready `sasl.jaas.config`. Its
+ACLs are a list under `authorization`:
+
+```yaml
+apiVersion: krabka.io/v1alpha1
+kind: KafkaUser
+metadata:
+  name: orders-producer
+  labels:
+    krabka.io/cluster: prod
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      - resource: {type: topic, name: orders, patternType: literal}
+        operations: [Write, Describe]
+---
+apiVersion: krabka.io/v1alpha1
+kind: KafkaTopic
+metadata:
+  name: orders
+  labels:
+    krabka.io/cluster: prod
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    min.insync.replicas: "2"
+    remote.storage.enable: "true"
+```
+
+To change the broker image, set `spec.image` on the pool, or upgrade the
+chart with a new `brokerImage.digest`. The operator rolls the pods one at a
+time, and each pod waits for `/readyz`. The checks in
+[Rolling upgrade](#rolling-upgrade) still apply before and after the roll.
+
+`spec.kafkaVersion` also sets `metadata.version`. The level follows the
+`major.minor` of the version. When it rises, the operator rolls the images and
+then finalizes the new level with `UpdateFeatures`. A finalized level ends the
+roll back to a build that does not support it. To keep that roll back
+possible, set `spec.metadataVersion` to the current level before you raise
+`kafkaVersion`. Raise `spec.metadataVersion` later, as its own step.
+`status.metadataVersion` reports the finalized level, and the condition
+`KafkaVersionUpgrade` reports the progress.
+
+To add or remove brokers on an operator-managed pool, follow
+[Scale a cluster](scaling.md).
+
 ## Ports
 
 | Port | Listener | Configured by |
 | :--- | :--- | :--- |
 | 9092 | Kafka client and inter-broker listener | `--listen-addr` (default `127.0.0.1:9092`). Under `--config-file` each `[[listeners]]` entry sets its own port. |
 | 9093 | KIP-595 controller listener | `--controller-listen-addr`, `KRABKA_CONTROLLER_LISTEN_ADDR`. By default `listen_addr` with the port set to 9093. Under `--config-file` the default binds all interfaces. It must equal the endpoint that `krabka format` recorded for the node. |
-| 9404 | Prometheus `/metrics` and `/debug/pprof` | `--metrics-listen-addr`, `KRABKA_METRICS_LISTEN_ADDR`. `none` disables it. |
-| 9405 | `/healthz` and `/readyz` probes | `--health-listen-addr`, `KRABKA_HEALTH_LISTEN_ADDR`. `none` disables them. |
+| 9404 | Prometheus `/metrics` and `/debug/pprof` | `--metrics-listen-addr`, `KRABKA_METRICS_LISTEN_ADDR` (default `0.0.0.0:9404`). It binds all interfaces even when the Kafka listener binds only loopback. `none` disables it. |
+| 9405 | `/healthz` and `/readyz` probes | `--health-listen-addr`, `KRABKA_HEALTH_LISTEN_ADDR` (default `0.0.0.0:9405`). It binds all interfaces even when the Kafka listener binds only loopback. `none` disables them. |
 
 Every broker in the cluster must reach every other broker's 9093. Clients
 need only the port of the listener they connect to: 9092 under
 `--listen-addr`, or the `bind_addr` port of their `[[listeners]]` entry under
 `--config-file`. The three-node file below serves clients on 9094.
+
+A node whose port another process holds exits at startup with an error that
+names the listener, the address and the setting that gave it, for example
+`unable to bind the CONTROLLER listener to 0.0.0.0:9093 (set by
+--controller-listen-addr): Address already in use (os error 98)`. Two brokers
+on one host need distinct ports for each listener in this table.
 
 ## Format the log directory
 
@@ -129,6 +321,17 @@ A single node that is its own controller:
 krabka-format --log-dir /var/lib/krabka --standalone --node-id 1 \
     --controller-listener broker-1.example:9093
 ```
+
+A cluster with fewer than three brokers must lower the replication factor of
+the internal topics when it starts, as a Kafka quickstart sets
+`offsets.topic.replication.factor=1`. Start the broker with
+`--offsets-topic-replication-factor 1`,
+`--transaction-state-replication-factor 1` and
+`--transaction-state-min-isr 1`. Without the first, the broker cannot create
+`__consumer_offsets`. It logs `INVALID_REPLICATION_FACTOR`, and every
+consumer group waits for a coordinator with no error to the client. Without
+the last, `__transaction_state` has one replica against a minimum ISR of 2,
+and no transactional producer can write.
 
 A three-node quorum with a KIP-853 dynamic initial voter set. Every node
 runs the same command with its own `--node-id`, its own `--directory-id` and
@@ -226,8 +429,9 @@ credentials_path = "/etc/krabka/sasl/plain-credentials"
 controlled_shutdown_drain_timeout = "20s"
 ```
 
-The sections the file accepts are the fields of
-`krabka_broker::file_config::FileConfig`. The ones an operator reaches for
+The [configuration reference](../config-reference.md) lists every section and
+key the file accepts, with its default. `krabka-broker --print-config-schema`
+prints the same set as a JSON schema. The sections an operator reaches for
 first:
 
 | Section | Purpose |
@@ -236,7 +440,7 @@ first:
 | `[process]` | `roles`: `controller`, `broker`, and the `witness` modifier for a stretch cluster. |
 | `[stretch]` | The three sites of a stretch cluster and the preferred leader site. All-or-nothing. |
 | `[runtime]` | Timers and sizes: the controlled-shutdown drain, snapshot cadence, the diskless WAL flusher, queue capacities. Heartbeats and `replica_lag_time_max` sit at the top level. |
-| `[remote_storage]` | KIP-405 tiered storage: the S3 or GCS bucket, the WORM policy and the topic-backed metadata manager. |
+| `[remote_storage]` | KIP-405 tiered storage: the S3 or GCS bucket, the WORM policy and the topic-backed metadata manager. A topic tiers only with `remote.storage.enable=true`. [Backup and restore](backup-restore.md) restores only from this archive. |
 | `[audit]` | The audit topic, its failure mode, signing and the durable spool. |
 | `[sasl_plain]` | `credentials_path`: the file the static SASL/PLAIN credential table is read from. Required once a listener offers `PLAIN`. |
 | `[authorization]` | ACL or OPA authorizer. |
@@ -255,11 +459,11 @@ krabka-broker --config-file /etc/krabka/broker.toml \
     --cluster-id DX4vWpscTB6KPyttHkyfEA
 ```
 
-The broker logs `health server listening` first, before it opens the log
-directory, so the probes answer through recovery. It then logs
-`selected bootstrap mode`: `Bootstrap` on a fresh directory, `Rejoin` on one
-it has run from before. It logs `metrics server listening` once `/metrics` is
-up. It logs `krabka-broker started` when its start is complete. That line
+The broker first logs `selected bootstrap mode`: `Bootstrap` on a fresh
+directory, `Rejoin` on one it has run from before. It then logs
+`health server listening`, before it recovers the log directory, so the
+probes answer through recovery. It logs `metrics server listening` once
+`/metrics` is up. It logs `krabka-broker started` when its start is complete. That line
 names the listeners that the node opened: `listen_addr` for the client
 listener of a node with the `broker` role, and `controller_listen_addr` for
 the controller listener of a node with the `controller` role. A
@@ -305,7 +509,13 @@ contains.
    `krabka_broker_under_replicated_partitions` is zero on every broker and
    `krabka_broker_offline_partitions_count` is zero. Do not roll a cluster
    that is already under-replicated: the next stop drops a partition below
-   `min.insync.replicas`.
+   `min.insync.replicas`. During the roll, the stopped broker's audit
+   partition counts as offline until the broker is back, so
+   `krabka_broker_offline_partitions_count` and
+   `krabka_broker_offline_audit_partitions` both read 1 on the active
+   controller and `KrabkaOfflinePartitions` stays quiet. An offline count
+   above the audit count is a user partition that lost its leader: stop the
+   roll.
 2. Stop one broker with `SIGTERM`. Wait for its log to record the controlled
    shutdown, or for `krabka_broker_partitions_led` on it to reach zero.
 3. Replace the binary or the image and start the broker on the same
@@ -335,6 +545,17 @@ you change the image, and step 6 after the last pod is ready.
 A rise in `krabka_broker_unsupported_api_requests_total` during the roll is
 a client that learned a new version range from an upgraded broker and sent it
 to an old one. It clears when the roll completes.
+
+On a cluster with tiered topics, do not run `DeleteRecords` against a tiered
+topic while the roll is in progress, until every broker runs a build with the
+fix for #1481. A broker before that fix enforces a `DeleteRecords` floor in the
+remote tier only on its next remote-log-manager pass, after
+`remote_log_manager_interval`. If leadership moves before that pass to a
+replica that reports a lower log start, the followers lower the floor and the
+deleted records become readable again. A broker cannot tell such a floor from
+one that an older broker raised by mistake, so it cannot repair this itself.
+A trim made before the roll is safe once one interval has passed with its
+leader in place.
 
 Within 1.x, a roll is always enough. Any 1.x broker reads every on-disk and
 object-store artifact that an earlier 1.x broker wrote, and

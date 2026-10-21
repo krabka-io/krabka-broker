@@ -10,21 +10,36 @@ crate_library(name = "raft")
 # The README snippet uses this runnable example, so API changes compile here.
 crate_binary(
     name = "quorum-state-example",
+    compile_data = ["tests/support/voter.rs"],
     crate_root = "examples/quorum_state.rs",
     lib = ":raft",
 )
 
 crate_tests(
+    compile_data = ["tests/support/voter.rs"],
     # The engine simulation drives real elections against real timers. Starved
     # of CPU it reports a timed-out election as a failure, which is a statement
     # about the machine rather than the code -- it failed 7 of 7 at twelve
     # concurrent runs and passed at six. Declaring the cores keeps Bazel from
     # creating that starvation.
-    cpu_heavy = ["kraft_engine_sim"],
+    #
+    # `kraft_model` asserts on no clock, but it is here for the same lane. The
+    # exhaustive model grew to ~3.2M unique and ~19.6M generated states in
+    # `three_voters_faults` (#1408, #1414): about ten minutes on four cores
+    # uninstrumented, and past the 1200s `long` bound under coverage
+    # instrumentation. The `timing-sensitive` tag this list applies keeps it out
+    # of `coverage` and runs it in the `ci` job's own `test` step, where it
+    # still gates; `cpu:4` reserves the cores its BFS workers use. The `flaky`
+    # retry cannot hide a failure: the search is deterministic, so a broken
+    # property or a moved state count fails every attempt.
+    cpu_heavy = [
+        "kraft_engine_sim",
+        "kraft_model",
+    ],
     docker = {"kraft_checkpoint_jvm": ["apache_kafka_4_0_0"]},
-    # The exhaustive fault model grew to 1.13M unique states. Its five cases
-    # share one Bazel process, which exceeded the default 300s CI timeout.
-    integration_timeouts = {"kraft_model": "long"},
+    # Its five cases share one Bazel process, and the largest alone takes about
+    # ten minutes, past `long`'s 900s on a loaded runner.
+    integration_timeouts = {"kraft_model": "eternal"},
     lib = "raft",
     # The consensus engine is the highest-value mutation target here: its
     # decision logic is pure and almost entirely unit-tested, so a survivor is a

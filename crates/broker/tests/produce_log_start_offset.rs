@@ -70,8 +70,8 @@ const TRIM_TO: i64 = 3;
 /// value works; the broker learns it from the first batch that carries it.
 const PRODUCER_ID: i64 = 777;
 
-/// The max timestamp of every batch this suite sends. A duplicate row answers
-/// with it in `log_append_time_ms`.
+/// The timestamp of every record this suite sends, and so its batches' max
+/// timestamp. A duplicate row answers with it in `log_append_time_ms`.
 const BATCH_MAX_TIMESTAMP: i64 = 12_345;
 
 /// A broker holding the `orders` topic with its first records appended.
@@ -191,6 +191,7 @@ async fn produce_as(
 ) -> PartitionProduceResponse {
     let batch = RecordBatch {
         last_offset_delta: 0,
+        base_timestamp: BATCH_MAX_TIMESTAMP,
         max_timestamp: BATCH_MAX_TIMESTAMP,
         producer_id,
         producer_epoch: 0,

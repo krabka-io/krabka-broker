@@ -56,6 +56,7 @@ bounds, caller preconditions, and the I/O or orchestration outside its scope.
 | `krabka-raft` | KRaft consensus engine. |
 | `krabka-kraft-core` | Shared KRaft types and the quorum state machine. |
 | `krabka-log` | The on-disk log: segments, indexes, compaction, retention. |
+| `krabka-java-regex` | Java's `java.util.regex` semantics, for the configs whose values are Java regular expressions. |
 | `krabka-records-legacy` | v0/v1 message-set codecs for down-conversion. |
 | `krabka-remote-storage` | Tiered-storage backends and the remote log reader. |
 | `krabka-remote-storage-topic` | The `__remote_log_metadata` topic-backed RLMM. |
@@ -483,8 +484,9 @@ points at robot-head/crabka for the history before the extraction.
 
 ## Publishing
 
-A `vX.Y.Z` tag on `main` publishes `krabka-log` and `krabka-verified` to
-crates.io, with `krabka-macros`, which `krabka-log` needs. Every other crate,
+A `vX.Y.Z` tag on `main` publishes `krabka-log`, `krabka-verified` and
+`krabka-java-regex` to crates.io, with `krabka-macros`, which `krabka-log`
+needs. Every other crate,
 the broker included, sets `publish = false`; consumers of those pin this
 repository by git revision. [Releasing](docs/releasing.md#cratesio) gives the
 procedure.

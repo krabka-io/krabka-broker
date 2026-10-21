@@ -1,10 +1,11 @@
 //! Registry-backed dispatch. It builds the per-request context for the
-//! handler kind that the registry entry names, calls that handler, frames the
-//! body it returns, and writes the response back to the client.
+//! handler kind that the registry entry names, calls that handler, and frames
+//! the body it returns into the response the connection loop writes back to
+//! the client.
 
 use {
     super::{
-        AfterResponse,
+        AfterResponse, Reply,
         response::{ResponseShape, ThrottledResponse, apply_request_quota, encode_response},
         session::principal_or_anonymous,
     },
@@ -15,24 +16,21 @@ use {
             DispatchEntry, DispatchKind, RequestContext, RequestQuotaPolicy, TelemetryContext,
             produce::response_required,
         },
-        network::{auth::ConnectionAuth, codec::KafkaCodec, request::ParsedRequest},
+        network::{auth::ConnectionAuth, request::ParsedRequest},
+        quota::{Timed, with_active_time},
     },
     bytes::Bytes,
     std::net::SocketAddr,
-    tokio::io::{AsyncRead, AsyncWrite},
-    tokio_util::codec::Framed,
     tracing::Instrument as _,
 };
 
-pub(super) async fn send_registry_response<S>(
-    framed: &mut Framed<S, KafkaCodec>,
+/// Runs the registry handler for `entry` and returns what it leaves for the
+/// socket. The connection loop writes it once the handler is done.
+pub(super) async fn registry_reply(
     entry: DispatchEntry,
     context: DispatchContext<'_, '_>,
     request_span: tracing::Span,
-) -> AfterResponse
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
+) -> Reply {
     // KIP-124 meters the time a request holds a handler thread. A handler
     // future that is parked (on a group rebalance, a replication wait, a raft
     // commit) holds none, so only the time spent polling it is charged.
@@ -44,7 +42,7 @@ where
         Ok(Some(response)) => response,
         Ok(None) => {
             tracing::warn!("registry entry has no ordinary dispatcher, closing connection");
-            return AfterResponse::Close;
+            return Reply::Done(AfterResponse::Close);
         }
         Err(error) => {
             context
@@ -52,7 +50,7 @@ where
                 .metrics
                 .record_request_error(context.parsed.api_key);
             tracing::warn!(%error, "registry dispatch error, closing connection");
-            return AfterResponse::Close;
+            return Reply::Done(AfterResponse::Close);
         }
     };
     if response.bytes.is_empty()
@@ -64,11 +62,11 @@ where
         // the close is the only signal an acks=0 producer gets, so it is what
         // makes such a producer refresh metadata after, say, a leader move.
         if response.close_after_response {
-            return AfterResponse::Close;
+            return Reply::Done(AfterResponse::Close);
         }
         // Otherwise the handler may still have charged a quota, so the mute
         // window stands.
-        return AfterResponse::Mute(response.throttle);
+        return Reply::Done(AfterResponse::Mute(response.throttle));
     }
     if entry.quota_policy() == RequestQuotaPolicy::ApplyFallbackAccounting {
         // Kafka mutes the channel once per request, for the longest window
@@ -88,7 +86,7 @@ where
         );
         response.throttle = response.throttle.max(handler_throttle);
     }
-    super::response::send_throttled_response(framed, response).await
+    Reply::Frame(response)
 }
 
 #[derive(Clone, Copy)]
@@ -207,27 +205,6 @@ async fn dispatch_registered_bytes(
     }
 }
 
-/// The output of a future, and the time spent inside its `poll` calls.
-pub(super) struct Timed<T> {
-    pub(super) output: T,
-    pub(super) active: std::time::Duration,
-}
-
-/// Awaits `future` and reports, beside its output, the time spent inside its
-/// `poll` calls. The time the future is parked between polls is not counted.
-pub(super) async fn with_active_time<F: std::future::Future>(future: F) -> Timed<F::Output> {
-    let mut future = std::pin::pin!(future);
-    let mut active = std::time::Duration::ZERO;
-    let output = std::future::poll_fn(|cx| {
-        let polled_at = std::time::Instant::now();
-        let poll = future.as_mut().poll(cx);
-        active += polled_at.elapsed();
-        poll
-    })
-    .await;
-    Timed { output, active }
-}
-
 /// Pairs a handler's framed bytes with the KIP-219 window that handler
 /// recorded on its [`crate::handlers::RequestContext`].
 fn with_recorded_throttle(
@@ -272,40 +249,5 @@ async fn dispatch_registry_response(
     match dispatch_registered_bytes(entry, context).await {
         Some(result) => result.map(Some),
         None => Ok(None),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use {
-        super::{Timed, with_active_time},
-        assert2::check,
-        std::time::Duration,
-    };
-
-    /// KIP-124 meters the time a request holds a handler thread, so a handler
-    /// parked on a timer, a channel or a raft commit is not charged for the
-    /// wait. Only the time spent inside `poll` counts.
-    #[tokio::test]
-    async fn active_time_counts_polling_and_not_parking() {
-        let Timed {
-            output: value,
-            active: parked,
-        } = with_active_time(async {
-            tokio::time::sleep(Duration::from_millis(300)).await;
-            7
-        })
-        .await;
-        check!(value == 7);
-        check!(parked < Duration::from_millis(100), "{parked:?}");
-
-        let Timed {
-            output: (),
-            active: working,
-        } = with_active_time(async {
-            std::thread::sleep(Duration::from_millis(60));
-        })
-        .await;
-        check!(working >= Duration::from_millis(60), "{working:?}");
     }
 }

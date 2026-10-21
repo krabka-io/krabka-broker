@@ -25,6 +25,28 @@ pub type OffsetEntry = IndexEntry<u32, u32>;
 pub type TimeEntry = IndexEntry<i64, u32>;
 pub(crate) type RangeEntry = IndexEntry<i64, i64>;
 
+#[cfg(creusot)]
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+fn time_keys_nondecreasing(entries: Seq<TimeEntry>) -> bool {
+    pearlite! {
+        forall<i: Int, j: Int> 0 <= i && i < j && j < entries.len()
+            ==> entries[i].key@ <= entries[j].key@
+    }
+}
+
+#[cfg(creusot)]
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+fn offset_keys_strictly_increasing(entries: Seq<OffsetEntry>) -> bool {
+    pearlite! {
+        forall<i: Int, j: Int> 0 <= i && i < j && j < entries.len()
+            ==> entries[i].key@ < entries[j].key@
+    }
+}
+
 krabka_macros::sorted_index_cursor! {
     pub(crate) fn upper_offset_cursor(entries: &[OffsetEntry], target: u32) -> usize;
     <=;
@@ -58,8 +80,7 @@ krabka_macros::index_floor_lookup! {
 /// A safe sparse starting offset for a forward scan seeking `timestamp >= target`.
 /// Entries carry running maxima. Starting at an equal maximum could skip its
 /// first occurrence, so only a strictly smaller maximum may advance the scan.
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < entries@.len()
-    ==> entries@[i].key@ <= entries@[j].key@)]
+#[cfg_attr(creusot, requires(time_keys_nondecreasing(entries@)))]
 #[ensures((exists<i: Int> 0 <= i && i < entries@.len() && entries@[i].key@ < target_timestamp@)
     ==> exists<i: Int> 0 <= i && i < entries@.len()
         && entries@[i].key@ < target_timestamp@
@@ -80,8 +101,7 @@ pub fn time_index_scan_start(entries: &[TimeEntry], target_timestamp: i64) -> u3
 ///
 /// Returns `None` when every entry is below `target`. `entries` must be
 /// strictly sorted by relative offset.
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < entries@.len()
-    ==> entries@[i].key@ < entries@[j].key@)]
+#[cfg_attr(creusot, requires(offset_keys_strictly_increasing(entries@)))]
 #[ensures((exists<i: Int> 0 <= i && i < entries@.len() && target@ <= entries@[i].key@)
     ==> exists<i: Int> 0 <= i && i < entries@.len()
         && target@ <= entries@[i].key@

@@ -9,10 +9,13 @@
 
 use {
     super::pending::PendingPartition,
-    crate::codes,
-    krabka_protocol::owned::share_fetch_response::{
-        LeaderIdAndEpoch, NodeEndpoint, PartitionData, ShareFetchResponse,
-        ShareFetchableTopicResponse,
+    crate::{codes, handlers::ApiVersion},
+    krabka_protocol::{
+        Encode as _,
+        owned::share_fetch_response::{
+            LeaderIdAndEpoch, NodeEndpoint, PartitionData, ShareFetchResponse,
+            ShareFetchableTopicResponse,
+        },
     },
 };
 
@@ -44,14 +47,22 @@ pub(super) fn not_leader_response(
 /// entries. It keeps the order in which the topics first appeared in the
 /// request.
 pub(super) fn group_responses(pending: Vec<PendingPartition>) -> Vec<ShareFetchableTopicResponse> {
+    group_rows(pending.into_iter().map(|p| (p.topic_id, p.out)))
+}
+
+/// Groups `(topic, row)` pairs into per-topic response entries, in the order
+/// in which the topics first appear.
+fn group_rows(
+    rows: impl IntoIterator<Item = (uuid::Uuid, PartitionData)>,
+) -> Vec<ShareFetchableTopicResponse> {
     let mut order: Vec<uuid::Uuid> = Vec::new();
     let mut by_topic: std::collections::HashMap<uuid::Uuid, Vec<PartitionData>> =
         std::collections::HashMap::new();
-    for p in pending {
-        if !by_topic.contains_key(&p.topic_id) {
-            order.push(p.topic_id);
+    for (topic_id, row) in rows {
+        if !by_topic.contains_key(&topic_id) {
+            order.push(topic_id);
         }
-        by_topic.entry(p.topic_id).or_default().push(p.out);
+        by_topic.entry(topic_id).or_default().push(row);
     }
     order
         .into_iter()
@@ -61,6 +72,49 @@ pub(super) fn group_responses(pending: Vec<PendingPartition>) -> Vec<ShareFetcha
             ..Default::default()
         })
         .collect()
+}
+
+/// The size Kafka's `ShareFetchContext.responseSize` charges to the consumer
+/// byte rate: four bytes and the encoded `version` body of a response that
+/// holds the fetch rows alone. The acknowledge results and the node endpoints
+/// join the response only after the quota check, so they are not charged.
+pub(super) fn fetch_rows_size(pending: &[PendingPartition], version: ApiVersion) -> u64 {
+    let response = ShareFetchResponse {
+        responses: group_rows(pending.iter().filter(|p| p.fetchable).map(|p| {
+            (p.topic_id, PartitionData {
+                acknowledge_error_code: codes::NONE,
+                acknowledge_error_message: None,
+                ..p.out.clone()
+            })
+        })),
+        ..Default::default()
+    };
+    u64::try_from(response.encoded_len(version))
+        .unwrap_or(u64::MAX)
+        .saturating_add(4)
+}
+
+/// The rows of a throttled response. Kafka's
+/// `ShareFetchContext.throttleResponse` answers no fetch rows, so each
+/// acknowledge result takes a row of its own with no records, as
+/// `KafkaApis.handleShareFetchRequest` adds every acknowledge result that
+/// matches no fetch row.
+pub(super) fn acknowledge_rows(
+    pending: Vec<PendingPartition>,
+    has_acknowledgements: bool,
+) -> Vec<ShareFetchableTopicResponse> {
+    group_rows(
+        pending
+            .into_iter()
+            .filter(|p| p.in_request && has_acknowledgements)
+            .map(|p| {
+                (p.topic_id, PartitionData {
+                    acknowledge_error_code: p.out.acknowledge_error_code,
+                    acknowledge_error_message: p.out.acknowledge_error_message,
+                    ..partition_response(p.partition_index)
+                })
+            }),
+    )
 }
 
 pub(super) fn success_response(

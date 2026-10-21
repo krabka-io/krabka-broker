@@ -2,7 +2,11 @@
 //! block that stamps the schema version and the emitting product, and the
 //! `status_id` code that reports whether the audited operation succeeded.
 
-use {super::ProductInfo, crate::event::AuditOutcome, serde_json::json};
+use {
+    super::ProductInfo,
+    crate::event::{AuditOutcome, AuditPrincipal},
+    serde_json::json,
+};
 
 const SCHEMA_VERSION: &str = "1.3.0";
 
@@ -22,4 +26,8 @@ pub(super) fn metadata(product: &ProductInfo) -> serde_json::Value {
             "version": product.version,
         }
     })
+}
+
+pub(super) fn user(principal: &AuditPrincipal) -> serde_json::Value {
+    json!({ "name": principal.name, "type": principal.auth_method })
 }

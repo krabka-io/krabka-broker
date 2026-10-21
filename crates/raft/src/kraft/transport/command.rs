@@ -20,7 +20,10 @@ use {
     },
     bytes::Bytes,
     std::sync::Arc,
-    tokio::sync::oneshot,
+    tokio::{
+        sync::{mpsc, oneshot},
+        time::Instant,
+    },
 };
 
 /// An inbound KIP-595 RPC body, the request version its header carried, and a
@@ -91,6 +94,17 @@ impl Inbound {
         }
     }
 
+    /// Whether the peer stopped waiting for the reply.
+    #[must_use]
+    pub fn caller_gone(&self) -> bool {
+        let (Self::Fetch { reply, .. }
+        | Self::Vote { reply, .. }
+        | Self::BeginQuorumEpoch { reply, .. }
+        | Self::EndQuorumEpoch { reply, .. }
+        | Self::FetchSnapshot { reply, .. }) = self;
+        reply.is_closed()
+    }
+
     /// The peer api, request body, request version and reply oneshot.
     #[must_use]
     pub fn into_parts(self) -> (PeerApi, Bytes, i16, oneshot::Sender<Bytes>) {
@@ -130,22 +144,59 @@ impl Inbound {
     }
 }
 
+/// A [`Command`] on the engine's mpsc, with the instant it was sent: the start
+/// of its Kafka `EventQueueTimeMs`.
+pub struct QueuedCommand {
+    pub command: Command,
+    pub enqueued_at: Instant,
+}
+
+/// The sending half of the engine's mpsc. It stamps each [`Command`] with
+/// the instant it was sent, before any wait for room in the queue, as Kafka
+/// stamps an event when it creates it.
+#[derive(Debug, Clone)]
+pub struct CommandSender(mpsc::Sender<QueuedCommand>);
+
+impl CommandSender {
+    /// A bounded command channel of `capacity`.
+    #[must_use]
+    pub fn channel(capacity: usize) -> (Self, mpsc::Receiver<QueuedCommand>) {
+        let (sender, receiver) = mpsc::channel(capacity);
+        (Self(sender), receiver)
+    }
+
+    /// Send `command` to the engine, waiting for room in the queue.
+    ///
+    /// # Errors
+    /// Returns the command back when the engine task is gone.
+    pub async fn send(&self, command: Command) -> Result<(), mpsc::error::SendError<Command>> {
+        let queued = QueuedCommand {
+            command,
+            enqueued_at: Instant::now(),
+        };
+        self.0
+            .send(queued)
+            .await
+            .map_err(|mpsc::error::SendError(queued)| mpsc::error::SendError(queued.command))
+    }
+
+    /// The room left in the queue.
+    #[must_use]
+    pub fn capacity(&self) -> usize { self.0.capacity() }
+}
+
 /// Everything that arrives on the engine's mpsc and drives one turn of the
 /// loop.
 pub enum Command {
     /// An inbound peer RPC with a oneshot to reply on.
     Inbound(Inbound),
     /// Injects a core [`Event`] directly. This is the test and driver entry
-    /// point. The loop also uses it to feed peer-RPC responses back to itself
-    /// as the matching `Receive*Response` event, which is the fire-and-forget
-    /// feedback path.
+    /// point.
     Event(Event),
-    /// A Fetch RESPONSE the follower received from the leader. Other peer
-    /// responses decode to a pure core event, but a Fetch response carries log
-    /// records. The follower must truncate, append, and apply those records
-    /// BEFORE it feeds the `ReceiveFetchResponse` event to the core. This
-    /// response therefore gets its own command instead of the pure `Event`
-    /// feedback path.
+    /// A Fetch RESPONSE the follower received from the leader. A Fetch
+    /// response carries log records. The follower must truncate, append, and
+    /// apply those records BEFORE it feeds the `ReceiveFetchResponse` event to
+    /// the core, so this response gets its own command.
     FetchResponse {
         /// The leader that answered, which is the responder peer.
         from: NodeId,
@@ -153,6 +204,11 @@ pub enum Command {
         /// body.
         body: Bytes,
     },
+    /// A Vote RESPONSE a nominee received from a voter. Beside the grant it
+    /// names the voter's epoch, the leader it knows and that leader's
+    /// endpoint, which the engine acts on before the core counts the grant,
+    /// as Kafka's `maybeHandleCommonResponse` does.
+    VoteResponse { from: NodeId, body: Bytes },
     /// A `FetchSnapshot` RESPONSE the follower received from the leader. It
     /// carries snapshot bytes that the follower reassembles before it resumes.
     /// This mirrors the dedicated command path of `FetchResponse`.
@@ -208,8 +264,37 @@ pub enum Command {
         records: Vec<krabka_metadata::MetadataRecord>,
         reply: oneshot::Sender<i64>,
     },
-    /// Stop the loop.
+    /// Stop the loop gracefully: a leader resigns and the loop runs on, within
+    /// a bound, until the quorum has elected a successor.
     Shutdown,
+    /// Stop the loop at once, handing nothing over, as a halted process does.
+    Halt,
+}
+
+impl Command {
+    /// Whether the caller of a command that replies stopped waiting for the
+    /// reply. A command that sends no reply never has a caller to lose.
+    #[must_use]
+    pub fn caller_gone(&self) -> bool {
+        match self {
+            Self::Inbound(inbound) => inbound.caller_gone(),
+            Self::SubmitChange { reply, .. }
+            | Self::SubmitDelegationTokenMutations { reply, .. } => reply.is_closed(),
+            Self::Reconfigure { reply, .. } => reply.is_closed(),
+            Self::TriggerSnapshot { reply } => reply.is_closed(),
+            Self::QuorumStateSnapshot { reply } => reply.is_closed(),
+            Self::MetadataFetch { reply, .. } => reply.is_closed(),
+            #[cfg(test)]
+            Self::TestAppendAndCommit { reply, .. } => reply.is_closed(),
+            Self::Event(_)
+            | Self::FetchResponse { .. }
+            | Self::VoteResponse { .. }
+            | Self::FetchSnapshotResponse { .. }
+            | Self::Timer(_)
+            | Self::Shutdown
+            | Self::Halt => false,
+        }
+    }
 }
 
 /// A committed-range read result for the observer metadata-fetch path (1004).

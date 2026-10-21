@@ -146,7 +146,7 @@ test:docker-rbe --experimental_ui_max_stdouterr_bytes=20000000
 # it wholesale. Deliberately not `test` or `stateright models` -- see those
 # steps in the workflow for why.
 #
-# Only one flag is here, and it is the one that needs no credential. Everything
+# Only flags that need no credential are here. Everything
 # that does -- the executor, the execution platform, the job count -- is written
 # into `user.bazelrc` by `.github/actions/remote-cache`, beside the API key that
 # makes it usable, and only when there is a key to write.
@@ -161,6 +161,20 @@ test:docker-rbe --experimental_ui_max_stdouterr_bytes=20000000
 # does nothing at all, which is the point: the config has to exist for
 # `--config=rbe` to resolve, and this is the least it can be.
 build:rbe --remote_timeout=600
+# An executor that cannot start an action fails it before the action runs:
+#
+#     Clippy //crates/broker:client_consumer_headers_test failed: (Exit 34):
+#     Remote Execution Failure: Unavailable: prepare runner filesystem: Error
+#     pulling container: ... auth.docker.io/token?scope=repository%3Alibrary
+#     %2Fubuntu%3Apull ...: context canceled
+#
+# That is `@llvm//:rbe_linux_x86_64`'s `ubuntu:22.04`, which an executor
+# without it pulls from Docker Hub. Only actions that miss the remote cache
+# reach an executor, so it fails whichever few a change leaves uncached, and
+# a re-run fails on others. With this flag Bazel runs such an action on the
+# runner instead. An action that ran remotely and failed is not retried here:
+# a real Clippy or compile error still fails the build.
+build:rbe --remote_local_fallback
 
 # `--config=rbe` is on the `lint` step alone, and the reason is now known
 # rather than guessed. Reproduced by run 33728109218:

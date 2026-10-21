@@ -297,10 +297,14 @@ fn spawn_initialize(
     });
 }
 
-/// Apply the outcome of the `Initialize` calls that [`initialize`] started:
-/// each `(partition, initialized)` pair moves the partition to the
-/// initialized set, or takes it out of the initializing set so a later
-/// heartbeat retries it. Then write the group's
+/// Apply the outcome of the `Initialize` calls that [`initialize`] started.
+/// The calls are the partitions of what Kafka sends as one
+/// `InitializeShareGroupStateParameters` request (`buildInitializeShareGroupStateRequest`),
+/// which krabka sends one partition at a time, concurrently. Kafka's
+/// `GroupCoordinatorService.handlePersisterInitializeResponse` takes that
+/// request's outcome whole: when every partition initialized, they all move
+/// to the initialized set; when any one failed, they all leave the
+/// initializing set, so a later heartbeat retries every one of them. Then write the group's
 /// `ShareGroupStatePartitionMetadata`, as Kafka's `initializeShareGroupState`
 /// and `uninitializeShareGroupState` write it.
 pub(super) async fn apply_initialized(
@@ -313,12 +317,9 @@ pub(super) async fn apply_initialized(
     if outcomes.is_empty() {
         return;
     }
-    for &InitializeOutcome {
-        partition,
-        initialized,
-    } in outcomes
-    {
-        if initialized {
+    let all_initialized = outcomes.iter().all(|outcome| outcome.initialized);
+    for &InitializeOutcome { partition, .. } in outcomes {
+        if all_initialized {
             state.mark_initialized(partition);
         } else {
             state.uninitialize(&[partition]);
@@ -548,57 +549,72 @@ mod tests {
         assert!(key_versions == vec![vec![10, 11, 13, 12, 14, 15]]);
     }
 
-    /// The outcome of the `Initialize` calls reaches the actor as a message.
-    /// A partition the persister initialized is initialized, one it failed
-    /// leaves the initializing set for a later heartbeat to retry, and one
-    /// with no outcome yet stays initializing.
+    /// The outcome of the `Initialize` calls reaches the actor as a message,
+    /// and it is taken whole, as Kafka's `handlePersisterInitializeResponse`
+    /// takes it. When every partition of the request initialized, each is
+    /// initialized; when one failed, every partition of the request leaves
+    /// the initializing set for a later heartbeat to retry. A partition with
+    /// no outcome yet stays initializing.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn the_initialize_outcome_moves_each_partition() {
-        let (metadata, topic_id) = metadata_with_topic().partitions(3).call();
-        let (coordinator, _log) = make_coordinator(metadata);
-        let handle = coordinator.get_or_create_share("g");
-        handle
-            .tx
-            .send(ShareGroupActorMessage::Seed(ShareGroupSeed {
-                state_partition_metadata: ShareGroupStatePartitionMetadataValue {
-                    initializing: vec![topic_partitions(topic_id, vec![0, 1, 2])],
-                    ..ShareGroupStatePartitionMetadataValue::default()
-                },
-                ..ShareGroupSeed::default()
-            }))
-            .await
-            .expect("seed the group");
+    async fn the_initialize_outcome_moves_the_whole_request() {
+        // (row, outcome of partitions 0 and 1, expected initialized)
+        let rows = [
+            ("every partition initialized", [true, true], vec![0, 1]),
+            ("one partition failed", [true, false], vec![]),
+        ];
+        for (row, [first, second], initialized) in rows {
+            let (metadata, topic_id) = metadata_with_topic().partitions(3).call();
+            let (coordinator, _log) = make_coordinator(metadata);
+            let handle = coordinator.get_or_create_share("g");
+            handle
+                .tx
+                .send(ShareGroupActorMessage::Seed(ShareGroupSeed {
+                    state_partition_metadata: ShareGroupStatePartitionMetadataValue {
+                        initializing: vec![topic_partitions(topic_id, vec![0, 1, 2])],
+                        ..ShareGroupStatePartitionMetadataValue::default()
+                    },
+                    ..ShareGroupSeed::default()
+                }))
+                .await
+                .expect("seed the group");
 
-        handle
-            .tx
-            .send(ShareGroupActorMessage::ShareStateInitialized(vec![
-                InitializeOutcome {
-                    partition: share_partition(topic_id, 0),
-                    initialized: true,
-                },
-                InitializeOutcome {
-                    partition: share_partition(topic_id, 1),
-                    initialized: false,
-                },
-            ]))
-            .await
-            .expect("send the outcome");
-        let (reply, described) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(ShareGroupActorMessage::Describe { reply })
-            .await
-            .expect("describe after the outcome");
-        described.await.expect("the actor answers in order");
+            handle
+                .tx
+                .send(ShareGroupActorMessage::ShareStateInitialized(vec![
+                    InitializeOutcome {
+                        partition: share_partition(topic_id, 0),
+                        initialized: first,
+                    },
+                    InitializeOutcome {
+                        partition: share_partition(topic_id, 1),
+                        initialized: second,
+                    },
+                ]))
+                .await
+                .expect("send the outcome");
+            let (reply, described) = tokio::sync::oneshot::channel();
+            handle
+                .tx
+                .send(ShareGroupActorMessage::Describe { reply })
+                .await
+                .expect("describe after the outcome");
+            described.await.expect("the actor answers in order");
 
-        assert!(
-            committed_metadata(&coordinator, "g")
-                == ShareGroupStatePartitionMetadataValue {
-                    initializing: vec![topic_partitions(topic_id, vec![2])],
-                    initialized: vec![topic_partitions(topic_id, vec![0])],
-                    ..ShareGroupStatePartitionMetadataValue::default()
-                }
-        );
+            let initialized = if initialized.is_empty() {
+                vec![]
+            } else {
+                vec![topic_partitions(topic_id, initialized)]
+            };
+            assert2::check!(
+                committed_metadata(&coordinator, "g")
+                    == ShareGroupStatePartitionMetadataValue {
+                        initializing: vec![topic_partitions(topic_id, vec![2])],
+                        initialized,
+                        ..ShareGroupStatePartitionMetadataValue::default()
+                    },
+                "{row}"
+            );
+        }
     }
 
     /// Kafka's `buildInitializeShareGroupStateRequest` initializes every

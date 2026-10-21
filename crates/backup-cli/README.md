@@ -42,7 +42,9 @@ needs a Cargo working tree and a Bazel test sandbox has none.
 
 The binary is named `krabka-backup`, so `krabka backup` reaches it: the `krabka`
 operator CLI resolves an unknown subcommand to `krabka-<name>` on `PATH`, the
-way git resolves `git foo` to `git-foo`.
+way git resolves `git foo` to `git-foo`. The `krabka` CLI is not in this
+repository or in the broker image, so an operator with only those runs
+`krabka-backup` and `krabka-restore` by name.
 
 Every subcommand takes the same `--archive-*` flags `krabka restore` takes, and
 a capture is written into the archive the restore reads. Capture from a node and
@@ -108,6 +110,21 @@ two. A node that runs a controller has the first. A broker-only node has the
 second, because the metadata observer keeps its checkpoints in that
 subdirectory and never directly in `__cluster_metadata-0`.
 
+`capture` refuses a node whose newest checkpoint is the one `krabka format`
+wrote, `00000000000000000000-0000000000.checkpoint`, when that checkpoint holds
+no topic, and exits `7`. A restore from it would bring back no topic
+configuration, and its report could not say so. The controller writes its
+first checkpoint after `metadata_max_snapshot_interval` (1 hour by default),
+or sooner once enough metadata is committed. Capture again after that. A node
+that `krabka-restore` formatted is captured at once, because the restore seeds
+the restored topics into that checkpoint. The capture reads and checks the
+checkpoint before it uploads anything, so a refused capture leaves nothing in
+the archive.
+
+A capture that takes a checkpoint prints a `NOTE` line with the age of the
+newest record in it, read from the checkpoint itself. A metadata change
+committed after that record is not in the capture.
+
 Both directories are in the metadata log directory, Kafka's `metadata.log.dir`.
 That is the broker's first log directory unless its `metadata_log_dir` names
 another one. For a node with a separate metadata log directory, point
@@ -123,6 +140,15 @@ the coordinator accepts it for a group with no live members. A group that
 already has members is fenced, and that refusal is correct: an offset must not
 move under a consumer that reads from it. Start the restored cluster, put the
 offsets back, then start the consumers.
+
+A freshly booted broker creates `__consumer_offsets` on the first coordinator
+lookup and answers `COORDINATOR_NOT_AVAILABLE` while it does.
+`restore-offsets` retries the codes Kafka's admin client retries, with its
+backoff, until Kafka's default `default.api.timeout.ms` (60 seconds) runs out:
+`COORDINATOR_LOAD_IN_PROGRESS`, `COORDINATOR_NOT_AVAILABLE`, `NOT_COORDINATOR`
+and `REBALANCE_IN_PROGRESS`. It runs `FindCoordinator` again after
+`COORDINATOR_NOT_AVAILABLE` and `NOT_COORDINATOR`. It exits `6` only when the
+coordinator is still not ready at that deadline, and the message says so.
 
 The offsets a capture holds are as old as the capture. A group that committed
 after the last capture resumes at the older position and reads some records a
@@ -157,9 +183,10 @@ copied into the archive or rendered in command output; restrict its filesystem
 permissions because it contains the SASL password and private-key path.
 
 The backup principal needs `Describe` on every captured group and `Read` on its
-topics. A diskless capture also needs `Read`, `Write`, and `Describe` on
-`__diskless_wal_index` plus `DescribeConfigs` on the captured topics so empty
-diskless partitions remain in the recovery topology. Restoring offsets needs `Describe` and `Read` on each
+topics. A diskless capture also needs `Read` and `Describe` on
+`__diskless_wal_index`, and no `Write`, because the capture only reads it. It
+also needs `DescribeConfigs` on the captured topics so empty diskless
+partitions remain in the recovery topology. Restoring offsets needs `Describe` and `Read` on each
 captured group plus `Describe` and `Read` on each captured topic. Grant those
 operations only on the group and topic prefixes covered by the backup policy.
 
@@ -172,6 +199,7 @@ operations only on the group and topic prefixes covered by the backup policy.
 | 4 | The archive, the log directory, or the named capture cannot be read. |
 | 5 | An integrity failure: an artifact does not match its recorded digest. |
 | 6 | The cluster could not be reached, or it refused a request. |
+| 7 | The newest metadata checkpoint is the format-time one, and it holds no topic. |
 
 `2`, `4` and `5` mean what they mean in `krabka restore`, because one runbook
 branches on both tools.

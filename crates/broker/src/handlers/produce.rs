@@ -707,12 +707,14 @@ async fn await_durability(
             topic_name,
             ack,
         } = pending;
+        let leadership_changed = ack.leadership_changed(broker.controller.watch_image());
         async move {
             (
                 topic_row,
                 partition_row,
                 topic_name,
-                ack.finish(deadline, current_min_isr).await,
+                ack.finish(deadline, current_min_isr, leadership_changed)
+                    .await,
             )
         }
     }))

@@ -191,12 +191,16 @@ fn preprocess_resource(
         if resource.resource_type != RESOURCE_TYPE_BROKER {
             return Ok(());
         }
-        broker_configs::preprocess_broker_resource(resource, BrokerConfigContext {
-            image: &image,
-            serving: broker.config.node_id,
-            log_dirs: &broker.config.broker_log_dirs(),
-            unstable: broker.config.features.unstable_api_versions,
-        })
+        broker_configs::preprocess_broker_resource(
+            resource,
+            BrokerConfigContext {
+                image: &image,
+                serving: broker.config.node_id,
+                log_dirs: &broker.config.broker_log_dirs(),
+                unstable: broker.config.features.unstable_api_versions,
+            },
+            broker.own_config_checks(),
+        )
     });
     let (code, message) = result.err()?;
     let (code, message) = if shape.is_err() {

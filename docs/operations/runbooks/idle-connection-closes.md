@@ -9,8 +9,9 @@ minutes is a starting point; tune it to the fleet.
 ## What it means
 
 The broker closed more than one connection per second because the connection
-went `connections_max_idle` without a complete frame. A TLS handshake that
-the peer opened and never drove counts too. The `max_connections` and
+went `connections_max_idle` with no socket activity: no read brought bytes
+and no response was written. A request still in its handler counts, and so
+does a TLS handshake that the peer opened and never drove. The `max_connections` and
 `max_connections_per_ip` caps do not surface this on their own, because the
 idle connections are closed before they reach the cap.
 
@@ -30,6 +31,10 @@ connect loop. The broker log records the peer address of each idle close at
    handshake. The broker sees an idle socket and closes it after the timeout.
 3. A client pool that opens more connections than it uses parks the extra
    ones, and they idle out on the broker's timer.
+4. A request whose handler, or a throttle mute after its response, outlasts
+   the window. As in Kafka, the window keeps running while the broker works
+   on a request, so a Fetch whose `fetch.max.wait.ms` exceeds
+   `connections_max_idle` is closed without its response.
 
 ## Fix
 

@@ -70,6 +70,31 @@ impl Log {
         self.start_offset_established.then_some(self.start_offset)
     }
 
+    /// The global floor as a leader reports it to the replicas that follow
+    /// it: Kafka's `UnifiedLog.logStartOffset` in a `Fetch` response.
+    ///
+    /// This is [`Log::log_start_offset`] except on a remote-storage-enabled
+    /// log whose floor nobody established. Such a log reopened over the
+    /// segments local retention left, so its inferred start sits above
+    /// everything the archive holds. Kafka's `LogLoader.load` never infers a
+    /// remote-storage-enabled log's start from its segments: it takes the
+    /// log-start checkpoint, which is 0 when nobody moved it. A follower
+    /// raises its own start to what its leader reports, and a follower's start
+    /// is a floor it refuses reads below and deletes the archive below once it
+    /// leads, so reporting the inferred start would hide and then destroy
+    /// every archived record under it.
+    ///
+    /// # Panics
+    /// Panics if the configuration lock is poisoned.
+    #[must_use]
+    pub fn reported_log_start(&self) -> Offset {
+        match self.established_log_start() {
+            Some(start) => start,
+            None if self.config.read().unwrap().remote_storage_enable => Offset(0),
+            None => self.start_offset,
+        }
+    }
+
     /// The epoch of the earliest leader-epoch entry, when a log start that
     /// somebody established truncated the cache to it: Kafka's
     /// `leaderEpochCache.earliestEntry` after `truncateFromStart(logStartOffset)`.
@@ -170,6 +195,68 @@ impl Log {
             self.refresh_lso()?;
         }
         Ok(())
+    }
+
+    /// Whether [`Log::follow_leader_log_start`] would change anything for a
+    /// leader that reports `leader_start`. A follower answers this on every
+    /// fetch response, so it only reads.
+    ///
+    /// # Panics
+    /// Panics if the configuration lock is poisoned.
+    #[must_use]
+    pub fn differs_from_leader_log_start(&self, leader_start: Offset) -> bool {
+        if self.config.read().unwrap().remote_storage_enable {
+            self.established_log_start() != Some(leader_start)
+        } else {
+            leader_start > self.start_offset
+        }
+    }
+
+    /// Take a leader's global log start as this follower's own, and return
+    /// the resulting log start.
+    ///
+    /// A log with no remote tier only ever raises its start, as Kafka's
+    /// `ReplicaFetcherThread.processPartitionData` →
+    /// `maybeIncrementLogStartOffset` does, through [`Log::trim_to_offset`].
+    ///
+    /// A remote-storage-enabled log takes the leader's start in either
+    /// direction and establishes it. The leader is the replica that owns the
+    /// archive and moves its floor, so a follower start above the leader's is
+    /// one no acknowledged deletion put there:
+    ///
+    /// - A broker without the fix for #1444 reported a restarted leader's
+    ///   inferred start, the base of its first local segment, and its
+    ///   followers established it. Such a floor hides the archive below it,
+    ///   and remote retention deletes against it once the follower leads.
+    /// - [`Log::reset_to`] rebuilds a follower at its leader's *local* start,
+    ///   and Kafka's `truncateFullyAndStartAt(localLogStartOffset,
+    ///   leaderLogStartOffset)` gives the rebuilt log the leader's global
+    ///   start beneath it.
+    ///
+    /// Lowering the start leaves the local segments and the leader-epoch
+    /// cache alone, so [`Log::log_start_epoch`] answers `None` until a later
+    /// raise cuts the cache again.
+    ///
+    /// # Errors
+    /// Returns [`LogError::InvalidArgument`] if `leader_start` is negative,
+    /// and [`LogError::Io`] if the log-start checkpoint cannot be written or
+    /// a raise fails.
+    ///
+    /// # Panics
+    /// Panics if the configuration lock is poisoned.
+    pub fn follow_leader_log_start(&mut self, leader_start: Offset) -> Result<Offset, LogError> {
+        if !self.config.read().unwrap().remote_storage_enable || leader_start > self.start_offset {
+            return self.trim_to_offset(leader_start);
+        }
+        if leader_start < 0 {
+            return Err(LogError::InvalidArgument(
+                "follow_leader_log_start: leader_start must be >= 0".into(),
+            ));
+        }
+        log_start_offset_checkpoint::write(&*self.io, &self.dir, leader_start)?;
+        self.start_offset = leader_start;
+        self.start_offset_established = true;
+        Ok(leader_start)
     }
 
     /// Move the log start down to `ceiling` when it sits above it. Truncation
@@ -493,6 +580,18 @@ impl Log {
     pub fn reconcile_next_offset(&mut self, frontier: Offset) {
         self.reconciled_frontier = self.reconciled_frontier.max(frontier);
     }
+
+    /// Drop the frontier [`Log::reconcile_next_offset`] set, so append-at
+    /// bases are held only to the log end offset again.
+    ///
+    /// The frontier binds the broker that assigns this log's offsets. A
+    /// follower assigns none: it appends its leader's batches at the leader's
+    /// offsets, and Kafka's `UnifiedLog.appendAsFollower` refuses only a batch
+    /// below the log end. A diskless replica that reopened behind the
+    /// committed frontier -- it was down while its leader appended -- must
+    /// take the batches between its log end and that frontier from the
+    /// leader, and the frontier would refuse every one of them.
+    pub fn clear_reconciled_next_offset(&mut self) { self.reconciled_frontier = Offset(0); }
 }
 
 #[cfg(test)]
@@ -664,6 +763,143 @@ mod tests {
         drop(log);
         let log = Log::open(moved.path(), config).unwrap();
         check!(log.log_start_epoch() == Some(LeaderEpoch(2)));
+    }
+
+    /// A log in its own directory holding three segments, at offsets 0, 3
+    /// and 6 and in epochs 1, 2 and 4, and the configuration that opens it
+    /// again.
+    struct ThreeSegments {
+        dir: tempfile::TempDir,
+        log: Log,
+        config: LogConfig,
+    }
+
+    fn three_segments(remote_storage_enable: bool) -> ThreeSegments {
+        let config = LogConfig {
+            remote_storage_enable,
+            ..tiny_segments()
+        };
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(dir.path(), config.clone()).unwrap();
+        for epoch in [1, 2, 4] {
+            log.append(&mut sample_batch_with_epoch(3, epoch)).unwrap();
+        }
+        ThreeSegments { dir, log, config }
+    }
+
+    /// A leader reports Kafka's `logStartOffset` to its followers, and they
+    /// raise their own start to it. A remote-storage-enabled log reopened over
+    /// the segments local retention left infers a start above the whole
+    /// archive, and Kafka's `LogLoader.load` never takes that one: it reports
+    /// the checkpointed start, 0 when nobody moved it. A start somebody moved
+    /// is reported as it is, and a log with no remote tier reports the start
+    /// its segments witness.
+    ///
+    /// Each case fills three segments (offsets 0, 3 and 6), optionally moves
+    /// the start, drops the two sealed segments from disk, and reopens.
+    #[yare::parameterized(
+        tiered_nobody_moved_it = { true, None, 6, 0 },
+        tiered_moved = { true, Some(4), 4, 4 },
+        local_only = { false, None, 6, 6 },
+    )]
+    fn a_reopened_log_reports_the_start_kafka_reports(
+        remote_storage_enable: bool,
+        moved_to: Option<i64>,
+        log_start: i64,
+        reported: i64,
+    ) {
+        let ThreeSegments {
+            dir,
+            mut log,
+            config,
+        } = three_segments(remote_storage_enable);
+        if let Some(start) = moved_to {
+            log.set_log_start_offset(Offset(start)).unwrap();
+        }
+        check!(log.delete_local_segments_through(Offset(6)).unwrap() == 2);
+        drop(log);
+
+        let log = Log::open(dir.path(), config).unwrap();
+        check!(
+            (log.log_start_offset(), log.reported_log_start())
+                == (Offset(log_start), Offset(reported))
+        );
+    }
+
+    /// How a follower's log came by its start before the leader reports one.
+    #[derive(Clone, Copy, Debug)]
+    enum Prior {
+        /// Nobody moved it.
+        Untouched,
+        /// Somebody established it at this offset.
+        Moved(i64),
+        /// `reset_to` rebuilt the log at this offset, the leader's local
+        /// start.
+        Rebuilt(i64),
+    }
+
+    /// A follower takes its leader's log start. A log with no remote tier only
+    /// raises its start, as Kafka's `maybeIncrementLogStartOffset` does. A
+    /// remote-storage-enabled log takes the leader's start in either direction
+    /// and establishes it: that repairs a floor no deletion put there (a
+    /// restarted leader's inferred start, which an older broker reported) and
+    /// gives a rebuilt follower the leader's global start below its own, as
+    /// Kafka's `truncateFullyAndStartAt` does. The start a follower takes
+    /// survives a reopen.
+    ///
+    /// Each case fills three segments (offsets 0, 3 and 6) before `prior`.
+    #[yare::parameterized(
+        tiered_bogus_floor_is_repaired = { true, Prior::Moved(6), 0, true, 0 },
+        tiered_rebuilt_takes_the_global_start = { true, Prior::Rebuilt(6), 2, true, 2 },
+        tiered_raise = { true, Prior::Untouched, 4, true, 4 },
+        tiered_agreeing_floor_is_left_alone = { true, Prior::Moved(4), 4, false, 4 },
+        local_never_lowers = { false, Prior::Moved(4), 2, false, 4 },
+        local_raise = { false, Prior::Untouched, 4, true, 4 },
+    )]
+    fn a_follower_takes_its_leaders_log_start(
+        remote_storage_enable: bool,
+        prior: Prior,
+        leader_start: i64,
+        differs: bool,
+        followed: i64,
+    ) {
+        let ThreeSegments {
+            dir,
+            mut log,
+            config,
+        } = three_segments(remote_storage_enable);
+        match prior {
+            Prior::Untouched => {}
+            Prior::Moved(start) => log.set_log_start_offset(Offset(start)).unwrap(),
+            Prior::Rebuilt(base) => log.reset_to(Offset(base)).unwrap(),
+        }
+
+        let leader_start = Offset(leader_start);
+        check!(log.differs_from_leader_log_start(leader_start) == differs);
+        let result = log.follow_leader_log_start(leader_start).unwrap();
+        let followed = Offset(followed);
+        check!(
+            (result, log.established_log_start()) == (followed, Some(followed)),
+            "{prior:?}"
+        );
+        check!(!log.differs_from_leader_log_start(leader_start));
+        drop(log);
+        let reopened = Log::open(dir.path(), config).unwrap();
+        check!(reopened.log_start_offset() == followed, "{prior:?}");
+    }
+
+    /// A leader start below zero names no offset, and following it is refused
+    /// on a log with a remote tier as on one without.
+    #[yare::parameterized(tiered = { true }, local_only = { false })]
+    fn a_negative_leader_start_is_refused(remote_storage_enable: bool) {
+        let ThreeSegments {
+            dir: _dir, mut log, ..
+        } = three_segments(remote_storage_enable);
+        check!(matches!(
+            log.follow_leader_log_start(Offset(-1)),
+            Err(LogError::InvalidArgument(_))
+        ));
+        check!(log.log_start_offset() == Offset(0));
     }
 
     /// The log's size is every segment's size added up, the sealed ones as

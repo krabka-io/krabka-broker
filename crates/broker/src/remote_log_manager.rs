@@ -43,6 +43,7 @@
 use {
     crate::{
         api_catalog::UnstableApiVersions,
+        blocking::spawn_blocking,
         config_keys::resolve_remote_copy_lag,
         freeze::resolve::{FreezeMutationResolution, resolve_freeze_mutation},
         metadata_source::MetadataSource,
@@ -53,7 +54,10 @@ use {
     },
     futures_util::future::join_all,
     krabka_metadata::NodeId,
-    krabka_remote_storage::{RemoteLogMetadataManager, RemoteStorageManager, TopicIdPartition},
+    krabka_remote_storage::{
+        RemoteLogMetadataManager, RemoteLogSegmentMetadata, RemoteStorageError,
+        RemoteStorageManager, TopicIdPartition,
+    },
     krabka_units::{
         ByteSize, Time, bytes,
         convert::{ByteSizeExt as _, TimeExt as _},
@@ -73,6 +77,7 @@ mod delete;
 mod delivery;
 mod leader_epoch;
 mod local_retention;
+pub(crate) mod quota;
 mod remote_retention;
 mod rlmm;
 
@@ -142,8 +147,8 @@ pub(crate) mod test_support;
 pub(crate) use self::copy::copy_eligible;
 pub(crate) use self::{
     archive::ArchiveMode,
-    copy::{CopyBound, CopyDelay, CopyIdentity, copy_eligible_delayed},
-    delete::cascade_remote_partition_delete,
+    copy::{CopyBound, CopyDelay, CopyFence, CopyIdentity, copy_eligible_delayed},
+    delete::{cascade_remote_partition_delete, mark_segments_below},
     local_retention::{LocalRetentionBounds, local_retention_pass},
     remote_retention::{LocalLogFootprint, RemoteRetentionBounds, remote_retention_pass},
 };
@@ -232,6 +237,9 @@ pub(crate) struct RemoteLogManagerContext {
     /// The reader's index cache, so a segment this task deletes stops holding
     /// the cache's byte budget.
     pub index_cache: Arc<krabka_remote_storage::RemoteIndexCache>,
+    /// `remote.log.manager.copy.max.bytes.per.second`. See
+    /// [`RemoteTier::copy_quota`].
+    pub copy_quota: Arc<quota::RlmQuotaManager>,
     pub metrics: BrokerMetrics,
     pub node_id: NodeId,
     pub broker_id: i32,
@@ -251,6 +259,9 @@ pub(crate) struct RemoteTier<'a> {
     pub rlmm: &'a Arc<dyn RemoteLogMetadataManager>,
     pub metrics: &'a BrokerMetrics,
     pub index_cache: &'a Arc<krabka_remote_storage::RemoteIndexCache>,
+    /// Kafka's copy `RLMQuotaManager`: every segment waits for it before its
+    /// upload starts, and its `.log` bytes are recorded against it.
+    pub copy_quota: &'a quota::RlmQuotaManager,
     /// How long one segment copy may take before the sweep abandons it.
     ///
     /// A partition's copy holds one of the sweep's copier slots for as long
@@ -275,6 +286,7 @@ impl RemoteLogManagerContext {
             rlmm: &self.rlmm,
             metrics: &self.metrics,
             index_cache: &self.index_cache,
+            copy_quota: &self.copy_quota,
             copy_timeout: cfg.copy_timeout,
             unstable_api_versions: cfg.unstable_api_versions,
         }
@@ -282,6 +294,11 @@ impl RemoteLogManagerContext {
 }
 
 /// Spawned task entry point. Ticks every `cfg.interval` until `shutdown`.
+///
+/// `shutdown` also fences the copy pass of a tick already running: the pass
+/// stops at its next segment, and a copy in flight is withdrawn rather than
+/// published. A broker that is stopping has, or is about to have, handed its
+/// partitions to another leader, and that leader copies over the same offsets.
 // task dependencies; bundling would obscure them
 pub(crate) async fn run(
     context: RemoteLogManagerContext,
@@ -290,19 +307,26 @@ pub(crate) async fn run(
 ) {
     let mut ticker = tokio::time::interval(cfg.interval.to_std());
     loop {
+        // `biased`: a tick that ran past its interval leaves the ticker ready
+        // at once, and an unbiased select would then start another whole tick
+        // after shutdown half the time.
         tokio::select! {
-            _ = ticker.tick() => {}
+            biased;
             () = shutdown.cancelled() => {
                 debug!("remote-log-manager task shutting down");
                 return;
             }
+            _ = ticker.tick() => {}
         }
         tick_all(
             &context.partitions,
             &*context.controller,
             &context.tier(&cfg),
-            context.node_id,
-            context.broker_id,
+            SweepingBroker {
+                node_id: context.node_id,
+                broker_id: context.broker_id,
+                shutdown: &shutdown,
+            },
             cfg.concurrency,
         )
         .await;
@@ -322,8 +346,7 @@ async fn tick_all(
     partitions: &PartitionRegistry,
     controller: &dyn MetadataSource,
     tier: &RemoteTier<'_>,
-    node_id: NodeId,
-    broker_id: i32,
+    broker: SweepingBroker<'_>,
     concurrency: SweepConcurrency,
 ) {
     // Snapshot first to avoid holding any registry guard across an await.
@@ -335,12 +358,52 @@ async fn tick_all(
             partition,
             image: &image,
             tier,
-            node_id,
-            broker_id,
+            broker,
             permits: &permits,
         })
     }))
     .await;
+}
+
+/// The broker a sweep runs on: its node and broker ids, and the token that
+/// stops it.
+#[derive(Clone, Copy)]
+pub(crate) struct SweepingBroker<'a> {
+    node_id: NodeId,
+    broker_id: i32,
+    shutdown: &'a CancellationToken,
+}
+
+/// The copy fence of a partition this broker led when its tick began: it holds
+/// while the partition's leader is still this node in the same leader epoch,
+/// and the broker is not shutting down.
+///
+/// Both atomics are the ones the metadata listener moves on a leader change,
+/// so a pass that started as leader sees the move at its next segment rather
+/// than at the next tick. The epoch matters as well as the node: a broker that
+/// loses the partition and wins it back has a new epoch, and its copies belong
+/// to the pass that starts under it.
+struct LeaderFence<'a> {
+    partition: &'a Partition,
+    node_id: NodeId,
+    leader_epoch: i32,
+    shutdown: &'a CancellationToken,
+}
+
+impl CopyFence for LeaderFence<'_> {
+    fn holds(&self) -> bool {
+        !self.shutdown.is_cancelled()
+            && self.partition.current_leader.load(Ordering::Acquire) == self.node_id
+            && self.partition.current_leader_epoch.load(Ordering::Acquire) == self.leader_epoch
+    }
+
+    fn established_log_start(&self) -> Option<krabka_log::Offset> {
+        self.partition
+            .log
+            .lock()
+            .expect("log mutex poisoned")
+            .established_log_start()
+    }
 }
 
 /// One partition's place in a tick: the partition itself, the metadata image
@@ -350,8 +413,7 @@ struct PartitionSweep<'a> {
     partition: Arc<Partition>,
     image: &'a krabka_metadata::MetadataImage,
     tier: &'a RemoteTier<'a>,
-    node_id: NodeId,
-    broker_id: i32,
+    broker: SweepingBroker<'a>,
     permits: &'a SweepPermits,
 }
 
@@ -366,10 +428,18 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
         partition,
         image,
         tier,
-        node_id,
-        broker_id,
+        broker:
+            SweepingBroker {
+                node_id,
+                broker_id,
+                shutdown,
+            },
         permits,
     } = sweep;
+    // A stopping broker starts nothing new against the tier.
+    if shutdown.is_cancelled() {
+        return;
+    }
     // Leadership decides which halves of the sweep run, not whether it
     // runs at all: the copy and the remote-retention pass are the
     // leader's, local retention is every replica's.
@@ -452,10 +522,16 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
     // tier already holds keeps working, which is what makes the state a
     // freeze of the copy rather than an abandonment of the data.
     if is_leader && !exports.is_empty() && !log_config.remote_tier.copy_disable {
+        let raw_epoch = partition.current_leader_epoch.load(Ordering::Acquire);
         // Atomic stores the raw epoch; wrap for the remote-storage
         // metadata seam.
-        let leader_epoch =
-            krabka_ids::LeaderEpoch(partition.current_leader_epoch.load(Ordering::Acquire));
+        let leader_epoch = krabka_ids::LeaderEpoch(raw_epoch);
+        let fence = LeaderFence {
+            partition: &partition,
+            node_id,
+            leader_epoch: raw_epoch,
+            shutdown,
+        };
         let _permit = permits.copier().await;
         let delay = copy_delay(
             CopyScope {
@@ -476,6 +552,7 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
             CopyIdentity {
                 broker_id,
                 leader_epoch,
+                fence: &fence,
             },
             exports.clone(),
             CopyBound {
@@ -506,6 +583,9 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
         return;
     }
     let _permit = permits.expiration().await;
+    if shutdown.is_cancelled() {
+        return;
+    }
     retention_passes(
         RetentionPasses {
             partition: &partition,
@@ -612,6 +692,7 @@ async fn retention_passes(pass: RetentionPasses<'_>, tier: &RemoteTier<'_>) {
         tier.unstable_api_versions,
     );
     if !is_leader {
+        follow_unenforced_floor(partition, tp, deleted_below, tier.rlmm).await;
         return;
     }
     let outcome = remote_retention_pass(
@@ -651,6 +732,87 @@ async fn retention_passes(pass: RetentionPasses<'_>, tier: &RemoteTier<'_>) {
     }
 }
 
+/// Lower a follower's established floor to the lower start its leader
+/// reported, when the archive does not enforce that floor.
+///
+/// The replicator records a leader start below a floor this replica
+/// established rather than lowering the floor on the fetch response. A floor
+/// somebody deleted up to is enforced by remote retention, which deletes every
+/// finished segment wholly below it, and lowering it would serve deleted
+/// records again: a replica an older broker rebuilt with no checkpoint leads
+/// with a start of 0. A floor the archive does not enforce is one no deletion
+/// put there, such as the restarted leader's local start a broker without the
+/// fix for #1444 reported, and it hides every archived record under it. See
+/// [`remote_retention::archive_enforces_floor`].
+///
+/// The archive is read only once this broker's RLMM has applied everything
+/// the metadata store had committed when the check began
+/// ([`RemoteLogMetadataManager::caught_up`]). A leader marks the segments
+/// under a `DeleteRecords` floor `DeleteSegmentStarted`, and waits for those
+/// marks to be acknowledged, before it raises the floor, so a caught-up
+/// listing taken after this follower took the floor holds the marks. A stale
+/// listing could still show the segments finished and lower a floor somebody
+/// deleted up to.
+///
+/// An RLMM that is behind, or cannot list the partition yet, leaves the floor
+/// for the next tick, which is why this runs here rather than on a fetch
+/// response: an idle partition stops appearing in incremental fetch
+/// responses.
+async fn follow_unenforced_floor(
+    partition: &Partition,
+    tp: &TopicIdPartition,
+    deleted_below: Option<krabka_log::Offset>,
+    rlmm: &Arc<dyn RemoteLogMetadataManager>,
+) {
+    let reported = partition.reported_leader_log_start.load(Ordering::Acquire);
+    let Some(floor) = deleted_below.filter(|floor| (0..floor.0).contains(&reported)) else {
+        return;
+    };
+    let segments = match current_listing(tp, rlmm).await {
+        Ok(Some(segments)) => segments,
+        Ok(None) => {
+            debug!(topic = %partition.topic, partition = tp.partition,
+                   "remote-log-manager: the RLMM is behind the metadata store; the log start stays");
+            return;
+        }
+        Err(error) => {
+            debug!(topic = %partition.topic, partition = tp.partition, %error,
+                   "remote-log-manager: the archive cannot say whether it enforces the log start yet");
+            return;
+        }
+    };
+    if remote_retention::archive_enforces_floor(&segments, floor) {
+        return;
+    }
+    let mut log = partition.log.lock().expect("log mutex poisoned");
+    if let Err(error) = log.follow_leader_log_start(krabka_log::Offset(reported)) {
+        debug!(topic = %partition.topic, partition = tp.partition, %error,
+               "remote-log-manager: could not take the leader's log start");
+    }
+}
+
+/// The partition's remote segments as of now, or `None` while this broker's
+/// RLMM has not applied everything the metadata store holds for them. Both
+/// calls may block, so they run on the blocking pool.
+async fn current_listing(
+    tp: &TopicIdPartition,
+    rlmm: &Arc<dyn RemoteLogMetadataManager>,
+) -> Result<Option<Vec<RemoteLogSegmentMetadata>>, RemoteStorageError> {
+    let (tp, rlmm) = (tp.clone(), Arc::clone(rlmm));
+    spawn_blocking(move || {
+        if !rlmm.caught_up(&tp)? {
+            return Ok(None);
+        }
+        rlmm.list_remote_log_segments(&tp).map(Some)
+    })
+    .await
+    .unwrap_or_else(|error| {
+        Err(RemoteStorageError::Backend(format!(
+            "RLMM listing task panicked: {error}"
+        )))
+    })
+}
+
 fn topic_partition(
     partition: &Partition,
     image: &krabka_metadata::MetadataImage,
@@ -684,6 +846,7 @@ mod tests {
                 local_retention::{OffsetRange, finished_segment_ranges},
                 test_support as fixtures,
             },
+            remote_reader::test_support::{LaggingRlmm, NotReadyRlmm},
         },
         assert2::{assert, check},
         fixtures::{local_backends, partition_log, sweep_counts},
@@ -706,11 +869,115 @@ mod tests {
         rolled_tiered_partition_with_config(log_dir, fixtures::rolled_partition_config())
     }
 
+    /// What the follower's RLMM can say about the archive.
+    #[derive(Clone, Copy, Debug)]
+    enum Metadata {
+        /// One finished segment over offsets 0 to 9.
+        OneSegment,
+        /// The same segment, from a cache that lags the metadata store.
+        Lagging,
+        /// Its metadata partition has not caught up.
+        NotReady,
+    }
+
+    /// A follower lowers a floor it established to the start its leader
+    /// reported only when the archive does not enforce that floor: a finished
+    /// segment lies wholly below it, so nobody deleted up to it. A floor the
+    /// archive enforces is a deletion and is kept. Nothing reported, an RLMM
+    /// that cannot list yet, or one behind the metadata store keeps the floor
+    /// for a later tick.
+    #[yare::parameterized(
+        an_unenforced_floor_takes_the_reported_start = { Metadata::OneSegment, 10, 0, 0 },
+        an_enforced_floor_is_kept = { Metadata::OneSegment, 5, 0, 5 },
+        nothing_reported_keeps_the_floor = { Metadata::OneSegment, 10, -1, 10 },
+        an_rlmm_catching_up_keeps_the_floor = { Metadata::NotReady, 10, 0, 10 },
+        a_lagging_rlmm_keeps_the_floor = { Metadata::Lagging, 10, 0, 10 },
+    )]
+    #[test_macro(tokio::test)]
+    async fn a_follower_lowers_only_a_floor_the_archive_does_not_enforce(
+        metadata: Metadata,
+        floor: i64,
+        reported: i64,
+        start: i64,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let partition = rolled_tiered_partition(dir.path());
+        let one_segment = || {
+            let rlmm: Arc<dyn RemoteLogMetadataManager> =
+                Arc::new(krabka_remote_storage::InmemoryRemoteLogMetadataManager::new());
+            fixtures::seed_finished_segments(&rlmm, 1);
+            rlmm
+        };
+        let rlmm: Arc<dyn RemoteLogMetadataManager> = match metadata {
+            Metadata::OneSegment => one_segment(),
+            Metadata::Lagging => Arc::new(LaggingRlmm(one_segment())),
+            Metadata::NotReady => Arc::new(NotReadyRlmm),
+        };
+        let deleted_below = {
+            let mut log = partition.log.lock().expect("log mutex poisoned");
+            log.set_log_start_offset(Offset(floor)).unwrap();
+            log.established_log_start()
+        };
+        partition
+            .reported_leader_log_start
+            .store(reported, Ordering::Release);
+
+        follow_unenforced_floor(&partition, &tp(), deleted_below, &rlmm).await;
+
+        assert2::assert!(
+            partition.log_start_offset() == Offset(start),
+            "{metadata:?}"
+        );
+    }
+
+    /// The lagging fake the follower test uses answers every read the way the
+    /// manager it wraps does, and differs only in never being caught up.
+    #[test]
+    fn a_lagging_rlmm_serves_its_inner_answers_but_is_never_caught_up() {
+        let inner: Arc<dyn RemoteLogMetadataManager> =
+            Arc::new(krabka_remote_storage::InmemoryRemoteLogMetadataManager::new());
+        let lagging: Arc<dyn RemoteLogMetadataManager> = Arc::new(LaggingRlmm(Arc::clone(&inner)));
+        fixtures::seed_finished_segments(&lagging, 2);
+        let delete = krabka_remote_storage::RemotePartitionDeleteMetadata {
+            topic_id_partition: tp(),
+            state: krabka_remote_storage::RemotePartitionDeleteState::DeletePartitionMarked,
+            event_timestamp_ms: 100,
+            broker_id: 1,
+        };
+        let reads = |rlmm: &Arc<dyn RemoteLogMetadataManager>| {
+            let epoch = krabka_ids::LeaderEpoch(0);
+            (
+                rlmm.remote_log_segment_metadata(&tp(), epoch, 5).unwrap(),
+                rlmm.highest_offset_for_epoch(&tp(), epoch).unwrap(),
+                rlmm.list_remote_log_segments(&tp()).unwrap(),
+                rlmm.list_remote_log_segments_by_epoch(&tp(), epoch)
+                    .unwrap(),
+            )
+        };
+
+        check!(reads(&lagging) == reads(&inner));
+        check!(lagging.list_remote_log_segments(&tp()).unwrap().len() == 2);
+        check!(lagging.put_remote_partition_delete_metadata(delete).is_ok());
+        check!(
+            (
+                lagging.caught_up(&tp()).unwrap(),
+                inner.caught_up(&tp()).unwrap()
+            ) == (false, true)
+        );
+    }
+
     async fn wait_for_remote_segments(rlmm: &Arc<dyn RemoteLogMetadataManager>, expected: usize) {
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
-                let listed = rlmm.list_remote_log_segments(&tp()).unwrap();
-                if listed.len() >= expected {
+                // Finished copies only: a copy still in flight when the task is
+                // told to stop is withdrawn, not published.
+                let finished = rlmm
+                    .list_remote_log_segments(&tp())
+                    .unwrap()
+                    .iter()
+                    .filter(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
+                    .count();
+                if finished >= expected {
                     break;
                 }
                 tokio::task::yield_now().await;
@@ -718,6 +985,85 @@ mod tests {
         })
         .await
         .expect("remote-log-manager run loop did not copy expected segments");
+    }
+
+    /// The copy fence a sweep gives a partition it leads: the pass may go on
+    /// while this broker still leads the partition in the epoch it started
+    /// under and is not shutting down, and must stop on any one of them
+    /// changing. Kafka cancels the partition's `RLMCopyTask` on a leadership
+    /// change, and a broker that loses the partition and wins it back is a new
+    /// epoch with a task of its own.
+    #[yare::parameterized(
+        still_leading = { 1, 0, false, true },
+        leadership_moved = { 2, 0, false, false },
+        led_again_in_a_new_epoch = { 1, 1, false, false },
+        shutting_down = { 1, 0, true, false },
+    )]
+    #[test_macro(tokio::test)]
+    async fn the_copy_fence_holds_only_for_the_same_leader_and_epoch(
+        leader: u64,
+        epoch: i32,
+        stopping: bool,
+        holds: bool,
+    ) {
+        let log_dir = tempfile::tempdir().unwrap();
+        let partition = rolled_tiered_partition(log_dir.path());
+        partition.current_leader.store(1, Ordering::Release);
+        partition.current_leader_epoch.store(0, Ordering::Release);
+        let shutdown = CancellationToken::new();
+        let fence = LeaderFence {
+            partition: &partition,
+            node_id: NodeId(1),
+            leader_epoch: 0,
+            shutdown: &shutdown,
+        };
+
+        partition.current_leader.store(leader, Ordering::Release);
+        partition
+            .current_leader_epoch
+            .store(epoch, Ordering::Release);
+        if stopping {
+            shutdown.cancel();
+        }
+
+        check!(fence.holds() == holds);
+    }
+
+    /// A sweep on a broker that is shutting down starts no copy: the broker's
+    /// partitions are about to have other leaders, and they copy the same
+    /// offsets under their own segment boundaries.
+    #[yare::parameterized(
+        serving = { false },
+        stopping = { true },
+    )]
+    #[test_macro(tokio::test)]
+    async fn a_stopping_broker_starts_no_copy(stopping: bool) {
+        let TempDirs {
+            local: log_dir,
+            remote: remote_dir,
+        } = fixtures::temporary_dirs();
+        let partitions = PartitionRegistry::new();
+        let partition = rolled_tiered_partition(log_dir.path());
+        let sealed = fixtures::sealed_segment_count(&partition);
+        check!(sealed >= 2, "test needs multiple sealed segments");
+        partitions.insert("orders".into(), PartitionIndex(0), partition);
+        let fixtures::Backends { rsm, rlmm } = local_backends(remote_dir.path());
+        let shutdown = CancellationToken::new();
+        if stopping {
+            shutdown.cancel();
+        }
+
+        tick_all(
+            &partitions,
+            &fixed_source(image_with_orders_topic()),
+            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
+            fixtures::serving_broker(&shutdown),
+            SweepConcurrency::default(),
+        )
+        .await;
+
+        let want = if stopping { 0 } else { sealed };
+        check!(rlmm.list_remote_log_segments(&tp()).unwrap().len() == want);
     }
 
     #[tokio::test]
@@ -743,6 +1089,7 @@ mod tests {
                 rsm,
                 rlmm: rlmm.clone(),
                 index_cache: Arc::new(krabka_remote_storage::RemoteIndexCache::disabled()),
+                copy_quota: Arc::new(quota::RlmQuotaManager::unlimited()),
                 metrics: BrokerMetrics::new(),
                 node_id: NodeId(1),
                 broker_id: 1,
@@ -882,8 +1229,7 @@ mod tests {
                 unstable_api_versions: unstable,
                 ..tier(ArchiveMode::Mutable, &rsm, &rlmm)
             },
-            NodeId(1),
-            1,
+            fixtures::serving_broker(&CancellationToken::new()),
             SweepConcurrency::default(),
         )
         .await;

@@ -9,11 +9,13 @@ use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     super::*,
     crate::{
-        authorizer::AllowAllAuthorizer,
+        authorizer::{AllowAllAuthorizer, Authorizer},
         broker::{Broker, BrokerHandle},
         codes,
+        config::{RemoteStorageBackend, RlmmKind},
         config_keys::{
-            CLEANUP_POLICY, DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, parse_cleanup_policy,
+            CLEANUP_POLICY, DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, REMOTE_STORAGE_ENABLE,
+            parse_cleanup_policy,
         },
         coordinator::bootstrap::OFFSETS_TOPIC,
         delivery::test_support::batch_at as delivery_batch_at,
@@ -22,17 +24,21 @@ use {
         handlers::{
             RequestContext,
             create_topics::handle as create_topics_handle,
-            delete_records::test_support::gated_config,
+            delete_records::{
+                test_support::{ArchivedSegment, archived_segments, gated_config, seed_segment},
+                tiered::{ArchiveFloor, TrimFailure, trim_behind_archive},
+            },
             fetch::handle as fetch_handle,
             test_support::{self as handler_fixture_support, configured_topic_request},
         },
         heartbeat::fencing::{RegistrationChange, registration_change},
         partition::Partition,
+        remote_reader::test_support::{NotReadyRlmm, ReaderWithDir, reader_with_metadata},
         replica_state::ReplicaState,
         share_coordinator::bootstrap::TOPIC as SHARE_COORDINATOR_TOPIC,
         test_support::{
-            KafkaErrorCode, append_partition_batch, broker_registration, encode_request,
-            start_broker_no_audit_with,
+            KafkaErrorCode, StartedBroker, append_partition_batch, broker_registration,
+            encode_request, start_broker_no_audit_with,
         },
         txn::bootstrap::TOPIC,
     },
@@ -46,6 +52,7 @@ use {
             DeleteRecordsPartitionResult, DeleteRecordsResponse, DeleteRecordsTopicResult,
         },
     },
+    krabka_remote_storage::{RemoteLogSegmentState, RemoteStorageError, TopicIdPartition},
     std::sync::Arc,
 };
 
@@ -108,15 +115,7 @@ krabka_macros::wire_codec_helpers! {
 
 use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
 
-async fn drive(
-    broker: &Broker,
-    req: &DeleteRecordsRequest,
-    ctx: &RequestContext<'_>,
-) -> DeleteRecordsResponse {
-    handle(broker, req.clone(), VERSION, ctx)
-        .await
-        .expect("handle")
-}
+handler_drive!(DeleteRecordsRequest => DeleteRecordsResponse, handle, VERSION);
 
 async fn drive_trim(
     broker: &Broker,
@@ -124,6 +123,21 @@ async fn drive_trim(
     request: DeleteRecordsRequest,
 ) -> DeleteRecordsResponse {
     drive(broker, &request, ctx).await
+}
+
+async fn drive_trim_targets(
+    broker: &Broker,
+    admin: &krabka_security::Principal,
+    peer: &std::net::SocketAddr,
+    topic: &str,
+    targets: &[TrimTarget],
+) -> DeleteRecordsResponse {
+    drive_trim(
+        broker,
+        &test_context(admin, peer),
+        request().topic(topic).partitions(targets).call(),
+    )
+    .await
 }
 
 /// Compare the entire response with independent caller-specified expected rows.
@@ -301,11 +315,11 @@ async fn handle_denied_topic_returns_topic_auth_rows() {
 
 #[tokio::test]
 async fn handle_unknown_partition_preserves_requested_index() {
-    krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, p, peer);
-        boot [start_broker] allow_all;
-        user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, p, peer),
+        start_broker,
+        "admin"
+    );
     let req = request()
         .topic("missing")
         .partitions(&[TrimTarget {
@@ -487,11 +501,11 @@ async fn a_trim_stops_at_the_delivery_watermark_of_a_scheduled_topic() {
         ),
     ];
 
-    krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, admin, peer, ctx);
-        boot [start_broker] allow_all;
-        user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, admin, peer, ctx),
+        start_broker,
+        "admin"
+    );
 
     for (topic, delivery_mode, expected_low_watermark) in cases {
         topic_holding_a_pending_batch()
@@ -625,11 +639,11 @@ async fn a_trim_that_deletes_nothing_leaves_the_log_start_alone() {
         ),
     ];
 
-    krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, admin, peer, ctx);
-        boot [start_broker] allow_all;
-        user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, admin, peer, ctx),
+        start_broker,
+        "admin"
+    );
 
     for (topic, offset, low_watermark, error_code) in cases {
         let PendingPartitionFixture { part, before } =
@@ -656,11 +670,11 @@ async fn a_trim_that_deletes_nothing_leaves_the_log_start_alone() {
 /// caller who could otherwise trim still cannot.
 #[tokio::test]
 async fn a_frozen_topic_refuses_a_trim() {
-    krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, admin, peer, ctx);
-        boot [start_broker] allow_all;
-        user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, admin, peer, ctx),
+        start_broker,
+        "admin"
+    );
     let topic = "delete-records-frozen";
     let PendingPartitionFixture { part, before } =
         pending_partition_fixture(&broker_handle, &broker, topic, &ctx).await;
@@ -700,11 +714,11 @@ async fn a_frozen_topic_refuses_a_trim() {
 /// client re-resolves the leader rather than deleting on a stale replica.
 #[tokio::test]
 async fn a_replica_that_is_not_the_leader_refuses_a_trim() {
-    krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, admin, peer, ctx);
-        boot [start_broker] allow_all;
-        user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, admin, peer, ctx),
+        start_broker,
+        "admin"
+    );
     let topic = "delete-records-follower";
     let PendingPartitionFixture { part, before } =
         pending_partition_fixture(&broker_handle, &broker, topic, &ctx).await;
@@ -747,11 +761,11 @@ async fn a_compact_only_topic_refuses_a_trim() {
             2,
         ),
     ];
-    krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, admin, peer, ctx);
-        boot [start_broker] allow_all;
-        user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, admin, peer, ctx),
+        start_broker,
+        "admin"
+    );
 
     for (topic, policy, low_watermark, error_code, log_start) in cases {
         topic_with_configs_holding_a_pending_batch()
@@ -769,17 +783,10 @@ async fn a_compact_only_topic_refuses_a_trim() {
             .get(topic, krabka_ids::PartitionIndex(0))
             .expect("the partition is local");
 
-        let resp = drive_trim(
-            &broker,
-            &test_context(&admin, &peer),
-            request()
-                .topic(topic)
-                .partitions(&[TrimTarget {
-                    index: PartitionIndex(0),
-                    offset: Offset(2),
-                }])
-                .call(),
-        )
+        let resp = drive_trim_targets(&broker, &admin, &peer, topic, &[TrimTarget {
+            index: PartitionIndex(0),
+            offset: Offset(2),
+        }])
         .await;
 
         check!(
@@ -805,11 +812,11 @@ async fn a_compact_only_topic_refuses_a_trim() {
 /// partition the metadata does not hold answers `UNKNOWN_TOPIC_OR_PARTITION`.
 #[tokio::test]
 async fn a_partition_hosted_elsewhere_answers_not_leader_or_follower() {
-    krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, admin, peer);
-        boot [start_broker] allow_all;
-        user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, admin, peer),
+        start_broker,
+        "admin"
+    );
     let topic = "delete-records-elsewhere";
     let elsewhere = krabka_metadata::NodeId(broker.config.node_id.0 + 1);
     broker
@@ -835,23 +842,16 @@ async fn a_partition_hosted_elsewhere_answers_not_leader_or_follower() {
         .wait_for_image(|image| image.partition(topic, 0).is_some())
         .await;
 
-    let resp = drive_trim(
-        &broker,
-        &test_context(&admin, &peer),
-        request()
-            .topic(topic)
-            .partitions(&[
-                TrimTarget {
-                    index: PartitionIndex(0),
-                    offset: Offset(1),
-                },
-                TrimTarget {
-                    index: PartitionIndex(1),
-                    offset: Offset(1),
-                },
-            ])
-            .call(),
-    )
+    let resp = drive_trim_targets(&broker, &admin, &peer, topic, &[
+        TrimTarget {
+            index: PartitionIndex(0),
+            offset: Offset(1),
+        },
+        TrimTarget {
+            index: PartitionIndex(1),
+            offset: Offset(1),
+        },
+    ])
     .await;
 
     let expected = vec![krabka_macros::tagged_wire!(DeleteRecordsTopicResult {
@@ -879,11 +879,11 @@ async fn a_partition_hosted_elsewhere_answers_not_leader_or_follower() {
 /// would move the log start.
 #[tokio::test]
 async fn an_internal_topic_refuses_a_trim() {
-    krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, admin, peer, ctx);
-        boot [start_broker] allow_all;
-        user ["admin"];
-    };
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, admin, peer, ctx),
+        start_broker,
+        "admin"
+    );
 
     broker_handle.wait_until_group_coordinator_ready().await;
     broker_handle
@@ -1255,6 +1255,150 @@ async fn a_trim_waits_for_every_live_follower_to_reach_the_trim_point() {
         .call()
         .await;
     check!(fenced == expected_trim_rows().topic(topic).low_watermark(8).call());
+
+    broker_handle.shutdown().await;
+}
+
+/// A broker with a local remote tier and an in-memory RLMM whose sweep never
+/// runs during a test, so the archive a test seeds is the archive it reads.
+async fn start_tiered_broker(authorizer: Arc<dyn Authorizer>) -> StartedBroker {
+    start_broker_no_audit_with(|config| {
+        config.authorizer = authorizer;
+        let dir = config.log_dir.join("remote");
+        std::fs::create_dir_all(&dir).expect("create the remote tier directory");
+        config.remote_storage_backend = Some(RemoteStorageBackend::Local { dir });
+        config.remote_log_metadata = RlmmKind::InMemory;
+        config.remote_log_manager_interval = krabka_units::secs(3_600);
+    })
+    .await
+}
+
+/// A tiered partition holding four records, and its id in the archive.
+struct TieredTopic {
+    part: Arc<Partition>,
+    tp: TopicIdPartition,
+}
+
+/// Create `topic` with `remote.storage.enable=true`, append its four records,
+/// and wait until the tiering config reaches the partition log.
+async fn tiered_topic(
+    broker_handle: &BrokerHandle,
+    ctx: &RequestContext<'_>,
+    topic: &str,
+) -> TieredTopic {
+    topic_with_configs_holding_a_pending_batch()
+        .broker_handle(broker_handle)
+        .ctx(ctx)
+        .topic(topic)
+        .configs(&[ConfigPair {
+            name: REMOTE_STORAGE_ENABLE,
+            value: "true",
+        }])
+        .call()
+        .await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !broker_handle
+            .partition_log_config_for_test(topic, 0)
+            .is_some_and(|config| config.remote_storage_enable)
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("remote.storage.enable reaches the partition log");
+    let broker = broker_handle.broker_arc_for_test();
+    let topic_id = broker
+        .controller
+        .current_image()
+        .topic(topic)
+        .expect("the topic is in the image")
+        .topic_id;
+    TieredTopic {
+        part: broker
+            .partitions
+            .get(topic, PartitionIndex(0))
+            .expect("the partition is local"),
+        tp: TopicIdPartition::new(topic_id, topic, 0),
+    }
+}
+
+fn archived(
+    id: u128,
+    offsets: std::ops::RangeInclusive<i64>,
+    state: RemoteLogSegmentState,
+) -> ArchivedSegment {
+    ArchivedSegment { id, offsets, state }
+}
+
+/// Issue #1481: a trim marks every archived segment wholly below the trim
+/// point deleted before it answers, so the archive enforces the new floor
+/// from the moment it exists, and a later leader cannot lower it again.
+#[tokio::test]
+async fn a_tiered_trim_marks_the_archive_below_the_trim_point() {
+    use RemoteLogSegmentState::{CopySegmentFinished, CopySegmentStarted, DeleteSegmentStarted};
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, admin, peer, ctx),
+        start_tiered_broker,
+        "admin"
+    );
+    let topic = "delete-records-tiered";
+    let TieredTopic { part, tp } = tiered_topic(&broker_handle, &ctx, topic).await;
+    let rlmm = &broker.remote_reader.as_ref().expect("a remote tier").rlmm;
+    for segment in [
+        archived(1, 0..=0, CopySegmentFinished),
+        archived(2, 1..=1, CopySegmentStarted),
+        archived(3, 2..=3, CopySegmentFinished),
+    ] {
+        seed_segment(rlmm, &tp, &segment);
+    }
+
+    check_trim_frontier()
+        .broker(&broker)
+        .ctx(&test_context(&admin, &peer))
+        .partition(&part)
+        .topic(topic)
+        .offset(3)
+        .low_watermark(3)
+        .error(codes::NONE)
+        .frontier(3)
+        .call()
+        .await;
+    check!(
+        archived_segments(rlmm, &tp)
+            == [
+                archived(1, 0..=0, DeleteSegmentStarted),
+                archived(2, 1..=1, DeleteSegmentStarted),
+                archived(3, 2..=3, CopySegmentFinished),
+            ]
+    );
+
+    broker_handle.shutdown().await;
+}
+
+/// An archive that cannot be marked fails the trim before anything is
+/// removed: a client told its records are gone must not see them again after
+/// a leadership move, so the log start stays where it was.
+#[tokio::test]
+async fn a_tiered_trim_whose_archive_is_not_ready_deletes_nothing() {
+    allow_all_broker_setup!(
+        (broker_handle, _dir, broker, admin, peer, ctx),
+        start_tiered_broker,
+        "admin"
+    );
+    let TieredTopic { part, tp } =
+        tiered_topic(&broker_handle, &ctx, "delete-records-not-ready").await;
+    let before = part.log_start_offset();
+    let ReaderWithDir { reader, dir: _dir } = reader_with_metadata(|| Arc::new(NotReadyRlmm));
+    let archive = ArchiveFloor {
+        reader: &reader,
+        tp,
+        broker_id: broker.config.broker_id,
+    };
+
+    let trimmed = trim_behind_archive(Some(&archive), &part, krabka_log::Offset(3)).await;
+
+    check!(let Err(TrimFailure::Archive(RemoteStorageError::NotReady { .. })) = trimmed);
+    check!(part.log_start_offset() == before);
 
     broker_handle.shutdown().await;
 }

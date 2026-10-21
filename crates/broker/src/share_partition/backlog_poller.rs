@@ -2,7 +2,7 @@
 
 use {
     crate::{
-        broker::registered_listener_endpoint,
+        broker::leader_listener_endpoint,
         codes,
         coordinator::{GroupCoordinator, bootstrap::OFFSETS_TOPIC, partitioner},
         metadata_source::MetadataSource,
@@ -167,10 +167,7 @@ impl BacklogPoller {
         topic: &str,
         partition: i32,
     ) -> Result<PartitionOffsets, String> {
-        let broker = image
-            .broker(leader)
-            .ok_or_else(|| format!("unknown leader broker {leader}"))?;
-        let (host, port) = registered_listener_endpoint(broker, &self.listener_name);
+        let (host, port) = leader_listener_endpoint(image, leader, &self.listener_name)?;
         let options = ConnectionOptions {
             client_id: format!("krabka-share-backlog-{}", self.node_id),
             ..ConnectionOptions::default()

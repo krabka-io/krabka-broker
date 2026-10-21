@@ -22,7 +22,7 @@
 
 use {
     crate::{
-        broker::registered_listener_endpoint,
+        broker::leader_listener_endpoint,
         codes,
         coordinator::{
             GroupCoordinator,
@@ -269,10 +269,7 @@ impl LagPoller {
         leader: NodeId,
         partitions: &[TopicPartition],
     ) -> Result<HashMap<TopicPartition, i64>, String> {
-        let broker = image
-            .broker(leader)
-            .ok_or_else(|| format!("unknown leader broker {leader}"))?;
-        let (host, port) = registered_listener_endpoint(broker, &self.listener_name);
+        let (host, port) = leader_listener_endpoint(image, leader, &self.listener_name)?;
         let Some(offset_request) = probe_offsets_request(image, partitions) else {
             return Ok(HashMap::new());
         };

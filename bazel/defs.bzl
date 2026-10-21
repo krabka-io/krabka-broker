@@ -52,10 +52,10 @@ def docker_test_exec_properties(recycling_key):
         "test.workload-isolation-type": "firecracker",
         "test.init-dockerd": "true",
         # Two constraints pick this image, and only one of them was obvious.
-        # `@llvm//:rbe_linux_x86_64` pins `ubuntu:22.04`, which carries no
+        # `//bazel:rbe_linux_x86_64` runs `ubuntu:22.04`, which carries no
         # Docker, so `init-dockerd` has nothing to start; a target's properties
         # beat the platform's, and only for this exec group, so the compile
-        # actions still resolve against @llvm's. But BuildBuddy's *default*
+        # actions still resolve against it. But BuildBuddy's *default*
         # executor image is Ubuntu 16.04, and these binaries are built against
         # `@llvm//constraints/libc:gnu.2.28`, so on that image a suite died
         # before it ran a line:
@@ -94,7 +94,7 @@ WORKSPACE_RUSTC_FLAGS = ["-Funsafe_code"]
 # The root `Cargo.toml`'s `[workspace.package] version`. It reaches the release
 # artifacts through the purl `crate_library` stamps below, so a release bump
 # has to land here as well as in the manifest.
-WORKSPACE_VERSION = "1.0.5"
+WORKSPACE_VERSION = "1.0.8"
 
 def _features():
     return DEP_DATA[native.package_name()]["crate_features"]
@@ -164,6 +164,7 @@ def _crate(rule, name, srcs, clippy = True, **kwargs):
         package_metadata = [metadata],
         rustc_flags = WORKSPACE_RUSTC_FLAGS,
         visibility = ["//visibility:public"],
+        version = WORKSPACE_VERSION,
         deps = all_crate_deps(normal = True),
         **kwargs
     )
@@ -217,6 +218,7 @@ def crate_binary(name, crate_root, lib, tests = True, **kwargs):
         edition = edition(),
         rustc_flags = WORKSPACE_RUSTC_FLAGS,
         visibility = ["//visibility:public"],
+        version = WORKSPACE_VERSION,
         deps = all_crate_deps(normal = True) + [lib],
         **kwargs
     )

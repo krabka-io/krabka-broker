@@ -17,9 +17,9 @@ fn session_oracle(now: i64, credential: Option<i64>, cap: Option<i64>) -> (Optio
     (expiry, lifetime)
 }
 
-fn check_trace(times: [i64; 4], periods: [i64; 4], api: i16, token_api: TokenApi) {
+fn check_trace(times: [i64; 3], periods: [i64; 4], api: i16, token_api: TokenApi) {
     let actual = created_token_session_bounds_requests(
-        (times[0], times[1], times[2], times[3]),
+        (times[0], times[1], times[2]),
         (periods[0], periods[1], periods[2], periods[3]),
         api,
         token_api,
@@ -38,20 +38,18 @@ fn check_trace(times: [i64; 4], periods: [i64; 4], api: i16, token_api: TokenApi
         let expiry =
             i64::try_from((i128::from(times[0]) + i128::from(periods[2])).min(i128::from(maximum)))
                 .unwrap();
-        if times[2] >= expiry {
-            None
-        } else {
-            let (at, window) = session_oracle(times[2], Some(expiry), Some(periods[3]));
-            let at = at.unwrap();
-            Some((
-                expiry,
-                maximum,
-                at,
-                window,
-                matches!(api, 17 | 36) || times[3] < at,
-                TokenApiAdmission::Reject,
-            ))
-        }
+        // A token that expired before round two still authenticates; its
+        // session is already past its deadline.
+        let (at, window) = session_oracle(times[1], Some(expiry), Some(periods[3]));
+        let at = at.unwrap();
+        Some((
+            expiry,
+            maximum,
+            at,
+            window,
+            api == 17 || times[2] <= at,
+            TokenApiAdmission::Reject,
+        ))
     };
     assert2::assert!(
         actual == expected,
@@ -62,15 +60,16 @@ fn check_trace(times: [i64; 4], periods: [i64; 4], api: i16, token_api: TokenApi
 #[test]
 fn token_session_deadline_and_round_boundaries() {
     for times in [
-        [100, 101, 105, 105],
-        [100, 101, 105, 109],
-        [100, 101, 105, 110],
-        [100, 101, 110, 110],
-        [100, 110, 110, 111],
-        [100, 101, 105, 130],
-        [i64::MAX - 4, i64::MAX - 3, i64::MAX - 1, i64::MAX],
-        [0, 0, 0, 0],
-        [i64::MAX; 4],
+        [100, 105, 105],
+        [100, 105, 109],
+        [100, 105, 110],
+        [100, 110, 110],
+        [100, 110, 111],
+        [100, 105, 130],
+        [100, 130, 130],
+        [i64::MAX - 4, i64::MAX - 1, i64::MAX],
+        [0, 0, 0],
+        [i64::MAX; 3],
     ] {
         for periods in [
             [0, 30, 10, 0],
@@ -101,7 +100,7 @@ fn token_session_deadline_and_round_boundaries() {
                     let at = at.unwrap();
                     assert2::assert!(
                         credential_free_session_cap_bounds_requests(now, cap, request, api)
-                            == (at, window, matches!(api, 17 | 36) || request < at)
+                            == (at, window, api == 17 || request <= at)
                     );
                 }
             }
@@ -118,8 +117,8 @@ fn token_session_deadline_and_round_boundaries() {
                 );
                 for api in [0, 17, 18, 36, 41] {
                     assert2::assert!(
-                        session_expired_for_request(credential, api, now)
-                            == (!matches!(api, 17 | 36) && credential.is_some_and(|at| at <= now))
+                        session_expired_for_request(credential, api, now, None)
+                            == (api != 17 && credential.is_some_and(|at| now > at))
                     );
                 }
             }
@@ -132,15 +131,17 @@ proptest! {
     fn session_kernel_matches_wide_integer_oracle(
         now in any::<i64>(), credential in proptest::option::of(any::<i64>()),
         cap in proptest::option::of(any::<i64>()), api in any::<i16>(),
+        last in proptest::option::of(any::<i64>()),
     ) {
         prop_assert_eq!(sasl_session_expiry(now, credential, cap), session_oracle(now, credential, cap));
-        prop_assert_eq!(session_expired_for_request(credential, api, now),
-            !matches!(api, 17 | 36) && credential.is_some_and(|at| at <= now));
+        prop_assert_eq!(session_expired_for_request(credential, api, now, last),
+            credential.is_some_and(|at| now > at) && !(api == 17 && last.is_none_or(|last|
+                i128::from(now) - i128::from(last) >= 1_000)));
     }
 
     #[test]
     fn token_session_trace_matches_independent_deadline_oracle(
-        raw in any::<[u64; 4]>(), periods in any::<[i64; 4]>(), api in any::<i16>(),
+        raw in any::<[u64; 3]>(), periods in any::<[i64; 4]>(), api in any::<i16>(),
     ) {
         let mut times = raw.map(|value| i64::try_from(value & 0x7fff_ffff_ffff_ffff).unwrap());
         times.sort_unstable();

@@ -24,6 +24,11 @@ pub(crate) struct ChainResume {
 
 /// Read the tail of `partition` and return the [`ChainResume`] implied by the
 /// last chained (non-checkpoint) record, or `None` if there are none.
+///
+/// The read starts no lower than the log start. Retention and `DeleteRecords`
+/// raise the log start, and a read below it fails. A read that fails all the
+/// same is logged at error level: the caller then starts a new chain, and an
+/// auditor sees a break in it.
 #[must_use]
 pub(crate) fn recover_from_partition_tail(
     partition: &Partition,
@@ -31,12 +36,24 @@ pub(crate) fn recover_from_partition_tail(
     tail_read_max: ByteSize,
 ) -> Option<ChainResume> {
     let leo = partition.log_end_offset();
-    if leo <= krabka_log::Offset(0) {
+    let log_start = partition.log_start_offset();
+    if leo <= log_start {
         return None;
     }
     // Read a bounded tail window (audit records are small).
-    let start = tail_window_start(leo, tail_window_offsets);
-    let out = partition.read_log(start, tail_read_max).ok()?;
+    let start = tail_window_start(leo, log_start, tail_window_offsets);
+    let out = match partition.read_log(start, tail_read_max) {
+        Ok(out) => out,
+        Err(error) => {
+            tracing::error!(
+                %error,
+                topic = %partition.topic,
+                start = start.0,
+                "cannot read the audit partition tail; the audit hash chain starts again from genesis"
+            );
+            return None;
+        }
+    };
     let mut last: Option<ChainResume> = None;
     for batch in &out.batches {
         for rec in &batch.records {
@@ -74,9 +91,10 @@ fn header_str<'a>(rec: &'a krabka_protocol::records::Record, key: &str) -> Optio
 
 fn tail_window_start(
     log_end_offset: krabka_log::Offset,
+    log_start_offset: krabka_log::Offset,
     tail_window_offsets: i64,
 ) -> krabka_log::Offset {
-    (log_end_offset - tail_window_offsets).max(krabka_log::Offset(0))
+    (log_end_offset - tail_window_offsets).max(log_start_offset)
 }
 
 #[cfg(test)]
@@ -148,16 +166,66 @@ mod tests {
             .expect("append");
     }
 
+    fn partition_with_chained_record() -> (TestPartition, &'static [u8]) {
+        let fixture = test_partition();
+        let value = b"chained";
+        append_records(&fixture.partition, vec![chained_record(
+            7,
+            &GENESIS_HEAD,
+            value,
+        )]);
+        (fixture, value)
+    }
+
     #[yare::parameterized(
-        empty_log = { 0, Offset(0) },
-        exactly_one_window = { 4096, Offset(0) },
-        one_past_one_window = { 4097, Offset(1) },
-        two_windows = { 8192, Offset(4096) },
+        empty_log = { 0, 0, Offset(0) },
+        exactly_one_window = { 4096, 0, Offset(0) },
+        one_past_one_window = { 4097, 0, Offset(1) },
+        two_windows = { 8192, 0, Offset(4096) },
+        short_log_with_a_raised_start = { 161, 114, Offset(114) },
+        window_above_a_raised_start = { 8192, 114, Offset(4096) },
     )]
-    fn tail_window_start_keeps_configured_offset_count(log_end_offset: i64, want: Offset) {
+    fn tail_window_start_keeps_configured_offset_count(
+        log_end_offset: i64,
+        log_start_offset: i64,
+        want: Offset,
+    ) {
         assert2::assert!(
-            tail_window_start(Offset(log_end_offset), 4096) == want,
-            "log_end_offset {log_end_offset}"
+            tail_window_start(Offset(log_end_offset), Offset(log_start_offset), 4096) == want,
+            "log_end_offset {log_end_offset}, log_start_offset {log_start_offset}"
+        );
+    }
+
+    /// Retention or `DeleteRecords` can raise the log start of a log that is
+    /// still shorter than the tail window. The tail read then starts at the log
+    /// start, not at offset 0, and the chain resumes instead of starting again.
+    #[tokio::test]
+    async fn recover_resumes_when_the_log_start_is_above_zero() {
+        let TestPartition {
+            partition,
+            dir: _dir,
+        } = test_partition();
+        let first = chained_record(0, &GENESIS_HEAD, b"first");
+        let first_head = chain_hash(&GENESIS_HEAD, 0, b"first");
+        let second = chained_record(1, &first_head, b"second");
+        let second_head = chain_hash(&first_head, 1, b"second");
+        append_records(&partition, vec![first, second]);
+        partition
+            .log
+            .lock()
+            .expect("log lock")
+            .set_log_start_offset(Offset(1))
+            .expect("raise the log start");
+
+        let recovered = recover_from_partition_tail(&partition, 4096, mebibytes(1))
+            .expect("the chain resumes from the record above the log start");
+
+        assert!(
+            recovered
+                == ChainResume {
+                    next_seq: 2,
+                    head: second_head,
+                }
         );
     }
 
@@ -253,12 +321,13 @@ mod tests {
 
     #[tokio::test]
     async fn recover_honors_configured_tail_bounds() {
-        let TestPartition {
-            partition,
-            dir: _dir,
-        } = test_partition();
-        let value = b"chained";
-        append_records(&partition, vec![chained_record(7, &GENESIS_HEAD, value)]);
+        let (
+            TestPartition {
+                partition,
+                dir: _dir,
+            },
+            value,
+        ) = partition_with_chained_record();
         append_records(&partition, vec![checkpoint_record()]);
 
         assert!(recover_from_partition_tail(&partition, 1, kibibytes(1)).is_none());
@@ -273,12 +342,13 @@ mod tests {
 
     #[tokio::test]
     async fn recover_honors_configured_tail_read_max_bytes() {
-        let TestPartition {
-            partition,
-            dir: _dir,
-        } = test_partition();
-        let value = b"chained";
-        append_records(&partition, vec![chained_record(7, &GENESIS_HEAD, value)]);
+        let (
+            TestPartition {
+                partition,
+                dir: _dir,
+            },
+            value,
+        ) = partition_with_chained_record();
 
         assert!(recover_from_partition_tail(&partition, 1, bytes(1)).is_none());
         assert!(

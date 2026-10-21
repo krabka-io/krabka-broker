@@ -100,29 +100,71 @@ pub struct TimestampPolicy {
     /// default too -- see [`crate::config::BrokerConfig`]'s
     /// `default_message_timestamp_after_max_ms`).
     after_max_ms: Option<i64>,
+    /// Where a stored `CreateTime` batch's `max_timestamp` comes from.
+    max_timestamp: MaxTimestampSource,
+}
+
+/// Where the `max_timestamp` of a stored `CreateTime` batch comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MaxTimestampSource {
+    /// The largest record timestamp in the batch, or `NO_TIMESTAMP` (-1) when
+    /// none is larger, whatever the producer's header said. This is Kafka's
+    /// `LogValidator`: `assignOffsetsNonCompressed` and the in-place branch of
+    /// `validateMessagesAndAssignOffsetsCompressed` both fold the record
+    /// timestamps from `RecordBatch.NO_TIMESTAMP` and call
+    /// `batch.setMaxTimestamp` with the result.
+    Records,
+    /// The producer's own header value. A KFC-1 `delivery.mode=scheduled`
+    /// topic reads `max_timestamp` as the batch's delivery time, which KFC-1
+    /// defines on the header field so that neither the produce path nor the
+    /// scheduler has to decode records to find it.
+    Producer,
 }
 
 impl Default for TimestampPolicy {
-    /// The policy that bounds nothing: the producer's own timestamps, and
-    /// neither window applied.
+    /// The policy that bounds nothing: no window applied, and the stored
+    /// `max_timestamp` recomputed from the records as Kafka does.
     ///
     /// This is not the policy a stock topic resolves to.
     /// [`resolve_timestamp_policy`] gives an unconfigured topic the broker's
     /// own default, which normally bounds the future window at Kafka's
-    /// compiled-in one hour. What resolves to this is a
-    /// `delivery.mode=scheduled` topic, whose timestamps are delivery times
-    /// rather than create times, and the benchmark seam, which exists to time
-    /// the append rather than the window.
+    /// compiled-in one hour. What resolves to this is the benchmark seam,
+    /// which exists to time the append rather than the window. A
+    /// `delivery.mode=scheduled` topic resolves to
+    /// [`TimestampPolicy::scheduled`].
     fn default() -> Self {
         Self {
             timestamp_type: TimestampType::CreateTime,
             before_max_ms: None,
             after_max_ms: None,
+            max_timestamp: MaxTimestampSource::Records,
         }
     }
 }
 
 impl TimestampPolicy {
+    /// The policy of a KFC-1 `delivery.mode=scheduled` topic: no window in
+    /// either direction, and the producer's header `max_timestamp` kept as
+    /// the batch's delivery time. See [`resolve_timestamp_policy`].
+    fn scheduled(timestamp_type: TimestampType) -> Self {
+        Self {
+            timestamp_type,
+            max_timestamp: MaxTimestampSource::Producer,
+            ..Self::default()
+        }
+    }
+
+    /// Whether the stored batch's `max_timestamp` is the largest record
+    /// timestamp rather than the producer's header value.
+    ///
+    /// True under `CreateTime` on every topic but a KFC-1 scheduled one.
+    /// Under `LogAppendTime` the log stamps its own clock into the field at
+    /// append, so nothing computed here would survive.
+    pub(super) fn recomputes_max_timestamp(self) -> bool {
+        self.timestamp_type == TimestampType::CreateTime
+            && self.max_timestamp == MaxTimestampSource::Records
+    }
+
     /// Whether any record timestamp in a batch has to be looked at.
     ///
     /// False on a topic that opened both windows -- a `LogAppendTime` topic
@@ -143,28 +185,35 @@ impl TimestampPolicy {
     /// when it is more than `before.max.ms` older than the broker's clock or
     /// more than `after.max.ms` newer than it. `NO_TIMESTAMP` (-1) is exempt,
     /// as it is in Kafka, because such a record carries no timestamp to judge.
-    /// The arithmetic saturates rather than wrapping: a producer that sends
-    /// `i64::MIN` must be refused, not admitted by an overflow.
+    ///
+    /// The arithmetic wraps, because Java's `long` arithmetic does:
+    /// `timestampDiff = now - record.timestamp()` and `-1 * timestampDiff`
+    /// overflow for a timestamp near `Long.MIN_VALUE`, and Kafka answers what
+    /// the wrapped values say. On a stock topic (past window open, future
+    /// window one hour) Kafka refuses `Long.MIN_VALUE` through the wrapped
+    /// future test. With only the past window bounded, Kafka admits it. An
+    /// unset side is `Long.MAX_VALUE` in Kafka, which no `long` exceeds, so
+    /// `None` refuses nothing in either arithmetic.
     pub(super) fn rejects_record(self, timestamp_ms: i64, now_ms: i64) -> bool {
         if !self.bounds_records() || timestamp_ms == NO_TIMESTAMP {
             return false;
         }
-        let difference = now_ms.saturating_sub(timestamp_ms);
+        let difference = now_ms.wrapping_sub(timestamp_ms);
         self.before_max_ms.is_some_and(|before| difference > before)
             || self
                 .after_max_ms
-                .is_some_and(|after| difference.saturating_neg() > after)
+                .is_some_and(|after| difference.wrapping_neg() > after)
     }
 
     /// The inclusive window Kafka's `LogValidator.validateTimestamp` message
     /// reports around `now_ms`: `[now_ms - before.max.ms, now_ms +
     /// after.max.ms]`. An unset side reads as `i64::MAX`, the same "no bound"
     /// value Kafka's own `Long.MAX_VALUE` default spells, and the arithmetic
-    /// saturates rather than wraps for the same reason [`Self::rejects_record`]
-    /// does.
+    /// wraps as Java's does, so an unbounded future side reports the negative
+    /// number Kafka's message prints for `now + Long.MAX_VALUE`.
     pub(super) fn window(self, now_ms: i64) -> TimestampWindow {
-        let low = now_ms.saturating_sub(self.before_max_ms.unwrap_or(i64::MAX));
-        let high = now_ms.saturating_add(self.after_max_ms.unwrap_or(i64::MAX));
+        let low = now_ms.wrapping_sub(self.before_max_ms.unwrap_or(i64::MAX));
+        let high = now_ms.wrapping_add(self.after_max_ms.unwrap_or(i64::MAX));
         TimestampWindow { low, high }
     }
 }
@@ -207,6 +256,7 @@ pub(super) fn kafka_stock_broker_default() -> TimestampPolicy {
         timestamp_type: TimestampType::CreateTime,
         before_max_ms: None,
         after_max_ms: Some(DEFAULT_AFTER_MAX_MS),
+        max_timestamp: MaxTimestampSource::Records,
     }
 }
 
@@ -228,6 +278,7 @@ pub(super) fn broker_default_timestamp_policy(
         timestamp_type,
         before_max_ms,
         after_max_ms,
+        max_timestamp: MaxTimestampSource::Records,
     }
 }
 
@@ -258,6 +309,11 @@ pub(super) fn broker_default_timestamp_policy(
 /// own create time. An immediate topic -- every topic that does not opt into
 /// KFC-1 -- is bounded exactly as a Kafka topic is.
 ///
+/// A scheduled topic also keeps the producer's header `max_timestamp`, where
+/// every other `CreateTime` topic stores the largest record timestamp as
+/// Kafka's `LogValidator` does. KFC-1 defines the delivery time as that header
+/// field, which the broker reads without decoding a record.
+///
 /// An unparseable window falls back to "no bound", the same direction the other
 /// produce-side config reads fall back in. `AlterConfigs` already refused the
 /// value, so a string here that does not parse means a corrupt metadata image,
@@ -275,10 +331,7 @@ pub(super) fn resolve_timestamp_policy(
         None => broker_default.timestamp_type,
     };
     if value(DELIVERY_MODE) == Some(DELIVERY_MODE_SCHEDULED) {
-        return TimestampPolicy {
-            timestamp_type,
-            ..TimestampPolicy::default()
-        };
+        return TimestampPolicy::scheduled(timestamp_type);
     }
     TimestampPolicy {
         timestamp_type,
@@ -290,6 +343,7 @@ pub(super) fn resolve_timestamp_policy(
             None => broker_default.after_max_ms,
             explicit => parse_timestamp_window(explicit),
         },
+        max_timestamp: MaxTimestampSource::Records,
     }
 }
 
@@ -622,6 +676,7 @@ mod tests {
             timestamp_type,
             before_max_ms: before,
             after_max_ms: after,
+            max_timestamp: MaxTimestampSource::Records,
         };
         let cases = [
             (
@@ -672,11 +727,31 @@ mod tests {
                 0,
                 false,
             ),
+            // Java's `now - timestamp` and `-1 * diff` wrap near
+            // `Long.MIN_VALUE`, and Kafka answers what the wrapped values say.
             (
-                "an absurd timestamp saturates rather than wrapping into the window",
+                "Long.MIN_VALUE wraps into the future test, which refuses it",
                 policy(TimestampType::CreateTime, Some(100), Some(100)),
                 i64::MIN,
                 true,
+            ),
+            (
+                "a stock topic refuses Long.MIN_VALUE through the wrapped future test",
+                policy(TimestampType::CreateTime, None, Some(3_600_000)),
+                i64::MIN,
+                true,
+            ),
+            (
+                "with only the past bounded, Long.MIN_VALUE's wrapped difference passes",
+                policy(TimestampType::CreateTime, Some(100), None),
+                i64::MIN,
+                false,
+            ),
+            (
+                "a difference of exactly Long.MIN_VALUE negates to itself and passes",
+                policy(TimestampType::CreateTime, Some(100), Some(100)),
+                NOW.wrapping_add(i64::MIN),
+                false,
             ),
         ];
         for (label, policy, timestamp_ms, want_rejected) in cases {
@@ -684,6 +759,48 @@ mod tests {
                 policy.rejects_record(timestamp_ms, NOW) == want_rejected,
                 "{label}"
             );
+        }
+    }
+
+    /// The `[low, high]` Kafka's `validateTimestamp` message prints:
+    /// `now - timestampBeforeMaxMs` and `now + timestampAfterMaxMs` in Java's
+    /// wrapping `long` arithmetic, with an unbounded side at `Long.MAX_VALUE`.
+    #[test]
+    fn the_reported_window_is_kafkas_wrapping_arithmetic() {
+        const NOW: i64 = 1_000_000;
+        let policy = |before, after| TimestampPolicy {
+            before_max_ms: before,
+            after_max_ms: after,
+            ..TimestampPolicy::default()
+        };
+        let cases = [
+            (
+                "both sides bounded",
+                policy(Some(100), Some(200)),
+                TimestampWindow {
+                    low: 999_900,
+                    high: 1_000_200,
+                },
+            ),
+            (
+                "an open past side reads now - Long.MAX_VALUE, which does not wrap",
+                policy(None, Some(3_600_000)),
+                TimestampWindow {
+                    low: NOW - i64::MAX,
+                    high: 4_600_000,
+                },
+            ),
+            (
+                "an open future side reads now + Long.MAX_VALUE, which wraps negative",
+                policy(Some(100), None),
+                TimestampWindow {
+                    low: 999_900,
+                    high: i64::MIN + NOW - 1,
+                },
+            ),
+        ];
+        for (label, policy, want) in cases {
+            check!(policy.window(NOW) == want, "{label}");
         }
     }
 
@@ -731,6 +848,7 @@ mod tests {
                     timestamp_type: TimestampType::CreateTime,
                     before_max_ms: Some(1_000),
                     after_max_ms: Some(2_000),
+                    max_timestamp: MaxTimestampSource::Records,
                 },
             ),
             (
@@ -789,7 +907,9 @@ mod tests {
     ///
     /// Without this, a scheduled topic would refuse its own writes: the
     /// default delay is seven days and the default future window would be one
-    /// hour.
+    /// hour. A scheduled topic also keeps the producer's header
+    /// `max_timestamp`, which KFC-1 reads as the delivery time, where an
+    /// immediate topic recomputes it from the records as Kafka does.
     #[test]
     fn a_scheduled_topic_has_no_timestamp_window() {
         let cases = [
@@ -799,7 +919,7 @@ mod tests {
                     key: DELIVERY_MODE,
                     value: DELIVERY_MODE_SCHEDULED,
                 }],
-                TimestampPolicy::default(),
+                TimestampPolicy::scheduled(TimestampType::CreateTime),
             ),
             (
                 "scheduled drops a window the topic set for itself, too",
@@ -817,7 +937,7 @@ mod tests {
                         value: "2000",
                     },
                 ],
-                TimestampPolicy::default(),
+                TimestampPolicy::scheduled(TimestampType::CreateTime),
             ),
             (
                 "an immediate topic is bounded exactly as a Kafka topic is",

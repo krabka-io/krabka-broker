@@ -42,6 +42,16 @@ groups:
           description: "The node's applied __cluster_metadata offset is behind the quorum's committed offset. 100 records is DEFAULT_READINESS_MAX_METADATA_LAG in crates/broker/src/config.rs, the same bound /readyz reports metadata_lag against."
           runbook: docs/operations/runbooks/metadata-quorum-loss.md
 
+      - alert: KrabkaMetadataStale
+        expr: krabka_broker_metadata_last_applied_lag_ms > 30000 and krabka_broker_metadata_last_applied_timestamp_ms > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} last applied a metadata record {{ $value }} ms ago"
+          description: "KIP-835: the leader appends a NoOpRecord every metadata.max.idle.interval.ms (500 ms by default), so a node that keeps applying the log stays near that interval. 30 s is a starting point for the operator to tune; the metric comment names no threshold. The lag grows on every node when the leader stops appending, and on one node when that node stops applying. It also grows on an idle cluster whose metadata.max.idle.interval.ms is 0. The timestamp guard skips a node that has applied nothing yet, whose lag reads the Unix time."
+          runbook: docs/operations/runbooks/metadata-quorum-loss.md
+
   - name: krabka-broker-availability
     rules:
       - alert: KrabkaUnderReplicatedPartitions
@@ -64,14 +74,19 @@ groups:
           description: "These partitions reject acks=all produces with NOT_ENOUGH_REPLICAS. Writes are blocked."
           runbook: docs/operations/runbooks/under-min-isr-partitions.md
 
+      # The audit topic's partitions are left out: each has one replica on its
+      # own broker, so it is leaderless exactly while that broker is down, and
+      # KrabkaBrokerDown already pages for that. The `or` keeps the rule firing
+      # on a controller too old to export the audit gauge.
       - alert: KrabkaOfflinePartitions
-        expr: krabka_broker_offline_partitions_count > 0
+        expr: >-
+          krabka_broker_offline_partitions_count - (krabka_broker_offline_audit_partitions or krabka_broker_offline_partitions_count * 0) > 0
         for: 1m
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.instance }} reports {{ $value }} offline partitions"
-          description: "A partition has no live leader. It is unavailable until an ISR member returns or an unclean election runs."
+          summary: "{{ $labels.instance }} reports {{ $value }} offline partitions outside the audit topic"
+          description: "A partition has no live leader. It is unavailable until an ISR member returns or an unclean election runs. Audit-topic partitions of a down broker are not counted."
           runbook: docs/operations/runbooks/offline-partitions.md
 
       - alert: KrabkaLeaderSiteDrift
@@ -219,6 +234,16 @@ groups:
           summary: "{{ $labels.instance }} cannot bootstrap the topic-backed RLMM"
           description: "The broker keeps retrying the __remote_log_metadata bootstrap and still answers from the fail-closed placeholder. Tiered reads and copies wait."
           runbook: docs/operations/runbooks/rlmm-bootstrap-stuck.md
+
+      - alert: KrabkaRlmmPartitionNotReady
+        expr: krabka_broker_tiered_storage_rlmm_partition_ready == 0 and (krabka_broker_tiered_storage_rlmm_partition_target_offset == -1 or changes(krabka_broker_tiered_storage_rlmm_partition_applied_offset[5m]) == 0)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} is stuck NotReady on __remote_log_metadata partition {{ $labels.metadata_partition }}"
+          description: "The broker is assigned this remote-log metadata partition, but it has not caught up and its consumer has made no progress for 10 minutes, or the partition's high-water mark has been unknown for 5 minutes. Remote retention, remote copy and local retention fail with NotReady for every topic partition that maps to it, and Fetch in the remote band answers REPLICA_NOT_AVAILABLE."
+          runbook: docs/operations/runbooks/rlmm-partition-not-ready.md
 
       - alert: KrabkaRemoteCopyErrors
         expr: rate(krabka_broker_remote_copy_errors_total[5m]) > 0

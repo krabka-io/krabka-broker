@@ -19,7 +19,7 @@ use {
             reconciler::{ReconcileInput, metadata_hash},
             test_support::{
                 MemberEpoch, assert_next_tombstone_batch, assert_single_member_limit_with_log,
-                consumer_join_request,
+                consumer_join_request, heartbeat_write_failures,
             },
         },
         test_support::KafkaErrorCode,
@@ -43,6 +43,28 @@ async fn first_join_emits_one_batch() {
     );
     // Minimum: k3 (group metadata) + k5 (member metadata) + k8 (current).
     assert!(batches[0].records.len() >= 3);
+}
+
+/// A heartbeat whose write fails answers the code of that failure, as
+/// Kafka's `CoordinatorOperationExceptionHelper.handleOperationException`
+/// does: `NOT_COORDINATOR` after a lost leadership, so the member looks the
+/// coordinator up again, and `COORDINATOR_NOT_AVAILABLE` after a write that
+/// did not commit in time. The failed write publishes no batch.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_write_answers_its_code_and_writes_no_partial_batch() {
+    for case in heartbeat_write_failures() {
+        let fixture = case.coordinator(make_coordinator);
+        let handle = fixture.coordinator.get_or_create_consumer("g");
+
+        let response = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;
+
+        fixture
+            .check_refused(&response, |error_code| ConsumerGroupHeartbeatResponse {
+                error_code,
+                ..Default::default()
+            })
+            .await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

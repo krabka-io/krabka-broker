@@ -1,6 +1,6 @@
 //! Portable write stalls, continuing progress, and request-budget release.
 use {
-    super::WriteIdle,
+    super::{IdleTimer, WriteIdle},
     crate::{
         SslPrincipalMapper,
         config::ListenerSpec,
@@ -29,7 +29,7 @@ impl SendfileSink for DuplexStream {
 #[tokio::test(start_paused = true)]
 async fn stalled_write_expires() {
     let (stream, _reader) = tokio::io::duplex(1);
-    let mut writer = WriteIdle::new(stream, Some(Duration::from_millis(100)));
+    let mut writer = WriteIdle::new(stream, IdleTimer::new(Some(Duration::from_millis(100))));
     let error = writer
         .write_all(&[1, 2])
         .await
@@ -41,7 +41,7 @@ async fn stalled_write_expires() {
 async fn successful_writes_rearm_the_window_instead_of_limiting_total_duration() {
     let (stream, mut reader) = tokio::io::duplex(1);
     let task = tokio::spawn(async move {
-        WriteIdle::new(stream, Some(Duration::from_millis(100)))
+        WriteIdle::new(stream, IdleTimer::new(Some(Duration::from_millis(100))))
             .write_all(&[1, 2, 3, 4, 5])
             .await
     });
@@ -59,7 +59,7 @@ async fn successful_writes_rearm_the_window_instead_of_limiting_total_duration()
 #[tokio::test(start_paused = true)]
 async fn disabled_idle_window_leaves_a_stalled_write_pending() {
     let (stream, _reader) = tokio::io::duplex(1);
-    let mut writer = WriteIdle::new(stream, None);
+    let mut writer = WriteIdle::new(stream, IdleTimer::new(None));
     assert!(
         tokio::time::timeout(Duration::from_secs(1), writer.write_all(&[1, 2]))
             .await
@@ -95,7 +95,7 @@ async fn stalled_sendfile_obeys_the_same_idle_window() {
         offset: 0,
         len: bytes.len(),
     };
-    let mut stream = WriteIdle::new(server, Some(Duration::from_millis(50)));
+    let mut stream = WriteIdle::new(server, IdleTimer::new(Some(Duration::from_millis(50))));
     let error = tokio::time::timeout(
         Duration::from_secs(2),
         write_fetch_plan(
@@ -121,6 +121,7 @@ async fn stalled_connection_returns_broker_queue_permits_and_other_requests_proc
     } = start_broker_with(|config| {
         config.connections_max_idle = Some(krabka_units::millis(100));
         config.queued_max_requests = 1;
+        config.socket_request_max = krabka_units::bytes(65_536);
         config.queued_max_request_bytes = Some(krabka_units::bytes(65_536));
     })
     .await;

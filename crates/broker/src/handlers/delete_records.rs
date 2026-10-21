@@ -51,7 +51,8 @@
 //!
 //! This file is the module root and holds the request loop and its ACL
 //! preamble. The response constructors live in `response`, the offset
-//! boundary decisions in `offsets`, and the break-glass gate in `gate`.
+//! boundary decisions in `offsets`, the break-glass gate in `gate`, and the
+//! remote archive's share of a tiered trim in `tiered`.
 
 use {
     crate::handlers::{ApiVersion, audit_admin_success, audit_resource, denied_topics},
@@ -74,9 +75,10 @@ mod gate;
 mod low_watermark;
 mod offsets;
 mod response;
+mod tiered;
 
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 #[cfg(test)]
 mod tests;
 
@@ -87,6 +89,7 @@ use {
         response::{
             delete_records_response, error_partition_result, partition_result, topic_result,
         },
+        tiered::{archive_floor, trim_behind_archive},
     },
     crate::{
         break_glass::handlers::audit::{GatedTransition, audit_transition, require_transition},
@@ -101,6 +104,20 @@ use {
         partition_registry::PartitionRegistry,
     },
 };
+
+fn delete_records_transition<'a>(
+    target: &'a str,
+    proposal_id: Option<Uuid>,
+    reason: &'a str,
+) -> GatedTransition<'a> {
+    GatedTransition {
+        action: BreakGlassAction::DeleteRecords,
+        target,
+        phase: PrivilegedPhase::Applied,
+        proposal_id,
+        reason,
+    }
+}
 
 pub(crate) async fn handle(
     broker: &Broker,
@@ -466,13 +483,11 @@ async fn trim_one(
         &env.broker.audit_log,
         &env.broker.config.break_glass,
         env.ctx,
-        &GatedTransition {
-            action: BreakGlassAction::DeleteRecords,
-            target: &audit_target,
-            phase: PrivilegedPhase::Applied,
-            proposal_id: consumed.as_ref().and_then(consumed_proposal_id),
-            reason: "record trim admitted",
-        },
+        &delete_records_transition(
+            &audit_target,
+            consumed.as_ref().and_then(consumed_proposal_id),
+            "record trim admitted",
+        ),
     )
     .await
     {
@@ -505,7 +520,10 @@ async fn trim_one(
         return refused(codes::UNKNOWN_SERVER_ERROR);
     }
 
-    match part.trim_to_offset(target).await {
+    // A tiered partition's archive enforces the floor before the trim removes
+    // anything; see `tiered`.
+    let archive = deletes.then(|| archive_floor(env, topic, &part)).flatten();
+    match trim_behind_archive(archive.as_ref(), &part, target).await {
         Ok(_) => {
             // On a diskless partition the local trim frontier is already past
             // `target` in the steady state, so `new_start` says nothing about
@@ -535,13 +553,11 @@ async fn trim_one(
                 &env.broker.audit_log,
                 &env.broker.config.break_glass,
                 env.ctx,
-                &GatedTransition {
-                    action: BreakGlassAction::DeleteRecords,
-                    target: &audit_target,
-                    phase: PrivilegedPhase::Applied,
+                &delete_records_transition(
+                    &audit_target,
                     proposal_id,
-                    reason: "records deleted below the trim point",
-                },
+                    "records deleted below the trim point",
+                ),
             );
             let code = if waiting_for.is_some() {
                 // Kafka's `DelayedDeleteRecords` starts every waiting row at
@@ -556,11 +572,8 @@ async fn trim_one(
                 waiting_for,
             }
         }
-        Err(e) => {
-            tracing::warn!(
-                %topic, partition = index, error = %e,
-                "DeleteRecords: trim_to_offset failed"
-            );
+        Err(error) => {
+            tracing::warn!(%topic, partition = index, %error, "DeleteRecords trim failed");
             refused(codes::UNKNOWN_SERVER_ERROR)
         }
     }

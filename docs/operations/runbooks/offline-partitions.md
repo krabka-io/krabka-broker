@@ -1,11 +1,14 @@
 # Offline partitions
 
-**Alert:** `KrabkaOfflinePartitions`, `krabka_broker_offline_partitions_count > 0` for 1m.
+**Alert:** `KrabkaOfflinePartitions`,
+`krabka_broker_offline_partitions_count - krabka_broker_offline_audit_partitions > 0`
+for 1m.
 
 ## What it means
 
-A partition has no live leader. Its last leader is gone and no ISR member is
-available to take over. Every produce and every fetch to the partition fails
+A partition has no live leader. Its last leader is gone, or lost the log
+directory that holds the partition, and no ISR member is available to take
+over. Every produce and every fetch to the partition fails
 until an ISR member returns or an unclean election runs. This is an outage for
 that partition.
 
@@ -17,6 +20,18 @@ kafka-topics --bootstrap-server <broker>:9092 --describe --unavailable-partition
 
 The output shows `Leader: none` for each affected partition, with the replica
 list and the last known ISR.
+
+The alert does not count partitions of the audit topic, which is
+`__krabka_audit` unless `[audit] topic` names another one. Each broker holds
+one audit partition with no other replica, so that partition has no leader
+exactly while its broker is down, a planned stop included.
+`krabka_broker_offline_audit_partitions` counts those partitions, and the
+command above still lists them. An audit partition whose broker is up but
+whose log directory failed still counts toward the alert: follow
+[offline log directory](offline-log-dir.md) for it. Ignore them here and follow
+[broker down](broker-down.md) for their brokers. Do not run an unclean
+election for an audit partition: it has no other replica to elect. The
+alert fires only for a partition outside the audit topic.
 
 ## Diagnose
 

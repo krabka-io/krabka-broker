@@ -8,12 +8,12 @@ use {
         controller::{
             test_support::{EngineSetup, voter_set},
             timing::{
-                election_timeout_ms, election_timer_starts_election, following_leader_for_role,
-                heartbeat_period, initial_election_at, instant_from_clock_base,
-                should_fail_waiters_on_leadership_change,
+                election_timer_starts_election, following_leader_for_role, heartbeat_period,
+                initial_election_at, instant_from_clock_base,
+                should_fail_waiters_on_leadership_change, whole_millis,
             },
         },
-        core::election_jitter_ms,
+        core::{QuorumTimeouts, election_jitter_ms},
         transport::wire::FETCH_VERSION,
     },
     assert2::check,
@@ -26,12 +26,18 @@ fn initial_election_deadline_matches_startup_role() {
     const TIMEOUT: Time = millis(400);
     /// The same extent in the integer milliseconds the core's jitter uses.
     const TIMEOUT_MS: u64 = 400;
+    /// The machines' timeouts: a fetch timeout far from the election timeout
+    /// shows that the startup deadline is drawn from the election timeout.
+    const TIMEOUTS: QuorumTimeouts = QuorumTimeouts {
+        election: TIMEOUT,
+        fetch: secs(9),
+    };
 
     let base = Instant::now();
     let single = QuorumStateMachine::new(
         NodeId(1),
         QuorumState::bootstrap(uuid::Uuid::nil(), voter_set(&[NodeId(1)])),
-        TIMEOUT,
+        TIMEOUTS,
     );
     assert2::assert!(initial_election_at(&single, None, base, NodeId(1), 0, TIMEOUT) == Some(base));
 
@@ -41,15 +47,15 @@ fn initial_election_deadline_matches_startup_role() {
             voter_set(&[NodeId(1), NodeId(2), NodeId(3)]),
         )
     };
-    let known_leader = QuorumStateMachine::new(NodeId(1), three_voter_state(), TIMEOUT);
+    let known_leader = QuorumStateMachine::new(NodeId(1), three_voter_state(), TIMEOUTS);
     assert2::assert!(
         initial_election_at(&known_leader, Some(NodeId(2)), base, NodeId(1), 0, TIMEOUT).is_none()
     );
 
-    let non_voter = QuorumStateMachine::new(NodeId(4), three_voter_state(), TIMEOUT);
+    let non_voter = QuorumStateMachine::new(NodeId(4), three_voter_state(), TIMEOUTS);
     assert2::assert!(initial_election_at(&non_voter, None, base, NodeId(4), 0, TIMEOUT).is_none());
 
-    let multi = QuorumStateMachine::new(NodeId(1), three_voter_state(), TIMEOUT);
+    let multi = QuorumStateMachine::new(NodeId(1), three_voter_state(), TIMEOUTS);
     // The jitter is integer milliseconds and the deadline is the integer
     // sum, so the quantity must not shift the deadline by even a nanosecond.
     let jitter = election_jitter_ms(NodeId(1), 0, TIMEOUT_MS);
@@ -65,7 +71,7 @@ fn initial_election_deadline_matches_startup_role() {
     negative_clamps_to_zero = { Time::from_millis(-4), 0 },
 )]
 fn election_timeout_converts_to_whole_milliseconds(timeout: Time, want_ms: u64) {
-    check!(election_timeout_ms(timeout) == want_ms);
+    check!(whole_millis(timeout) == want_ms);
 }
 
 #[yare::parameterized(
@@ -222,63 +228,85 @@ async fn discovery_takes_the_peers_in_turn() {
     check!(picked == vec![Some(NodeId(1)), Some(NodeId(2)), Some(NodeId(1))]);
 }
 
-#[tokio::test]
-async fn fetch_misses_increment_and_trigger_timeout_at_limit() {
+/// Where a replica stands after one fetch-timer expiry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AfterFetchExpiry {
+    /// Still following the leader, with a re-poll in flight and the timer
+    /// re-armed.
+    Following,
+    /// A voter that started an election: Kafka's Prospective state.
+    Prospective,
+    /// An observer that went back to looking for the leader.
+    Discovering,
+}
+
+/// krabka-io/krabka-broker#1449: a voter that stops hearing from the leader
+/// starts an election after one fetch timeout, as Kafka's
+/// `KafkaRaftClient.pollFollowerAsVoter` moves to Prospective once
+/// `FollowerState.hasFetchTimeoutExpired`. Waiting out three timeouts made a
+/// killed or paused controller leader take 20 s or more to replace. An
+/// observer has no election to start: it keeps re-polling the leader until the
+/// configured run of misses sends it back to discovery.
+#[yare::parameterized(
+    voter = { 2, &[AfterFetchExpiry::Prospective] },
+    observer = {
+        3,
+        &[
+            AfterFetchExpiry::Following,
+            AfterFetchExpiry::Following,
+            AfterFetchExpiry::Discovering,
+        ],
+    },
+)]
+#[test_macro(tokio::test)]
+async fn a_fetch_timeout_elects_a_voter_at_once_and_re_polls_an_observer(
+    me: u64,
+    after_each_expiry: &[AfterFetchExpiry],
+) {
     use crate::kraft::{controller::test_support::build_engine_only, transport::TimerTick};
 
-    let (mut follower, _dir) = build_engine_only()
-        .me(2)
+    let (mut replica, _dir) = build_engine_only()
+        .me(me)
         .ids(&[NodeId(1), NodeId(2)])
+        .controller_fetch_miss_limit(3)
         .call();
-    follower.on_event(Event::ReceiveBeginQuorumEpoch {
+    replica.on_event(Event::ReceiveBeginQuorumEpoch {
         leader_id: NodeId(1),
         leader_epoch: 1,
     });
-    check!(follower.following_leader() == Some(NodeId(1)));
-    check!(follower.fetch_misses == 0);
+    assert2::assert!(replica.following_leader() == Some(NodeId(1)));
 
-    // Miss 1
-    follower.on_timer(TimerTick::Fetch);
-    check!(follower.fetch_misses == 1);
-    check!(follower.fetch_at.is_some());
-    check!(follower.fetch_at.unwrap() > Instant::now());
-    check!(follower.following_leader() == Some(NodeId(1)));
-
-    // Miss 2
-    follower.on_timer(TimerTick::Fetch);
-    check!(follower.fetch_misses == 2);
-    check!(follower.following_leader() == Some(NodeId(1)));
-
-    // Miss 3 (limit is 3 by default)
-    follower.on_timer(TimerTick::Fetch);
-    check!(follower.fetch_misses == 0);
-    check!(follower.following_leader().is_none());
-}
-
-#[test]
-fn response_to_event_maps_vote_response() {
-    use crate::kraft::{
-        controller::engine_loop::response_to_event,
-        transport::{api_key, wire::PeerResponse},
-    };
-
-    let vote = PeerResponse::Vote {
-        epoch: 5,
-        granted: true,
-    };
-    let encoded = vote.encode();
-    let event = response_to_event(NodeId(3), api_key::VOTE, &encoded);
-    check!(
-        event
-            == Some(Event::ReceiveVoteResponse {
-                from: NodeId(3),
-                epoch: 5,
-                vote_granted: true,
-            })
-    );
-
-    check!(response_to_event(NodeId(3), 999, &encoded).is_none());
-    check!(response_to_event(NodeId(3), api_key::VOTE, b"invalid").is_none());
+    // Every state that holds after each expiry: exactly one should.
+    let seen: Vec<Vec<AfterFetchExpiry>> = after_each_expiry
+        .iter()
+        .map(|_| {
+            replica.on_timer(TimerTick::Fetch);
+            let role = replica.core.role();
+            [
+                (
+                    replica.following_leader() == Some(NodeId(1)) && replica.fetch_at.is_some(),
+                    AfterFetchExpiry::Following,
+                ),
+                (
+                    matches!(role, Role::Prospective { .. }),
+                    AfterFetchExpiry::Prospective,
+                ),
+                (
+                    matches!(role, Role::Observer {
+                        leader_id: None,
+                        ..
+                    }),
+                    AfterFetchExpiry::Discovering,
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(holds, state)| holds.then_some(state))
+            .collect()
+        })
+        .collect();
+    let want: Vec<Vec<AfterFetchExpiry>> =
+        after_each_expiry.iter().map(|state| vec![*state]).collect();
+    assert2::assert!(seen == want);
 }
 
 #[tokio::test]

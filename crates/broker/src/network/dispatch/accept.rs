@@ -8,7 +8,10 @@
 //! it by the same window: see `handshake_within_idle_window`.
 
 use {
-    super::{serve_connection_stream, write_idle::WriteIdle},
+    super::{
+        serve_connection_stream,
+        write_idle::{IdleTimer, WriteIdle},
+    },
     crate::{
         broker::Broker,
         config::ListenerSpec,
@@ -38,7 +41,24 @@ pub async fn serve_connection_on_listener(
     // non-matching host.
     let peer = Sockets::TARGET.peer_address(&stream);
     if spec.protocol.requires_tls() {
-        let acceptor = if let Some(per_tls) = spec.tls_config.as_ref() {
+        // A listener's dynamic `listener.name.<listener>.ssl.*` keys, set
+        // for this node, win over its static `tls_config` while set: Kafka's
+        // `SslFactory.reconfigure` serves new handshakes from the new stores.
+        let dynamic = spec
+            .tls_config
+            .as_ref()
+            .or(broker.config.tls_config.as_ref())
+            .and_then(|static_tls| {
+                broker.listener_tls.server_config(
+                    &broker.controller.current_image(),
+                    broker.config.node_id,
+                    &spec.name,
+                    static_tls,
+                )
+            });
+        let acceptor = if let Some(config) = dynamic {
+            tokio_rustls::TlsAcceptor::from(config)
+        } else if let Some(per_tls) = spec.tls_config.as_ref() {
             match per_tls.build_server_config() {
                 Ok(sc) => tokio_rustls::TlsAcceptor::from(sc),
                 Err(e) => {
@@ -117,7 +137,7 @@ pub async fn serve_connection_on_listener(
 
         // rustls can make ciphertext progress while its outer poll_flush
         // remains pending. Track the socket writes beneath its buffer.
-        let handshake = acceptor.accept(WriteIdle::new(stream, idle));
+        let handshake = acceptor.accept(WriteIdle::new(stream, IdleTimer::new(idle)));
         // A required certificate was checked by rustls; optional/disabled certificates may be absent.
         // A presented DN with no configured mapping still closes the connection.
         let Some(AuthenticatedTls {
@@ -127,7 +147,16 @@ pub async fn serve_connection_on_listener(
         else {
             return;
         };
-        serve_connection_stream(broker, tls_stream, spec, peer, mtls_principal).await;
+        // Boxed: the userspace TLS stream makes this the largest serve-loop
+        // future, past `clippy::large_futures`.
+        Box::pin(serve_connection_stream(
+            broker,
+            tls_stream,
+            spec,
+            peer,
+            mtls_principal,
+        ))
+        .await;
     } else {
         serve_connection_plaintext(broker, stream, spec, peer).await;
     }

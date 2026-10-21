@@ -24,29 +24,31 @@
 //! election timer, a fetch timer, and a leader heartbeat interval:
 //! - on a role transition the now-irrelevant timer is cancelled (a follower has
 //!   no election timer; a leader has no fetch timer and runs the heartbeat);
-//! - a fetch-timer expiry while the leader is still reachable RE-POLLS
-//!   (`SendFetch`), it does not elect; only the configured consecutive
-//!   misses feed `Event::FetchTimeout` to start an election;
+//! - a voter's fetch-timer expiry feeds `Event::FetchTimeout` and starts an
+//!   election, as Kafka's `pollFollowerAsVoter` does; an observer's RE-POLLS
+//!   (`SendFetch`), and only the configured consecutive misses send it back
+//!   to leader discovery;
 //! - the leader re-broadcasts `BeginQuorumEpoch` to voters each heartbeat tick.
 
 use {
     crate::{
-        OffsetReservation, SubmitChangeResult,
+        OffsetReservation, RegistrationAdmission, SubmitChangeResult,
         config::{
             ControllerFetchMissLimit, DEFAULT_METADATA_RAFT_FETCH_MAX, MetadataLogConfig,
             MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax,
         },
         error::{MetadataReplayError, RaftError},
+        event_queue::{EventQueueMeter, EventQueueRecorder, EventTimer},
         kraft::{
             action::{Action, TimerKind},
-            core::QuorumStateMachine,
+            core::{QuorumStateMachine, QuorumTimeouts},
             event::{Event, LogEnd},
             log::KraftLog,
             role::{ReplicaProgress, Role},
             snapshot_fetch::{MetadataSnapshotFetchMax, SnapshotFetchState, SnapshotFetchStep},
             transport::{
-                Command, Inbound, MetadataFetchSlice, PeerSender, QuorumStateSnapshot, TimerTick,
-                api_key, wire,
+                Command, CommandSender, Inbound, MetadataFetchSlice, PeerSender,
+                QuorumStateSnapshot, TimerTick, api_key, wire,
             },
             types::{Epoch, LogView, NodeId, QuorumState, ReplicaKey, SimInstant},
         },
@@ -93,6 +95,7 @@ pub mod checkpoint;
 mod cleaning;
 mod control_state;
 mod engine_loop;
+mod graceful_shutdown;
 mod handle;
 mod idle;
 mod inbound;
@@ -109,6 +112,7 @@ mod snapshotting;
 mod startup;
 mod submit;
 mod timing;
+mod vote_response;
 
 pub use self::{
     activation::Activation,
@@ -131,9 +135,13 @@ mod tests_control_records;
 #[cfg(test)]
 mod tests_downgrade;
 #[cfg(test)]
+mod tests_event_queue;
+#[cfg(test)]
 mod tests_fetch;
 #[cfg(test)]
 mod tests_fetch_requests;
+#[cfg(test)]
+mod tests_graceful_shutdown;
 #[cfg(test)]
 mod tests_lifecycle;
 #[cfg(test)]
@@ -169,6 +177,14 @@ struct Engine {
     peers: Arc<dyn PeerSender>,
     /// Publishes the latest applied [`MetadataImage`] to readers.
     image_tx: watch::Sender<Arc<MetadataImage>>,
+    /// The offset of the last record of the newest applied batch or snapshot
+    /// that carried a `FeatureLevelRecord`, or `-1` before the first. It is
+    /// the finalized-features epoch of Kafka's `FeaturesPublisher`, which
+    /// takes `lastContainedOffset` only from an image whose delta has a
+    /// features delta.
+    features_epoch: i64,
+    /// Publishes `features_epoch` with each image `image_tx` publishes.
+    features_epoch_tx: watch::Sender<i64>,
     /// Publishes the current leader id (None while unknown / election running).
     leader_tx: watch::Sender<Option<NodeId>>,
     /// Publishes a structured consensus snapshot for the handle's synchronous
@@ -177,7 +193,13 @@ struct Engine {
     quorum_tx: watch::Sender<QuorumStateSnapshot>,
     /// Clone of the command sender, handed to fire-and-forget send tasks so
     /// they can post the decoded `Receive*Response` event back to the loop.
-    cmd_tx: mpsc::Sender<Command>,
+    cmd_tx: CommandSender,
+    /// Meters the loop's turns as Kafka's controller event queue.
+    event_queue: EventQueueMeter,
+    /// The processing timer of the event this turn runs. A write that parks
+    /// a [`CommitWaiter`] takes it, so its processing time runs to the commit
+    /// reply; otherwise the turn's end drops it.
+    turn: Option<EventTimer>,
     /// Publishes the fault that stops the engine, which Kafka halts the
     /// process over: the failure of the metadata log directory, once a write
     /// to it returned an I/O error (KIP-858), or a controller activation that
@@ -189,8 +211,9 @@ struct Engine {
     data_dir: PathBuf,
     /// Monotonic clock base: `SimInstant(ms)` is `(now - base).as_millis()`.
     clock_base: Instant,
-    /// Base election timeout (varied per node by the caller for liveness).
-    election_timeout: Time,
+    /// The election timeout, varied per node by the caller for liveness, and
+    /// the fetch timeout.
+    timeouts: QuorumTimeouts,
     heartbeat_interval: Option<Time>,
     controller_fetch_miss_limit: ControllerFetchMissLimit,
     metadata_raft_fetch_max: MetadataRaftFetchMax,
@@ -200,7 +223,7 @@ struct Engine {
     /// Leader-side check-quorum deadline. Only a leader over a multi-voter
     /// quorum arms it; every other role runs with it disarmed.
     check_quorum_at: Option<Instant>,
-    /// Consecutive fetch misses while still believing in a leader.
+    /// Consecutive fetch misses of an observer still following a leader.
     fetch_misses: u32,
     /// Discovery Fetches sent while no leader is known. The next one goes to
     /// the discovery peer this count selects, so a dead peer, or this node's
@@ -366,19 +389,26 @@ struct CommitWaiter {
     creates: Vec<String>,
     result: SubmitChangeResult,
     reply: oneshot::Sender<Result<SubmitChangeResult, RaftError>>,
+    /// The processing timer of the submit that parked this waiter; it
+    /// records when the waiter goes, replied or failed.
+    _processing: Option<EventTimer>,
 }
 
 /// Cheap, cloneable handle to the running engine: holds the command sender and
 /// the `watch` receivers the broker/handle read.
 #[derive(Clone)]
 pub struct KraftController {
-    cmd_tx: mpsc::Sender<Command>,
+    cmd_tx: CommandSender,
     image_rx: watch::Receiver<Arc<MetadataImage>>,
+    features_epoch_rx: watch::Receiver<i64>,
     fault_rx: watch::Receiver<Option<String>>,
     leader_rx: watch::Receiver<Option<NodeId>>,
     quorum_rx: watch::Receiver<QuorumStateSnapshot>,
     peers: Arc<dyn PeerSender>,
     me: NodeId,
+    /// The broker crate's hook for batches that register a broker anew, once
+    /// it is installed. Every clone of the handle shares it.
+    registration_admission: Arc<std::sync::OnceLock<Arc<dyn RegistrationAdmission>>>,
 }
 
 /// Configuration to build a [`KraftController`].
@@ -388,7 +418,9 @@ pub struct KraftConfig {
     /// This replica's directory id, from its `meta.properties`.
     pub directory_id: Uuid,
     pub initial_state: QuorumState,
-    pub election_timeout: Time,
+    /// Kafka's `controller.quorum.election.timeout.ms` and
+    /// `controller.quorum.fetch.timeout.ms`.
+    pub timeouts: QuorumTimeouts,
     pub heartbeat_interval: Option<Time>,
     pub controller_fetch_miss_limit: ControllerFetchMissLimit,
     pub metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity,
@@ -414,4 +446,6 @@ pub struct KraftConfig {
     /// `metadata.version`: the bootstrap records and the static
     /// `min.insync.replicas`.
     pub activation: Activation,
+    /// Where the engine reports Kafka's controller event-queue measurements.
+    pub event_queue_recorder: Arc<dyn EventQueueRecorder>,
 }

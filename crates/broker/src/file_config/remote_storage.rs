@@ -44,8 +44,9 @@ pub struct FileRemoteStorageConfig {
     /// ordinary mutable tiered storage. Requires `[remote_storage.s3]` or
     /// `[remote_storage.gcs]` — `storage_dir` cannot enforce write-once.
     pub worm: Option<FileWormConfig>,
-    /// Opt-in to the topic-backed `RemoteLogMetadataManager`.
-    /// When absent, the broker uses the in-memory fixture.
+    /// Overrides for the topic-backed `RemoteLogMetadataManager`.
+    /// Tiered storage uses that manager when the table is absent too;
+    /// `in_memory = true` selects the in-memory manager instead.
     pub kafka_metadata: Option<FileKafkaRlmmConfig>,
     /// How many partitions may be copying segments to the remote tier at
     /// once. Kafka's `remote.log.manager.copier.thread.pool.size`; defaults

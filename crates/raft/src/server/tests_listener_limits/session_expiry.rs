@@ -35,11 +35,19 @@ fn describe_quorum_request(correlation: i32) -> Vec<u8> {
     request
 }
 
+/// Kafka's `KafkaChannel.serverAuthenticationSessionExpired` expires a session
+/// only strictly after its deadline: a request at exactly the deadline is
+/// served and one a millisecond later closes. A deadline of `i64::MAX` ms is
+/// never passed, because the millisecond clock cannot exceed it.
 #[yare::parameterized(
-    api_versions_exact_deadline = { 18, Some(1_000), 999, 1_000, true },
-    quorum_exact_deadline = { 55, Some(1_000), 999, 1_000, true },
-    api_versions_i64_limit = { 18, Some(i64::MAX), i64::MAX - 1, i64::MAX, true },
-    quorum_i64_limit = { 55, Some(i64::MAX), i64::MAX - 1, i64::MAX, true },
+    api_versions_exact_deadline = { 18, Some(1_000), 999, 1_000, false },
+    quorum_exact_deadline = { 55, Some(1_000), 999, 1_000, false },
+    api_versions_after_deadline = { 18, Some(1_000), 999, 1_001, true },
+    quorum_after_deadline = { 55, Some(1_000), 999, 1_001, true },
+    api_versions_i64_limit = { 18, Some(i64::MAX - 1), i64::MAX - 2, i64::MAX, true },
+    quorum_i64_limit = { 55, Some(i64::MAX - 1), i64::MAX - 2, i64::MAX, true },
+    api_versions_i64_max_deadline = { 18, Some(i64::MAX), i64::MAX - 1, i64::MAX, false },
+    quorum_i64_max_deadline = { 55, Some(i64::MAX), i64::MAX - 1, i64::MAX, false },
     api_versions_without_deadline = { 18, None, 999, i64::MAX, false },
     quorum_without_deadline = { 55, None, 999, i64::MAX, false },
     api_versions_before_deadline = { 18, Some(1_000), 999, 999, false },

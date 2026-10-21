@@ -2,10 +2,10 @@
 //!
 //! The request quota throttles on the server-side time a request takes, as a
 //! percentage of one request-handler thread. The per-connection dispatch loop
-//! calls this helper for most APIs. The `Produce` and `Fetch` handlers call it
-//! inline, so that the broker can combine the request throttle with the
-//! byte-rate data throttle, with `max`, into one `throttle_time_ms` and one
-//! channel mute (KIP-219).
+//! calls this helper for most APIs. The `Produce`, `Fetch` and `ShareFetch`
+//! handlers call it inline, so that the broker can combine the request
+//! throttle with the byte-rate data throttle, with `max`, into one
+//! `throttle_time_ms` and one channel mute (KIP-219).
 
 use {
     super::{QuotaConsumption, buckets::QuotaBuckets, consume_configured_quota},
@@ -57,6 +57,62 @@ pub fn consume_request_quota(
 /// The token rate of a `request_percentage` bucket: microseconds of handler
 /// time per second, so `100.0` is 1 000 000.
 pub(super) fn request_percentage_token_rate(rate_pct: f64) -> f64 { rate_pct * 10_000.0 }
+
+/// The output of a future, and the time spent inside its `poll` calls.
+pub(crate) struct Timed<T> {
+    pub(crate) output: T,
+    pub(crate) active: std::time::Duration,
+}
+
+/// Awaits `future` and reports, beside its output, the time spent inside its
+/// `poll` calls. The time the future is parked between polls is not counted.
+///
+/// This is the handler time KIP-124 charges to `request_percentage`: Kafka
+/// meters the time a request holds a handler thread, so a handler parked on a
+/// timer, a long poll, a channel or a raft commit is not charged for the wait.
+pub(crate) async fn with_active_time<F: std::future::Future>(future: F) -> Timed<F::Output> {
+    let mut future = std::pin::pin!(future);
+    let mut active = std::time::Duration::ZERO;
+    let output = std::future::poll_fn(|cx| {
+        let polled_at = std::time::Instant::now();
+        let poll = future.as_mut().poll(cx);
+        active += polled_at.elapsed();
+        poll
+    })
+    .await;
+    Timed { output, active }
+}
+
+/// The handler time KIP-124 charges, for a handler whose every await goes
+/// through [`Self::run`]: the time since [`Self::start`], less the time those
+/// awaits spent parked between polls. A long poll's wait is therefore not
+/// charged, as Kafka parks such a request off the handler thread.
+pub(crate) struct ActiveClock {
+    started: std::time::Instant,
+    parked: std::time::Duration,
+}
+
+impl ActiveClock {
+    pub(crate) fn start() -> Self {
+        Self {
+            started: std::time::Instant::now(),
+            parked: std::time::Duration::ZERO,
+        }
+    }
+
+    /// Awaits `future`, and counts the time it spent parked.
+    pub(crate) async fn run<F: std::future::Future>(&mut self, future: F) -> F::Output {
+        let awaited_at = std::time::Instant::now();
+        let Timed { output, active } = with_active_time(future).await;
+        self.parked += awaited_at.elapsed().saturating_sub(active);
+        output
+    }
+
+    /// The handler time so far, parked time excluded.
+    pub(crate) fn active(&self) -> std::time::Duration {
+        self.started.elapsed().saturating_sub(self.parked)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -204,5 +260,55 @@ mod tests {
         let delay = consume_request_quota(&img, &buckets, "alice", Some(""), 1_500_000, secs(1));
 
         assert!(delay == millis(500));
+    }
+
+    /// KIP-124 meters the time a request holds a handler thread, so a handler
+    /// parked on a timer, a channel or a raft commit is not charged for the
+    /// wait. Only the time spent inside `poll` counts.
+    #[tokio::test]
+    async fn active_time_counts_polling_and_not_parking() {
+        use {assert2::check, std::time::Duration};
+
+        let Timed {
+            output: value,
+            active: parked,
+        } = with_active_time(async {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            7
+        })
+        .await;
+        check!(value == 7);
+        check!(parked < Duration::from_millis(100), "{parked:?}");
+
+        let Timed {
+            output: (),
+            active: working,
+        } = with_active_time(async {
+            std::thread::sleep(Duration::from_millis(60));
+        })
+        .await;
+        check!(working >= Duration::from_millis(60), "{working:?}");
+    }
+
+    /// An `ActiveClock` charges the work between and inside its awaits, and
+    /// not the time an await spent parked.
+    #[tokio::test]
+    async fn active_clock_charges_work_and_not_a_parked_await() {
+        use {assert2::check, std::time::Duration};
+
+        let mut clock = ActiveClock::start();
+        std::thread::sleep(Duration::from_millis(40));
+        let value = clock
+            .run(async {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                std::thread::sleep(Duration::from_millis(20));
+                7
+            })
+            .await;
+        let active = clock.active();
+
+        check!(value == 7);
+        check!(active >= Duration::from_millis(60), "{active:?}");
+        check!(active < Duration::from_millis(200), "{active:?}");
     }
 }

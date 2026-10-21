@@ -6,7 +6,7 @@
 //! module keeps that ordering identical for both callers.
 
 use {
-    super::gate::consumed_record_matches,
+    super::gate::{consumed_proposal_id, consumed_record_matches},
     crate::broker::Broker,
     krabka_metadata::{BreakGlassAction, MetadataRecord},
     krabka_raft::RaftError,
@@ -17,13 +17,6 @@ use {
     std::collections::HashSet,
     uuid::Uuid,
 };
-
-fn proposal_id(record: &MetadataRecord) -> Option<Uuid> {
-    match record {
-        MetadataRecord::V1BreakGlassProposal(proposal) => Some(proposal.proposal_id),
-        _ => None,
-    }
-}
 
 fn action_decision(
     gated: bool,
@@ -67,7 +60,7 @@ pub(crate) async fn spend_before_local_action(
     action: BreakGlassAction,
     target: &str,
 ) -> Result<Option<Uuid>, RaftError> {
-    let id = consumed.as_ref().and_then(proposal_id);
+    let id = consumed.as_ref().and_then(consumed_proposal_id);
     let already_committed = id.is_some_and(|id| committed.contains(&id));
     if action_decision(
         gated,

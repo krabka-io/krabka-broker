@@ -6,12 +6,11 @@
 //! model in `fetch_session_model` can drive it directly.
 
 use {
-    super::state::{CachedPartitionState, FetchSessionKey},
+    super::state::{FetchSessionKey, SessionPartitions},
     krabka_protocol::{
         owned::fetch_request::{FetchTopic, ForgottenTopic},
         primitives::uuid::Uuid as WireUuid,
     },
-    std::collections::HashMap,
 };
 
 /// Pure core of the incremental-fetch session update (KIP-227). It drops
@@ -25,12 +24,14 @@ use {
 ///   by either identity half plus the partition, and updates its desired state
 ///   in place. It inserts a new default-state key only when the partition is
 ///   truly not cached. That rule stops a partial-identity copy from shadowing
-///   a fully resolved key.
+///   a fully resolved key. A new key goes to the end of the session's order,
+///   as Kafka's `FetchSession.update` adds it, and an updated key keeps its
+///   place.
 ///
 /// `fetch_session_model` exercises the asymmetry between the OR-match forget
 /// and the either-half-match merge exhaustively.
 pub(crate) fn apply_incremental(
-    partitions: &mut HashMap<FetchSessionKey, CachedPartitionState>,
+    partitions: &mut SessionPartitions,
     forgotten: &[ForgottenTopic],
     topics: &[FetchTopic],
 ) {
@@ -72,7 +73,10 @@ pub(crate) fn apply_incremental(
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::fetch_session::test_support::forgotten_topic};
+    use {
+        super::*,
+        crate::fetch_session::{CachedPartitionState, test_support::forgotten_topic},
+    };
 
     #[yare::parameterized(
         topic_name = { WireUuid::ZERO, WireUuid::ZERO, false },
@@ -93,7 +97,7 @@ mod tests {
             topic_id: other_topic_id,
             partition: 0,
         };
-        let mut partitions = maplit::hashmap! {
+        let mut partitions = indexmap::indexmap! {
             target.clone() => CachedPartitionState::default(),
             other.clone() => CachedPartitionState::default(),
         };
@@ -121,14 +125,13 @@ mod tests {
 #[cfg(test)]
 mod fuzz {
     use {
-        super::{CachedPartitionState, FetchSessionKey, apply_incremental},
+        super::{SessionPartitions, apply_incremental},
         crate::fetch_session::test_support::forgotten_topic,
         krabka_protocol::{
             owned::fetch_request::{FetchPartition, FetchTopic},
             primitives::uuid::Uuid as WireUuid,
         },
         proptest::prelude::*,
-        std::collections::HashMap,
     };
 
     // name index 0 = empty (id-only wire form), 1 = "A", 2 = "B".
@@ -149,7 +152,7 @@ mod fuzz {
                 0..200,
             )
         ) {
-            let mut partitions: HashMap<FetchSessionKey, CachedPartitionState> = HashMap::new();
+            let mut partitions = SessionPartitions::new();
             for (fname, fid, fp, do_sub, sname, sid, sp, mb) in ops {
                 // A forget with an all-empty identity matches nothing — skip it
                 // (the wire never carries a topic with neither name nor id).

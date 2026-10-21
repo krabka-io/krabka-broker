@@ -48,3 +48,69 @@ process RSS, file descriptors, disk and network use, and metrics scrape time,
 bytes and series count. `scale/verdict.txt` names the highest passing tier;
 failure of the 10,000-partition attempt is evidence, not permission to describe
 1,000 as a product limit.
+
+## Regression budget mode
+
+`qualify.sh budget before_after <reference-revision>` and `qualify.sh budget
+pinned_kafka` run the predeclared RF=3 workload matrix in interleaved rounds
+and judge the candidate against fixed budgets. A correctness failure always
+rejects. [Performance regression budgets](performance-budgets.md) defines the
+matrix, the results record and the decision rule.
+
+## Sustained-load contract
+
+This qualification measures throughput and the partition envelope over runs of minutes. Correctness over days, under injected faults, is a separate contract. [`bench/soak/rf3-72h.yaml`](../../bench/soak/rf3-72h.yaml) declares the 72-hour RF=3 soak before it runs: host and disk, seed, client settings, throughput floors, p50/p99/p999 budgets for each path, recovery deadlines, and a seeded schedule of bounded pauses, restarts, slow followers and disk fills. The `soak_contract` suite of `krabka-broker` executes a contract against an isolated three-broker cluster, and `krabka-soak-check` reconciles the evidence. The [design document](../../crates/bench-driver/docs/soak-contract-design.md) gives the rules.
+
+```sh
+bazel run -c opt //packaging:image_load
+KRABKA_SOAK_CONTRACT=$PWD/bench/soak/rf3-72h.yaml \
+KRABKA_SOAK_EVIDENCE_DIR=$PWD/soak-evidence \
+  cargo test -p krabka-broker --test soak_contract -- --ignored --nocapture
+krabka-soak-check judge --contract bench/soak/rf3-72h.yaml \
+  --evidence soak-evidence/evidence.json --out soak-evidence/verdict.json
+```
+
+Without `KRABKA_SOAK_CONTRACT` the suite runs `bench/soak/self-check.yaml`, a five-minute run that proves the judge reports an injected missing record and an injected missed deadline. The container matrix in CI runs it.
+
+## Run the frozen candidate in the cloud
+
+[`qualification-profile.yml`](../../.github/workflows/qualification-profile.yml)
+checks the manifest against successful main CI and its delivery digest before
+it allocates a cloud worker. Start it from `main`, with the reviewed candidate
+manifest. First check the host and evidence publication, then execute:
+
+```sh
+gh workflow run qualification-profile.yml --ref main \
+  -f manifest=qualification/ecosystem-v1.0.8.json -f execute=false
+gh workflow run qualification-profile.yml --ref main \
+  -f manifest=qualification/ecosystem-v1.0.8.json -f execute=true
+```
+
+The existing `gcp-ubuntu-24-04-32core` template supplies 32 logical CPUs,
+128 GiB of memory and a 1.2 TB SSD, with a five-day VM lifetime. The preflight
+records actual capacity and requires at least 700 GiB free for both data and
+Docker. The 72-hour contract, rates and deadlines stay unchanged. Its evidence
+records the larger host; a pass is evidence for that measured host.
+
+The two performance jobs run sequentially, against v1.0.5 (`ac9deff3`) and the
+contract's pinned Kafka image. Each five-round comparison stays on one worker
+and publishes before its job token expires. The soak gets a separate worker.
+Performance results remain in the run's Actions artifacts.
+Soak inputs, the host check and the final archive use the private
+`robot-head-krabka-broker-qualification` cloud bucket. Its runner identity can
+create and read objects, and the bucket retains them for 90 days. The worker
+checks storage with a write/read round trip before starting the load. Archive
+parts cannot replace existing objects, and the checksum index is written last.
+
+The publisher runs in a separate job, with a fresh GitHub token, because the
+normal job token expires after
+[24 hours](https://docs.github.com/en/actions/concepts/security/github_token).
+It checks each archive part before uploading it and retains the original input
+identity when the publisher alone is retried. A preflight leaves its evidence
+release in draft and makes no workload claim. A full run retains passing or
+failing evidence in a prerelease whose title states the outcome.
+
+The evidence archive is split into parts below the release asset size limit.
+Download every part and `SHA256SUMS`, check the hashes, then concatenate the
+parts in filename order and extract the gzip archive. Inspect `evidence.json`,
+`verdict.json`, the frozen candidate record and the raw telemetry together.

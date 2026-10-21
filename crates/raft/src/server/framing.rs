@@ -12,6 +12,7 @@ use {
     },
     bytes::{Buf, BufMut, Bytes, BytesMut},
     krabka_ids::{ApiKey, ApiVersion},
+    std::time::Duration,
     tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
 };
 
@@ -25,7 +26,46 @@ pub(super) fn is_eof(e: &RaftError) -> bool {
     )
 }
 
+/// Whether `e` is the [`read_one_request`] failure for a peer that went the
+/// whole idle window without sending a byte.
+pub(super) fn is_idle(e: &RaftError) -> bool {
+    matches!(e,
+        RaftError::Storage(krabka_log::LogError::Io(io))
+            if io.kind() == std::io::ErrorKind::TimedOut
+    )
+}
+
 fn io_err(e: std::io::Error) -> RaftError { RaftError::Storage(krabka_log::LogError::Io(e)) }
+
+/// Fills `buf`, giving up once `max_idle` passes with no byte read. Each read
+/// that makes progress arms a fresh window, as Kafka's `Selector` refreshes a
+/// channel's idle clock on every read, so the window bounds the silence
+/// between bytes rather than the time the whole buffer takes.
+async fn read_exact_within_idle_window<S>(
+    stream: &mut S,
+    buf: &mut [u8],
+    max_idle: Option<Duration>,
+) -> Result<(), RaftError>
+where
+    S: AsyncRead + Unpin,
+{
+    let mut filled = 0;
+    while filled < buf.len() {
+        let read = stream.read(&mut buf[filled..]);
+        let n = match max_idle {
+            Some(window) => tokio::time::timeout(window, read)
+                .await
+                .map_err(|_| io_err(std::io::ErrorKind::TimedOut.into()))?,
+            None => read.await,
+        }
+        .map_err(io_err)?;
+        if n == 0 {
+            return Err(io_err(std::io::ErrorKind::UnexpectedEof.into()));
+        }
+        filled += n;
+    }
+    Ok(())
+}
 
 fn truncated(needed: usize) -> RaftError {
     RaftError::Protocol(krabka_protocol::ProtocolError::UnexpectedEof { needed })
@@ -87,10 +127,15 @@ pub(super) struct RequestFrame {
 /// (`socket.request.max.bytes`), fails before the frame is read, as Kafka's
 /// `NetworkReceive.readFrom` throws `InvalidReceiveException` on it. The caller
 /// closes the connection, and no allocation is sized from the peer's number.
+///
+/// `max_idle` (`connections.max.idle.ms`) bounds the silence before and
+/// between the frame's bytes, not the time the frame takes; a peer that goes
+/// the whole window without a byte fails with an error [`is_idle`] matches.
 pub(super) async fn read_one_request<S>(
     stream: &mut S,
     admin_router: Option<&dyn ControllerAdminRouter>,
     max_request_bytes: usize,
+    max_idle: Option<Duration>,
 ) -> Result<RequestFrame, RaftError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -98,7 +143,7 @@ where
     const REQUEST_HEADER_FIXED_LEN: usize = 8;
 
     let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf).await.map_err(io_err)?;
+    read_exact_within_idle_window(stream, &mut len_buf, max_idle).await?;
     let len = usize::try_from(i32::from_be_bytes(len_buf))
         .ok()
         .filter(|len| *len <= max_request_bytes)
@@ -108,7 +153,7 @@ where
             ),
         ))?;
     let mut frame = vec![0u8; len];
-    stream.read_exact(&mut frame).await.map_err(io_err)?;
+    read_exact_within_idle_window(stream, &mut frame, max_idle).await?;
 
     // RequestHeader v2 (flexible): api_key(i16), api_version(i16),
     // correlation_id(i32), client_id(NULLABLE_STRING), tagged_fields(varint=0).
@@ -239,7 +284,7 @@ mod tests {
         client.write_all(&size.to_be_bytes()).await.unwrap();
         drop(client);
 
-        let err = super::read_one_request(&mut server, None, limit)
+        let err = super::read_one_request(&mut server, None, limit, None)
             .await
             .expect_err("the stream holds no frame");
 
@@ -251,6 +296,30 @@ mod tests {
             "{case}: {err}"
         );
         check!(super::is_eof(&err) == !refused, "{case}: {err}");
+    }
+
+    /// A size prefix of zero passes the size check and reads an empty frame,
+    /// as Kafka's `NetworkReceive` allocates an empty buffer for it, and then
+    /// the request header is short by its whole fixed part.
+    #[tokio::test]
+    async fn read_one_request_reads_a_zero_size_frame_and_fails_its_header() {
+        let (mut client, mut server) = tokio::io::duplex(128);
+        client.write_all(&0_i32.to_be_bytes()).await.unwrap();
+        drop(client);
+
+        let err = super::read_one_request(&mut server, None, 64, None)
+            .await
+            .expect_err("an empty frame has no header");
+
+        check!(
+            matches!(
+                err,
+                super::RaftError::Protocol(krabka_protocol::ProtocolError::UnexpectedEof {
+                    needed: 8
+                })
+            ),
+            "{err}"
+        );
     }
 
     /// A request is flexible from its API's own `FLEXIBLE_MIN` upward, and an
@@ -342,7 +411,7 @@ mod tests {
             client.write_all(&frame).await.unwrap();
         };
         let writer = tokio::spawn(write_fut);
-        let request = super::read_one_request(&mut server, router, MAX_REQUEST_BYTES)
+        let request = super::read_one_request(&mut server, router, MAX_REQUEST_BYTES, None)
             .await
             .expect("decode");
         writer.await.unwrap();
@@ -574,7 +643,7 @@ mod tests {
                 client.write_all(&frame).await.unwrap();
             });
 
-            let err = super::read_one_request(&mut server, None, MAX_REQUEST_BYTES)
+            let err = super::read_one_request(&mut server, None, MAX_REQUEST_BYTES, None)
                 .await
                 .expect_err("short frame");
 
@@ -602,7 +671,7 @@ mod tests {
         });
 
         let RequestFrame { body, flexible, .. } =
-            super::read_one_request(&mut server, None, MAX_REQUEST_BYTES)
+            super::read_one_request(&mut server, None, MAX_REQUEST_BYTES, None)
                 .await
                 .expect("decode");
 

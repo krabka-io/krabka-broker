@@ -9,7 +9,7 @@ use {
         codes,
         fetch_session::{
             CachedPartitionState, FIRST_TOPIC_ID_FETCH_VERSION, FetchPartitionKey, FetchSessionKey,
-            INVALID_SESSION_ID, SessionDecision,
+            INVALID_SESSION_ID, SentPartition, SessionDecision,
         },
     },
     krabka_protocol::{
@@ -32,7 +32,7 @@ pub(super) enum SessionCommit {
     /// An incremental fetch on `session_id` that sent these rows.
     Incremental {
         session_id: i32,
-        sent: Vec<(FetchSessionKey, CachedPartitionState)>,
+        sent: Vec<SentPartition>,
     },
 }
 
@@ -305,13 +305,14 @@ impl<'cache> CachedIndex<'cache> {
 /// `(key, sent_state)` list for the partitions that survived, keyed by the
 /// key the cache actually holds so the caller's update lands on it. The caller
 /// uses that list to update the cache's `last_*` fields to what it just
-/// emitted.
+/// emitted, and to move the partitions that sent records to the end of the
+/// session's read order.
 fn filter_incremental_response(
     responses: &mut Vec<FetchableTopicResponse>,
     cached: &std::collections::HashMap<FetchSessionKey, CachedPartitionState>,
-) -> Vec<(FetchSessionKey, CachedPartitionState)> {
+) -> Vec<SentPartition> {
     let index = CachedIndex::of(cached);
-    let mut sent: Vec<(FetchSessionKey, CachedPartitionState)> = Vec::new();
+    let mut sent: Vec<SentPartition> = Vec::new();
     for tr in responses.iter_mut() {
         tr.partitions.retain(|p| {
             let entry = index.get(tr.topic_id, &tr.topic, p.partition_index);
@@ -349,15 +350,19 @@ fn filter_incremental_response(
                     },
                     |entry| entry.key.clone(),
                 );
-                sent.push((key, CachedPartitionState {
-                    last_high_watermark: p.high_watermark,
-                    last_last_stable_offset: p.last_stable_offset,
-                    last_log_start_offset: p.log_start_offset,
-                    last_preferred_read_replica: p.preferred_read_replica,
-                    last_aborted_txns_hash: aborted_hash,
-                    last_error_code: p.error_code,
-                    ..Default::default()
-                }));
+                sent.push(SentPartition {
+                    key,
+                    state: CachedPartitionState {
+                        last_high_watermark: p.high_watermark,
+                        last_last_stable_offset: p.last_stable_offset,
+                        last_log_start_offset: p.log_start_offset,
+                        last_preferred_read_replica: p.preferred_read_replica,
+                        last_aborted_txns_hash: aborted_hash,
+                        last_error_code: p.error_code,
+                        ..Default::default()
+                    },
+                    records: records_present,
+                });
             }
             changed
         });
@@ -391,11 +396,19 @@ fn hash_aborted_transactions(list: Option<&Vec<AbortedTransaction>>) -> u64 {
 }
 
 #[cfg(test)]
+#[path = "session_order_tests.rs"]
+mod order_tests;
+
+#[cfg(test)]
 mod tests {
     use {
         super::*,
         assert2::assert,
-        krabka_protocol::owned::fetch_response::{EpochEndOffset, PartitionData},
+        bytes::Bytes,
+        krabka_protocol::{
+            owned::fetch_response::{EpochEndOffset, PartitionData},
+            records::RecordsPayload,
+        },
     };
 
     fn cached_entry(
@@ -454,15 +467,9 @@ mod tests {
         }
     }
 
-    #[derive(Debug, PartialEq, Eq)]
-    struct SentPartitionState {
-        key: FetchSessionKey,
-        state: CachedPartitionState,
-    }
-
     struct FilteredSingleTopic {
         responses: Vec<FetchableTopicResponse>,
-        sent: Vec<SentPartitionState>,
+        sent: Vec<SentPartition>,
     }
 
     fn filter_single_topic(
@@ -473,10 +480,7 @@ mod tests {
     ) -> FilteredSingleTopic {
         let cached = [cached_entry(name, id, 0, watermark)].into_iter().collect();
         let mut responses = vec![topic_response("orders", 7, response_watermark)];
-        let sent = filter_incremental_response(&mut responses, &cached)
-            .into_iter()
-            .map(|(key, state)| SentPartitionState { key, state })
-            .collect();
+        let sent = filter_incremental_response(&mut responses, &cached);
         FilteredSingleTopic { responses, sent }
     }
 
@@ -502,13 +506,14 @@ mod tests {
         } = filter_single_topic("", 7, 42, 43);
 
         assert!(
-            sent == vec![SentPartitionState {
+            sent == vec![SentPartition {
                 key: FetchSessionKey {
                     topic_name: String::new(),
                     topic_id: WireUuid([7; 16]),
                     partition: 0,
                 },
                 state: sent_state(43),
+                records: false,
             }]
         );
     }
@@ -553,7 +558,46 @@ mod tests {
 
         let sent = filter_incremental_response(&mut responses, &cached);
 
-        assert!((responses, sent) == (vec![topic], vec![(key, state)]));
+        assert!(
+            (responses, sent)
+                == (vec![topic], vec![SentPartition {
+                    key,
+                    state,
+                    records: false,
+                }])
+        );
+    }
+
+    /// A row that carries records is sent whatever its offsets say, and is
+    /// marked for the move to the end of the session. An empty record set
+    /// is not records.
+    #[yare::parameterized(
+        records = { Some(Bytes::from_static(b"batch")), Some(true) },
+        empty_records = { Some(Bytes::new()), None },
+        no_records = { None, None },
+    )]
+    fn a_row_with_records_is_sent_and_marked(records: Option<Bytes>, expected: Option<bool>) {
+        let (key, state) = cached_entry("", 7, 0, 42);
+        let cached = [(key.clone(), state)].into_iter().collect();
+        let mut responses = vec![FetchableTopicResponse {
+            partitions: vec![PartitionData {
+                records: records.map(RecordsPayload::Legacy),
+                ..partition_data(42)
+            }],
+            ..topic_response("orders", 7, 42)
+        }];
+
+        let sent = filter_incremental_response(&mut responses, &cached);
+
+        let expected: Vec<SentPartition> = expected
+            .into_iter()
+            .map(|records| SentPartition {
+                key: key.clone(),
+                state: sent_state(42),
+                records,
+            })
+            .collect();
+        assert2::assert!(sent == expected);
     }
 
     /// A response topic that survived the filter and the high watermark of its row.

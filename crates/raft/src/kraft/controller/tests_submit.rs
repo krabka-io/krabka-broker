@@ -105,6 +105,7 @@ fn park_waiter(
         creates: Vec::new(),
         result: SubmitChangeResult::default(),
         reply,
+        _processing: None,
     });
     receiver
 }
@@ -1251,4 +1252,74 @@ fn offset_advance(topic: &str, count: i64) -> Vec<krabka_metadata::MetadataRecor
             count,
         },
     )]
+}
+
+/// What the leader holds between its high watermark and its log end when a
+/// plan built from its committed image arrives.
+#[derive(Debug, Clone, Copy)]
+enum UncommittedTail {
+    Nothing,
+    /// The `NoOpRecord` the leader appends every
+    /// `metadata.max.idle.interval.ms`.
+    NoOp,
+    /// A topic another submit appended and no follower has fetched yet.
+    Topic,
+}
+
+/// What happens to the plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlanAdmission {
+    /// Appended at the log end, waiting for the followers to commit it.
+    Appended,
+    /// Refused with the retriable `UncommittedTail`, nothing appended.
+    Refused,
+}
+
+/// krabka-io/krabka-broker#1453: a plan built from the committed image is
+/// refused only while the uncommitted tail could change that image. The
+/// leader's KIP-835 no-op changes nothing, and refusing behind it lost the
+/// liveness ticker's failover to the no-op timer for as long as the two stayed
+/// in step, so a dead broker's partitions kept their leader.
+#[yare::parameterized(
+    nothing = { UncommittedTail::Nothing, PlanAdmission::Appended },
+    noop = { UncommittedTail::NoOp, PlanAdmission::Appended },
+    topic = { UncommittedTail::Topic, PlanAdmission::Refused },
+)]
+#[test_macro(tokio::test)]
+async fn a_plan_waits_only_for_an_uncommitted_tail_that_changes_the_image(
+    tail: UncommittedTail,
+    want: PlanAdmission,
+) {
+    let EngineInDir {
+        mut engine,
+        dir: _dir,
+    } = elected_three_voter_engine();
+    engine.advance_and_apply(engine.log.log_end_offset());
+    let planned_from = engine.image_tx.borrow().clone();
+    let _pending = match tail {
+        UncommittedTail::Nothing => None,
+        UncommittedTail::NoOp => {
+            engine.append_noop().expect("append the no-op");
+            None
+        }
+        UncommittedTail::Topic => Some(submit_on_engine(
+            &mut engine,
+            &topic_record_named("pending", 1),
+        )),
+    };
+    let end_before = engine.log.log_end_offset();
+
+    let (reply, mut result) = oneshot::channel();
+    engine.on_submit_change_if_image(&topic_record("planned"), Some(&planned_from), reply);
+
+    let admission = match result.try_recv() {
+        Err(oneshot::error::TryRecvError::Empty) if engine.log.log_end_offset() > end_before => {
+            PlanAdmission::Appended
+        }
+        Ok(Err(RaftError::UncommittedTail)) if engine.log.log_end_offset() == end_before => {
+            PlanAdmission::Refused
+        }
+        other => panic!("{tail:?}: unexpected outcome {other:?}"),
+    };
+    assert2::assert!(admission == want, "{tail:?}");
 }

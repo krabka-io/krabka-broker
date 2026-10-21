@@ -42,8 +42,8 @@ use {
 const UNKNOWN_TOPIC_OR_PARTITION: i16 = 3;
 pub(super) const NOT_LEADER_OR_FOLLOWER: i16 = 6;
 pub(super) const INVALID_REQUEST: i16 = 42;
-const FENCED_LEADER_EPOCH: i16 = 74;
-const UNKNOWN_LEADER_EPOCH: i16 = 75;
+pub(super) const FENCED_LEADER_EPOCH: i16 = 74;
+pub(super) const UNKNOWN_LEADER_EPOCH: i16 = 75;
 const SNAPSHOT_NOT_FOUND: i16 = 98;
 const POSITION_OUT_OF_RANGE: i16 = 99;
 pub(super) const INCONSISTENT_CLUSTER_ID: i16 = 104;

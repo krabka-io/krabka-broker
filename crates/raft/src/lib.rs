@@ -54,15 +54,17 @@
 //! Mixed JVM and Krabka controller quorums are outside this crate's
 //! compatibility target.
 
-#![doc(html_root_url = "https://docs.rs/krabka-raft/1.0.5")]
+#![doc(html_root_url = "https://docs.rs/krabka-raft/1.0.8")]
 
 mod config;
 mod connection_limiter;
 mod controller;
 mod error;
+pub mod event_queue;
 pub mod handshake;
 pub mod kraft;
 mod network;
+mod observed_stream;
 pub mod reconfig;
 pub mod voter_requests;
 mod voter_wire;
@@ -87,30 +89,37 @@ pub use {
         DEFAULT_METADATA_MAX_IDLE_INTERVAL, DEFAULT_METADATA_MAX_RETENTION,
         DEFAULT_METADATA_MAX_RETENTION_SIZE, KAFKA_4_3_1_APIS, LATEST_PRODUCTION_METADATA_VERSION,
         ListenerLimits, METADATA_PARTITION_DIR, MIN_METADATA_LOG_SEGMENT_SIZE, MetadataLogConfig,
-        MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax, RaftShardRouter, ReleasedApi,
-        ShardRouteFuture, UnstableApiVersions, UnstableFeatureVersions, kafka_4_3_1_api,
-        kafka_4_3_1_max, metadata_partition_dir, supported_feature_range, supported_feature_ranges,
+        MetadataRaftCommandQueueCapacity, MetadataRaftFetchMax, RaftShardRouter,
+        RegistrationAdmission, RegistrationAdmissionFuture, ReleasedApi, ShardRouteFuture,
+        UnstableApiVersions, UnstableFeatureVersions, kafka_4_3_1_api, kafka_4_3_1_max,
+        metadata_partition_dir, supported_feature_range, supported_feature_ranges,
     },
-    connection_limiter::{ConnectionGuard, ConnectionLimit, ConnectionLimiter},
+    connection_limiter::{
+        AcceptingListener, ConnectionGuard, ConnectionLimit, ConnectionLimiter, ConnectionLimits,
+        ConnectionQuotaSettings, ConnectionQuotas, IpOverrides, MAX_CONNECTION_CREATION_RATE,
+        MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP, MAX_CONNECTIONS_PER_IP_OVERRIDES,
+    },
     controller::{
         Controller, ControllerHandle, QuorumState, QuorumStateSnapshot, SnapshotRange,
         SnapshotSlice, metadata_log_nonempty,
     },
     error::{MetadataReplayError, PersistedFormatError, RaftError},
+    event_queue::{EventQueueRecorder, NoEventQueueRecorder},
     handshake::{
-        AllowAllGrants, ClusterGrants, ClusterOperation, ControllerApiVersions, RaftConnection,
-        RaftHandshakeError, RaftListenerHandshake,
+        AllowAllGrants, ClusterGrants, ClusterOperation, ControllerApiVersions, HandshakeStream,
+        RaftConnection, RaftHandshakeError, RaftListenerHandshake,
     },
     kraft::{
         MetadataFetchSlice,
         controller::{control_batch_image_records, decode_committed_value, is_kip835_noop},
     },
     network::{OutboundDialer, PlaintextDialer},
+    observed_stream::{ObservedStream, StreamObserver},
     reconfig::{AddVoter, ReconfigOutcome, RemoveVoter, UpdateVoter},
     server::{
-        api_versions_max_version, describe_quorum::describe_quorum, finalized_feature_keys,
-        is_valid_api_versions_request, is_valid_client_info, supported_feature_key,
-        supported_feature_keys, unsupported_version_response,
+        api_versions_max_version, describe_quorum::describe_quorum, fetch_error_response,
+        finalized_feature_keys, is_valid_api_versions_request, is_valid_client_info,
+        supported_feature_key, supported_feature_keys, unsupported_version_response,
     },
     types::{
         AppData, AppDataResponse, DelegationTokenMutation, Node, NodeId, OffsetReservation,

@@ -1,5 +1,5 @@
 use {
-    super::{ReceiveError, RequestByteBudget, receive_request},
+    super::{IdleClock, ReceiveError, RequestByteBudget, receive_request},
     assert2::assert,
     bytes::Bytes,
     std::{
@@ -64,8 +64,23 @@ async fn waiting_connections_read_only_the_prefix_before_capacity_is_available()
         reader: mut second,
         consumed: second_read,
     } = stream(b"abcdefgh");
-    let mut first_request = Box::pin(receive_request(&mut first, 8, Some(&budget), None));
-    let mut second_request = Box::pin(receive_request(&mut second, 8, Some(&budget), None));
+    let (mut first_clock, mut second_clock, mut cancelled_clock) = (
+        IdleClock::start(None),
+        IdleClock::start(None),
+        IdleClock::start(None),
+    );
+    let mut first_request = Box::pin(receive_request(
+        &mut first,
+        8,
+        Some(&budget),
+        &mut first_clock,
+    ));
+    let mut second_request = Box::pin(receive_request(
+        &mut second,
+        8,
+        Some(&budget),
+        &mut second_clock,
+    ));
     assert!(futures_util::poll!(&mut first_request).is_pending());
     assert!(futures_util::poll!(&mut second_request).is_pending());
     assert!(first_read.load(Ordering::SeqCst) == 4);
@@ -76,7 +91,12 @@ async fn waiting_connections_read_only_the_prefix_before_capacity_is_available()
         reader: mut cancelled,
         consumed: cancelled_read,
     } = stream(b"cancel!!");
-    let mut cancelled_request = Box::pin(receive_request(&mut cancelled, 8, Some(&budget), None));
+    let mut cancelled_request = Box::pin(receive_request(
+        &mut cancelled,
+        8,
+        Some(&budget),
+        &mut cancelled_clock,
+    ));
     assert!(futures_util::poll!(&mut cancelled_request).is_pending());
     drop(cancelled_request);
     assert!(cancelled_read.load(Ordering::SeqCst) == 4);
@@ -105,7 +125,7 @@ async fn invalid_sizes_are_rejected_before_reading_the_body() {
         };
         let budget = RequestByteBudget::of(budget_bytes);
         assert!(
-            matches!(receive_request(&mut reader, maximum, Some(&budget), None).await, Err(ReceiveError::Io(error)) if error.kind() == io::ErrorKind::InvalidData)
+            matches!(receive_request(&mut reader, maximum, Some(&budget), &mut IdleClock::start(None)).await, Err(ReceiveError::Io(error)) if error.kind() == io::ErrorKind::InvalidData)
         );
         assert!(consumed.load(Ordering::SeqCst) == 4);
         assert!(budget.available() == budget_bytes);
@@ -118,7 +138,7 @@ async fn a_truncated_body_returns_its_reserved_capacity() {
     reader.remaining.truncate(6);
     let budget = RequestByteBudget::of(8);
     assert!(
-        matches!(receive_request(&mut reader, 8, Some(&budget), None).await, Err(ReceiveError::Io(error)) if error.kind() == io::ErrorKind::UnexpectedEof)
+        matches!(receive_request(&mut reader, 8, Some(&budget), &mut IdleClock::start(None)).await, Err(ReceiveError::Io(error)) if error.kind() == io::ErrorKind::UnexpectedEof)
     );
     assert!(budget.available() == 8);
 }
@@ -127,7 +147,8 @@ async fn a_truncated_body_returns_its_reserved_capacity() {
 async fn idle_connections_reserve_no_request_bytes() {
     let (_client, mut server) = tokio::io::duplex(16);
     let budget = RequestByteBudget::of(8);
-    let mut request = Box::pin(receive_request(&mut server, 8, Some(&budget), None));
+    let mut clock = IdleClock::start(None);
+    let mut request = Box::pin(receive_request(&mut server, 8, Some(&budget), &mut clock));
     assert!(futures_util::poll!(&mut request).is_pending());
     assert!(budget.available() == 8);
 }
@@ -140,12 +161,8 @@ async fn broker_budget_waits_do_not_expire_the_client_idle_window() {
         mut reader,
         consumed,
     } = stream(b"abcdefgh");
-    let mut request = Box::pin(receive_request(
-        &mut reader,
-        8,
-        Some(&budget),
-        Some(Duration::from_millis(10)),
-    ));
+    let mut clock = IdleClock::start(Some(Duration::from_millis(10)));
+    let mut request = Box::pin(receive_request(&mut reader, 8, Some(&budget), &mut clock));
     assert!(futures_util::poll!(&mut request).is_pending());
     assert!(consumed.load(Ordering::SeqCst) == 4);
     tokio::time::advance(Duration::from_secs(1)).await;
@@ -160,12 +177,8 @@ async fn an_idle_body_releases_its_byte_permit() {
     let (mut client, mut server) = tokio::io::duplex(16);
     client.write_all(&8_i32.to_be_bytes()).await.unwrap();
     let budget = RequestByteBudget::of(8);
-    let mut request = Box::pin(receive_request(
-        &mut server,
-        8,
-        Some(&budget),
-        Some(Duration::from_millis(10)),
-    ));
+    let mut clock = IdleClock::start(Some(Duration::from_millis(10)));
+    let mut request = Box::pin(receive_request(&mut server, 8, Some(&budget), &mut clock));
     assert!(futures_util::poll!(&mut request).is_pending());
     assert!(budget.available() == 0);
     tokio::time::advance(Duration::from_millis(11)).await;
@@ -181,16 +194,97 @@ async fn pipelined_frames_are_read_one_body_at_a_time() {
     remaining.extend_from_slice(b"second");
     reader.remaining = Bytes::from(remaining);
     for expected in [b"first".as_slice(), b"second".as_slice()] {
-        let frame = receive_request(&mut reader, 8, None, None)
+        let frame = receive_request(&mut reader, 8, None, &mut IdleClock::start(None))
             .await
             .unwrap()
             .unwrap();
         assert!(frame.bytes.as_ref() == expected);
     }
     assert!(
-        receive_request(&mut reader, 8, None, None)
+        receive_request(&mut reader, 8, None, &mut IdleClock::start(None))
             .await
             .unwrap()
             .is_none()
     );
+}
+
+/// How a peer feeds one frame to `receive_request` under paused time.
+#[derive(Debug)]
+struct Trickle {
+    /// What the case describes.
+    what: &'static str,
+    /// Bytes of the frame, size prefix included, written one at a time.
+    sent: usize,
+    /// The pause before each byte.
+    gap: Duration,
+}
+
+/// Feeds the first `sent` bytes of a 4-byte frame one at a time, `gap` apart,
+/// and reports how the read ended and when, counted from the first byte.
+async fn trickle(case: &Trickle, idle: Duration) -> (Result<Bytes, String>, Duration) {
+    use tokio::io::AsyncWriteExt as _;
+
+    let (mut client, mut server) = tokio::io::duplex(64);
+    let mut frame = 4_i32.to_be_bytes().to_vec();
+    frame.extend_from_slice(b"body");
+    let bytes = frame[..case.sent].to_vec();
+    let gap = case.gap;
+    let writer = tokio::spawn(async move {
+        for byte in bytes {
+            client.write_all(&[byte]).await.unwrap();
+            tokio::time::sleep(gap).await;
+        }
+        // Holds the socket open: a peer that goes quiet, not one that hangs up.
+        std::future::pending::<()>().await;
+    });
+    let started = tokio::time::Instant::now();
+    let outcome = receive_request(&mut server, 8, None, &mut IdleClock::start(Some(idle)))
+        .await
+        .map(|frame| frame.expect("a frame").bytes)
+        .map_err(|error| format!("{error:?}"));
+    let elapsed = started.elapsed();
+    writer.abort();
+    (outcome, elapsed)
+}
+
+/// Kafka's `Selector` refreshes a channel's idle clock on every read it serves
+/// (`IdleExpiryManager.update` for each selected key), so
+/// `connections.max.idle.ms` measures silence, not how long one frame takes
+/// to arrive. A frame trickled a byte at a time, each byte inside the window,
+/// is served however long the whole frame takes; a peer that stops part-way
+/// is closed one window after its last byte, not one window after the frame
+/// began.
+#[tokio::test(start_paused = true)]
+async fn the_idle_window_measures_silence_not_frame_duration() {
+    let idle = Duration::from_millis(10);
+    let gap = Duration::from_millis(6);
+    let served = Trickle {
+        what: "a whole frame, 8 bytes 6 ms apart",
+        sent: 8,
+        gap,
+    };
+    assert!(trickle(&served, idle).await.0 == Ok(Bytes::from_static(b"body")));
+    for (case, expected_close) in [
+        (
+            Trickle {
+                what: "stops after 3 prefix bytes",
+                sent: 3,
+                gap,
+            },
+            // The third byte lands at 12 ms; the window runs from there.
+            Duration::from_millis(22),
+        ),
+        (
+            Trickle {
+                what: "stops after the prefix and 2 body bytes",
+                sent: 6,
+                gap,
+            },
+            Duration::from_millis(40),
+        ),
+    ] {
+        let (outcome, elapsed) = trickle(&case, idle).await;
+        assert!(outcome == Err("Idle".to_string()), "{case:?}");
+        assert!(elapsed == expected_close, "{}", case.what);
+    }
 }

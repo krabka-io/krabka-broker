@@ -14,7 +14,10 @@
 //! capture groups as `$1`, and the trailing `L` or `U` lowercases or
 //! uppercases the result. The first rule that matches wins.
 
-use super::java_regex::{JavaPattern, ReplacementError};
+use {
+    krabka_java_regex::{JavaPattern, MatchError},
+    std::num::ParseIntError,
+};
 
 /// Why a rule spec is not a rule.
 #[derive(Debug, thiserror::Error)]
@@ -29,6 +32,17 @@ pub enum SslPrincipalRuleError {
     /// The text after the second slash is not one of `L`, `U` or nothing.
     #[error("unknown case flag `{0}`, expected `L`, `U` or nothing")]
     CaseFlag(String),
+}
+
+/// Why a rule gives no name, where Java throws while it applies the rule.
+#[derive(Debug, thiserror::Error)]
+enum ApplyError {
+    /// The match, or the replacement, which [`JavaPattern`] refuses.
+    #[error(transparent)]
+    Match(#[from] MatchError),
+    /// A `$n` too long to be a number: Kafka's `NumberFormatException`.
+    #[error(transparent)]
+    Reference(#[from] ParseIntError),
 }
 
 /// What a rule does to the case of its result.
@@ -56,7 +70,7 @@ impl Rule {
     /// The principal `distinguished_name` maps to, `None` when this rule does
     /// not match and the next one should be tried, or an error when Java
     /// would throw while it rewrites the name.
-    fn apply(&self, distinguished_name: &str) -> Result<Option<String>, ReplacementError> {
+    fn apply(&self, distinguished_name: &str) -> Result<Option<String>, ApplyError> {
         match self {
             Self::Default => Ok(Some(distinguished_name.to_owned())),
             Self::Mapping {
@@ -115,7 +129,7 @@ impl Rule {
             // reads that as a plain slash, so the escape is undone here. The
             // replacement keeps it, because `replaceAll` takes `\/` as `/`.
             pattern: JavaPattern::compile(&pattern.replace("\\/", "/"))
-                .map_err(SslPrincipalRuleError::Pattern)?,
+                .map_err(|error| SslPrincipalRuleError::Pattern(error.to_string()))?,
             replacement: replacement.to_owned(),
             case,
         })
@@ -132,10 +146,7 @@ impl Rule {
 /// and leave the second one to throw, exactly as they do on Kafka. The error
 /// is the `NumberFormatException` Kafka throws for a reference too long to
 /// be a number.
-fn escape_literal_back_references(
-    unescaped: &str,
-    groups: usize,
-) -> Result<String, ReplacementError> {
+fn escape_literal_back_references(unescaped: &str, groups: usize) -> Result<String, ParseIntError> {
     if groups == 0 {
         return Ok(unescaped.to_owned());
     }
@@ -153,11 +164,7 @@ fn escape_literal_back_references(
         if reference.is_empty() || reference[0] == '0' {
             continue;
         }
-        let mut index = reference
-            .iter()
-            .collect::<String>()
-            .parse::<i32>()
-            .map_err(|error| ReplacementError(error.to_string()))?;
+        let mut index = reference.iter().collect::<String>().parse::<i32>()?;
         while index > groups && index >= 10 {
             index /= 10;
         }

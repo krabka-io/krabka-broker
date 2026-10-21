@@ -62,7 +62,7 @@
 //! # }
 //! ```
 
-#![doc(html_root_url = "https://docs.rs/krabka-log/1.0.5")]
+#![doc(html_root_url = "https://docs.rs/krabka-log/1.0.8")]
 
 mod compact;
 mod config;
@@ -113,9 +113,9 @@ pub use {
     krabka_protocol::records::FileRegion,
     leader_epoch_checkpoint::{EpochEntry, LeaderEpochCheckpoint, epoch_and_offset_for_entries},
     log::{
-        ActiveProducer, ActiveSegmentExport, BARRIER_CONTROL_TYPE, CompactionContext, Log, RawRead,
-        ReadOutput, SegmentExport, TransactionAppendRefusal, TransactionalBatch, VerbatimBatch,
-        VerificationGuard,
+        ActiveProducer, ActiveSegmentExport, BARRIER_CONTROL_TYPE, CompactionContext, DueDeletions,
+        FailedDeletion, Log, RawRead, ReadOutput, SegmentExport, TransactionAppendRefusal,
+        TransactionalBatch, VerbatimBatch, VerificationGuard,
     },
     producer_snapshot::{
         NUM_BATCHES_TO_RETAIN, ProducerBatchMetadata, ProducerSnapshotEntry, RecoveredProducer,

@@ -12,13 +12,11 @@ mod support;
 use {
     crate::support::{
         client::connect_owned,
+        commit_partition_zero,
         configs::describe_resource,
-        offsets::{
-            offset_commit_topic, offset_delete_partition, offset_delete_request,
-            offset_delete_topic,
-        },
+        create_topic_for_commits,
+        offsets::{offset_delete_partition, offset_delete_request, offset_delete_topic},
         standalone_broker,
-        topics::{creatable_topic, create_topic_request_with_setup},
     },
     assert2::{assert, check},
     krabka_broker::{Broker, BrokerConfig, codes},
@@ -27,11 +25,9 @@ use {
         describe_configs_request::DescribeConfigsRequest,
         describe_configs_response::DescribeConfigsResourceResult,
         list_groups_request::ListGroupsRequest,
-        offset_commit_request::{OffsetCommitRequest, OffsetCommitRequestPartition},
     },
     krabka_units::{millis, minutes},
     std::{sync::Arc, time::Duration},
-    support::topic_id_for,
 };
 
 /// `ConfigResource.Type.BROKER`.
@@ -201,40 +197,8 @@ async fn the_broker_sweep_reaps_a_dead_group_on_its_own() {
 
     // `OffsetDelete` resolves each partition against the metadata image, so
     // the topic has to exist for the delete to reach the log.
-    let created = client
-        .send(
-            create_topic_request_with_setup()
-                .topic(creatable_topic().name(TOPIC.to_string()).call())
-                .timeout(10_000)
-                .call(),
-        )
-        .await
-        .expect("CreateTopics");
-    assert!(created.topics[0].error_code == codes::NONE);
-
-    // KIP-516: `OffsetCommit` negotiates to v10, which carries `topic_id`
-    // rather than the name, so a commit that names only the topic lands under
-    // an empty name and `OffsetDelete` cannot find it again.
-    let topic_id = topic_id_for(&client, TOPIC).await;
-
-    let committed = client
-        .send(OffsetCommitRequest {
-            group_id: GROUP.to_string(),
-            generation_id_or_member_epoch: -1,
-            member_id: String::new(),
-            topics: vec![offset_commit_topic(TOPIC.to_string(), topic_id, vec![
-                OffsetCommitRequestPartition {
-                    partition_index: 0,
-                    committed_offset: 5,
-                    committed_leader_epoch: -1,
-                    ..Default::default()
-                },
-            ])],
-            ..Default::default()
-        })
-        .await
-        .expect("OffsetCommit");
-    assert!(committed.topics[0].partitions[0].error_code == codes::NONE);
+    let topic_id = create_topic_for_commits(&client, TOPIC).await;
+    commit_partition_zero(&client, GROUP, (TOPIC, topic_id), 5).await;
 
     let listed = |client: Arc<Client>| async move {
         client

@@ -48,20 +48,24 @@ mod follower_authorization_tests;
 #[cfg(test)]
 mod follower_watermark_tests;
 #[cfg(test)]
+mod request_quota_tests;
+#[cfg(test)]
 mod response_budget_tests;
 
 #[cfg(test)]
 mod leader_read_tests;
 #[cfg(test)]
+mod leader_throttle_tests;
+#[cfg(test)]
 mod topic_resolution_tests;
 
-pub(crate) use self::{plan::PendingRead, read::LiveOffsets};
+pub(crate) use self::{plan::PendingRead, read::LiveOffsets, throttle::apply_consumer_fetch_quota};
 use {
     self::{
         node_endpoints::fetch_node_endpoints,
         plan::{FetchMode, PendingPlanContext, build_pending_reads},
         read_loop::execute_pending_reads,
-        request::{FetchPreparation, prepare_fetch},
+        request::{FetchPreparation, SessionRefusal, prepare_fetch},
         response::{
             GroupedResponses, charge_fetch_cpu, downconvert_legacy_responses, record_fetch_metrics,
             withhold_current_leader_before_kip_951,
@@ -69,10 +73,7 @@ use {
         session::{
             FetchKind, commit_fetch_session, prepare_fetch_session, refresh_fetch_session_metrics,
         },
-        throttle::{
-            apply_consumer_fetch_quota, consumer_quota_window_bytes, fetch_response_size,
-            throttle_follower_responses,
-        },
+        throttle::{consumer_quota_window_bytes, fetch_response_size, throttle_follower_responses},
     },
     crate::{
         broker::Broker,
@@ -82,6 +83,7 @@ use {
         handlers::{ApiKeyCode, RequestContext},
         metrics::RequestPhases,
         network::fetch_writer::records_to_serve,
+        quota::ActiveClock,
         wal::quorum::wire::{KIP_595_FETCH_VERSION, decode_fetch_request},
     },
 };
@@ -101,6 +103,23 @@ const KIP_951_FETCH_VERSION: i16 = 16;
 /// (KIP-516). The request schema carries `Topic` at versions 0-12 and
 /// `TopicId` from this version on.
 const FIRST_TOPIC_ID_VERSION: i16 = 13;
+
+/// The whole-response byte budget of a consumer read, which a `ShareFetch`
+/// shares with a consumer `Fetch`: Kafka's
+/// `min(maxBytes, fetch.max.bytes, maxQuotaWindowBytes)`.
+pub(crate) fn consumer_response_byte_budget(
+    broker: &Broker,
+    image: &krabka_metadata::MetadataImage,
+    context: &RequestContext<'_>,
+    request_max_bytes: i32,
+) -> usize {
+    fetch_response_byte_budget(
+        request_max_bytes,
+        broker.config.fetch_max_bytes.bytes_usize(),
+        consumer_quota_window_bytes(broker, image, context),
+        false,
+    )
+}
 
 /// The whole-response byte budget for one Fetch read. Follower reads use the
 /// request budget; consumers also honor the broker and client-quota ceilings.
@@ -142,18 +161,24 @@ pub(crate) async fn handle(
     req_bytes: &[u8],
     ctx: &RequestContext<'_>,
 ) -> Result<(FetchResponse, i16), BrokerError> {
-    // KIP-124 request_percentage meters server-side handler time; capture the
-    // start so the request throttle can be combined with the consumer
-    // byte-rate throttle below (KIP-219).
-    let handler_start = std::time::Instant::now();
+    // KIP-124 request_percentage meters the time the request holds a handler
+    // thread, which the request throttle combines with the consumer byte-rate
+    // throttle below (KIP-219). Every await before the charge runs through
+    // the clock, so a long poll's wait is not charged, and the read loop
+    // reports the time its long poll spent polling, which is not charged
+    // either: Kafka parks such a fetch in the fetch purgatory and completes
+    // it, re-reads included, off the handler thread.
+    let mut handler_clock = ActiveClock::start();
     // Phase accounting for `request_{local,remote}_duration_seconds`. The read
     // loop charges every partition read to the local phase, and the long poll
     // and the cold-tier round trip to the remote one. Every path that reaches
     // a read observes all three phases exactly once, the failed read and the
     // routed KIP-595 answer included, so the three `_count`s stay equal to one
-    // another; the rejection arms below answer before any read happens and
-    // observe nothing, so the gap to `request_duration_seconds` is exactly the
-    // fetches this handler refused.
+    // another. A consumer fetch its session refuses is charged like a read, so
+    // it observes all three too; the follower and KIP-595 rejection arms below
+    // answer before any read happens and observe nothing, so the gap to
+    // `request_duration_seconds` is exactly the replica fetches this handler
+    // refused.
     let phases = RequestPhases::default();
     let mut cur: &[u8] = req_bytes;
     let req: FetchRequest = if version < 4 {
@@ -165,13 +190,38 @@ pub(crate) async fn handle(
 
     let preparation = match prepare_fetch(broker, &req, version, ctx) {
         Ok(preparation) => preparation,
-        Err(code) => {
-            let resp = FetchResponse {
+        Err(SessionRefusal {
+            code,
+            is_follower_fetch,
+        }) => {
+            let mut resp = FetchResponse {
                 error_code: code,
                 session_id: INVALID_SESSION_ID,
                 responses: Vec::new(),
                 ..Default::default()
             };
+            if !is_follower_fetch {
+                // Kafka's `SessionErrorContext` answers through
+                // `processResponseCallback` like any consumer fetch: the
+                // error response is charged to both quotas, and a throttled
+                // one is the same error with the throttle in it. A follower's
+                // refusal is exempt, as its fetch is.
+                broker
+                    .metrics
+                    .observe_request_phases(FETCH_API_KEY, &phases);
+                let (throttle_time_ms, charge) = apply_consumer_fetch_quota(
+                    broker,
+                    &broker.controller.current_image(),
+                    ctx,
+                    FETCH_API_KEY,
+                    handler_clock.active(),
+                    fetch_response_size(&resp, version),
+                );
+                if throttle_time_ms > 0 {
+                    charge.refund();
+                }
+                resp.throttle_time_ms = throttle_time_ms;
+            }
             return Ok((resp, version));
         }
     };
@@ -202,7 +252,8 @@ pub(crate) async fn handle(
         let routing_start = std::time::Instant::now();
         if let Some(response) = broker
             .wal_shards
-            .route_fetch_request(&req, authenticated_node)
+            .route_fetch_request_wait(&req, authenticated_node)
+            .await
         {
             // A routed WAL fetch is served straight out of this broker's own
             // shard engine, so the round trip is local work like any other
@@ -228,7 +279,9 @@ pub(crate) async fn handle(
         follower_id: effective_replica_id,
         follower_broker_epoch: req.replica_state.replica_epoch,
     };
-    let pending = build_pending_reads(&plan_context, &effective_topics).await;
+    let pending = handler_clock
+        .run(build_pending_reads(&plan_context, &effective_topics))
+        .await;
 
     // Kafka's `KafkaApis.handleFetchRequest`: consumer responses use
     // `min(request.maxBytes, config.fetchMaxBytes, quota window bytes)`.
@@ -249,16 +302,18 @@ pub(crate) async fn handle(
     let GroupedResponses {
         mut responses,
         cpu_micros: cpu_micros_by_idx,
-    } = execute_pending_reads(
-        broker,
-        pending,
-        req.min_bytes,
-        response_max_bytes,
-        req.max_wait_ms,
-        ctx.sendfile_capable,
-        &phases,
-    )
-    .await;
+        long_poll_active,
+    } = handler_clock
+        .run(execute_pending_reads(
+            broker,
+            pending,
+            req.min_bytes,
+            response_max_bytes,
+            req.max_wait_ms,
+            ctx.sendfile_capable,
+            &phases,
+        ))
+        .await;
     broker
         .metrics
         .observe_request_phases(FETCH_API_KEY, &phases);
@@ -267,7 +322,7 @@ pub(crate) async fn handle(
     withhold_current_leader_before_kip_951(version, &mut responses);
 
     if is_follower_fetch {
-        throttle_follower_responses(broker, &image, effective_replica_id, &mut responses);
+        throttle_follower_responses(broker, &image, &responses);
     }
 
     let metric_rows = charge_fetch_cpu(broker, &responses, &cpu_micros_by_idx);
@@ -310,7 +365,8 @@ pub(crate) async fn handle(
             broker,
             &image,
             ctx,
-            handler_start,
+            FETCH_API_KEY,
+            handler_clock.active().saturating_sub(long_poll_active),
             fetch_response_size(&resp, version),
         );
         if throttle_time_ms > 0 {

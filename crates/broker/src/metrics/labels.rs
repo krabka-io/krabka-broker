@@ -112,6 +112,18 @@ pub struct WalVoterLabel {
     pub voter: u64,
 }
 
+/// One `__remote_log_metadata` partition, paired with the
+/// `tiered_storage_rlmm_partition_*` gauge families.
+///
+/// Cardinality is bounded by the metadata topic's partition count, 50 by
+/// default, and a series exists only while this broker is assigned the
+/// partition: the RLMM reconciler releases it when the assignment drops the
+/// partition. No client input reaches this label.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct MetadataPartitionLabel {
+    pub metadata_partition: i32,
+}
+
 /// Fleet-complete KIP-932 backlog for one share-group partition.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct ShareGroupLabel {
@@ -315,9 +327,10 @@ pub struct BreakGlassActionLabel {
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, krabka_macros::EnumStr)]
 #[enum_str(case = "snake_case", all, label_value)]
 pub enum ConnectionCloseReason {
-    /// The connection went `connections.max.idle.ms` without a complete frame
-    /// — counting a TLS handshake it opened the socket for and never drove,
-    /// which Kafka's idle expiry covers for the same reason.
+    /// The connection went `connections.max.idle.ms` with no socket activity,
+    /// a request in its handler or a throttle mute included — counting a TLS
+    /// handshake it opened the socket for and never drove, which Kafka's idle
+    /// expiry covers for the same reason.
     Idle,
     /// KIP-368: the SASL session passed the token's expiry without an in-band
     /// re-authentication.

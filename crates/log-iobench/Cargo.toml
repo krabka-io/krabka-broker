@@ -21,14 +21,15 @@ categories = ["development-tools::profiling"]
 unsafe_op_in_unsafe_fn = "warn"
 
 [dependencies]
-krabka-log = { version = "1.0.5", path = "../log" }
-krabka-protocol = { version = "0.6.0", default-features = false }
+krabka-log = { version = "1.0.8", path = "../log" }
+krabka-protocol = { version = "0.7.0", default-features = false }
 krabka-units = { workspace = true }
 bytes = { workspace = true }
 memmap2 = "0.9"
 
 [dev-dependencies]
-krabka-macros = { version = "1.0.5", path = "../macros" }
+krabka-ids = { version = "0.7.0" }
+krabka-macros = { version = "1.0.8", path = "../macros" }
 assert2 = { workspace = true }
 tempfile = { workspace = true }
 criterion = { version = "5.0.2", package = "codspeed-criterion-compat" }
@@ -40,4 +41,8 @@ harness = false
 
 [[bench]]
 name = "uncached_io"
+harness = false
+
+[[bench]]
+name = "direct_append"
 harness = false

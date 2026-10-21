@@ -15,25 +15,23 @@ use {
     },
     bytes::BytesMut,
     krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion},
-    krabka_protocol::{
-        Decode, Encode,
-        owned::{
-            create_delegation_token_request::CreateDelegationTokenRequest,
-            create_delegation_token_response::CreateDelegationTokenResponse,
-            describe_delegation_token_request::DescribeDelegationTokenRequest,
-            describe_delegation_token_response::DescribeDelegationTokenResponse,
-            expire_delegation_token_request::ExpireDelegationTokenRequest,
-            expire_delegation_token_response::ExpireDelegationTokenResponse,
-            renew_delegation_token_request::RenewDelegationTokenRequest,
-            renew_delegation_token_response::RenewDelegationTokenResponse,
-        },
-    },
+    krabka_protocol::{Decode, Encode, owned as protocol},
     std::io,
     tokio::{
         io::{AsyncRead, AsyncWrite},
         net::TcpStream,
     },
 };
+
+type CreateRequest = protocol::create_delegation_token_request::CreateDelegationTokenRequest;
+type CreateResponse = protocol::create_delegation_token_response::CreateDelegationTokenResponse;
+type DescribeRequest = protocol::describe_delegation_token_request::DescribeDelegationTokenRequest;
+type DescribeResponse =
+    protocol::describe_delegation_token_response::DescribeDelegationTokenResponse;
+type ExpireRequest = protocol::expire_delegation_token_request::ExpireDelegationTokenRequest;
+type ExpireResponse = protocol::expire_delegation_token_response::ExpireDelegationTokenResponse;
+type RenewRequest = protocol::renew_delegation_token_request::RenewDelegationTokenRequest;
+type RenewResponse = protocol::renew_delegation_token_response::RenewDelegationTokenResponse;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Delegation-token wire helpers — encode one request at the negotiated MAX
@@ -54,8 +52,8 @@ const DESCRIBE_DT_VERSION: i16 =
 pub(crate) async fn send_create_delegation_token<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,
     corr_id: i32,
-    req: &CreateDelegationTokenRequest,
-) -> Result<CreateDelegationTokenResponse, io::Error> {
+    req: &CreateRequest,
+) -> Result<CreateResponse, io::Error> {
     let mut body = BytesMut::new();
     req.encode(&mut body, CREATE_DT_VERSION)
         .map_err(|e| io::Error::other(format!("CreateDelegationToken encode: {e}")))?;
@@ -71,15 +69,15 @@ pub(crate) async fn send_create_delegation_token<S: AsyncRead + AsyncWrite + Unp
     )
     .await?;
     let mut cur: &[u8] = &resp_bytes;
-    CreateDelegationTokenResponse::decode(&mut cur, CREATE_DT_VERSION)
+    CreateResponse::decode(&mut cur, CREATE_DT_VERSION)
         .map_err(|e| io::Error::other(format!("CreateDelegationToken decode: {e}")))
 }
 
 pub(crate) async fn send_renew_delegation_token(
     stream: &mut TcpStream,
     corr_id: i32,
-    req: &RenewDelegationTokenRequest,
-) -> Result<RenewDelegationTokenResponse, io::Error> {
+    req: &RenewRequest,
+) -> Result<RenewResponse, io::Error> {
     let mut body = BytesMut::new();
     req.encode(&mut body, RENEW_DT_VERSION)
         .map_err(|e| io::Error::other(format!("RenewDelegationToken encode: {e}")))?;
@@ -95,15 +93,15 @@ pub(crate) async fn send_renew_delegation_token(
     )
     .await?;
     let mut cur: &[u8] = &resp_bytes;
-    RenewDelegationTokenResponse::decode(&mut cur, RENEW_DT_VERSION)
+    RenewResponse::decode(&mut cur, RENEW_DT_VERSION)
         .map_err(|e| io::Error::other(format!("RenewDelegationToken decode: {e}")))
 }
 
 pub(crate) async fn send_expire_delegation_token(
     stream: &mut TcpStream,
     corr_id: i32,
-    req: &ExpireDelegationTokenRequest,
-) -> Result<ExpireDelegationTokenResponse, io::Error> {
+    req: &ExpireRequest,
+) -> Result<ExpireResponse, io::Error> {
     let mut body = BytesMut::new();
     req.encode(&mut body, EXPIRE_DT_VERSION)
         .map_err(|e| io::Error::other(format!("ExpireDelegationToken encode: {e}")))?;
@@ -119,15 +117,15 @@ pub(crate) async fn send_expire_delegation_token(
     )
     .await?;
     let mut cur: &[u8] = &resp_bytes;
-    ExpireDelegationTokenResponse::decode(&mut cur, EXPIRE_DT_VERSION)
+    ExpireResponse::decode(&mut cur, EXPIRE_DT_VERSION)
         .map_err(|e| io::Error::other(format!("ExpireDelegationToken decode: {e}")))
 }
 
 pub(crate) async fn send_describe_delegation_token(
     stream: &mut TcpStream,
     corr_id: i32,
-    req: &DescribeDelegationTokenRequest,
-) -> Result<DescribeDelegationTokenResponse, io::Error> {
+    req: &DescribeRequest,
+) -> Result<DescribeResponse, io::Error> {
     let mut body = BytesMut::new();
     req.encode(&mut body, DESCRIBE_DT_VERSION)
         .map_err(|e| io::Error::other(format!("DescribeDelegationToken encode: {e}")))?;
@@ -143,16 +141,12 @@ pub(crate) async fn send_describe_delegation_token(
     )
     .await?;
     let mut cur: &[u8] = &resp_bytes;
-    DescribeDelegationTokenResponse::decode(&mut cur, DESCRIBE_DT_VERSION)
+    DescribeResponse::decode(&mut cur, DESCRIBE_DT_VERSION)
         .map_err(|e| io::Error::other(format!("DescribeDelegationToken decode: {e}")))
 }
 
 /// Independent wire expectations for a freshly created token's identity and HMAC.
-pub fn check_created_identity(
-    response: &CreateDelegationTokenResponse,
-    owner: &str,
-    requester: &str,
-) {
+pub fn check_created_identity(response: &CreateResponse, owner: &str, requester: &str) {
     assert2::check!(response.principal_type == "User");
     assert2::check!(response.principal_name == owner);
     assert2::check!(response.token_requester_principal_type == "User");

@@ -162,6 +162,13 @@ mod tests {
         ) -> Result<(), RemoteStorageError> {
             Ok(())
         }
+
+        fn caught_up(
+            &self,
+            _topic_id_partition: &TopicIdPartition,
+        ) -> Result<bool, RemoteStorageError> {
+            Ok(true)
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]

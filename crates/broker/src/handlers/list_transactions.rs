@@ -416,11 +416,7 @@ mod tests {
     #[tokio::test]
     async fn handler_reports_unknown_state_filters_and_top_level_fields() {
         let version = krabka_protocol::owned::list_transactions_response::MAX_VERSION;
-        krabka_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker, ctx);
-            boot [start_broker] allow_all;
-            user ["admin"];
-        };
+        allow_all_broker_setup!((broker_handle, _dir, broker, ctx), start_broker, "admin");
         let req = ListTransactionsRequest {
             state_filters: vec!["Ongoing".into(), "MysteryState".into()],
             producer_id_filters: vec![42],
@@ -523,11 +519,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_pattern_is_rejected_only_when_present_on_the_wire() {
-        krabka_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker, ctx);
-            boot [start_broker] allow_all;
-            user ["admin"];
-        };
+        allow_all_broker_setup!((broker_handle, _dir, broker, ctx), start_broker, "admin");
 
         for (version, expected_error) in [(1, codes::NONE), (2, codes::INVALID_REGULAR_EXPRESSION)]
         {

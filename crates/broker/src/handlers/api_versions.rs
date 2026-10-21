@@ -56,8 +56,6 @@ use {
         codes,
         error::BrokerError,
         handlers::{RequestContext, decode_request, encode_response},
-        metrics::QuotaType,
-        quota::throttle_time_ms,
     },
 };
 
@@ -81,31 +79,6 @@ pub(crate) fn unsupported_version_response(
 ) -> Result<Bytes, BrokerError> {
     let response = krabka_raft::unsupported_version_response(unstable);
     encode_response(&response, 0)
-}
-
-/// Charges the KIP-124 request quota for the handler time this request has
-/// taken, records the KIP-219 window on `context` so the dispatch loop mutes
-/// the connection once the bytes are written, and returns the delay the
-/// response must report.
-///
-/// This is the `Produce` and `Fetch` accounting, minus the data quotas that
-/// `ApiVersions` has none of.
-fn charge_request_quota(
-    broker: &Broker,
-    image: &krabka_metadata::MetadataImage,
-    context: &RequestContext<'_>,
-    handler_start: std::time::Instant,
-) -> i32 {
-    let request_delay = context.charge_request_quota(broker, image, handler_start);
-    let delay = broker.metrics.record_applied_throttle(
-        krabka_protocol::api_key::ApiKey::ApiVersions as i16,
-        &[(QuotaType::Request, request_delay).into()],
-    );
-    // KIP-219: the response goes out now and the connection is muted for the
-    // window afterwards. Sleeping here would hold the handshake back past the
-    // client's request timeout.
-    context.record_throttle(delay);
-    throttle_time_ms(delay)
 }
 
 pub(crate) fn handle<'a>(
@@ -149,7 +122,17 @@ pub(crate) fn handle<'a>(
             if pre_authentication {
                 0
             } else {
-                charge_request_quota(broker, &image, context, handler_start)
+                // The `Produce` and `Fetch` accounting, minus the data quotas
+                // that `ApiVersions` has none of. The response goes out now
+                // and the connection is muted for the window afterwards:
+                // sleeping here would hold the handshake back past the
+                // client's request timeout.
+                context.throttle_on_request_quota(
+                    broker,
+                    &image,
+                    krabka_protocol::api_key::ApiKey::ApiVersions as i16,
+                    handler_start.elapsed(),
+                )
             }
         };
 

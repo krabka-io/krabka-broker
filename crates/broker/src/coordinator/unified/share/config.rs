@@ -1,5 +1,11 @@
 //! KIP-932 share-group membership configuration.
-use {crate::coordinator::unified::config::DEFAULT_ASSIGNMENT_INTERVAL, std::time::Duration};
+use {
+    crate::coordinator::unified::config::{
+        DEFAULT_ASSIGNMENT_INTERVAL, broker_assignment_interval,
+    },
+    krabka_metadata::{MetadataImage, NodeId},
+    std::{borrow::Cow, time::Duration},
+};
 
 /// Kafka's `GroupConfig.SHARE_SESSION_TIMEOUT_MS_CONFIG`.
 const KEY_SHARE_SESSION_TIMEOUT_MS: &str = "share.session.timeout.ms";
@@ -7,6 +13,9 @@ const KEY_SHARE_SESSION_TIMEOUT_MS: &str = "share.session.timeout.ms";
 const KEY_SHARE_HEARTBEAT_INTERVAL_MS: &str = "share.heartbeat.interval.ms";
 /// Kafka's `GroupConfig.SHARE_ASSIGNMENT_INTERVAL_MS_CONFIG`.
 const KEY_SHARE_ASSIGNMENT_INTERVAL_MS: &str = "share.assignment.interval.ms";
+/// Kafka's `GroupCoordinatorConfig.SHARE_GROUP_ASSIGNMENT_INTERVAL_MS_CONFIG`,
+/// a dynamic broker config.
+pub(crate) const SHARE_GROUP_ASSIGNMENT_INTERVAL_MS: &str = "group.share.assignment.interval.ms";
 
 /// The broker share-group settings: the share keys of Kafka's
 /// `GroupCoordinatorConfig` and of its `ShareGroupConfig`.
@@ -96,6 +105,23 @@ pub struct ShareGroupConfig {
     /// initialize it again.
     #[default(Duration::from_secs(30))]
     pub initialize_retry_interval: Duration,
+}
+
+impl ShareGroupConfig {
+    /// The broker share settings as `node` applies them as of `image`: the
+    /// dynamic `group.share.assignment.interval.ms` over the static one, as
+    /// Kafka's `GroupCoordinatorConfig.RECONFIGURABLE_CONFIGS` makes it
+    /// dynamic. A broker with no dynamic value that applies borrows the static
+    /// values.
+    #[must_use]
+    pub(crate) fn for_broker(&self, image: &MetadataImage, node: Option<NodeId>) -> Cow<'_, Self> {
+        self.with_assignment_interval(broker_assignment_interval(
+            image,
+            node,
+            SHARE_GROUP_ASSIGNMENT_INTERVAL_MS,
+            self.assignment_interval,
+        ))
+    }
 }
 
 #[cfg(test)]

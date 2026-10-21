@@ -191,7 +191,10 @@ pub trait LogIo: Debug + Send + Sync {
     /// nowhere else: a guessed one that is wrong fails the append that first
     /// uses it, and a failed append takes the log directory offline. A
     /// kernel or filesystem that does not report one answers `Unsupported`,
-    /// and the segment stays buffered.
+    /// and the segment stays buffered. Both alignments are then raised to the
+    /// filesystem block, up to 4 KiB, so that no write's offset, length or
+    /// buffer falls inside a block the filesystem would have to lock, convert
+    /// or zero apart.
     ///
     /// # Errors
     /// Returns `Unsupported` where `O_DIRECT` is unavailable or its alignment
@@ -208,6 +211,14 @@ pub trait LogIo: Debug + Send + Sync {
     fn write_direct(&self, file: &File, buf: &[u8], offset: u64) -> std::io::Result<usize> {
         write_direct(file, buf, offset)
     }
+
+    /// Whether the direct writes of a segment under this I/O go to the
+    /// shared `io_uring` submitter, which writes the file itself, rather than
+    /// through [`LogIo::write_direct`] on the write threads.
+    ///
+    /// Only the real file I/O answers true. Every other implementation keeps
+    /// the threads, so an override of [`LogIo::write_direct`] sees each write.
+    fn submits_direct_writes(&self) -> bool { false }
 }
 
 /// A `.log` handle that bypasses the page cache, and what it requires of a
@@ -217,10 +228,46 @@ pub trait LogIo: Debug + Send + Sync {
 pub struct DirectFile {
     /// The `O_DIRECT` handle.
     pub file: File,
-    /// Required alignment of a write's buffer address, in bytes.
+    /// Alignment of a write's buffer address, in bytes: at least what
+    /// `O_DIRECT` requires, and every write keeps to it.
     pub mem_align: usize,
-    /// Required alignment of a write's offset and length, in bytes.
+    /// Alignment of a write's offset and length, in bytes: at least what
+    /// `O_DIRECT` requires, and every write keeps to it.
     pub block: usize,
+}
+
+/// The largest filesystem block [`write_alignment`] raises a direct write's
+/// alignment to. It is the bound on the zeros past the last batch that
+/// `docs/persisted_formats.md` gives for an active `preallocate` segment.
+/// `stx_blksize` is the preferred I/O size, which is the block size on ext4
+/// but can be an XFS stripe width or an NFS `wsize`: those are larger than
+/// any block, and the cap keeps them from growing every write.
+#[cfg(target_os = "linux")]
+const MAX_FS_BLOCK: u32 = 4096;
+
+/// The alignment a direct write keeps for one of the two `O_DIRECT` rules,
+/// whose kernel minimum is `required`: the buffer address, or the file
+/// offset and length. It is `required` raised to the filesystem block
+/// `fs_block`, capped at [`MAX_FS_BLOCK`], when that is a power of two.
+///
+/// The kernel takes buffers and offsets aligned to the device's logical
+/// block, often 512 bytes, but a filesystem allocates and converts whole
+/// blocks of its own. ext4 sends a direct write down its unaligned path when
+/// its offset, its length or its buffer address falls inside a 4 KiB block:
+/// it takes the inode lock exclusively, waits for every other direct write
+/// to the file, and zeroes the rest of a newly allocated partial block with
+/// a write of its own. A segment's appends end anywhere, so with the kernel
+/// minimum almost every write paid that, at about a fifth of the device's
+/// rate. The larger of two powers of two is a multiple of both, so the
+/// result still meets the kernel's rule.
+#[cfg(target_os = "linux")]
+fn write_alignment(required: u32, fs_block: u32) -> u32 {
+    let fs_block = fs_block.min(MAX_FS_BLOCK);
+    if fs_block.is_power_of_two() {
+        required.max(fs_block)
+    } else {
+        required
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -244,8 +291,8 @@ fn open_direct(path: &Path) -> std::io::Result<DirectFile> {
     )?;
     Ok(DirectFile {
         file: File::from(fd),
-        mem_align: to_usize(stat.stx_dio_mem_align)?,
-        block: to_usize(stat.stx_dio_offset_align)?,
+        mem_align: to_usize(write_alignment(stat.stx_dio_mem_align, stat.stx_blksize))?,
+        block: to_usize(write_alignment(stat.stx_dio_offset_align, stat.stx_blksize))?,
     })
 }
 
@@ -407,7 +454,9 @@ pub(crate) fn write_atomic(
 #[derive(Debug)]
 pub(crate) struct FileIo;
 
-impl LogIo for FileIo {}
+impl LogIo for FileIo {
+    fn submits_direct_writes(&self) -> bool { true }
+}
 
 /// The shared handle every structure defaults to before a test installs its
 /// own.
@@ -553,6 +602,45 @@ mod tests {
             let io = Scripted::new(script);
             let error = write_all(&io, IoTarget::OffsetIndex, &file, b"abcdef").unwrap_err();
             check!(error.kind() == expected);
+        }
+    }
+
+    /// A direct write keeps to the filesystem block as well as to what
+    /// `O_DIRECT` requires, so neither its buffer nor its offset and length
+    /// ever fall inside a block the filesystem allocates. A preferred I/O size
+    /// above 4 KiB counts as 4 KiB, and one that is not a power of two below
+    /// that, or none, leaves the `O_DIRECT` alignment as it is.
+    #[cfg(target_os = "linux")]
+    #[yare::parameterized(
+        ext4_on_a_512_byte_device = { 512, 4096, 4096 },
+        ext4_on_a_4k_device = { 4096, 4096, 4096 },
+        small_filesystem_block = { 512, 1024, 1024 },
+        device_coarser_than_the_filesystem = { 4096, 1024, 4096 },
+        xfs_stripe_width = { 512, 65536, 4096 },
+        nfs_wsize = { 512, 1_048_576, 4096 },
+        stripe_width_not_a_power_of_two = { 512, 196_608, 4096 },
+        small_block_not_a_power_of_two = { 512, 3072, 512 },
+        no_block_reported = { 512, 0, 512 },
+    )]
+    fn a_direct_write_aligns_to_the_filesystem_block(required: u32, fs_block: u32, expected: u32) {
+        check!(write_alignment(required, fs_block) == expected);
+    }
+
+    /// The real `O_DIRECT` handle, where the scratch filesystem offers one,
+    /// asks for buffers and offsets aligned to the filesystem block, up to
+    /// 4 KiB, whatever the device under it takes.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_real_direct_handle_aligns_to_the_filesystem_block() {
+        let ScratchFile { dir, file } = scratch_file();
+        let Ok(direct) = open_direct(&dir.path().join("scratch")) else {
+            return;
+        };
+        let fs_block =
+            usize::try_from(rustix::fs::fstatvfs(&file).unwrap().f_bsize.min(4096)).unwrap();
+        for align in [direct.mem_align, direct.block] {
+            check!(align.is_power_of_two());
+            check!(align % fs_block == 0);
         }
     }
 }

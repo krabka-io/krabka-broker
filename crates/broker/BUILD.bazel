@@ -35,7 +35,7 @@ crate_tests(
     # the test run and fail under coverage instrumentation, which is a statement
     # about the instrumentation rather than about the code. `diskless_e2e` and
     # `sharegroup_backlog` assert on a committed high-watermark across three
-    # brokers; `diskless_e2e` boots three such clusters at once, one per case,
+    # brokers; `diskless_e2e` boots one such cluster per case, all at once,
     # and every case gates on a quorum-committed watermark inside a bounded
     # deadline.
     #
@@ -123,11 +123,23 @@ crate_tests(
     # `cli_smoke_test`, `config_reference_test` and `krabka-broker_test` -- and
     # this suite, like the other 114, contributes none. It still runs on every
     # pull request, in the `test` step that exists for this tag.
+    #
+    # `controller_failover` joins on the same shape, ahead of any failure: it
+    # boots three brokers with the production raft timings, stops the active
+    # controller and bounds the time until the survivors elect and serve a
+    # mutation. That bound is an elapsed wall-clock time across a quorum.
+    #
+    # `group_coordinator_failover` joins on that shape too, ahead of any
+    # failure: three brokers, the group coordinator killed behind a cut relay,
+    # and a bounded deadline for a survivor to lead `__consumer_offsets-0`,
+    # load it and serve both groups again.
     cpu_heavy = [
         "compaction",
+        "controller_failover",
         "diskless_e2e",
         "durability",
         "elect_leaders",
+        "group_coordinator_failover",
         "ip_quotas",
         "leader_election",
         "sharegroup_backlog",
@@ -149,6 +161,10 @@ crate_tests(
         # the checked-in `/metrics` body; `support::manifest_dir()` resolves
         # them under `$TEST_SRCDIR/$TEST_WORKSPACE/docs/operations`.
         "//docs/operations:contract",
+        # `soak_contract` executes one of the sustained-load contracts, by
+        # default `bench/soak/self-check.yaml`, resolved under
+        # `support::manifest_dir()`.
+        "//bench:soak_contracts",
     ],
     # The runnable example only needs normal dependencies. Keeping the live
     # Schema Registry dev dependency out also avoids loading its older
@@ -279,6 +295,14 @@ crate_tests(
         # neither librdkafka nor the JVM, so its decoder agrees with neither
         # by construction.
         "sarama_conformance": ["kaf_sarama"],
+        # The Prometheus sidecar that evaluates the shipped alert rules over the
+        # run, so the evidence records when each one fired and resolved.
+        # And the source release of the lifecycle contract, which its
+        # executor formats a cluster on and rolls back to; see `env` below.
+        "soak_contract": [
+            "krabka_broker_1_0_5",
+            "prometheus_3_5_0",
+        ],
         # One image, used twice: as the `kafka-topics` client that reads
         # krabka's answer and as the Kafka broker the same command is run
         # against for the differential.
@@ -296,7 +320,15 @@ crate_tests(
     # `cli_smoke` boots the real binary and finds it through the variable Cargo
     # exports for a `[[bin]]` in the same package. Bazel exports no such thing,
     # so the same name is set here from the binary's own target.
-    env = {"CARGO_BIN_EXE_krabka-broker": "$(rootpath :krabka-broker)"},
+    #
+    # `KRABKA_LIFECYCLE_SOURCE_IMAGE` is the tag `krabka_broker_1_0_5` loads
+    # under, which soak_contract runs in place of the lifecycle contract's
+    # digest reference: a loaded image carries no registry digest, and a
+    # container suite does not pull.
+    env = {
+        "CARGO_BIN_EXE_krabka-broker": "$(rootpath :krabka-broker)",
+        "KRABKA_LIFECYCLE_SOURCE_IMAGE": "ghcr.io/krabka-io/krabka-broker:v1.0.5",
+    },
     # The suites that run brokers as real processes out of //packaging's image
     # rather than as in-process handles. For `process_kill_durability` that is
     # what makes a `docker kill -s KILL` a kill of the thing that holds the log;
@@ -311,10 +343,18 @@ crate_tests(
     # selection -- the `soak` job in `.github/workflows/ci.yml` is the one place
     # that names it, and it passes a `--test_timeout` because Bazel's longest
     # built-in timeout is an hour.
+    #
+    # `soak_contract` runs the self-check of the sustained-load contract by
+    # default: about five minutes against three containers, with its faults
+    # injected through the Docker CLI. Unlike `soak` it stays in the container
+    # matrix, so every change that reaches it proves the judge still catches an
+    # injected loss and a missed deadline on a live cluster. The 72-hour soak
+    # is the same suite with `KRABKA_SOAK_CONTRACT` naming its contract.
     krabka_image = [
         "jbod_enospc",
         "process_kill_durability",
         "soak",
+        "soak_contract",
     ],
     lib = "broker",
     # Suites whose `#[ignore]`d cases drive real containers, and the images

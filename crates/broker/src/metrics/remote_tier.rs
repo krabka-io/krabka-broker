@@ -121,7 +121,7 @@ impl BrokerMetrics {
         self.track_topic_series(&label);
     }
 
-    /// Accounts replication bytes the leader-side KIP-73 throttle granted.
+    /// Accounts replication bytes the leader-side KIP-73 quota was charged.
     ///
     /// Kafka's `kafka.server:type=LeaderReplication,name=byte-rate`. A
     /// reassignment that is not moving is either a throttle that is biting --
@@ -131,19 +131,19 @@ impl BrokerMetrics {
         self.replication_throttled_bytes_out_total.inc_by(bytes);
     }
 
-    /// Accounts replication bytes the follower-side KIP-73 throttle granted.
+    /// Accounts replication bytes the follower-side KIP-73 quota was charged.
     ///
     /// Kafka's `kafka.server:type=FollowerReplication,name=byte-rate`.
     pub fn record_replication_throttled_in(&self, bytes: u64) {
         self.replication_throttled_bytes_in_total.inc_by(bytes);
     }
 
-    /// Counts one replication fetch the KIP-73 throttle held back entirely,
-    /// because its bucket had nothing left to grant.
+    /// Counts one replication read the KIP-73 throttle held back because its
+    /// quota was exceeded: a follower read whose records the leader withheld,
+    /// or a follower partition that sat a fetch round out.
     ///
-    /// Kafka's throttle delays a fetch; krabka's drops the partition from the
-    /// round and retries, so there is no delay to observe and this is the
-    /// series that says the throttle refused rather than merely capped.
+    /// A replication fetch reports no `throttle_time_ms`, in Kafka or here, so
+    /// this is the series that says the throttle refused.
     pub fn record_replication_throttle_sleep(&self) {
         self.replication_throttle_sleeps_total.inc();
     }

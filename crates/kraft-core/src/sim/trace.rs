@@ -137,5 +137,6 @@ pub(super) fn event_label(event: &Event) -> String {
         Event::ReceiveFetch { .. } => "Fetch".to_string(),
         Event::ReceiveFetchSnapshot { .. } => "FetchSnapshot".to_string(),
         Event::ReceiveFetchResponse { .. } => "FetchResponse".to_string(),
+        Event::ReceiveLeaderlessEpoch { .. } => "LeaderlessEpoch".to_string(),
     }
 }

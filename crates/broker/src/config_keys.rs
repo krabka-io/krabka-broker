@@ -93,6 +93,8 @@ pub(crate) mod group;
 pub(crate) mod kafka_broker;
 #[cfg(test)]
 mod kafka_parity;
+pub(crate) mod listener_endpoints;
+pub(crate) mod listener_reconfig;
 mod log_config;
 mod lookup;
 mod message_size;
@@ -123,6 +125,7 @@ pub(crate) use self::{
     delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, resolve_delivery_max_delay},
     diskless::{DISKLESS, resolve_diskless, validate_diskless_unchanged},
     log_config::apply_to_log_config,
+    lookup::node_or_cluster_default,
     message_size::resolve_max_message_bytes,
     min_isr::{clear_elr_records, effective_min_insync_replicas, node_min_insync_replicas},
     recovery::{
@@ -131,7 +134,8 @@ pub(crate) use self::{
     },
     schema::resolve_schema_validation,
     topic_scope::{
-        WRITE_FREEZE, controller_managed_topic_config_message, is_controller_managed_topic_config,
+        AUDIT_PLACEMENT_EPOCH_PREFIX, WRITE_FREEZE, controller_managed_topic_config_message,
+        is_controller_managed_topic_config,
     },
     trunk_log::{
         RemoteCopyLag, log_max_decompressed_record, resolve_max_decompressed_record_bytes,

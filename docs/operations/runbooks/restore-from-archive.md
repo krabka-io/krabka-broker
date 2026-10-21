@@ -6,9 +6,12 @@ a point before it. No alert fires for this; a person decides it.
 
 ## What it means
 
-`krabka restore` reads the KIP-405 tiered-storage archive and writes a complete,
-bootable log directory out of it, up to a bound the operator names. The tool
-runs when the cluster does not, and it does not depend on the broker.
+`krabka-restore` reads the KIP-405 tiered-storage archive and writes a
+complete, bootable log directory out of it, up to a bound the operator names.
+The tool runs when the cluster does not, and it does not depend on the broker.
+The image and the [binary install](../deploy.md#install) supply it as
+`krabka-restore`. They do not supply the `krabka` dispatcher that turns
+`krabka restore` into `krabka-restore`, so run `krabka-restore` by name.
 
 Three things a restore needs are not in the archive: the RLMM snapshot, the
 controller's metadata checkpoint, and the committed offsets of every consumer
@@ -64,20 +67,46 @@ Answer four questions before writing anything.
 4. **Which topics?** `--topic` restores a subset. Absent, every topic in the
    archive is restored.
 
-Run the plan first. `--dry-run` runs discovery, verification and the bound, and
-writes no partition data:
+Run the plan first. `--dry-run` runs discovery, verification, the bound and the
+format checks, and writes nothing to `--log-dir`. Run it with the same
+`--log-dir` that the restore in step 2 uses. It refuses a directory that is not
+empty with exit `3`, as the restore does. Fetch the two snapshots first, as
+step 1 of [Fix](#fix) says, and give them to the dry run so that the plan also
+counts the metadata:
 
 ```sh
-krabka restore --dry-run --report json \
+krabka-restore --dry-run --report json \
   --archive-s3-bucket krabka-tier --archive-s3-region eu-west-1 \
   --archive-prefix prod/ \
+  --rlmm-snapshot ./rlmm-snapshot \
+  --metadata-snapshot ./cluster-metadata.checkpoint \
   --log-dir /var/lib/krabka-restored \
+  --cluster-id <the old cluster id> \
   --node-id 1 --standalone --controller-listener 127.0.0.1:9093 \
-  --to-timestamp 2026-08-24T09:15:00Z
+  --to-timestamp 2026-08-24T09:15:00Z > plan.json
 ```
+
+With `--report json`, stdout holds only the JSON report, so `jq` reads
+`plan.json` as it is. The format step and the log print on stderr. Give the
+dry run the same `--cluster-id` as the restore: without it, each run generates
+its own id, and the plan names one the restored cluster does not get.
 
 Read the counts. A partition missing from the plan, or a record count far from
 what the topic should hold, is a wrong `--archive-prefix` or a wrong bound.
+Read `metadata.topics_without_configuration` too. It names each restored topic
+that the metadata checkpoint does not hold, such as a topic created after the
+checkpoint, and the restore prints a warning about them
+([#1514](https://github.com/krabka-io/krabka-broker/issues/1514)). It cannot
+name a config change committed after the checkpoint to a topic the checkpoint
+does hold. `metadata.topic_configs` counts configuration records, not topics,
+so only zero is a clear signal: zero, while production has config overrides,
+means the checkpoint holds none of them. Step 3 checks each topic's
+configuration with `kafka-configs`. A current `krabka-backup` refuses
+the format-time checkpoint, which holds no topic, but a capture still misses a
+change committed after the checkpoint it took. No capture of that cluster
+carries the change then. Set it again with `kafka-configs` after
+step 3, from a record kept outside the cluster.
+[How often](../backup-restore.md#how-often) says how to avoid this.
 
 ## Fix
 
@@ -88,7 +117,7 @@ what the topic should hold, is a wrong `--archive-prefix` or a wrong bound.
 2. **Restore**, with both:
 
    ```sh
-   krabka restore \
+   krabka-restore \
      --archive-s3-bucket krabka-tier --archive-s3-region eu-west-1 \
      --archive-prefix prod/ \
      --rlmm-snapshot ./rlmm-snapshot \
@@ -109,26 +138,58 @@ what the topic should hold, is a wrong `--archive-prefix` or a wrong bound.
    could not be written, and a different target may work.
 
 3. **Boot a broker** on the restored directory. It is an ordinary krabka data
-   directory and needs no restore-specific configuration. Confirm that
+   directory and needs no restore-specific configuration. The ACLs and SCRAM
+   credentials come back from the metadata checkpoint, but the listeners, the
+   TLS files and the `[authorization]` table come from the new broker's own
+   configuration. Give it the same ones as production, or the restored ACLs
+   have no authorizer to enforce them. It is a single-node cluster, so also
+   start it with the internal-topic flags that
+   [Format the log directory](../deploy.md#format-the-log-directory) gives
+   for fewer than three brokers. Without them the broker cannot create
+   `__consumer_offsets`, and step 4 fails every time. Confirm that
    `kafka-topics --describe` lists the topics and that `kafka-configs
    --describe` shows the topic configuration the metadata checkpoint carried. If
    the configuration is missing, the restore ran without
-   `--metadata-snapshot`, and the report says so.
+   `--metadata-snapshot`, and the report says so. Or the checkpoint does not
+   hold the topic, and the report names it in `topics_without_configuration`
+   with a warning. Or the checkpoint predates a change to the configuration,
+   and the report does not say so: compare with a record kept outside the
+   cluster. Check
+   `remote.storage.enable` in particular: a topic restored without it does
+   not tier again.
 
 4. **Put the group offsets back, before any consumer starts.**
 
    ```sh
    krabka-backup restore-offsets --capture <id> \
      -b restored-broker:9092 \
-     --worm-key-id <id> --worm-public-key <path> \
-     --worm-expect-head <diskless-capture-head> \
      --archive-s3-bucket krabka-tier --archive-prefix prod/
    ```
 
+   On a secured restored cluster, add `--command-config <file>` with the backup
+   principal's client properties.
+   [Secured clusters](../backup-restore.md#secured-clusters) shows the file and
+   the ACLs that the principal needs.
+
+   Add the trust flags only when the capture holds a signed diskless boundary,
+   that is, when the backup ran `capture` with `--worm-signing-key-id`:
+
+   ```sh
+     --worm-key-id <id> --worm-public-key <path> \
+     --worm-expect-head <diskless-capture-head>
+   ```
+
+   With a signed capture the tool refuses to commit without all three. With a
+   capture that holds no diskless boundary, the tool refuses the flags: it
+   exits `5` and names the capture. The expected head must come from the
+   incident evidence, not from the archive being restored.
+
+   On a freshly booted broker the tool waits, for up to 60 seconds, while the
+   broker creates and loads `__consumer_offsets`. If it exits `6` saying that
+   the group coordinator did not become available, read the broker log for
+   `INVALID_REPLICATION_FACTOR`: the broker then needs the flags of step 3.
+
    Run it with `--dry-run` first to see the positions it will write. It commits
-   only after a signed capture authenticates their digest when the backup used
-   capture signing. The expected head must come from the incident evidence,
-   not from the archive being restored. It commits
    as a simple consumer, so the coordinator fences it on any group that already
    has live members. That is why this step comes before the consumers: a group
    that is running has to be stopped for its position to be set.
@@ -140,8 +201,9 @@ what the topic should hold, is a wrong `--archive-prefix` or a wrong bound.
    replica of everything. Add brokers and reassign partitions with
    `kafka-reassign-partitions` as a separate, planned piece of work.
 
-7. **Capture immediately.** The restored cluster has a new cluster id, possibly
-   a new node identity, and a fresh metadata log. Run `krabka-backup capture`
+7. **Capture immediately.** The restored cluster has a fresh metadata log and
+   possibly a new node identity. It also has a new cluster id, unless step 2
+   passed `--cluster-id`. Run `krabka-backup capture`
    against it as soon as it serves traffic, so the next incident is not restored
    from the dead cluster's inputs.
 

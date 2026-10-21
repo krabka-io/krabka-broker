@@ -38,32 +38,33 @@ assert2 = { workspace = true }
 bon = { workspace = true }
 maplit = { workspace = true }
 krabka-audit = { workspace = true }
-krabka-protocol = { version = "0.6.0", default-features = false }
-krabka-telemetry = { version = "1.0.5", path = "../telemetry" }
-krabka-records-legacy = { version = "1.0.5", path = "../records-legacy" }
-krabka-log = { version = "1.0.5", path = "../log" }
-krabka-ids = { version = "0.6.0" }
-krabka-compression = { version = "0.6.0", default-features = false }
-krabka-raft = { version = "1.0.5", path = "../raft" }
-krabka-kraft-core = { version = "1.0.5", path = "../kraft-core" }
-krabka-verified = { version = "1.0.5", path = "../verified" }
+krabka-protocol = { version = "0.7.0", default-features = false }
+krabka-telemetry = { version = "1.0.8", path = "../telemetry" }
+krabka-records-legacy = { version = "1.0.8", path = "../records-legacy" }
+krabka-log = { version = "1.0.8", path = "../log" }
+krabka-ids = { version = "0.7.0" }
+krabka-compression = { version = "0.7.0", default-features = false }
+krabka-raft = { version = "1.0.8", path = "../raft" }
+krabka-kraft-core = { version = "1.0.8", path = "../kraft-core" }
+krabka-verified = { version = "1.0.8", path = "../verified" }
+krabka-java-regex = { version = "1.0.8", path = "../java-regex" }
 # `#[derive(RegisterMetrics)]`: `BrokerMetrics` names, helps and constructs each
 # metric once, on its field.
-krabka-macros = { version = "1.0.5", path = "../macros" }
+krabka-macros = { version = "1.0.8", path = "../macros" }
 # Kafka's `meta.properties` is read and written with the formatter's own
 # `MetaProperties`, so the file has one parser and one writer. Tests such as `bootstrap_consumption`,
 # `cli_smoke` and `format_features` also call `krabka_format::run_from_args` to
 # format a log directory before they boot a broker: a subprocess would need a
 # Cargo working tree, which a Bazel test sandbox does not have.
-krabka-format = { version = "1.0.5", path = "../format" }
-krabka-voters = { version = "0.6.0" }
-krabka-metadata = { version = "0.6.0" }
-krabka-authz = { version = "1.0.5", path = "../authz" }
-krabka-remote-storage = { version = "1.0.5", path = "../remote-storage" }
-krabka-remote-storage-topic = { version = "1.0.5", path = "../remote-storage-topic" }
-krabka-object-store = { version = "1.0.5", path = "../object-store" }
-krabka-client-core = { version = "0.6.0" }
-krabka-throttle = { version = "1.0.5", path = "../throttle" }
+krabka-format = { version = "1.0.8", path = "../format" }
+krabka-voters = { version = "0.7.0" }
+krabka-metadata = { version = "0.7.0" }
+krabka-authz = { version = "1.0.8", path = "../authz" }
+krabka-remote-storage = { version = "1.0.8", path = "../remote-storage" }
+krabka-remote-storage-topic = { version = "1.0.8", path = "../remote-storage-topic" }
+krabka-object-store = { version = "1.0.8", path = "../object-store" }
+krabka-client-core = { version = "0.7.1" }
+krabka-throttle = { version = "1.0.8", path = "../throttle" }
 krabka-units = { workspace = true }
 krabka-security.workspace = true
 qubit-clock = { workspace = true }
@@ -82,7 +83,6 @@ tokio-metrics = { workspace = true }
 toml = { workspace = true }
 dashmap = { workspace = true }
 derive_more = { workspace = true }
-fancy-regex = { workspace = true }
 regex = { workspace = true }
 refined_type = { workspace = true }
 tracing = { workspace = true }
@@ -121,6 +121,10 @@ crc32c = { workspace = true }
 # KIP-714: decode OTLP MetricsData protobuf payloads in PushTelemetry handler.
 prost = { workspace = true }
 hex = { workspace = true }
+# A KIP-227 fetch session keeps its partitions in order, as Kafka's
+# `ImplicitLinkedHashCollection` does: the leader reads them in that order and
+# moves a partition that returned records to the end.
+indexmap = { workspace = true }
 # The host name a controller bound to a wildcard address advertises.
 # SHA-256 fingerprint of the configured break-glass approver set
 # (`operator_keys::approver_set_fingerprint`), recorded on every break-glass
@@ -140,7 +144,7 @@ exponential-backoff = "2.1.1"
 hostname = { workspace = true }
 # KFC-7 broker-side schema validation: the Confluent wire framing, the
 # registry REST client, and the untyped body validators.
-krabka-schema-serde = { version = "0.4.1", features = ["avro", "protobuf", "json"] }
+krabka-schema-serde = { version = "0.4.3", features = ["avro", "protobuf", "json"] }
 apache-avro = { workspace = true }
 jsonschema = { workspace = true }
 # Fetch the OAUTHBEARER JWKS over HTTP(S). The `rustls` feature reuses the
@@ -193,7 +197,7 @@ krabka-broker = { path = ".", features = ["test-helpers"] }
 # `krabka-docgen` renders (see docs/docgen-contract.md). No production path
 # enables the feature, so it is turned on here to keep the trace shape under
 # test. Bazel reads the feature off the same table.
-krabka-raft = { version = "1.0.5", path = "../raft", features = ["scenarios"] }
+krabka-raft = { version = "1.0.8", path = "../raft", features = ["scenarios"] }
 # `jvm_acceptance_tiered`'s restore case rebuilds a log directory from the
 # MinIO bucket this crate's own tiered-storage path filled, then boots a broker
 # on it and points the JVM console consumer at that. Called in process for the
@@ -201,24 +205,31 @@ krabka-raft = { version = "1.0.5", path = "../raft", features = ["scenarios"] }
 # `krabka-restore` boots a broker to read its output back -- which Cargo and
 # `//bazel:defs.bzl` both allow, because a library and its test binaries are
 # separate compilations and neither library depends on the other.
-krabka-restore = { version = "1.0.5", path = "../restore" }
+krabka-restore = { version = "1.0.8", path = "../restore" }
 # Drives the relocated `client_admin_*` suites, which boot an in-process
 # broker to exercise the admin client end to end.
-krabka-client-admin = { version = "0.6.0" }
-krabka-client-consumer = { version = "0.6.0" }
-krabka-client-producer = { version = "0.6.0" }
+krabka-client-admin = { version = "0.7.1" }
+krabka-client-consumer = { version = "0.7.1" }
+krabka-client-producer = { version = "0.7.1" }
 # Host-side raw `Client::send(DescribeGroupsRequest)` against the
 # real-Kafka Docker capture (`describe_groups_jvm.rs`).
-krabka-client-core = { version = "0.6.0", features = ["mock"] }
-krabka-ids = { version = "0.6.0" }
-krabka-records-legacy = { version = "1.0.5", path = "../records-legacy" }
-krabka-protocol = { version = "0.6.0", default-features = false }
+krabka-client-core = { version = "0.7.1", features = ["mock"] }
+krabka-ids = { version = "0.7.0" }
+krabka-records-legacy = { version = "1.0.8", path = "../records-legacy" }
+krabka-protocol = { version = "0.7.0", default-features = false }
 # Serialize the captured real-Kafka DescribeGroups fixture as JSON.
 serde_json = { workspace = true }
 bytes = { workspace = true }
 rustls.workspace = true
 rustls-pki-types.workspace = true
 tempfile = { workspace = true }
+# `soak_contract` executes a sustained-load contract and grades what it
+# recorded with the judge in this crate: the contract, its fault schedule, the
+# evidence types and the verdict. Not on crates.io, so no `version`.
+krabka-bench-driver = { path = "../bench-driver" }
+# The steady and disturbed latency histograms `soak_contract` keeps per path,
+# built with the bounds `krabka_bench_driver::hist` sets.
+hdrhistogram = { version = "7.6", default-features = false }
 # `process`: `diskless_jepsen` runs the JVM console consumer under a deadline,
 # and `tokio::process` is what gives the wait one. A blocking
 # `std::process::Command::output` has no deadline, so a stalled image pull would

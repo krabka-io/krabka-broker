@@ -15,7 +15,7 @@ use {
         features::share_groups_enabled,
         handlers::{
             ApiVersion, ErrorResponse as _, RequestContext,
-            acl_gates::{group_protocol_refusal, subscribed_names_refusal},
+            acl_gates::{group_protocol_refusal, subscribed_names_response},
             group_coordinator_error, group_coordinator_error_response,
             share_fetch::member_id_is_valid,
         },
@@ -68,19 +68,15 @@ pub(crate) async fn handle(
         return Ok(reply(codes::INVALID_REQUEST, None));
     }
 
-    // `Describe` on every distinct name in `subscribed_topic_names`
-    // (Kafka's `filterByAuthorized(request.context, DESCRIBE, TOPIC,
-    // subscribedTopicSet)`). Any denial fails the WHOLE heartbeat with
-    // `TOPIC_AUTHORIZATION_FAILED` (29); the group is never touched, so an
-    // unauthorized caller cannot learn a denied topic's id or partitions
-    // by being admitted as a member. This runs before
-    // `group_coordinator_error` -- Kafka authorizes the request before it
-    // ever reaches coordinator routing, so an unauthorized subscription
-    // must not be masked by `NOT_COORDINATOR` / `COORDINATOR_NOT_AVAILABLE`.
-    if let Some(error_code) =
-        subscribed_names_refusal(broker, &image, ctx, req.subscribed_topic_names.as_deref())
-    {
-        return Ok(reply(error_code, None));
+    // Refuse unauthorized subscriptions before coordinator routing.
+    if let Some(response) = subscribed_names_response(
+        broker,
+        &image,
+        ctx,
+        req.subscribed_topic_names.as_deref(),
+        |code| reply(code, None),
+    ) {
+        return Ok(response);
     }
 
     // Kafka's `GroupCoordinatorService.throwIfShareGroupHeartbeatRequestIsInvalid`
@@ -418,11 +414,11 @@ mod tests {
     #[tokio::test]
     async fn handle_refuses_malformed_heartbeats_as_kafka_does() {
         let version = VERSION;
-        krabka_macros::broker_test_setup! {
-            bind(broker_handle, _dir, broker, ctx);
-            boot [start_broker] allow_all;
-            user ["ANONYMOUS"];
-        };
+        allow_all_broker_setup!(
+            (broker_handle, _dir, broker, ctx),
+            start_broker,
+            "ANONYMOUS"
+        );
         let valid = heartbeat_request()
             .group_id("g".into())
             .member_id("member-1".into())

@@ -30,9 +30,9 @@
 //! self-shutdown, and `krabka-broker` exits non-zero with the refusal, so the
 //! process never runs on without its controller.
 //!
-//! The engine applies a record and publishes the resulting image, so the guard
-//! reads the finalized levels of a published image: the one the engine
-//! recovered at start-up, and each one it publishes afterwards. The image keeps
+//! At startup the guard reads the fully recovered image before the engine
+//! starts or repairs a downgrade checkpoint. At runtime it reads each image
+//! the engine publishes. The image keeps
 //! the last level of each feature, so a record that a later record superseded
 //! is not named. Kafka would name it, and refuses the same logs.
 

@@ -26,10 +26,10 @@ final class BrokerPerformanceWorkload {
     }
 
     public static void main(String[] args) throws Exception {
-        if (args.length < 7 || args.length > 9) {
+        if (args.length < 7 || args.length > 11) {
             throw new IllegalArgumentException(
                     "bootstrap topic group records bytes records_per_second timeout_seconds"
-                            + " [compression] [zeros|random]");
+                            + " [compression] [zeros|random] [idle_seconds] [warmup_records]");
         }
         String bootstrap = args[0];
         String topic = args[1];
@@ -43,6 +43,16 @@ final class BrokerPerformanceWorkload {
         }
         String compression = args.length > 7 ? args[7] : "lz4";
         String payload = args.length > 8 ? args[8] : "zeros";
+        long idleSeconds = args.length > 9 ? Long.parseLong(args[9]) : 0;
+        if (idleSeconds < 0) {
+            throw new IllegalArgumentException("idle_seconds must not be negative");
+        }
+        // Records below this sequence are produced and consumed but left out of
+        // the latency percentiles, so JIT warm-up does not set the tail.
+        int warmup = args.length > 10 ? Integer.parseInt(args[10]) : 0;
+        if (warmup < 0 || warmup >= expected) {
+            throw new IllegalArgumentException("warmup_records must be in [0, records)");
+        }
         if (!payload.equals("zeros") && !payload.equals("random")) {
             throw new IllegalArgumentException("payload must be zeros or random");
         }
@@ -65,7 +75,8 @@ final class BrokerPerformanceWorkload {
         producerProperties.put(ProducerConfig.LINGER_MS_CONFIG, "5");
         producerProperties.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, "120000");
 
-        long[] latencies = new long[expected];
+        long[] latencies = new long[expected - warmup];
+        int measured = 0;
         BitSet seen = new BitSet(expected);
         AtomicInteger errors = new AtomicInteger();
         AtomicInteger sent = new AtomicInteger();
@@ -76,6 +87,18 @@ final class BrokerPerformanceWorkload {
             consumer.subscribe(Collections.singleton(topic));
             while (consumer.assignment().isEmpty()) {
                 consumer.poll(Duration.ofMillis(100));
+            }
+            // Idle-to-burst: the consumer long-polls the empty topic before the
+            // first record is sent. The topic is fresh, so anything polled here
+            // is a harness fault.
+            if (idleSeconds > 0) {
+                long idleUntil = System.nanoTime() + Duration.ofSeconds(idleSeconds).toNanos();
+                while (System.nanoTime() < idleUntil) {
+                    int polled = consumer.poll(Duration.ofMillis(250)).count();
+                    if (polled != 0) {
+                        throw new IllegalStateException(polled + " records arrived while idle");
+                    }
+                }
             }
             long started = System.nanoTime();
             CompletableFuture<Void> producing = CompletableFuture.runAsync(() -> {
@@ -123,7 +146,10 @@ final class BrokerPerformanceWorkload {
                         duplicates++;
                     } else {
                         seen.set(index);
-                        latencies[consumed++] = System.nanoTime() - sentAt;
+                        consumed++;
+                        if (index >= warmup) {
+                            latencies[measured++] = System.nanoTime() - sentAt;
+                        }
                     }
                 }
             }
@@ -138,11 +164,13 @@ final class BrokerPerformanceWorkload {
                     "{\"sent\":%d,\"consumed\":%d,\"duplicates\":%d,\"errors\":%d,"
                             + "\"seconds\":%.6f,\"records_per_second\":%.3f,"
                             + "\"mib_per_second\":%.3f,\"latency_ms_p50\":%.3f,"
-                            + "\"latency_ms_p95\":%.3f,\"latency_ms_p99\":%.3f}%n",
+                            + "\"latency_ms_p95\":%.3f,\"latency_ms_p99\":%.3f,"
+                            + "\"latency_ms_p999\":%.3f,\"latency_ms_max\":%.3f}%n",
                     sent.get(), consumed, duplicates, errors.get(), elapsed / 1e9,
                     expected / (elapsed / 1e9), expected * (double) bytes / elapsed * 1e9 / 1048576,
                     percentile(latencies, 0.50) / 1e6, percentile(latencies, 0.95) / 1e6,
-                    percentile(latencies, 0.99) / 1e6);
+                    percentile(latencies, 0.99) / 1e6, percentile(latencies, 0.999) / 1e6,
+                    latencies[latencies.length - 1] / 1e6);
         }
     }
 }

@@ -6,6 +6,7 @@ use {
     super::{
         ReplicatorSupervisor, TopicPartition,
         materialize::{MaterializePartitionConfig, materialize_partition_with_replication_target},
+        topic_log_config,
     },
     crate::{
         config_keys::resolve_diskless,
@@ -48,10 +49,14 @@ impl ReplicatorSupervisor {
             let topic_id = image.topic(&key.0).map(|topic| topic.topic_id);
             let promoting_diskless = part.diskless
                 && part_record.leader == self.node_id
-                && part
+                && (part
                     .current_leader
                     .load(std::sync::atomic::Ordering::Acquire)
-                    != self.node_id.0;
+                    != self.node_id.0
+                    || part
+                        .current_leader_epoch
+                        .load(std::sync::atomic::Ordering::Acquire)
+                        != part_record.leader_epoch.0);
             if promoting_diskless {
                 let Some(topic_id) = topic_id else {
                     warn!(
@@ -87,6 +92,12 @@ impl ReplicatorSupervisor {
                                     log.log_end_offset(),
                                 );
                             }
+                            // ISR re-admission needs this epoch's start, after hydration.
+                            let log_end = log.log_end_offset();
+                            log.assign_epoch_start_offset(
+                                krabka_ids::LeaderEpoch(part_record.leader_epoch.0),
+                                log_end,
+                            )?;
                             Ok(log.recovered_producers())
                         },
                         |snapshot| {
@@ -99,6 +110,7 @@ impl ReplicatorSupervisor {
                     )
                     .await;
                 if let Err(error) = result {
+                    flag_storage_failure(&error, &part.log_dir, &self.log_dir_status);
                     warn!(
                         topic = %key.0,
                         partition = key.1,
@@ -172,6 +184,13 @@ impl ReplicatorSupervisor {
         topic: &str,
         partition: i32,
     ) -> Result<(), String> {
+        let log_config = topic_log_config(
+            image,
+            &self.log_config,
+            self.node_id,
+            topic,
+            self.unstable_api_versions,
+        );
         let diskless = resolve_diskless(image.topic_config(topic));
         let topic_id = image.topic(topic).map(|topic| topic.topic_id);
         let initial_target = if diskless {
@@ -192,7 +211,7 @@ impl ReplicatorSupervisor {
                 topic_id,
                 partition,
                 log_dirs: &self.log_dirs,
-                log_config: &self.log_config,
+                log_config: &log_config,
                 log_dir_status: &self.log_dir_status,
                 producer_state: &self.producer_state,
                 runtime: PartitionRuntimeConfig::new(
@@ -262,31 +281,47 @@ mod tests {
     /// no-op) on a reconcile that changes nothing.
     #[tokio::test]
     async fn reconcile_records_a_promoted_leader_epoch_at_the_log_end() {
-        let (as_follower, as_leader) = follower_promotion_images();
-        let ((supervisor, _partitions, _reporter, _dir), part) =
-            reconciled_partition(&as_follower, "local follower materialized").await;
-        for _ in 0..2 {
-            let mut batch = krabka_protocol::records::RecordBatch {
-                partition_leader_epoch: 3,
-                records: vec![krabka_protocol::records::Record::default()],
-                ..Default::default()
-            };
-            part.log.lock().unwrap().append(&mut batch).unwrap();
-        }
-        let history = || part.epoch_history();
-        assert!(
-            history() == [(3, 0)],
-            "a follower records only what it wrote"
-        );
-
-        for pass in ["promotion", "unchanged reconcile"] {
-            supervisor.reconcile(&as_leader).await;
-            assert!(history() == [(3, 0), (7, 2)], "{pass}");
-            assert!(part.current_leader.load(Ordering::Acquire) == 2, "{pass}");
+        for diskless in [false, true] {
+            let (mut as_follower, mut as_leader) = follower_promotion_images();
+            if diskless {
+                let config = MetadataRecord::V1TopicConfig(krabka_metadata::TopicConfigRecord {
+                    topic: "t".into(),
+                    overrides: [("krabka.diskless".into(), "true".into())].into(),
+                });
+                as_follower.apply(&config);
+                as_leader.apply(&config);
+            }
+            let ((supervisor, _partitions, _reporter, _dir), part) =
+                reconciled_partition(&as_follower, "local follower materialized").await;
+            for _ in 0..2 {
+                let mut batch = krabka_protocol::records::RecordBatch {
+                    partition_leader_epoch: 3,
+                    records: vec![krabka_protocol::records::Record::default()],
+                    ..Default::default()
+                };
+                part.log.lock().unwrap().append(&mut batch).unwrap();
+            }
+            let history = || part.epoch_history();
             assert!(
-                part.current_leader_epoch.load(Ordering::Acquire) == 7,
-                "{pass}"
+                history() == [(3, 0)],
+                "a follower records only what it wrote"
             );
+
+            for pass in ["promotion", "unchanged reconcile"] {
+                supervisor.reconcile(&as_leader).await;
+                assert!(history() == [(3, 0), (7, 2)], "{pass}");
+                assert!(part.current_leader.load(Ordering::Acquire) == 2, "{pass}");
+                assert!(
+                    part.current_leader_epoch.load(Ordering::Acquire) == 7,
+                    "{pass}"
+                );
+            }
+            let mut record = as_leader.partition("t", 0).unwrap().clone();
+            record.leader_epoch.0 = 8;
+            record.partition_epoch += 1;
+            as_leader.apply(&MetadataRecord::V1Partition(record));
+            supervisor.reconcile(&as_leader).await;
+            assert!(history() == [(3, 0), (8, 2)]);
         }
     }
 
@@ -373,6 +408,45 @@ mod tests {
             .unwrap();
 
         assert!(partitions.contains("t", PartitionIndex(0)));
+    }
+
+    #[tokio::test]
+    async fn materialization_installs_config_before_registry_visibility() {
+        use {
+            krabka_metadata::{BrokerConfigRecord, TopicConfigRecord},
+            krabka_units::{bytes, minutes},
+            std::collections::BTreeMap,
+        };
+
+        for leader in [NodeId(1), NodeId(2)] {
+            let mut image = three_replica_image(leader, krabka_metadata::LeaderEpoch(7));
+            image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+                node_id: NodeId(2),
+                config_name: "log.retention.ms".into(),
+                config_value: Some("120000".into()),
+            }));
+            image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+                topic: "t".into(),
+                overrides: BTreeMap::from([
+                    ("segment.bytes".into(), "1048576".into()),
+                    ("max.message.bytes".into(), "2097152".into()),
+                ]),
+            }));
+            let (supervisor, partitions, _reporter, _dir) = supervisor_fixture(image.clone());
+
+            // Inspect before any reconcile can repair the initial defaults.
+            supervisor
+                .materialize_local_partition(&image, "t", 0)
+                .expect("materialize");
+
+            let partition = partitions
+                .get("t", PartitionIndex(0))
+                .expect("visible partition");
+            let config = partition.log.lock().expect("log lock").config_snapshot();
+            assert!(config.segment_size == bytes(1_048_576));
+            assert!(config.max_message_size == bytes(2_097_152));
+            assert!(config.retention == Some(minutes(2)));
+        }
     }
 
     #[tokio::test]

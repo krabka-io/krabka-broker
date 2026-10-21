@@ -33,6 +33,15 @@ impl InmemoryRemoteLogMetadataManager {
     #[must_use]
     pub fn new() -> Self { Self::default() }
 
+    fn list_segments(
+        &self,
+        topic_id_partition: &TopicIdPartition,
+        query: impl FnOnce(&RemoteLogMetadataCache) -> Vec<RemoteLogSegmentMetadata>,
+    ) -> Vec<RemoteLogSegmentMetadata> {
+        let guard = self.partitions.lock().expect("metadata mutex poisoned");
+        guard.get(topic_id_partition).map_or_default(query)
+    }
+
     /// Dumps every partition's segment and partition-delete metadata for a
     /// snapshot. The result is order-independent. [`Self::import`] re-derives
     /// the order and the epoch index.
@@ -135,10 +144,7 @@ impl RemoteLogMetadataManager for InmemoryRemoteLogMetadataManager {
         &self,
         topic_id_partition: &TopicIdPartition,
     ) -> Result<Vec<RemoteLogSegmentMetadata>, RemoteStorageError> {
-        let guard = self.partitions.lock().expect("metadata mutex poisoned");
-        Ok(guard
-            .get(topic_id_partition)
-            .map_or_default(RemoteLogMetadataCache::list))
+        Ok(self.list_segments(topic_id_partition, RemoteLogMetadataCache::list))
     }
 
     fn list_remote_log_segments_by_epoch(
@@ -146,10 +152,7 @@ impl RemoteLogMetadataManager for InmemoryRemoteLogMetadataManager {
         topic_id_partition: &TopicIdPartition,
         leader_epoch: LeaderEpoch,
     ) -> Result<Vec<RemoteLogSegmentMetadata>, RemoteStorageError> {
-        let guard = self.partitions.lock().expect("metadata mutex poisoned");
-        Ok(guard
-            .get(topic_id_partition)
-            .map_or_default(|c| c.list_by_epoch(leader_epoch)))
+        Ok(self.list_segments(topic_id_partition, |c| c.list_by_epoch(leader_epoch)))
     }
 
     fn put_remote_partition_delete_metadata(
@@ -170,6 +173,14 @@ impl RemoteLogMetadataManager for InmemoryRemoteLogMetadataManager {
         }
         cache.set_delete_state(metadata.state);
         Ok(())
+    }
+
+    // The cache is the store, so every committed event is already applied.
+    fn caught_up(
+        &self,
+        _topic_id_partition: &TopicIdPartition,
+    ) -> Result<bool, RemoteStorageError> {
+        Ok(true)
     }
 }
 
@@ -204,6 +215,15 @@ mod tests {
         let m = manager_with_finished_segment();
 
         check_finished_segment(&m, &tp());
+    }
+
+    #[test]
+    fn caught_up_is_always_true() {
+        assert!(
+            InmemoryRemoteLogMetadataManager::new()
+                .caught_up(&tp())
+                .unwrap()
+        );
     }
 
     #[test]

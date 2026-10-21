@@ -29,14 +29,25 @@ IMAGES = {
     "cp_kafka_7_8_8": "mirror.gcr.io/confluentinc/cp-kafka:7.8.8",
     "fake_gcs_server": "mirror.gcr.io/fsouza/fake-gcs-server:1.56.1",
     "kcat_1_7_1": "mirror.gcr.io/edenhill/kcat:1.7.1",
+    # soak_contract's `KRABKA_LIFECYCLE_SOURCE_IMAGE`, in //crates/broker.
+    "krabka_broker_1_0_5": "ghcr.io/krabka-io/krabka-broker:v1.0.5",
+    "prometheus_3_5_0": "mirror.gcr.io/prom/prometheus:v3.5.0",
 }
 
+# `no-remote-exec`: a load is a registry fetch and a tar, nothing a remote
+# executor does better than the runner. Run remotely, it also needs the
+# executor to pull its own `ubuntu:22.04` from Docker Hub first, and when that
+# pull fails the suite fails to build before a test starts. The tag still reads
+# the remote cache, so a load that is already cached does not run at all.
 [
     image_load(
         name = name,
         image = "@" + name,
         tag = tag,
-        tags = ["docker"],
+        tags = [
+            "docker",
+            "no-remote-exec",
+        ],
     )
     for name, tag in IMAGES.items()
 ]

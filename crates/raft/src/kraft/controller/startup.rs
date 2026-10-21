@@ -9,7 +9,11 @@ use {
         activation::{Activation, check_bootstrap_records},
         checkpoint::{BOOTSTRAP_SNAPSHOT_ID, latest_checkpoint_id, load_latest_checkpoint},
         quorum_state_file::load_quorum_state,
-        recovery::{control_state_at, replay_committed_with_timestamp, replay_control_records},
+        records::features_epoch_after_snapshot,
+        recovery::{
+            CommittedReplay, control_state_at, replay_committed_with_timestamp,
+            replay_control_records,
+        },
         timing::initial_election_at,
     },
     crate::{
@@ -18,11 +22,12 @@ use {
             MetadataRaftFetchMax,
         },
         error::RaftError,
+        event_queue::{EventQueueMeter, EventQueueRecorder},
         kraft::{
-            core::QuorumStateMachine,
+            core::{QuorumStateMachine, QuorumTimeouts},
             log::KraftLog,
             snapshot_fetch::MetadataSnapshotFetchMax,
-            transport::PeerSender,
+            transport::{CommandSender, PeerSender},
             types::{NodeId, QuorumState},
         },
         snapshot::SnapshotReader,
@@ -48,6 +53,9 @@ struct RecoveredMetadata {
     last_snapshot_timestamp_ms: i64,
     last_applied_record_timestamp_ms: i64,
     downgrade_snapshot_pending: Option<PendingDowngradeSnapshot>,
+    /// The finalized-features epoch of `image`, or `-1` before any features
+    /// delta.
+    features_epoch: i64,
 }
 
 impl KraftController {
@@ -75,6 +83,7 @@ impl KraftController {
             last_snapshot_timestamp_ms: 0,
             last_applied_record_timestamp_ms: 0,
             downgrade_snapshot_pending: None,
+            features_epoch: -1,
         })
         .expect("fresh controller cannot have a pending downgrade checkpoint")
     }
@@ -94,13 +103,14 @@ impl KraftController {
             last_snapshot_timestamp_ms,
             last_applied_record_timestamp_ms,
             downgrade_snapshot_pending,
+            features_epoch,
         } = recovered;
         let KraftConfig {
             me,
             cluster_id: _,
             directory_id,
             mut initial_state,
-            election_timeout,
+            timeouts,
             heartbeat_interval,
             controller_fetch_miss_limit,
             metadata_raft_command_queue_capacity,
@@ -112,6 +122,7 @@ impl KraftController {
             metadata_snapshot_fetch_max,
             metadata_log,
             activation,
+            event_queue_recorder,
         } = config;
 
         // Every record in a cleanly reopened log is committed. Recover the
@@ -120,7 +131,7 @@ impl KraftController {
         replay_control_records(&log, &mut initial_state, metadata_raft_fetch_max)?;
         let controls =
             KraftControlState::new(initial_state.voters.clone(), initial_state.kraft_version);
-        let core = QuorumStateMachine::new(me, initial_state, election_timeout);
+        let core = QuorumStateMachine::new(me, initial_state, timeouts);
         let initial_leader = core.quorum_state().leader_id;
         let initial_was_leader = core.role().is_leader();
         let initial_epoch = core.quorum_state().leader_epoch;
@@ -142,6 +153,7 @@ impl KraftController {
         }));
 
         let (image_tx, image_rx) = watch::channel(Arc::new(image.clone()));
+        let (features_epoch_tx, features_epoch_rx) = watch::channel(features_epoch);
         let (leader_tx, leader_rx) = watch::channel(initial_leader);
         // Captured before the log moves into `Engine`; it seeds both the first
         // published snapshot and the engine's `leader_reported_hwm`, which a
@@ -155,7 +167,7 @@ impl KraftController {
         );
         let (quorum_tx, quorum_rx) = watch::channel(initial_snapshot);
         let (fault_tx, fault_rx) = watch::channel(None);
-        let (cmd_tx, cmd_rx) = mpsc::channel(metadata_raft_command_queue_capacity.get());
+        let (cmd_tx, cmd_rx) = CommandSender::channel(metadata_raft_command_queue_capacity.get());
 
         let clock_base = Instant::now();
         // A fresh voter arms its election timer so a bootstrap cluster elects
@@ -166,7 +178,7 @@ impl KraftController {
             clock_base,
             me,
             initial_epoch,
-            election_timeout,
+            timeouts.election,
         );
 
         let engine_peers = Arc::clone(&peers);
@@ -177,13 +189,17 @@ impl KraftController {
             image,
             peers,
             image_tx,
+            features_epoch,
+            features_epoch_tx,
             leader_tx,
             quorum_tx,
             cmd_tx: cmd_tx.clone(),
+            event_queue: EventQueueMeter::new(event_queue_recorder),
+            turn: None,
             fault_tx,
             data_dir,
             clock_base,
-            election_timeout,
+            timeouts,
             heartbeat_interval,
             controller_fetch_miss_limit,
             metadata_raft_fetch_max,
@@ -240,11 +256,13 @@ impl KraftController {
         Ok(Self {
             cmd_tx,
             image_rx,
+            features_epoch_rx,
             fault_rx,
             leader_rx,
             quorum_rx,
             peers: engine_peers,
             me,
+            registration_admission: Arc::default(),
         })
     }
 
@@ -262,11 +280,13 @@ impl KraftController {
     /// `QuorumController.handleLoadBootstrap` keeps them for its activation.
     ///
     /// # Errors
-    /// Returns [`RaftError`] if the log/checkpoint cannot be opened or read.
+    /// Returns [`RaftError`] if the log/checkpoint cannot be opened or read, or
+    /// `validate_image` refuses the recovered metadata before checkpoint repair
+    /// or an engine task can start.
     #[tracing::instrument(
         level = "info",
         skip_all,
-        fields(node = me.0, %cluster_id, election_timeout = %election_timeout.human()),
+        fields(node = me.0, %cluster_id, election_timeout = %timeouts.election.human(), fetch_timeout = %timeouts.fetch.human()),
         err
     )]
     #[allow(
@@ -279,7 +299,7 @@ impl KraftController {
         cluster_id: Uuid,
         directory_id: Uuid,
         bootstrap_voters: krabka_metadata::voters::VoterSet,
-        election_timeout: Time,
+        timeouts: QuorumTimeouts,
         heartbeat_interval: Option<Time>,
         controller_fetch_miss_limit: ControllerFetchMissLimit,
         metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity,
@@ -291,6 +311,8 @@ impl KraftController {
         metadata_snapshot_fetch_max: MetadataSnapshotFetchMax,
         metadata_log: MetadataLogConfig,
         mut activation: Activation,
+        event_queue_recorder: Arc<dyn EventQueueRecorder>,
+        validate_image: impl FnOnce(&MetadataImage) -> Result<(), RaftError>,
     ) -> Result<Self, RaftError> {
         std::fs::create_dir_all(&data_dir).map_err(krabka_log::LogError::Io)?;
         let log = KraftLog::open(&data_dir, &metadata_log)?;
@@ -302,6 +324,7 @@ impl KraftController {
         let mut snapshot_control = None;
         let mut last_snapshot_end_offset = Offset(0);
         let mut last_snapshot_timestamp_ms = 0;
+        let mut features_epoch = -1;
         let mut bootstrap_source = "the controller configuration";
         if let Some(bytes) = load_latest_checkpoint(&data_dir)? {
             let contents = SnapshotReader::read(&bytes)?;
@@ -325,6 +348,13 @@ impl KraftController {
                 }
             } else {
                 image = MetadataImage::from_records(cluster_id, &contents.metadata_records);
+                if let Some((end_offset, _)) = latest_checkpoint_id(&data_dir) {
+                    features_epoch = features_epoch_after_snapshot(
+                        &contents.metadata_records,
+                        end_offset,
+                        features_epoch,
+                    );
+                }
             }
             if let Some(control) = contents.control_state {
                 image.apply(&MetadataRecord::V1KRaftVersion(
@@ -346,15 +376,23 @@ impl KraftController {
             // rename but before prefix pruning.
         }
         check_bootstrap_records(&activation.bootstrap_records, bootstrap_source)?;
-        let (mut downgrade_snapshot_pending, replayed_timestamp_ms) =
-            replay_committed_with_timestamp(
-                &log,
-                &mut image,
-                log.log_start_offset(),
-                metadata_raft_fetch_max,
-            )?;
+        let CommittedReplay {
+            pending: mut downgrade_snapshot_pending,
+            last_applied_timestamp_ms: replayed_timestamp_ms,
+            features_epoch: replayed_features_epoch,
+        } = replay_committed_with_timestamp(
+            &log,
+            &mut image,
+            log.log_start_offset(),
+            metadata_raft_fetch_max,
+        )?;
         let last_applied_record_timestamp_ms =
             replayed_timestamp_ms.unwrap_or(last_snapshot_timestamp_ms);
+        // The replay starts at the log start, which can sit below a checkpoint
+        // whose prefix is not yet cleaned. A feature batch met there is older
+        // than the checkpoint's epoch and must not move it back.
+        let features_epoch =
+            replayed_features_epoch.map_or(features_epoch, |replayed| replayed.max(features_epoch));
 
         let mut boundary_state = QuorumState::bootstrap(cluster_id, bootstrap_voters.clone());
         if let Some(control) = &snapshot_control {
@@ -396,13 +434,15 @@ impl KraftController {
             voters: initial_state.voters.clone(),
         }));
 
+        validate_image(&image)?;
+
         Self::spawn_with_image(
             KraftConfig {
                 me,
                 cluster_id,
                 directory_id,
                 initial_state,
-                election_timeout,
+                timeouts,
                 heartbeat_interval,
                 controller_fetch_miss_limit,
                 metadata_raft_command_queue_capacity,
@@ -414,6 +454,7 @@ impl KraftController {
                 metadata_snapshot_fetch_max,
                 metadata_log,
                 activation,
+                event_queue_recorder,
             },
             log,
             data_dir,
@@ -423,6 +464,7 @@ impl KraftController {
                 last_snapshot_timestamp_ms,
                 last_applied_record_timestamp_ms,
                 downgrade_snapshot_pending,
+                features_epoch,
             },
         )
     }

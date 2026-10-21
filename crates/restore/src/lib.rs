@@ -214,6 +214,9 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         let count = trusted.as_ref().map_or(0, |trusted| trusted.count);
         record_capture_head(&mut authenticated, head, count);
     }
+    // Before anything is seeded from the inventory: a segment no manifest
+    // names, and a partition that held nothing else, are not restored.
+    let unclaimed = drop_unclaimed_uploads(&mut archive, authenticated.as_ref());
     let AuthenticatedSnapshots {
         metadata: metadata_bytes,
         rlmm: rlmm_snapshot,
@@ -235,8 +238,16 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         });
     }
     let predicates = Predicates::from_args(args)?;
-    let format =
-        materialize::format_target_with_snapshot(args, &archive, metadata_bytes.as_deref()).await?;
+    let (format, diskless_next_offsets) = format_with_next_offsets(
+        &store,
+        args,
+        &archive,
+        &predicates,
+        diskless_capture.as_ref(),
+        diskless_claims,
+        metadata_bytes.as_deref(),
+    )
+    .await?;
     materialize::seed_rlmm_snapshot_from(
         args,
         authenticated
@@ -254,7 +265,7 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         consumed_authenticated_objects.insert("rlmm-snapshot".to_owned());
     }
     let mut partitions = Vec::with_capacity(archive.partitions.len());
-    let mut skipped = Vec::new();
+    let mut skipped = unclaimed;
     for entry in &archive.partitions {
         if entry.segments.is_empty() {
             continue;
@@ -330,6 +341,7 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         Some(capture) => {
             let report =
                 diskless::materialize(&store, args, &predicates, &capture, diskless_claims).await?;
+            diskless::check_next_offsets(&report, &diskless_next_offsets)?;
             if diskless_claims.is_some() {
                 consumed_authenticated_objects.extend(
                     capture
@@ -357,6 +369,32 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         partitions,
         skipped,
     })
+}
+
+/// Format the target, seeding the restored metadata with each diskless
+/// partition's next offset, and return the format outcome and those offsets.
+///
+/// The restored metadata starts each diskless partition's offsets at its
+/// materialized end (#1524), so that end is settled before the target is
+/// formatted, and [`diskless::check_next_offsets`] later holds the restore to
+/// it.
+async fn format_with_next_offsets(
+    store: &ArchiveStore,
+    args: &RestoreArgs,
+    archive: &ArchiveInventory,
+    predicates: &Predicates,
+    capture: Option<&krabka_remote_storage::diskless::DisklessWalCapture>,
+    claims: Option<&std::collections::BTreeMap<String, krabka_remote_storage::ObjectEntry>>,
+    metadata_snapshot: Option<&[u8]>,
+) -> Result<(FormatTargetOutcome, Vec<diskless::DisklessNextOffset>), RestoreError> {
+    let next_offsets = match capture {
+        Some(capture) => diskless::next_offsets(store, predicates, capture, args, claims).await?,
+        None => Vec::new(),
+    };
+    let format =
+        materialize::format_target_with_snapshot(args, archive, metadata_snapshot, &next_offsets)
+            .await?;
+    Ok((format, next_offsets))
 }
 
 struct AuthenticatedSnapshots {
@@ -406,6 +444,17 @@ async fn authenticate_captured_snapshot(
     flag: &str,
 ) -> Result<Option<Vec<u8>>, RestoreError> {
     let Some(path) = path else {
+        // A signed capture that binds this input says the source had it. A
+        // restore without it would silently come back without what it
+        // carries: for the metadata checkpoint, every ACL and SCRAM credential.
+        if let (true, Some(expected)) = (authenticated_restore, expected) {
+            return Err(RestoreError::Authenticity {
+                reason: format!(
+                    "the signed diskless capture binds {flag} (SHA-256 {expected}), but it was \
+                     not supplied"
+                ),
+            });
+        }
         return Ok(None);
     };
     if !authenticated_restore {
@@ -431,6 +480,7 @@ async fn authenticate_captured_snapshot(
 fn record_capture_head(authenticated: &mut Option<SourceAuthentication>, head: &str, count: usize) {
     let source = authenticated.get_or_insert_with(|| SourceAuthentication {
         archive: None,
+        unclaimed: std::collections::BTreeSet::new(),
         report: AuthenticationReport {
             partitions: 0,
             manifests: 0,
@@ -448,6 +498,43 @@ fn record_capture_head(authenticated: &mut Option<SourceAuthentication>, head: &
         .insert(CAPTURE_HEAD_NAME.to_owned(), head.to_owned());
 }
 
+/// Remove from `archive` every segment whose objects an authenticated restore
+/// found with no manifest naming them, and every partition left with no
+/// segment, and say what was removed.
+///
+/// This runs before the inventory seeds anything. A partition whose only
+/// upload was interrupted has no manifest and no head; were it kept, its
+/// topic and partition would be created from directory names alone.
+fn drop_unclaimed_uploads(
+    archive: &mut ArchiveInventory,
+    authenticated: Option<&SourceAuthentication>,
+) -> Vec<SkippedSegment> {
+    let Some(unclaimed) = authenticated.map(|source| &source.unclaimed) else {
+        return Vec::new();
+    };
+    let mut skipped = Vec::new();
+    for partition in &mut archive.partitions {
+        partition.segments.retain(|segment| {
+            let claimed = !segment
+                .artifacts()
+                .any(|object| unclaimed.contains(object.key.as_ref()));
+            if !claimed {
+                skipped.push(SkippedSegment {
+                    topic: partition.partition.topic.clone(),
+                    partition: partition.partition.partition,
+                    segment_id: segment.segment_id,
+                    reason: "uploaded without a manifest: no signed claim names it".to_owned(),
+                });
+            }
+            claimed
+        });
+    }
+    archive
+        .partitions
+        .retain(|partition| !partition.segments.is_empty());
+    skipped
+}
+
 /// The trusted WORM manifest keys and how many the operator supplied.
 struct TrustedKeySet {
     keys: TrustedManifestKeys,
@@ -460,6 +547,10 @@ struct TrustedKeySet {
 struct SourceAuthentication {
     archive: Option<AuthenticatedArchive>,
     report: AuthenticationReport,
+    /// Objects inside a partition directory that no manifest names: an upload
+    /// whose manifest was never written. They make no signed claim, so the
+    /// restore leaves their segments out rather than trust them.
+    unclaimed: std::collections::BTreeSet<String>,
 }
 
 async fn authenticate_source(
@@ -493,7 +584,7 @@ async fn authenticate_source(
         ))
     } else if !report.fully_attested() {
         Some("one or more manifests are unsigned or use an untrusted key".to_owned())
-    } else if !report.ok() {
+    } else if !report.global_orphan_objects.is_empty() {
         Some("the archive contains objects outside its authenticated manifests".to_owned())
     } else if report.has_epoch_restarts() {
         Some("the archive contains an untrusted manifest-chain restart".to_owned())
@@ -534,9 +625,19 @@ async fn authenticate_source(
         chain_heads: actual_heads,
         tail_truncation_protected: true,
     };
+    // A partition whose chain is unbroken and fully attested is not `ok` only
+    // for objects no manifest names. A source lost mid-upload leaves exactly
+    // that: a segment's objects without the manifest that would have named
+    // them. The pinned heads above already prove no manifest was taken away.
+    let unclaimed = report
+        .partitions
+        .iter()
+        .flat_map(|partition| partition.orphan_objects.iter().cloned())
+        .collect();
     Ok(Some(SourceAuthentication {
         archive: Some(authenticated),
         report: coverage,
+        unclaimed,
     }))
 }
 

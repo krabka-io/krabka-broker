@@ -77,6 +77,19 @@ fn offline_after_failed_append(part: &Partition, cfg: &Config) -> Option<RowActi
 /// follower's high watermark, which is the bound Kafka's
 /// `UnifiedLog.maybeIncrementLogStartOffset` enforces.
 ///
+/// On a tiered partition the follower takes the leader's start in either
+/// direction, which repairs a floor no deletion put there and gives a rebuilt
+/// follower the leader's global start: see
+/// [`krabka_log::Log::follow_leader_log_start`]. A floor it established is
+/// the exception: a leader that reports less is recorded on the partition and
+/// left to the remote-log manager, which lowers the floor only when the
+/// archive does not enforce it (`remote_log_manager::follow_unenforced_floor`).
+/// A floor a `DeleteRecords` or remote retention moved is kept against a
+/// leader that reports less, such as a replica an older broker rebuilt with no
+/// checkpoint, which reports 0. The archive check needs the RLMM, which may
+/// not have caught up, and an idle partition stops appearing in incremental
+/// fetch responses, so it runs on the manager's own tick rather than here.
+///
 /// A diskless partition's local log start is the flusher's trim frontier, and
 /// its delete floor travels through the WAL index instead, so it is left
 /// alone here.
@@ -85,12 +98,74 @@ async fn follow_leader_log_start(part: &Partition, cfg: &Config, leader_log_star
         return;
     }
     let target = Offset(leader_log_start).min(part.high_watermark().await);
-    if target <= part.log_start_offset() {
+    let (differs, established) = {
+        let log = part.log.lock().expect("log mutex poisoned");
+        (
+            log.differs_from_leader_log_start(target),
+            log.established_log_start(),
+        )
+    };
+    // Every response overwrites the record, so a lower start reported before
+    // a raise cannot pull the raised floor back down.
+    let lowers = established.is_some_and(|floor| target < floor);
+    part.reported_leader_log_start.store(
+        if lowers { target.0 } else { -1 },
+        std::sync::atomic::Ordering::Release,
+    );
+    if lowers || !differs {
         return;
     }
-    if let Err(error) = part.trim_to_offset(target).await {
+    if let Err(error) = part.follow_leader_log_start(target).await {
         warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
-            leader_log_start, "replicator: raising the log start to the leader's failed");
+            leader_log_start, "replicator: following the leader's log start failed");
+    }
+}
+
+/// The base and last offset of the first batch in `records`.
+fn first_batch_span(records: &RecordsPayload) -> Option<(Offset, Offset)> {
+    let (base, last_delta) = if let RecordsPayload::Raw(bytes) = records {
+        let header = validate_one_v2_batch(bytes).ok()?.header;
+        (header.base_offset.get(), header.last_offset_delta.get())
+    } else if let RecordsPayload::V2(batches) = records {
+        let first = batches.first()?;
+        (first.base_offset, first.last_offset_delta)
+    } else {
+        return None;
+    };
+    Some((
+        Offset(base),
+        Offset(base.checked_add(i64::from(last_delta))?),
+    ))
+}
+
+/// Restarts an empty follower log at the base of the leader's first batch
+/// when that batch begins below the log end and spans it, as Kafka's
+/// `Partition.appendRecordsToFollowerOrFutureReplica` truncates fully to the
+/// batch's base offset on `UnexpectedAppendOffsetException`; see
+/// [`krabka_log::Log::restarts_at_batch_base`].
+///
+/// The leader serves the whole batch that holds the fetch offset, so after an
+/// `OFFSET_OUT_OF_RANGE` reset to a leader log start that `DeleteRecords` or
+/// retention put inside a batch, every fetch returns a batch that starts
+/// below this log's end, and without the restart the append refuses it on
+/// every round and the follower never catches up.
+async fn restart_at_first_batch_base(part: &Partition, cfg: &Config, records: &RecordsPayload) {
+    let Some((base, last)) = first_batch_span(records) else {
+        return;
+    };
+    let (restarts, end) = {
+        let log = part.log.lock().expect("log mutex poisoned");
+        (log.restarts_at_batch_base(base, last), log.log_end_offset())
+    };
+    if !restarts {
+        return;
+    }
+    info!(topic = %cfg.topic, partition = cfg.partition.get(), end = end.0,
+        batch_base = base.0, "replicator: restarting the empty log at the base of the leader's batch");
+    match part.reset_to(base).await {
+        Ok(()) => super::truncate_producer_state(cfg, base.0).await,
+        Err(error) => warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
+            batch_base = base.0, "replicator: restarting at the leader's batch base failed"),
     }
 }
 
@@ -204,6 +279,9 @@ pub(super) async fn handle_partition_response(
                 cfg,
                 "replicator: discarding response for stale local target"
             );
+            if let Some(records) = &part_resp.records {
+                restart_at_first_batch_base(&part, cfg, records).await;
+            }
             match part_resp.records.take() {
                 Some(RecordsPayload::Raw(bytes)) => {
                     let action = replicate_raw_batches(&part, cfg, bytes).await;
@@ -670,6 +748,57 @@ mod tests {
         }
     }
 
+    /// A tiered follower takes its leader's log start on the fetch response,
+    /// except that it never lowers a floor it established there: it records
+    /// the lower start for the remote-log manager, which lowers the floor only
+    /// when the archive does not enforce it. A raise, and a floor nobody
+    /// established yet, follow the leader at once and clear a lower start an
+    /// earlier response recorded.
+    #[yare::parameterized(
+        a_lower_start_under_an_established_floor_is_recorded = { Some(5), 0, 5, 0 },
+        a_higher_start_raises_an_established_floor = { Some(5), 7, 7, -1 },
+        an_unestablished_floor_follows_a_lower_start = { None, 3, 3, -1 },
+    )]
+    #[test_macro(tokio::test)]
+    async fn a_tiered_follower_defers_lowering_an_established_floor(
+        established: Option<i64>,
+        leader_start: i64,
+        start: i64,
+        recorded: i64,
+    ) {
+        let LocalPartitionFixture {
+            cfg,
+            dir: _dir,
+            part,
+        } = local_partition_fixture();
+        {
+            let mut log = part.log.lock().expect("log mutex poisoned");
+            log.set_config(krabka_log::LogConfig {
+                remote_storage_enable: true,
+                ..log.config_snapshot()
+            });
+            for base_offset in 0..10 {
+                log.append(&mut one_record_batch(base_offset)).unwrap();
+            }
+            if let Some(floor) = established {
+                log.set_log_start_offset(Offset(floor)).unwrap();
+            }
+        }
+        part.set_follower_hw(Offset(10)).await;
+        part.reported_leader_log_start
+            .store(1, std::sync::atomic::Ordering::Release);
+
+        follow_leader_log_start(&part, &cfg, leader_start).await;
+
+        assert2::assert!(
+            (
+                part.log_start_offset(),
+                part.reported_leader_log_start
+                    .load(std::sync::atomic::Ordering::Acquire)
+            ) == (Offset(start), recorded)
+        );
+    }
+
     fn one_record_batch(base_offset: i64) -> RecordBatch {
         RecordBatch {
             base_offset,
@@ -1029,7 +1158,12 @@ mod tests {
     }
 
     fn one_batch_response(cfg: &Config, offset: i64, raw: bool) -> FetchResponse {
-        let mut batch = one_record_batch(offset);
+        batch_response(cfg, one_record_batch(offset), raw)
+    }
+
+    /// A response row that carries `batch` under `cfg`'s leader epoch, decoded
+    /// or as raw bytes.
+    fn batch_response(cfg: &Config, mut batch: RecordBatch, raw: bool) -> FetchResponse {
         batch.partition_leader_epoch = cfg.leader_epoch.0;
         let records = if raw {
             let mut encoded = BytesMut::new();
@@ -1128,6 +1262,61 @@ mod tests {
 
             assert!(part.log_end_offset() == Offset(6), "raw: {raw}");
         }
+    }
+
+    /// Kafka's `Partition.appendRecordsToFollowerOrFutureReplica`: the leader
+    /// serves the whole batch that holds the fetch offset, so a follower that
+    /// reset to a leader log start inside a batch is served a batch that
+    /// begins below its log end. An empty follower restarts at that batch's
+    /// base and takes it; one that holds records still refuses the overlap.
+    /// Decoded and raw records take the same path.
+    #[yare::parameterized(
+        decoded_empty_inside_the_batch = { false, None, (0, 5) },
+        raw_empty_inside_the_batch = { true, None, (0, 5) },
+        decoded_holding_records_it_overlaps = { false, Some(3), (0, 3) },
+        raw_holding_records_it_overlaps = { true, Some(3), (0, 3) },
+    )]
+    #[test_macro(tokio::test)]
+    async fn an_empty_follower_restarts_at_the_base_of_the_batch_it_is_served(
+        raw: bool,
+        held: Option<i64>,
+        want: (i64, i64),
+    ) {
+        let LocalPartitionFixture {
+            cfg,
+            dir: _dir,
+            part,
+        } = local_partition_fixture();
+        match held {
+            Some(count) => {
+                for base_offset in 0..count {
+                    part.log
+                        .lock()
+                        .unwrap()
+                        .append(&mut one_record_batch(base_offset))
+                        .unwrap();
+                }
+            }
+            None => part.reset_to(Offset(3)).await.unwrap(),
+        }
+        let served = RecordBatch {
+            last_offset_delta: 4,
+            records: (0..5)
+                .map(|offset_delta| Record {
+                    offset_delta,
+                    ..Record::default()
+                })
+                .collect(),
+            ..one_record_batch(0)
+        };
+
+        let action =
+            handle_response(batch_response(&cfg, served, raw), &cfg, cfg.leader_epoch.0).await;
+
+        assert2::assert!(action == RowAction::Continue);
+        assert2::assert!(
+            (part.log_start_offset(), part.log_end_offset()) == (Offset(want.0), Offset(want.1))
+        );
     }
 
     #[tokio::test]

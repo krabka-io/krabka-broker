@@ -20,11 +20,12 @@ use {
         metrics::BrokerMetrics,
         network::client::InterBrokerClient,
         partition_registry::PartitionRegistry,
-        producer_state::ProducerState,
+        producer_state::{ProducerState, producer_id_expiration},
         reassignment::{ReassignmentController, run as run_reassignment},
         task_util::run_every,
         time_util::now_ms,
     },
+    krabka_metadata::NodeId,
     krabka_units::{Time, convert::TimeExt},
     std::sync::Arc,
     tokio::task::JoinHandle,
@@ -99,13 +100,18 @@ pub(super) fn spawn_storage_security_maintenance(
     disk_scanner
 }
 
-fn spawn_producer_expiry(
+/// What the producer-expiry sweep reads on each tick.
+struct ProducerExpiry {
     producer_state: Arc<ProducerState>,
     partitions: Arc<PartitionRegistry>,
-    scan_interval: Time,
-    expiration: Time,
-    shutdown: CancellationToken,
-) {
+    controller: Arc<dyn MetadataSource>,
+    node_id: NodeId,
+    /// The static `producer.id.expiration.ms`, which applies while no dynamic
+    /// value does.
+    static_expiration: Time,
+}
+
+fn spawn_producer_expiry(expiry: ProducerExpiry, scan_interval: Time, shutdown: CancellationToken) {
     tokio::spawn(async move {
         // Kafka's `UnifiedLog` schedules `PeriodicProducerExpirationCheck`
         // with `producer.id.expiration.check.interval.ms` as both the initial
@@ -113,11 +119,23 @@ fn spawn_producer_expiry(
         // start, not at start.
         let period = scan_interval.to_std();
         let tick = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
-        let (producer_state, partitions) = (&producer_state, &partitions);
+        let expiry = &expiry;
         run_every(tick, &shutdown, move || async move {
             let now_ms = now_ms();
-            producer_state.expire_older_than(now_ms, expiration).await;
-            expire_log_producers(partitions, now_ms, expiration).await;
+            // `producer.id.expiration.ms` is dynamic: Kafka's
+            // `DynamicProducerStateManagerConfig` updates the config each
+            // log's `removeExpiredProducers` reads, so each sweep reads the
+            // value of the current image.
+            let expiration = producer_id_expiration(
+                &expiry.controller.current_image(),
+                expiry.node_id,
+                expiry.static_expiration,
+            );
+            expiry
+                .producer_state
+                .expire_older_than(now_ms, expiration)
+                .await;
+            expire_log_producers(&expiry.partitions, now_ms, expiration).await;
         })
         .await;
     });
@@ -195,10 +213,14 @@ pub(super) fn spawn_cluster_data_maintenance(
         shutdown.child_token(),
     ));
     spawn_producer_expiry(
-        Arc::clone(producer_state),
-        Arc::clone(partitions),
+        ProducerExpiry {
+            producer_state: Arc::clone(producer_state),
+            partitions: Arc::clone(partitions),
+            controller: Arc::clone(controller),
+            node_id: config.node_id,
+            static_expiration: config.producer_id_expiration,
+        },
         config.producer_id_expiration_scan_interval,
-        config.producer_id_expiration,
         shutdown.child_token(),
     );
     // The sweep reads the KFC-9 write-freeze registry from this authority, so

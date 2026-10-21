@@ -24,9 +24,14 @@ draining once the topic accepts writes again.
 
 ## Diagnose
 
-1. The audit topic is a normal topic. Check its ISR:
-   `kafka-topics --describe --topic __krabka_audit`. A partition below
-   `min.insync.replicas` rejects the audit produce like any other.
+1. Check the audit topic's placement:
+   `kafka-topics --describe --topic __krabka_audit`. Each broker leads one
+   partition with one replica and appends its records to it locally, so
+   `min.insync.replicas` does not gate the write. A broker that leads no
+   partition logs `no audit partition is placed on this broker` at startup and
+   drops its records until it restarts. The active controller adds a
+   partition for each broker that has none, so a restart of that broker
+   picks it up.
 2. Check `max_bytes` in `[audit.spool]` against the spool bytes. A spool at
    its cap drops.
 3. Check `audit_event_queue_capacity` in `[runtime]`. A queue that fills

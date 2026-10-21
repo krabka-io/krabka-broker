@@ -211,11 +211,18 @@ pub struct FileConfig {
     /// Maximum follower lag before the leader proposes ISR shrink. Absent
     /// leaves the `BrokerConfig` default intact.
     pub replica_lag_time_max: Option<Time>,
-    /// Controller election timeout, Kafka's `controller.quorum.fetch.timeout.ms`.
-    /// It is the follower fetch watchdog, and 1.5x of it is the leader's
-    /// check-quorum window: a leader that has not been fetched from by a
-    /// majority of the voters within that window resigns its epoch. Absent
-    /// leaves the `BrokerConfig` default intact.
+    /// Controller quorum fetch timeout, Kafka's
+    /// `controller.quorum.fetch.timeout.ms`. It is the follower and observer
+    /// fetch watchdog, and 1.5x of it is the leader's check-quorum window: a
+    /// leader that has not been fetched from by a majority of the voters
+    /// within that window resigns its epoch. Absent leaves the `BrokerConfig`
+    /// default intact.
+    pub controller_fetch_timeout: Option<Time>,
+    /// Controller election timeout, Kafka's
+    /// `controller.quorum.election.timeout.ms`. It is the base of a
+    /// candidate's randomized election timer, which adds a jitter in
+    /// `[0, timeout)`, so a split vote is retried within one to two election
+    /// timeouts. Absent leaves the `BrokerConfig` default intact.
     pub controller_election_timeout: Option<Time>,
     /// Controller heartbeat interval. Absent leaves the `BrokerConfig` default intact.
     pub controller_heartbeat_interval: Option<Time>,
@@ -236,11 +243,13 @@ pub struct FileConfig {
     /// default `usize::MAX` (unlimited).
     pub max_connections_per_ip: Option<usize>,
 
-    /// How long a connection may go without a complete request frame before
-    /// the broker closes it (Kafka `connections.max.idle.ms`). Absent leaves
-    /// the `BrokerConfig` default of ten minutes, which is Kafka's 600000. A
-    /// `[[listeners]]` entry may carry its own `connections_max_idle`, which
-    /// wins for that listener.
+    /// How long a connection may go with no socket activity before the broker
+    /// closes it (Kafka `connections.max.idle.ms`). Each read and each response
+    /// write restarts the window, and it keeps running while a request is in its
+    /// handler or a throttled connection is muted. Absent leaves the
+    /// `BrokerConfig` default of ten minutes, which is Kafka's 600000. A
+    /// `[[listeners]]` entry may carry its own `connections_max_idle`, which wins
+    /// for that listener.
     pub connections_max_idle: Option<Time>,
 
     /// KIP-368 `connections.max.reauth.ms`: how long an authenticated SASL

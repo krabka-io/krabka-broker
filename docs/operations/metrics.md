@@ -67,11 +67,12 @@ listener is open to peers you do not control.
 | `krabka_broker_partitions_total` | gauge | - | `ReplicaManager,name=PartitionCount` | Partitions this broker hosts, leader and follower replicas both. |
 | `krabka_broker_under_replicated_partitions` | gauge | - | `ReplicaManager,name=UnderReplicatedPartitions` | Partitions this broker leads whose ISR is smaller than the replica set. Alert on `> 0`. [Runbook](runbooks/under-replicated-partitions.md). |
 | `krabka_broker_under_min_isr_partition_count` | gauge | - | `ReplicaManager,name=UnderMinIsrPartitionCount` | Partitions this broker leads whose ISR is below `min.insync.replicas`. They reject `acks=all` with `NOT_ENOUGH_REPLICAS`. Alert on `> 0`. [Runbook](runbooks/under-min-isr-partitions.md). |
-| `krabka_broker_offline_partitions_count` | gauge | - | `ReplicaManager,name=OfflinePartitionsCount` | Partitions with no live leader. Alert on `> 0`. [Runbook](runbooks/offline-partitions.md). |
+| `krabka_broker_offline_partitions_count` | gauge | - | `KafkaController,name=OfflinePartitionsCount` | Partitions in the cluster with no live leader, internal topics included, as Kafka counts them: a partition whose leader is gone, and one the controller left leaderless after a log-dir failure on a live leader. The active controller reports it; every other node reports 0. It includes the audit topic's partition of each down broker, so alert on `offline_partitions_count - offline_audit_partitions > 0`. [Runbook](runbooks/offline-partitions.md). |
+| `krabka_broker_offline_audit_partitions` | gauge | - | - | The audit topic's partitions with no leader and no live replica, a subset of `offline_partitions_count`. Each broker holds one audit partition with no other replica, so this counts down brokers, a planned stop included. An audit partition on a failed log dir of a live broker is not counted here, so `KrabkaOfflinePartitions` fires for it. The active controller reports it; every other node, and a cluster with audit disabled, reports 0. Do not alert on it: `KrabkaBrokerDown` covers a down broker. |
 | `krabka_broker_replica_lag_records` | gauge | `topic`, `partition`, `replica` | `FetcherLagMetrics,name=ConsumerLag,clientId=ReplicaFetcherThread-*,topic=<t>,partition=<p>` | Records a follower of a partition this broker leads has yet to fetch: the leader's log end offset minus the follower's last-fetched offset. `replica` is the follower's node id. Kafka reports this on the follower; krabka reports it on the leader, one series per follower. Where `under_replicated_partitions` says only that a follower left the ISR, this says how far behind it is while it is still in. [Runbook](runbooks/replica-lag.md). |
-| `krabka_broker_replication_throttled_bytes_out_total` | counter | - | `LeaderReplication,name=byte-rate` | KIP-73: replication bytes the leader-side throttle granted to a throttled follower. Flat at the configured rate during a reassignment means the throttle is biting; flat at zero with a reassignment in flight means something else is. |
-| `krabka_broker_replication_throttled_bytes_in_total` | counter | - | `FollowerReplication,name=byte-rate` | KIP-73: replication bytes the follower-side throttle granted for a throttled partition. |
-| `krabka_broker_replication_throttle_sleeps_total` | counter | - | - | KIP-73 rounds the throttle held back rather than merely capped: a follower fetch whose bucket had nothing left. krabka drops the partition from the round instead of delaying it, so there is no `throttle_time_ms` to observe and this is the series that says the throttle refused. |
+| `krabka_broker_replication_throttled_bytes_out_total` | counter | - | `LeaderReplication,name=byte-rate` | KIP-73: replication bytes the leader sent of its throttled partitions, in sync or not, which it charges to the leader-side quota. Flat at the configured rate during a reassignment means the throttle is biting; flat at zero with a reassignment in flight means something else is. |
+| `krabka_broker_replication_throttled_bytes_in_total` | counter | - | `FollowerReplication,name=byte-rate` | KIP-73: replication bytes a follower received for a throttled partition, which it charges to the follower-side quota. |
+| `krabka_broker_replication_throttle_sleeps_total` | counter | - | - | KIP-73 reads the throttle held back because its quota was exceeded: a follower read whose records the leader withheld, or a follower partition that sat a fetch round out. A replication fetch reports no `throttle_time_ms`, in Kafka or here, so this is the series that says the throttle refused. |
 | `krabka_broker_replica_lag_max_records` | gauge | - | `ReplicaFetcherManager,name=MaxLag,clientId=Replica` | The largest value `replica_lag_records` carries on this broker, or zero when it leads no partition with a follower. Alert on this series rather than on an aggregate of the per-follower family. [Runbook](runbooks/replica-lag.md). |
 | `krabka_broker_isr_shrinks_total` | counter | - | `ReplicaManager,name=IsrShrinksPerSec` | ISR shrinks this broker's maintenance loop proposed. |
 | `krabka_broker_isr_expands_total` | counter | - | `ReplicaManager,name=IsrExpandsPerSec` | ISR expands this broker's maintenance loop proposed. |
@@ -87,14 +88,57 @@ families. The metric comments name no threshold for any of them.
 
 ## Controller
 
+Kafka's `QuorumController` runs every operation as an event on one queue
+thread. Krabka's controller engine loop is that thread: each turn handles one
+command from its queue or one timer. The `controller_event_queue_*` series
+measure it on controller and combined nodes, and a broker-only node exports
+them at zero.
+
 | Series | Type | Labels | Replaces | Meaning |
 | :--- | :--- | :--- | :--- | :--- |
 | `krabka_broker_active_controller` | gauge | - | `KafkaController,name=ActiveControllerCount` | 1 on the raft leader, 0 elsewhere. |
 | `krabka_broker_controller_leader_changes_total` | counter | - | `KafkaController,name=LeaderElectionRateAndTimeMs` | Controller-leader transitions this broker observed. Alert on a sustained `rate(...) > 0`. [Runbook](runbooks/controller-leader-flapping.md). |
 | `krabka_broker_controller_fencing_publications_total` | counter | - | - | Completed broker-fencing publication passes on the controller leader, one per liveness tick. |
+| `krabka_broker_controller_event_queue_time_seconds` | histogram | - | `ControllerEventManager,name=EventQueueTimeMs` | Seconds a command waited on the controller engine's queue before the loop started it. A timer has none, as a Kafka deferred event has none. |
+| `krabka_broker_controller_event_queue_processing_time_seconds` | histogram | - | `ControllerEventManager,name=EventQueueProcessingTimeMs` | Seconds one controller event ran. A write runs to its commit reply, so a slow follower shows up here, as it does in Kafka. |
+| `krabka_broker_controller_event_queue_operations_started_total` | counter | - | `KafkaController,name=EventQueueOperationsStartedCount` | Events the engine loop started, one per turn: a command or a timer. |
+| `krabka_broker_controller_event_queue_operations_timed_out_total` | counter | - | `KafkaController,name=EventQueueOperationsTimedOutCount` | Commands the engine reached after their caller had stopped waiting. Kafka drops such an event; the engine still runs it, so it also counts as started. |
+| `krabka_broker_controller_event_queue_idle_seconds_total` | counter | - | `ControllerEventManager,name=AvgIdleRatio` | Seconds the engine loop waited for its next event. `rate(...[5m])` is the idle ratio: near 1 on a quiet controller, falling toward 0 as the loop saturates. |
 | `krabka_broker_unclean_leader_elections_total` | counter | - | `ControllerStats,name=UncleanLeaderElectionsPerSec` | KIP-841 unclean elections this controller drove. A KIP-966 recovery from an eligible leader replica is not counted. Alert on `rate(...) > 0`. [Runbook](runbooks/unclean-leader-election.md). |
 | `krabka_broker_ignored_static_voters` | gauge | - | `raft-metrics,name=ignored-static-voters` | Static voters in the configuration that the quorum ignores at `kraft.version` 1. |
 | `krabka_broker_voted_directory` | gauge | `directory_id` | `raft-metrics,name=current-vote-directory-id` | One-hot series for the directory identity voted for in this epoch. |
+
+## Metadata quorum health
+
+KIP-835's quorum-health series and the raft state beside them. One series
+serves every role: a broker-only node reads its observer's progress, and a
+controller or combined node reads its voter's. Kafka splits the same values
+between `broker-metadata-metrics` and `KafkaController`; the **Replaces**
+column names both where both exist.
+
+The sampler refreshes these every `--gauge-poll-interval` (1 s by default), so
+`metadata_last_applied_lag_ms` is computed at the sample, not at the scrape,
+and can read up to one interval low. Before the node applies its first record,
+the offsets read `-1`, the timestamp reads `-1` and the lag reads the current
+Unix time plus 1, as Kafka's `MetadataProvenance.EMPTY` makes them. Alert on
+the lag only where the timestamp is above zero.
+
+| Series | Type | Labels | Replaces | Meaning |
+| :--- | :--- | :--- | :--- | :--- |
+| `krabka_broker_metadata_last_applied_offset` | gauge | - | `broker-metadata-metrics,name=last-applied-record-offset`, `KafkaController,name=LastAppliedRecordOffset` | Highest `__cluster_metadata` offset applied to the node's metadata image. |
+| `krabka_broker_metadata_last_committed_offset` | gauge | - | `KafkaController,name=LastCommittedRecordOffset` | Highest offset the quorum has committed, as this node last heard it. Kafka exports it on controllers only; a broker-only node reports the leader's high watermark from its fetches. |
+| `krabka_broker_metadata_last_applied_timestamp_ms` | gauge | - | `broker-metadata-metrics,name=last-applied-record-timestamp`, `KafkaController,name=LastAppliedRecordTimestamp` | Append timestamp, in Unix epoch milliseconds, of the last applied metadata batch. |
+| `krabka_broker_metadata_last_applied_lag_ms` | gauge | - | `broker-metadata-metrics,name=last-applied-record-lag-ms`, `KafkaController,name=LastAppliedRecordLagMs` | Sample time minus `metadata_last_applied_timestamp_ms`, on every role, the active controller included. The leader appends a `NoOpRecord` every `metadata.max.idle.interval.ms` (500 ms by default), so a current node stays near that interval; a value that keeps growing means the node stopped applying or the leader stopped appending. With the interval set to `0` an idle cluster's lag grows without a fault. Clocks that disagree can make it negative. |
+| `krabka_broker_metadata_lag_records` | gauge | - | - | `metadata_last_committed_offset` minus `metadata_last_applied_offset`, never below zero. `/readyz` bounds the same value. |
+| `krabka_broker_pending_record_processing_time_us_avg` | gauge | - | `BrokerMetadataListener,name=MetadataBatchProcessingTimeUs` (`Mean`) | Process-lifetime mean microseconds to apply one completed pass over newly committed records. |
+| `krabka_broker_pending_record_processing_time_us_max` | gauge | - | `BrokerMetadataListener,name=MetadataBatchProcessingTimeUs` (`Max`) | Process-lifetime maximum of the same. |
+| `krabka_broker_metadata_load_error_count` | gauge | - | `broker-metadata-metrics,name=metadata-load-error-count` | Committed metadata records a broker-only node could not decode and skipped. A controller stops on such a record instead. |
+| `krabka_broker_raft_current_state` | gauge | `state` | `raft-metrics,name=current-state` | One-hot consensus state. Controller and combined nodes only. |
+| `krabka_broker_raft_current_epoch` | gauge | - | `raft-metrics,name=current-epoch` | Current leader epoch. Controller and combined nodes only. |
+| `krabka_broker_raft_high_watermark` | gauge | - | `raft-metrics,name=high-watermark` | High watermark of the local metadata log. Controller and combined nodes only. |
+| `krabka_broker_raft_log_end_offset` | gauge | - | `raft-metrics,name=log-end-offset` | Log end offset of the local metadata log. Controller and combined nodes only. |
+| `krabka_broker_raft_voters` | gauge | - | `raft-metrics,name=number-of-voters` | Active voters. Controller and combined nodes only. |
+| `krabka_broker_raft_observers` | gauge | - | `raft-metrics,name=number-of-observers` | Active observers, as the leader sees them. Controller and combined nodes only. |
 
 ## Requests
 
@@ -144,6 +188,9 @@ bucket of a phase says nothing about the same bucket of the total.
 | :--- | :--- | :--- | :--- | :--- |
 | `krabka_broker_tiered_storage_rlmm_topic_backed` | gauge | - | - | KIP-405: 1 once the topic-backed `RemoteLogMetadataManager` is in place, 0 on the fail-closed placeholder. Alert on `min_over_time(...[5m]) == 0` for a cluster that asked for it. [Runbook](runbooks/rlmm-bootstrap-stuck.md). |
 | `krabka_broker_tiered_storage_rlmm_bootstrap_attempts_total` | counter | - | - | Bootstrap attempts. Climbs while stuck, flat once the gauge flips to 1. |
+| `krabka_broker_tiered_storage_rlmm_partition_ready` | gauge | `metadata_partition` | - | KIP-405: 1 when this broker answers remote-log metadata reads for an assigned `__remote_log_metadata` partition, 0 while they return the retriable `NotReady`. A series exists only while the partition is assigned. The RLMM reconciler samples the three `rlmm_partition` gauges after each reconcile: on each assignment change and each `rlmm_reconcile_tick` (30s by default). [Runbook](runbooks/rlmm-partition-not-ready.md). |
+| `krabka_broker_tiered_storage_rlmm_partition_target_offset` | gauge | `metadata_partition` | - | The high-water mark the partition's consumer must reach before reads are answered, read when the partition was assigned. -1 while the high-water-mark fetch has failed and a later reconcile has not replaced it. |
+| `krabka_broker_tiered_storage_rlmm_partition_applied_offset` | gauge | `metadata_partition` | - | Offset of the last event the broker applied from the partition, -1 when none. The partition is ready once this reaches `target_offset - 1`. A value that does not change while `ready` is 0 means the consumer is stuck. |
 | `krabka_broker_worm_manifests_sealed_total` | counter | - | - | KFC-5: WORM manifests the archive sealed and returned a valid chain receipt for, one per segment copied into a write-once archive. Flat while a WORM cluster tiers means the chain has stopped growing. |
 | `krabka_broker_worm_manifest_seal_failures_total` | counter | - | - | KFC-5: write-once segment copies that ended with no usable manifest -- the copy failed, the task panicked, or the receipt was missing or did not match the requested chain position. Alert on `rate(...[5m]) > 0`. |
 | `krabka_broker_remote_copy_bytes_total` | counter | `topic` | `BrokerTopicMetrics,name=RemoteCopyBytesPerSec` | Bytes of finished segment copies that reached the remote tier. |

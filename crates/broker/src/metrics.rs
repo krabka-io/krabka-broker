@@ -28,6 +28,7 @@ mod auth;
 mod break_glass;
 mod delivery;
 mod diskless;
+mod event_queue;
 mod eviction;
 mod fetch_drain;
 mod labels;
@@ -54,8 +55,8 @@ pub use self::{
         BreakGlassActionLabel, BreakGlassState, BreakGlassStateLabel, CleanerFailureLabel,
         CleanerFailureReason, ClientSoftwareLabel, ConnectionCloseReason,
         ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel, FetchDrainPath,
-        FetchDrainPathLabel, PartitionLabel, QuotaEntityLabel, QuotaType, QuotaTypeLabel,
-        RaftStateLabel, ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel,
+        FetchDrainPathLabel, MetadataPartitionLabel, PartitionLabel, QuotaEntityLabel, QuotaType,
+        QuotaTypeLabel, RaftStateLabel, ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel,
         ShareGroupIdLabel, ShareGroupLabel, TopicLabel, WalShardLabel, WalVoterLabel,
     },
     lag::LagSeriesIndex,
@@ -187,19 +188,39 @@ pub struct BrokerMetrics {
         alert on > 0 — these partitions reject acks=all produces \
         with NOT_ENOUGH_REPLICAS.")]
     pub under_min_isr_partition_count: Gauge,
-    /// Count of partitions this broker leads that
-    /// currently have no live leader (leader broker dead with no
-    /// eligible ISR replacement). Mirrors Kafka's
-    /// `ReplicaManager.OfflinePartitionsCount`. Operators alert on
-    /// `> 0`: such partitions are wholly unavailable until an ISR
-    /// member returns or an unclean election runs.
-    #[metric(help = "Count of partitions this broker leads that have \
-        no live leader (leader dead with no eligible ISR \
-        replacement). Mirrors Kafka's \
-        ReplicaManager.OfflinePartitionsCount; alert on > 0 — \
-        these partitions are wholly unavailable until an ISR \
-        member returns or an unclean election runs.")]
+    /// Count of partitions in the cluster that have no live leader: the
+    /// leader is fenced or gone and no eligible ISR member replaced it, or
+    /// the controller left the partition leaderless with its leader still
+    /// alive, as the KIP-112 offline-dir failover does when no live ISR
+    /// member can take over. Only the active controller reports a non-zero
+    /// value; every other node reports zero. Mirrors Kafka's
+    /// `kafka.controller:type=KafkaController,name=OfflinePartitionsCount`,
+    /// which counts every leaderless partition, internal topics included. The
+    /// audit topic's partitions therefore count here while their broker is
+    /// down; [`offline_audit_partitions`](Self::offline_audit_partitions)
+    /// counts them alone, so an alert can subtract them.
+    #[metric(help = "Count of partitions in the cluster that have no live \
+        leader, internal topics included. Reported by the active \
+        controller; zero on every other node. Mirrors Kafka's \
+        KafkaController.OfflinePartitionsCount. Subtract \
+        offline_audit_partitions before alerting on > 0.")]
     pub offline_partitions_count: Gauge,
+    /// The part of
+    /// [`offline_partitions_count`](Self::offline_partitions_count) that a
+    /// down broker explains: audit-topic partitions with no leader and no
+    /// live replica. Each broker holds one audit partition with no other
+    /// replica, so this counts down brokers, a planned stop included. An
+    /// audit partition left leaderless by a failed log dir on a live broker
+    /// is not counted here, so the alert that subtracts this gauge still
+    /// fires for it. Only the active controller reports a non-zero value, and
+    /// the value is zero when the audit subsystem is disabled. Kafka has no
+    /// audit topic and no counterpart.
+    #[metric(help = "Count of audit-topic partitions that have no leader and no \
+        live replica. Each broker holds one single-replica audit partition, \
+        so this counts brokers that are down. Reported by the active \
+        controller; zero on every other node and with audit disabled. \
+        Already included in offline_partitions_count.")]
+    pub offline_audit_partitions: Gauge,
     #[metric(help = "1 if this broker is the raft (controller) leader, 0 otherwise.")]
     pub active_controller: Gauge,
     /// Configured static voters ignored after `kraft.version` reaches 1.
@@ -261,6 +282,44 @@ pub struct BrokerMetrics {
         the fencing state it decided on is applied rather than in \
         flight.")]
     pub controller_fencing_publications_total: Counter,
+    /// Seconds a command waited on the controller engine's queue before the
+    /// loop started it. Mirrors Kafka's
+    /// `ControllerEventManager.EventQueueTimeMs`. A timer has no queue time,
+    /// as a Kafka deferred event has none. Controller and combined nodes
+    /// only; a broker-only node exports the family empty.
+    #[metric(help = "Seconds a command waited on the controller engine's queue \
+        before the loop started it. Mirrors Kafka's \
+        ControllerEventManager.EventQueueTimeMs. Controller and combined \
+        nodes only.", buckets = registration::EVENT_QUEUE_DURATION_BUCKETS)]
+    pub controller_event_queue_time_seconds: Histogram,
+    /// Seconds one controller event ran, from the start of its turn to its
+    /// commit reply for a write. Mirrors Kafka's
+    /// `ControllerEventManager.EventQueueProcessingTimeMs`.
+    #[metric(help = "Seconds one controller event ran, to its commit reply for a \
+        write. Mirrors Kafka's \
+        ControllerEventManager.EventQueueProcessingTimeMs. Controller and \
+        combined nodes only.", buckets = registration::EVENT_QUEUE_DURATION_BUCKETS)]
+    pub controller_event_queue_processing_time_seconds: Histogram,
+    /// Events the controller engine loop started: one per turn, a command
+    /// or a timer. Mirrors Kafka's
+    /// `KafkaController.EventQueueOperationsStartedCount`.
+    #[metric(help = "Events the controller engine loop started, one per turn. \
+        Mirrors Kafka's KafkaController.EventQueueOperationsStartedCount.")]
+    pub controller_event_queue_operations_started_total: Counter,
+    /// Commands the controller engine reached after their caller had
+    /// stopped waiting. Mirrors Kafka's
+    /// `KafkaController.EventQueueOperationsTimedOutCount`. Kafka drops such
+    /// an event; the engine still runs it, so it counts as started too.
+    #[metric(help = "Commands the controller engine reached after their caller \
+        had stopped waiting for the reply. Mirrors Kafka's \
+        KafkaController.EventQueueOperationsTimedOutCount; the engine still \
+        runs them.")]
+    pub controller_event_queue_operations_timed_out_total: Counter,
+    /// Seconds the controller engine loop waited for its next event.
+    /// `rate(...)` is Kafka's `ControllerEventManager.AvgIdleRatio`.
+    #[metric(help = "Seconds the controller engine loop waited for its next \
+        event. rate() is Kafka's ControllerEventManager.AvgIdleRatio.")]
+    pub controller_event_queue_idle_seconds_total: Counter<f64, AtomicU64>,
     #[metric(help = "Cumulative count of ISR shrinks proposed by this broker's \
         ISR-maintenance loop.")]
     pub isr_shrinks_total: Counter,
@@ -710,6 +769,40 @@ pub struct BrokerMetrics {
         stuck retrying, flat once tiered_storage_rlmm_topic_backed \
         flips to 1.")]
     pub tiered_storage_rlmm_bootstrap_attempts: Counter,
+    /// Whether this broker answers gated remote-log metadata reads for one
+    /// assigned `__remote_log_metadata` partition: `1` once its consumer has
+    /// applied every event up to the high-water mark it saw at assignment,
+    /// `0` while reads answer the retriable `NotReady`. The RLMM reconciler
+    /// samples it after every reconcile, which runs on each assignment change
+    /// and each `rlmm_reconcile_tick`, and releases the series when the
+    /// partition leaves the assignment.
+    #[metric(help = "KIP-405: 1 when this broker answers remote-log metadata \
+        reads for the assigned __remote_log_metadata partition \
+        metadata_partition, 0 while they return the retriable NotReady \
+        because its consumer has not reached the assignment-time \
+        high-water mark. Sampled after every RLMM reconcile; the series \
+        exists only while the partition is assigned.")]
+    pub tiered_storage_rlmm_partition_ready: Family<MetadataPartitionLabel, Gauge>,
+    /// The high-water mark of one assigned `__remote_log_metadata` partition
+    /// that its consumer must reach before reads are answered, or `-1` while
+    /// it is unknown because the assignment-time fetch failed. Sampled with
+    /// `tiered_storage_rlmm_partition_ready`.
+    #[metric(help = "KIP-405: assignment-time high-water mark of the assigned \
+        __remote_log_metadata partition metadata_partition, which its \
+        consumer must reach before reads are answered; -1 while the \
+        high-water-mark fetch has failed and a later reconcile has not \
+        refreshed it. Sampled after every RLMM reconcile.")]
+    pub tiered_storage_rlmm_partition_target_offset: Family<MetadataPartitionLabel, Gauge>,
+    /// The offset of the last event the consumer applied for one assigned
+    /// `__remote_log_metadata` partition, or `-1` when it has applied none.
+    /// The partition is ready once this reaches the target minus one.
+    /// Sampled with `tiered_storage_rlmm_partition_ready`.
+    #[metric(help = "KIP-405: offset of the last event this broker applied \
+        from the assigned __remote_log_metadata partition \
+        metadata_partition, -1 when none. Ready once it reaches \
+        tiered_storage_rlmm_partition_target_offset - 1. Sampled after \
+        every RLMM reconcile.")]
+    pub tiered_storage_rlmm_partition_applied_offset: Family<MetadataPartitionLabel, Gauge>,
     /// Per-topic counter of v0/v1 → v2 record-batch
     /// up-conversions on the Produce path. Mirrors Kafka's
     /// `BrokerTopicMetrics.ProduceMessageConversionsPerSec`. Bumped
@@ -1214,18 +1307,44 @@ pub struct BrokerMetrics {
     pub raft_voters: Gauge,
     #[metric(help = "Number of active KRaft observers")]
     pub raft_observers: Gauge,
-    #[metric(help = "Highest metadata record offset applied to the active metadata image")]
-    pub metadata_last_applied_offset: Gauge,
+    /// KIP-835 `last-applied-record-offset` and the controller's
+    /// `LastAppliedRecordOffset`: `-1` before the first applied record.
     #[metric(
-        help = "Append timestamp in Unix epoch milliseconds of the last applied metadata record"
+        help = "Highest metadata record offset applied to the active metadata image, -1 before the first"
+    )]
+    pub metadata_last_applied_offset: Gauge,
+    /// KIP-835 `LastCommittedRecordOffset`: the highest `__cluster_metadata`
+    /// offset the quorum has committed, as this node last heard it, and `-1`
+    /// before it has heard of one. Kafka exports it on controllers only; a
+    /// broker-only node reports the leader's high watermark from its fetches.
+    #[metric(
+        help = "Highest metadata record offset the quorum has committed, as this node last heard it, -1 before the first"
+    )]
+    pub metadata_last_committed_offset: Gauge,
+    /// KIP-835 `last-applied-record-timestamp`: the append timestamp of the
+    /// last applied metadata batch, `-1` before the first.
+    #[metric(
+        help = "Append timestamp in Unix epoch milliseconds of the last applied metadata record, -1 before the first"
     )]
     pub metadata_last_applied_timestamp_ms: Gauge,
-    #[metric(help = "Milliseconds since the last applied metadata record was appended")]
+    /// KIP-835 `last-applied-record-lag-ms`: the sample time minus
+    /// [`Self::metadata_last_applied_timestamp_ms`], on every role. The
+    /// leader appends a `NoOpRecord` every `metadata.max.idle.interval.ms`,
+    /// so a current node stays below that interval plus the commit delay.
+    /// Before the first record it reads `now + 1`, as Kafka's does.
+    #[metric(
+        help = "Milliseconds between the gauge sample and the append timestamp of the last applied metadata record"
+    )]
     pub metadata_last_applied_lag_ms: Gauge,
+    /// The lifetime mean of Kafka's
+    /// `BrokerMetadataListener,name=MetadataBatchProcessingTimeUs`
+    /// histogram, which Yammer exports as its `Mean` attribute: microseconds
+    /// spent applying one completed pass over newly committed records.
     #[metric(
         help = "Lifetime average microseconds to apply a completed set of pending committed metadata records"
     )]
     pub pending_record_processing_time_us_avg: Gauge,
+    /// The lifetime `Max` attribute of the same Kafka histogram.
     #[metric(
         help = "Lifetime maximum microseconds to apply a completed set of pending committed metadata records"
     )]

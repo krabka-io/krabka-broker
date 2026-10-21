@@ -45,6 +45,8 @@ mod cli_entry;
 mod consume;
 #[path = "roundtrip/fixture.rs"]
 mod fixture;
+#[path = "roundtrip/live_archive.rs"]
+mod live_archive;
 #[path = "roundtrip/partition_data.rs"]
 mod partition_data;
 #[path = "roundtrip/report.rs"]

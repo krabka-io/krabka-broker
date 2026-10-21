@@ -21,26 +21,18 @@ fn token_visibility_requires_owner_filter_plus_a_relationship(
 }
 
 #[yare::parameterized(
-    regular_credential_wins = { true, false, true, false, ScramCredentialSource::Regular },
-    active_token_fallback = { false, true, true, true, ScramCredentialSource::DelegationToken },
-    expired_token_fallback = {
-        false,
-        true,
-        true,
-        false,
-        ScramCredentialSource::ExpiredDelegationToken,
-    },
-    non_token_mechanism = { false, false, true, true, ScramCredentialSource::Unknown },
-    no_token_credential = { false, true, false, true, ScramCredentialSource::Unknown },
+    regular_credential_wins = { true, false, true, ScramCredentialSource::Regular },
+    token_credential = { false, true, true, ScramCredentialSource::DelegationToken },
+    non_token_mechanism = { false, false, true, ScramCredentialSource::Unknown },
+    no_token_credential = { false, true, false, ScramCredentialSource::Unknown },
 )]
 fn scram_source_prefers_regular_and_limits_token_fallback(
     regular: bool,
     token_mechanism: bool,
     token: bool,
-    active: bool,
     expected: ScramCredentialSource,
 ) {
-    check!(scram_credential_source(regular, token_mechanism, token, active) == expected);
+    check!(scram_credential_source(regular, token_mechanism, token) == expected);
 }
 
 #[yare::parameterized(

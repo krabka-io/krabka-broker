@@ -191,9 +191,14 @@ pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream
 
     };
     let replication = moxy::template! {
-    /// Maximum bytes a follower requests from a leader in one replication
-    /// fetch. It reaches the leader as the fetch request's `max_bytes`.
+    /// Maximum bytes a follower requests for one partition in a replication
+    /// fetch, Kafka's `replica.fetch.max.bytes`. It reaches the leader as
+    /// each partition's `partition_max_bytes`.
     pub replication_fetch_max: Option<ByteSize>,
+    /// Maximum bytes a follower requests for the whole response of a
+    /// replication fetch, Kafka's `replica.fetch.response.max.bytes`. It
+    /// reaches the leader as the fetch request's `max_bytes`.
+    pub replication_fetch_response_max: Option<ByteSize>,
     /// Maximum time a leader holds a replication fetch that is not yet
     /// satisfied. It reaches the leader as the fetch request's `max_wait_ms`.
     pub replication_fetch_max_wait: Option<Time>,
@@ -372,12 +377,13 @@ fn controller_fields(
     interface: ControllerFieldInterface,
 ) -> Result<TokenStream, ParseError> {
     let cli = matches!(interface, ControllerFieldInterface::CommandLine);
-    let [observer_lag_bound_doc, heartbeat_interval_doc, heartbeat_timeout_doc, replica_lag_time_max_doc, controller_election_timeout_doc, controller_heartbeat_interval_doc, controller_fetch_miss_limit_doc] = if cli {
+    let [observer_lag_bound_doc, heartbeat_interval_doc, heartbeat_timeout_doc, replica_lag_time_max_doc, controller_fetch_timeout_doc, controller_election_timeout_doc, controller_heartbeat_interval_doc, controller_fetch_miss_limit_doc] = if cli {
         [
             "KIP-853 observer promotion lag bound.",
             "Broker heartbeat interval in milliseconds.",
             "Broker heartbeat timeout in milliseconds.",
             "Follower lag timeout in milliseconds before ISR shrink.",
+            "Controller quorum fetch timeout in milliseconds.",
             "Controller election timeout in milliseconds.",
             "Controller heartbeat interval in milliseconds.",
             "Consecutive controller fetch misses tolerated before election.",
@@ -388,9 +394,10 @@ fn controller_fields(
             "How often this broker sends `BrokerHeartbeat` to the controller leader.",
             "How long the controller waits without a heartbeat before it marks a\nbroker dead.",
             "Maximum follower lag before the leader proposes an ISR shrink. Kafka's\n`replica.lag.time.max.ms`.",
-            "Controller election timeout, Kafka's\n`controller.quorum.fetch.timeout.ms`. It is the follower fetch\nwatchdog, and 1.5x of it is the leader's check-quorum window: a leader\nthat a majority of the voters has not fetched from within that window\nresigns its epoch.",
-            "Raft heartbeat interval on the controller quorum. It should stay at or\nbelow `controller_election_timeout / 3`.",
-            "Consecutive follower fetch misses tolerated before a new election.",
+            "Controller quorum fetch timeout, Kafka's\n`controller.quorum.fetch.timeout.ms`. It is the follower and observer\nfetch watchdog, and 1.5x of it is the leader's check-quorum window: a\nleader that a majority of the voters has not fetched from within that\nwindow resigns its epoch.",
+            "Controller election timeout, Kafka's\n`controller.quorum.election.timeout.ms`. It is the base of a\ncandidate's randomized election timer, which adds a jitter in\n`[0, timeout)`, so a split vote is retried within one to two election\ntimeouts.",
+            "Raft heartbeat interval on the controller quorum. It should stay at or\nbelow `controller_fetch_timeout / 3`.",
+            "Consecutive fetch misses an observer tolerates before it looks for the\nleader again. A voter starts an election after one fetch timeout, as\nKafka does.",
         ]
     }.map(|doc| LitStr::new(doc, Span::call_site()));
     let observer_arg = if cli {
@@ -408,6 +415,8 @@ fn controller_fields(
         pub heartbeat_timeout: Option<Time>,
         #[doc = {{ replica_lag_time_max_doc }}]
         pub replica_lag_time_max: Option<Time>,
+        #[doc = {{ controller_fetch_timeout_doc }}]
+        pub controller_fetch_timeout: Option<Time>,
         #[doc = {{ controller_election_timeout_doc }}]
         pub controller_election_timeout: Option<Time>,
         #[doc = {{ controller_heartbeat_interval_doc }}]

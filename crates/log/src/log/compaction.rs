@@ -11,7 +11,8 @@ use {
     crate::{
         compact::{
             CleanedTransactionMetadata, CleaningRound, RewriteOutput, RewriteRetention,
-            atomic_swap, atomic_swap_retiring, build_offset_map, rewrite_segments,
+            atomic_swap, atomic_swap_retiring, build_offset_map, replaces_producer_snapshot,
+            rewrite_segments,
         },
         error::LogError,
         retention,
@@ -499,7 +500,13 @@ impl Log {
                 let dir = self.dir.clone();
                 let now = std::time::SystemTime::now();
                 atomic_swap_retiring(&*io, &dir, group_bases, rewrite, |base| {
-                    self.retire_files(base, now, &["log", "index", "timeindex", "txnindex"])
+                    let files: &[&str] =
+                        if replaces_producer_snapshot(base, rewrite.new_base_offset) {
+                            &["log", "index", "timeindex", "txnindex", "snapshot"]
+                        } else {
+                            &["log", "index", "timeindex", "txnindex"]
+                        };
+                    self.retire_files(base, now, files)
                 })?;
             }
 

@@ -3,7 +3,7 @@ set -euo pipefail
 
 builder_tar="$1"
 output_tar="$2"
-builder_image="docker.io/krabka-io/creusot-builder:0.13.0"
+builder_image="docker.io/krabka-io/creusot-builder:0.14.0"
 output_name="$(basename "${output_tar}")"
 
 docker load --input "${builder_tar}"

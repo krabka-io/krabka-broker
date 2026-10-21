@@ -120,4 +120,24 @@ pub trait RemoteLogMetadataManager: Send + Sync {
         &self,
         metadata: RemotePartitionDeleteMetadata,
     ) -> Result<(), RemoteStorageError>;
+
+    /// Whether this manager has applied every metadata event for
+    /// `topic_id_partition` that the metadata store had committed when the
+    /// call began.
+    ///
+    /// This is a read-your-peers'-writes check. Another broker can publish
+    /// an event, for example a `DeleteSegmentStarted` update, and wait for
+    /// the store to acknowledge it. A read on this manager that follows a
+    /// `true` answer sees that event. A `false` answer means the local view
+    /// can be stale, so the caller must not judge from it. A manager that
+    /// does not consume the partition's metadata answers `false`, because
+    /// it cannot vouch for the view.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteStorageError::NotReady`] while the manager is still
+    /// catching up after it took on the partition, and
+    /// [`RemoteStorageError::Io`] if it cannot read the store's committed
+    /// position.
+    fn caught_up(&self, topic_id_partition: &TopicIdPartition) -> Result<bool, RemoteStorageError>;
 }

@@ -74,7 +74,7 @@ A sealed `.log` file is always exactly as long as the batches in it, and so is a
 | `meta.properties` | `<log_dir>/meta.properties` | Kafka V1 properties | `version=1` | A version other than 1 is refused. | None |
 | Bootstrap records | `<metadata_log_dir>/bootstrap.records.bin` | krabka: a header, then for each record a `u32` little-endian length and a wincode `MetadataRecord` | `BOOTSTRAP_RECORDS_VERSION`, `i16` 0, at the front of the file | A file without the header, which a 0.x `krabka-format` wrote, or with another version is refused. The node must be formatted again. | None |
 | Bootstrap manifest | `<metadata_log_dir>/bootstrap.json` | krabka JSON | `version: 1` | No reader exists. The broker never reads the file. | None |
-| Incarnation id | `<log_dir>/incarnation_id` | krabka UUID text | None, on purpose | An unreadable value makes the broker generate and write a new id. The id is outside the strict contract: Kafka never persists it, and a new id only delays registration until the old heartbeat session expires. | None |
+| Incarnation id | `<log_dir>/incarnation_id` | krabka UUID text | None, on purpose | Written by earlier 1.x releases only. A broker now draws a new id for every process, as Kafka does, and neither reads nor writes the file; a file an earlier release left is ignored, and an earlier release that finds none generates one. The id is outside the strict contract. | None |
 | Clean-shutdown proof | `<log_dir>/.kafka_cleanshutdown` | Kafka JSON `{"version":0,"brokerEpoch":N}` | `version` 0 | A missing, unreadable or other-version file makes the restart unclean, as Kafka's `CleanShutdownFileHandler.read` does. | None |
 
 Kafka writes `bootstrap.checkpoint` instead. The bootstrap checkpoint at offset zero of the metadata log, described below, replaces `bootstrap.records.bin` for a controller of a dynamic quorum.
@@ -93,6 +93,12 @@ The metadata partition directory is `<metadata_log_dir>/__cluster_metadata-0/`.
 | High watermark | `high-watermark` | krabka text, `0` then the offset | Header line `0` | A file without the header (0.x) or with another version stops the node. A damaged version-0 file makes the broker use the log start offset: the file is only a restart shortcut, and Kafka keeps none. | None |
 
 `FeatureLevelRecord` persists the finalized `metadata.version` and the other feature levels. A `metadata.version` downgrade writes a snapshot at the lower level and discards the incompatible log prefix, as KIP-1155 describes.
+
+The audit topic stores `krabka.audit.placement.epoch.<broker-id>` as ordinary
+topic config records. Each value is the decimal broker registration epoch
+that received a partition. Reassignment keeps the marker, so a controller
+restart does not undo an evacuation. Only the controller writes these keys;
+both topic-config alter paths preserve them and refuse client writes.
 
 ### Krabka-private metadata records
 
@@ -178,6 +184,20 @@ Every krabka-owned format in the tables above has a golden-bytes test that encod
 Kafka 4.3.1 builds each group record that it writes from its in-memory group, not from the record it replayed. So it drops the unknown tagged fields at the top level of a replayed record when it writes that record again, and krabka drops them too. KIP-1331's streams tags 2 and 3, which Kafka 4.3.1 does not know, follow the same rule: krabka writes them only while `group.streams.topology.description.plugin.class` is set.
 
 Kafka keeps two nested structs of a replayed record as the generated objects, with their unknown tagged fields: `ConsumerGroupMemberMetadataValue.ClassicMemberMetadata`, with each of its `ClassicProtocol` entries, and `StreamsGroupMemberMetadataValue.Endpoint`. A member record that Kafka writes from a copy of the member, such as the record of a static member's replacement, carries those fields again. And because the generated `equals` compares them, a classic rejoin or a streams heartbeat that sends the same values as the replayed record still writes the member record again, and for the streams heartbeat also bumps the group epoch. krabka decodes these structs into its own types and drops their unknown tagged fields, so it writes the member record without them, and it writes no record and bumps no epoch for such a heartbeat. Kafka 4.3.1 defines no tagged field in these structs, so only a record from a later Kafka version can carry one.
+
+### Tiered `DeleteRecords` floors from before #1481
+
+The log-start checkpoint does not say who raised a floor. A follower of a
+tiered partition lowers an established floor to a lower start its leader
+reports only while the archive does not enforce it, that is while a finished
+segment still lies wholly below it. A broker with the fix for #1481 marks those
+segments `DeleteSegmentStarted` before it raises a `DeleteRecords` floor, so
+its floors are enforced from the start. An earlier broker left them finished
+until its next remote-retention pass. Such a floor, in that window, is
+indistinguishable from the restarted leader's local start that a broker without
+the fix for #1444 reported, which is the floor the lowering exists to repair.
+[Deploying](operations/deploy.md#rolling-upgrade) gives the procedure that keeps
+a roll out of the window.
 
 ## Integration
 

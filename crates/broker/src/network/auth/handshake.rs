@@ -13,11 +13,8 @@ use {
         sasl_handshake_response::SaslHandshakeResponse,
     },
     krabka_security::SaslMechanism,
+    krabka_verified::authz::reauthentication_begins,
 };
-
-/// Kafka's `KafkaChannel.MIN_REAUTH_INTERVAL_ONE_SECOND_NANOS`, in ms: a
-/// connection may not start a re-authentication more than once a second.
-const MIN_REAUTH_INTERVAL_MS: i64 = 1_000;
 
 /// What the dispatcher does with a `SaslHandshake`: the response to send, and
 /// whether to close the connection once it is written.
@@ -76,10 +73,7 @@ pub fn handle_handshake(
             expires_at_ms,
             ..
         } => {
-            let recently_started = clock
-                .last_start_ms
-                .is_some_and(|last| clock.now_ms.saturating_sub(last) < MIN_REAUTH_INTERVAL_MS);
-            if expires_at_ms.is_none() || recently_started {
+            if !reauthentication_begins(*expires_at_ms, clock.now_ms, *clock.last_start_ms) {
                 tracing::debug!(
                     requested = %req.mechanism,
                     "SaslHandshake on an authenticated connection that cannot re-authenticate now"

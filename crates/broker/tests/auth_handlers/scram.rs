@@ -15,7 +15,10 @@ use {
             capped_session_closes, different_principal_closes, repeated_expired_reauth,
             same_principal_reopens,
         },
-        support::wire::CorrelationId,
+        support::{
+            sasl::{HashIterations, provision_scram, sasl_plaintext_mechanisms},
+            wire::CorrelationId,
+        },
     },
     assert2::assert,
     krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse,
@@ -116,6 +119,79 @@ async fn sasl_scram_sha256_wrong_password_closes_connection() {
     );
 }
 
+/// Kafka's `ScramSaslServer` refuses a stored credential stretched fewer than
+/// 4096 times in round 1, with the generic invalid-credentials text, and
+/// accepts one at 4096. Such a credential reaches the image only through a
+/// bootstrap record, never through `AlterUserScramCredentials`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scram_credential_below_4096_iterations_is_refused_in_round_one() {
+    for (mechanism, iterations, expected) in [
+        (
+            SaslMechanism::ScramSha256,
+            4095,
+            Some(
+                "Authentication failed during authentication due to invalid credentials with \
+                 SASL mechanism SCRAM-SHA-256",
+            ),
+        ),
+        (
+            SaslMechanism::ScramSha512,
+            4095,
+            Some(
+                "Authentication failed during authentication due to invalid credentials with \
+                 SASL mechanism SCRAM-SHA-512",
+            ),
+        ),
+        (SaslMechanism::ScramSha256, 4096, None),
+        (SaslMechanism::ScramSha512, 4096, None),
+    ] {
+        let log_dir = tempfile::tempdir().unwrap();
+        let cfg = sasl_plaintext_mechanisms(log_dir.path().to_path_buf(), vec![mechanism]);
+        let handle = krabka_broker::Broker::start(cfg)
+            .await
+            .expect("broker must start");
+        provision_scram()
+            .broker(&handle)
+            .mechanism(mechanism)
+            .iterations(HashIterations(iterations))
+            .call()
+            .await;
+        let mut stream = TcpStream::connect(handle.listen_addr())
+            .await
+            .expect("connect");
+        let response = scram_authenticate(
+            &mut stream,
+            &mut CorrelationId(0),
+            &ScramAuthenticationSetup {
+                client_id: "krabka-sasl-test",
+                user: "alice",
+                password: alice_password(),
+                mechanism,
+            },
+        )
+        .await
+        .expect("SCRAM rounds complete");
+        handle.shutdown().await;
+        let refused = expected.map(|message| SaslAuthenticateResponse {
+            error_code: 58,
+            error_message: Some(message.to_owned()),
+            ..Default::default()
+        });
+        match refused {
+            Some(refused) => {
+                assert!(
+                    response == refused,
+                    "{mechanism:?} at {iterations} iterations"
+                );
+            }
+            None => assert!(
+                response.error_code == 0,
+                "{mechanism:?} at {iterations} iterations"
+            ),
+        }
+    }
+}
+
 /// Drive a complete SASL/SCRAM session against a `SASL_PLAINTEXT` listener.
 ///
 /// This helper works for both SHA-256 and SHA-512. It passes the mechanism
@@ -140,6 +216,69 @@ pub async fn drive_sasl_scram_session(
     })
     .await?;
     metadata_probe(&mut stream, 5).await
+}
+
+/// Kafka's `ScramFormatter.xor` throws `IllegalArgumentException` on a
+/// client-final proof that does not decode to the hash length, and
+/// `Selector` then closes the connection with no `SaslAuthenticate`
+/// response. A proof of the right length and the wrong value still gets the
+/// usual error-58 answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_scram_proof_of_the_wrong_length_closes_with_no_response() {
+    for (case, proof, answered) in [
+        ("empty proof", String::new(), false),
+        // Valid base64 of 30 bytes; 43 characters would fail the grammar,
+        // which Kafka answers with error 58.
+        ("thirty bytes", "A".repeat(40), false),
+        (
+            "right length, wrong value",
+            format!("{}=", "A".repeat(43)),
+            true,
+        ),
+    ] {
+        let RetainedBroker {
+            log_dir: _log_dir,
+            handle,
+            addr,
+        } = scram_fixture(SaslMechanism::ScramSha256).await;
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        sasl_handshake_on()
+            .stream(&mut stream)
+            .correlation(1)
+            .mechanism(SaslMechanism::ScramSha256.wire_name())
+            .call()
+            .await
+            .unwrap();
+        let (client_first, client) = krabka_macros::scram_client_first!(
+            "alice",
+            alice_password().as_str(),
+            SaslMechanism::ScramSha256
+        )
+        .unwrap();
+        let first = sasl_authenticate_on()
+            .stream(&mut stream)
+            .auth_bytes(bytes::Bytes::from(client_first))
+            .correlation(2)
+            .call()
+            .await
+            .unwrap();
+        let (client_final, _client) = client.step(&first.auth_bytes).unwrap();
+        let client_final = String::from_utf8(client_final).unwrap();
+        let (without_proof, _) = client_final.rsplit_once(",p=").unwrap();
+        let result = sasl_authenticate_on()
+            .stream(&mut stream)
+            .auth_bytes(bytes::Bytes::from(format!("{without_proof},p={proof}")))
+            .correlation(3)
+            .call()
+            .await;
+        handle.shutdown().await;
+        let outcome = result.as_ref().map(|response| response.error_code);
+        if answered {
+            assert!(outcome.ok() == Some(58), "case {case}: {result:?}");
+        } else {
+            assert!(outcome.is_err(), "case {case}: {result:?}");
+        }
+    }
 }
 
 /// Runs the two RFC 5802 rounds on `stream` and returns the round-2

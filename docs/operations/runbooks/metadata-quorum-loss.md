@@ -2,6 +2,9 @@
 
 **Alert:** `KrabkaMetadataLag`, `krabka_broker_metadata_lag_records > 100` for 5m.
 
+**Alert:** `KrabkaMetadataStale`, `krabka_broker_metadata_last_applied_lag_ms > 30000`
+on a node that has applied a record, for 2m.
+
 ## What it means
 
 `krabka_broker_metadata_lag_records` is the distance between the quorum's
@@ -18,6 +21,14 @@ threshold also answers 503 and leaves the `krabka-bootstrap` Service.
 A node lags for one of three reasons: it is catching up after a restart, it
 cannot keep up with the metadata write rate, or the quorum it fetches from
 has lost a voter and cannot serve it.
+
+`krabka_broker_metadata_last_applied_lag_ms` measures the same staleness in
+time (KIP-835): the sample time minus the append timestamp of the last record
+the node applied. The leader appends a `NoOpRecord` every
+`metadata.max.idle.interval.ms`, so the record lag can sit at zero while the
+time lag grows. That happens when the leader stops appending, or when the
+node stopped fetching and believes itself current. Every node's time lag
+rising together points at the leader; one node's points at that node.
 
 ## Confirm
 

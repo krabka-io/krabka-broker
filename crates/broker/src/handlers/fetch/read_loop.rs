@@ -10,13 +10,18 @@ use {
             record_follower_position, required_leader,
         },
         read::{LiveOffsets, ReadRequest, do_read},
-        remote::try_remote_read,
+        remote::{RemoteFetchWait, try_remote_read},
         request::EffectivePartition,
         response::{GroupedResponses, group_into_topic_responses},
+        throttle::leader_withholds,
     },
     crate::{
-        broker::Broker, codes, diskless::read::try_diskless_read, metrics::RequestPhases,
+        broker::Broker,
+        codes,
+        diskless::read::try_diskless_read,
+        metrics::RequestPhases,
         partition::Partition,
+        quota::{Timed, with_active_time},
     },
     krabka_log::Offset,
     krabka_protocol::owned::fetch_response::PartitionData,
@@ -86,6 +91,9 @@ struct LongPollState {
     /// Original response budget, used to recompute the remaining budget when
     /// a long-poll read replaces an earlier oversized first batch.
     response_max_bytes: usize,
+    /// The request's `remote.fetch.max.wait.ms` deadline, shared by every
+    /// cold-tier read it makes.
+    remote_wait: RemoteFetchWait,
 }
 
 #[derive(Clone, Copy)]
@@ -94,6 +102,9 @@ struct ReadAccounting {
     cold_bytes: usize,
     budget: i32,
     allow_first_batch_overrun: bool,
+    /// The KIP-73 leader throttle withholds this read's records
+    /// ([`withheld_by_leader_throttle`]).
+    withheld: bool,
 }
 
 impl LongPollState {
@@ -117,8 +128,12 @@ impl LongPollState {
     fn record_read(&mut self, index: usize, read: &mut PendingRead, result: ReadAccounting) {
         self.cold_served[index] = result.cold_bytes > 0;
         self.bytes[index] = result.local_bytes + result.cold_bytes;
-        if !result.allow_first_batch_overrun
-            && self.bytes[index] > usize::try_from(result.budget.max(0)).unwrap_or(0)
+        // A withheld read is Kafka's `MemoryRecords.EMPTY` row: it adds
+        // nothing toward `min_bytes`, so a fetch with nothing else to send
+        // parks for its `max_wait_ms` rather than answering at once.
+        if result.withheld
+            || (!result.allow_first_batch_overrun
+                && self.bytes[index] > usize::try_from(result.budget.max(0)).unwrap_or(0))
         {
             discard_to_metadata_only(read);
             self.bytes[index] = 0;
@@ -261,6 +276,7 @@ pub(super) async fn execute_pending_reads(
         cold_served: vec![false; pending.len()],
         remaining_response_bytes: response_max_bytes,
         response_max_bytes,
+        remote_wait: RemoteFetchWait::default(),
     };
     // Arm the long poll's waiters before the first read pass, so that an
     // append landing between a partition's read and the park cannot be lost.
@@ -326,13 +342,16 @@ pub(super) async fn execute_pending_reads(
         // long-poll re-read of this partition (or an epoch recheck) must
         // still see.
         read.max_bytes = budget;
-        let cold = serve_from_cold_tier(broker, read, &partition, phases).await;
+        let cold =
+            serve_from_cold_tier(broker, read, &partition, phases, &mut state.remote_wait).await;
         read.max_bytes = requested_max_bytes;
+        let withheld = withheld_by_leader_throttle(broker, read);
         state.record_read(index, read, ReadAccounting {
             local_bytes,
             cold_bytes: cold,
             budget,
             allow_first_batch_overrun: min_one_batch,
+            withheld,
         });
         // Kafka's `Partition.fetchRecords` records the follower's position
         // only after its read succeeded, so the row this read just filled
@@ -352,13 +371,37 @@ pub(super) async fn execute_pending_reads(
     let has_preferred_read_replica = pending
         .iter()
         .any(|read| read.out.preferred_read_replica >= 0);
-    if state.total() < state.min_bytes && max_wait_ms > 0 && !has_preferred_read_replica {
+    // Kafka parks a fetch that handed any read to the remote tier as a
+    // `DelayedRemoteFetch`, not a `DelayedFetch`: it answers once the remote
+    // reads finish or `remote.fetch.max.wait.ms` passes, and neither
+    // `min.bytes` nor the request's `max.wait.ms` holds it any longer.
+    let remote_fetch = state.remote_wait.dispatched();
+    let mut long_poll_active = Duration::ZERO;
+    if state.total() < state.min_bytes
+        && max_wait_ms > 0
+        && !has_preferred_read_replica
+        && !remote_fetch
+    {
         let mut waits = waits;
         waits.extend(arm_leadership_waits(&pending));
         refresh_follower_bounds(&mut pending, &state).await;
-        long_poll_then_reread(broker, &mut pending, waits, &mut state, phases).await;
+        // Kafka's `DelayedFetch` completes off the request-handler thread:
+        // the reads after a wake or the deadline run on the thread that
+        // completes it, so the handler does not charge them to the fetch.
+        let Timed { active, .. } = with_active_time(Box::pin(long_poll_then_reread(
+            broker,
+            &mut pending,
+            waits,
+            &mut state,
+            phases,
+        )))
+        .await;
+        long_poll_active = active;
     }
-    group_into_topic_responses(pending)
+    GroupedResponses {
+        long_poll_active,
+        ..group_into_topic_responses(pending)
+    }
 }
 
 /// Park on the armed waiters until the fetch has `min_bytes` to answer with,
@@ -403,8 +446,10 @@ async fn long_poll_then_reread(
             tokio::time::timeout_at(deadline, futures_util::future::select_all(waits)).await;
         phases.add_remote(parked.elapsed());
         let Ok((woken, _fired, rest)) = outcome else {
-            // The deadline passed. Nothing more will be read, but the loop
-            // head still revalidates the epochs before the response goes out.
+            // The deadline passed. Nothing more will be read but the rows the
+            // leader throttle withheld, and the loop head still revalidates
+            // the epochs before the response goes out.
+            reread_withheld(broker, pending, state, phases).await;
             waits = Vec::new();
             continue;
         };
@@ -557,14 +602,62 @@ async fn reread_woken(
     // capped budget to it the same way the first pass does, and give the
     // original per-partition request back afterward.
     read.max_bytes = read_budget;
-    let cold = serve_from_cold_tier(broker, read, &part, phases).await;
+    let cold = serve_from_cold_tier(broker, read, &part, phases, &mut state.remote_wait).await;
     read.max_bytes = requested_max_bytes;
+    let withheld = withheld_by_leader_throttle(broker, read);
     state.record_read(index, read, ReadAccounting {
         local_bytes: bytes,
         cold_bytes: cold,
         budget: read_budget,
         allow_first_batch_overrun: min_one_batch,
+        withheld,
     });
+}
+
+/// Read again, once the wait expires, every row the KIP-73 leader throttle
+/// withheld, if the quota now allows it.
+///
+/// Kafka's `DelayedFetch.onComplete` reads every partition again on expiry,
+/// and `readFromLog` asks the replication quota again, so records the quota
+/// allows by then go out with this response and not with the follower's next
+/// fetch. The refill wakes nothing, so expiry is where a parked fetch sees the
+/// quota recover.
+async fn reread_withheld(
+    broker: &Broker,
+    pending: &mut [PendingRead],
+    state: &mut LongPollState,
+    phases: &RequestPhases,
+) {
+    if broker.throttle_state.leader_out.quota_exceeded() {
+        return;
+    }
+    for index in 0..pending.len() {
+        let throttled = pending[index]
+            .follower_position
+            .is_some_and(|position| position.leader_throttled);
+        if throttled && state.bytes[index] == 0 {
+            reread_woken(broker, pending, index, state, phases).await;
+        }
+    }
+}
+
+/// KIP-73: whether the leader withholds this follower read's records, Kafka's
+/// `ReplicaManager.shouldLeaderThrottle` as `readFromLog` asks it of every
+/// read: the leader throttles the follower's replica and its leader-out quota
+/// is exceeded right now.
+///
+/// The read still runs, so the row carries the offsets and watermarks the
+/// follower needs, and the leader still records the follower's position.
+fn withheld_by_leader_throttle(broker: &Broker, read: &PendingRead) -> bool {
+    let withheld = leader_withholds(
+        &broker.throttle_state.leader_out,
+        read.follower_position
+            .is_some_and(|position| position.leader_throttled),
+    );
+    if withheld {
+        broker.metrics.record_replication_throttle_sleep();
+    }
+    withheld
 }
 
 /// Serve `read`'s offset out of the cold tier when the local log no longer
@@ -607,12 +700,16 @@ async fn serve_from_cold_tier(
     read: &mut PendingRead,
     part: &Partition,
     phases: &RequestPhases,
+    remote_wait: &mut RemoteFetchWait,
 ) -> usize {
     if read.out.error_code != codes::OFFSET_OUT_OF_RANGE {
         return 0;
     }
     let started = std::time::Instant::now();
-    let served = match try_remote_read(broker, read, part).await {
+    // Boxed: the cold read holds the remote-wait deadline and the reader
+    // permit across several awaits, and inline it would make every fetch
+    // future, local or cold, carry its whole state.
+    let served = match Box::pin(try_remote_read(broker, read, part, remote_wait)).await {
         Some(remote_bytes) => remote_bytes,
         None => try_diskless_read(broker, read, part).await.unwrap_or(0),
     };
@@ -626,7 +723,7 @@ mod tests {
         super::super::{plan::FetchMode, response::GroupedResponses},
         crate::{
             broker::{Broker, BrokerHandle, spawn_partition},
-            codes::{NONE, OFFSET_OUT_OF_RANGE},
+            codes::{self, NONE, OFFSET_OUT_OF_RANGE},
             diskless::wal_index::WalFlushRecord,
             handlers::{
                 fetch::test_support::append_epoch_batches,
@@ -668,6 +765,25 @@ mod tests {
             dir: started.dir,
             broker,
             part,
+        }
+    }
+
+    struct LocalRemoteReadSetup {
+        _object_dir: TempDir,
+        broker_handle: BrokerHandle,
+        dir: TempDir,
+        broker: Arc<Broker>,
+    }
+
+    async fn local_remote_read_setup() -> LocalRemoteReadSetup {
+        let object_dir = tempfile::tempdir().expect("object tempdir");
+        let started = handler_fixture_support::start_with_local_remote_storage(&object_dir).await;
+        let broker = started.broker.broker_arc_for_test();
+        LocalRemoteReadSetup {
+            _object_dir: object_dir,
+            broker_handle: started.broker,
+            dir: started.dir,
+            broker,
         }
     }
 
@@ -790,6 +906,7 @@ mod tests {
                 cold_served: Vec::new(),
                 remaining_response_bytes: case.response_budget,
                 response_max_bytes: case.response_budget,
+                remote_wait: super::RemoteFetchWait::default(),
             };
             for (i, step) in case.steps.iter().enumerate() {
                 let given = state.partition_read_budget(step.partition_max_bytes);
@@ -959,8 +1076,13 @@ mod tests {
         };
         let phases = RequestPhases::default();
         let GroupedResponses {
-            responses: topics, ..
+            responses: topics,
+            long_poll_active,
+            ..
         } = super::execute_pending_reads(&broker, pending(), 0, 150, 0, false, &phases).await;
+        // A fetch that does not wait is all handler work, none of it a long
+        // poll.
+        assert!(long_poll_active == std::time::Duration::ZERO);
         let first_bytes = topics[0].partitions[0]
             .records
             .as_ref()
@@ -977,6 +1099,7 @@ mod tests {
             cold_served: vec![false; 2],
             remaining_response_bytes: 150 - first_bytes,
             response_max_bytes: 150,
+            remote_wait: super::RemoteFetchWait::default(),
         };
         super::reread_woken(&broker, &mut pending, 1, &mut state, &phases).await;
         assert!(pending[1].out.records.is_none());
@@ -1094,6 +1217,17 @@ mod tests {
         ]
     }
 
+    fn empty_partition_data() -> super::PartitionData {
+        super::PartitionData {
+            partition_index: 0,
+            error_code: codes::NONE,
+            high_watermark: 0,
+            last_stable_offset: 0,
+            log_start_offset: 0,
+            ..Default::default()
+        }
+    }
+
     /// A partition the response budget has no room for gets the row an
     /// empty read produces, including the aborted-transaction list: Kafka
     /// reads nothing for it, so the aborted range it looks up ends at the
@@ -1209,11 +1343,12 @@ mod tests {
         const TOPIC_A: &str = "budget-cold-a";
         const TOPIC_B: &str = "budget-cold-b";
 
-        let object_dir = tempfile::tempdir().expect("object tempdir");
-        krabka_macros::broker_test_setup! {
-            bind(broker_handle, dir, broker);
-            boot [handler_fixture_support::start_with_local_remote_storage(&object_dir)];
-        };
+        let LocalRemoteReadSetup {
+            _object_dir,
+            broker_handle,
+            dir,
+            broker,
+        } = local_remote_read_setup().await;
 
         let topic_a = uuid::Uuid::from_u128(0xA0);
         let topic_b = uuid::Uuid::from_u128(0xB0);
@@ -1350,11 +1485,12 @@ mod tests {
     /// rustdoc describes as decode, authorization and encode.
     #[tokio::test]
     async fn cold_tier_fallback_charges_the_object_store_read_to_the_remote_phase() {
-        let object_dir = tempfile::tempdir().expect("object tempdir");
-        krabka_macros::broker_test_setup! {
-            bind(broker_handle, dir, broker);
-            boot [handler_fixture_support::start_with_local_remote_storage(&object_dir)];
-        };
+        let LocalRemoteReadSetup {
+            _object_dir,
+            broker_handle,
+            dir,
+            broker,
+        } = local_remote_read_setup().await;
 
         let topic_id = uuid::Uuid::from_u128(0xC01D);
         let mut flushed = BytesMut::new();
@@ -1420,7 +1556,14 @@ mod tests {
         };
 
         let phases = RequestPhases::default();
-        let served = super::serve_from_cold_tier(&broker, &mut pending, &part, &phases).await;
+        let served = super::serve_from_cold_tier(
+            &broker,
+            &mut pending,
+            &part,
+            &phases,
+            &mut super::RemoteFetchWait::default(),
+        )
+        .await;
 
         assert!(served == flushed.len());
         assert!(pending.out.error_code == crate::codes::NONE);
@@ -1433,7 +1576,14 @@ mod tests {
         // cluster with no cold tier sees an unchanged remote phase.
         pending.out.error_code = NONE;
         let local_only = RequestPhases::default();
-        let served = super::serve_from_cold_tier(&broker, &mut pending, &part, &local_only).await;
+        let served = super::serve_from_cold_tier(
+            &broker,
+            &mut pending,
+            &part,
+            &local_only,
+            &mut super::RemoteFetchWait::default(),
+        )
+        .await;
 
         assert!(served == 0);
         assert!(local_only.remote_seconds() < 1.0e-9);
@@ -1597,14 +1747,8 @@ mod tests {
             assert!(
                 pending[0].out
                     == super::PartitionData {
-                        partition_index: 0,
-                        error_code: crate::codes::NONE,
-                        high_watermark: 0,
-                        last_stable_offset: 0,
-                        log_start_offset: 0,
                         aborted_transactions: want_aborted,
-                        records: None,
-                        ..Default::default()
+                        ..empty_partition_data()
                     },
                 "{name}"
             );
@@ -1645,18 +1789,13 @@ mod tests {
         assert!(
             pending[0].out
                 == super::PartitionData {
-                    partition_index: 0,
-                    error_code: crate::codes::NONE,
-                    high_watermark: 0,
-                    last_stable_offset: 0,
-                    log_start_offset: 0,
                     aborted_transactions: None,
                     diverging_epoch: krabka_protocol::owned::fetch_response::EpochEndOffset {
                         epoch: 1,
                         end_offset: 4,
                         ..Default::default()
                     },
-                    ..Default::default()
+                    ..empty_partition_data()
                 }
         );
         broker_handle.shutdown().await;
@@ -1727,6 +1866,7 @@ mod tests {
             cold_served: vec![false; pending.len()],
             remaining_response_bytes: usize::MAX,
             response_max_bytes: usize::MAX,
+            remote_wait: super::RemoteFetchWait::default(),
         }
     }
 
@@ -1757,6 +1897,9 @@ mod tests {
     /// `fetch.min.bytes` is a floor and not a hint. A wake that does not carry
     /// enough bytes parks again, and the response the fetch finally sends
     /// holds every append that arrived up to the one that cleared the floor.
+    /// The fetch reports the time its long poll spent polling, which the
+    /// handler leaves out of the request quota as Kafka completes a parked
+    /// fetch off the request-handler thread.
     #[tokio::test]
     async fn min_bytes_holds_the_long_poll_until_three_appends_add_up() {
         const TOPIC: &str = "min-bytes-floor";
@@ -1801,7 +1944,9 @@ mod tests {
         let pending = vec![planned_follower(TOPIC, &part, &request, crate::codes::NONE)];
         let phases = RequestPhases::default();
         let GroupedResponses {
-            responses: topics, ..
+            responses: topics,
+            long_poll_active,
+            ..
         } = super::execute_pending_reads(
             &broker,
             pending,
@@ -1815,7 +1960,12 @@ mod tests {
 
         appends.await.expect("producer task");
         let served = &topics[0].partitions[0];
-        assert!(served_base_offsets(served) == vec![0, 1, 2]);
+        assert!(
+            (
+                served_base_offsets(served),
+                long_poll_active > std::time::Duration::ZERO
+            ) == (vec![0, 1, 2], true)
+        );
         broker_handle.shutdown().await;
     }
 

@@ -140,3 +140,27 @@ fn applies_each_timing_and_keeps_unrelated_configuration(
             }
     );
 }
+
+/// The broker layer: an interval other than the current one sets only the
+/// assignment interval, and the current one borrows the original.
+#[yare::parameterized(
+    same = { 1_000, None },
+    longer = { 9_000, Some(9_000) },
+    zero = { 0, Some(0) },
+)]
+fn with_assignment_interval_replaces_only_the_assignment_interval(millis: u64, owned: Option<u64>) {
+    let config = Config::default();
+    let actual = config.with_assignment_interval(Duration::from_millis(millis));
+    match owned {
+        None => assert2::assert!(
+            matches!(actual, Cow::Borrowed(borrowed) if std::ptr::eq(borrowed, &raw const config))
+        ),
+        Some(want) => assert2::assert!(
+            actual.into_owned()
+                == Config {
+                    assignment_interval: Duration::from_millis(want),
+                    ..Config::default()
+                }
+        ),
+    }
+}

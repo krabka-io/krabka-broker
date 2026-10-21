@@ -40,6 +40,25 @@ and `GroupMetadataMessageFormatter` over the topic krabka writes and compares
 the decoded rows with what krabka committed, so that class is held to a real
 Kafka decoder rather than to a claim.
 
+### Group and stream-processing clients
+
+The client libraries row covers every group protocol, not only the classic
+one. The table names the protocol each client type uses and the client
+releases that the suites run against krabka. The
+[KIP matrix](../KIP_MATRIX.md) lists the same versions with links to the
+suites. A version that is not listed is not known to fail. It has only not
+been run.
+
+| Client | Protocol | Checked with | Suites |
+| :--- | :--- | :--- | :--- |
+| Kafka Streams, classic rebalance protocol | `JoinGroup` and `SyncGroup` with the Streams assignor. `processing.guarantee=exactly_once_v2` writes each output and changelog record in a transaction. | Kafka Streams 3.5 (`cp-kafka:7.5.0`) | `jvm_streams_app` |
+| Kafka Streams, `group.protocol=streams` | KIP-1071 `StreamsGroupHeartbeat` and `StreamsGroupDescribe`. Needs `streams.version` 1 or higher finalized; without it the broker answers the heartbeat with `UNSUPPORTED_VERSION`. | Apache Kafka 4.3.1 clients; the `kafka-streams-groups` tool from 4.1.0 | `jvm_streams_app`, `jvm_streams_groups` |
+| Consumer, `group.protocol=consumer` | KIP-848 `ConsumerGroupHeartbeat`, with assignment on the broker. | Apache Kafka 4.0.0 clients; librdkafka 2.15.0 | `jvm_consumer_group_next_gen`, `librdkafka_conformance` |
+| Share consumer | KIP-932 `ShareGroupHeartbeat`, `ShareFetch` and `ShareAcknowledge`. The start position is the group config `share.auto.offset.reset`, not a client setting. | Apache Kafka 4.1.0 `kafka-console-share-consumer` only | `jvm_share_groups` |
+
+A share group gives no order within a partition across its members. Choose it
+for queue-style work, and a consumer group where order by key matters.
+
 ## What does not work
 
 | Tool | What it needs | Why it cannot work |
@@ -52,6 +71,10 @@ Kafka decoder rather than to a claim.
 
 A tool in this table that has both a protocol path and a JMX path keeps the
 protocol path. Turn the JMX collector off rather than the whole tool.
+
+The [release support matrix](support-matrix.md) names the client versions
+that have run against krabka, the revision that each one ran at, and the link
+to that run.
 
 ## Reporting a gap
 

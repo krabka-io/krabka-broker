@@ -1,11 +1,11 @@
 name: publish
 
-# Publish `krabka-log` and `krabka-verified` to crates.io, with the workspace
-# crates they need as a normal dependency.
+# Publish `krabka-log`, `krabka-verified` and `krabka-java-regex` to crates.io,
+# with the workspace crates they need as a normal dependency.
 #
 # Every member crate without `publish = false` is published. Today those are
-# `krabka-macros`, `krabka-verified` and `krabka-log`; the broker and every
-# other member set `publish = false`.
+# `krabka-macros`, `krabka-verified`, `krabka-log` and `krabka-java-regex`; the
+# broker and every other member set `publish = false`.
 #
 # A `v*` tag push publishes. A manual run is a dry run unless `dry_run` is off,
 # and a manual run that publishes must be started from a `v*` tag.
@@ -64,7 +64,7 @@ jobs:
   # --dry-run`. It holds no credential.
   plan:
     name: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -74,6 +74,8 @@ jobs:
       crates: ${{ steps.pending.outputs.crates }}
       publish: ${{ steps.mode.outputs.publish }}
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -222,7 +224,7 @@ jobs:
     name: publish
     needs: plan
     if: needs.plan.outputs.publish == 'true' && needs.plan.outputs.crates != ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     # crates.io's trusted-publisher entry for each crate names this
     # environment. It also holds the bootstrap token, so the secret is
@@ -234,6 +236,8 @@ jobs:
       # token.
       id-token: write
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: choose the credential

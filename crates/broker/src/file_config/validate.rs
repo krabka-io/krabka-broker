@@ -473,6 +473,7 @@ mod tests {
     #[yare::parameterized(
         client_metrics_telemetry_max = { "client_metrics_telemetry_max", "0B" },
         replication_fetch_max = { "replication_fetch_max", "0B" },
+        replication_fetch_response_max = { "replication_fetch_response_max", "0B" },
         replication_fetch_min = { "replication_fetch_min", "0B" },
         observer_fetch_max = { "observer_fetch_max", "0B" },
         audit_tail_read_max = { "audit_tail_read_max", "0B" },

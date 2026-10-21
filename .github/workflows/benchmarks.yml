@@ -6,6 +6,7 @@ on:
       - "crates/log/**"
       - "crates/verified/**"
       - "crates/parse-benches/**"
+      - "packaging/performance/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/benchmarks.yml"
@@ -15,6 +16,7 @@ on:
       - "crates/log/**"
       - "crates/verified/**"
       - "crates/parse-benches/**"
+      - "packaging/performance/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/benchmarks.yml"
@@ -29,20 +31,46 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # The broker performance budgets are judged on a dedicated host by
+  # `packaging/performance/qualify.sh budget` in qualification-profile.yml.
+  # This nightly lane checks the predeclared contract instead: it must
+  # parse and validate, and the digest the harness will record is printed so a
+  # published verdict can be traced back to this commit's contract. The
+  # evaluator's own tests run under `bazel test //...` in ci.yml.
+  performance-budget-contract:
+    name: broker · performance budget contract
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: bench-broker
+      - name: Validate regression contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run -p krabka-parse-benches -- check-contract \
+            packaging/performance/regression-contract.json | tee -a "${GITHUB_STEP_SUMMARY}"
+
   # Automated storage microbenchmarks for krabka-log.
   # Bazel's crate_bench macro compiles and lints this suite. This lane measures
   # it through Cargo using the repository's pinned toolchain.
   micro-benchmarks:
     name: broker · storage microbenchmarks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Omitting an explicit rust-toolchain action relies on ubuntu-latest's pre-installed
+      # Omitting an explicit rust-toolchain action relies on the runner image's pre-installed
       # rustup, which automatically reads rust-toolchain.toml (channel = "1.98.0") as the
       # single source of truth and eliminates an unpinned third-party action step.
-      # Note: ubuntu-latest's pre-installed stable toolchain still appears in the
+      # Note: the runner image's pre-installed stable toolchain still appears in the
       # rust-cache environment inventory alongside the pinned 1.98.0 toolchain.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:

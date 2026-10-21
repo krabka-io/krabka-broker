@@ -11,7 +11,7 @@ use {
             ApiVersion, RequestContext,
             registration_listeners::{self, ListenerFields},
         },
-        leader_election::{FailoverPlan, compute_unclean_restart_changes},
+        leader_election::{compute_failover_changes, compute_unclean_restart_changes},
         unclean_recovery::RecoveryJob,
     },
     krabka_metadata::{BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord, NodeId},
@@ -135,18 +135,21 @@ pub(crate) async fn handle(
         return Ok(registered_response(broker, node_id, incarnation_id));
     }
     let clean_restart = clean_shutdown_proven(&req, version, &image, node_id);
-    // KIP-966: a broker that cannot prove it stopped gracefully may have lost
-    // an unflushed log tail, so nothing the cluster still believes about that
-    // log holds -- not its ELR membership, and not its ISR seat either.
     // `ClusterControlManager.registerBroker` calls
-    // `handleBrokerShutdown(id, isCleanShutdown, records)` before it appends
-    // the `RegisterBrokerRecord`, and the branch that boolean picks is the
-    // whole difference: `isElrFeatureEnabled() && !isCleanShutdown` runs two
+    // `handleBrokerShutdown(id, isCleanShutdown, records)` for every new
+    // incarnation, before it appends the `RegisterBrokerRecord`. KIP-966: a
+    // broker that cannot prove it stopped gracefully may have lost an
+    // unflushed log tail, so nothing the cluster still believes about that log
+    // holds -- not its ELR membership, and not its ISR seat either.
+    // `isElrFeatureEnabled() && !isCleanShutdown` runs two
     // `generateLeaderAndIsrUpdates` calls, which is what
-    // `compute_unclean_restart_changes` is. A restart that proves itself
-    // clean takes none of that.
+    // `compute_unclean_restart_changes` is. The other branch handles the
+    // broker as fenced (`brokerToRemove`): it leaves every ISR and every
+    // leadership it still holds, and may stay eligible, which is what the
+    // fencing failover computes. A broker that stopped through controlled
+    // shutdown holds neither, so that branch writes nothing for it.
     let restart = if clean_restart {
-        FailoverPlan::default()
+        compute_failover_changes(&image, node_id, &broker.liveness, &broker.metrics).await
     } else {
         compute_unclean_restart_changes(&image, node_id, &broker.liveness, &broker.metrics).await
     };
@@ -218,12 +221,11 @@ fn registered_response(
 
 /// The records one accepted registration writes, in the order they apply.
 ///
-/// `restart` is what a restart that could not prove itself clean costs, empty
-/// for one that did: the ELR withdrawals and ISR removals
-/// [`compute_unclean_restart_changes`](crate::leader_election::compute_unclean_restart_changes)
-/// decided. They go ahead of the registration, so a replay that stops between
-/// the two has already stopped trusting the returning log rather than not yet
-/// started.
+/// `restart` is what retiring the previous incarnation costs: the ISR removals
+/// and elections of Kafka's `handleBrokerShutdown`, and, for a restart that
+/// could not prove itself clean, the ELR withdrawals too. They go ahead of the
+/// registration, so a replay that stops between the two has already stopped
+/// trusting the returning log rather than not yet started.
 fn registration_records(
     mut restart: Vec<MetadataRecord>,
     record: BrokerRegistrationRecord,
@@ -393,115 +395,67 @@ mod tests {
         /// A case label, the features the broker reports, and the registration outcome.
         struct FeatureCase {
             what: &'static str,
-            features: &'static [FeatureRange],
+            features: Vec<FeatureRange>,
             expected: Result<(), i16>,
+        }
+
+        fn range(name: &'static str, min: i16, max: i16) -> FeatureRange {
+            FeatureRange { name, min, max }
         }
 
         let cases: &[FeatureCase] = &[
             FeatureCase {
                 what: "both finalized features in range",
-                features: &[
-                    FeatureRange {
-                        name: "metadata.version",
-                        min: 7,
-                        max: 25,
-                    },
-                    FeatureRange {
-                        name: "group.version",
-                        min: 0,
-                        max: 1,
-                    },
+                features: vec![
+                    range("metadata.version", 7, 25),
+                    range("group.version", 0, 1),
                 ],
                 expected: Ok(()),
             },
             FeatureCase {
                 what: "metadata.version below the finalized level",
-                features: &[
-                    FeatureRange {
-                        name: "metadata.version",
-                        min: 7,
-                        max: 24,
-                    },
-                    FeatureRange {
-                        name: "group.version",
-                        min: 0,
-                        max: 1,
-                    },
+                features: vec![
+                    range("metadata.version", 7, 24),
+                    range("group.version", 0, 1),
                 ],
                 expected: Err(codes::UNSUPPORTED_VERSION),
             },
             FeatureCase {
                 what: "a feature the cluster left at level 0 that the broker cannot run at 0",
-                features: &[
-                    FeatureRange {
-                        name: "metadata.version",
-                        min: 7,
-                        max: 25,
-                    },
-                    FeatureRange {
-                        name: "group.version",
-                        min: 0,
-                        max: 1,
-                    },
-                    FeatureRange {
-                        name: "share.version",
-                        min: 1,
-                        max: 1,
-                    },
+                features: vec![
+                    range("metadata.version", 7, 25),
+                    range("group.version", 0, 1),
+                    range("share.version", 1, 1),
                 ],
                 expected: Err(codes::UNSUPPORTED_VERSION),
             },
             FeatureCase {
                 what: "an unfinalized feature that includes level 0",
-                features: &[
-                    FeatureRange {
-                        name: "metadata.version",
-                        min: 7,
-                        max: 25,
-                    },
-                    FeatureRange {
-                        name: "group.version",
-                        min: 0,
-                        max: 1,
-                    },
-                    FeatureRange {
-                        name: "share.version",
-                        min: 0,
-                        max: 1,
-                    },
+                features: vec![
+                    range("metadata.version", 7, 25),
+                    range("group.version", 0, 1),
+                    range("share.version", 0, 1),
                 ],
                 expected: Ok(()),
             },
             FeatureCase {
                 what: "no metadata.version",
-                features: &[FeatureRange {
-                    name: "group.version",
-                    min: 0,
-                    max: 1,
-                }],
+                features: vec![range("group.version", 0, 1)],
                 expected: Err(codes::INVALID_REGISTRATION),
             },
             FeatureCase {
                 what: "no features at all",
-                features: &[],
+                features: vec![],
                 expected: Err(codes::INVALID_REGISTRATION),
             },
             FeatureCase {
                 what: "a finalized feature the broker does not name",
-                features: &[FeatureRange {
-                    name: "metadata.version",
-                    min: 7,
-                    max: 25,
-                }],
+                features: vec![range("metadata.version", 7, 25)],
                 expected: Err(codes::UNSUPPORTED_VERSION),
             },
             FeatureCase {
                 what: "an unsupported feature wins over a missing metadata.version",
-                features: &[FeatureRange {
-                    name: "group.version",
-                    min: 2,
-                    max: 3,
-                }],
+                features: vec![range("group.version", 2, 3)],
                 expected: Err(codes::UNSUPPORTED_VERSION),
             },
         ];
@@ -922,19 +876,26 @@ mod wire_tests {
         );
     }
 
-    /// A restart that proves itself clean keeps the seat, from the same seed.
+    /// A restart that proves itself clean leaves its ISR seat too, from the
+    /// same seed, but stays eligible to lead.
     ///
     /// Kafka's `handleBrokerShutdown` reaches the two-call unclean path only
-    /// under `isElrFeatureEnabled() && !isCleanShutdown`, so the proof is what
-    /// decides, and a broker that stopped gracefully still holds the log its
-    /// ISR membership claims. Nothing moves: same ISR, still no ELR.
+    /// under `isElrFeatureEnabled() && !isCleanShutdown`. Its other branch
+    /// handles the new incarnation as fenced: `generateLeaderAndIsrUpdates`
+    /// with the broker to remove, which takes node 2 out of the ISR. A broker
+    /// that stopped gracefully still holds the log its ISR membership claimed,
+    /// so the ISR it leaves under `min.insync.replicas` publishes it as
+    /// eligible (krabka-io/krabka-broker#1450).
     #[tokio::test]
-    async fn a_proven_clean_restart_keeps_its_isr_seat() {
+    async fn a_proven_clean_restart_leaves_its_isr_seat_and_stays_eligible() {
         assert!(
             restart(V3, Offer::HeldEpoch, healthy_isr_seed()).await
                 == Restarted {
-                    isr: nodes(&[1, 2, 3]),
-                    elr: PartitionElr::default(),
+                    isr: nodes(&[1, 3]),
+                    elr: PartitionElr {
+                        eligible_leader_replicas: vec![2],
+                        last_known_elr: vec![],
+                    },
                 }
         );
     }

@@ -19,8 +19,8 @@
 //! - `no_orphan_default`: no key carries default state (`max_bytes == 0`). A
 //!   merge-created entry always takes the request's value.
 //!
-//! Note on determinism: the real merge resolves a double-match through
-//! `HashMap` iteration order. A double-match is a request whose name matches
+//! Note on determinism: the real merge resolves a double-match through the
+//! session's partition order. A double-match is a request whose name matches
 //! one cached key and whose id matches another. So `next_state` is not a pure
 //! function of `(state, action)`. That is faithful to production and sound
 //! here. Every possible resolution satisfies the asserted invariants, which are
@@ -28,17 +28,14 @@
 //! for identical resulting content, so the explored graph is well-defined.
 
 use {
-    super::{CachedPartitionState, FetchSessionKey, apply_incremental},
+    super::{CachedPartitionState, FetchSessionKey, SessionPartitions, apply_incremental},
     crate::model_check::{assert_pinned_count, run_bfs},
     krabka_protocol::{
         owned::fetch_request::{FetchPartition, FetchTopic, ForgottenTopic},
         primitives::uuid::Uuid as WireUuid,
     },
     stateright::{Checker, Model, Property},
-    std::{
-        collections::HashMap,
-        hash::{Hash, Hasher},
-    },
+    std::hash::{Hash, Hasher},
 };
 
 // Exhaustiveness is bounded on UNIQUE states (memory-proportional). The combined
@@ -100,7 +97,7 @@ fn ref_matches(k: &FetchSessionKey, r: Ref, p: i32) -> bool {
 
 #[derive(Clone, Debug)]
 struct CacheState {
-    partitions: HashMap<FetchSessionKey, CachedPartitionState>,
+    partitions: SessionPartitions,
 }
 /// One cached partition, as the hashable projection of a [`CacheState`] sees it.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -196,7 +193,7 @@ fn fetch_topic(r: Ref, p: i32, mb: i32) -> FetchTopic {
 
 /// No two distinct keys refer to one logical partition: same partition AND
 /// (both names non-empty & equal) OR (both ids non-zero & equal).
-fn no_shadow(partitions: &HashMap<FetchSessionKey, CachedPartitionState>) -> bool {
+fn no_shadow(partitions: &SessionPartitions) -> bool {
     let keys: Vec<&FetchSessionKey> = partitions.keys().collect();
     for (i, a) in keys.iter().enumerate() {
         for b in &keys[i + 1..] {
@@ -257,7 +254,7 @@ impl Model for FsModel {
     fn init_states(&self) -> Vec<Self::State> {
         // Seed: a fully-resolved session — one key with BOTH halves (name A,
         // id U) on the first partition, max_bytes 9 (a non-default sentinel).
-        let mut partitions = HashMap::new();
+        let mut partitions = SessionPartitions::new();
         partitions.insert(
             FetchSessionKey {
                 topic_name: NAME_A.to_string(),

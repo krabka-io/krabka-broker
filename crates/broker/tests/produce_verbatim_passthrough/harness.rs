@@ -34,6 +34,9 @@ use {
 pub fn batch(codec: CompressionType, n: usize, value: &[u8]) -> RecordBatch {
     let mut b = RecordBatch {
         last_offset_delta: i32::try_from(n).unwrap() - 1,
+        // Every record sits at the header's timestamp, so the header's
+        // max_timestamp agrees with them, as a real producer's does.
+        base_timestamp: 12_345,
         max_timestamp: 12_345,
         producer_id: -1,
         ..RecordBatch::default()
@@ -50,6 +53,7 @@ pub fn batch(codec: CompressionType, n: usize, value: &[u8]) -> RecordBatch {
 
 pub fn idempotent_lz4_batch(producer_id: i64, base_sequence: i32, n: usize) -> RecordBatch {
     let mut batch = batch(CompressionType::Lz4, n, &[b'I'; 1024]);
+    batch.base_timestamp = 77;
     batch.max_timestamp = 77;
     batch.producer_id = producer_id;
     batch.producer_epoch = 0;

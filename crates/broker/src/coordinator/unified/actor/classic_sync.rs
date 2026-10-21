@@ -13,7 +13,9 @@ use {
     },
     crate::{
         codes,
-        coordinator::unified::{classic_ops, group::CoordinatorGroup, migration},
+        coordinator::unified::{
+            classic_ops, group::CoordinatorGroup, migration, offsets_log::write_failure_code,
+        },
     },
     krabka_protocol::owned::sync_group_request::SyncGroupRequest,
     tokio::sync::oneshot,
@@ -66,8 +68,9 @@ pub(super) async fn handle_classic_sync_message(
                     "classic SyncGroup log write failed");
                 // Kafka's `propagateAssignment` leaves the protocol type and
                 // name null when it propagates an error.
+                let error_code = write_failure_code(&error);
                 let failure = || SyncResult {
-                    error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
+                    error_code,
                     ..SyncResult::default()
                 };
                 let _ = reply.send(failure());

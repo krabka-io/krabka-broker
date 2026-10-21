@@ -28,6 +28,7 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/krabka-io/krabka-broker
+  PROVENANCE_TYPE: https://slsa.dev/provenance/v1
 
 jobs:
   # A `v*` tag is a name a person pushes, and before this job the workflow
@@ -40,7 +41,7 @@ jobs:
   # it.
   verify:
     name: verify
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     outputs:
       delivery_run: ${{ steps.main-ci.outputs.delivery_run }}
@@ -51,6 +52,8 @@ jobs:
       # `gh run list` below reads this repository's workflow runs.
       actions: read
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # A push checks out the tag it was started by; a dispatch, the tag
@@ -132,13 +135,15 @@ jobs:
           echo "delivery_run=${delivery_run}" >>"${GITHUB_OUTPUT}"
 
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: verify
     timeout-minutes: 90
     env:
       RELEASE_TAG: ${{ needs.verify.outputs.tag }}
       RELEASE_COMMIT: ${{ needs.verify.outputs.commit }}
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.commit }}
@@ -270,13 +275,11 @@ jobs:
 
       - name: create provenance predicate
         env:
-          DIGEST: ${{ steps.image.outputs.digest }}
           SOURCE: ${{ steps.delivery-image.outputs.source }}
           ARM64_DIGEST: ${{ steps.arm64.outputs.arm64_digest }}
         run: |
           jq -n \
             --arg commit "${RELEASE_COMMIT}" \
-            --arg digest "${DIGEST}" \
             --arg ref "refs/tags/${RELEASE_TAG}" \
             --arg source "${SOURCE}" \
             --arg arm64 "${ARM64_DIGEST}" \
@@ -300,11 +303,15 @@ jobs:
               runDetails: {
                 builder: {id: $run},
                 metadata: {invocationId: $run}
-              },
-              outputDigest: $digest
+              }
             }
           ' >provenance.json
 
+      # The predicate above is SLSA v1. Through v1.0.5 this step attested it as
+      # `--type slsaprovenance`, which cosign reads as SLSA v0.2: it parsed the
+      # predicate into the v0.2 schema, dropped every field, and signed `{}`.
+      # A URI type is attested as written. (`slsaprovenance1` would also keep
+      # the fields, but re-serialises `invocationId` as `invocationID`.)
       - name: sign image and attest SBOM and provenance
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
@@ -312,11 +319,13 @@ jobs:
           reference="${IMAGE}@${DIGEST}"
           cosign sign --yes "${reference}"
           cosign attest --yes --type cyclonedx --predicate sbom.cdx.json "${reference}"
-          cosign attest --yes --type slsaprovenance --predicate provenance.json "${reference}"
+          cosign attest --yes --type "${PROVENANCE_TYPE}" --predicate provenance.json "${reference}"
 
       - name: verify release signatures
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
+          AMD64_DIGEST: ${{ steps.delivery-image.outputs.amd64_digest }}
+          ARM64_DIGEST: ${{ steps.arm64.outputs.arm64_digest }}
         run: |
           reference="${IMAGE}@${DIGEST}"
           identity="https://github.com/${GITHUB_WORKFLOW_REF}"
@@ -330,11 +339,37 @@ jobs:
             --certificate-identity "${identity}" \
             --certificate-oidc-issuer "${issuer}" \
             "${reference}"
+          # `verify-attestation` checks the signature and the predicate type,
+          # never what the predicate says, so it passed on the empty v0.2
+          # predicate of every release through v1.0.5. Read the statement back
+          # and require the subject, the commit, the ref and both children.
           cosign verify-attestation \
-            --type slsaprovenance \
+            --type "${PROVENANCE_TYPE}" \
             --certificate-identity "${identity}" \
             --certificate-oidc-issuer "${issuer}" \
-            "${reference}"
+            "${reference}" >provenance-attestations.jsonl
+          jq -r '.payload' provenance-attestations.jsonl |
+            while read -r payload; do
+              base64 --decode <<<"${payload}"
+              echo
+            done >provenance-statements.jsonl
+          jq -s -e \
+            --arg type "${PROVENANCE_TYPE}" \
+            --arg subject "${DIGEST#sha256:}" \
+            --arg commit "${RELEASE_COMMIT}" \
+            --arg ref "refs/tags/${RELEASE_TAG}" \
+            --arg arm64 "${ARM64_DIGEST}" \
+            --arg amd64 "${IMAGE}@${AMD64_DIGEST}" '
+            any(.[];
+              .predicateType == $type
+              and [.subject[]?.digest.sha256] == [$subject]
+              and [.predicate.buildDefinition.resolvedDependencies[]?
+                   | select(.uri == "git+https://github.com/krabka-io/krabka-broker")
+                   | .digest.gitCommit] == [$commit]
+              and .predicate.buildDefinition.externalParameters.ref == $ref
+              and .predicate.buildDefinition.internalParameters.arm64Digest == $arm64
+              and (.predicate.buildDefinition.internalParameters.imageSource // "" | endswith($amd64)))
+          ' provenance-statements.jsonl >/dev/null
 
       - name: publish GitHub release and SBOM
         env:

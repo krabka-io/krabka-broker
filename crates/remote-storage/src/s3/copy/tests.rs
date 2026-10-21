@@ -54,6 +54,13 @@ fn copied_segment(
     fetched
 }
 
+fn assert_manifest_absent(store: &S3RemoteStorage, metadata: &RemoteLogSegmentMetadata) {
+    check!(matches!(
+        S3RemoteStorage::block_os(store.ops.get(&store.segment_key(metadata, MANIFEST_SUFFIX))),
+        Err(ObjectStoreError::NotFound(_))
+    ));
+}
+
 fn write_log_segment(dir: &std::path::Path, len: usize) -> PathBuf {
     let p = dir.join("00.log");
     let mut f = std::fs::File::create(&p).unwrap();
@@ -420,10 +427,7 @@ async fn non_worm_copy_writes_no_manifest_and_returns_none() {
     tokio::task::spawn_blocking(move || {
         let data = sample_data(src.path(), TransactionIndex::Present);
         check!(store.copy_log_segment_data(&md, &data).unwrap().is_none());
-        check!(matches!(
-            S3RemoteStorage::block_os(store.ops.get(&store.segment_key(&md, MANIFEST_SUFFIX))),
-            Err(ObjectStoreError::NotFound(_))
-        ));
+        assert_manifest_absent(&store, &md);
         // A second copy overwrites rather than being refused.
         check!(store.copy_log_segment_data(&md, &data).unwrap().is_none());
     })
@@ -447,10 +451,7 @@ async fn worm_copy_without_a_chain_stamp_is_refused() {
         ));
         // Nothing was committed: the manifest is the commit point, and the
         // copy failed before it.
-        check!(matches!(
-            S3RemoteStorage::block_os(store.ops.get(&store.segment_key(&md, MANIFEST_SUFFIX))),
-            Err(ObjectStoreError::NotFound(_))
-        ));
+        assert_manifest_absent(&store, &md);
     })
     .await
     .unwrap();

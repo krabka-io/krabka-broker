@@ -1,0 +1,205 @@
+"""Unit tests for `check_support_matrix.axl`."""
+
+load(
+    "./check_support_matrix.axl",
+    "HEADER",
+    "candidate_revision",
+    "cells",
+    "matrix_rows",
+    "problems",
+    "revisions",
+)
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+_RUN = "[run](https://github.com/o/r/actions/runs/1)"
+_ISSUE = "[#1](https://github.com/o/r/issues/1)"
+
+def _page(rows, candidate = "`none`"):
+    """A matrix page: the candidate line, then one table holding `rows`."""
+    return [
+        "# Matrix",
+        "",
+        "Candidate revision: " + candidate,
+        "",
+        HEADER,
+        "| :--- | :--- | :--- | :--- | :--- |",
+    ] + rows + ["", "After the table."]
+
+def _row(status, evidence = _RUN, tested_at = "`948e3cc8`", name = "PLAINTEXT"):
+    return "| %s | `%s` | %s | %s | note |" % (name, status, evidence, tested_at)
+
+def _test_cells(_ctx):
+    check_eq("a row", cells("| a | `b` | c |"), ["a", "`b`", "c"])
+    check_eq("indented", cells("  | a |  "), ["a"])
+    check_eq("prose is not a row", cells("Some prose."), None)
+    check_eq("an empty line is not a row", cells(""), None)
+    check_eq(
+        "an escaped pipe stays in its cell",
+        cells("| PLAINTEXT \\| SSL | `historical` |"),
+        ["PLAINTEXT \\| SSL", "`historical`"],
+    )
+    check_eq("an escaped closing pipe does not close the row", cells("| a \\|"), None)
+
+def _test_revisions(_ctx):
+    check_eq("a short commit", revisions("`948e3cc8`"), ["948e3cc8"])
+    check_eq(
+        "a tag and a commit",
+        revisions("`v1.0.5` (`ac9deff3`)"),
+        ["v1.0.5", "ac9deff3"],
+    )
+    check_eq("two commits", revisions("`948e3cc8`; `dc4acebe`"), ["948e3cc8", "dc4acebe"])
+    check_eq("six digits are not a commit", revisions("`948e3c`"), [])
+    check_eq("upper case is not a commit", revisions("`948E3CC8`"), [])
+    check_eq("a word is not a revision", revisions("none"), [])
+    check_eq("`main` is not a revision", revisions("`main` with #1373"), [])
+    check_eq("a two-part version is not a tag", revisions("v1.0"), [])
+
+def _test_candidate_revision(_ctx):
+    check_eq("none", candidate_revision(["Candidate revision: `none`"]), "none")
+    check_eq("a commit", candidate_revision(["x", "Candidate revision: `abc1234`"]), "abc1234")
+    check_eq("absent", candidate_revision(["Candidate: none"]), "")
+
+def _test_a_complete_page_passes(_ctx):
+    check_eq(
+        "every status in its correct form",
+        problems(_page([
+            _row("historical"),
+            _row("failing"),
+            _row("untested", evidence = _ISSUE, tested_at = "none"),
+            _row("unsupported", evidence = "[doc](doc.md)", tested_at = "none"),
+        ])),
+        [],
+    )
+
+def _test_only_matrix_tables_are_read(_ctx):
+    lines = _page([_row("historical")]) + [
+        "| Status | Meaning |",
+        "| :--- | :--- |",
+        "| `bogus` | not a matrix row |",
+    ]
+    check_eq("the legend is not a matrix", problems(lines), [])
+    check_eq("one matrix row", len(matrix_rows(lines)), 1)
+
+def _test_a_table_ends_at_the_first_non_row(_ctx):
+    lines = _page([_row("historical")]) + ["| `bogus` | a | b | c | d |"]
+    check_eq("a row after prose is not read", problems(lines), [])
+
+def _test_two_matrix_tables_are_both_read(_ctx):
+    lines = _page([_row("historical")]) + [
+        "",
+        HEADER,
+        "| :--- | :--- | :--- | :--- | :--- |",
+        _row("bogus", name = "TLS"),
+    ]
+    check_eq(
+        "the second table",
+        problems(lines),
+        ["line 13: TLS has status `bogus`, want one of candidate, historical, failing, untested, unsupported"],
+    )
+
+def _test_a_row_without_a_link_is_reported(_ctx):
+    check_eq(
+        "no link",
+        problems(_page([_row("historical", evidence = "a nightly run")])),
+        ["line 7: PLAINTEXT has no evidence link"],
+    )
+
+def _test_an_executed_row_without_a_revision_is_reported(_ctx):
+    for status in ["historical", "failing"]:
+        check_eq(
+            status + " with no revision",
+            problems(_page([_row(status, tested_at = "`main`, revision not recorded")])),
+            ["line 7: PLAINTEXT is %s but names no revision" % status],
+        )
+
+def _test_an_untested_row_must_link_an_issue(_ctx):
+    check_eq(
+        "a run is not an issue",
+        problems(_page([_row("untested", tested_at = "none")])),
+        ["line 7: PLAINTEXT is untested but links no issue"],
+    )
+
+def _test_no_candidate_row_while_none_is_frozen(_ctx):
+    check_eq(
+        "candidate with none",
+        problems(_page([_row("candidate")])),
+        ["line 7: PLAINTEXT is candidate, but the candidate revision is none"],
+    )
+
+def _test_a_candidate_row_names_the_candidate(_ctx):
+    frozen = "`948e3cc8f99dfabad5bd0917f7b710abc3a07710`"
+    check_eq(
+        "a prefix of the frozen commit",
+        problems(_page([_row("candidate")], candidate = frozen)),
+        [],
+    )
+    check_eq(
+        "another commit",
+        problems(_page([_row("candidate", tested_at = "`dc4acebe`")], candidate = frozen)),
+        ["line 7: PLAINTEXT is candidate but does not name 948e3cc8f99dfabad5bd0917f7b710abc3a07710"],
+    )
+
+def _test_the_candidate_line_is_required_and_checked(_ctx):
+    lines = [line for line in _page([_row("historical")]) if not line.startswith("Candidate")]
+    check_eq("absent", problems(lines), ["no `Candidate revision:` line"])
+    check_eq(
+        "not a commit",
+        problems(_page([_row("historical")], candidate = "`soon`")),
+        ["candidate revision `soon` is neither none nor a commit"],
+    )
+
+def _test_an_escaped_pipe_does_not_add_a_cell(_ctx):
+    check_eq(
+        "five cells, one of them holding a pipe",
+        problems(_page([_row("historical", name = "PLAINTEXT \\| SSL")])),
+        [],
+    )
+
+def _test_a_renamed_evidence_table_is_reported(_ctx):
+    lines = _page([_row("historical")]) + [
+        "",
+        "| Combination | Status | Evidence | Test revision | Notes |",
+        "| :--- | :--- | :--- | :--- | :--- |",
+        _row("bogus", name = "TLS"),
+    ]
+    check_eq(
+        "the renamed table is not skipped in silence",
+        problems(lines),
+        ["line 11: an evidence table's header is not " + HEADER],
+    )
+
+def _test_a_short_row_is_reported(_ctx):
+    check_eq(
+        "four cells",
+        problems(_page(["| PLAINTEXT | `historical` | %s | `948e3cc8` |" % _RUN])),
+        ["line 7: a matrix row has 4 cells, want 5"],
+    )
+
+def _test_a_page_without_rows_is_reported(_ctx):
+    check_eq(
+        "no rows",
+        problems(_page([])),
+        ["no matrix rows under the header " + HEADER],
+    )
+
+check_support_matrix_tests = suite("check-support-matrix", [
+    _test_cells,
+    _test_revisions,
+    _test_candidate_revision,
+    _test_a_complete_page_passes,
+    _test_only_matrix_tables_are_read,
+    _test_a_table_ends_at_the_first_non_row,
+    _test_two_matrix_tables_are_both_read,
+    _test_a_row_without_a_link_is_reported,
+    _test_an_executed_row_without_a_revision_is_reported,
+    _test_an_untested_row_must_link_an_issue,
+    _test_no_candidate_row_while_none_is_frozen,
+    _test_a_candidate_row_names_the_candidate,
+    _test_the_candidate_line_is_required_and_checked,
+    _test_an_escaped_pipe_does_not_add_a_cell,
+    _test_a_renamed_evidence_table_is_reported,
+    _test_a_short_row_is_reported,
+    _test_a_page_without_rows_is_reported,
+])
+
+test_check_support_matrix = suite_task(check_support_matrix_tests)

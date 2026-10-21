@@ -32,6 +32,10 @@ krabka_broker_under_replicated_partitions
 krabka_broker_offline_partitions_count
 ```
 
+`krabka_broker_offline_partitions_count` on the active controller counts a
+partition on the failed dir that no live ISR member could take over, and
+`KrabkaOfflinePartitions` fires for it.
+
 `kafka-log-dirs --bootstrap-server <broker> --describe` names the directory
 and carries the reason the broker recorded. Compare the count with the number
 of `log.dirs` entries the broker was started with: all of them offline is a

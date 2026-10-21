@@ -91,30 +91,36 @@ impl Partition {
         ))
     }
 
-    /// Push `overrides` through the writer actor so the partition's `Log`
-    /// picks up the new `retention.ms`, `retention.bytes`, and
-    /// `segment.bytes` on the next retention or roll tick. The caller has
-    /// already validated `overrides`; see `config_keys`. The call is
-    /// idempotent, so the same map pushed twice is a cheap noop.
-    /// `ReplicatorSupervisor::reconcile` calls this every time the metadata
-    /// image changes.
+    /// Atomically install validated topic overrides off the async poller, then
+    /// wake an idle writer so it recalculates its flush deadline. A writer
+    /// waiting for WAL quorum must not block metadata reconciliation.
     ///
     /// # Errors
-    ///
-    /// Returns `BrokerError::Replication` if the writer is dead or the
-    /// ack is dropped.
+    /// Returns an error if the blocking task cannot complete.
     pub(crate) async fn apply_log_config_overrides(
         &self,
         overrides: &std::collections::BTreeMap<String, String>,
         base: &krabka_log::LogConfig,
     ) -> Result<(), BrokerError> {
         let merged = apply_to_log_config(overrides, base);
-        self.ask_writer(|ack| WriterMessage::SetLogConfig {
-            config: merged,
-            ack,
+        let log = self.log.clone();
+        let writer = self.writer_tx.clone();
+        run_blocking(move || {
+            let log = log
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if log.config_snapshot() == merged {
+                return;
+            }
+            log.set_config(merged);
+            drop(log);
+            // A full queue already wakes the writer; a stopped writer has no timer.
+            let _ = writer.try_send(WriterMessage::ConfigChanged);
         })
-        .await?;
-        Ok(())
+        .await
+        .map_err(|error| {
+            BrokerError::Replication(format!("log configuration task failed: {error}"))
+        })
     }
 
     /// Append a leader-assigned batch to the local log and keep its
@@ -175,6 +181,22 @@ impl Partition {
     /// or the underlying `Log::trim_to_offset` fails (negative offset).
     pub async fn trim_to_offset(&self, new_start: Offset) -> Result<Offset, BrokerError> {
         self.ask_writer(|ack| WriterMessage::TrimToOffset { new_start, ack })
+            .await?
+    }
+
+    /// Take the leader's global log start as this follower's own, through
+    /// the writer actor. Returns the resulting `log_start_offset`. See
+    /// [`krabka_log::Log::follow_leader_log_start`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `BrokerError` if the writer is dead, the ack is dropped, or
+    /// the underlying log call fails.
+    pub(crate) async fn follow_leader_log_start(
+        &self,
+        leader_start: Offset,
+    ) -> Result<Offset, BrokerError> {
+        self.ask_writer(|ack| WriterMessage::FollowLeaderLogStart { leader_start, ack })
             .await?
     }
 
@@ -370,7 +392,71 @@ impl Partition {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::partition::test_support::test_partition_with_writer, assert2::assert};
+    use {
+        super::*,
+        crate::partition::test_support::{test_partition, test_partition_with_writer},
+        assert2::assert,
+    };
+
+    #[tokio::test]
+    async fn config_changes_do_not_wait_behind_a_stalled_writer() {
+        let (mut part, _dir) = test_partition_with_writer();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        part.writer_tx = tx;
+        let base = part.log.lock().unwrap().config_snapshot();
+        part.apply_log_config_overrides(&std::collections::BTreeMap::new(), &base)
+            .await
+            .unwrap();
+        assert!(rx.try_recv().is_err());
+
+        // The first notification fills the paused writer's queue. A newer
+        // config must still apply, and no queued config may roll it back.
+        for size in [1, 2] {
+            let bytes = 1_048_576 * size;
+            let overrides = [("segment.bytes".to_owned(), bytes.to_string())].into();
+            part.apply_log_config_overrides(&overrides, &base)
+                .await
+                .unwrap();
+            assert!(
+                part.log.lock().unwrap().config_snapshot()
+                    == krabka_log::LogConfig {
+                        segment_size: krabka_units::mebibytes(size),
+                        ..base.clone()
+                    }
+            );
+        }
+        assert!(matches!(rx.try_recv(), Ok(WriterMessage::ConfigChanged)));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn a_contended_config_swap_does_not_block_the_current_thread_runtime() {
+        let (part, _dir) = test_partition(std::sync::Arc::new(tokio::sync::Notify::new()));
+        let base = part.log.lock().unwrap().config_snapshot();
+        let log = part.log.clone();
+        let (locked, lock_held) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _guard = log.lock().unwrap();
+            locked.send(()).unwrap();
+            released
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .is_ok()
+        });
+        lock_held.await.unwrap();
+        let overrides = [("segment.bytes".into(), "1048576".into())].into();
+        let update = part.apply_log_config_overrides(&overrides, &base);
+        tokio::pin!(update);
+        assert!(futures_util::poll!(update.as_mut()).is_pending());
+        // This task must run while the blocking pool waits for the log lock.
+        assert!(tokio::spawn(async { 7 }).await.unwrap() == 7);
+        release.send(()).unwrap();
+        update.await.unwrap();
+        assert!(holder.join().unwrap());
+        assert!(
+            part.log.lock().unwrap().config_snapshot().segment_size == krabka_units::mebibytes(1)
+        );
+    }
 
     #[tokio::test]
     async fn test_set_log_start_updates_log_start_through_writer() {
@@ -391,10 +477,7 @@ mod tests {
     /// arrives as.
     #[tokio::test]
     async fn a_follower_takes_a_compressed_record_above_the_decompressed_limit() {
-        use {
-            krabka_ids::{LeaderEpoch, ProducerId},
-            krabka_protocol::records::{Attributes, Record},
-        };
+        use krabka_protocol::records::{Attributes, Record};
 
         let (p, _td) = test_partition_with_writer();
         {
@@ -419,19 +502,52 @@ mod tests {
             ..Default::default()
         };
 
-        p.replicate_batch(oversized(0))
+        take_both_follower_writes(&p, oversized(0), oversized(1)).await;
+    }
+
+    /// A diskless replica reopens with the committed `KRaft` next offset as its
+    /// append frontier. When it reopened behind it -- it was down while the
+    /// leader appended -- the batches between its log end and that frontier
+    /// are the leader's, and both writes of a follower's Fetch loop take them
+    /// at their own offsets.
+    #[tokio::test]
+    async fn a_follower_takes_the_leader_batches_below_a_recovered_frontier() {
+        use krabka_protocol::records::Record;
+
+        let (p, _td) = test_partition_with_writer();
+        p.log
+            .lock()
+            .expect("partition log lock")
+            .reconcile_next_offset(Offset(5));
+        let batch = |base_offset| RecordBatch {
+            base_offset,
+            producer_id: -1,
+            producer_epoch: -1,
+            base_sequence: -1,
+            records: vec![Record::default()],
+            ..Default::default()
+        };
+
+        take_both_follower_writes(&p, batch(0), batch(1)).await;
+    }
+
+    /// Replicate `owned` at offset 0 as an owned batch and `verbatim` at
+    /// offset 1 as verbatim bytes, the two writes of a follower's Fetch loop,
+    /// and require the log to take each one.
+    async fn take_both_follower_writes(p: &Partition, owned: RecordBatch, verbatim: RecordBatch) {
+        use krabka_ids::{LeaderEpoch, ProducerId};
+
+        p.replicate_batch(owned)
             .await
             .expect("the owned batch is taken");
         assert!(p.log.lock().expect("partition log lock").log_end_offset() == 1);
-
-        let producer = oversized(1);
         let mut wire = bytes::BytesMut::new();
-        producer.encode(&mut wire).expect("encode the batch");
+        verbatim.encode(&mut wire).expect("encode the batch");
         p.replicate_verbatim(
             krabka_log::VerbatimBatch {
                 bytes: wire.freeze(),
-                last_offset_delta: producer.last_offset_delta,
-                max_timestamp: producer.max_timestamp,
+                last_offset_delta: verbatim.last_offset_delta,
+                max_timestamp: verbatim.max_timestamp,
                 leader_epoch: LeaderEpoch(0),
                 producer_id: ProducerId(-1),
                 producer_epoch: -1,

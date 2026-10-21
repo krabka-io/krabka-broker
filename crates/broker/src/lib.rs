@@ -120,7 +120,7 @@
 //! `acks=all` produces survive arbitrary single-broker failures with
 //! no data loss and no zombie writes.
 
-#![doc(html_root_url = "https://docs.rs/krabka-broker/1.0.5")]
+#![doc(html_root_url = "https://docs.rs/krabka-broker/1.0.8")]
 
 pub mod api_catalog;
 pub(crate) mod assign_dirs;
@@ -194,6 +194,7 @@ pub(crate) mod kafka_hash;
 pub(crate) mod lag;
 pub(crate) mod leader_election;
 pub mod leader_rebalance;
+pub(crate) mod listener_tls;
 mod log_dir;
 pub mod log_dir_id;
 mod log_dir_status;
@@ -224,6 +225,7 @@ pub mod quota;
 pub mod raft_handshake;
 pub(crate) mod re2j;
 pub(crate) mod reassignment;
+pub(crate) mod registration_admission;
 pub(crate) mod remote_log_manager;
 pub(crate) mod remote_reader;
 pub mod replica_selector;

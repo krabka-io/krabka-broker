@@ -10,14 +10,17 @@ use {
     crate::{
         auto_topic_creation::AutoTopicCreation,
         barrier::coordinator::BarrierCoordinator,
+        broker::dynamic_listeners::DataPlaneListeners,
         client_metrics::ClientMetrics,
         config::BrokerConfig,
+        config_keys::{listener_endpoints::static_originals, listener_reconfig::OwnBrokerChecks},
         coordinator::GroupCoordinator,
         diskless::{hot_tail::HotTailCache, read::DisklessReadHandle},
         fetch_session::FetchSessionCache,
         future_log::FutureLogState,
         handlers::DispatchRegistry,
         heartbeat::controller_state::ControllerLivenessState,
+        listener_tls::{ListenerTlsCache, ListenerTlsInputs},
         log_dir_status::LogDirRegistry,
         metadata_source::MetadataSource,
         metrics::BrokerMetrics,
@@ -26,6 +29,7 @@ use {
         producer_id_manager::ProducerIdManager,
         producer_state::ProducerState,
         quota::QuotaBuckets,
+        remote_log_manager::quota::RemoteLogQuotas,
         remote_reader::RemoteReader,
         share_coordinator::coordinator::ShareCoordinator,
         share_partition::manager::SharePartitionLeaderManager,
@@ -51,8 +55,9 @@ mod adapters;
 mod audit;
 mod coordinators;
 mod diskless_index;
+mod dynamic_listeners;
 mod endpoints;
-pub(crate) use endpoints::registered_listener_endpoint;
+pub(crate) use endpoints::{leader_listener_endpoint, registered_listener_endpoint};
 mod finish;
 mod gauges;
 mod handle;
@@ -70,6 +75,16 @@ mod runtime;
 mod startup;
 mod storage;
 mod transport;
+
+pub(crate) async fn tick_or_shutdown(
+    tick: &mut tokio::time::Interval,
+    shutdown: &CancellationToken,
+) -> bool {
+    tokio::select! {
+        _ = tick.tick() => true,
+        () = shutdown.cancelled() => false,
+    }
+}
 
 #[cfg(test)]
 mod test_support;
@@ -98,6 +113,10 @@ const DISKLESS_FLUSHER_READY_TIMEOUT: std::time::Duration = std::time::Duration:
 /// [`Broker::start`]; this struct is the shared internal state.
 pub struct Broker {
     pub(crate) config: BrokerConfig,
+    /// The data-plane listeners this node runs: the static ones and the ones
+    /// a dynamic `listeners` added. `accept_loop` reads how many run to tell
+    /// whether the inter-broker listener is protected.
+    pub(crate) data_plane: DataPlaneListeners,
     /// Metadata authority for this broker. For combined/controller nodes
     /// this is a live `KRaft` `ControllerHandle`; for broker-only nodes it
     /// is an observer-backed source that fetches `__cluster_metadata` and
@@ -135,12 +154,20 @@ pub struct Broker {
     /// cancelling `supervisor_shutdown`. `None` when the scanner is
     /// disabled (interval = 0, typical in tests).
     pub(crate) disk_scanner_handle: tokio::sync::Mutex<Option<JoinHandle<()>>>,
+    /// The remote-log-manager sweep, when the broker has a remote tier. It
+    /// stops on `supervisor_shutdown`, and [`BrokerHandle::shutdown`] joins it
+    /// so no copy this broker started is published after it has stopped.
+    pub(crate) remote_log_manager_handle: tokio::sync::Mutex<Option<JoinHandle<()>>>,
     pub(crate) liveness: Arc<ControllerLivenessState>,
     /// `Some` when `BrokerConfig::tls_config` is set. Per-listener
     /// accept loops snapshot the current `Arc<ServerConfig>` with
     /// `current()` and wrap it in a fresh `TlsAcceptor`. The TLS
     /// hot-reload path swaps the inner config without restart.
     pub(crate) tls_dynamic: Option<Arc<krabka_security::DynamicServerConfig>>,
+    /// The server config each TLS listener builds from its dynamic
+    /// `listener.name.<listener>.ssl.*` keys, which win over the static
+    /// `tls_config` while set.
+    pub(crate) listener_tls: ListenerTlsCache,
     /// Linux kTLS (Increment F): `true` when the startup probe confirmed the
     /// kernel supports kTLS TX (kernel ≥ 4.13 + the `tls` module loadable) and
     /// rustls is configured to export secrets. Set ONCE at startup.
@@ -218,6 +245,11 @@ pub struct Broker {
     /// the remote-log-manager copy task and the Fetch/ListOffsets
     /// handlers share the same instance through this handle.
     pub(crate) remote_reader: Option<Arc<RemoteReader>>,
+    /// KIP-956's remote-log copy and fetch quotas, which the dynamic
+    /// `remote.log.manager.{copy,fetch}.max.bytes.per.second` configs change
+    /// on a running broker. The fetch path asks the fetch quota before every
+    /// cold read.
+    pub(crate) remote_log_quotas: Arc<RemoteLogQuotas>,
     /// Diskless WAL cold-read handle. `Some` once object-store + committed
     /// index-log wiring is active; fetch/list-offset handlers are fail-closed
     /// when this is absent.
@@ -278,6 +310,24 @@ impl DisklessRuntime {
 }
 
 impl Broker {
+    /// This node's listeners and broker-wide `tls_config`, for the listener
+    /// SSL checks of an alter addressed to it.
+    fn listener_tls_inputs(&self) -> ListenerTlsInputs<'_> {
+        ListenerTlsInputs {
+            listeners: self.data_plane.specs().into(),
+            tls_config: self.config.tls_config.as_ref(),
+        }
+    }
+
+    /// What the reconfiguration checks of an alter of this node's own
+    /// `BROKER` resource need of it.
+    pub(crate) fn own_config_checks(&self) -> OwnBrokerChecks<'_> {
+        OwnBrokerChecks {
+            listener_tls: self.listener_tls_inputs(),
+            static_config: static_originals(&self.config),
+        }
+    }
+
     pub(crate) fn handlers(&self) -> &DispatchRegistry { &self.handlers }
 
     pub(crate) fn audit_product() -> krabka_audit::ProductInfo {
@@ -309,9 +359,11 @@ pub struct BrokerHandle {
     /// data-plane listener.
     listen_addr: Option<SocketAddr>,
     shutdown: CancellationToken,
-    /// One task per `ListenerSpec` bound during `Broker::start`. `shutdown()`
-    /// awaits every task after it stops all active connections.
-    listener_tasks: Vec<JoinHandle<()>>,
+    /// The task that opens and closes data-plane listeners as this node's
+    /// dynamic `listeners` changes. `None` on a node without the broker role.
+    /// The accept loops themselves are in `Broker::data_plane`, and
+    /// `shutdown()` awaits every one of them after this task.
+    listener_watcher: Option<JoinHandle<()>>,
     /// Topic-backed RLMM bootstrap and assignment task. Retained so shutdown
     /// can join it before the Tokio runtime drops.
     topic_rlmm_task: Option<JoinHandle<()>>,

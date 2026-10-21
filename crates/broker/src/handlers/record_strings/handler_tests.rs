@@ -32,7 +32,7 @@ use {
     bytes::Bytes,
     krabka_metadata::{FeatureLevelRecord, MetadataRecord},
     krabka_protocol::{
-        Encode,
+        Decode, Encode,
         owned::{
             consumer_group_heartbeat_request::{self, ConsumerGroupHeartbeatRequest},
             consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse,
@@ -190,6 +190,22 @@ fn check(label: &str, result: &Result<Bytes, BrokerError>, length: usize) {
     }
 }
 
+async fn dispatch_checked_response<R: Encode, Response: Decode<'static>>(
+    env: &Env,
+    api_key: i16,
+    version: i16,
+    request: &R,
+    client_id: &str,
+    label: &str,
+    length: usize,
+) -> Option<Response> {
+    let result = env.dispatch(api_key, version, request, client_id).await;
+    check(label, &result, length);
+    result
+        .ok()
+        .map(|bytes| decode_response::<Response>(&bytes, version))
+}
+
 /// A running broker with the group, share and streams protocols on.
 struct Env {
     handle: BrokerHandle,
@@ -315,19 +331,16 @@ async fn consumer_group_heartbeat_takes_32767_byte_ids_and_refuses_32768() {
             ..Default::default()
         };
 
-        let result = env
-            .dispatch(
-                consumer_group_heartbeat_request::API_KEY,
-                VERSION,
-                &request,
-                &client_id,
-            )
-            .await;
-
-        check(&label, &result, length);
-        let response = result
-            .ok()
-            .map(|bytes| decode_response::<ConsumerGroupHeartbeatResponse>(&bytes, VERSION));
+        let response = dispatch_checked_response::<_, ConsumerGroupHeartbeatResponse>(
+            &env,
+            consumer_group_heartbeat_request::API_KEY,
+            VERSION,
+            &request,
+            &client_id,
+            &label,
+            length,
+        )
+        .await;
         assert!(
             env.broker.group_coordinator.find(&ids.group).is_some() == (length <= LIMIT),
             "{label}: the group exists only when the request was taken: {response:?}"
@@ -369,19 +382,16 @@ async fn share_group_heartbeat_takes_32767_byte_ids_and_refuses_32768() {
             ..Default::default()
         };
 
-        let result = env
-            .dispatch(
-                share_group_heartbeat_request::API_KEY,
-                VERSION,
-                &request,
-                &client_id,
-            )
-            .await;
-
-        check(&label, &result, length);
-        let response = result
-            .ok()
-            .map(|bytes| decode_response::<ShareGroupHeartbeatResponse>(&bytes, VERSION));
+        let response = dispatch_checked_response::<_, ShareGroupHeartbeatResponse>(
+            &env,
+            share_group_heartbeat_request::API_KEY,
+            VERSION,
+            &request,
+            &client_id,
+            &label,
+            length,
+        )
+        .await;
         assert!(
             env.broker.group_coordinator.find_share(&group_id).is_some()
                 == (length <= LIMIT && long != Long::Member),
@@ -420,19 +430,16 @@ async fn streams_group_heartbeat_takes_32767_byte_ids_and_refuses_32768() {
             ..streams_request(&ids.group, &ids.member)
         };
 
-        let result = env
-            .dispatch(
-                streams_group_heartbeat_request::API_KEY,
-                VERSION,
-                &request,
-                &client_id,
-            )
-            .await;
-
-        check(&label, &result, length);
-        let response = result
-            .ok()
-            .map(|bytes| decode_response::<StreamsGroupHeartbeatResponse>(&bytes, VERSION));
+        let response = dispatch_checked_response::<_, StreamsGroupHeartbeatResponse>(
+            &env,
+            streams_group_heartbeat_request::API_KEY,
+            VERSION,
+            &request,
+            &client_id,
+            &label,
+            length,
+        )
+        .await;
         // Kafka 4.3.1 refuses a streams member with an instance id (static
         // membership) as `INVALID_REQUEST`, so that request creates no group.
         assert!(

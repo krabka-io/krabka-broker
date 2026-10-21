@@ -250,8 +250,8 @@ shape.
 A `vX.Y.Z` tag on `main` starts two independent workflows.
 `.github/workflows/release.yml` signs and promotes the container image and
 creates the GitHub release. `.github/workflows/publish.yml` publishes
-`krabka-log` and `krabka-verified` to crates.io, with `krabka-macros`, which
-`krabka-log` needs as a normal dependency.
+`krabka-log`, `krabka-verified` and `krabka-java-regex` to crates.io, with
+`krabka-macros`, which `krabka-log` needs as a normal dependency.
 
 `publish.yml` publishes every member crate without `publish = false`. Every
 other member, the broker included, sets `publish = false`, and a new crate that

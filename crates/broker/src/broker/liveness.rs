@@ -47,9 +47,8 @@ fn spawn_liveness_ticker(
         let mut tick = tokio::time::interval(tick_interval.to_std());
         let mut state = LivenessTickState::default();
         loop {
-            tokio::select! {
-                _ = tick.tick() => {}
-                () = shutdown.cancelled() => return,
+            if !super::tick_or_shutdown(&mut tick, &shutdown).await {
+                return;
             }
             run_liveness_tick(
                 &controller,
@@ -206,6 +205,7 @@ pub(super) fn start_liveness_services(
     tokio::spawn(run(Config {
         broker_id: config.broker_id,
         broker_epoch: config.broker_epoch,
+        incarnation_id: config.incarnation_id,
         interval: config.heartbeat_interval,
         controller: Arc::clone(controller),
         shutdown: shutdown.child_token(),

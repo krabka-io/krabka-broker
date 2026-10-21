@@ -17,8 +17,9 @@ use {
             broker_dynamic::{
                 BrokerConfigContext, BrokerKeyKind, CLUSTER_DEFAULT_ONLY, broker_key_kind,
                 cordoned_log_dirs_disabled_error, cordoned_log_dirs_error, elr_min_isr_error,
-                validate_dynamic_broker_configs,
+                stored_dynamic_configs, validate_dynamic_broker_configs,
             },
+            listener_reconfig::OwnBrokerChecks,
         },
         cordoned_log_dirs::CORDONED_LOG_DIRS,
     },
@@ -142,14 +143,7 @@ fn broker_records(
             ));
         }
     }
-    let mut props: BTreeMap<String, String> = context
-        .image
-        .broker_config(node_id)
-        .into_iter()
-        .flatten()
-        .filter(|(name, _)| !config_keys::is_controller_managed_broker_config(name))
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .collect();
+    let mut props = stored_dynamic_configs(context.image, node_id);
     apply_operations(resource, &mut props, context.unstable)?;
     let per_broker = node_id != krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID;
     // The records carry the client's strings, as Kafka's do: validation
@@ -183,9 +177,17 @@ fn broker_records(
 /// Broker-side checks whose inputs belong to the client-addressed node.
 /// The controller applies the operations and validates the complete config
 /// again against its authoritative image.
+///
+/// For this node's own resource that includes Kafka's reconfigurable checks,
+/// which only the addressed node can make, over the stored dynamic configs
+/// with the operations applied, after the key rules those configs must pass
+/// first: the listener values of the config the node would run with, then the
+/// TLS listeners' new keystores and truststores, then the listeners it keeps
+/// ([`OwnBrokerChecks`]).
 pub(super) fn preprocess_broker_resource(
     resource: &AlterConfigsResource,
     context: BrokerConfigContext<'_>,
+    checks: OwnBrokerChecks<'_>,
 ) -> Result<(), (i16, String)> {
     if context.is_cluster_default_resource(&resource.resource_name)? {
         return Ok(());
@@ -202,7 +204,11 @@ pub(super) fn preprocess_broker_resource(
             cordoned_log_dirs_error(&props, context.log_dirs)?;
         }
     }
-    Ok(())
+    let current = stored_dynamic_configs(context.image, context.serving);
+    let mut proposed = current.clone();
+    apply_operations(resource, &mut proposed, context.unstable)?;
+    validate_dynamic_broker_configs(&proposed, true, context.unstable)?;
+    checks.check(context.image, &current, &proposed)
 }
 
 pub(super) fn handle_broker_scoped(

@@ -7,9 +7,10 @@ use {
         archive::ChainPosition,
         copy_segment::{CopyOutcome, copy_one},
         local_retention::{OffsetRange, remote_covered_through},
+        quota::RlmQuotaManager,
     },
     crate::config_keys::RemoteCopyLag,
-    krabka_log::SegmentExport,
+    krabka_log::{Offset, SegmentExport},
     krabka_remote_storage::{RemoteLogSegmentState, TopicIdPartition},
     krabka_units::convert::{ByteSizeExt, TimeExt},
     tracing::{debug, warn},
@@ -221,6 +222,7 @@ pub(crate) async fn copy_eligible_below(
         CopyIdentity {
             broker_id,
             leader_epoch,
+            fence: &Unfenced,
         },
         exports,
         CopyBound {
@@ -231,11 +233,98 @@ pub(crate) async fn copy_eligible_below(
     .await
 }
 
-/// The broker and leader epoch a copy pass uploads under.
+/// Whether the broker running a copy pass still owns the partition's tier.
+///
+/// KIP-405 gives the remote tier one writer per partition: its leader. Kafka's
+/// `RemoteLogManager` cancels a partition's `RLMCopyTask` when leadership moves,
+/// and the task asks `isCancelled()` before each candidate segment, so a broker
+/// that has lost the partition uploads nothing more for it. A copy pass here
+/// asks its fence at the same points, and once more around the upload, because
+/// a pass that read its leadership at the start of a tick can run for as long
+/// as the object store and the metadata manager take to answer.
+pub(crate) trait CopyFence: Sync {
+    /// `true` while this broker still leads the partition in the leader epoch
+    /// the pass started under, and the broker is not shutting down.
+    fn holds(&self) -> bool;
+
+    /// The partition's established log start as it reads now
+    /// (`Log::established_log_start`): the floor a `DeleteRecords` or a
+    /// remote deletion moved, or `None` when nobody moved one.
+    ///
+    /// A copy asks this once it has recorded `CopySegmentFinished`, and
+    /// deletes the segment at once when it lies wholly below the floor. The
+    /// `DeleteRecords` handler marks the archive below a floor it raises, but
+    /// a copy that finishes after that marking was never there to be marked.
+    fn established_log_start(&self) -> Option<Offset>;
+}
+
+/// A fence that always holds, for tests that drive the copy pass directly.
+#[cfg(test)]
+pub(crate) struct Unfenced;
+
+#[cfg(test)]
+impl CopyFence for Unfenced {
+    fn holds(&self) -> bool { true }
+
+    fn established_log_start(&self) -> Option<Offset> { None }
+}
+
+/// The broker and leader epoch a copy pass uploads under, and the fence that
+/// says whether it still may.
 #[derive(Clone, Copy)]
-pub(crate) struct CopyIdentity {
+pub(crate) struct CopyIdentity<'a> {
     pub(crate) broker_id: i32,
     pub(crate) leader_epoch: krabka_ids::LeaderEpoch,
+    pub(crate) fence: &'a dyn CopyFence,
+}
+
+#[cfg(test)]
+impl CopyIdentity<'static> {
+    /// Broker `broker_id` in `leader_epoch`, behind a fence that always holds.
+    pub(crate) fn unfenced(broker_id: i32, leader_epoch: krabka_ids::LeaderEpoch) -> Self {
+        Self {
+            broker_id,
+            leader_epoch,
+            fence: &Unfenced,
+        }
+    }
+}
+
+/// The longest one wait for the copy quota sleeps before it asks the quota
+/// and the fence again: Kafka's `RemoteLogManager.quotaTimeout()`.
+const COPY_QUOTA_RECHECK: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Kafka's copy-quota gate in `RLMCopyTask.copyLogSegmentsToRemote`: wait
+/// until `quota` allows more bytes, then record the segment's `bytes` against
+/// it before the upload starts.
+///
+/// Kafka waits on a condition for at most `quotaTimeout()` and asks the quota
+/// again; the task is interrupted when it is cancelled. This sleeps for the
+/// throttle time, capped at the same second, and asks `fence` after each
+/// sleep, so a broker that loses the partition or starts to shut down stops
+/// waiting.
+///
+/// Returns `false` when the fence stopped holding during the wait.
+async fn wait_for_copy_quota(
+    quota: &RlmQuotaManager,
+    bytes: u64,
+    fence: &dyn CopyFence,
+    tp: &TopicIdPartition,
+) -> bool {
+    loop {
+        let throttle_ms = match quota.try_acquire(bytes) {
+            Ok(()) => return true,
+            Err(throttle_ms) => throttle_ms,
+        };
+        debug!(topic = %tp.topic, partition = tp.partition, throttle_ms,
+               "remote-log-manager: quota exceeded for copying log segments, waiting for the \
+                quota to be available");
+        let wait = std::time::Duration::from_millis(u64::try_from(throttle_ms).unwrap_or(0));
+        tokio::time::sleep(wait.min(COPY_QUOTA_RECHECK)).await;
+        if !fence.holds() {
+            return false;
+        }
+    }
 }
 
 /// What holds a copy pass back: the last stable offset that bounds what it
@@ -254,13 +343,15 @@ pub(crate) struct CopyBound {
 /// pass copies the sealed segments in order and stops at the first that is
 /// held back, as `candidateLogSegments` does. A held segment is still local and
 /// uncopied, so the copy lag counts it.
+///
+/// The pass stops at the first segment for which `identity`'s fence no longer
+/// holds, as Kafka's `RLMCopyTask` stops when its task is cancelled: a broker
+/// that has lost the partition, or is shutting down, must not keep uploading
+/// over the tier the new leader is copying into.
 pub(crate) async fn copy_eligible_delayed(
     tier: &RemoteTier<'_>,
     tp: &TopicIdPartition,
-    CopyIdentity {
-        broker_id,
-        leader_epoch,
-    }: CopyIdentity,
+    identity: CopyIdentity<'_>,
     exports: Vec<SegmentExport>,
     CopyBound {
         last_stable_offset,
@@ -325,6 +416,11 @@ pub(crate) async fn copy_eligible_delayed(
     // is deliberately the near side of that hole -- coverage, not maximum --
     // and this is the line that says the tier is being re-copied over ground
     // it already has.
+    let CopyIdentity {
+        leader_epoch,
+        fence,
+        ..
+    } = identity;
     match tier.rlmm.highest_offset_for_epoch(tp, leader_epoch) {
         Ok(Some(highest)) if highest >= copy_start => {
             warn!(topic = %tp.topic, partition = tp.partition, copy_start, highest,
@@ -382,13 +478,36 @@ pub(crate) async fn copy_eligible_delayed(
                    segment without a distinct chain position");
             break;
         }
+        // Kafka's `RLMCopyTask` asks `isCancelled()` before each candidate.
+        // Leadership was read once, at the start of the tick, and every
+        // segment before this one may have taken the object store's time.
+        if !fence.holds() {
+            debug!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                   epoch = leader_epoch.0,
+                   "remote-log-manager: no longer the partition's leader in this epoch; \
+                    stopping the copy pass");
+            break;
+        }
+        // KIP-956's copy quota, asked after the fence and before the upload as
+        // `RLMCopyTask` asks it, and charged with the segment's `.log` bytes.
+        if !wait_for_copy_quota(tier.copy_quota, ex.size.bytes_u64(), fence, tp).await {
+            debug!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                   "remote-log-manager: the copy fence closed while waiting for the copy \
+                    quota; stopping the copy pass");
+            break;
+        }
         // Each success hands back the next chain position, so a run of
         // consecutive segments chains inside one tick with no further listing.
-        if let CopyOutcome::Copied { next } =
-            copy_one(tier, tp, broker_id, leader_epoch, &ex, chain).await
-        {
-            copied += 1;
-            chain = next;
+        match copy_one(tier, tp, identity, &ex, chain).await {
+            CopyOutcome::Copied { next } => {
+                copied += 1;
+                chain = next;
+            }
+            // The tier no longer holds the segment, but a write-once copy
+            // sealed its manifest all the same, and the chain runs through it.
+            CopyOutcome::Withdrawn { next } => chain = next,
+            CopyOutcome::Failed => {}
+            CopyOutcome::Fenced => break,
         }
     }
     copied
@@ -421,7 +540,10 @@ mod tests {
             RemoteStorageManager, WormChainRecord,
         },
         krabka_units::bytes,
-        std::sync::Arc,
+        std::sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
         uuid::Uuid,
     };
 
@@ -577,10 +699,7 @@ mod tests {
         let copied = copy_eligible_delayed(
             &tier,
             &tp(),
-            CopyIdentity {
-                broker_id: 1,
-                leader_epoch: LeaderEpoch(0),
-            },
+            CopyIdentity::unfenced(1, LeaderEpoch(0)),
             exports,
             CopyBound {
                 last_stable_offset: krabka_log::Offset(i64::MAX),
@@ -654,6 +773,257 @@ mod tests {
         );
         check!(metrics.remote_copy_errors_total.get_or_create(&topic).get() == 1);
         check!(metrics.remote_copy_bytes_total.get_or_create(&topic).get() == 0);
+    }
+
+    /// The broker's leadership of the partition, as a copy fence a test can
+    /// take away.
+    #[derive(Default)]
+    struct Leadership {
+        lost: AtomicBool,
+    }
+
+    impl CopyFence for Leadership {
+        fn holds(&self) -> bool { !self.lost.load(Ordering::SeqCst) }
+
+        fn established_log_start(&self) -> Option<Offset> { None }
+    }
+
+    /// A backend that holds every object it is given until it is told to
+    /// delete it, and that takes `leadership` away during its `lose_on`th
+    /// upload -- the partition moving to another broker while an upload is in
+    /// flight. `lose_on == 0` never takes it.
+    struct LeadershipMovingRsm {
+        leadership: Arc<Leadership>,
+        lose_on: usize,
+        uploads: AtomicUsize,
+        held: std::sync::Mutex<Vec<RemoteLogSegmentMetadata>>,
+    }
+
+    impl LeadershipMovingRsm {
+        /// An empty backend that takes `leadership` away during its
+        /// `lose_on`th upload, or never when `lose_on` is 0.
+        fn new(leadership: &Arc<Leadership>, lose_on: usize) -> Self {
+            Self {
+                leadership: Arc::clone(leadership),
+                lose_on,
+                uploads: AtomicUsize::new(0),
+                held: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        /// The offset ranges of the objects the backend still holds.
+        fn held(&self) -> Vec<(i64, i64)> {
+            let mut held: Vec<(i64, i64)> = self
+                .held
+                .lock()
+                .expect("held-objects mutex poisoned")
+                .iter()
+                .map(|md| (md.start_offset(), md.end_offset()))
+                .collect();
+            held.sort_unstable();
+            held
+        }
+    }
+
+    #[krabka_macros::missing_remote_reads]
+    impl RemoteStorageManager for LeadershipMovingRsm {
+        fn copy_log_segment_data(
+            &self,
+            metadata: &RemoteLogSegmentMetadata,
+            _data: &LogSegmentData,
+        ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
+            self.held
+                .lock()
+                .expect("held-objects mutex poisoned")
+                .push(metadata.clone());
+            let upload = self.uploads.fetch_add(1, Ordering::SeqCst) + 1;
+            if upload == self.lose_on {
+                self.leadership.lost.store(true, Ordering::SeqCst);
+            }
+            Ok(None)
+        }
+
+        fn delete_log_segment_data(
+            &self,
+            metadata: &RemoteLogSegmentMetadata,
+        ) -> Result<(), RemoteStorageError> {
+            self.held
+                .lock()
+                .expect("held-objects mutex poisoned")
+                .retain(|held| held.remote_log_segment_id() != metadata.remote_log_segment_id());
+            Ok(())
+        }
+    }
+
+    /// What a copy pass left behind once its broker lost the partition.
+    #[derive(Debug, PartialEq, Eq)]
+    struct FencedPass {
+        copied: usize,
+        uploads: usize,
+        /// The objects the backend holds.
+        held: Vec<(i64, i64)>,
+        /// The segments the metadata names `CopySegmentFinished`.
+        finished: Vec<(i64, i64)>,
+        /// The segments the metadata leaves in `CopySegmentStarted`.
+        started: Vec<(i64, i64)>,
+        errors: u64,
+    }
+
+    /// KIP-405: the partition's leader is the tier's one writer. Kafka cancels
+    /// a partition's `RLMCopyTask` when leadership moves, and the task stops
+    /// at its next candidate segment. A copy pass that read its leadership
+    /// once, at the start of the tick, went on uploading every segment it had
+    /// planned -- and a new leader copying the same offsets under its own
+    /// segment boundaries left the tier two copies of them.
+    ///
+    /// Three ten-offset segments; the broker loses the partition before the
+    /// pass, or during its first, second or third upload, or never. The upload
+    /// that was running when it lost the partition is withdrawn, objects and
+    /// metadata both, and nothing after it is uploaded.
+    #[yare::parameterized(
+        before_the_pass = { true, 0, FencedPass {
+            copied: 0, uploads: 0, held: vec![], finished: vec![], started: vec![], errors: 0,
+        } },
+        during_the_first_upload = { false, 1, FencedPass {
+            copied: 0, uploads: 1, held: vec![], finished: vec![], started: vec![], errors: 0,
+        } },
+        during_the_second_upload = { false, 2, FencedPass {
+            copied: 1, uploads: 2, held: vec![(0, 9)], finished: vec![(0, 9)], started: vec![],
+            errors: 0,
+        } },
+        during_the_last_upload = { false, 3, FencedPass {
+            copied: 2, uploads: 3, held: vec![(0, 9), (10, 19)], finished: vec![(0, 9), (10, 19)],
+            started: vec![], errors: 0,
+        } },
+        never = { false, 0, FencedPass {
+            copied: 3, uploads: 3, held: vec![(0, 9), (10, 19), (20, 29)],
+            finished: vec![(0, 9), (10, 19), (20, 29)], started: vec![], errors: 0,
+        } },
+    )]
+    #[test_macro(tokio::test)]
+    async fn a_copy_pass_stops_and_withdraws_its_upload_once_leadership_moves(
+        lost_before: bool,
+        lose_on: usize,
+        want: FencedPass,
+    ) {
+        let leadership = Arc::new(Leadership::default());
+        leadership.lost.store(lost_before, Ordering::SeqCst);
+        let backend = Arc::new(LeadershipMovingRsm::new(&leadership, lose_on));
+        let rlmm = fixtures::in_memory_metadata();
+
+        let got = fenced_copy_pass(&*leadership, &backend, &rlmm).await;
+
+        check!(got == want);
+    }
+
+    /// A broker's leadership as a fence that answers "still the leader" for
+    /// its first `answers` questions and "no longer" from then on.
+    ///
+    /// A copy pass asks three times per segment: before the segment, between
+    /// recording `CopySegmentStarted` and uploading, and after the upload. So
+    /// `answers` picks the question at which the partition has moved: `1` is
+    /// the first segment's pre-upload question, `4` the second segment's.
+    struct AnsweredLeadership {
+        answers: usize,
+        asked: AtomicUsize,
+    }
+
+    impl CopyFence for AnsweredLeadership {
+        fn holds(&self) -> bool { self.asked.fetch_add(1, Ordering::SeqCst) < self.answers }
+
+        fn established_log_start(&self) -> Option<Offset> { None }
+    }
+
+    /// The fence `copy_one` asks between recording `CopySegmentStarted` and
+    /// uploading. That record waits on the metadata log, and a broker that
+    /// lost the partition in the wait must upload nothing: it withdraws the
+    /// record and stops. The after-upload check alone would still keep the
+    /// copy out of the tier, but only after an upload the new leader's copy
+    /// races, which is what the upload count here pins down.
+    ///
+    /// Three ten-offset segments; leadership moves while the first or the
+    /// second `CopySegmentStarted` is recorded.
+    #[yare::parameterized(
+        recording_the_first = { 1, FencedPass {
+            copied: 0, uploads: 0, held: vec![], finished: vec![], started: vec![], errors: 0,
+        } },
+        recording_the_second = { 4, FencedPass {
+            copied: 1, uploads: 1, held: vec![(0, 9)], finished: vec![(0, 9)], started: vec![],
+            errors: 0,
+        } },
+    )]
+    #[test_macro(tokio::test)]
+    async fn a_copy_whose_leadership_moves_before_the_upload_uploads_nothing(
+        answers: usize,
+        want: FencedPass,
+    ) {
+        let leadership = AnsweredLeadership {
+            answers,
+            asked: AtomicUsize::new(0),
+        };
+        let backend = Arc::new(LeadershipMovingRsm::new(
+            &Arc::new(Leadership::default()),
+            0,
+        ));
+        let rlmm = fixtures::in_memory_metadata();
+
+        let got = fenced_copy_pass(&leadership, &backend, &rlmm).await;
+
+        check!(got == want);
+    }
+
+    /// One copy pass over three ten-offset segments, as broker 1 in epoch 0
+    /// behind `fence`, and what it left in `backend` and `rlmm`.
+    async fn fenced_copy_pass(
+        fence: &dyn CopyFence,
+        backend: &Arc<LeadershipMovingRsm>,
+        rlmm: &Arc<dyn RemoteLogMetadataManager>,
+    ) -> FencedPass {
+        let rsm: Arc<dyn RemoteStorageManager> = backend.clone();
+        let metrics = BrokerMetrics::new();
+        let tier = fixtures::configured_tier()
+            .rsm(&rsm)
+            .rlmm(rlmm)
+            .metrics(&metrics)
+            .call();
+
+        let copied = copy_eligible_delayed(
+            &tier,
+            &tp(),
+            CopyIdentity {
+                broker_id: 1,
+                leader_epoch: LeaderEpoch(0),
+                fence,
+            },
+            three_exports().call(),
+            CopyBound {
+                last_stable_offset: krabka_log::Offset(i64::MAX),
+                delay: CopyDelay::IMMEDIATE,
+            },
+        )
+        .await;
+
+        let listed = rlmm.list_remote_log_segments(&tp()).unwrap();
+        let in_state = |state: RemoteLogSegmentState| {
+            let mut ranges: Vec<(i64, i64)> = listed
+                .iter()
+                .filter(|md| md.state() == state)
+                .map(|md| (md.start_offset(), md.end_offset()))
+                .collect();
+            ranges.sort_unstable();
+            ranges
+        };
+        FencedPass {
+            copied,
+            uploads: backend.uploads.load(Ordering::SeqCst),
+            held: backend.held(),
+            finished: in_state(RemoteLogSegmentState::CopySegmentFinished),
+            started: in_state(RemoteLogSegmentState::CopySegmentStarted),
+            errors: metrics
+                .remote_copy_errors_total
+                .get_or_create(&fixtures::orders_label())
+                .get(),
+        }
     }
 
     /// An RSM that refuses every copy, so the error path is the only one a

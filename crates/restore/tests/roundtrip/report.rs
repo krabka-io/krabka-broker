@@ -5,7 +5,7 @@
 use {
     crate::{
         args::{RestoreOptions, restore_args},
-        fixture::build_fixture,
+        fixture::{Fixture, build_fixture},
         restored::fresh_restore,
     },
     assert2::check,
@@ -17,31 +17,68 @@ use {
         restore,
     },
     ring::{rand::SystemRandom, signature::Ed25519KeyPair},
+    std::{path::PathBuf, sync::Arc},
+    tempfile::TempDir,
 };
 
-#[tokio::test]
-async fn authenticated_object_count_covers_only_the_selected_topic() {
+/// A fixture whose archive one WORM key signed, with the key and heads an
+/// authenticated restore of it trusts.
+struct Signed {
+    fixture: Fixture,
+    _keys: TempDir,
+    public_key: PathBuf,
+    heads: Vec<(String, String)>,
+}
+
+fn signed_fixture() -> Signed {
     let fixture = build_fixture();
     let keys = tempfile::tempdir().unwrap();
     let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
-    let signer = std::sync::Arc::new(
-        FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), "key".to_owned()).unwrap(),
-    );
+    let signer =
+        Arc::new(FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), "key".to_owned()).unwrap());
     let public_key = keys.path().join("key.pub");
     std::fs::write(&public_key, signer.public_key()).unwrap();
     let heads = fixture.sign_worm(&[signer]);
+    Signed {
+        fixture,
+        _keys: keys,
+        public_key,
+        heads,
+    }
+}
+
+/// Restore `orders` from a signed fixture, authenticated against its key and
+/// pinned to its heads.
+async fn restore_orders(signed: &Signed) -> RestoreReport {
     let mut extra = vec![
         "--topic".to_owned(),
         "orders".to_owned(),
         "--worm-key-id".to_owned(),
         "key".to_owned(),
         "--worm-public-key".to_owned(),
-        public_key.display().to_string(),
+        signed.public_key.display().to_string(),
     ];
-    for (partition, head) in heads {
+    for (partition, head) in &signed.heads {
         extra.push("--worm-expect-head".to_owned());
         extra.push(format!("{partition}={head}"));
     }
+    let target = tempfile::tempdir().unwrap();
+    let refs = extra.iter().map(String::as_str).collect::<Vec<_>>();
+    let args = restore_args(
+        signed.fixture.archive_root.path(),
+        target.path(),
+        RestoreOptions {
+            extra: &refs,
+            ..Default::default()
+        },
+    );
+    restore(&args).await.unwrap()
+}
+
+#[tokio::test]
+async fn authenticated_object_count_covers_only_the_selected_topic() {
+    let signed = signed_fixture();
+    let fixture = &signed.fixture;
     let expected = std::fs::read_dir(fixture.archive_root.path())
         .unwrap()
         .filter_map(Result::ok)
@@ -58,15 +95,106 @@ async fn authenticated_object_count_covers_only_the_selected_topic() {
                 .ends_with(MANIFEST_SUFFIX)
         })
         .count() as u64;
-    let target = tempfile::tempdir().unwrap();
-    let refs = extra.iter().map(String::as_str).collect::<Vec<_>>();
-    let args = restore_args(fixture.archive_root.path(), target.path(), RestoreOptions {
-        extra: &refs,
-        ..Default::default()
-    });
-
-    let report = restore(&args).await.unwrap();
+    let report = restore_orders(&signed).await;
     check!(report.authentication.unwrap().objects == expected);
+}
+
+/// A source lost mid-upload leaves a segment's objects without the manifest
+/// that would have named them. An authenticated restore leaves that segment
+/// out and says so, instead of refusing the whole archive: no signed claim
+/// covers it, and the pinned heads prove no manifest was taken away.
+#[tokio::test]
+async fn an_upload_without_its_manifest_is_skipped_by_an_authenticated_restore() {
+    let signed = signed_fixture();
+    let fixture = &signed.fixture;
+
+    // Copy one archived segment of `orders` under a base offset past its end,
+    // with no manifest: the bytes of an upload the loss interrupted.
+    let partition_dir = std::fs::read_dir(fixture.archive_root.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("orders-"))
+        })
+        .unwrap();
+    let mut copied = 0;
+    for entry in std::fs::read_dir(&partition_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+    {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.ends_with(MANIFEST_SUFFIX) || !name.starts_with(&format!("{:020}", 0)) {
+            continue;
+        }
+        // Its own segment id too: the first character of the encoded id,
+        // `-` sitting between the base offset and it, is changed.
+        let first = if name.as_bytes()[21] == b'A' {
+            'B'
+        } else {
+            'A'
+        };
+        let orphan = format!("{:020}-{first}{}", 99_999_999, &name[22..]);
+        std::fs::copy(entry.path(), partition_dir.join(orphan)).unwrap();
+        copied += 1;
+    }
+    check!(copied > 0);
+    // And a partition whose only upload was interrupted: no manifest, no head.
+    let dir_name = partition_dir
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let (number, topic_id) = dir_name
+        .strip_prefix("orders-")
+        .and_then(|rest| rest.split_once('-'))
+        .unwrap();
+    let interrupted: i32 = number.parse().unwrap();
+    let lone = fixture
+        .archive_root
+        .path()
+        .join(format!("orders-7-{topic_id}"));
+    check!(interrupted != 7);
+    std::fs::create_dir(&lone).unwrap();
+    for entry in std::fs::read_dir(&partition_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+    {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with(&format!("{:020}", 99_999_999)) {
+            std::fs::copy(entry.path(), lone.join(name)).unwrap();
+        }
+    }
+
+    let report = restore_orders(&signed).await;
+    let mut skipped: Vec<(String, i32, String)> = report
+        .skipped
+        .iter()
+        .map(|segment| {
+            (
+                segment.topic.clone(),
+                segment.partition,
+                segment.reason.clone(),
+            )
+        })
+        .collect();
+    skipped.sort();
+    let reason = "uploaded without a manifest: no signed claim names it".to_owned();
+    check!(
+        skipped
+            == [
+                ("orders".to_owned(), interrupted, reason.clone()),
+                ("orders".to_owned(), 7, reason)
+            ]
+    );
+    // The lone partition is not restored at all: nothing signed names it.
+    check!(
+        !report
+            .partitions
+            .iter()
+            .any(|partition| partition.partition == 7)
+    );
 }
 
 /// 5. `restore()`'s report -- the structured value `--report json` renders --

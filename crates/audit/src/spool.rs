@@ -173,18 +173,13 @@ impl PendingLosses {
     /// Settle `batch` once its marker is durable. Losses added since the
     /// snapshot stay pending in a fresh generation (`settle_loss_batch`).
     pub(crate) fn commit(&self, batch: AuditLosses) {
-        let state = {
-            let mut state = self
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.update_and_persist(|state| {
             if state.generation != batch.generation {
-                return;
+                return false;
             }
             *state = settle_loss_batch(*state, batch);
-            *state
-        };
-        self.persist_or_warn(state);
+            true
+        });
     }
 
     pub(crate) fn persist(&self) -> Result<(), AuditError> {
@@ -216,22 +211,31 @@ impl PendingLosses {
     /// marker's sync and the commit's sidecar write. The marker settles only
     /// the count it reports (`settle_loss_batch`).
     fn reconcile(&self, records: &[AuditRecord]) {
-        let state = {
-            let mut state = self
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.update_and_persist(|state| {
             if state.count == 0 {
-                return;
+                return false;
             }
             let Some(batch) = records
                 .iter()
                 .filter_map(loss_marker_batch)
                 .find(|batch| batch.generation == state.generation)
             else {
-                return;
+                return false;
             };
             *state = settle_loss_batch(*state, batch);
+            true
+        });
+    }
+
+    fn update_and_persist(&self, update: impl FnOnce(&mut AuditLosses) -> bool) {
+        let state = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !update(&mut state) {
+                return;
+            }
             *state
         };
         self.persist_or_warn(state);

@@ -33,7 +33,7 @@ mod meta_properties;
 pub use self::{
     format::{
         FAIL_AFTER_ENV, FormatArgs, LATEST_PRODUCTION_METADATA_VERSION, ScramSpec, parse_node_id,
-        run, run_with_records,
+        run, run_with_records, run_with_records_to,
     },
     ids::{ClusterId, DirectoryId, KafkaUuidError, random_uuid},
     meta_properties::{
@@ -98,8 +98,22 @@ pub async fn run_from_args() -> i32 { run_from_args_with_records(argv, Vec::new(
 /// requests print to stdout and return 0, without terminating the caller.
 #[krabka_macros::argv_entrypoint]
 pub async fn run_from_args_with_records(extra: Vec<MetadataRecord>) -> i32 {
+    run_from_args_with_records_to(argv, extra, &mut std::io::stdout()).await
+}
+
+/// [`run_from_args_with_records`], with the progress lines of a successful
+/// format written to `progress` instead of stdout; [`run_with_records_to`]
+/// says why a caller wants that.
+///
+/// Malformed arguments print a diagnostic and return 2. Help and version
+/// requests print to stdout and return 0, without terminating the caller.
+#[krabka_macros::argv_entrypoint]
+pub async fn run_from_args_with_records_to(
+    extra: Vec<MetadataRecord>,
+    progress: &mut (dyn std::io::Write + Send),
+) -> i32 {
     match Cli::try_parse_from(argv) {
-        Ok(cli) => run_with_records(cli.args, extra).await,
+        Ok(cli) => run_with_records_to(cli.args, extra, progress).await,
         Err(error) => {
             let _ = error.print();
             if error.use_stderr() { 2 } else { 0 }

@@ -59,7 +59,7 @@ impl QuorumStateMachine {
         }
         self.state.leader_epoch = leader_epoch;
         self.state.leader_id = Some(leader_id);
-        let fetch_deadline = now.saturating_add_ms(self.election_timeout_ms);
+        let fetch_deadline = now.saturating_add_ms(self.fetch_timeout_ms);
         self.role = if self.is_voter() {
             Role::Follower {
                 leader_id,
@@ -118,20 +118,7 @@ impl QuorumStateMachine {
             return self.start_election(log, now);
         }
         self.state.leader_id = None;
-        let election_deadline = now.saturating_add_ms(backoff_ms);
-        self.role = if self.state.voted_key.is_some() {
-            Role::Voted { election_deadline }
-        } else {
-            Role::Unattached { election_deadline }
-        };
-        vec![
-            Action::PersistQuorumState,
-            Action::TransitionedTo(self.role.name()),
-            Action::ResetTimer {
-                kind: TimerKind::Election,
-                deadline: election_deadline,
-            },
-        ]
+        self.await_election(now.saturating_add_ms(backoff_ms))
     }
 }
 

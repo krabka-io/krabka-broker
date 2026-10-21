@@ -10,6 +10,7 @@ use {
         audit_sink::KafkaTopicAuditSink,
         broker::Broker,
         config::BrokerConfig,
+        coordinator::bootstrap::hosted_audit_partition,
         metadata_source::MetadataSource,
         metrics::BrokerMetrics,
         partition_registry::PartitionRegistry,
@@ -66,9 +67,8 @@ fn spawn_audit_metrics(
         let mut previous = (0, 0, 0);
         let mut tick = tokio::time::interval(poll_interval.to_std());
         loop {
-            tokio::select! {
-                _ = tick.tick() => {}
-                () = shutdown.cancelled() => return,
+            if !super::tick_or_shutdown(&mut tick, &shutdown).await {
+                return;
             }
             let current = (
                 stats.spooled(),
@@ -97,7 +97,8 @@ fn spawn_audit_metrics(
 
 /// What the audit pipeline hands to the rest of startup.
 pub(super) struct AuditPipeline {
-    /// The audit partition this broker leads, if it leads one.
+    /// The audit partition this broker hosts, if it hosts one. Each audit
+    /// partition has one replica, and the broker it is placed on writes it.
     pub(super) led_partition: Option<PartitionIndex>,
     pub(super) log: Arc<krabka_audit::AuditLog>,
     /// The writer task, absent when no writer runs.
@@ -131,15 +132,13 @@ pub(super) fn start_audit_pipeline(
             writer_handle: None,
         };
     }
-    let image = controller.current_image();
-    let led_partition = (0_i32..)
-        .map_while(|index| {
-            image
-                .partition(&config.audit_topic, index)
-                .map(|record| (index, record))
-        })
-        .find(|(_, record)| record.leader == config.node_id)
-        .map(|(index, _)| PartitionIndex(index));
+    let led_partition = hosted_audit_partition(
+        &controller.current_image(),
+        &config.audit_topic,
+        config.node_id,
+    );
+    // The sink refuses a write until this broker leads the partition, and
+    // the spool keeps the records meanwhile.
     let (spool, mut replay_poisoned) = if led_partition.is_some() {
         match open_audit_spool(config) {
             Ok(spool) => (Some(spool), false),
@@ -232,7 +231,7 @@ pub(super) fn start_audit_pipeline(
         );
         Some(writer_handle)
     } else {
-        tracing::warn!("no audit partition led by this broker; audit records will drop");
+        tracing::warn!("no audit partition is placed on this broker; audit records will drop");
         None
     };
     install_auditing_authorizer(config, &log);

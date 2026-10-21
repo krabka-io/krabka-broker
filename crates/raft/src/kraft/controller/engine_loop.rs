@@ -6,19 +6,20 @@
 use {
     super::{
         Engine, METADATA_LOG_CLEAN_INTERVAL,
-        offsets::leader_alone_is_majority,
+        graceful_shutdown::graceful_shutdown_window,
         timing::{
-            election_timeout_ms, election_timer_starts_election, following_leader_for_role,
-            heartbeat_period, instant_from_clock_base, should_fail_waiters_on_leadership_change,
+            election_timer_starts_election, following_leader_for_role, heartbeat_period,
+            instant_from_clock_base, should_fail_waiters_on_leadership_change, whole_millis,
         },
     },
     crate::{
         error::RaftError,
+        event_queue::Arrival,
         kraft::{
             action::{Action, TimerKind},
             event::Event,
             role::Role,
-            transport::{Command, TimerTick, api_key, wire},
+            transport::{Command, QueuedCommand, TimerTick, api_key, wire},
             types::{NodeId, SimInstant},
         },
     },
@@ -31,13 +32,30 @@ use {
     },
 };
 
+/// What woke one turn of the loop.
+enum Wake {
+    /// A command arrived on the mpsc.
+    Command {
+        command: Command,
+        arrival: Arrival,
+    },
+    Election,
+    Fetch,
+    CheckQuorum,
+    Heartbeat,
+    /// A parked fetch's wait ran out; the turn's end answers it.
+    ParkedFetch,
+    Noop,
+    Clean,
+}
+
 impl Engine {
     /// The event loop. `select!`s the command mpsc against the election/fetch
     /// timers and the leader heartbeat interval, turning each into core input
     /// and executing the resulting [`Action`]s. Single-threaded over all
     /// consensus state, so no locking is needed inside; peer sends are
     /// fire-and-forget (see the module docs).
-    pub async fn run(mut self, mut cmd_rx: mpsc::Receiver<Command>) {
+    pub async fn run(mut self, mut cmd_rx: mpsc::Receiver<QueuedCommand>) {
         // A dynamically formatted controller starts as an observer with no
         // known leader.  It still has one or more discovery voters from the
         // bootstrap configuration, so poll one immediately.  The Fetch reply
@@ -47,11 +65,14 @@ impl Engine {
         self.send_discovery_fetch();
 
         // Heartbeat ticks the whole time; the loop only acts on it while leader.
-        let hb_period = heartbeat_period(self.election_timeout, self.heartbeat_interval);
+        let hb_period = heartbeat_period(self.timeouts.fetch, self.heartbeat_interval);
         let mut heartbeat = tokio::time::interval(hb_period.to_std());
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let mut faulted = false;
+        // Set by a graceful `Shutdown`: when the engine stops waiting for the
+        // quorum to elect a successor.
+        let mut shutdown_at: Option<Instant> = None;
         loop {
             // Build the timer futures fresh each turn from the current deadlines.
             let election_sleep = sleep_until_opt(self.election_at);
@@ -60,47 +81,55 @@ impl Engine {
             let parked_fetch_sleep = sleep_until_opt(self.next_parked_fetch_deadline());
             let noop_sleep = sleep_until_opt(self.noop_at);
             let clean_sleep = tokio::time::sleep_until(self.clean_at);
+            let shutdown_sleep = sleep_until_opt(shutdown_at);
             tokio::pin!(election_sleep);
             tokio::pin!(fetch_sleep);
             tokio::pin!(check_quorum_sleep);
             tokio::pin!(parked_fetch_sleep);
             tokio::pin!(noop_sleep);
             tokio::pin!(clean_sleep);
+            tokio::pin!(shutdown_sleep);
 
-            tokio::select! {
-                cmd = cmd_rx.recv() => {
-                    match cmd {
-                        None | Some(Command::Shutdown) => break,
-                        Some(c) => self.on_command(c),
+            // A shutting-down replica starts no election of its own: Kafka's
+            // poll loop keeps a resigned or unattached voter where it is, and
+            // lets a candidate finish only the election it already runs.
+            let shutting_down = shutdown_at.is_some();
+            let wake = tokio::select! {
+                queued = cmd_rx.recv() => match queued {
+                    None | Some(QueuedCommand { command: Command::Halt, .. }) => break,
+                    Some(QueuedCommand { command, enqueued_at }) => {
+                        if matches!(command, Command::Shutdown) {
+                            shutdown_at.get_or_insert_with(|| {
+                                Instant::now() + graceful_shutdown_window(self.timeouts.fetch)
+                            });
+                        }
+                        Wake::Command {
+                            arrival: Arrival {
+                                enqueued_at,
+                                caller_gone: command.caller_gone(),
+                            },
+                            command,
+                        }
                     }
+                },
+                () = &mut election_sleep => Wake::Election,
+                () = &mut fetch_sleep => Wake::Fetch,
+                () = &mut check_quorum_sleep => Wake::CheckQuorum,
+                () = &mut shutdown_sleep => {
+                    tracing::warn!(
+                        node = self.me.0,
+                        role = self.core.role().name(),
+                        "kraft: graceful shutdown timed out before a successor was elected"
+                    );
+                    break;
                 }
-                () = &mut election_sleep => {
-                    self.election_at = None;
-                    self.on_timer(TimerTick::Election);
-                }
-                () = &mut fetch_sleep => {
-                    self.fetch_at = None;
-                    self.on_timer(TimerTick::Fetch);
-                }
-                () = &mut check_quorum_sleep => {
-                    self.check_quorum_at = None;
-                    self.on_timer(TimerTick::CheckQuorum);
-                }
-                _ = heartbeat.tick() => {
-                    self.on_timer(TimerTick::Heartbeat);
-                }
+                _ = heartbeat.tick() => Wake::Heartbeat,
                 // A parked fetch whose wait ran out is answered below.
-                () = &mut parked_fetch_sleep => {}
-                () = &mut noop_sleep => {
-                    self.on_noop_timer();
-                }
-                () = &mut clean_sleep => {
-                    self.clean_at = Instant::now() + METADATA_LOG_CLEAN_INTERVAL;
-                    if let Err(error) = self.maybe_clean() {
-                        tracing::error!(?error, "kraft: metadata log cleaning failed");
-                    }
-                }
-            }
+                () = &mut parked_fetch_sleep => Wake::ParkedFetch,
+                () = &mut noop_sleep => Wake::Noop,
+                () = &mut clean_sleep => Wake::Clean,
+            };
+            self.run_turn(wake, shutting_down);
             // A write to the metadata log directory that failed this turn
             // ends the controller (KIP-858), and so does a failed controller
             // activation. The engine stops taking part in the quorum at once,
@@ -118,6 +147,15 @@ impl Engine {
             // that advances the HWM already retriggers this check, but an
             // idle voter only ticks the loop on its timers.
             self.maybe_snapshot();
+            // The event is done, unless a write parked its timer in a commit
+            // waiter.
+            self.turn = None;
+            self.event_queue.finish_turn();
+            // A graceful shutdown resigns a leadership this replica holds, or
+            // wins while it waits, and ends once a successor is known.
+            if shutdown_at.is_some() && self.step_graceful_shutdown() {
+                break;
+            }
         }
         if faulted {
             // The engine takes part in nothing more, but it keeps its watch
@@ -127,7 +165,7 @@ impl Engine {
             // also sees the fatal fault and not a bare shutdown.
             let mut held = Vec::new();
             while let Some(command) = cmd_rx.recv().await {
-                if matches!(command, Command::Shutdown) {
+                if matches!(command.command, Command::Shutdown | Command::Halt) {
                     break;
                 }
                 held.push(command);
@@ -136,6 +174,48 @@ impl Engine {
         // Fail any parked submitters so callers don't hang on shutdown.
         for w in self.commit_waiters.drain(..) {
             let _ = w.reply.send(Err(RaftError::Shutdown));
+        }
+    }
+
+    /// Run the event the loop woke for, metered as one Kafka controller
+    /// event: a command with its queue time, a timer without one.
+    /// Run one turn for `wake`. While `shutting_down`, the election, fetch and
+    /// check-quorum timers clear without acting.
+    fn run_turn(&mut self, wake: Wake, shutting_down: bool) {
+        let arrival = match &wake {
+            Wake::Command { arrival, .. } => Some(*arrival),
+            _ => None,
+        };
+        self.turn = Some(self.event_queue.start(arrival));
+        match wake {
+            Wake::Command { command, .. } => self.on_command(command),
+            Wake::Election => {
+                self.election_at = None;
+                if !shutting_down {
+                    self.on_timer(TimerTick::Election);
+                }
+            }
+            Wake::Fetch => {
+                self.fetch_at = None;
+                if !shutting_down {
+                    self.on_timer(TimerTick::Fetch);
+                }
+            }
+            Wake::CheckQuorum => {
+                self.check_quorum_at = None;
+                if !shutting_down {
+                    self.on_timer(TimerTick::CheckQuorum);
+                }
+            }
+            Wake::Heartbeat => self.on_timer(TimerTick::Heartbeat),
+            Wake::ParkedFetch => {}
+            Wake::Noop => self.on_noop_timer(),
+            Wake::Clean => {
+                self.clean_at = Instant::now() + METADATA_LOG_CLEAN_INTERVAL;
+                if let Err(error) = self.maybe_clean() {
+                    tracing::error!(?error, "kraft: metadata log cleaning failed");
+                }
+            }
         }
     }
 
@@ -176,9 +256,10 @@ impl Engine {
 
     pub fn on_command(&mut self, cmd: Command) {
         match cmd {
-            Command::Shutdown => {}
+            Command::Shutdown | Command::Halt => {}
             Command::Event(event) => self.on_event(event),
             Command::FetchResponse { from, body } => self.on_fetch_response(from, &body),
+            Command::VoteResponse { from, body } => self.on_vote_response(from, &body),
             Command::FetchSnapshotResponse { from, body } => {
                 self.on_fetch_snapshot_response(from, &body);
             }
@@ -248,11 +329,18 @@ impl Engine {
                 }
             }
             TimerTick::Fetch => {
-                // A fetch-timer expiry while we still believe in a reachable
-                // leader RE-POLLS rather than electing; only a sustained loss
-                // (the configured consecutive-miss limit) feeds FetchTimeout.
-                let leader = self.following_leader();
-                if let Some(leader_id) = leader {
+                // A voter elects on the first expiry, as Kafka's
+                // `KafkaRaftClient.pollFollowerAsVoter` moves to Prospective
+                // once `FollowerState.hasFetchTimeoutExpired`. Only a
+                // successful Fetch re-arms the timer, so an expiry already
+                // means a whole fetch timeout without one. An observer has no
+                // election to start: it re-polls the leader it follows, and
+                // only the configured run of consecutive misses sends it back
+                // to discovery.
+                if self.core.is_voter() {
+                    self.fetch_misses = 0;
+                    self.on_event(Event::FetchTimeout);
+                } else if let Some(leader_id) = self.following_leader() {
                     self.fetch_misses += 1;
                     if self.fetch_misses >= self.controller_fetch_miss_limit.get() {
                         self.fetch_misses = 0;
@@ -262,9 +350,6 @@ impl Engine {
                         self.send_fetch(leader_id);
                         self.arm_fetch_timer();
                     }
-                } else if self.core.is_voter() {
-                    // No leader to poll but the fetch watchdog fired: elect.
-                    self.on_event(Event::FetchTimeout);
                 } else {
                     // An observer has no election timeout. Retry discovery
                     // until a bootstrap voter redirects it to the leader.
@@ -326,7 +411,7 @@ impl Engine {
     /// Send the next observer leader discovery Fetch, if this node is a
     /// leaderless observer with a peer to ask, and arm the fetch timer that
     /// retries it.
-    fn send_discovery_fetch(&mut self) {
+    pub(super) fn send_discovery_fetch(&mut self) {
         if let Some(peer) = self.discovery_peer() {
             self.discovery_attempts = self.discovery_attempts.wrapping_add(1);
             self.send_fetch(peer);
@@ -395,15 +480,10 @@ impl Engine {
                 // Kafka's controller activation: the first write of the
                 // epoch seeds a log that holds no `metadata.version`.
                 self.complete_activation();
-                if leader_alone_is_majority(
-                    self.core.quorum_state().majority(),
-                    self.core.is_voter(),
-                ) {
-                    // There is no follower Fetch acknowledgement to drive HWM
-                    // recomputation in a one-voter quorum. The local append is
-                    // already a majority, so commit the current-epoch barrier.
-                    self.advance_and_apply(self.log.log_end_offset());
-                }
+                // There is no follower Fetch acknowledgement to drive HWM
+                // recomputation in a one-voter quorum. The local append is
+                // already a majority, so commit the current-epoch barrier.
+                self.advance_if_single_voter();
             }
             Action::AdvanceHighWatermark(n) => {
                 // `n` is the core's raw i64 HWM target; wrap into the log domain.
@@ -524,11 +604,10 @@ impl Engine {
         self.held_epoch = epoch;
     }
 
-    /// Arm the fetch timer one election-timeout out from now (re-poll cadence).
+    /// Arm the fetch timer one fetch timeout out from now (re-poll cadence).
     pub fn arm_fetch_timer(&mut self) {
-        self.fetch_at = Some(
-            Instant::now() + Duration::from_millis(election_timeout_ms(self.election_timeout)),
-        );
+        self.fetch_at =
+            Some(Instant::now() + Duration::from_millis(whole_millis(self.timeouts.fetch)));
     }
 
     /// Convert a core [`SimInstant`] deadline into a `tokio::time::Instant`.
@@ -546,27 +625,6 @@ impl Engine {
         // the watch's stored value current even with no active receiver.
         let snapshot = self.quorum_state_snapshot();
         self.quorum_tx.send_replace(snapshot);
-    }
-}
-
-/// Decode a non-Fetch peer response body into the matching `Receive*Response`
-/// event. `peer` is the responder, used to fill `from`. Returns `None` for
-/// `Ack` (Begin/End acks produce no core event), `Fetch` (handled by the
-/// dedicated [`Engine::on_fetch_response`] path, which must touch the log before
-/// the core sees the event), and undecodable bodies.
-pub fn response_to_event(peer: NodeId, api_key: i16, body: &[u8]) -> Option<Event> {
-    match api_key {
-        self::api_key::VOTE => match wire::PeerResponse::decode_vote(body)? {
-            wire::PeerResponse::Vote { epoch, granted } => Some(Event::ReceiveVoteResponse {
-                from: peer,
-                epoch,
-                vote_granted: granted,
-            }),
-            _ => None,
-        },
-        // Begin/End acks produce no core event; Fetch is handled by the
-        // dedicated `FetchResponse` command path before reaching here.
-        _ => None,
     }
 }
 

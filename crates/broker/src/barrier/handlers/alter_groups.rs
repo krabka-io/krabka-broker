@@ -171,7 +171,10 @@ fn row(group: &str, error_code: i16, error_message: Option<String>) -> AlterBarr
 mod tests {
     use {
         super::*,
-        crate::barrier::{coordinator::test_support::Fixture, error::BarrierError},
+        crate::barrier::{
+            coordinator::test_support::{Fixture, fixture_with_coordinator},
+            error::BarrierError,
+        },
         assert2::check,
         krabka_units::millis,
     };
@@ -285,8 +288,7 @@ mod tests {
     /// The longest name that a state record can carry is taken.
     #[tokio::test]
     async fn an_entry_with_a_group_and_a_topic_of_32767_bytes_creates_the_group() {
-        let fixture = Fixture::new();
-        let coordinator = fixture.coordinator().await;
+        let (_fixture, coordinator) = fixture_with_coordinator().await;
         let group = "g".repeat(MAX_STRING_BYTES);
         let topic = "t".repeat(MAX_STRING_BYTES);
         let created = AlterableBarrierGroup {

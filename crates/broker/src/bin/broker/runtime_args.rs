@@ -312,6 +312,7 @@ mod tests {
         auto-join-retry-backoff KRABKA_AUTO_JOIN_RETRY_BACKOFF None -------+-----\n\
         auto-join-voter-request-timeout KRABKA_AUTO_JOIN_VOTER_REQUEST_TIMEOUT None -------+-----\n\
         replication-fetch-max KRABKA_REPLICATION_FETCH_MAX None ---------++--\n\
+        replication-fetch-response-max KRABKA_REPLICATION_FETCH_RESPONSE_MAX None ---------++--\n\
         replication-fetch-max-wait KRABKA_REPLICATION_FETCH_MAX_WAIT None -------+-----\n\
         replication-fetch-min KRABKA_REPLICATION_FETCH_MIN None ---------++--\n\
         replication-throttle-exhausted-backoff KRABKA_REPLICATION_THROTTLE_EXHAUSTED_BACKOFF None -------+-----\n\

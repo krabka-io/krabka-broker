@@ -32,7 +32,7 @@
 //! | --- | --- | --- | --- | --- |
 //! | `soak-retention` | `delete` | `internal.segment.bytes=64 KiB`, `segment.ms=5s` | `retention.ms=60s`, `retention.bytes=4 MiB` | segment roll, then deletion of the sealed segments |
 //! | `soak-compacted` | `compact` | `internal.segment.bytes=64 KiB`, `segment.ms=5s` | `min.cleanable.dirty.ratio=0.01`, `min.compaction.lag.ms=0` | the cleaner, sweeping every second |
-//! | `soak-verify` | `delete` | default | unlimited | the acked records read back at the end |
+//! | `soak-verify` | `delete` | `segment.ms=7d` | unlimited | the acked records read back at the end |
 //!
 //! A 64 KiB segment is what makes the roll count reachable: at this suite's
 //! produce rate each partition of `soak-retention` fills one every half-minute
@@ -61,12 +61,46 @@
 //! nothing bounding its segment count at all, and its descriptors climbed for
 //! the length of the run while the leader's stayed flat.
 //!
+//! # The directories that only a roll reclaims
+//!
+//! Three directories climb under steady load for as long as their active
+//! segment does not roll, in Kafka as here, and none of them is a leak:
+//!
+//! | directory | what writes it | what bounds it at Kafka's defaults |
+//! | --- | --- | --- |
+//! | `__consumer_offsets-<n>` | the soak consumer's auto-commit, every 5 s | a roll at 100 MiB or 7 days, then the cleaner. The cleaner never compacts the active segment. |
+//! | `__cluster_metadata-0` | the KIP-835 `NoOpRecord`, every 500 ms | a roll at 1 GiB or 7 days, then a snapshot and `metadata.max.retention.*` |
+//! | `soak-verify-0` | the verify producer, every second | nothing: unlimited retention, so every acked record can be read back |
+//!
+//! Together they grew each broker's log directory by about 680 B/s, which is
+//! 4.9 MB over the second half of the four-hour run, against the 4 MiB the
+//! drift bound allows. Before #1303 every offset commit rolled a segment, and
+//! before #1307 the metadata log was pruned at each snapshot and had no
+//! no-ops, so until 2026-10-05 only `soak-verify` grew and the bound held.
+//!
+//! So the cluster is configured, by [`STEADY_STATE_TABLES`], to roll the first
+//! two every minute: `log.roll.ms` for the offsets topic, which sets no
+//! `segment.ms` of its own, and the metadata log's roll, snapshot and
+//! retention intervals. Both are then reclaimed inside the run, the cleaner
+//! and the metadata log cleaning are what keep them level, and the drift bound
+//! judges that rather than the calendar. `soak-verify` is left out of the
+//! judged log-directory series instead: its growth is the ledger this suite
+//! reads back, not something the broker should reclaim. It keeps an explicit
+//! seven-day `segment.ms`, so the minute roll does not cut it into a segment
+//! per minute. `steady_state_reclaim` shows the same contrast in seconds.
+//!
 //! # What fails it
 //!
-//! Four series per broker -- resident set, open descriptors, `/metrics`
-//! cardinality and log-directory bytes -- are sampled on a fixed interval and
-//! handed to [`drift::judge`], which fails a series that exceeds its ceiling
-//! or that trends upward across the second half of the run. That judgement is
+//! Five series per broker -- resident set, open descriptors, `/metrics`
+//! cardinality, and the bytes and files of the log directory less
+//! `soak-verify` -- are sampled on a fixed interval and handed to
+//! [`drift::judge`], which fails a series that exceeds its ceiling or that
+//! trends upward across the second half of the run. The run then prints what
+//! each top-level entry of each log directory gained over that half, so a
+//! log-directory failure names the directory that grew. The file count is
+//! what catches a sidecar that is never deleted: compaction once left the
+//! producer-state snapshot of every segment it merged, which added a 56-byte
+//! file per roll, too small to move the bytes. That judgement is
 //! pure logic over a list of numbers and is unit-tested in [`drift`] against
 //! series whose shape is known, including the segment-roll sawtooth that a
 //! first-to-last comparison would misread as a leak.
@@ -200,14 +234,45 @@ const FD_CEILING: f64 = 4_096.0;
 /// thousand is the point at which a family has stopped dropping members.
 const SERIES_CEILING: f64 = 20_000.0;
 
-/// Bytes one broker's log directory may not exceed.
+/// Bytes one broker's log directory, less `soak-verify`, may not exceed.
 ///
 /// `soak-retention` is capped at 4 MiB per partition by `retention.bytes` over
 /// six partitions, all three replicas of which land on every broker, and the
-/// compacted and verify topics are far smaller. 512 MiB leaves an order of
-/// magnitude of head-room over that and still catches retention that has
-/// stopped working.
+/// compacted topic, the offsets topic and the metadata log are far smaller.
+/// 512 MiB leaves an order of magnitude of head-room over that and still
+/// catches retention that has stopped working.
 const LOG_DIR_CEILING: f64 = 512.0 * 1024.0 * 1024.0;
+
+/// Files one broker's log directory, less `soak-verify`, may hold.
+///
+/// About a hundred partition directories of a handful of files each, plus the
+/// segments `soak-retention` and the cleaner keep in flight and the minute of
+/// retired files `file.delete.delay.ms` holds: a few thousand. A hundred
+/// thousand is a sidecar that is never deleted.
+const LOG_FILES_CEILING: f64 = 100_000.0;
+
+/// How many of the top-level entries that grew most the run prints per broker.
+const GROWTH_REPORTED: usize = 8;
+
+/// The tables every node's configuration file carries in this suite: the
+/// settings that roll the offsets topic and the metadata log inside the run.
+/// See the module documentation.
+///
+/// One minute is Kafka-valid for all four (`log.roll.ms` and
+/// `metadata.log.segment.ms` take any positive value), short beside four hours
+/// and long beside the cleaner's one-second sweep. Retention of one minute
+/// keeps the newest snapshot and the one below the log start, as Kafka's
+/// `KafkaRaftLog.maybeClean` does, so a follower that falls behind still
+/// finds a snapshot to fetch.
+const STEADY_STATE_TABLES: &str = "\
+[runtime]
+metadata_log_segment_roll_interval = \"60s\"
+metadata_max_snapshot_interval = \"60s\"
+metadata_max_retention = \"60s\"
+
+[server_properties]
+\"log.roll.ms\" = \"60000\"
+";
 
 /// The metric the cleaner's sweeps are counted from.
 const CLEANER_RUNS: &str = "krabka_broker_log_cleaner_runs_total";
@@ -311,6 +376,13 @@ async fn create_topics(bootstrap: &str) {
                 name: "cleanup.policy",
                 value: "delete",
             },
+            // Kafka's default, set explicitly: the cluster's `log.roll.ms` of a
+            // minute would otherwise apply, and an unlimited topic would keep
+            // a segment per minute.
+            ConfigEntry {
+                name: "segment.ms",
+                value: "604800000",
+            },
             ConfigEntry {
                 name: "retention.ms",
                 value: "-1",
@@ -322,28 +394,9 @@ async fn create_topics(bootstrap: &str) {
         ]),
     ];
 
-    // A cluster that has just booted is still electing; the first attempts are
-    // expected to fail on the connection or on a missing controller.
-    let deadline = Instant::now() + Duration::from_secs(180);
-    let mut last = String::new();
-    while Instant::now() < deadline {
-        if let Ok(admin) = Client::builder().bootstrap(bootstrap).build().await {
-            match admin
-                .send(CreateTopicsRequest {
-                    topics: topics.clone(),
-                    timeout_ms: 30_000,
-                    ..Default::default()
-                })
-                .await
-            {
-                Ok(response) if response.topics.iter().all(|t| t.error_code == 0) => return,
-                Ok(response) => last = format!("{:?}", response.topics),
-                Err(error) => last = format!("{error}"),
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+    if let Err(last) = cluster::create_topics(bootstrap, &topics).await {
+        panic!("could not create the soak topics on {bootstrap}: {last}");
     }
-    panic!("could not create the soak topics on {bootstrap}: {last}");
 }
 
 /// One topic config name and the value it is set to.
@@ -473,7 +526,15 @@ struct BrokerSamples {
     rss: Series,
     fds: Series,
     series_count: Series,
+    /// Bytes of the log directory less `soak-verify`.
     log_dir: Series,
+    /// Files in the log directory less `soak-verify`.
+    log_files: Series,
+    /// Every top-level entry of the log directory, at every sample.
+    usage: Vec<(
+        Duration,
+        std::collections::BTreeMap<String, probe::DirectoryUsage>,
+    )>,
     /// Every segment base offset seen in any partition directory, ever.
     segments_seen: std::collections::BTreeMap<String, BTreeSet<u64>>,
     /// The lowest base offset still present per partition, at the last sample.
@@ -492,7 +553,15 @@ impl BrokerSamples {
             rss: Series::new(format!("{name} resident set"), "bytes"),
             fds: Series::new(format!("{name} open descriptors"), "descriptors"),
             series_count: Series::new(format!("{name} /metrics series"), "series"),
-            log_dir: Series::new(format!("{name} log directory"), "bytes"),
+            log_dir: Series::new(
+                format!("{name} log directory without {VERIFY_TOPIC}"),
+                "bytes",
+            ),
+            log_files: Series::new(
+                format!("{name} log directory files without {VERIFY_TOPIC}"),
+                "files",
+            ),
+            usage: Vec::new(),
             segments_seen: std::collections::BTreeMap::new(),
             lowest_kept: std::collections::BTreeMap::new(),
             retention_cycles: 0,
@@ -500,6 +569,25 @@ impl BrokerSamples {
             cleaner_failures: 0.0,
             compactions: 0.0,
         }
+    }
+
+    /// Print what the top-level entries of the log directory that grew most
+    /// gained over the second half, so a log-directory verdict names them.
+    fn report_growth(&self) {
+        let growth = probe::second_half_growth(&self.usage, GROWTH_REPORTED)
+            .iter()
+            .map(|growth| {
+                format!(
+                    "{} {:+} bytes {:+} files",
+                    growth.entry, growth.bytes, growth.files
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        eprintln!(
+            "soak: {} log directory, second-half growth by entry: {growth}",
+            self.name
+        );
     }
 
     /// Segments created since the first sample.
@@ -567,7 +655,7 @@ async fn read_back(bootstrap: &str, want: usize) -> BTreeSet<String> {
 
 /// The bounds each series is judged against, in the order the samples are
 /// collected.
-fn bounds() -> [Bound; 4] {
+fn bounds() -> [Bound; 5] {
     [
         // A resident set that climbs 15% over the second half of a four-hour
         // run is on course to double inside a day.
@@ -599,6 +687,14 @@ fn bounds() -> [Bound; 4] {
             drift_fraction: 0.25,
             floor: 16.0 * 1024.0 * 1024.0,
         },
+        // The same sawtooth, counted in files: a segment rolls and is
+        // deleted, and a compaction's retired files wait out
+        // `file.delete.delay.ms`. A file that is never deleted climbs it.
+        Bound {
+            ceiling: LOG_FILES_CEILING,
+            drift_fraction: 0.25,
+            floor: 1_000.0,
+        },
     ]
 }
 
@@ -617,7 +713,9 @@ async fn a_three_broker_cluster_holds_its_resources_over_a_soak() {
         .build()
         .expect("build an HTTP client");
 
-    let cluster = SoakCluster::start();
+    let cluster = SoakCluster::configured()
+        .tables_toml(STEADY_STATE_TABLES.to_owned())
+        .call();
     cluster.wait_metrics_up(&http).await;
     let bootstrap = cluster.bootstrap();
     create_topics(&bootstrap).await;
@@ -688,9 +786,11 @@ async fn a_three_broker_cluster_holds_its_resources_over_a_soak() {
             sample
                 .series_count
                 .push(elapsed, probe::sampled_count(probe::count_series(&body)));
-            sample
-                .log_dir
-                .push(elapsed, probe::sampled(probe::directory_bytes(&log_dir)));
+            let usage = probe::top_level_usage(&log_dir);
+            let judged = probe::usage_without(&usage, VERIFY_TOPIC);
+            sample.log_dir.push(elapsed, probe::sampled(judged.bytes));
+            sample.log_files.push(elapsed, probe::sampled(judged.files));
+            sample.usage.push((elapsed, usage));
             sample.observe_segments(&probe::segments(&log_dir));
             sample.cleaner_runs = probe::sum_metric(&body, CLEANER_RUNS);
             sample.cleaner_failures = probe::sum_metric(&body, CLEANER_FAILURES);
@@ -775,9 +875,10 @@ async fn a_three_broker_cluster_holds_its_resources_over_a_soak() {
     );
 
     // And nothing drifted.
-    let [rss, fds, series, log_dir] = bounds();
+    let [rss, fds, series, log_dir, log_files] = bounds();
     let mut judged = Vec::new();
     for sample in samples {
+        sample.report_growth();
         judged.push(BoundedSeries {
             series: sample.rss,
             bound: rss,
@@ -793,6 +894,10 @@ async fn a_three_broker_cluster_holds_its_resources_over_a_soak() {
         judged.push(BoundedSeries {
             series: sample.log_dir,
             bound: log_dir,
+        });
+        judged.push(BoundedSeries {
+            series: sample.log_files,
+            bound: log_files,
         });
     }
     let verdicts = drift::judge_all(&judged);

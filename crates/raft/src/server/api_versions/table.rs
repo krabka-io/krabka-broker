@@ -212,7 +212,7 @@ mod tests {
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         let body = api_versions_response_body(4, ApiVersionsView {
             image: &image,
-            metadata_offset: -1,
+            finalized_features_epoch: -1,
             admin_router: None,
             unstable,
         });
@@ -238,21 +238,27 @@ mod tests {
             decodes_whole: DecodesWhole,
         }
         let cases = [
-            Case {
-                name: "vote",
-                api_key: api_key::VOTE,
-                request: PeerRequest::Vote {
-                    cluster_id: None,
-                    voter_id: NodeId(1),
-                    voter_directory_id: uuid::Uuid::nil(),
-                    candidate_epoch: 3,
-                    candidate: NodeId(2),
-                    candidate_directory_id: uuid::Uuid::nil(),
-                    last_epoch: 2,
-                    last_offset: 9,
-                    pre_vote: true,
-                },
-                decodes_whole: decodes_whole::<VoteRequest>,
+            {
+                let vote_requester = NodeId(1);
+                let vote_candidate = NodeId(2);
+                let vote_directory_id = uuid::Uuid::nil();
+                let vote_epoch = 3;
+                Case {
+                    name: "vote",
+                    api_key: api_key::VOTE,
+                    request: PeerRequest::Vote {
+                        cluster_id: None,
+                        voter_id: vote_requester,
+                        voter_directory_id: vote_directory_id,
+                        candidate_epoch: vote_epoch,
+                        candidate: vote_candidate,
+                        candidate_directory_id: vote_directory_id,
+                        last_epoch: 2,
+                        last_offset: 9,
+                        pre_vote: true,
+                    },
+                    decodes_whole: decodes_whole::<VoteRequest>,
+                }
             },
             Case {
                 name: "begin quorum epoch",

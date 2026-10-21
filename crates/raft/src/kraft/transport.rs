@@ -28,7 +28,8 @@ pub mod wire;
 pub use self::{
     api_key::PeerApi,
     command::{
-        Command, Inbound, MetadataFetchSlice, ObserverReplica, QuorumStateSnapshot, TimerTick,
+        Command, CommandSender, Inbound, MetadataFetchSlice, ObserverReplica, QueuedCommand,
+        QuorumStateSnapshot, TimerTick,
     },
     peer_sender::{NullPeerSender, PeerSender},
 };

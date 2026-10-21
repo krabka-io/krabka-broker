@@ -5,7 +5,8 @@ use {
         GroupCoordinator,
         assignor::{Assignor, RangeAssignor, UniformAssignor},
     },
-    crate::time_util::system_timer,
+    crate::{config_keys::node_or_cluster_default, time_util::system_timer},
+    krabka_metadata::{MetadataImage, NodeId},
     qubit_clock::Timer,
     std::{borrow::Cow, collections::BTreeMap, str::FromStr, sync::Arc, time::Duration},
 };
@@ -53,6 +54,11 @@ impl FromStr for ConsumerGroupMigrationPolicy {
 /// The settings a consumer group runs with: each `consumer.*` override in
 /// the group's stored config over the broker value, clamped to the
 /// broker's `group.consumer.min.*` and `group.consumer.max.*` bounds.
+///
+/// The broker value of `group.consumer.assignment.interval.ms` is dynamic, as
+/// it is in Kafka's `GroupCoordinatorConfig.RECONFIGURABLE_CONFIGS`: the
+/// broker's dynamic value, else the cluster-wide one, else this static one
+/// (`NextGenConfig::for_broker`).
 ///
 /// This is Kafka's `GroupMetadataManager.consumerGroupSessionTimeoutMs`,
 /// `consumerGroupHeartbeatIntervalMs` and
@@ -200,16 +206,65 @@ pub(crate) fn group_millis(
     Some(clamp_to_range(value, min, max))
 }
 
-/// Resolve a protocol's group overrides from one current image, or borrow broker defaults.
+/// Kafka's `GroupCoordinatorConfig.CONSUMER_GROUP_ASSIGNMENT_INTERVAL_MS_CONFIG`,
+/// a dynamic broker config.
+pub(crate) const CONSUMER_GROUP_ASSIGNMENT_INTERVAL_MS: &str =
+    "group.consumer.assignment.interval.ms";
+
+/// The broker assignment interval `key` that `node` applies as of `image`:
+/// `node`'s own dynamic value, else the cluster-wide one, else `static_value`.
+/// With no `node`, only the cluster-wide value is consulted.
+///
+/// Kafka lists the three `group.*.assignment.interval.ms` keys in
+/// `GroupCoordinatorConfig.RECONFIGURABLE_CONFIGS`, and
+/// `GroupMetadataManager` reads the current value each time it needs it.
+/// Kafka defines each as an `INT` of at least 0 that its broker bounds
+/// contain, and refuses any other value at alter time, so when the dynamic
+/// value that is set is not one, `static_value` applies.
+pub(crate) fn broker_assignment_interval(
+    image: &MetadataImage,
+    node: Option<NodeId>,
+    key: &str,
+    static_value: Duration,
+) -> Duration {
+    let dynamic = match node {
+        Some(node) => node_or_cluster_default(image, node, key),
+        None => image
+            .default_broker_config()
+            .and_then(|configs| configs.get(key))
+            .map(String::as_str),
+    };
+    dynamic
+        .and_then(|value| value.trim().parse::<i32>().ok())
+        .and_then(|millis| u64::try_from(millis).ok())
+        .map(Duration::from_millis)
+        .filter(|interval| (MIN_ASSIGNMENT_INTERVAL..=MAX_ASSIGNMENT_INTERVAL).contains(interval))
+        .unwrap_or(static_value)
+}
+
+/// Resolve a protocol's config for `group_id` from one current image: the
+/// broker layer `for_broker` gives over `config`, then the group overrides
+/// `for_group` applies on top. A coordinator with no metadata source borrows
+/// `config`.
+///
+/// This is Kafka's `groupConfig.consumerAssignmentIntervalMs().orElse(
+/// config.consumerGroupAssignmentIntervalMs())`, where `config` is the
+/// broker's current, dynamically reconfigured `GroupCoordinatorConfig`.
 pub(super) fn resolve_group_config<'a, C: Clone>(
     config: &'a C,
     coordinator: &GroupCoordinator,
     group_id: &str,
-    apply: impl FnOnce(&'a C, Option<&BTreeMap<String, String>>) -> Cow<'a, C>,
+    for_broker: impl FnOnce(&'a C, &MetadataImage, Option<NodeId>) -> Cow<'a, C>,
+    for_group: impl for<'c> FnOnce(&'c C, Option<&BTreeMap<String, String>>) -> Cow<'c, C>,
 ) -> Cow<'a, C> {
-    match coordinator.metadata_source() {
-        Some(source) => apply(config, source.current_image().group_config(group_id)),
-        None => Cow::Borrowed(config),
+    let Some(source) = coordinator.metadata_source() else {
+        return Cow::Borrowed(config);
+    };
+    let image = source.current_image();
+    let overrides = image.group_config(group_id);
+    match for_broker(config, &image, coordinator.node_id()) {
+        Cow::Borrowed(broker) => for_group(broker, overrides),
+        Cow::Owned(broker) => Cow::Owned(for_group(&broker, overrides).into_owned()),
     }
 }
 
@@ -299,6 +354,19 @@ impl NextGenConfig {
         Ok(())
     }
 
+    /// The broker consumer settings as `node` applies them as of `image`: the
+    /// dynamic `group.consumer.assignment.interval.ms` over the static one. A
+    /// broker with no dynamic value that applies borrows the static values.
+    #[must_use]
+    pub(crate) fn for_broker(&self, image: &MetadataImage, node: Option<NodeId>) -> Cow<'_, Self> {
+        self.with_assignment_interval(broker_assignment_interval(
+            image,
+            node,
+            CONSUMER_GROUP_ASSIGNMENT_INTERVAL_MS,
+            self.assignment_interval,
+        ))
+    }
+
     /// Resolve a registered assignor by name. An `Arc` clone is cheap.
     #[must_use]
     pub fn find_assignor(&self, name: &str) -> Option<Arc<dyn Assignor>> {
@@ -325,12 +393,16 @@ mod tests {
         crate::{
             coordinator::unified::{
                 assignor::{Assignment, GroupSpec, TopicMetadata},
-                share::config::ShareGroupConfig,
-                test_support::{group_config_image, make_coord},
+                share::config::{SHARE_GROUP_ASSIGNMENT_INTERVAL_MS, ShareGroupConfig},
+                streams::{
+                    actor::resolve_broker_and_group_config,
+                    config::{STREAMS_GROUP_ASSIGNMENT_INTERVAL_MS, StreamsGroupConfig},
+                },
+                test_support::{BrokerValue, group_config_image, make_coord, with_broker_values},
             },
             test_support::FakeMetadataSource,
         },
-        assert2::assert,
+        assert2::{assert, check},
         std::{borrow::Cow, collections::HashMap, ptr},
     };
 
@@ -348,9 +420,13 @@ mod tests {
     fn effective_config_without_a_source_borrows_defaults_without_applying_overrides() {
         let broker = NextGenConfig::default();
         let coordinator = make_coord();
-        let effective = resolve_group_config(&broker, &coordinator, "group", |_, _| {
-            panic!("no metadata source must not run the override callback")
-        });
+        let effective = resolve_group_config(
+            &broker,
+            &coordinator,
+            "group",
+            |_, _, _| panic!("no metadata source must not run the broker callback"),
+            |_, _| panic!("no metadata source must not run the override callback"),
+        );
         assert!(matches!(effective, Cow::Borrowed(_)));
         assert!(ptr::eq(
             ptr::from_ref(effective.as_ref()),
@@ -370,19 +446,34 @@ mod tests {
         let coordinator = make_coord();
         coordinator.set_metadata_source(source.clone());
         let consumer = NextGenConfig::default();
-        let effective =
-            resolve_group_config(&consumer, &coordinator, "group", NextGenConfig::for_group);
+        let effective = resolve_group_config(
+            &consumer,
+            &coordinator,
+            "group",
+            NextGenConfig::for_broker,
+            NextGenConfig::for_group,
+        );
         assert!(source.current_image_calls() == 1);
         assert!(matches!(effective, Cow::Owned(_)));
         assert!(effective.heartbeat_interval == Duration::from_secs(7));
 
         let share = ShareGroupConfig::default();
-        let shared =
-            resolve_group_config(&share, &coordinator, "group", ShareGroupConfig::for_group);
+        let shared = resolve_group_config(
+            &share,
+            &coordinator,
+            "group",
+            ShareGroupConfig::for_broker,
+            ShareGroupConfig::for_group,
+        );
         assert!(source.current_image_calls() == 2);
         assert!(shared.heartbeat_interval == Duration::from_secs(9));
-        let defaults =
-            resolve_group_config(&consumer, &coordinator, "unknown", NextGenConfig::for_group);
+        let defaults = resolve_group_config(
+            &consumer,
+            &coordinator,
+            "unknown",
+            NextGenConfig::for_broker,
+            NextGenConfig::for_group,
+        );
         assert!(source.current_image_calls() == 3);
         assert!(matches!(defaults, Cow::Borrowed(_)));
         assert!(ptr::eq(
@@ -394,11 +485,196 @@ mod tests {
             "consumer.heartbeat.interval.ms",
             "8000",
         )])]));
-        let refreshed =
-            resolve_group_config(&consumer, &coordinator, "group", NextGenConfig::for_group);
+        let refreshed = resolve_group_config(
+            &consumer,
+            &coordinator,
+            "group",
+            NextGenConfig::for_broker,
+            NextGenConfig::for_group,
+        );
         assert!(source.current_image_calls() == 4);
         assert!(refreshed.heartbeat_interval == Duration::from_secs(8));
         assert!(effective.heartbeat_interval == Duration::from_secs(7));
+    }
+
+    /// This node, whose dynamic broker configs the resolution rows read.
+    const NODE: NodeId = NodeId(1);
+
+    /// Where a row's dynamic broker assignment interval is set.
+    #[derive(Debug, Clone, Copy)]
+    enum Scope {
+        Cluster,
+        Node(NodeId),
+    }
+
+    impl Scope {
+        fn node(self) -> NodeId {
+            match self {
+                Self::Cluster => krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+                Self::Node(node) => node,
+            }
+        }
+    }
+
+    /// Kafka's `GroupMetadataManager`: each protocol's assignment interval is
+    /// the group's `*.assignment.interval.ms` override over the broker's
+    /// current `group.*.assignment.interval.ms`, which is this node's dynamic
+    /// value, else the cluster-wide one, else the static one. A dynamic value
+    /// that does not parse, or that the broker bounds do not contain, does not
+    /// apply, and the static value does; a coordinator that does not know its
+    /// node reads only the cluster-wide value.
+    #[yare::parameterized(
+        static_only = { true, &[], None, 1_000 },
+        cluster_default = { true, &[(Scope::Cluster, "3000")], None, 3_000 },
+        node_over_cluster = {
+            true, &[(Scope::Cluster, "3000"), (Scope::Node(NODE), "5000")], None, 5_000
+        },
+        node_over_static = { true, &[(Scope::Node(NODE), "0")], None, 0 },
+        another_node = { true, &[(Scope::Node(NodeId(2)), "5000")], None, 1_000 },
+        unparsable_node_falls_to_static = {
+            true, &[(Scope::Cluster, "3000"), (Scope::Node(NODE), "soon")], None, 1_000
+        },
+        above_the_bounds = { true, &[(Scope::Cluster, "20000")], None, 1_000 },
+        negative = { true, &[(Scope::Node(NODE), "-1")], None, 1_000 },
+        group_over_node = {
+            true, &[(Scope::Node(NODE), "5000")], Some("7000"), 7_000
+        },
+        group_zero_over_cluster = { true, &[(Scope::Cluster, "3000")], Some("0"), 0 },
+        unparsable_group_keeps_the_broker_value = {
+            true, &[(Scope::Cluster, "3000")], Some("soon"), 3_000
+        },
+        unknown_node_reads_the_cluster = {
+            false, &[(Scope::Cluster, "3000"), (Scope::Node(NODE), "5000")], None, 3_000
+        },
+    )]
+    fn the_assignment_interval_layers_group_over_broker_over_static(
+        node_known: bool,
+        broker: &[(Scope, &'static str)],
+        group: Option<&'static str>,
+        want_ms: u64,
+    ) {
+        let group_overrides: Vec<(&str, &str)> = group
+            .map(|value| {
+                vec![
+                    ("consumer.assignment.interval.ms", value),
+                    ("share.assignment.interval.ms", value),
+                    ("streams.assignment.interval.ms", value),
+                ]
+            })
+            .unwrap_or_default();
+        let broker_values: Vec<BrokerValue> = broker
+            .iter()
+            .flat_map(|(scope, value)| {
+                [
+                    CONSUMER_GROUP_ASSIGNMENT_INTERVAL_MS,
+                    SHARE_GROUP_ASSIGNMENT_INTERVAL_MS,
+                    STREAMS_GROUP_ASSIGNMENT_INTERVAL_MS,
+                ]
+                .map(|key| BrokerValue {
+                    node: scope.node(),
+                    key,
+                    value,
+                })
+            })
+            .collect();
+        let image = with_broker_values(
+            group_config_image(&[("group", &group_overrides)]),
+            &broker_values,
+        );
+        let coordinator = make_coord();
+        coordinator.set_metadata_source(Arc::new(FakeMetadataSource::static_image(image.clone())));
+        if node_known {
+            coordinator.set_node_id(NODE);
+        }
+        let want = Duration::from_millis(want_ms);
+
+        let consumer = NextGenConfig::default();
+        let consumer = resolve_group_config(
+            &consumer,
+            &coordinator,
+            "group",
+            NextGenConfig::for_broker,
+            NextGenConfig::for_group,
+        );
+        check!(
+            (
+                consumer.session_timeout,
+                consumer.heartbeat_interval,
+                consumer.assignment_interval
+            ) == (DEFAULT_SESSION_TIMEOUT, DEFAULT_HEARTBEAT_INTERVAL, want)
+        );
+
+        let share = ShareGroupConfig::default();
+        let share = resolve_group_config(
+            &share,
+            &coordinator,
+            "group",
+            ShareGroupConfig::for_broker,
+            ShareGroupConfig::for_group,
+        );
+        check!(
+            *share
+                == ShareGroupConfig {
+                    assignment_interval: want,
+                    ..ShareGroupConfig::default()
+                }
+        );
+
+        let streams = resolve_broker_and_group_config(
+            &StreamsGroupConfig::default(),
+            &image,
+            node_known.then_some(NODE),
+            "group",
+        );
+        check!(
+            streams
+                == StreamsGroupConfig {
+                    assignment_interval: want,
+                    ..StreamsGroupConfig::default()
+                }
+        );
+    }
+
+    /// The broker layer is read from the image of each lookup, so an alter of
+    /// `group.consumer.assignment.interval.ms` reaches the group's next
+    /// heartbeat without a restart, and deleting it restores the static value.
+    #[test]
+    fn a_dynamic_broker_assignment_interval_reaches_the_next_lookup() {
+        let source = Arc::new(FakeMetadataSource::static_image(group_config_image(&[])));
+        let coordinator = make_coord();
+        coordinator.set_metadata_source(source.clone());
+        coordinator.set_node_id(NODE);
+        let consumer = NextGenConfig::default();
+        let interval = || {
+            resolve_group_config(
+                &consumer,
+                &coordinator,
+                "group",
+                NextGenConfig::for_broker,
+                NextGenConfig::for_group,
+            )
+            .assignment_interval
+        };
+        let before = interval();
+        source.set_image(with_broker_values(group_config_image(&[]), &[
+            BrokerValue {
+                node: NODE,
+                key: CONSUMER_GROUP_ASSIGNMENT_INTERVAL_MS,
+                value: "9000",
+            },
+        ]));
+        let altered = interval();
+        source.set_image(group_config_image(&[]));
+        let deleted = interval();
+
+        check!(
+            [before, altered, deleted]
+                == [
+                    DEFAULT_ASSIGNMENT_INTERVAL,
+                    Duration::from_secs(9),
+                    DEFAULT_ASSIGNMENT_INTERVAL
+                ]
+        );
     }
 
     #[test]

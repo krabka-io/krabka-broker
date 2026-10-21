@@ -65,6 +65,25 @@ pub enum BrokerError {
     #[error("startup failed: {0}")]
     Startup(String),
 
+    /// A listener could not bind its address. Kafka's `SocketServer` fails
+    /// its start the same way, with `Socket server failed to bind to` and the
+    /// address. It names the listener, the address and the setting that gave
+    /// it, so that an operator looks at the network and not at the log
+    /// directory.
+    #[error("unable to bind the {listener} listener to {addr} (set by {setting}): {source}")]
+    ListenerBind {
+        /// The listener's name, such as `CONTROLLER`, `PLAINTEXT` or
+        /// `metrics`.
+        listener: String,
+        /// The address the listener tried to bind.
+        addr: std::net::SocketAddr,
+        /// The setting that gave the address, such as
+        /// `--controller-listen-addr`.
+        setting: &'static str,
+        /// Why the bind failed, such as `Address already in use`.
+        source: std::io::Error,
+    },
+
     /// The metadata controller that this node hosts met a fault that Kafka's
     /// `ProcessTerminatingFaultHandler` halts the process over, such as a
     /// replay of a `FeatureLevelRecord` above the range it supports. The text
@@ -240,6 +259,16 @@ pub enum BrokerError {
     #[error("node {node_id} is not a controller but appears in its own controller_quorum_voters")]
     NonControllerIsVoter { node_id: krabka_raft::NodeId },
 
+    /// `broker_id` and `node_id` name different ids. Kafka's `KafkaConfig`
+    /// refuses this in `KRaft` mode: a node names itself to the controller by one
+    /// id, so registration, heartbeats and every other controller RPC must
+    /// agree on it.
+    #[error("broker_id {broker_id} must equal node_id {node_id}")]
+    BrokerIdNodeIdMismatch {
+        broker_id: i32,
+        node_id: krabka_raft::NodeId,
+    },
+
     /// A controller-only node names `[[listeners]]`. Kafka refuses a
     /// `listeners` config that names any listener outside
     /// `controller.listener.names` when `process.roles=controller`. Krabka's
@@ -403,6 +432,24 @@ pub enum BrokerError {
 
     #[error("controlled shutdown did not complete within {0:?}")]
     ShutdownTimeout(std::time::Duration),
+}
+
+impl BrokerError {
+    /// Turns the I/O error of binding the listener `listener` to `addr`, which
+    /// `setting` gave, into a [`BrokerError::ListenerBind`].
+    pub fn listener_bind(
+        listener: &str,
+        addr: std::net::SocketAddr,
+        setting: &'static str,
+    ) -> impl FnOnce(std::io::Error) -> Self {
+        let listener = listener.to_owned();
+        move |source| Self::ListenerBind {
+            listener,
+            addr,
+            setting,
+            source,
+        }
+    }
 }
 
 #[cfg(test)]

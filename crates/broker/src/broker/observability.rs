@@ -38,7 +38,9 @@ pub(super) async fn start_observability(
             )
             .await
             .map_err(|error| match error {
-                krabka_telemetry::profiling::ProfilingError::Io(error) => BrokerError::Io(error),
+                krabka_telemetry::profiling::ProfilingError::Io(error) => {
+                    BrokerError::listener_bind("metrics", address, "--metrics-listen-addr")(error)
+                }
                 krabka_telemetry::profiling::ProfilingError::Config(error) => {
                     BrokerError::InvalidRuntimeConfig(error)
                 }

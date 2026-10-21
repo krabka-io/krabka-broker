@@ -5,7 +5,7 @@
 use {
     crate::{
         BrokerError,
-        config::{BrokerConfig, RlmmKind},
+        config::{BrokerConfig, ListenerSpec, RlmmKind},
         internal_topics::validate_audit_topic_name,
     },
     krabka_security::SaslMechanism,
@@ -26,6 +26,8 @@ impl BrokerConfig {
     /// # Errors
     ///
     /// Returns `Err` when:
+    /// - `broker_id` and `node_id` differ, which Kafka's `KafkaConfig` refuses
+    ///   in `KRaft` mode.
     /// - Two listeners share the same `bind_addr`.
     /// - `inter_broker_listener_name` does not match any listener name.
     /// - A SASL listener is declared while `enabled_sasl_mechanisms` is empty.
@@ -37,6 +39,12 @@ impl BrokerConfig {
     ///   configured: the metrics server, the OTLP forwarding of client
     ///   metrics, or the OAUTHBEARER JWKS refresher.
     pub fn validate(&self) -> Result<(), BrokerError> {
+        if u64::try_from(self.broker_id).ok() != Some(self.node_id.0) {
+            return Err(BrokerError::BrokerIdNodeIdMismatch {
+                broker_id: self.broker_id,
+                node_id: self.node_id,
+            });
+        }
         self.validate_log_io_policy()?;
         validate_audit_topic_name(&self.audit_topic)?;
         if self.roles.is_empty() {
@@ -89,39 +97,19 @@ impl BrokerConfig {
         // Every SASL listener requires at least one mechanism. Per-listener
         // sasl_mechanisms wins over the broker-wide default.
         for l in &listeners {
-            if l.protocol.requires_sasl() {
-                let mechanisms = l
-                    .sasl_mechanisms
-                    .as_deref()
-                    .unwrap_or(&self.enabled_sasl_mechanisms);
-                if mechanisms.is_empty() {
-                    return Err(BrokerError::SaslListenerNoMechanisms {
-                        name: l.name.clone(),
-                    });
-                }
-                // PLAIN has no dynamic credential path the way SCRAM does, so
-                // an empty table means every PLAIN login fails at runtime.
-                if mechanisms.contains(&SaslMechanism::Plain) && self.plain_credentials.is_empty() {
-                    return Err(BrokerError::PlainListenerNoCredentials {
-                        name: l.name.clone(),
-                    });
-                }
-            }
+            self.validate_sasl_listener(l)?;
         }
 
         // GSSAPI, wherever it is enabled (per-listener override or broker-wide
         // default), requires a `gssapi` config block. Without it the dispatch
         // path has nothing to authenticate against, so reject at startup rather
         // than panicking when the first GSSAPI client connects.
-        let gssapi_enabled = listeners.iter().any(|l| {
-            l.protocol.requires_sasl()
-                && l.sasl_mechanisms
-                    .as_deref()
-                    .unwrap_or(&self.enabled_sasl_mechanisms)
-                    .contains(&SaslMechanism::Gssapi)
-        }) || self
-            .enabled_sasl_mechanisms
-            .contains(&SaslMechanism::Gssapi);
+        let gssapi_enabled = listeners
+            .iter()
+            .any(|l| self.listener_enables(l, SaslMechanism::Gssapi))
+            || self
+                .enabled_sasl_mechanisms
+                .contains(&SaslMechanism::Gssapi);
         if gssapi_enabled && self.gssapi.is_none() {
             return Err(BrokerError::GssapiConfigMissing);
         }
@@ -250,6 +238,81 @@ impl BrokerConfig {
         self.validate_leader_rebalance()
     }
 
+    /// The SASL mechanisms `listener` enables: its own, else the broker-wide
+    /// `enabled_sasl_mechanisms`.
+    fn listener_sasl_mechanisms<'a>(&'a self, listener: &'a ListenerSpec) -> &'a [SaslMechanism] {
+        listener
+            .sasl_mechanisms
+            .as_deref()
+            .unwrap_or(&self.enabled_sasl_mechanisms)
+    }
+
+    /// Whether `listener` is a SASL listener that enables `mechanism`.
+    fn listener_enables(&self, listener: &ListenerSpec, mechanism: SaslMechanism) -> bool {
+        listener.protocol.requires_sasl()
+            && self.listener_sasl_mechanisms(listener).contains(&mechanism)
+    }
+
+    /// The startup rules one SASL listener passes: it enables a mechanism, and
+    /// PLAIN only with a credential to check it against. A listener that is
+    /// not SASL passes.
+    fn validate_sasl_listener(&self, listener: &ListenerSpec) -> Result<(), BrokerError> {
+        if !listener.protocol.requires_sasl() {
+            return Ok(());
+        }
+        if self.listener_sasl_mechanisms(listener).is_empty() {
+            return Err(BrokerError::SaslListenerNoMechanisms {
+                name: listener.name.clone(),
+            });
+        }
+        // PLAIN has no dynamic credential path the way SCRAM does, so an
+        // empty table means every PLAIN login fails at runtime.
+        if self.listener_enables(listener, SaslMechanism::Plain)
+            && self.plain_credentials.is_empty()
+        {
+            return Err(BrokerError::PlainListenerNoCredentials {
+                name: listener.name.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Whether this broker can serve `listener` when it opens while the
+    /// broker runs, as a dynamic `listeners` adds it.
+    ///
+    /// Kafka's `SocketServer.addListeners` builds the new listener's
+    /// `ChannelBuilder` first, and logs and skips a listener whose builder
+    /// fails: a SASL mechanism without a login, an SSL listener without a
+    /// keystore. These are the startup rules [`Self::validate`] applies to a
+    /// static listener, for one listener: a SASL listener enables a
+    /// mechanism, PLAIN only with a credential and GSSAPI only with a
+    /// `gssapi` block, and a TLS listener has TLS material to start from.
+    /// OAUTHBEARER always has a validator, the unsecured one by default, so it
+    /// needs nothing more.
+    ///
+    /// # Errors
+    /// The error [`Self::validate`] gives for the same listener at startup,
+    /// or [`BrokerError::Tls`] for a TLS listener without TLS material.
+    pub(crate) fn validate_added_listener(
+        &self,
+        listener: &ListenerSpec,
+    ) -> Result<(), BrokerError> {
+        if listener.protocol.requires_tls()
+            && listener.tls_config.is_none()
+            && self.tls_config.is_none()
+        {
+            return Err(BrokerError::Tls(format!(
+                "listener {} requires TLS but tls_config is None",
+                listener.name
+            )));
+        }
+        self.validate_sasl_listener(listener)?;
+        if self.listener_enables(listener, SaslMechanism::Gssapi) && self.gssapi.is_none() {
+            return Err(BrokerError::GssapiConfigMissing);
+        }
+        Ok(())
+    }
+
     /// Refuses the subsystems that `wasm32-wasip1` cannot run, when `wasm` is
     /// true.
     ///
@@ -310,9 +373,11 @@ impl BrokerConfig {
                 "RLMM bootstrap initial backoff exceeds maximum".into(),
             ));
         }
-        if self.replication.fetch_min > self.replication.fetch_max {
+        // `min_bytes` counts across the response, so its ceiling is the
+        // response's maximum and not one partition's.
+        if self.replication.fetch_min > self.replication.fetch_response_max {
             return Err(BrokerError::InvalidRuntimeConfig(
-                "replication fetch minimum bytes exceeds maximum".into(),
+                "replication fetch minimum bytes exceeds response maximum".into(),
             ));
         }
         if self.replication.reconnect_initial_delay > self.replication.reconnect_delay_cap {
@@ -325,9 +390,9 @@ impl BrokerConfig {
                 "broker heartbeat interval must be below timeout".into(),
             ));
         }
-        if self.controller_heartbeat_interval >= self.controller_election_timeout {
+        if self.controller_heartbeat_interval >= self.controller_fetch_timeout {
             return Err(BrokerError::InvalidRuntimeConfig(
-                "controller heartbeat interval must be below election timeout".into(),
+                "controller heartbeat interval must be below fetch timeout".into(),
             ));
         }
         if self.delegation_token_default_renew_period > self.delegation_token_max_lifetime {
@@ -374,14 +439,49 @@ impl BrokerConfig {
 mod tests {
     use {
         super::*,
-        crate::config::{
-            PlainCredentials, RemoteStorageBackend,
-            test_support::{RuntimeInvalidator, assert_invalid_runtime, base},
+        crate::{
+            SslPrincipalMapper,
+            config::{
+                PlainCredentials, RemoteStorageBackend,
+                test_support::{RuntimeInvalidator, assert_invalid_runtime, base},
+            },
         },
-        assert2::assert,
+        assert2::{assert, check},
         krabka_security::ListenerProtocol,
         krabka_units::{Time, bytes, millis},
     };
+
+    /// Kafka's `KafkaConfig` requires `broker.id == node.id` in `KRaft` mode. A
+    /// broker whose ids differ would register under one and heartbeat under
+    /// the other, so the controller never unfences it.
+    #[test]
+    fn requires_broker_id_to_equal_node_id() {
+        let cases = [
+            ("equal", 7, 7, None),
+            ("broker id differs", 42, 1, Some((42, 1))),
+            ("negative broker id", -1, 1, Some((-1, 1))),
+            (
+                "node id past i32",
+                1,
+                u64::from(u32::MAX),
+                Some((1, u64::from(u32::MAX))),
+            ),
+        ];
+        for (name, broker_id, node_id, want) in cases {
+            let mut config = BrokerConfig::default();
+            config.broker_id = broker_id;
+            config.node_id = krabka_raft::NodeId(node_id);
+            config.controller_quorum_voters = vec![(config.node_id, "127.0.0.1:9093".to_string())];
+            let got = match config.validate() {
+                Ok(()) => None,
+                Err(BrokerError::BrokerIdNodeIdMismatch { broker_id, node_id }) => {
+                    Some((broker_id, node_id.0))
+                }
+                Err(other) => panic!("{name}: unexpected error {other}"),
+            };
+            assert!(got == want, "{name}");
+        }
+    }
 
     /// Kafka's `super.users` accepts any principal, `User:ANONYMOUS`
     /// included. A cluster with a `PLAINTEXT` controller listener and a
@@ -418,6 +518,63 @@ mod tests {
         // The same config passes once the table is loaded.
         let config = base();
         assert!(config.validate().is_ok());
+    }
+
+    /// A listener added while the broker runs passes the startup rules of a
+    /// static one, and a TLS listener needs TLS material to start from.
+    #[yare::parameterized(
+        plaintext = { ListenerProtocol::Plaintext, None, |_| {}, Ok(()) },
+        scram = {
+            ListenerProtocol::SaslPlaintext, Some(vec![SaslMechanism::ScramSha256]), |_| {}, Ok(()),
+        },
+        broker_wide_mechanisms = { ListenerProtocol::SaslPlaintext, None, |_| {}, Ok(()) },
+        no_mechanisms = {
+            ListenerProtocol::SaslPlaintext, Some(vec![]), |_| {},
+            Err("SASL listener ADDED declared but enabled_sasl_mechanisms is empty"),
+        },
+        plain_without_credentials = {
+            ListenerProtocol::SaslPlaintext, Some(vec![SaslMechanism::Plain]),
+            |config| config.plain_credentials = PlainCredentials::default(),
+            Err(
+                "listener ADDED enables SASL/PLAIN but no PLAIN credentials are configured: set \
+                 [sasl_plain] credentials_path in broker.toml",
+            ),
+        },
+        gssapi_without_config = {
+            ListenerProtocol::SaslPlaintext, Some(vec![SaslMechanism::Gssapi]), |_| {},
+            Err("GSSAPI is an enabled SASL mechanism but gssapi config is missing"),
+        },
+        gssapi_on_a_listener_that_is_not_sasl = {
+            ListenerProtocol::Plaintext, Some(vec![SaslMechanism::Gssapi]), |_| {}, Ok(()),
+        },
+        tls_without_material = {
+            ListenerProtocol::Ssl, None, |_| {},
+            Err("tls: listener ADDED requires TLS but tls_config is None"),
+        },
+    )]
+    fn an_added_listener_passes_the_startup_rules(
+        protocol: ListenerProtocol,
+        sasl_mechanisms: Option<Vec<SaslMechanism>>,
+        change: fn(&mut BrokerConfig),
+        expected: Result<(), &str>,
+    ) {
+        let mut config = base();
+        change(&mut config);
+        let listener = ListenerSpec {
+            name: "ADDED".to_owned(),
+            bind_addr: "127.0.0.1:9095".parse().expect("literal"),
+            advertised: "127.0.0.1:9095".to_owned(),
+            protocol,
+            tls_config: None,
+            sasl_mechanisms,
+            principal_mapper: SslPrincipalMapper::default(),
+        };
+        check!(
+            config
+                .validate_added_listener(&listener)
+                .map_err(|error| error.to_string())
+                == expected.map_err(str::to_owned)
+        );
     }
 
     /// The controller listener is configured outside `listeners`, so it needs
@@ -544,6 +701,16 @@ mod tests {
         assert!(config.validate_platform(true).is_ok());
     }
 
+    /// A replication fetch's `min_bytes` can add up across partitions, so a
+    /// minimum above one partition's maximum and within the response's is
+    /// valid.
+    #[test]
+    fn accepts_a_replication_fetch_minimum_above_one_partition_s_maximum() {
+        let mut config = BrokerConfig::default();
+        config.replication.fetch_min = config.replication.fetch_max + bytes(1);
+        assert!(config.validate().is_ok());
+    }
+
     #[test]
     fn rejects_invalid_runtime_relations() {
         let mut config = BrokerConfig::default();
@@ -555,8 +722,11 @@ mod tests {
         assert_invalid_runtime(&config, "RLMM bootstrap initial backoff exceeds maximum");
 
         let mut config = BrokerConfig::default();
-        config.replication.fetch_min = config.replication.fetch_max + bytes(1);
-        assert_invalid_runtime(&config, "replication fetch minimum bytes exceeds maximum");
+        config.replication.fetch_min = config.replication.fetch_response_max + bytes(1);
+        assert_invalid_runtime(
+            &config,
+            "replication fetch minimum bytes exceeds response maximum",
+        );
 
         let mut config = BrokerConfig::default();
         config.replication.reconnect_initial_delay = config.replication.reconnect_delay_cap * 2.0;
@@ -567,10 +737,10 @@ mod tests {
         assert_invalid_runtime(&config, "broker heartbeat interval must be below timeout");
 
         let mut config = BrokerConfig::default();
-        config.controller_heartbeat_interval = config.controller_election_timeout;
+        config.controller_heartbeat_interval = config.controller_fetch_timeout;
         assert_invalid_runtime(
             &config,
-            "controller heartbeat interval must be below election timeout",
+            "controller heartbeat interval must be below fetch timeout",
         );
 
         let mut config = BrokerConfig::default();

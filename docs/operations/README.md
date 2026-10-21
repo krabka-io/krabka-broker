@@ -8,15 +8,20 @@ fails the build when the series drift.
 
 ## Guides
 
-- [Deploy](deploy.md): install the image, the binary or the reference
-  Kubernetes manifests. Format a log directory, write the config file, and
-  start, stop and roll a cluster. Wire the `/healthz` and `/readyz` probes.
+- [Deploy](deploy.md): install the image, the binary, the reference
+  Kubernetes manifests or the krabka-operator chart. Format a log directory,
+  write the config file, and start, stop and roll a cluster. Wire the
+  `/healthz` and `/readyz` probes.
 - [Capacity](capacity.md): what a broker spends per partition and per byte,
   how to size disk, network and voters, and how to read the phase families.
 - [Performance qualification](performance-qualification.md): reproduce the
   Kafka comparison and the 1,000/10,000-partition operating-envelope run.
 - [Broker performance results](performance-results.md): the measured
   comparison and highest passing partition tier, with exact provenance.
+- [Performance regression budgets](performance-budgets.md): the RF=3
+  workload matrix, the results record, and the budgets that reject a
+  candidate before or after a change, or report its limits against pinned
+  Kafka 4.3.1.
 - [Scale a cluster](scaling.md): add capacity, move replicas with a throttle,
   and drain and unregister a broker, including the operator-managed path.
 - [Metrics](metrics.md): every exported series with its labels and the JMX
@@ -25,6 +30,9 @@ fails the build when the series drift.
   Kafka protocol, and which need broker-side JMX or a JVM plugin and therefore
   do not. Cruise Control is in the second list; the lag monitors that decode
   `__consumer_offsets` are in the first.
+- [Release support matrix](support-matrix.md): the clients, builds, security
+  modes, storage modes and deployments with evidence, the revision each one
+  ran at, the upgrade and rollback rules, and the known limitations.
 - [Migrate from Apache Kafka](migrate-from-kafka.md): how to move a running
   Kafka cluster onto krabka with MirrorMaker 2, and how to cut consumers and
   producers over. Names what the mirror carries, what it does not, and what
@@ -34,6 +42,11 @@ fails the build when the series drift.
   records and nothing else, so the RLMM snapshot, the controller metadata
   checkpoint and the committed group offsets have to be captured before the
   day they are needed.
+- [Pilot acceptance plans](pilot-acceptance-plans.md): the two workload
+  plans an operator who did not build krabka follows to install, migrate
+  from Apache Kafka, cut over, roll back and run a recovery drill, with the
+  checks that decide each phase, what counts as a maintainer intervention,
+  and how independent acceptance runs are labeled.
 - [Audit](../../crates/audit/README.md#which-rpcs-are-audited): which admin
   RPCs write an `AdminOperation` record to `__krabka_audit`, what each record
   names, and what is redacted from it.
@@ -55,11 +68,15 @@ data-loss event that no alert fires for:
 [restore-from-archive](runbooks/restore-from-archive.md), the rebuild of a
 cluster out of its tiered-storage archive.
 
+The runbooks name the Kafka command-line tools without the `.sh` suffix, for
+example `kafka-topics`. An Apache Kafka release archive has the same tools in
+its `bin/` directory with the suffix, for example `bin/kafka-topics.sh`.
+
 | Alert | Runbook |
 | :--- | :--- |
 | `KrabkaNoActiveController` | [no-active-controller](runbooks/no-active-controller.md) |
 | `KrabkaBrokerDown` | [broker-down](runbooks/broker-down.md) |
-| `KrabkaMetadataLag` | [metadata-quorum-loss](runbooks/metadata-quorum-loss.md) |
+| `KrabkaMetadataLag`, `KrabkaMetadataStale` | [metadata-quorum-loss](runbooks/metadata-quorum-loss.md) |
 | `KrabkaUnderReplicatedPartitions` | [under-replicated-partitions](runbooks/under-replicated-partitions.md) |
 | `KrabkaUnderMinIsrPartitions` | [under-min-isr-partitions](runbooks/under-min-isr-partitions.md) |
 | `KrabkaOfflinePartitions` | [offline-partitions](runbooks/offline-partitions.md) |
@@ -75,6 +92,7 @@ cluster out of its tiered-storage archive.
 | `KrabkaRequestLatencyHigh`, `KrabkaQuotaThrottleHigh`, `KrabkaInFlightRequestsClimbing` | [broker-saturation](runbooks/broker-saturation.md) |
 | `KrabkaFetchZeroCopyLost` | [fetch-zero-copy-regression](runbooks/fetch-zero-copy-regression.md) |
 | `KrabkaRlmmBootstrapStuck` | [rlmm-bootstrap-stuck](runbooks/rlmm-bootstrap-stuck.md) |
+| `KrabkaRlmmPartitionNotReady` | [rlmm-partition-not-ready](runbooks/rlmm-partition-not-ready.md) |
 | `KrabkaRemoteCopyErrors` | [remote-copy-lag](runbooks/remote-copy-lag.md) |
 | `KrabkaRemoteCopyLagGrowing` | [remote-copy-lag](runbooks/remote-copy-lag.md) |
 | `KrabkaRemoteFetchErrors` | [remote-copy-lag](runbooks/remote-copy-lag.md) |

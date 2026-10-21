@@ -9,8 +9,9 @@ use {
         io::FileIo,
         log::test_support::{
             NO_LIMIT, TempLog, TransactionFields, append_samples, append_transaction,
-            check_contiguous_exports, commit_marker, install_stamps, rolling_test_log,
-            sample_batch, sample_batch_with_epoch, test_log, tiny_segments, transaction_fields,
+            check_contiguous_exports, commit_marker, install_stamps,
+            log_with_three_then_two_records, rolling_test_log, sample_batch,
+            sample_batch_with_epoch, test_log, tiny_segments, transaction_fields,
             transactional_batch,
         },
         log_start_offset_checkpoint::write,
@@ -52,14 +53,8 @@ fn open_rejects_a_negative_segment_base() {
 
 #[test]
 fn open_recovers_partial_trailing_batch() {
-    let dir = tempdir().unwrap();
-    {
-        let mut log = open_log(dir.path());
-        let mut b1 = sample_batch(3);
-        let mut b2 = sample_batch(2);
-        log.append(&mut b1).unwrap();
-        log.append(&mut b2).unwrap();
-    }
+    let TempLog { dir, log } = log_with_three_then_two_records();
+    drop(log);
     // Append 10 bytes of garbage to the .log file.
     let log_path = dir.path().join("00000000000000000000.log");
     let mut f = std::fs::OpenOptions::new()

@@ -314,7 +314,9 @@ mod tests {
             replica_state::LeaderPolicy,
             test_support::{StandalonePartitionSetup, peer, principal, request_context},
             time_util::now_ms,
-            txn::handlers::write_txn_markers::test_support::{open_partition, start_broker},
+            txn::handlers::write_txn_markers::test_support::{
+                PartitionAnswer, answer, open_partition, start_broker,
+            },
         },
         assert2::assert,
         krabka_protocol::{
@@ -416,20 +418,6 @@ mod tests {
                 ..Default::default()
             }],
             ..Default::default()
-        }
-    }
-
-    /// The code a marker result answers for one partition.
-    #[derive(Clone, Copy)]
-    struct PartitionAnswer {
-        partition_index: i32,
-        error_code: i16,
-    }
-
-    fn answer(partition_index: i32, error_code: i16) -> PartitionAnswer {
-        PartitionAnswer {
-            partition_index,
-            error_code,
         }
     }
 

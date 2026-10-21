@@ -45,7 +45,6 @@ mod support;
 
 /// The topic that takes the first placement on every broker, so the topic
 /// under test lands in the second log directory, as in the system test.
-const FILLER: &str = "ldf-filler";
 /// The topic whose follower replica loses its log directory.
 const TOPIC: &str = "ldf-target";
 /// The `log.roll.ms` every broker runs with: shorter than the gap between the
@@ -169,6 +168,21 @@ async fn wait_until_materialized(brokers: &[BrokerNode], partition: &str) {
     .unwrap_or_else(|_| panic!("{partition} was not materialized on every broker"));
 }
 
+/// Wait until every broker holds one of the `__krabka_audit` partitions,
+/// which the controller places one to a broker.
+async fn wait_until_each_hosts_an_audit_partition(brokers: &[BrokerNode]) {
+    let hosts = |broker: &BrokerNode| {
+        (0..brokers.len()).any(|index| broker.dir_of(&format!("__krabka_audit-{index}")).is_some())
+    };
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while !brokers.iter().all(hosts) {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("an audit partition was not placed on every broker"));
+}
+
 /// The directory id `krabka format` gave `dir`.
 fn directory_id(dir: &Path) -> uuid::Uuid {
     LogDirIds::resolve(&[dir.to_path_buf()])
@@ -266,15 +280,9 @@ async fn produce(producer: &Producer, timestamp_ms: i64) {
 async fn a_follower_whose_log_directory_fails_leaves_the_isr() {
     support::init_tracing();
     let cluster = start_cluster().await;
-    create_topic_for_broker(
-        &cluster.controller,
-        configured_topic_request()
-            .topic(FILLER)
-            .replication_factor(3)
-            .call(),
-    )
-    .await;
-    wait_until_materialized(&cluster.brokers, &format!("{FILLER}-0")).await;
+    // Each broker's audit partition fills its first log directory, so the
+    // target, placed in the least-loaded directory, lands in the second.
+    wait_until_each_hosts_an_audit_partition(&cluster.brokers).await;
     create_topic_for_broker(
         &cluster.controller,
         configured_topic_request()
@@ -292,8 +300,7 @@ async fn a_follower_whose_log_directory_fails_leaves_the_isr() {
         .expect("the partition is in the image");
     let leader = record.leader.0;
     // The system test fails the second log directory and checks first that
-    // the partition lives there. An internal topic can take the first
-    // placement on one broker, so pick a follower where the premise holds.
+    // the partition lives there, so pick a follower where the premise holds.
     let follower = cluster
         .brokers
         .iter()

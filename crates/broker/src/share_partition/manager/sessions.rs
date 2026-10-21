@@ -27,15 +27,23 @@ impl SharePartitionLeaderManager {
         self.sessions.update_fetch(request)
     }
 
-    /// Which rows an incremental `ShareFetch` response carries: see
-    /// [`ShareSessionCache::prune_response`](crate::share_partition::session::ShareSessionCache::prune_response).
-    pub(crate) fn prune_fetch_response(
+    /// Which rows an incremental `ShareFetch` response carries, without
+    /// changing the session: see
+    /// [`ShareSessionCache::select_response`](crate::share_partition::session::ShareSessionCache::select_response).
+    pub(crate) fn select_fetch_response(
         &self,
         group: &str,
         member: &str,
         rows: &[ResponseRow],
     ) -> Vec<bool> {
-        self.sessions.prune_response(group, member, rows)
+        self.sessions.select_response(group, member, rows)
+    }
+
+    /// Updates the session for an incremental `ShareFetch` response that goes
+    /// out: see
+    /// [`ShareSessionCache::commit_response`](crate::share_partition::session::ShareSessionCache::commit_response).
+    pub(crate) fn commit_fetch_response(&self, group: &str, member: &str, rows: &[ResponseRow]) {
+        self.sessions.commit_response(group, member, rows);
     }
 
     pub(crate) fn update_acknowledge_session(

@@ -60,6 +60,15 @@ impl DisklessReadHandle {
         self.index_log.load_full()
     }
 
+    pub(crate) fn ensure_index_log_valid(&self) -> Result<(), BrokerError> {
+        if self.index_log().is_some_and(|log| !log.is_valid()) {
+            return Err(BrokerError::Txn(
+                "diskless WAL index projection is unavailable or invalid".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Clone the raw object-store handle for the background WAL flusher.
     #[must_use]
     pub(crate) fn object_store(&self) -> Arc<dyn ObjectStore> { Arc::clone(&self.store) }
@@ -71,11 +80,7 @@ impl DisklessReadHandle {
         offset: i64,
         max_bytes: usize,
     ) -> Result<Option<Bytes>, BrokerError> {
-        if self.index_log().is_some_and(|log| !log.is_valid()) {
-            return Err(BrokerError::Txn(
-                "diskless WAL index projection is unavailable or invalid".into(),
-            ));
-        }
+        self.ensure_index_log_valid()?;
         let Some(FetchRange {
             object_key,
             byte_start,

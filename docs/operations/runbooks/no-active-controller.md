@@ -14,7 +14,8 @@ Produce and fetch on existing leaders continue until a leader fails, and then
 that partition goes offline with no controller to replace it.
 
 A sum above one means two brokers each believe they lead. In a healthy quorum
-this cannot last past one election timeout. A sustained value above one means
+this cannot last past one check-quorum window, 1.5 times
+`controller_fetch_timeout`. A sustained value above one means
 the scrape covers two clusters, or two nodes formatted with the same node id
 and different directory ids.
 
@@ -25,11 +26,18 @@ kafka-metadata-quorum --bootstrap-server <broker>:9092 describe --status
 ```
 
 The output names the leader id, the leader epoch and each voter's last fetch
-timestamp. `LeaderId: -1` confirms a quorum with no leader.
+timestamp. A quorum with no leader cannot answer the request, so the command
+prints no leader. It retries until the admin client's `default.api.timeout.ms`
+(60 seconds by default) runs out, and then fails with
+`TimeoutException: Timed out waiting for a node assignment. Call: describeMetadataQuorum`.
 
-`krabka_broker_raft_current_state` gives the same answer per broker: one
-series per state, and the `leader` series is 1 on the controller. A cluster
-where every voter sits in `candidate` is in a failed election loop.
+`krabka_broker_raft_current_state` answers the same question per broker, and
+it needs no leader to do so. It has one series per state, and the `leader`
+series is 1 on the controller.
+A cluster where every voter sits in `candidate` is in a failed election loop.
+`/readyz` stays at 200 on a node whose quorum has no leader. The node keeps its
+last committed metadata and serves produce and fetch to the partitions it
+leads.
 
 ## Diagnose
 

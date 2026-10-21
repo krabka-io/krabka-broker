@@ -19,7 +19,7 @@ use {
     krabka_protocol::{Decode as _, api_key::ApiKey},
     krabka_units::{Time, convert::TimeExt},
     std::{net::SocketAddr, sync::Arc},
-    tokio::io::{AsyncRead, AsyncWrite},
+    tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt as _},
     tokio_util::codec::Framed,
     tracing::Instrument as _,
 };
@@ -27,6 +27,7 @@ use {
 mod accept;
 mod fetch;
 mod guards;
+mod idle_clock;
 mod receive;
 mod registry;
 mod response;
@@ -79,27 +80,31 @@ mod throttle_audit;
 pub use self::accept::serve_connection_on_listener;
 use {
     self::{
-        fetch::dispatch_fetch,
+        fetch::{FetchPlan, fetch_reply},
         guards::{ActiveConnectionGuard, InFlightGuard, QueuedRequestGuard},
-        registry::{DispatchContext, send_registry_response},
-        response::{ResponseShape, apply_request_quota, encode_response},
+        idle_clock::IdleClock,
+        registry::{DispatchContext, registry_reply},
+        response::{
+            ResponseShape, ThrottledResponse, apply_request_quota, encode_response,
+            send_throttled_response,
+        },
         sasl::{SaslConnection, SaslFrameOutcome, SaslListener, try_handle_sasl_frame},
         session::{
             FrameSizeLimit, FrameWaitPolicy, RequestLimits, initial_connection_auth,
             next_connection_frame,
         },
-        write_idle::WriteIdle,
     },
     crate::{
         api_catalog::{INTER_BROKER_ONLY_APIS, ListenerKind, is_disabled_version},
         broker::Broker,
         config::ListenerSpec,
+        error::BrokerError,
         handlers::{
-            ApiKeyCode, ApiVersion,
+            ApiKeyCode, ApiVersion, DispatchKind,
             api_versions::{is_valid_client_info, unsupported_version_response},
             registry::DispatchEntry,
         },
-        metrics::ConnectionCloseReason,
+        metrics::{BrokerMetrics, ConnectionCloseReason},
         network::{
             auth::ConnectionAuth,
             codec::{self, KafkaCodec},
@@ -125,6 +130,128 @@ pub(super) enum AfterResponse {
     Mute(Time),
     /// Close the connection.
     Close,
+}
+
+/// What a request leaves for the socket once its handler is done.
+///
+/// A handler computes its reply without touching the socket, and the
+/// connection loop writes it afterwards. That split is what lets the loop
+/// close the socket while a handler is still running: see [`within_idle`].
+enum Reply {
+    /// One response frame, and the KIP-219 window it earned.
+    Frame(ThrottledResponse),
+    /// A `Fetch` response, as the write plan that keeps its records
+    /// zero-copy.
+    Fetch(FetchPlan),
+    /// Nothing to write.
+    Done(AfterResponse),
+}
+
+/// Writes `reply`, and records the write's completion as activity on
+/// `clock`: Kafka's `Selector` refreshes a channel's idle clock each time it
+/// is ready to write.
+async fn respond<S>(
+    framed: &mut Framed<S, KafkaCodec>,
+    clock: &mut IdleClock,
+    reply: Reply,
+    metrics: &BrokerMetrics,
+) -> AfterResponse
+where
+    S: AsyncRead + AsyncWrite + Unpin + SendfileSink,
+{
+    let after = match reply {
+        Reply::Frame(response) => send_throttled_response(framed, response).await,
+        Reply::Fetch(plan) => fetch::write_plan(framed, plan, metrics).await,
+        Reply::Done(after) => return after,
+    };
+    clock.touch();
+    after
+}
+
+/// Runs a request's handler `work` against the connection's idle window, and
+/// returns its output, or `None` when the window passed first.
+///
+/// Kafka mutes a channel from the receive of a request until its response is
+/// sent, so a muted channel's idle clock stands still while the request is in
+/// a handler, and `maybeCloseOldestConnection` closes the channel once the
+/// window passes. The handler runs on, and its response is dropped with the
+/// channel. This does the same: once the window passes it shuts the socket
+/// down, so the peer sees the close at once, and then lets `work` finish
+/// rather than dropping it part-way. A handler cancelled between two awaits
+/// could leave broker state half-applied.
+async fn within_idle<S, F>(
+    framed: &mut Framed<S, KafkaCodec>,
+    clock: &IdleClock,
+    work: F,
+) -> Option<F::Output>
+where
+    S: AsyncWrite + Unpin,
+    F: Future,
+{
+    let mut work = std::pin::pin!(work);
+    tokio::select! {
+        biased;
+        output = &mut work => return Some(output),
+        () = clock.expired() => {}
+    }
+    if let Err(error) = framed.get_mut().shutdown().await {
+        tracing::debug!(%error, "shutting down a connection idle past its window");
+    }
+    let _discarded = work.await;
+    None
+}
+
+/// Runs the handler of a request that reaches the registry, against the idle
+/// window, and returns its reply, or `None` when the window passed first.
+async fn handler_reply<S>(
+    framed: &mut Framed<S, KafkaCodec>,
+    clock: &IdleClock,
+    entry: DispatchEntry,
+    context: DispatchContext<'_, '_>,
+    request_span: tracing::Span,
+) -> Option<Reply>
+where
+    S: AsyncWrite + Unpin + SendfileSink,
+{
+    if matches!(entry.kind(), DispatchKind::Fetch) {
+        let sendfile_capable = SendfileSink::is_sendfile_capable(framed.get_ref());
+        let work = fetch_reply(context, request_span, sendfile_capable);
+        within_idle(framed, clock, work).await
+    } else {
+        within_idle(framed, clock, registry_reply(entry, context, request_span)).await
+    }
+}
+
+/// Writes the answer to a `SaslHandshake` or `SaslAuthenticate` frame, and
+/// says whether the connection goes on, as `Mute` with no window, or closes.
+async fn write_sasl_outcome<S>(
+    framed: &mut Framed<S, KafkaCodec>,
+    clock: &mut IdleClock,
+    outcome: Result<SaslFrameOutcome, BrokerError>,
+) -> AfterResponse
+where
+    S: AsyncWrite + Unpin,
+{
+    let SaslFrameOutcome {
+        response_bytes,
+        close_after,
+    } = match outcome {
+        Ok(outcome) => outcome,
+        Err(e) => {
+            tracing::warn!(error = %e, "SASL dispatch error, closing connection");
+            return AfterResponse::Close;
+        }
+    };
+    if let Err(e) = framed.send(response_bytes).await {
+        tracing::warn!(error = %e, "framed.send error during SASL, closing");
+        return AfterResponse::Close;
+    }
+    clock.touch();
+    if close_after {
+        tracing::info!("closing connection after a refused SASL frame");
+        return AfterResponse::Close;
+    }
+    AfterResponse::Mute(<Time as TimeExt>::ZERO)
 }
 
 /// Turns a KIP-219 throttle window into the deadline the connection stays
@@ -265,13 +392,14 @@ fn is_served_version(broker: &Broker, entry: DispatchEntry, parsed: &ParsedReque
 
 async fn reject_unsupported_version<S>(
     framed: &mut Framed<S, KafkaCodec>,
+    clock: &mut IdleClock,
     broker: &Broker,
     entry: DispatchEntry,
     parsed: &ParsedRequest<'_>,
     auth: &ConnectionAuth,
 ) -> AfterResponse
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin + SendfileSink,
 {
     const RESPONSE_VERSION: ApiVersion = 0;
     if parsed.api_key != API_VERSIONS_KEY {
@@ -332,7 +460,7 @@ where
         started.elapsed(),
         None,
     );
-    response::send_throttled_response(framed, response).await
+    respond(framed, clock, Reply::Frame(response), &broker.metrics).await
 }
 
 /// KIP scope check (#683): `crate::api_catalog::INTER_BROKER_ONLY_APIS` is
@@ -370,7 +498,7 @@ async fn serve_connection_stream<S>(
 {
     let limits = RequestLimits::of(&broker.config);
     let stream =
-        WriteIdle::for_response(stream, broker.config.connections_max_idle_for(&spec.name));
+        write_idle::for_response(stream, broker.config.connections_max_idle_for(&spec.name));
     let mut framed = Framed::new(stream, codec::codec(limits.request_max()));
     let is_sasl_listener = spec.protocol.requires_sasl();
     let sasl_mechanisms =
@@ -383,9 +511,9 @@ async fn serve_connection_stream<S>(
     // gauge is decremented when `_conn` drops on any loop exit (EOF,
     // decode/send error, or SASL-session expiry).
     let _conn = ActiveConnectionGuard::new(&broker.metrics);
-    // Resolved once: the listener's `connections.max.idle.ms`, with its
-    // per-listener override already applied. `next_connection_frame` re-arms
-    // the deadline from it on every frame read.
+    // The listener's `connections.max.idle.ms`, run from the last socket
+    // activity through handler time and mutes alike.
+    let mut clock = IdleClock::start(broker.config.connections_max_idle_for(&spec.name));
     // Resolved once, like the idle window: the listener's KIP-368
     // re-authentication window, which every mechanism handler clamps its
     // session to.
@@ -395,7 +523,6 @@ async fn serve_connection_stream<S>(
         max_reauth: broker.config.connections_max_reauth_for(&spec.name),
     };
     let frame_wait = FrameWaitPolicy {
-        idle: broker.config.connections_max_idle_for(&spec.name),
         peer,
         metrics: broker.metrics.clone(),
         audit_log: broker.audit_log.clone(),
@@ -429,6 +556,7 @@ async fn serve_connection_stream<S>(
             &mut framed,
             &auth,
             mute_until.take(),
+            &mut clock,
             &frame_wait,
             FrameSizeLimit {
                 maximum: limits.for_auth(&auth),
@@ -453,6 +581,8 @@ async fn serve_connection_stream<S>(
         let Ok(permit) = broker.queued_requests_sem.clone().acquire_owned().await else {
             break;
         };
+        // Broker backpressure, like the byte budget: the idle window restarts.
+        clock.touch();
         let _queued_guard =
             QueuedRequestGuard::new(permit, byte_permit, &broker.metrics, frame.len());
         // After a `SaslHandshake` v0 the exchange carries raw size-prefixed
@@ -464,8 +594,15 @@ async fn serve_connection_stream<S>(
                 session: &mut sasl_session,
             };
             let token = sasl::handle_raw_sasl_token(&broker, &frame, &mut auth, session, &peer);
-            match token.await {
-                Some(token) if framed.send(token.clone()).await.is_ok() => continue,
+            let Some(token) = within_idle(&mut framed, &clock, token).await else {
+                frame_wait.record_idle_close(&auth, &clock);
+                break;
+            };
+            match token {
+                Some(token) if framed.send(token.clone()).await.is_ok() => {
+                    clock.touch();
+                    continue;
+                }
                 _ => break,
             }
         }
@@ -486,9 +623,10 @@ async fn serve_connection_stream<S>(
         // request that arrives past the deadline, not on a timer racing the
         // read. A client re-authenticates only when it next has something to
         // send, so it routinely opens the exchange after its window closed;
-        // `expired_for_request` lets the two SASL api_keys through so that
-        // exchange runs, and ends the connection on anything else.
-        if is_sasl_listener && auth.expired_for_request(parsed.api_key, now_ms()) {
+        // a `SaslHandshake` that begins the re-authentication passes, and any
+        // other frame ends the connection with no response.
+        if is_sasl_listener && sasl_session.closes_expired_session(&auth, parsed.api_key, now_ms())
+        {
             // Kafka's `Processor.processCompletedReceives` logs this at DEBUG.
             tracing::debug!(
                 api_key = parsed.api_key,
@@ -509,10 +647,11 @@ async fn serve_connection_stream<S>(
             && (!auth.allows_request(parsed.api_key)
                 || sasl_session.repeats_api_versions(&auth, parsed.api_key))
         {
-            if let Some(response) =
-                sasl::refuse_gated_request(&broker, &parsed, &auth, &peer, &spec.name).await
-            {
-                let _ = framed.send(response).await;
+            let refusal = sasl::refuse_gated_request(&broker, &parsed, &auth, &peer, &spec.name);
+            match within_idle(&mut framed, &clock, refusal).await {
+                Some(Some(response)) => _ = framed.send(response).await,
+                Some(None) => {}
+                None => frame_wait.record_idle_close(&auth, &clock),
             }
             break;
         }
@@ -535,7 +674,16 @@ async fn serve_connection_stream<S>(
             break;
         }
         if !is_served_version(&broker, entry, &parsed) {
-            match reject_unsupported_version(&mut framed, &broker, entry, &parsed, &auth).await {
+            match reject_unsupported_version(
+                &mut framed,
+                &mut clock,
+                &broker,
+                entry,
+                &parsed,
+                &auth,
+            )
+            .await
+            {
                 AfterResponse::Close => break,
                 AfterResponse::Mute(window) => mute_until = mute_deadline(window),
             }
@@ -546,7 +694,7 @@ async fn serve_connection_stream<S>(
         // table because handlers receive only `&Broker` and have no way to
         // touch `auth`. Returning `Some(SaslFrameOutcome)` short-circuits
         // the normal registry path for that frame.
-        if let Some(outcome) = try_handle_sasl_frame(
+        let sasl_frame = try_handle_sasl_frame(
             &broker,
             &parsed,
             &mut auth,
@@ -554,28 +702,16 @@ async fn serve_connection_stream<S>(
             &mut sasl_session,
             &peer,
         )
-        .instrument(req_span.clone())
-        .await
-        {
-            let SaslFrameOutcome {
-                response_bytes,
-                close_after,
-            } = match outcome {
-                Ok(o) => o,
-                Err(e) => {
-                    tracing::warn!(error = %e, "SASL dispatch error, closing connection");
-                    break;
-                }
-            };
-            if let Err(e) = framed.send(response_bytes).await {
-                tracing::warn!(error = %e, "framed.send error during SASL, closing");
-                break;
+        .instrument(req_span.clone());
+        let Some(sasl_frame) = within_idle(&mut framed, &clock, sasl_frame).await else {
+            frame_wait.record_idle_close(&auth, &clock);
+            break;
+        };
+        if let Some(outcome) = sasl_frame {
+            match write_sasl_outcome(&mut framed, &mut clock, outcome).await {
+                AfterResponse::Close => break,
+                AfterResponse::Mute(_) => continue,
             }
-            if close_after {
-                tracing::info!("closing connection after a refused SASL frame");
-                break;
-            }
-            continue;
         }
 
         capture_client_software(&parsed, &mut client_software.0, &mut client_software.1);
@@ -598,15 +734,11 @@ async fn serve_connection_stream<S>(
             client_software_version: &client_software.1,
         };
 
-        if matches!(entry.kind(), crate::handlers::DispatchKind::Fetch) {
-            match dispatch_fetch(&mut framed, context, req_span.clone()).await {
-                AfterResponse::Close => break,
-                AfterResponse::Mute(window) => mute_until = mute_deadline(window),
-            }
-            continue;
-        }
-
-        match send_registry_response(&mut framed, entry, context, req_span).await {
+        let Some(reply) = handler_reply(&mut framed, &clock, entry, context, req_span).await else {
+            frame_wait.record_idle_close(&auth, &clock);
+            break;
+        };
+        match respond(&mut framed, &mut clock, reply, &broker.metrics).await {
             AfterResponse::Close => break,
             AfterResponse::Mute(window) => mute_until = mute_deadline(window),
         }

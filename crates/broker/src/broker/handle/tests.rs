@@ -8,7 +8,7 @@ use {
                 submit_metadata_topic_partition,
             },
         },
-        config::BrokerConfig,
+        config::{BrokerConfig, RemoteStorageBackend, RlmmKind},
         partition::{Partition, WriterMessage},
         test_support::{
             UNSUPPORTED_LEVEL_FAULT, broker_registration, finalize_unstable_metadata_version,
@@ -16,8 +16,9 @@ use {
         },
     },
     assert2::{assert, check},
-    std::sync::Arc,
+    std::{sync::Arc, time::Duration},
     tempfile::tempdir,
+    tokio::task::JoinHandle,
 };
 
 async fn assert_listener_stops_accepting(addr: SocketAddr) {
@@ -374,12 +375,157 @@ async fn dropping_handle_stops_idle_connections_and_partition_writers() {
     broker.controller.cancel().await;
 }
 
+/// How a test stops a broker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stop {
+    /// [`BrokerHandle::shutdown`], which joins the copy task.
+    Shutdown,
+    /// [`BrokerHandle::crash_for_test`], which aborts it and waits for it.
+    Crash,
+    /// Dropping the handle, which aborts it and returns at once.
+    Drop,
+}
+
+/// Whether the broker's remote-log-manager task has finished, or `None` when
+/// the broker has no remote tier and so no such task.
+async fn copy_task_finished(broker: &Broker) -> Option<bool> {
+    broker
+        .remote_log_manager_handle
+        .lock()
+        .await
+        .as_ref()
+        .map(JoinHandle::is_finished)
+}
+
+/// Waits until the remote-log-manager sweep holds `partition` in its snapshot
+/// and stays there, which is the sweep parked on the partition's replica-state
+/// lock the test holds. Other tasks clone a partition only for as long as a
+/// synchronous pass over the registry takes, so a count that stays raised
+/// across consecutive samples is the sweep's.
+async fn await_sweep_parked_on(partition: &Arc<Partition>, baseline: usize) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut raised = 0;
+        while raised < 5 {
+            raised = if Arc::strong_count(partition) > baseline {
+                raised + 1
+            } else {
+                0
+            };
+            // intentional: the sweep runs on its own 10 ms interval, and a
+            // reference count is the only sign it holds the partition.
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the remote-log-manager sweep reaches the held partition");
+}
+
+/// However a broker stops, its remote-log-manager task stops with it, even in
+/// the middle of a tick. A copy task that outlived its broker went on
+/// uploading into a tier that the partitions' new leaders were copying into,
+/// and the tier kept both copies.
+///
+/// The test holds a partition's replica-state lock, so the sweep parks
+/// mid-tick on an await that does not watch the shutdown token. Cancelling the
+/// token alone cannot stop it there:
+/// - a crash and a dropped handle abort the task, which stops it where it is;
+/// - `shutdown` joins it, so it returns only once the held lock is released
+///   and the tick has finished.
+#[yare::parameterized(
+    shutdown = { Stop::Shutdown },
+    crash = { Stop::Crash },
+    dropped_handle = { Stop::Drop },
+)]
+#[test_macro(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn a_stopped_broker_leaves_no_remote_log_manager_task_running(stop: Stop) {
+    let dir = tempdir().unwrap();
+    let remote = tempdir().unwrap();
+    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+    config.remote_storage_backend = Some(RemoteStorageBackend::Local {
+        dir: remote.path().to_path_buf(),
+    });
+    config.remote_log_metadata = RlmmKind::InMemory;
+    config.remote_log_manager_interval = krabka_units::millis(10);
+    let handle = Broker::start(config).await.unwrap();
+    let broker = handle.broker_arc_for_test();
+    check!(
+        copy_task_finished(&broker).await == Some(false),
+        "the copy task runs while the broker serves"
+    );
+
+    let partition = local_partition_with_records()
+        .log_dir(dir.path())
+        .topic("parked-sweep")
+        .call();
+    let held = partition.replica_state.lock().await;
+    let baseline = Arc::strong_count(&partition) + 1;
+    broker.partitions.insert(
+        "parked-sweep".into(),
+        PartitionIndex(0),
+        Arc::clone(&partition),
+    );
+    await_sweep_parked_on(&partition, baseline).await;
+
+    match stop {
+        Stop::Shutdown => {
+            let shutdown = tokio::spawn(handle.shutdown());
+            // intentional: a shutdown that did not join the task would return
+            // within this window; one that joins it cannot while the lock is
+            // held, which is the property under test.
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            // `shutdown` holds the task's handle while it joins it, so the
+            // handle cannot be read here; the shutdown itself is the witness.
+            check!(
+                !shutdown.is_finished(),
+                "shutdown returned with the copy task still mid-tick"
+            );
+            drop(held);
+            tokio::time::timeout(Duration::from_secs(10), shutdown)
+                .await
+                .expect("shutdown returns once the tick finishes")
+                .expect("shutdown does not panic");
+        }
+        Stop::Crash => {
+            let crash = tokio::spawn(handle.crash_for_test());
+            await_copy_task_finished(&broker).await;
+            drop(held);
+            tokio::time::timeout(Duration::from_secs(10), crash)
+                .await
+                .expect("the crash returns")
+                .expect("the crash does not panic");
+        }
+        Stop::Drop => {
+            drop(handle);
+            await_copy_task_finished(&broker).await;
+            drop(held);
+            broker.controller.cancel().await;
+        }
+    }
+
+    check!(copy_task_finished(&broker).await == Some(true));
+}
+
+/// Waits until the broker's remote-log-manager task has finished, with the
+/// replica-state lock it is parked on still held.
+async fn await_copy_task_finished(broker: &Broker) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while copy_task_finished(broker).await != Some(true) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the aborted copy task stops while it is parked mid-tick");
+}
+
 #[tokio::test]
 async fn controlled_shutdown_timeout_stops_listener_and_reports_error() {
     let dir = tempdir().unwrap();
     let config = BrokerConfig::for_tests(dir.path().to_path_buf());
     let handle = Broker::start(config).await.unwrap();
     let addr = handle.listen_addr();
+    // An available controller can finish the drain before a zero timeout is polled.
+    handle.broker.controller.halt().await;
+    assert!(!*handle.should_shutdown_rx().borrow());
     let err = handle
         .controlled_shutdown(std::time::Duration::ZERO)
         .await
@@ -395,9 +541,7 @@ async fn controlled_shutdown_timeout_stops_listener_and_reports_error() {
 async fn a_fatal_controller_fault_latches_self_shutdown_and_names_its_reason() {
     let dir = tempdir().unwrap();
     // The default config supports no unstable feature level.
-    let handle = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-        .await
-        .expect("broker start");
+    let handle = start_default_broker(dir.path()).await.handle;
     let mut should_shutdown = handle.should_shutdown_rx();
     check!(!*should_shutdown.borrow());
     check!(handle.fatal_fault().is_none());
@@ -413,6 +557,29 @@ async fn a_fatal_controller_fault_latches_self_shutdown_and_names_its_reason() {
     .await
     .expect("controlled shutdown waited for a drain that the dead controller cannot serve")
     .expect("controlled shutdown");
+}
+
+/// A broker whose `broker_id` differs from its `node_id` is refused before it
+/// touches the quorum, as Kafka's `KafkaConfig` refuses it. Started, it would
+/// register under one id and heartbeat under the other, and wait out
+/// `startup_leader_wait_timeout` for an unfence that never comes.
+#[tokio::test]
+async fn a_broker_whose_broker_id_differs_from_its_node_id_is_refused_at_startup() {
+    let dir = tempdir().unwrap();
+    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+    config.broker_id = 42;
+
+    let started = tokio::time::timeout(std::time::Duration::from_secs(10), Broker::start(config))
+        .await
+        .expect("the start waited instead of refusing the config");
+
+    let Err(refused) = started else {
+        panic!("a broker whose broker_id differs from its node_id started");
+    };
+    check!(matches!(refused, BrokerError::BrokerIdNodeIdMismatch {
+        broker_id: 42,
+        node_id: krabka_raft::NodeId(1),
+    }));
 }
 
 /// A node whose log finalized a level above its range never starts. The
@@ -477,9 +644,7 @@ async fn only_a_stop_without_a_fatal_fault_leaves_a_clean_shutdown_proof() {
         ("a stop after a fatal fault", true, false),
     ] {
         let dir = tempdir().unwrap();
-        let handle = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-            .await
-            .expect("broker start");
+        let handle = start_default_broker(dir.path()).await.handle;
         if faulted {
             let mut should_shutdown = handle.should_shutdown_rx();
             latch_unsupported_fault(&handle, &mut should_shutdown).await;
@@ -510,4 +675,72 @@ async fn latch_unsupported_fault(
     .await
     .expect("the fault did not latch the self-shutdown flag within 30s")
     .expect("the self-shutdown flag closed");
+}
+
+/// Points the controller listener, and this node's voter entry, at `addr`.
+fn controller_listener_on(config: &mut BrokerConfig, addr: SocketAddr) {
+    config.controller_listen_addr = addr;
+    config.controller_quorum_voters = vec![(config.node_id, addr.to_string())];
+}
+
+/// Points the one data-plane listener at `addr`.
+fn client_listener_on(config: &mut BrokerConfig, addr: SocketAddr) {
+    config.listen_addr = addr;
+    config.advertised_listener = addr.to_string();
+}
+
+/// Points the metrics listener at `addr`.
+fn metrics_listener_on(config: &mut BrokerConfig, addr: SocketAddr) {
+    config.metrics_listen_addr = Some(addr);
+}
+
+/// A listener whose port another socket holds fails the start with an error
+/// that names the listener, the address, the setting that gave it and the
+/// cause, as Kafka's `SocketServer` fails with `Socket server failed to bind
+/// to <address>`. It is not a storage or plain I/O error, which would send an
+/// operator to the log directory instead of the network.
+#[yare::parameterized(
+    controller = { controller_listener_on, "CONTROLLER", "--controller-listen-addr" },
+    client = { client_listener_on, "PLAINTEXT", "--listen-addr" },
+    metrics = { metrics_listener_on, "metrics", "--metrics-listen-addr" },
+)]
+#[test_macro(tokio::test)]
+async fn a_taken_listener_port_fails_the_start_with_a_listener_bind_error(
+    listener_on: fn(&mut BrokerConfig, SocketAddr),
+    listener: &str,
+    setting: &str,
+) {
+    let taken = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = taken.local_addr().expect("local address");
+    let dir = tempdir().unwrap();
+    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+    listener_on(&mut config, addr);
+
+    let Err(refused) = Broker::start(config).await else {
+        panic!("a broker started with its {listener} listener on a port another socket holds");
+    };
+
+    // `yare` puts each case in a module of its own, where `assert` and
+    // `check` are ambiguous with the prelude, so the macros are named in full.
+    let message = refused.to_string();
+    assert2::assert!(
+        let BrokerError::ListenerBind {
+            listener: failed,
+            addr: failed_addr,
+            setting: failed_setting,
+            source,
+        } = refused
+    );
+    assert2::check!(failed == listener);
+    assert2::check!(failed_addr == addr);
+    assert2::check!(failed_setting == setting);
+    assert2::check!(source.kind() == std::io::ErrorKind::AddrInUse);
+    assert2::check!(
+        message
+            == format!(
+                "unable to bind the {listener} listener to {addr} (set by {setting}): {source}"
+            )
+    );
 }

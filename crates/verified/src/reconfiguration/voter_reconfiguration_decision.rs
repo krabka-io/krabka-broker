@@ -10,6 +10,25 @@ use super::{
 #[cfg(creusot)]
 use creusot_std::prelude::*;
 
+#[cfg(creusot)]
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+fn voter_set_change_admission_valid(
+    voters: CurrentVoterSet,
+    kind: VoterChangeKind,
+    decision: VoterReconfigurationDecision,
+) -> bool {
+    pearlite! {
+        match decision {
+            VoterReconfigurationDecision::Admit(plan) =>
+                voters.kraft_version@ == 1 && admitted_plan(voters, kind, plan),
+            VoterReconfigurationDecision::UnsupportedKraftVersion => voters.kraft_version@ != 1,
+            _ => true,
+        }
+    }
+}
+
 /// Admit one fresh KIP-853 operation and construct its exact result shape.
 ///
 /// The result is exactly the first rejection of
@@ -83,15 +102,17 @@ fn admit_voter_set_change(
 
 /// `AddVoterHandler`: version, duplicate id, `ApiVersions` range, catch-up.
 #[cfg_attr(creusot, requires(decision_voter_set_valid(voters)))]
+#[cfg_attr(
+    creusot,
+    ensures(voter_set_change_admission_valid(voters, VoterChangeKind::Add, result,))
+)]
 #[cfg_attr(creusot, ensures(match result {
-    VoterReconfigurationDecision::Admit(plan) =>
-        voters.kraft_version@ == 1
-            && target.membership == TargetMembership::Absent
+    VoterReconfigurationDecision::Admit(_) =>
+        target.membership == TargetMembership::Absent
             && target.version_compatible
             && target.caught_up
-            && voters.voter_count@ < usize::MAX@
-            && admitted_plan(voters, VoterChangeKind::Add, plan),
-    VoterReconfigurationDecision::UnsupportedKraftVersion => voters.kraft_version@ != 1,
+            && voters.voter_count@ < usize::MAX@,
+    VoterReconfigurationDecision::UnsupportedKraftVersion => true,
     VoterReconfigurationDecision::DuplicateVoter => voters.kraft_version@ == 1
         && target.membership != TargetMembership::Absent,
     VoterReconfigurationDecision::IncompatibleVoter => voters.kraft_version@ == 1
@@ -132,12 +153,14 @@ fn add_decision(voters: CurrentVoterSet, target: TargetVoter) -> VoterReconfigur
 /// returns a new set; an absent id, a different stored key, and the last
 /// voter are all its `VOTER_NOT_FOUND`.
 #[cfg_attr(creusot, requires(decision_voter_set_valid(voters)))]
+#[cfg_attr(
+    creusot,
+    ensures(voter_set_change_admission_valid(voters, VoterChangeKind::Remove, result,))
+)]
 #[cfg_attr(creusot, ensures(match result {
-    VoterReconfigurationDecision::Admit(plan) =>
-        voters.kraft_version@ == 1
-            && voter_set_removes(target.membership, voters)
-            && admitted_plan(voters, VoterChangeKind::Remove, plan),
-    VoterReconfigurationDecision::UnsupportedKraftVersion => voters.kraft_version@ != 1,
+    VoterReconfigurationDecision::Admit(_) =>
+        voter_set_removes(target.membership, voters),
+    VoterReconfigurationDecision::UnsupportedKraftVersion => true,
     VoterReconfigurationDecision::VoterNotFound => voters.kraft_version@ == 1
         && !voter_set_removes(target.membership, voters),
     _ => false,

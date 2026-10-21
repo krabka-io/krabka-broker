@@ -482,7 +482,7 @@ mod tests {
         let image = MetadataImage::new(Uuid::nil());
         let av = api_versions_response_body(4, ApiVersionsView {
             image: &image,
-            metadata_offset: -1,
+            finalized_features_epoch: -1,
             admin_router: None,
             unstable: UnstableApiVersions::Disabled,
         });

@@ -4,7 +4,10 @@
 //! resolves to.
 
 use {
-    super::request::{EffectivePartition, EffectiveTopic, FetchAuthorization},
+    super::{
+        request::{EffectivePartition, EffectiveTopic, FetchAuthorization},
+        throttle::leader_throttles_replica,
+    },
     crate::{
         broker::Broker,
         codes,
@@ -118,6 +121,11 @@ pub(crate) struct FollowerPosition {
     /// under. The leader records the position only while this target is
     /// still installed.
     pub(crate) target: ReplicationTarget,
+    /// Whether the leader throttles this follower's replica of the partition
+    /// (KIP-73): the partition is on the leader's throttled list and the
+    /// follower is not in its ISR. Each read of the row asks the leader-out
+    /// quota whether to withhold its records.
+    pub(crate) leader_throttled: bool,
 }
 
 /// Kafka's `Partition.updateFollowerFetchState`: record that `position`'s
@@ -155,12 +163,15 @@ pub(crate) async fn record_follower_position(
         // KIP-841: the ISR-expansion eligibility check compares this with the
         // broker's registered epoch before `update_follower_leo` reads it.
         state.record_follower_broker_epoch(follower, position.broker_epoch);
-        state.update_follower_leo(
-            follower,
-            Offset(fetch_offset),
-            leader_log_end,
-            std::time::Instant::now(),
-        ) > previous
+        let now = std::time::Instant::now();
+        if partition.diskless {
+            // Canonical replica progress must neither replace nor rewind the WAL watermark.
+            state.record_follower_fetch(follower, Offset(fetch_offset), leader_log_end, now);
+            false
+        } else {
+            state.update_follower_leo(follower, Offset(fetch_offset), leader_log_end, now)
+                > previous
+        }
     };
     drop(transition);
     if advanced {
@@ -252,7 +263,7 @@ struct OffsetSnapshot {
 async fn preferred_replica_snapshot(partition: &Partition) -> OffsetSnapshot {
     let hw = partition.high_watermark().await;
     let mut log = partition.log.lock().expect("log mutex poisoned");
-    let log_start = log.log_start_offset();
+    let log_start = log.reported_log_start();
     let last_stable_offset = log.last_stable_offset(hw);
     OffsetSnapshot {
         high_watermark: hw.0,
@@ -489,7 +500,17 @@ pub(super) async fn apply_epoch_checks(
     // `LogReadResult(Errors)`, whose offsets are all -1: `refused_read`. A
     // follower learns the leader's bounds from `ListOffsets` instead
     // (`AbstractFetcherThread.fetchOffsetAndTruncate`).
-    if let Some(established) = established_log_start
+    //
+    // Kafka compares against `UnifiedLog.logStartOffset`, the partition's
+    // global floor. A diskless partition's log start is not that floor: it is
+    // the flusher's trim frontier, and the WAL objects still hold every offset
+    // from the floor `ListOffsets(EARLIEST)` answers up to it. So a diskless
+    // read below the log start goes on to the cold-read path, which answers
+    // `OFFSET_OUT_OF_RANGE` itself for an offset that no object holds or that
+    // `DeleteRecords` removed, as a tiered partition's read below its local
+    // log start goes on to the remote tier.
+    if !partition.diskless
+        && let Some(established) = established_log_start
         && request.fetch_offset < established.0
     {
         if log_dir_offline {
@@ -699,6 +720,13 @@ pub(super) async fn plan_partition_read(
         broker_epoch: context.follower_broker_epoch,
         log_start_offset: request.log_start_offset,
         target: *target,
+        leader_throttled: leader_throttles_replica(
+            context.image,
+            context.broker.config.node_id,
+            context.follower_id,
+            topic_name,
+            request.partition,
+        ),
     });
     if let Some(partition) = partition.as_ref()
         && apply_epoch_checks(
@@ -929,6 +957,7 @@ pub(super) async fn build_pending_reads(
 #[cfg(test)]
 mod tests {
     use {
+        super::{FollowerPosition, record_follower_position},
         crate::{
             broker::{Broker, BrokerHandle, spawn_partition},
             codes::{NONE, NOT_LEADER_OR_FOLLOWER, OFFSET_OUT_OF_RANGE},
@@ -943,13 +972,13 @@ mod tests {
             producer_state::ProducerState,
             replica_selector::ReplicaSelectorKind,
             test_support::{
-                TemporaryPartition, broker_registration, spawn_standalone_partition,
+                StorageMode, TemporaryPartition, broker_registration, spawn_standalone_partition,
                 temporary_partition,
             },
         },
         assert2::assert,
         krabka_ids::PartitionIndex,
-        krabka_log::{Log, LogConfig},
+        krabka_log::{Log, LogConfig, Offset},
         std::sync::Arc,
     };
 
@@ -1277,11 +1306,31 @@ mod tests {
     }
 
     fn epoch_checks_partition(dir: &std::path::Path) -> Arc<Partition> {
+        epoch_checks_partition_with_storage(dir, StorageMode::Local)
+    }
+
+    fn epoch_checks_partition_with_storage(
+        dir: &std::path::Path,
+        storage: StorageMode,
+    ) -> Arc<Partition> {
         spawn_standalone_partition()
             .log_dir(dir)
             .log(Log::open(dir, LogConfig::default()).expect("open partition log"))
             .topic("diverge")
+            .storage(storage)
             .call()
+    }
+
+    /// Epochs 0, 1 and 2 of two records each, with the log start moved to 5.
+    fn trimmed_partition(dir: &std::path::Path, storage: StorageMode) -> Arc<Partition> {
+        let partition = epoch_checks_partition_with_storage(dir, storage);
+        {
+            let mut log = partition.log.lock().expect("log mutex poisoned");
+            append_epoch_batches(&mut log, &[0, 0, 1, 1, 2, 2]);
+            log.set_log_start_offset(super::Offset(5))
+                .expect("move log start");
+        }
+        partition
     }
 
     fn epoch_checks_partition_with_history(epochs: &[i32]) -> (tempfile::TempDir, Arc<Partition>) {
@@ -1363,13 +1412,12 @@ mod tests {
         // established, above the epoch-0 boundary (2) that a
         // `last_fetched_epoch = 0` fetch would otherwise diverge to.
         let trimmed_dir = tempfile::tempdir().expect("tempdir");
-        let trimmed = epoch_checks_partition(trimmed_dir.path());
-        {
-            let mut log = trimmed.log.lock().expect("log mutex poisoned");
-            append_epoch_batches(&mut log, &[0, 0, 1, 1, 2, 2]);
-            log.set_log_start_offset(super::Offset(5))
-                .expect("move log start");
-        }
+        let trimmed = trimmed_partition(trimmed_dir.path(), StorageMode::Local);
+
+        // The same trimmed history on a diskless partition, where the flusher
+        // moved the log start and the WAL objects still hold what is below it.
+        let diskless_dir = tempfile::tempdir().expect("tempdir");
+        let trimmed_diskless = trimmed_partition(diskless_dir.path(), StorageMode::Diskless);
 
         // Both histories have HW/LSO 4 and start 0; epoch 0 ends at offset 2.
         let expected_history_divergence = || super::PartitionData {
@@ -1432,6 +1480,18 @@ mod tests {
                 4,
                 true,
                 super::refused_read(0, OFFSET_OUT_OF_RANGE),
+            ),
+            (
+                "fetch offset below a diskless partition's trimmed log start: \
+                 the read goes on to the WAL objects",
+                Arc::clone(&trimmed_diskless),
+                2,
+                4,
+                false,
+                super::PartitionData {
+                    partition_index: 0,
+                    ..Default::default()
+                },
             ),
             (
                 "a true divergence still answers a diverging_epoch with epoch >= 0",
@@ -1566,6 +1626,15 @@ mod tests {
         assert!(!final_, "defers to the caller's own offline check");
     }
 
+    async fn install_two_replica_leader(partition: &Partition) {
+        use krabka_raft::NodeId;
+
+        partition.install_replication_target(None, 1, 0).await;
+        partition
+            .install_isr(&[NodeId(1), NodeId(2)], &[NodeId(1), NodeId(2)], NodeId(1))
+            .await;
+    }
+
     /// Kafka's `maybeIncrementLeaderHW` runs only while this broker still
     /// leads. The leader records a follower position only while the
     /// replication target that its leader checks passed under is installed.
@@ -1602,15 +1671,13 @@ mod tests {
 
         for (name, epoch_moved, want) in cases {
             let (_dir, partition) = epoch_checks_partition_with_history(&[0, 0]);
-            partition.install_replication_target(None, 1, 0).await;
-            partition
-                .install_isr(&[NodeId(1), NodeId(2)], &[NodeId(1), NodeId(2)], NodeId(1))
-                .await;
+            install_two_replica_leader(&partition).await;
             let position = super::FollowerPosition {
                 follower_id: 2,
                 broker_epoch: -1,
                 log_start_offset: 0,
                 target: *partition.replication_target.read().await,
+                leader_throttled: false,
             };
             if epoch_moved {
                 partition.install_replication_target(None, 1, 1).await;
@@ -1632,6 +1699,55 @@ mod tests {
             assert!(recorded == want, "{name}");
         }
     }
+
+    #[yare::parameterized(
+        stale_fetch_cannot_rewind_wal_durability = { StorageMode::Diskless, 2, 1, 2, false },
+        replica_progress_cannot_replace_wal_durability = { StorageMode::Diskless, 1, 2, 1, false },
+        classic_replication_still_advances_the_watermark = { StorageMode::Local, 1, 2, 2, true },
+    )]
+    #[test_macro(tokio::test)]
+    async fn follower_fetches_preserve_the_storage_durability_authority(
+        storage: StorageMode,
+        durable: i64,
+        read_log_end: i64,
+        expected_watermark: i64,
+        expected_advance: bool,
+    ) {
+        use {assert2::assert, krabka_raft::NodeId};
+
+        let dir = tempfile::tempdir().unwrap();
+        let partition = epoch_checks_partition_with_storage(dir.path(), storage);
+        append_epoch_batches(&mut partition.log.lock().unwrap(), &[0, 0]);
+        install_two_replica_leader(&partition).await;
+        partition
+            .replica_state
+            .lock()
+            .await
+            .recompute_hw_for_wal_durable(Offset(durable));
+        let position = FollowerPosition {
+            follower_id: 2,
+            broker_epoch: 7,
+            log_start_offset: 0,
+            target: *partition.replication_target.read().await,
+            leader_throttled: false,
+        };
+        let changed = partition.hw_advance_notify.notified();
+        tokio::pin!(changed);
+        changed.as_mut().enable();
+
+        let advanced =
+            record_follower_position(&partition, position, read_log_end, Offset(read_log_end))
+                .await;
+
+        assert!(advanced == expected_advance);
+        assert!(partition.high_watermark().await == Offset(expected_watermark));
+        assert!(futures_util::poll!(changed.as_mut()).is_ready() == expected_advance);
+        let state = partition.replica_state.lock().await;
+        let (log_end, caught_up) = state.follower_progress(NodeId(2));
+        assert!(log_end == Offset(read_log_end));
+        assert!(caught_up.is_some());
+    }
+
     /// Whether the epoch gate decided the row, and the row it left.
     struct EpochCheck {
         is_final: bool,

@@ -13,30 +13,24 @@ fn rational_cap(wait: u128, rate: u64) -> u64 {
     .unwrap()
 }
 
-fn signed_deadline_ledger(
-    initial: (u64, u64, u64),
-    charge: (u64, u128),
-    elapsed: (u64, u64),
-    rate: u64,
-    burst: u64,
-    probe: u64,
-    units: u64,
-) -> (u64, u64, u64, u64, u64, u64) {
-    let cap = rational_cap(charge.1, rate);
-    let charged_balance = i128::from(initial.0) - i128::from(initial.1) - i128::from(charge.0);
+fn signed_deadline_ledger(inputs: DeadlineInputs) -> (u64, u64, u64, u64, u64, u64) {
+    let cap = rational_cap(inputs.charge.1, inputs.rate);
+    let charged_balance =
+        i128::from(inputs.initial.0) - i128::from(inputs.initial.1) - i128::from(inputs.charge.0);
     let retained_debt = (-charged_balance).max(0).min(i128::from(cap));
-    let numerator = u128::from(elapsed.0 + elapsed.1) * u128::from(rate) + u128::from(initial.2);
+    let numerator = u128::from(inputs.elapsed.0 + inputs.elapsed.1) * u128::from(inputs.rate)
+        + u128::from(inputs.initial.2);
     let balance =
         charged_balance.max(0) - retained_debt + i128::try_from(numerator / 1_000_000_000).unwrap();
-    let available = u64::try_from(balance.max(0).min(i128::from(burst))).unwrap();
-    let whole = probe.min(available / units);
+    let available = u64::try_from(balance.max(0).min(i128::from(inputs.burst))).unwrap();
+    let whole = inputs.probe.min(available / inputs.units);
     (
         cap,
         u64::try_from(retained_debt).unwrap(),
         whole,
-        available - whole * units,
+        available - whole * inputs.units,
         u64::try_from((-balance).max(0)).unwrap(),
-        if balance >= i128::from(burst) {
+        if balance >= i128::from(inputs.burst) {
             0
         } else {
             u64::try_from(numerator % 1_000_000_000).unwrap()
@@ -67,7 +61,7 @@ fn a_deadline_releases_debt_without_forgetting_earned_capacity(
     expected: (u64, u64, u64, u64, u64, u64),
 ) {
     assert2::assert!(
-        capped_charge_is_repaid_by_elapsed_time(
+        capped_charge_is_repaid_by_elapsed_time(DeadlineInputs::new(
             (0, 0, 0),
             (u64::MAX, wait),
             elapsed,
@@ -75,7 +69,7 @@ fn a_deadline_releases_debt_without_forgetting_earned_capacity(
             10,
             10,
             1,
-        ) == expected
+        )) == expected
     );
 }
 
@@ -84,7 +78,7 @@ fn deadline_composition_covers_saturation_fraction_and_token_quantum() {
     // Credit covers the retained cap and every whole token in this probe;
     // the burst leaves a fractional token rather than denying service.
     assert2::assert!(
-        capped_charge_is_repaid_by_elapsed_time(
+        capped_charge_is_repaid_by_elapsed_time(DeadlineInputs::new(
             (0, 0, 0),
             (u64::MAX, 500_000_000),
             (2_000_000_000, 2_000_000_000),
@@ -92,7 +86,7 @@ fn deadline_composition_covers_saturation_fraction_and_token_quantum() {
             10,
             3,
             3,
-        ) == (1, 1, 3, 1, 0, 0)
+        )) == (1, 1, 3, 1, 0, 0)
     );
     for burst in [0, 1, 10, u64::MAX] {
         for initial in [
@@ -119,7 +113,7 @@ fn deadline_composition_covers_saturation_fraction_and_token_quantum() {
                         for request in [0, 1, u64::MAX] {
                             for units in [1, 1_000_000, u64::MAX] {
                                 let charge = (request, wait);
-                                let actual = capped_charge_is_repaid_by_elapsed_time(
+                                let inputs = DeadlineInputs::new(
                                     initial,
                                     charge,
                                     elapsed,
@@ -128,18 +122,8 @@ fn deadline_composition_covers_saturation_fraction_and_token_quantum() {
                                     u64::MAX,
                                     units,
                                 );
-                                assert2::assert!(
-                                    actual
-                                        == signed_deadline_ledger(
-                                            initial,
-                                            charge,
-                                            elapsed,
-                                            rate,
-                                            burst,
-                                            u64::MAX,
-                                            units
-                                        )
-                                );
+                                let actual = capped_charge_is_repaid_by_elapsed_time(inputs);
+                                assert2::assert!(actual == signed_deadline_ledger(inputs));
                                 if wait <= u128::from(elapsed.0 + elapsed.1) {
                                     assert2::assert!(actual.4 == 0);
                                 }
@@ -161,9 +145,17 @@ proptest! {
         first in any::<u64>(), raw_second in any::<u64>(),
         rate in 1_u64..=u64::MAX, probe in any::<u64>(), units in 1_u64..=u64::MAX,
     ) {
-        let initial = if owes { (0, debt, fraction) } else { (raw_available.min(burst), 0, fraction) };
+        let initial = if owes {
+            (0, debt, fraction)
+        } else {
+            (raw_available.min(burst), 0, fraction)
+        };
         let elapsed = (first, raw_second.min(u64::MAX - first));
-        prop_assert_eq!(capped_charge_is_repaid_by_elapsed_time(initial, (request, wait), elapsed, rate, burst, probe, units),
-            signed_deadline_ledger(initial, (request, wait), elapsed, rate, burst, probe, units));
+        let inputs =
+            DeadlineInputs::new(initial, (request, wait), elapsed, rate, burst, probe, units);
+        prop_assert_eq!(
+            capped_charge_is_repaid_by_elapsed_time(inputs),
+            signed_deadline_ledger(inputs)
+        );
     }
 }

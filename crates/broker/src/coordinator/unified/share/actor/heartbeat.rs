@@ -547,16 +547,12 @@ mod tests {
 
             let response = heartbeat(&handle, subscribed_request().call()).await;
 
-            check!(
-                response
-                    == ShareGroupHeartbeatResponse {
-                        error_code: fixture.expected.0,
-                        ..Default::default()
-                    },
-                "{}",
-                fixture.label
-            );
-            fixture.check_no_batches().await;
+            fixture
+                .check_refused(&response, |error_code| ShareGroupHeartbeatResponse {
+                    error_code,
+                    ..Default::default()
+                })
+                .await;
         }
     }
 

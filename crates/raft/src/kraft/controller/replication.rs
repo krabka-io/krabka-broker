@@ -7,7 +7,8 @@ use {
         Engine, KraftControlState, Role,
         checkpoint::{retain_recent_checkpoints, write_checkpoint},
         offsets::fetch_offset_has_records,
-        records::{decode_batches, encode_batches},
+        quorum_requests::{FENCED_LEADER_EPOCH, NOT_LEADER_OR_FOLLOWER, UNKNOWN_LEADER_EPOCH},
+        records::{decode_batches, encode_batches, features_epoch_after_snapshot},
     },
     crate::{
         error::RaftError,
@@ -31,6 +32,33 @@ use {
     },
     std::sync::Arc,
 };
+
+/// Whether a Fetch answer that the leader fence refused still sends this
+/// replica straight back to the leader it follows.
+///
+/// Kafka's `maybeHandleCommonResponse` handles four answers from the followed
+/// leader: one from an older epoch, an `UNKNOWN_LEADER_EPOCH`, and a
+/// `FENCED_LEADER_EPOCH` or `NOT_LEADER_OR_FOLLOWER` in the replica's own
+/// epoch, which leaves it on that leader. `RequestManager.onResponseResult`
+/// then marks the leader ready, and the next poll fetches from it again with
+/// no backoff. The fetch timeout is not reset, so a leader that keeps refusing
+/// still ends in an election or a discovery. Any other refused answer waits
+/// for the fetch timer. A newer epoch never reaches this point: it moves the
+/// replica first.
+#[must_use]
+pub fn refetches_after_refusal(
+    following: Option<NodeId>,
+    current_epoch: Epoch,
+    from: NodeId,
+    answer_epoch: Epoch,
+    error_code: i16,
+) -> bool {
+    following == Some(from)
+        && (answer_epoch < current_epoch
+            || error_code == UNKNOWN_LEADER_EPOCH
+            || (answer_epoch == current_epoch
+                && matches!(error_code, FENCED_LEADER_EPOCH | NOT_LEADER_OR_FOLLOWER)))
+}
 
 pub fn should_serve_fetch_records(
     has_snapshot: bool,
@@ -144,8 +172,9 @@ impl Engine {
         // the epoch keeps fetching from it, rejects every answer, and stops
         // replicating. A voter learns the new leader from `BeginQuorumEpoch`
         // too, but an observer learns it only here. A newer epoch that names
-        // no leader is left to that epoch's Vote or `BeginQuorumEpoch`;
-        // Kafka moves to Unattached in it instead.
+        // no leader moves the node to Unattached in it, as Kafka's
+        // `maybeTransition` does, and an observer then asks a voter for the
+        // leader at once instead of waiting for its fetch timer.
         if leader_epoch > self.core.quorum_state().leader_epoch {
             if let Some(leader_id) = leader.leader_id {
                 self.remember_leader_endpoint(&leader);
@@ -153,6 +182,11 @@ impl Engine {
                     leader_id,
                     leader_epoch,
                 });
+            } else {
+                self.on_event(Event::ReceiveLeaderlessEpoch {
+                    epoch: leader_epoch,
+                });
+                self.send_discovery_fetch();
             }
             return;
         }
@@ -173,6 +207,7 @@ impl Engine {
             ..
         });
         let state = self.core.quorum_state();
+        let current_epoch = state.leader_epoch;
         let mutation = fetch_response_mutation(
             FetchFence {
                 discovering,
@@ -210,7 +245,18 @@ impl Engine {
         }
 
         match mutation {
-            FetchResponseMutation::Reject => return,
+            FetchResponseMutation::Reject => {
+                if refetches_after_refusal(
+                    role_leader.map(NodeId),
+                    current_epoch,
+                    from,
+                    leader_epoch,
+                    error_code,
+                ) {
+                    self.send_fetch(from);
+                }
+                return;
+            }
             FetchResponseMutation::Discover => {
                 // A leaderless observer uses a discovery response only to
                 // attach to the advertised leader, as Kafka's
@@ -308,7 +354,7 @@ impl Engine {
     /// announced in `NodeEndpoints`, as Kafka's `transitionToFollower` takes
     /// the response's leader endpoints. Without one, the transport keeps
     /// using the leader's voter-set listener.
-    fn remember_leader_endpoint(&self, leader: &wire::QuorumLeader) {
+    pub(super) fn remember_leader_endpoint(&self, leader: &wire::QuorumLeader) {
         if let (Some(leader_id), Some(wire::LeaderEndpoint { host, port })) =
             (leader.leader_id, &leader.endpoint)
         {
@@ -409,6 +455,11 @@ impl Engine {
         }
         write_checkpoint(&self.data_dir, end_offset, epoch, bytes)?;
         self.image = new_image;
+        self.features_epoch = features_epoch_after_snapshot(
+            &contents.metadata_records,
+            end_offset,
+            self.features_epoch,
+        );
         if let Some(control) = contents.control_state {
             self.controls = KraftControlState::new(control.voters.clone(), control.kraft_version);
             self.core.set_kraft_version(control.kraft_version);
@@ -426,7 +477,7 @@ impl Engine {
         self.installed_snapshot_epoch = Some(
             u32::try_from(epoch).expect("snapshot install admission requires a nonnegative epoch"),
         );
-        let _ = self.image_tx.send(Arc::new(self.image.clone()));
+        self.publish_image();
         retain_recent_checkpoints(&self.data_dir);
         Ok(())
     }

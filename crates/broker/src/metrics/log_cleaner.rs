@@ -8,6 +8,7 @@
 use {
     super::{BrokerMetrics, CleanerFailureLabel, CleanerFailureReason, PartitionLabel},
     crate::error::BrokerError,
+    prometheus_client::metrics::{counter::Counter, family::Family},
     std::sync::Arc,
 };
 
@@ -42,12 +43,7 @@ impl BrokerMetrics {
         partition: i32,
         reason: CleanerFailureReason,
     ) {
-        let lbl = CleanerFailureLabel {
-            topic: Arc::from(topic),
-            partition,
-            reason,
-        };
-        self.log_cleaner_failures.get_or_create(&lbl).inc();
+        record_failure(&self.log_cleaner_failures, topic, partition, reason);
     }
 
     /// Account one clean local-retention sweep (a full pass that failed no
@@ -67,12 +63,7 @@ impl BrokerMetrics {
         partition: i32,
         reason: CleanerFailureReason,
     ) {
-        let lbl = CleanerFailureLabel {
-            topic: Arc::from(topic),
-            partition,
-            reason,
-        };
-        self.log_retention_failures.get_or_create(&lbl).inc();
+        record_failure(&self.log_retention_failures, topic, partition, reason);
     }
 
     /// Publish the count of partitions whose most recent compaction attempt
@@ -84,6 +75,21 @@ impl BrokerMetrics {
         self.log_cleaner_uncleanable_partitions
             .set(i64::try_from(count).unwrap_or(i64::MAX));
     }
+}
+
+fn record_failure(
+    family: &Family<CleanerFailureLabel, Counter>,
+    topic: &str,
+    partition: i32,
+    reason: CleanerFailureReason,
+) {
+    family
+        .get_or_create(&CleanerFailureLabel {
+            topic: Arc::from(topic),
+            partition,
+            reason,
+        })
+        .inc();
 }
 
 /// Compaction and retention classify failures identically for operator metrics.

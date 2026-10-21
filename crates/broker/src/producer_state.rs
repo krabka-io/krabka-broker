@@ -39,6 +39,7 @@ mod truncation_replay;
 #[cfg(test)]
 pub(crate) use self::decision::check_pure;
 use self::entry::Completion;
+pub(crate) use self::expiry::producer_id_expiration;
 pub use self::{
     decision::{Checked, Decision, SequenceContext},
     entry::{NO_EARLIER_BATCHES, PartitionProducerState, ProducerEntry, RetainedBatch},

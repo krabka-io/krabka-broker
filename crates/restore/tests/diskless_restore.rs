@@ -5,6 +5,7 @@ use {
     krabka_audit::FileEd25519Signer,
     krabka_ids::Offset,
     krabka_log::{Log, LogConfig},
+    krabka_metadata::{MetadataRecord, PartitionOffsetAdvanceRecord},
     krabka_protocol::records::{Record, RecordBatch, validate_one_v2_batch},
     krabka_remote_storage::{
         ObjectEntry, RlmmCacheDump, Sha256Digest,
@@ -383,7 +384,6 @@ fn trusted_capture_setup() -> TrustedCaptureSetup {
     .unwrap();
     let rlmm_bytes = std::fs::read(&rlmm_path).unwrap();
     let mut capture = fixture(archive.path(), true, false);
-    capture.metadata_snapshot_sha256 = Some(Sha256Digest::of(b"trusted metadata"));
     capture.rlmm_snapshot_sha256 = Some(Sha256Digest::of(&rlmm_bytes));
     let wal_key = capture.partitions[0].ranges[0].object_key.clone();
     let wal = std::fs::read(archive.path().join(&wal_key)).unwrap();
@@ -484,6 +484,24 @@ async fn trusted_capture_accepts_only_its_key_head_state_and_wal_bytes() {
     let error = restore(&tampered_metadata).await.unwrap_err();
     check!(matches!(error, RestoreError::Authenticity { .. }));
 
+    // The capture binds an RLMM snapshot, so a restore that omits it is
+    // refused. The metadata checkpoint takes the same path: omitting it would
+    // bring the cluster back without its ACLs and SCRAM credentials.
+    let target = tempfile::tempdir().unwrap();
+    let error = restore(&trusted_args(
+        archive.path(),
+        target.path(),
+        &capture_path,
+        &public_path,
+        &head,
+    ))
+    .await
+    .unwrap_err();
+    check!(matches!(
+        &error,
+        RestoreError::Authenticity { reason } if reason.contains("--rlmm-snapshot")
+    ));
+
     let target = tempfile::tempdir().unwrap();
     let mut missing_classic = trusted_args(
         archive.path(),
@@ -503,16 +521,19 @@ async fn trusted_capture_accepts_only_its_key_head_state_and_wal_bytes() {
     let mut wal_tampered = wal;
     wal_tampered[10] ^= 1;
     std::fs::write(archive.path().join(wal_key), wal_tampered).unwrap();
-    let error = restore(&trusted_args(
+    let mut wal_args = trusted_args(
         archive.path(),
         target.path(),
         &capture_path,
         &public_path,
         &head,
-    ))
-    .await
-    .unwrap_err();
-    check!(matches!(error, RestoreError::Authenticity { .. }));
+    );
+    wal_args.archive.rlmm_snapshot = Some(rlmm_path);
+    let error = restore(&wal_args).await.unwrap_err();
+    check!(matches!(
+        &error,
+        RestoreError::Authenticity { reason } if !reason.contains("--rlmm-snapshot")
+    ));
 }
 
 #[derive(Clone, Copy)]
@@ -553,15 +574,15 @@ async fn trusted_capture_rejects_changed_state_head_and_key(
     let key_path = setup.archive.path().join(format!("{name}.pub"));
     write_capture(&changed_path, &changed);
     std::fs::write(&key_path, key_bytes).unwrap();
-    let error = restore(&trusted_args(
+    let mut args = trusted_args(
         setup.archive.path(),
         target.path(),
         &changed_path,
         &key_path,
         &expected_head,
-    ))
-    .await
-    .unwrap_err();
+    );
+    args.archive.rlmm_snapshot = Some(setup.rlmm_path.clone());
+    let error = restore(&args).await.unwrap_err();
     check!(matches!(error, RestoreError::Authenticity { .. }), "{name}");
 }
 
@@ -628,4 +649,130 @@ async fn assert_dry_run_error(
             ));
         }
     }
+}
+
+/// The restored metadata starts a diskless partition's offsets where the
+/// restore ends its log, so the restored cluster assigns its first write the
+/// next offset (#1524). An unbounded restore ends at the capture's recovery
+/// cutoff. A `--to-offset` bound ends at the last batch it keeps, which only
+/// a walk of the WAL objects finds before the target is formatted.
+#[yare::parameterized(
+    unbounded = { &[], 2 },
+    bounded = { &["--to-offset", "orders:0=0"], 1 },
+)]
+#[test_macro(tokio::test)]
+async fn the_restored_metadata_starts_a_diskless_partition_at_its_restored_end(
+    extra: &[&str],
+    next_offset: i64,
+) {
+    let UnwrittenFixture {
+        archive,
+        target,
+        capture_path,
+        mut capture,
+    } = unwritten_fixture(true, false);
+    capture.partitions[0].delete_floor = 0;
+    write_capture(&capture_path, &capture);
+    let extra: Vec<String> = extra.iter().map(|flag| (*flag).to_owned()).collect();
+
+    restore(&capture_args(
+        archive.path(),
+        target.path(),
+        &capture_path,
+        &extra,
+    ))
+    .await
+    .unwrap();
+
+    check_restored_next_offset(target.path(), next_offset);
+    check_orders_offsets(target.path(), Offset(0), Offset(next_offset));
+}
+
+/// `--exclude-offset` drops a captured diskless record, and the batch that held
+/// it still holds its offsets, so the partition ends where the capture does
+/// and the restored metadata starts it there.
+#[yare::parameterized(
+    the_first_record = { "orders:0=0..1" },
+    the_last_record = { "orders:0=1..2" },
+)]
+#[test_macro(tokio::test)]
+async fn an_excluded_record_leaves_a_restored_diskless_partition_at_its_captured_end(
+    excluded: &str,
+) {
+    let UnwrittenFixture {
+        archive,
+        target,
+        capture_path,
+        mut capture,
+    } = unwritten_fixture(true, false);
+    capture.partitions[0].delete_floor = 0;
+    write_capture(&capture_path, &capture);
+
+    let report = restore(&capture_args(
+        archive.path(),
+        target.path(),
+        &capture_path,
+        &["--exclude-offset".to_owned(), excluded.to_owned()],
+    ))
+    .await
+    .unwrap();
+
+    let partition = &report.diskless.as_ref().unwrap().partitions[0];
+    check!(
+        (
+            partition.records,
+            partition.records_dropped,
+            partition.recovery_cutoff
+        ) == (1, 1, 2)
+    );
+    check_restored_next_offset(target.path(), 2);
+}
+
+/// A capture whose declared cutoff or run boundaries disagree with the batches
+/// in its WAL objects is refused before anything is formatted.
+#[yare::parameterized(
+    cutoff_past_the_batches = { 3, 1 },
+    run_ends_before_its_last_batch = { 2, 0 },
+)]
+#[test_macro(tokio::test)]
+async fn a_capture_that_disagrees_with_its_batches_is_refused(
+    recovery_cutoff: i64,
+    last_offset: i64,
+) {
+    let UnwrittenFixture {
+        archive,
+        target,
+        capture_path,
+        mut capture,
+    } = unwritten_fixture(true, false);
+    capture.partitions[0].recovery_cutoff = recovery_cutoff;
+    capture.partitions[0].ranges[0].entry.last_offset = last_offset;
+    assert_dry_run_error(
+        archive.path(),
+        target.path(),
+        &capture_path,
+        &capture,
+        DryRunExpectation::Integrity,
+    )
+    .await;
+}
+
+/// The target's bootstrap records start `orders-0` at `next_offset`, with the
+/// one `V1PartitionOffsetAdvance` the restore seeds for it.
+fn check_restored_next_offset(target: &std::path::Path, next_offset: i64) {
+    let advances: Vec<MetadataRecord> = krabka_broker::bootstrap::load_bootstrap_records(target)
+        .unwrap()
+        .into_iter()
+        .filter(|record| matches!(record, MetadataRecord::V1PartitionOffsetAdvance(_)))
+        .collect();
+    check!(
+        advances
+            == vec![MetadataRecord::V1PartitionOffsetAdvance(
+                PartitionOffsetAdvanceRecord {
+                    topic: "orders".to_owned(),
+                    partition: 0,
+                    count: next_offset,
+                }
+            )]
+    );
 }

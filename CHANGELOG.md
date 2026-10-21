@@ -18,8 +18,8 @@ makes no promise about the Rust API, so read the entries for that. Before
 The layout follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 The history before krabka-broker became its own repository is in
 [robot-head/crabka](https://github.com/robot-head/crabka). This repository
-publishes `krabka-log`, `krabka-verified` and `krabka-macros` to crates.io from
-the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
+publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
+`krabka-java-regex` to crates.io from the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ## [Unreleased]
 
@@ -38,6 +38,688 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
     building the eight candidate entity keys.
   - The log-directory health check every produce and fetch makes answers
     without hashing the directory's path while every directory is online.
+
+### Fixed
+
+- Store a produced `CreateTime` batch with its largest record timestamp as
+  `max_timestamp`, as Kafka's `LogValidator` does, on the verbatim and the
+  owned path. The producer's header value was kept, so an LZ4 batch with
+  header 7777 over one record at 0 was stored as 7777 where Kafka stores 0.
+  A batch whose header already agrees keeps its zero-copy append. A KFC-1
+  `delivery.mode=scheduled` topic keeps the header, which is its delivery
+  time (#1388).
+- Compute the `message.timestamp.{before,after}.max.ms` window, its error
+  message and record timestamps in Java's wrapping `long` arithmetic, as
+  Kafka does. A stock topic admitted a `Long.MIN_VALUE` timestamp that Kafka
+  refuses, and a topic that bounds only the past refused one that Kafka
+  admits (#1388).
+- Skip a remote segment outside the partition's leader-epoch lineage in a
+  by-timestamp `ListOffsets`, as Kafka's `isRemoteSegmentWithinLeaderEpochs`
+  does, so a deposed leader's copy left by an unclean election cannot answer
+  the seek (#1388).
+- Resolve the remote segment of a `read_committed` `Fetch`'s aborted
+  transactions as the data read resolves it. A finished segment nested inside
+  the covering one made the abort lookup answer none while the read still
+  served the batches (#1388).
+
+## [1.0.8] - 2026-10-20
+
+1.0.8 includes the recovery fixes from #1578 and the published Rust client
+0.7.1 producer fixes. The 1.x persisted formats are unchanged. Full ecosystem
+qualification still requires evidence from the final frozen candidate.
+
+### Fixed
+
+- Keep metadata reconciliation moving while a log mutex or WAL quorum wait
+  is blocked. Record diskless promotion epochs so replicas can rejoin ISR.
+- Finish obsolete produce acknowledgements on leadership changes. Reject
+  follower diskless Produce requests with the current leader hint, preserve
+  WAL high-watermark authority, and wake WAL fetches when new data arrives.
+- Renew exhausted non-transactional producer identities and keep healthy
+  partitions flowing while another broker or metadata request stalls.
+- Disable Nagle on accepted controller sockets. Prepare consumer assignments
+  before the soak measurement clock and observe delivery receipts while
+  pacing later sends. The soak declares its independent five-second broker
+  session window; latency budgets and recovery deadlines are unchanged.
+
+## [1.0.7] - 2026-10-20
+
+1.0.7 updates the broker's compiled protocol and Rust client libraries to their
+published 0.7.0 releases. It keeps the 1.x persisted formats and uses the
+startup-safe 1.0.6 broker as the loaded lifecycle baseline. The frozen manifest
+and its qualification report record the tested ecosystem set.
+
+### Security
+
+- Update `rustls-webpki` to 0.103.16 and `webpki-root-certs` to 1.0.10 for
+  [RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382) and
+  [RUSTSEC-2026-0383](https://rustsec.org/advisories/RUSTSEC-2026-0383), which
+  address distrusted emSign certificate chains.
+
+### Changed
+
+- **Breaking Rust API.** Use protocol 0.7 and Rust client 0.7 from their published source revisions.
+  This changes the Rust dependency types exposed by the workspace; the broker's
+  Kafka wire and persisted-format compatibility remain governed by their
+  existing version contracts.
+
+### Added
+
+- A manually dispatched cloud qualification workflow for the frozen candidate.
+  It checks main CI and its delivery image, runs the two declared performance
+  budgets and the unchanged 72-hour soak on separate workers, and retains
+  evidence through renewable cloud credentials and a fresh publication job.
+  A host/publication preflight is the default; the full workload requires
+  `execute=true`.
+
+## [1.0.6] - 2026-10-20
+
+1.0.6 fixes audit retention, diskless restore and replication, controller
+recovery, authentication and quota handling. It keeps the 1.x persisted
+formats; review the changed controller timeout defaults and the upgrade notes
+below before upgrading. Ecosystem qualification must pass on the frozen
+candidate before promotion.
+
+### Added
+
+- The `krabka-java-regex` crate: the `java.util.regex` engine behind
+  `ssl.principal.mapping.rules`, Kerberos `auth_to_local` and KIP-714
+  `match` patterns, moved out of the broker so other projects can use it. It
+  answers `Matcher.matches()`, `replaceAll` and `replaceFirst` as JDK 25 does,
+  and refuses what `Pattern.compile` refuses. It publishes from the release
+  tag; its first release needs the crates.io token once
+  ([Releasing](docs/releasing.md#first-publish-of-a-crate-name)).
+- A [release support matrix](docs/operations/support-matrix.md) (issue
+  #1400). Each client, broker build, security mode, storage mode, deployment
+  and upgrade path has a status, a link to its evidence and the revision it ran
+  at. Untested and failing combinations are listed as such, with the issue
+  that owns each gap, and the page gathers the upgrade and rollback rules and
+  the known limitations. `aspect check-support-matrix` fails a row that lacks
+  its evidence. [Capacity](docs/operations/capacity.md#measured-envelope) gains
+  a measured envelope that names the workload, host and artifact of every
+  number and claims no maximum.
+- `aspect verify-release` checks a published release from outside: the
+  signature, the SLSA provenance content, the SBOM attestation against the
+  uploaded `sbom.cdx.json`, the tested delivery digest, and the support
+  documents at the tagged commit. v1.0.0 to v1.0.5 fail its provenance check,
+  because their provenance predicate is empty.
+  [Release candidate qualification](docs/release-candidate-qualification.md)
+  records the result, the candidate gates and the proposed release blockers.
+- `aspect freeze-candidate` records a release candidate's commit, its
+  `[patch.crates-io]` sibling pins and its delivery image digest, and lists
+  where a qualification manifest differs from those pins. Only a sibling that
+  `Cargo.lock` compiles in counts: a patch that nothing uses is recorded under
+  `unused_patches` and is not compared.
+
+- The controller exports Kafka's event-queue metrics:
+  `controller_event_queue_time_seconds` and
+  `controller_event_queue_processing_time_seconds` (`EventQueueTimeMs`,
+  `EventQueueProcessingTimeMs`), the started and timed-out operation counters
+  (`EventQueueOperationsStartedCount`, `EventQueueOperationsTimedOutCount`),
+  and `controller_event_queue_idle_seconds_total`, whose rate is
+  `AvgIdleRatio`. A write's processing time runs to its commit reply, as in
+  Kafka.
+- A sustained-load and failure contract for RF=3 soaks (issue #1392).
+  `bench/soak/rf3-72h.yaml` declares the 72-hour M26 soak before it runs:
+  host, disk, seed, client settings, throughput floors, p50/p99/p999 budgets
+  per path, recovery deadlines and a seeded schedule of bounded pauses,
+  restarts, slow followers and disk fills. The `soak_contract` suite runs a
+  contract against the soak lane's three-broker cluster, and
+  `krabka-soak-check` reconciles acknowledged records, transactional
+  visibility and committed offsets, and tells permitted retries from loss. A
+  five-minute self-check in the container matrix proves that the judge catches
+  an injected missing record and a missed recovery deadline.
+- The sustained-load executor keeps the evidence a 72-hour run needs (issue
+  #1393): resource and controller-progress telemetry for every node every
+  10 s, and the firing history of the shipped alert rules from a pinned
+  Prometheus sidecar, both written as the run goes. It also runs diskless
+  paths, on a SASL inter-broker listener.
+- A loaded lifecycle gate for release images (issue #1396).
+  `bench/soak/lifecycle.yaml` upgrades a four-broker cluster from the v1.0.5
+  image to the candidate broker by broker, rotates every broker's TLS
+  certificate through the dynamic listener keystore and truststore, drains a
+  broker by reassignment, and rolls back to v1.0.5, all under the soak load.
+  After each transition the executor reconciles the acknowledged records, the
+  committed offsets and the configuration, and records which image each
+  broker runs and whether a rollback is still supported. The gate requires
+  the previous release to refuse an unsupported `metadata.version` without
+  changing protected metadata. Qualification exposed a startup race in
+  v1.0.5 that violates this requirement; do not roll it back onto a log whose
+  feature levels it cannot serve. `docs/qualification.md` states the contract,
+  and the `loaded lifecycle` job of the qualification workflow runs it.
+- `qualify.sh budget` compares a candidate build with an earlier revision or
+  with pinned Kafka 4.3.1 over a predeclared RF=3 workload matrix, in
+  interleaved rounds. `krabka-parse-benches` assembles every raw trial into a
+  versioned results record and judges it against the materiality and variance
+  budgets of `packaging/performance/regression-contract.json`, with the same
+  median and MAD rule as the criterion lane. A lost or duplicated record
+  always rejects. See
+  [Performance regression budgets](docs/operations/performance-budgets.md).
+- `[oauthbearer]` takes Kafka's `unsecuredValidatorRequiredScope` and
+  `unsecuredValidatorScopeClaimName` for the unsecured validator, as
+  `unsecured_required_scope` (space-separated scope items a token must all
+  carry) and `unsecured_scope_claim_name` (default `scope`). An item outside
+  the RFC 6749 scope-token grammar fails config validation, as Kafka's
+  handler fails its configuration (#1390).
+
+### Changed
+
+- The controller quorum's fetch timeout and election timeout are two keys
+  now, as in Kafka. The new `controller_fetch_timeout`, Kafka's
+  `controller.quorum.fetch.timeout.ms`, is the follower and observer fetch
+  watchdog, and 1.5 times it is the leader's check-quorum window. Its default
+  is Kafka's 2 s, down from the 5 s the single key had, so the survivors of a
+  crashed controller leader start their election after 2 s rather than 5 s.
+  `controller_election_timeout` is now Kafka's
+  `controller.quorum.election.timeout.ms` only, with Kafka's default of 1 s:
+  it is the base of the randomized election timer, so a vote that splits
+  after a controller leader is killed is retried within one to two election
+  timeouts rather than 5 to 10 s. The derived controller heartbeat cadence is
+  `controller_fetch_timeout / 3`, and validation now requires
+  `controller_heartbeat_interval` to be below `controller_fetch_timeout`. An
+  operator who tuned `controller_election_timeout` as the fetch watchdog
+  should move that value to `controller_fetch_timeout`, and one whose
+  controller links need more than 2 s should raise it (#1477).
+
+- Benchmark report templating excludes unused TOML configuration parsing,
+  removing the unmaintained `basic-toml` dependency.
+
+### Fixed
+
+- Audit placement records the broker registration epoch that received each
+  partition. Reassigning the audit replica away no longer creates another
+  partition on the same live broker and prevents operator scale-down.
+  A new registration without a replica still gets one. The controller-owned
+  epochs survive metadata snapshots and topic config changes.
+
+- A controller validates recovered feature levels before repairing downgrade
+  checkpoints or starting its engine. Previously, an unsupported log could
+  be changed by recovery or an election before startup refused it.
+
+- A newly opened partition installs its topic and dynamic broker log settings
+  before it can accept requests. Previously, a write just after topic creation
+  could use the default segment size until the supervisor applied overrides,
+  accepting a batch larger than the topic's `segment.bytes`.
+
+- Bazel-built binaries report the workspace version instead of `0.0.0`.
+  The version also reaches the broker's metrics and client software metadata.
+
+- A decoded read at or beyond the log end returns without taking the log
+  configuration lock. Offset-boundary validation still runs before the empty
+  result; reads that need data take the current buffer cap as before.
+
+- `connections.max.idle.ms` now keeps running while a request is in its
+  handler, while its response is written, and while a connection is muted
+  after a throttled response, on broker and controller listeners alike, as
+  Kafka's `Selector` does. The window measures time since the last read or
+  write that moved bytes, or since a response was queued. A handler or a
+  throttle mute that outlasts it closes the connection without the response.
+  A Fetch whose `fetch.max.wait.ms` exceeds the window is closed the same way
+  in Kafka; with the defaults, 500 ms against 10 min, this cannot happen
+  (#1390).
+- SASL/PLAIN decodes the credentials as Kafka does, with Java's lossy UTF-8:
+  each malformed sequence becomes U+FFFD before the payload is split and
+  compared. Before, krabka compared raw bytes and refused a username that was
+  not UTF-8 (#1390).
+- A SCRAM delegation token that has expired but is still in the token store
+  authenticates with `session_lifetime_ms` 0, as in Kafka, so its session is
+  already past its deadline and the next request that does not begin a
+  re-authentication closes the connection. The token expiry sweep removes it
+  as before (#1390).
+- SCRAM signs and verifies the `AuthMessage` that Kafka rebuilds from the
+  parsed messages, no longer checks `c=` against the GS2 header, and closes
+  the connection with no response and no failed-authentication delay when the
+  client proof does not decode to the hash length, as Kafka's
+  `ScramFormatter.xor` does (#1390, krabka-io/krabka-protocol#68).
+- Audit records are kept for the audit topic's `retention.ms` (issue #1550).
+  The audit writer stored every batch with `CreateTime` 0, so time retention
+  took each closed segment of `__krabka_audit` as decades old and deleted it
+  at the next pass. On v1.0.5 the first 114 audit records of a test broker
+  were gone about five minutes after start, against a 7-day `retention.ms`.
+  The writer now stamps each batch with the wall clock, as Kafka stamps its
+  records. This release cannot recover audit records that an earlier release
+  wrote and retention already deleted. A segment that holds only records
+  written before the upgrade is still deleted at the first retention pass
+  after it closes.
+- An audit hash chain continues across a broker restart (issue #1550). On
+  restart the writer searched for the chain's last record from offset 0. Once
+  retention had raised the log start, that read failed with `OffsetTooLow`,
+  the `ERROR` line reported in the issue. The writer then began a new chain:
+  sequence 0 with an all-zero `prev_hash`. It now reads from the log start. A
+  chain that an earlier release wrote may restart at a broker restart. A
+  verifier finds a break at sequence 0 with an all-zero `prev_hash` there.
+  Match each break against the broker's restart times.
+- Transaction, share-group and barrier state records carry the time they
+  were written, as Kafka's do. `__transaction_state`, `__share_group_state`
+  and `__barrier_state` stored every record with `CreateTime` 0. These topics
+  are compacted, so no record was lost. But a quiet partition's active
+  segment never rolled by `segment.ms`, so the cleaner did not compact it
+  until the segment reached `segment.bytes`. Records written before the
+  upgrade keep timestamp 0, and `kafka-dump-log` shows `CreateTime:0` for
+  them. The on-disk format does not change.
+- A combined node that is killed and restarts inside its heartbeat session,
+  and wins the controller election before its broker layer is up, no longer
+  keeps its partition leaderships at the same leader epoch (issue #1442). Its
+  own registration reached the new registration admission before the broker
+  bound, and went through unchanged. The batch now retires the previous
+  incarnation there too, as Kafka's `registerBroker` does on any active
+  controller: the broker leaves every ISR, and each partition it led elects
+  another leader at a new leader epoch. Before any broker heartbeats it, the
+  controller elects only brokers whose registration is unfenced and not in
+  controlled shutdown, as Kafka's `ClusterControlManager.isActive` does after
+  `activate`. Offset-aware recoveries the batch decides are handed to the
+  Unclean Recovery Manager once the broker binds.
+- `krabka-schema-serde` is pinned to `krabka-schema-registry` `7e5115f7` on
+  its `main`. The earlier pin was a merge commit on a release branch, which the
+  ecosystem qualification workflow refuses. The crate's source is unchanged.
+- `KrabkaOfflinePartitions` no longer pages for every broker that is down,
+  a planned stop in a rolling upgrade included (issue #1516). Each broker
+  holds one single-replica partition of the audit topic, which has no leader
+  while that broker is down. `krabka_broker_offline_partitions_count` still
+  counts it, as Kafka's `OfflinePartitionsCount` counts every leaderless
+  partition. The new `krabka_broker_offline_audit_partitions` gauge counts
+  those partitions alone, and the shipped alert rule subtracts it. Update a
+  copied `alert-rules.yaml` to the new expression. The gauge's help text and
+  `metrics.md` now say that the active controller reports the count for the
+  whole cluster, and name Kafka's `KafkaController` MBean, not
+  `ReplicaManager`.
+- `krabka_broker_offline_partitions_count` counts a partition that a log-dir
+  failure left without a leader while its broker stays up. The KIP-112
+  failover keeps the live broker as the recorded leader and marks the
+  partition leaderless through its last-known ELR, and the gauge only checked
+  whether the recorded leader was alive, so it read 0 where Kafka's
+  `OfflinePartitionsCount` counts the partition. `KrabkaOfflinePartitions`
+  now fires for it. `krabka_broker_offline_audit_partitions` counts only
+  audit partitions with no live replica, so an audit partition on a failed
+  dir of a live broker still pages.
+- A diskless broker's hot-tail cache keeps every compressed batch it is given.
+  The cache split each newly durable run into batches by the decoded batch's
+  `encoded_len`, which is its uncompressed length. A compressed batch does not
+  occupy that many bytes, so the first batch of each run was cached cut short
+  or with the next batch's bytes attached, and every batch after it was
+  dropped. A `read_uncommitted` fetch the cache answered could get a truncated
+  batch. The cache now takes the length that the decode consumed.
+- A restored diskless partition takes new writes (issue #1524). `KRaft`
+  assigns a diskless partition's offsets, and a restored cluster's metadata
+  held no next offset for it, so the first write was assigned offset 0 and the
+  materialized log refused it with `UNKNOWN_SERVER_ERROR` ("offset mismatch:
+  expected 712, got 0"). `krabka-restore` now formats the target with a
+  `V1PartitionOffsetAdvance` that starts each diskless partition at the end it
+  restores the log to, and fails the restore if the log ends anywhere else. The
+  controller takes that record in its activation batch: a new leader reserves
+  no offsets for a request until its epoch commits, but the activation batch
+  of an empty log inherits no reservation to wait for. The record is the one
+  every 1.x metadata snapshot already carries.
+- A consumer reads every record of a restored diskless partition (issue
+  #1525). On v1.0.5 it read only the first batch of each one. The restored
+  node flushes the materialized records into its own WAL and trims its local
+  log to them, so a KIP-320 consumer's fetch from the earliest offset falls
+  below the trimmed log start. v1.0.5 answered that fetch
+  `OFFSET_OUT_OF_RANGE`, and the consumer reset to the end. The fix in #1487
+  sends that fetch to the WAL objects. A new `diskless_capture_broker` case
+  restores a captured diskless topic and reads it back the way the
+  qualification drill does.
+- Log compaction deletes the producer-state snapshot of every segment it
+  merges, as Kafka's `UnifiedLog.replaceSegments` does, keeping only the one at
+  a survivor's own base offset (issue #1507). It used to leave them all, so a
+  compacted partition gained one `.snapshot` file per segment roll until the
+  broker restarted. The four-hour soak's `soak-compacted` partitions held 183
+  snapshots beside 2 segments after 15 minutes. A log open now also reclaims
+  a retired snapshot's `.deleted` tombstone, which a restart inside
+  `file.delete.delay.ms` used to leave behind for good, from retention as well
+  as from compaction.
+- The KRaft metadata log deletes the segments its cleaning retired once
+  `file.delete.delay.ms` (60 s, as in Kafka) has passed (issue #1507). Since
+  the delete delay took effect in #1335, a retired metadata segment was renamed
+  to `.deleted` and left on disk until the node restarted, because nothing
+  reaped the metadata log's retired files. The controller now reaps them after
+  each snapshot and once a minute, on a thread of its own, so a large unlink
+  never stalls the Raft engine.
+- `krabka-backup restore-offsets` waits for a freshly booted broker's group
+  coordinator instead of exiting `6` (issue #1515). It commits through the
+  admin client's `alterConsumerGroupOffsets`, which retries
+  `COORDINATOR_LOAD_IN_PROGRESS`, `COORDINATOR_NOT_AVAILABLE`,
+  `NOT_COORDINATOR` and `REBALANCE_IN_PROGRESS` with Kafka's backoff until
+  Kafka's default `default.api.timeout.ms` (60 seconds) runs out, and finds the
+  coordinator again after `COORDINATOR_NOT_AVAILABLE` and `NOT_COORDINATOR`, as
+  Kafka's `AlterConsumerGroupOffsetsHandler` does. The restore runbook no
+  longer tells the operator to run the command twice.
+- A successful `krabka-backup restore-offsets` no longer prints
+  `ERROR krabka_client_core::pool: error=connection closed` (issue #1515). The
+  Kafka client that the operator tools use logged every error it returned at
+  ERROR, even one its caller then retried. It now records each at the level
+  of its own tracing span, debug or info: the core, producer and coordination
+  crates in krabka-io/krabka-client-rs#187, and the consumer and share
+  consumer in krabka-io/krabka-client-rs#189. The workspace pins a revision
+  with both.
+- A listener that cannot bind its port now says which listener, which address
+  and which setting (issue #1517). A node whose controller port another
+  process held exited with `storage: I/O: Address already in use`, which sent
+  an operator to the log directory, and the client, metrics and health
+  listeners named no address either. The error now reads, for example,
+  `unable to bind the CONTROLLER listener to 0.0.0.0:9093 (set by
+  --controller-listen-addr): Address already in use (os error 98)`. The
+  controller listener also binds before the metadata engine opens, so the
+  failure leaves no engine running.
+- The release image's SLSA provenance attestation carries its predicate
+  again. Through v1.0.5, `release.yml` attested its SLSA v1 predicate as
+  `--type slsaprovenance`, which cosign reads as SLSA v0.2, so every release
+  from v1.0.0 to v1.0.5 has an empty provenance predicate: nothing in it names
+  the commit or the tested image. The release now attests the predicate as
+  `https://slsa.dev/provenance/v1`, and fails before it creates the GitHub
+  release unless the statement it reads back names the tagged commit, the tag
+  ref, the arm64 child and the tested amd64 image. The attestations of v1.0.0
+  to v1.0.5 do not change.
+- A classic follower whose log was empty at a leader log start inside a
+  batch now catches up. `DeleteRecords` (KIP-107) or retention can put the
+  leader's log start in the middle of a multi-record batch, and a follower
+  that is behind, or a new replica, resets there after `OFFSET_OUT_OF_RANGE`.
+  The leader serves the whole batch that holds the fetch offset, so every
+  fetch returned a batch that began below the follower's log end, and the
+  append refused it forever ("offset mismatch: expected 25, got 20"): the
+  follower never caught up and never rejoined the ISR. The empty follower now
+  restarts at the batch's base and takes it, as Kafka's
+  `Partition.appendRecordsToFollowerOrFutureReplica` does, then raises its log
+  start to the leader's from the next fetch response. The diskless WAL
+  follower shares the same check (`Log::restarts_at_batch_base`).
+- A `DeleteRecords` on a tiered topic can no longer be undone by a leadership
+  move. Its floor was enforced only when the leader's next remote-retention
+  pass deleted the archived segments below it. If leadership moved first to a
+  replica that reports a log start of 0, its followers saw an archive that did
+  not enforce the floor and lowered to 0, and the deleted records were readable
+  again. The leader now marks every archived segment below the trim point
+  `DeleteSegmentStarted` before it trims, and the row fails if it cannot. A
+  follower judges the archive only once its remote-log metadata has caught up
+  with the metadata topic. A floor that a broker before this release set is
+  not covered: see the rolling-upgrade note in
+  [Deploying](docs/operations/deploy.md#rolling-upgrade).
+- Every broker now leads its own `__krabka_audit` partition, and the audit
+  topic no longer counts in `under_min_isr_partition_count`. Before, the
+  quorum leader created the topic once, with a partition only for the brokers
+  registered at that moment, which in a fresh cluster was often the leader
+  alone. A broker that registered later got no partition and dropped every
+  audit record it emitted, or refused the request under a fail-closed
+  `failure_mode`. The active controller now adds one RF=1 partition for each
+  registered broker that holds none, as a `CreatePartitions` does, and a
+  broker waits at startup for its partition to arrive. The topic now declares
+  `min.insync.replicas=1`, because each partition has one replica: with a
+  cluster default of 2, every audit partition was under min ISR, and
+  `KrabkaUnderMinIsrPartitions` fired on a healthy cluster. A topic that an
+  earlier release created gets its missing partitions and the override once
+  the upgraded controller leads; a `min.insync.replicas` that an operator set
+  on the topic is kept. Both are existing metadata records, so the change
+  needs no feature level and rolls back in place. A restarted broker also finds
+  its partition by replica: it used to read the image while still fenced, see
+  no partition it led, and drop audit records until its next restart.
+- A diskless topic now serves its whole log to a consumer that sends
+  `last_fetched_epoch`, as the krabka Rust consumer does on Fetch v12 and
+  later. Before, a fetch below the leader's local log start answered
+  `OFFSET_OUT_OF_RANGE` before the WAL objects were consulted, because the
+  epoch check measured it against the flusher's trim frontier rather than the
+  partition's real floor. Such a consumer reset to the latest offset each
+  time it fell behind a trim, and read only a few dozen of thousands of
+  records. A replica of a diskless partition that fell behind the trim was
+  refused the same way.
+- A diskless WAL follower now takes the batch it is served when its log is
+  empty at an offset inside that batch, as Kafka's
+  `Partition.appendRecordsToFollowerOrFutureReplica` does: it restarts at the
+  batch's base. The flusher trims to the high watermark less the safety lag,
+  which a batch of many records straddles, so a voter that fell behind the
+  trim reset into a batch and then failed every fetch with `WAL fetch is not
+  contiguous`. The follower also keeps a hole in the leader's WAL, where the
+  controller reserved offsets that no batch was written at, instead of
+  refusing the batch after it, which stalled the quorum after a leader change.
+- A broker restarted while a diskless partition took writes rejoins that
+  partition's ISR. It reopened the partition with the committed `KRaft` next
+  offset as its append frontier, and its replicator then refused every leader
+  batch below that frontier with `offset mismatch`. A follower now appends the
+  leader's batches from its own log end, as Kafka's `appendAsFollower` does;
+  `Log::clear_reconciled_next_offset` drops the frontier.
+- A per-broker `listeners` and `listener.security.protocol.map` change now
+  opens and closes data-plane listeners without a restart, as Kafka's
+  `DynamicListenerConfig` does: a new listener name is bound and served with
+  its own `listener.name.<listener>.sasl.enabled.mechanisms`, a dropped one
+  closes with its connections, and a stored `listeners` opens again after a
+  restart. The broker the alter is addressed to first refuses, with
+  `INVALID_REQUEST` and Kafka's message, a change Kafka refuses: a listener
+  without a protocol, a repeated name or port, a dropped advertised listener
+  or controller mapping, a disabled inter-broker SASL mechanism, or a new
+  protocol or own key for a listener that stays. Before, both keys were
+  stored and reported and changed nothing. As in Kafka, the SASL and Kerberos
+  keys and `principal.builder.class` reach only listeners added later
+  (#1423).
+- The controller listener's TLS and SASL handshake is now held to
+  `connections.max.idle.ms` of silence, as Kafka's `Selector` does, instead
+  of to that long in total (#1426).
+- A request other than `SaslAuthenticate` during a SASL exchange now gets its
+  own error response with `ILLEGAL_SASL_STATE` (34), after the failed
+  authentication delay, before the connection closes, as Kafka's
+  `SaslServerAuthenticator` sends it. A request Kafka cannot parse still
+  closes at once (#1427).
+- A KIP-368 session, on a broker or the controller listener, now expires only
+  strictly after its deadline, as Kafka's `KafkaChannel` does, so a request at
+  the deadline itself is still served (#1428).
+- A SCRAM credential stored with fewer than 4096 iterations is now refused at
+  authentication with Kafka's generic failure (#1429).
+- The unsecured OAUTHBEARER validator allows no clock skew by default, as
+  Kafka's `unsecuredValidatorAllowableClockSkewMs` does. The signed and
+  introspection validators keep 30 s (#1430).
+- A token that lacks a required scope item gets Kafka's `insufficient_scope`
+  OAUTHBEARER challenge, `{"status":"insufficient_scope", "scope":"[a, b]"}`,
+  and the client's `\x01` then fails with error 58 and that JSON as the
+  message, as Kafka's `OAuthBearerSaslServer` does. Every other refused token
+  still gets `invalid_token`. The controller listener answers the same way
+  (#1390, krabka-io/krabka-protocol#66).
+- SCRAM parses the client-final message with Kafka's grammar,
+  `c=...,r=...[,extensions],p=...` in that order, and the unsecured
+  OAUTHBEARER validator refuses what Kafka's does: an `exp` not after `iat`,
+  a non-numeric `iat`, a blank principal and a numeric scope claim
+  (krabka-io/krabka-protocol#65, #66).
+- These dynamic broker configs now take effect on a running broker, per
+  broker and then cluster-wide, where before they were stored and reported
+  and changed nothing (#1424):
+  - `producer.id.expiration.ms` drives the producer-expiry sweep and the
+    transaction-verification window.
+  - The three group assignment intervals,
+    `group.consumer.assignment.interval.ms`,
+    `group.share.assignment.interval.ms` and
+    `group.streams.assignment.interval.ms`, apply under a group's own
+    override. A value outside the group minimum and maximum is refused with
+    Kafka's `GroupCoordinatorConfig` message.
+  - `remote.log.manager.copy.max.bytes.per.second` and
+    `remote.log.manager.fetch.max.bytes.per.second` meter segment uploads
+    and consumer cold reads with Kafka's `RLMQuotaManager` (KIP-956). A copy
+    over the quota waits; a fetch over it answers the partition with empty
+    records.
+  - `remote.fetch.max.wait.ms` bounds a fetch's cold reads, as
+    `DelayedRemoteFetch` does.
+  - `remote.log.index.file.cache.total.size.bytes` resizes the remote index
+    cache, and a shrink evicts down to the new size.
+  - `follower.fetch.last.tiered.offset.enable` makes an empty follower of a
+    tiered topic start at the leader's earliest pending upload offset
+    (KIP-1023) instead of copying its whole local log.
+- A partition no longer stalls its appends and fetches while it deletes
+  segment files that retention retired. When their `file.delete.delay.ms`
+  passed, the partition writer unlinked them one after another under the log
+  lock, and an unlink drops the file's page cache, which takes tens of
+  milliseconds a segment on a loaded disk. Under RF3 `acks=all` saturation
+  with size retention this held produce acks for up to about a second
+  (#1394). The writer now deletes them on the blocking pool, outside the log
+  lock and off its own loop, as Kafka deletes them from its scheduler.
+- The bench driver's consumer no longer stalls each `poll` for up to
+  `fetch.max.wait.ms`. The krabka-client-rs pin moves to 29dac7a5
+  (krabka-io/krabka-client-rs#186), whose consumer refreshes metadata only
+  when it is due rather than on every poll, behind a parked `Fetch`. RF3
+  multi-partition end-to-end latencies from `krabka-bench-driver` were set by
+  that stall (#1394).
+- The bench driver's `acks: all` scenarios run again. They turn idempotence on,
+  and the driver asked for more in-flight requests than an idempotent producer
+  allows, so each one failed at start.
+- A broker that stops leading a tiered partition stops copying it to the
+  remote tier at its next segment, as Kafka's `RLMCopyTask` does once it is
+  cancelled. Before, the copy pass checked leadership only at the start of
+  each tick and then uploaded every segment it had planned, and a shutdown
+  never stopped a tick that was already running. The new leader, which had
+  seen the old leader's unfinished copy, copied the same offsets again under
+  its own segment boundaries, so the tier held two copies of them. The pass
+  now re-checks the leader and the leader epoch before each segment and
+  again before it uploads. On a mutable tier it checks once more before it
+  publishes `CopySegmentFinished`, and an upload that outlived the broker's
+  leadership is withdrawn, not published. A write-once archive has already
+  sealed that upload's manifest, so the copy is published.
+  `BrokerHandle::shutdown` now waits for the copy task to stop.
+- A gracefully stopped active controller now hands the metadata quorum over
+  before it exits, as Kafka's `KafkaRaftClient.shutdown` does: it resigns,
+  sends `EndQuorumEpoch` naming the other voters by how far they have fetched,
+  and waits up to five seconds (or two and a half `controller_fetch_timeout`s,
+  when that is shorter) for a successor. Before, it stopped without a word,
+  and the other voters noticed only after three missed five-second fetch
+  timeouts and then an election, 18–26 s after `SIGTERM` in a three-node
+  cluster with the default timings. A new controller now serves within about
+  half a second. A broker in controlled shutdown also sends its first
+  heartbeat at once and asks again 50 ms after the controller's first answer,
+  as Kafka's `BrokerLifecycleManager` does, instead of waiting a
+  `heartbeat_interval` for each (#1446).
+- A controller voter that stops hearing from the controller leader now
+  starts an election after one fetch timeout (`controller_fetch_timeout`),
+  as Kafka's `KafkaRaftClient.pollFollowerAsVoter` does. Before, it re-polled
+  the silent leader until `controller_fetch_miss_limit` timeouts had passed
+  (three by default, 15 s), so a killed or paused controller leader was
+  replaced only after 20 s or more. A partition leader on the same node then
+  kept its leadership through an outage of 15 s: the new controller gives
+  every broker a fresh heartbeat session, as Kafka's does, and the node came
+  back inside it. `controller_fetch_miss_limit` now applies to observers only
+  (#1449).
+- The controller no longer refuses a dead broker's failover while the only
+  uncommitted record in its log is the KIP-835 no-op it appends every
+  `metadata.max.idle.interval.ms`. A failover the liveness ticker retried
+  once a second could land behind that no-op on every retry and be refused
+  with `the controller leader has uncommitted metadata records` until the
+  broker came back, so its partitions kept their leader. A tail that holds a
+  metadata record is still waited for (#1453).
+- A broker whose self-registration was retried across a controller leader
+  change now names its newest registration in heartbeats, producer-id
+  allocations and its clean-shutdown proof. The first attempt could commit
+  although its submit failed, and the broker kept that attempt's epoch: the
+  controller refused every heartbeat with `STALE_BROKER_EPOCH` and the broker
+  was never unfenced (#1458).
+- A per-broker `listener.name.<listener>.ssl.keystore.*` or
+  `listener.name.<listener>.ssl.truststore.*` change now takes effect on an
+  SSL or SASL_SSL listener: the next handshake gets the new stores, and a
+  store file is read again when it changes. The broker the alter is addressed
+  to checks the change first, as Kafka's `SslFactory` does, and answers
+  `INVALID_REQUEST` when a store does not load or a new certificate changes
+  the DN or drops a SAN. Before, the broker stored and reported the keys and
+  kept serving its static certificate. krabka reads PEM stores with an
+  unencrypted key only (#1422).
+- The broker refuses to start when `broker_id` and `node_id` differ, as
+  Kafka's `KafkaConfig` refuses a `broker.id` that is not the `node.id`.
+  Before, such a broker registered under its node id but heartbeated under
+  its broker id, so the controller never unfenced it, and `Broker::start`
+  waited out `startup_leader_wait_timeout` (two minutes) before going on
+  fenced (#1471).
+- `max.connections.per.ip.overrides`, `max.connection.creation.rate` and the
+  per-listener `listener.name.<listener>.max.connections` and
+  `listener.name.<listener>.max.connection.creation.rate` now take effect, on
+  the broker listeners and the controller listener, and a change applies to
+  the next connection without a restart. Before, the broker stored and
+  reported them and enforced none. As in Kafka, the inter-broker listener of a
+  broker with several listeners is exempt from the broker-wide cap and rate,
+  an override host is resolved in the background when the value changes, and
+  over a creation rate the acceptor waits the throttle out, at most
+  `quota.window.size.seconds`, before it accepts. A dynamic `max.connections`
+  of 0 is no longer applied, because Kafka refuses a listener cap below 1 and
+  every listener inherits the broker-wide value; a refused value leaves the
+  value in force before it (#1421).
+- With `preallocate=true`, a segment's `O_DIRECT` writes now align their
+  buffers, offsets and lengths to the filesystem block (up to 4 KiB). Before,
+  they used the kernel's minimum `O_DIRECT` alignment, often 512 bytes, or a
+  few bytes for a buffer on NVMe, and ext4 sent almost every write down its
+  unaligned path: an exclusive inode lock, a wait for the file's other direct
+  writes, and a separate zeroing write. The on-disk format does not
+  change: the zeros an active segment can carry past its last batch stay
+  within one block of at most 4 KiB, as `docs/persisted_formats.md` already
+  states (#1370).
+- A consumer `Fetch` that its fetch session refuses (for example
+  `FETCH_SESSION_ID_NOT_FOUND`) is now charged to the client's
+  `request_percentage` and `consumer_byte_rate` quotas, as Kafka's
+  `SessionErrorContext` is, and its error response carries the throttle.
+  Before, a client retrying a stale session was never throttled. A follower's
+  refused fetch stays exempt.
+- A long-polling `Fetch` is no longer charged its wait to
+  `request_percentage`. Kafka parks the wait in the fetch purgatory, off the
+  request-handler thread, and charges only the handler's own time. Before, a
+  consumer whose fetches waited out `MaxWaitMs` was throttled for time it
+  spent idle.
+- A long-polling `Fetch` is no longer charged to `request_percentage` for the
+  reads it makes after a wake or its deadline. Kafka completes a parked fetch,
+  re-reads included, off the request-handler thread, so the handler's time
+  ends where the fetch parks.
+- `connections.max.idle.ms` now measures silence on the client and controller
+  listeners, as Kafka's `Selector` does: every read that brings bytes starts a
+  fresh window, so a request that arrives steadily but takes longer than the
+  window in all is no longer closed part-way through (#1390).
+- An expired KIP-368 session now closes on any frame that does not begin a
+  re-authentication, as Kafka's `SocketServer` does. A `SaslAuthenticate`, or
+  a `SaslHandshake` inside the one-second re-authentication interval, used to
+  get error 34 and keep the connection (#1390).
+- OAUTHBEARER answers a malformed client initial response with error 58 and
+  Kafka's generic message at once, and an authorization id that differs from
+  the token's principal with Kafka's own message, instead of the
+  `invalid_token` challenge. After a challenge, a reply other than a lone
+  `\x01` is a fresh attempt, as in Kafka's `OAuthBearerSaslServer` (#1390).
+- The broker refuses to start with a `queued_max_request_bytes` below
+  `socket_request_max`, as Kafka's `KafkaConfig` does (#1390).
+- A dynamic `max.connections` or `max.connections.per.ip`, set per broker or
+  cluster-wide with `IncrementalAlterConfigs` or `AlterConfigs`, now applies
+  to the next connection accepted on a broker listener and on the controller
+  listener, and deleting it restores the static cap. Before, the broker stored
+  and reported the value but kept counting against the static cap until it
+  restarted. A `max.connections.per.ip` of 0 is stored but not applied, as
+  Kafka allows 0 only beside `max.connections.per.ip.overrides` (#1391).
+- A consumer `Fetch` is now charged to `consumer_byte_rate` at Kafka's
+  `FetchResponse.sizeOf`, four bytes more than the encoded response body.
+  Before, every fetch was charged four bytes short.
+- A `ShareFetch` is now charged to the member's `consumer_byte_rate` and
+  `request_percentage` quotas, as Kafka's `processShareFetchResponse` charges
+  it. A throttled fetch reports the larger throttle in `throttle_time_ms`,
+  takes its byte charge back, and answers without its records, which stay
+  acquired until their lock runs out. Its acknowledgement results still
+  answer. A refused `ShareFetch` is charged to `request_percentage` alone.
+  Before, a `ShareFetch` was never throttled for bytes, and a request-quota
+  delay did not empty its response.
+- A `ShareFetch` is now capped at what the member's `consumer_byte_rate`
+  quota allows in one quota window, as Kafka's
+  `min(MaxBytes, fetch.max.bytes, maxQuotaWindowBytes)` caps it. Before, only
+  the request limit and `fetch.max.bytes` bounded it. The first batch still
+  goes out when it is larger than the cap.
+
+- `OffsetFetch` v9 and later checks the member id and epoch it names against a
+  streams group, as Kafka's `StreamsGroup.validateOffsetFetch` does: an
+  unknown member answers `UNKNOWN_MEMBER_ID` and any other epoch than the
+  member's own answers `STALE_MEMBER_EPOCH`. Before, a streams group's
+  offsets were served to any member id at any epoch, and the check ran for
+  consumer groups only.
+
+- A share group takes the outcome of one share-state initialize request
+  whole, as Kafka's `handlePersisterInitializeResponse` does: when any
+  partition of the request fails, every partition of it goes back for a
+  retry. Before, the partitions that succeeded became assignable at once.
+
+- A by-timestamp `ListOffsets` on a tiered topic answers
+  `UNKNOWN_SERVER_ERROR` when the remote tier fails, as Kafka's
+  `DelayedRemoteListOffsets` does. Before, it logged the failure and answered
+  from the local log, which skips every record only the tier holds.
+
+- A consumer or classic group write that does not commit answers
+  `ConsumerGroupHeartbeat`, `JoinGroup`, `SyncGroup` and `LeaveGroup` with
+  Kafka's code for it: `NOT_COORDINATOR` after the coordinator lost its
+  leadership and `COORDINATOR_NOT_AVAILABLE` after a timeout. Before, every
+  failed write answered `COORDINATOR_LOAD_IN_PROGRESS`, so a client retried
+  the old coordinator instead of looking up the new one.
+
+- Keep metadata reconciliation moving when an unchanged log policy would
+  otherwise queue behind a diskless writer waiting for its WAL quorum.
 
 ## [1.0.5] - 2026-10-14
 
@@ -1567,7 +2249,10 @@ robot-head/crabka.
 - An audit stamp carries the value that its freeze signature covers.
 - The release publishes the image digest that cosign signed.
 
-[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v1.0.5...HEAD
+[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v1.0.8...HEAD
+[1.0.8]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.8
+[1.0.7]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.7
+[1.0.6]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.6
 [1.0.5]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.5
 [1.0.4]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.4
 [1.0.3]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.3

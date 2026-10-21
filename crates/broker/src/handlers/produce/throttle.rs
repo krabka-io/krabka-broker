@@ -43,7 +43,7 @@ pub(super) fn finish_produce_response(
     // `acks = 0`, which `request_quota_start` holds as `None`. The byte-rate
     // quota above still applies.
     let request_delay = request_quota_start.map_or_else(QuotaDelay::zero, |start| {
-        context.charge_request_quota(broker, image, start)
+        context.charge_request_quota(broker, image, start.elapsed())
     });
     // KIP-219: the connection is muted for the larger of the two delays.
     // Resolving it through the metric records the throttle phase and the quota

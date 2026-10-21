@@ -50,6 +50,7 @@ impl Args {
         runtime.heartbeat_interval = self.heartbeat_interval;
         runtime.heartbeat_timeout = self.heartbeat_timeout;
         runtime.replica_lag_time_max = self.replica_lag_time_max;
+        runtime.controller_fetch_timeout = self.controller_fetch_timeout;
         runtime.controller_election_timeout = self.controller_election_timeout;
         runtime.controller_heartbeat_interval = self.controller_heartbeat_interval;
         runtime.controller_fetch_miss_limit = self.controller_fetch_miss_limit;

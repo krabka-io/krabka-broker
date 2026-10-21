@@ -274,13 +274,8 @@ impl ClassicGroup {
         }
         if !dropped.is_empty() {
             if self.members.is_empty() {
-                self.state = GroupState::Empty;
-                self.leader_id = None;
-                self.protocol_name = None;
-                self.rebalance_deadline = None;
                 self.joined_this_round.clear();
                 self.rebalance_from_empty = false;
-                self.clear_sync_expiration();
             } else if self.can_rebalance() {
                 // Kafka's `maybePrepareRebalanceOrCompleteJoin`: the survivors
                 // of a `Stable` or `CompletingRebalance` group get the whole

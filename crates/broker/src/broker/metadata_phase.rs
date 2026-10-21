@@ -21,12 +21,13 @@ use {
         error::BrokerError,
         features::LATEST_PRODUCTION_METADATA_VERSION,
         host_port::{HostPort, parse_host_port},
-        incarnation::load_or_generate,
         metadata_observer::{MetadataObserver, ObserverConfig},
         metadata_source::{MetadataSource, ObserverSource, QuorumForwarder, or_fatal_fault},
+        metrics::BrokerMetrics,
         network::client::{InterBrokerClient, InterBrokerDialer},
         platform::{Sockets, bind_listener},
         raft_handshake::{AuditLogArc, BrokerRaftHandshake},
+        registration_admission::BrokerRegistrationAdmission,
         time_util::system_timer,
         wal::quorum::registry::{WalShardRegistry, WalShardRouter},
     },
@@ -191,6 +192,7 @@ async fn start_metadata_source(
     controller_listener: Option<tokio::net::TcpListener>,
     transport: RaftTransport,
     wal_shards: Arc<WalShardRegistry>,
+    metrics: &BrokerMetrics,
 ) -> Result<MetadataControlPlane, BrokerError> {
     let RaftTransport {
         controller_cell,
@@ -211,6 +213,7 @@ async fn start_metadata_source(
             initial_voters: prepare_initial_voters(config, &bootstrap_records),
             controller_listen_addr: config.controller_listen_addr,
             log_dir: config.metadata_dir().to_path_buf(),
+            fetch_timeout: config.controller_fetch_timeout,
             election_timeout: config.controller_election_timeout,
             heartbeat_interval: config
                 .controller_heartbeat_interval_explicit
@@ -241,12 +244,14 @@ async fn start_metadata_source(
                 max_idle: config.connections_max_idle_for(CONTROLLER_LISTENER_NAME),
                 max_connections: config.max_connections,
                 max_connections_per_ip: config.max_connections_per_ip,
+                max_connection_throttle: config.connection_creation_throttle_max.to_std(),
             },
             max_bytes_between_snapshots: config.metadata_max_bytes_between_snapshots,
             max_snapshot_interval: config.metadata_max_snapshot_interval,
             snapshot_interval_records: config.metadata_snapshot_interval_records,
             metadata_snapshot_fetch_max: config.metadata_snapshot_fetch_max,
             metadata_log: config.metadata_log,
+            event_queue_recorder: Arc::new(metrics.clone()),
         };
         let controller = Arc::new(
             krabka_raft::Controller::start_with_listener(controller_config, controller_listener)
@@ -257,10 +262,30 @@ async fn start_metadata_source(
                     // running controller publishes, as Kafka's handler logs
                     // both alike.
                     krabka_raft::RaftError::FatalFault(fault) => BrokerError::FatalFault(fault),
+                    krabka_raft::RaftError::ControllerListenerBind { addr, source } => {
+                        BrokerError::listener_bind(
+                            CONTROLLER_LISTENER_NAME,
+                            addr,
+                            CONTROLLER_LISTEN_ADDR_SETTING,
+                        )(source)
+                    }
                     other => BrokerError::Startup(other.to_string()),
                 })?,
         );
         let _ = controller_cell.set(Arc::clone(&controller));
+        // Installed before this node can lead a registration: a new
+        // incarnation of a broker id retires the previous one in the batch that
+        // registers it, as `ClusterControlManager.registerBroker` does.
+        if let Some(router) = &admin_router {
+            controller
+                .install_registration_admission(Arc::new(BrokerRegistrationAdmission::new(
+                    config.node_id,
+                    controller.watch_image(),
+                    Arc::clone(router),
+                    metrics.clone(),
+                )))
+                .map_err(|error| BrokerError::Startup(error.into()))?;
+        }
         return Ok(MetadataControlPlane {
             source: controller as Arc<dyn MetadataSource>,
             admin_router,
@@ -390,6 +415,10 @@ async fn wait_for_metadata_version(
     }
 }
 
+/// The setting that gives the controller listener's address, which a bind
+/// error names.
+const CONTROLLER_LISTEN_ADDR_SETTING: &str = "--controller-listen-addr";
+
 /// Binds the controller listener before the quorum starts when the config asks
 /// for an OS-assigned port, and publishes the port it got.
 ///
@@ -410,8 +439,18 @@ async fn bind_ephemeral_controller_listener(
     if prebound.is_some() || !config.is_controller() || config.controller_listen_addr.port() != 0 {
         return Ok(prebound);
     }
-    let listener = bind_listener(config.controller_listen_addr).await?;
-    let bound = Sockets::TARGET.listener_address(&listener, config.controller_listen_addr)?;
+    let addr = config.controller_listen_addr;
+    let bind_error = || {
+        BrokerError::listener_bind(
+            CONTROLLER_LISTENER_NAME,
+            addr,
+            CONTROLLER_LISTEN_ADDR_SETTING,
+        )
+    };
+    let listener = bind_listener(addr).await.map_err(bind_error())?;
+    let bound = Sockets::TARGET
+        .listener_address(&listener, addr)
+        .map_err(bind_error())?;
     publish_bound_controller_addr(config, bound);
     Ok(Some(listener))
 }
@@ -438,6 +477,7 @@ pub(super) async fn start_metadata_phase(
     tls_dynamic: Option<&Arc<krabka_security::DynamicServerConfig>>,
     inter_broker_client: &Arc<InterBrokerClient>,
     wal_shards: Arc<WalShardRegistry>,
+    metrics: &BrokerMetrics,
 ) -> Result<MetadataPhase, BrokerError> {
     let controller_listener =
         bind_ephemeral_controller_listener(config, controller_listener).await?;
@@ -458,6 +498,7 @@ pub(super) async fn start_metadata_phase(
         controller_listener,
         transport,
         wal_shards,
+        metrics,
     )
     .await?;
     spawn_auto_join(config, &controller.source, inter_broker_client);
@@ -495,7 +536,10 @@ async fn join_metadata_quorum(
         wait_for_metadata_version(&**controller, timeout).await?;
     }
     if config.is_controller() || config.is_broker() {
-        config.incarnation_id = load_or_generate(&config.log_dir);
+        // Every process is a new incarnation, as Kafka's `BrokerLifecycleManager`
+        // draws `Uuid.randomUuid()` at every start: it is what lets the
+        // controller tell a restart from this process registering again.
+        config.incarnation_id = uuid::Uuid::new_v4();
         // Spend the clean-shutdown proof the last stop left, if it left one.
         // Reading it here -- before this node registers -- is what lets
         // `register_broker` tell a graceful restart from a crash.

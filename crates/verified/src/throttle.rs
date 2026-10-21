@@ -4,59 +4,40 @@ use creusot_std::prelude::*;
 #[cfg(not(creusot))]
 use derive_more::{Display, From, Into};
 
-/// Tokens currently sitting in the bucket, available to grant.
-#[krabka_macros::model_type(
-    proof(DeepModel),
-    runtime(
-        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Display, From, Into
-    )
-)]
-pub struct AvailableTokens(pub u64);
+macro_rules! token_count {
+    ($name:ident, $doc:literal) => {
+        #[doc = $doc]
+        #[krabka_macros::model_type(
+            proof(DeepModel),
+            runtime(
+                Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Display, From, Into
+            )
+        )]
+        pub struct $name(pub u64);
+    };
+}
 
-/// Tokens accrued since the last refill, to be added to `available` this call.
-#[krabka_macros::model_type(
-    proof(DeepModel),
-    runtime(
-        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Display, From, Into
-    )
-)]
-pub struct RefillTokens(pub u64);
-
-/// The burst cap: the maximum the bucket may hold after a refill.
-#[krabka_macros::model_type(
-    proof(DeepModel),
-    runtime(
-        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Display, From, Into
-    )
-)]
-pub struct BurstCapacity(pub u64);
-
-/// Tokens the caller is asking to consume.
-#[krabka_macros::model_type(
-    proof(DeepModel),
-    runtime(
-        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Display, From, Into
-    )
-)]
-pub struct RequestedTokens(pub u64);
-
-/// Tokens actually granted by a consume call (`<= requested`).
-#[krabka_macros::model_type(
-    proof(DeepModel),
-    runtime(
-        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Display, From, Into
-    )
-)]
-pub struct GrantedTokens(pub u64);
-
-/// The bucket's new `available` count after a consume call commits.
-#[krabka_macros::model_type(
-    proof(DeepModel),
-    runtime(
-        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Display, From, Into
-    )
-)]
-pub struct NewAvailable(pub u64);
+token_count!(
+    AvailableTokens,
+    "Tokens currently sitting in the bucket, available to grant."
+);
+token_count!(
+    RefillTokens,
+    "Tokens accrued since the last refill, to be added to `available` this call."
+);
+token_count!(
+    BurstCapacity,
+    "The burst cap: the maximum the bucket may hold after a refill."
+);
+token_count!(RequestedTokens, "Tokens the caller is asking to consume.");
+token_count!(
+    GrantedTokens,
+    "Tokens actually granted by a consume call (`<= requested`)."
+);
+token_count!(
+    NewAvailable,
+    "The bucket's new `available` count after a consume call commits."
+);
 
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]

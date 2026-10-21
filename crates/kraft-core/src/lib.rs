@@ -15,7 +15,7 @@
 //! module, behind the `sim` feature, uses this to drive an interactive
 //! consensus simulation in the browser playground.
 
-#![doc(html_root_url = "https://docs.rs/krabka-kraft-core/1.0.5")]
+#![doc(html_root_url = "https://docs.rs/krabka-kraft-core/1.0.8")]
 #![allow(dead_code, unused_imports)]
 
 pub mod action;
@@ -31,7 +31,7 @@ pub mod sim;
 
 pub use {
     action::{Action, TimerKind},
-    core::{QuorumStateMachine, election_jitter_ms},
+    core::{QuorumStateMachine, QuorumTimeouts, election_jitter_ms},
     event::{Event, LogEnd, SuccessorRank},
     role::{ReplicaProgress, Role},
     types::{Epoch, LogOffsetMetadata, LogView, NodeId, QuorumState, ReplicaKey, SimInstant},

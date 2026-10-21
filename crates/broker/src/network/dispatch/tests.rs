@@ -32,6 +32,7 @@ use {
     tokio::net::TcpStream,
 };
 
+mod idle_in_flight;
 mod throttle_mute;
 
 use crate::network::test_support::{FrameCorrelationId, broker_config, request_frame};
@@ -1036,7 +1037,13 @@ mod request_budget {
     use crate::test_support::start_broker_with as broker_with;
 
     async fn byte_budget_broker() -> StartedBroker {
-        broker_with(|cfg| cfg.queued_max_request_bytes = Some(budget())).await
+        // Kafka refuses a budget below `socket.request.max.bytes`, so the
+        // request limit comes down to the budget with it.
+        broker_with(|cfg| {
+            cfg.socket_request_max = budget();
+            cfg.queued_max_request_bytes = Some(budget());
+        })
+        .await
     }
 
     /// `queued.max.requests` bounds what the broker is *handling*, across every
@@ -1096,8 +1103,9 @@ mod request_budget {
     }
 
     /// A frame larger than the whole `queued.max.request.bytes` budget can
-    /// never be admitted, however long the broker waits, so the connection
-    /// ends the way one carrying bytes the broker cannot take does.
+    /// never be admitted, however long the broker waits. Since the budget
+    /// covers `socket.request.max.bytes`, such a frame is also over the
+    /// request limit, and the connection ends at its size prefix.
     ///
     /// The budget is big enough for the broker's own inter-broker traffic --
     /// a budget under one ordinary request would wedge the broker itself

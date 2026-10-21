@@ -11,6 +11,7 @@ use {
         clean_shutdown::write,
         error::BrokerError,
         future_log::{abort_moves, shutdown_moves},
+        incarnation::own_broker_epoch,
         partition::Partition,
         partition_registry::PartitionRegistry,
         time_util::now_ms,
@@ -444,9 +445,7 @@ impl BrokerHandle {
         // and join all active connection children. The requests themselves
         // are not drained, but this method does not return while a child can
         // still mutate the victim's data files.
-        for task in self.listener_tasks.drain(..) {
-            let _ = task.await;
-        }
+        self.stop_listeners().await;
 
         // The supervisor's cancellation epilogue aborts and joins its private
         // ordinary and WAL follower tasks. Its run loop races every reconcile
@@ -458,6 +457,12 @@ impl BrokerHandle {
         if let Some(task) = self.broker.disk_scanner_handle.lock().await.take() {
             let _ = task.await;
         }
+        // A crash does not wait for a copy to stop; it stops mid-copy. The
+        // handle stays on the broker, finished, so a test can see it stopped.
+        if let Some(task) = self.broker.remote_log_manager_handle.lock().await.as_mut() {
+            task.abort();
+            let _ = task.await;
+        }
 
         shutdown_moves(&self.broker.future_logs).await;
         shutdown_partition_writers(&self.broker.partitions).await;
@@ -465,7 +470,9 @@ impl BrokerHandle {
             task.abort();
             let _ = task.await;
         }
-        self.broker.controller.cancel().await;
+        // A dead process hands no leadership over: the quorum finds out
+        // through its fetch watchdog, as it does after a kill.
+        self.broker.controller.halt().await;
     }
 
     /// Record the broker epoch this node is stopping on, so its next start can
@@ -491,7 +498,27 @@ impl BrokerHandle {
         if !config.is_broker() || config.broker_epoch < 0 || self.fatal_fault().is_some() {
             return;
         }
-        write(&config.log_dir, config.broker_epoch);
+        write(
+            &config.log_dir,
+            own_broker_epoch(
+                &self.broker.controller.current_image(),
+                config.node_id,
+                config.incarnation_id,
+                config.broker_epoch,
+            ),
+        );
+    }
+
+    /// Await the listener watcher, so that it opens no listener after this,
+    /// and then every data-plane accept loop, each of which closes its
+    /// connections. The caller has cancelled the shutdown token.
+    async fn stop_listeners(&mut self) {
+        if let Some(task) = self.listener_watcher.take() {
+            let _ = task.await;
+        }
+        for task in self.broker.data_plane.close() {
+            let _ = task.await;
+        }
     }
 
     /// Cancel the listener and drain in-flight connections. The returned
@@ -512,6 +539,17 @@ impl BrokerHandle {
         if let Some(h) = self.broker.disk_scanner_handle.lock().await.take() {
             let _ = h.await;
         }
+        // The remote-log-manager sweep observes `supervisor_shutdown` too: its
+        // copy pass stops at the next segment and withdraws a copy in flight
+        // rather than publishing it. Join it while the listeners still serve,
+        // because a copy's metadata write may be waiting on a metadata
+        // partition this broker leads. A broker that returned from here with
+        // a copy still running would go on writing to a tier its partitions'
+        // new leaders are copying into. The handle stays on the broker,
+        // finished, so a test can see it stopped.
+        if let Some(h) = self.broker.remote_log_manager_handle.lock().await.as_mut() {
+            let _ = h.await;
+        }
         self.shutdown.cancel();
         if let Some(task) = self.topic_rlmm_task.take() {
             let _ = task.await;
@@ -519,9 +557,7 @@ impl BrokerHandle {
         if let Some(task) = self.diskless_task.take() {
             let _ = task.await;
         }
-        for t in self.listener_tasks.drain(..) {
-            let _ = t.await;
-        }
+        self.stop_listeners().await;
         self.broker
             .audit_log
             .emit(krabka_audit::AuditEvent::Lifecycle {
@@ -547,7 +583,10 @@ impl BrokerHandle {
         // participating in elections after the broker is logically dead.
         // Without this, a killed broker's in-process raft engine keeps ticking
         // and re-elects itself, preventing the surviving nodes from detecting
-        // the leader failure and electing a replacement.
+        // the leader failure and electing a replacement. A controller that
+        // leads the quorum resigns first and sends `EndQuorumEpoch`, as Kafka's
+        // `KafkaRaftClient.shutdown` does, so its successor elects at once
+        // rather than after the followers' fetch watchdog.
         self.broker.controller.cancel().await;
     }
 }
@@ -562,13 +601,23 @@ impl Drop for BrokerHandle {
         {
             task.abort();
         }
-        for task in self.listener_tasks.drain(..) {
+        if let Some(task) = self.listener_watcher.take() {
+            task.abort();
+        }
+        for task in self.broker.data_plane.close() {
             task.abort();
         }
         if let Some(task) = self.topic_rlmm_task.take() {
             task.abort();
         }
         if let Some(task) = self.diskless_task.take() {
+            task.abort();
+        }
+        // Abort in place: aborting a task that `shutdown` already joined does
+        // nothing, and the handle shows a test that the task stopped.
+        if let Ok(handle) = self.broker.remote_log_manager_handle.try_lock()
+            && let Some(task) = handle.as_ref()
+        {
             task.abort();
         }
         abort_moves(&self.broker.future_logs);

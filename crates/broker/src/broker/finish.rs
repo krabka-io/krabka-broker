@@ -10,10 +10,8 @@ use {
         broker::{
             Broker, BrokerHandle, DisklessRuntime,
             diskless_index::{DisklessFlusherStartup, bootstrap_diskless_index_log},
-            listeners::{
-                ListenerStartup, ListenerTasks, bind_listeners_and_recover_moves,
-                spawn_listener_tasks,
-            },
+            dynamic_listeners::{DataPlaneListeners, spawn_watcher},
+            listeners::{ListenerStartup, bind_listeners_and_recover_moves, start_listeners},
             rlmm::{KafkaSwapKickoff, bootstrap_topic_rlmm},
             runtime::BrokerRuntimeStartup,
             transport::StartupTransport,
@@ -24,6 +22,7 @@ use {
         diskless::{flusher::FlushConfig, read::DisklessReadHandle},
         error::BrokerError,
         handlers::registry::build_registry,
+        listener_tls::ListenerTlsCache,
         log_dir_status::LogDirRegistry,
         metadata_source::MetadataSource,
         network::dispatch::RequestByteBudget,
@@ -104,7 +103,9 @@ pub(super) async fn finish_broker_startup(
     let queued_request_bytes = config
         .queued_max_request_bytes
         .map(|budget| RequestByteBudget::of(budget.bytes_usize()));
+    let shutdown = CancellationToken::new();
     let broker = Arc::new(Broker {
+        data_plane: DataPlaneListeners::new(shutdown.clone()),
         config,
         controller,
         partitions,
@@ -120,8 +121,10 @@ pub(super) async fn finish_broker_startup(
         supervisor_shutdown: runtime.supervisor_shutdown,
         supervisor_handle: tokio::sync::Mutex::new(Some(runtime.supervisor_handle)),
         disk_scanner_handle: tokio::sync::Mutex::new(runtime.disk_scanner_handle),
+        remote_log_manager_handle: tokio::sync::Mutex::new(runtime.remote_log_manager_handle),
         liveness: runtime.liveness_services.liveness,
         tls_dynamic: transport.tls_dynamic,
+        listener_tls: ListenerTlsCache::default(),
         ktls_enabled: transport.ktls_enabled,
         inter_broker_client: transport.inter_broker_client,
         unclean_recovery: runtime.liveness_services.unclean_recovery,
@@ -136,6 +139,7 @@ pub(super) async fn finish_broker_startup(
         want_shutdown: runtime.liveness_services.want_shutdown,
         should_shutdown: runtime.liveness_services.should_shutdown,
         remote_reader: runtime.remote_reader,
+        remote_log_quotas: runtime.remote_log_quotas,
         diskless_read: runtime.diskless_read,
         hot_tail: storage.diskless.hot_tail,
         wal_shards: storage.diskless.wal_shards,
@@ -175,10 +179,8 @@ pub(super) async fn finish_broker_startup(
             ));
         }
     };
-    let ListenerTasks {
-        shutdown,
-        tasks: listener_tasks,
-    } = spawn_listener_tasks(&broker, bound);
+    start_listeners(&broker, bound);
+    let listener_watcher = spawn_watcher(&broker, shutdown.clone());
     emit_broker_started(&broker, runtime.audit_led_partition).await;
     let topic_rlmm_task = spawn_rlmm_bootstrap(
         &broker,
@@ -197,7 +199,7 @@ pub(super) async fn finish_broker_startup(
     Ok(BrokerHandle {
         listen_addr,
         shutdown,
-        listener_tasks,
+        listener_watcher,
         topic_rlmm_task,
         diskless_task,
         diskless_flusher_ready,

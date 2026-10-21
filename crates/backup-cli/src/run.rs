@@ -7,7 +7,10 @@
 use {
     crate::{
         archive::{Archive, ArchiveArgs},
-        capture::{RLMM_SNAPSHOT_RELATIVE, capture_id, capture_key, newest_metadata_checkpoint},
+        capture::{
+            MetadataCheckpoint, RLMM_SNAPSHOT_RELATIVE, capture_id, capture_key, holds_a_topic,
+            newest_metadata_checkpoint,
+        },
         cli::{CaptureSigningArgs, CaptureTrustArgs, LATEST},
         connection::SecurityArgs,
         diskless::capture_projection,
@@ -16,18 +19,15 @@ use {
             Artifact, CAPTURE_ROOT, DISKLESS_WAL_INDEX, GROUP_OFFSETS, MANIFEST, MANIFEST_VERSION,
             METADATA_CHECKPOINT, Manifest, RLMM_SNAPSHOT, artifact_problem, sha256_hex,
         },
-        offsets::{GroupOffsetsFile, commit_refusals, commit_request, group_offsets},
+        offsets::{GroupOffsetsFile, admin_offsets, commit_outcome, group_offsets},
     },
     krabka_audit::FileEd25519Signer,
     krabka_client_admin::{
         AdminClient, AdminError, ConfigResource, DescribeConfigsOptions, TopicMetadata,
         groups::ListGroupsOptions,
     },
-    krabka_client_core::{
-        Client, CoordinatorKeyType, build_find_coordinator, coordinator_endpoint,
-        security::ClientSecurity,
-    },
-    krabka_protocol::primitives::uuid::Uuid as WireUuid,
+    krabka_client_core::security::ClientSecurity,
+    krabka_raft::{deserialize_metadata_snapshot, metadata_snapshot_last_contained_log_timestamp},
     krabka_remote_storage::{ObjectEntry, Sha256Digest},
     krabka_remote_storage_topic::{KafkaMetadataEventLog, KafkaMetadataLogConfig},
     std::collections::{BTreeMap, BTreeSet},
@@ -157,8 +157,22 @@ async fn capture_secured_at(
     let mut absent: Vec<String> = Vec::new();
     let mut metadata_snapshot_sha256 = None;
     let mut rlmm_snapshot_sha256 = None;
+    let mut notes: Vec<String> = Vec::new();
 
     if let Some(log_dir) = log_dir {
+        // Read and vet the checkpoint before anything is uploaded. A refused
+        // capture then leaves no orphan artifact in the archive, and the
+        // controller cannot delete the chosen file while the RLMM snapshot
+        // uploads.
+        let checkpoint = match newest_metadata_checkpoint(log_dir) {
+            Some(checkpoint) => {
+                let bytes = read_capture_file(&checkpoint.path, METADATA_CHECKPOINT).await?;
+                refuse_format_time_checkpoint(&checkpoint, &bytes)?;
+                Some((checkpoint, bytes))
+            }
+            None => None,
+        };
+
         let rlmm = log_dir.join(RLMM_SNAPSHOT_RELATIVE);
         match read_capture_file(&rlmm, RLMM_SNAPSHOT).await {
             Ok(bytes) => {
@@ -180,9 +194,9 @@ async fn capture_secured_at(
             Err(error) => return Err(error),
         }
 
-        match newest_metadata_checkpoint(log_dir) {
-            Some(path) => {
-                let bytes = read_capture_file(&path, METADATA_CHECKPOINT).await?;
+        match checkpoint {
+            Some((MetadataCheckpoint { path, .. }, bytes)) => {
+                notes.push(checkpoint_note(&bytes, captured_at_ms));
                 metadata_snapshot_sha256 = Some(Sha256Digest::of(&bytes));
                 artifacts.push(
                     upload(
@@ -261,10 +275,78 @@ async fn capture_secured_at(
             artifact.name, artifact.source, artifact.size_bytes, artifact.sha256
         );
     }
+    for note in &notes {
+        println!("  NOTE: {note}");
+    }
     for missing in &absent {
         println!("  WARNING: {missing}");
     }
     Ok(id)
+}
+
+/// Refuses a capture whose newest metadata checkpoint is the one `krabka
+/// format` wrote and holds no topic.
+///
+/// A plain format writes that checkpoint with the bootstrap records only. A
+/// restore from it brings back no topic configuration, and its report cannot
+/// say so, because the restore takes the checkpoint as the whole of the
+/// cluster's metadata. A capture is taken to be restored from, so the honest
+/// result is no capture.
+///
+/// A format that `krabka-restore` ran also writes its checkpoint at offset
+/// zero, but seeds the restored topics into it, so that one is captured.
+fn refuse_format_time_checkpoint(
+    checkpoint: &MetadataCheckpoint,
+    bytes: &[u8],
+) -> Result<(), BackupError> {
+    if !checkpoint.id.is_format_time() {
+        return Ok(());
+    }
+    let records = deserialize_metadata_snapshot(bytes).map_err(|error| {
+        BackupError::Integrity(format!(
+            "metadata checkpoint {}: {error}",
+            checkpoint.path.display()
+        ))
+    })?;
+    if holds_a_topic(&records) {
+        return Ok(());
+    }
+    Err(BackupError::StaleMetadata(format!(
+        "the newest metadata checkpoint is {}, the one `krabka format` wrote. It holds no \
+         topic, so a restore from it would bring back no topic configuration. The controller \
+         writes its next checkpoint after `metadata_max_snapshot_interval` (1 hour by \
+         default), or sooner once enough metadata is committed. Capture again after that, or \
+         lower `metadata_max_snapshot_interval`",
+        checkpoint.path.display()
+    )))
+}
+
+/// What a capture prints about the metadata checkpoint it took: how old its
+/// newest record is. A metadata change committed after the checkpoint, such as
+/// a topic config change, is not in the capture, and the age is how far back
+/// that window reaches.
+///
+/// The age comes from the checkpoint's own last-contained-record timestamp, not
+/// the file's modification time: a broker-only node writes the file when it
+/// fetches a snapshot, which can be long after the controller took it.
+fn checkpoint_note(bytes: &[u8], now_ms: u64) -> String {
+    let age = metadata_snapshot_last_contained_log_timestamp(bytes)
+        .ok()
+        .and_then(|timestamp| u64::try_from(timestamp).ok())
+        .filter(|timestamp| *timestamp > 0)
+        .map_or_else(
+            || "the age of its newest record is unknown".to_owned(),
+            |timestamp| {
+                format!(
+                    "its newest record is {}s old",
+                    now_ms.saturating_sub(timestamp) / 1000
+                )
+            },
+        );
+    format!(
+        "{METADATA_CHECKPOINT}: {age}. Metadata changes committed after it are not in \
+         this capture"
+    )
 }
 
 async fn capture_diskless_index(
@@ -707,50 +789,19 @@ async fn restore_offsets_secured(
         return Ok(offsets.offset_count());
     }
 
-    let topic_ids = topic_ids(bootstrap_server, &offsets, security.clone()).await?;
-    let client = Client::builder()
-        .bootstrap(bootstrap_server)
-        .client_id("krabka-backup")
-        .maybe_security(security)
-        .build()
-        .await
-        .map_err(|error| {
-            BackupError::Cluster(format!("cannot reach {bootstrap_server}: {error}"))
-        })?;
-
+    if offsets.offset_count() == 0 {
+        return Ok(0);
+    }
+    let mut admin = connect_admin(bootstrap_server, security).await?;
     let mut committed = 0;
     for group in &offsets.groups {
         if group.offsets.is_empty() {
             continue;
         }
-        let found = client
-            .send(build_find_coordinator(
-                &group.group,
-                CoordinatorKeyType::Group,
-            ))
-            .await
-            .map_err(|error| {
-                BackupError::Cluster(format!("FindCoordinator for {}: {error}", group.group))
-            })?;
-        let coordinator = coordinator_endpoint(&group.group, found).map_err(|error| {
-            BackupError::Cluster(format!("FindCoordinator for {}: {error}", group.group))
-        })?;
-        let response = client
-            .broker(coordinator.node_id)
-            .send(commit_request(group, &topic_ids))
-            .await
-            .map_err(|error| {
-                BackupError::Cluster(format!("OffsetCommit for {}: {error}", group.group))
-            })?;
-        let refusals = commit_refusals(&response);
-        if !refusals.is_empty() {
-            return Err(BackupError::Cluster(format!(
-                "OffsetCommit for {}: {}",
-                group.group,
-                refusals.join("; ")
-            )));
-        }
-        committed += group.offsets.len();
+        let result = admin
+            .alter_consumer_group_offsets(&group.group, &admin_offsets(group))
+            .await;
+        committed += commit_outcome(group, result)?;
         println!("{}: {} offsets committed", group.group, group.offsets.len());
     }
     Ok(committed)
@@ -808,40 +859,6 @@ async fn verify_offsets_boundary(
         ));
     }
     Ok(())
-}
-
-/// The topic id the restored cluster gave each topic the capture names.
-///
-/// `OffsetCommit` v10 puts the topic id on the wire instead of the name, so a
-/// commit that carried names only would silently commit nothing there.
-async fn topic_ids(
-    bootstrap_server: &str,
-    offsets: &GroupOffsetsFile,
-    security: Option<ClientSecurity>,
-) -> Result<BTreeMap<String, WireUuid>, BackupError> {
-    let names: BTreeSet<&str> = offsets
-        .groups
-        .iter()
-        .flat_map(|group| group.offsets.iter().map(|offset| offset.topic.as_str()))
-        .collect();
-    if names.is_empty() {
-        return Ok(BTreeMap::new());
-    }
-    let mut admin = connect_admin(bootstrap_server, security).await?;
-    let wanted: Vec<&str> = names.into_iter().collect();
-    let metadata = admin
-        .metadata(&wanted)
-        .await
-        .map_err(|error| BackupError::Cluster(format!("Metadata: {error}")))?;
-    Ok(metadata
-        .topics
-        .into_iter()
-        .filter_map(|topic| {
-            topic
-                .topic_id
-                .map(|id| (topic.name, WireUuid(id.into_bytes())))
-        })
-        .collect())
 }
 
 /// Read every group's committed offsets from a live cluster.
@@ -943,8 +960,8 @@ mod tests {
             BackupError, CAPTURE_ROOT, DISKLESS_WAL_INDEX, FileEd25519Signer, GROUP_OFFSETS,
             MANIFEST, MAX_SNAPSHOT_BYTES, METADATA_CHECKPOINT, RLMM_SNAPSHOT,
             RLMM_SNAPSHOT_RELATIVE, Sha256Digest, artifact_byte_limit, capture, check_capture_size,
-            list, newest_metadata_checkpoint, restore_offsets, upload_capped, verify,
-            verify_offsets_boundary,
+            checkpoint_note, list, newest_metadata_checkpoint, restore_offsets, upload_capped,
+            verify, verify_offsets_boundary,
         },
         crate::{
             archive::{Archive, ArchiveArgs},
@@ -954,6 +971,8 @@ mod tests {
             offsets::{CommittedOffset, GROUP_OFFSETS_VERSION, GroupOffsets, GroupOffsetsFile},
         },
         assert2::{assert, check},
+        krabka_ids::PartitionIndex,
+        krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord},
     };
 
     /// The RLMM snapshot bytes a fixture node holds. The capture copies bytes
@@ -1056,7 +1075,7 @@ mod tests {
         let path = if name == RLMM_SNAPSHOT {
             node.path().join(RLMM_SNAPSHOT_RELATIVE)
         } else {
-            newest_metadata_checkpoint(node.path()).unwrap()
+            newest_metadata_checkpoint(node.path()).unwrap().path
         };
         std::fs::OpenOptions::new()
             .write(true)
@@ -1071,19 +1090,15 @@ mod tests {
         } = archive_fixture();
         let error = capture(Some(node.path()), None, &args).await.unwrap_err();
         check!(error.to_string().contains(name));
-        let ids = store.child_directories(CAPTURE_ROOT).await.unwrap();
-        check!(ids.len() == usize::from(name == METADATA_CHECKPOINT));
-        for id in ids {
-            check!(store.get(&capture_key(&id, RLMM_SNAPSHOT)).await.unwrap() == RLMM_BYTES);
-            for absent in [name, MANIFEST] {
-                check!(matches!(
-                    store.get(&capture_key(&id, absent)).await,
-                    Err(BackupError::ObjectStore(
-                        krabka_object_store::ObjectStoreError::NotFound(_)
-                    ))
-                ));
-            }
-        }
+        // Both local snapshots are read before the first upload, so either
+        // refusal leaves the archive untouched.
+        check!(
+            store
+                .child_directories(CAPTURE_ROOT)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -1402,6 +1417,206 @@ mod tests {
         check!(manifest.artifact(GROUP_OFFSETS) == None);
     }
 
+    /// The name `krabka format` gives its offset-zero checkpoint.
+    const FORMAT_TIME_CHECKPOINT: &str = "00000000000000000000-0000000000.checkpoint";
+
+    krabka_macros::single_replica_partition_fixture!(single_replica_partition);
+
+    /// The records `krabka-restore` seeds for one restored topic.
+    fn restored_topic() -> Vec<MetadataRecord> {
+        vec![
+            MetadataRecord::V1Topic(TopicRecord {
+                name: "ledger".to_owned(),
+                topic_id: uuid::Uuid::from_u128(1),
+                partitions: 1,
+                replication_factor: 1,
+            }),
+            MetadataRecord::V1Partition(PartitionRecord {
+                directories: vec![uuid::Uuid::nil()],
+                ..single_replica_partition("ledger", PartitionIndex(0), NodeId(1))
+            }),
+        ]
+    }
+
+    /// A node log directory that `krabka format` wrote with `seeded` records,
+    /// its offset-zero checkpoint moved into `subdir` and an RLMM snapshot
+    /// beside it. The returned guard owns the parent directory.
+    async fn formatted_node(
+        seeded: Vec<MetadataRecord>,
+        subdir: &str,
+    ) -> (tempfile::TempDir, std::path::PathBuf) {
+        let parent = tempfile::tempdir().expect("parent dir");
+        // The formatter refuses a directory that already exists.
+        let log_dir = parent.path().join("node");
+        let argv = [
+            "krabka-format",
+            "--log-dir",
+            &log_dir.display().to_string(),
+            "--cluster-id",
+            "8a2f4e1c-0000-4000-8000-00000000c1d0",
+            "--node-id",
+            "1",
+            "--no-initial-controllers",
+        ]
+        .map(ToOwned::to_owned);
+        check!(krabka_format::run_from_args_with_records(argv, seeded).await == 0);
+        let formatted = log_dir
+            .join("__cluster_metadata-0")
+            .join(FORMAT_TIME_CHECKPOINT);
+        let target = log_dir.join(subdir);
+        std::fs::create_dir_all(&target).expect("create the checkpoint dir");
+        std::fs::rename(&formatted, target.join(FORMAT_TIME_CHECKPOINT))
+            .expect("move the format-time checkpoint");
+        let rlmm = log_dir.join(RLMM_SNAPSHOT_RELATIVE);
+        std::fs::create_dir_all(rlmm.parent().expect("a parent")).expect("create the rlmm dir");
+        std::fs::write(rlmm, RLMM_BYTES).expect("write the rlmm snapshot");
+        (parent, log_dir)
+    }
+
+    #[yare::parameterized(
+        controller = { "__cluster_metadata-0" },
+        observer = { "__cluster_metadata-0/observer" },
+    )]
+    #[test_macro(tokio::test(flavor = "multi_thread"))]
+    async fn a_capture_refuses_a_plain_format_time_checkpoint_and_writes_nothing(subdir: &str) {
+        let (_parent, log_dir) = formatted_node(Vec::new(), subdir).await;
+        let ArchiveFixture { root, args, .. } = archive_fixture();
+
+        let error = capture(Some(&log_dir), None, &args)
+            .await
+            .expect_err("a capture of the format-time checkpoint fails");
+
+        check!(
+            matches!(&error, BackupError::StaleMetadata(_)),
+            "got: {error}"
+        );
+        let message = error.to_string();
+        check!(message.contains(FORMAT_TIME_CHECKPOINT), "got: {message}");
+        check!(
+            message.contains("metadata_max_snapshot_interval"),
+            "got: {message}"
+        );
+        check!(
+            std::fs::read_dir(root.path()).unwrap().next().is_none(),
+            "the refused capture wrote no artifact"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_undecodable_format_time_checkpoint_is_an_integrity_failure_that_writes_nothing() {
+        let log_dir = node_with_rlmm();
+        let metadata = log_dir.path().join("__cluster_metadata-0");
+        std::fs::create_dir_all(&metadata).expect("create the checkpoint dir");
+        std::fs::write(metadata.join(FORMAT_TIME_CHECKPOINT), CHECKPOINT_BYTES)
+            .expect("write a damaged format-time checkpoint");
+        let ArchiveFixture { root, args, .. } = archive_fixture();
+
+        let error = capture(Some(log_dir.path()), None, &args)
+            .await
+            .expect_err("a damaged checkpoint fails the capture");
+
+        check!(matches!(&error, BackupError::Integrity(_)), "got: {error}");
+        check!(
+            error.to_string().contains(FORMAT_TIME_CHECKPOINT),
+            "got: {error}"
+        );
+        check!(
+            std::fs::read_dir(root.path()).unwrap().next().is_none(),
+            "the failed capture wrote no artifact"
+        );
+    }
+
+    #[yare::parameterized(
+        controller = { "__cluster_metadata-0" },
+        observer = { "__cluster_metadata-0/observer" },
+    )]
+    #[test_macro(tokio::test(flavor = "multi_thread"))]
+    async fn a_capture_takes_the_format_time_checkpoint_a_restore_seeded(subdir: &str) {
+        let (_parent, log_dir) = formatted_node(restored_topic(), subdir).await;
+        let checkpoint = std::fs::read(log_dir.join(subdir).join(FORMAT_TIME_CHECKPOINT))
+            .expect("read the seeded checkpoint");
+        let ArchiveFixture {
+            root: _root,
+            args,
+            store,
+        } = archive_fixture();
+
+        let id = capture(Some(&log_dir), None, &args)
+            .await
+            .expect("a capture of a restored node succeeds");
+
+        let manifest = capture_manifest(&store, &id).await;
+        check!(
+            manifest
+                .artifact(METADATA_CHECKPOINT)
+                .map(|a| a.sha256.clone())
+                == Some(sha256_hex(&checkpoint))
+        );
+    }
+
+    #[yare::parameterized(
+        an_hour_old = { 1_700_000_000_000, 1_700_003_600_000, "its newest record is 3600s old" },
+        no_timestamp = { 0, 1_700_003_600_000, "the age of its newest record is unknown" },
+    )]
+    fn the_checkpoint_note_gives_the_age_of_its_newest_record(
+        last_contained_ms: i64,
+        now_ms: u64,
+        age: &str,
+    ) {
+        let bytes = krabka_raft::serialize_metadata_snapshot(
+            &MetadataImage::new(uuid::Uuid::from_u128(7)),
+            last_contained_ms,
+        )
+        .expect("serialize a checkpoint");
+
+        check!(
+            checkpoint_note(&bytes, now_ms)
+                == format!(
+                    "cluster-metadata.checkpoint: {age}. Metadata changes committed after it \
+                     are not in this capture"
+                )
+        );
+    }
+
+    #[test]
+    fn the_checkpoint_note_of_an_undecodable_checkpoint_has_no_age() {
+        check!(
+            checkpoint_note(CHECKPOINT_BYTES, 1)
+                == "cluster-metadata.checkpoint: the age of its newest record is unknown. \
+                    Metadata changes committed after it are not in this capture"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_capture_takes_a_controller_checkpoint_past_the_format_time_one() {
+        let log_dir = node_with_rlmm();
+        let metadata = log_dir.path().join("__cluster_metadata-0");
+        std::fs::create_dir_all(&metadata).expect("create the checkpoint dir");
+        std::fs::write(
+            metadata.join("00000000000000000000-0000000000.checkpoint"),
+            b"format-time",
+        )
+        .expect("write the format-time checkpoint");
+        write_checkpoint(log_dir.path());
+        let ArchiveFixture {
+            root: _root,
+            args,
+            store,
+        } = archive_fixture();
+
+        let id = capture(Some(log_dir.path()), None, &args)
+            .await
+            .expect("a capture past the format-time checkpoint succeeds");
+
+        let manifest = capture_manifest(&store, &id).await;
+        check!(
+            manifest
+                .artifact(METADATA_CHECKPOINT)
+                .map(|a| a.sha256.clone())
+                == Some(sha256_hex(CHECKPOINT_BYTES))
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_capture_reports_each_input_it_did_not_find_and_takes_the_other() {
         let log_dir = tempfile::tempdir().expect("log dir");
@@ -1700,7 +1915,7 @@ mod tests {
         write_offsets_capture(&store, "0000000000000001", &offsets, &offsets).await;
         let address = closed_address();
 
-        // The topic ids come first, so this is the Metadata lookup failing.
+        // The admin client's bootstrap connection is the first thing to fail.
         let error = restore_offsets("latest", &address, false, &args)
             .await
             .expect_err("a commit cannot reach a cluster that is not there");

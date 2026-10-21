@@ -61,6 +61,7 @@ pub use self::{
     active_producers::ActiveProducer,
     compaction::CompactionContext,
     control::BARRIER_CONTROL_TYPE,
+    maintenance::{DueDeletions, FailedDeletion},
     read::{RawRead, ReadOutput},
     tiering::{ActiveSegmentExport, SegmentExport},
     verbatim::VerbatimBatch,

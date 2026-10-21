@@ -34,13 +34,13 @@ use {
 /// `Produce` wire `api_key`.
 const PRODUCE_KEY: i16 = 0;
 /// `Fetch` wire `api_key`.
-const FETCH_KEY: i16 = 1;
+pub(super) const FETCH_KEY: i16 = 1;
 /// The `Produce` version these tests drive: flexible, and its response carries
 /// `throttle_time_ms`.
 const PRODUCE_VERSION: i16 = 11;
 /// The `Fetch` version these tests drive: flexible, and its response carries
 /// `throttle_time_ms` first.
-const FETCH_VERSION: i16 = 12;
+pub(super) const FETCH_VERSION: i16 = 12;
 
 /// Stands in for a client `request.timeout.ms` well inside a mute window. A
 /// response that has to beat it, or a muted read that has to outlast it, is
@@ -59,13 +59,15 @@ const ONE_WINDOW_CEILING: Duration = Duration::from_millis(1900);
 const MUTE_LIFT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A quota config key and the value it is seeded with.
-struct AnonymousQuota<'a> {
+pub(super) struct AnonymousQuota<'a> {
     key: &'a str,
     value: f64,
 }
 
 /// An [`AnonymousQuota`] of `key` set to `value`.
-const fn quota(key: &str, value: f64) -> AnonymousQuota<'_> { AnonymousQuota { key, value } }
+pub(super) const fn quota(key: &str, value: f64) -> AnonymousQuota<'_> {
+    AnonymousQuota { key, value }
+}
 
 /// Starts a broker whose quota throttle caps at `throttle_max`, and seeds
 /// `quotas` against the ANONYMOUS user.
@@ -102,7 +104,7 @@ async fn broker_with_anonymous_quotas(
 /// connection for `throttle_max` on the very next quota-charged request, so a
 /// topic created through the wire protocol afterwards would eat the mute
 /// window this function's caller is trying to test around.
-async fn seed_anonymous_quotas(handle: &BrokerHandle, quotas: &[AnonymousQuota<'_>]) {
+pub(super) async fn seed_anonymous_quotas(handle: &BrokerHandle, quotas: &[AnonymousQuota<'_>]) {
     let records: Vec<MetadataRecord> = quotas
         .iter()
         .map(|AnonymousQuota { key, value }| {
@@ -138,13 +140,13 @@ async fn seed_anonymous_quotas(handle: &BrokerHandle, quotas: &[AnonymousQuota<'
 /// Accepts one PLAINTEXT connection and serves it through the real dispatch
 /// loop. It returns the join handle for the loop and a client already framed
 /// against it.
-async fn connect_to_serve_loop(
+pub(super) async fn connect_to_serve_loop(
     handle: &BrokerHandle,
 ) -> (tokio::task::JoinHandle<()>, Framed<TcpStream, KafkaCodec>) {
     plaintext_loop(handle.broker_arc_for_test()).await
 }
 
-async fn create_topic(framed: &mut Framed<TcpStream, KafkaCodec>, topic: &str) {
+pub(super) async fn create_topic(framed: &mut Framed<TcpStream, KafkaCodec>, topic: &str) {
     let body = encoded(&configured_topic_request().topic(topic).call(), 7);
     send_request(framed, 19, 7, 1, &body).await;
     let response = response_frame(
@@ -158,7 +160,10 @@ async fn create_topic(framed: &mut Framed<TcpStream, KafkaCodec>, topic: &str) {
 
 /// Writes a v0 `ApiVersions` request, the cheapest frame that still reaches a
 /// real handler through the whole serve loop.
-async fn send_api_versions(framed: &mut Framed<TcpStream, KafkaCodec>, correlation_id: i32) {
+pub(super) async fn send_api_versions(
+    framed: &mut Framed<TcpStream, KafkaCodec>,
+    correlation_id: i32,
+) {
     let frame = request_frame()
         .api_key(super::API_VERSIONS_KEY)
         .correlation_id(correlation_id)
@@ -169,7 +174,7 @@ async fn send_api_versions(framed: &mut Framed<TcpStream, KafkaCodec>, correlati
 
 /// Writes a flexible request frame — a v2 request header, with its trailing
 /// tagged-fields byte — carrying an encoded `body`.
-async fn send_request(
+pub(super) async fn send_request(
     framed: &mut Framed<TcpStream, KafkaCodec>,
     api_key: i16,
     version: i16,

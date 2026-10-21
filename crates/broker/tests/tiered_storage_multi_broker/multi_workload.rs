@@ -13,6 +13,7 @@ use {
     crate::{
         RECORDS, TOPIC,
         multi_client::topic_id_for,
+        multi_cluster::local_log_files,
         support::{
             client::produce_batch,
             produce::{ProduceAcknowledgements, ProduceTimeoutMillis},
@@ -166,21 +167,8 @@ pub(crate) async fn produce_and_await_remote_segments(
 /// disk: the *global* log start does not move when a segment is merely
 /// evicted, only when it is deleted from the tier as well.
 pub(crate) fn local_segment_bases(partition_dir: &Path) -> Vec<i64> {
-    let Ok(entries) = std::fs::read_dir(partition_dir) else {
-        return Vec::new();
-    };
-    let mut bases: Vec<i64> = entries
-        .flatten()
-        .filter_map(|entry| {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("log") {
-                return None;
-            }
-            path.file_stem()
-                .and_then(|stem| stem.to_str())
-                .and_then(|stem| stem.parse::<i64>().ok())
-        })
-        .collect();
-    bases.sort_unstable();
-    bases
+    local_log_files(partition_dir)
+        .into_iter()
+        .map(|(base, _)| base)
+        .collect()
 }

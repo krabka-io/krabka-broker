@@ -14,10 +14,10 @@ use {
             FIRST_SESSION_ID, FetchSessionId, INITIAL_EPOCH, INVALID_SESSION_ID, next_epoch,
             session_id_is_reserved,
         },
-        state::{CachedPartitionState, FetchSessionKey},
+        state::{CachedPartitionState, FetchSessionKey, SessionPartitions},
     },
     qubit_clock::MonotonicClock as _,
-    std::{collections::HashMap, sync::atomic::Ordering},
+    std::sync::atomic::Ordering,
 };
 
 impl FetchSessionCache {
@@ -87,8 +87,8 @@ impl FetchSessionCache {
             return INVALID_SESSION_ID;
         };
 
-        let partitions: HashMap<FetchSessionKey, CachedPartitionState> =
-            partitions.into_iter().collect();
+        // Kafka's `FullFetchContext` caches the partitions in request order.
+        let partitions: SessionPartitions = partitions.into_iter().collect();
         let session = FetchSession {
             id,
             // Client's first incremental request after a new-session

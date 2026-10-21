@@ -12,7 +12,7 @@ use {
         replica_state::ReplicaState,
     },
     arc_swap::ArcSwap,
-    krabka_log::Log,
+    krabka_log::{DueDeletions, FailedDeletion, Log},
     std::{
         path::PathBuf,
         sync::{Arc, Mutex},
@@ -100,6 +100,57 @@ pub(super) async fn run_log_mutation<T: Send + 'static>(
         flag_storage_failure(err, storage.log_dir, storage.registry);
     }
     result
+}
+
+/// How long the writer waits before it retries a failed maintenance pass or
+/// a failed deletion of retired files.
+pub(super) const MAINTENANCE_RETRY: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Delete the retired segment files that a maintenance pass took out of the
+/// log, on the blocking pool and off the writer.
+///
+/// Unlinking a segment file drops its page cache, which takes tens of
+/// milliseconds a file on a loaded disk, and a retention pass retires several
+/// files at once. Run under the log mutex, or awaited by the writer, those
+/// unlinks held every append and read of the partition for the whole batch:
+/// the acks=all stalls of #1394. Kafka deletes retired files from its
+/// scheduler, outside the log lock, in the same way.
+///
+/// A failed deletion hands the files back to the log, due again after
+/// [`MAINTENANCE_RETRY`], and reports the error to the log-dir registry as any
+/// other storage failure of the writer does.
+pub(super) fn delete_retired_files(
+    due: DueDeletions,
+    log: &Arc<Mutex<Log>>,
+    log_dir: &Arc<ArcSwap<PathBuf>>,
+    registry: &LogDirRegistry,
+) {
+    if due.is_empty() {
+        return;
+    }
+    let log = Arc::clone(log);
+    let log_dir = Arc::clone(log_dir);
+    let registry = registry.clone();
+    tokio::spawn(async move {
+        let result = run_log_mutation(
+            move || {
+                due.delete().map_err(|FailedDeletion { error, remaining }| {
+                    let retry_at = std::time::SystemTime::now() + MAINTENANCE_RETRY;
+                    lock_log(&log).restore_deletions(remaining, retry_at);
+                    BrokerError::from(error)
+                })
+            },
+            "retired file deletion panicked",
+            StorageStatus {
+                log_dir: &log_dir,
+                registry: &registry,
+            },
+        )
+        .await;
+        if let Err(error) = result {
+            tracing::warn!(%error, "deleting retired segment files failed");
+        }
+    });
 }
 
 /// Read the writer-owned watermark, then run one clocked maintenance pass

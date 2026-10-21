@@ -324,7 +324,9 @@ krabka_macros::broker_config! {
         pub barrier_max_topics_per_group: usize,
 
         // identity.
-        /// Broker id reported in `Metadata` responses. Default: 1.
+        /// Broker id reported in `Metadata` responses. Kafka's `broker.id`:
+        /// it must equal [`node_id`][Self::node_id], or
+        /// [`validate`][Self::validate] refuses the config. Default: 1.
         pub broker_id: i32,
 
         /// `KRaft` `process.roles`. It controls whether this node is a metadata
@@ -383,7 +385,8 @@ krabka_macros::broker_config! {
         pub stamp_source: Option<Arc<dyn krabka_log::StampSource>>,
 
         // quorum.
-        /// Raft node id. Conventionally equal to `broker_id as NodeId`.
+        /// Raft node id, Kafka's `node.id`. It must equal
+        /// [`broker_id`][Self::broker_id].
         pub node_id: NodeId,
 
         /// Address the controller listener binds on. `KRaft` convention: same
@@ -414,9 +417,9 @@ krabka_macros::broker_config! {
         /// `meta.properties` at boot. Identifies which voter this node *is*.
         pub directory_id: uuid::Uuid,
 
-        /// UUID for this broker process invocation. The broker keeps it in
-        /// `{log_dir}/incarnation_id` and reloads it on restart. The internal
-        /// `load_or_generate` helper sets it before self-registration. Tests
+        /// UUID for this broker process invocation. Startup draws a new one
+        /// before self-registration, as Kafka's `BrokerLifecycleManager` does
+        /// for every process, so a restart is a new incarnation. Tests
         /// generate a random UUID for each call through [`Self::for_tests`].
         pub incarnation_id: uuid::Uuid,
 
@@ -457,22 +460,27 @@ krabka_macros::broker_config! {
         /// Default 30s.
         pub replica_lag_time_max: Time,
 
-        /// Controller election timeout, covering both Kafka's
-        /// `controller.quorum.election.timeout.ms` and its
-        /// `controller.quorum.fetch.timeout.ms`. Default 5s.
+        /// Controller quorum fetch timeout, Kafka's
+        /// `controller.quorum.fetch.timeout.ms`. Default 2s, as in Kafka.
         ///
-        /// One extent drives three deadlines in the `KRaft` engine. It is the
-        /// base of an electing voter's randomized election timer, before the
-        /// per-(node, epoch) jitter the core adds. It is the follower and
-        /// observer fetch watchdog, so it bounds how long a lost leader goes
-        /// unnoticed. And 1.5x of it -- Kafka's
+        /// It is the follower and observer fetch watchdog in the `KRaft`
+        /// engine, so it bounds how long a lost leader goes unnoticed before
+        /// a voter starts an election. And 1.5x of it -- Kafka's
         /// `LeaderState.CHECK_QUORUM_TIMEOUT_FACTOR` -- is the leader's
         /// check-quorum window: a leader that a majority of the voters has
         /// not fetched from within that window resigns rather than keep
         /// answering as the leader of an epoch the quorum has replaced.
+        pub controller_fetch_timeout: Time,
+
+        /// Controller election timeout, Kafka's
+        /// `controller.quorum.election.timeout.ms`. Default 1s, as in Kafka.
         ///
-        /// The default is conservative and avoids a split vote on slow
-        /// runners.
+        /// It is the base of a candidate's randomized election timer: each
+        /// election waits this long plus a jitter in `[0, timeout)`, like
+        /// Kafka's random election timeout. Two voters whose fetch timers
+        /// expired together and split the vote therefore retry within one to
+        /// two election timeouts, and the jitter makes a second split
+        /// unlikely.
         pub controller_election_timeout: Time,
 
         /// Leader heartbeat cadence. Default 500ms. The `KRaft` engine
@@ -480,14 +488,16 @@ krabka_macros::broker_config! {
         /// missed the original announcement, or an old leader that
         /// rejoined, re-attaches without waiting for an election.
         /// Validation rejects a value that is not below
-        /// `controller_election_timeout`.
+        /// `controller_fetch_timeout`.
         pub controller_heartbeat_interval: Time,
         /// Whether the heartbeat interval was explicitly configured. An
         /// omitted value leaves the engine on its derived cadence of
-        /// `controller_election_timeout / 3`, with a floor of one
+        /// `controller_fetch_timeout / 3`, with a floor of one
         /// millisecond.
         pub controller_heartbeat_interval_explicit: bool,
-        /// Consecutive follower fetch misses tolerated before a new election.
+        /// Consecutive fetch misses an observer tolerates before it looks for the
+        /// leader again. A voter starts an election after one fetch timeout, as
+        /// Kafka does.
         pub controller_fetch_miss_limit: ControllerFetchMissLimit,
         /// Capacity of the metadata Raft engine command queue.
         pub metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity,
@@ -853,14 +863,16 @@ krabka_macros::broker_config! {
         /// `usize::MAX`, which is unlimited.
         pub max_connections_per_ip: usize,
 
-        /// How long a connection may go without a complete request frame
-        /// before the broker closes it. Matches Apache Kafka's
+        /// How long a connection may go with no socket activity before the
+        /// broker closes it. Matches Apache Kafka's
         /// `connections.max.idle.ms`, whose default is 600000, ten
-        /// minutes. The deadline is armed the moment the per-connection
-        /// serve loop starts waiting for a frame and re-armed after every
-        /// frame it reads, so it reclaims a peer that completed the TCP
-        /// (and TLS) handshake and then sent nothing, and a peer that
-        /// vanished without a FIN. A non-positive value disables idle
+        /// minutes. As in Kafka's `Selector`, each read that brings bytes
+        /// and each response write restarts the window, and it keeps
+        /// running while a request is in its handler or a throttled
+        /// connection is muted. It reclaims a peer that completed the TCP
+        /// (and TLS) handshake and then sent nothing, a peer that vanished
+        /// without a FIN, and a request that outlasts it, whose response is
+        /// then dropped. A non-positive value disables idle
         /// expiry, the way Kafka arms no `IdleExpiryManager` for one.
         ///
         /// `None` is the operator having set nothing, and runs Kafka's

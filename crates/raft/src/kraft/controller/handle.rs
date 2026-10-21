@@ -5,7 +5,7 @@
 use {
     super::KraftController,
     crate::{
-        DelegationTokenMutation, SubmitChangeResult,
+        DelegationTokenMutation, RegistrationAdmission, SubmitChangeResult,
         error::RaftError,
         kraft::{
             event::Event,
@@ -66,6 +66,17 @@ impl KraftController {
     #[must_use]
     pub fn current_image(&self) -> Arc<MetadataImage> { self.image_rx.borrow().clone() }
 
+    /// The finalized-features epoch of the published [`MetadataImage`]: the
+    /// offset of the last record of the newest batch or snapshot that carried
+    /// a `FeatureLevelRecord`, or `-1` before the first. Kafka's controller
+    /// listener answers `ApiVersions` with it, from `FeaturesPublisher`.
+    ///
+    /// The engine publishes it after the image, so a caller that reads it
+    /// before [`Self::current_image`] never gets an epoch ahead of the
+    /// features.
+    #[must_use]
+    pub fn finalized_features_epoch(&self) -> i64 { *self.features_epoch_rx.borrow() }
+
     /// Watch the published [`MetadataImage`].
     #[must_use]
     pub fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> { self.image_rx.clone() }
@@ -102,12 +113,46 @@ impl KraftController {
         &self,
         records: Vec<krabka_metadata::MetadataRecord>,
     ) -> Result<SubmitChangeResult, RaftError> {
+        let records = self.admit_registrations(records).await?;
         self.ask(|reply| Command::SubmitChange {
             records,
             expected_image: None,
             reply,
         })
         .await?
+    }
+
+    /// Install the hook every batch that registers a broker anew passes through
+    /// on the leader. It can be installed once.
+    ///
+    /// # Errors
+    /// Returns an error if a hook is already installed.
+    pub fn install_registration_admission(
+        &self,
+        admission: Arc<dyn RegistrationAdmission>,
+    ) -> Result<(), &'static str> {
+        self.registration_admission
+            .set(admission)
+            .map_err(|_| "registration admission already installed")
+    }
+
+    /// `records` as the installed [`RegistrationAdmission`] admits them, when
+    /// this node leads and the batch registers a broker anew, and unchanged
+    /// otherwise. A follower forwards the batch as it was submitted, and the
+    /// leader that receives it admits it.
+    async fn admit_registrations(
+        &self,
+        records: Vec<krabka_metadata::MetadataRecord>,
+    ) -> Result<Vec<krabka_metadata::MetadataRecord>, RaftError> {
+        let registers_anew = records.iter().any(|record| {
+            matches!(record, krabka_metadata::MetadataRecord::V1BrokerRegistration(registration)
+                if registration.broker_epoch < 0)
+        });
+        let leads = *self.leader_rx.borrow() == Some(self.me);
+        match self.registration_admission.get() {
+            Some(admission) if registers_anew && leads => admission.admit(records).await,
+            _ => Ok(records),
+        }
     }
 
     /// Submit a leader-local mutation only while its admission image is current.
@@ -232,10 +277,24 @@ impl KraftController {
             .map_err(|_| RaftError::Shutdown)
     }
 
-    /// Stop the engine task and wait for its log to close.
-    pub async fn shutdown(&self) {
+    /// Stop the engine task gracefully and wait for its log to close.
+    ///
+    /// A leader resigns first and sends `EndQuorumEpoch`, and the engine keeps
+    /// taking part in the quorum until a successor is known or its graceful
+    /// shutdown window runs out, as Kafka's `KafkaRaftClient.shutdown` does. A
+    /// follower or an observer stops at once.
+    pub async fn shutdown(&self) { self.stop(Command::Shutdown).await; }
+
+    /// Stop the engine task at once, handing nothing over, and wait for its
+    /// log to close.
+    ///
+    /// This is the stop of a halted process: a fatal fault, or a test that
+    /// models a crash. The quorum finds out through its fetch watchdog.
+    pub async fn halt(&self) { self.stop(Command::Halt).await; }
+
+    async fn stop(&self, command: Command) {
         let mut image = self.image_rx.clone();
-        let _ = self.cmd_tx.send(Command::Shutdown).await;
+        let _ = self.cmd_tx.send(command).await;
         // The engine owns the image sender. Wait for it to drop before callers
         // can reopen or remove the log directory.
         while image.changed().await.is_ok() {}

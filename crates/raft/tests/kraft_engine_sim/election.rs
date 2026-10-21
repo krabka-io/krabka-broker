@@ -5,7 +5,9 @@
 //! livelock, which the staggered topologies cannot reach.
 
 use {
-    crate::harness::{await_single_leader, build_engine, start_engines, three_voter_network},
+    crate::harness::{
+        await_single_leader, build_engine, start_engines, three_voter_network, uniform,
+    },
     krabka_raft::kraft::NodeId,
     krabka_units::prelude::millis,
     std::time::Duration,
@@ -63,7 +65,7 @@ async fn bare_majority_two_of_three_elects_with_uniform_timeouts() {
             .me(id)
             .ids(&ids)
             .cluster_id(cid)
-            .election_timeout(millis(200))
+            .timeouts(uniform(millis(200)))
             .call();
         net.register(id, ctrl);
         dirs.push(dir);

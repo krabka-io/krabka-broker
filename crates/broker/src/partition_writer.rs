@@ -49,7 +49,10 @@ pub(crate) use self::append::run_produce_append_batch;
 pub(crate) use self::storage::{flag_storage_failure, storage_failure_error};
 use self::{
     compaction::handle_compact,
-    mutations::{ReplicationState, ResetMutation, handle_log_reset, handle_replicate, handle_trim},
+    mutations::{
+        ReplicationState, ResetMutation, handle_follow_leader_log_start, handle_log_reset,
+        handle_replicate, handle_trim,
+    },
     produce::{DisklessParts, ProduceGroup, ProduceSignals, ProduceStorage, handle_produce},
     retention::handle_retention,
     storage::{StorageStatus, lock_log},
@@ -156,19 +159,23 @@ pub async fn run_with_sequencer(
             let result = storage::run_log_mutation(
                 move || {
                     lock_log(&maintenance_log)
-                        .maintain(std::time::SystemTime::now())
+                        .maintain_deferring_deletions(std::time::SystemTime::now())
                         .map_err(BrokerError::from)
                 },
                 "log maintenance task panicked",
                 storage_status,
             )
             .await;
-            if let Err(error) = result {
-                tracing::warn!(%error, "log maintenance failed");
-                // Back off retries while still accepting control messages.
-                delay = Some(std::time::Duration::from_millis(100));
-            } else {
-                continue;
+            match result {
+                Ok(due) => {
+                    storage::delete_retired_files(due, &log, &log_dir, &log_dir_status);
+                    continue;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "log maintenance failed");
+                    // Back off retries while still accepting control messages.
+                    delay = Some(storage::MAINTENANCE_RETRY);
+                }
             }
         }
         let msg = match pending.take() {
@@ -288,10 +295,10 @@ pub async fn run_with_sequencer(
             WriterMessage::TrimToOffset { new_start, ack } => {
                 handle_trim(&log, storage_status, wal.as_ref(), new_start, ack).await;
             }
-            WriterMessage::SetLogConfig { config, ack } => {
-                lock_log(&log).set_config(config);
-                let _ = ack.send(());
+            WriterMessage::FollowLeaderLogStart { leader_start, ack } => {
+                handle_follow_leader_log_start(&log, storage_status, leader_start, ack).await;
             }
+            WriterMessage::ConfigChanged => {}
             WriterMessage::Retain { ack } => {
                 handle_retention((&log, &log_dir, &log_dir_status), &replica_state, ack).await;
             }

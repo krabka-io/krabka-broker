@@ -36,6 +36,13 @@ _GATES = {
     "registry-migration": 557,
     "snapshot-retention": 558,
 }
+
+# Gates a candidate can execute that its manifest does not list, by issue. The
+# loaded lifecycle runs beside the schema-2 gates, in a job of its own, so the
+# qualified eight-gate baselines stay valid as they were published.
+_SUPPLEMENTARY_GATES = {
+    "loaded-lifecycle": 1396,
+}
 _ARTIFACT_KINDS = {
     "krabka-io/krabka-broker": ["image"],
     "krabka-io/krabka-cli": ["binary"],
@@ -121,7 +128,8 @@ def candidate_identity(document):
 
 def runner_digest():
     """Bind candidate results to the reviewed adapters that performed the checks."""
-    return text_digest(json.encode([[name, gate_script(name)] for name in sorted(_GATES.keys())]))
+    names = sorted(_GATES.keys()) + sorted(_SUPPLEMENTARY_GATES.keys())
+    return text_digest(json.encode([[name, gate_script(name)] for name in names]))
 
 def result_problems(document, name, result):
     """Reject reused, incomplete, zero-check or incorrectly bound gate receipts."""
@@ -235,7 +243,13 @@ def manifest_problems(document, final = False):
         if not component.get("default_branch"):
             problems.append("%s: default_branch is empty" % repository)
         artifacts = component.get("artifacts", [])
-        if repository in artifact_kinds and sorted([artifact.get("kind", "") for artifact in artifacts]) != artifact_kinds[repository]:
+        kinds = sorted([artifact.get("kind", "") for artifact in artifacts])
+
+        # Older schema-2 manifests bind only the CLI binary; new sets can also
+        # bind the image used by the observability recipe's Gres setup.
+        if candidate and repository == "krabka-io/krabka-cli" and kinds == ["binary", "image"]:
+            kinds = ["binary"]
+        if repository in artifact_kinds and kinds != artifact_kinds[repository]:
             problems.append("%s: artifacts must preserve the %s slot" % (repository, ", ".join(artifact_kinds[repository])))
         for artifact in artifacts:
             if not artifact.get("kind") or not artifact.get("reference"):
@@ -319,7 +333,7 @@ def _impl(ctx: TaskContext) -> int:
     if ctx.args.gate:
         if document.get("schema") != 2 or document.get("runner_sha256") != runner_digest():
             fail("execution needs a schema-2 candidate bound to the current adapters")
-        if ctx.args.gate not in _GATES:
+        if ctx.args.gate not in _GATES and ctx.args.gate not in _SUPPLEMENTARY_GATES:
             fail("unknown qualification gate: " + ctx.args.gate)
         return run_gate(ctx, document, candidate_identity(document), ctx.args.gate, text_digest)
     ctx.std.io.stdout.write(

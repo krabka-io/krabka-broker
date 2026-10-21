@@ -6,10 +6,12 @@ use {
     super::{
         CommitWaiter, Engine, KraftController,
         offsets::{
-            assigned_record_offset, hwm_reaches_waiter, leader_alone_is_majority,
-            submit_waiter_need_offset, validate_append_result,
+            assigned_record_offset, hwm_reaches_waiter, submit_waiter_need_offset,
+            validate_append_result,
         },
-        records::{decode_committed_value, metadata_record_batch, next_batch_offset},
+        records::{
+            decode_committed_value, is_kip835_noop, metadata_record_batch, next_batch_offset,
+        },
     },
     crate::{
         DelegationTokenMutation, OffsetReservation, SubmitChangeResult, error::RaftError,
@@ -41,7 +43,7 @@ impl Engine {
                 })
             } else if !Arc::ptr_eq(expected, &self.image_tx.borrow()) {
                 Some(RaftError::StaleMetadataImage)
-            } else if self.log.hwm() < self.log.log_end_offset() {
+            } else if !self.uncommitted_tail_is_idle() {
                 Some(RaftError::UncommittedTail)
             } else {
                 None
@@ -181,7 +183,7 @@ impl Engine {
             let _ = reply.send(Ok(SubmitChangeResult::default()));
             return;
         }
-        self.on_submit_change_guarded(&records, reply, true);
+        self.on_submit_change_guarded(&records, reply, true, Submitter::Request);
     }
 
     fn consumption_matches_stored(
@@ -421,6 +423,42 @@ impl Engine {
         names
     }
 
+    /// Whether the log between the high watermark and the log end holds
+    /// nothing that changes the metadata image: only KIP-835 no-ops and
+    /// control batches, or nothing at all.
+    ///
+    /// An admission image is the committed image, so a plan built from it
+    /// still describes the log end when the uncommitted tail changes nothing.
+    /// The leader appends a no-op every `metadata.max.idle.interval.ms`
+    /// whatever else it does, and a check that refused every uncommitted
+    /// tail lost to it whenever the no-op landed just before the plan: the
+    /// liveness ticker's failover, which retries once a second, could then be
+    /// refused for as long as the two timers stayed in step. Kafka's
+    /// controller plans against its uncommitted state and has no such window.
+    ///
+    /// A tail that does not read counts as changing the image.
+    fn uncommitted_tail_is_idle(&self) -> bool {
+        let end = self.log.log_end_offset();
+        let mut cursor = self.log.hwm();
+        let mut idle = true;
+        while idle && cursor < end {
+            let batches = self
+                .log
+                .read_decoded(cursor, self.metadata_raft_fetch_max.size())
+                .unwrap_or_default();
+            let next = next_batch_offset(&batches).filter(|next| *next > cursor);
+            idle = next.is_some()
+                && batches
+                    .iter()
+                    .filter(|batch| !batch.attributes.is_control_batch())
+                    .flat_map(|batch| &batch.records)
+                    .filter_map(|record| record.value.as_ref())
+                    .all(|value| is_kip835_noop(value));
+            cursor = next.unwrap_or(end);
+        }
+        idle
+    }
+
     /// Whether a change to the registration of `node_id` must wait for the
     /// log to commit before the leader can decide it.
     ///
@@ -474,7 +512,19 @@ impl Engine {
         records: &[krabka_metadata::MetadataRecord],
         reply: oneshot::Sender<Result<SubmitChangeResult, RaftError>>,
     ) {
-        self.on_submit_change_guarded(records, reply, false);
+        self.on_submit_change_guarded(records, reply, false, Submitter::Request);
+    }
+
+    /// Append the activation batch of a log that holds no `metadata.version`.
+    ///
+    /// It is [`Self::on_submit_change`] except that it may reserve diskless
+    /// offsets before this leader's epoch commits. See [`Submitter::Activation`].
+    pub(super) fn on_activation_change(
+        &mut self,
+        records: &[krabka_metadata::MetadataRecord],
+        reply: oneshot::Sender<Result<SubmitChangeResult, RaftError>>,
+    ) {
+        self.on_submit_change_guarded(records, reply, false, Submitter::Activation);
     }
 
     fn on_submit_change_guarded(
@@ -482,6 +532,7 @@ impl Engine {
         records: &[krabka_metadata::MetadataRecord],
         reply: oneshot::Sender<Result<SubmitChangeResult, RaftError>>,
         delegation_token_guarded: bool,
+        submitter: Submitter,
     ) {
         if !self.core.role().is_leader() {
             let _ = reply.send(Err(RaftError::NotLeader {
@@ -495,11 +546,12 @@ impl Engine {
         // refusal is transient, as the refusal of a compare-and-set behind
         // an uncommitted tail is, so it is the same error. A broker then
         // tells the refusal apart from a failed reservation, and the forward
-        // path keeps it.
+        // path keeps it. The activation batch is the exception.
         if records
             .iter()
             .any(|record| matches!(record, MetadataRecord::V1PartitionOffsetAdvance(_)))
             && !epoch_ready
+            && submitter == Submitter::Request
         {
             let _ = reply.send(Err(RaftError::UncommittedTail));
             return;
@@ -718,12 +770,11 @@ impl Engine {
             creates,
             result,
             reply,
+            _processing: self.turn.take(),
         });
         // Drive a self-fetch so the core recomputes the HWM (single voter
         // commits immediately; multi-voter commits when followers fetch).
-        if leader_alone_is_majority(self.core.quorum_state().majority(), self.core.is_voter()) {
-            self.advance_and_apply(self.log.log_end_offset());
-        }
+        self.advance_if_single_voter();
         self.try_resolve_waiters();
     }
 
@@ -918,6 +969,24 @@ fn replay_value_blobs(blobs: &[bytes::Bytes], image: &mut MetadataImage) -> Resu
         image.apply(&decoded);
     }
     Ok(())
+}
+
+/// Who appends a batch, which decides when the batch may reserve diskless
+/// offsets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Submitter {
+    /// A broker or client request. It reserves offsets only once this
+    /// leader's epoch commits, so every reservation an earlier leader left
+    /// uncommitted is committed and folded in, or truncated, first.
+    Request,
+    /// The activation batch: the bootstrap records of a log that holds no
+    /// `metadata.version`. It is this epoch's first write after its
+    /// `LeaderChange`, on a log that holds no earlier record, so no earlier
+    /// leader left a reservation for it to fold in. A restored cluster's
+    /// bootstrap starts each diskless partition's next offset at its
+    /// materialized end with a `V1PartitionOffsetAdvance` (#1524), and the
+    /// activation batch has to carry it.
+    Activation,
 }
 
 #[cfg(test)]

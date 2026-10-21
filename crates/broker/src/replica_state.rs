@@ -409,11 +409,22 @@ impl ReplicaState {
         leader_leo: Offset,
         now: Instant,
     ) -> Offset {
+        self.record_follower_fetch(follower, follower_leo, leader_leo, now);
+        self.recompute_hw_at(leader_leo, now)
+    }
+
+    /// Track replication progress without treating it as a WAL durability vote.
+    pub(crate) fn record_follower_fetch(
+        &mut self,
+        follower: NodeId,
+        follower_leo: Offset,
+        leader_leo: Offset,
+        now: Instant,
+    ) {
         self.per_follower
             .entry(follower)
             .or_insert(FollowerStats::UNKNOWN)
             .record_fetch(follower_leo, leader_leo, now);
-        self.recompute_hw_at(leader_leo, now)
     }
 
     /// Recompute the high watermark after the leader's log end moved to

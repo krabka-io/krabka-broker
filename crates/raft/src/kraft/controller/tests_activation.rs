@@ -456,3 +456,65 @@ fn a_refused_activation_is_a_fatal_fault() {
         )
     );
 }
+
+/// The activation batch carries a restored diskless partition's next offset
+/// (#1524). A restore formats the target with a `V1PartitionOffsetAdvance`
+/// for each diskless partition, so the partition's first write is assigned
+/// its materialized end. A new leader reserves no offsets for a request until
+/// its epoch commits, but the activation batch is the first write of the
+/// epoch on a log that holds no earlier record, so the leader takes it, and
+/// the quorum commits it with the rest of the bootstrap.
+#[tokio::test]
+async fn the_activation_starts_a_restored_diskless_partition_at_its_materialized_end() {
+    let topic_id = uuid::Uuid::from_u128(1524);
+    let restored = vec![
+        feature(METADATA_VERSION_FEATURE, LATEST_PRODUCTION_METADATA_VERSION),
+        MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
+            name: "orders".to_owned(),
+            topic_id,
+            partitions: 1,
+            replication_factor: 1,
+        }),
+        MetadataRecord::V1Partition(crate::test_support::single_replica_partition(
+            "orders",
+            krabka_ids::PartitionIndex(0),
+            NodeId(1),
+        )),
+        MetadataRecord::V1PartitionOffsetAdvance(krabka_metadata::PartitionOffsetAdvanceRecord {
+            topic: "orders".to_owned(),
+            partition: 0,
+            count: 712,
+        }),
+    ];
+    let single: &[NodeId] = &[NodeId(1)];
+    let three: &[NodeId] = &[NodeId(1), NodeId(2), NodeId(3)];
+    for (what, voters) in [("one voter", single), ("three voters", three)] {
+        let (mut engine, _dir) = build_engine_only().ids(voters).call();
+        engine.activation = Activation {
+            bootstrap_records: restored.clone(),
+            default_min_insync_replicas: 2,
+        };
+
+        elect(&mut engine, voters);
+        acknowledge(&mut engine, voters);
+        let epoch = engine.core.quorum_state().leader_epoch;
+        engine.execute_one_local(Action::AppendLeaderChange { epoch });
+
+        let advances: Vec<MetadataRecord> = log_batches(&engine)
+            .into_iter()
+            .flat_map(|batch| match batch {
+                Batch::Metadata(records) => records,
+                Batch::Control => Vec::new(),
+            })
+            .filter(|record| matches!(record, MetadataRecord::V1PartitionOffsetAdvance(_)))
+            .collect();
+        check!(
+            (
+                engine.activation_fault.clone(),
+                advances,
+                engine.image.partition_next_offset("orders", 0),
+            ) == (None, vec![restored[3].clone()], Some(712)),
+            "{what}"
+        );
+    }
+}

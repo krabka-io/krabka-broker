@@ -6,8 +6,8 @@
 use {
     crate::{
         harness::{
-            STAGGERED_TIMEOUTS, await_single_leader, await_until, build_engine, shutdown_nodes,
-            three_voter_network, topic_record,
+            await_single_leader, await_until, build_engine, shutdown_nodes, three_voter_network,
+            topic_record, uniform,
         },
         sim_net::SimNet,
     },
@@ -18,11 +18,23 @@ use {
         NodeId, PeerSender,
         transport::{api_key, wire},
     },
+    krabka_units::prelude::{Time, secs},
     std::{
         collections::{BTreeSet, HashMap},
         time::Duration,
     },
 };
+
+/// Per-node election timeouts for these tests, staggered as the harness's
+/// `STAGGERED_TIMEOUTS` are, but wide enough that a scheduling stall on a
+/// loaded runner does not depose the leader mid-transfer.
+///
+/// None of these tests is about an election: each needs the leader it elected
+/// to stay the leader. A voter elects after one fetch timeout without a
+/// successful Fetch, as Kafka's does, and a leader resigns after 1.5 of its
+/// own without hearing from a majority, so the harness's 150 ms to 450 ms
+/// leave no room for a pause of a few hundred milliseconds.
+const SNAPSHOT_TIMEOUTS: [Time; 3] = [secs(1), secs(2), secs(3)];
 
 fn start_snapshot_pair(
     net: &SimNet,
@@ -39,7 +51,7 @@ fn start_snapshot_pair(
                 .me(id)
                 .ids(voters)
                 .cluster_id(cid)
-                .election_timeout(STAGGERED_TIMEOUTS[idx])
+                .timeouts(uniform(SNAPSHOT_TIMEOUTS[idx]))
                 .snapshot_interval_records(interval)
                 .call();
             net.register(id, ctrl);
@@ -193,7 +205,7 @@ async fn lagging_follower_catches_up_via_snapshot() {
         .me(3)
         .ids(&ids)
         .cluster_id(cid)
-        .election_timeout(STAGGERED_TIMEOUTS[2])
+        .timeouts(uniform(SNAPSHOT_TIMEOUTS[2]))
         .snapshot_interval_records(interval)
         .call();
     net.register(NodeId(3), lag_ctrl);

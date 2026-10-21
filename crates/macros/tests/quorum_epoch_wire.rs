@@ -55,6 +55,18 @@ impl QuorumLeader {
         self.id.and_then(|_| self.endpoint.clone())
     }
 }
+
+fn valid_leader() -> QuorumLeader {
+    QuorumLeader {
+        id: Some(7),
+        epoch: 9,
+        endpoint: Some(NodeEndpointEntry {
+            node_id: 7,
+            host: "host".into(),
+            port: 9093,
+        }),
+    }
+}
 fn epoch_to_wire(epoch: u32) -> i32 { i32::try_from(epoch).unwrap() }
 fn encode_body(message: &impl Encode, version: i16) -> Bytes {
     let mut output = BytesMut::with_capacity(128);
@@ -132,15 +144,7 @@ fn request_accessors_preserve_raw_values_borrowed_endpoints_and_topic_order() {
 
 #[yare::parameterized(v0 = { 0 }, v1 = { 1 })]
 fn response_encoders_keep_partition_leader_layouts(version: i16) {
-    let leader = QuorumLeader {
-        id: Some(7),
-        epoch: 9,
-        endpoint: Some(NodeEndpointEntry {
-            node_id: 7,
-            host: "host".into(),
-            port: 9093,
-        }),
-    };
+    let leader = valid_leader();
     {
         let begin_bytes = begin(0, 42, &leader, version);
         let decoded = BeginQuorumEpochResponse::decode(&mut &begin_bytes[..], version).unwrap();
@@ -168,15 +172,7 @@ fn response_encoders_keep_partition_leader_layouts(version: i16) {
 
 #[test]
 fn response_encoders_keep_bare_errors() {
-    let leader = QuorumLeader {
-        id: Some(7),
-        epoch: 9,
-        endpoint: Some(NodeEndpointEntry {
-            node_id: 7,
-            host: "host".into(),
-            port: 9093,
-        }),
-    };
+    let leader = valid_leader();
     let bare = b"\x00\x1f\x00\x00\x00\x00";
     assert!(begin(31, 42, &leader, 0).as_ref() == bare);
     assert!(end(31, 42, &leader, 0).as_ref() == bare);

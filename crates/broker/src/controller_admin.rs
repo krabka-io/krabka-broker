@@ -45,7 +45,8 @@ use {
         ControllerAdminRequest, ControllerAdminResponse, ControllerAdminRouteFuture,
         ControllerAdminRouter, ControllerApiVersion, RaftError,
     },
-    std::sync::{Arc, OnceLock, Weak},
+    std::sync::{Arc, Weak},
+    tokio::sync::watch,
 };
 
 /// `Envelope`'s api key. KIP-590 forwarding is the one controller-listener API
@@ -136,20 +137,46 @@ const SUPPORTED_APIS: &[ControllerApiVersion] = &[
 /// the broker's single Admin handler registry. The weak pointer avoids a
 /// controller -> router -> broker -> controller ownership cycle.
 pub(crate) struct BrokerControllerAdminRouter {
-    broker: OnceLock<Weak<Broker>>,
+    /// The broker, once bound. A watch rather than a cell, so a task can wait
+    /// for the bind without keeping the router alive.
+    broker: watch::Sender<Option<Weak<Broker>>>,
 }
 
 impl BrokerControllerAdminRouter {
-    pub(crate) const fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            broker: OnceLock::new(),
+            broker: watch::Sender::new(None),
         }
     }
 
     pub(crate) fn bind(&self, broker: &Arc<Broker>) -> Result<(), &'static str> {
-        self.broker
-            .set(Arc::downgrade(broker))
-            .map_err(|_| "controller Admin router already bound")
+        let mut bound = false;
+        self.broker.send_if_modified(|slot| {
+            bound = slot.is_none();
+            if bound {
+                *slot = Some(Arc::downgrade(broker));
+            }
+            bound
+        });
+        bound
+            .then_some(())
+            .ok_or("controller Admin router already bound")
+    }
+
+    /// The broker this router serves, once it is bound and while it runs.
+    pub(crate) fn broker(&self) -> Option<Arc<Broker>> {
+        self.broker.borrow().as_ref().and_then(Weak::upgrade)
+    }
+
+    /// Resolves with the broker once it is bound, or with `None` if the router
+    /// is dropped first or the broker has already stopped. The future does not
+    /// keep the router alive.
+    pub(crate) fn bound(&self) -> impl Future<Output = Option<Arc<Broker>>> + Send + 'static {
+        let mut bound = self.broker.subscribe();
+        async move {
+            let broker = bound.wait_for(Option::is_some).await.ok()?.clone()?;
+            broker.upgrade()
+        }
     }
 }
 
@@ -178,10 +205,9 @@ impl ControllerAdminRouter for BrokerControllerAdminRouter {
                 // these through ApiVersions negotiation.
                 return Ok(None);
             }
-            let broker =
-                self.broker.get().and_then(Weak::upgrade).ok_or_else(|| {
-                    RaftError::ControllerAdmin("broker startup is incomplete".into())
-                })?;
+            let broker = self
+                .broker()
+                .ok_or_else(|| RaftError::ControllerAdmin("broker startup is incomplete".into()))?;
 
             let principal = outer_principal(&request);
             if request.api_key == ENVELOPE_API_KEY {
@@ -546,6 +572,34 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    /// A wait for the bind started before it resolves with the broker the
+    /// router is bound to, and the router binds only once.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_wait_for_the_bind_resolves_with_the_bound_broker() {
+        let (handle, _controller_addr, _dir) = start_controller().await;
+        let router = BrokerControllerAdminRouter::new();
+        let bound = tokio::spawn(router.bound());
+        tokio::task::yield_now().await;
+        check!(!bound.is_finished());
+
+        check!(router.bind(handle.broker_for_test()).is_ok());
+        check!(router.bind(handle.broker_for_test()).is_err());
+
+        let broker = bound.await.expect("the wait for the bind");
+        check!(broker.is_some_and(|broker| Arc::ptr_eq(&broker, handle.broker_for_test())));
+    }
+
+    /// A wait for the bind does not keep the router alive, and ends without a
+    /// broker when the router is dropped unbound.
+    #[tokio::test]
+    async fn a_wait_for_the_bind_ends_when_the_router_is_dropped_unbound() {
+        let router = BrokerControllerAdminRouter::new();
+        let bound = router.bound();
+        drop(router);
+
+        check!(bound.await.is_none());
     }
 
     /// The controller listener serves before the broker binds itself to this

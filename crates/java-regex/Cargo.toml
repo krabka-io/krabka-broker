@@ -1,0 +1,27 @@
+[package]
+name = "krabka-java-regex"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Java's java.util.regex semantics in Rust: Pattern.matches, replaceAll and replaceFirst as JDK 25 reads them"
+repository = "https://github.com/krabka-io/krabka-broker"
+homepage = "https://github.com/krabka-io/krabka-broker"
+documentation = "https://docs.rs/krabka-java-regex"
+readme = "README.md"
+keywords = ["regex", "java", "kafka", "krabka", "pattern"]
+categories = ["text-processing"]
+include = ["src/**/*.rs", "README.md", "CHANGELOG.md"]
+
+[lints]
+workspace = true
+
+[dependencies]
+fancy-regex = { workspace = true }
+regex = { workspace = true }
+regex-syntax = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+assert2 = { workspace = true }
+yare = { workspace = true }

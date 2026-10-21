@@ -1,6 +1,6 @@
 use {
     super::{
-        Decision, RetainedBatch,
+        Decision,
         snapshot_tail::{check, check_duplicate, rebuilt},
         test_support::{RecordOffsets, producer_batch},
     },
@@ -30,21 +30,10 @@ async fn rebuilt_producer_retries_never_name_a_truncated_batch() {
         for sequence in [0, 2] {
             let checked = check(&state, (42, 7), (sequence, 1)).await;
             if i64::from(sequence) + 2 <= end {
-                assert!(
-                    checked.decision
-                        == Decision::Duplicate {
-                            base_offset: i64::from(sequence)
-                        }
-                );
-                assert!(
-                    checked.duplicate
-                        == Some(RetainedBatch {
-                            base_sequence: sequence,
-                            last_sequence: sequence + 1,
-                            base_offset: i64::from(sequence),
-                            last_offset: i64::from(sequence) + 1,
-                            timestamp: 0,
-                        })
+                check_duplicate(
+                    &checked,
+                    (sequence, sequence + 1),
+                    (i64::from(sequence), i64::from(sequence) + 1),
                 );
             } else {
                 assert!(!matches!(checked.decision, Decision::Duplicate { .. }));

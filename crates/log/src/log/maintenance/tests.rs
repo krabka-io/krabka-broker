@@ -176,6 +176,44 @@ fn a_failed_deferred_unlink_is_reported_and_retried() {
     check!(log.pending_deletes.is_empty());
 }
 
+/// A deferred deletion takes the due files out of the log without touching
+/// the disk, and the files go only when the caller deletes them.
+#[test]
+fn deferred_deletions_leave_the_files_until_the_caller_deletes_them() {
+    let TempLog { dir: _dir, mut log } = trimmed_two_segment_log(millis(1000));
+    let PendingDelete { deadline, paths } = log.pending_deletes[0].clone();
+    assert!(
+        log.maintain_deferring_deletions(deadline - Duration::from_millis(1))
+            .unwrap()
+            .is_empty()
+    );
+    let due = log.maintain_deferring_deletions(deadline).unwrap();
+    check!(!due.is_empty());
+    check!(log.maintenance_delay(deadline).is_none());
+    check!(paths.iter().all(|p| p.exists()));
+    due.delete().unwrap();
+    check!(paths.iter().all(|p| !p.exists()));
+}
+
+/// A deferred deletion that fails hands its files back, due again from the
+/// time the caller names, and the retry deletes them.
+#[test]
+fn a_failed_deferred_deletion_is_retried_from_the_time_the_caller_names() {
+    let TempLog { dir: _dir, mut log } = trimmed_two_segment_log(millis(1000));
+    let PendingDelete { deadline, paths } = log.pending_deletes[0].clone();
+    log.test_set_io(Arc::new(FailUnlink));
+    let failed = log.take_due_deletions(deadline).delete().unwrap_err();
+    check!(matches!(failed.error, LogError::Io(_)));
+    let backoff = Duration::from_millis(100);
+    log.restore_deletions(failed.remaining, deadline + backoff);
+    check!(log.maintenance_delay(deadline) == Some(backoff));
+    check!(paths.iter().all(|p| p.exists()));
+    log.test_set_io(file_io());
+    log.take_due_deletions(deadline + backoff).delete().unwrap();
+    check!(paths.iter().all(|p| !p.exists()));
+    check!(log.maintenance_delay(deadline + backoff).is_none());
+}
+
 #[test]
 fn owned_gzip_batches_use_the_live_level_and_verbatim_keeps_producer_bytes() {
     for allocation in [SegmentAllocation::OnWrite, SegmentAllocation::Preallocate] {
@@ -203,10 +241,10 @@ fn owned_gzip_batches_use_the_live_level_and_verbatim_keeps_producer_bytes() {
     }
 }
 
-#[test]
-fn compaction_keeps_retired_files_until_the_deadline() {
-    use crate::log::test_support::{KeyedRecord, compacting_segments, compaction_ctx, keyed_batch};
-    let TempLog { dir: _dir, mut log } = configured_test_log(compacting_segments());
+/// Append three versions of one key, one batch per segment on a log of
+/// `compacting_segments`, so a pass has two sealed segments to merge.
+fn append_three_versions_of_one_key(log: &mut Log) {
+    use crate::log::test_support::{KeyedRecord, keyed_batch};
     for value in [b"old", b"new", b"end"] {
         log.append(&mut keyed_batch(0, &[KeyedRecord {
             offset_delta: 0,
@@ -215,6 +253,13 @@ fn compaction_keeps_retired_files_until_the_deadline() {
         }]))
         .unwrap();
     }
+}
+
+#[test]
+fn compaction_keeps_retired_files_until_the_deadline() {
+    use crate::log::test_support::{compacting_segments, compaction_ctx};
+    let TempLog { dir: _dir, mut log } = configured_test_log(compacting_segments());
+    append_three_versions_of_one_key(&mut log);
     log.compact(&compaction_ctx()).unwrap();
     check!(!log.pending_deletes.is_empty());
     let paths: Vec<_> = log
@@ -232,6 +277,89 @@ fn compaction_keeps_retired_files_until_the_deadline() {
     log.maintain(deadline).unwrap();
     check!(paths.iter().all(|path| !path.exists()));
     check!(log.log_end_offset() == Offset(3));
+}
+
+/// The base offsets of the files in `dir` named `<base><suffix>`.
+fn bases_with_suffix(dir: &std::path::Path, suffix: &str) -> Vec<i64> {
+    let mut bases: Vec<i64> = std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .filter_map(|entry| {
+            let file_name = entry.file_name().into_string().ok()?;
+            file_name.strip_suffix(suffix)?.parse().ok()
+        })
+        .collect();
+    bases.sort_unstable();
+    bases
+}
+
+/// Kafka's `UnifiedLog.replaceSegments` deletes the producer-state snapshot of
+/// every segment a compaction replaces, unless the survivor starts at that
+/// segment's base. Two sealed segments, at 0 and 1, merge into one survivor
+/// at 0, so the snapshot taken when the log rolled to 1 goes, and the one at
+/// the active segment's base stays. Before this, every pass left the merged
+/// segments' snapshots behind, and a compacted partition kept one snapshot
+/// file per roll until it was reopened.
+#[test]
+fn compaction_deletes_the_producer_snapshots_of_the_segments_it_replaces() {
+    use crate::log::test_support::{compacting_segments, compaction_ctx, set_segment_size};
+    // How the retired files go: unlinked at once, reaped once their delay
+    // has passed, or reclaimed by the next open after a restart inside the
+    // delay, when the in-memory queue of pending deletions is gone. A reopen
+    // also writes a fresh snapshot at the log end, as Kafka's
+    // `rebuildProducerState` does.
+    for (how, file_delete_delay, restart, snapshots) in [
+        ("immediate deletion", Time::ZERO, false, vec![2]),
+        ("a reap past the delay", millis(60_000), false, vec![2]),
+        ("a restart inside the delay", millis(60_000), true, vec![
+            2, 3,
+        ]),
+    ] {
+        let config = LogConfig {
+            file_delete_delay,
+            ..compacting_segments()
+        };
+        let TempLog { dir, mut log } = configured_test_log(config.clone());
+        append_three_versions_of_one_key(&mut log);
+        // A rolled segment's snapshot and its compaction boundary are
+        // published by the rollover flush.
+        log.sync().unwrap();
+        check!(
+            bases_with_suffix(dir.path(), ".snapshot") == vec![1, 2],
+            "{how}: a snapshot at each roll"
+        );
+
+        // The pass groups by `segment.bytes`; widen it so that one pass
+        // merges both sealed segments into a survivor at 0.
+        set_segment_size(&mut log, krabka_units::mebibytes(1));
+        log.compact(&compaction_ctx()).unwrap();
+        if restart {
+            drop(log);
+            log = Log::open(dir.path(), config).unwrap();
+        } else if let Some(deadline) = log
+            .pending_deletes
+            .iter()
+            .map(|pending| pending.deadline)
+            .max()
+        {
+            log.maintain(deadline).unwrap();
+        }
+
+        let tombstones = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".deleted"))
+            .count();
+        check!(
+            (
+                bases_with_suffix(dir.path(), ".log"),
+                bases_with_suffix(dir.path(), ".snapshot"),
+                tombstones,
+                log.log_end_offset(),
+            ) == (vec![0, 2], snapshots, 0, Offset(3)),
+            "{how}"
+        );
+    }
 }
 
 #[test]

@@ -1,6 +1,6 @@
 //! Cluster formation and controller start-up: the [`Controller`] factory that
-//! validates the requested bootstrap mode against the on-disk log, opens or
-//! recovers the engine, binds the controller listener, and the on-disk state
+//! validates the requested bootstrap mode against the on-disk log, binds the
+//! controller listener, opens or recovers the engine, and the on-disk state
 //! probe the broker binary shares with that validation.
 
 use {
@@ -13,7 +13,7 @@ use {
             BootstrapMode, ControllerConfig, UnstableFeatureVersions, metadata_partition_dir,
         },
         error::RaftError,
-        kraft::{Activation, KraftController},
+        kraft::{Activation, KraftController, core::QuorumTimeouts},
         network::{OutboundDialer, PlaintextDialer, RealPeerSender},
         server,
         snapshot::SnapshotReader,
@@ -113,6 +113,22 @@ impl Controller {
             }
         }
 
+        // The controller listener binds before the engine opens, so a port
+        // that another process holds fails the start with no engine left
+        // running behind it.
+        let bind_error = |source| RaftError::ControllerListenerBind {
+            addr: config.controller_listen_addr,
+            source,
+        };
+        let listener = match prebound {
+            Some(l) => l,
+            None => bind_controller_listener(config.controller_listen_addr)
+                .await
+                .map_err(bind_error)?,
+        };
+        let actual_addr =
+            listener_address(&listener, config.controller_listen_addr).map_err(bind_error)?;
+
         let cluster_id = config.cluster_id.unwrap_or_else(Uuid::nil);
         let dialer: Arc<dyn OutboundDialer> = config
             .dialer
@@ -138,7 +154,10 @@ impl Controller {
             cluster_id,
             config.directory_id,
             voters.clone(),
-            config.election_timeout,
+            QuorumTimeouts {
+                election: config.election_timeout,
+                fetch: config.fetch_timeout,
+            },
             config.heartbeat_interval,
             config.controller_fetch_miss_limit,
             config.metadata_raft_command_queue_capacity,
@@ -153,29 +172,17 @@ impl Controller {
                 bootstrap_records: config.bootstrap_records.clone(),
                 default_min_insync_replicas: config.default_min_insync_replicas,
             },
+            Arc::clone(&config.event_queue_recorder),
+            |image| {
+                if let Some(refusal) =
+                    unsupported_feature_level(image, config.unstable_feature_versions)
+                {
+                    return Err(RaftError::FatalFault(refusal));
+                }
+                Ok(())
+            },
         )?;
 
-        // Kafka's `FeatureControlManager.replay(FeatureLevelRecord)` throws
-        // when a record's level is outside what this controller supports, so
-        // a log finalized at an unstable level does not start under a node that
-        // cannot serve it. The engine has replayed the log and the checkpoint
-        // by now, and `open` has published the image that replay left.
-        if let Some(refusal) =
-            unsupported_feature_level(&engine.current_image(), config.unstable_feature_versions)
-        {
-            engine.shutdown().await;
-            return Err(RaftError::FatalFault(refusal));
-        }
-
-        // Controller listener.
-        let listener = match prebound {
-            Some(l) => l,
-            None => bind_controller_listener(config.controller_listen_addr)
-                .await
-                .map_err(|e| RaftError::Storage(krabka_log::LogError::Io(e)))?,
-        };
-        let actual_addr = listener_address(&listener, config.controller_listen_addr)
-            .map_err(|e| RaftError::Storage(krabka_log::LogError::Io(e)))?;
         let shutdown = CancellationToken::new();
         let leader_rx = engine.watch_leader();
         let listener_task = tokio::spawn(server::run(
@@ -301,7 +308,7 @@ async fn stop_on_fatal_fault(
             continue;
         }
         shutdown.cancel();
-        engine.shutdown().await;
+        engine.halt().await;
         return;
     }
 }
@@ -519,6 +526,34 @@ mod tests {
                 panic!("Bootstrap on existing log must error but succeeded");
             }
         }
+    }
+
+    /// A controller listener whose port another socket holds fails the start
+    /// with a listener bind error that names the address and the cause. It is
+    /// not a storage error: the log directory is fine.
+    #[tokio::test]
+    async fn a_taken_controller_port_fails_with_a_listener_bind_error() {
+        let taken = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = taken.local_addr().expect("local address");
+        let dir = TempDir::new().unwrap();
+        let cfg = ControllerConfig {
+            controller_listen_addr: addr,
+            ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
+        };
+
+        let Err(error) = Controller::start(cfg).await else {
+            panic!("a controller started on a port another socket holds");
+        };
+
+        let message = error.to_string();
+        assert2::assert!(let RaftError::ControllerListenerBind { addr: failed, source } = error);
+        assert2::check!(failed == addr);
+        assert2::check!(source.kind() == std::io::ErrorKind::AddrInUse);
+        assert2::check!(
+            message == format!("unable to bind the controller listener to {addr}: {source}")
+        );
     }
 
     #[tokio::test]

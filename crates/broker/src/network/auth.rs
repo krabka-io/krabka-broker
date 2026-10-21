@@ -17,7 +17,6 @@
 #[cfg_attr(target_family = "wasm", path = "auth/gssapi/wasm.rs")]
 mod gssapi;
 mod handshake;
-mod java_regex;
 // The Kerberos `auth_to_local` rules belong to the GSSAPI stack, so the
 // wasm stand-in has no use for them.
 #[cfg(not(target_family = "wasm"))]
@@ -45,8 +44,8 @@ pub use self::{
     oauthbearer::handle_authenticate_oauthbearer_with_jwks_cache,
     plain::handle_authenticate_plain,
     response::generic_failure_message,
-    scram::handle_authenticate_scram,
+    scram::{ScramDisconnect, handle_authenticate_scram},
     ssl_principal_mapper::{SslPrincipalMapper, SslPrincipalRuleError},
     state::ConnectionAuth,
-    subject_dn::subject_dn_rfc2253,
+    subject_dn::{subject_alt_names, subject_dn_rfc2253},
 };

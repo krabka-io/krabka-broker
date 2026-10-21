@@ -5,7 +5,7 @@
 use {
     super::*,
     crate::{
-        MetadataLogConfig,
+        MetadataLogConfig, NoEventQueueRecorder,
         kraft::{Activation, transport::NullPeerSender},
     },
     krabka_units::prelude::{TimeExt as _, secs},
@@ -17,6 +17,17 @@ pub const TEST_RECV_TIMEOUT: Time = secs(1);
 
 /// Default election timeout for engines built by [`build`].
 pub const TEST_ELECTION_TIMEOUT: Time = secs(1);
+
+/// Default fetch timeout for engines built by [`build`]. It differs from
+/// [`TEST_ELECTION_TIMEOUT`], as Kafka's defaults do, so a timer drawn from the
+/// wrong one shows.
+pub const TEST_FETCH_TIMEOUT: Time = secs(2);
+
+/// [`TEST_ELECTION_TIMEOUT`] and [`TEST_FETCH_TIMEOUT`] together.
+pub const TEST_TIMEOUTS: QuorumTimeouts = QuorumTimeouts {
+    election: TEST_ELECTION_TIMEOUT,
+    fetch: TEST_FETCH_TIMEOUT,
+};
 
 /// The metadata log configuration of an engine under test: Kafka's segment
 /// defaults, no KIP-835 no-op records, so a test sees only the offsets its own
@@ -68,6 +79,7 @@ pub struct ControllerSetup<'a> {
     pub me: NodeId,
     pub ids: &'a [NodeId],
     pub election_timeout: Time,
+    pub fetch_timeout: Time,
     pub snapshot_interval_records: SnapshotRecordCount,
     pub heartbeat_interval: Option<Time>,
     pub controller_fetch_miss_limit: ControllerFetchMissLimit,
@@ -82,6 +94,7 @@ impl Default for ControllerSetup<'_> {
             me: NodeId(1),
             ids: &[NodeId(1), NodeId(2), NodeId(3)],
             election_timeout: TEST_ELECTION_TIMEOUT,
+            fetch_timeout: TEST_FETCH_TIMEOUT,
             snapshot_interval_records: SnapshotRecordCount(0),
             heartbeat_interval: None,
             controller_fetch_miss_limit: ControllerFetchMissLimit::default(),
@@ -97,6 +110,7 @@ pub fn build(
     #[builder(into, default = ControllerSetup::default().me)] me: NodeId,
     #[builder(default = ControllerSetup::default().ids)] ids: &'_ [NodeId],
     #[builder(default = ControllerSetup::default().election_timeout)] election_timeout: Time,
+    #[builder(default = ControllerSetup::default().fetch_timeout)] fetch_timeout: Time,
     #[builder(into, default = ControllerSetup::default().snapshot_interval_records)]
     snapshot_interval_records: SnapshotRecordCount,
     heartbeat_interval: Option<Time>,
@@ -108,11 +122,15 @@ pub fn build(
     metadata_raft_fetch_max: MetadataRaftFetchMax,
     #[builder(default = ControllerSetup::default().max_bytes_between_snapshots)]
     max_bytes_between_snapshots: krabka_units::ByteSize,
+    #[builder(default = Arc::new(NoEventQueueRecorder))] event_queue_recorder: Arc<
+        dyn EventQueueRecorder,
+    >,
 ) -> (KraftController, tempfile::TempDir) {
     let setup = ControllerSetup {
         me,
         ids,
         election_timeout,
+        fetch_timeout,
         snapshot_interval_records,
         heartbeat_interval,
         controller_fetch_miss_limit,
@@ -121,13 +139,17 @@ pub fn build(
         max_bytes_between_snapshots,
     };
     spawn_test_controller(setup.me, setup.ids, |config| {
-        config.election_timeout = setup.election_timeout;
+        config.timeouts = QuorumTimeouts {
+            election: setup.election_timeout,
+            fetch: setup.fetch_timeout,
+        };
         config.snapshot_interval_records = setup.snapshot_interval_records.0;
         config.heartbeat_interval = setup.heartbeat_interval;
         config.controller_fetch_miss_limit = setup.controller_fetch_miss_limit;
         config.metadata_raft_command_queue_capacity = setup.metadata_raft_command_queue_capacity;
         config.metadata_raft_fetch_max = setup.metadata_raft_fetch_max;
         config.max_bytes_between_snapshots = setup.max_bytes_between_snapshots;
+        config.event_queue_recorder = event_queue_recorder;
     })
 }
 
@@ -137,7 +159,7 @@ pub fn test_kraft_config(me: NodeId, cluster_id: uuid::Uuid, state: QuorumState)
         cluster_id,
         directory_id: uuid::Uuid::nil(),
         initial_state: state,
-        election_timeout: TEST_ELECTION_TIMEOUT,
+        timeouts: TEST_TIMEOUTS,
         heartbeat_interval: None,
         controller_fetch_miss_limit: ControllerFetchMissLimit::default(),
         metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity::default(),
@@ -149,6 +171,7 @@ pub fn test_kraft_config(me: NodeId, cluster_id: uuid::Uuid, state: QuorumState)
         metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
         metadata_log: test_metadata_log(),
         activation: Activation::default(),
+        event_queue_recorder: Arc::new(NoEventQueueRecorder),
     }
 }
 
@@ -181,6 +204,7 @@ pub fn open_test_controller_with(
     #[builder(default = voter_set (& [NodeId (1)]))] voters: VoterSet,
     #[builder(default = TEST_ELECTION_TIMEOUT)] election_timeout: krabka_units::Time,
     #[builder(default)] activation: Activation,
+    #[builder(default = |_| Ok(()))] validate_image: fn(&MetadataImage) -> Result<(), RaftError>,
 ) -> Result<KraftController, RaftError> {
     let setup = ControllerOpenSetup {
         cluster_id,
@@ -200,7 +224,10 @@ pub fn open_test_controller_with(
         cluster_id,
         uuid::Uuid::nil(),
         voters,
-        election_timeout,
+        QuorumTimeouts {
+            election: election_timeout,
+            fetch: TEST_FETCH_TIMEOUT,
+        },
         None,
         ControllerFetchMissLimit::default(),
         MetadataRaftCommandQueueCapacity::default(),
@@ -212,6 +239,8 @@ pub fn open_test_controller_with(
         MetadataSnapshotFetchMax::default(),
         test_metadata_log(),
         activation,
+        Arc::new(NoEventQueueRecorder),
+        validate_image,
     )
 }
 
@@ -279,7 +308,7 @@ pub fn build_engine_only(
     let core = QuorumStateMachine::new(
         me,
         QuorumState::bootstrap(uuid::Uuid::nil(), voter_set(ids)),
-        TEST_ELECTION_TIMEOUT,
+        TEST_TIMEOUTS,
     );
     let image = MetadataImage::new(uuid::Uuid::nil());
     let (image_tx, _image_rx) = watch::channel(Arc::new(image.clone()));
@@ -287,7 +316,7 @@ pub fn build_engine_only(
     let log_hwm_at_open = log.hwm().0;
     let initial_snapshot = super::queries::initial_quorum_snapshot(&core, &log, log_hwm_at_open, 0);
     let (quorum_tx, _quorum_rx) = watch::channel(initial_snapshot);
-    let (cmd_tx, _cmd_rx) = mpsc::channel(1);
+    let (cmd_tx, _cmd_rx) = CommandSender::channel(1);
     let held_epoch = core.quorum_state().leader_epoch;
     let was_leader = core.role().is_leader();
     let controls = KraftControlState::new(core.quorum_state().voters.clone(), 0);
@@ -300,13 +329,17 @@ pub fn build_engine_only(
             image,
             peers: Arc::new(NullPeerSender),
             image_tx,
+            features_epoch: -1,
+            features_epoch_tx: watch::channel(-1).0,
             leader_tx,
             quorum_tx,
             cmd_tx,
+            event_queue: EventQueueMeter::new(Arc::new(NoEventQueueRecorder)),
+            turn: None,
             fault_tx: watch::channel(None).0,
             data_dir: dir.path().to_path_buf(),
             clock_base,
-            election_timeout: TEST_ELECTION_TIMEOUT,
+            timeouts: TEST_TIMEOUTS,
             heartbeat_interval: None,
             controller_fetch_miss_limit,
             metadata_raft_fetch_max,
@@ -382,6 +415,25 @@ impl PeerSender for RecordingPeerSender {
             .expect("record peer send");
         Ok(self.response.clone())
     }
+}
+
+/// A spawned three-voter controller, voter 1, whose peer sends are captured and
+/// answered with `response`, under `election_timeout`.
+pub fn spawn_recording_controller(
+    timeouts: QuorumTimeouts,
+    response: bytes::Bytes,
+) -> (
+    KraftController,
+    tempfile::TempDir,
+    mpsc::UnboundedReceiver<CapturedPeerSend>,
+) {
+    let (sends, rx) = mpsc::unbounded_channel();
+    let (controller, dir) =
+        spawn_test_controller(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)], |config| {
+            config.timeouts = timeouts;
+            config.peers = Arc::new(RecordingPeerSender { sends, response });
+        });
+    (controller, dir, rx)
 }
 
 pub fn record_peer_sends(

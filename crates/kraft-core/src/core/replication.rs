@@ -220,7 +220,7 @@ impl QuorumStateMachine {
         skip_all,
         fields(node = self.me.0, epoch = self.state.leader_epoch, is_voter = self.is_voter())
     )]
-    fn transition_to_resigned(&mut self, now: SimInstant) -> Vec<Action> {
+    pub(super) fn transition_to_resigned(&mut self, now: SimInstant) -> Vec<Action> {
         let epoch = self.state.leader_epoch;
         let preferred_successors = self.preferred_successors();
         self.state.leader_id = None;
@@ -231,7 +231,7 @@ impl QuorumStateMachine {
                 deadline: self.election_deadline(now),
             }
         } else {
-            let fetch_deadline = now.saturating_add_ms(self.election_timeout_ms);
+            let fetch_deadline = now.saturating_add_ms(self.fetch_timeout_ms);
             self.role = Role::Observer {
                 leader_id: None,
                 fetch_deadline,
@@ -322,10 +322,30 @@ impl QuorumStateMachine {
         &mut self,
         log: &dyn LogView,
         leader_id: NodeId,
-        _leader_epoch: Epoch,
+        leader_epoch: Epoch,
         diverging: Option<LogOffsetMetadata>,
         now: SimInstant,
     ) -> Vec<Action> {
+        // Only an answer from the leader this replica follows, in its epoch,
+        // is a fetch it still waits on. Kafka's `maybeHandleCommonResponse`
+        // drops an answer from an older epoch, and the engine's leader fence
+        // (`fetch_response_mutation`) holds every other answer back before
+        // it reaches this method. A replica that has since voted in a newer
+        // epoch must not fetch, and so replicate, from the leader it left.
+        let following = match &self.role {
+            Role::Follower {
+                leader_id: following,
+                ..
+            }
+            | Role::Observer {
+                leader_id: Some(following),
+                ..
+            } => *following == leader_id,
+            _ => false,
+        };
+        if !following || leader_epoch != self.state.leader_epoch {
+            return Vec::new();
+        }
         // Kafka's `resetFetchTimeoutForSuccessfulFetch` also records that this
         // follower has now heard from its leader.
         if let Role::Follower {
@@ -348,7 +368,7 @@ impl QuorumStateMachine {
             })
             .into_iter()
             .collect();
-        let fetch_deadline = now.saturating_add_ms(self.election_timeout_ms);
+        let fetch_deadline = now.saturating_add_ms(self.fetch_timeout_ms);
         actions.extend([Action::SendFetch { leader_id }, Action::ResetTimer {
             kind: TimerKind::Fetch,
             deadline: fetch_deadline,
@@ -379,20 +399,60 @@ impl QuorumStateMachine {
         if self.is_voter() {
             self.start_election(log, now)
         } else {
-            self.state.leader_id = None;
-            let fetch_deadline = now.saturating_add_ms(self.election_timeout_ms);
-            self.role = Role::Observer {
-                leader_id: None,
-                fetch_deadline,
-            };
-            vec![
-                Action::PersistQuorumState,
-                Action::TransitionedTo(self.role.name()),
-                Action::ResetTimer {
-                    kind: TimerKind::Fetch,
-                    deadline: fetch_deadline,
-                },
-            ]
+            self.become_discovering_observer(now)
         }
+    }
+
+    /// A Fetch or Vote response came from a newer epoch that names no leader
+    /// yet.
+    ///
+    /// Kafka's `KafkaRaftClient.maybeTransition` moves the replica to
+    /// Unattached in that epoch. A voter arms its election timer as
+    /// `QuorumState.transitionToUnattached` does. An observer forgets the
+    /// leader it followed, which no longer leads, and becomes a discovering
+    /// observer at the new epoch, so that the engine asks a voter for the
+    /// leader at once, as Kafka's `pollUnattached` does through
+    /// `maybeSendFetchToAnyBootstrap`. An observer that ignored the newer
+    /// epoch would keep fetching from a replica that no longer leads, and it
+    /// would look for the leader only after its fetch timer had fired the
+    /// configured number of times.
+    #[tracing::instrument(
+        level = "info",
+        skip_all,
+        fields(node = self.me.0, epoch = self.state.leader_epoch, newer_epoch = epoch, is_voter = self.is_voter())
+    )]
+    pub(super) fn handle_leaderless_epoch(&mut self, epoch: Epoch, now: SimInstant) -> Vec<Action> {
+        if epoch <= self.state.leader_epoch {
+            return Vec::new();
+        }
+        if self.is_voter() {
+            let mut actions = Vec::new();
+            let deadline = self.unattached_election_deadline(epoch, now);
+            self.transition_to_unattached(epoch, deadline, &mut actions);
+            actions
+        } else {
+            self.state.leader_epoch = epoch;
+            self.state.voted_key = None;
+            self.become_discovering_observer(now)
+        }
+    }
+
+    /// Forget the leader and look for the current one: an observer with no
+    /// leader, whose fetch timer retries the discovery Fetch.
+    fn become_discovering_observer(&mut self, now: SimInstant) -> Vec<Action> {
+        self.state.leader_id = None;
+        let fetch_deadline = now.saturating_add_ms(self.fetch_timeout_ms);
+        self.role = Role::Observer {
+            leader_id: None,
+            fetch_deadline,
+        };
+        vec![
+            Action::PersistQuorumState,
+            Action::TransitionedTo(self.role.name()),
+            Action::ResetTimer {
+                kind: TimerKind::Fetch,
+                deadline: fetch_deadline,
+            },
+        ]
     }
 }

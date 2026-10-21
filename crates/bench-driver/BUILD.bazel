@@ -21,15 +21,42 @@ crate_binary(
     lib = ":bench-driver",
 )
 
+# The sustained-load judge: `krabka-soak-check plan|judge|self-check` over a
+# contract under `//bench:soak_contracts`.
+crate_binary(
+    name = "krabka-soak-check",
+    crate_root = "src/soak_check_main.rs",
+    lib = ":bench-driver",
+)
+
+# The disaster-recovery executor: `krabka-soak-drill load|probe|readback`,
+# which the qualification drill runs against its secured clusters.
+crate_binary(
+    name = "krabka-soak-drill",
+    crate_root = "src/soak_drill_main.rs",
+    lib = ":bench-driver",
+)
+
 crate_tests(
     # `scenario_files` loads every checked-in scenario through the driver's own
     # loader, and `report_cli` runs the report binary the way an operator does.
+    # `contract_files` judges a synthetic run of every sustained-load contract,
+    # and `soak_check_cli` runs the judge's binary over them.
     data = [
         ":krabka-bench-report",
+        ":krabka-soak-check",
         "//bench:scenarios",
+        "//bench:soak_contracts",
     ],
-    env = {"CARGO_BIN_EXE_krabka-bench-report": "$(rootpath :krabka-bench-report)"},
+    env = {
+        "CARGO_BIN_EXE_krabka-bench-report": "$(rootpath :krabka-bench-report)",
+        "CARGO_BIN_EXE_krabka-soak-check": "$(rootpath :krabka-soak-check)",
+    },
     lib = "bench-driver",
-    # `scenario_files` is `harness = false`: datatest-stable supplies its own.
-    no_harness = ["scenario_files"],
+    # `scenario_files` and `contract_files` are `harness = false`:
+    # libtest-mimic supplies their harness.
+    no_harness = [
+        "contract_files",
+        "scenario_files",
+    ],
 )

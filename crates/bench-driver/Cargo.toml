@@ -28,6 +28,20 @@ path = "src/main.rs"
 name = "krabka-bench-report"
 path = "src/report_main.rs"
 
+# The sustained-load judge. It validates a contract under `bench/soak/`, prints
+# its fault schedule, and judges a run's evidence; `self-check` proves the
+# judge catches an injected missing record and a missed recovery deadline.
+[[bin]]
+name = "krabka-soak-check"
+path = "src/soak_check_main.rs"
+
+# The executor of a disaster-recovery contract. The qualification drill runs
+# its load against the secured source cluster until the loss, and its
+# read-back against the cluster restored from the capture.
+[[bin]]
+name = "krabka-soak-drill"
+path = "src/soak_drill_main.rs"
+
 [dependencies]
 bon = { workspace = true }
 assert2 = { workspace = true }
@@ -35,14 +49,14 @@ anyhow = { workspace = true }
 bytes = { workspace = true }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 clap = { workspace = true, features = ["env"] }
-krabka-client-admin = { version = "0.6.0" }
-krabka-client-consumer = { version = "0.6.0" }
-krabka-client-core = { version = "0.6.0" }
-krabka-client-producer = { version = "0.6.0" }
-krabka-protocol = { version = "0.6.0", default-features = false }
+krabka-client-admin = { version = "0.7.1" }
+krabka-client-consumer = { version = "0.7.1" }
+krabka-client-core = { version = "0.7.1" }
+krabka-client-producer = { version = "0.7.1" }
+krabka-protocol = { version = "0.7.0", default-features = false }
 krabka-security = { workspace = true }
 krabka-units = { workspace = true }
-krabka-macros = { version = "1.0.5", path = "../macros" }
+krabka-macros = { version = "1.0.8", path = "../macros" }
 derive_more = { workspace = true }
 exponential-backoff = "2.1.1"
 futures = "0.3"
@@ -55,20 +69,23 @@ num-traits = { workspace = true }
 # HTML/Plotly.js graph rendering for the benchmark report. Default features
 # only. `kaleido` and static export pull a native browser binary this does not
 # need: the report emits self-contained HTML that loads Plotly from the CDN.
-plotly = { version = "0.14", default-features = false }
+# shortcut: pin the unused-config fix, return to crates.io when upstream releases it.
+plotly = { version = "0.14", git = "https://github.com/krabka-io/plotly.rs", rev = "8cc4414e63f66d4a99ebdd73d0d5bb9befd99613", default-features = false }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "query"] }
 refined_type = { workspace = true }
 rustls = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-serde-saphyr = "1.3"
+sha2 = { workspace = true }
+hex = { workspace = true }
+serde-saphyr = "2.0"
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "sync", "time", "fs"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
-krabka-client-core = { version = "0.6.0", features = ["mock"] }
+krabka-client-core = { version = "0.7.1", features = ["mock"] }
 # Runs bench/scenarios/*.yaml as one test case per file, so a scenario that
 # stops parsing names itself.
 libtest-mimic = "0.8"
@@ -78,4 +95,8 @@ yare = { workspace = true }
 
 [[test]]
 name = "scenario_files"
+harness = false
+
+[[test]]
+name = "contract_files"
 harness = false

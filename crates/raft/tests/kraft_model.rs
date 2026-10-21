@@ -30,7 +30,7 @@ use {krabka_ids::NodeId, model::ConsensusModel, stateright::Checker};
 /// true bounded count of each config, so it never truncates a real check. Such
 /// a truncation would spuriously fail a `sometimes` witness, or leave an
 /// `always` only partially verified.
-const MAX_STATES: usize = 8_000_000;
+const MAX_STATES: usize = 26_000_000;
 /// Depth backstop. It must exceed the reachable-graph diameter of each config,
 /// or the search is depth-truncated and therefore incomplete. The configs below
 /// are bounded, so their diameter sits well under this value.
@@ -81,11 +81,41 @@ const MAX_DEPTH: usize = 60;
 // cap rose from 6M to 8M with them). The two-voter configs never split a vote
 // from a leader, and did not move. The `always` properties, election safety
 // among them, still hold.
-const PINNED_UNIQUE_STATES_THREE_VOTERS_ELECTION_SAFETY: usize = 10_750;
-const PINNED_UNIQUE_STATES_TWO_VOTERS_LINEARIZABLE: usize = 46_521;
-const PINNED_UNIQUE_STATES_THREE_VOTERS_FAULTS: usize = 1_128_704;
-const PINNED_UNIQUE_STATES_THREE_VOTERS_APPEND: usize = 839_339;
-const PINNED_UNIQUE_STATES_TWO_VOTERS_APPEND_VIA: usize = 256_973;
+//
+// Every count moved again when a nominee fenced by a newer epoch in a Vote
+// response began to keep its election deadline, as Kafka's
+// `QuorumState.transitionToUnattached` keeps a candidate's remaining timeout
+// (#621). It used to arm its election timer at the instant of the response,
+// so the states in which it starts its next pre-vote at once are gone, and a
+// fenced nominee now carries the deadline it drew into the new epoch.
+//
+// Every count grew, and the generated count of `three_voters_faults` passed
+// the old 8M cap (the cap rose to 18M with it), when a `Prospective` began to
+// record the voters that refuse its pre-vote and to end a round it can no
+// longer win, as Kafka's `EpochElection.isVoteRejected` and
+// `prospectiveTransitionAfterElectionLoss` do (#621). The refusals are new
+// state, and a lost round now leads back to the abandoned leader or to
+// Unattached instead of waiting for the election timer. The `always`
+// properties, election safety among them, still hold.
+//
+// Every count grew again, and the generated count of `three_voters_faults`
+// passed the 18M cap (the cap rose to 26M with it), when a `Prospective` whose
+// round timed out began to follow the leader it abandoned again, as Kafka's
+// `pollProspective` does through `prospectiveTransitionAfterElectionLoss`
+// (#621). A voter now cycles between following that leader and pre-voting
+// instead of pre-voting round after round, and each cycle is new state.
+// The same change let `three_voters_append` find a `leader_completeness`
+// counterexample: the model hands every Fetch answer to the core, and
+// `handle_fetch_response` fetched again even after the replica had voted in a
+// newer epoch, so a stale answer from the old leader replicated an entry the
+// new leader lacked. The core now acts only on an answer from the leader it
+// follows, in its epoch, as the engine's fence and Kafka's
+// `maybeHandleCommonResponse` do, and the `always` properties hold again.
+const PINNED_UNIQUE_STATES_THREE_VOTERS_ELECTION_SAFETY: usize = 27_343;
+const PINNED_UNIQUE_STATES_TWO_VOTERS_LINEARIZABLE: usize = 70_037;
+const PINNED_UNIQUE_STATES_THREE_VOTERS_FAULTS: usize = 3_224_882;
+const PINNED_UNIQUE_STATES_THREE_VOTERS_APPEND: usize = 2_614_970;
+const PINNED_UNIQUE_STATES_TWO_VOTERS_APPEND_VIA: usize = 344_543;
 
 krabka_macros::bounded_bfs!(bounded_bfs);
 

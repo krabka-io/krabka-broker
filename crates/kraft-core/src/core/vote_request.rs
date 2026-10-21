@@ -183,11 +183,7 @@ impl QuorumStateMachine {
             } => pre_vote && !has_fetched_from_leader && up_to_date,
             Role::Candidate { .. } | Role::Resigned => pre_vote && up_to_date,
             Role::Unattached { .. } | Role::Prospective { .. } | Role::Voted { .. } => {
-                let leader_known = self.state.leader_id.is_some()
-                    || matches!(&self.role, Role::Prospective {
-                        abandoned_leader: Some(_),
-                        ..
-                    });
+                let leader_known = self.known_leader().is_some();
                 if pre_vote {
                     up_to_date
                 } else if let Some(voted) = self.state.voted_key {

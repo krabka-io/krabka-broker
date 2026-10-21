@@ -63,6 +63,14 @@ feature level that turns the new format on, and updates
 on, every 1.x release reads every format that an earlier 1.x release wrote. A
 change that cannot keep that promise waits for the next major version.
 
+An entry that breaks the on-disk format opens with the exact marker
+`**Breaking, on-disk format.**`. The nightly upgrade smoke
+(`packaging/upgrade-smoke.sh`) reads only that marker. When an entry added since
+the previous release has it, the smoke expects the new build to refuse the old
+data directory. Without it, the smoke expects the new build to open the
+directory and serve the old records. Other wording, such as "the on-disk format
+does not change", does not count.
+
 Then fix the link definitions at the end of the file. Add one for the new tag,
 and move the `[Unreleased]` comparison onto that tag as well: it names the
 previous one, so leaving it alone would keep listing everything this release
@@ -182,7 +190,15 @@ missing image reference or another image's digest must fail.
 
 It fails the release rather than publishing an unsigned or unverified image,
 because it runs `cosign verify` and `cosign verify-attestation` against the
-digest it signed.
+digest it signed. `verify-attestation` checks a signature and a predicate type,
+not what the predicate says, so the job also reads the provenance statement
+back. It must be SLSA v1 (`https://slsa.dev/provenance/v1`), its subject must
+be the signed index, and its predicate must name the tagged commit, the tag
+ref, the arm64 child and the tested amd64 image. Through v1.0.5 the job
+attested the provenance as `--type slsaprovenance`, which cosign reads as SLSA
+v0.2: it dropped every field of the v1 predicate and signed an empty one.
+Those releases keep that empty provenance, and their release run log and
+`delivery-image` artifact are what tie them to the tested commit.
 
 `latest` moves onto the release only when the tag is the newest `v*` tag in the
 repository, by `sort -V`. A patch cut after a later minor -- a `v0.5.4` tagged
@@ -197,6 +213,21 @@ cosign verify \
   ghcr.io/krabka-io/krabka-broker:v0.5.2
 ```
 
+Then read the provenance back. Use cosign 3: `sigstore/cosign-installer` v4
+signs with it, and cosign 2 finds no signature on these images. Only a release
+after v1.0.5 has a v1 provenance. For v1.0.5 and earlier, the command finds no
+matching attestation.
+
+```sh
+tag=vX.Y.Z
+cosign verify-attestation \
+  --type https://slsa.dev/provenance/v1 \
+  --certificate-identity "https://github.com/krabka-io/krabka-broker/.github/workflows/release.yml@refs/tags/${tag}" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "ghcr.io/krabka-io/krabka-broker:${tag}" |
+  jq -r .payload | base64 --decode | jq .predicate.buildDefinition
+```
+
 Also compare the release tag's digest against the delivery artifact:
 
 ```sh
@@ -205,6 +236,20 @@ aspect check-delivery-image --expected delivery-image.digest \
 ```
 
 The GitHub release carries `sbom.cdx.json` for the same build.
+
+`aspect verify-release` does all of these checks from outside, with cosign 3,
+and also checks what the attestations say: the provenance must name the tagged
+commit and the tested amd64 digest, and the SBOM attestation must be the
+uploaded `sbom.cdx.json`. It reads and writes nothing in the registry or the
+release:
+
+```sh
+aspect verify-release --tag v0.5.2 --delivery-digest delivery-image.digest
+```
+
+[Release candidate qualification](release-candidate-qualification.md) gives
+the gates a candidate passes before its stack is described as
+ecosystem-qualified, and the result of this check for v1.0.5.
 
 ## Crates.io
 
@@ -223,6 +268,7 @@ a tag that `release.yml` refuses publishes nothing either.
 | `krabka-macros` | | `krabka-log` derives with it |
 | `krabka-verified` | | Library for other repositories |
 | `krabka-log` | `krabka-macros`, `krabka-verified` | Library for other repositories |
+| `krabka-java-regex` | | Library for other repositories |
 
 Every other member sets `publish = false`, the broker among them. A new member
 crate is published unless its manifest sets `publish = false`, so a crate that
@@ -263,7 +309,7 @@ Before you merge the release pull request, run a dry run from its branch: start
 and builds it from the packaged sources, as crates.io users get them. Locally:
 
 ```sh
-cargo publish --dry-run --locked -p krabka-macros -p krabka-verified -p krabka-log
+cargo publish --dry-run --locked -p krabka-macros -p krabka-verified -p krabka-log -p krabka-java-regex
 ```
 
 ### What the workflow does
@@ -320,14 +366,14 @@ reviewers if a person should approve each publish.
 1. Sign in to crates.io with the account that will own the crates. Under
    **Account Settings**, open **API Tokens** and create a token with the
    `publish-new` and `publish-update` scopes. Limit it to the crate names
-   `krabka-macros`, `krabka-verified` and `krabka-log`, or the pattern
+   `krabka-macros`, `krabka-verified`, `krabka-log` and `krabka-java-regex`, or the pattern
    `krabka-*`, and give it a short expiry.
 2. Add the token to the `crates-io` environment as the secret
    `CARGO_REGISTRY_TOKEN`.
 3. Push the release tag, or start `publish.yml` on it with `dry_run` off.
 
 crates.io limits new crate names to a burst of five, then one every ten
-minutes, so the three names go up in one burst. On a `429` answer the job waits
+minutes, so the four names go up in one burst. On a `429` answer the job waits
 ten minutes and tries again.
 
 #### Then: trusted publishing for each crate
@@ -342,7 +388,7 @@ For each published crate:
    - Workflow filename: `publish.yml`
    - Environment: `crates-io`
 
-When all three crates have a publisher, delete the `CARGO_REGISTRY_TOKEN`
+When all four crates have a publisher, delete the `CARGO_REGISTRY_TOKEN`
 secret, and revoke the token on crates.io. The next release uses trusted
 publishing. Its log says "publishing through trusted publishing".
 

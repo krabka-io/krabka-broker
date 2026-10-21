@@ -287,10 +287,15 @@ pub enum SaslExchange {
     /// in the first `SaslAuthenticate`, which on success is the only one.
     OAuthBearer,
     /// OAUTHBEARER token validation failed. The broker returned the RFC 7628
-    /// error JSON with `error_code = 0` and kept the connection open. It now
-    /// waits for the client's single-`\x01` final message before it fails the
-    /// connection with `SASL_AUTHENTICATION_FAILED`.
-    OAuthBearerFailed,
+    /// error JSON with `error_code = 0` and kept the connection open. A
+    /// single-`\x01` reply then fails the connection with
+    /// `SASL_AUTHENTICATION_FAILED` and `error_json` as the message; any
+    /// other reply is a fresh client initial response, as in Kafka's
+    /// `OAuthBearerSaslServer`.
+    OAuthBearerFailed {
+        /// The error JSON the challenge carried, Kafka's `errorMessage`.
+        error_json: String,
+    },
     /// GSSAPI post-handshake and pre-first-token. The broker builds the
     /// acceptor, and with it the live `GssapiServerExchange`, lazily on the
     /// first `SaslAuthenticate` round, once the client's AP-REQ arrives. This
@@ -313,7 +318,7 @@ impl SaslExchange {
     #[must_use]
     pub fn awaits_client_round(&self) -> bool {
         match self {
-            Self::Scram(_) | Self::OAuthBearerFailed => true,
+            Self::Scram(_) | Self::OAuthBearerFailed { .. } => true,
             #[cfg(not(target_family = "wasm"))]
             Self::Gssapi(_) => true,
             Self::Plain | Self::ScramPending | Self::OAuthBearer | Self::GssapiPending => false,
@@ -393,16 +398,30 @@ impl ConnectionAuth {
     /// broker that closed on the deadline itself would cut those clients off
     /// mid-re-authentication.
     ///
-    /// `SaslHandshake` and `SaslAuthenticate` therefore pass whatever the
-    /// clock says; every other API on an expired session does not.
+    /// The grace covers one frame only: a `SaslHandshake` that begins the
+    /// re-authentication, which `last_reauth_start_ms` and Kafka's one-second
+    /// interval decide. Kafka checks `maybeBeginServerReauthentication` first
+    /// and the deadline second, so every other frame on an expired session
+    /// closes the connection with no response: a `SaslAuthenticate` with no
+    /// handshake before it, and a handshake the interval refuses. Once the
+    /// handshake has begun the exchange the connection is `Reauthenticating`,
+    /// which has no deadline here.
+    ///
+    /// A session expires only strictly after its deadline, as Kafka's
+    /// `KafkaChannel.serverAuthenticationSessionExpired` decides, so a request
+    /// at exactly `expires_at_ms` is served. The whole rule is
+    /// `krabka_verified::authz::session_expired_for_request`.
     #[must_use]
-    pub(crate) fn expired_for_request(&self, api_key: ApiKeyCode, now_ms: i64) -> bool {
-        match self {
-            Self::Authenticated { expires_at_ms, .. } => {
-                session_expired_for_request(*expires_at_ms, api_key, now_ms)
-            }
-            _ => false,
-        }
+    pub(crate) fn expired_for_request(
+        &self,
+        api_key: ApiKeyCode,
+        now_ms: i64,
+        last_reauth_start_ms: Option<i64>,
+    ) -> bool {
+        let Self::Authenticated { expires_at_ms, .. } = self else {
+            return false;
+        };
+        session_expired_for_request(*expires_at_ms, api_key, now_ms, last_reauth_start_ms)
     }
 
     /// The mechanism a `SaslHandshake` named for the exchange now in flight,
@@ -697,9 +716,13 @@ mod tests {
     }
 
     /// KIP-368: the deadline ends a connection only through a request, and
-    /// never through one of the two frames a re-authentication is made of.
-    /// That is what lets a client whose window has already closed start its
-    /// exchange and be served, the way Apache Kafka serves one.
+    /// never through a `SaslHandshake` that begins a re-authentication. That
+    /// is what lets a client whose window has already closed start its
+    /// exchange and be served, the way Apache Kafka serves one. Every other
+    /// frame on an expired session closes it, as Kafka's
+    /// `Processor.processCompletedReceives` does: a `SaslAuthenticate` with no
+    /// handshake before it, and a handshake the one-second re-authentication
+    /// interval refuses.
     #[test]
     fn an_expired_session_admits_a_re_authentication_and_nothing_else() {
         let now_ms = 1_000_i64;
@@ -741,32 +764,139 @@ mod tests {
 
         let cases = [
             (
-                "expired: SaslHandshake opens the re-auth",
+                "expired: a SaslHandshake that begins the re-auth passes",
                 &expired,
                 17,
+                None,
                 false,
             ),
-            ("expired: SaslAuthenticate runs it", &expired, 36, false),
-            ("expired: Produce closes", &expired, 0, true),
-            ("expired: Metadata closes", &expired, 3, true),
-            ("expired: ApiVersions closes", &expired, 18, true),
-            ("live session serves Produce", &live, 0, false),
-            ("uncapped session serves Produce", &uncapped, 0, false),
+            (
+                "expired: a SaslHandshake a second after the last re-auth passes",
+                &expired,
+                17,
+                Some(now_ms - 1_000),
+                false,
+            ),
+            (
+                "expired: a SaslHandshake inside the one-second interval closes",
+                &expired,
+                17,
+                Some(now_ms - 999),
+                true,
+            ),
+            (
+                "expired: a SaslAuthenticate with no handshake closes",
+                &expired,
+                36,
+                None,
+                true,
+            ),
+            ("expired: Produce closes", &expired, 0, None, true),
+            ("expired: Metadata closes", &expired, 3, None, true),
+            ("expired: ApiVersions closes", &expired, 18, None, true),
+            ("live session serves Produce", &live, 0, None, false),
+            (
+                "live: a SaslAuthenticate reaches its handler",
+                &live,
+                36,
+                None,
+                false,
+            ),
+            (
+                "live: a SaslHandshake inside the interval reaches its handler",
+                &live,
+                17,
+                Some(now_ms - 1),
+                false,
+            ),
+            ("uncapped session serves Produce", &uncapped, 0, None, false),
             (
                 "an exchange in flight is never expired",
                 &reauthenticating,
-                0,
+                36,
+                Some(now_ms),
                 false,
             ),
             (
                 "anonymous has no deadline",
                 &ConnectionAuth::Anonymous,
                 0,
+                None,
                 false,
             ),
         ];
-        for (case, auth, api_key, want) in cases {
-            check!(auth.expired_for_request(api_key, now_ms) == want, "{case}");
+        for (case, auth, api_key, last_reauth_start_ms, want) in cases {
+            check!(
+                auth.expired_for_request(api_key, now_ms, last_reauth_start_ms) == want,
+                "{case}"
+            );
+        }
+    }
+
+    /// KIP-368: Kafka's `KafkaChannel.serverAuthenticationSessionExpired`
+    /// expires a session only strictly after its deadline, so a request at
+    /// exactly `expires_at_ms` is still served and one a millisecond later
+    /// closes the connection.
+    #[test]
+    fn a_session_expires_strictly_after_its_deadline() {
+        let deadline_ms = 1_000_i64;
+        let session = authenticated(
+            "alice",
+            krabka_security::AuthMethod::SaslScramSha512,
+            SaslMechanism::ScramSha512,
+            Some(deadline_ms),
+            false,
+        );
+        let cases = [
+            (
+                "Produce before the deadline",
+                0,
+                deadline_ms - 1,
+                None,
+                false,
+            ),
+            ("Produce at the deadline", 0, deadline_ms, None, false),
+            (
+                "Produce a ms after the deadline",
+                0,
+                deadline_ms + 1,
+                None,
+                true,
+            ),
+            (
+                "SaslAuthenticate at the deadline",
+                36,
+                deadline_ms,
+                None,
+                false,
+            ),
+            (
+                "SaslAuthenticate a ms after the deadline",
+                36,
+                deadline_ms + 1,
+                None,
+                true,
+            ),
+            (
+                "a SaslHandshake inside the interval at the deadline",
+                17,
+                deadline_ms,
+                Some(deadline_ms - 1),
+                false,
+            ),
+            (
+                "a SaslHandshake inside the interval a ms after the deadline",
+                17,
+                deadline_ms + 1,
+                Some(deadline_ms),
+                true,
+            ),
+        ];
+        for (case, api_key, now_ms, last_reauth_start_ms, want) in cases {
+            check!(
+                session.expired_for_request(api_key, now_ms, last_reauth_start_ms) == want,
+                "{case}"
+            );
         }
     }
 

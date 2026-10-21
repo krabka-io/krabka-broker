@@ -183,15 +183,8 @@ pub enum WriterMessage {
         new_base: Offset,
         ack: oneshot::Sender<Result<(), BrokerError>>,
     },
-    /// Atomically swap the partition's `LogConfig`. The writer task
-    /// serializes this with appends so no in-flight `RecordBatch` sees a
-    /// half-applied config. Sent by
-    /// `ReplicatorSupervisor::reconcile` whenever a `V1TopicConfig`
-    /// record changes the topic's overrides.
-    SetLogConfig {
-        config: krabka_log::LogConfig,
-        ack: tokio::sync::oneshot::Sender<()>,
-    },
+    /// Recalculate idle timers after the log's configuration was swapped.
+    ConfigChanged,
     /// Run one compaction pass. The writer actor serializes this with
     /// appends to preserve the single-writer invariant on `Log`.
     Compact {
@@ -212,6 +205,13 @@ pub enum WriterMessage {
     /// semantics. The `DeleteRecords` handler sends this message.
     TrimToOffset {
         new_start: Offset,
+        ack: tokio::sync::oneshot::Sender<Result<Offset, BrokerError>>,
+    },
+    /// Take the leader's global log start as this follower's own, as
+    /// [`krabka_log::Log::follow_leader_log_start`] describes. Returns the
+    /// resulting `log_start_offset`. The replicator sends this message.
+    FollowLeaderLogStart {
+        leader_start: Offset,
         ack: tokio::sync::oneshot::Sender<Result<Offset, BrokerError>>,
     },
     /// Test-only: shift the in-memory `log_start_offset` and do not

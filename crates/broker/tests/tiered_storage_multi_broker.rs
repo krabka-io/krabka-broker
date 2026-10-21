@@ -87,12 +87,16 @@ use crate::support::tiered as topic_fixture;
 mod multi_client;
 #[path = "tiered_storage_multi_broker/multi_cluster.rs"]
 mod multi_cluster;
+#[path = "tiered_storage_multi_broker/multi_earliest.rs"]
+mod multi_earliest;
 #[path = "tiered_storage_multi_broker/multi_failover.rs"]
 mod multi_failover;
 #[path = "tiered_storage_multi_broker/multi_misaligned.rs"]
 mod multi_misaligned;
 #[path = "tiered_storage_multi_broker/multi_reassign.rs"]
 mod multi_reassign;
+#[path = "tiered_storage_multi_broker/multi_soak_shape.rs"]
+mod multi_soak_shape;
 #[path = "tiered_storage_multi_broker/multi_workload.rs"]
 mod multi_workload;
 

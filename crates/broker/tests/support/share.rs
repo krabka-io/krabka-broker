@@ -11,7 +11,6 @@ use {
     krabka_client_core::Client,
     krabka_protocol::{
         owned::{
-            produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
             share_acknowledge_request::{
                 AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch as AckAckBatch,
                 ShareAcknowledgeRequest,
@@ -83,6 +82,11 @@ pub async fn bootstrap_share_state(
 }
 
 pub async fn set_auto_offset_reset_earliest(client: &Client, group: &str) {
+    set_auto_offset_reset(client, group, "earliest").await;
+}
+
+/// Sets the group config `share.auto.offset.reset` of `group` to `value`.
+pub async fn set_auto_offset_reset(client: &Client, group: &str, value: &str) {
     let resp = client
         .send(
             incremental_request()
@@ -91,7 +95,7 @@ pub async fn set_auto_offset_reset_earliest(client: &Client, group: &str) {
                     group,
                     vec![incremental_config(
                         "share.auto.offset.reset",
-                        Some("earliest".into()),
+                        Some(value.into()),
                         crate::support::configs::ConfigOperation::Set,
                     )],
                 )])
@@ -101,7 +105,7 @@ pub async fn set_auto_offset_reset_earliest(client: &Client, group: &str) {
         .expect("IncrementalAlterConfigs(group)");
     assert!(
         resp.responses[0].error_code == 0,
-        "share.auto.offset.reset=earliest rejected: {:?}",
+        "share.auto.offset.reset={value} rejected: {:?}",
         resp.responses[0].error_message
     );
 }
@@ -182,24 +186,14 @@ pub async fn produce_batch(client: &Client, batch: RecordBatch) {
     let partition = partition.0;
     for _ in 0..40 {
         let resp = client
-            .send(ProduceRequest {
-                transactional_id: None,
-                acks: -1,
-                timeout_ms: 5_000,
-                topic_data: vec![TopicProduceData {
-                    name: topic.to_string(),
-                    // Produce negotiates v13, which carries topic_id (not name)
-                    // on the wire; the broker resolves the topic by id.
-                    topic_id: wire(topic_id),
-                    partition_data: vec![PartitionProduceData {
-                        index: partition,
-                        records: Some(batch.clone().into()),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
+            .send(krabka_broker::testing::single_partition_produce_request(
+                topic,
+                topic_id,
+                partition,
+                batch.clone(),
+                -1,
+                5_000,
+            ))
             .await
             .expect("Produce");
         let p = &resp.responses[0].partition_responses[0];
@@ -699,11 +693,25 @@ pub async fn rejoin_group(
     log_dir: std::path::PathBuf,
     group: &str,
 ) -> (krabka_broker::BrokerHandle, Arc<Client>) {
+    let (broker, client) = restart_broker(log_dir).await;
+    set_auto_offset_reset_earliest(&client, group).await;
+    (broker, client)
+}
+
+/// Restart a broker on `log_dir` and wait for its group and share
+/// coordinators, leaving every group config as the metadata log holds it.
+///
+/// # Panics
+/// Panics if the broker or client cannot restart from the supplied directory.
+pub async fn restart_broker(
+    log_dir: std::path::PathBuf,
+) -> (krabka_broker::BrokerHandle, Arc<Client>) {
     let mut cfg = broker_config(log_dir);
     cfg.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
     let broker = krabka_broker::Broker::start(cfg).await.unwrap();
     let client = connect(&broker.listen_addr().to_string()).await;
-    bootstrap_share_state(&broker, &client, group).await;
+    broker.wait_until_group_coordinator_ready().await;
+    broker.wait_until_share_coordinator_ready().await;
     (broker, client)
 }
 

@@ -16,7 +16,7 @@ use {
         error::BrokerError,
         handlers::{
             ApiVersion, ErrorResponse as _, RequestContext,
-            acl_gates::{group_protocol_refusal, subscribed_names_refusal},
+            acl_gates::{group_protocol_refusal, subscribed_names_response},
             coordinator_routing::group_actor_error_code,
             group_coordinator_error, group_version_disabled,
         },
@@ -67,19 +67,15 @@ pub(crate) async fn handle(
         return Ok(reply(error_code, None));
     }
 
-    // `Describe` on every distinct name in `subscribed_topic_names`
-    // (Kafka's `filterByAuthorized(request.context, DESCRIBE, TOPIC,
-    // subscribedTopicSet)`). Any denial fails the WHOLE heartbeat with
-    // `TOPIC_AUTHORIZATION_FAILED` (29); the group is never touched, so an
-    // unauthorized caller cannot learn the denied topic's id or
-    // partitions by being admitted as a member. This runs before
-    // `group_coordinator_error` -- Kafka authorizes the request before it
-    // ever reaches coordinator routing, so an unauthorized subscription
-    // must not be masked by `NOT_COORDINATOR` / `COORDINATOR_NOT_AVAILABLE`.
-    if let Some(error_code) =
-        subscribed_names_refusal(broker, &image, ctx, req.subscribed_topic_names.as_deref())
-    {
-        return Ok(reply(error_code, None));
+    // Refuse unauthorized subscriptions before coordinator routing.
+    if let Some(response) = subscribed_names_response(
+        broker,
+        &image,
+        ctx,
+        req.subscribed_topic_names.as_deref(),
+        |code| reply(code, None),
+    ) {
+        return Ok(response);
     }
 
     // `GroupCoordinatorService.consumerGroupHeartbeat` validates the

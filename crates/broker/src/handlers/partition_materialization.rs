@@ -5,7 +5,9 @@ use {
         broker::Broker,
         handlers::create_topics::{INITIAL_LEADER_EPOCH, InitialLeadership},
         partition::PartitionRuntimeConfig,
-        replicator_supervisor::{MaterializePartitionConfig, materialize_partition},
+        replicator_supervisor::{
+            MaterializePartitionConfig, materialize_partition, topic_log_config,
+        },
         wal::{ControllerSequencer, OffsetSequencer},
     },
     krabka_raft::NodeId,
@@ -38,6 +40,13 @@ impl PartitionMaterialization<'_> {
         leaderships: &[InitialLeadership],
     ) {
         let broker = self.broker;
+        let log_config = topic_log_config(
+            &broker.controller.current_image(),
+            &broker.config.log_config,
+            broker.config.node_id,
+            topic,
+            broker.config.features.unstable_api_versions,
+        );
         for (index, (replicas, leadership)) in
             indices.into_iter().zip(assignments.iter().zip(leaderships))
         {
@@ -50,7 +59,7 @@ impl PartitionMaterialization<'_> {
                 topic_id: Some(self.topic_id),
                 partition: index,
                 log_dirs: self.log_dirs,
-                log_config: &broker.config.log_config,
+                log_config: &log_config,
                 log_dir_status: &broker.log_dir_status,
                 producer_state: &broker.producer_state,
                 runtime: PartitionRuntimeConfig::from_broker(

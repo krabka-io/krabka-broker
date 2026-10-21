@@ -28,11 +28,13 @@ concurrency:
 
 jobs:
   cpd:
-    name: jscpd · zero repeats at 47 tokens
+    name: jscpd · zero repeats at 52 tokens
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -70,9 +72,11 @@ jobs:
   ci:
     name: build · lint · format · test · docgen
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Change detection needs the merge base, not just the tip.
@@ -143,7 +147,7 @@ jobs:
       - name: daemon-free tests
         run: bazel test --test_tag_filters=-docker,-timing-sensitive //crates/...
 
-      # The eight suites tagged timing-sensitive, plus
+      # The suites tagged timing-sensitive, plus
       # `//packaging:image_binaries_test`, which sits outside `//crates`. They
       # run in an invocation of their own so that the ~140 suites above do not
       # compete with them for the runner's four cores.
@@ -195,7 +199,7 @@ jobs:
   # keeps this to the tests it actually runs. `//crates/...` reaches the 22
   # `*_docker_test` wrappers, each of which links its suite a second time as a
   # `*_docker_bin`, and `--test_tag_filters` alone excludes a test from the run
-  # but still builds it. Those 22 plus the 5 timing-sensitive suites are 27
+  # but still builds it. Those 22 plus the timing-sensitive suites are
   # instrumented broker binaries this job would otherwise link and discard.
   #
   # This job used to carry `disk-cache: false`, alone among the Bazel jobs, and
@@ -236,9 +240,11 @@ jobs:
     name: coverage
     needs: select
     if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || needs.select.outputs.rust == 'true')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       # No `fetch-depth: 0`: nothing here reads the merge base -- the report
       # covers every target under //crates/..., not the impacted ones.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -292,9 +298,11 @@ jobs:
   supply-chain:
     name: cargo deny
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
@@ -322,8 +330,9 @@ jobs:
   cargo:
     name: cargo clippy · nextest
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    runs-on: ubuntu-26.04
+    # Cold builds, the full suite and the post-job cache upload share this budget.
+    timeout-minutes: 90
     # This job builds the whole workspace twice into one target directory --
     # `clippy --all-targets`, then nextest's own `cargo test --no-run
     # --workspace` -- and `[profile.dev]` carries full debug info. That
@@ -340,6 +349,8 @@ jobs:
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: ./.github/actions/reclaim-disk
@@ -355,7 +366,7 @@ jobs:
           test -n "${channel}"
           echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
 
-      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: ${{ steps.toolchain.outputs.channel }}
           components: clippy
@@ -405,9 +416,11 @@ jobs:
   wasm:
     name: cargo clippy · wasm32-wasip1
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - id: toolchain
@@ -417,7 +430,7 @@ jobs:
           test -n "${channel}"
           echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
 
-      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: ${{ steps.toolchain.outputs.channel }}
           targets: wasm32-wasip1
@@ -465,11 +478,13 @@ jobs:
   checks:
     name: checks
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # The longest of the four (`docs checks`, whose lychee step walks every
     # markdown file); the other three wanted 10.
     timeout-minutes: 45
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
       - uses: ./.github/actions/remote-cache
@@ -574,6 +589,9 @@ jobs:
       # Every crate has a README and the root README crate table names it.
       - name: crate READMEs
         run: aspect check-crate-readmes
+      # Every row of the release support matrix has a status from its legend, an evidence link, and the revision it ran at; no row claims a candidate that is not frozen.
+      - name: support matrix evidence
+        run: aspect check-support-matrix
       # //bazel/images' IMAGES restates every //MODULE.bazel image pin as the tag the image is loaded under. A digest bump that moves the tag on one side only leaves a suite testing bytes its `const KAFKA_IMAGE` no longer describes.
       - name: pinned images
         run: aspect check-images
@@ -609,7 +627,7 @@ jobs:
   proofs:
     name: creusot proofs
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     permissions:
       contents: read
@@ -619,10 +637,12 @@ jobs:
       packages: write
     env:
       # What the proof step runs, and what `image_load` writes locally.
-      LOCAL_IMAGE: docker.io/krabka-io/creusot:0.13.0
+      LOCAL_IMAGE: docker.io/krabka-io/creusot:0.14.0
       # Must match `image_push`'s registry and repository in //tools/creusot.
       REGISTRY_IMAGE: ghcr.io/krabka-io/creusot
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The CLI alone, and unconditionally: the tag below is what decides
@@ -751,7 +771,7 @@ jobs:
   # all, which is what lets `coverage` sit out a docs-only pull request.
   select:
     name: select
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     outputs:
       suites: ${{ steps.select.outputs.suites }}
@@ -761,6 +781,8 @@ jobs:
       BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
       FULL_MATRIX: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # rdeps needs the merge base, not just the tip.
@@ -811,7 +833,7 @@ jobs:
     name: container · ${{ matrix.suite.name }}
     needs: select
     if: needs.select.outputs.any == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     strategy:
       # One group failing should not cancel the rest -- the point of the shard
@@ -820,6 +842,8 @@ jobs:
       matrix:
         suite: ${{ fromJSON(needs.select.outputs.suites) }}
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
         with:
@@ -902,9 +926,11 @@ jobs:
 
   kubernetes:
     name: kubernetes · kind
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
         with:
@@ -926,12 +952,14 @@ jobs:
   upgrade:
     name: upgrade · previous release
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     permissions:
       contents: read
       packages: read
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -953,9 +981,11 @@ jobs:
   gssapi:
     name: container · gssapi
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
         with:
@@ -1007,14 +1037,22 @@ jobs:
   # `--test_timeout` because Bazel's longest built-in timeout, `eternal`, is
   # one hour. The value is the soak plus an hour for the image load, the
   # cluster boot and the read-back at the end.
+  #
+  # `--flaky_test_attempts=1` because every `_docker_test` is `flaky`, which
+  # gives it three attempts, and a second four-hour attempt cannot finish
+  # inside `timeout-minutes`. With the retry, every failed soak from
+  # 2026-10-06 to 10-18 ended as a job cancelled at the time limit, not as a
+  # failure.
   soak:
     name: soak · four hours
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # The soak itself is four hours; the rest is the compile, the image and the
     # verification pass.
     timeout-minutes: 330
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: ./.github/actions/reclaim-disk
@@ -1053,9 +1091,67 @@ jobs:
             --config=docker \
             --bes_backend= \
             --test_timeout=18000 \
+            --flaky_test_attempts=1 \
             --test_env=KRABKA_SOAK_SECONDS \
             --test_output=streamed \
             //crates/broker:soak_docker_test
+
+  # The slow-follower fault of the 72-hour contract, `tc netem` in a broker's
+  # network namespace, had never run: no kernel the repository tested on had
+  # `sch_netem` (release blocker B7). `bench/soak/self-check-netem.yaml` is the
+  # self-check with that one fault changed, and this job runs it on a
+  # GitHub-hosted runner. The module is loaded first, so a runner without it
+  # fails here, by name, instead of as a fault the executor could not inject.
+  #
+  # Scheduled and dispatched only, like `soak`: the pull-request container
+  # matrix keeps the CPU-quota self-check, because its remote executors may
+  # lack the module. `--flaky_test_attempts=1` so that a failure is reported,
+  # not retried away.
+  netem:
+    name: netem · slow-follower self-check
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/reclaim-disk
+
+      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+        with:
+          bazelisk-cache: true
+          # Off explicitly, as in `soak`: the remote cache covers it.
+          disk-cache: false
+          repository-cache: true
+
+      - uses: ./.github/actions/remote-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          client-cert: ${{ secrets.BUILDBUDDY_CLIENT_CERT }}
+          client-key: ${{ secrets.BUILDBUDDY_CLIENT_KEY }}
+          upload: ${{ github.event_name != 'pull_request' }}
+
+      # As in `soak`: every broker advertises `host.docker.internal`.
+      - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
+
+      - name: load sch_netem
+        run: |
+          set -euo pipefail
+          sudo modprobe sch_netem
+          grep -w sch_netem /proc/modules
+
+      - name: netem self-check
+        run: |
+          set -euo pipefail
+          bazel test \
+            --config=docker \
+            --bes_backend= \
+            --flaky_test_attempts=1 \
+            --test_env=KRABKA_SOAK_CONTRACT=bench/soak/self-check-netem.yaml \
+            --test_output=streamed \
+            //crates/broker:soak_contract_docker_test
 
   # The external half of the link check.
   #
@@ -1080,9 +1176,11 @@ jobs:
   links:
     name: external links
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: markdown links (external)
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
@@ -1100,12 +1198,14 @@ jobs:
   bench:
     name: variance-calibrated criterion benches
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Four alternating reference/candidate passes over all seven suites.
     timeout-minutes: 360
     permissions:
       contents: read
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -1122,7 +1222,7 @@ jobs:
           test -n "${channel}"
           echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
 
-      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: ${{ steps.toolchain.outputs.channel }}
 
@@ -1162,6 +1262,15 @@ jobs:
             free -b
             df -B1 .
           } > benchmark-artifacts/environment.txt
+          # Both Bazel release graphs enable tracing/log. Cargo dev dependencies
+          # enable it only on some revisions, so match it explicitly on both sides.
+          for side in reference candidate; do
+            source_dir="${reference_dir}"
+            if [ "${side}" = candidate ]; then source_dir="${GITHUB_WORKSPACE}"; fi
+            (cd "${source_dir}" && cargo tree --locked -p krabka-broker -p krabka-log \
+              --features tracing/log -e features -i tracing) \
+              > "benchmark-artifacts/${side}/tracing-features.txt"
+          done
           for run in 1 2 3 4; do
             sides=(reference candidate)
             if ((run % 2 == 0)); then
@@ -1180,7 +1289,7 @@ jobs:
               (
                 cd "${source_dir}"
                 CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/target" cargo bench \
-                  -p krabka-broker -p krabka-log --bench '*' -- \
+                  -p krabka-broker -p krabka-log --features tracing/log --bench '*' -- \
                   --output-format bencher --noplot --sample-size 20 --measurement-time 2
               ) | tee "${run_dir}/raw.txt"
               cargo run -p krabka-parse-benches -- \
@@ -1238,12 +1347,14 @@ jobs:
     name: delivery
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: [ci, coverage, supply-chain]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     permissions:
       contents: read
       packages: write
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -1339,9 +1450,11 @@ jobs:
       - select
       - docker
       - kubernetes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - name: require every dependency to have succeeded
         env:
           NEEDS: ${{ toJSON(needs) }}
@@ -1389,11 +1502,11 @@ jobs:
   # point `mutants.yml`'s schedule at the same mechanism.
   nightly-report:
     name: nightly report
-    needs: [select, docker, gssapi, links, bench, soak, kubernetes, upgrade]
+    needs: [select, docker, gssapi, links, bench, soak, netem, kubernetes, upgrade]
     # `always()`: the whole point is to run when a dependency failed, and a
     # plain `needs` would skip this job exactly then.
     if: always() && github.event_name == 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     # The workflow-level block is `contents: read` + `id-token: write`. This is
     # the only job that writes issues, so the grant stays here rather than
@@ -1410,6 +1523,8 @@ jobs:
       NEEDS: ${{ toJSON(needs) }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       # `gh issue create --label` fails outright when the label does not exist,
       # which would turn "the nightly is red" into "the reporting job is red"
       # with nothing filed. Creating it here keeps the workflow self-sufficient:
@@ -1425,7 +1540,7 @@ jobs:
 
       # `contains(needs.*.result, 'failure')` and nothing else. `needs.*.result`
       # also yields `skipped` and `cancelled`, and neither is a red lane:
-      # `gssapi` and `soak` are skipped on any event that is not a schedule or a
+      # `gssapi`, `soak` and `netem` are skipped on any event that is not a schedule or a
       # dispatch, `docker` is skipped when the suite selection is empty, and a
       # cancelled run means a human or the concurrency group stopped it.
       # (`links` and `bench` are the two dependencies that cannot be skipped

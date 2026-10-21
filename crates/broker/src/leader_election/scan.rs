@@ -462,19 +462,61 @@ pub(crate) async fn compute_unclean_restart_changes(
     liveness: &ControllerLivenessState,
     metrics: &BrokerMetrics,
 ) -> FailoverPlan {
+    restart_plan(
+        image,
+        returning,
+        &liveness.alive_node_ids().await,
+        metrics,
+        withdraw_elr_membership(image, returning),
+    )
+}
+
+/// The failover changes a new incarnation of `returning` needs when the
+/// controller cannot tell whether its last stop was clean: the
+/// `partitionsWithBrokerInIsr` half of [`compute_unclean_restart_changes`],
+/// without the ELR withdrawal.
+///
+/// A krabka broker registers itself by submitting its registration record, and
+/// the record carries no `previousBrokerEpoch`. The broker withdraws its own
+/// ELR membership in that batch when it cannot prove a clean stop, so what the
+/// controller adds is what `handleBrokerShutdown` does on either branch: the
+/// broker leaves every ISR and every leadership it still holds. It takes the
+/// unclean branch's eligibility, so an ISR removal here never makes the
+/// returning broker eligible to lead. For a broker that did stop cleanly that
+/// is the safe side of Kafka's clean branch, and a broker that stopped through
+/// controlled shutdown holds no ISR seat and no leadership, so nothing here
+/// touches it.
+///
+/// `alive` is the set of brokers that may take a leadership over: Kafka's
+/// `ClusterControlManager.isActive`. The caller reads it from its liveness
+/// registry, or, before it has one, from the registrations `image` holds.
+pub(crate) fn compute_reregistration_changes(
+    image: &MetadataImage,
+    returning: NodeId,
+    alive: &std::collections::HashSet<NodeId>,
+    metrics: &BrokerMetrics,
+) -> FailoverPlan {
+    restart_plan(image, returning, alive, metrics, Vec::new())
+}
+
+/// [`compute_unclean_restart_changes`] after `withdrawals`, its ELR half.
+fn restart_plan(
+    image: &MetadataImage,
+    returning: NodeId,
+    alive: &std::collections::HashSet<NodeId>,
+    metrics: &BrokerMetrics,
+    withdrawals: Vec<MetadataRecord>,
+) -> FailoverPlan {
     let FailoverPlan {
         mut changes,
         mut recoveries,
         mut unavailable,
     } = FailoverPlan {
-        changes: withdraw_elr_membership(image, returning),
+        changes: withdrawals,
         ..Default::default()
     };
-    let ScanInputs {
-        alive,
-        witnesses,
-        mut elr,
-    } = scan_inputs(image, liveness).await;
+    let witnesses = witness_node_ids(image);
+    let mut elr = ScanElr::default();
     // The ISR removals below are the candidate set the next eligibility is
     // derived from, so the broker they remove has to be excluded from that
     // derivation too.
@@ -489,7 +531,7 @@ pub(crate) async fn compute_unclean_restart_changes(
         match unclean_restart_one(
             pr,
             returning,
-            &alive,
+            alive,
             &witnesses,
             &elr_state,
             strategy,

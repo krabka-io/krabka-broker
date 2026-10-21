@@ -188,11 +188,7 @@ async fn a_cancel_publishes_the_eligible_leader_state_the_revert_implies() {
 #[tokio::test]
 async fn handle_preserves_unknown_partition_response_shape() {
     let version = 1;
-    krabka_macros::broker_test_setup! {
-        bind(broker_handle, _dir, broker, ctx);
-        boot [start_broker] allow_all;
-        user ["admin"];
-    };
+    allow_all_broker_setup!((broker_handle, _dir, broker, ctx), start_broker, "admin");
 
     let resp = handle(
         &broker,
