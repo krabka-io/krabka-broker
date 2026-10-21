@@ -10,7 +10,7 @@ use crate::io::LogIo;
 use {
     super::Log,
     crate::{
-        RecoveredProducer,
+        RecoveredProducer, SegmentAllocation,
         config::LogConfig,
         error::LogError,
         leader_epoch_checkpoint::LeaderEpochCheckpoint,
@@ -367,6 +367,90 @@ impl Log {
             producer_snapshot::write(&*self.io, &self.dir, log_end, &self.producer_state)?;
         }
         Ok(())
+    }
+
+    /// Refuses every append from now on with [`LogError::Fenced`].
+    ///
+    /// The broker fences a partition's log, under the log's mutex, before it
+    /// removes the partition's directory. An append that holds the mutex
+    /// first finishes before the directory goes; any later one, from whatever
+    /// task, is refused rather than written into a log that is about to be
+    /// deleted. Reads are unaffected.
+    pub fn fence(&mut self) { self.fenced = true; }
+
+    pub(super) fn ensure_unfenced(&self) -> Result<(), LogError> {
+        if self.fenced {
+            Err(LogError::Fenced)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// The first offset whose bytes this process wrote into the active
+    /// segment, and so most likely finds in the page cache: the active
+    /// segment's base, or the log end offset at open when the active segment
+    /// was already there. A read below it may have to go to the disk.
+    ///
+    /// A log with `preallocate` writes through `O_DIRECT`, which leaves
+    /// nothing in the page cache beyond its bounded tail cache, so for it no
+    /// offset counts as written here: every read may go to the disk.
+    ///
+    /// # Panics
+    /// Panics if the log's configuration lock is poisoned.
+    #[must_use]
+    pub fn written_since_open_from(&self) -> Offset {
+        if self.config.read().unwrap().segment_allocation == SegmentAllocation::Preallocate {
+            return Offset(i64::MAX);
+        }
+        let active_base = self
+            .active
+            .as_ref()
+            .map_or_else(|| self.log_end_offset(), Segment::base_offset);
+        active_base.max(self.opened_end)
+    }
+
+    /// Whether appending `incoming_size` bytes whose newest record is stamped
+    /// `incoming_max_timestamp` may wait on more than the page cache.
+    ///
+    /// It is true when the log's flush policy can make an append fsync
+    /// (`flush.messages`, `flush.ms`, or a flush on every append), and when
+    /// the append would roll the active segment, which creates files and can
+    /// wait for an earlier roll's flush budget, and for every append to a log
+    /// with `preallocate`: that append can reserve the segment's blocks, open
+    /// its `O_DIRECT` handle, or wait for room in its direct write queue. It
+    /// errs towards true: a caller that sees false may run the append where a
+    /// wait would stall others.
+    ///
+    /// # Panics
+    /// Panics if the log's configuration lock is poisoned.
+    pub fn append_may_block(
+        &mut self,
+        incoming_size: ByteSize,
+        incoming_max_timestamp: i64,
+    ) -> bool {
+        let (flushes, segment_size, roll_interval, index_size) = {
+            let config = self.config.read().unwrap();
+            (
+                config.flush_on_append
+                    || config.flush_messages.is_some()
+                    || config.flush_interval.is_some()
+                    || config.segment_allocation == SegmentAllocation::Preallocate,
+                config.segment_size,
+                config.segment_roll_interval,
+                config.segment_index_size,
+            )
+        };
+        if flushes {
+            return true;
+        }
+        let roll_interval = self.jittered_roll_interval(roll_interval);
+        self.should_roll_for_incoming(
+            incoming_size,
+            incoming_max_timestamp,
+            segment_size,
+            roll_interval,
+            index_size,
+        )
     }
 
     /// Next offset that `append` will assign.

@@ -8,11 +8,14 @@
 use {
     super::{
         WriterPartition,
-        storage::{StorageStatus, flag_storage_failure, lock_log, run_log_mutation},
+        append::append_may_block,
+        storage::{
+            StorageStatus, flag_storage_failure, lock_log, run_log_append, run_log_mutation,
+        },
     },
     crate::{
-        error::BrokerError, log_dir_status::LogDirRegistry, producer_state::ProducerState,
-        replica_state::ReplicaState, wal::SharedWal,
+        error::BrokerError, log_dir_status::LogDirRegistry, partition::ReplicatedBatch,
+        producer_state::ProducerState, replica_state::ReplicaState, wal::SharedWal,
     },
     arc_swap::ArcSwap,
     krabka_log::{Log, Offset},
@@ -119,33 +122,46 @@ pub(super) async fn handle_replicate_verbatim(
     log: &Arc<Mutex<Log>>,
     log_dir: &Arc<ArcSwap<PathBuf>>,
     log_dir_status: &LogDirRegistry,
-    batch: krabka_log::VerbatimBatch,
-    base_offset: Offset,
+    batches: Vec<ReplicatedBatch>,
     ack: tokio::sync::oneshot::Sender<Result<(), BrokerError>>,
     append_notify: &Notify,
 ) {
-    let log_for_blocking = Arc::clone(log);
-    let result = run_log_mutation(
-        move || {
-            let mut guard = lock_log(&log_for_blocking);
-            // A follower takes its offsets from the leader; see
-            // `Log::clear_reconciled_next_offset`.
-            guard.clear_reconciled_next_offset();
-            guard
-                .append_verbatim_at(&batch, base_offset)
-                .map(|_| ())
-                .map_err(BrokerError::from)
-        },
-        "replicate verbatim task panicked",
-        StorageStatus {
-            log_dir,
-            registry: log_dir_status,
-        },
-    )
-    .await;
-    let succeeded = result.is_ok();
+    let storage = StorageStatus {
+        log_dir,
+        registry: log_dir_status,
+    };
+    // One batch per lock, not the whole run: a fetch row can carry megabytes,
+    // and every reader of this partition -- a fetch, an epoch check, an offset
+    // lookup -- waits on the lock while it is held. Each batch also decides
+    // for itself whether its append may block.
+    let mut result = Ok(());
+    // A run can fail part-way, after earlier batches are in the log. Readers
+    // parked on `append_notify` are woken for those batches all the same.
+    let mut appended_any = false;
+    for ReplicatedBatch { batch, base_offset } in batches {
+        let footprint = (batch.bytes.len(), batch.max_timestamp);
+        result = run_log_append(
+            log,
+            move |log| !append_may_block(log, footprint),
+            move |log| {
+                // A follower takes its offsets from the leader; see
+                // `Log::clear_reconciled_next_offset`.
+                log.clear_reconciled_next_offset();
+                log.append_verbatim_at(&batch, base_offset)
+                    .map(|_| ())
+                    .map_err(BrokerError::from)
+            },
+            "replicate verbatim task panicked",
+            storage,
+        )
+        .await;
+        if result.is_err() {
+            break;
+        }
+        appended_any = true;
+    }
     let _ = ack.send(result);
-    if succeeded {
+    if appended_any {
         append_notify.notify_waiters();
     }
 }
