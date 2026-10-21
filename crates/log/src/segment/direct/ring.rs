@@ -14,15 +14,21 @@ use {
     std::{
         fs::File,
         io::{Error, ErrorKind},
+        rc::Rc,
         sync::Arc,
     },
-    tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+    tokio::sync::{
+        Semaphore,
+        mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+    },
     tokio_uring::buf::BoundedBuf as _,
 };
 
-/// Submission queue entries of the ring. Every segment may have
-/// `RING_WRITES_IN_FLIGHT` writes submitted; more wait in the ring's own
-/// backlog, which costs nothing but latency.
+/// Submission queue entries of the ring, and the most writes the ring has
+/// started at once, for every segment together. Each started write holds a
+/// duplicate of its segment's descriptor, so the bound keeps a burst across
+/// thousands of partitions from running the process out of descriptors. A
+/// write past it waits before it is taken from its segment's queue.
 const ENTRIES: u32 = 256;
 
 /// The thread that owns the `io_uring`, and the channel segments with work to
@@ -77,8 +83,9 @@ impl Ring {
 
 /// Start one write task for every segment that arrives.
 async fn serve(mut segments: UnboundedReceiver<Arc<Shared>>) {
+    let started = Rc::new(Semaphore::new(ENTRIES as usize));
     while let Some(segment) = segments.recv().await {
-        tokio_uring::spawn(write_one(segment));
+        tokio_uring::spawn(write_one(segment, Rc::clone(&started)));
     }
 }
 
@@ -101,7 +108,10 @@ impl Drop for Pending {
 
 /// Make one write of `segment`. Taking it puts the segment back on the
 /// channel when another can run beside it, so a segment's writes overlap.
-async fn write_one(segment: Arc<Shared>) {
+/// It first waits for one of the ring's `started` permits.
+async fn write_one(segment: Arc<Shared>, started: Rc<Semaphore>) {
+    // The semaphore is never closed, so the permit is always granted.
+    let _permit = started.acquire().await;
     let Some(work) = segment.take_work() else {
         return;
     };
