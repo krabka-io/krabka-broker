@@ -3,6 +3,26 @@
 //! KIP-405 puts the oldest records in the remote tier, so a by-timestamp
 //! lookup asks the remote tier first, then compares overlapping local records
 //! so an upload gap cannot hide an earlier match.
+//!
+//! Each tier answers from its first candidate segment only, as Kafka 4.3.1
+//! does. Kafka's `RemoteLogOffsetReader.call` takes the remote answer and
+//! falls through to the local log only when it is empty:
+//!
+//! ```java
+//! Optional<FileRecords.TimestampAndOffset> timestampAndOffsetOpt =
+//!         rlm.findOffsetByTimestamp(tp, timestamp, startingOffset, leaderEpochCache);
+//! if (timestampAndOffsetOpt.isEmpty()) {
+//!     timestampAndOffsetOpt = searchInLocalLog.get();
+//! }
+//! ```
+//!
+//! The merger here takes the earlier of the two answers instead, which is the
+//! same answer whenever the tier holds a copy of every local record below its
+//! hit: the remote hit sits in a candidate that starts below the first local
+//! segment, so any earlier local match would be a record of that same
+//! candidate, and the remote scan would have returned it. Only a tier with an
+//! upload gap, which Kafka's sequential copier never leaves, makes the two
+//! differ, and there the earlier local record is the one a consumer can read.
 
 use {
     super::{
@@ -124,12 +144,25 @@ pub(crate) async fn resolve_timestamp_with_sources(
         None
     };
     let remote = remote_reader.map(|reader| {
-        // Kafka's `findOffsetByTimestamp` reads the leader-epoch cache and the
-        // log end offset when the lookup starts.
-        let lineage = EpochLineage::of(&partition.log.lock().expect("log mutex poisoned"));
+        // Kafka's `findOffsetByTimestamp` reads the leader-epoch cache, the
+        // log end offset and the local segments when the lookup starts.
+        let (lineage, local_base) = {
+            let log = partition.log.lock().expect("log mutex poisoned");
+            (
+                EpochLineage::of(&log),
+                log.first_segment_base().map(|base| base.0),
+            )
+        };
         move |max_record_body| async move {
             reader
-                .offset_for_timestamp(tp, timestamp, minimum, max_record_body, &lineage)
+                .offset_for_timestamp(
+                    tp,
+                    timestamp,
+                    minimum,
+                    max_record_body,
+                    &lineage,
+                    local_base,
+                )
                 .await
         }
     });
@@ -434,6 +467,10 @@ mod tests {
         #[builder(default = Offset (0) ..= Offset (6))] bounds: RangeInclusive<Offset>,
         #[builder(default = bytes (64))] size: ByteSize,
         #[builder(into, default = UnixMillis (2_400))] event: UnixMillis,
+        /// The segment's largest record timestamp, which a seek's first
+        /// candidate is chosen by.
+        #[builder(default = 2_400)]
+        max_timestamp: i64,
     ) -> RemoteLogSegmentId {
         let setup = TimestampSegmentSetup {
             topic_partition,
@@ -452,7 +489,7 @@ mod tests {
             id.clone(),
             bounds.start().0,
             bounds.end().0,
-            2_400,
+            max_timestamp,
             1,
             event.0,
             RemoteLogSegmentDetails::new(
@@ -535,6 +572,7 @@ mod tests {
                 .topic_partition(TopicIdPartition::new(id, TOPIC, 0))
                 .bounds(export.base_offset..=export.last_offset)
                 .size(export.size)
+                .max_timestamp(export.max_timestamp)
                 .call();
         }
         log.delete_local_segments_through(Offset(4)).unwrap();

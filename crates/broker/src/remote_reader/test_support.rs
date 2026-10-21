@@ -395,16 +395,36 @@ fn remote_segment_reader(
 pub fn sparse_remote_segment_reader() -> ReaderWithDir { sparse_reader_with_max_timestamp(2_400) }
 
 /// One finished remote segment of [`tier_reader`]: its batches, in offset
-/// order, and the leader epochs its metadata records.
+/// order, the leader epochs its metadata records, and whether its metadata
+/// carries the unknown max timestamp `-1` instead of its largest record
+/// timestamp.
 pub struct TierSegment {
     pub batches: Vec<krabka_protocol::records::RecordBatch>,
     pub epochs: std::collections::BTreeMap<LeaderEpoch, i64>,
+    pub unknown_max_timestamp: bool,
+}
+
+/// A [`TierSegment`] of one batch at `base` with `timestamps`, in `epoch` from
+/// `base`, whose metadata carries the unknown max timestamp when
+/// `unknown_max` is set.
+pub fn single_batch_tier_segment(
+    base: i64,
+    timestamps: &[i64],
+    epoch: i32,
+    unknown_max: bool,
+) -> TierSegment {
+    TierSegment {
+        batches: vec![timestamped_batch_at(base, timestamps, b'v')],
+        epochs: maplit::btreemap! {LeaderEpoch(epoch) => base},
+        unknown_max_timestamp: unknown_max,
+    }
 }
 
 /// A tier holding `segments`, each copied with the indexes Kafka writes at an
 /// index interval of one batch, as `remote_segment_reader` does for one.
 /// A segment spans its first batch's base offset to its last batch's last
-/// offset, and its max timestamp is its largest record timestamp.
+/// offset, and its max timestamp is its largest record timestamp unless it
+/// asks for the unknown one.
 pub fn tier_reader(segments: &[TierSegment]) -> ReaderWithDir {
     let remote_dir = tempfile::tempdir().unwrap();
     let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
@@ -463,7 +483,11 @@ pub fn tier_reader(segments: &[TierSegment]) -> ReaderWithDir {
             id.clone(),
             base,
             end,
-            max_timestamp,
+            if segment.unknown_max_timestamp {
+                -1
+            } else {
+                max_timestamp
+            },
             1,
             max_timestamp,
             krabka_remote_storage::RemoteLogSegmentDetails::new(
@@ -504,6 +528,7 @@ pub fn divergent_tier_reader() -> ReaderWithDir {
         TierSegment {
             batches: vec![timestamped_batch_at(0, &[100, 110, 120, 130, 140], b'a')],
             epochs: maplit::btreemap! {LeaderEpoch(0) => 0},
+            unknown_max_timestamp: false,
         },
         TierSegment {
             batches: vec![timestamped_batch_at(
@@ -512,6 +537,7 @@ pub fn divergent_tier_reader() -> ReaderWithDir {
                 b'x',
             )],
             epochs: maplit::btreemap! {LeaderEpoch(0) => 3},
+            unknown_max_timestamp: false,
         },
         TierSegment {
             batches: vec![timestamped_batch_at(
@@ -520,6 +546,7 @@ pub fn divergent_tier_reader() -> ReaderWithDir {
                 b'b',
             )],
             epochs: maplit::btreemap! {LeaderEpoch(1) => 5},
+            unknown_max_timestamp: false,
         },
     ])
 }

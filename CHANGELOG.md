@@ -79,6 +79,14 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   transactions as the data read resolves it. A finished segment nested inside
   the covering one made the abort lookup answer none while the read still
   served the batches (#1388).
+- Answer a by-timestamp `ListOffsets` from the first candidate segment only,
+  as Kafka 4.3.1 does: locally the first segment whose largest timestamp
+  reaches the target, remotely the first finished, lineage-admitted segment
+  whose max timestamp and end offset reach the target and the log start. When
+  that segment's matching records all sit below the log start, the answer is
+  `-1`/`-1`, where the seek went on to a later segment before. A remote
+  candidate at or above the first local segment's base is answered from the
+  local log, as Kafka's `findOffsetByTimestamp` does (#1388).
 
 ## [1.0.8] - 2026-10-20
 
