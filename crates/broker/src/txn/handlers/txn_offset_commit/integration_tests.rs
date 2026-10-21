@@ -27,6 +27,7 @@ use {
                     AssignedTopicPartitions, CurrentMemberAssignmentValue, CurrentTopicPartitions,
                     MemberAssignmentState, MemberMetadataValue, TargetAssignmentMemberValue,
                 },
+                test_support::{seed_streams_group, stop_streams_actor},
             },
         },
         handlers::{RequestContext, test_support::StartedBroker},
@@ -907,6 +908,122 @@ async fn an_older_member_epoch_commits_a_partition_assigned_before_it() {
         actual.push((version, epoch, response.topics[0].partitions[0].error_code));
     }
     check!(actual == rows);
+
+    handle.shutdown().await;
+}
+
+/// The streams group a [`StreamsCommitRow`] commits to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamsGroup {
+    /// Member `m1` at member epoch 5.
+    Live,
+    /// The same group after its actor exited, as one does after a failed
+    /// write. A respawned actor holds no member.
+    Stopped,
+}
+
+/// One `TxnOffsetCommit` to a streams group and the code Kafka answers on its
+/// row.
+struct StreamsCommitRow {
+    name: &'static str,
+    group: StreamsGroup,
+    member_id: &'static str,
+    group_instance_id: Option<&'static str>,
+    member_epoch: i32,
+    expected: i16,
+}
+
+/// Kafka's `StreamsGroup.validateOffsetCommit` with `isTransactional`: a
+/// commit skips the member check only when it names no member id, the
+/// unknown generation and no group instance id. A streams actor that exited
+/// is respawned to validate the commit instead of refusing it with
+/// `UNKNOWN_SERVER_ERROR`.
+#[tokio::test]
+async fn txn_offset_commit_to_a_streams_group_follows_kafka() {
+    let rows = [
+        StreamsCommitRow {
+            name: "no member, generation or instance id",
+            group: StreamsGroup::Live,
+            member_id: "",
+            group_instance_id: None,
+            member_epoch: -1,
+            expected: codes::NONE,
+        },
+        StreamsCommitRow {
+            name: "a group instance id and no member",
+            group: StreamsGroup::Live,
+            member_id: "",
+            group_instance_id: Some("instance"),
+            member_epoch: -1,
+            expected: codes::UNKNOWN_MEMBER_ID,
+        },
+        StreamsCommitRow {
+            name: "the member at its epoch",
+            group: StreamsGroup::Live,
+            member_id: "m1",
+            group_instance_id: None,
+            member_epoch: 5,
+            expected: codes::NONE,
+        },
+        StreamsCommitRow {
+            name: "no member, generation or instance id, stopped actor",
+            group: StreamsGroup::Stopped,
+            member_id: "",
+            group_instance_id: None,
+            member_epoch: -1,
+            expected: codes::NONE,
+        },
+        StreamsCommitRow {
+            name: "a member the respawned actor does not hold",
+            group: StreamsGroup::Stopped,
+            member_id: "m1",
+            group_instance_id: None,
+            member_epoch: 5,
+            expected: codes::UNKNOWN_MEMBER_ID,
+        },
+    ];
+
+    let SeededBroker { handle, dir: _dir } = start_seeded_broker().await;
+    let broker = handle.broker_arc_for_test();
+    let ReadIdentity { address, user } = read_identity();
+    let ctx = request_context(&user, &address, "txn-offset-commit-streams");
+
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (i, row) in rows.iter().enumerate() {
+        let group_id = format!("streams-{i}");
+        seed_streams_group()
+            .coordinator(&broker.group_coordinator)
+            .group_id(&group_id)
+            .call()
+            .await;
+        if row.group == StreamsGroup::Stopped {
+            stop_streams_actor(&broker.group_coordinator, &group_id).await;
+        }
+        let producer = super::test_support::TxnCommitProducer::initial(krabka_ids::ProducerId(
+            142 + i64::try_from(i).expect("small"),
+        ));
+        let request = TxnOffsetCommitRequest {
+            member_id: row.member_id.into(),
+            group_instance_id: row.group_instance_id.map(str::to_string),
+            generation_id_or_member_epoch: row.member_epoch,
+            ..open_commit_request(&broker, super::test_support::TxnCommitSetup {
+                transactional_id: format!("tid-streams-{i}"),
+                group_id: &group_id,
+                producer,
+                topics: vec![topic("a", &[0])],
+            })
+            .await
+        };
+        let response = commit_response(&broker, &request, 5, &ctx).await;
+        actual.push((row.name, response_rows(&response)));
+        expected.push((row.name, vec![ResponseRow {
+            topic: "a".into(),
+            partition: 0,
+            code: row.expected,
+        }]));
+    }
+    check!(actual == expected);
 
     handle.shutdown().await;
 }

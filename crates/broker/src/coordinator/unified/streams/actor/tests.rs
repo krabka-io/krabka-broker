@@ -20,7 +20,7 @@ use {
                 config::KEY_NUM_STANDBY_REPLICAS,
                 persistence::{
                     DescriptionEpochs, LastAssignmentConfig, PendingStreamsRecords,
-                    StreamsGroupMetadataValue,
+                    StoredSubtopology, StoredTopicInfo, StreamsGroupMetadataValue,
                 },
                 state::{StreamsGroupState, StreamsMemberState},
             },
@@ -1906,12 +1906,13 @@ fn validate_offset_commit_follows_kafka_streams_group() {
     group.members.insert("m1".into(), member);
     let empty = StreamsGroupState::new("g");
 
-    // (row, group, member id, member epoch, fence, expected)
+    // (row, group, member id, group instance id, member epoch, fence, expected)
     let rows = [
         (
             "admin commit on an empty group",
             &empty,
             "",
+            None,
             -1,
             offset(9),
             Ok(()),
@@ -1920,6 +1921,7 @@ fn validate_offset_commit_follows_kafka_streams_group() {
             "admin commit on a live group",
             &group,
             "",
+            None,
             -1,
             offset(9),
             Err(codes::UNKNOWN_MEMBER_ID),
@@ -1928,6 +1930,7 @@ fn validate_offset_commit_follows_kafka_streams_group() {
             "empty member id at a real epoch",
             &group,
             "",
+            None,
             5,
             offset(9),
             Err(codes::UNKNOWN_MEMBER_ID),
@@ -1936,6 +1939,25 @@ fn validate_offset_commit_follows_kafka_streams_group() {
             "transactional commit with no member",
             &group,
             "",
+            None,
+            -1,
+            txn,
+            Ok(()),
+        ),
+        (
+            "transactional commit naming only a group instance id",
+            &group,
+            "",
+            Some("instance"),
+            -1,
+            txn,
+            Err(codes::UNKNOWN_MEMBER_ID),
+        ),
+        (
+            "transactional commit naming a group instance id on an empty group",
+            &empty,
+            "",
+            Some("instance"),
             -1,
             txn,
             Ok(()),
@@ -1944,6 +1966,7 @@ fn validate_offset_commit_follows_kafka_streams_group() {
             "unknown member",
             &group,
             "m2",
+            None,
             5,
             offset(9),
             Err(codes::UNKNOWN_MEMBER_ID),
@@ -1952,6 +1975,7 @@ fn validate_offset_commit_follows_kafka_streams_group() {
             "OffsetCommit before v9",
             &group,
             "m1",
+            None,
             5,
             offset(8),
             Err(codes::UNSUPPORTED_VERSION),
@@ -1960,15 +1984,17 @@ fn validate_offset_commit_follows_kafka_streams_group() {
             "TxnOffsetCommit has no version floor",
             &group,
             "m1",
+            None,
             5,
             txn,
             Ok(()),
         ),
-        ("current epoch", &group, "m1", 5, offset(9), Ok(())),
+        ("current epoch", &group, "m1", None, 5, offset(9), Ok(())),
         (
             "newer epoch",
             &group,
             "m1",
+            None,
             6,
             offset(9),
             Err(codes::STALE_MEMBER_EPOCH),
@@ -1977,18 +2003,86 @@ fn validate_offset_commit_follows_kafka_streams_group() {
             "older epoch on a group without a topology",
             &group,
             "m1",
+            None,
             4,
             offset(9),
             Err(codes::STALE_MEMBER_EPOCH),
         ),
     ];
     let partitions = [("in".to_string(), 0)];
-    for (row, state, member_id, member_epoch, fence, expected) in rows {
+    for (row, state, member_id, group_instance_id, member_epoch, fence, expected) in rows {
+        let identity = CommitIdentity {
+            member_id,
+            group_instance_id,
+            member_epoch,
+            fence,
+        };
         check!(
-            validate_offset_commit(state, None, member_id, member_epoch, fence, &partitions)
-                == expected,
+            validate_offset_commit(state, None, identity, &partitions) == expected,
             "{row}"
         );
+    }
+}
+
+/// A stored subtopology `id` that reads the source topic `source` and the
+/// repartition topics `repartition`.
+fn stored_subtopology(id: &str, source: &str, repartition: &[&str]) -> StoredSubtopology {
+    StoredSubtopology {
+        subtopology_id: id.into(),
+        source_topics: vec![source.into()],
+        source_topic_regex: vec![],
+        repartition_sink_topics: vec![],
+        state_changelog_topics: vec![],
+        repartition_source_topics: repartition
+            .iter()
+            .map(|name| StoredTopicInfo {
+                name: (*name).into(),
+                partitions: 4,
+                replication_factor: -1,
+                topic_configs: vec![],
+            })
+            .collect(),
+        copartition_groups: vec![],
+    }
+}
+
+/// Kafka's `StreamsGroup.isSubscribedToTopic`, which `OffsetDelete` asks:
+/// an empty group and a group with no topology subscribe to nothing;
+/// otherwise the group subscribes to the source and repartition source
+/// topics of its topology, and not to its other topics.
+#[test]
+fn subscribed_topics_follow_kafka_streams_group() {
+    let topology = StreamsGroupTopologyValue {
+        epoch: 1,
+        subtopologies: vec![
+            StoredSubtopology {
+                repartition_sink_topics: vec!["rep".into()],
+                ..stored_subtopology("0", "in", &[])
+            },
+            stored_subtopology("1", "other", &["rep"]),
+        ],
+    };
+    let mut live = StreamsGroupState::new("g");
+    live.members.insert("m1".into(), epoch_five_member());
+    live.phase = StreamsGroupStatePhase::Stable;
+    let empty = StreamsGroupState::new("g");
+    let named = |topics: &[&str]| {
+        SubscribedTopics::Named(topics.iter().map(|topic| (*topic).to_string()).collect())
+    };
+
+    // (row, group, topology, expected)
+    let rows = [
+        ("an empty group", &empty, Some(&topology), named(&[])),
+        ("a live group with no topology", &live, None, named(&[])),
+        (
+            "a live group with a topology",
+            &live,
+            Some(&topology),
+            named(&["in", "other", "rep"]),
+        ),
+    ];
+    for (row, state, topology, expected) in rows {
+        check!(subscribed_topics(state, topology) == expected, "{row}");
     }
 }
 
@@ -2045,8 +2139,6 @@ fn validate_offset_fetch_follows_kafka_streams_group() {
 /// nothing. Each row commits at epoch 4.
 #[test]
 fn older_epoch_commit_checks_each_tasks_assignment_epoch() {
-    use crate::coordinator::unified::streams::persistence::{StoredSubtopology, StoredTopicInfo};
-
     /// A partition that the commit writes.
     struct CommittedPartition {
         topic: &'static str,
@@ -2060,28 +2152,11 @@ fn older_epoch_commit_checks_each_tasks_assignment_epoch() {
         expected: Result<(), i16>,
     }
 
-    let subtopology = |id: &str, source: &str, repartition: &[&str]| StoredSubtopology {
-        subtopology_id: id.into(),
-        source_topics: vec![source.into()],
-        source_topic_regex: vec![],
-        repartition_sink_topics: vec![],
-        state_changelog_topics: vec![],
-        repartition_source_topics: repartition
-            .iter()
-            .map(|name| StoredTopicInfo {
-                name: (*name).into(),
-                partitions: 4,
-                replication_factor: -1,
-                topic_configs: vec![],
-            })
-            .collect(),
-        copartition_groups: vec![],
-    };
     let topology = StreamsGroupTopologyValue {
         epoch: 1,
         subtopologies: vec![
-            subtopology("0", "in", &["rep"]),
-            subtopology("1", "other", &[]),
+            stored_subtopology("0", "in", &["rep"]),
+            stored_subtopology("1", "other", &[]),
         ],
     };
     let mut group = StreamsGroupState::new("g");
@@ -2196,8 +2271,17 @@ fn older_epoch_commit_checks_each_tasks_assignment_epoch() {
             CommitFence::Transactional,
         ] {
             check!(
-                validate_offset_commit(&group, Some(&topology), "m1", 4, fence, &partitions)
-                    == expected,
+                validate_offset_commit(
+                    &group,
+                    Some(&topology),
+                    CommitIdentity {
+                        member_id: "m1",
+                        group_instance_id: None,
+                        member_epoch: 4,
+                        fence,
+                    },
+                    &partitions,
+                ) == expected,
                 "{row} {fence:?}"
             );
         }

@@ -182,6 +182,21 @@ impl GroupCoordinator {
         self.streams_groups.get(group_id).map(|e| e.value().clone())
     }
 
+    /// The actor of the streams group `group_id`, when the group exists.
+    ///
+    /// Unlike [`find_streams`](Self::find_streams), it never returns the
+    /// closed handle of an actor that exited after a failed write: it
+    /// respawns that actor from the group's replayed state, as
+    /// [`get_or_create_streams`](Self::get_or_create_streams) does.
+    #[must_use]
+    pub fn find_live_streams(
+        self: &Arc<Self>,
+        group_id: &str,
+    ) -> Option<Arc<StreamsGroupActorHandle>> {
+        self.find_streams(group_id)
+            .map(|_| self.get_or_create_streams(group_id))
+    }
+
     /// Snapshot the ids of every live streams group, per KIP-1071.
     ///
     /// The method is the counterpart of

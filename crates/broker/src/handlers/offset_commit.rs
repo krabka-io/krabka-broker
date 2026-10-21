@@ -363,7 +363,8 @@ fn expire_timestamp_ms(retention_time_ms: i64, now_ms: i64) -> Option<i64> {
 /// LIVE protocol: a KIP-848 migration may have flipped the protocol in place
 /// after spawn. A streams group (KIP-1071) validates in its streams actor, and
 /// its offsets live in a group actor of the same id, as `TxnOffsetCommit`
-/// keeps them.
+/// keeps them. A streams actor that exited after a failed write is respawned
+/// first, so it never refuses the commit with `UNKNOWN_SERVER_ERROR`.
 ///
 /// `req` holds the partitions that Kafka's `commitOffset` runs the
 /// per-partition validator on: a consumer group checks them by topic id, and
@@ -376,7 +377,7 @@ async fn validate(
 ) -> Result<Arc<GroupActorHandle>, i16> {
     let coordinator = &broker.group_coordinator;
     let generation = req.generation_id_or_member_epoch;
-    let code = if let Some(streams) = coordinator.find_streams(&req.group_id) {
+    let code = if let Some(streams) = coordinator.find_live_streams(&req.group_id) {
         validate_streams_group_offset_commit(
             &streams,
             &req.member_id,
