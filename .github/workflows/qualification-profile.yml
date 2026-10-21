@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   candidate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     outputs:
       revision: ${{ steps.freeze.outputs.revision }}

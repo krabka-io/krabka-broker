@@ -13,7 +13,7 @@ cannot reconnect.
 
 The network pattern depends on the Docker host:
 
-- Linux hosts, including GitHub Actions ubuntu-latest: set
+- Linux hosts, including the GitHub Actions ubuntu-26.04 runner: set
   `KRABKA_HOST_BOOTSTRAP=<docker_bridge_gateway>:<port>`. The value is
   usually `172.17.0.1:9092`. Find the bridge IP with:
 

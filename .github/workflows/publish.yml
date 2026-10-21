@@ -64,7 +64,7 @@ jobs:
   # --dry-run`. It holds no credential.
   plan:
     name: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -222,7 +222,7 @@ jobs:
     name: publish
     needs: plan
     if: needs.plan.outputs.publish == 'true' && needs.plan.outputs.crates != ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     # crates.io's trusted-publisher entry for each crate names this
     # environment. It also holds the bootstrap token, so the secret is

@@ -30,7 +30,7 @@ jobs:
   cpd:
     name: jscpd · zero repeats at 52 tokens
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -70,7 +70,7 @@ jobs:
   ci:
     name: build · lint · format · test · docgen
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -236,7 +236,7 @@ jobs:
     name: coverage
     needs: select
     if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || needs.select.outputs.rust == 'true')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
       # No `fetch-depth: 0`: nothing here reads the merge base -- the report
@@ -292,7 +292,7 @@ jobs:
   supply-chain:
     name: cargo deny
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -322,7 +322,7 @@ jobs:
   cargo:
     name: cargo clippy · nextest
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Cold builds, the full suite and the post-job cache upload share this budget.
     timeout-minutes: 90
     # This job builds the whole workspace twice into one target directory --
@@ -406,7 +406,7 @@ jobs:
   wasm:
     name: cargo clippy · wasm32-wasip1
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -466,7 +466,7 @@ jobs:
   checks:
     name: checks
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # The longest of the four (`docs checks`, whose lychee step walks every
     # markdown file); the other three wanted 10.
     timeout-minutes: 45
@@ -613,7 +613,7 @@ jobs:
   proofs:
     name: creusot proofs
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     permissions:
       contents: read
@@ -755,7 +755,7 @@ jobs:
   # all, which is what lets `coverage` sit out a docs-only pull request.
   select:
     name: select
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     outputs:
       suites: ${{ steps.select.outputs.suites }}
@@ -815,7 +815,7 @@ jobs:
     name: container · ${{ matrix.suite.name }}
     needs: select
     if: needs.select.outputs.any == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     strategy:
       # One group failing should not cancel the rest -- the point of the shard
@@ -906,7 +906,7 @@ jobs:
 
   kubernetes:
     name: kubernetes · kind
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -930,7 +930,7 @@ jobs:
   upgrade:
     name: upgrade · previous release
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     permissions:
       contents: read
@@ -957,7 +957,7 @@ jobs:
   gssapi:
     name: container · gssapi
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1020,7 +1020,7 @@ jobs:
   soak:
     name: soak · four hours
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # The soak itself is four hours; the rest is the compile, the image and the
     # verification pass.
     timeout-minutes: 330
@@ -1082,7 +1082,7 @@ jobs:
   netem:
     name: netem · slow-follower self-check
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1146,7 +1146,7 @@ jobs:
   links:
     name: external links
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1166,7 +1166,7 @@ jobs:
   bench:
     name: variance-calibrated criterion benches
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Four alternating reference/candidate passes over all seven suites.
     timeout-minutes: 360
     permissions:
@@ -1304,7 +1304,7 @@ jobs:
     name: delivery
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: [ci, coverage, supply-chain]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -1405,7 +1405,7 @@ jobs:
       - select
       - docker
       - kubernetes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - name: require every dependency to have succeeded
@@ -1459,7 +1459,7 @@ jobs:
     # `always()`: the whole point is to run when a dependency failed, and a
     # plain `needs` would skip this job exactly then.
     if: always() && github.event_name == 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     # The workflow-level block is `contents: read` + `id-token: write`. This is
     # the only job that writes issues, so the grant stays here rather than

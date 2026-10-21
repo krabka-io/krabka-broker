@@ -37,7 +37,7 @@ permissions:
 jobs:
   immutable-set:
     if: ${{ github.event_name != 'schedule' && !inputs.execute && !inputs.dr_drill }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     env:
       MANIFEST: ${{ inputs.manifest || 'qualification/ecosystem-eight-gate-baseline.json' }}
@@ -88,7 +88,7 @@ jobs:
 
   candidate:
     if: ${{ github.event_name == 'schedule' || inputs.execute || inputs.dr_drill }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -130,7 +130,7 @@ jobs:
   gate:
     needs: candidate
     if: ${{ github.event_name == 'schedule' || inputs.execute }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 160
     strategy:
       fail-fast: false
@@ -178,7 +178,7 @@ jobs:
   disaster-recovery-drill:
     needs: candidate
     if: ${{ inputs.dr_drill && !inputs.execute }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 160
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -231,7 +231,7 @@ jobs:
 
   publish:
     needs: [candidate, gate]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
       contents: write
@@ -288,7 +288,7 @@ jobs:
   loaded-lifecycle:
     name: loaded lifecycle
     if: ${{ inputs.loaded_lifecycle || inputs.execute }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 160
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
