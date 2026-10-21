@@ -585,12 +585,13 @@ impl Pool {
     /// `io`.
     fn takes(&self, io: &dyn LogIo) -> bool {
         #[cfg(target_os = "linux")]
-        return io.submits_direct_writes() && self.ring.is_some();
+        let ring = self.ring.is_some();
         #[cfg(not(target_os = "linux"))]
-        {
-            let _ = (self, io);
+        let ring = {
+            let _ = self;
             false
-        }
+        };
+        ring && io.submits_direct_writes()
     }
 
     fn push(&self, segment: Arc<Shared>, ring: bool) {
