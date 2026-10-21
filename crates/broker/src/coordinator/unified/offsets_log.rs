@@ -30,7 +30,7 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long one window of [`LeaderAppend::committed_whenever`] waits before
 /// it checks again.
-const UNBOUNDED_WAIT_WINDOW: Duration = Duration::from_secs(60 * 60);
+const UNBOUNDED_WAIT_WINDOW: Duration = Duration::from_hours(1);
 
 #[async_trait]
 pub trait OffsetsLog: Send + Sync + std::fmt::Debug {
