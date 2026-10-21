@@ -7,7 +7,7 @@
 //! finds the first one at or after the requested timestamp.
 
 use {
-    super::RemoteReader,
+    super::{RemoteReader, lineage::EpochLineage},
     krabka_remote_storage::{
         IndexType, LogOffset, RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageError,
         TimestampMs, TopicIdPartition, first_record_at_or_after_timestamp, parse_offset_index,
@@ -27,15 +27,24 @@ impl RemoteReader {
     /// above it fails the lookup with [`RemoteStorageError::RecordTooLarge`],
     /// as `RemoteLogManager.findOffsetByTimestamp` fails with
     /// `InvalidRecordException` and does not go on to the next segment.
+    ///
+    /// A segment outside the partition's leader-epoch `lineage` is never read,
+    /// as `findOffsetByTimestamp` skips any segment that fails
+    /// `isRemoteSegmentWithinLeaderEpochs`: after an unclean election the tier
+    /// can still hold a deposed leader's copy of offsets the current lineage
+    /// assigns to other records. See [`EpochLineage::admits`].
     pub(crate) async fn offset_for_timestamp(
         &self,
         tp: &TopicIdPartition,
         target_timestamp: TimestampMs,
         minimum_offset: LogOffset,
         max_record_body: Option<usize>,
+        lineage: &EpochLineage,
     ) -> Result<Option<(LogOffset, TimestampMs)>, RemoteStorageError> {
         let mut listed = self.list_remote_log_segments_blocking(tp).await?;
-        listed.retain(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished);
+        listed.retain(|md| {
+            md.state() == RemoteLogSegmentState::CopySegmentFinished && lineage.admits(md)
+        });
         listed.sort_by_key(RemoteLogSegmentMetadata::start_offset);
 
         for metadata in listed
@@ -86,10 +95,11 @@ impl RemoteReader {
 #[cfg(test)]
 mod tests {
     use {
+        super::EpochLineage,
         crate::remote_reader::test_support::{
             ReaderFixture, ReaderWithDir, append_time_remote_segment_reader,
-            compressed_remote_segment_reader, reader_fixture, sparse_remote_segment_reader,
-            sparse_remote_segment_reader_with_max_timestamp, tp,
+            compressed_remote_segment_reader, divergent_tier_reader, reader_fixture,
+            sparse_remote_segment_reader, sparse_remote_segment_reader_with_max_timestamp, tp,
             unordered_timestamps_remote_segment_reader,
         },
         assert2::assert,
@@ -114,7 +124,7 @@ mod tests {
         let end = log.tierable_segments().last().unwrap().last_offset.0 + 1;
         let expected = (minimum < end).then_some((minimum, 0));
         let actual = reader
-            .offset_for_timestamp(&tp(), 0, minimum, None)
+            .offset_for_timestamp(&tp(), 0, minimum, None, &EpochLineage::unknown())
             .await
             .unwrap();
         assert2::assert!(actual == expected, "minimum {minimum}, end {end}");
@@ -135,10 +145,51 @@ mod tests {
     ) {
         let ReaderWithDir { reader, dir: _dir } = append_time_remote_segment_reader();
         let actual = reader
-            .offset_for_timestamp(&tp(), target, floor, None)
+            .offset_for_timestamp(&tp(), target, floor, None, &EpochLineage::unknown())
             .await
             .unwrap();
         assert2::assert!(actual == expected, "floor {floor} target {target}");
+    }
+
+    /// #1388: Kafka's `findOffsetByTimestamp` reads only segments that pass
+    /// `isRemoteSegmentWithinLeaderEpochs`. The deposed leader's copy of
+    /// offsets 3 to 9 claims epoch 0 past offset 4, where the lineage starts
+    /// epoch 1, so the answer for 1 000 is the current lineage's offset 7, not
+    /// the divergent copy's offset 5. An empty checkpoint says nothing about
+    /// lineage, so it reads every segment, as a remote `Fetch` does then.
+    #[tokio::test]
+    async fn timestamp_lookup_skips_a_segment_outside_the_leader_epoch_lineage() {
+        let ReaderWithDir {
+            reader,
+            dir: _remote_dir,
+        } = divergent_tier_reader();
+        let lineage = EpochLineage::from_entries(&[(0, 0), (1, 5)], 10);
+        let cases = [
+            ("before the divergence", &lineage, 100, Some((0, 100))),
+            (
+                "past it, the lineage's record",
+                &lineage,
+                1_000,
+                Some((7, 1_100)),
+            ),
+            (
+                "an empty checkpoint judges nothing",
+                &EpochLineage::unknown(),
+                1_000,
+                Some((5, 1_000)),
+            ),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (label, lineage, target, want) in cases {
+            let found = reader
+                .offset_for_timestamp(&tp(), target, 0, None, lineage)
+                .await
+                .unwrap();
+            actual.push((label, found));
+            expected.push((label, want));
+        }
+        assert!(actual == expected);
     }
 
     #[tokio::test]
@@ -156,7 +207,7 @@ mod tests {
         // all 0. Target a timestamp <= 0 to match the first segment.
         let target_ts = 0_i64;
         let got = reader
-            .offset_for_timestamp(&tp(), target_ts, 0, None)
+            .offset_for_timestamp(&tp(), target_ts, 0, None, &EpochLineage::unknown())
             .await
             .unwrap()
             .expect("first segment matches ts=0");
@@ -174,7 +225,7 @@ mod tests {
         } = sparse_remote_segment_reader();
 
         let got = reader
-            .offset_for_timestamp(&tp(), 1_500, 0, None)
+            .offset_for_timestamp(&tp(), 1_500, 0, None, &EpochLineage::unknown())
             .await
             .unwrap()
             .expect("timestamp 1500 has a remote match");
@@ -190,7 +241,7 @@ mod tests {
         } = sparse_remote_segment_reader();
 
         let got = reader
-            .offset_for_timestamp(&tp(), 2_000, 0, None)
+            .offset_for_timestamp(&tp(), 2_000, 0, None, &EpochLineage::unknown())
             .await
             .unwrap()
             .expect("timestamp 2000 has an exact record match");
@@ -203,7 +254,7 @@ mod tests {
         let (reader, _remote_dir) = sparse_remote_segment_reader_with_max_timestamp(-1);
 
         let got = reader
-            .offset_for_timestamp(&tp(), 2_000, 0, None)
+            .offset_for_timestamp(&tp(), 2_000, 0, None, &EpochLineage::unknown())
             .await
             .unwrap()
             .expect("the unknown max sentinel must not suppress an exact remote scan");
@@ -223,7 +274,7 @@ mod tests {
         } = unordered_timestamps_remote_segment_reader();
 
         let got = reader
-            .offset_for_timestamp(&tp(), 2_400, 0, None)
+            .offset_for_timestamp(&tp(), 2_400, 0, None, &EpochLineage::unknown())
             .await
             .unwrap()
             .expect("the newest record is the first of the second batch");
@@ -242,7 +293,7 @@ mod tests {
         // All segments have max_ts=0 by construction (see test above); any
         // strictly-positive target is past every remote segment.
         let got = reader
-            .offset_for_timestamp(&tp(), 1, 0, None)
+            .offset_for_timestamp(&tp(), 1, 0, None, &EpochLineage::unknown())
             .await
             .unwrap();
         assert!(got == None);
@@ -271,7 +322,10 @@ mod tests {
             reader,
             dir: _remote_dir,
         } = compressed_remote_segment_reader(1_000);
-        let actual = match reader.offset_for_timestamp(&tp(), target, 0, limit).await {
+        let actual = match reader
+            .offset_for_timestamp(&tp(), target, 0, limit, &EpochLineage::unknown())
+            .await
+        {
             Ok(found) => Ok(found),
             Err(RemoteStorageError::RecordTooLarge { size, limit: seen }) => {
                 assert2::assert!(Some(seen) == limit);

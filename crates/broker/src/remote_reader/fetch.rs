@@ -117,43 +117,8 @@ impl RemoteReader {
         offset: LogOffset,
         max_bytes: usize,
     ) -> Result<Option<SegmentRead>, RemoteStorageError> {
-        // Primary lookup: epoch-indexed fast path.  The caller resolves
-        // `leader_epoch` from the local leader-epoch checkpoint via
-        // `epoch_for_offset`, so this is the epoch that *owned* the requested
-        // offset at copy time.  The RLMM indexes a segment under every epoch
-        // in its `segment_leader_epochs` map, so this reliably hits after a
-        // clean failover.
-        let primary = self
-            .rlmm
-            .remote_log_segment_metadata(tp, leader_epoch, offset)?;
-
-        // Defensive fallback: the epoch-indexed primary lookup can still miss
-        // in rare edge cases (e.g. the local leader-epoch checkpoint is empty
-        // on a fresh replica, or an unclean election produced a gap in the
-        // checkpoint that `epoch_for_offset` cannot bridge).  When the primary
-        // misses, scan `list_remote_log_segments` for finished segments that
-        // cover `offset` and prefer the one whose `segment_leader_epochs` map
-        // contains the passed epoch (same lineage). No lineage-unmatched
-        // segment is a safe fallback under log divergence, so that case is a
-        // miss rather than a read from a different history.
-        let primary = primary.and_then(|metadata| {
-            relative_offset(&metadata, leader_epoch, offset).map(|relative| (metadata, relative))
-        });
-        let (metadata, target_rel) = if let Some(selected) = primary {
-            selected
-        } else {
-            let candidates = self.rlmm.list_remote_log_segments(tp)?;
-            let Some(selected) = candidates
-                .into_iter()
-                .filter_map(|metadata| {
-                    relative_offset(&metadata, leader_epoch, offset)
-                        .map(|relative| (metadata, relative))
-                })
-                .max_by_key(|(metadata, _)| metadata.start_offset())
-            else {
-                return Ok(None);
-            };
-            selected
+        let Some((metadata, target_rel)) = self.segment_covering(tp, leader_epoch, offset)? else {
+            return Ok(None);
         };
 
         let index_bytes = self
@@ -195,6 +160,57 @@ impl RemoteReader {
             start_position,
             data,
         }))
+    }
+
+    /// The finished segment that covers `(leader_epoch, offset)`, and the
+    /// offset's position in it relative to the segment's base.
+    ///
+    /// A `Fetch` reads its batches from this segment, and the read-committed
+    /// abort lookup gates on it, so the two cannot disagree about whether the
+    /// tier holds the offset. `None` when no finished segment on the epoch's
+    /// lineage covers it.
+    pub(super) fn segment_covering(
+        &self,
+        tp: &TopicIdPartition,
+        leader_epoch: LeaderEpoch,
+        offset: LogOffset,
+    ) -> Result<Option<(RemoteLogSegmentMetadata, u32)>, RemoteStorageError> {
+        // Primary lookup: epoch-indexed fast path.  The caller resolves
+        // `leader_epoch` from the local leader-epoch checkpoint via
+        // `epoch_for_offset`, so this is the epoch that *owned* the requested
+        // offset at copy time.  The RLMM indexes a segment under every epoch
+        // in its `segment_leader_epochs` map, so this reliably hits after a
+        // clean failover.
+        let primary = self
+            .rlmm
+            .remote_log_segment_metadata(tp, leader_epoch, offset)?;
+
+        // Defensive fallback: the epoch-indexed primary lookup can still miss
+        // in rare edge cases (e.g. the local leader-epoch checkpoint is empty
+        // on a fresh replica, or an unclean election produced a gap in the
+        // checkpoint that `epoch_for_offset` cannot bridge, or a finished segment
+        // nested inside the covering one shadows it in the RLMM's floor-by-start
+        // lookup).  When the primary
+        // misses, scan `list_remote_log_segments` for finished segments that
+        // cover `offset` and prefer the one whose `segment_leader_epochs` map
+        // contains the passed epoch (same lineage). No lineage-unmatched
+        // segment is a safe fallback under log divergence, so that case is a
+        // miss rather than a read from a different history.
+        let primary = primary.and_then(|metadata| {
+            relative_offset(&metadata, leader_epoch, offset).map(|relative| (metadata, relative))
+        });
+        if primary.is_some() {
+            return Ok(primary);
+        }
+        Ok(self
+            .rlmm
+            .list_remote_log_segments(tp)?
+            .into_iter()
+            .filter_map(|metadata| {
+                relative_offset(&metadata, leader_epoch, offset)
+                    .map(|relative| (metadata, relative))
+            })
+            .max_by_key(|(metadata, _)| metadata.start_offset()))
     }
 }
 

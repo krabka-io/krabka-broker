@@ -10,13 +10,13 @@ use {
         topic_settings::{TimestampPolicy, TimestampWindow},
     },
     crate::{codes, metrics::BrokerMetrics, time_util::now_ms},
-    bytes::Bytes,
+    bytes::{Bytes, BytesMut},
     krabka_compression::RecordDecompressionPolicy,
     krabka_protocol::{
         owned::produce_response::BatchIndexAndErrorMessage,
         records::{
-            Attributes, RecordBatch, RecordsError, RecordsPayload, TimestampType, ValidatedBatch,
-            validate_one_v2_batch,
+            Attributes, CRC_COVERAGE_START, RecordBatch, RecordsError, RecordsPayload,
+            TimestampType, ValidatedBatch, validate_one_v2_batch,
         },
     },
     krabka_verified::produce::{ProduceBatchAdmission, produce_batch_admission},
@@ -77,7 +77,10 @@ pub(super) struct PreparedBatch {
 #[derive(Debug)]
 pub(super) enum PreparedSource {
     /// Validated, single, CRC-checked v2 batch. The writer appends the
-    /// producer's exact bytes after every declared record was parsed.
+    /// producer's exact bytes after every declared record was parsed, except
+    /// when the header's `max_timestamp` disagrees with the records: Kafka
+    /// stores the largest record timestamp, so then the header field and the
+    /// CRC are rewritten and the record body still goes out untouched.
     Verbatim(Bytes),
     /// Decoded owned batch. This is the complete fallback path. When the
     /// producer compressed the batch, `RecordBatch::decode` decompressed it
@@ -110,22 +113,31 @@ impl PreparedBatch {
     /// way Kafka's `LogValidator.validateRecord` does: the key first, on a
     /// compacted topic, and the timestamp window only for a record whose key
     /// passed that check (or every record, off a compacted topic).
-    fn from_owned(batch: RecordBatch, compacted_topic: bool, timestamps: TimestampPolicy) -> Self {
+    ///
+    /// The same walk folds the largest record timestamp into the batch's
+    /// `max_timestamp` when the policy says Kafka would, so the batch the
+    /// writer encodes carries the value `LogValidator.setMaxTimestamp` would
+    /// have stored.
+    fn from_owned(
+        mut batch: RecordBatch,
+        compacted_topic: bool,
+        timestamps: TimestampPolicy,
+    ) -> Self {
         let now_ms = timestamps.bounds_records().then(now_ms);
         let mut keyless_records = Vec::new();
         let mut invalid_timestamp_records = Vec::new();
+        let mut max_timestamp = RecordMaxTimestamp::default();
         for (index, record) in batch.records.iter().enumerate() {
             let index = i32::try_from(index).unwrap_or(i32::MAX);
+            let timestamp = record_timestamp(batch.base_timestamp, record.timestamp_delta);
+            max_timestamp.observe(timestamp);
             if compacted_topic && record.key.is_none() {
                 keyless_records.push(index);
                 continue;
             }
             let Some(now_ms) = now_ms else { continue };
-            let timestamp = batch.base_timestamp.saturating_add(record.timestamp_delta);
             if timestamps.rejects_record(timestamp, now_ms) {
-                let offset = batch
-                    .base_offset
-                    .saturating_add(i64::from(record.offset_delta));
+                let offset = record_offset(batch.base_offset, record.offset_delta);
                 invalid_timestamp_records.push(timestamp_error(
                     index,
                     offset,
@@ -133,6 +145,9 @@ impl PreparedBatch {
                     timestamps.window(now_ms),
                 ));
             }
+        }
+        if timestamps.recomputes_max_timestamp() {
+            batch.max_timestamp = max_timestamp.0;
         }
         Self {
             keyless_records,
@@ -308,28 +323,29 @@ pub(super) fn prepare_batch(
     }
     let mut keyless_records = Vec::new();
     let mut invalid_timestamp_records = Vec::new();
-    if timestamps.bounds_records() || compacted_topic {
-        let now_ms = now_ms();
+    let recomputes_max_timestamp = timestamps.recomputes_max_timestamp();
+    let mut max_timestamp = RecordMaxTimestamp::default();
+    if timestamps.bounds_records() || compacted_topic || recomputes_max_timestamp {
+        let now_ms = timestamps.bounds_records().then(now_ms);
         let mut index = 0_i32;
         validated
             .validate_records_with(policy, |record| {
+                let timestamp = record_timestamp(header.base_timestamp, record.timestamp_delta);
+                max_timestamp.observe(timestamp);
                 // Kafka's `LogValidator.validateRecord` checks the key first
                 // and checks the timestamp only of a record whose key passed.
                 if compacted_topic && record.key.is_none() {
                     keyless_records.push(index);
-                } else {
-                    let timestamp = header.base_timestamp.saturating_add(record.timestamp_delta);
-                    if timestamps.rejects_record(timestamp, now_ms) {
-                        let offset = header
-                            .base_offset
-                            .saturating_add(i64::from(record.offset_delta));
-                        invalid_timestamp_records.push(timestamp_error(
-                            index,
-                            offset,
-                            timestamp,
-                            timestamps.window(now_ms),
-                        ));
-                    }
+                } else if let Some(now_ms) = now_ms
+                    && timestamps.rejects_record(timestamp, now_ms)
+                {
+                    let offset = record_offset(header.base_offset, record.offset_delta);
+                    invalid_timestamp_records.push(timestamp_error(
+                        index,
+                        offset,
+                        timestamp,
+                        timestamps.window(now_ms),
+                    ));
                 }
                 index = index.saturating_add(1);
             })
@@ -339,12 +355,88 @@ pub(super) fn prepare_batch(
             .validate_records(policy)
             .map_err(|_| codes::INVALID_RECORD)?;
     }
+    let (header, bytes) = if recomputes_max_timestamp && max_timestamp.0 != header.max_timestamp {
+        (
+            ValidatedHeader {
+                max_timestamp: max_timestamp.0,
+                ..header
+            },
+            with_max_timestamp(&bytes, max_timestamp.0),
+        )
+    } else {
+        (header, bytes)
+    };
     Ok(PreparedBatch::from_header(
         header,
         bytes,
         keyless_records,
         invalid_timestamp_records,
     ))
+}
+
+/// A record's timestamp as Kafka's `DefaultRecord` computes it,
+/// `baseTimestamp + timestampDelta`, in Java's wrapping `long` arithmetic.
+fn record_timestamp(base_timestamp: i64, timestamp_delta: i64) -> i64 {
+    base_timestamp.wrapping_add(timestamp_delta)
+}
+
+/// A record's offset as Kafka's `DefaultRecord` computes it,
+/// `baseOffset + offsetDelta`, in Java's wrapping `long` arithmetic.
+fn record_offset(base_offset: i64, offset_delta: i32) -> i64 {
+    base_offset.wrapping_add(i64::from(offset_delta))
+}
+
+/// The largest record timestamp of a batch, folded the way Kafka's
+/// `LogValidator` folds it: from `RecordBatch.NO_TIMESTAMP` (-1), taking a
+/// record's timestamp only when it is larger. A batch whose records all carry
+/// timestamps below -1 therefore stores -1, as it does in Kafka.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RecordMaxTimestamp(i64);
+
+impl Default for RecordMaxTimestamp {
+    fn default() -> Self { Self(NO_TIMESTAMP) }
+}
+
+impl RecordMaxTimestamp {
+    fn observe(&mut self, timestamp: i64) {
+        if timestamp > self.0 {
+            self.0 = timestamp;
+        }
+    }
+}
+
+/// Kafka's `RecordBatch.NO_TIMESTAMP`.
+const NO_TIMESTAMP: i64 = -1;
+
+/// Byte range of `max_timestamp` in the v2 batch header: `attributes` (2) and
+/// `last_offset_delta` (4) and `base_timestamp` (8) follow the CRC, so it
+/// starts 14 bytes into the CRC-covered region and is eight bytes wide.
+const MAX_TIMESTAMP_RANGE: std::ops::Range<usize> =
+    CRC_COVERAGE_START + 14..CRC_COVERAGE_START + 22;
+
+/// Byte range of the CRC in the v2 batch header: the four bytes in front of
+/// the region it covers.
+const CRC_RANGE: std::ops::Range<usize> = CRC_COVERAGE_START - 4..CRC_COVERAGE_START;
+
+/// The producer's batch with `max_timestamp` rewritten and the CRC that
+/// covers it recomputed: Kafka's `DefaultRecordBatch.setMaxTimestamp` on wire
+/// bytes. Nothing else moves, the timestamp-type bit included, because the
+/// batch stays `CreateTime`.
+///
+/// The bytes are copied once. Only a producer whose header disagrees with
+/// its own records pays for the copy; a batch whose header already holds the
+/// largest record timestamp keeps the zero-copy append, as Kafka's
+/// `setMaxTimestamp` skips the CRC when the value does not change.
+/// [`validate_one_v2_batch`] has already checked that the slice holds a whole
+/// header.
+fn with_max_timestamp(bytes: &Bytes, max_timestamp: i64) -> Bytes {
+    let mut patched = BytesMut::from(&bytes[..]);
+    patched[MAX_TIMESTAMP_RANGE].copy_from_slice(&max_timestamp.to_be_bytes());
+    // The CRC covers the header from `attributes` to the end of the batch,
+    // and the body follows the header without a gap.
+    let crc = crc32c::crc32c(&patched[CRC_COVERAGE_START..]);
+    patched[CRC_RANGE].copy_from_slice(&crc.to_be_bytes());
+    patched.freeze()
 }
 
 /// The per-record message of Kafka's `LogValidator.validateTimestamp`, for one
