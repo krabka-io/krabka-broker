@@ -115,33 +115,18 @@ impl PendingAck {
         }
     }
 
-    /// Observe committed leadership independently of the transition barrier,
-    /// which this acknowledgement keeps locked until its producer state commits.
-    pub(super) fn leadership_changed(
-        &self,
-        mut images: watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
-    ) -> impl std::future::Future<Output = i16> + Send + 'static + use<> {
-        let topic = self.partition.topic.clone();
-        let partition = self.partition.index.0;
-        let target = *self.transition;
-        async move {
-            loop {
-                {
-                    let image = images.borrow_and_update();
-                    let Some(record) = image.partition(&topic, partition) else {
-                        return codes::UNKNOWN_TOPIC_OR_PARTITION;
-                    };
-                    let topic_id = image.topic(&topic).map(|topic| topic.topic_id);
-                    if !super::leadership::replication_target_matches_image(
-                        &target, topic_id, record,
-                    ) {
-                        return codes::NOT_LEADER_OR_FOLLOWER;
-                    }
-                }
-                if images.changed().await.is_err() {
-                    std::future::pending::<()>().await;
-                }
-            }
+    /// Check committed leadership while the acknowledgement holds its transition barrier.
+    fn check_leadership(&self, image: &krabka_metadata::MetadataImage) -> Result<(), i16> {
+        let record = image
+            .partition(&self.partition.topic, self.partition.index.0)
+            .ok_or(codes::UNKNOWN_TOPIC_OR_PARTITION)?;
+        let topic_id = image
+            .topic(&self.partition.topic)
+            .map(|topic| topic.topic_id);
+        if super::leadership::replication_target_matches_image(&self.transition, topic_id, record) {
+            Ok(())
+        } else {
+            Err(codes::NOT_LEADER_OR_FOLLOWER)
         }
     }
 
@@ -167,13 +152,27 @@ impl PendingAck {
         mut self,
         deadline: std::time::Instant,
         current_min_isr: impl FnOnce(&Partition, Option<uuid::Uuid>) -> Result<usize, i16>,
-        leadership_changed: impl std::future::Future<Output = i16>,
+        mut images: watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
     ) -> PartitionProduceResponse {
-        let gate = tokio::select! {
-            biased;
-            code = leadership_changed => Err(code),
-            gate = self.partition.await_hw_at_least(self.target, deadline) => {
-                gate.map_err(|_| codes::REQUEST_TIMED_OUT)
+        let gate = {
+            let committed = self.partition.await_hw_at_least(self.target, deadline);
+            tokio::pin!(committed);
+            let mut watching = true;
+            loop {
+                if let Err(code) = self.check_leadership(&images.borrow_and_update()) {
+                    break Err(code);
+                }
+                tokio::select! {
+                    biased;
+                    gate = &mut committed => {
+                        // A leadership change must win when both branches are ready.
+                        break self.check_leadership(&images.borrow())
+                            .and(gate.map_err(|_| codes::REQUEST_TIMED_OUT));
+                    }
+                    changed = images.changed(), if watching => {
+                        watching = changed.is_ok();
+                    }
+                }
             }
         };
         let isr_size = match gate {
@@ -493,6 +492,7 @@ mod tests {
         crate::{
             codes,
             error::BrokerError,
+            handlers::produce::test_support::image_with_topic,
             log_dir::partition_dir,
             metrics::{BrokerMetrics, RequestPhases},
             partition::{AppendedBatch, test_support::test_partition},
@@ -609,6 +609,11 @@ mod tests {
             partition
                 .install_isr(&isr, &[NodeId(1), NodeId(2), NodeId(3)], NodeId(1))
                 .await;
+            let image = image_with_topic("orders", &[1, 2, 3]);
+            partition
+                .install_replication_target(Some(image.topic("orders").unwrap().topic_id), 1, 0)
+                .await;
+            let (_, receiver) = tokio::sync::watch::channel(Arc::new(image));
             let transition = partition.lock_produce_transition().await;
             let admitted_topic_id = transition.topic_id;
             let pending = PendingAck::new(
@@ -630,7 +635,7 @@ mod tests {
                         asked_for = Some(topic_id);
                         case.current_min_isr
                     },
-                    std::future::pending(),
+                    receiver,
                 )
                 .await;
             assert!(
@@ -654,10 +659,7 @@ mod tests {
     #[tokio::test]
     async fn leadership_change_finishes_old_acks_before_publishing_the_new_target() {
         use {
-            crate::{
-                handlers::produce::test_support::image_with_topic,
-                producer_state::{Decision, SequenceContext},
-            },
+            crate::producer_state::{Decision, SequenceContext},
             krabka_metadata::MetadataRecord,
             krabka_protocol::records::{Record, RecordBatch},
             std::{sync::atomic::Ordering, time::Duration},
@@ -718,14 +720,13 @@ mod tests {
                 transition,
             );
             let (images, receiver) = tokio::sync::watch::channel(Arc::new(image.clone()));
-            let changed = pending.leadership_changed(receiver);
             let waiting = pending.finish(
                 std::time::Instant::now() + Duration::from_secs(30),
                 |partition, _| {
                     assert!(partition.current_leader.load(Ordering::Acquire) == 1);
                     Ok(2)
                 },
-                changed,
+                receiver,
             );
             tokio::pin!(waiting);
             assert!(futures_util::poll!(waiting.as_mut()).is_pending());
