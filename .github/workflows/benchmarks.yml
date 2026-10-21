@@ -40,9 +40,9 @@ jobs:
       run: |
         set -euo pipefail
         mkdir -p evidence "$RUNNER_TEMP/produce-acks-sources" "$RUNNER_TEMP/produce-acks-tmp"
-        for variant in reference original no-driver; do
+        for variant in reference reference-log original no-driver; do
           revision=3831a25de74804460f32d921b711e0cacef48deb
-          if [[ "$variant" = reference ]]; then revision=ac9deff316d38418622b16c237c671df88f57c7a; fi
+          if [[ "$variant" = reference || "$variant" = reference-log ]]; then revision=ac9deff316d38418622b16c237c671df88f57c7a; fi
             git worktree add --detach "$RUNNER_TEMP/produce-acks-sources/$variant" "$revision"
         done
         python3 - <<'PYCODE'
@@ -52,6 +52,10 @@ jobs:
         t=p.read_text();needle='krabka-bench-driver = { path = "../bench-driver" }\n'
         assert t.count(needle)==1
         p.write_text(t.replace(needle,''))
+        p=Path(os.environ['RUNNER_TEMP'])/'produce-acks-sources/reference-log/crates/broker/Cargo.toml'
+        t=p.read_text();needle='tracing = { workspace = true }'
+        assert t.count(needle)==1
+        p.write_text(t.replace(needle,'tracing = { workspace = true, features = ["log"] }'))
         PYCODE
         python3 - <<'PYLOCK'
         import os,subprocess
@@ -62,7 +66,7 @@ jobs:
         assert old.count(needle)==1
         (p/'Cargo.lock').write_text(old.replace(needle,''))
         PYLOCK
-        for variant in reference original no-driver; do
+        for variant in reference reference-log original no-driver; do
           source="$RUNNER_TEMP/produce-acks-sources/$variant"
           git -C "$source" rev-parse HEAD > "evidence/$variant.base-commit"
           git -C "$source" diff --binary > "evidence/$variant.patch"
@@ -84,7 +88,7 @@ jobs:
         set -euo pipefail
         export CARGO_TARGET_DIR="$RUNNER_TEMP/produce-acks-target"
         export TMPDIR="$RUNNER_TEMP/produce-acks-tmp"
-        for variant in reference original no-driver; do
+        for variant in reference reference-log original no-driver; do
           source="$RUNNER_TEMP/produce-acks-sources/$variant"
           (cd "$source" && cargo tree --locked -p krabka-broker -p krabka-log -e features -i tracing) > "evidence/$variant.feature-tree"
           (cd "$source" && cargo bench --locked -p krabka-broker -p krabka-log --bench '*' --no-run) > "evidence/$variant.build.log" 2>&1
@@ -105,8 +109,8 @@ jobs:
       run: |
         set -euo pipefail
         for round in 1 2 3 4; do
-          variants=(reference original no-driver)
-          if ((round % 2 == 0)); then variants=(no-driver original reference); fi
+          variants=(reference reference-log original no-driver)
+          if ((round % 2 == 0)); then variants=(no-driver original reference-log reference); fi
           for variant in "${variants[@]}"; do
             "evidence/$variant.bench" --bench \
               --output-format bencher --noplot --sample-size 20 --measurement-time 2 \
@@ -117,7 +121,7 @@ jobs:
         import json,re,statistics
         from pathlib import Path
         result={'status':'diagnostic-only-not-qualification','variants':{}}
-        for variant in ['reference','original','no-driver']:
+        for variant in ['reference','reference-log','original','no-driver']:
           cases={}
           for round in range(1,5):
             text=Path(f'evidence/{variant}.round-{round}.txt').read_text()
