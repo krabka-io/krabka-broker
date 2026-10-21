@@ -334,6 +334,35 @@ fn offsets_log_end(broker: &BrokerHandle, group_id: &str) -> krabka_ids::Offset 
     part.log.lock().expect("offsets log").log_end_offset()
 }
 
+/// Sends one `OffsetDelete` for `group_id` and returns the whole response
+/// with the number of records it added to the group's `__consumer_offsets`
+/// partition.
+async fn delete_counting_writes(
+    broker: &BrokerHandle,
+    group_id: &str,
+    topics: &[RequestTopic<'_>],
+) -> (OffsetDeleteResponse, i64) {
+    krabka_macros::request_test_identity! {
+        bind(principal, peer, ctx);
+        user ["alice"];
+        client ["offset-delete-client"];
+    };
+    let before = offsets_log_end(broker, group_id);
+    let req = OffsetDeleteRequest {
+        group_id: group_id.to_string(),
+        ..req_with_topics(topics)
+    };
+    let resp = handle(
+        &broker.broker_arc_for_test(),
+        req,
+        offset_delete_response::MAX_VERSION,
+        &ctx,
+    )
+    .await
+    .expect("OffsetDelete");
+    (resp, offsets_log_end(broker, group_id).0 - before.0)
+}
+
 /// Kafka's `OffsetMetadataManager.deleteOffsets` on a streams group: the
 /// group is found whether or not it has committed an offset,
 /// `StreamsGroup.isSubscribedToTopic` refuses the source and repartition
@@ -430,11 +459,6 @@ async fn offset_delete_on_a_streams_group_follows_its_topology() {
         }],
     };
 
-    krabka_macros::request_test_identity! {
-        bind(principal, peer, ctx);
-        user ["alice"];
-        client ["offset-delete-client"];
-    };
     let mut actual = Vec::new();
     let mut expected = Vec::new();
     for (i, row) in rows.into_iter().enumerate() {
@@ -474,21 +498,8 @@ async fn offset_delete_on_a_streams_group_follows_its_topology() {
                 .expect("commit the streams group's offsets");
             done.await.expect("offsets committed");
         }
-        let before = offsets_log_end(&broker, &group_id);
-        let req = OffsetDeleteRequest {
-            group_id: group_id.clone(),
-            ..req_with_topics(row.topics)
-        };
-        let resp = handle(
-            &broker.broker_arc_for_test(),
-            req,
-            offset_delete_response::MAX_VERSION,
-            &ctx,
-        )
-        .await
-        .expect("OffsetDelete");
-        let wrote = offsets_log_end(&broker, &group_id) > before;
-        actual.push((row.name, resp, wrote));
+        let (resp, written) = delete_counting_writes(&broker, &group_id, row.topics).await;
+        actual.push((row.name, resp, written > 0));
         expected.push((row.name, row.want, row.writes));
     }
     check!(actual == expected);
@@ -577,15 +588,13 @@ async fn offset_delete_tombstones_only_offsets_the_group_holds() {
         .await;
     let coordinator = broker.broker_arc_for_test().group_coordinator.clone();
 
-    krabka_macros::request_test_identity! {
-        bind(principal, peer, ctx);
-        user ["alice"];
-        client ["offset-delete-client"];
-    };
-    let mut actual = Vec::new();
-    let mut expected = Vec::new();
-    for (i, row) in rows.into_iter().enumerate() {
-        let group_id = format!("held-{i}");
+    let want: Vec<_> = rows
+        .iter()
+        .map(|row| (row.name, row.want.clone(), row.tombstones))
+        .collect();
+    let mut got = Vec::new();
+    for row in rows {
+        let group_id = format!("held-{}", row.name.replace(' ', "-"));
         let mut group = CoordinatorGroup::seeded(
             group_id.as_str(),
             GroupKind::Classic(ClassicGroup::new(group_id.as_str())),
@@ -594,24 +603,10 @@ async fn offset_delete_tombstones_only_offsets_the_group_holds() {
         group.add_pending_txn_offsets(7, 0, [("t".to_string(), 1)]);
         coordinator.seed_classic(&group_id, Box::new(group));
 
-        let before = offsets_log_end(&broker, &group_id);
-        let req = OffsetDeleteRequest {
-            group_id: group_id.clone(),
-            ..req_with_topics(row.topics)
-        };
-        let resp = handle(
-            &broker.broker_arc_for_test(),
-            req,
-            offset_delete_response::MAX_VERSION,
-            &ctx,
-        )
-        .await
-        .expect("OffsetDelete");
-        let tombstones = offsets_log_end(&broker, &group_id).0 - before.0;
-        actual.push((row.name, resp, tombstones));
-        expected.push((row.name, row.want, row.tombstones));
+        let (resp, tombstones) = delete_counting_writes(&broker, &group_id, row.topics).await;
+        got.push((row.name, resp, tombstones));
     }
-    check!(actual == expected);
+    check!(got == want);
 
     broker.shutdown().await;
 }

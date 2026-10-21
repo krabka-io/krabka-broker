@@ -33,6 +33,19 @@ fn tombstone(topic: &str, partition: i32) -> OffsetsRecord {
     }
 }
 
+/// An empty classic group `g` that holds committed offsets for `t-0` and
+/// `t-2`, and a pending transactional offset for `u-0`.
+fn group_holding_offsets() -> CoordinatorGroup {
+    let committed = HashMap::from([
+        (key("t", 0), offset_entry(10)),
+        (key("t", 2), offset_entry(12)),
+    ]);
+    let mut group =
+        CoordinatorGroup::seeded("g", GroupKind::Classic(ClassicGroup::new("g")), committed);
+    group.add_pending_txn_offsets(7, 100, [key("u", 0)]);
+    group
+}
+
 /// One `DeleteOffsets` against a group that holds committed offsets for
 /// `t-0` and `t-2`, and a pending transactional offset for `u-0`.
 struct Row {
@@ -111,16 +124,7 @@ async fn delete_offsets_tombstones_only_offsets_the_group_holds() {
 
     for row in rows {
         let (coordinator, log) = make_coordinator();
-        let mut group = CoordinatorGroup::seeded(
-            "g",
-            GroupKind::Classic(ClassicGroup::new("g")),
-            HashMap::from([
-                (key("t", 0), offset_entry(10)),
-                (key("t", 2), offset_entry(12)),
-            ]),
-        );
-        group.add_pending_txn_offsets(7, 100, [key("u", 0)]);
-        coordinator.seed_classic("g", Box::new(group));
+        coordinator.seed_classic("g", Box::new(group_holding_offsets()));
         let handle = coordinator.find("g").unwrap();
         if row.fail_append {
             // `PartitionWriterDied`: `NOT_LEADER_OR_FOLLOWER`.
