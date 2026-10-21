@@ -63,6 +63,19 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   index floor, header scan and readahead hint under the log lock. It now
   reads the regions the first walk found. Followers and consumers at the tail
   of a log make this fetch on every round trip.
+- Less work per request on the produce and fetch paths:
+  - Dispatch reads a Produce request's `acks` from its leading fields to
+    decide whether a response is owed, instead of decoding the request a
+    second time.
+  - A request body is read straight into the buffer, without first being
+    filled with zeros.
+  - A fetch response's small inline parts (the frame length, the header, the
+    envelope metadata and small record runs) go out in one write instead of
+    one syscall and one TCP segment each.
+  - A cluster with no client quota answers a request's quota lookup without
+    building the eight candidate entity keys.
+  - The log-directory health check every produce and fetch makes answers
+    without hashing the directory's path while every directory is online.
 
 ### Fixed
 
