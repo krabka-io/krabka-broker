@@ -84,14 +84,18 @@ pub(super) fn assert_transition(
     child: &AcquisitionState,
     action: ShareAction,
 ) {
+    let reload = action == ShareAction::Reload;
     // KFC-1: `promote_deferred` is the only route out of `Deferred`. A leader
     // reload does write the record back as `Available`, but the new leader
     // re-derives the deferral before the state is readable again, so the
-    // deferred set is unchanged across that transition too.
+    // deferred set is unchanged across that transition too, except for an
+    // offset past the last written window, which the reload drops whole.
     if action != ShareAction::PromoteDeferred {
         for raw in parent.start_offset.0..parent.end_offset.0 {
             let off = Offset(raw);
-            if offset_state(parent, off) == Some(RecordState::Deferred) {
+            if offset_state(parent, off) == Some(RecordState::Deferred)
+                && !(reload && offset_state(child, off).is_none())
+            {
                 assert!(
                     offset_state(child, off) == Some(RecordState::Deferred),
                     "deferred offset {off} left Deferred on {action:?}"
@@ -105,8 +109,13 @@ pub(super) fn assert_transition(
         parent.start_offset,
         child.start_offset
     );
-    // Per-offset delivery_count never regresses for offsets live in both.
+    // Per-offset delivery_count never regresses for offsets live in both,
+    // except across a reload: an acquisition is not written, as in Kafka's
+    // `SharePartition.acquire`, so its increment dies with the leader.
     for raw in child.start_offset.0..child.end_offset.0 {
+        if reload {
+            break;
+        }
         let off = Offset(raw);
         if let (Some(pc), Some(cc)) = (offset_dc(parent, off), offset_dc(child, off)) {
             assert!(
