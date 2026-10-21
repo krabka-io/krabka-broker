@@ -21,7 +21,7 @@ bon = { workspace = true }
 assert2 = { workspace = true }
 krabka-metadata = { version = "0.7.0" }
 krabka-security = { version = "0.7.0" }
-krabka-verified = { version = "1.0.7", path = "../verified" }
+krabka-verified = { version = "1.0.8", path = "../verified" }
 tracing = { workspace = true }
 
 [dev-dependencies]
