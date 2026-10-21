@@ -159,10 +159,13 @@ fn run_if_cached<T, R, W: FnOnce(&mut T) -> R>(
     let Some(mut guard) = lock_within(lock, LOCK_SPIN) else {
         return Err(work);
     };
-    if stays_in_cache(&mut guard) {
-        Ok(run_inline(|| work(&mut guard)))
-    } else {
-        Err(work)
+    // The predicate runs on the caller's task too, so its panic is returned
+    // as the work's would be. `Log::append_may_block` can panic on a
+    // poisoned config lock.
+    match run_inline(|| stays_in_cache(&mut guard)) {
+        Ok(true) => Ok(run_inline(|| work(&mut guard))),
+        Ok(false) => Err(work),
+        Err(panicked) => Ok(Err(panicked)),
     }
 }
 
@@ -414,6 +417,8 @@ mod tests {
             [
                 run_blocking(panics).await,
                 run_page_cache_io(&Arc::new(Mutex::new(())), |()| true, |()| panics()).await,
+                // The cache-residency question runs on the calling task too.
+                run_page_cache_io(&Arc::new(Mutex::new(())), |()| panics() == 0, |()| 0).await,
                 spawn_blocking(panics).await,
             ]
         });

@@ -432,6 +432,10 @@ fn a_fenced_log_refuses_every_append_and_still_serves_reads() {
         log.append_at(&mut test_batch_at(1), Offset(1)),
         log.append_verbatim(&verbatim).map(|_| ()),
         log.append_verbatim_at(&verbatim, Offset(1)).map(|_| ()),
+        // Below the log end: admission would refuse these with its own error,
+        // but the fence is checked first.
+        log.append_at(&mut test_batch_at(0), Offset(0)),
+        log.append_verbatim_at(&verbatim, Offset(0)).map(|_| ()),
     ];
     for result in refused {
         check!(let Err(LogError::Fenced) = result);
@@ -467,6 +471,16 @@ fn an_append_may_block_only_when_it_rolls_or_the_log_flushes() {
             kibibytes(1),
             true,
         ),
+        // A direct append can reserve blocks, open its O_DIRECT handle or
+        // wait for room in its write queue.
+        (
+            LogConfig {
+                segment_allocation: crate::SegmentAllocation::Preallocate,
+                ..LogConfig::default()
+            },
+            kibibytes(1),
+            true,
+        ),
     ];
     for (config, incoming, blocks) in cases {
         let (_dir, mut log) = plain(config);
@@ -490,4 +504,14 @@ fn only_bytes_this_process_wrote_count_as_written_since_open() {
     assert!(reopened.roll().unwrap());
     reopened.append(&mut test_batch_at(2)).unwrap();
     check!(reopened.written_since_open_from() == Offset(2));
+}
+
+#[test]
+fn a_preallocated_log_counts_nothing_as_written_since_open() {
+    let TempLog { dir: _dir, mut log } = configured_test_log(LogConfig {
+        segment_allocation: crate::SegmentAllocation::Preallocate,
+        ..LogConfig::default()
+    });
+    log.append(&mut test_batch_at(0)).unwrap();
+    check!(log.written_since_open_from() == Offset(i64::MAX));
 }

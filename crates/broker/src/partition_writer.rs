@@ -496,9 +496,10 @@ pub(crate) async fn produce_inline(
     log_dir_status: &LogDirRegistry,
     producer_state: &Arc<ProducerState>,
 ) -> Result<(), ProduceJob> {
-    let Some(_busy) = partition.writer_gate.try_inline(partition) else {
+    let Some(busy) = partition.writer_gate.try_inline(partition) else {
         return Err(job);
     };
+    let mut busy = Some(busy);
     let appended = append_jobs(
         WriterPartition {
             topic: &partition.topic,
@@ -527,10 +528,19 @@ pub(crate) async fn produce_inline(
     if let Some(appended) = appended {
         let mut finish = Box::pin(finish_group(appended));
         if futures_util::poll!(finish.as_mut()).is_pending() {
-            tokio::spawn(finish);
+            // The completion holds the gate until it ends, as the writer
+            // would hold its message: otherwise the writer could take a later
+            // command, such as a truncation, while the completion still acts
+            // on the log end it read before it.
+            let busy = busy.take();
+            tokio::spawn(async move {
+                finish.await;
+                drop(busy);
+            });
         }
     }
     after_inline_mutation(partition);
+    drop(busy);
     Ok(())
 }
 

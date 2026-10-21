@@ -26,7 +26,7 @@ use {
         task::{Context, Poll},
         time::{Duration, SystemTime, UNIX_EPOCH},
     },
-    tokio::sync::{MutexGuard, Notify, mpsc},
+    tokio::sync::{MutexGuard, Notify, OwnedMutexGuard, mpsc},
 };
 
 /// The writer's deadline value when it has none armed.
@@ -41,7 +41,7 @@ pub(crate) struct WriterGate {
     inline: bool,
     /// Held by whoever is mutating the log: the writer handling a message,
     /// or a produce appending on its own task.
-    busy: tokio::sync::Mutex<()>,
+    busy: Arc<tokio::sync::Mutex<()>>,
     /// Raised by the writer before it polls its channel, and lowered only
     /// when the poll finds the channel empty.
     holding: AtomicBool,
@@ -58,7 +58,7 @@ impl WriterGate {
     pub(crate) fn shared(inline: bool) -> Arc<Self> {
         Arc::new(Self {
             inline,
-            busy: tokio::sync::Mutex::new(()),
+            busy: Arc::new(tokio::sync::Mutex::new(())),
             holding: AtomicBool::new(false),
             armed_deadline_ms: AtomicU64::new(NO_DEADLINE),
             nudge: Notify::new(),
@@ -71,11 +71,14 @@ impl WriterGate {
     /// The guard under which `partition` may take a produce append on the
     /// calling task, or `None` when the produce has to go through the
     /// writer's channel.
-    pub(crate) fn try_inline<'a>(&'a self, partition: &Partition) -> Option<MutexGuard<'a, ()>> {
+    ///
+    /// The guard is owned, so a produce's completion that has to finish on
+    /// its own task can keep the writer out until it is done.
+    pub(crate) fn try_inline(&self, partition: &Partition) -> Option<OwnedMutexGuard<()>> {
         if !self.inline {
             return None;
         }
-        let busy = self.busy.try_lock().ok()?;
+        let busy = Arc::clone(&self.busy).try_lock_owned().ok()?;
         let idle = !self.holding.load(Ordering::SeqCst)
             && partition.writer_tx.capacity() == partition.writer_tx.max_capacity();
         idle.then_some(busy)

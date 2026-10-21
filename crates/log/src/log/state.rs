@@ -390,8 +390,18 @@ impl Log {
     /// segment, and so most likely finds in the page cache: the active
     /// segment's base, or the log end offset at open when the active segment
     /// was already there. A read below it may have to go to the disk.
+    ///
+    /// A log with `preallocate` writes through `O_DIRECT`, which leaves
+    /// nothing in the page cache beyond its bounded tail cache, so for it no
+    /// offset counts as written here: every read may go to the disk.
+    ///
+    /// # Panics
+    /// Panics if the log's configuration lock is poisoned.
     #[must_use]
     pub fn written_since_open_from(&self) -> Offset {
+        if self.config.read().unwrap().segment_allocation == crate::SegmentAllocation::Preallocate {
+            return Offset(i64::MAX);
+        }
         let active_base = self
             .active
             .as_ref()
@@ -405,8 +415,11 @@ impl Log {
     /// It is true when the log's flush policy can make an append fsync
     /// (`flush.messages`, `flush.ms`, or a flush on every append), and when
     /// the append would roll the active segment, which creates files and can
-    /// wait for an earlier roll's flush budget. It errs towards true: a caller
-    /// that sees false may run the append where a wait would stall others.
+    /// wait for an earlier roll's flush budget, and for every append to a log
+    /// with `preallocate`: that append can reserve the segment's blocks, open
+    /// its `O_DIRECT` handle, or wait for room in its direct write queue. It
+    /// errs towards true: a caller that sees false may run the append where a
+    /// wait would stall others.
     ///
     /// # Panics
     /// Panics if the log's configuration lock is poisoned.
@@ -420,7 +433,8 @@ impl Log {
             (
                 config.flush_on_append
                     || config.flush_messages.is_some()
-                    || config.flush_interval.is_some(),
+                    || config.flush_interval.is_some()
+                    || config.segment_allocation == crate::SegmentAllocation::Preallocate,
                 config.segment_size,
                 config.segment_roll_interval,
                 config.segment_index_size,

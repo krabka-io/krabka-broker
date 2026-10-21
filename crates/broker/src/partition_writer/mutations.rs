@@ -135,6 +135,9 @@ pub(super) async fn handle_replicate_verbatim(
     // lookup -- waits on the lock while it is held. Each batch also decides
     // for itself whether its append may block.
     let mut result = Ok(());
+    // A run can fail part-way, after earlier batches are in the log. Readers
+    // parked on `append_notify` are woken for those batches all the same.
+    let mut appended_any = false;
     for ReplicatedBatch { batch, base_offset } in batches {
         let footprint = (batch.bytes.len(), batch.max_timestamp);
         result = run_log_append(
@@ -155,10 +158,10 @@ pub(super) async fn handle_replicate_verbatim(
         if result.is_err() {
             break;
         }
+        appended_any = true;
     }
-    let succeeded = result.is_ok();
     let _ = ack.send(result);
-    if succeeded {
+    if appended_any {
         append_notify.notify_waiters();
     }
 }
