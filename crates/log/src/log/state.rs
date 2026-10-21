@@ -121,6 +121,16 @@ impl Log {
             .map(|entry| entry.epoch)
     }
 
+    /// The base offset of the log's first segment on disk, sealed or active,
+    /// or `None` when it holds none: Kafka's `logSegments().get(0).baseOffset()`.
+    #[must_use]
+    pub fn first_segment_base(&self) -> Option<Offset> {
+        self.segments
+            .first()
+            .or(self.active.as_ref())
+            .map(Segment::base_offset)
+    }
+
     /// The first offset the segments on disk begin at, before the global
     /// floor is applied.
     pub(super) fn first_local_offset(&self) -> Offset {

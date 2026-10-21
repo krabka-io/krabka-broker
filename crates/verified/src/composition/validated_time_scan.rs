@@ -28,11 +28,15 @@ fn time_scan_input_valid(
     }
 }
 
-/// Check canonical archived rows against complete decoded records, then consume
-/// the actual remote floor and local cursor to scan the retained suffix.
-/// Invalid shape or untruthful prefix bounds are rejected exactly; accepted
-/// inputs return the original globally first retained match, or complete absence.
-/// Faithful decoding, complete enumeration and physical reads remain external.
+/// Check one segment's canonical archived rows against its complete decoded
+/// records, then consume the actual remote floor and local cursor to scan the
+/// segment's retained suffix. Invalid shape or untruthful prefix bounds are
+/// rejected exactly; accepted inputs return the original first retained match
+/// in this segment, or its complete absence from the segment. A by-timestamp
+/// seek runs this scan on its first candidate segment only, as Kafka 4.3.1
+/// does, so absence here is the seek's answer even when a later segment holds
+/// a match. Faithful decoding, complete enumeration and physical reads remain
+/// external.
 #[ensures(match result {
     Err(()) => !time_scan_input_valid(entries@, offsets@, times@, max_relative@),
     Ok((count, remote, local, selected)) => time_scan_input_valid(entries@, offsets@, times@, max_relative@)

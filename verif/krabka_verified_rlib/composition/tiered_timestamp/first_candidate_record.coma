@@ -1,0 +1,187 @@
+(* #"/workspace/crates/verified/src/composition/tiered_timestamp.rs" 44 0 48 27 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/logic/ord.rs" 34 8 34 21
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/std/option.rs" 193 19 193 79
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/std/option.rs" 194 18 197 9
+let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 28 10 28 61
+let%span stimestamp'0 = "/workspace/crates/verified/src/timestamp.rs" 134 10 141 1
+let%span stimestamp'1 = "/workspace/crates/verified/src/timestamp.rs" 18 8 23 9
+let%span stiered_timestamp = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 49 10 49 47
+let%span stiered_timestamp'0 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 52 26 52 26
+let%span stiered_timestamp'1 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 53 41 53 56
+let%span stiered_timestamp'2 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 53 12 53 74
+let%span stiered_timestamp'3 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 53 12 54 48
+let%span stiered_timestamp'4 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 34 11 34 41
+let%span stiered_timestamp'5 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 35 10 43 1
+let%span stiered_timestamp'6 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 25 8 26 74
+let%span stiered_timestamp'7 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 54 21 54 29
+
+use creusot.slice.Slice64
+use creusot.int.Int64
+use creusot.int.UInt64
+use seq.Seq
+use creusot.prelude.Opaque
+use creusot.prelude.Any
+use int.Int
+
+type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+
+type tup2_ref_slice_ref_slice_tup2_i64_i64_ref_slice_i64 = {
+  f0'0: Slice64.slice (Slice64.slice tup2_i64_i64);
+  f1'0: Slice64.slice Int64.t }
+
+type t_Option_usize = None | Some UInt64.t
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate first_timestamp_match [#"/workspace/crates/verified/src/timestamp.rs" 12 0 16 9] (timestamps: Seq.seq Int64.t) (target: int) (matched: t_Option_usize) =
+  [%#stimestamp'1] match matched with
+    | Some index -> UInt64.t'int index < Seq.length timestamps
+    /\ ge_log_Int (Int64.to_int (Seq.get timestamps (UInt64.t'int index))) target
+    /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index -> Int64.to_int (Seq.get timestamps i) < target)
+    | None -> forall i: int. 0 <= i /\ i < Seq.length timestamps -> Int64.to_int (Seq.get timestamps i) < target
+    end
+
+let first_timestamp_index (timestamps: Slice64.slice Int64.t) (target: Int64.t) (return (x: t_Option_usize)) = any
+  [ return (result: t_Option_usize) ->
+  {[@stop_split] [@expl:first_timestamp_index ensures] [%#stimestamp] first_timestamp_match (Slice64.view timestamps) (Int64.to_int target) result}
+    (! return {result}) ]
+
+let elim_Some (_x: t_Option_usize) (return (f0'1: UInt64.t)) = any
+  [ _k (f0'1: UInt64.t) -> {Some f0'1 = _x} (! return {f0'1})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+predicate first_candidate [#"/workspace/crates/verified/src/composition/tiered_timestamp.rs" 23 0 23 74] (largest: Seq.seq Int64.t) (target: int) (candidate: int) =
+  [%#stiered_timestamp'6] 0 <= candidate
+  /\ candidate < Seq.length largest
+  /\ ge_log_Int (Int64.to_int (Seq.get largest candidate)) target
+  /\ (forall i: int. 0 <= i /\ i < candidate -> Int64.to_int (Seq.get largest i) < target)
+
+let first_timestamp_record_index (records: Slice64.slice tup2_i64_i64) (minimum: Int64.t) (target: Int64.t)
+  (return (x: t_Option_usize)) = any
+  [ return (result: t_Option_usize) ->
+  {[@stop_split] [@expl:first_timestamp_record_index ensures] [%#stimestamp'0] match result with
+      | Some index -> UInt64.t'int index < Seq.length (Slice64.view records)
+      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view records) (UInt64.t'int index)).f0) (Int64.to_int minimum)
+      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view records) (UInt64.t'int index)).f1) (Int64.to_int target)
+      /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index
+        -> Int64.to_int (Seq.get (Slice64.view records) i).f0 < Int64.to_int minimum
+        \/ Int64.to_int (Seq.get (Slice64.view records) i).f1 < Int64.to_int target)
+      | None -> forall i: int. 0 <= i /\ i < Seq.length (Slice64.view records)
+        -> Int64.to_int (Seq.get (Slice64.view records) i).f0 < Int64.to_int minimum
+        \/ Int64.to_int (Seq.get (Slice64.view records) i).f1 < Int64.to_int target
+      end}
+    (! return {result}) ]
+
+type tup2_usize_usize = { f0'1: UInt64.t; f1'1: UInt64.t }
+
+type closure0 = { c0: UInt64.t }
+
+let closure0 [#"/workspace/crates/verified/src/composition/tiered_timestamp.rs" 54 21 54 29] [@coma:extspec]
+  (self: closure0) (record: UInt64.t) (return (x: tup2_usize_usize)) = bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- { f0'1 = self.c0; f1'1 = record } ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: tup2_usize_usize = Any.any_l () | & self: closure0 = self | & record: UInt64.t = record ]
+  [ return (result: tup2_usize_usize) -> return {result} ]
+
+meta "rewrite_def" predicate closure0'pre
+
+meta "rewrite_def" predicate closure0'post'return
+
+type t_Option_tup2_usize_usize = None'0 | Some'0 tup2_usize_usize
+
+predicate precondition_closure0 (self: closure0) (args: UInt64.t) =
+  [%#stiered_timestamp'7] let record = args in closure0'pre self record
+
+meta "rewrite_def" predicate precondition_closure0
+
+predicate resolve_closure0 [@inline:trivial] (_1: closure0) = true
+
+meta "rewrite_def" predicate resolve_closure0
+
+predicate postcondition_once_closure0 (self: closure0) (args: UInt64.t) (result: tup2_usize_usize) =
+  [%#stiered_timestamp'7] let record = args in closure0'post'return self record result
+
+meta "rewrite_def" predicate postcondition_once_closure0
+
+let map_usize (self: t_Option_usize) (f: closure0) (return (x: t_Option_tup2_usize_usize)) =
+{[@stop_split] [@expl:map requires] [%#soption] match self with
+    | None -> true
+    | Some t -> precondition_closure0 f t
+    end}
+  any
+  [ return (result: t_Option_tup2_usize_usize) -> {[@stop_split] [@expl:map ensures] [%#soption'0] match self with
+      | None -> resolve_closure0 f /\ result = None'0
+      | Some t -> exists r: tup2_usize_usize. result = Some'0 r /\ postcondition_once_closure0 f t r
+      end}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let first_candidate_record [#"/workspace/crates/verified/src/composition/tiered_timestamp.rs" 44 0 48 27]
+  (tier: tup2_ref_slice_ref_slice_tup2_i64_i64_ref_slice_i64) (minimum: Int64.t) (target: Int64.t)
+  (return (x: t_Option_tup2_usize_usize)) =
+{[@stop_split] [@expl:first_candidate_record requires] [%#stiered_timestamp'4] Seq.length (Slice64.view tier.f0'0)
+  = Seq.length (Slice64.view tier.f1'0)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = first_timestamp_index [%#stiered_timestamp] {tier.f1'0} {target}
+        (fun (_x: t_Option_usize) -> [ &_12 <- _x ] s1)
+    | s1 = any [ br0 -> {_12 = None} (! bb5) | br1 (x0: UInt64.t) -> {_12 = Some x0} (! bb4) ] ]
+  | bb4 = s0
+    [ s0 = elim_Some {_12} (fun (r0: UInt64.t) -> [ &segment <- r0 ] s1)
+    | s1 =
+      {[@expl:assertion] [%#stiered_timestamp'0] forall c: int. first_candidate (Slice64.view tier.f1'0) (Int64.to_int target) c
+        -> c = UInt64.t'int segment}
+      s2
+    | s2 = [ &_24 <- segment ] s3
+    | s3 = Opaque.fresh_ptr
+        (fun (_ptr: Opaque.ptr) -> -{Slice64.slice_ptr_len _ptr = Slice64.length tier.f0'0}- [ &_25 <- _ptr ] s4)
+    | s4 = [ &_26 <- Slice64.slice_ptr_len _25 ] s5
+    | s5 = [ &_27 <- UInt64.lt _24 _26 ] s6
+    | s6 = {[@expl:index in bounds] [%#stiered_timestamp'1] _27} s7
+    | s7 = Slice64.get [%#stiered_timestamp'1] <Slice64.slice tup2_i64_i64> {tier.f0'0} {_24}
+        (fun (r: Slice64.slice tup2_i64_i64) -> [ &_23 <- r ] s8)
+    | s8 = first_timestamp_record_index [%#stiered_timestamp'2] {_23} {minimum} {target}
+        (fun (_x: t_Option_usize) -> [ &_22 <- _x ] s9)
+    | s9 = [ &_30 <- { c0 = segment } ] s10
+    | s10 = map_usize [%#stiered_timestamp'3] {_22} {_30} (fun (_x: t_Option_tup2_usize_usize) -> [ &_ret <- _x ] s11)
+    | s11 = return {_ret} ]
+  | bb5 = s0 [ s0 = [ &_ret <- None'0 ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_tup2_usize_usize = Any.any_l ()
+  | & tier: tup2_ref_slice_ref_slice_tup2_i64_i64_ref_slice_i64 = tier
+  | & minimum: Int64.t = minimum
+  | & target: Int64.t = target
+  | & _12: t_Option_usize = Any.any_l ()
+  | & segment: UInt64.t = Any.any_l ()
+  | & _22: t_Option_usize = Any.any_l ()
+  | & _23: Slice64.slice tup2_i64_i64 = Any.any_l ()
+  | & _24: UInt64.t = Any.any_l ()
+  | & _25: Opaque.ptr = Any.any_l ()
+  | & _26: UInt64.t = Any.any_l ()
+  | & _27: bool = Any.any_l ()
+  | & _30: closure0 = Any.any_l () ])
+  [ return (result: t_Option_tup2_usize_usize) ->
+  {[@stop_split] [@expl:first_candidate_record ensures] [%#stiered_timestamp'5] match result with
+      | Some'0 {f0'1 = segment; f1'1 = record} -> first_candidate (Slice64.view tier.f1'0) (Int64.to_int target) (UInt64.t'int segment)
+      /\ UInt64.t'int record < Seq.length (Slice64.view (Seq.get (Slice64.view tier.f0'0) (UInt64.t'int segment)))
+      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view tier.f0'0) (UInt64.t'int segment))) (UInt64.t'int record)).f0) (Int64.to_int minimum)
+      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view tier.f0'0) (UInt64.t'int segment))) (UInt64.t'int record)).f1) (Int64.to_int target)
+      /\ (forall i: int. 0 <= i /\ i < UInt64.t'int record
+        -> Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view tier.f0'0) (UInt64.t'int segment))) i).f0
+          < Int64.to_int minimum
+        \/ Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view tier.f0'0) (UInt64.t'int segment))) i).f1
+        < Int64.to_int target)
+      | None'0 -> forall c: int, i: int. first_candidate (Slice64.view tier.f1'0) (Int64.to_int target) c
+          /\ 0 <= i /\ i < Seq.length (Slice64.view (Seq.get (Slice64.view tier.f0'0) c))
+        -> Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view tier.f0'0) c)) i).f0 < Int64.to_int minimum
+        \/ Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view tier.f0'0) c)) i).f1 < Int64.to_int target
+      end}
+    (! return {result}) ]
