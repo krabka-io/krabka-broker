@@ -72,7 +72,7 @@ mod support;
 const TOPIC: &str = "group-failover";
 const CONSUMER_GROUP: &str = "group-failover-consumer";
 const CLASSIC_GROUP: &str = "group-failover-classic";
-/// The KIP-848 member id, which the client chooses (KIP-1082).
+/// The KIP-848 member id, which the client chooses for itself.
 const MEMBER: &str = "group-failover-member";
 const OFFSETS_TOPIC: &str = "__consumer_offsets";
 
