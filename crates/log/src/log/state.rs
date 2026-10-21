@@ -10,7 +10,7 @@ use crate::io::LogIo;
 use {
     super::Log,
     crate::{
-        RecoveredProducer,
+        RecoveredProducer, SegmentAllocation,
         config::LogConfig,
         error::LogError,
         leader_epoch_checkpoint::LeaderEpochCheckpoint,
@@ -399,7 +399,7 @@ impl Log {
     /// Panics if the log's configuration lock is poisoned.
     #[must_use]
     pub fn written_since_open_from(&self) -> Offset {
-        if self.config.read().unwrap().segment_allocation == crate::SegmentAllocation::Preallocate {
+        if self.config.read().unwrap().segment_allocation == SegmentAllocation::Preallocate {
             return Offset(i64::MAX);
         }
         let active_base = self
@@ -434,7 +434,7 @@ impl Log {
                 config.flush_on_append
                     || config.flush_messages.is_some()
                     || config.flush_interval.is_some()
-                    || config.segment_allocation == crate::SegmentAllocation::Preallocate,
+                    || config.segment_allocation == SegmentAllocation::Preallocate,
                 config.segment_size,
                 config.segment_roll_interval,
                 config.segment_index_size,

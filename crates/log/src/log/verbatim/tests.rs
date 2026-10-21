@@ -5,6 +5,7 @@
 use {
     super::*,
     crate::{
+        SegmentAllocation,
         config::LogConfig,
         leader_epoch_checkpoint::EpochEntry,
         log::test_support::{
@@ -475,7 +476,7 @@ fn an_append_may_block_only_when_it_rolls_or_the_log_flushes() {
         // wait for room in its write queue.
         (
             LogConfig {
-                segment_allocation: crate::SegmentAllocation::Preallocate,
+                segment_allocation: SegmentAllocation::Preallocate,
                 ..LogConfig::default()
             },
             kibibytes(1),
@@ -509,7 +510,7 @@ fn only_bytes_this_process_wrote_count_as_written_since_open() {
 #[test]
 fn a_preallocated_log_counts_nothing_as_written_since_open() {
     let TempLog { dir: _dir, mut log } = configured_test_log(LogConfig {
-        segment_allocation: crate::SegmentAllocation::Preallocate,
+        segment_allocation: SegmentAllocation::Preallocate,
         ..LogConfig::default()
     });
     log.append(&mut test_batch_at(0)).unwrap();
