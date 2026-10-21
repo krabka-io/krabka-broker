@@ -402,9 +402,14 @@ impl CoordinatorGroup {
         }
     }
 
-    /// Drops every staged commit: the leadership term they were written in
-    /// ended, so none of them may be in the log of the next leader.
-    pub fn abandon_pending_commits(&mut self) { self.pending_commits.clear(); }
+    /// Drops every staged commit of `leader_epoch`: the leadership term they
+    /// were written in ended, so none of them may be in the log of the next
+    /// leader. A commit of a later epoch, which this broker may still lead,
+    /// stays.
+    pub fn abandon_pending_commits(&mut self, leader_epoch: i32) {
+        self.pending_commits
+            .retain(|pending| pending.leader_epoch != leader_epoch);
+    }
 
     /// `true` while a commit waits for the high watermark.
     #[must_use]
@@ -781,9 +786,10 @@ mod tests {
     }
 
     /// A commit of an earlier leader epoch is never published by a write of a
-    /// later one, which proves nothing about it.
+    /// later one, which proves nothing about it, and the end of an earlier
+    /// term never drops a commit of a later one that this broker still leads.
     #[test]
-    fn a_new_epoch_drops_commits_staged_under_the_old_one() {
+    fn leader_epochs_keep_their_staged_commits_apart() {
         let mut group = CoordinatorGroup::new_classic("g");
         group.stage_commit(1, 0, commits(&[(0, 5)]));
         group.stage_commit(2, 1, commits(&[(1, 7)]));
@@ -791,9 +797,17 @@ mod tests {
         check!(committed(&group) == commits(&[(1, 7)]).into_iter().collect());
         check!(!group.has_pending_commits());
 
+        // A wait of epoch 0 reports the end of its term after epoch 1 staged
+        // a commit: the epoch 1 commit stays, and publishes when it commits.
         group.stage_commit(3, 1, commits(&[(0, 9)]));
-        group.abandon_pending_commits();
+        group.abandon_pending_commits(0);
         group.publish_commits_through(3, 1);
-        check!(committed(&group) == commits(&[(1, 7)]).into_iter().collect());
+        check!(committed(&group) == commits(&[(0, 9), (1, 7)]).into_iter().collect());
+
+        // The end of epoch 1 drops its own staged commit.
+        group.stage_commit(4, 1, commits(&[(0, 11)]));
+        group.abandon_pending_commits(1);
+        group.publish_commits_through(4, 1);
+        check!(committed(&group) == commits(&[(0, 9), (1, 7)]).into_iter().collect());
     }
 }

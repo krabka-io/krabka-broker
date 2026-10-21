@@ -28,6 +28,10 @@ pub const OFFSETS_TOPIC: &str = "__consumer_offsets";
 /// `GroupCoordinatorService` passes to every `scheduleWriteOperation`.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long one window of [`LeaderAppend::committed_whenever`] waits before
+/// it checks again.
+const UNBOUNDED_WAIT_WINDOW: Duration = Duration::from_secs(60 * 60);
+
 #[async_trait]
 pub trait OffsetsLog: Send + Sync + std::fmt::Debug {
     /// Append `batch` to the `__consumer_offsets` partition of `group_id`, and
@@ -38,7 +42,7 @@ pub trait OffsetsLog: Send + Sync + std::fmt::Debug {
     /// applies the write to the shard's state as soon as it is appended, and
     /// completes the operation only when the high watermark passes it. A
     /// caller that must not wait for the second half in the meantime awaits
-    /// [`PendingWrite::committed`] elsewhere.
+    /// the [`PendingWrite`] elsewhere.
     ///
     /// # Errors
     ///
@@ -49,21 +53,30 @@ pub trait OffsetsLog: Send + Sync + std::fmt::Debug {
         batch: RecordBatch,
     ) -> Result<PendingWrite, BrokerError>;
 
-    /// Append `batch` and wait until the write is committed.
+    /// Append `batch` and wait until the write is committed, or until its
+    /// write timeout passes.
     ///
     /// # Errors
     ///
     /// The errors of [`append_pending`](Self::append_pending), and those of
-    /// [`PendingWrite::committed`].
+    /// [`PendingWrite::committed_in_time`].
     async fn append(&self, group_id: &str, batch: RecordBatch) -> Result<(), BrokerError> {
-        self.append_pending(group_id, batch).await?.committed.await
+        self.append_pending(group_id, batch)
+            .await?
+            .committed_in_time()
+            .await
     }
 }
 
 /// A group coordinator write that is in the log of its `__consumer_offsets`
 /// partition and that may not be committed yet.
+///
+/// Its two futures borrow nothing, so they may be awaited outside the turn
+/// that appended the write.
 #[derive(derive_more::Debug)]
 pub struct PendingWrite {
+    /// The `__consumer_offsets` partition the write is in.
+    pub partition: i32,
     /// The offset after the write's last record. The high watermark covers
     /// the write once it reaches this offset.
     pub end_offset: i64,
@@ -72,22 +85,34 @@ pub struct PendingWrite {
     /// later one proves the earlier one committed too.
     pub leader_epoch: i32,
     /// Completes when the high watermark covers the write while the epoch
-    /// still holds, and fails as [`LeaderAppend::committed`] does: with
-    /// `NOT_COORDINATOR` when the term ends first, and with
-    /// `COORDINATOR_NOT_AVAILABLE` after the write timeout. It borrows
-    /// nothing, so it may be awaited outside the turn that appended it.
+    /// still holds, and fails with `NOT_COORDINATOR` when the term ends
+    /// first. It has no deadline of its own: a write whose client already
+    /// heard its timeout may still commit, and Kafka shows it once it does.
     #[debug(skip)]
     pub committed: BoxFuture<'static, Result<(), BrokerError>>,
+    /// Completes when the write timeout passes: the default of Kafka's
+    /// `offsets.commit.timeout.ms`, after which `CoordinatorRuntime` fails
+    /// the operation and the client hears `COORDINATOR_NOT_AVAILABLE`.
+    #[debug(skip)]
+    pub deadline: BoxFuture<'static, ()>,
 }
 
-/// `true` when `error` is a write that timed out waiting for the high
-/// watermark: the record stays in the log and may still commit.
-#[must_use]
-pub fn write_timed_out(error: &BrokerError) -> bool {
-    matches!(error, BrokerError::CoordinatorWriteUncommitted {
-        code: codes::COORDINATOR_NOT_AVAILABLE,
-        ..
-    })
+impl PendingWrite {
+    /// Wait until the write is committed, or fail when its deadline passes
+    /// first.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`committed`](Self::committed), and
+    /// [`BrokerError::CoordinatorWriteUncommitted`] with
+    /// `COORDINATOR_NOT_AVAILABLE` when the deadline passes first.
+    pub async fn committed_in_time(self) -> Result<(), BrokerError> {
+        tokio::select! {
+            biased;
+            result = self.committed => result,
+            () = self.deadline => Err(uncommitted(self.partition, codes::COORDINATOR_NOT_AVAILABLE)),
+        }
+    }
 }
 
 /// Resolves the group-id's live `__consumer_offsets` partition at every
@@ -140,9 +165,11 @@ impl OffsetsLog for ProductionOffsetsLog {
         )
         .await?;
         Ok(PendingWrite {
+            partition: partition_id,
             end_offset: append.end_offset.0,
             leader_epoch: append.term.epoch.get(),
-            committed: Box::pin(append.committed()),
+            committed: Box::pin(append.committed_whenever()),
+            deadline: Box::pin(tokio::time::sleep(WRITE_TIMEOUT)),
         })
     }
 }
@@ -183,6 +210,36 @@ impl LeaderAppend {
             WRITE_TIMEOUT,
         )
         .await
+    }
+
+    /// Wait until the write is committed under the term it was appended in,
+    /// however long that takes.
+    ///
+    /// The wait runs in [`UNBOUNDED_WAIT_WINDOW`] windows, so a partition
+    /// that does not replicate logs its stall once per window.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::CoordinatorWriteUncommitted`] with
+    /// `NOT_COORDINATOR` when this broker stops leading the partition first.
+    pub(crate) async fn committed_whenever(mut self) -> Result<(), BrokerError> {
+        loop {
+            let window = await_committed(
+                &self.partition,
+                &mut self.images,
+                self.term,
+                self.end_offset,
+                UNBOUNDED_WAIT_WINDOW,
+            )
+            .await;
+            match window {
+                Err(BrokerError::CoordinatorWriteUncommitted {
+                    code: codes::COORDINATOR_NOT_AVAILABLE,
+                    ..
+                }) => {}
+                outcome => return outcome,
+            }
+        }
     }
 }
 
@@ -343,7 +400,7 @@ pub(crate) fn write_failure_code(error: &BrokerError) -> i16 {
 pub mod fake {
     use {
         super::{BrokerError, OFFSETS_TOPIC, OffsetsLog, PendingWrite, async_trait},
-        crate::{codes, coordinator::unified::persistence_next_gen::NextGenKey},
+        crate::coordinator::unified::persistence_next_gen::NextGenKey,
         krabka_protocol::records::RecordBatch,
         std::sync::{Arc, PoisonError},
         tokio::sync::{Mutex, Notify},
@@ -382,8 +439,8 @@ pub mod fake {
         held: bool,
         log_end: i64,
         high_watermark: i64,
-        /// Writes that end at or below it and are not committed fail as a
-        /// timed-out write does.
+        /// The write timeout has passed for every write that ends at or below
+        /// it.
         timed_out_through: i64,
     }
 
@@ -393,22 +450,14 @@ pub mod fake {
             self.changed.notify_waiters();
         }
 
-        async fn committed(&self, end_offset: i64) -> Result<(), BrokerError> {
+        /// Waits until `reached` holds of the gate's state.
+        async fn until(&self, reached: impl Fn(&GateState) -> bool) {
             loop {
                 let changed = self.changed.notified();
                 tokio::pin!(changed);
                 changed.as_mut().enable();
-                {
-                    let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-                    if state.high_watermark >= end_offset {
-                        return Ok(());
-                    }
-                    if state.timed_out_through >= end_offset {
-                        return Err(BrokerError::CoordinatorWriteUncommitted {
-                            partition: 0,
-                            code: codes::COORDINATOR_NOT_AVAILABLE,
-                        });
-                    }
+                if reached(&self.state.lock().unwrap_or_else(PoisonError::into_inner)) {
+                    return;
                 }
                 changed.await;
             }
@@ -449,11 +498,23 @@ pub mod fake {
                     state.high_watermark = end_offset;
                 }
             });
-            let gate = Arc::clone(&self.commit_gate);
+            let committed = Arc::clone(&self.commit_gate);
+            let deadline = Arc::clone(&self.commit_gate);
             Ok(PendingWrite {
+                partition: 0,
                 end_offset,
                 leader_epoch: 0,
-                committed: Box::pin(async move { gate.committed(end_offset).await }),
+                committed: Box::pin(async move {
+                    committed
+                        .until(|state| state.high_watermark >= end_offset)
+                        .await;
+                    Ok(())
+                }),
+                deadline: Box::pin(async move {
+                    deadline
+                        .until(|state| state.timed_out_through >= end_offset)
+                        .await;
+                }),
             })
         }
     }
@@ -471,8 +532,8 @@ pub mod fake {
             });
         }
 
-        /// Time out every write in the log that is not committed yet, while
-        /// its records stay in the log.
+        /// Pass the write timeout of every write in the log, while the records
+        /// stay in the log and may still commit.
         pub fn time_out_uncommitted(&self) {
             self.commit_gate
                 .update(|state| state.timed_out_through = state.log_end);

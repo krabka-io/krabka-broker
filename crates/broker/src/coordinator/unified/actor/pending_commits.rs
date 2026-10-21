@@ -18,9 +18,7 @@ use {
     crate::{
         codes,
         coordinator::unified::{
-            classic_state::OffsetEntry,
-            group::CoordinatorGroup,
-            offsets_log::{OffsetsLog, write_timed_out},
+            classic_state::OffsetEntry, group::CoordinatorGroup, offsets_log::OffsetsLog,
         },
         error::BrokerError,
     },
@@ -37,13 +35,23 @@ pub(super) type CommitReply = oneshot::Sender<Result<(), ErrorCode>>;
 struct WaitingCommit {
     end_offset: i64,
     leader_epoch: i32,
-    reply: CommitReply,
+    /// `None` once the client has heard the write timeout: the actor still
+    /// watches the write, to publish it if it commits after all.
+    reply: Option<CommitReply>,
 }
 
-/// The end of one commit's wait for the high watermark.
+/// What ended one step of a commit's wait.
+enum CommitEvent {
+    /// The high watermark covered the write, or its term ended first.
+    Ended(Result<(), BrokerError>),
+    /// The write timeout passed first. The wait for the commit goes on.
+    TimedOut(BoxFuture<'static, Result<(), BrokerError>>),
+}
+
+/// The end of one step of a commit's wait.
 pub(super) struct CommitOutcome {
     id: u64,
-    result: Result<(), BrokerError>,
+    event: CommitEvent,
 }
 
 /// The commits of one group that are in the offsets log and that the high
@@ -54,7 +62,7 @@ pub(super) struct CommitWaits {
     waits: FuturesUnordered<BoxFuture<'static, CommitOutcome>>,
     /// The waiting commits, by the id their wait ends with. The replies are
     /// kept here rather than in the waits so the actor can answer them when
-    /// it stops.
+    /// it unloads.
     waiting: HashMap<u64, WaitingCommit>,
 }
 
@@ -88,19 +96,21 @@ impl CommitWaits {
         self.waiting.insert(id, WaitingCommit {
             end_offset: write.end_offset,
             leader_epoch: write.leader_epoch,
-            reply,
+            reply: Some(reply),
         });
-        let committed = write.committed;
+        let (mut committed, deadline) = (write.committed, write.deadline);
         self.waits.push(Box::pin(async move {
-            CommitOutcome {
-                id,
-                result: committed.await,
-            }
+            let event = tokio::select! {
+                biased;
+                result = &mut committed => CommitEvent::Ended(result),
+                () = deadline => CommitEvent::TimedOut(committed),
+            };
+            CommitOutcome { id, event }
         }));
     }
 
-    /// The next commit whose wait ended. Pending for ever while none waits,
-    /// so the actor loop can poll it beside its mailbox.
+    /// The next step of a commit's wait that ended. Pending for ever while
+    /// none waits, so the actor loop can poll it beside its mailbox.
     pub(super) async fn next(&mut self) -> CommitOutcome {
         match self.waits.next().await {
             Some(outcome) => outcome,
@@ -108,47 +118,91 @@ impl CommitWaits {
         }
     }
 
-    /// Applies the end of one commit's wait to the group and answers its
-    /// client.
+    /// Applies one step of a commit's wait to the group and answers its
+    /// client, as Kafka's `CoordinatorRuntime` completes a write.
     ///
-    /// A committed write publishes every staged commit of its epoch up to it,
-    /// in log order, so an earlier commit that finishes late never overwrites
-    /// a later one. A write that timed out answers `COORDINATOR_NOT_AVAILABLE`
-    /// and stays staged: its records are in the log, and a later write that
-    /// commits publishes it. A write whose leadership term ended answers
-    /// `NOT_COORDINATOR` and drops every staged commit.
+    /// - A committed write publishes every staged commit of its epoch up to
+    ///   it, in log order, so an earlier commit that finishes late never
+    ///   overwrites a later one.
+    /// - A write whose timeout passed answers `COORDINATOR_NOT_AVAILABLE` and
+    ///   stays staged; the actor keeps watching it, and publishes it if the
+    ///   high watermark passes it after all.
+    /// - A write whose leadership term ended answers `NOT_COORDINATOR` and
+    ///   drops every staged commit of that term.
     pub(super) fn complete(&mut self, group: &mut CoordinatorGroup, outcome: CommitOutcome) {
-        let Some(WaitingCommit {
-            end_offset,
-            leader_epoch,
-            reply,
-        }) = self.waiting.remove(&outcome.id)
-        else {
-            return;
-        };
-        let answer = match outcome.result {
-            Ok(()) => {
-                group.publish_commits_through(end_offset, leader_epoch);
-                Ok(())
-            }
-            Err(error) => {
-                tracing::warn!(group_id = %group.group_id, %error, "OffsetCommit did not commit");
-                if !write_timed_out(&error) {
-                    group.abandon_pending_commits();
+        let CommitOutcome { id, event } = outcome;
+        match event {
+            CommitEvent::TimedOut(committed) => {
+                if let Some(waiting) = self.waiting.get_mut(&id) {
+                    answer(waiting.reply.take(), Err(codes::COORDINATOR_NOT_AVAILABLE));
                 }
-                Err(codes::from_broker_error(&error))
+                self.waits.push(Box::pin(async move {
+                    CommitOutcome {
+                        id,
+                        event: CommitEvent::Ended(committed.await),
+                    }
+                }));
             }
-        };
-        let _ = reply.send(answer);
+            CommitEvent::Ended(result) => {
+                let Some(waiting) = self.waiting.remove(&id) else {
+                    return;
+                };
+                let answered = match result {
+                    Ok(()) => {
+                        group.publish_commits_through(waiting.end_offset, waiting.leader_epoch);
+                        Ok(())
+                    }
+                    Err(error) => {
+                        tracing::warn!(group_id = %group.group_id, %error, "OffsetCommit did not commit");
+                        group.abandon_pending_commits(waiting.leader_epoch);
+                        Err(codes::from_broker_error(&error))
+                    }
+                };
+                answer(waiting.reply, answered);
+            }
+        }
     }
 
-    /// Answers every commit still waiting with `NOT_COORDINATOR`, as Kafka's
+    /// Answers every client still waiting with `NOT_COORDINATOR`, as Kafka's
     /// runtime fails the pending writes of a shard it unloads, so the clients
-    /// look the coordinator up again instead of waiting on an actor that has
-    /// stopped.
-    pub(super) fn fail_all(self) {
-        for waiting in self.waiting.into_values() {
-            let _ = waiting.reply.send(Err(codes::NOT_COORDINATOR));
+    /// look the coordinator up again. Nothing is watched any more.
+    pub(super) fn fail_all(&mut self) {
+        for (_, waiting) in self.waiting.drain() {
+            answer(waiting.reply, Err(codes::NOT_COORDINATOR));
         }
+        self.waits.clear();
+    }
+
+    /// Hands the commits still waiting to a task of their own when the actor
+    /// stops for any reason but an unload, such as a deleted group.
+    ///
+    /// Their records are in the log, and the write that stopped the actor may
+    /// even prove them committed, so each client hears the outcome of its own
+    /// write, as it would from Kafka, rather than a guess. Nothing is
+    /// published: no group is left to publish to.
+    pub(super) fn detach(mut self) {
+        if self.waits.is_empty() {
+            return;
+        }
+        tokio::spawn(async move {
+            while let Some(CommitOutcome { id, event }) = self.waits.next().await {
+                let Some(waiting) = self.waiting.remove(&id) else {
+                    continue;
+                };
+                let answered = match event {
+                    CommitEvent::Ended(result) => {
+                        result.map_err(|error| codes::from_broker_error(&error))
+                    }
+                    CommitEvent::TimedOut(_) => Err(codes::COORDINATOR_NOT_AVAILABLE),
+                };
+                answer(waiting.reply, answered);
+            }
+        });
+    }
+}
+
+fn answer(reply: Option<CommitReply>, answered: Result<(), ErrorCode>) {
+    if let Some(reply) = reply {
+        let _ = reply.send(answered);
     }
 }

@@ -243,8 +243,10 @@ pub(super) async fn handle_actor_message(
             // Kafka's `GroupMetadataManager.onUnloaded`: a parked `JoinGroup`
             // or `SyncGroup` learns that this broker no longer coordinates the
             // group, so its client looks the coordinator up again instead of
-            // retrying here.
+            // retrying here. Its runtime fails the shard's pending writes the
+            // same way, so a commit still replicating answers `NOT_COORDINATOR`.
             drain_parked_for_unload(&mut parked.joiners, &mut parked.followers);
+            commits.fail_all();
             let _ = reply.send(());
             false
         }
@@ -463,11 +465,11 @@ mod tests {
     }
 
     /// A commit that times out answers `COORDINATOR_NOT_AVAILABLE` and stays
-    /// invisible, but its record is in the log. Once a later write of the same
-    /// leadership commits, the high watermark has passed it too, and Kafka
-    /// shows it: so does the actor.
+    /// invisible, but its record is in the log. Once the high watermark passes
+    /// it after all, Kafka shows it, with no further write needed: so does the
+    /// actor.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_timed_out_commit_becomes_visible_once_a_later_write_commits() {
+    async fn a_timed_out_commit_becomes_visible_once_the_high_watermark_passes_it() {
         let (coord, log) = make_coordinator();
         let handle = coord.get_or_create_classic("g");
         log.hold_commits();
@@ -480,8 +482,39 @@ mod tests {
         assert!(committed_now(&handle).await == offsets(&[]));
 
         log.release_commits();
-        assert!(begin_commit(&handle, 1, 3).await.await.unwrap() == Ok(()));
-        assert!(committed_now(&handle).await == offsets(&[(0, 7), (1, 3)]));
+        tokio::time::timeout(PROMPT, async {
+            while committed_now(&handle).await != offsets(&[(0, 7)]) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the timed-out commit is published once it commits");
+    }
+
+    /// `DeleteGroups` of an empty group while a commit of it replicates: the
+    /// group's tombstones come later in the log, so once they commit the
+    /// commit has too. Kafka answers the commit by its own write's outcome,
+    /// and only an unload fails it, so the client is not told to retry a
+    /// commit that landed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_commit_replicating_under_a_group_delete_answers_its_own_outcome() {
+        let (coord, log) = make_coordinator();
+        let handle = coord.get_or_create_classic("g");
+        log.hold_commits();
+        let pending = begin_commit(&handle, 0, 7).await;
+        assert!(committed_now(&handle).await == offsets(&[]));
+        let delete = tokio::spawn({
+            let coord = std::sync::Arc::clone(&coord);
+            async move { coord.delete_group("g").await }
+        });
+        // The delete's tombstones are in the log once a second batch is.
+        while log.batches().await.len() < 2 {
+            tokio::task::yield_now().await;
+        }
+
+        log.release_commits();
+        assert!(delete.await.unwrap() == Ok(()));
+        assert!(pending.await.unwrap() == Ok(()));
     }
 
     /// Kafka's runtime fails the pending writes of a shard it unloads with

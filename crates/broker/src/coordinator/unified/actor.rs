@@ -384,9 +384,10 @@ async fn run_actor(
             break;
         }
     }
-    // No turn is left to publish a commit that is still replicating, so its
-    // client hears now rather than waiting on a dead actor.
-    commits.fail_all();
+    // No turn is left to publish a commit that is still replicating. Its
+    // client still hears how its own write ended, and after an unload it has
+    // already heard `NOT_COORDINATOR`.
+    commits.detach();
     // A sender can enqueue using a permit reserved before closure. Drain those
     // sends too, dropping their replies, so callers cannot wait on a dead actor.
     rx.close();
