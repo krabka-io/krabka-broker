@@ -46,7 +46,9 @@ pub trait OffsetsLog: Send + Sync + std::fmt::Debug {
     ///
     /// # Errors
     ///
-    /// The errors of [`append_as_leader`] for the production log.
+    /// The production log fails as its leader append does: `NOT_COORDINATOR`
+    /// when another broker leads the partition, and the writer's error when
+    /// the log refuses the batch.
     async fn append_pending(
         &self,
         group_id: &str,
