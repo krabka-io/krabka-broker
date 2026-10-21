@@ -749,7 +749,7 @@ mod tests {
                             (krabka_audit::NodeId(1), 1),
                         )
                     },
-                    std::future::pending(),
+                    tokio::sync::watch::channel(Arc::clone(&leader.image)).1,
                 )
                 .await
             }
