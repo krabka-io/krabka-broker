@@ -45,13 +45,12 @@ pub(super) async fn fetch_offsets(
     member_epoch: i32,
 ) -> Result<GroupOffsets, i16> {
     let names_member = member_id.is_some() || member_epoch >= 0;
-    if names_member && broker.group_coordinator.find_streams(group_id).is_some() {
-        let streams = broker.group_coordinator.get_or_create_streams(group_id);
-        if let Some(error_code) =
+    if names_member
+        && let Some(streams) = broker.group_coordinator.find_live_streams(group_id)
+        && let Some(error_code) =
             validate_streams_group_offset_fetch(&streams, member_id, member_epoch).await
-        {
-            return Err(error_code);
-        }
+    {
+        return Err(error_code);
     }
     let Some(handle) = broker.group_coordinator.find(group_id) else {
         return Ok(GroupOffsets::default());

@@ -21,6 +21,7 @@ use {
                 CurrentTopicPartitions, MemberAssignmentState, MemberMetadataValue,
                 TargetAssignmentMemberValue,
             },
+            test_support::{seed_streams_group, stop_streams_actor},
         },
         handlers::{RequestContext, test_support::configured_topic_request},
         test_support::{
@@ -89,6 +90,9 @@ enum Group {
     ClassicWithMember,
     /// A consumer (KIP-848) group with no members.
     EmptyConsumer,
+    /// A streams (KIP-1071) group whose actor exited, as one does after a
+    /// failed write. A respawned actor holds no member.
+    StoppedStreams,
 }
 
 /// One row: the group, the request version, member id and generation, and
@@ -128,7 +132,7 @@ async fn create_topic_with_partitions(broker: &Broker, num_partitions: i32) {
     .await;
 }
 
-fn seed(broker: &Broker, group_id: &str, group: Group) {
+async fn seed(broker: &Broker, group_id: &str, group: Group) {
     match group {
         Group::Missing => {}
         Group::ClassicWithMember => {
@@ -151,6 +155,14 @@ fn seed(broker: &Broker, group_id: &str, group: Group) {
                 .group_coordinator
                 .get_or_create_group(group_id, GroupKindTag::Consumer);
         }
+        Group::StoppedStreams => {
+            seed_streams_group()
+                .coordinator(&broker.group_coordinator)
+                .group_id(group_id)
+                .call()
+                .await;
+            stop_streams_actor(&broker.group_coordinator, group_id).await;
+        }
     }
 }
 
@@ -165,7 +177,7 @@ struct Driven {
 async fn drive(broker: &BrokerHandle, row: usize, case: Case) -> Driven {
     let shared = broker.broker_arc_for_test();
     let group_id = format!("group-validation-{row}");
-    seed(&shared, &group_id, case.group);
+    seed(&shared, &group_id, case.group).await;
     let request = offset_commit_request(group_id.clone(), case.generation, case.member_id, vec![
         super::test_topic_row().name(TOPIC.to_string()).call(),
     ]);
@@ -245,6 +257,15 @@ async fn commit_is_fenced_by_kafka_group_rule() {
             generation: -1,
             error_code: codes::NONE,
         },
+        // A streams actor that exited is respawned to validate the commit,
+        // rather than refusing it with `UNKNOWN_SERVER_ERROR`.
+        Case {
+            group: Group::StoppedStreams,
+            version: 9,
+            member_id: "",
+            generation: -1,
+            error_code: codes::NONE,
+        },
     ];
     let HandlerStartedBroker { broker, dir: _dir } =
         start_group_broker_no_audit(Arc::new(AllowAllAuthorizer)).await;
@@ -313,7 +334,7 @@ async fn topic_read_is_checked_before_the_group() {
     let shared = broker.broker_arc_for_test();
     create_topic(&shared).await;
     broker.wait_until_partition_present(TOPIC, 0).await;
-    seed(&shared, "authz-mixed", Group::ClassicWithMember);
+    seed(&shared, "authz-mixed", Group::ClassicWithMember).await;
 
     let row = |name: &str| OffsetCommitRequestTopic {
         name: name.to_string(),
