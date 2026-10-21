@@ -42,6 +42,8 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -61,6 +63,8 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Omitting an explicit rust-toolchain action relies on the runner image's pre-installed
@@ -78,12 +82,8 @@ jobs:
       # stderr diagnostic messages in the console.
       # `rm -rf target/criterion` clears stale baseline samples from warm cache runs.
       # `--noplot` prevents Criterion from rendering uncollected gnuplot charts.
-      # `TMPDIR` moves the bench logs off `/tmp`, which ubuntu-26.04 mounts as a
-      # quota-limited tmpfs that the append benches fill (EDQUOT).
       - name: Run Log Engine Benches
         shell: bash
-        env:
-          TMPDIR: ${{ runner.temp }}
         run: |
           mkdir -p bench-results
           rm -rf target/criterion

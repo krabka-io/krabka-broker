@@ -30,6 +30,8 @@ jobs:
       artifact: ${{ steps.freeze.outputs.artifact }}
       prefix: ${{ steps.freeze.outputs.prefix }}
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - name: Require the reviewed workflow on main
         run: test "$GITHUB_REF" = refs/heads/main
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -83,6 +85,8 @@ jobs:
     # 24-hour job token expires. Comparisons stay interleaved on one host.
     timeout-minutes: 1380
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ needs.candidate.outputs.revision }}
@@ -153,6 +157,8 @@ jobs:
       CLOUD_PREFIX: ${{ needs.candidate.outputs.prefix }}
       CLOUDSDK_STORAGE_PARALLEL_COMPOSITE_UPLOAD_ENABLED: 'false'
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ needs.candidate.outputs.revision }}
@@ -262,6 +268,8 @@ jobs:
       INPUTS_RETAINED: ${{ needs.soak.outputs.inputs_retained }}
       ARCHIVE_RETAINED: ${{ needs.soak.outputs.archive_retained }}
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: ${{ needs.candidate.outputs.artifact }}

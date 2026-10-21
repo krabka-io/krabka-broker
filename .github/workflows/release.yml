@@ -52,6 +52,8 @@ jobs:
       # `gh run list` below reads this repository's workflow runs.
       actions: read
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # A push checks out the tag it was started by; a dispatch, the tag
@@ -140,6 +142,8 @@ jobs:
       RELEASE_TAG: ${{ needs.verify.outputs.tag }}
       RELEASE_COMMIT: ${{ needs.verify.outputs.commit }}
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.commit }}
