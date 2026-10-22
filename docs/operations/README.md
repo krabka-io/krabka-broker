@@ -22,6 +22,8 @@ fails the build when the series drift.
   workload matrix, the results record, and the budgets that reject a
   candidate before or after a change, or report its limits against pinned
   Kafka 4.3.1.
+- [Performance budget results](performance-budget-results.md): the measured
+  runs of those budgets, with each run's archived evidence.
 - [Scale a cluster](scaling.md): add capacity, move replicas with a throttle,
   and drain and unregister a broker, including the operator-managed path.
 - [Metrics](metrics.md): every exported series with its labels and the JMX
