@@ -25,6 +25,11 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Added
 
+- `krabka-log` gains `Log::prepare_compaction`, `CompactionJob::build` and
+  `Log::finish_compaction`, with `BuiltCompaction` and `CompactionOutcome`:
+  `Log::compact` in three steps, the middle one runnable without the log.
+  `Log::compact` runs all three and behaves as before, except that it does
+  nothing on a fenced log (#1639).
 - `packaging/k8s/profiles/krabka-io-uring.json`, a seccomp profile for the
   reference StatefulSet. It is containerd v2.4.2's `RuntimeDefault` profile
   plus the three io_uring system calls, which the default profiles of
@@ -42,6 +47,11 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- `ci.yml` runs on the merge queue's `merge_group` event, treated like a
+  pull request: lanes are scoped by path, the remote cache is read-only and
+  nextest waits for `main`. Each queued pull request is then tested on top of
+  `main` and of every pull request ahead of it, so two that pass alone can no
+  longer merge into a `main` that does not build, as #1624 and #1629 did.
 - Pull request CI runs fewer lanes, and a release requires a full run. Pull
   requests no longer run `coverage`, `cargo nextest` or `benchmarks.yml`.
   Pushes to `main` still run coverage and nextest. A pull request runs the
@@ -56,6 +66,29 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   its own last run, so the GitHub runner no longer compiles the closure or
   downloads test binaries. A run without a key, such as a fork's pull
   request, runs the same script on the GitHub runner.
+- Log compaction holds one record batch at a time. The offset-map and rewrite
+  passes used to read and decode each sealed segment whole, the rewrite held
+  every decoded batch of its group at once, and the offset map kept each
+  batch's decompressed body alive through the keys it stored. A rewrite group
+  is bounded by `segment.bytes` on disk, so a compressed group could need many
+  times that in memory. The passes now stream each segment batch by batch, and
+  the map copies each distinct key once. In the measurements on #1613, a pass
+  over 256 MiB of gzip-expanded records raised the peak resident set by 1.4
+  MiB instead of 521 MiB. Damaged segments fail the pass with the same errors
+  as before (#1613).
+- Log compaction reads and rewrites a partition's sealed segments without
+  holding the partition's log mutex or its writer task, as Kafka's cleaner
+  does. The writer takes the mutex only to start the pass and to install its
+  output, and handles other messages while the pass builds, so produce,
+  replica appends and fetches of the partition no longer wait for the whole
+  pass. A pass whose input a truncation, retention or reset took
+  away meanwhile installs nothing and is not reported as a storage failure.
+  `Log::fence` and `Log::close` now stop a running pass and return once it
+  writes no more files, so a retired or moved partition's directory can be
+  deleted as before. A built pass that is never installed deletes its files. In the
+  measurements on #1639, the lock was held for 50 ms instead of 1.5 s during
+  a pass over 45 MiB of gzip records, and for 150 ms instead of 0.8 s over
+  256 compressed segments (#1639).
 - A produce append runs on the request's own task when it only writes to the
   page cache. The partition writer task used to take every produce, so each
   one paid two cross-thread wakes before its write. The request task now takes
@@ -77,6 +110,11 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   index floor, header scan and readahead hint under the log lock. It now
   reads the regions the first walk found. Followers and consumers at the tail
   of a log make this fetch on every round trip.
+- A wide fetch counts its bytes in linear time. Before each partition read the
+  read loop asks whether the response is still empty, and it used to answer by
+  summing every partition's bytes, so a fetch over `P` partitions did `P²`
+  additions. It now keeps a running total. On a 4-vCPU host, the read loop
+  over 10,000 entries took 21-23 ms instead of 32-34 ms (#1609).
 - Less work per request on the produce and fetch paths:
   - Dispatch reads a Produce request's `acks` from its leading fields to
     decide whether a response is owed, instead of decoding the request a
@@ -90,9 +128,29 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
     building the eight candidate entity keys.
   - The log-directory health check every produce and fetch makes answers
     without hashing the directory's path while every directory is online.
+- The partitions of one Produce request append at once, up to 16 at a time,
+  instead of one after another. An append that waits for a busy writer, a
+  segment roll or a diskless WAL no longer holds back the other partitions of
+  the request. Two entries for the same partition still append in request
+  order, and the response keeps the request's order (#1618).
+- A remote segment's lifecycle transition updates only that segment's entries
+  in the tiered-storage metadata manager's epoch index. Each finish, hide and
+  delete used to rebuild and sort the partition's whole index under the
+  manager-wide lock that offset lookups take, so the cost of one transition,
+  and the time a lookup could wait behind it, grew with the partition's
+  retained remote history. With 100,000 retained segments one lifecycle went
+  from about 36 ms to under 1 µs in the `remote_epoch_index` benchmark (#1616).
 
 ### Fixed
 
+- The nightly criterion lane builds the reference and the candidate into
+  separate Cargo target directories, both before either is measured. With one
+  shared directory, Cargo could judge a candidate that changed only source as
+  fresh and run the reference's executable again under the candidate's
+  commit. `krabka-parse-benches executables` records each side's bench
+  executables by path and SHA-256. Every summary names the executables its pass
+  ran, checked against Cargo's `Running` lines and the recorded digests. The
+  verdict refuses a comparison whose sides share an executable path (#1608).
 - Store a produced `CreateTime` batch with its largest record timestamp as
   `max_timestamp`, as Kafka's `LogValidator` does, on the verbatim and the
   owned path. The producer's header value was kept, so an LZ4 batch with

@@ -1,6 +1,13 @@
 name: ci
 on:
   pull_request:
+  # The merge queue. Every PR is tested again on top of main and every
+  # PR queued ahead of it before it merges, so two PRs that each pass
+  # alone cannot merge into a main that does not build: #1624 and #1629
+  # did, with no text conflict between them. A queue group is untrusted
+  # like a pull request (no cache uploads, path-scoped lanes, no nextest),
+  # and `gate` reports on it, which is what the queue waits for.
+  merge_group:
   push:
     branches: [main]
   schedule:
@@ -20,6 +27,12 @@ permissions:
   # holding this. Without it those uploads are skipped and the run says so
   # on every job.
   id-token: write
+
+env:
+  # Pushes to `main`, the nightly, a dispatch and a release tag are trusted:
+  # they may write to the remote cache. A pull request and a merge-queue group
+  # read only.
+  TRUSTED_RUN: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
 
 # Cancel superseded PR runs; let pushes to main run to completion. The event
 # is part of the group so that a push to `main` never queues behind, or
@@ -84,22 +97,41 @@ jobs:
       CI_BAZEL_SCRIPT: |
         set -euo pipefail
 
-        # One invocation builds `//...` and runs every test that needs no
-        # Docker daemon and asserts on no wall clock, so test execution overlaps
-        # the rest of the build instead of waiting for all of it. That covers
-        # the rustdoc targets (none is `manual`), `//packaging:image_binaries_test`
-        # and the Stateright models but `kraft_model_test`, which is
-        # timing-sensitive and runs below. There are no test targets outside
-        # `//crates` and `//packaging`.
+        # Build `//...` first, then run every test that needs no Docker daemon
+        # and asserts on no wall clock. The rustdoc targets (none is `manual`),
+        # `//packaging:image_binaries_test` and the Stateright models are among
+        # them, all but `kraft_model_test`, which is timing-sensitive and runs
+        # below. There are no test targets outside `//crates` and `//packaging`.
+        #
+        # Building first, rather than letting `bazel test` overlap the two,
+        # keeps rustc off the cores the suites need: broker suites that wait on
+        # heartbeats starved beside a compile on the remote runner and failed
+        # at random -- `CreateTopics` answering 38 ("All brokers are currently
+        # fenced"), `COORDINATOR_NOT_AVAILABLE`, 30 s image-wait timeouts -- on
+        # #1622 and #1632, while every one passes alone. The build passes the
+        # lint flag `.bazelrc` sets for `test` only, so both commands share one
+        # configuration and the second reuses the first's analysis.
+        #
+        # `--local_test_jobs=4` keeps the four-at-a-time concurrency these
+        # suites had on a four-core GitHub runner; the 16-core remote runner
+        # would otherwise run 16 at once.
         #
         # The test tag filter is named in full because `--test_tag_filters` is
         # last-wins: `-timing-sensitive` alone would drop the `-docker` that
         # `.bazelrc` sets for `test`. The remote cache holds test results, so a
         # change that leaves a target's inputs alone does not run it again.
-        echo "::group::build and daemon-free tests"
+        echo "::group::build"
+        bazel build \
+          --build_tag_filters=-docker \
+          --@aspect_rules_lint//lint:fail_on_violation \
+          //...
+        echo "::endgroup::"
+
+        echo "::group::daemon-free tests"
         bazel test \
           --build_tag_filters=-docker \
           --test_tag_filters=-docker,-timing-sensitive \
+          --local_test_jobs=4 \
           //...
         echo "::endgroup::"
 
@@ -145,7 +177,7 @@ jobs:
           # Everything that is not a pull request is a trusted context: pushes
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
 
       # `--severity` defaults to `auto`, which the CLI resolves to `fail` on CI
       # and `info` off it -- so this gates here and only reports locally.
@@ -172,7 +204,7 @@ jobs:
           lane: ci
           script: ${{ env.CI_BAZEL_SCRIPT }}
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: steps.bazel.outputs.remote != 'true'
         with:
@@ -251,7 +283,7 @@ jobs:
           # Everything that is not a pull request is a trusted context: pushes
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
 
       # The instrumented build and run happen on a BuildBuddy remote runner
       # when this run holds a key (see `.github/actions/buildbuddy-run`), which
@@ -268,7 +300,7 @@ jobs:
           lane: coverage
           script: bazel coverage //crates/...
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
       - name: collect the coverage report from the remote cache
         if: steps.bazel.outputs.remote == 'true'
         run: bazel coverage //crates/...
@@ -326,7 +358,7 @@ jobs:
   cargo:
     name: cargo clippy · nextest
     needs: select
-    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || needs.select.outputs.rust == 'true')
+    if: github.event_name != 'schedule' && (!contains(fromJSON('["pull_request", "merge_group"]'), github.event_name) || needs.select.outputs.rust == 'true')
     runs-on: ubuntu-26.04
     # Cold builds, the full suite and the post-job cache upload share this budget.
     timeout-minutes: 90
@@ -369,10 +401,19 @@ jobs:
         with:
           lane: cargo
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
+          # Clippy plus nextest's `cargo test --no-run` links ~140 statically
+          # linked broker test binaries into one target directory. On the
+          # first push run that reached nextest that filled 80 GB: ld died
+          # with a bus error and rustc with "No space left on device". So the
+          # runner takes BuildBuddy's 100 GB maximum, incremental compilation
+          # (whose dep-graph files are useless in CI) is off, and the script
+          # clears a target directory that the snapshot has let grow.
+          disk: 100GB
           env: |
             CARGO_PROFILE_DEV_DEBUG=line-tables-only
-            RUN_NEXTEST=${{ github.event_name != 'pull_request' }}
+            CARGO_INCREMENTAL=0
+            RUN_NEXTEST=${{ env.TRUSTED_RUN }}
           script: |
             set -euo pipefail
             if ! command -v rustup >/dev/null; then
@@ -383,11 +424,21 @@ jobs:
             # Installs the channel and components `rust-toolchain.toml` names.
             rustup toolchain install
 
+            # The snapshot keeps `target/` between runs, and Cargo never
+            # removes artifacts a later dependency graph no longer uses. Drop
+            # the incremental caches older runs left, and start clean once the
+            # directory passes 40 GB, so it cannot creep up to the disk limit.
+            rm -rf target/debug/incremental
+            if [ -d target ] && [ "$(du -sm target | cut -f1)" -gt 40000 ]; then
+              cargo clean
+            fi
+
             cargo clippy --workspace --all-targets -- -D warnings
 
             if [ "${RUN_NEXTEST}" = "true" ]; then
               if ! command -v cargo-nextest >/dev/null; then
-                curl -LsSf --retry 5 --retry-all-errors https://get.nexte.st/latest/linux \
+                # No `--retry-all-errors`: the remote runner's curl predates it.
+                curl -LsSf --retry 5 https://get.nexte.st/latest/linux \
                   | tar zxf - -C "${CARGO_HOME:-${HOME}/.cargo}/bin"
               fi
               cargo nextest run --workspace --profile ci
@@ -408,7 +459,7 @@ jobs:
   wasm:
     name: cargo clippy · wasm32-wasip1
     needs: select
-    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || needs.select.outputs.rust == 'true')
+    if: github.event_name != 'schedule' && (!contains(fromJSON('["pull_request", "merge_group"]'), github.event_name) || needs.select.outputs.rust == 'true')
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
@@ -488,7 +539,7 @@ jobs:
           # Everything that is not a pull request is a trusted context: pushes
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
 
       # Every check and generator this repository runs on a runner is an AXL task
       # under `.aspect/`, and this step is their unit tests. It is also where the
@@ -663,7 +714,7 @@ jobs:
           # Everything that is not a pull request is a trusted context: pushes
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
 
       # A digest of everything that decides the image's contents. See
       # //tools/creusot for why the registry, and not the Bazel disk cache, is
@@ -712,7 +763,7 @@ jobs:
           # Everything that is not a pull request is a trusted context: pushes
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
 
       # `--verbose_failures`: the toolchain layer is built by a genrule that
       # shells out to Docker, and when it fails Bazel otherwise reports only
@@ -780,7 +831,7 @@ jobs:
       kubernetes: ${{ steps.scope.outputs.kubernetes }}
       proofs: ${{ steps.scope.outputs.proofs }}
     env:
-      BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
       FULL_MATRIX: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     steps:
       - name: Keep temporary files off the size-limited /tmp tmpfs
@@ -806,7 +857,7 @@ jobs:
           # Everything that is not a pull request is a trusted context: pushes
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
 
       - id: select
         run: |
@@ -865,7 +916,7 @@ jobs:
           # Everything that is not a pull request is a trusted context: pushes
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
 
       # The host side of these suites reaches the broker over loopback, but a few
       # host-side Rust clients bootstrap through the advertised name, so it has to
@@ -951,7 +1002,7 @@ jobs:
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
           client-cert: ${{ secrets.BUILDBUDDY_CLIENT_CERT }}
           client-key: ${{ secrets.BUILDBUDDY_CLIENT_KEY }}
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           cluster_name: krabka
@@ -1013,7 +1064,7 @@ jobs:
           # Everything that is not a pull request is a trusted context: pushes
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
       - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
       - name: load KDC image
         run: bazel run //crates/broker/tests/fixtures/security/kdc:image_load
@@ -1083,7 +1134,7 @@ jobs:
           # Everything that is not a pull request is a trusted context: pushes
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
 
       # Each broker advertises `host.docker.internal` so that its two peers and
       # the host-side clients reach it by one name. The containers resolve it
@@ -1140,7 +1191,7 @@ jobs:
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
           client-cert: ${{ secrets.BUILDBUDDY_CLIENT_CERT }}
           client-key: ${{ secrets.BUILDBUDDY_CLIENT_KEY }}
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
 
       # As in `soak`: every broker advertises `host.docker.internal`.
       - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
@@ -1201,9 +1252,10 @@ jobs:
   #
   # Each side runs four times, alternating on the same host. The verdict uses
   # medians and three times the larger median absolute deviation, with a 10%
-  # floor. Missing or invalid samples fail. Raw output, exact commits and host
-  # resources travel with the verdict artifact. Pull requests only compile the
-  # benches; this eight-pass lane is nightly and manually dispatchable.
+  # floor. Missing or invalid samples fail. Raw output, exact commits, the
+  # SHA-256 of every bench executable each pass ran, and host resources travel
+  # with the verdict artifact. Pull requests only compile the benches; this
+  # eight-pass lane is nightly and manually dispatchable.
   bench:
     name: variance-calibrated criterion benches
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -1259,12 +1311,25 @@ jobs:
         run: |
           set -euo pipefail
           candidate_sha="$(git rev-parse HEAD)"
+          reference_sha='${{ steps.reference.outputs.sha }}'
           reference_dir="${RUNNER_TEMP}/krabka-benchmark-reference"
-          git worktree add --detach "${reference_dir}" '${{ steps.reference.outputs.sha }}'
+          git worktree add --detach "${reference_dir}" "${reference_sha}"
+          declare -A source_dirs=([reference]="${reference_dir}" [candidate]="${GITHUB_WORKSPACE}")
+          declare -A commits=([reference]="${reference_sha}" [candidate]="${candidate_sha}")
+          # One target directory per revision (#1608). Cargo judges freshness
+          # per directory, so in a shared one a candidate that changes only
+          # source can be judged fresh and the reference's executable runs
+          # again under the candidate's name. The candidate keeps `target/`,
+          # which rust-cache restores.
+          declare -A target_dirs=(
+            [reference]="${RUNNER_TEMP}/krabka-benchmark-reference-target"
+            [candidate]="${GITHUB_WORKSPACE}/target"
+          )
+          bench_args=(-p krabka-broker -p krabka-log --features tracing/log --bench '*')
           mkdir -p benchmark-artifacts/{reference,candidate}/summaries
           {
             echo "candidate=${candidate_sha}"
-            echo "reference=${{ steps.reference.outputs.sha }}"
+            echo "reference=${reference_sha}"
             rustc -Vv
             uname -a
             lscpu
@@ -1280,6 +1345,18 @@ jobs:
               --features tracing/log -e features -i tracing) \
               > "benchmark-artifacts/${side}/tracing-features.txt"
           done
+          # Build both revisions before measuring either, and record each
+          # side's bench executables by path and SHA-256. Every pass below
+          # must run exactly those, unchanged.
+          for side in reference candidate; do
+            (cd "${source_dirs[${side}]}" && CARGO_TARGET_DIR="${target_dirs[${side}]}" \
+              cargo bench "${bench_args[@]}" --no-run --message-format=json) \
+              > "benchmark-artifacts/${side}/cargo-build.json"
+            cargo run -p krabka-parse-benches -- executables \
+              "benchmark-artifacts/${side}/cargo-build.json" \
+              --commit "${commits[${side}]}" \
+              --output "benchmark-artifacts/${side}/executables.json"
+          done
           for run in 1 2 3 4; do
             sides=(reference candidate)
             if ((run % 2 == 0)); then
@@ -1288,24 +1365,23 @@ jobs:
             for side in "${sides[@]}"; do
               run_dir="benchmark-artifacts/${side}/run-${run}"
               mkdir -p "${run_dir}"
-              if [ "${side}" = reference ]; then
-                source_dir="${reference_dir}"
-                commit='${{ steps.reference.outputs.sha }}'
-              else
-                source_dir="${GITHUB_WORKSPACE}"
-                commit="${candidate_sha}"
-              fi
-              (
-                cd "${source_dir}"
-                CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/target" cargo bench \
-                  -p krabka-broker -p krabka-log --features tracing/log --bench '*' -- \
+              # Cargo's standard error names each executable it runs.
+              if ! (
+                cd "${source_dirs[${side}]}"
+                CARGO_TARGET_DIR="${target_dirs[${side}]}" cargo bench "${bench_args[@]}" -- \
                   --output-format bencher --noplot --sample-size 20 --measurement-time 2
-              ) | tee "${run_dir}/raw.txt"
+              ) 2> "${run_dir}/cargo-stderr.log" | tee "${run_dir}/raw.txt"; then
+                cat "${run_dir}/cargo-stderr.log" >&2
+                exit 1
+              fi
               cargo run -p krabka-parse-benches -- \
                 --results-dir "${run_dir}" \
                 --output "benchmark-artifacts/${side}/summaries/run-${run}.json" \
                 --suite krabka-broker \
-                --commit "${commit}"
+                --commit "${commits[${side}]}" \
+                --executables "benchmark-artifacts/${side}/executables.json" \
+                --cargo-log "${run_dir}/cargo-stderr.log" \
+                --source-dir "${source_dirs[${side}]}"
             done
           done
 
@@ -1327,7 +1403,7 @@ jobs:
             echo
             echo '```'
             if [ -f benchmark-artifacts/verdict.json ]; then
-              jq -r '"passed=\(.passed)\nbenchmarks=\(.benchmarks | length)\nreference=\(.reference_commits[0])\ncandidate=\(.candidate_commits[0])"' benchmark-artifacts/verdict.json
+              jq -r '"passed=\(.passed)\nbenchmarks=\(.benchmarks | length)\nreference=\(.reference_commits[0])\ncandidate=\(.candidate_commits[0])\nexecutables=\(.reference_executables | length) reference, \(.candidate_executables | length) candidate"' benchmark-artifacts/verdict.json
             else
               echo 'No verdict: measurement or validation failed.'
             fi
@@ -1384,7 +1460,7 @@ jobs:
           # Everything that is not a pull request is a trusted context: pushes
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io

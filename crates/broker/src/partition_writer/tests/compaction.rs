@@ -19,7 +19,7 @@ use {
     },
     assert2::check,
     bytes::{Bytes, BytesMut},
-    krabka_log::{CleanupPolicy, LogConfig, Offset, ProducerId, VerbatimBatch},
+    krabka_log::{CleanupPolicy, LogConfig, Offset, ProducerId, VerbatimBatch, compaction_pause},
     krabka_protocol::records::{Attributes, Record, RecordBatch},
     krabka_units::{bytes, convert::TimeExt as _, gibibytes, millis},
     tempfile::tempdir,
@@ -347,12 +347,20 @@ async fn append(
     }
 }
 
-/// The batches that `role` keeps of `history` after [`PASSES`] compaction
-/// passes with the high watermark at the log end.
-async fn compacted(role: Role, history: &History, now_ms: i64) -> Vec<Kept> {
+/// A writer over a compacted log, and the state the tests drive it with.
+struct CompactingWriter {
+    dir: tempfile::TempDir,
+    log: Arc<Mutex<Log>>,
+    producer_state: Arc<ProducerState>,
+    replica_state: Arc<tokio::sync::Mutex<ReplicaState>>,
+    tx: mpsc::Sender<WriterMessage>,
+    writer: tokio::task::JoinHandle<()>,
+}
+
+/// A writer over a compacted log with one batch for each segment, and no
+/// delete retention, so a pass can drop a marker.
+fn compacting_writer() -> CompactingWriter {
     let dir = tempdir().expect("tempdir");
-    // One batch for each segment, and no delete retention, so the passes can
-    // drop a marker.
     let config = LogConfig {
         cleanup_policy: CleanupPolicy::Compact,
         segment_size: bytes(1),
@@ -368,6 +376,27 @@ async fn compacted(role: Role, history: &History, now_ms: i64) -> Vec<Kept> {
         producer_state: producer_state.clone(),
         ..Default::default()
     });
+    CompactingWriter {
+        dir,
+        log,
+        producer_state,
+        replica_state,
+        tx,
+        writer,
+    }
+}
+
+/// The batches that `role` keeps of `history` after [`PASSES`] compaction
+/// passes with the high watermark at the log end.
+async fn compacted(role: Role, history: &History, now_ms: i64) -> Vec<Kept> {
+    let CompactingWriter {
+        dir: _dir,
+        log,
+        producer_state,
+        replica_state,
+        tx,
+        writer,
+    } = compacting_writer();
 
     for (offset, batch) in (0..).zip(&history.batches) {
         append(role, &tx, &producer_state, batch.clone(), offset).await;
@@ -419,4 +448,82 @@ async fn compaction_keeps_the_last_record_of_each_active_producer_on_every_repli
             check!(kept == history.want, "{}, {role:?}", history.name);
         }
     }
+}
+
+/// One keyed record with no producer.
+fn keyed_batch(key: &'static str) -> RecordBatch {
+    RecordBatch {
+        producer_id: -1,
+        records: vec![Record {
+            key: Some(Bytes::from_static(key.as_bytes())),
+            value: Some(Bytes::from_static(b"v")),
+            ..Record::default()
+        }],
+        ..RecordBatch::default()
+    }
+}
+
+/// The writer goes on taking produces while a compaction pass builds. The
+/// build holds neither the log's mutex nor the writer, so a produce that
+/// arrives meanwhile is appended at once, and the pass still installs when
+/// its build ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_writer_takes_produces_while_a_pass_builds() {
+    let CompactingWriter {
+        dir: _dir,
+        log,
+        producer_state,
+        replica_state,
+        tx,
+        writer,
+    } = compacting_writer();
+    for (offset, key) in (0..).zip(["k0", "k1", "k0", "k1"]) {
+        append(Role::Leader, &tx, &producer_state, keyed_batch(key), offset).await;
+    }
+    replica_state.lock().await.hw = Offset(4);
+    let (pause, control) = compaction_pause();
+    log.lock().expect("log lock").test_set_io(pause);
+    let control = Arc::new(control);
+
+    let (ack, compacted) = oneshot::channel();
+    tx.send(WriterMessage::Compact { ack })
+        .await
+        .expect("send compact");
+    let waiting = Arc::clone(&control);
+    tokio::task::spawn_blocking(move || waiting.wait_until_paused())
+        .await
+        .expect("join");
+    // The build is held inside a write. The produce must not wait for it.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        append(Role::Leader, &tx, &producer_state, keyed_batch("k0"), 4),
+    )
+    .await
+    .expect("a produce completes while the pass builds");
+    control.resume();
+    compacted.await.expect("compact ack").expect("compact");
+
+    let kept: Vec<(i64, Bytes)> = log
+        .lock()
+        .expect("log lock")
+        .read(Offset(0), gibibytes(1))
+        .expect("read")
+        .batches
+        .iter()
+        .map(|batch| {
+            (
+                batch.base_offset,
+                batch.records[0].key.clone().expect("keyed"),
+            )
+        })
+        .collect();
+    // The pass consumed offsets 0..3 and dropped the superseded `k0` at 0;
+    // the produce at 4 is untouched.
+    let expected: Vec<(i64, Bytes)> = [(1, "k1"), (2, "k0"), (3, "k1"), (4, "k0")]
+        .into_iter()
+        .map(|(offset, key)| (offset, Bytes::from_static(key.as_bytes())))
+        .collect();
+    check!(kept == expected);
+    drop(tx);
+    writer.await.expect("writer join");
 }

@@ -4,17 +4,18 @@
 
 use {
     super::{
-        CleanedTransactionMetadata, ProducerLastRecord, RewriteOutput, RewriteRetention, Segment,
+        CleanedTransactionMetadata, ProducerLastRecord, RewriteOutput, RewriteRetention,
         tests::decode_all,
     },
     crate::{
         compact::{
             build_offset_map,
             test_support::{
-                RETENTION, control_batch, make_record, rewrite_all, rewrite_with_map, round_over,
-                transactional_record, write_sealed_batches,
+                RETENTION, control_batch, inputs, make_record, rewrite_all, rewrite_with_map,
+                round_over, transactional_record, write_sealed_batches,
             },
         },
+        segment::Segment,
         test_support::KeyValue,
         txn_index::{AbortedTxn, TxnIndex},
     },
@@ -101,7 +102,7 @@ fn an_aborted_transactions_records_are_dropped_and_the_committed_value_survives(
     ]);
     let segment_refs = vec![&seg];
     let entry = aborted_entry(2000, 10, 12);
-    let map = build_offset_map(&segment_refs, vec![entry], None).unwrap();
+    let map = build_offset_map(&inputs(&segment_refs), vec![entry], None).unwrap();
     assert2::assert!(map.get(b"k".as_slice()) == Some(&Offset(5)));
     assert2::assert!(!map.contains_key(b"j".as_slice()));
 

@@ -10,21 +10,27 @@ use {
     super::Log,
     crate::{
         compact::{
-            CleanedTransactionMetadata, CleaningRound, RewriteOutput, RewriteRetention,
-            atomic_swap, atomic_swap_retiring, build_offset_map, replaces_producer_snapshot,
-            rewrite_segments,
+            RewriteOutput, RewriteRetention, atomic_swap, atomic_swap_retiring,
+            replaces_producer_snapshot,
         },
         error::LogError,
         retention,
-        segment::Segment,
+        segment::{SealedInput, Segment},
         txn_index::TxnIndex,
     },
     krabka_ids::Offset,
     krabka_units::prelude::{
         ByteSize, ByteSizeExt as _, Ratio, RatioExt as _, Time, TimeExt as _, fraction,
     },
+    std::sync::Arc,
     tracing::instrument,
 };
+
+mod job;
+
+pub(in crate::log) use self::job::CompactionGate;
+use self::job::GroupPlan;
+pub use self::job::{BuiltCompaction, CompactionJob, CompactionOutcome};
 
 /// Inputs to one [`Log::compact`] pass that depend on broker-side state.
 ///
@@ -165,7 +171,8 @@ fn compaction_is_due(
 
 /// One output group of a compaction pass: the base offsets of the segments it
 /// consumes and the rewrite that replaces them.
-struct GroupRewrite {
+#[derive(Debug)]
+pub(in crate::log) struct GroupRewrite {
     group_bases: Vec<Offset>,
     rewrite: RewriteOutput,
 }
@@ -333,7 +340,11 @@ impl Log {
         )
     }
 
-    /// Run one compaction pass over the cleanable sealed segments.
+    /// Run one compaction pass over the cleanable sealed segments, holding
+    /// the log throughout: [`Self::prepare_compaction`], then
+    /// [`CompactionJob::build`], then [`Self::finish_compaction`]. A caller
+    /// that shares the log between threads runs the three itself and builds
+    /// without the log's lock.
     ///
     /// The pass never touches the active segment, and it stops short of the
     /// sealed segments `min.compaction.lag.ms` or `ctx.last_stable_offset`
@@ -366,15 +377,52 @@ impl Log {
     /// # Panics
     /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn compact(&mut self, ctx: &CompactionContext) -> Result<(), LogError> {
+        let Some(job) = self.prepare_compaction(ctx)? else {
+            return Ok(());
+        };
+        let built = job.build();
+        self.finish_compaction(built).map(drop)
+    }
+
+    /// Take a compaction pass over the cleanable sealed segments from the log,
+    /// for [`CompactionJob::build`] to run without it. See [`Self::compact`]
+    /// for what one pass does.
+    ///
+    /// Returns `None` when there is nothing to do: the cleanup policy has no
+    /// `compact`, no sealed segment is cleanable, the log is fenced, or an
+    /// earlier job is still out. Only one job runs at a time; it ends when
+    /// [`Self::finish_compaction`] takes it back, or when it is dropped.
+    ///
+    /// The job holds what the pass reads from the log now: the consumed
+    /// segments' open files, the aborted transactions of their range, and the
+    /// last record of each active producer. Kafka's cleaner reads the same
+    /// facts when a pass starts. An append after this call lands past the
+    /// consumed range, so it changes none of them; a producer it moves on
+    /// only leaves the pass keeping an empty batch the producer no longer
+    /// needs.
+    ///
+    /// # Errors
+    /// Returns an error when the log's rolled segments could not be flushed.
+    /// # Panics
+    /// Panics if the configuration lock is poisoned.
+    pub fn prepare_compaction(
+        &mut self,
+        ctx: &CompactionContext,
+    ) -> Result<Option<CompactionJob>, LogError> {
+        // A fenced log is being removed: an error a flush recorded earlier is
+        // no reason to refuse a pass that does nothing anyway.
+        if self.fenced {
+            return Ok(None);
+        }
         self.rollover_flusher.check()?;
         if self.segments.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
 
         let (index_interval, delete_retention, min_lag, segment_bytes, record_limit) = {
             let cfg_guard = self.config.read().unwrap();
             if !cfg_guard.cleanup_policy.contains_compact() {
-                return Ok(());
+                return Ok(None);
             }
             (
                 cfg_guard.index_interval,
@@ -391,13 +439,12 @@ impl Log {
         if consumed == 0 {
             // Everything sealed is withheld — by the min lag, by the last
             // stable offset, or by both — so this pass has nothing to rewrite.
-            return Ok(());
+            return Ok(None);
         }
-        // Borrow sealed segments to run map + rewrite (`rewrite_segments`
-        // reads each input segment's `.log` by path rather than through the
-        // segment's own handle, so this borrow does not itself hold anything
-        // open across the swap below).
-        //
+        let Some(slot) = self.compaction_gate.claim() else {
+            return Ok(None);
+        };
+
         // The offset map is built once over the whole consumed range:
         // whether a record is the newest for its key is a fact about the full
         // dirty region, not about whichever output group a record lands in.
@@ -405,71 +452,90 @@ impl Log {
         // aborted transactions of the range, wherever their abort marker sits.
         // The rewrite itself then runs once per size-bounded group, so no
         // output segment grows past `segment.bytes`, and every group's
-        // `.swap` files are written before any of them is promoted. One
-        // transaction tracker walks all the groups in order, as a transaction
-        // can span two of them.
+        // `.cleaned` files are written before any of them is promoted.
         //
         // Kafka's `Cleaner.cleanSegments` reads the last record of each
         // active producer from the producer state of the log, once for the
         // groups of one pass.
         self.rollover_flusher.finish()?;
-        let active_producers = self.last_records_of_active_producers();
-        let mut rewrites: Vec<GroupRewrite> = Vec::new();
-        {
-            let sealed_refs: Vec<&Segment> = self.segments[..consumed].iter().collect();
-            let consumed_end = self.sealed_segment_end(consumed - 1);
-            let offset_map = build_offset_map(
-                &sealed_refs,
-                self.aborted_in_range(sealed_refs[0].base_offset(), consumed_end),
-                record_limit,
-            )?;
-            let mut txn_meta = CleanedTransactionMetadata::default();
-            let sizes: Vec<ByteSize> = sealed_refs.iter().map(|segment| segment.size()).collect();
-            let groups = Self::group_segments_by_size(&sizes, segment_bytes);
-            rewrites.reserve_exact(groups.len());
-
-            let mut start = 0usize;
-            for group_len in groups {
-                let group_refs = &sealed_refs[start..start + group_len];
-                let group_bases: Vec<Offset> = group_refs
-                    .iter()
-                    .map(|segment| segment.base_offset())
-                    .collect();
-                txn_meta.add_aborted_transactions(self.aborted_in_range(
-                    group_refs[0].base_offset(),
-                    self.sealed_segment_end(start + group_len - 1),
-                ));
-                let rewrite = rewrite_segments(
-                    &*self.io,
-                    &self.dir,
-                    group_refs,
-                    &offset_map,
-                    &mut txn_meta,
-                    RewriteRetention {
-                        now_ms,
-                        delete_retention,
-                    },
-                    CleaningRound {
-                        active_producers: &active_producers,
-                        // The round rewrites the offset map's whole range, so
-                        // it ends where the last consumed segment does.
-                        upper_bound: consumed_end,
-                        max_decompressed_record: record_limit,
-                    },
-                )?;
-                rewrites.push(GroupRewrite {
-                    group_bases,
-                    rewrite,
-                });
-                start += group_len;
-            }
-            // `sealed_refs` (and the borrow of `self.segments` it holds)
-            // ends here, before the consumed segments are dropped below.
+        let fenced = self.compaction_gate.fenced_flag();
+        let inputs: Vec<SealedInput> = self.segments[..consumed]
+            .iter()
+            .map(|segment| segment.sealed_input().watched_by(Arc::clone(&fenced)))
+            .collect();
+        let upper_bound = self.sealed_segment_end(consumed - 1);
+        let sizes: Vec<ByteSize> = self.segments[..consumed]
+            .iter()
+            .map(Segment::size)
+            .collect();
+        let mut groups = Vec::new();
+        let mut start = 0usize;
+        for len in Self::group_segments_by_size(&sizes, segment_bytes) {
+            groups.push(GroupPlan {
+                len,
+                aborted: self.aborted_in_range(
+                    self.segments[start].base_offset(),
+                    self.sealed_segment_end(start + len - 1),
+                ),
+            });
+            start += len;
         }
+        Ok(Some(CompactionJob {
+            dir: self.dir.clone(),
+            io: Arc::clone(&self.io),
+            map_aborted: self.aborted_in_range(inputs[0].base_offset(), upper_bound),
+            inputs,
+            groups,
+            active_producers: self.last_records_of_active_producers(),
+            upper_bound,
+            record_limit,
+            retention: RewriteRetention {
+                now_ms,
+                delete_retention,
+            },
+            index_interval,
+            slot,
+            output_unclaimed: false,
+        }))
+    }
+
+    /// Install a built compaction pass: replace the segments it read with its
+    /// output.
+    ///
+    /// Nothing is installed when the log has dropped or replaced a segment the
+    /// pass read since [`Self::prepare_compaction`], by a truncation,
+    /// retention, `DeleteRecords` or a reset, or when the log has been fenced.
+    /// The pass's files are deleted and [`CompactionOutcome::Stale`] reports
+    /// it, whether or not the build succeeded: a build that failed because
+    /// the log took its input away is no fault of the disk.
+    ///
+    /// # Errors
+    /// Returns the build's error when the build failed on a log that still
+    /// holds its input, and an error when the swap's log I/O fails or the
+    /// rewritten segment is corrupt.
+    /// # Panics
+    /// Panics if the configuration lock is poisoned.
+    pub fn finish_compaction(
+        &mut self,
+        built: BuiltCompaction,
+    ) -> Result<CompactionOutcome, LogError> {
+        let BuiltCompaction { mut job, rewrites } = built;
+        if self.fenced || !self.still_holds_inputs_of(&job) {
+            // Dropping the job deletes its files.
+            return Ok(CompactionOutcome::Stale);
+        }
+        let rewrites = rewrites?;
+        let consumed = job.inputs.len();
+        let index_interval = job.index_interval;
+        // The swap below claims the job's files. The job's inputs share the
+        // consumed segments' file handles, which must close before it, as the
+        // segments' own do.
+        job.output_unclaimed = false;
+        drop(job);
 
         // Compaction rewrites sealed segments, so any record the last
         // activation walk read may not survive it. Nothing on disk has changed
-        // until here: the offset map and every rewrite above write only
+        // until here: the offset map and every rewrite of the build write only
         // `.cleaned` files and can refuse the pass (a record above
         // `max.decompressed.message.bytes`), and a refused pass that reset the
         // schedule would send every later sweep of the partition through a full
@@ -535,10 +601,23 @@ impl Log {
         // first -- are this pass's output and belong to the clean prefix.
         self.clean_prefix_segments = new_segments.len();
         self.segments.splice(0..0, new_segments);
-        Ok(())
+        Ok(CompactionOutcome::Installed)
+    }
+
+    /// Whether the log still leads with the segments `job` read, unchanged.
+    fn still_holds_inputs_of(&self, job: &CompactionJob) -> bool {
+        job.dir == self.dir
+            && self.segments.len() >= job.inputs.len()
+            && self
+                .segments
+                .iter()
+                .zip(&job.inputs)
+                .all(|(segment, input)| segment.still_holds(input))
     }
 }
 
+#[cfg(test)]
+mod job_tests;
 #[cfg(test)]
 mod producer_tests;
 #[cfg(test)]

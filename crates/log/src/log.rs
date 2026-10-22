@@ -59,7 +59,7 @@ mod verification;
 pub use self::read::RawReadDesc;
 pub use self::{
     active_producers::ActiveProducer,
-    compaction::CompactionContext,
+    compaction::{BuiltCompaction, CompactionContext, CompactionJob, CompactionOutcome},
     control::BARRIER_CONTROL_TYPE,
     maintenance::{DueDeletions, FailedDeletion},
     read::{RawRead, ReadOutput},
@@ -99,6 +99,9 @@ pub struct Log {
     active: Option<Segment>,
     dir_sync_needed: bool,
     rollover_flusher: rollover_flush::Flusher,
+    /// The one compaction job this log allows at a time, and the fence's
+    /// hold on its build. See [`Log::prepare_compaction`].
+    compaction_gate: std::sync::Arc<compaction::CompactionGate>,
     /// Set by [`Log::fence`] when the partition is being removed: every
     /// append from then on fails with [`LogError::Fenced`].
     fenced: bool,
