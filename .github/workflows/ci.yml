@@ -925,11 +925,19 @@ jobs:
           printf 'No labels resolved for targets: %s\n' "${TARGETS}" >&2
           exit 1
         fi
-        # `--config=docker-rbe` is defined for `test` only (it swaps the
-        # `--test_tag_filters` set), so passing it to `build` fails with
-        # "Config value 'docker-rbe' is not defined in any .rc file".
+        # Build every selected suite before testing any. The suites that run
+        # the broker image are `no-remote-exec` and run on this machine, and
+        # broker suites starve beside a compile -- the `ci` job builds first
+        # for the same reason. The build passes the lint flag `.bazelrc` sets
+        # for `test` only, and `build` and `test` share `--config=docker-rbe`'s
+        # executor flags, so the test reuses this build's analysis and
+        # outputs; at most four local suites then run at once.
         if [ -n "${tests}" ]; then
-          bazel test --config=docker-rbe ${tests}
+          bazel build \
+            --config=docker-rbe \
+            --@aspect_rules_lint//lint:fail_on_violation \
+            ${tests}
+          bazel test --config=docker-rbe --local_test_jobs=4 ${tests}
         fi
         if [ -n "${builds}" ]; then
           bazel build ${builds}
