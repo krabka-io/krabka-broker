@@ -50,11 +50,12 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   the Creusot proofs only when it changes their inputs. The nightly run always
   runs the kind smoke test and the proofs. `release.yml` now refuses a commit
   that has no green scheduled or dispatched `ci.yml` run.
-- The `ci` job's build, tests, rustdoc and Stateright models run on a
-  BuildBuddy remote runner, a 16-core VM restored from a warm snapshot, when
-  the run holds a BuildBuddy API key. The GitHub runner no longer compiles
-  the closure or downloads test binaries. A run without a key, such as a
-  fork's pull request, runs the same script on the GitHub runner.
+- The `ci` job's build and tests, the `coverage` run and the `cargo` Clippy
+  and nextest lane run on BuildBuddy remote runners when the run holds a
+  BuildBuddy API key. Each is a 16-core VM restored from a warm snapshot of
+  its own last run, so the GitHub runner no longer compiles the closure or
+  downloads test binaries. A run without a key, such as a fork's pull
+  request, runs the same script on the GitHub runner.
 - A produce append runs on the request's own task when it only writes to the
   page cache. The partition writer task used to take every produce, so each
   one paid two cross-thread wakes before its write. The request task now takes

@@ -92,6 +92,11 @@ DATA_PREFIXES = ["bench/scenarios/", "docs/examples/", "docs/operations/"]
 # the cluster. The workflow itself is here so that an edit to the job runs the
 # job it edits.
 CI_WORKFLOW = ".github/workflows/ci.yml"
+
+# The workflow and its local actions decide how the Rust jobs run -- on which
+# machine, with which flags -- so an edit to either runs the jobs it could
+# change, as it does for the kind smoke test and the proofs.
+CI_ACTIONS_PREFIX = ".github/actions/"
 KUBERNETES_FILES = [".github/kind.yaml", CI_WORKFLOW]
 KUBERNETES_PREFIXES = ["packaging/"]
 
@@ -123,9 +128,9 @@ def touches_rust(paths):
         path = raw_path.strip().replace("\\", "/")
         if not path:
             continue
-        if path in BUILD_FILES or path in DATA_FILES:
+        if path in BUILD_FILES or path in DATA_FILES or path == CI_WORKFLOW:
             return True
-        if starts_with_any(path, BUILD_PREFIXES) or starts_with_any(path, DATA_PREFIXES):
+        if starts_with_any(path, BUILD_PREFIXES) or starts_with_any(path, DATA_PREFIXES) or path.startswith(CI_ACTIONS_PREFIX):
             return True
         if path.startswith(SOURCE_PREFIX) and not path.endswith(DOC_SUFFIX):
             return True
