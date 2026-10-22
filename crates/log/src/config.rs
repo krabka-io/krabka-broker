@@ -259,6 +259,7 @@ pub struct LogConfig {
     /// How long a log start that only retention moved may wait before it is
     /// written to `log-start-offset-checkpoint`. Kafka's broker-wide
     /// `log.flush.start.offset.checkpoint.interval.ms`; default one minute.
+    /// Zero writes the start on the next maintenance pass.
     /// Retention moves the start to a segment boundary, which the segment
     /// names already record, so the write can wait: see
     /// [`Log::checkpoint_log_start_if_due`](crate::Log::checkpoint_log_start_if_due).

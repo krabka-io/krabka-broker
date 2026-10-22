@@ -108,13 +108,24 @@ impl Partition {
         let log = self.log.clone();
         let writer = self.writer_tx.clone();
         run_blocking(move || {
-            let log = log
+            let mut log = log
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if log.config_snapshot() == merged {
+            let current = log.config_snapshot();
+            if current == merged {
                 return;
             }
+            let enables_tiering = merged.remote_storage_enable && !current.remote_storage_enable;
             log.set_config(merged);
+            // A tiered log reopens at whatever start the checkpoint holds, with
+            // no floor at the first segment, so a start local retention moved
+            // and has not yet written must reach the file before the log turns
+            // tiered: a crash would otherwise reopen it at the older start and
+            // send reads for offsets retention deleted to a tier that never
+            // held them.
+            if enables_tiering && let Err(error) = log.flush_log_start_checkpoint() {
+                tracing::warn!(%error, "log start checkpoint before enabling remote storage failed");
+            }
             drop(log);
             // A full queue already wakes the writer; a stopped writer has no timer.
             let _ = writer.try_send(WriterMessage::ConfigChanged);
@@ -397,6 +408,39 @@ mod tests {
         crate::partition::test_support::{test_partition, test_partition_with_writer},
         assert2::assert,
     };
+
+    /// A tiered log reopens at the checkpointed start with no floor at its
+    /// first segment, so the start local retention moved must be on disk
+    /// before a config change turns the log tiered.
+    #[tokio::test]
+    async fn enabling_remote_storage_writes_the_start_retention_moved() {
+        let (part, dir) = test_partition(std::sync::Arc::new(tokio::sync::Notify::new()));
+        let checkpoint = krabka_log::name::log_start_offset_checkpoint_path(dir.path());
+        let base = {
+            let mut log = part.log.lock().unwrap();
+            log.set_config(krabka_log::LogConfig {
+                segment_size: krabka_units::bytes(1),
+                retention_size: Some(krabka_units::bytes(0)),
+                file_delete_delay: krabka_units::millis(0),
+                ..krabka_log::LogConfig::default()
+            });
+            for _ in 0..3 {
+                log.append(&mut crate::test_support::default_records_batch().call())
+                    .unwrap();
+            }
+            log.set_log_start_offset(Offset(1)).unwrap();
+            log.tick(std::time::SystemTime::now(), Offset(2)).unwrap();
+            log.config_snapshot()
+        };
+        assert!(std::fs::read_to_string(&checkpoint).unwrap() == "0\n1\n");
+
+        let overrides = [("remote.storage.enable".to_owned(), "true".to_owned())].into();
+        part.apply_log_config_overrides(&overrides, &base)
+            .await
+            .unwrap();
+
+        assert!(std::fs::read_to_string(&checkpoint).unwrap() == "0\n2\n");
+    }
 
     #[tokio::test]
     async fn config_changes_do_not_wait_behind_a_stalled_writer() {

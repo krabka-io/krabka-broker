@@ -10,9 +10,9 @@ use {
     super::{
         FileConfigError, RuntimeFileConfig,
         validate::{
-            kafka_int_bytes, kafka_long_bytes, nonnegative_time, positive_i32, positive_i64,
-            positive_ratio, positive_time, positive_u32, positive_usize, whole_bytes_u32,
-            whole_bytes_u64, whole_bytes_usize,
+            disableable_millis_i32_time, kafka_int_bytes, kafka_long_bytes, nonnegative_time,
+            positive_i32, positive_i64, positive_ratio, positive_time, positive_u32,
+            positive_usize, whole_bytes_u32, whole_bytes_u64, whole_bytes_usize,
         },
     },
     crate::config::BrokerConfig,
@@ -67,9 +67,9 @@ impl RuntimeFileConfig {
             runtime => cfg;
             whole_bytes_u64: log_segment_bytes => log_config.segment_size;
             kafka_int_bytes: message_max_bytes => log_config.max_message_size;
-            positive_time: log_delivery_clock_uncertainty => log_config.delivery_clock_uncertainty,
-                log_flush_start_offset_checkpoint_interval
-                    => log_config.start_offset_checkpoint_interval;
+            positive_time: log_delivery_clock_uncertainty => log_config.delivery_clock_uncertainty;
+            disableable_millis_i32_time: log_flush_start_offset_checkpoint_interval
+                => log_config.start_offset_checkpoint_interval;
         }
         Ok(())
     }
@@ -211,14 +211,28 @@ mod tests {
         assert2::assert!(applied == expected, "{line}");
     }
 
-    /// A zero interval is refused: the checkpoint runs on a timer. An omitted
-    /// key keeps Kafka's default of one minute.
+    /// Kafka's `log.flush.start.offset.checkpoint.interval.ms` is an `INT` of
+    /// milliseconds with `atLeast(0)`, so zero is a value: the start is written
+    /// on the next maintenance pass. A fraction of a millisecond or a value an
+    /// `INT` cannot hold is refused, and an omitted key keeps Kafka's default
+    /// of one minute.
     #[yare::parameterized(
         five_seconds = {
             "log_flush_start_offset_checkpoint_interval = \"5s\"\n",
             Some(krabka_units::secs(5)),
         },
-        zero = { "log_flush_start_offset_checkpoint_interval = \"0ms\"\n", None },
+        zero = {
+            "log_flush_start_offset_checkpoint_interval = \"0ms\"\n",
+            Some(krabka_units::millis(0)),
+        },
+        fractional_millisecond = {
+            "log_flush_start_offset_checkpoint_interval = \"1.5ms\"\n",
+            None,
+        },
+        past_an_int = {
+            "log_flush_start_offset_checkpoint_interval = \"2147483648ms\"\n",
+            None,
+        },
         default = { "", Some(krabka_units::secs(60)) },
     )]
     fn log_flush_start_offset_checkpoint_interval_round_trips_into_the_log_config(
