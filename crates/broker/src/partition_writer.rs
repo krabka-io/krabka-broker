@@ -10,6 +10,7 @@
 use crate::config::BrokerConfig;
 use {
     crate::{
+        blocking::BlockingError,
         delivery::DeliveryHandles,
         error::BrokerError,
         log_dir_status::LogDirRegistry,
@@ -22,7 +23,7 @@ use {
     },
     arc_swap::ArcSwap,
     krabka_ids::PartitionIndex,
-    krabka_log::Log,
+    krabka_log::{BuiltCompaction, Log},
     std::{
         path::PathBuf,
         sync::{Arc, Mutex},
@@ -50,7 +51,7 @@ mod tests;
 pub(crate) use self::append::run_produce_append_batch;
 pub(crate) use self::storage::{flag_storage_failure, storage_failure_error};
 use self::{
-    compaction::handle_compact,
+    compaction::{BuildingCompaction, finish_compaction, start_compaction},
     mutations::{
         ReplicationState, ResetMutation, handle_follow_leader_log_start, handle_log_reset,
         handle_replicate, handle_trim,
@@ -238,6 +239,10 @@ pub async fn run_gated(
     // move task last asked. A future log must be cut to it before it may
     // replace the current log.
     let mut unreported_cut: Option<krabka_log::Offset> = None;
+    // The compaction pass whose build is running off the writer, if any; see
+    // `compaction`.
+    let mut compaction: Option<BuildingCompaction> = None;
+    let maintenance_storage = (&log, &log_dir, &log_dir_status);
     loop {
         // Disarmed while the deadline is computed, so a nudge that lands in
         // between counts as earlier and leaves a wake-up for the select below;
@@ -248,13 +253,24 @@ pub async fn run_gated(
         let msg = match pending.take() {
             Some(m) => m,
             None => match tokio::select! {
-                message = std::future::poll_fn(|cx| gate.poll_recv(&mut rx, cx)) => message,
-                () = tokio::time::sleep(delay.unwrap_or(std::time::Duration::ZERO)), if delay.is_some() => continue,
+                message = std::future::poll_fn(|cx| gate.poll_recv(&mut rx, cx)) => Wake::Message(message),
+                () = tokio::time::sleep(delay.unwrap_or(std::time::Duration::ZERO)), if delay.is_some() => Wake::Again,
                 // An inline append brought the next maintenance forward.
-                () = gate.nudged() => continue,
+                () = gate.nudged() => Wake::Again,
+                built = building_pass(&mut compaction), if compaction.is_some() => Wake::Built(built),
             } {
-                Some(m) => m,
-                None => break, // channel closed: every sender dropped
+                Wake::Message(Some(m)) => m,
+                Wake::Message(None) => break, // channel closed: every sender dropped
+                Wake::Again => continue,
+                Wake::Built(built) => {
+                    let building = compaction.take().expect("a pass was building");
+                    // Installing mutates the log, so it waits out an inline
+                    // append as a message does.
+                    let _busy = gate.writer_busy().await;
+                    finish_compaction(maintenance_storage, building, built).await;
+                    publish_delivery(&log, &delivery);
+                    continue;
+                }
             },
         };
         // Held through the message, so an inline produce never lands inside
@@ -370,7 +386,12 @@ pub async fn run_gated(
                 handle_retention((&log, &log_dir, &log_dir_status), &replica_state, ack).await;
             }
             WriterMessage::Compact { ack } => {
-                handle_compact((&log, &log_dir, &log_dir_status), &replica_state, ack).await;
+                if compaction.is_some() {
+                    // A pass is already building; the log runs one at a time.
+                    let _ = ack.send(Ok(()));
+                } else {
+                    compaction = start_compaction(maintenance_storage, &replica_state, ack).await;
+                }
             }
             #[cfg(any(test, feature = "test-helpers"))]
             WriterMessage::TestSetLogStart { new_start, ack } => {
@@ -414,6 +435,35 @@ pub async fn run_gated(
         // leaving the mirror stale after the arms that do not append.
         publish_delivery(&log, &delivery);
     }
+    // The channel closed with a pass still building: finish it, as the writer
+    // would have finished a pass it ran inside the Compact message.
+    if let Some(mut building) = compaction {
+        let built = building.built().await;
+        let _busy = gate.writer_busy().await;
+        finish_compaction(maintenance_storage, building, built).await;
+    }
+}
+
+/// What woke the writer loop.
+enum Wake {
+    /// The channel's next message, or `None` once it closed.
+    Message(Option<WriterMessage>),
+    /// A maintenance deadline or a nudge: recompute and wait again.
+    Again,
+    /// The running compaction pass's build ended.
+    Built(Result<BuiltCompaction, BlockingError>),
+}
+
+/// The end of the running compaction pass's build. Polled only while one is
+/// building.
+async fn building_pass(
+    compaction: &mut Option<BuildingCompaction>,
+) -> Result<BuiltCompaction, BlockingError> {
+    compaction
+        .as_mut()
+        .expect("polled only while a pass is building")
+        .built()
+        .await
 }
 
 /// Make the log prefix ending at `leo` durable: sync the WAL of a diskless

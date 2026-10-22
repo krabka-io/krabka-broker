@@ -200,7 +200,7 @@ fn a_leader_appends_kip835_no_ops_that_change_nothing() {
         (
             engine.log.log_end_offset(),
             engine.log.hwm(),
-            engine.image == image,
+            *engine.image == image,
         ) == (end + 2, end + 2, true)
     );
 }

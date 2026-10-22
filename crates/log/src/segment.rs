@@ -26,11 +26,12 @@ mod read;
 mod read_raw;
 #[krabka_macros::sendfile_cfg]
 mod read_raw_desc;
+mod sealed_input;
 #[cfg(test)]
 mod test_support;
 mod timestamp_scan;
 
-pub(crate) use self::append::PlacedBatch;
+pub(crate) use self::{append::PlacedBatch, sealed_input::SealedInput};
 use crate::{
     index::{OFFSET_ENTRY_SIZE, OffsetIndex, TIME_ENTRY_SIZE, TimeIndex},
     io::LogIo,
