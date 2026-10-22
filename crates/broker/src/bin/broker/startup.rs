@@ -180,10 +180,10 @@ fn broker_config(
         controller_addr,
         node_id,
         metrics_listen_addr,
-        profiling_listen_addr,
         client_metrics_otlp_endpoint,
         client_metrics_otlp_protocol,
     );
+    config.profiling_listen_addr = profiling_listen_addr;
     if let Some(roles) = roles {
         config.roles = roles;
     }
@@ -763,6 +763,35 @@ mod tests {
                     .collect()
             });
             assert!(voters == want, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_profiling_flags_reach_the_broker_config() {
+        type Profiling = (Option<std::net::SocketAddr>, Option<std::path::PathBuf>);
+        let cases: [(&str, &[&str], Profiling); 2] = [
+            ("the default disables profiling", &[], (None, None)),
+            (
+                "both flags enable it",
+                &[
+                    "--profiling-listen-addr=127.0.0.1:9406",
+                    "--profiling-auth-token-file=/run/secrets/profiling",
+                ],
+                (
+                    Some("127.0.0.1:9406".parse().unwrap()),
+                    Some("/run/secrets/profiling".into()),
+                ),
+            ),
+        ];
+        for (name, flags, want) in cases {
+            let config = configured(flags, "broker_id = 4\n").expect("the config assembles");
+            assert!(
+                (
+                    config.profiling_listen_addr,
+                    config.profiling_auth_token_file
+                ) == want,
+                "{name}"
+            );
         }
     }
 

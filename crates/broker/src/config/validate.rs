@@ -871,16 +871,39 @@ mod tests {
     fn profiling_is_disabled_by_default_and_requires_loopback_and_authentication() {
         assert!(BrokerConfig::default().validate().is_ok());
 
-        let mut missing_token = BrokerConfig::default();
-        missing_token.profiling_listen_addr = Some("127.0.0.1:9406".parse().unwrap());
-        assert_invalid_runtime(
-            &missing_token,
-            "profiling_listen_addr requires profiling_auth_token_file",
-        );
+        let profiling = |listen: Option<&str>, token: bool| BrokerConfig {
+            profiling_listen_addr: listen.map(|addr| addr.parse().unwrap()),
+            profiling_auth_token_file: token.then(|| "/run/secrets/profiling".into()),
+            ..BrokerConfig::default()
+        };
+        let cases = [
+            (
+                profiling(Some("127.0.0.1:9406"), false),
+                "profiling_listen_addr requires profiling_auth_token_file",
+            ),
+            (
+                profiling(None, true),
+                "profiling_auth_token_file requires profiling_listen_addr",
+            ),
+            (
+                profiling(Some("0.0.0.0:9406"), true),
+                "profiling_listen_addr must use a loopback address",
+            ),
+        ];
+        for (config, message) in &cases {
+            assert_invalid_runtime(config, message);
+        }
 
-        let mut public = BrokerConfig::default();
-        public.profiling_listen_addr = Some("0.0.0.0:9406".parse().unwrap());
-        public.profiling_auth_token_file = Some("/run/secrets/profiling".into());
-        assert_invalid_runtime(&public, "profiling_listen_addr must use a loopback address");
+        let enabled = profiling(Some("127.0.0.1:9406"), true);
+        assert!(enabled.validate().is_ok());
+
+        let invalid_policy = BrokerConfig {
+            profiling: krabka_telemetry::profiling::ProfilingConfig {
+                profiling_cpu_default_duration: krabka_units::secs(61),
+                ..krabka_telemetry::profiling::ProfilingConfig::default()
+            },
+            ..enabled
+        };
+        assert!(let Err(BrokerError::InvalidRuntimeConfig(_)) = invalid_policy.validate());
     }
 }

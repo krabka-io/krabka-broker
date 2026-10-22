@@ -107,3 +107,55 @@ pub(super) async fn start_observability(
         client_metrics,
     })
 }
+
+#[cfg(all(test, not(target_family = "wasm")))]
+mod tests {
+    use {super::*, assert2::assert};
+
+    fn profiling_config(token_file: std::path::PathBuf) -> BrokerConfig {
+        BrokerConfig {
+            profiling_listen_addr: Some("127.0.0.1:0".parse().unwrap()),
+            profiling_auth_token_file: Some(token_file),
+            ..BrokerConfig::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn an_enabled_profiling_listener_starts_with_observability() {
+        let dir = tempfile::tempdir().unwrap();
+        let token_file = dir.path().join("token");
+        std::fs::write(&token_file, "secret").unwrap();
+        let shutdown = CancellationToken::new();
+        let started = start_observability(
+            &profiling_config(token_file),
+            &BrokerMetrics::new(),
+            &shutdown,
+        )
+        .await;
+        shutdown.cancel();
+        assert!(let Ok(_) = started);
+    }
+
+    #[tokio::test]
+    async fn profiling_startup_failures_name_their_cause() {
+        let dir = tempfile::tempdir().unwrap();
+        let token_file = dir.path().join("token");
+        std::fs::write(&token_file, "secret").unwrap();
+        let mut invalid_policy = profiling_config(token_file);
+        invalid_policy.profiling.profiling_cpu_default_duration = krabka_units::secs(61);
+        let missing_token = profiling_config(dir.path().join("missing"));
+
+        let shutdown = CancellationToken::new();
+        let invalid = start_observability(&invalid_policy, &BrokerMetrics::new(), &shutdown).await;
+        let missing = start_observability(&missing_token, &BrokerMetrics::new(), &shutdown).await;
+        shutdown.cancel();
+
+        assert!(let Err(BrokerError::InvalidRuntimeConfig(_)) = invalid);
+        assert!(
+            let Err(BrokerError::ListenerBind {
+                setting: "--profiling-listen-addr",
+                ..
+            }) = missing
+        );
+    }
+}
