@@ -69,9 +69,8 @@ data:
     ssl.keystore.type=PKCS12
     ssl.keystore.location=/etc/krabka/tls/admin.p12
     ssl.keystore.password=changeit
-    ssl.truststore.type=PKCS12
-    ssl.truststore.location=/etc/krabka/tls/trust.p12
-    ssl.truststore.password=changeit
+    ssl.truststore.type=PEM
+    ssl.truststore.location=/etc/krabka/tls/ca.crt
 ---
 apiVersion: v1
 kind: Pod
@@ -180,10 +179,9 @@ def _impl(ctx: TaskContext) -> int:
         _certificate(ctx, work, "broker-%d" % ordinal, "/CN=broker-%d" % ordinal, broker_extension(ordinal))
     _certificate(ctx, work, "admin", "/CN=admin", "extendedKeyUsage=clientAuth\n")
     _must(ctx, ["openssl", "pkcs12", "-export", "-passout", "pass:changeit", "-name", "admin", "-inkey", work + "/admin.key", "-in", work + "/admin.crt", "-certfile", work + "/ca.crt", "-out", work + "/admin.p12"], work)
-    _must(ctx, ["openssl", "pkcs12", "-export", "-nokeys", "-passout", "pass:changeit", "-name", "ca", "-in", work + "/ca.crt", "-out", work + "/trust.p12"], work)
 
     secret_args = ["kubectl", "create", "secret", "generic", "krabka-tls", "--dry-run=client", "-o", "yaml"]
-    for name in ["ca.crt", "broker-0.crt", "broker-0.key", "broker-1.crt", "broker-1.key", "broker-2.crt", "broker-2.key", "admin.p12", "trust.p12"]:
+    for name in ["ca.crt", "broker-0.crt", "broker-0.key", "broker-1.crt", "broker-1.key", "broker-2.crt", "broker-2.key", "admin.p12"]:
         secret_args.append("--from-file=" + work + "/" + name)
     secret = _write(ctx, work, "secret.yaml", _capture(ctx, secret_args, root))
     _must(ctx, ["kubectl", "apply", "-f", secret], root)
