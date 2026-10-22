@@ -5,7 +5,7 @@
 use {
     super::{CommitWaiter, Engine},
     crate::{
-        SubmitChangeResult,
+        OffsetReservation, SubmitChangeResult,
         error::RaftError,
         kraft::{
             KraftController,
@@ -53,10 +53,10 @@ struct TopicSubmitFixture {
 
 fn topic_submit_fixture(records: &[MetadataRecord]) -> TopicSubmitFixture {
     let (mut engine, directory) = single_voter_leader_engine();
-    let images = engine.image_tx.subscribe();
+    let images = engine.image.subscribe();
     let mut created = submit_on_engine(&mut engine, records);
     assert!(matches!(created.try_recv(), Ok(Ok(_))));
-    let expected_image = engine.image_tx.borrow().clone();
+    let expected_image = engine.image.published().clone();
     TopicSubmitFixture {
         engine,
         _directory: directory,
@@ -197,7 +197,7 @@ fn guarded_config_rejects_stale_maps_and_accepts_a_fresh_merge() {
         .records(&[config(&[over("retention.ms", "30000")])])
         .expected_image(&expected_image)
         .call();
-    let expected = engine.image_tx.borrow().clone();
+    let expected = engine.image.published().clone();
     let merged = config(&[
         over("cleanup.policy", "compact"),
         over("retention.ms", "30000"),
@@ -227,7 +227,7 @@ async fn guarded_change_rejects_old_authority_after_a_term_cycle_without_metadat
     };
     elect(&mut engine);
     engine.advance_and_apply(engine.log.log_end_offset());
-    let original = engine.image_tx.borrow().clone();
+    let original = engine.image.published().clone();
     let original_epoch = engine.core.quorum_state().leader_epoch;
     // No watch receiver is retained: send_replace must keep the admission
     // identity current even when nobody is watching the image yet.
@@ -236,11 +236,11 @@ async fn guarded_change_rejects_old_authority_after_a_term_cycle_without_metadat
         leader_epoch: original_epoch + 1,
     });
     assert!(!engine.core.role().is_leader());
-    let follower_image = engine.image_tx.borrow().clone();
+    let follower_image = engine.image.published().clone();
     assert!(!Arc::ptr_eq(&original, &follower_image));
     assert!(original.as_ref() == follower_image.as_ref());
     elect(&mut engine);
-    let new_authority = engine.image_tx.borrow().clone();
+    let new_authority = engine.image.published().clone();
     assert!(!Arc::ptr_eq(&follower_image, &new_authority));
     assert!(original.as_ref() == new_authority.as_ref());
     // The old guard is stale even before the new term's barrier commits.
@@ -255,7 +255,7 @@ async fn guarded_change_rejects_old_authority_after_a_term_cycle_without_metadat
             .call();
         assert!(engine.image.topic("stale").is_none());
     }
-    let fresh = engine.image_tx.borrow().clone();
+    let fresh = engine.image.published().clone();
     let (reply, mut result) = oneshot::channel();
     engine.on_submit_change_if_image(&topic_record("fresh"), Some(&fresh), reply);
     engine.advance_and_apply(engine.log.log_end_offset());
@@ -1295,7 +1295,7 @@ async fn a_plan_waits_only_for_an_uncommitted_tail_that_changes_the_image(
         dir: _dir,
     } = elected_three_voter_engine();
     engine.advance_and_apply(engine.log.log_end_offset());
-    let planned_from = engine.image_tx.borrow().clone();
+    let planned_from = engine.image.published().clone();
     let _pending = match tail {
         UncommittedTail::Nothing => None,
         UncommittedTail::NoOp => {
@@ -1322,4 +1322,87 @@ async fn a_plan_waits_only_for_an_uncommitted_tail_that_changes_the_image(
         other => panic!("{tail:?}: unexpected outcome {other:?}"),
     };
     assert2::assert!(admission == want, "{tail:?}");
+}
+
+/// A submission that reserves diskless offsets, and what it must return.
+struct ReservationCase {
+    name: &'static str,
+    /// The counts the batch reserves on `topic` partition 0, in order.
+    counts: &'static [i64],
+    /// The deep copies of the applied image the submission makes, through to
+    /// its commit and publish.
+    copies: u64,
+}
+
+/// #1614: a small update costs in proportion to the update, not the cluster.
+/// A one-record reservation copies no image on its way through submission,
+/// commit and publication. A batch whose later records depend on earlier ones
+/// still validates each against the image the earlier ones produce: its two
+/// overlays copy once each.
+#[test]
+fn offset_reservations_copy_the_image_only_for_in_batch_dependencies() {
+    let cases = [
+        ReservationCase {
+            name: "one reservation",
+            counts: &[3],
+            copies: 0,
+        },
+        ReservationCase {
+            name: "two reservations in one batch",
+            counts: &[3, 2],
+            copies: 2,
+        },
+    ];
+    for case in cases {
+        let (mut engine, _dir) = single_voter_leader_engine();
+        let _readers = engine.image.subscribe();
+        let mut created = submit_on_engine(&mut engine, &topic_record("topic"));
+        assert!(matches!(created.try_recv(), Ok(Ok(_))), "{}", case.name);
+        let leader_epoch = u64::from(engine.core.quorum_state().leader_epoch);
+        let copies_before = engine.image.copies();
+
+        let records: Vec<MetadataRecord> = case
+            .counts
+            .iter()
+            .flat_map(|count| offset_advance("topic", *count))
+            .collect();
+        let mut reserved = submit_on_engine(&mut engine, &records);
+
+        let mut base_offset = 0;
+        let offset_reservations = case
+            .counts
+            .iter()
+            .map(|count| {
+                let reservation = OffsetReservation {
+                    topic: "topic".to_owned(),
+                    partition: 0,
+                    base_offset,
+                    count: *count,
+                    leader_epoch,
+                };
+                base_offset += count;
+                reservation
+            })
+            .collect();
+        let reserved = reserved.try_recv().expect("an immediate reply");
+        check!(
+            reserved.ok()
+                == Some(SubmitChangeResult {
+                    offset_reservations
+                }),
+            "{}",
+            case.name
+        );
+        check!(
+            engine.image.published().partition_next_offset("topic", 0) == Some(base_offset),
+            "{}",
+            case.name
+        );
+        check!(**engine.image.published() == *engine.image, "{}", case.name);
+        check!(
+            engine.image.copies() - copies_before == case.copies,
+            "{}",
+            case.name
+        );
+    }
 }
