@@ -13,12 +13,12 @@ use {
     std::{
         collections::HashMap,
         sync::{
-            Arc,
+            Arc, Mutex as StdMutex, Weak,
             atomic::{AtomicBool, Ordering},
         },
         time::Duration,
     },
-    tokio::sync::{Mutex, watch},
+    tokio::sync::{Mutex, OwnedMutexGuard, watch},
 };
 
 #[cfg(test)]
@@ -45,6 +45,7 @@ pub(crate) struct DisklessIndexLog {
     progress: watch::Receiver<ReplayProgress>,
     applied: watch::Receiver<u64>,
     valid: Arc<AtomicBool>,
+    object_fences: Arc<StdMutex<HashMap<String, Weak<Mutex<()>>>>>,
 }
 
 impl DisklessIndexLog {
@@ -116,6 +117,8 @@ impl DisklessIndexLog {
 
         let pump_cache = cache.clone();
         let pump_valid = Arc::clone(&valid);
+        let object_fences = Arc::new(StdMutex::new(HashMap::new()));
+        let pump_object_fences = Arc::clone(&object_fences);
         tokio::spawn(async move {
             let mut delivered: HashMap<i32, u64> =
                 pending.keys().map(|partition| (*partition, 0)).collect();
@@ -171,6 +174,12 @@ impl DisklessIndexLog {
                             // an unkeyed one has no range it is the latest
                             // for, so the projection can no longer be trusted.
                             if let Some(key) = range_key {
+                                // An object-local fence serializes additions
+                                // with the reclaimer's final check and DELETE,
+                                // without blocking unrelated cache traffic.
+                                let _object_fence =
+                                    lock_object_fence(&pump_object_fences, &record.object_key)
+                                        .await;
                                 pump_cache.lock().await.apply_keyed(key, &record);
                                 applied_tx.send_modify(|generation| {
                                     *generation = generation.wrapping_add(1);
@@ -224,6 +233,7 @@ impl DisklessIndexLog {
             progress: progress_rx,
             applied: applied_rx,
             valid,
+            object_fences,
         })
     }
 
@@ -255,6 +265,15 @@ impl DisklessIndexLog {
 
     #[must_use]
     pub(crate) fn cache(&self) -> Arc<Mutex<WalIndexCache>> { self.cache.clone() }
+
+    /// Fence a projection addition against reclamation of `object_key`.
+    ///
+    /// Callers acquire this before the cache mutex. Object keys are immutable
+    /// UUID names and are never legitimately published again after retirement;
+    /// the fence closes the check/delete race with replay already in flight.
+    pub(crate) async fn object_fence(&self, object_key: &str) -> OwnedMutexGuard<()> {
+        lock_object_fence(&self.object_fences, object_key).await
+    }
 
     pub(crate) fn is_valid(&self) -> bool { self.valid.load(Ordering::Acquire) }
 
@@ -447,6 +466,25 @@ impl DisklessIndexLog {
         }
         Ok(())
     }
+}
+
+async fn lock_object_fence(
+    fences: &StdMutex<HashMap<String, Weak<Mutex<()>>>>,
+    object_key: &str,
+) -> OwnedMutexGuard<()> {
+    let fence = {
+        let mut fences = fences
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(fence) = fences.get(object_key).and_then(Weak::upgrade) {
+            fence
+        } else {
+            let fence = Arc::new(Mutex::new(()));
+            fences.insert(object_key.to_owned(), Arc::downgrade(&fence));
+            fence
+        }
+    };
+    fence.lock_owned().await
 }
 
 fn invalidate_projection(

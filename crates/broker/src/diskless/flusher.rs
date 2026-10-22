@@ -334,6 +334,9 @@ impl Reclaimer {
             if !krabka_verified::diskless_object_reclaimable(false, grace_elapsed) {
                 continue;
             }
+            // Additions for this object take the same fence before the cache
+            // lock. Keep only the object-local fence over slow DELETE.
+            let _object_fence = context.index_log.object_fence(&object_key).await;
             let cache = context.index_log.cache();
             let cache = cache.lock().await;
             if !krabka_verified::diskless_object_reclaimable(
@@ -343,6 +346,7 @@ impl Reclaimer {
                 self.first_seen.remove(&object_key);
                 continue;
             }
+            drop(cache);
             match context.object_store.delete(&object.location).await {
                 Ok(()) | Err(object_store::Error::NotFound { .. }) => {
                     self.first_seen.remove(&object_key);
@@ -403,6 +407,7 @@ mod tests {
         },
         assert2::assert,
         krabka_metadata::{MetadataRecord, TopicRecord},
+        krabka_object_store::fault::{FaultInjectingStore, FaultPolicy, OpFault, StoreOp},
         krabka_remote_storage_topic::MetadataEventLog,
         krabka_units::ByteSize,
         object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path},
@@ -776,6 +781,108 @@ mod tests {
                 .await
                 .is_ok()
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn slow_delete_does_not_stall_unrelated_lookup_or_replay() {
+        const DELETE_DELAY: Duration = Duration::from_millis(250);
+        let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        inner
+            .put(
+                &Path::from("diskless-wal/7/unreferenced.ckwl"),
+                PutPayload::from_static(b"object"),
+            )
+            .await
+            .unwrap();
+        let delayed = Arc::new(FaultInjectingStore::new(
+            inner,
+            FaultPolicy::none().with(StoreOp::Delete, OpFault::stall(DELETE_DELAY)),
+        ));
+        let store: Arc<dyn ObjectStore> = delayed.clone();
+        let index = test_index_log().await;
+        let cache = index.cache();
+        let context = Arc::new(reclaimer_context(
+            MetadataImage::new(Uuid::nil()),
+            &store,
+            index.clone(),
+        ));
+        let sweep = tokio::spawn({
+            let context = Arc::clone(&context);
+            async move { Reclaimer::new(Duration::ZERO).sweep(&context).await }
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while delayed.attempts(StoreOp::Delete) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let mut lookup_latencies = Vec::with_capacity(100);
+        for _ in 0..100 {
+            let start = Instant::now();
+            let _ = cache.lock().await.flushed_frontier(Uuid::nil(), 99);
+            lookup_latencies.push(start.elapsed());
+        }
+        lookup_latencies.sort_unstable();
+        let lookup_p99 = lookup_latencies[98];
+
+        let replay_start = Instant::now();
+        index
+            .publish_flush(&three_record_flush(
+                Uuid::from_u128(12),
+                "diskless-wal/8/unrelated.ckwl",
+            ))
+            .await
+            .unwrap();
+        wait_for_object(&cache, Uuid::from_u128(12), "diskless-wal/8/unrelated.ckwl").await;
+        let replay_latency = replay_start.elapsed();
+
+        assert!(lookup_p99 < DELETE_DELAY / 2, "lookup p99: {lookup_p99:?}");
+        assert!(
+            replay_latency < DELETE_DELAY / 2,
+            "replay: {replay_latency:?}"
+        );
+        sweep.await.unwrap();
+        eprintln!(
+            "delayed DELETE={DELETE_DELAY:?}, lookup p99={lookup_p99:?}, replay={replay_latency:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reference_winning_object_fence_prevents_delete() {
+        let topic_id = Uuid::from_u128(13);
+        let object_key = "diskless-wal/7/referenced-again.ckwl";
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        store
+            .put(&Path::from(object_key), PutPayload::from_static(b"object"))
+            .await
+            .unwrap();
+        let index = test_index_log().await;
+        let cache = index.cache();
+        let context = Arc::new(reclaimer_context(
+            MetadataImage::new(Uuid::nil()),
+            &store,
+            index.clone(),
+        ));
+
+        let fence = index.object_fence(object_key).await;
+        let sweep = tokio::spawn({
+            let context = Arc::clone(&context);
+            async move { Reclaimer::new(Duration::ZERO).sweep(&context).await }
+        });
+        // Let the sweep snapshot this object as unreferenced and reach its
+        // object fence before the replacement projection becomes visible.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        cache
+            .lock()
+            .await
+            .apply(&three_record_flush(topic_id, object_key));
+        drop(fence);
+        sweep.await.unwrap();
+
+        assert!(cache.lock().await.references_object(object_key));
+        assert!(store.head(&Path::from(object_key)).await.is_ok());
     }
 
     #[tokio::test]

@@ -47,6 +47,7 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- Diskless WAL trimming and object reclamation release the shared projection mutex before waiting on storage I/O (#1658).
 - The broker writes the log start offset that local retention moves to a
   partition's `log-start-offset-checkpoint` on a timer, instead of on every
   retention pass. The `[runtime]` key
