@@ -4045,6 +4045,7 @@ dependencies = [
  "bon",
  "bytes",
  "clap",
+ "codspeed-criterion-compat",
  "derive_more",
  "futures-util",
  "hex",
