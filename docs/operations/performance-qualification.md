@@ -70,7 +70,7 @@ krabka-soak-check judge --contract bench/soak/rf3-72h.yaml \
   --evidence soak-evidence/evidence.json --out soak-evidence/verdict.json
 ```
 
-Without `KRABKA_SOAK_CONTRACT` the suite runs `bench/soak/self-check.yaml`, a five-minute run that proves the judge reports an injected missing record and an injected missed deadline. The container matrix in CI runs it.
+Without `KRABKA_SOAK_CONTRACT` the suite runs `bench/soak/self-check.yaml`, a five-minute run that proves the judge reports an injected missing record and an injected missed deadline. The container job in CI runs it.
 
 ## Run the frozen candidate in the cloud
 

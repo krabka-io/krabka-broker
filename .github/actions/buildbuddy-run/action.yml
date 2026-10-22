@@ -22,6 +22,17 @@ description: Run a bash script through `bb remote` when the run holds a BuildBud
 # fills the cache so that a `bazel coverage` here only reads. A pull request's
 # run reads and never writes, as on a GitHub runner.
 #
+# The runner has no `user.bazelrc` from `.github/actions/remote-cache`, so the
+# prelude writes the remote *execution* half of it: `--config=rbe` then means on
+# the runner what it means here. BuildBuddy's own bazelrc already carries the
+# API key header those actions authenticate with.
+#
+# `docker: true` starts a Docker daemon in the runner's VM. The container
+# suites execute on microVMs of their own, but an action that cannot start
+# remotely falls back to the machine that invoked Bazel
+# (`--remote_local_fallback`), and there it needs a daemon as it had on a
+# GitHub runner.
+#
 # A run without a key -- a fork's pull request -- runs the same script here,
 # after reclaiming the disk that a local build needs.
 
@@ -60,6 +71,10 @@ inputs:
     description: How long the remote run may take.
     required: false
     default: 80m
+  docker:
+    description: Whether the remote runner starts a Docker daemon.
+    required: false
+    default: "false"
 
 outputs:
   remote:
@@ -84,9 +99,23 @@ runs:
     - if: steps.mode.outputs.remote != 'true'
       uses: ./.github/actions/reclaim-disk
 
+    # The `bb` CLI, pinned. install.buildbuddy.io finds the latest release
+    # through an unauthenticated api.github.com call, which GitHub limits per
+    # IP; runners share IPs, and the call answered 403 on run 39741856418. A
+    # release download from github.com is not that API, and the checksum
+    # pins what it serves.
     - if: steps.mode.outputs.remote == 'true'
       shell: bash
-      run: curl -fsSL --retry 5 --retry-all-errors https://install.buildbuddy.io | bash
+      env:
+        BB_VERSION: 5.0.496
+        BB_SHA256: 4dba5a0c377339b9e4b4053e812fe33da8fe917d22eee533b642ffdf210f2d10
+      run: |
+        set -euo pipefail
+        bb="${RUNNER_TEMP}/bb"
+        curl -fsSL --retry 5 -o "${bb}" \
+          "https://github.com/buildbuddy-io/bazel/releases/download/${BB_VERSION}/bazel-${BB_VERSION}-linux-x86_64"
+        echo "${BB_SHA256}  ${bb}" | sha256sum -c -
+        sudo install -m 0755 "${bb}" /usr/local/bin/bb
 
     - if: steps.mode.outputs.remote == 'true'
       shell: bash
@@ -100,9 +129,15 @@ runs:
         MEMORY: ${{ inputs.memory }}
         DISK: ${{ inputs.disk }}
         TIMEOUT: ${{ inputs.timeout }}
+        DOCKER: ${{ inputs.docker }}
         SNAPSHOT_SAVE: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'none-available' || 'always' }}
         REMOTE_PRELUDE: |
           set -euo pipefail
+          {
+            echo "build:rbe --remote_executor=grpcs://remote.buildbuddy.io"
+            echo "build:rbe --extra_execution_platforms=//bazel:rbe_linux_x86_64"
+            echo "build:rbe --jobs=100"
+          } >>user.bazelrc
           if [ "${UPLOAD:-false}" != "true" ]; then
             echo "build --noremote_upload_local_results" >>user.bazelrc
           fi
@@ -112,10 +147,15 @@ runs:
         while IFS= read -r line; do
           [ -n "${line}" ] && env_flags+=(--env="${line}")
         done <<<"${EXTRA_ENV}"
+        runner_flags=()
+        if [ "${DOCKER}" = "true" ]; then
+          runner_flags+=(--runner_exec_properties=init-dockerd=true)
+        fi
         bb remote \
           --run_from_commit="${GITHUB_SHA}" \
           --timeout="${TIMEOUT}" \
           "${env_flags[@]}" \
+          "${runner_flags[@]}" \
           --runner_exec_properties=krabka-ci-lane="${LANE}" \
           --runner_exec_properties=EstimatedCPU="${CPU}" \
           --runner_exec_properties=EstimatedMemory="${MEMORY}" \

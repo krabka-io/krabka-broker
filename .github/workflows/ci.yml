@@ -513,7 +513,7 @@ jobs:
   # checkout and the Aspect CLI, with no Bazel cache namespace and nothing to
   # build. Each then spent about 0.6 minutes on `setup-aspect` to do a few
   # seconds of work, and four of those slots came out of the 20-concurrent-job
-  # cap that the container matrix is queued behind. Running the checks in
+  # cap that every job is queued behind. Running the checks in
   # sequence here costs seconds and hands three slots back.
   #
   # None of them uses Bazel, so they still do not need the merge base or a
@@ -792,29 +792,23 @@ jobs:
             --mount type=bind,source="${GITHUB_WORKSPACE}",target=/workspace \
             "${LOCAL_IMAGE}"
 
-  # Container suites, sharded across runners.
+  # Container suites, one job on a BuildBuddy remote runner.
   #
-  # These saturate a runner: the suites are container-heavy, so Bazel got only
-  # about 1.2x concurrency running them together and the box, not the target
-  # granularity, was the limit. Sharding them across runners is what actually
-  # parallelises them -- one job per group of suites, so the wall clock is the
-  # slowest group rather than the sum of all of them.
+  # Every suite executes on a BuildBuddy Firecracker microVM with a Docker
+  # daemon of its own (`--config=docker-rbe`), so the machine that invokes Bazel
+  # only compiles the suites and waits on them. That is why one runner is
+  # enough. The suites once shared a GitHub runner's own daemon, saturated it
+  # at about 1.2x concurrency, and so ran as a matrix of up to twelve runners
+  # -- most of the account's twenty concurrent jobs, which queued every other
+  # pull request behind them, and each runner compiled the broker again. One
+  # `bazel test` on a warm 16-core runner compiles it once and starts every
+  # suite at the same time.
   #
   # `aspect test` does not narrow to impacted targets -- that is an Aspect
   # Workflows feature, not part of the open-source CLI. The custom `aspect
   # container-suites` task owns the selection: scheduled/manual runs take every
   # suite, while PRs use Bazel rdeps outside the broker and an explicit broker
   # feature map so one Rust target does not become the entire JVM matrix.
-  #
-  # A matrix entry is a GROUP of targets rather than a single one, and the task
-  # emits at most 12 of them. The cap is the concurrency budget: GitHub runs at
-  # most 20 jobs at once for this account, and the rest of the workflow already
-  # claims several, so a matrix wider than that queues into a second wave and
-  # the run's wall clock becomes two container jobs deep instead of one. Twelve
-  # entries fit alongside the other jobs in a single wave. Grouping is also
-  # cheaper per target: the suites in a group are tested by one Bazel
-  # invocation, which analyses and compiles the shared broker closure once
-  # rather than once per suite.
   #
   # This job also answers, through `aspect changed-scope`, whether the change
   # reaches the Rust build, the kind smoke test's inputs and the Creusot
@@ -825,7 +819,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     outputs:
-      suites: ${{ steps.select.outputs.suites }}
+      targets: ${{ steps.select.outputs.targets }}
       any: ${{ steps.select.outputs.any }}
       rust: ${{ steps.scope.outputs.rust }}
       kubernetes: ${{ steps.scope.outputs.kubernetes }}
@@ -884,17 +878,75 @@ jobs:
           fi
 
   docker:
-    name: container · ${{ matrix.suite.name }}
+    name: container suites
     needs: select
     if: needs.select.outputs.any == 'true'
     runs-on: ubuntu-26.04
-    timeout-minutes: 60
-    strategy:
-      # One group failing should not cancel the rest -- the point of the shard
-      # is to see every suite's result in one run.
-      fail-fast: false
-      matrix:
-        suite: ${{ fromJSON(needs.select.outputs.suites) }}
+    timeout-minutes: 120
+    env:
+      # `aspect container-suites` selects by touched path, so the list can name
+      # a container target that is not a test rule -- the KDC fixture's `image`
+      # and `seed_layer` are built, not run. `bazel test` exits 4 on a label
+      # with no test targets ("No test targets were found, yet testing was
+      # requested"), so the script dispatches on the rule kind: one `bazel
+      # query` over the list, then at most one `bazel test` and one `bazel
+      # build`.
+      #
+      # The labels arrive as `TARGETS` in the environment rather than as a
+      # `${{ }}` interpolation into the script, so a label can never be read
+      # as shell. It is a space-joined list, which `set(...)` takes verbatim.
+      CONTAINER_SCRIPT: |
+        set -euo pipefail
+        # The suites that run here -- the broker-image ones are `no-remote-exec`
+        # -- reach the brokers through their advertised name from the host
+        # side. Containers resolve it through
+        # `--add-host=host.docker.internal:host-gateway`; this machine needs it
+        # to be loopback. The BuildBuddy runner's /etc/hosts already names it,
+        # as `ff02::2`, which failed `soak_contract` and `jbod_enospc` on run
+        # 39740994910, so the loopback line goes first rather than last.
+        if ! getent ahosts host.docker.internal | grep -q '^127\.0\.0\.1 '; then
+          hosts="$(printf '127.0.0.1 host.docker.internal\n'; cat /etc/hosts)"
+          printf '%s\n' "${hosts}" | sudo tee /etc/hosts >/dev/null 2>&1 \
+            || printf '%s\n' "${hosts}" >/etc/hosts
+        fi
+        getent ahosts host.docker.internal
+        # Assigned before the loop reads it: a command substitution in a
+        # here-string word is not a simple command, so `set -e` would not
+        # abort on a failed query there and the job would pass having run
+        # nothing.
+        labels="$(bazel query --output=label_kind "set(${TARGETS})")"
+        tests=""
+        builds=""
+        # `--output=label_kind` prints "<kind> <rule|file> <label>", so the
+        # kind is the first word and the label the last.
+        while read -r kind _ label; do
+          [ -n "${label}" ] || continue
+          case "${kind}" in
+            *_test) tests="${tests} ${label}" ;;
+            *) builds="${builds} ${label}" ;;
+          esac
+        done <<<"${labels}"
+        if [ -z "${tests}" ] && [ -z "${builds}" ]; then
+          printf 'No labels resolved for targets: %s\n' "${TARGETS}" >&2
+          exit 1
+        fi
+        # Build every selected suite before testing any. The suites that run
+        # the broker image are `no-remote-exec` and run on this machine, and
+        # broker suites starve beside a compile -- the `ci` job builds first
+        # for the same reason. The build passes the lint flag `.bazelrc` sets
+        # for `test` only, and `build` and `test` share `--config=docker-rbe`'s
+        # executor flags, so the test reuses this build's analysis and
+        # outputs; at most four local suites then run at once.
+        if [ -n "${tests}" ]; then
+          bazel build \
+            --config=docker-rbe \
+            --@aspect_rules_lint//lint:fail_on_violation \
+            ${tests}
+          bazel test --config=docker-rbe --local_test_jobs=4 ${tests}
+        fi
+        if [ -n "${builds}" ]; then
+          bazel build ${builds}
+        fi
     steps:
       - name: Keep temporary files off the size-limited /tmp tmpfs
         run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
@@ -908,75 +960,27 @@ jobs:
           disk-cache: false
           repository-cache: true
 
+      # Matters only when the suites run here, on a run without a BuildBuddy
+      # API key: a fork's pull request writes nothing, and a client
+      # certificate alone still points this runner's build at the cache.
       - uses: ./.github/actions/remote-cache
         with:
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
           client-cert: ${{ secrets.BUILDBUDDY_CLIENT_CERT }}
           client-key: ${{ secrets.BUILDBUDDY_CLIENT_KEY }}
-          # Everything that is not a pull request is a trusted context: pushes
-          # to `main`, the nightly, a dispatch, a release tag. Pull requests
-          # read only.
           upload: ${{ env.TRUSTED_RUN }}
 
-      # The host side of these suites reaches the broker over loopback, but a few
-      # host-side Rust clients bootstrap through the advertised name, so it has to
-      # resolve here too. Containers resolve it separately, through
-      # `--add-host=host.docker.internal:host-gateway`.
-      - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
-
-      # `aspect container-suites` selects by touched path, so a group can name a
-      # container target that is not a test rule -- the KDC fixture's `image`
-      # and `seed_layer` are built, not run. `bazel test` exits 4 on a label
-      # with no test targets ("No test targets were found, yet testing was
-      # requested"), which failed every suite in the matrix regardless of the
-      # code under review. Dispatch on the rule kind instead.
-      #
-      # One `bazel query` over the whole group, then at most one `bazel test`
-      # and at most one `bazel build` -- never a command per target. Sharing an
-      # invocation is the point of grouping: the group's suites analyse and
-      # compile the broker closure once between them, where a loop paid for it
-      # per target.
-      #
-      # `matrix.suite.targets` arrives through `env` rather than as a `${{ }}`
-      # interpolation into the script body, so a label can never be read as
-      # shell. It is a space-joined list, which `set(...)` takes verbatim.
-      - env:
-          TARGETS: ${{ matrix.suite.targets }}
-        run: |
-          set -euo pipefail
-          # Assigned before the loop reads it: a command substitution in a
-          # here-string word is not a simple command, so `set -e` would not
-          # abort on a failed query there and the group would pass having run
-          # nothing.
-          labels="$(bazel query --output=label_kind "set(${TARGETS})")"
-          tests=""
-          builds=""
-          # `--output=label_kind` prints "<kind> <rule|file> <label>", so the
-          # kind is the first word and the label the last.
-          while read -r kind _ label; do
-            [ -n "${label}" ] || continue
-            case "${kind}" in
-              *_test) tests="${tests} ${label}" ;;
-              *) builds="${builds} ${label}" ;;
-            esac
-          done <<<"${labels}"
-          if [ -z "${tests}" ] && [ -z "${builds}" ]; then
-            printf 'No labels resolved for group targets: %s\n' "${TARGETS}" >&2
-            exit 1
-          fi
-          # `--config=docker-rbe` is defined for `test` only (it swaps the
-          # `--test_tag_filters` set), so passing it to `build` fails with
-          # "Config value 'docker-rbe' is not defined in any .rc file".
-          #
-          # It runs the suites on BuildBuddy Firecracker microVMs, each with its
-          # own dockerd, rather than on this runner's daemon. The compile stays
-          # here -- see the `docker-rbe` block in `.bazelrc`.
-          if [ -n "${tests}" ]; then
-            bazel test --config=docker-rbe ${tests}
-          fi
-          if [ -n "${builds}" ]; then
-            bazel build ${builds}
-          fi
+      - name: container suites
+        uses: ./.github/actions/buildbuddy-run
+        with:
+          lane: containers
+          script: ${{ env.CONTAINER_SCRIPT }}
+          env: TARGETS=${{ needs.select.outputs.targets }}
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          upload: ${{ env.TRUSTED_RUN }}
+          docker: "true"
+          # The nightly runs every suite in this one invocation.
+          timeout: 110m
 
   # The kind smoke test runs on a pull request or push only when the change
   # reaches the image packaging or the cluster manifests (see `aspect
@@ -1085,12 +1089,11 @@ jobs:
   # failure when a resource level drifts rather than only when something
   # crashes.
   #
-  # Its own job, and not a member of the `docker` matrix, for two reasons. The
-  # matrix is a twelve-way shard of suites that finish in minutes, and one
-  # four-hour member would hold the whole shard -- and the nightly report that
-  # waits on it -- open for four hours. And the matrix runs on every pull
-  # request whose diff selects a suite, which is exactly what a four-hour lane
-  # must never do. `.aspect/container_suites.axl` drops
+  # Its own job, and not one of the `docker` job's suites, for two reasons. The
+  # `docker` job runs suites that finish in minutes, and one four-hour suite
+  # would hold it -- and the nightly report that waits on it -- open for four
+  # hours. And that job runs on every pull request whose diff selects a suite,
+  # which is exactly what a four-hour lane must never do. `.aspect/container_suites.axl` drops
   # `//crates/broker:soak_docker_test` from every selection it makes, with a
   # unit test that says so; this is the only job that names it.
   #
@@ -1139,7 +1142,7 @@ jobs:
       # Each broker advertises `host.docker.internal` so that its two peers and
       # the host-side clients reach it by one name. The containers resolve it
       # through `--add-host=host.docker.internal:host-gateway`; the host needs
-      # this line, exactly as the `docker` matrix does.
+      # this line, exactly as the `docker` job does.
       - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
 
       - name: soak
@@ -1164,7 +1167,7 @@ jobs:
   # fails here, by name, instead of as a fault the executor could not inject.
   #
   # Scheduled and dispatched only, like `soak`: the pull-request container
-  # matrix keeps the CPU-quota self-check, because its remote executors may
+  # job keeps the CPU-quota self-check, because its remote executors may
   # lack the module. `--flaky_test_attempts=1` so that a failure is reported,
   # not retried away.
   netem:
@@ -1496,9 +1499,9 @@ jobs:
   # The single context `main` requires, and the reason the list of required
   # checks is one name rather than one name per job.
   #
-  # Branch protection can only name checks statically, and `docker` is a matrix
-  # built from the impacted-suite query, so its jobs are named at run time and
-  # can never appear in that list. Before this job the protected set was `build
+  # Branch protection can only name checks statically, and a job that a change
+  # may skip -- `docker` runs only when the impacted-suite query selects a
+  # suite -- cannot be a required check of its own. Before this job the protected set was `build
   # · test · lint · format`, `coverage` and `docgen`: `cargo deny`, the Cargo
   # clippy and nextest lane, the Creusot proofs and every container suite could
   # go red without blocking a merge.
@@ -1564,7 +1567,7 @@ jobs:
 
   # The scheduled lanes' only reader.
   #
-  # `docker` (the full JVM/librdkafka container matrix), `gssapi` (both
+  # `docker` (every JVM/librdkafka container suite), `gssapi` (both
   # Kerberos acceptance cases), `links` (every external URL in the markdown
   # the pull-request lychee run skips under `--offline`) and `bench` (the seven
   # criterion suites) run once a day, on the 05:00 UTC schedule, and `gate`

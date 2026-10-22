@@ -111,7 +111,7 @@ test:docker --test_tag_filters=docker
 #
 #     bazel test --config=docker-rbe //...
 #
-# `ci` passes this on the container matrix. The per-target half of it -- the
+# `ci` passes this on the container job. The per-target half of it -- the
 # microVM, its dockerd, the image the VM boots -- is `exec_properties` on each
 # `*_docker_test` in //bazel/defs.bzl, because it belongs to the test action
 # rather than to an invocation.
@@ -127,9 +127,14 @@ test:docker --test_tag_filters=docker
 # `^Rustc$` and not `Rustc`: Bazel matches this regex anywhere in the mnemonic,
 # so the unanchored spelling would also catch `RustcMetadata`, which is the one
 # rustc action that is already known to run remotely.
+# The executor half is on `build` so that CI can build the selected suites
+# with the same configuration before it tests them: the suites that run the
+# broker image are `no-remote-exec` (see //bazel:defs.bzl) and run on the
+# invoking machine, where they must not share its cores with rustc. `test`
+# inherits it, and only `test` swaps the tag filters to the container suites.
+build:docker-rbe --config=rbe
+build:docker-rbe --modify_execution_info=^Rustc$=+no-remote-exec
 test:docker-rbe --config=docker
-test:docker-rbe --config=rbe
-test:docker-rbe --modify_execution_info=^Rustc$=+no-remote-exec
 # A failing suite here prints the broker's whole INFO log -- `jvm_acceptance_tiered`
 # managed 8.6 MB -- and Bazel drops anything past this cap, printing
 # "exceeds maximum size ...; skipping" in place of the output. That is the only
