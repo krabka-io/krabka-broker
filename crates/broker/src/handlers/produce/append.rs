@@ -254,7 +254,7 @@ pub(super) async fn dispatch_prepared(
     // The local phase opens here and closes when the writer answers: the
     // enqueue plus the append is the work this broker's own log does for this
     // partition. A send failure is charged too, so the phase covers every exit.
-    let local_started = std::time::Instant::now();
+    let local = context.phases.open_local();
     // An idle writer means the append can run right here, with no hop to
     // the writer task and back; see `WriterGate`.
     let queued = produce_inline(
@@ -273,7 +273,7 @@ pub(super) async fn dispatch_prepared(
             .await
             .is_err()
     {
-        context.phases.add_local(local_started.elapsed());
+        drop(local);
         response.error_code = codes::NOT_LEADER_OR_FOLLOWER;
         return Ok(AppendOutcome::Answered(response));
     }
@@ -285,7 +285,7 @@ pub(super) async fn dispatch_prepared(
     // and a producer that retried it wrote it twice. It closed the connection
     // of an `acks=0` producer too, which Kafka never does over a timeout.
     let acked = ack_rx.await;
-    context.phases.add_local(local_started.elapsed());
+    drop(local);
     match acked {
         Ok(Ok(appended)) => return Ok(finalize_ack(response, context, appended, commit).await),
         Ok(Err(error)) => {

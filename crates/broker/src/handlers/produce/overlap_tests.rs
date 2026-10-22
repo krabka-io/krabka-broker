@@ -12,8 +12,8 @@ use {
         test_support::{PipelineFixture, PipelinePartitionSetup, encode_batch, pipeline_input},
     },
     crate::{
-        codes, handlers::test_support::replicated_partition, partition::Partition,
-        test_support::replica_nodes,
+        codes, handlers::test_support::replicated_partition, metrics::PartitionLabel,
+        partition::Partition, test_support::replica_nodes,
     },
     assert2::{assert, check},
     bytes::Bytes,
@@ -214,6 +214,75 @@ async fn a_busy_writer_holds_back_only_its_own_partition() {
     check!(awaiting.is_empty(), "acks=1 answers without a wait");
     let rows = (0..topics.len()).map(|_| appended(0)).collect();
     assert!(topic_results == expected_rows(&topics, rows));
+}
+
+/// Appends that wait at once share the request's handler time between them:
+/// the per-partition CPU charge of four writers busy over the same interval
+/// adds up to that interval, not four times it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn overlapping_waits_share_the_handler_time_they_spent_together() {
+    let topics = ["a", "b", "c", "d"];
+    let dir = tempfile::tempdir().expect("tempdir");
+    let image = wide_image(&topics);
+    let fixture = PipelineFixture::new(krabka_ids::NodeId(1));
+    let mut partitions = Vec::new();
+    for topic in topics {
+        partitions.push(fixture.register_partition(dir.path(), topic, &image).await);
+    }
+    let entries: Vec<Entry<'_>> = (0..)
+        .zip(topics)
+        .map(|(topic_row, topic)| Entry {
+            topic,
+            topic_row,
+            base_sequence: 0,
+        })
+        .collect();
+    let Request {
+        admitted,
+        mut topic_results,
+    } = admit(&fixture, &image, &entries, 1).await;
+    let mut awaiting: Vec<PendingPartition> = Vec::new();
+
+    let mut busy = Vec::new();
+    for partition in &partitions {
+        busy.push(partition.writer_gate.writer_busy().await);
+    }
+    let started = std::time::Instant::now();
+    let (completed, ()) = tokio::join!(
+        complete_admitted(
+            admitted,
+            fixture.services(&image),
+            no_transaction(),
+            &mut topic_results,
+            &mut awaiting,
+        ),
+        async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            drop(busy);
+        },
+    );
+    let wall = started.elapsed();
+    completed.expect("append");
+
+    let charged: u64 = topics
+        .iter()
+        .map(|topic| {
+            fixture
+                .metrics
+                .partition_cpu_micros
+                .get_or_create(&PartitionLabel {
+                    topic: (*topic).into(),
+                    partition: 0,
+                })
+                .get()
+        })
+        .sum();
+    let wall_micros = u64::try_from(wall.as_micros()).expect("a short test");
+    check!(charged >= 40_000, "the waits are charged");
+    check!(
+        charged <= wall_micros,
+        "{charged}us charged for {wall_micros}us of request time"
+    );
 }
 
 /// A partition the request names twice, around a partition that is refused,

@@ -203,9 +203,9 @@ pub(crate) async fn handle(
     let handler_start = std::time::Instant::now();
     // Phase accounting for `request_{local,remote}_duration_seconds`. One
     // Produce appends to many partitions, so the local phase is a sum over the
-    // partitions below: `dispatch_prepared` charges each writer round-trip,
-    // and `complete_admitted` caps the overlapped appends' sum at their wall
-    // time. The remote phase is a single interval, because the `acks=all`
+    // partitions below: `dispatch_prepared` opens an interval around each
+    // writer round-trip, and overlapping ones are charged once. The remote
+    // phase is a single interval, because the `acks=all`
     // high-watermark waits of every appended partition run as one wait.
     let phases = RequestPhases::default();
     let record_decompression_policy = broker.config.record_decompression_policy()?;
@@ -630,17 +630,8 @@ async fn complete_admitted(
     )
     .await;
     let lanes = partition_lanes(admitted.into_iter().zip(answers));
-    // The lanes charge their writer round-trips as if they ran one after
-    // another. They overlap, so the request's local phase takes their sum only
-    // up to the wall time of the whole stage.
-    let lane_phases = RequestPhases::default();
-    let lane_services = PartitionServices {
-        phases: &lane_phases,
-        ..services
-    };
     let started = std::time::Instant::now();
-    let mut finished: Vec<(usize, Result<Vec<CompletedPartition>, BrokerError>)> =
-        Vec::with_capacity(lanes.len());
+    let mut finished: Vec<(usize, LaneOutcome)> = Vec::with_capacity(lanes.len());
     // A lane is polled once where it is started. Most finish there, appending
     // on this task to an idle writer, and only a lane that has to wait joins
     // the set the request then drives together.
@@ -649,8 +640,7 @@ async fn complete_admitted(
         while waiting.len() >= MAX_CONCURRENT_PARTITION_APPENDS {
             finished.extend(waiting.next().await);
         }
-        let mut lane =
-            Box::pin(async move { (lane_index, complete_lane(lane, lane_services).await) });
+        let mut lane = Box::pin(async move { (lane_index, complete_lane(lane, services).await) });
         match futures_util::poll!(lane.as_mut()) {
             Poll::Ready(done) => finished.push(done),
             Poll::Pending => waiting.push(lane),
@@ -659,17 +649,34 @@ async fn complete_admitted(
     while let Some(done) = waiting.next().await {
         finished.push(done);
     }
-    services
-        .phases
-        .add_overlapped(&lane_phases, started.elapsed());
     finished.sort_unstable_by_key(|(lane_index, _)| *lane_index);
+    // Each entry timed its own completion, and the lanes overlap, so their sum
+    // can exceed the stage's wall time. The handler time charged per partition
+    // stays within what the request spent: the overlap is shared out in
+    // proportion to each entry's time.
+    let stage_micros = elapsed_micros(started);
+    let timed_micros = finished
+        .iter()
+        .flat_map(|(_, lane)| &lane.completed)
+        .map(|completed| completed.stage_micros)
+        .fold(0_u64, u64::saturating_add);
+    for completed in finished.iter().flat_map(|(_, lane)| &lane.completed) {
+        let share = overlap_share(completed.stage_micros, timed_micros, stage_micros);
+        record_partition_cpu(
+            services.metrics,
+            &completed.topic_name,
+            completed.idx,
+            completed.admit_micros.saturating_add(share),
+        );
+    }
     for (_, lane) in finished {
-        for completed in lane? {
+        for completed in lane.completed {
             let CompletedPartition {
                 topic_row,
                 partition_row,
                 topic_name,
                 outcome,
+                ..
             } = completed;
             match outcome {
                 PartitionOutcome::Done(out) => {
@@ -687,8 +694,26 @@ async fn complete_admitted(
                 }
             }
         }
+        lane.error.map_or(Ok(()), Err)?;
     }
     Ok(())
+}
+
+/// Microseconds since `started`, saturating.
+fn elapsed_micros(started: std::time::Instant) -> u64 {
+    u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
+}
+
+/// The part of `wall` micros charged to an entry that timed `own` micros out
+/// of `total` timed by every entry of the stage. Entries that ran one after
+/// another time no more than the wall time between them and keep their own
+/// time; entries that overlapped share the wall time in proportion.
+fn overlap_share(own: u64, total: u64, wall: u64) -> u64 {
+    if total <= wall {
+        return own;
+    }
+    let share = u128::from(own) * u128::from(wall) / u128::from(total);
+    u64::try_from(share).unwrap_or(u64::MAX)
 }
 
 /// One admitted partition entry and the coordinator's answer for it.
@@ -710,21 +735,29 @@ fn partition_lanes(entries: impl IntoIterator<Item = LaneEntry>) -> Vec<Vec<Lane
     lanes
 }
 
-/// One appended entry of a lane, and the place in the response its row
-/// belongs.
+/// One appended entry of a lane, the place in the response its row belongs,
+/// and the handler time it took.
 struct CompletedPartition {
     topic_row: usize,
     partition_row: usize,
     topic_name: Arc<str>,
+    idx: i32,
+    /// The handler time the gates before the transaction check took.
+    admit_micros: u64,
+    /// The time this entry's completion took, which can overlap other lanes.
+    stage_micros: u64,
     outcome: PartitionOutcome,
 }
 
-/// Append every entry of one partition's lane in request order, charging each
-/// its handler time. An error stops the lane, as it stops the request.
-async fn complete_lane(
-    lane: Vec<LaneEntry>,
-    services: PartitionServices<'_>,
-) -> Result<Vec<CompletedPartition>, BrokerError> {
+/// What one lane finished, and the error that stopped it, if one did.
+struct LaneOutcome {
+    completed: Vec<CompletedPartition>,
+    error: Option<BrokerError>,
+}
+
+/// Append every entry of one partition's lane in request order, timing each.
+/// An error stops the lane, as it stops the request.
+async fn complete_lane(lane: Vec<LaneEntry>, services: PartitionServices<'_>) -> LaneOutcome {
     let mut completed = Vec::with_capacity(lane.len());
     for (partition, answer) in lane {
         let AdmittedPartition {
@@ -736,18 +769,37 @@ async fn complete_lane(
             batch,
         } = partition;
         let started = std::time::Instant::now();
-        let outcome = complete_partition(*batch, answer, services).await?;
-        let micros =
-            micros.saturating_add(u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX));
-        record_partition_cpu(services.metrics, &topic_name, idx, micros);
+        let outcome = complete_partition(*batch, answer, services).await;
+        let stage_micros = elapsed_micros(started);
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                record_partition_cpu(
+                    services.metrics,
+                    &topic_name,
+                    idx,
+                    micros.saturating_add(stage_micros),
+                );
+                return LaneOutcome {
+                    completed,
+                    error: Some(error),
+                };
+            }
+        };
         completed.push(CompletedPartition {
             topic_row,
             partition_row,
             topic_name,
+            idx,
+            admit_micros: micros,
+            stage_micros,
             outcome,
         });
     }
-    Ok(completed)
+    LaneOutcome {
+        completed,
+        error: None,
+    }
 }
 
 /// Charge `micros` of handler time to one partition for the rebalancer's
@@ -892,6 +944,20 @@ fn any_partition_failed(topic_results: &[TopicProduceResponse]) -> bool {
 /// requests are one-way even when an append or authorization check fails.
 pub(crate) fn response_required(request_bytes: &[u8], version: i16) -> Result<bool, BrokerError> {
     Ok(framing::produce_acks(request_bytes, version)? != 0)
+}
+
+#[cfg(test)]
+mod overlap_share_tests {
+    use super::overlap_share;
+
+    #[yare::parameterized(
+        serial_entries_keep_their_time = { 30, 50, 60, 30 },
+        overlapping_entries_share_the_wall_time = { 30, 120, 60, 15 },
+        a_stage_with_no_time_charges_nothing = { 0, 0, 0, 0 },
+    )]
+    fn overlap_is_shared_in_proportion(own: u64, total: u64, wall: u64, expected: u64) {
+        assert2::assert!(overlap_share(own, total, wall) == expected);
+    }
 }
 
 #[cfg(test)]

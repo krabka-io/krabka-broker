@@ -10,13 +10,21 @@
 //!
 //! The fields are atomics rather than cells because the accumulator is
 //! borrowed across `.await` points inside futures that must stay `Send`.
+//!
+//! The partitions of one Produce request append at once, so their local
+//! intervals can overlap. They open a [`LocalInterval`] rather than add an
+//! elapsed time, and the local phase is charged with the union of the open
+//! intervals: the time during which at least one of them was open.
 
 use {
     super::BrokerMetrics,
     crate::handlers::ApiKeyCode,
     std::{
-        sync::atomic::{AtomicU64, Ordering},
-        time::Duration,
+        sync::{
+            Mutex, PoisonError,
+            atomic::{AtomicU64, Ordering},
+        },
+        time::{Duration, Instant},
     },
 };
 
@@ -30,6 +38,24 @@ use {
 pub(crate) struct RequestPhases {
     local_nanos: AtomicU64,
     remote_nanos: AtomicU64,
+    open_local: Mutex<OpenIntervals>,
+}
+
+/// The local intervals open right now, and since when at least one has been.
+#[derive(Debug, Default)]
+struct OpenIntervals {
+    count: usize,
+    since: Option<Instant>,
+}
+
+/// One open local interval of a request. Dropping it closes the interval.
+#[must_use = "the interval closes when the guard is dropped"]
+pub(crate) struct LocalInterval<'a> {
+    phases: &'a RequestPhases,
+}
+
+impl Drop for LocalInterval<'_> {
+    fn drop(&mut self) { self.phases.close_local_at(Instant::now()); }
 }
 
 impl RequestPhases {
@@ -41,19 +67,35 @@ impl RequestPhases {
     /// object store behind a tiered or diskless partition.
     pub(crate) fn add_remote(&self, elapsed: Duration) { Self::add(&self.remote_nanos, elapsed); }
 
-    /// Charge the phases of a stage whose parts ran at once. `overlapped`
-    /// holds what each part charged as if they ran one after another, and
-    /// `elapsed` is the stage's wall time: each phase takes that sum only up
-    /// to `elapsed`, so time two parts spent together is not charged twice.
-    pub(crate) fn add_overlapped(&self, overlapped: &Self, elapsed: Duration) {
-        Self::add(
-            &self.local_nanos,
-            Self::duration(&overlapped.local_nanos).min(elapsed),
-        );
-        Self::add(
-            &self.remote_nanos,
-            Self::duration(&overlapped.remote_nanos).min(elapsed),
-        );
+    /// Open a local interval, which ends when the guard is dropped. Intervals
+    /// that overlap charge the local phase once, for their union.
+    pub(crate) fn open_local(&self) -> LocalInterval<'_> {
+        self.open_local_at(Instant::now());
+        LocalInterval { phases: self }
+    }
+
+    fn open_local_at(&self, now: Instant) {
+        let mut open = self
+            .open_local
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if open.count == 0 {
+            open.since = Some(now);
+        }
+        open.count += 1;
+    }
+
+    fn close_local_at(&self, now: Instant) {
+        let mut open = self
+            .open_local
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        open.count = open.count.saturating_sub(1);
+        if open.count == 0
+            && let Some(since) = open.since.take()
+        {
+            Self::add(&self.local_nanos, now.saturating_duration_since(since));
+        }
     }
 
     /// Seconds charged to the local phase so far.
@@ -108,27 +150,45 @@ mod tests {
         assert!((phases.remote_seconds() - 0.250).abs() < 1.0e-9);
     }
 
+    /// Each interval is (open, close) in milliseconds after a common start.
     #[yare::parameterized(
-        serial_parts_keep_their_sum = { 30, 40 },
-        overlapped_parts_take_the_wall_time = { 30, 10 },
+        disjoint_intervals_add_up = { &[(0, 10), (20, 25)], 15 },
+        overlapping_intervals_count_once = { &[(0, 10), (5, 30)], 30 },
+        a_nested_interval_adds_nothing = { &[(0, 30), (5, 10)], 30 },
+        overlap_beside_a_gap = { &[(0, 10), (0, 10), (50, 51)], 11 },
     )]
-    fn overlapped_phases_are_capped_at_the_stage_wall_time(sum_ms: u64, wall_ms: u64) {
-        let parts = RequestPhases::default();
-        parts.add_local(Duration::from_millis(sum_ms / 3));
-        parts.add_local(Duration::from_millis(sum_ms - sum_ms / 3));
-        parts.add_remote(Duration::from_millis(sum_ms));
+    fn local_intervals_charge_their_union(intervals: &[(u64, u64)], charged_ms: u64) {
         let phases = RequestPhases::default();
-        phases.add_local(Duration::from_millis(5));
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let mut events: Vec<(u64, bool)> = intervals
+            .iter()
+            .flat_map(|&(open, close)| [(open, true), (close, false)])
+            .collect();
+        // At one instant, close before opening, as a guard dropped before the
+        // next is taken would.
+        events.sort_by_key(|&(ms, opens)| (ms, opens));
+        for (ms, opens) in events {
+            if opens {
+                phases.open_local_at(at(ms));
+            } else {
+                phases.close_local_at(at(ms));
+            }
+        }
 
-        phases.add_overlapped(&parts, Duration::from_millis(wall_ms));
+        assert2::assert!(
+            RequestPhases::duration(&phases.local_nanos) == Duration::from_millis(charged_ms)
+        );
+    }
 
-        let charged = sum_ms.min(wall_ms);
-        assert2::assert!(
-            RequestPhases::duration(&phases.local_nanos) == Duration::from_millis(5 + charged)
-        );
-        assert2::assert!(
-            RequestPhases::duration(&phases.remote_nanos) == Duration::from_millis(charged)
-        );
+    #[test]
+    fn a_dropped_interval_charges_the_local_phase() {
+        let phases = RequestPhases::default();
+        let interval = phases.open_local();
+        std::thread::sleep(Duration::from_millis(2));
+        drop(interval);
+
+        assert!(phases.local_seconds() >= 0.002);
     }
 
     #[test]
