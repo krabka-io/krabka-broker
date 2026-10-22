@@ -1,0 +1,35 @@
+"""Unit tests for `kind_smoke.axl`."""
+
+load("./kind_smoke.axl", "broker_extension", "statefulset_for_kind")
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+_PIN = "ghcr.io/krabka-io/krabka-broker@sha256:ad5195370c6e55fbb9bb5c31a2dd244c62e5b407f9f6f6e89c01a45aee2e4222"
+
+def _test_statefulset_substitution_is_narrow(_ctx):
+    source = """image: %s
+image: %s
+      spec:
+        accessModes: ["ReadWriteOnce"]
+unchanged: true
+""" % (_PIN, _PIN)
+    check_eq("kind adaptation", statefulset_for_kind(source, "local:test"), """image: local:test
+image: local:test
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: krabka-kind
+unchanged: true
+""")
+
+def _test_broker_extensions_bind_the_shared_and_ordinal_names(_ctx):
+    check_eq(
+        "broker two",
+        broker_extension(2),
+        "subjectAltName=DNS:krabka,DNS:krabka-2.krabka\nextendedKeyUsage=serverAuth,clientAuth\n",
+    )
+
+kind_smoke_tests = suite("kind-smoke", [
+    _test_statefulset_substitution_is_narrow,
+    _test_broker_extensions_bind_the_shared_and_ordinal_names,
+])
+
+test_kind_smoke = suite_task(kind_smoke_tests)

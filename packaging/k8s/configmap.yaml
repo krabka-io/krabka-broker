@@ -1,0 +1,119 @@
+# Security-sensitive broker configuration. Each ordinal gets a separate file
+# because its advertised address and certificate are part of its identity.
+# The referenced TLS Secret is deliberately not included: operators must issue
+# certificates from their own CA; the StatefulSet fails closed when it is absent.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: krabka-config
+  labels:
+    app.kubernetes.io/name: krabka
+data:
+  broker-0.toml: |
+    log_dir = "/var/lib/krabka"
+    controller_quorum_voters = [
+      "0@krabka-0.krabka:9093",
+      "1@krabka-1.krabka:9093",
+      "2@krabka-2.krabka:9093",
+    ]
+    bootstrap_servers = ["krabka:9093"]
+    inter_broker_listener_name = "INTERNAL"
+    controller_listener_protocol = "Ssl"
+    controller_server_name = "krabka"
+
+    [tls_config]
+    cert_path = "/etc/krabka/tls/broker-0.crt"
+    key_path = "/etc/krabka/tls/broker-0.key"
+    trust_roots_path = "/etc/krabka/tls/ca.crt"
+    client_ca_path = "/etc/krabka/tls/ca.crt"
+    client_auth = "Required"
+
+    [inter_broker_principal_node_ids]
+    "CN=broker-0" = 0
+    "CN=broker-1" = 1
+    "CN=broker-2" = 2
+
+    [[listeners]]
+    name = "INTERNAL"
+    bind_addr = "0.0.0.0:9092"
+    advertised = "krabka-0.krabka:9092"
+    protocol = "Ssl"
+    [listeners.tls_config]
+    cert_path = "/etc/krabka/tls/broker-0.crt"
+    key_path = "/etc/krabka/tls/broker-0.key"
+    client_ca_path = "/etc/krabka/tls/ca.crt"
+    client_auth = "Required"
+
+    [authorization]
+    type = "simple"
+    super_users = ["CN=admin", "CN=broker-0", "CN=broker-1", "CN=broker-2"]
+    allow_everyone_if_no_acl_found = false
+
+    [process]
+    roles = ["controller", "broker"]
+  broker-1.toml: |
+    log_dir = "/var/lib/krabka"
+    controller_quorum_voters = ["0@krabka-0.krabka:9093", "1@krabka-1.krabka:9093", "2@krabka-2.krabka:9093"]
+    bootstrap_servers = ["krabka:9093"]
+    inter_broker_listener_name = "INTERNAL"
+    controller_listener_protocol = "Ssl"
+    controller_server_name = "krabka"
+    [tls_config]
+    cert_path = "/etc/krabka/tls/broker-1.crt"
+    key_path = "/etc/krabka/tls/broker-1.key"
+    trust_roots_path = "/etc/krabka/tls/ca.crt"
+    client_ca_path = "/etc/krabka/tls/ca.crt"
+    client_auth = "Required"
+    [inter_broker_principal_node_ids]
+    "CN=broker-0" = 0
+    "CN=broker-1" = 1
+    "CN=broker-2" = 2
+    [[listeners]]
+    name = "INTERNAL"
+    bind_addr = "0.0.0.0:9092"
+    advertised = "krabka-1.krabka:9092"
+    protocol = "Ssl"
+    [listeners.tls_config]
+    cert_path = "/etc/krabka/tls/broker-1.crt"
+    key_path = "/etc/krabka/tls/broker-1.key"
+    client_ca_path = "/etc/krabka/tls/ca.crt"
+    client_auth = "Required"
+    [authorization]
+    type = "simple"
+    super_users = ["CN=admin", "CN=broker-0", "CN=broker-1", "CN=broker-2"]
+    allow_everyone_if_no_acl_found = false
+    [process]
+    roles = ["controller", "broker"]
+  broker-2.toml: |
+    log_dir = "/var/lib/krabka"
+    controller_quorum_voters = ["0@krabka-0.krabka:9093", "1@krabka-1.krabka:9093", "2@krabka-2.krabka:9093"]
+    bootstrap_servers = ["krabka:9093"]
+    inter_broker_listener_name = "INTERNAL"
+    controller_listener_protocol = "Ssl"
+    controller_server_name = "krabka"
+    [tls_config]
+    cert_path = "/etc/krabka/tls/broker-2.crt"
+    key_path = "/etc/krabka/tls/broker-2.key"
+    trust_roots_path = "/etc/krabka/tls/ca.crt"
+    client_ca_path = "/etc/krabka/tls/ca.crt"
+    client_auth = "Required"
+    [inter_broker_principal_node_ids]
+    "CN=broker-0" = 0
+    "CN=broker-1" = 1
+    "CN=broker-2" = 2
+    [[listeners]]
+    name = "INTERNAL"
+    bind_addr = "0.0.0.0:9092"
+    advertised = "krabka-2.krabka:9092"
+    protocol = "Ssl"
+    [listeners.tls_config]
+    cert_path = "/etc/krabka/tls/broker-2.crt"
+    key_path = "/etc/krabka/tls/broker-2.key"
+    client_ca_path = "/etc/krabka/tls/ca.crt"
+    client_auth = "Required"
+    [authorization]
+    type = "simple"
+    super_users = ["CN=admin", "CN=broker-0", "CN=broker-1", "CN=broker-2"]
+    allow_everyone_if_no_acl_found = false
+    [process]
+    roles = ["controller", "broker"]

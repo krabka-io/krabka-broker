@@ -1,0 +1,162 @@
+"""Check the secure-by-default contract of the reference Kubernetes manifests.
+
+This is deliberately a repository task rather than a Bazel test wrapper: it
+reads deployment source directly, has no interpreter/runtime dependency, and
+keeps the policy assertions unit-testable beside the task.
+
+    aspect check-k8s-security
+"""
+
+load("./repo.axl", "is_file")
+
+_HEX = "0123456789abcdef"
+_IMAGE_PREFIX = "ghcr.io/krabka-io/krabka-broker@sha256:"
+
+_FILES = [
+    "configmap.yaml",
+    "networkpolicy.yaml",
+    "service.yaml",
+    "statefulset.yaml",
+]
+
+def _is_digest_image(value):
+    if not value.startswith(_IMAGE_PREFIX):
+        return False
+    digest = value[len(_IMAGE_PREFIX):]
+    return len(digest) == 64 and all([digest[index] in _HEX for index in range(len(digest))])
+
+def _literal_blocks(configmap):
+    """The three literal broker TOML bodies, keyed by file name."""
+    lines = configmap.splitlines()
+    starts = []
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if line.startswith("  broker-") and stripped.endswith(".toml: |"):
+            starts.append((index, stripped.removesuffix(": |")))
+
+    blocks = {}
+    for position, (start, name) in enumerate(starts):
+        end = starts[position + 1][0] if position + 1 < len(starts) else len(lines)
+        body = []
+        for line in lines[start + 1:end]:
+            body.append(line[4:] if line.startswith("    ") else line)
+        blocks[name] = "\n".join(body)
+    return blocks
+
+def security_problems(stateful, services, policy, configmap):
+    """Every violated security invariant, in deterministic order."""
+    problems = []
+
+    images = []
+    for line in stateful.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("image: "):
+            images.append(stripped.removeprefix("image: "))
+    if len(images) != 2:
+        problems.append("StatefulSet must have exactly formatter and broker images")
+    elif images[0] != images[1]:
+        problems.append("formatter and broker images must match")
+    elif not _is_digest_image(images[0]):
+        problems.append("broker image must be pinned to a ghcr.io sha256 digest")
+    if ":dev" in stateful:
+        problems.append("StatefulSet must not use a mutable development image")
+
+    for token, message in [
+        ("--config-file=/etc/krabka/config/broker-$(KRABKA_POD_INDEX).toml", "broker must require its ordinal security config"),
+        ("secretName: krabka-tls", "StatefulSet must require the TLS Secret"),
+        ("mountPath: /etc/krabka/config", "StatefulSet must mount broker configuration"),
+        ("mountPath: /etc/krabka/tls", "StatefulSet must mount TLS material"),
+    ]:
+        if token not in stateful:
+            problems.append(message)
+
+    blocks = _literal_blocks(configmap)
+    expected_names = ["broker-%d.toml" % ordinal for ordinal in range(3)]
+    if sorted(blocks.keys()) != expected_names:
+        problems.append("ConfigMap must hold exactly one config per broker ordinal")
+    else:
+        bindings = ["\"CN=broker-%d\" = %d" % (ordinal, ordinal) for ordinal in range(3)]
+        super_users = "super_users = [\"CN=admin\", \"CN=broker-0\", \"CN=broker-1\", \"CN=broker-2\"]"
+        for ordinal in range(3):
+            name = "broker-%d.toml" % ordinal
+            body = blocks[name]
+            required = [
+                'controller_listener_protocol = "Ssl"',
+                "[tls_config]",
+                'trust_roots_path = "/etc/krabka/tls/ca.crt"',
+                "[inter_broker_principal_node_ids]",
+                'advertised = "krabka-%d.krabka:9092"' % ordinal,
+                'protocol = "Ssl"',
+                "[listeners.tls_config]",
+                "[authorization]",
+                'type = "simple"',
+                super_users,
+                "allow_everyone_if_no_acl_found = false",
+            ] + bindings
+            for token in required:
+                if token not in body:
+                    problems.append("%s lacks %s" % (name, token))
+
+            # Once for the controller and once for the Kafka listener.
+            if body.count('client_auth = "Required"') != 2:
+                problems.append("%s must require client certificates on both listeners" % name)
+            if "ANONYMOUS" in body:
+                problems.append("%s must not privilege ANONYMOUS" % name)
+
+    exposed = []
+    for line in services.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("port: "):
+            exposed.append(stripped.removeprefix("port: "))
+    if exposed != ["9092", "9092"]:
+        problems.append("Services must expose only Kafka port 9092")
+
+    for token, message in [
+        ("port: 9093", "NetworkPolicy must restrict the controller port"),
+        ('krabka.io/client: "true"', "Kafka access must require the client label"),
+        ('krabka.io/monitor: "true"', "metrics access must require the monitor label"),
+        ("app.kubernetes.io/name: krabka", "controller access must select broker pods"),
+    ]:
+        if token not in policy:
+            problems.append(message)
+
+    return sorted(problems)
+
+def _resolve(ctx, given):
+    if not given:
+        return ctx.std.env.bazel_root_dir() + "/packaging/k8s"
+    if given.startswith("/"):
+        return given
+    return ctx.std.env.current_dir() + "/" + given
+
+def _impl(ctx: TaskContext) -> int:
+    root = _resolve(ctx, ctx.args.root)
+    paths = {name: root + "/" + name for name in _FILES}
+    for name, path in paths.items():
+        if not is_file(ctx.std.fs, path):
+            ctx.std.io.stderr.write("%s: not a file\n" % path)
+            return 1
+
+    problems = security_problems(
+        ctx.std.fs.read_to_string(paths["statefulset.yaml"]),
+        ctx.std.fs.read_to_string(paths["service.yaml"]),
+        ctx.std.fs.read_to_string(paths["networkpolicy.yaml"]),
+        ctx.std.fs.read_to_string(paths["configmap.yaml"]),
+    )
+    for problem in problems:
+        ctx.std.io.stderr.write("check-k8s-security: %s\n" % problem)
+    if problems:
+        return 1
+    ctx.std.io.stdout.write("check-k8s-security: secure reference manifest contract satisfied\n")
+    return 0
+
+check_k8s_security = task(
+    summary = "Check the secure-by-default Kubernetes manifest contract",
+    implementation = _impl,
+    args = {
+        "root": args.string(
+            default = "",
+            description = "Manifest directory; defaults to packaging/k8s.",
+        ),
+    },
+)
