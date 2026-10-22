@@ -70,6 +70,46 @@ async fn persisted_start(broker: &krabka_broker::BrokerHandle, tid: uuid::Uuid) 
     (start, delivery_complete_count)
 }
 
+/// The leader epoch the share state of partition 0 holds. Initialization
+/// stores 0, and each load by a partition leader raises it to that leader's
+/// epoch, which `DescribeShareGroupOffsets` then reports.
+async fn stored_leader_epoch(broker: &krabka_broker::BrokerHandle, tid: uuid::Uuid) -> i32 {
+    let (_, leader_epoch, _, _) = broker
+        .share_state_summary_for_test(GROUP, tid, 0)
+        .await
+        .expect("initialized share state");
+    leader_epoch
+}
+
+/// Waits until the image elects this broker leader of `t-0` at an epoch above
+/// `above`, and the local partition runs at that epoch, then returns it.
+///
+/// The epoch is read rather than assumed. A broker that misses heartbeats on
+/// a loaded host can be fenced and re-elected, and each election raises the
+/// epoch, so it is not always 0 after the first boot or 1 after a restart.
+async fn settled_leader_epoch(
+    broker: &krabka_broker::BrokerHandle,
+    above: Option<LeaderEpoch>,
+) -> LeaderEpoch {
+    let node = NodeId(broker.node_id());
+    broker
+        .wait_for_image(move |image| {
+            image.partition("t", 0).is_some_and(|p| {
+                p.leader == node && above.is_none_or(|epoch| p.leader_epoch > epoch)
+            })
+        })
+        .await;
+    let epoch = broker
+        .controller_image_for_test()
+        .partition("t", 0)
+        .expect("t-0 is in the image")
+        .leader_epoch;
+    broker
+        .wait_until_local_partition_target("t", 0, node, epoch)
+        .await;
+    epoch
+}
+
 /// Joins `g1`, waits for its share state, and opens a share session with a
 /// fetch. With `latest` and no record above the high watermark, the fetch
 /// loads the share partition and acquires nothing.
@@ -107,12 +147,19 @@ async fn join_and_load(
 ///    the records produced after it, 5 and 6, only.
 /// 3. Accepting 6 alone leaves the SPSO at 5, so the persisted state is start
 ///    5 with one delivered record, and the lag is `7 - 5 - 1`. The restart
-///    raised the partition's leader epoch to 1.
+///    re-elected the broker at a higher leader epoch, and the second load
+///    stored it.
+///
+/// Each load stores the epoch of the leader that ran it, and Describe reports
+/// the stored epoch. The test reads the epochs instead of assuming 0 and 1,
+/// because a fence and re-election on a loaded host raises them too.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unwritten_start_is_resolved_again_and_the_first_ack_persists_it() {
     let dir = restart_directory().await;
     let log_dir = dir.path.clone();
     let tid;
+    let first_epoch;
+    let before_restart;
     {
         let (broker, client, topic) = start_topic()
             .cfg(broker_config(log_dir.clone()))
@@ -129,8 +176,11 @@ async fn an_unwritten_start_is_resolved_again_and_the_first_ack_persists_it() {
             .call()
             .await;
 
+        let leading = settled_leader_epoch(&broker, None).await;
         join_and_load(&broker, &client, tid).await;
 
+        first_epoch = stored_leader_epoch(&broker, tid).await;
+        assert!(first_epoch >= leading.0);
         let first_leader = (
             persisted_start(&broker, tid).await.0,
             describe_offsets(&client, GROUP, "t", vec![0]).await,
@@ -139,7 +189,7 @@ async fn an_unwritten_start_is_resolved_again_and_the_first_ack_persists_it() {
             first_leader
                 == (
                     UNINITIALIZED_START_OFFSET,
-                    described(tid, (UNINITIALIZED_START_OFFSET, 0, -1))
+                    described(tid, (UNINITIALIZED_START_OFFSET, first_epoch, -1))
                 )
         );
 
@@ -149,17 +199,20 @@ async fn an_unwritten_start_is_resolved_again_and_the_first_ack_persists_it() {
             .count(2)
             .call()
             .await;
+        before_restart = broker
+            .controller_image_for_test()
+            .partition("t", 0)
+            .expect("t-0 is in the image")
+            .leader_epoch;
         broker.shutdown().await;
     }
 
     // The restart keeps the group's `share.auto.offset.reset=latest`.
     let (broker, client) = restart_broker(log_dir).await;
-    // The rejoined broker leads the partition at epoch 0 until the controller
-    // re-elects it at epoch 1. Loading or acknowledging before then reads or
-    // writes the share state at the old epoch.
-    broker
-        .wait_until_local_partition_target("t", 0, NodeId(broker.node_id()), LeaderEpoch(1))
-        .await;
+    // The rejoined broker leads the partition at its old epoch until the
+    // controller re-elects it above that. Loading or acknowledging before then
+    // reads or writes the share state at the old epoch.
+    let leading = settled_leader_epoch(&broker, Some(before_restart)).await;
     let member = join_and_load(&broker, &client, tid).await;
     assert!(persisted_start(&broker, tid).await.0 == UNINITIALIZED_START_OFFSET);
     produce_n()
@@ -195,10 +248,13 @@ async fn an_unwritten_start_is_resolved_again_and_the_first_ack_persists_it() {
         .wait_until_share_delivery_complete(GROUP, tid, 0, 1)
         .await;
 
+    let second_epoch = stored_leader_epoch(&broker, tid).await;
+    assert!(second_epoch >= leading.0);
+    assert!(second_epoch > first_epoch);
     let durable = (
         persisted_start(&broker, tid).await,
         describe_offsets(&client, GROUP, "t", vec![0]).await,
     );
-    assert!(durable == ((5, 1), described(tid, (5, 1, 1))));
+    assert!(durable == ((5, 1), described(tid, (5, second_epoch, 1))));
     broker.shutdown().await;
 }
