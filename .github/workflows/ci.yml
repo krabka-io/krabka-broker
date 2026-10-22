@@ -84,22 +84,41 @@ jobs:
       CI_BAZEL_SCRIPT: |
         set -euo pipefail
 
-        # One invocation builds `//...` and runs every test that needs no
-        # Docker daemon and asserts on no wall clock, so test execution overlaps
-        # the rest of the build instead of waiting for all of it. That covers
-        # the rustdoc targets (none is `manual`), `//packaging:image_binaries_test`
-        # and the Stateright models but `kraft_model_test`, which is
-        # timing-sensitive and runs below. There are no test targets outside
-        # `//crates` and `//packaging`.
+        # Build `//...` first, then run every test that needs no Docker daemon
+        # and asserts on no wall clock. The rustdoc targets (none is `manual`),
+        # `//packaging:image_binaries_test` and the Stateright models are among
+        # them, all but `kraft_model_test`, which is timing-sensitive and runs
+        # below. There are no test targets outside `//crates` and `//packaging`.
+        #
+        # Building first, rather than letting `bazel test` overlap the two,
+        # keeps rustc off the cores the suites need: broker suites that wait on
+        # heartbeats starved beside a compile on the remote runner and failed
+        # at random -- `CreateTopics` answering 38 ("All brokers are currently
+        # fenced"), `COORDINATOR_NOT_AVAILABLE`, 30 s image-wait timeouts -- on
+        # #1622 and #1632, while every one passes alone. The build passes the
+        # lint flag `.bazelrc` sets for `test` only, so both commands share one
+        # configuration and the second reuses the first's analysis.
+        #
+        # `--local_test_jobs=4` keeps the four-at-a-time concurrency these
+        # suites had on a four-core GitHub runner; the 16-core remote runner
+        # would otherwise run 16 at once.
         #
         # The test tag filter is named in full because `--test_tag_filters` is
         # last-wins: `-timing-sensitive` alone would drop the `-docker` that
         # `.bazelrc` sets for `test`. The remote cache holds test results, so a
         # change that leaves a target's inputs alone does not run it again.
-        echo "::group::build and daemon-free tests"
+        echo "::group::build"
+        bazel build \
+          --build_tag_filters=-docker \
+          --@aspect_rules_lint//lint:fail_on_violation \
+          //...
+        echo "::endgroup::"
+
+        echo "::group::daemon-free tests"
         bazel test \
           --build_tag_filters=-docker \
           --test_tag_filters=-docker,-timing-sensitive \
+          --local_test_jobs=4 \
           //...
         echo "::endgroup::"
 
