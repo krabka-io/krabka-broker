@@ -92,6 +92,7 @@ def security_problems(stateful, services, policy, configmap):
                 'type = "simple"',
                 super_users,
                 "allow_everyone_if_no_acl_found = false",
+                'inter_broker_server_name = "krabka"',
             ] + bindings
             for token in required:
                 if token not in body:

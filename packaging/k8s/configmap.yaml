@@ -51,6 +51,11 @@ data:
 
     [process]
     roles = ["controller", "broker"]
+
+    # Replica fetches verify the leader against this name, so it must be a
+    # SAN on every broker certificate. The default is "localhost".
+    [runtime]
+    inter_broker_server_name = "krabka"
   broker-1.toml: |
     log_dir = "/var/lib/krabka"
     controller_quorum_voters = ["0@krabka-0.krabka:9093", "1@krabka-1.krabka:9093", "2@krabka-2.krabka:9093"]
@@ -84,6 +89,11 @@ data:
     allow_everyone_if_no_acl_found = false
     [process]
     roles = ["controller", "broker"]
+
+    # Replica fetches verify the leader against this name, so it must be a
+    # SAN on every broker certificate. The default is "localhost".
+    [runtime]
+    inter_broker_server_name = "krabka"
   broker-2.toml: |
     log_dir = "/var/lib/krabka"
     controller_quorum_voters = ["0@krabka-0.krabka:9093", "1@krabka-1.krabka:9093", "2@krabka-2.krabka:9093"]
@@ -117,3 +127,8 @@ data:
     allow_everyone_if_no_acl_found = false
     [process]
     roles = ["controller", "broker"]
+
+    # Replica fetches verify the leader against this name, so it must be a
+    # SAN on every broker certificate. The default is "localhost".
+    [runtime]
+    inter_broker_server_name = "krabka"

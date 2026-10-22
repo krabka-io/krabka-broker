@@ -33,6 +33,8 @@ def _broker(ordinal):
     type = "simple"
     super_users = ["CN=admin", "CN=broker-0", "CN=broker-1", "CN=broker-2"]
     allow_everyone_if_no_acl_found = false
+    [runtime]
+    inter_broker_server_name = "krabka"
 """ % (ordinal, ordinal)
 
 def _configmap():
@@ -92,6 +94,12 @@ def _test_missing_binding_and_mtls_fail(_ctx):
         "broker-0.toml must require client certificates on both listeners",
     ])
 
+def _test_default_inter_broker_server_name_fails(_ctx):
+    changed = _configmap().replace('    inter_broker_server_name = "krabka"\n', "", 1)
+    check_eq("server name", _problems(configmap = changed), [
+        "broker-0.toml lacks inter_broker_server_name = \"krabka\"",
+    ])
+
 def _test_service_and_policy_exposure_fail(_ctx):
     services = _SERVICES + "    port: 9093\n"
     policy = _POLICY.replace("port: 9093\n", "").replace('krabka.io/monitor: "true"\n', "")
@@ -106,6 +114,7 @@ check_k8s_security_tests = suite("check-k8s-security", [
     _test_mutable_or_mismatched_images_fail,
     _test_plaintext_and_anonymous_configs_fail,
     _test_missing_binding_and_mtls_fail,
+    _test_default_inter_broker_server_name_fails,
     _test_service_and_policy_exposure_fail,
 ])
 
