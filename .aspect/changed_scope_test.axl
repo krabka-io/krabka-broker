@@ -54,6 +54,7 @@ def _test_the_build_directories_need_the_rust_jobs(_ctx):
     check_eq("rule definitions", touches_rust(["bazel/defs.bzl"]), True)
     check_eq("image", touches_rust(["packaging/base.apko.yaml"]), True)
     check_eq("toolchains", touches_rust(["tools/lint/linters.bzl"]), True)
+    check_eq("cargo config", touches_rust([".cargo/config.toml"]), True)
 
 def _test_docs_that_are_rust_test_data_need_the_rust_jobs(_ctx):
     # Every one of these is named in the `data` of a `//crates/broker` test

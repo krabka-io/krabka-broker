@@ -57,9 +57,11 @@ BUILD_FILES = [
 # Directories that feed the build without being crates. `bazel/` holds the rule
 # definitions every `BUILD.bazel` calls, `packaging/` builds the image the
 # container suites load, and `tools/` holds the lint aspects and the toolchains
-# the actions run under. An edit in any of them changes what a Rust job does
-# without touching a `.rs` file.
-BUILD_PREFIXES = ["bazel/", "packaging/", "tools/"]
+# the actions run under. `.cargo/` holds the Cargo config, whose per-target
+# rustflags (the wasm lane's `tokio_unstable` among them) change what Cargo
+# compiles. An edit in any of them changes what a Rust job does without
+# touching a `.rs` file.
+BUILD_PREFIXES = [".cargo/", "bazel/", "packaging/", "tools/"]
 
 # Generated artifacts and example configs that live under `docs/` but are Rust
 # test inputs. `crates/broker/BUILD.bazel` names every one of them in the
