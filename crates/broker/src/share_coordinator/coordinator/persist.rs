@@ -243,7 +243,7 @@ impl ShareCoordinator {
     }
 
     /// Whether `part` leads on this broker at the leader epoch of `term`.
-    fn leads(&self, part: &Partition, term: Term) -> bool {
+    pub(super) fn leads(&self, part: &Partition, term: Term) -> bool {
         part.current_leader.load(Ordering::Acquire) == self.node_id.0
             && part.current_leader_epoch.load(Ordering::Acquire) == term.leader_epoch
     }
