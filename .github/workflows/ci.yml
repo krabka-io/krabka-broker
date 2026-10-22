@@ -406,7 +406,8 @@ jobs:
 
             if [ "${RUN_NEXTEST}" = "true" ]; then
               if ! command -v cargo-nextest >/dev/null; then
-                curl -LsSf --retry 5 --retry-all-errors https://get.nexte.st/latest/linux \
+                # No `--retry-all-errors`: the remote runner's curl predates it.
+                curl -LsSf --retry 5 https://get.nexte.st/latest/linux \
                   | tar zxf - -C "${CARGO_HOME:-${HOME}/.cargo}/bin"
               fi
               cargo nextest run --workspace --profile ci
