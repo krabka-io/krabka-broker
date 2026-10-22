@@ -450,7 +450,10 @@ fn a_local_eviction_leaves_a_reopened_log_with_no_floor_to_refuse_against() {
 #[test]
 fn a_delete_records_floor_under_the_local_segments_survives_a_reopen() {
     let dir = tempdir().unwrap();
-    let config = LogConfig::default();
+    let config = LogConfig {
+        remote_storage_enable: true,
+        ..LogConfig::default()
+    };
     let mut log = rolled_log(dir.path(), &config);
     let exports = log.tierable_segments();
     let deleted_through = exports[0].base_offset + 1;

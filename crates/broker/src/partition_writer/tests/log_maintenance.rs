@@ -172,3 +172,40 @@ async fn a_produce_completes_while_retired_files_are_being_deleted() {
     drop(tx);
     writer.await.unwrap();
 }
+
+/// A log start that retention moved is written on a timer, Kafka's
+/// `log.flush.start.offset.checkpoint.interval.ms`, rather than by the pass
+/// that moved it. An idle writer wakes for it with no message to prompt it.
+#[tokio::test]
+async fn an_idle_writer_checkpoints_the_start_retention_moved_once_it_is_due() {
+    let dir = tempdir().unwrap();
+    let checkpoint = krabka_log::name::log_start_offset_checkpoint_path(dir.path());
+    let mut log = Log::open(dir.path(), LogConfig {
+        segment_size: krabka_units::bytes(1),
+        retention_size: Some(krabka_units::bytes(0)),
+        file_delete_delay: krabka_units::millis(0),
+        start_offset_checkpoint_interval: krabka_units::millis(20),
+        ..LogConfig::default()
+    })
+    .unwrap();
+    for _ in 0..3 {
+        log.append(&mut sample_batch().call()).unwrap();
+    }
+    log.set_log_start_offset(Offset(1)).unwrap();
+    log.tick(std::time::SystemTime::now(), Offset(2)).unwrap();
+    assert!(log.log_start_offset() == Offset(2));
+    assert!(std::fs::read_to_string(&checkpoint).unwrap() == "0\n1\n");
+    let log = std::sync::Arc::new(std::sync::Mutex::new(log));
+    let (tx, writer) = spawn_default_writer(dir.path(), log.clone());
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while std::fs::read_to_string(&checkpoint).unwrap() != "0\n2\n" {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the writer checkpoints the start once the interval passes");
+
+    drop(tx);
+    writer.await.unwrap();
+}

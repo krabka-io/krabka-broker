@@ -40,7 +40,8 @@
 //! deleted for a compliance request, and `ListOffsets EARLIEST` would move back
 //! down. Apache Kafka keeps the same value, per log dir rather than per
 //! partition directory, on a `log.flush.start.offset.checkpoint.interval.ms`
-//! schedule; krabka writes it on the trim itself.
+//! schedule. krabka writes a trim's start before the trim returns, and only a
+//! start that retention moved to a segment boundary waits for that schedule.
 //!
 //! This trim writes no metadata record, so there is nothing for the consumed
 //! proposal to ride beside. The broker appends the consume on its own and only

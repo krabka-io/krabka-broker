@@ -69,7 +69,9 @@ impl DueDeletions {
 }
 
 impl Log {
-    /// Flush dirty data and reclaim retired files whose deadlines have passed.
+    /// Flush dirty data, write a log start retention moved once its
+    /// checkpoint is due, and reclaim retired files whose deadlines have
+    /// passed.
     ///
     /// # Errors
     /// Returns the first flush or file deletion failure.
@@ -79,6 +81,7 @@ impl Log {
     pub fn maintain(&mut self, now: SystemTime) -> Result<(), LogError> {
         self.rollover_flusher.check()?;
         self.flush_if_due(Instant::now())?;
+        self.checkpoint_log_start_if_due()?;
         self.reap_deleted_files(now)
     }
 
@@ -86,8 +89,8 @@ impl Log {
     /// passed are handed back rather than deleted under `&mut self`.
     ///
     /// # Errors
-    /// Returns the first flush failure. The retired files then stay with the
-    /// log.
+    /// Returns the first flush or checkpoint failure. The retired files then
+    /// stay with the log.
     ///
     /// # Panics
     /// Panics when the configuration lock is poisoned.
@@ -97,6 +100,7 @@ impl Log {
     ) -> Result<DueDeletions, LogError> {
         self.rollover_flusher.check()?;
         self.flush_if_due(Instant::now())?;
+        self.checkpoint_log_start_if_due()?;
         Ok(self.take_due_deletions(now))
     }
 
@@ -123,7 +127,8 @@ impl Log {
             }));
     }
 
-    /// Time until the next flush or retired-file deadline, or `None` when idle.
+    /// Time until the next flush, log-start checkpoint or retired-file
+    /// deadline, or `None` when idle.
     ///
     /// # Panics
     /// Panics when the configuration lock is poisoned.
@@ -132,7 +137,11 @@ impl Log {
         self.maintenance_delay_at(now, Instant::now())
     }
 
-    fn maintenance_delay_at(&self, now: SystemTime, elapsed: Instant) -> Option<Duration> {
+    pub(super) fn maintenance_delay_at(
+        &self,
+        now: SystemTime,
+        elapsed: Instant,
+    ) -> Option<Duration> {
         let config = self.config.read().unwrap();
         let flush = if self.unflushed_messages == 0 {
             None
@@ -149,6 +158,7 @@ impl Log {
         };
         flush
             .into_iter()
+            .chain(self.start_checkpoint_delay(elapsed))
             .chain(
                 self.pending_deletes
                     .iter()

@@ -51,7 +51,8 @@ impl Log {
     ///
     /// This method also fsyncs the log directory after it creates a new
     /// segment file. The segment therefore stays reachable after a crash on
-    /// filesystems that require a parent-directory fsync.
+    /// filesystems that require a parent-directory fsync. A log start that
+    /// retention moved and has not yet checkpointed is written too.
     ///
     /// # Errors
     /// Returns a [`LogError`] if the underlying segment or directory flush fails.
@@ -71,6 +72,9 @@ impl Log {
             Self::sync_log_dir(&*self.io, &self.dir)?;
             self.dir_sync_needed = false;
         }
+        // The segments the start follows are durable now, so the start they
+        // record is too.
+        self.flush_log_start_checkpoint()?;
         self.unflushed_messages = 0;
         self.last_flush = std::time::Instant::now();
         Ok(())

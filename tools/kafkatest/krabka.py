@@ -113,6 +113,7 @@ RUNTIME_KEYS = {
     "group.streams.session.timeout.ms": ("streams_group_session_timeout", "ms"),
     "group.streams.task.offset.interval.ms": ("streams_group_task_offset_interval", "ms"),
     "leader.imbalance.check.interval.seconds": ("leader_imbalance_check_interval", "s"),
+    "log.flush.start.offset.checkpoint.interval.ms": ("log_flush_start_offset_checkpoint_interval", "ms"),
     "log.retention.check.interval.ms": ("log_retention_check_interval", "ms"),
     "log.segment.bytes": ("log_segment_bytes", "B"),
     "max.connections": ("max_connections", ""),

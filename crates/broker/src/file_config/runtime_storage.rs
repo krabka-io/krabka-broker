@@ -67,7 +67,9 @@ impl RuntimeFileConfig {
             runtime => cfg;
             whole_bytes_u64: log_segment_bytes => log_config.segment_size;
             kafka_int_bytes: message_max_bytes => log_config.max_message_size;
-            positive_time: log_delivery_clock_uncertainty => log_config.delivery_clock_uncertainty;
+            positive_time: log_delivery_clock_uncertainty => log_config.delivery_clock_uncertainty,
+                log_flush_start_offset_checkpoint_interval
+                    => log_config.start_offset_checkpoint_interval;
         }
         Ok(())
     }
@@ -205,6 +207,31 @@ mod tests {
                 file.apply_to(&mut cfg)
                     .ok()
                     .map(|()| cfg.log_config.tail_cache_size)
+            });
+        assert2::assert!(applied == expected, "{line}");
+    }
+
+    /// A zero interval is refused: the checkpoint runs on a timer. An omitted
+    /// key keeps Kafka's default of one minute.
+    #[yare::parameterized(
+        five_seconds = {
+            "log_flush_start_offset_checkpoint_interval = \"5s\"\n",
+            Some(krabka_units::secs(5)),
+        },
+        zero = { "log_flush_start_offset_checkpoint_interval = \"0ms\"\n", None },
+        default = { "", Some(krabka_units::secs(60)) },
+    )]
+    fn log_flush_start_offset_checkpoint_interval_round_trips_into_the_log_config(
+        line: &str,
+        expected: Option<krabka_units::Time>,
+    ) {
+        let applied = toml::from_str::<FileConfig>(&format!("[runtime]\n{line}"))
+            .ok()
+            .and_then(|file| {
+                let mut cfg = BrokerConfig::default();
+                file.apply_to(&mut cfg)
+                    .ok()
+                    .map(|()| cfg.log_config.start_offset_checkpoint_interval)
             });
         assert2::assert!(applied == expected, "{line}");
     }

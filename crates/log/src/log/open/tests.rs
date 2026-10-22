@@ -531,27 +531,34 @@ fn open_rewrites_a_checkpoint_past_the_log_end_so_appends_cannot_revive_it() {
 }
 
 #[yare::parameterized(
-    checkpoint_below_derived_start = { Offset(1), Offset(1), Offset(2) },
-    checkpoint_past_log_end = { Offset(9), Offset(3), Offset(3) },
+    checkpoint_below_derived_start_tiered = { Offset(1), true, Offset(1), Offset(1) },
+    checkpoint_below_derived_start_local = { Offset(1), false, Offset(2), Offset(1) },
+    checkpoint_past_log_end = { Offset(9), false, Offset(3), Offset(3) },
 )]
 fn open_resolves_a_checkpoint_against_what_the_log_holds(
     checkpointed: Offset,
+    remote_storage_enable: bool,
     expected_start: Offset,
-    expected_local_start: Offset,
+    expected_file: Offset,
 ) {
-    // Reopening caps the checkpoint at the log end and leaves it alone below
-    // the derived start.
+    // Reopening caps the checkpoint at the log end, and floors it at the
+    // derived start only on a log without remote storage.
     //
     // Past the log end, every record still present is below a start that was
     // already acknowledged -- they are all trimmed -- so the log start is the
     // log end and the log reads empty. A crash between a trim and the fsync of
-    // the records it trimmed past arrives there.
+    // the records it trimmed past arrives there. The open rewrites the file,
+    // or appends would bring the stale value back in range.
     //
-    // Below the derived start the checkpoint stands, because KIP-405 gives a
-    // tiered partition a global floor that belongs under its oldest local
-    // segment: raising it to meet the surviving files would hide the band the
-    // archive serves. `local_log_start_offset` is the floor that follows the
-    // files, and it is what a local read is measured against either way.
+    // Below the derived start, a local log starts at its first segment, as
+    // Kafka's `LogLoader` starts it: retention checkpoints the start it moves
+    // on a timer, so a crash can leave an older value behind. The file is
+    // left for that timer. On a tiered partition the checkpoint stands,
+    // because KIP-405 gives it a global floor that belongs under its oldest
+    // local segment: raising it to meet the surviving files would hide the
+    // band the archive serves. `local_log_start_offset` is the floor that
+    // follows the files, and it is what a local read is measured against
+    // either way.
     let dir = tempdir().unwrap();
     {
         let mut log = rolling_test_log(dir.path());
@@ -563,15 +570,17 @@ fn open_resolves_a_checkpoint_against_what_the_log_holds(
     }
     write(&FileIo, dir.path(), checkpointed).unwrap();
 
-    let log = open_log(dir.path());
+    let log = Log::open(dir.path(), LogConfig {
+        remote_storage_enable,
+        ..LogConfig::default()
+    })
+    .unwrap();
 
     assert2::assert!(log.log_start_offset() == expected_start);
-    assert2::assert!(log.local_log_start_offset() == expected_local_start);
-    // Whatever it resolved to is what is now on disk, so the next open
-    // reads a value that already agrees with the log.
+    assert2::assert!(log.local_log_start_offset() == Offset(2).max(expected_start));
     drop(log);
     assert2::assert!(
-        crate::log_start_offset_checkpoint::read(dir.path()).unwrap() == Some(expected_start)
+        crate::log_start_offset_checkpoint::read(dir.path()).unwrap() == Some(expected_file)
     );
 }
 

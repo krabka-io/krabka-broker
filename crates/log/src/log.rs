@@ -42,6 +42,7 @@ mod preallocation;
 mod read;
 mod rollover_flush;
 mod stamp;
+mod start_checkpoint;
 mod state;
 mod sync;
 #[cfg(test)]
@@ -127,7 +128,7 @@ pub struct Log {
     /// The segment names witness only the local half. [`Log::open`] derives
     /// this pointer from them and then restores the durable half from
     /// `log-start-offset-checkpoint`, which [`Log::set_log_start_offset`]
-    /// writes.
+    /// writes at once and retention writes on a timer.
     start_offset: Offset,
 
     /// Whether [`Self::start_offset`] is a floor someone deleted up to, rather
@@ -145,6 +146,15 @@ pub struct Log {
     /// the tier still holds. [`Log::established_log_start`] is what they ask
     /// instead.
     start_offset_established: bool,
+
+    /// The log start `log-start-offset-checkpoint` holds on disk, or `None`
+    /// when there is no such file.
+    checkpointed_start: Option<Offset>,
+
+    /// When the start that retention moved is due in
+    /// `log-start-offset-checkpoint`, or `None` when the file is current. See
+    /// [`Log::checkpoint_log_start_if_due`].
+    start_checkpoint_due: Option<std::time::Instant>,
 
     /// How many of the leading sealed segments are a *clean* prefix, because
     /// a compaction pass produced them and nothing has appended to the log's
