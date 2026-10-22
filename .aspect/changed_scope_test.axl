@@ -1,6 +1,6 @@
 """Unit tests for `changed_scope.axl`."""
 
-load("./changed_scope.axl", "decide", "touches_rust")
+load("./changed_scope.axl", "decide", "output_lines", "touches_kubernetes", "touches_proofs", "touches_rust")
 load("./testing.axl", "check_eq", "suite", "suite_task")
 
 # A diff that changes nothing a compiler reads: this is the shape of the pull
@@ -108,17 +108,67 @@ def _test_an_empty_diff_does_not_need_the_rust_jobs(_ctx):
     check_eq("no paths", touches_rust([]), False)
     check_eq("blank lines", touches_rust(["", "   "]), False)
 
+def _test_broker_source_alone_skips_kubernetes_and_proofs(_ctx):
+    # The common pull request: the kind smoke test and the proofs wait for the
+    # nightly, which is the trade this scope exists to make.
+    paths = ["crates/broker/src/barrier/cut.rs"]
+    check_eq("kubernetes", touches_kubernetes(paths), False)
+    check_eq("proofs", touches_proofs(paths), False)
+
+def _test_packaging_and_cluster_config_need_kubernetes(_ctx):
+    check_eq("manifest", touches_kubernetes(["packaging/k8s/statefulset.yaml"]), True)
+    check_eq("smoke script", touches_kubernetes(["packaging/k8s/kind-smoke.sh"]), True)
+    check_eq("image", touches_kubernetes(["packaging/base.apko.yaml"]), True)
+    check_eq("cluster", touches_kubernetes([".github/kind.yaml"]), True)
+
+def _test_the_proof_inputs_need_proofs(_ctx):
+    check_eq("proved crate", touches_proofs(["crates/verified/src/lib.rs"]), True)
+    check_eq("its macros", touches_proofs(["crates/macros/src/lib.rs"]), True)
+    check_eq("sessions", touches_proofs(["verif/krabka_verified_rlib/proof.json"]), True)
+    check_eq("image", touches_proofs(["tools/creusot/prove.sh"]), True)
+    check_eq("creusot pin", touches_proofs([".creusot-version"]), True)
+    check_eq("lock", touches_proofs(["Cargo.lock"]), True)
+    check_eq("toolchain", touches_proofs(["rust-toolchain.toml"]), True)
+
+def _test_a_ci_workflow_edit_runs_the_jobs_it_could_change(_ctx):
+    # The workflow edit itself carries no Rust, but it can rewrite either job,
+    # so the pull request that edits it has to run them.
+    paths = [".github/workflows/ci.yml"]
+    check_eq("rust", touches_rust(paths), False)
+    check_eq("kubernetes", touches_kubernetes(paths), True)
+    check_eq("proofs", touches_proofs(paths), True)
+
+def _test_documentation_needs_no_scoped_job(_ctx):
+    docs = [path for path in DOCS_ONLY if path != ".github/workflows/ci.yml"]
+    check_eq("scopes", decide(True, docs), {"rust": False, "kubernetes": False, "proofs": False})
+
 def _test_an_unresolvable_base_runs_everything(_ctx):
     # Fail open: a diff nobody could compute is not a diff that changed
     # nothing. Without this branch an empty `--base` would read as a
     # documentation-only change and skip the entire build.
-    check_eq("unknown diff", decide(False, []), True)
-    check_eq("unknown diff, docs listed", decide(False, DOCS_ONLY), True)
+    everything = {"rust": True, "kubernetes": True, "proofs": True}
+    check_eq("unknown diff", decide(False, []), everything)
+    check_eq("unknown diff, docs listed", decide(False, DOCS_ONLY), everything)
 
 def _test_a_resolved_base_defers_to_the_paths(_ctx):
-    check_eq("resolved and empty", decide(True, []), False)
-    check_eq("resolved and docs", decide(True, DOCS_ONLY), False)
-    check_eq("resolved and source", decide(True, ["crates/broker/src/lib.rs"]), True)
+    check_eq("resolved and empty", decide(True, []), {"rust": False, "kubernetes": False, "proofs": False})
+    check_eq(
+        "resolved and broker source",
+        decide(True, ["crates/broker/src/lib.rs"]),
+        {"rust": True, "kubernetes": False, "proofs": False},
+    )
+    check_eq(
+        "resolved and verified source",
+        decide(True, ["crates/verified/src/lib.rs"]),
+        {"rust": True, "kubernetes": False, "proofs": True},
+    )
+
+def _test_the_output_lines_name_every_scope_in_order(_ctx):
+    check_eq(
+        "lines",
+        output_lines({"proofs": True, "rust": False, "kubernetes": True}),
+        ["rust=false", "kubernetes=true", "proofs=true"],
+    )
 
 changed_scope_tests = suite("changed-scope", [
     _test_a_crate_source_needs_the_rust_jobs,
@@ -134,8 +184,14 @@ changed_scope_tests = suite("changed-scope", [
     _test_a_crate_readme_beside_a_source_still_needs_the_rust_jobs,
     _test_a_documentation_only_diff_does_not_need_the_rust_jobs,
     _test_an_empty_diff_does_not_need_the_rust_jobs,
+    _test_broker_source_alone_skips_kubernetes_and_proofs,
+    _test_packaging_and_cluster_config_need_kubernetes,
+    _test_the_proof_inputs_need_proofs,
+    _test_a_ci_workflow_edit_runs_the_jobs_it_could_change,
+    _test_documentation_needs_no_scoped_job,
     _test_an_unresolvable_base_runs_everything,
     _test_a_resolved_base_defers_to_the_paths,
+    _test_the_output_lines_name_every_scope_in_order,
 ])
 
 test_changed_scope = suite_task(changed_scope_tests)

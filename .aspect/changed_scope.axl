@@ -1,22 +1,32 @@
-"""Decide whether a change reaches the Rust build or its test inputs.
+"""Decide which of CI's path-scoped jobs a change needs.
 
-CI uses this decision to skip coverage on documentation-only pull requests.
-Build, Clippy and daemon-free tests still run. A KFC, style guide, README or
-workflow change usually cannot move the coverage numbers; source, build rules
-and test fixtures can.
+It answers three questions, one `GITHUB_OUTPUT` line each:
 
-This task asks whether anything in the diff reaches the Rust build.
+- `rust`: whether the change reaches the Rust build or its test inputs. CI
+  uses it to skip the Cargo and wasm Clippy lanes on documentation-only pull
+  requests. The Bazel build, lint and daemon-free tests still run. A KFC,
+  style guide, README or workflow change cannot move what those lanes check;
+  source, build rules and test fixtures can.
+- `kubernetes`: whether the change reaches the kind smoke test's own inputs,
+  the image packaging and the cluster manifests. A pull request that only
+  changes broker code skips it; the nightly and the release gate run it.
+- `proofs`: whether the change reaches what the Creusot proofs read, the
+  proved crate, its in-workspace dependency, the proof sessions and the proof
+  image. Anything else cannot invalidate a proof.
+
 `container-suites` separately answers which container suites a change needs.
-A wrong answer here could omit a useful coverage run, so the rules are
-deliberately generous: a file counts
-if it plausibly reaches a compiler, a linker, a Bazel rule or a test fixture,
-and only a `.md` under `crates/` is carved back out.
+A wrong answer here could omit a useful run, so the rules are deliberately
+generous: for `rust`, a file counts if it plausibly reaches a compiler, a
+linker, a Bazel rule or a test fixture, and only a `.md` under `crates/` is
+carved back out. The scheduled run takes every scope regardless, and a release
+requires a green scheduled or dispatched run, so a scope that misses a file
+delays the signal to the nightly rather than losing it.
 
 It fails open. An unresolvable `--base` -- an empty one, a shallow clone that
 does not reach the merge base, a branch force-pushed out from under the runner
--- means the diff is unknown, and an unknown diff runs coverage. The cost of
+-- means the diff is unknown, and an unknown diff runs every scope. The cost of
 being wrong in that direction is one slower pull request; the other direction
-can hide a coverage regression.
+can hide a regression until the nightly.
 
     aspect changed-scope --base origin/main
 """
@@ -75,6 +85,30 @@ BUILD_PREFIXES = ["bazel/", "packaging/", "tools/"]
 DATA_FILES = ["docs/config-reference.md", "docs/config-schema.json"]
 DATA_PREFIXES = ["bench/scenarios/", "docs/examples/", "docs/operations/"]
 
+# The kind smoke test's inputs. `packaging/` builds the image it loads and
+# holds the manifests and the script it applies; `.github/kind.yaml` shapes
+# the cluster. The workflow itself is here so that an edit to the job runs the
+# job it edits.
+CI_WORKFLOW = ".github/workflows/ci.yml"
+KUBERNETES_FILES = [".github/kind.yaml", CI_WORKFLOW]
+KUBERNETES_PREFIXES = ["packaging/"]
+
+# What the Creusot proofs read. `crates/verified/` is the one proved package
+# (`check-creusot-packages` keeps that list honest) and `crates/macros/` its one
+# in-workspace dependency. `verif/` holds the checked-in proof sessions and
+# `tools/creusot/` the image they run in, whose Creusot release
+# `.creusot-version` pins and whose base `MODULE.bazel` pins. The workspace
+# manifest, lock and toolchain decide what `cargo creusot` compiles.
+PROOFS_FILES = [
+    ".creusot-version",
+    "Cargo.lock",
+    "Cargo.toml",
+    "MODULE.bazel",
+    "rust-toolchain.toml",
+    CI_WORKFLOW,
+]
+PROOFS_PREFIXES = ["crates/macros/", "crates/verified/", "tools/creusot/", "verif/"]
+
 # Where the code is. Everything under it counts except documentation: a crate's
 # README and changelog are checked by their own tasks, which do not need a
 # compiler.
@@ -95,19 +129,43 @@ def touches_rust(paths):
             return True
     return False
 
+def _touches(paths, files, prefixes):
+    for raw_path in paths:
+        path = raw_path.strip().replace("\\", "/")
+        if path and (path in files or starts_with_any(path, prefixes)):
+            return True
+    return False
+
+def touches_kubernetes(paths):
+    """Whether any of `paths` can change what the kind smoke test does."""
+    return _touches(paths, KUBERNETES_FILES, KUBERNETES_PREFIXES)
+
+def touches_proofs(paths):
+    """Whether any of `paths` can change what the Creusot proofs prove."""
+    return _touches(paths, PROOFS_FILES, PROOFS_PREFIXES)
+
+# The scopes, in the order the task prints them.
+SCOPES = ["rust", "kubernetes", "proofs"]
+
 def decide(base_resolved, paths):
-    """Whether coverage should run, given a diff that may not exist.
+    """Which scoped jobs should run, given a diff that may not exist.
+
+    Returns a dict from each name in `SCOPES` to whether its jobs run.
 
     `base_resolved` is whether Git could turn the `--base` this task was handed
     into a commit. When it could not, `paths` says nothing about the change and
-    the conservative answer is to run coverage: this is the fail-open case, and it
-    is a branch of its own rather than an empty list flowing through
-    `touches_rust`, because an empty diff and an unknown diff are opposite
-    answers.
+    the conservative answer is to run everything: this is the fail-open case,
+    and it is a branch of its own rather than an empty list flowing through the
+    `touches_*` functions, because an empty diff and an unknown diff are
+    opposite answers.
     """
     if not base_resolved:
-        return True
-    return touches_rust(paths)
+        return {scope: True for scope in SCOPES}
+    return {
+        "rust": touches_rust(paths),
+        "kubernetes": touches_kubernetes(paths),
+        "proofs": touches_proofs(paths),
+    }
 
 def _changed(ctx, base):
     """`(base resolved, changed paths)` for the diff against `base`.
@@ -123,24 +181,29 @@ def _changed(ctx, base):
 
 def _impl(ctx: TaskContext) -> int:
     resolved, paths = _changed(ctx, ctx.args.base)
-    value = "true" if decide(resolved, paths) else "false"
+    lines = output_lines(decide(resolved, paths))
 
     github_output = ctx.std.env.var("GITHUB_OUTPUT")
     if github_output:
-        if not ctx.std.fs.try_append(github_output, "rust=" + value + "\n"):
+        if not ctx.std.fs.try_append(github_output, "".join([line + "\n" for line in lines])):
             fail("could not append the changed scope to GITHUB_OUTPUT")
 
     # The reason, not just the verdict: a job that was skipped is invisible in
     # the run summary, so the log of the step that skipped it is the only place
     # anyone can find out why.
-    reason = "the diff reaches the Rust build" if value == "true" else "nothing in the diff reaches the Rust build"
+    reason = "from the diff against --base"
     if not resolved:
-        reason = "no resolvable --base, so the diff is unknown"
-    ctx.std.io.stdout.write("rust=%s (%s)\n" % (value, reason))
+        reason = "no resolvable --base, so the diff is unknown and every scope runs"
+    for line in lines:
+        ctx.std.io.stdout.write("%s (%s)\n" % (line, reason))
     return 0
 
+def output_lines(scopes):
+    """The `name=true|false` lines for `scopes`, in `SCOPES` order."""
+    return ["%s=%s" % (scope, "true" if scopes[scope] else "false") for scope in SCOPES]
+
 changed_scope = task(
-    summary = "Decide whether a change needs the Rust build and test jobs",
+    summary = "Decide which path-scoped CI jobs a change needs",
     implementation = _impl,
     args = {
         "base": args.string(

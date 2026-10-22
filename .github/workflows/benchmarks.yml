@@ -1,15 +1,9 @@
 name: benchmarks
 
+# Not on pull requests: `ci.yml`'s nightly `bench` lane runs the
+# variance-calibrated criterion suites, and Clippy `--all-targets` already
+# keeps every bench compiling on each pull request that reaches Rust.
 on:
-  pull_request:
-    paths:
-      - "crates/log/**"
-      - "crates/verified/**"
-      - "crates/parse-benches/**"
-      - "packaging/performance/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/benchmarks.yml"
   push:
     branches: [main]
     paths:

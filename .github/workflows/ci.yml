@@ -21,9 +21,12 @@ permissions:
   # on every job.
   id-token: write
 
-# Cancel superseded PR runs; let pushes to main run to completion.
+# Cancel superseded PR runs; let pushes to main run to completion. The event
+# is part of the group so that a push to `main` never queues behind, or
+# replaces the pending slot of, a scheduled or dispatched full run: a release
+# needs one of those to finish green on its commit.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
@@ -228,18 +231,15 @@ jobs:
   # `bazelisk-cache` and `repository-cache` stay: they hold fetched archives
   # rather than build outputs, and they are small.
   #
-  # On a pull request this job is gated on the change touching Rust or build
-  # inputs: `aspect changed-scope`, read through `select`, says so, and a
-  # docs-only pull request cannot move a coverage number. The gate is PR-only
-  # on purpose. A push to `main` always runs it, for two reasons: Codecov's
-  # trend line for the default branch would otherwise have holes wherever a
-  # docs-only commit landed, and `delivery` needs `[ci, coverage,
-  # supply-chain]`, which a skipped `coverage` on `main` would never satisfy.
-  # `changed-scope` fails open to `rust=true`, so an unreadable diff runs it.
+  # Coverage only measures, and the `ci` job already runs the same targets
+  # uninstrumented, so it sits out pull requests. A push to `main` always runs
+  # it, for two reasons: Codecov's trend line for the default branch would
+  # otherwise have holes, and `delivery` needs `[ci, coverage, supply-chain]`,
+  # which a skipped `coverage` on `main` would never satisfy. A dispatch runs
+  # it too.
   coverage:
     name: coverage
-    needs: select
-    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || needs.select.outputs.rust == 'true')
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
@@ -327,9 +327,13 @@ jobs:
   #
   # `cargo deny` is a sibling job rather than a step here for the same reason
   # it always was: it needs neither a toolchain nor a build directory.
+  # Clippy gates every pull request that reaches the Rust build, because Bazel
+  # does not run it. nextest repeats what the `ci` job's `bazel test` already
+  # ran, under Cargo, so it runs on pushes to `main` and on a dispatch only.
   cargo:
     name: cargo clippy · nextest
-    if: github.event_name != 'schedule'
+    needs: select
+    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || needs.select.outputs.rust == 'true')
     runs-on: ubuntu-26.04
     # Cold builds, the full suite and the post-job cache upload share this budget.
     timeout-minutes: 90
@@ -377,6 +381,7 @@ jobs:
       # install path the nextest book documents for CI, and it lands one
       # prebuilt binary next to `cargo` with no compilation.
       - name: install cargo-nextest
+        if: github.event_name != 'pull_request'
         run: |
           set -euo pipefail
           curl -LsSf --retry 5 --retry-all-errors \
@@ -400,6 +405,7 @@ jobs:
       # in `.config/nextest.toml`. The container-backed cases are `#[ignore]`d
       # and nextest does not run those unless asked.
       - name: nextest
+        if: github.event_name != 'pull_request'
         run: cargo nextest run --workspace --profile ci
 
   # The broker library for wasm32-wasip1, the target that the Cluster Lab
@@ -413,9 +419,12 @@ jobs:
   # needs for `net` on a wasm target, scoped to that target. The packages are
   # the broker's library and every workspace crate in its graph; the binaries
   # and the tests stay native-only.
+  #
+  # A pull request that does not reach the Rust build skips it.
   wasm:
     name: cargo clippy · wasm32-wasip1
-    if: github.event_name != 'schedule'
+    needs: select
+    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || needs.select.outputs.rust == 'true')
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
@@ -525,6 +534,12 @@ jobs:
       # dropping off a function as crates/verified grows.
       - name: every #[cfg(creusot)] fn skips mutation testing
         run: aspect check-creusot-skip
+      # The proved-package list and what the proof image actually proves cannot
+      # drift apart. It runs here rather than in `proofs`, which a pull request
+      # skips unless it touches the proved crates: a crate that gains a contract
+      # is exactly the change that scope would not see.
+      - name: the proofs job covers every Creusot package
+        run: aspect check-creusot-packages
 
       # Documentation source checks do not use Bazel, so they stay off the
       # critical path while the `ci` job renders and uploads rustdoc from its
@@ -615,7 +630,12 @@ jobs:
   #
   # The sessions are checked in, and nothing re-ran them before this job, so a
   # contract change could invalidate a proof and leave the stale session in the
-  # tree with no signal. This proves them again on every change.
+  # tree with no signal. This proves them again on every change that reaches
+  # them.
+  #
+  # Only a change that reaches the proofs' inputs runs it on a pull request or a
+  # push (see `aspect changed-scope`); the nightly and a dispatch always run it,
+  # and a release requires one of those to be green.
   #
   # It gates on the proof RESULT and never on the artifacts. A `.coma` file
   # embeds the absolute source path of the machine that wrote it, so a checkout
@@ -626,7 +646,8 @@ jobs:
   # including crates with no proof contracts, so discover the relevant members.
   proofs:
     name: creusot proofs
-    if: github.event_name != 'schedule'
+    needs: select
+    if: needs.select.outputs.proofs == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 90
     permissions:
@@ -659,13 +680,6 @@ jobs:
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
           upload: ${{ github.event_name != 'pull_request' }}
-
-      # The proved-package list and what the proof image actually proves cannot
-      # drift apart. This ran inside the image until the checks moved to AXL
-      # tasks; the image has no Aspect CLI, so it runs here, before the image
-      # does anything.
-      - name: the proofs job covers every Creusot package
-        run: aspect check-creusot-packages
 
       # A digest of everything that decides the image's contents. See
       # //tools/creusot for why the registry, and not the Bazel disk cache, is
@@ -767,8 +781,10 @@ jobs:
   # invocation, which analyses and compiles the shared broker closure once
   # rather than once per suite.
   #
-  # This job also answers whether the change touches Rust or build inputs at
-  # all, which is what lets `coverage` sit out a docs-only pull request.
+  # This job also answers, through `aspect changed-scope`, whether the change
+  # reaches the Rust build, the kind smoke test's inputs and the Creusot
+  # proofs' inputs, which is what lets `cargo`, `wasm`, `kubernetes` and
+  # `proofs` sit out a pull request that cannot affect them.
   select:
     name: select
     runs-on: ubuntu-26.04
@@ -777,6 +793,8 @@ jobs:
       suites: ${{ steps.select.outputs.suites }}
       any: ${{ steps.select.outputs.any }}
       rust: ${{ steps.scope.outputs.rust }}
+      kubernetes: ${{ steps.scope.outputs.kubernetes }}
+      proofs: ${{ steps.scope.outputs.proofs }}
     env:
       BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
       FULL_MATRIX: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
@@ -819,7 +837,8 @@ jobs:
       # a job slot nothing. `--base` is omitted on the full-matrix runs for the
       # same reason `container-suites` omits it: with no merge base to compare
       # against there is no diff to narrow by, and `changed-scope` fails open to
-      # `rust=true` -- which is what a scheduled or dispatched run wants anyway.
+      # every scope `true` -- which is what a scheduled or dispatched run wants
+      # anyway.
       - id: scope
         run: |
           set -euo pipefail
@@ -924,8 +943,14 @@ jobs:
             bazel build ${builds}
           fi
 
+  # The kind smoke test runs on a pull request or push only when the change
+  # reaches the image packaging or the cluster manifests (see `aspect
+  # changed-scope`). The nightly and a dispatch always run it, and a release
+  # requires one of those to be green.
   kubernetes:
     name: kubernetes · kind
+    needs: select
+    if: needs.select.outputs.kubernetes == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
@@ -1463,7 +1488,7 @@ jobs:
           jq -r 'to_entries[] | "\(.value.result)\t\(.key)"' <<<"${NEEDS}" | sort
           unmet="$(
             jq -r '
-              ["coverage", "docker"] as $may_skip
+              ["cargo", "coverage", "docker", "kubernetes", "proofs", "wasm"] as $may_skip
               | to_entries[]
               | . as $dep
               | select($dep.value.result != "success")
@@ -1502,7 +1527,7 @@ jobs:
   # point `mutants.yml`'s schedule at the same mechanism.
   nightly-report:
     name: nightly report
-    needs: [select, docker, gssapi, links, bench, soak, netem, kubernetes, upgrade]
+    needs: [select, docker, gssapi, links, bench, soak, netem, kubernetes, proofs, upgrade]
     # `always()`: the whole point is to run when a dependency failed, and a
     # plain `needs` would skip this job exactly then.
     if: always() && github.event_name == 'schedule'
