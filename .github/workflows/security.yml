@@ -16,11 +16,15 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@4305ac05e8f3e0c995e89e18cfc09d19f28d336f # stable
+      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
+      # The runner's rustup installs the channel `rust-toolchain.toml` pins on
+      # first use, so neither step needs a toolchain action.
       - name: Check the reviewed RSA dependency boundary
-        run: tools/security/check-rustsec-2023-0071.sh
+        run: aspect check-rustsec-2023-0071
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked --version 0.22.0
+        run: cargo install cargo-audit --locked --version 0.22.2
       - name: Reject unsuppressed RustSec advisories
         run: cargo audit --ignore RUSTSEC-2023-0071

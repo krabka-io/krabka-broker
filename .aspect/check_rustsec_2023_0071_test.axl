@@ -1,0 +1,129 @@
+"""Unit tests for `check_rustsec_2023_0071.axl`."""
+
+load("./check_rustsec_2023_0071.axl", "normal_parents", "problems")
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+def _id(name, version):
+    return "registry+https://github.com/rust-lang/crates.io-index#%s@%s" % (name, version)
+
+def _dep(name, version, kind = None):
+    return {"pkg": _id(name, version), "dep_kinds": [{"kind": kind, "target": None}]}
+
+# The graph as it was reviewed: every package at its reviewed version, and each
+# reached only by its reviewed parents. Every case is a mutation of this.
+_VERSIONS = {
+    "krabka-broker": "1.0.0",
+    "krabka-security": "0.7.0",
+    "krabka-sspi": "0.23.0",
+    "picky": "7.0.0-rc.26",
+    "rsa": "0.10.0-rc.18",
+}
+
+_EDGES = {
+    "krabka-broker": [("krabka-security", None)],
+    "krabka-security": [("krabka-sspi", None)],
+    "krabka-sspi": [("picky", None), ("rsa", None)],
+    "picky": [("rsa", None)],
+    "rsa": [],
+}
+
+def _metadata(versions = _VERSIONS, edges = _EDGES, extra = []):
+    packages = [
+        {"id": _id(name, version), "name": name, "version": version}
+        for name, version in versions.items()
+    ] + extra
+    nodes = [
+        {
+            "id": _id(name, versions[name]),
+            "deps": [_dep(child, versions[child], kind) for child, kind in edges.get(name, [])],
+        }
+        for name in versions
+    ]
+    return {"packages": packages, "resolve": {"nodes": nodes}}
+
+def _with(base, key, value):
+    copied = dict(base)
+    copied[key] = value
+    return copied
+
+def _without(base, key):
+    return {name: value for name, value in base.items() if name != key}
+
+def _test_the_reviewed_graph_has_no_problems(_ctx):
+    check_eq("problems", problems(_metadata()), [])
+
+def _test_normal_parents_reads_normal_edges_only(_ctx):
+    edges = _with(_EDGES, "krabka-broker", [("krabka-security", None), ("rsa", "dev")])
+    parents = normal_parents(_metadata(edges = edges))
+    check_eq("rsa", parents[_id("rsa", "0.10.0-rc.18")], ["krabka-sspi", "picky"])
+    check_eq("broker", parents[_id("krabka-broker", "1.0.0")], [])
+
+def _test_a_dev_or_build_parent_is_not_a_new_path(_ctx):
+    edges = _with(_EDGES, "krabka-broker", [
+        ("krabka-security", None),
+        ("rsa", "dev"),
+        ("picky", "build"),
+    ])
+    check_eq("problems", problems(_metadata(edges = edges)), [])
+
+def _test_an_explicit_normal_kind_is_a_normal_edge(_ctx):
+    edges = _with(_EDGES, "krabka-broker", [("krabka-security", None), ("rsa", "normal")])
+    check_eq("problems", problems(_metadata(edges = edges)), [
+        "rsa parent set changed from reviewed [krabka-sspi, picky] to " +
+        "[krabka-broker, krabka-sspi, picky]; review RUSTSEC-2023-0071 reachability",
+    ])
+
+def _test_a_version_change_is_reported(_ctx):
+    versions = _with(_VERSIONS, "rsa", "0.10.0")
+    check_eq("problems", problems(_metadata(versions = versions)), [
+        "rsa changed from reviewed 0.10.0-rc.18 to 0.10.0; review RUSTSEC-2023-0071 reachability",
+    ])
+
+def _test_a_new_rsa_parent_is_reported(_ctx):
+    edges = _with(_EDGES, "krabka-security", [("krabka-sspi", None), ("rsa", None)])
+    check_eq("problems", problems(_metadata(edges = edges)), [
+        "rsa parent set changed from reviewed [krabka-sspi, picky] to " +
+        "[krabka-security, krabka-sspi, picky]; review RUSTSEC-2023-0071 reachability",
+    ])
+
+def _test_a_new_sspi_parent_is_reported(_ctx):
+    edges = _with(_EDGES, "krabka-broker", [("krabka-security", None), ("krabka-sspi", None)])
+    check_eq("problems", problems(_metadata(edges = edges)), [
+        "krabka-sspi parent set changed from reviewed [krabka-security] to " +
+        "[krabka-broker, krabka-security]; review RUSTSEC-2023-0071 reachability",
+    ])
+
+def _test_a_lost_parent_is_reported(_ctx):
+    edges = _with(_EDGES, "krabka-sspi", [("picky", None)])
+    check_eq("problems", problems(_metadata(edges = edges)), [
+        "rsa parent set changed from reviewed [krabka-sspi, picky] to " +
+        "[picky]; review RUSTSEC-2023-0071 reachability",
+    ])
+
+def _test_a_second_copy_is_reported(_ctx):
+    extra = [{"id": _id("rsa", "0.9.8"), "name": "rsa", "version": "0.9.8"}]
+    check_eq("problems", problems(_metadata(extra = extra)), [
+        "multiple rsa packages require a fresh RUSTSEC-2023-0071 review",
+    ])
+
+def _test_a_removed_package_asks_to_remove_the_exception(_ctx):
+    versions = _without(_VERSIONS, "rsa")
+    edges = _with(_with(_EDGES, "krabka-sspi", [("picky", None)]), "picky", [])
+    check_eq("problems", problems(_metadata(versions = versions, edges = edges)), [
+        "review and remove the RUSTSEC-2023-0071 exception; absent packages: rsa",
+    ])
+
+check_rustsec_2023_0071_tests = suite("check-rustsec-2023-0071", [
+    _test_the_reviewed_graph_has_no_problems,
+    _test_normal_parents_reads_normal_edges_only,
+    _test_a_dev_or_build_parent_is_not_a_new_path,
+    _test_an_explicit_normal_kind_is_a_normal_edge,
+    _test_a_version_change_is_reported,
+    _test_a_new_rsa_parent_is_reported,
+    _test_a_new_sspi_parent_is_reported,
+    _test_a_lost_parent_is_reported,
+    _test_a_second_copy_is_reported,
+    _test_a_removed_package_asks_to_remove_the_exception,
+])
+
+test_check_rustsec_2023_0071 = suite_task(check_rustsec_2023_0071_tests)
