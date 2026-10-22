@@ -577,8 +577,7 @@ impl Engine {
             // including while the new leader's control batch is uncommitted.
             // Preserve the published contents: self.image can include a
             // downgrade whose checkpoint has not yet made it publishable.
-            let published = self.image_tx.borrow().as_ref().clone();
-            self.image_tx.send_replace(Arc::new(published));
+            self.image.republish();
         }
         let lost_leadership = should_fail_waiters_on_leadership_change(
             self.was_leader,

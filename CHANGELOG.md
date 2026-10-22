@@ -87,6 +87,11 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   index floor, header scan and readahead hint under the log lock. It now
   reads the regions the first walk found. Followers and consumers at the tail
   of a log make this fetch on every round trip.
+- A wide fetch counts its bytes in linear time. Before each partition read the
+  read loop asks whether the response is still empty, and it used to answer by
+  summing every partition's bytes, so a fetch over `P` partitions did `P²`
+  additions. It now keeps a running total. On a 4-vCPU host, the read loop
+  over 10,000 entries took 21-23 ms instead of 32-34 ms (#1609).
 - Less work per request on the produce and fetch paths:
   - Dispatch reads a Produce request's `acks` from its leading fields to
     decide whether a response is owed, instead of decoding the request a
@@ -100,6 +105,11 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
     building the eight candidate entity keys.
   - The log-directory health check every produce and fetch makes answers
     without hashing the directory's path while every directory is online.
+- The partitions of one Produce request append at once, up to 16 at a time,
+  instead of one after another. An append that waits for a busy writer, a
+  segment roll or a diskless WAL no longer holds back the other partitions of
+  the request. Two entries for the same partition still append in request
+  order, and the response keeps the request's order (#1618).
 - A remote segment's lifecycle transition updates only that segment's entries
   in the tiered-storage metadata manager's epoch index. Each finish, hide and
   delete used to rebuild and sort the partition's whole index under the

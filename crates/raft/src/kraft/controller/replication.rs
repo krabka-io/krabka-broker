@@ -454,7 +454,7 @@ impl Engine {
             }));
         }
         write_checkpoint(&self.data_dir, end_offset, epoch, bytes)?;
-        self.image = new_image;
+        self.image.replace(new_image);
         self.features_epoch = features_epoch_after_snapshot(
             &contents.metadata_records,
             end_offset,

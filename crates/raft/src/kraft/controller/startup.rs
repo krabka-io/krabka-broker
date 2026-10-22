@@ -7,6 +7,7 @@ use {
         Engine, KraftConfig, KraftControlState, KraftController, METADATA_LOG_CLEAN_INTERVAL,
         PendingDowngradeSnapshot,
         activation::{Activation, check_bootstrap_records},
+        applied_image::AppliedImage,
         checkpoint::{BOOTSTRAP_SNAPSHOT_ID, latest_checkpoint_id, load_latest_checkpoint},
         quorum_state_file::load_quorum_state,
         records::features_epoch_after_snapshot,
@@ -152,7 +153,7 @@ impl KraftController {
             voters: core.quorum_state().voters.clone(),
         }));
 
-        let (image_tx, image_rx) = watch::channel(Arc::new(image.clone()));
+        let (image, image_rx) = AppliedImage::new(image);
         let (features_epoch_tx, features_epoch_rx) = watch::channel(features_epoch);
         let (leader_tx, leader_rx) = watch::channel(initial_leader);
         // Captured before the log moves into `Engine`; it seeds both the first
@@ -188,7 +189,6 @@ impl KraftController {
             log,
             image,
             peers,
-            image_tx,
             features_epoch,
             features_epoch_tx,
             leader_tx,

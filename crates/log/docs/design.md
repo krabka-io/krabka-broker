@@ -39,7 +39,7 @@ The `.stampindex` sidecar is the one file Kafka does not have. It never changes 
 
 A segment rolls at append, before the incoming batch lands, as Kafka's `LogSegment.shouldRoll` decides. It rolls when the batch would push the active `.log` past `segment.bytes`, when the batch's timestamp is more than `segment.ms` past the segment's first record, or when the offset index or the time index is full under `segment.index.bytes`. The offset index holds `segment.index.bytes / 8` entries. Like Kafka's `TimeIndex.isFull`, the time index counts as full one entry short of `segment.index.bytes / 12`, which keeps a slot for the entry the seal writes. The roll flushes the active segment, writes the boundary producer snapshot, seals the old segment, creates the new one, and marks the directory as needing an fsync. The snapshot is written after the flush so it can never become durable ahead of the records it describes.
 
-The three read paths in [`log/read.rs`](../src/log/read.rs) return decoded batches, verbatim bytes, or file-region descriptors for the zero-copy `sendfile` fetch. Each walks the sealed segments and then the active one, so a read can span a boundary, and each asks a segment for at least one whole batch header, which is Kafka's anti-stall rule.
+The three read paths in [`log/read.rs`](../src/log/read.rs) return decoded batches, verbatim bytes, or file-region descriptors for the zero-copy `sendfile` fetch. Each finds its first segment by a binary search over the sealed segments' last offsets, then walks on through the later sealed segments and the active one, so a read can span a boundary, and each asks a segment for at least one whole batch header, which is Kafka's anti-stall rule.
 
 ### Durability
 

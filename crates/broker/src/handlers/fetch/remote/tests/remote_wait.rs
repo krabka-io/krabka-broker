@@ -149,3 +149,51 @@ async fn the_remote_fetch_wait_bounds_a_read_that_cannot_start_and_follows_an_al
             .is_some_and(|records| records.payload_len() > 0)
     );
 }
+
+/// A cold read whose remote wait runs out while it is queued for a reader
+/// slot gives the slot in the pending queue back. With room for one waiter,
+/// a second expired read would otherwise be refused, and once the reader is
+/// free every later cold read would be refused too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn expired_queued_reads_give_their_queue_slots_back() {
+    let owners = tiered_broker_with(|config| {
+        config.remote_reader_threads = 1;
+        config.remote_reader_max_pending_tasks = 1;
+    })
+    .await;
+    let broker = owners.handle.broker_arc_for_test();
+    alter_remote_fetch_max_wait(&broker, 100).await;
+    let part = committed_tiered_partition(&broker, owners.dir.path()).await;
+    let reader = broker.remote_reader.clone().expect("remote reader");
+    let held = reader.pool.acquire().await.expect("a reader slot");
+    for _ in 0..3 {
+        let mut expired = out_of_range_at(&part, 0);
+        let served = try_remote_read(
+            &broker,
+            &mut expired,
+            &part,
+            &mut RemoteFetchWait::default(),
+        )
+        .await;
+        // Expired, not refused: no error for the partition.
+        check!(served == Some(0));
+        check!(expired.out.error_code == codes::NONE);
+        check!(reader.pool.queue_size() == 0);
+    }
+    check!(reader.pool.rejected() == 0);
+    drop(held);
+    check!(reader.pool.queue_size() == 0);
+    check!(reader.pool.idle_percent() > 99.0);
+
+    alter_remote_fetch_max_wait(&broker, 30_000).await;
+    for _ in 0..2 {
+        let mut cold = out_of_range_at(&part, 0);
+        let served =
+            try_remote_read(&broker, &mut cold, &part, &mut RemoteFetchWait::default()).await;
+        check!(served.is_some_and(|bytes| bytes > 0));
+        check!(cold.out.error_code == codes::NONE);
+    }
+    check!(reader.pool.queue_size() == 0);
+    check!(reader.pool.rejected() == 0);
+    check!(reader.pool.idle_percent() > 99.0);
+}
