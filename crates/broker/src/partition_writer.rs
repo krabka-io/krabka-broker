@@ -10,6 +10,7 @@
 use crate::config::BrokerConfig;
 use {
     crate::{
+        blocking::BlockingError,
         delivery::DeliveryHandles,
         error::BrokerError,
         log_dir_status::LogDirRegistry,
@@ -22,7 +23,7 @@ use {
     },
     arc_swap::ArcSwap,
     krabka_ids::PartitionIndex,
-    krabka_log::Log,
+    krabka_log::{BuiltCompaction, Log},
     std::{
         path::PathBuf,
         sync::{Arc, Mutex},
@@ -450,14 +451,14 @@ enum Wake {
     /// A maintenance deadline or a nudge: recompute and wait again.
     Again,
     /// The running compaction pass's build ended.
-    Built(Result<krabka_log::BuiltCompaction, crate::blocking::BlockingError>),
+    Built(Result<BuiltCompaction, BlockingError>),
 }
 
 /// The end of the running compaction pass's build. Polled only while one is
 /// building.
 async fn building_pass(
     compaction: &mut Option<BuildingCompaction>,
-) -> Result<krabka_log::BuiltCompaction, crate::blocking::BlockingError> {
+) -> Result<BuiltCompaction, BlockingError> {
     compaction
         .as_mut()
         .expect("polled only while a pass is building")
