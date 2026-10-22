@@ -46,14 +46,15 @@ use {
         freeze::resolve::resolve_freeze_mutation,
         handlers::{ApiKeyCode, RequestContext},
         internal_topics::{is_internal_topic, produce_internal_topics_allowed},
-        metrics::RequestPhases,
+        metrics::{BrokerMetrics, RequestPhases},
         partition::Partition,
         topic_resolve::resolve,
     },
     bytes::Bytes,
+    futures_util::{StreamExt as _, stream::FuturesUnordered},
     krabka_protocol::owned::produce_response::{PartitionProduceResponse, TopicProduceResponse},
     krabka_verified::FreezeMutationKind,
-    std::{sync::Arc, time::Duration},
+    std::{collections::HashMap, sync::Arc, task::Poll, time::Duration},
 };
 
 mod append;
@@ -84,6 +85,8 @@ pub(crate) mod test_support;
 mod broker_default_tests;
 #[cfg(test)]
 mod compacted_key_tests;
+#[cfg(test)]
+mod overlap_tests;
 #[cfg(test)]
 mod topic_resolution_tests;
 #[cfg(test)]
@@ -200,8 +203,9 @@ pub(crate) async fn handle(
     let handler_start = std::time::Instant::now();
     // Phase accounting for `request_{local,remote}_duration_seconds`. One
     // Produce appends to many partitions, so the local phase is a sum over the
-    // partition loop below: `dispatch_prepared` charges each writer round-trip
-    // to it. The remote phase is a single interval, because the `acks=all`
+    // partitions below: `dispatch_prepared` charges each writer round-trip,
+    // and `complete_admitted` caps the overlapped appends' sum at their wall
+    // time. The remote phase is a single interval, because the `acks=all`
     // high-watermark waits of every appended partition run as one wait.
     let phases = RequestPhases::default();
     let record_decompression_policy = broker.config.record_decompression_policy()?;
@@ -491,8 +495,8 @@ pub(crate) async fn handle(
             let micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
             match admission {
                 Admission::Done(out) => {
-                    record_partition_cpu(broker, &topic_name, idx, micros);
-                    record_partition_failure(broker, &topic_name, out.error_code);
+                    record_partition_cpu(&broker.metrics, &topic_name, idx, micros);
+                    record_partition_failure(&broker.metrics, &topic_name, out.error_code);
                     partition_results.push(out);
                 }
                 Admission::Admitted(batch) => {
@@ -527,7 +531,6 @@ pub(crate) async fn handle(
 
     // ── the one transaction check, then every append ────────────────
     complete_admitted(
-        broker,
         admitted,
         services,
         transaction,
@@ -581,14 +584,35 @@ struct AdmittedPartition {
     batch: Box<AdmittedBatch>,
 }
 
+/// How many distinct partitions of one request append at once.
+///
+/// An append that finds its partition's writer idle runs on the request's own
+/// task and costs microseconds, so the bound matters only for appends that
+/// wait: on a writer busy with an earlier message, on a segment roll, or on a
+/// diskless partition's WAL. Sixteen such waits in flight keep one slow
+/// partition from holding back the rest of a wide request without letting one
+/// request queue a message on every writer of the broker at once.
+const MAX_CONCURRENT_PARTITION_APPENDS: usize = 16;
+
 /// Ask the transaction coordinator about every admitted partition at once,
 /// then append each one, and write its row or queue its high-watermark wait.
 ///
 /// Kafka's `ReplicaManager.handleProduceAppend` asks the coordinator about
 /// every partition of the request in one `AddPartitionsToTxn` call, and
 /// appends once it has answered.
+///
+/// Kafka's `appendToLocalLog` then appends the partitions one after another,
+/// each a write to the page cache. Here an append can wait (see
+/// [`MAX_CONCURRENT_PARTITION_APPENDS`]), and distinct partitions share no log,
+/// writer or producer state, so each distinct partition is one lane and up to
+/// that many lanes run at once. A partition the request names twice keeps both
+/// entries in one lane, in request order, so their offsets and idempotent
+/// sequences follow the request as before. Every row goes into the slot it
+/// reserved, so the response keeps the request's order however the lanes
+/// finish. Every lane runs to completion, because a lane dropped part-way
+/// through would abandon an append its writer still makes; the error of the
+/// earliest lane in request order is then the request's.
 async fn complete_admitted(
-    broker: &Broker,
     admitted: Vec<AdmittedPartition>,
     services: PartitionServices<'_>,
     transaction: TransactionRequest<'_>,
@@ -605,7 +629,104 @@ async fn complete_admitted(
         transaction,
     )
     .await;
-    for (partition, answer) in admitted.into_iter().zip(answers) {
+    let lanes = partition_lanes(admitted.into_iter().zip(answers));
+    // The lanes charge their writer round-trips as if they ran one after
+    // another. They overlap, so the request's local phase takes their sum only
+    // up to the wall time of the whole stage.
+    let lane_phases = RequestPhases::default();
+    let lane_services = PartitionServices {
+        phases: &lane_phases,
+        ..services
+    };
+    let started = std::time::Instant::now();
+    let mut finished: Vec<(usize, Result<Vec<CompletedPartition>, BrokerError>)> =
+        Vec::with_capacity(lanes.len());
+    // A lane is polled once where it is started. Most finish there, appending
+    // on this task to an idle writer, and only a lane that has to wait joins
+    // the set the request then drives together.
+    let mut waiting = FuturesUnordered::new();
+    for (lane_index, lane) in lanes.into_iter().enumerate() {
+        while waiting.len() >= MAX_CONCURRENT_PARTITION_APPENDS {
+            finished.extend(waiting.next().await);
+        }
+        let mut lane =
+            Box::pin(async move { (lane_index, complete_lane(lane, lane_services).await) });
+        match futures_util::poll!(lane.as_mut()) {
+            Poll::Ready(done) => finished.push(done),
+            Poll::Pending => waiting.push(lane),
+        }
+    }
+    while let Some(done) = waiting.next().await {
+        finished.push(done);
+    }
+    services
+        .phases
+        .add_overlapped(&lane_phases, started.elapsed());
+    finished.sort_unstable_by_key(|(lane_index, _)| *lane_index);
+    for (_, lane) in finished {
+        for completed in lane? {
+            let CompletedPartition {
+                topic_row,
+                partition_row,
+                topic_name,
+                outcome,
+            } = completed;
+            match outcome {
+                PartitionOutcome::Done(out) => {
+                    record_partition_failure(services.metrics, &topic_name, out.error_code);
+                    topic_results[topic_row].partition_responses[partition_row] = out;
+                }
+                PartitionOutcome::AwaitingHighWatermark(ack) => {
+                    // The row is decided by the one high-watermark wait.
+                    awaiting.push(PendingPartition {
+                        topic_row,
+                        partition_row,
+                        topic_name,
+                        ack,
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One admitted partition entry and the coordinator's answer for it.
+type LaneEntry = (AdmittedPartition, Option<i16>);
+
+/// Group the admitted entries into one lane per distinct partition, lanes in
+/// the order their partition first appears and entries in request order.
+fn partition_lanes(entries: impl IntoIterator<Item = LaneEntry>) -> Vec<Vec<LaneEntry>> {
+    let mut lane_of: HashMap<(Arc<str>, i32), usize> = HashMap::new();
+    let mut lanes: Vec<Vec<LaneEntry>> = Vec::new();
+    for entry in entries {
+        let key = (Arc::clone(&entry.0.topic_name), entry.0.idx);
+        let lane = *lane_of.entry(key).or_insert_with(|| {
+            lanes.push(Vec::new());
+            lanes.len() - 1
+        });
+        lanes[lane].push(entry);
+    }
+    lanes
+}
+
+/// One appended entry of a lane, and the place in the response its row
+/// belongs.
+struct CompletedPartition {
+    topic_row: usize,
+    partition_row: usize,
+    topic_name: Arc<str>,
+    outcome: PartitionOutcome,
+}
+
+/// Append every entry of one partition's lane in request order, charging each
+/// its handler time. An error stops the lane, as it stops the request.
+async fn complete_lane(
+    lane: Vec<LaneEntry>,
+    services: PartitionServices<'_>,
+) -> Result<Vec<CompletedPartition>, BrokerError> {
+    let mut completed = Vec::with_capacity(lane.len());
+    for (partition, answer) in lane {
         let AdmittedPartition {
             topic_row,
             partition_row,
@@ -618,33 +739,22 @@ async fn complete_admitted(
         let outcome = complete_partition(*batch, answer, services).await?;
         let micros =
             micros.saturating_add(u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX));
-        record_partition_cpu(broker, &topic_name, idx, micros);
-        match outcome {
-            PartitionOutcome::Done(out) => {
-                record_partition_failure(broker, &topic_name, out.error_code);
-                topic_results[topic_row].partition_responses[partition_row] = out;
-            }
-            PartitionOutcome::AwaitingHighWatermark(ack) => {
-                // The row is decided by the one high-watermark wait.
-                awaiting.push(PendingPartition {
-                    topic_row,
-                    partition_row,
-                    topic_name,
-                    ack,
-                });
-            }
-        }
+        record_partition_cpu(services.metrics, &topic_name, idx, micros);
+        completed.push(CompletedPartition {
+            topic_row,
+            partition_row,
+            topic_name,
+            outcome,
+        });
     }
-    Ok(())
+    Ok(completed)
 }
 
 /// Charge `micros` of handler time to one partition for the rebalancer's
 /// `CpuUsage` / `CpuCapacity` goals.
-fn record_partition_cpu(broker: &Broker, topic_name: &Arc<str>, idx: i32, micros: u64) {
+fn record_partition_cpu(metrics: &BrokerMetrics, topic_name: &Arc<str>, idx: i32, micros: u64) {
     if !topic_name.is_empty() {
-        broker
-            .metrics
-            .record_partition_cpu_micros(topic_name, idx, micros);
+        metrics.record_partition_cpu_micros(topic_name, idx, micros);
     }
 }
 
@@ -721,7 +831,7 @@ async fn await_durability(
     .await;
     phases.add_remote(started.elapsed());
     for (topic_row, partition_row, topic_name, row) in finished {
-        record_partition_failure(broker, &topic_name, row.error_code);
+        record_partition_failure(&broker.metrics, &topic_name, row.error_code);
         topic_results[topic_row].partition_responses[partition_row] = row;
     }
 }
@@ -730,9 +840,9 @@ async fn await_durability(
 /// carries a non-zero error code (`TOPIC_AUTHORIZATION_FAILED`,
 /// `NOT_ENOUGH_REPLICAS`, `INVALID_RECORD`, etc.) — mirrors JVM's
 /// `failedProduceRequestRate.mark()`.
-fn record_partition_failure(broker: &Broker, topic_name: &Arc<str>, error_code: i16) {
+fn record_partition_failure(metrics: &BrokerMetrics, topic_name: &Arc<str>, error_code: i16) {
     if !topic_name.is_empty() && error_code != 0 {
-        broker.metrics.record_failed_produce(topic_name);
+        metrics.record_failed_produce(topic_name);
     }
 }
 

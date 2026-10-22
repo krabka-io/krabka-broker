@@ -76,6 +76,11 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
     building the eight candidate entity keys.
   - The log-directory health check every produce and fetch makes answers
     without hashing the directory's path while every directory is online.
+- The partitions of one Produce request append at once, up to 16 at a time,
+  instead of one after another. An append that waits for a busy writer, a
+  segment roll or a diskless WAL no longer holds back the other partitions of
+  the request. Two entries for the same partition still append in request
+  order, and the response keeps the request's order (#1618).
 
 ### Fixed
 

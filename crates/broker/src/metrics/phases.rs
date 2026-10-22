@@ -41,6 +41,21 @@ impl RequestPhases {
     /// object store behind a tiered or diskless partition.
     pub(crate) fn add_remote(&self, elapsed: Duration) { Self::add(&self.remote_nanos, elapsed); }
 
+    /// Charge the phases of a stage whose parts ran at once. `overlapped`
+    /// holds what each part charged as if they ran one after another, and
+    /// `elapsed` is the stage's wall time: each phase takes that sum only up
+    /// to `elapsed`, so time two parts spent together is not charged twice.
+    pub(crate) fn add_overlapped(&self, overlapped: &Self, elapsed: Duration) {
+        Self::add(
+            &self.local_nanos,
+            Self::duration(&overlapped.local_nanos).min(elapsed),
+        );
+        Self::add(
+            &self.remote_nanos,
+            Self::duration(&overlapped.remote_nanos).min(elapsed),
+        );
+    }
+
     /// Seconds charged to the local phase so far.
     pub(crate) fn local_seconds(&self) -> f64 { Self::seconds(&self.local_nanos) }
 
@@ -59,9 +74,9 @@ impl RequestPhases {
 
     /// Round-trips through [`Duration`] rather than dividing the raw count,
     /// which keeps the conversion free of a lossy integer-to-float cast.
-    fn seconds(slot: &AtomicU64) -> f64 {
-        Duration::from_nanos(slot.load(Ordering::Relaxed)).as_secs_f64()
-    }
+    fn seconds(slot: &AtomicU64) -> f64 { Self::duration(slot).as_secs_f64() }
+
+    fn duration(slot: &AtomicU64) -> Duration { Duration::from_nanos(slot.load(Ordering::Relaxed)) }
 }
 
 impl BrokerMetrics {
@@ -91,6 +106,29 @@ mod tests {
 
         assert!((phases.local_seconds() - 0.010).abs() < 1.0e-9);
         assert!((phases.remote_seconds() - 0.250).abs() < 1.0e-9);
+    }
+
+    #[yare::parameterized(
+        serial_parts_keep_their_sum = { 30, 40 },
+        overlapped_parts_take_the_wall_time = { 30, 10 },
+    )]
+    fn overlapped_phases_are_capped_at_the_stage_wall_time(sum_ms: u64, wall_ms: u64) {
+        let parts = RequestPhases::default();
+        parts.add_local(Duration::from_millis(sum_ms / 3));
+        parts.add_local(Duration::from_millis(sum_ms - sum_ms / 3));
+        parts.add_remote(Duration::from_millis(sum_ms));
+        let phases = RequestPhases::default();
+        phases.add_local(Duration::from_millis(5));
+
+        phases.add_overlapped(&parts, Duration::from_millis(wall_ms));
+
+        let charged = sum_ms.min(wall_ms);
+        assert2::assert!(
+            RequestPhases::duration(&phases.local_nanos) == Duration::from_millis(5 + charged)
+        );
+        assert2::assert!(
+            RequestPhases::duration(&phases.remote_nanos) == Duration::from_millis(charged)
+        );
     }
 
     #[test]
