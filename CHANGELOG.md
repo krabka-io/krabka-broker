@@ -42,6 +42,20 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- Pull request CI runs fewer lanes, and a release requires a full run. Pull
+  requests no longer run `coverage`, `cargo nextest` or `benchmarks.yml`.
+  Pushes to `main` still run coverage and nextest. A pull request runs the
+  Cargo and wasm Clippy lanes only when it reaches the Rust build. It runs the
+  kind smoke test only when it changes `packaging/` or the cluster config, and
+  the Creusot proofs only when it changes their inputs. The nightly run always
+  runs the kind smoke test and the proofs. `release.yml` now refuses a commit
+  that has no green scheduled or dispatched `ci.yml` run.
+- The `ci` job's build and tests, the `coverage` run and the `cargo` Clippy
+  and nextest lane run on BuildBuddy remote runners when the run holds a
+  BuildBuddy API key. Each is a 16-core VM restored from a warm snapshot of
+  its own last run, so the GitHub runner no longer compiles the closure or
+  downloads test binaries. A run without a key, such as a fork's pull
+  request, runs the same script on the GitHub runner.
 - A produce append runs on the request's own task when it only writes to the
   page cache. The partition writer task used to take every produce, so each
   one paid two cross-thread wakes before its write. The request task now takes
@@ -84,6 +98,14 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Fixed
 
+- The nightly criterion lane builds the reference and the candidate into
+  separate Cargo target directories, both before either is measured. With one
+  shared directory, Cargo could judge a candidate that changed only source as
+  fresh and run the reference's executable again under the candidate's
+  commit. `krabka-parse-benches executables` records each side's bench
+  executables by path and SHA-256. Every summary names the executables its pass
+  ran, checked against Cargo's `Running` lines and the recorded digests. The
+  verdict refuses a comparison whose sides share an executable path (#1608).
 - Store a produced `CreateTime` batch with its largest record timestamp as
   `max_timestamp`, as Kafka's `LogValidator` does, on the verbatim and the
   owned path. The producer's header value was kept, so an LZ4 batch with
