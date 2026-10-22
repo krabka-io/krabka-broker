@@ -134,6 +134,43 @@ jobs:
           delivery_run="$(jq -r '[.[] | select(.event == "push" and .conclusion == "success")][0].databaseId' <<<"${runs}")"
           echo "delivery_run=${delivery_run}" >>"${GITHUB_OUTPUT}"
 
+      # Pull requests and pushes run the kind smoke test and the Creusot proofs
+      # only when a change reaches their inputs, and the full container matrix,
+      # the upgrade smoke, GSSAPI, netem and the soak not at all. Those run on
+      # the nightly schedule and on a dispatch, so a release needs one such run
+      # of this exact commit with every lane green. `links` (external sites
+      # answer bots inconsistently) and `bench` (it measures and reports, and
+      # gates nothing) may be red; the nightly report files those regardless.
+      - name: a full CI run succeeded for this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_COMMIT: ${{ steps.tag.outputs.commit }}
+          OPTIONAL_JOBS: '["external links", "variance-calibrated criterion benches", "nightly report"]'
+        run: |
+          set -euo pipefail
+          runs="$(gh run list --workflow ci.yml --commit "${RELEASE_COMMIT}" \
+            --branch main --limit 100 --json databaseId,event,status,url)"
+          ids="$(jq -r '.[]
+            | select(.event == "schedule" or .event == "workflow_dispatch")
+            | select(.status == "completed")
+            | .databaseId' <<<"${runs}")"
+          for id in ${ids}; do
+            jobs="$(gh run view "${id}" --json jobs,url)"
+            url="$(jq -r '.url' <<<"${jobs}")"
+            red="$(jq -r --argjson optional "${OPTIONAL_JOBS}" '.jobs[]
+              | select(.name as $name | $optional | index($name) | not)
+              | select(.conclusion != "success" and .conclusion != "skipped")
+              | "  \(.name): \(.conclusion)"' <<<"${jobs}")"
+            if [ -z "${red}" ]; then
+              echo "Full run ${url} passed every required lane."
+              exit 0
+            fi
+            printf 'Full run %s has lanes that did not pass:\n%s\n' "${url}" "${red}"
+          done
+          echo "No completed scheduled or dispatched ci.yml run passed for ${RELEASE_COMMIT}." >&2
+          echo 'Run one with `gh workflow run ci.yml --ref main` while main is at this commit, then re-dispatch this workflow with the tag.' >&2
+          exit 1
+
   release:
     runs-on: ubuntu-26.04
     needs: verify

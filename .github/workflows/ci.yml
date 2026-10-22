@@ -21,9 +21,12 @@ permissions:
   # on every job.
   id-token: write
 
-# Cancel superseded PR runs; let pushes to main run to completion.
+# Cancel superseded PR runs; let pushes to main run to completion. The event
+# is part of the group so that a push to `main` never queues behind, or
+# replaces the pending slot of, a scheduled or dispatched full run: a release
+# needs one of those to finish green on its commit.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
@@ -54,8 +57,9 @@ jobs:
           path: ${{ runner.temp }}/cpd-reports
           if-no-files-found: warn
 
-  # Format, lint, build, render rustdoc and gate the tests coverage cannot run,
-  # in one Bazel output tree.
+  # Format, lint, build, render rustdoc and gate the tests coverage cannot run.
+  # Format and lint run here; the rest runs as one script in one Bazel output
+  # tree, on a BuildBuddy remote runner when the run holds a key.
   #
   # Coverage is a sibling job rather than a step here. Both configurations build
   # the same ~140 broker integration tests as separate statically linked
@@ -64,8 +68,8 @@ jobs:
   # a 145 GB disk and filled it, which surfaced as a linker `Bus error` partway
   # through coverage. On two runners each configuration gets its own disk.
   #
-  # The `daemon-free tests` and `test` steps below run every test target that
-  # needs no Docker daemon, uninstrumented.
+  # `CI_BAZEL_SCRIPT` below runs every test target that needs no Docker daemon,
+  # uninstrumented.
   # `coverage` runs most of the same targets again under instrumentation, but
   # only to measure. A target that fails under Bazel therefore fails here, in a
   # job whose log names it, and not only in the instrumented run.
@@ -74,6 +78,48 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-26.04
     timeout-minutes: 90
+    env:
+      # Run as one bash script, on a BuildBuddy remote runner or on this runner
+      # (see `.github/actions/buildbuddy-run`).
+      CI_BAZEL_SCRIPT: |
+        set -euo pipefail
+
+        # One invocation builds `//...` and runs every test that needs no
+        # Docker daemon and asserts on no wall clock, so test execution overlaps
+        # the rest of the build instead of waiting for all of it. That covers
+        # the rustdoc targets (none is `manual`), `//packaging:image_binaries_test`
+        # and the Stateright models but `kraft_model_test`, which is
+        # timing-sensitive and runs below. There are no test targets outside
+        # `//crates` and `//packaging`.
+        #
+        # The test tag filter is named in full because `--test_tag_filters` is
+        # last-wins: `-timing-sensitive` alone would drop the `-docker` that
+        # `.bazelrc` sets for `test`. The remote cache holds test results, so a
+        # change that leaves a target's inputs alone does not run it again.
+        echo "::group::build and daemon-free tests"
+        bazel test \
+          --build_tag_filters=-docker \
+          --test_tag_filters=-docker,-timing-sensitive \
+          //...
+        echo "::endgroup::"
+
+        # The suites that assert on wall clock run in an invocation of their
+        # own, after the build, so nothing competes with them for cores, and
+        # never under `--config=rbe`: `cpu:4` means nothing to a remote
+        # executor. //crates/raft records `kraft_engine_sim` failing 7 of 7 at
+        # twelve concurrent runs and passing at six. The build tag filter
+        # matches the invocation above so Bazel keeps its analysis cache.
+        echo "::group::timing-sensitive tests"
+        bazel test \
+          --build_tag_filters=-docker \
+          --test_tag_filters=timing-sensitive \
+          //crates/...
+        echo "::endgroup::"
+
+        if [ -n "${BUILDBUDDY_ARTIFACTS_DIRECTORY:-}" ]; then
+          (cd bazel-bin && find crates -name '*.rustdoc' -print0 \
+            | tar --null -czf "${BUILDBUDDY_ARTIFACTS_DIRECTORY}/rustdoc.tar.gz" -T -)
+        fi
     steps:
       - name: Keep temporary files off the size-limited /tmp tmpfs
         run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
@@ -81,8 +127,6 @@ jobs:
         with:
           # Change detection needs the merge base, not just the tip.
           fetch-depth: 0
-
-      - uses: ./.github/actions/reclaim-disk
 
       - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
         with:
@@ -117,80 +161,24 @@ jobs:
       - name: lint
         run: aspect lint --bazel-flag=--config=rbe
 
-      # No `--config=rbe`: this compiles, and rustc codegen actions cannot
-      # currently execute on the remote. See the `build:rbe` block in .bazelrc.
-      - name: build
-        run: |
-          aspect build \
-            --bazel-flag=--build_tag_filters=-docker \
-            //...
-
-      # Every test target that needs no Docker daemon and asserts on no wall
-      # clock. `build` above has already linked these binaries, so this step
-      # only runs them.
-      #
-      # `coverage` runs the same set under instrumentation, to measure. Before
-      # this step, `coverage` was the only place most of these targets ran
-      # under Bazel. On #571, `//crates/bench-driver:scenario_files_test`
-      # failed under Bazel twice, and only `coverage` reported it.
-      #
-      # The remote cache holds test results too. A pull request that does not
-      # change a target's inputs reads its result from the cache and does not
-      # run it again.
-      #
-      # The tag filter is named in full because `--test_tag_filters` is
-      # last-wins: `-timing-sensitive` alone would drop the `-docker` that
-      # `.bazelrc` sets for `test`.
-      #
-      # No `--config=rbe`, and the steps below are why the config is applied
-      # per step rather than per job.
-      - name: daemon-free tests
-        run: bazel test --test_tag_filters=-docker,-timing-sensitive //crates/...
-
-      # The suites tagged timing-sensitive, plus
-      # `//packaging:image_binaries_test`, which sits outside `//crates`. They
-      # run in an invocation of their own so that the ~140 suites above do not
-      # compete with them for the runner's four cores.
-      # No `--config=rbe`: `timing-sensitive` is exactly the tag for suites
-      # that assert on wall clock, and `cpu:4` -- which stops Bazel starving
-      # them locally -- means nothing to a remote executor, which sizes actions
-      # from `exec_properties`. //crates/raft records `kraft_engine_sim` failing
-      # 7 of 7 at twelve concurrent runs and passing at six.
-      - name: test
-        run: |
-          bazel test --test_tag_filters=timing-sensitive //crates/...
-          bazel test //packaging/...
-
-      # `aspect build` renders docs for impacted crates. Build the complete set
-      # here for the artifact, reusing this runner's Bazel output tree.
-      - name: docgen
-        run: |
-          set -euo pipefail
-          targets="${RUNNER_TEMP}/rustdoc-targets.txt"
-          bazel query 'kind("rust_doc rule", //crates/...)' > "${targets}"
-          test -s "${targets}"
-          bazel build --target_pattern_file="${targets}"
+      # The Bazel half of this job runs on a BuildBuddy remote runner when this
+      # run holds a key; see `.github/actions/buildbuddy-run` for why. `format`
+      # and `lint` stay here: they are short, `lint` already executes
+      # remotely, and `aspect lint` annotates the pull request from here.
+      - id: bazel
+        name: build, test and docgen
+        uses: ./.github/actions/buildbuddy-run
+        with:
+          lane: ci
+          script: ${{ env.CI_BAZEL_SCRIPT }}
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          upload: ${{ github.event_name != 'pull_request' }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.bazel.outputs.remote != 'true'
         with:
           name: rustdoc
           path: bazel-bin/crates/**/*.rustdoc
           if-no-files-found: error
-
-      # Impact analysis may omit a model when its source did not change. Run
-      # every Stateright-bearing target explicitly so the verification catalog
-      # remains a merge gate on every pull request.
-      # Local as well. These are model checks rather than wall-clock
-      # assertions, so they could run remotely, but they are the verification
-      # catalog's merge gate and there is no case for making a gate depend on a
-      # second service before the cheaper steps have proved it.
-      - name: stateright models
-        run: |
-          bazel test \
-            //crates/audit:audit_test \
-            //crates/broker:broker_test \
-            //crates/log:log_test \
-            //crates/raft:kraft_model_test \
-            //crates/throttle:bucket_model_test
 
   # Build and execute the tests with LLVM instrumentation, and upload the merged
   # LCOV report.
@@ -228,18 +216,15 @@ jobs:
   # `bazelisk-cache` and `repository-cache` stay: they hold fetched archives
   # rather than build outputs, and they are small.
   #
-  # On a pull request this job is gated on the change touching Rust or build
-  # inputs: `aspect changed-scope`, read through `select`, says so, and a
-  # docs-only pull request cannot move a coverage number. The gate is PR-only
-  # on purpose. A push to `main` always runs it, for two reasons: Codecov's
-  # trend line for the default branch would otherwise have holes wherever a
-  # docs-only commit landed, and `delivery` needs `[ci, coverage,
-  # supply-chain]`, which a skipped `coverage` on `main` would never satisfy.
-  # `changed-scope` fails open to `rust=true`, so an unreadable diff runs it.
+  # Coverage only measures, and the `ci` job already runs the same targets
+  # uninstrumented, so it sits out pull requests. A push to `main` always runs
+  # it, for two reasons: Codecov's trend line for the default branch would
+  # otherwise have holes, and `delivery` needs `[ci, coverage, supply-chain]`,
+  # which a skipped `coverage` on `main` would never satisfy. A dispatch runs
+  # it too.
   coverage:
     name: coverage
-    needs: select
-    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || needs.select.outputs.rust == 'true')
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
@@ -248,8 +233,6 @@ jobs:
       # No `fetch-depth: 0`: nothing here reads the merge base -- the report
       # covers every target under //crates/..., not the impacted ones.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: ./.github/actions/reclaim-disk
 
       - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
         with:
@@ -270,16 +253,26 @@ jobs:
           # read only.
           upload: ${{ github.event_name != 'pull_request' }}
 
-      - name: coverage
+      # The instrumented build and run happen on a BuildBuddy remote runner
+      # when this run holds a key (see `.github/actions/buildbuddy-run`), which
+      # writes every result to the remote cache. `bb remote` has no documented
+      # way to hand a file back, so the step after it runs the same command
+      # here: every action is then a cache hit, and this runner downloads only
+      # the per-test coverage files and merges them into the report Codecov
+      # reads. Without a key the first step runs here and the second is a
+      # no-op.
+      - id: bazel
+        name: coverage
+        uses: ./.github/actions/buildbuddy-run
+        with:
+          lane: coverage
+          script: bazel coverage //crates/...
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          upload: ${{ github.event_name != 'pull_request' }}
+      - name: collect the coverage report from the remote cache
+        if: steps.bazel.outputs.remote == 'true'
         run: bazel coverage //crates/...
 
-      # `if: always()`, and the three directories by name: when this job does
-      # run the disk out, the failure arrives as a linker `Bus error` or a bare
-      # `No space left on device` that names no consumer. This says which of the
-      # output tree, the repository cache and the disk cache took the space --
-      # together they are the job's whole footprint. `bazel-disk` stays on the
-      # list although this job no longer configures one, because a line
-      # reappearing there is the signal that it has come back.
       - name: disk usage after coverage
         if: always()
         run: |
@@ -327,9 +320,13 @@ jobs:
   #
   # `cargo deny` is a sibling job rather than a step here for the same reason
   # it always was: it needs neither a toolchain nor a build directory.
+  # Clippy gates every pull request that reaches the Rust build, because Bazel
+  # does not run it. nextest repeats what the `ci` job's `bazel test` already
+  # ran, under Cargo, so it runs on pushes to `main` and on a dispatch only.
   cargo:
     name: cargo clippy · nextest
-    if: github.event_name != 'schedule'
+    needs: select
+    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || needs.select.outputs.rust == 'true')
     runs-on: ubuntu-26.04
     # Cold builds, the full suite and the post-job cache upload share this budget.
     timeout-minutes: 90
@@ -353,55 +350,48 @@ jobs:
         run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: ./.github/actions/reclaim-disk
-
-      # `rust-toolchain.toml` is the single pin, so read the channel out of it
-      # rather than restating it here: a bump there must not leave this job
-      # installing the previous compiler and downloading the new one anyway on
-      # the first `cargo` invocation.
-      - id: toolchain
-        run: |
-          set -euo pipefail
-          channel="$(sed -ne 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
-          test -n "${channel}"
-          echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
-
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
-        with:
-          toolchain: ${{ steps.toolchain.outputs.channel }}
-          components: clippy
-
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-
-      # The tarball rather than a fourth pinned action: `get.nexte.st` is the
-      # install path the nextest book documents for CI, and it lands one
-      # prebuilt binary next to `cargo` with no compilation.
-      - name: install cargo-nextest
-        run: |
-          set -euo pipefail
-          curl -LsSf --retry 5 --retry-all-errors \
-            --output "${RUNNER_TEMP}/cargo-nextest.tar.gz" \
-            https://get.nexte.st/latest/linux
-          tar zxf "${RUNNER_TEMP}/cargo-nextest.tar.gz" \
-            -C "${CARGO_HOME:-${HOME}/.cargo}/bin"
-
-      # `--all-targets` is also what keeps the criterion benches compiling.
-      # It includes `--benches`, so every `[[bench]]` target in
-      # `crates/broker` and `crates/log` is type-checked on every pull request
-      # and a bench that stops building fails here. The `bench` job below runs
-      # them on a schedule or dispatch. Bazel's `crate_bench` also compiles and
-      # lints them; a `cargo bench --no-run` step beside this would repeat the
-      # Cargo compilation check.
-      - name: clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
+      # Clippy and nextest run on a BuildBuddy remote runner when this run
+      # holds a key (see `.github/actions/buildbuddy-run`), whose snapshot keeps
+      # the toolchain and the target directory warm between runs. Without one
+      # they run here, where rustup installs the `rust-toolchain.toml` pin.
+      #
+      # `--all-targets` is also what keeps the criterion benches compiling: it
+      # includes `--benches`, so every `[[bench]]` target in `crates/broker`
+      # and `crates/log` is type-checked and a bench that stops building fails
+      # here.
+      #
       # `--profile ci` is what excludes the two suites `//crates/broker`'s
       # `manual` list excludes for the same reasons -- see the `default-filter`
       # in `.config/nextest.toml`. The container-backed cases are `#[ignore]`d
       # and nextest does not run those unless asked.
-      - name: nextest
-        run: cargo nextest run --workspace --profile ci
+      - name: clippy and nextest
+        uses: ./.github/actions/buildbuddy-run
+        with:
+          lane: cargo
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          upload: ${{ github.event_name != 'pull_request' }}
+          env: |
+            CARGO_PROFILE_DEV_DEBUG=line-tables-only
+            RUN_NEXTEST=${{ github.event_name != 'pull_request' }}
+          script: |
+            set -euo pipefail
+            if ! command -v rustup >/dev/null; then
+              curl --proto '=https' --tlsv1.2 -sSf --retry 5 https://sh.rustup.rs \
+                | sh -s -- -y --profile minimal --default-toolchain none
+            fi
+            export PATH="${CARGO_HOME:-${HOME}/.cargo}/bin:${PATH}"
+            # Installs the channel and components `rust-toolchain.toml` names.
+            rustup toolchain install
 
+            cargo clippy --workspace --all-targets -- -D warnings
+
+            if [ "${RUN_NEXTEST}" = "true" ]; then
+              if ! command -v cargo-nextest >/dev/null; then
+                curl -LsSf --retry 5 --retry-all-errors https://get.nexte.st/latest/linux \
+                  | tar zxf - -C "${CARGO_HOME:-${HOME}/.cargo}/bin"
+              fi
+              cargo nextest run --workspace --profile ci
+            fi
   # The broker library for wasm32-wasip1, the target that the Cluster Lab
   # runs a real broker on in a browser. Neither Bazel nor the job above builds
   # it, so this is what keeps the platform gates honest: a native-only
@@ -413,9 +403,12 @@ jobs:
   # needs for `net` on a wasm target, scoped to that target. The packages are
   # the broker's library and every workspace crate in its graph; the binaries
   # and the tests stay native-only.
+  #
+  # A pull request that does not reach the Rust build skips it.
   wasm:
     name: cargo clippy · wasm32-wasip1
-    if: github.event_name != 'schedule'
+    needs: select
+    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || needs.select.outputs.rust == 'true')
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
@@ -525,6 +518,12 @@ jobs:
       # dropping off a function as crates/verified grows.
       - name: every #[cfg(creusot)] fn skips mutation testing
         run: aspect check-creusot-skip
+      # The proved-package list and what the proof image actually proves cannot
+      # drift apart. It runs here rather than in `proofs`, which a pull request
+      # skips unless it touches the proved crates: a crate that gains a contract
+      # is exactly the change that scope would not see.
+      - name: the proofs job covers every Creusot package
+        run: aspect check-creusot-packages
 
       # Documentation source checks do not use Bazel, so they stay off the
       # critical path while the `ci` job renders and uploads rustdoc from its
@@ -615,7 +614,12 @@ jobs:
   #
   # The sessions are checked in, and nothing re-ran them before this job, so a
   # contract change could invalidate a proof and leave the stale session in the
-  # tree with no signal. This proves them again on every change.
+  # tree with no signal. This proves them again on every change that reaches
+  # them.
+  #
+  # Only a change that reaches the proofs' inputs runs it on a pull request or a
+  # push (see `aspect changed-scope`); the nightly and a dispatch always run it,
+  # and a release requires one of those to be green.
   #
   # It gates on the proof RESULT and never on the artifacts. A `.coma` file
   # embeds the absolute source path of the machine that wrote it, so a checkout
@@ -626,7 +630,8 @@ jobs:
   # including crates with no proof contracts, so discover the relevant members.
   proofs:
     name: creusot proofs
-    if: github.event_name != 'schedule'
+    needs: select
+    if: needs.select.outputs.proofs == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 90
     permissions:
@@ -659,13 +664,6 @@ jobs:
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
           upload: ${{ github.event_name != 'pull_request' }}
-
-      # The proved-package list and what the proof image actually proves cannot
-      # drift apart. This ran inside the image until the checks moved to AXL
-      # tasks; the image has no Aspect CLI, so it runs here, before the image
-      # does anything.
-      - name: the proofs job covers every Creusot package
-        run: aspect check-creusot-packages
 
       # A digest of everything that decides the image's contents. See
       # //tools/creusot for why the registry, and not the Bazel disk cache, is
@@ -767,8 +765,10 @@ jobs:
   # invocation, which analyses and compiles the shared broker closure once
   # rather than once per suite.
   #
-  # This job also answers whether the change touches Rust or build inputs at
-  # all, which is what lets `coverage` sit out a docs-only pull request.
+  # This job also answers, through `aspect changed-scope`, whether the change
+  # reaches the Rust build, the kind smoke test's inputs and the Creusot
+  # proofs' inputs, which is what lets `cargo`, `wasm`, `kubernetes` and
+  # `proofs` sit out a pull request that cannot affect them.
   select:
     name: select
     runs-on: ubuntu-26.04
@@ -777,6 +777,8 @@ jobs:
       suites: ${{ steps.select.outputs.suites }}
       any: ${{ steps.select.outputs.any }}
       rust: ${{ steps.scope.outputs.rust }}
+      kubernetes: ${{ steps.scope.outputs.kubernetes }}
+      proofs: ${{ steps.scope.outputs.proofs }}
     env:
       BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
       FULL_MATRIX: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
@@ -819,7 +821,8 @@ jobs:
       # a job slot nothing. `--base` is omitted on the full-matrix runs for the
       # same reason `container-suites` omits it: with no merge base to compare
       # against there is no diff to narrow by, and `changed-scope` fails open to
-      # `rust=true` -- which is what a scheduled or dispatched run wants anyway.
+      # every scope `true` -- which is what a scheduled or dispatched run wants
+      # anyway.
       - id: scope
         run: |
           set -euo pipefail
@@ -924,8 +927,14 @@ jobs:
             bazel build ${builds}
           fi
 
+  # The kind smoke test runs on a pull request or push only when the change
+  # reaches the image packaging or the cluster manifests (see `aspect
+  # changed-scope`). The nightly and a dispatch always run it, and a release
+  # requires one of those to be green.
   kubernetes:
     name: kubernetes · kind
+    needs: select
+    if: needs.select.outputs.kubernetes == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
@@ -1463,7 +1472,7 @@ jobs:
           jq -r 'to_entries[] | "\(.value.result)\t\(.key)"' <<<"${NEEDS}" | sort
           unmet="$(
             jq -r '
-              ["coverage", "docker"] as $may_skip
+              ["cargo", "coverage", "docker", "kubernetes", "proofs", "wasm"] as $may_skip
               | to_entries[]
               | . as $dep
               | select($dep.value.result != "success")
@@ -1502,7 +1511,7 @@ jobs:
   # point `mutants.yml`'s schedule at the same mechanism.
   nightly-report:
     name: nightly report
-    needs: [select, docker, gssapi, links, bench, soak, netem, kubernetes, upgrade]
+    needs: [select, docker, gssapi, links, bench, soak, netem, kubernetes, proofs, upgrade]
     # `always()`: the whole point is to run when a dependency failed, and a
     # plain `needs` would skip this job exactly then.
     if: always() && github.event_name == 'schedule'
