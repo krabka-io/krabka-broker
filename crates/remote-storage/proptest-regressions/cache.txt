@@ -1,7 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc c9f7c24b70add04134d0d242efd88c7f35e4fb93f36d7dfea16c7b4171a29e3e # shrinks to pool = [{LeaderEpoch(0): 0}, {LeaderEpoch(0): 0}, {LeaderEpoch(0): 0}, {LeaderEpoch(0): 0}, {LeaderEpoch(0): 0}], steps = [Add(1), Update { slot: 1, state: CopySegmentFinished, event_timestamp_ms: 200 }, Update { slot: 1, state: DeleteSegmentStarted, event_timestamp_ms: 200 }]
