@@ -84,3 +84,101 @@ async fn a_zero_thread_pool_still_serves_one_read_at_a_time() {
         .expect("a pool must never refuse everything");
     drop(permit);
 }
+
+/// A Fetch whose remote wait runs out drops its queued `acquire`. That waiter
+/// must give its queue slot back, or every cancelled read shrinks the queue
+/// for good and the pool ends up refusing reads while all its readers are idle.
+#[tokio::test]
+async fn a_cancelled_waiter_gives_its_queue_slot_back() {
+    let pool = ReaderPool::new(1, 1);
+    let held = pool.acquire().await.expect("the one slot");
+
+    {
+        let cancelled = pool.acquire();
+        tokio::pin!(cancelled);
+        check!(futures_util::poll!(cancelled.as_mut()).is_pending());
+        check!(pool.queue_size() == 1);
+    }
+    check!(pool.queue_size() == 0);
+
+    // The freed slot takes a new waiter instead of refusing it.
+    let queued = pool.acquire();
+    tokio::pin!(queued);
+    check!(futures_util::poll!(queued.as_mut()).is_pending());
+    check!(pool.queue_size() == 1);
+    check!(pool.rejected() == 0);
+
+    drop(held);
+    let permit = queued.await.expect("the queued read gets the slot");
+    check!(pool.queue_size() == 0);
+    drop(permit);
+    check!(is_percent(pool.idle_percent(), 100.0));
+}
+
+/// Far more cancellations than the queue holds, at Kafka's default
+/// `remote.log.reader.max.pending.tasks`, leave the queue empty and the pool
+/// serving.
+#[tokio::test]
+async fn repeated_cancellations_never_exhaust_the_queue() {
+    let pool = ReaderPool::new(1, 100);
+    let held = pool.acquire().await.expect("the one slot");
+    for _ in 0..1_000 {
+        let cancelled = pool.acquire();
+        tokio::pin!(cancelled);
+        check!(futures_util::poll!(cancelled.as_mut()).is_pending());
+    }
+    check!(pool.queue_size() == 0);
+    check!(pool.rejected() == 0);
+    drop(held);
+
+    let permit = pool
+        .acquire()
+        .await
+        .expect("an idle pool serves the next read");
+    check!(pool.queue_size() == 0);
+    drop(permit);
+}
+
+/// A waiter the semaphore has already handed the freed permit to, dropped
+/// before it is polled again, releases both its queue slot and that permit,
+/// and releases each once.
+#[tokio::test]
+async fn a_waiter_cancelled_after_its_permit_was_assigned_releases_both_once() {
+    let pool = ReaderPool::new(1, 1);
+    let held = pool.acquire().await.expect("the one slot");
+    {
+        let woken = pool.acquire();
+        tokio::pin!(woken);
+        check!(futures_util::poll!(woken.as_mut()).is_pending());
+        drop(held);
+    }
+    check!(pool.queue_size() == 0);
+    check!(is_percent(pool.idle_percent(), 100.0));
+
+    let permit = pool.acquire().await.expect("the slot is free again");
+    check!(pool.queue_size() == 0);
+    check!(is_percent(pool.idle_percent(), 0.0));
+    drop(permit);
+}
+
+/// A refused read never held a queue slot, so it must not give one back: the
+/// queued waiter keeps its place and the count does not drop below it.
+#[tokio::test]
+async fn a_refused_read_leaves_the_queue_count_alone() {
+    let pool = ReaderPool::new(1, 1);
+    let held = pool.acquire().await.expect("the one slot");
+    let queued = pool.acquire();
+    tokio::pin!(queued);
+    check!(futures_util::poll!(queued.as_mut()).is_pending());
+
+    for _ in 0..3 {
+        check!(pool.acquire().await.is_err());
+    }
+    check!(pool.queue_size() == 1);
+    check!(pool.rejected() == 3);
+
+    drop(held);
+    let permit = queued.await.expect("the queued read still gets its slot");
+    check!(pool.queue_size() == 0);
+    drop(permit);
+}
