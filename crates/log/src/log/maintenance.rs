@@ -2,7 +2,11 @@
 
 use {
     super::{Log, PendingDelete, RollJitter},
-    crate::{error::LogError, io::LogIo, retention},
+    crate::{
+        error::LogError,
+        io::LogIo,
+        retention::{self, DirSync},
+    },
     krabka_ids::Offset,
     krabka_units::{Time, prelude::TimeExt as _},
     std::{
@@ -234,14 +238,19 @@ impl Log {
         if self.config.read().unwrap().file_delete_delay <= Time::ZERO {
             return retention::delete_segment_files(&*self.io, &self.dir, base);
         }
-        self.retire_files(base, now, &[
-            "log",
-            "index",
-            "timeindex",
-            "txnindex",
-            "stampindex",
-            "snapshot",
-        ])
+        self.retire_files(
+            base,
+            now,
+            &[
+                "log",
+                "index",
+                "timeindex",
+                "txnindex",
+                "stampindex",
+                "snapshot",
+            ],
+            DirSync::Now,
+        )
     }
 
     pub(super) fn retire_files(
@@ -249,6 +258,7 @@ impl Log {
         base: Offset,
         now: SystemTime,
         extensions: &[&str],
+        sync: DirSync,
     ) -> Result<(), LogError> {
         let delay = self.config.read().unwrap().file_delete_delay;
         let delay =
@@ -257,7 +267,8 @@ impl Log {
             .checked_add(delay)
             .ok_or_else(|| LogError::InvalidArgument("file deletion deadline overflow".into()))?;
         let mut paths = Vec::new();
-        let result = retention::retire_files(&*self.io, &self.dir, base, extensions, &mut paths);
+        let result =
+            retention::retire_files(&*self.io, &self.dir, base, extensions, &mut paths, sync);
         if !paths.is_empty() {
             self.pending_deletes.push(PendingDelete { deadline, paths });
         }

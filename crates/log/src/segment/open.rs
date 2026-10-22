@@ -29,6 +29,7 @@ use {
 /// writes it: the offset index gets the indexed batch's last offset and its
 /// byte position, and the time index gets the running maximum timestamp with
 /// the last offset of the batch that set it.
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct IndexPoint {
     /// Last offset of the indexed batch, relative to the segment base.
     last_offset: u32,
@@ -41,12 +42,165 @@ struct IndexPoint {
     max_timestamp_offset: u32,
 }
 
-struct TailScan {
+/// What a walk over a segment's batches derives: the end of their valid
+/// prefix, the segment's frontiers, and the sparse-index points Kafka's
+/// `LogSegment.recover` writes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TailScan {
     valid_end: u64,
     last_offset: Offset,
     max_timestamp: i64,
     max_timestamp_offset: Offset,
     index_points: Vec<IndexPoint>,
+}
+
+/// Builds a [`TailScan`] one batch at a time, in file order.
+///
+/// The tail scan feeds it the batches it decodes from a file, and a
+/// compaction rewrite the batches it writes, so the two derive the same
+/// frontiers and index points by the same rule.
+pub(crate) struct FrontierScan {
+    base_offset: Offset,
+    file_end: u64,
+    index_interval: ByteSize,
+    next_offset: i64,
+    scan: TailScan,
+}
+
+impl FrontierScan {
+    /// A walk over a segment at `base_offset` whose file holds `file_end`
+    /// bytes, indexing every `index_interval` bytes.
+    pub(crate) fn new(
+        base_offset: Offset,
+        file_end: u64,
+        index_interval: ByteSize,
+    ) -> Result<Self, LogError> {
+        let last_offset = base_offset
+            .0
+            .checked_sub(1)
+            .map(Offset)
+            .ok_or_else(|| LogError::Corrupt("recovery offset underflow".into()))?;
+        Ok(Self {
+            base_offset,
+            file_end,
+            index_interval,
+            next_offset: base_offset.0,
+            scan: TailScan {
+                valid_end: 0,
+                last_offset,
+                max_timestamp: i64::MIN,
+                max_timestamp_offset: last_offset,
+                index_points: Vec::new(),
+            },
+        })
+    }
+
+    /// Take `batch`, `encoded_len` bytes long, which starts where the valid
+    /// prefix ends. Returns `false`, and takes nothing, when the batch does not
+    /// extend the valid prefix: it runs past the file, or its offsets do not
+    /// follow the prefix's.
+    pub(crate) fn push(&mut self, batch: &RecordBatch, encoded_len: u64) -> Result<bool, LogError> {
+        let batch_position = self.scan.valid_end;
+        let Some(step) = krabka_verified::local_recovery_batch_step(
+            batch_position,
+            self.file_end,
+            self.next_offset,
+            batch.base_offset,
+            batch.last_offset_delta,
+            encoded_len,
+        ) else {
+            return Ok(false);
+        };
+        let scan = &mut self.scan;
+        scan.valid_end = step.valid_end;
+        scan.last_offset = Offset(step.last_offset);
+        self.next_offset = step.next_offset;
+        if batch.max_timestamp > scan.max_timestamp {
+            scan.max_timestamp = batch.max_timestamp;
+            scan.max_timestamp_offset = scan.last_offset;
+        }
+        // Kafka's `LogSegment.recover`: `validBytes - lastIndexEntry >
+        // indexIntervalBytes`, the last entry starting at zero.
+        let last_indexed = scan
+            .index_points
+            .last()
+            .map_or(0, |previous| u64::from(previous.position));
+        if batch_position.saturating_sub(last_indexed) > self.index_interval.bytes_u64() {
+            let base_offset = self.base_offset;
+            let relative = |offset: Offset| {
+                krabka_verified::truncation_relative_offset(base_offset.0, offset.0).ok_or_else(
+                    || LogError::Corrupt("recovered batch offset exceeds index range".into()),
+                )
+            };
+            let position = u32::try_from(batch_position).map_err(|_| {
+                LogError::Corrupt("recovered batch position exceeds index range".into())
+            })?;
+            scan.index_points.push(IndexPoint {
+                last_offset: relative(scan.last_offset)?,
+                position,
+                max_timestamp: scan.max_timestamp,
+                max_timestamp_offset: relative(scan.max_timestamp_offset)?,
+            });
+        }
+        Ok(true)
+    }
+
+    /// The walk's result.
+    pub(crate) fn finish(self) -> TailScan { self.scan }
+}
+
+impl TailScan {
+    /// Check that the scanned prefix fits a segment: its end in a `u32`
+    /// position and its offsets in the 32-bit relative index.
+    fn check_index_range(&self, base_offset: Offset) -> Result<(), LogError> {
+        u32::try_from(self.valid_end)
+            .map_err(|_| LogError::Corrupt("recovered segment position exceeds u32".into()))?;
+        krabka_verified::local_recovery_index_frontier(base_offset.0, self.last_offset.0)
+            .ok_or_else(|| {
+                LogError::Corrupt("recovered segment offset exceeds index range".into())
+            })?;
+        Ok(())
+    }
+
+    /// Append the scan's index points to `offset_index` and `time_index`,
+    /// then the running maximum timestamp, as a segment that closed normally
+    /// always had its newest timestamp in the index (Kafka's
+    /// `LogSegment.recover` ends the same way).
+    fn write_index_points(
+        &self,
+        base_offset: Offset,
+        offset_index: &mut OffsetIndex,
+        time_index: &mut TimeIndex,
+    ) -> Result<(), LogError> {
+        for point in &self.index_points {
+            offset_index.append(point.last_offset, point.position)?;
+            time_index.maybe_append(point.max_timestamp, point.max_timestamp_offset)?;
+        }
+        if self.max_timestamp >= 0 {
+            let relative = krabka_verified::truncation_relative_offset(
+                base_offset.0,
+                self.max_timestamp_offset.0,
+            )
+            .ok_or_else(|| LogError::BadSegmentName("offset overflow in segment".into()))?;
+            time_index.maybe_append(self.max_timestamp, relative)?;
+        }
+        Ok(())
+    }
+
+    /// Write the scan's sparse indexes for a segment at `base_offset` into
+    /// the index files at `index_path` and `timeindex_path`, which a
+    /// compaction rewrite creates empty beside its output.
+    pub(crate) fn write_indexes(
+        &self,
+        base_offset: Offset,
+        index_path: &Path,
+        timeindex_path: &Path,
+    ) -> Result<(), LogError> {
+        self.check_index_range(base_offset)?;
+        let mut offset_index = OffsetIndex::open(index_path)?;
+        let mut time_index = TimeIndex::open(timeindex_path)?;
+        self.write_index_points(base_offset, &mut offset_index, &mut time_index)
+    }
 }
 
 impl Segment {
@@ -141,12 +295,7 @@ impl Segment {
     )]
     fn recover_active_tail(&mut self, index_interval: ByteSize) -> Result<(), LogError> {
         let recovered = self.scan_valid_tail(index_interval)?;
-        u32::try_from(recovered.valid_end)
-            .map_err(|_| LogError::Corrupt("recovered segment position exceeds u32".into()))?;
-        krabka_verified::local_recovery_index_frontier(self.base_offset.0, recovered.last_offset.0)
-            .ok_or_else(|| {
-                LogError::Corrupt("recovered segment offset exceeds index range".into())
-            })?;
+        recovered.check_index_range(self.base_offset)?;
         if recovered.valid_end < self.log_size {
             self.log_file.set_len(recovered.valid_end)?;
             self.renew_reservation();
@@ -155,18 +304,14 @@ impl Segment {
         seek_to_log_size(&self.log_file, self.log_size)?;
         self.offset_index.truncate_by_position(0)?;
         self.time_index.truncate_by_relative_offset(0)?;
-        for point in recovered.index_points {
-            self.offset_index
-                .append(point.last_offset, point.position)?;
-            self.time_index
-                .maybe_append(point.max_timestamp, point.max_timestamp_offset)?;
-        }
+        recovered.write_index_points(
+            self.base_offset,
+            &mut self.offset_index,
+            &mut self.time_index,
+        )?;
         self.last_offset = recovered.last_offset;
         self.max_timestamp = recovered.max_timestamp;
         self.max_timestamp_offset = recovered.max_timestamp_offset;
-        // Kafka's `LogSegment.recover` ends the same way: a segment that
-        // closed normally always had its newest timestamp in the index.
-        self.append_running_max_time_entry()?;
         tracing::Span::current().record("recovered_last_offset", self.last_offset.0);
         Ok(())
     }
@@ -176,75 +321,20 @@ impl Segment {
         let to_read = usize::try_from(self.log_size).unwrap_or(usize::MAX);
         self.read_log_range(0, &mut buf, to_read)?;
 
+        let mut scan = FrontierScan::new(self.base_offset, self.log_size, index_interval)?;
         let mut cur: &[u8] = &buf;
-        let mut valid_end = 0;
-        let mut next_offset = self.base_offset.0;
-        let mut last_offset = self
-            .base_offset
-            .0
-            .checked_sub(1)
-            .map(Offset)
-            .ok_or_else(|| LogError::Corrupt("recovery offset underflow".into()))?;
-        let mut max_timestamp = i64::MIN;
-        let mut max_timestamp_offset = last_offset;
-        let mut index_points: Vec<IndexPoint> = Vec::new();
         while !cur.is_empty() {
-            let batch_position = valid_end;
             let before = cur.len();
             let Ok(batch) = RecordBatch::decode(&mut cur) else {
                 break;
             };
             let encoded_len = u64::try_from(before - cur.len())
                 .map_err(|_| LogError::Corrupt("decoded batch length exceeds u64".into()))?;
-            let Some(step) = krabka_verified::local_recovery_batch_step(
-                valid_end,
-                self.log_size,
-                next_offset,
-                batch.base_offset,
-                batch.last_offset_delta,
-                encoded_len,
-            ) else {
+            if !scan.push(&batch, encoded_len)? {
                 break;
-            };
-            valid_end = step.valid_end;
-            last_offset = Offset(step.last_offset);
-            next_offset = step.next_offset;
-            if batch.max_timestamp > max_timestamp {
-                max_timestamp = batch.max_timestamp;
-                max_timestamp_offset = last_offset;
-            }
-            // Kafka's `LogSegment.recover`: `validBytes - lastIndexEntry >
-            // indexIntervalBytes`, the last entry starting at zero.
-            let last_indexed = index_points
-                .last()
-                .map_or(0, |previous| u64::from(previous.position));
-            let should_index =
-                batch_position.saturating_sub(last_indexed) > index_interval.bytes_u64();
-            if should_index {
-                let relative = |offset: Offset| {
-                    krabka_verified::truncation_relative_offset(self.base_offset.0, offset.0)
-                        .ok_or_else(|| {
-                            LogError::Corrupt("recovered batch offset exceeds index range".into())
-                        })
-                };
-                let position = u32::try_from(batch_position).map_err(|_| {
-                    LogError::Corrupt("recovered batch position exceeds index range".into())
-                })?;
-                index_points.push(IndexPoint {
-                    last_offset: relative(last_offset)?,
-                    position,
-                    max_timestamp,
-                    max_timestamp_offset: relative(max_timestamp_offset)?,
-                });
             }
         }
-        Ok(TailScan {
-            valid_end,
-            last_offset,
-            max_timestamp,
-            max_timestamp_offset,
-            index_points,
-        })
+        Ok(scan.finish())
     }
 
     /// Open an existing segment for reading and refuse further appends.
@@ -272,6 +362,29 @@ impl Segment {
         segment.max_timestamp = scanned.max_timestamp;
         segment.max_timestamp_offset = scanned.max_timestamp_offset;
         segment.sealed = true;
+        Ok(segment)
+    }
+
+    /// Open the segment a compaction rewrite wrote at `base_offset`, from the
+    /// [`TailScan`] the rewrite derived while it wrote it and the indexes it
+    /// wrote with [`TailScan::write_indexes`], without decoding the file
+    /// again. The file must hold exactly the bytes the scan covers.
+    pub(crate) fn open_rewritten(
+        dir: &Path,
+        base_offset: Offset,
+        scan: &TailScan,
+    ) -> Result<Self, LogError> {
+        let mut segment = Self::open_unscanned(dir, base_offset)?;
+        if segment.log_size != scan.valid_end {
+            return Err(LogError::Corrupt(format!(
+                "rewritten segment {} holds {} bytes, the rewrite wrote {}",
+                base_offset.0, segment.log_size, scan.valid_end
+            )));
+        }
+        scan.check_index_range(base_offset)?;
+        segment.last_offset = scan.last_offset;
+        segment.max_timestamp = scan.max_timestamp;
+        segment.max_timestamp_offset = scan.max_timestamp_offset;
         Ok(segment)
     }
 

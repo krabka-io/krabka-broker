@@ -7,7 +7,10 @@
 
 use {
     super::Log,
-    crate::{error::LogError, producer_snapshot, segment::Segment, txn_index::TxnIndex},
+    crate::{
+        error::LogError, producer_snapshot, retention::DirSync, segment::Segment,
+        txn_index::TxnIndex,
+    },
     krabka_ids::Offset,
     std::collections::HashSet,
     tracing::instrument,
@@ -36,13 +39,12 @@ impl Log {
         // Producer snapshots are pruned separately by retain_reload_range:
         // the snapshot exactly at the cut must survive deleting its segment.
         let now = std::time::SystemTime::now();
-        self.retire_files(base, now, &[
-            "log",
-            "index",
-            "timeindex",
-            "txnindex",
-            "stampindex",
-        ])
+        self.retire_files(
+            base,
+            now,
+            &["log", "index", "timeindex", "txnindex", "stampindex"],
+            DirSync::Now,
+        )
     }
 
     /// Truncate the log so that no record at offset `>= offset` remains.

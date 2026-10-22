@@ -14,7 +14,7 @@ use {
             replaces_producer_snapshot,
         },
         error::LogError,
-        retention,
+        retention::{self, DirSync},
         segment::{SealedInput, Segment},
         txn_index::TxnIndex,
     },
@@ -526,7 +526,6 @@ impl Log {
         }
         let rewrites = rewrites?;
         let consumed = job.inputs.len();
-        let index_interval = job.index_interval;
         // The swap below claims the job's files. The job's inputs share the
         // consumed segments' file handles, which must close before it, as the
         // segments' own do.
@@ -572,19 +571,17 @@ impl Log {
                         } else {
                             &["log", "index", "timeindex", "txnindex"]
                         };
-                    self.retire_files(base, now, files)
+                    // The swap syncs the directory once all the consumed
+                    // segments are retired, before anything depends on it.
+                    self.retire_files(base, now, files, DirSync::Deferred)
                 })?;
             }
 
-            // Validation scans the new log from byte zero, rebuilds both
-            // sparse indexes, and derives exact offset and timestamp
-            // frontiers before the segment is sealed.
-            let mut new_seg = Segment::open_active_with_index_interval(
-                &self.dir,
-                rewrite.new_base_offset,
-                true,
-                index_interval,
-            )?;
+            // The rewrite derived the output's frontiers and sparse indexes
+            // as it wrote it, by the rule a recovery scan applies, so the
+            // segment opens without decoding its batches again under the log.
+            let mut new_seg =
+                Segment::open_rewritten(&self.dir, rewrite.new_base_offset, &rewrite.frontier)?;
             new_seg.set_io(self.io.clone());
             new_seg.seal()?;
             let txn_index = TxnIndex::open(new_seg.txn_index_path())?;
@@ -616,6 +613,8 @@ impl Log {
     }
 }
 
+#[cfg(test)]
+mod install_tests;
 #[cfg(test)]
 mod job_tests;
 #[cfg(test)]

@@ -89,6 +89,16 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   measurements on #1639, the lock was held for 50 ms instead of 1.5 s during
   a pass over 45 MiB of gzip records, and for 150 ms instead of 0.8 s over
   256 compressed segments (#1639).
+- Installing a compaction pass holds the log mutex for less time. The install
+  used to re-read every output segment under the mutex to rebuild its offset
+  and time indexes, and to sync the directory once for each segment it
+  retired. The pass now writes each output's indexes while it builds the
+  output, from the same index rule recovery applies, and the install syncs the
+  directory once after it retires them all. An output whose file is not what
+  the build wrote fails the pass as corrupt. In the measurements on the pull
+  request, the install held the mutex for 9 ms instead of 150 ms over 256
+  compressed segments, and for 1.4 ms instead of 43 ms over 45 MiB of gzip
+  records. The files on disk are the same as before.
 - A produce append runs on the request's own task when it only writes to the
   page cache. The partition writer task used to take every produce, so each
   one paid two cross-thread wakes before its write. The request task now takes

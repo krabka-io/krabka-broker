@@ -13,7 +13,7 @@ use {
         io::{IoTarget, LogIo, write_all},
         record_limit::check_records_read,
         recovery::swap::cleaned_path,
-        segment::SealedInput,
+        segment::{FrontierScan, SealedInput, TailScan},
         txn_index::TxnIndex,
     },
     bytes::{Bytes, BytesMut},
@@ -36,16 +36,25 @@ mod tests;
 #[cfg(test)]
 mod transaction_tests;
 
-/// Encode one retained batch and advance the inclusive output frontier after its write.
+/// Encode one retained batch, account for it in the output's `frontier`, and
+/// advance the inclusive output frontier after its write.
 fn write_rewritten_batch(
     io: &dyn LogIo,
     file: &File,
     batch: &RecordBatch,
     previous_last: Offset,
+    frontier: &mut FrontierScan,
 ) -> Result<Offset, LogError> {
     let mut bytes = BytesMut::with_capacity(batch.encoded_len());
     batch.encode(&mut bytes)?;
     write_all(io, IoTarget::CompactionSwap, file, &bytes)?;
+    let encoded_len = u64::try_from(bytes.len()).expect("a batch length fits in u64");
+    if !frontier.push(batch, encoded_len)? {
+        return Err(LogError::Corrupt(format!(
+            "rewritten batch at offset {} does not follow the batches written before it",
+            batch.base_offset
+        )));
+    }
     Ok(previous_last.max(Offset(
         batch.base_offset + i64::from(batch.last_offset_delta),
     )))
@@ -71,6 +80,10 @@ pub struct RewriteOutput {
     /// when it keeps the abort marker of one or more aborted transactions. It
     /// is `None` when no aborted transaction survives.
     pub txnindex_swap: Option<PathBuf>,
+    /// What the rewrite derived about the output as it wrote it: its length,
+    /// frontiers and index points, which `index_swap` and `timeindex_swap`
+    /// already hold. The install opens the output from it without scanning.
+    pub(crate) frontier: TailScan,
 }
 
 /// Time-based retention inputs used while rewriting compacted segments.
@@ -112,6 +125,8 @@ pub struct CleaningRound<'a> {
     /// Kafka trunk's `max.decompressed.message.bytes`, the `maxRecordBodySize`
     /// `Cleaner.cleanInto` hands to `MemoryRecords.filterTo`. `None` is no limit.
     pub max_decompressed_record: Option<ByteSize>,
+    /// The topic's `index.interval.bytes`, for the output's sparse indexes.
+    pub index_interval: ByteSize,
 }
 
 impl CleaningRound<'_> {
@@ -208,11 +223,10 @@ pub fn rewrite_segments(
     let index_swap = swap_path(dir, new_base.0, "index");
     let timeindex_swap = swap_path(dir, new_base.0, "timeindex");
 
-    // Truncate (or create) all three .cleaned files. We rewrite the .log
-    // file proper here; for the index sidecars we write empty files
-    // and let Segment::open populate them via tail-scan in the recovery
-    // promotion path. (Sparse indexes are derivable from the .log; an
-    // empty index is correct and small.)
+    // Truncate (or create) all three .cleaned files. The .log gets the
+    // retained batches; the index sidecars get the sparse indexes the walk
+    // derives as it writes them, by the rule a recovery scan applies, so the
+    // install can open the output without decoding it again.
     let log_file = OpenOptions::new()
         .write(true)
         .create(true)
@@ -233,6 +247,7 @@ pub fn rewrite_segments(
     // never sits in memory decoded: a compressed group can expand to many
     // times the `segment.bytes` it is bounded by on disk.
     let mut last_kept_offset = new_base - 1;
+    let mut frontier = FrontierScan::new(new_base, u64::MAX, round.index_interval)?;
     for batch in group_batches(segments) {
         let batch = &batch?;
         let is_control = batch.attributes.is_control_batch();
@@ -322,7 +337,8 @@ pub fn rewrite_segments(
                 continue;
             }
             let out_batch = bare_header(batch);
-            last_kept_offset = write_rewritten_batch(io, &log_file, &out_batch, last_kept_offset)?;
+            last_kept_offset =
+                write_rewritten_batch(io, &log_file, &out_batch, last_kept_offset, &mut frontier)?;
             continue;
         }
 
@@ -355,9 +371,16 @@ pub fn rewrite_segments(
             out_batch = out_batch.with_delete_horizon(h);
         }
 
-        last_kept_offset = write_rewritten_batch(io, &log_file, &out_batch, last_kept_offset)?;
+        last_kept_offset =
+            write_rewritten_batch(io, &log_file, &out_batch, last_kept_offset, &mut frontier)?;
     }
     io.sync_file(IoTarget::CompactionSwap, &log_file)?;
+    let frontier = frontier.finish();
+    frontier.write_indexes(new_base, &index_swap, &timeindex_swap)?;
+    for path in [&index_swap, &timeindex_swap] {
+        let file = OpenOptions::new().write(true).open(path)?;
+        io.sync_file(IoTarget::CompactionSwap, &file)?;
+    }
 
     // Rebuild the `.txnindex` from the aborted transactions the walk kept an
     // abort marker for, as Kafka's `CleanedTransactionMetadata` appends them
@@ -398,6 +421,7 @@ pub fn rewrite_segments(
         #[cfg(test)]
         new_last_offset: last_kept_offset,
         txnindex_swap,
+        frontier,
     })
 }
 

@@ -216,6 +216,7 @@ impl CompactionJob {
                     // ends where the last consumed segment does.
                     upper_bound: self.upper_bound,
                     max_decompressed_record: self.record_limit,
+                    index_interval: self.index_interval,
                 },
             )?;
             rewrites.push(GroupRewrite {

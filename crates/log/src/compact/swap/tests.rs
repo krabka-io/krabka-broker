@@ -219,6 +219,7 @@ fn compactable(dir: &Path, survivor_txnindex: bool) -> RewriteOutput {
         new_base_offset: rewrite.new_base_offset,
         new_last_offset: rewrite.new_last_offset,
         txnindex_swap,
+        frontier: rewrite.frontier,
     }
 }
 

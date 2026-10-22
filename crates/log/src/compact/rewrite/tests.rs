@@ -8,8 +8,8 @@ use {
         compact::{
             build_offset_map,
             test_support::{
-                RETENTION, control_batch, inputs, make_record, rewrite_all, rewrite_with_map,
-                superseded_records, transactional_record, write_sealed_batches,
+                INDEX_INTERVAL, RETENTION, control_batch, inputs, make_record, rewrite_all,
+                rewrite_with_map, superseded_records, transactional_record, write_sealed_batches,
                 write_sealed_segment,
             },
         },
@@ -611,6 +611,7 @@ fn only_the_last_group_of_a_round_keeps_an_emptied_last_batch() {
         active_producers: &active,
         upper_bound: Offset(2),
         max_decompressed_record: None,
+        index_interval: INDEX_INTERVAL,
     };
     let mut txn = CleanedTransactionMetadata::default();
     let outputs = [&first, &second].map(|segment| {
