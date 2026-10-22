@@ -57,8 +57,9 @@ jobs:
           path: ${{ runner.temp }}/cpd-reports
           if-no-files-found: warn
 
-  # Format, lint, build, render rustdoc and gate the tests coverage cannot run,
-  # in one Bazel output tree.
+  # Format, lint, build, render rustdoc and gate the tests coverage cannot run.
+  # Format and lint run here; the rest runs as one script in one Bazel output
+  # tree, on a BuildBuddy remote runner when the run holds a key.
   #
   # Coverage is a sibling job rather than a step here. Both configurations build
   # the same ~140 broker integration tests as separate statically linked
@@ -67,8 +68,8 @@ jobs:
   # a 145 GB disk and filled it, which surfaced as a linker `Bus error` partway
   # through coverage. On two runners each configuration gets its own disk.
   #
-  # The `daemon-free tests` and `test` steps below run every test target that
-  # needs no Docker daemon, uninstrumented.
+  # `CI_BAZEL_SCRIPT` below runs every test target that needs no Docker daemon,
+  # uninstrumented.
   # `coverage` runs most of the same targets again under instrumentation, but
   # only to measure. A target that fails under Bazel therefore fails here, in a
   # job whose log names it, and not only in the instrumented run.
@@ -77,6 +78,61 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-26.04
     timeout-minutes: 90
+    env:
+      # Run as one bash script, on a BuildBuddy remote runner or on this runner
+      # (see the steps below). `UPLOAD` is `true` only in trusted contexts, as
+      # for `.github/actions/remote-cache`.
+      CI_BAZEL_SCRIPT: |
+        set -euo pipefail
+        if [ "${UPLOAD:-false}" != "true" ]; then
+          echo "build --noremote_upload_local_results" >>user.bazelrc
+        fi
+
+        echo "::group::build"
+        bazel build --build_tag_filters=-docker //...
+        echo "::endgroup::"
+
+        # Every test target that needs no Docker daemon and asserts on no wall
+        # clock. The tag filter is named in full because `--test_tag_filters`
+        # is last-wins: `-timing-sensitive` alone would drop the `-docker` that
+        # `.bazelrc` sets for `test`. The remote cache holds test results, so a
+        # change that leaves a target's inputs alone does not run it again.
+        echo "::group::daemon-free tests"
+        bazel test --test_tag_filters=-docker,-timing-sensitive //crates/...
+        echo "::endgroup::"
+
+        # The suites that assert on wall clock run in an invocation of their
+        # own, so the suites above do not compete with them for cores, and
+        # never under `--config=rbe`: `cpu:4` means nothing to a remote
+        # executor. //crates/raft records `kraft_engine_sim` failing 7 of 7 at
+        # twelve concurrent runs and passing at six.
+        echo "::group::timing-sensitive tests"
+        bazel test --test_tag_filters=timing-sensitive //crates/...
+        bazel test //packaging/...
+        echo "::endgroup::"
+
+        echo "::group::docgen"
+        targets="$(mktemp)"
+        bazel query 'kind("rust_doc rule", //crates/...)' >"${targets}"
+        test -s "${targets}"
+        bazel build --target_pattern_file="${targets}"
+        if [ -n "${BUILDBUDDY_ARTIFACTS_DIRECTORY:-}" ]; then
+          (cd bazel-bin && find crates -name '*.rustdoc' -print0 \
+            | tar --null -czf "${BUILDBUDDY_ARTIFACTS_DIRECTORY}/rustdoc.tar.gz" -T -)
+        fi
+        echo "::endgroup::"
+
+        # Impact analysis may omit a model when its source did not change. Run
+        # every Stateright-bearing target explicitly so the verification
+        # catalog remains a merge gate on every pull request.
+        echo "::group::stateright models"
+        bazel test \
+          //crates/audit:audit_test \
+          //crates/broker:broker_test \
+          //crates/log:log_test \
+          //crates/raft:kraft_model_test \
+          //crates/throttle:bucket_model_test
+        echo "::endgroup::"
     steps:
       - name: Keep temporary files off the size-limited /tmp tmpfs
         run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
@@ -120,80 +176,71 @@ jobs:
       - name: lint
         run: aspect lint --bazel-flag=--config=rbe
 
-      # No `--config=rbe`: this compiles, and rustc codegen actions cannot
-      # currently execute on the remote. See the `build:rbe` block in .bazelrc.
-      - name: build
+      # The Bazel half of this job -- build, the daemon-free and
+      # timing-sensitive tests, rustdoc and the Stateright models -- runs on a
+      # BuildBuddy remote runner when this run holds an API key. That moves the
+      # job's long pole off this four-core runner: rustc codegen cannot use
+      # remote execution yet (see the `build:rbe` block in .bazelrc), so on a
+      # `Cargo.lock` bump this runner compiled the closure itself, and on a warm
+      # cache it still downloaded every test binary it ran. The remote runner is
+      # a 16-core Firecracker VM restored from a snapshot of the last run, so
+      # its Bazel server, output tree and analysis cache are already warm and
+      # nothing comes back here but the log.
+      #
+      # `format` and `lint` stay above: they are short, `lint` already executes
+      # remotely, and `aspect lint` annotates the pull request from here.
+      #
+      # A run without the key -- a fork's pull request -- runs the same script
+      # on this runner instead, so the steps are written once, in `env`.
+      - id: buildbuddy
+        name: is there a BuildBuddy key on this run
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         run: |
-          aspect build \
-            --bazel-flag=--build_tag_filters=-docker \
-            //...
+          if [ -n "${BUILDBUDDY_API_KEY}" ]; then
+            echo "remote=true" >>"${GITHUB_OUTPUT}"
+          else
+            echo "No BuildBuddy key on this run: the Bazel steps run here."
+            echo "remote=false" >>"${GITHUB_OUTPUT}"
+          fi
+      - name: install the BuildBuddy CLI
+        if: steps.buildbuddy.outputs.remote == 'true'
+        run: curl -fsSL --retry 5 --retry-all-errors https://install.buildbuddy.io | bash
 
-      # Every test target that needs no Docker daemon and asserts on no wall
-      # clock. `build` above has already linked these binaries, so this step
-      # only runs them.
-      #
-      # `coverage` runs the same set under instrumentation, to measure. Before
-      # this step, `coverage` was the only place most of these targets ran
-      # under Bazel. On #571, `//crates/bench-driver:scenario_files_test`
-      # failed under Bazel twice, and only `coverage` reported it.
-      #
-      # The remote cache holds test results too. A pull request that does not
-      # change a target's inputs reads its result from the cache and does not
-      # run it again.
-      #
-      # The tag filter is named in full because `--test_tag_filters` is
-      # last-wins: `-timing-sensitive` alone would drop the `-docker` that
-      # `.bazelrc` sets for `test`.
-      #
-      # No `--config=rbe`, and the steps below are why the config is applied
-      # per step rather than per job.
-      - name: daemon-free tests
-        run: bazel test --test_tag_filters=-docker,-timing-sensitive //crates/...
-
-      # The suites tagged timing-sensitive, plus
-      # `//packaging:image_binaries_test`, which sits outside `//crates`. They
-      # run in an invocation of their own so that the ~140 suites above do not
-      # compete with them for the runner's four cores.
-      # No `--config=rbe`: `timing-sensitive` is exactly the tag for suites
-      # that assert on wall clock, and `cpu:4` -- which stops Bazel starving
-      # them locally -- means nothing to a remote executor, which sizes actions
-      # from `exec_properties`. //crates/raft records `kraft_engine_sim` failing
-      # 7 of 7 at twelve concurrent runs and passing at six.
-      - name: test
-        run: |
-          bazel test --test_tag_filters=timing-sensitive //crates/...
-          bazel test //packaging/...
-
-      # `aspect build` renders docs for impacted crates. Build the complete set
-      # here for the artifact, reusing this runner's Bazel output tree.
-      - name: docgen
+      # Snapshots key on the branch and fall back to the pull request's base,
+      # then the default branch. Pushes to `main` always save one, which is
+      # what keeps every pull request warm; a pull request saves one only when
+      # none exists for its branch.
+      - name: build, test and docgen on a BuildBuddy remote runner
+        if: steps.buildbuddy.outputs.remote == 'true'
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+          SNAPSHOT_SAVE: ${{ github.event_name == 'pull_request' && 'none-available' || 'always' }}
+          UPLOAD: ${{ github.event_name != 'pull_request' }}
         run: |
           set -euo pipefail
-          targets="${RUNNER_TEMP}/rustdoc-targets.txt"
-          bazel query 'kind("rust_doc rule", //crates/...)' > "${targets}"
-          test -s "${targets}"
-          bazel build --target_pattern_file="${targets}"
+          bb remote \
+            --run_from_commit="${GITHUB_SHA}" \
+            --timeout=80m \
+            --env=UPLOAD="${UPLOAD}" \
+            --runner_exec_properties=EstimatedCPU=16 \
+            --runner_exec_properties=EstimatedMemory=64GB \
+            --runner_exec_properties=EstimatedFreeDiskBytes=80GB \
+            --runner_exec_properties=snapshot-read-policy=local-first \
+            --remote_run_header=x-buildbuddy-platform.remote-snapshot-save-policy="${SNAPSHOT_SAVE}" \
+            --script="${CI_BAZEL_SCRIPT}"
+
+      - name: build, test and docgen on this runner
+        if: steps.buildbuddy.outputs.remote != 'true'
+        env:
+          UPLOAD: ${{ github.event_name != 'pull_request' }}
+        run: bash -c "${CI_BAZEL_SCRIPT}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.buildbuddy.outputs.remote != 'true'
         with:
           name: rustdoc
           path: bazel-bin/crates/**/*.rustdoc
           if-no-files-found: error
-
-      # Impact analysis may omit a model when its source did not change. Run
-      # every Stateright-bearing target explicitly so the verification catalog
-      # remains a merge gate on every pull request.
-      # Local as well. These are model checks rather than wall-clock
-      # assertions, so they could run remotely, but they are the verification
-      # catalog's merge gate and there is no case for making a gate depend on a
-      # second service before the cheaper steps have proved it.
-      - name: stateright models
-        run: |
-          bazel test \
-            //crates/audit:audit_test \
-            //crates/broker:broker_test \
-            //crates/log:log_test \
-            //crates/raft:kraft_model_test \
-            //crates/throttle:bucket_model_test
 
   # Build and execute the tests with LLVM instrumentation, and upload the merged
   # LCOV report.
