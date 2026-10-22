@@ -88,10 +88,18 @@ impl EncodedBatch {
     ) -> Result<Self, krabka_protocol::records::RecordsError> {
         let mut buf = bytes::BytesMut::with_capacity(batch.encoded_len());
         batch.encode_with_compression_level(&mut buf, level)?;
+        // The buffer is sized for the uncompressed batch. A compressed encode
+        // fills a fraction of it, and the bytes are held until the append, so
+        // they are copied down to their length rather than keep the rest.
+        let bytes = if buf.len() < buf.capacity() {
+            Bytes::copy_from_slice(&buf)
+        } else {
+            buf.freeze()
+        };
         Ok(Self {
             codec: batch.attributes.compression(),
             level,
-            bytes: buf.freeze(),
+            bytes,
         })
     }
 
@@ -198,13 +206,14 @@ impl ProduceData {
     /// The bytes this job appends and the newest timestamp it carries, which
     /// decide whether its append rolls the segment. An owned batch is encoded
     /// again on append, and a recompression can change its size, so its size
-    /// here is an estimate. One the produce size gates already encoded reports
-    /// those bytes.
+    /// here is an estimate. One the produce size gates already encoded is
+    /// estimated the same way: the writer drops those bytes when the codec
+    /// changed since, so their length can understate what it writes.
     pub(crate) fn append_footprint(&self) -> (usize, i64) {
         match self {
             Self::Verbatim(batch) => (batch.bytes.len(), batch.max_timestamp),
-            Self::OwnedEncoded { batch, encoded } => (encoded.len(), batch.max_timestamp),
             Self::Owned(batch)
+            | Self::OwnedEncoded { batch, .. }
             | Self::OwnedControl(batch)
             | Self::OwnedCommitMarker { batch, .. } => (batch.encoded_len(), batch.max_timestamp),
         }
@@ -405,6 +414,41 @@ mod tests {
         };
 
         check!(data.record_count() == 4);
+    }
+
+    /// A compressed encode holds only its own bytes until the append, not the
+    /// buffer sized for the uncompressed batch it was written into, and its job
+    /// still counts the owned batch toward the append's footprint.
+    #[test]
+    fn an_encoded_batch_holds_its_bytes_and_sizes_its_job_as_the_owned_batch() {
+        let value = Bytes::from(vec![b'x'; 64 * 1024]);
+        let batch = RecordBatch {
+            attributes: krabka_protocol::records::Attributes::default()
+                .with_compression(CompressionType::Gzip),
+            records: vec![krabka_protocol::records::Record {
+                value: Some(value),
+                ..Default::default()
+            }],
+            ..RecordBatch::default()
+        };
+
+        let encoded = EncodedBatch::encode(&batch, None).expect("encode");
+        let len = encoded.len();
+        // The writer drops the bytes if the topic's codec changed since the
+        // gates, so a job is sized as the owned batch it may encode again,
+        // not by the compressed bytes it may never write.
+        let job = ProduceData::OwnedEncoded {
+            batch: batch.clone(),
+            encoded: Box::new(encoded.clone()),
+        };
+        check!(job.append_footprint() == (batch.encoded_len(), batch.max_timestamp));
+        drop(job);
+        check!(len < batch.encoded_len() / 10);
+        let held = encoded
+            .bytes
+            .try_into_mut()
+            .expect("the only handle on its bytes");
+        check!(held.capacity() == len);
     }
 }
 

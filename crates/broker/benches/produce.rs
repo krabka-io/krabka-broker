@@ -53,6 +53,7 @@ use {
     krabka_protocol::{
         owned::{
             create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
+            delete_topics_request::{DeleteTopicState, DeleteTopicsRequest},
             metadata_request::{MetadataRequest, MetadataRequestTopic},
             produce_request::PartitionProduceData,
         },
@@ -431,6 +432,25 @@ async fn boot_with_topics(topics: &[BenchTopic<'_>]) -> (BenchBroker, Vec<WireUu
         .build()
         .await
         .expect("connect to the broker");
+    let topic_ids = create_topics(&broker, &client, topics).await;
+    (
+        BenchBroker {
+            broker,
+            client,
+            topic_id: topic_ids[0],
+            _dir: dir,
+        },
+        topic_ids,
+    )
+}
+
+/// Create each of `topics`, wait for its partitions to exist locally, and
+/// return the topic ids in the same order.
+async fn create_topics(
+    broker: &BrokerHandle,
+    client: &Client,
+    topics: &[BenchTopic<'_>],
+) -> Vec<WireUuid> {
     let created = client
         .send(CreateTopicsRequest {
             topics: topics
@@ -480,7 +500,7 @@ async fn boot_with_topics(topics: &[BenchTopic<'_>]) -> (BenchBroker, Vec<WireUu
         })
         .await
         .expect("Metadata for the topic ids");
-    let topic_ids: Vec<WireUuid> = topics
+    topics
         .iter()
         .map(|wanted| {
             metadata
@@ -490,16 +510,7 @@ async fn boot_with_topics(topics: &[BenchTopic<'_>]) -> (BenchBroker, Vec<WireUu
                 .map(|topic| topic.topic_id)
                 .expect("the created topic is in the metadata")
         })
-        .collect();
-    (
-        BenchBroker {
-            broker,
-            client,
-            topic_id: topic_ids[0],
-            _dir: dir,
-        },
-        topic_ids,
-    )
+        .collect()
 }
 
 /// Send one Produce covering `partitions` partitions and check every row.
@@ -570,7 +581,8 @@ fn bench_produce_acks_all(c: &mut Criterion) {
     runtime.block_on(fixture.broker.shutdown());
 }
 
-/// One converting topic the full-handler arm produces to: its name, the
+/// One converting topic the full-handler arm produces to: its report label,
+/// the base name its [`RotatingTopic`] generations take, the
 /// `compression.type` it forces, and what its producer sends.
 struct ConversionCase {
     label: &'static str,
@@ -640,20 +652,11 @@ fn bench_produce_conversion(c: &mut Criterion) {
         .enable_all()
         .build()
         .expect("build a multi-threaded runtime");
-    let configs: Vec<[(&str, &str); 1]> = CONVERSION_CASES
-        .iter()
-        .map(|case| [("compression.type", case.compression_type)])
-        .collect();
-    let topics: Vec<BenchTopic<'_>> = CONVERSION_CASES
-        .iter()
-        .zip(&configs)
-        .map(|(case, configs)| BenchTopic {
-            name: case.topic,
-            partitions: 1,
-            configs: configs.as_slice(),
-        })
-        .collect();
-    let (fixture, topic_ids) = runtime.block_on(boot_with_topics(&topics));
+    let (fixture, _) = runtime.block_on(boot_with_topics(&[BenchTopic {
+        name: "bench-conversion-boot",
+        partitions: 1,
+        configs: &[],
+    }]));
 
     let mut group = c.benchmark_group("broker/produce_conversion");
     for BatchShape {
@@ -662,19 +665,94 @@ fn bench_produce_conversion(c: &mut Criterion) {
         payload,
     } in SHAPES
     {
-        for (case, topic_id) in CONVERSION_CASES.iter().zip(&topic_ids) {
+        for case in &CONVERSION_CASES {
             let wire = (case.wire)(records, payload);
+            let topic = RefCell::new(runtime.block_on(RotatingTopic::create(&fixture, case, 0)));
             group.throughput(Throughput::Bytes(wire.len() as u64));
             group.bench_function(format!("{shape}/{}", case.label), |b| {
-                b.iter(|| {
-                    runtime.block_on(produce_one(&fixture, case.topic, *topic_id, &wire));
-                });
+                b.iter_batched(
+                    || {
+                        let mut topic = topic.borrow_mut();
+                        runtime.block_on(topic.rotate_if_full(&fixture, case, wire.len()));
+                        (topic.name.clone(), topic.topic_id)
+                    },
+                    |(name, topic_id)| {
+                        runtime.block_on(produce_one(&fixture, &name, topic_id, &wire));
+                    },
+                    BatchSize::PerIteration,
+                );
             });
+            runtime.block_on(topic.into_inner().delete(&fixture));
         }
     }
     group.finish();
 
     runtime.block_on(fixture.broker.shutdown());
+}
+
+/// The topic one conversion case produces to, replaced by a fresh one once it
+/// has taken [`LOG_BUDGET`] bytes.
+///
+/// Each case appends to its partition for as long as criterion measures it,
+/// which for the 100 KiB shapes is gigabytes. Replacing the topic outside the
+/// timed region keeps every case's log, and the disk under it, bounded and
+/// comparable, as the hot-path arm's [`BoundedLog`] does for its bare log.
+struct RotatingTopic {
+    name: String,
+    topic_id: WireUuid,
+    generation: u32,
+    written: usize,
+}
+
+impl RotatingTopic {
+    async fn create(fixture: &BenchBroker, case: &ConversionCase, generation: u32) -> Self {
+        let name = format!("{}-{generation}", case.topic);
+        let topic_ids = create_topics(&fixture.broker, &fixture.client, &[BenchTopic {
+            name: &name,
+            partitions: 1,
+            configs: &[("compression.type", case.compression_type)],
+        }])
+        .await;
+        Self {
+            name,
+            topic_id: topic_ids[0],
+            generation,
+            written: 0,
+        }
+    }
+
+    /// Replace the topic when `incoming` more bytes would take it past the
+    /// budget, and count them.
+    async fn rotate_if_full(
+        &mut self,
+        fixture: &BenchBroker,
+        case: &ConversionCase,
+        incoming: usize,
+    ) {
+        if self.written + incoming > LOG_BUDGET {
+            let next = Self::create(fixture, case, self.generation + 1).await;
+            std::mem::replace(self, next).delete(fixture).await;
+        }
+        self.written += incoming;
+    }
+
+    async fn delete(self, fixture: &BenchBroker) {
+        let response = fixture
+            .client
+            .send(DeleteTopicsRequest {
+                topics: vec![DeleteTopicState {
+                    name: Some(self.name.clone()),
+                    ..Default::default()
+                }],
+                timeout_ms: 5_000,
+                ..Default::default()
+            })
+            .await
+            .expect("DeleteTopics");
+        for topic in &response.responses {
+            assert!(topic.error_code == 0, "{topic:?}");
+        }
+    }
 }
 
 criterion_group!(
