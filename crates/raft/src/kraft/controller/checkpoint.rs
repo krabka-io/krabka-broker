@@ -2,7 +2,10 @@
 //! directory: their filename encoding, atomic write, id ordering, and the
 //! two-snapshot retention the engine keeps the directory at.
 
-use crate::{error::RaftError, kraft::snapshot_fetch::SnapshotId};
+use {
+    crate::{error::RaftError, kraft::snapshot_fetch::SnapshotId},
+    std::io::{Read, Seek, SeekFrom},
+};
 
 /// Kafka's `Snapshots.BOOTSTRAP_SNAPSHOT_ID`: the id of the bootstrap
 /// checkpoint that a dynamic format writes. No replica replicates it, and no
@@ -168,4 +171,76 @@ pub fn load_checkpoint_by_id(
     epoch: i32,
 ) -> Option<Vec<u8>> {
     std::fs::read(dir.join(checkpoint_name(end_offset, epoch))).ok()
+}
+
+/// An open `.checkpoint`, for serving one KIP-630 `FetchSnapshot` chunk
+/// without reading the rest of the file.
+///
+/// The length is the one the open handle reports, so it and every byte read
+/// through the handle come from the same file. A checkpoint is never written
+/// in place: [`write_checkpoint`] renames a finished file into place and
+/// retention unlinks it. An id that retention deletes after the open is
+/// therefore still read in full through the open handle, and one deleted
+/// before the open does not open.
+pub(crate) struct CheckpointFile<R> {
+    reader: R,
+    len: u64,
+}
+
+/// What [`CheckpointFile::read_chunk`] found at a requested position.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum CheckpointChunk {
+    /// `position < 0` or `position >= len`, which Kafka's
+    /// `handleFetchSnapshotRequest` answers with `POSITION_OUT_OF_RANGE`.
+    OutOfRange,
+    /// The bytes `[position, position + min(max_bytes, len - position))`.
+    Bytes(Vec<u8>),
+}
+
+/// Open the checkpoint `<end_offset>-<epoch>.checkpoint`, or `None` if it is
+/// absent or cannot be opened (the leader's `FetchSnapshot` serve path).
+pub(crate) fn open_checkpoint(
+    dir: &std::path::Path,
+    end_offset: i64,
+    epoch: i32,
+) -> Option<CheckpointFile<std::fs::File>> {
+    let file = std::fs::File::open(dir.join(checkpoint_name(end_offset, epoch))).ok()?;
+    let len = file.metadata().ok()?.len();
+    Some(CheckpointFile::new(file, len))
+}
+
+impl<R: Read + Seek> CheckpointFile<R> {
+    pub(crate) fn new(reader: R, len: u64) -> Self { Self { reader, len } }
+
+    /// The checkpoint's length in bytes, the `FetchSnapshot` `Size`.
+    pub(crate) fn len(&self) -> u64 { self.len }
+
+    #[cfg(test)]
+    pub(crate) fn reader(&self) -> &R { &self.reader }
+
+    /// Read the chunk at `position`, at most `max_bytes` long. Both stay the
+    /// raw KIP-630 `int64` and `int32` off the wire. A negative `max_bytes`
+    /// reads nothing. Only the returned bytes are read and allocated.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the seek or the read fails.
+    pub(crate) fn read_chunk(
+        &mut self,
+        position: i64,
+        max_bytes: i32,
+    ) -> std::io::Result<CheckpointChunk> {
+        let Some(start) = u64::try_from(position)
+            .ok()
+            .filter(|start| *start < self.len)
+        else {
+            return Ok(CheckpointChunk::OutOfRange);
+        };
+        let max = u64::try_from(max_bytes).unwrap_or(0);
+        let len = usize::try_from(max.min(self.len - start)).map_err(std::io::Error::other)?;
+        let mut bytes = vec![0; len];
+        self.reader.seek(SeekFrom::Start(start))?;
+        self.reader.read_exact(&mut bytes)?;
+        Ok(CheckpointChunk::Bytes(bytes))
+    }
 }

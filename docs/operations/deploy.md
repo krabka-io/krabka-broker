@@ -96,6 +96,107 @@ The parts that carry the design:
   `Metadata` request never lands on a node that is behind the quorum.
 - The PodDisruptionBudget sets `minAvailable: 2`, the majority of three. Scale
   the StatefulSet and move the budget with it.
+- The pod uses the `RuntimeDefault` seccomp profile. See
+  [Seccomp and io_uring](#seccomp-and-io_uring).
+
+#### Seccomp and io_uring
+
+A segment of a `preallocate=true` log writes its data with `O_DIRECT`. The
+broker starts an io_uring on a thread named `log-direct-uring` and submits
+those writes through it. If the kernel refuses the io_uring, the broker logs
+`no io_uring; direct writes use the write threads` at info level and its
+write threads do the writes. The data on disk is the same on both paths. The
+broker starts the io_uring when it opens its first `preallocate=true`
+segment, so a broker that keeps `preallocate=false`, the default, does not
+use io_uring. [#1582](https://github.com/krabka-io/krabka-broker/pull/1582)
+measured the `log-iobench` `direct_append` benchmark on one cloud VM with
+ext4: io_uring increased the throughput of 64 KiB writes by about a quarter
+and did not change it for 1 MiB writes.
+
+A seccomp profile can refuse the three io_uring system calls,
+`io_uring_setup`, `io_uring_enter` and `io_uring_register`. The
+`RuntimeDefault` profile is the profile of the node's container runtime:
+
+| Runtime | io_uring in its default profile | Source |
+| --- | --- | --- |
+| containerd 1.7 (v1.7.36) | allowed | [`seccomp_default.go` at v1.7.36](https://github.com/containerd/containerd/blob/v1.7.36/contrib/seccomp/seccomp_default.go) |
+| containerd 2.0 and later (v2.0.0 to v2.4.2) | refused, `EPERM` | [containerd#9320](https://github.com/containerd/containerd/pull/9320), in the [v2.0.0 notes](https://github.com/containerd/containerd/releases/tag/v2.0.0) |
+| CRI-O (v1.34.15 to v1.37.2) | refused, `ENOSYS` | the vendored `containers/common` profile, for example [at v1.37.2](https://github.com/cri-o/cri-o/blob/v1.37.2/vendor/go.podman.io/common/pkg/seccomp/default_linux.go) |
+
+The sysctl `kernel.io_uring_disabled` can also refuse io_uring on a node, for
+every profile.
+
+[`packaging/k8s/profiles/krabka-io-uring.json`](../../packaging/k8s/profiles/krabka-io-uring.json)
+is the `RuntimeDefault` profile of containerd v2.4.2, for a container with no
+capabilities, plus one rule that allows the three io_uring system calls. It
+lists no architectures, so the runtime applies it to the native architecture
+of the node, amd64 or arm64, and to no 32-bit compatibility architecture. The
+broker and the format tool are native binaries. The StatefulSet drops all
+capabilities, so the rules that the runtime adds for a capability do not
+apply to it.
+
+To use the profile:
+
+1. Put the file on every node that can run a broker pod. Kubernetes reads a
+   `Localhost` profile relative to the kubelet's seccomp directory,
+   `/var/lib/kubelet/seccomp` by default:
+
+   ```
+   sudo install -D -m 0644 krabka-io-uring.json \
+       /var/lib/kubelet/seccomp/krabka-io-uring.json
+   ```
+
+   If the cluster runs the
+   [Security Profiles Operator](https://github.com/kubernetes-sigs/security-profiles-operator)
+   (v1.0.0 or later), let it install the file instead. Its `SeccompProfile`
+   is cluster-scoped and its `spec` takes the fields of the JSON file:
+
+   ```
+   jq '{apiVersion: "security-profiles-operator.x-k8s.io/v1",
+        kind: "SeccompProfile",
+        metadata: {name: "krabka-io-uring"},
+        spec: .}' packaging/k8s/profiles/krabka-io-uring.json |
+     kubectl apply -f -
+   kubectl get seccompprofile krabka-io-uring --output wide
+   ```
+
+   The `LOCALHOSTPROFILE` column gives the path to use,
+   `operator/krabka-io-uring.json`.
+2. In `statefulset.yaml`, replace the `RuntimeDefault` lines of the pod
+   `securityContext` with the `Localhost` lines in the comment above them. Set
+   `localhostProfile` to `operator/krabka-io-uring.json` if the Security
+   Profiles Operator installed the file. A pod whose profile file is not on
+   its node stays in `CreateContainerError`.
+3. Apply the StatefulSet. The pods restart with the new profile.
+
+To check the result, let the broker open a `preallocate=true` segment first:
+create a topic with `preallocate=true` and produce one record to it. Then do
+one or both of these checks:
+
+- Look for the fallback line in the broker log:
+
+  ```
+  kubectl logs krabka-0 -c broker | grep 'no io_uring'
+  ```
+
+  When io_uring works, this command prints nothing.
+- Look for the `log-direct-uring` thread in the broker process. The image has
+  no shell, so look from the node that runs the pod. Get the container id
+  from the pod status, without its `containerd://` or `cri-o://` prefix:
+
+  ```
+  kubectl get pod krabka-0 \
+      --output jsonpath='{.status.containerStatuses[?(@.name=="broker")].containerID}'
+  ```
+
+  Then, on that node:
+
+  ```
+  pid=$(sudo crictl inspect --output go-template --template '{{.info.pid}}' <container id>)
+  grep -l log-direct-uring /proc/"$pid"/task/*/comm
+  ```
+
+  When io_uring works, this command prints one path.
 
 ### Kubernetes operator
 

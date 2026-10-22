@@ -47,6 +47,7 @@ use {
     krabka_audit::signing::FileEd25519Signer,
     krabka_broker::{BrokerConfig, BrokerHandle, testing::list_offsets_request},
     krabka_client_core::Client,
+    krabka_metadata::LeaderEpoch,
     krabka_protocol::{
         owned::{
             fetch_request::{FetchPartition, FetchRequest, FetchTopic},
@@ -57,6 +58,7 @@ use {
         },
         records::{Attributes, Record, RecordBatch},
     },
+    krabka_raft::NodeId,
     krabka_restore::RestoreReport,
     ring::{rand::SystemRandom, signature::Ed25519KeyPair},
     std::sync::Arc,
@@ -179,6 +181,15 @@ async fn await_restored_partitions(broker: &BrokerHandle, fixture: &Fixture) {
             .wait_until_high_watermark(partition.topic, partition.partition, partition.end_offset())
             .await;
     }
+}
+
+/// The leader epoch the controller's image holds for `topic`-`partition`.
+fn leader_epoch(broker: &BrokerHandle, topic: &str, partition: i32) -> LeaderEpoch {
+    broker
+        .controller_image_for_test()
+        .partition(topic, partition)
+        .expect("the restored partition is in the image")
+        .leader_epoch
 }
 
 /// One `ListOffsets` row for `partition` at one timestamp sentinel.
@@ -423,8 +434,26 @@ async fn a_restored_broker_restarts_and_appends_at_the_archived_end_offset() {
 
     let cluster = RestoredCluster::start().await;
     await_restored_partitions(&cluster.broker, &cluster.fixture).await;
+    let epoch_before = leader_epoch(&cluster.broker, TOPIC, PARTITION);
     let cluster = cluster.restart().await;
     await_restored_partitions(&cluster.broker, &cluster.fixture).await;
+    // The restart re-elects this broker at a higher epoch, and the image can
+    // show that election before the local partition installs it; until then
+    // Produce answers NOT_LEADER_OR_FOLLOWER. Fetch does not wait on that
+    // gate, so the Fetch checks below cannot stand in for this wait.
+    let node = NodeId(cluster.broker.node_id());
+    cluster
+        .broker
+        .wait_for_image(move |image| {
+            image
+                .partition(TOPIC, PARTITION)
+                .is_some_and(|p| p.leader == node && p.leader_epoch > epoch_before)
+        })
+        .await;
+    cluster
+        .broker
+        .wait_until_local_partition_leader(TOPIC, PARTITION, node)
+        .await;
 
     // The whole archived history is still there after the second boot, which
     // is the claim the restart exists to make.

@@ -6,7 +6,8 @@
 //! `Broker::start`'s RLMM bootstrap. It publishes across three partitions,
 //! then subscribes to a subset from a non-zero offset. It asserts that the
 //! reworked consumer delivers exactly the assigned records, and never the
-//! unassigned partition.
+//! unassigned partition. A second test publishes one interleaved keyed group
+//! and checks that each partition lands it in the order given.
 
 use assert2::assert;
 mod support;
@@ -17,9 +18,12 @@ use {
     krabka_broker::BrokerHandle,
     krabka_remote_storage_topic::{
         kafka_log::{KafkaMetadataEventLog, KafkaMetadataLogConfig},
-        log::{MetadataEventLog, PartitionStart},
+        log::{KeyedEvent, MetadataEventLog, PartitionStart},
     },
-    std::time::{Duration, Instant},
+    std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    },
     tempfile::TempDir,
 };
 
@@ -37,6 +41,16 @@ struct Received {
     partition: i32,
     offset: i64,
     payload: Vec<u8>,
+}
+
+/// A keyed record the metadata log delivered.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct KeyedReceived {
+    partition: i32,
+    offset: i64,
+    key: Vec<u8>,
+    payload: Vec<u8>,
+    tombstone: bool,
 }
 
 /// Boot a bare loopback broker with the pinned-port pattern from
@@ -63,19 +77,27 @@ async fn start_bare_broker() -> BareBroker {
     BareBroker { broker, log_dir }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn subscribe_subset_from_nonzero_offset_yields_exact_records() {
-    let BareBroker {
-        broker,
-        log_dir: _log_dir,
-    } = start_bare_broker().await;
-    let bootstrap = format!("127.0.0.1:{}", broker.listen_addr().port());
-
+/// A bare broker and a three-partition metadata event log on it.
+async fn start_three_partition_log() -> (BareBroker, Arc<KafkaMetadataEventLog>) {
+    let bare = start_bare_broker().await;
+    let bootstrap = format!("127.0.0.1:{}", bare.broker.listen_addr().port());
     let mut cfg = KafkaMetadataLogConfig::new(bootstrap);
     cfg.num_partitions = 3;
     cfg.replication = 1;
     cfg.min_isr = Some(1);
     let log = KafkaMetadataEventLog::start(cfg).await.expect("log start");
+    (bare, log)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subscribe_subset_from_nonzero_offset_yields_exact_records() {
+    let (
+        BareBroker {
+            broker,
+            log_dir: _log_dir,
+        },
+        log,
+    ) = start_three_partition_log().await;
     let pc = log.partition_count();
     assert!(pc >= 3);
 
@@ -144,6 +166,84 @@ async fn subscribe_subset_from_nonzero_offset_yields_exact_records() {
     if let Ok(Some(extra)) = tokio::time::timeout(Duration::from_millis(500), stream.next()).await {
         assert!(extra.partition != 2, "partition 2 leaked: {extra:?}");
     }
+
+    log.shutdown().await;
+    broker.shutdown().await;
+}
+
+/// `publish_keyed_group` enqueues the whole group before it waits. Each
+/// partition still assigns offsets in the order the group lists its records,
+/// and every key, value and tombstone lands as given.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn keyed_group_lands_each_partition_in_order() {
+    let (
+        BareBroker {
+            broker,
+            log_dir: _log_dir,
+        },
+        log,
+    ) = start_three_partition_log().await;
+    assert!(log.partition_count() >= 3);
+
+    assert!(log.publish_keyed_group(Vec::new()).await.unwrap() == Vec::<i64>::new());
+
+    let group = [
+        (0, "k-a", Some("a")),
+        (1, "k-x", Some("x")),
+        (0, "k-b", Some("b")),
+        (2, "k-z", Some("z")),
+        (1, "k-y", Some("y")),
+        (0, "k-a", None),
+    ];
+    let offsets = log
+        .publish_keyed_group(
+            group
+                .iter()
+                .map(|&(partition, key, value)| KeyedEvent {
+                    partition,
+                    key: Bytes::from_static(key.as_bytes()),
+                    event: value.map(|value| Bytes::from_static(value.as_bytes())),
+                })
+                .collect(),
+        )
+        .await
+        .unwrap();
+    assert!(offsets == [0, 0, 1, 0, 1, 2]);
+
+    let starts = (0..3).map(|partition| PartitionStart::new(partition, 0));
+    let (mut stream, _handle) = log.subscribe(starts.collect());
+    let mut got = Vec::with_capacity(group.len());
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while got.len() < group.len() {
+        if let Ok(Some(r)) = tokio::time::timeout(Duration::from_millis(500), stream.next()).await {
+            got.push(KeyedReceived {
+                partition: r.partition,
+                offset: r.offset,
+                key: r.key.map(|key| key.to_vec()).unwrap_or_default(),
+                payload: r.payload.to_vec(),
+                tombstone: r.tombstone,
+            });
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "did not receive {} records in 15s: {got:?}",
+            group.len()
+        );
+    }
+    got.sort_unstable();
+    let mut expected: Vec<_> = group
+        .iter()
+        .zip(offsets)
+        .map(|(&(partition, key, value), offset)| KeyedReceived {
+            partition,
+            offset,
+            key: key.as_bytes().to_vec(),
+            payload: value.unwrap_or_default().as_bytes().to_vec(),
+            tombstone: value.is_none(),
+        })
+        .collect();
+    expected.sort_unstable();
+    assert!(got == expected);
 
     log.shutdown().await;
     broker.shutdown().await;

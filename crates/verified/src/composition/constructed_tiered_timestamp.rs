@@ -9,6 +9,8 @@ use {
 
 /// Construct each tier's sparse index, select retained matches, merge the
 /// earliest absolute coordinate and apply exclusive `ListOffsets` visibility.
+/// Each tier's window is the one segment its seek reads, the first candidate
+/// (see `tiered_timestamp_lookup_answers_first_candidate`).
 /// Actual row maxima establish scan safety; no supplied bound boolean is used.
 /// Complete decoding/enumeration, overlapping-record consistency, epoch lookup,
 /// coherent publication and successful I/O remain host obligations.

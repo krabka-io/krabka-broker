@@ -4,8 +4,9 @@
 
 use {
     crate::error::BrokerError,
+    bytes::Bytes,
     krabka_compression::CompressionType,
-    krabka_log::{Log, Offset, VerbatimBatch},
+    krabka_log::{LeaderEpoch, Log, LogConfig, Offset, ProducerId, VerbatimBatch},
     krabka_protocol::records::RecordBatch,
     std::{
         path::PathBuf,
@@ -31,6 +32,20 @@ pub enum ProduceData {
     /// Decode and re-encode the owned batch on append (the original path).
     /// The writer mutates `base_offset` before append.
     Owned(RecordBatch),
+    /// An owned client batch together with the bytes the produce size gates
+    /// already encoded it into.
+    ///
+    /// The writer appends `encoded` as it would a verbatim batch when the
+    /// codec and compression level in force under the log lock are the ones
+    /// `encoded` was made with, and otherwise falls back to [`Self::Owned`]
+    /// and encodes `batch` afresh. Either way the stored bytes are the same.
+    /// See [`Self::resolve_for_append`].
+    OwnedEncoded {
+        batch: RecordBatch,
+        /// Boxed so the variant stays no larger than [`Self::Owned`] beside
+        /// a pointer, and a writer job's size does not grow with it.
+        encoded: Box<EncodedBatch>,
+    },
     /// An internally built control batch, such as a transaction ABORT marker
     /// or a barrier marker.
     ///
@@ -48,17 +63,117 @@ pub enum ProduceData {
     },
 }
 
-impl ProduceData {
-    /// Apply the partition's configured compression to an owned client batch.
-    /// Control batches and verbatim producer bytes keep their original shape.
-    pub(crate) fn apply_target_compression(&mut self, target: Option<CompressionType>) {
-        let Self::Owned(batch) = self else {
-            return;
+/// An owned batch encoded ahead of its append, with the codec and the
+/// compression level the encode used.
+///
+/// The produce size gates have to encode an owned batch to measure it, since
+/// only an encode can say how large a compressed batch is. This keeps what
+/// they encoded, so the second gate and the append need not encode it again.
+/// The bytes hold whatever `base_offset` and `partition_leader_epoch` the batch
+/// carried when it was encoded; both sit outside the CRC region, and the
+/// verbatim append patches both.
+#[derive(Debug, Clone)]
+pub struct EncodedBatch {
+    codec: CompressionType,
+    level: Option<i32>,
+    bytes: Bytes,
+}
+
+impl EncodedBatch {
+    /// Bytes that `batch.encode_with_compression_level(level)` writes for
+    /// `batch` as it is, under its own codec.
+    pub(crate) fn encode(
+        batch: &RecordBatch,
+        level: Option<i32>,
+    ) -> Result<Self, krabka_protocol::records::RecordsError> {
+        let mut buf = bytes::BytesMut::with_capacity(batch.encoded_len());
+        batch.encode_with_compression_level(&mut buf, level)?;
+        // The buffer is sized for the uncompressed batch. A compressed encode
+        // fills a fraction of it, and the bytes are held until the append, so
+        // they are copied down to their length rather than keep the rest.
+        let bytes = if buf.len() < buf.capacity() {
+            Bytes::copy_from_slice(&buf)
+        } else {
+            buf.freeze()
         };
-        if let Some(target) = target
-            && batch.attributes.compression() != target
-        {
-            batch.attributes = batch.attributes.with_compression(target);
+        Ok(Self {
+            codec: batch.attributes.compression(),
+            level,
+            bytes,
+        })
+    }
+
+    /// Whether these bytes are what encoding under `codec` at `level` writes.
+    pub(crate) fn encoded_with(&self, codec: CompressionType, level: Option<i32>) -> bool {
+        self.codec == codec && self.level == level
+    }
+
+    /// The encoded length.
+    pub(crate) fn len(&self) -> usize { self.bytes.len() }
+
+    /// The encoded bytes, for tests that tell a reused encode from a new one.
+    #[cfg(test)]
+    pub(crate) fn bytes(&self) -> &Bytes { &self.bytes }
+}
+
+/// `bytes`, the wire encoding of `batch`, with the header fields the log's
+/// verbatim append reads copied from `batch` rather than parsed back out.
+pub(crate) fn verbatim_of(batch: &RecordBatch, bytes: Bytes) -> VerbatimBatch {
+    VerbatimBatch {
+        bytes,
+        last_offset_delta: batch.last_offset_delta,
+        max_timestamp: batch.max_timestamp,
+        leader_epoch: LeaderEpoch(batch.partition_leader_epoch),
+        producer_id: ProducerId(batch.producer_id),
+        producer_epoch: batch.producer_epoch,
+        base_sequence: batch.base_sequence,
+        is_transactional: batch.attributes.is_transactional(),
+    }
+}
+
+/// `batch` with its codec set to the topic's `compression.type`, when that
+/// names one. `None` is `compression.type=producer`.
+fn with_target_compression(batch: &mut RecordBatch, target: Option<CompressionType>) {
+    if let Some(target) = target
+        && batch.attributes.compression() != target
+    {
+        batch.attributes = batch.attributes.with_compression(target);
+    }
+}
+
+impl ProduceData {
+    /// The job the writer appends under `config`, the log's config read under
+    /// the append's own lock.
+    ///
+    /// An owned client batch takes the partition's configured compression.
+    /// Control batches and verbatim producer bytes keep their original shape.
+    ///
+    /// An [`Self::OwnedEncoded`] job whose bytes were encoded under the codec
+    /// and level `config` now asks for becomes a [`Self::Verbatim`] job over
+    /// those bytes: the log then stamps the base offset, the leader epoch and,
+    /// on a `LogAppendTime` partition, the log-append time into them exactly
+    /// as its owned append would before encoding, and stores the same bytes.
+    /// A `compression.type` or level that changed since the gates encoded the
+    /// batch drops the bytes and encodes the batch afresh under the new one.
+    #[must_use]
+    pub(crate) fn resolve_for_append(self, config: &LogConfig) -> Self {
+        let target = config.compression_type;
+        match self {
+            Self::Owned(mut batch) => {
+                with_target_compression(&mut batch, target);
+                Self::Owned(batch)
+            }
+            Self::OwnedEncoded { mut batch, encoded } => {
+                with_target_compression(&mut batch, target);
+                let codec = batch.attributes.compression();
+                if encoded.encoded_with(codec, config.compression_level(codec)) {
+                    Self::Verbatim(verbatim_of(&batch, encoded.bytes))
+                } else {
+                    Self::Owned(batch)
+                }
+            }
+            other
+            @ (Self::Verbatim(_) | Self::OwnedControl(_) | Self::OwnedCommitMarker { .. }) => other,
         }
     }
 
@@ -71,7 +186,7 @@ impl ProduceData {
     #[must_use]
     pub(crate) fn control_producer_id(&self) -> Option<krabka_log::ProducerId> {
         match self {
-            Self::Verbatim(_) | Self::Owned(_) => None,
+            Self::Verbatim(_) | Self::Owned(_) | Self::OwnedEncoded { .. } => None,
             Self::OwnedControl(batch) | Self::OwnedCommitMarker { batch, .. } => {
                 Some(krabka_log::ProducerId(batch.producer_id))
             }
@@ -83,12 +198,30 @@ impl ProduceData {
         match self {
             Self::Verbatim(batch) => u32::try_from(batch.last_offset_delta + 1)
                 .expect("verbatim batch offset count is non-negative"),
-            Self::Owned(batch) => u32::try_from(batch.last_offset_delta + 1)
-                .expect("owned batch offset count is non-negative"),
+            Self::Owned(batch) | Self::OwnedEncoded { batch, .. } => {
+                u32::try_from(batch.last_offset_delta + 1)
+                    .expect("owned batch offset count is non-negative")
+            }
             Self::OwnedControl(batch) => u32::try_from(batch.last_offset_delta + 1)
                 .expect("control batch offset count is non-negative"),
             Self::OwnedCommitMarker { batch, .. } => u32::try_from(batch.last_offset_delta + 1)
                 .expect("commit marker offset count is non-negative"),
+        }
+    }
+
+    /// The bytes this job appends and the newest timestamp it carries, which
+    /// decide whether its append rolls the segment. An owned batch is encoded
+    /// again on append, and a recompression can change its size, so its size
+    /// here is an estimate. One the produce size gates already encoded is
+    /// estimated the same way: the writer drops those bytes when the codec
+    /// changed since, so their length can understate what it writes.
+    pub(crate) fn append_footprint(&self) -> (usize, i64) {
+        match self {
+            Self::Verbatim(batch) => (batch.bytes.len(), batch.max_timestamp),
+            Self::Owned(batch)
+            | Self::OwnedEncoded { batch, .. }
+            | Self::OwnedControl(batch)
+            | Self::OwnedCommitMarker { batch, .. } => (batch.encoded_len(), batch.max_timestamp),
         }
     }
 }
@@ -163,9 +296,12 @@ pub enum WriterMessage {
     /// Append a leader's already-encoded data batch without decoding or
     /// recompressing it. Control batches cannot use this arm because their
     /// marker record is needed for transaction bookkeeping.
+    ///
+    /// One message carries every data batch of a fetch response row, in
+    /// offset order, so a follower pays one writer round trip per partition
+    /// per fetch rather than one per batch.
     ReplicateVerbatim {
-        batch: VerbatimBatch,
-        base_offset: Offset,
+        batches: Vec<ReplicatedBatch>,
         ack: oneshot::Sender<Result<(), BrokerError>>,
     },
     /// Truncate the log so no records at offset `>= offset` remain. Used
@@ -285,4 +421,49 @@ mod tests {
 
         check!(data.record_count() == 4);
     }
+
+    /// A compressed encode holds only its own bytes until the append, not the
+    /// buffer sized for the uncompressed batch it was written into, and its job
+    /// still counts the owned batch toward the append's footprint.
+    #[test]
+    fn an_encoded_batch_holds_its_bytes_and_sizes_its_job_as_the_owned_batch() {
+        let value = Bytes::from(vec![b'x'; 64 * 1024]);
+        let batch = RecordBatch {
+            attributes: krabka_protocol::records::Attributes::default()
+                .with_compression(CompressionType::Gzip),
+            records: vec![krabka_protocol::records::Record {
+                value: Some(value),
+                ..Default::default()
+            }],
+            ..RecordBatch::default()
+        };
+
+        let encoded = EncodedBatch::encode(&batch, None).expect("encode");
+        let len = encoded.len();
+        // The writer drops the bytes if the topic's codec changed since the
+        // gates, so a job is sized as the owned batch it may encode again,
+        // not by the compressed bytes it may never write.
+        let job = ProduceData::OwnedEncoded {
+            batch: batch.clone(),
+            encoded: Box::new(encoded.clone()),
+        };
+        check!(job.append_footprint() == (batch.encoded_len(), batch.max_timestamp));
+        drop(job);
+        check!(len < batch.encoded_len() / 10);
+        let held = encoded
+            .bytes
+            .try_into_mut()
+            .expect("the only handle on its bytes");
+        check!(held.capacity() == len);
+    }
+}
+
+/// One leader-encoded data batch a follower appends, and the offset the
+/// leader assigned it.
+#[derive(Debug)]
+pub struct ReplicatedBatch {
+    /// The batch as the leader wrote it.
+    pub batch: VerbatimBatch,
+    /// The leader's base offset for the batch.
+    pub base_offset: Offset,
 }

@@ -16,23 +16,57 @@ use {
 };
 
 impl RemoteReader {
-    /// Returns the smallest absolute offset and its record timestamp where the
-    /// timestamp is `>= target_timestamp` and offset is `>= minimum_offset`,
-    /// across the finished remote segments.
-    /// The sparse time index supplies a scan floor; the exact answer comes from
-    /// decoding records from the corresponding offset-index position.
+    /// Answers a by-timestamp seek from the first candidate remote segment,
+    /// as Kafka 4.3.1's `RemoteLogManager.findOffsetByTimestamp` does: the
+    /// first finished segment, in start-offset order, whose max timestamp
+    /// reaches `target_timestamp`, whose end offset reaches `minimum_offset`,
+    /// and which the leader-epoch `lineage` admits. The answer is the smallest
+    /// offset `>= minimum_offset` in that segment whose record timestamp is
+    /// `>= target_timestamp`, or `None` when that segment holds none. Later
+    /// segments are never read:
+    ///
+    /// ```java
+    /// if (rlsMetadata.maxTimestampMs() >= timestamp
+    ///     && rlsMetadata.endOffset() >= startingOffset
+    ///     && isRemoteSegmentWithinLeaderEpochs(rlsMetadata, unifiedLog.logEndOffset(), epochWithOffsets)
+    ///     && rlsMetadata.state().equals(RemoteLogSegmentState.COPY_SEGMENT_FINISHED)) {
+    ///     List<LogSegment> segmentsCopy = unifiedLog.logSegments();
+    ///     if (segmentsCopy.isEmpty() || rlsMetadata.startOffset() < segmentsCopy.get(0).baseOffset()) {
+    ///         return lookupTimestamp(rlsMetadata, timestamp, startingOffset);
+    ///     } else {
+    ///         // search in local-log
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// Kafka walks the leader epochs from the one holding `startingOffset`
+    /// and each epoch's segments in start-offset order; over the segments the
+    /// lineage admits, that is start-offset order.
+    ///
+    /// When the first candidate starts at or above `local_base`, the base
+    /// offset of the log's first local segment, Kafka searches the local log
+    /// instead, and this returns `None` so the caller's local search answers.
+    /// `local_base` is `None` for a log with no local segment, where Kafka
+    /// reads the tier.
+    ///
+    /// The sparse time index supplies a scan floor; the exact answer comes
+    /// from decoding records from the corresponding offset-index position.
     ///
     /// `max_record_body` is the topic's Kafka trunk `max.decompressed.message.bytes`,
     /// or `None` for no limit. A compressed record the scan has to read that is
     /// above it fails the lookup with [`RemoteStorageError::RecordTooLarge`],
     /// as `RemoteLogManager.findOffsetByTimestamp` fails with
-    /// `InvalidRecordException` and does not go on to the next segment.
+    /// `InvalidRecordException`.
     ///
     /// A segment outside the partition's leader-epoch `lineage` is never read,
     /// as `findOffsetByTimestamp` skips any segment that fails
     /// `isRemoteSegmentWithinLeaderEpochs`: after an unclean election the tier
     /// can still hold a deposed leader's copy of offsets the current lineage
     /// assigns to other records. See [`EpochLineage::admits`].
+    ///
+    /// A segment whose metadata carries the unknown max timestamp (`-1`, which
+    /// Kafka's metadata never does) is the first candidate only when its
+    /// records reach `target_timestamp`, so the lookup reads it to find out.
     pub(crate) async fn offset_for_timestamp(
         &self,
         tp: &TopicIdPartition,
@@ -40,6 +74,7 @@ impl RemoteReader {
         minimum_offset: LogOffset,
         max_record_body: Option<usize>,
         lineage: &EpochLineage,
+        local_base: Option<LogOffset>,
     ) -> Result<Option<(LogOffset, TimestampMs)>, RemoteStorageError> {
         let mut listed = self.list_remote_log_segments_blocking(tp).await?;
         listed.retain(|md| {
@@ -47,16 +82,16 @@ impl RemoteReader {
         });
         listed.sort_by_key(RemoteLogSegmentMetadata::start_offset);
 
-        for metadata in listed
-            .into_iter()
-            // `-1` is the persisted unknown-max sentinel for a sealed segment
-            // opened without a tail scan. It must remain scan-eligible for a
-            // positive timestamp lookup after broker restart.
-            .filter(|md| {
-                md.end_offset() >= minimum_offset
-                    && (md.max_timestamp_ms() == -1 || md.max_timestamp_ms() >= target_timestamp)
-            })
-        {
+        for metadata in listed.into_iter().filter(|md| {
+            md.end_offset() >= minimum_offset
+                && (md.max_timestamp_ms() == UNKNOWN_MAX_TIMESTAMP
+                    || md.max_timestamp_ms() >= target_timestamp)
+        }) {
+            if local_base.is_some_and(|base| metadata.start_offset() >= base) {
+                // Kafka's "search in local-log" branch: the caller's local
+                // search is the answer.
+                return Ok(None);
+            }
             let (time_index_bytes, offset_index_bytes) = tokio::try_join!(
                 self.fetch_index_blocking(metadata.clone(), IndexType::Timestamp),
                 self.fetch_index_blocking(metadata.clone(), IndexType::Offset),
@@ -79,31 +114,222 @@ impl RemoteReader {
             // offset inside that batch included: Kafka's
             // `RemoteLogManager.lookupTimestamp` filters on the log start
             // offset only, never on the time index's offset.
-            if let Some(found) = first_record_at_or_after_timestamp(
+            let found = first_record_at_or_after_timestamp(
                 &data,
                 metadata.start_offset().max(minimum_offset),
                 target_timestamp,
                 max_record_body,
-            )? {
-                return Ok(Some(found));
+            )?;
+            if found.is_some()
+                || metadata.max_timestamp_ms() != UNKNOWN_MAX_TIMESTAMP
+                // Whether the segment's records reach the target at all, below
+                // the floor too: its largest timestamp does exactly then. As
+                // with the local maximum, the measurement takes no limit.
+                || first_record_at_or_after_timestamp(
+                    &data,
+                    metadata.start_offset(),
+                    target_timestamp,
+                    None,
+                )?
+                .is_some()
+            {
+                return Ok(found);
             }
         }
         Ok(None)
     }
 }
 
+/// The persisted unknown-max sentinel for a sealed segment opened without a
+/// tail scan.
+const UNKNOWN_MAX_TIMESTAMP: TimestampMs = -1;
+
 #[cfg(test)]
 mod tests {
     use {
-        super::EpochLineage,
+        super::{EpochLineage, RemoteReader},
         crate::remote_reader::test_support::{
             ReaderFixture, ReaderWithDir, append_time_remote_segment_reader,
             compressed_remote_segment_reader, divergent_tier_reader, reader_fixture,
-            sparse_remote_segment_reader, sparse_remote_segment_reader_with_max_timestamp, tp,
+            single_batch_tier_segment as segment, sparse_remote_segment_reader,
+            sparse_remote_segment_reader_with_max_timestamp, tier_reader, tp,
             unordered_timestamps_remote_segment_reader,
         },
         assert2::assert,
     };
+
+    /// One seek of [`a_seek_answers_from_the_first_candidate_segment_only`].
+    struct Seek {
+        name: &'static str,
+        lineage: EpochLineage,
+        target: i64,
+        minimum: i64,
+        local_base: Option<i64>,
+        want: Option<(i64, i64)>,
+    }
+
+    /// Runs each seek against the reader, and pairs every answer with its
+    /// name, as the expected answers are.
+    async fn seek_all(
+        reader: &RemoteReader,
+        seeks: Vec<Seek>,
+    ) -> (
+        Vec<(&'static str, Option<(i64, i64)>)>,
+        Vec<(&'static str, Option<(i64, i64)>)>,
+    ) {
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for Seek {
+            name,
+            lineage,
+            target,
+            minimum,
+            local_base,
+            want,
+        } in seeks
+        {
+            let found = reader
+                .offset_for_timestamp(&tp(), target, minimum, None, &lineage, local_base)
+                .await
+                .unwrap();
+            actual.push((name, found));
+            expected.push((name, want));
+        }
+        (actual, expected)
+    }
+
+    /// #1388: Kafka 4.3.1's `RemoteLogManager.findOffsetByTimestamp` answers
+    /// from its first candidate segment, the first finished one the
+    /// leader-epoch lineage admits whose max timestamp reaches the target and
+    /// whose end offset reaches the floor, even when that segment holds no
+    /// match at or above the floor. When that candidate starts at or above the
+    /// first local segment's base, Kafka searches the local log instead.
+    ///
+    /// The lineage is epoch 0 from offset 0 and epoch 1 from offset 5, with the
+    /// log end at 12. The tier holds:
+    /// - offsets 0 to 4 in epoch 0, timestamps 100, 500, 150, 160, 170;
+    /// - a deposed leader's copy of offsets 3 to 9, all in epoch 0, which the
+    ///   lineage does not admit: its offset 5 has timestamp 1 000;
+    /// - offsets 5 to 9 in epoch 1, timestamps 900, 1 200, 950, 960, 970;
+    /// - offsets 10 and 11 in epoch 1, timestamps 1 300, 1 400.
+    #[tokio::test]
+    async fn a_seek_answers_from_the_first_candidate_segment_only() {
+        let ReaderWithDir {
+            reader,
+            dir: _remote_dir,
+        } = tier_reader(&[
+            segment(0, &[100, 500, 150, 160, 170], 0, false),
+            segment(3, &[130, 140, 1_000, 1_010, 1_020, 1_030, 1_040], 0, false),
+            segment(5, &[900, 1_200, 950, 960, 970], 1, false),
+            segment(10, &[1_300, 1_400], 1, false),
+        ]);
+        let lineage = || EpochLineage::from_entries(&[(0, 0), (1, 5)], 12);
+        let seek = |name, target, minimum, local_base, want| Seek {
+            name,
+            lineage: lineage(),
+            target,
+            minimum,
+            local_base,
+            want,
+        };
+        let (actual, expected) = seek_all(&reader, vec![
+            seek(
+                "the first candidate holds the match",
+                400,
+                0,
+                None,
+                Some((1, 500)),
+            ),
+            seek("its only match is below the floor", 400, 2, None, None),
+            seek(
+                "a segment ending below the floor is no candidate",
+                400,
+                5,
+                None,
+                Some((5, 900)),
+            ),
+            seek(
+                "a segment below the target is no candidate",
+                1_300,
+                0,
+                None,
+                Some((10, 1_300)),
+            ),
+            seek(
+                "the lineage skips the deposed leader's copy",
+                1_000,
+                0,
+                None,
+                Some((6, 1_200)),
+            ),
+            seek(
+                "the first admitted candidate holds no match above the floor",
+                1_000,
+                7,
+                None,
+                None,
+            ),
+            seek(
+                "a candidate below the local base is read from the tier",
+                400,
+                0,
+                Some(5),
+                Some((1, 500)),
+            ),
+            seek(
+                "a candidate at the local base is the local log's to answer",
+                1_000,
+                0,
+                Some(5),
+                None,
+            ),
+            Seek {
+                name: "an empty checkpoint admits the deposed leader's copy",
+                lineage: EpochLineage::unknown(),
+                target: 1_000,
+                minimum: 0,
+                local_base: None,
+                want: Some((5, 1_000)),
+            },
+        ])
+        .await;
+        assert!(actual == expected);
+    }
+
+    /// A segment whose metadata carries the unknown max timestamp is the first
+    /// candidate exactly when its records reach the target, below the floor
+    /// too, as its largest timestamp would.
+    #[tokio::test]
+    async fn an_unknown_max_timestamp_is_measured_from_the_segments_records() {
+        let ReaderWithDir {
+            reader,
+            dir: _remote_dir,
+        } = tier_reader(&[
+            segment(0, &[100, 500, 150], 0, true),
+            segment(3, &[200, 300], 0, true),
+            segment(5, &[600, 700], 0, false),
+        ]);
+        let seek = |name, target, minimum, want| Seek {
+            name,
+            lineage: EpochLineage::unknown(),
+            target,
+            minimum,
+            local_base: None,
+            want,
+        };
+        let (actual, expected) = seek_all(&reader, vec![
+            seek("its records hold the match", 400, 0, Some((1, 500))),
+            seek(
+                "its records reach the target only below the floor",
+                400,
+                2,
+                None,
+            ),
+            seek("its records never reach the target", 550, 0, Some((5, 600))),
+        ])
+        .await;
+        assert!(actual == expected);
+    }
 
     #[yare::parameterized(
         start = { 0 },
@@ -124,7 +350,7 @@ mod tests {
         let end = log.tierable_segments().last().unwrap().last_offset.0 + 1;
         let expected = (minimum < end).then_some((minimum, 0));
         let actual = reader
-            .offset_for_timestamp(&tp(), 0, minimum, None, &EpochLineage::unknown())
+            .offset_for_timestamp(&tp(), 0, minimum, None, &EpochLineage::unknown(), None)
             .await
             .unwrap();
         assert2::assert!(actual == expected, "minimum {minimum}, end {end}");
@@ -145,7 +371,7 @@ mod tests {
     ) {
         let ReaderWithDir { reader, dir: _dir } = append_time_remote_segment_reader();
         let actual = reader
-            .offset_for_timestamp(&tp(), target, floor, None, &EpochLineage::unknown())
+            .offset_for_timestamp(&tp(), target, floor, None, &EpochLineage::unknown(), None)
             .await
             .unwrap();
         assert2::assert!(actual == expected, "floor {floor} target {target}");
@@ -183,7 +409,7 @@ mod tests {
         let mut expected = Vec::new();
         for (label, lineage, target, want) in cases {
             let found = reader
-                .offset_for_timestamp(&tp(), target, 0, None, lineage)
+                .offset_for_timestamp(&tp(), target, 0, None, lineage, None)
                 .await
                 .unwrap();
             actual.push((label, found));
@@ -207,7 +433,7 @@ mod tests {
         // all 0. Target a timestamp <= 0 to match the first segment.
         let target_ts = 0_i64;
         let got = reader
-            .offset_for_timestamp(&tp(), target_ts, 0, None, &EpochLineage::unknown())
+            .offset_for_timestamp(&tp(), target_ts, 0, None, &EpochLineage::unknown(), None)
             .await
             .unwrap()
             .expect("first segment matches ts=0");
@@ -225,7 +451,7 @@ mod tests {
         } = sparse_remote_segment_reader();
 
         let got = reader
-            .offset_for_timestamp(&tp(), 1_500, 0, None, &EpochLineage::unknown())
+            .offset_for_timestamp(&tp(), 1_500, 0, None, &EpochLineage::unknown(), None)
             .await
             .unwrap()
             .expect("timestamp 1500 has a remote match");
@@ -241,7 +467,7 @@ mod tests {
         } = sparse_remote_segment_reader();
 
         let got = reader
-            .offset_for_timestamp(&tp(), 2_000, 0, None, &EpochLineage::unknown())
+            .offset_for_timestamp(&tp(), 2_000, 0, None, &EpochLineage::unknown(), None)
             .await
             .unwrap()
             .expect("timestamp 2000 has an exact record match");
@@ -254,7 +480,7 @@ mod tests {
         let (reader, _remote_dir) = sparse_remote_segment_reader_with_max_timestamp(-1);
 
         let got = reader
-            .offset_for_timestamp(&tp(), 2_000, 0, None, &EpochLineage::unknown())
+            .offset_for_timestamp(&tp(), 2_000, 0, None, &EpochLineage::unknown(), None)
             .await
             .unwrap()
             .expect("the unknown max sentinel must not suppress an exact remote scan");
@@ -274,7 +500,7 @@ mod tests {
         } = unordered_timestamps_remote_segment_reader();
 
         let got = reader
-            .offset_for_timestamp(&tp(), 2_400, 0, None, &EpochLineage::unknown())
+            .offset_for_timestamp(&tp(), 2_400, 0, None, &EpochLineage::unknown(), None)
             .await
             .unwrap()
             .expect("the newest record is the first of the second batch");
@@ -293,7 +519,7 @@ mod tests {
         // All segments have max_ts=0 by construction (see test above); any
         // strictly-positive target is past every remote segment.
         let got = reader
-            .offset_for_timestamp(&tp(), 1, 0, None, &EpochLineage::unknown())
+            .offset_for_timestamp(&tp(), 1, 0, None, &EpochLineage::unknown(), None)
             .await
             .unwrap();
         assert!(got == None);
@@ -323,7 +549,7 @@ mod tests {
             dir: _remote_dir,
         } = compressed_remote_segment_reader(1_000);
         let actual = match reader
-            .offset_for_timestamp(&tp(), target, 0, limit, &EpochLineage::unknown())
+            .offset_for_timestamp(&tp(), target, 0, limit, &EpochLineage::unknown(), None)
             .await
         {
             Ok(found) => Ok(found),

@@ -1,6 +1,5 @@
 //! The KIP-496 decision table: the requested `(topic, partition)` tuples in,
-//! the response rows plus, for each deletion that may proceed, one tombstone
-//! record out.
+//! the response rows plus the keys whose offsets may be deleted out.
 //!
 //! This is the whole per-partition outcome of an `OffsetDelete`, and it is
 //! pure. The handler feeds it the ACL decisions, the group's subscribed topics
@@ -9,29 +8,21 @@
 
 use {
     crate::{
-        authorizer::AuthorizationResult,
-        codes,
-        coordinator::{persistence::OffsetCommitValue, unified::actor::SubscribedTopics},
-        error::BrokerError,
+        authorizer::AuthorizationResult, codes, coordinator::unified::actor::SubscribedTopics,
     },
-    krabka_protocol::{
-        owned::{
-            offset_delete_request::OffsetDeleteRequestTopic,
-            offset_delete_response::{OffsetDeleteResponsePartition, OffsetDeleteResponseTopic},
-        },
-        records::Record,
+    krabka_protocol::owned::{
+        offset_delete_request::OffsetDeleteRequestTopic,
+        offset_delete_response::{OffsetDeleteResponsePartition, OffsetDeleteResponseTopic},
     },
     std::collections::HashMap,
 };
 
-/// The per-partition rows of an `OffsetDelete` response, the tombstones to
-/// append to the group's `__consumer_offsets` partition, and the
-/// `(topic, partition)` keys to remove from the group's committed offsets
-/// once the append succeeds.
+/// The per-partition rows of an `OffsetDelete` response, and the
+/// `(topic, partition)` keys whose rows answer `NONE`. The group actor
+/// tombstones those of them it holds an offset for.
 pub(super) struct Rows {
     pub topics: Vec<OffsetDeleteResponseTopic>,
-    pub tombstones: Vec<Record>,
-    pub to_remove: Vec<(String, i32)>,
+    pub to_delete: Vec<(String, i32)>,
 }
 
 /// A requested topic and the partitions of it that pass the broker's checks.
@@ -52,18 +43,19 @@ struct ValidTopic<'a> {
 /// `OffsetMetadataManager.deleteOffsets` then answers the partitions left:
 ///   - a topic that the group subscribes to gives `GROUP_SUBSCRIBED_TO_TOPIC`
 ///     for every one of them;
-///   - otherwise each queues a tombstone and answers `NONE`.
+///   - otherwise each answers `NONE` and joins `to_delete`. Whether it gets
+///     a tombstone depends on the offsets the group holds, which only the
+///     group actor knows.
 ///
 /// `OffsetDeleteResponse.Builder.merge` appends the coordinator's partitions
 /// to a topic that the first step already answered, and its topics after the
 /// first step's.
 pub(super) fn build_response_rows(
-    group_id: &str,
     topics: &[OffsetDeleteRequestTopic],
     topic_decisions: &HashMap<&str, AuthorizationResult>,
     subscribed_topics: &SubscribedTopics,
     topic_partition_counts: &HashMap<&str, i32>,
-) -> Result<Rows, BrokerError> {
+) -> Rows {
     let mut out: Vec<OffsetDeleteResponseTopic> = Vec::new();
     let mut valid: Vec<ValidTopic<'_>> = Vec::new();
 
@@ -95,35 +87,24 @@ pub(super) fn build_response_rows(
         }
     }
 
-    let mut tombstones: Vec<Record> = Vec::new();
-    let mut to_remove: Vec<(String, i32)> = Vec::new();
-    let mut delta: i32 = 0;
+    let mut to_delete: Vec<(String, i32)> = Vec::new();
     for ValidTopic { name, partitions } in valid {
         let subscribed = subscribed_topics.contains(name);
         for index in partitions {
             let code = if subscribed {
                 codes::GROUP_SUBSCRIBED_TO_TOPIC
             } else {
-                tombstones.push(Record {
-                    offset_delta: delta,
-                    timestamp_delta: 0,
-                    key: Some(OffsetCommitValue::encode_key(group_id, name, index)?),
-                    value: None, // null value = tombstone
-                    ..Default::default()
-                });
-                delta += 1;
-                to_remove.push((name.to_string(), index));
+                to_delete.push((name.to_string(), index));
                 codes::NONE
             };
             push_row(&mut out, name, index, code);
         }
     }
 
-    Ok(Rows {
+    Rows {
         topics: out,
-        tombstones,
-        to_remove,
-    })
+        to_delete,
+    }
 }
 
 /// Adds one partition row under the topic named `name`, creating the topic
@@ -173,7 +154,7 @@ mod tests {
         partitions: &'a [PartitionCode],
     }
 
-    /// A key that a case deletes from the group's committed offsets.
+    /// A key that a case asks the group actor to delete.
     #[derive(Debug, PartialEq, Eq)]
     struct RemovedKey<'a> {
         topic: &'a str,
@@ -480,12 +461,11 @@ mod tests {
         {
             let req = req_with_topics(request);
 
-            let got =
-                build_response_rows("g", &req.topics, &decisions, &subscribed, &counts).unwrap();
+            let got = build_response_rows(&req.topics, &decisions, &subscribed, &counts);
 
             check!(got.topics == expected(want), "{name}");
             let removed: Vec<RemovedKey<'_>> = got
-                .to_remove
+                .to_delete
                 .iter()
                 .map(|(topic, partition)| RemovedKey {
                     topic: topic.as_str(),
@@ -493,10 +473,6 @@ mod tests {
                 })
                 .collect();
             check!(removed == want_removed, "{name}");
-            let deltas: Vec<i32> = got.tombstones.iter().map(|t| t.offset_delta).collect();
-            let want_deltas: Vec<i32> = (0..).take(want_removed.len()).collect();
-            check!(deltas == want_deltas, "{name}");
-            check!(got.tombstones.iter().all(|t| t.value.is_none()), "{name}");
         }
     }
 }

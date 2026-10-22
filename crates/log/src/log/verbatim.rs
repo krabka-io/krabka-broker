@@ -159,6 +159,9 @@ impl Log {
         &mut self,
         batch: &VerbatimBatch,
     ) -> Result<(Offset, Option<i64>), LogError> {
+        // A fenced log refuses every append with `Fenced`, before any of
+        // the append's own validation can report a different error.
+        self.ensure_unfenced()?;
         // KFC-1, before an offset is assigned and before anything is written,
         // so a refused batch leaves the log exactly as it found it.
         self.reject_backwards_schedule(batch.max_timestamp)?;
@@ -207,6 +210,9 @@ impl Log {
         batch: &VerbatimBatch,
         base_offset: Offset,
     ) -> Result<Offset, LogError> {
+        // A fenced log refuses every append with `Fenced`, before any of
+        // the append's own validation can report a different error.
+        self.ensure_unfenced()?;
         self.admit_append_at(base_offset)?;
 
         let leader_epoch = batch.leader_epoch;
@@ -244,6 +250,7 @@ impl Log {
         batch: &VerbatimBatch,
         base_offset: Offset,
     ) -> Result<(), LogError> {
+        self.ensure_unfenced()?;
         self.rollover_flusher.check()?;
         let Some((last_offset, _)) = krabka_verified::local_append_coordinates(
             self.append_at_expected_offset().0,

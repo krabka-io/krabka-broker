@@ -6,6 +6,24 @@ MINIMUM_LINES = 5
 def rust_paths(nul_separated):
     return sorted({path: True for path in nul_separated.split("\x00") if path.endswith(".rs")})
 
+def tracked_symlinks(staged):
+    """The paths that `git ls-files --stage -z` output records as symlinks."""
+    return [entry.split("\t", 1)[1] for entry in staged.split("\x00") if entry.startswith("120000 ")]
+
+def source_kind(fs, source):
+    """Classify one inventory path: "missing", "regular" or "unsupported".
+
+    `exists` follows links, so a broken link reads as missing. Otherwise the
+    in-process no-follow `symlink_metadata` call decides: only a regular file
+    that is not a link is a source CPD reads.
+    """
+    if not fs.exists(source):
+        return "missing"
+    metadata = fs.symlink_metadata(source)
+    if metadata.is_file and not metadata.is_symlink:
+        return "regular"
+    return "unsupported"
+
 def _capture(ctx, argv, root):
     result = ctx.std.process.command(argv[0]).args(argv[1:]).current_dir(root).stdout("piped").stderr("piped").spawn().wait_with_output()
     if result.status.code != 0:
@@ -23,18 +41,19 @@ def snapshot_sources(ctx, work, root):
     candidate = work + "/sources"
     ctx.std.fs.create_dir_all(candidate)
     tracked = _capture(ctx, ["git", "ls-files", "--stage", "-z", "--", "*.rs"], root)
-    if any([entry.startswith("120000 ") for entry in tracked.split("\x00") if entry]):
+    if tracked_symlinks(tracked):
         fail("Rust symlinks are unsupported; CPD must read every source file")
     paths = rust_paths(_capture(ctx, ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "*.rs"], root))
     deleted = rust_paths(_capture(ctx, ["git", "diff", "--name-only", "--diff-filter=D", "-z", "HEAD", "--", "*.rs"], root))
     copied = []
     for path in paths:
         source = root + "/" + path
-        if not ctx.std.fs.exists(source):
+        kind = source_kind(ctx.std.fs, source)
+        if kind == "missing":
             if path not in deleted:
                 fail("missing Rust source: %s (sparse checkouts are unsupported)" % path)
             continue
-        if _run(ctx, ["test", "-L", source], root) == 0 or not ctx.std.fs.metadata(source).is_file:
+        if kind != "regular":
             fail("unsupported candidate Rust source: %s" % path)
         destination = candidate + "/" + path
         ctx.std.fs.create_dir_all(destination.rsplit("/", 1)[0])

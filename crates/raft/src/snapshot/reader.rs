@@ -128,16 +128,6 @@ impl SnapshotReader {
             metadata_records: records,
         })
     }
-
-    /// Return the `[position, position + max)` slice of `bytes`, clamped
-    /// to the buffer length. A `position` at or past EOF yields an empty
-    /// slice. Used to serve `FetchSnapshot` byte-range requests (KIP-595
-    /// §`FetchSnapshot`).
-    pub(crate) fn byte_range(bytes: &[u8], position: usize, max: usize) -> &[u8] {
-        let start = position.min(bytes.len());
-        let end = start.saturating_add(max).min(bytes.len());
-        &bytes[start..end]
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -400,51 +390,5 @@ mod tests {
         );
 
         assert2::assert!(SnapshotReader::read(&bytes).is_err());
-    }
-
-    #[test]
-    fn byte_range_returns_expected_slice() {
-        struct Scenario<'a> {
-            case: &'a str,
-            position: usize,
-            max: usize,
-            want: &'a [u8],
-        }
-        let buf: Vec<u8> = (0u8..=255).collect();
-        let cases = [
-            // In-range read.
-            Scenario {
-                case: "in-range read",
-                position: 10,
-                max: 5,
-                want: &buf[10..15],
-            },
-            // Position past EOF → empty.
-            Scenario {
-                case: "position past EOF",
-                position: 1000,
-                max: 5,
-                want: &[],
-            },
-            // Length clamps to buffer end.
-            Scenario {
-                case: "length clamped to end",
-                position: 250,
-                max: 100,
-                want: &buf[250..],
-            },
-        ];
-        for Scenario {
-            case,
-            position,
-            max,
-            want,
-        } in cases
-        {
-            assert2::assert!(
-                SnapshotReader::byte_range(&buf, position, max) == want,
-                "{case}"
-            );
-        }
     }
 }

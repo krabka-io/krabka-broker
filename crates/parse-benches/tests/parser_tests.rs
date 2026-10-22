@@ -2,8 +2,8 @@ use {
     assert2::assert,
     krabka_parse_benches::{
         Args, BenchmarkComparison, BenchmarkMetric, BenchmarkSummary, NamedMetric,
-        ParseBenchesError, compare_summaries, format_rfc3339_utc, parse_bencher_line,
-        parse_benchmark_dir, read_summaries, resolve_commit_sha, run_from_args,
+        ParseBenchesError, compare_summaries, executables::BenchExecutable, format_rfc3339_utc,
+        parse_bencher_line, parse_benchmark_dir, read_summaries, resolve_commit_sha, run_from_args,
     },
     std::{
         collections::BTreeMap,
@@ -277,6 +277,9 @@ fn runs_end_to_end_writing_valid_json() {
         commit: Some("deadbeef999".to_string()),
         reference_dir: None,
         candidate_dir: None,
+        executables: None,
+        cargo_log: None,
+        source_dir: None,
         minimum_tolerance_percent: 3.0,
         command: None,
     };
@@ -303,8 +306,18 @@ fn repeated_summaries(values: &[f64], commit: &str) -> Vec<BenchmarkSummary> {
                 ns_per_iter: *value,
                 variance_ns: 1.0,
             })]),
+            executables: vec![executable(commit)],
         })
         .collect()
+}
+
+/// A recorded executable in a target directory named after `side`.
+fn executable(side: &str) -> BenchExecutable {
+    BenchExecutable {
+        target: "hot".to_string(),
+        path: PathBuf::from(format!("/target-{side}/release/deps/hot-0123")),
+        sha256: format!("digest-{side}"),
+    }
 }
 
 #[test]
@@ -371,6 +384,7 @@ fn comparison_rejects_invalid_inputs() {
             commit: "empty".into(),
             timestamp: "2026-09-09T00:00:00Z".into(),
             benchmarks: BTreeMap::new(),
+            executables: vec![executable("empty")],
         };
         3
     ];

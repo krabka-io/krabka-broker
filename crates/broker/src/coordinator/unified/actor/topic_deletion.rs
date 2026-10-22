@@ -32,7 +32,9 @@ pub(super) async fn reply_delete_topic_offsets(
 }
 
 /// Tombstones every committed offset and every open transactional offset of
-/// the deleted topics in one batch, then removes them from the group.
+/// the deleted topics in one batch, then removes them from the group. A commit
+/// still waiting for the high watermark counts as committed here, as Kafka's
+/// write operations read the newest state.
 ///
 /// `topics` holds each deleted topic's name and id. A committed offset goes
 /// when its topic id is the deleted id or unknown, as in Kafka's
@@ -55,8 +57,8 @@ async fn delete_topic_offsets(
             .map(|topic| topic.topic_id)
     };
     let committed = group
-        .committed_offsets
-        .iter()
+        .latest_offsets()
+        .into_iter()
         .filter(|((topic, _), entry)| {
             deleted_id(topic).is_some_and(|id| entry.topic_id.is_none_or(|own| own == id))
         })

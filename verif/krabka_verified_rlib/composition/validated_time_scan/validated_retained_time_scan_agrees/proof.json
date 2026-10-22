@@ -21,8 +21,8 @@
         "prover": "alt-ergo",
         "time": 0.018
       },
+      "vc_len_IndexEntry_i64_u32": { "prover": "alt-ergo", "time": 0.018 },
       "vc_len_i64": { "prover": "alt-ergo", "time": 0.019 },
-      "vc_len_tup2_i64_u32": { "prover": "alt-ergo", "time": 0.014 },
       "vc_len_u32": { "prover": "alt-ergo", "time": 0.019 },
       "vc_remote_timestamp_scan_preserves_first": {
         "prover": "alt-ergo",

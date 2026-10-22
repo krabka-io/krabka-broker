@@ -153,9 +153,7 @@ async fn reap_expired_offsets(
         );
         return ReapOutcome::default();
     }
-    for key in &expired {
-        group.committed_offsets.remove(key);
-    }
+    group.remove_committed(&expired);
     if delete_group {
         coordinator.remove_cached_seed(&group.group_id);
     }
@@ -265,6 +263,10 @@ struct ExpiredOffsets {
 ///
 /// An offset of a subscribed topic stays, as does one that an open
 /// transaction has written or reserved (`hasPendingTransactionalOffsets`).
+/// The offsets are the newest ones, a commit that is still replicating
+/// included, as Kafka's sweep runs as a write operation and reads the
+/// shard's newest state: such a commit is fresh, so it neither expires nor
+/// lets the group count as holding no offsets.
 fn expired_offsets(
     group: &CoordinatorGroup,
     condition: &ExpirationCondition,
@@ -272,19 +274,18 @@ fn expired_offsets(
     retention_ms: i64,
 ) -> ExpiredOffsets {
     let open_transactions = group.unresolved_txn_keys();
-    let mut expired: Vec<(String, i32)> = group
-        .committed_offsets
+    let latest = group.latest_offsets();
+    let mut expired: Vec<(String, i32)> = latest
         .iter()
         .filter(|((topic, _), entry)| {
             !condition.subscribed.contains(topic)
                 && entry.is_expired(now_ms, condition.empty_since_ms, retention_ms)
         })
         .filter(|(key, _)| !open_transactions.contains(*key))
-        .map(|(key, _)| key.clone())
+        .map(|(key, _)| (*key).clone())
         .collect();
     expired.sort_unstable();
-    let all_expired =
-        expired.len() == group.committed_offsets.len() && open_transactions.is_empty();
+    let all_expired = expired.len() == latest.len() && open_transactions.is_empty();
     ExpiredOffsets {
         keys: expired,
         all_expired,

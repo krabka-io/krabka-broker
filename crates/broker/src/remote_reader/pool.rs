@@ -45,6 +45,21 @@ pub(crate) struct ReaderPermit<'pool> {
     _permit: SemaphorePermit<'pool>,
 }
 
+/// One reader's place in the pending queue, given back when it is dropped.
+///
+/// The wait for a permit can be cancelled: the Fetch handler drops a read
+/// still queued when `remote.fetch.max.wait.ms` runs out. Releasing the place
+/// in `Drop` gives it back on that path as well as when the permit arrives,
+/// and exactly once on either. It is only built after the count was raised,
+/// so its release never takes the count below zero.
+struct PendingSlot<'pool> {
+    pending: &'pool AtomicUsize,
+}
+
+impl Drop for PendingSlot<'_> {
+    fn drop(&mut self) { self.pending.fetch_sub(1, Ordering::AcqRel); }
+}
+
 impl ReaderPool {
     /// A pool of `threads` concurrent reads with room for `max_pending_tasks`
     /// waiting ones.
@@ -71,8 +86,8 @@ impl ReaderPool {
     /// Waits for a slot, or refuses when the pending queue is full.
     ///
     /// The pending count is incremented before the wait and decremented when
-    /// the permit arrives, so it reads as the queue depth Kafka's
-    /// `RemoteLogReaderTaskQueueSize` reports.
+    /// the permit arrives or the wait is cancelled, so it reads as the queue
+    /// depth Kafka's `RemoteLogReaderTaskQueueSize` reports.
     pub(crate) async fn acquire(&self) -> Result<ReaderPermit<'_>, ReaderPoolRejected> {
         // Take the queue slot first: two readers that both see room must not
         // both get in when only one slot is left.
@@ -85,8 +100,11 @@ impl ReaderPool {
             self.rejected.fetch_add(1, Ordering::Relaxed);
             return Err(ReaderPoolRejected);
         }
+        let slot = PendingSlot {
+            pending: &self.pending,
+        };
         let permit = self.permits.acquire().await;
-        self.pending.fetch_sub(1, Ordering::AcqRel);
+        drop(slot);
         // The semaphore is never closed: nothing calls `close`, and the pool
         // outlives every read it hands a permit to. Refusing is the safe
         // answer if that ever changes.

@@ -31,8 +31,28 @@ cargo run -p krabka-parse-benches -- \
   --suite krabka-broker
 ```
 
+To record which bench executables a pass ran, build the revision first and
+keep Cargo's JSON messages. `executables` writes a manifest of each bench
+executable's path and SHA-256. Parsing a pass's output against that manifest
+reads the `Running` lines in Cargo's standard error. It fails unless the pass
+ran only the manifest's executables, unchanged, and the summary names them:
+
+```sh
+cargo bench --no-run --message-format=json > cargo-build.json
+cargo run -p krabka-parse-benches -- executables cargo-build.json \
+  --commit "$(git rev-parse HEAD)" --output executables.json
+cargo bench -- --output-format bencher 2> run-1/cargo-stderr.log | tee run-1/raw.txt
+cargo run -p krabka-parse-benches -- \
+  --results-dir run-1 --output summaries/run-1.json \
+  --commit "$(git rev-parse HEAD)" \
+  --executables executables.json --cargo-log run-1/cargo-stderr.log
+```
+
 Compare repeated same-host summaries (a regression exits 1 after writing the
-verdict):
+verdict). Every summary must name its executables. A comparison is refused
+when one side's passes ran different executables, or when both sides ran an
+executable at the same path, which means the two revisions shared a target
+directory and may have run one binary:
 
 ```sh
 cargo run -p krabka-parse-benches -- \
