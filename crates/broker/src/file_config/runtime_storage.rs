@@ -225,14 +225,9 @@ mod tests {
         line: &str,
         expected: Option<krabka_units::Time>,
     ) {
-        let applied = toml::from_str::<FileConfig>(&format!("[runtime]\n{line}"))
-            .ok()
-            .and_then(|file| {
-                let mut cfg = BrokerConfig::default();
-                file.apply_to(&mut cfg)
-                    .ok()
-                    .map(|()| cfg.log_config.start_offset_checkpoint_interval)
-            });
+        let applied = optional_configured_feature(&format!("[runtime]\n{line}"), |config| {
+            config.log_config.start_offset_checkpoint_interval
+        });
         assert2::assert!(applied == expected, "{line}");
     }
 
