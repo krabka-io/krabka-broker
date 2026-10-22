@@ -159,11 +159,19 @@ async fn until_appended(partitions: &[Arc<Partition>]) {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_busy_writer_holds_back_only_its_own_partition() {
-    let topics = ["slow", "fast-1", "fast-2", "fast-3"];
+/// One fresh partition per topic, each with an idle writer, and one `acks=1`
+/// request with a batch for each, admitted in topic order.
+struct WideRequest {
+    _dir: tempfile::TempDir,
+    image: Arc<MetadataImage>,
+    fixture: PipelineFixture,
+    partitions: Vec<Arc<Partition>>,
+    request: Request,
+}
+
+async fn wide_request(topics: &[&str]) -> WideRequest {
     let dir = tempfile::tempdir().expect("tempdir");
-    let image = wide_image(&topics);
+    let image = wide_image(topics);
     let fixture = PipelineFixture::new(krabka_ids::NodeId(1));
     let mut partitions = Vec::new();
     for topic in topics {
@@ -177,10 +185,29 @@ async fn a_busy_writer_holds_back_only_its_own_partition() {
             base_sequence: 0,
         })
         .collect();
-    let Request {
-        admitted,
-        mut topic_results,
-    } = admit(&fixture, &image, &entries, 1).await;
+    let request = admit(&fixture, &image, &entries, 1).await;
+    WideRequest {
+        _dir: dir,
+        image,
+        fixture,
+        partitions,
+        request,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_busy_writer_holds_back_only_its_own_partition() {
+    let topics = ["slow", "fast-1", "fast-2", "fast-3"];
+    let WideRequest {
+        _dir,
+        image,
+        fixture,
+        partitions,
+        request: Request {
+            admitted,
+            mut topic_results,
+        },
+    } = wide_request(&topics).await;
     let mut awaiting: Vec<PendingPartition> = Vec::new();
 
     // The slow partition's writer is in the middle of a message, so its
@@ -222,25 +249,16 @@ async fn a_busy_writer_holds_back_only_its_own_partition() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn overlapping_waits_share_the_handler_time_they_spent_together() {
     let topics = ["a", "b", "c", "d"];
-    let dir = tempfile::tempdir().expect("tempdir");
-    let image = wide_image(&topics);
-    let fixture = PipelineFixture::new(krabka_ids::NodeId(1));
-    let mut partitions = Vec::new();
-    for topic in topics {
-        partitions.push(fixture.register_partition(dir.path(), topic, &image).await);
-    }
-    let entries: Vec<Entry<'_>> = (0..)
-        .zip(topics)
-        .map(|(topic_row, topic)| Entry {
-            topic,
-            topic_row,
-            base_sequence: 0,
-        })
-        .collect();
-    let Request {
-        admitted,
-        mut topic_results,
-    } = admit(&fixture, &image, &entries, 1).await;
+    let WideRequest {
+        _dir,
+        image,
+        fixture,
+        partitions,
+        request: Request {
+            admitted,
+            mut topic_results,
+        },
+    } = wide_request(&topics).await;
     let mut awaiting: Vec<PendingPartition> = Vec::new();
 
     let mut busy = Vec::new();
