@@ -604,7 +604,6 @@ def _self_test():
         "broker manifest must select every suite",
     )
 
-
 def _is_build_wide(path):
     return path in ["MODULE.bazel", ".bazelrc", "Cargo.lock", "Cargo.toml"] or path.startswith("bazel/")
 
