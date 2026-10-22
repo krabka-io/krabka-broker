@@ -45,7 +45,7 @@ fn uncheckpointed_downgrade() -> EngineInDir {
 #[test]
 fn metadata_version_downgrade_retries_mandatory_snapshot_and_prune() {
     let (mut engine, _dir) = build_engine_only().ids(&[NodeId(1)]).call();
-    let published_image = engine.image_tx.subscribe();
+    let published_image = engine.image.subscribe();
     elect_single_voter_engine(&mut engine);
     let mut rx =
         super::test_support::submit_on_engine(&mut engine, &topic_record("snapshot-reload"));

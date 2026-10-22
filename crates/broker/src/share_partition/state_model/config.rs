@@ -86,8 +86,8 @@ impl ShareModel {
     /// roughly doubles the reachable space per offset in the window. Two
     /// offsets is the smallest window that still lets a due record sit behind a
     /// waiting one, and it is as wide as this config goes: three offsets with
-    /// `Reload` generates 205016 states, which is past `MAX_STATES` and so
-    /// proves nothing. [`ShareModel::deferral_wide`] takes the wider window
+    /// `Reload` generates more states than `MAX_STATES`, and so proves
+    /// nothing. [`ShareModel::deferral_wide`] takes the wider window
     /// instead, and pays for it elsewhere.
     pub(super) fn deferral() -> Self {
         Self {
@@ -103,8 +103,8 @@ impl ShareModel {
     /// It buys that width with one member and no `Reload`. Both are covered
     /// elsewhere: the concurrency configs hold the two-member interleavings,
     /// and [`ShareModel::deferral`] holds the reload. Keeping either here puts
-    /// the generated count within 300 states of `MAX_STATES`, which is not a
-    /// bound anyone can build on.
+    /// the generated count within 300 states of `MAX_STATES`, or past it,
+    /// which is not a bound anyone can build on.
     pub(super) fn deferral_wide() -> Self {
         Self {
             t0: Instant::now(),

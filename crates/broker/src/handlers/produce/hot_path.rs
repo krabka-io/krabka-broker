@@ -117,20 +117,30 @@ pub fn append_one_batch(
     append_produce_data(build_produce_data(prepared, settings.leader_epoch), log)
 }
 
-/// Append one writer job, applying the same compression rewrite
-/// `crate::partition_writer::append` applies to an owned batch.
+/// Append one writer job, settled against the log's config the way
+/// `crate::partition_writer::append` settles it.
+///
+/// The path reported is the one `prepare_batch` chose. An owned batch whose
+/// gate-encoded bytes the writer appends as they are still took the owned
+/// path: it was decoded and encoded, once.
 fn append_produce_data(data: ProduceData, log: &mut Log) -> Result<ProducePath, i16> {
-    let target = log.config_snapshot().compression_type;
-    let mut data = data;
-    data.apply_target_compression(target);
-    let result = match data {
-        ProduceData::Verbatim(batch) => log.append_verbatim(&batch).map(|_| ProducePath::Verbatim),
-        ProduceData::Owned(mut batch) => log.append(&mut batch).map(|_| ProducePath::Owned),
-        // `build_produce_data` builds only the two client-produce shapes. The
+    let path = match data {
+        ProduceData::Verbatim(_) => ProducePath::Verbatim,
+        ProduceData::Owned(_) | ProduceData::OwnedEncoded { .. } => ProducePath::Owned,
+        // `build_produce_data` builds only the client-produce shapes. The
         // control and commit-marker shapes come from the coordinator paths,
         // which never reach this seam.
         ProduceData::OwnedControl(_) | ProduceData::OwnedCommitMarker { .. } => {
-            unreachable!("build_produce_data yields only Verbatim and Owned")
+            unreachable!("build_produce_data yields only client-produce shapes")
+        }
+    };
+    let result = match data.resolve_for_append(&log.config_snapshot()) {
+        ProduceData::Verbatim(batch) => log.append_verbatim(&batch).map(|_| path),
+        ProduceData::Owned(mut batch) => log.append(&mut batch).map(|_| path),
+        ProduceData::OwnedEncoded { .. }
+        | ProduceData::OwnedControl(_)
+        | ProduceData::OwnedCommitMarker { .. } => {
+            unreachable!("a settled client job is Verbatim or Owned")
         }
     };
     result.map_err(|error| codes::from_broker_error(&BrokerError::from(error)))

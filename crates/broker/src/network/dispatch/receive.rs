@@ -142,9 +142,25 @@ async fn read_body<S: AsyncRead + Unpin>(
     size: usize,
     clock: &mut IdleClock,
 ) -> Result<Bytes, ReceiveError> {
+    // Read into the buffer's spare capacity rather than zero-filling it
+    // first: every request body is about to be overwritten in full. The
+    // reader is bounded to this frame's remaining bytes, so no read reaches
+    // into the next frame however much spare capacity the buffer has. Each
+    // read gets a fresh idle window, as `fill_within_idle` gives one.
     let mut body = BytesMut::with_capacity(size);
-    body.resize(size, 0);
-    fill_within_idle(stream, &mut body, clock).await?;
+    while body.len() < size {
+        let remaining = u64::try_from(size - body.len()).unwrap_or(u64::MAX);
+        let mut frame_rest = (&mut *stream).take(remaining);
+        let read = tokio::select! {
+            biased;
+            () = clock.expired() => return Err(ReceiveError::Idle),
+            result = frame_rest.read_buf(&mut body) => result?,
+        };
+        if read == 0 {
+            return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into());
+        }
+        clock.touch();
+    }
     Ok(body.freeze())
 }
 

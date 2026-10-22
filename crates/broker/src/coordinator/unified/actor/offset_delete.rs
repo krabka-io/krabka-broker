@@ -5,15 +5,20 @@
 //! partition of a topic for which `isSubscribedToTopic` holds. This module
 //! computes both from the live group: the group-level error, or the set of
 //! topics that the group subscribes to.
+//!
+//! It also does the write. Kafka tombstones a partition only when the group
+//! holds a committed or a pending transactional offset for it, and this
+//! module decides that and appends in the same actor turn.
 
 use {
-    super::ErrorCode,
+    super::{ErrorCode, chrono_now_ms, retention::append_tombstones},
     crate::{
         codes,
         coordinator::unified::{
             classic_state::{ClassicGroup as ClassicState, GroupState as ClassicGroupState},
             consumer_state::GroupState as ConsumerState,
             group::CoordinatorGroup,
+            offsets_log::OffsetsLog,
         },
     },
     bytes::Buf as _,
@@ -56,6 +61,51 @@ pub(super) fn offset_delete_guard(group: &CoordinatorGroup) -> Result<Subscribed
     } else {
         Err(codes::GROUP_ID_NOT_FOUND)
     }
+}
+
+/// Kafka's write half of `OffsetMetadataManager.deleteOffsets`: tombstones
+/// the keys of `requested` for which the group holds a committed offset
+/// (`hasCommittedOffset`) or an unresolved transactional one
+/// (`hasPendingTransactionalOffsets`), in request order, and then drops them
+/// from the group. A commit still waiting for the high watermark counts as
+/// committed, as Kafka's write operations read the newest state, and the
+/// tombstone supersedes it.
+///
+/// Reading the group and appending in one actor turn keeps a concurrent
+/// commit from landing between the check and the write. An unresolved
+/// transactional key counts whether its records are durable yet or only
+/// reserved, as for `DeleteGroups`. When no key is held nothing is appended.
+///
+/// # Errors
+///
+/// Returns the code of the failed append, which leaves the group as it was.
+pub(super) async fn delete_held_offsets(
+    group: &mut CoordinatorGroup,
+    offsets_log: &dyn OffsetsLog,
+    requested: &[(String, i32)],
+) -> Result<(), ErrorCode> {
+    let pending = group.unresolved_txn_keys();
+    let latest = group.latest_offsets();
+    let held: Vec<(String, i32)> = requested
+        .iter()
+        .filter(|key| latest.contains_key(*key) || pending.contains(*key))
+        .cloned()
+        .collect();
+    if held.is_empty() {
+        return Ok(());
+    }
+    if let Err(error) =
+        append_tombstones(offsets_log, &group.group_id, &held, None, chrono_now_ms()).await
+    {
+        tracing::warn!(
+            group_id = %group.group_id,
+            %error,
+            "OffsetDelete: the tombstone write failed",
+        );
+        return Err(codes::from_broker_error(&error));
+    }
+    group.drop_offsets(&held);
+    Ok(())
 }
 
 /// `ClassicGroup.validateOffsetDelete` and `ClassicGroup.isSubscribedToTopic`.
@@ -118,6 +168,9 @@ fn decode_subscribed_topics(metadata: &[u8]) -> Option<Vec<String>> {
         .ok()
         .map(|subscription| subscription.topics)
 }
+
+#[cfg(test)]
+mod held_offsets_tests;
 
 #[cfg(test)]
 mod tests {

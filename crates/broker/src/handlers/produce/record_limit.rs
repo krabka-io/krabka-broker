@@ -111,6 +111,7 @@ mod tests {
         };
         PreparedBatch {
             source,
+            encoded: None,
             attributes: batch.attributes,
             producer_id: -1,
             producer_epoch: -1,

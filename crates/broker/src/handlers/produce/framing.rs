@@ -9,9 +9,9 @@ use {
     crate::error::BrokerError,
     bytes::Bytes,
     krabka_protocol::{
-        Decode,
+        Decode, ProtocolError,
         owned::produce_request::ProduceRequest,
-        primitives::uuid::Uuid as WireUuid,
+        primitives::{fixed::get_i16, uuid::Uuid as WireUuid, varint::get_uvarint},
         records::{Attributes, RecordsPayload, count_records_in_v2_batches, produce_framing},
     },
 };
@@ -359,6 +359,46 @@ pub(super) fn decode_produce_request(
     Ok(ProduceFramed::from_owned(owned))
 }
 
+/// The `acks` field of a `Produce` request body, read without decoding the
+/// rest.
+///
+/// The dispatcher needs only this, to know whether a response is owed, and
+/// decoding the whole request for it framed every topic and partition a
+/// second time. `acks` is the first field before v3 and follows the
+/// transactional id from v3 on, a compact nullable string from v9.
+///
+/// # Errors
+///
+/// [`BrokerError::Protocol`] when the body ends before `acks`.
+pub(crate) fn produce_acks(body: &[u8], version: i16) -> Result<i16, BrokerError> {
+    let mut cursor = body;
+    if version >= 9 {
+        let length = usize::try_from(get_uvarint(&mut cursor)?).unwrap_or(usize::MAX);
+        skip(&mut cursor, length.saturating_sub(1))?;
+    } else if version >= 3 {
+        // A nullable string: -1 is null, and any other negative length is
+        // malformed, as the full decode would find.
+        match get_i16(&mut cursor)? {
+            -1 => {}
+            length => {
+                let length = usize::try_from(length)
+                    .map_err(|_| ProtocolError::InvalidValue("negative transactional id length"))?;
+                skip(&mut cursor, length)?;
+            }
+        }
+    }
+    Ok(get_i16(&mut cursor)?)
+}
+
+/// Advances `cursor` past `count` bytes, or fails as a truncated body.
+fn skip(cursor: &mut &[u8], count: usize) -> Result<(), BrokerError> {
+    let rest = cursor.get(count..).ok_or(ProtocolError::UnexpectedEof {
+        needed: count.saturating_sub(cursor.len()),
+    })?;
+    *cursor = rest;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use {super::*, crate::handlers::produce::test_support::encode_batch, assert2::assert};
@@ -430,5 +470,43 @@ mod tests {
         let want = batch.encoded_len();
         let payload = PartitionPayload::Owned(RecordsPayload::V2(vec![batch]));
         assert!(payload.largest_batch_len() == want);
+    }
+
+    #[test]
+    fn acks_are_read_from_every_produce_version() {
+        use krabka_protocol::Encode as _;
+        // Before v3 there is no transactional id: `acks` leads the body.
+        for version in [0_i16, 2] {
+            let mut body = (-1_i16).to_be_bytes().to_vec();
+            body.extend_from_slice(&30_000_i32.to_be_bytes());
+            assert!(produce_acks(&body, version).expect("acks") == -1);
+            assert!(produce_acks(&body[..1], version).is_err());
+        }
+        for version in [3_i16, 8, 9, 12] {
+            for (transactional_id, acks) in [
+                (None, -1_i16),
+                (Some("txn-a".to_owned()), 0),
+                (Some(String::new()), 1),
+            ] {
+                let request = ProduceRequest {
+                    transactional_id: transactional_id.clone(),
+                    acks,
+                    timeout_ms: 30_000,
+                    ..Default::default()
+                };
+                let mut body = bytes::BytesMut::new();
+                request.encode(&mut body, version).expect("encode");
+                assert!(
+                    produce_acks(&body, version).expect("acks") == acks,
+                    "v{version} {transactional_id:?}"
+                );
+                assert!(produce_acks(&body[..body.len().min(2) - 1], version).is_err());
+            }
+        }
+        // Before the compact encoding, a length below -1 is malformed rather
+        // than null.
+        let mut malformed = (-2_i16).to_be_bytes().to_vec();
+        malformed.extend_from_slice(&(-1_i16).to_be_bytes());
+        assert!(produce_acks(&malformed, 3).is_err());
     }
 }

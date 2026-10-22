@@ -1,0 +1,140 @@
+name: run a script on a BuildBuddy remote runner
+description: Run a bash script through `bb remote` when the run holds a BuildBuddy API key, and on this runner otherwise.
+
+# The heavy CI jobs -- `ci`, `coverage` and `cargo` -- compile on whatever
+# machine runs them. rustc codegen cannot use remote execution yet (see the
+# `build:rbe` block in .bazelrc), so on a GitHub runner that meant four cores
+# compiling, then downloading every test binary it ran. A BuildBuddy remote
+# runner is a Firecracker VM restored from a snapshot of the lane's last run:
+# its Bazel server, output tree and Cargo target directory are already warm,
+# and nothing comes back here but the log.
+#
+# Snapshots key on the remote instance, the platform properties, the VM shape
+# and the git branch, and fall back to the pull request's base and then the
+# default branch. `lane` is a platform property of its own so that each job
+# keeps a snapshot of its own state rather than restoring another job's.
+# Pushes to `main` always save one, which is what keeps every pull request
+# warm; a pull request saves one only when none exists for its branch.
+#
+# Bazel on the runner already reads and writes BuildBuddy's remote cache and
+# streams to its BES: run 39712230796's remote invocations show remote cache
+# hits with no flags of ours. The coverage job depends on that: its remote run
+# fills the cache so that a `bazel coverage` here only reads. A pull request's
+# run reads and never writes, as on a GitHub runner.
+#
+# A run without a key -- a fork's pull request -- runs the same script here,
+# after reclaiming the disk that a local build needs.
+
+inputs:
+  script:
+    description: The bash script to run.
+    required: true
+  lane:
+    description: A name that keeps this job's runner snapshot apart from other jobs'.
+    required: true
+  api-key:
+    description: A BuildBuddy API key. Empty means run here.
+    required: false
+    default: ""
+  upload:
+    description: Whether Bazel may write to the remote cache. Only trusted contexts should.
+    required: false
+    default: "false"
+  env:
+    description: Extra NAME=VALUE lines to set for the script, one per line. Not for secrets.
+    required: false
+    default: ""
+  cpu:
+    description: Cores for the remote runner.
+    required: false
+    default: "16"
+  memory:
+    description: Memory for the remote runner.
+    required: false
+    default: 64GB
+  disk:
+    description: Free disk for the remote runner. BuildBuddy caps it at 100GB.
+    required: false
+    default: 80GB
+  timeout:
+    description: How long the remote run may take.
+    required: false
+    default: 80m
+
+outputs:
+  remote:
+    description: Whether the script ran on a BuildBuddy remote runner.
+    value: ${{ steps.mode.outputs.remote }}
+
+runs:
+  using: composite
+  steps:
+    - id: mode
+      shell: bash
+      env:
+        API_KEY: ${{ inputs.api-key }}
+      run: |
+        if [ -n "${API_KEY}" ]; then
+          echo "remote=true" >>"${GITHUB_OUTPUT}"
+        else
+          echo "No BuildBuddy key on this run: the script runs on this runner."
+          echo "remote=false" >>"${GITHUB_OUTPUT}"
+        fi
+
+    - if: steps.mode.outputs.remote != 'true'
+      uses: ./.github/actions/reclaim-disk
+
+    - if: steps.mode.outputs.remote == 'true'
+      shell: bash
+      run: curl -fsSL --retry 5 --retry-all-errors https://install.buildbuddy.io | bash
+
+    - if: steps.mode.outputs.remote == 'true'
+      shell: bash
+      env:
+        BUILDBUDDY_API_KEY: ${{ inputs.api-key }}
+        SCRIPT: ${{ inputs.script }}
+        LANE: ${{ inputs.lane }}
+        UPLOAD: ${{ inputs.upload }}
+        EXTRA_ENV: ${{ inputs.env }}
+        CPU: ${{ inputs.cpu }}
+        MEMORY: ${{ inputs.memory }}
+        DISK: ${{ inputs.disk }}
+        TIMEOUT: ${{ inputs.timeout }}
+        SNAPSHOT_SAVE: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'none-available' || 'always' }}
+        REMOTE_PRELUDE: |
+          set -euo pipefail
+          if [ "${UPLOAD:-false}" != "true" ]; then
+            echo "build --noremote_upload_local_results" >>user.bazelrc
+          fi
+      run: |
+        set -euo pipefail
+        env_flags=(--env=UPLOAD="${UPLOAD}")
+        while IFS= read -r line; do
+          [ -n "${line}" ] && env_flags+=(--env="${line}")
+        done <<<"${EXTRA_ENV}"
+        bb remote \
+          --run_from_commit="${GITHUB_SHA}" \
+          --timeout="${TIMEOUT}" \
+          "${env_flags[@]}" \
+          --runner_exec_properties=krabka-ci-lane="${LANE}" \
+          --runner_exec_properties=EstimatedCPU="${CPU}" \
+          --runner_exec_properties=EstimatedMemory="${MEMORY}" \
+          --runner_exec_properties=EstimatedFreeDiskBytes="${DISK}" \
+          --runner_exec_properties=snapshot-read-policy=local-first \
+          --remote_run_header=x-buildbuddy-platform.remote-snapshot-save-policy="${SNAPSHOT_SAVE}" \
+          --script="$(printf '%s\n%s\n' "${REMOTE_PRELUDE}" "${SCRIPT}")"
+    - if: steps.mode.outputs.remote != 'true'
+      shell: bash
+      env:
+        SCRIPT: ${{ inputs.script }}
+        UPLOAD: ${{ inputs.upload }}
+        EXTRA_ENV: ${{ inputs.env }}
+      run: |
+        set -euo pipefail
+        while IFS= read -r line; do
+          [ -n "${line}" ] && export "${line?}"
+        done <<<"${EXTRA_ENV}"
+        if [ "${UPLOAD}" != "true" ]; then
+          echo "build --noremote_upload_local_results" >>user.bazelrc
+        fi
+        bash -c "${SCRIPT}"

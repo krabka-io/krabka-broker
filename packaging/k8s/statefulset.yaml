@@ -74,6 +74,32 @@ spec:
         # run as the image's `nonroot` user, so without fsGroup the format
         # step fails on `meta.properties` before it writes a byte.
         fsGroup: 65532
+        # RuntimeDefault is the container runtime's own profile. The profiles
+        # of containerd 2.x and of CRI-O refuse io_uring. A broker then writes
+        # the `O_DIRECT` data of `preallocate=true` segments from its write
+        # threads, and logs "no io_uring; direct writes use the write
+        # threads" at info level when its first such segment opens. Nothing
+        # else changes, and a broker that keeps `preallocate=false` (the
+        # default) does not use io_uring.
+        #
+        # To let those writes go through io_uring, install
+        # `profiles/krabka-io-uring.json` on each node. That file is the
+        # RuntimeDefault profile of containerd v2.4.2, for a container with
+        # no capabilities, plus the three io_uring system calls. Kubernetes
+        # reads `localhostProfile` relative to the kubelet's seccomp
+        # directory, `/var/lib/kubelet/seccomp` by default. Install it there
+        # as `krabka-io-uring.json`, or give it to the Security Profiles
+        # Operator as a `SeccompProfile` named `krabka-io-uring` and use
+        # `operator/krabka-io-uring.json`. Then replace the two
+        # `seccompProfile` lines below with these:
+        #
+        #   seccompProfile:
+        #     type: Localhost
+        #     localhostProfile: krabka-io-uring.json
+        #
+        # A pod whose profile file is not on its node does not start. The
+        # "Seccomp and io_uring" section of docs/operations/deploy.md has the
+        # commands and the checks.
         seccompProfile:
           type: RuntimeDefault
       initContainers:

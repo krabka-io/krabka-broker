@@ -92,7 +92,8 @@ use {
     crate::{
         error::MetadataLogError,
         log::{
-            AssignmentHandle, MetadataEventLog, MetadataEventStream, PartitionStart, RangeVisitor,
+            AssignmentHandle, KeyedEvent, MetadataEventLog, MetadataEventStream, PartitionStart,
+            RangeVisitor,
         },
     },
 };
@@ -414,6 +415,13 @@ impl MetadataEventLog for KafkaMetadataEventLog {
         self.publish_record(partition, Some(key), event).await
     }
 
+    async fn publish_keyed_group(
+        &self,
+        events: Vec<KeyedEvent>,
+    ) -> Result<Vec<i64>, MetadataLogError> {
+        self.publish_record_group(events).await
+    }
+
     fn subscribe(
         &self,
         assignment: Vec<PartitionStart>,
@@ -534,6 +542,64 @@ impl KafkaMetadataEventLog {
             .await
             .map_err(|e| MetadataLogError::Publish(e.to_string()))?;
         Ok(meta.offset)
+    }
+
+    /// Enqueue every record of the group, then wait for every
+    /// acknowledgment.
+    ///
+    /// The producer appends records to each partition's batch in enqueue order
+    /// and keeps one idempotent request in flight per partition, so a
+    /// partition's records land in the order given. Records stop being
+    /// enqueued at the first one the producer refuses, and every record
+    /// already enqueued is still awaited, so no record is in flight when this
+    /// returns.
+    async fn publish_record_group(
+        &self,
+        events: Vec<KeyedEvent>,
+    ) -> Result<Vec<i64>, MetadataLogError> {
+        let producer = self
+            .producer
+            .as_ref()
+            .ok_or_else(|| MetadataLogError::Publish("the metadata log is read-only".into()))?;
+        let mut failure = None;
+        let mut handles = Vec::with_capacity(events.len());
+        for KeyedEvent {
+            partition,
+            key,
+            event,
+        } in events
+        {
+            let enqueued = match producer_record(
+                &self.topic,
+                self.partition_count,
+                partition,
+                Some(key),
+                event,
+            ) {
+                Ok(record) => producer
+                    .enqueue(record)
+                    .await
+                    .map_err(|e| MetadataLogError::Publish(e.to_string())),
+                Err(error) => Err(error),
+            };
+            match enqueued {
+                Ok(handle) => handles.push(handle),
+                Err(error) => {
+                    failure = Some(error);
+                    break;
+                }
+            }
+        }
+        let mut offsets = Vec::with_capacity(handles.len());
+        for handle in handles {
+            match handle.await {
+                Ok(meta) => offsets.push(meta.offset),
+                Err(error) => {
+                    failure.get_or_insert_with(|| MetadataLogError::Publish(error.to_string()));
+                }
+            }
+        }
+        failure.map_or(Ok(offsets), Err)
     }
 
     /// A connection to the current leader of `partition`.

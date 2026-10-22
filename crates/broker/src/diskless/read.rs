@@ -517,9 +517,12 @@ mod tests {
         assert!(resolve(150).await == Ok((1, 200)));
         assert!(resolve(250).await == Ok((2, 300)));
         assert!(resolve(450).await == Ok((-1, -1)));
-        // The authoritative WAL floor can precede the local trim. Search
-        // again above that floor; clamping offset 2 would keep timestamp 300
-        // attached to record 3, whose timestamp is actually 400.
+        // The authoritative WAL floor can precede the local trim. Until the
+        // trim, local segment 2 (timestamp 300) is still the first segment
+        // whose largest timestamp reaches 150, and its only record is below
+        // the floor: Kafka 4.3.1's `searchOffsetInLocalLog` answers from that
+        // segment alone, so the seek finds nothing, as it does in Kafka while
+        // a segment below the log start waits for retention (#1388).
         handle.index.lock().await.raise_delete_floor(id, 0, 3);
         assert!(
             partition
@@ -529,6 +532,15 @@ mod tests {
                 .established_log_start()
                 .is_none()
         );
+        assert!(resolve(150).await == Ok((-1, -1)));
+        // Once the trim removes it, record 3 is the first candidate's match,
+        // with its own timestamp 400 rather than the clamped 300.
+        partition
+            .log
+            .lock()
+            .unwrap()
+            .delete_local_segments_through(krabka_ids::Offset(3))
+            .unwrap();
         assert!(resolve(150).await == Ok((3, 400)));
         partition
             .log

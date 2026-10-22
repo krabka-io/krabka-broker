@@ -98,8 +98,8 @@ pub use {
         MetadataEventQueueCapacity,
     },
     log::{
-        AssignmentHandle, InProcessMetadataEventLog, MetadataEventLog, MetadataEventRecord,
-        MetadataEventStream, PartitionStart, RangeVisitor,
+        AssignmentHandle, InProcessMetadataEventLog, KeyedEvent, MetadataEventLog,
+        MetadataEventRecord, MetadataEventStream, PartitionStart, RangeVisitor,
     },
     manager::{MetadataPartitionReadiness, TopicBasedRemoteLogMetadataManager},
     not_ready::NotReadyRlmm,

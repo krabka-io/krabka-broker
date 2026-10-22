@@ -1,0 +1,463 @@
+(* #"/workspace/crates/verified/src/composition/tiered_timestamp.rs" 95 0 102 33 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/logic/ord.rs" 34 8 34 21
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/std/option.rs" 193 19 193 79
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/std/option.rs" 194 18 197 9
+let%span soption'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/std/option.rs" 148 18 148 22
+let%span soption'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.14.0/src/std/option.rs" 149 18 149 22
+let%span sselection_model = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 13 10 26 1
+let%span sselection_model'0 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 162 8 196 9
+let%span sselection_decision = "/workspace/crates/verified/src/list_offsets/selection_decision.rs" 13 10 13 55
+let%span stiered_timestamp = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 103 21 103 68
+let%span stiered_timestamp'0 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 103 21 104 59
+let%span stiered_timestamp'1 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 105 20 105 66
+let%span stiered_timestamp'2 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 105 20 106 58
+let%span stiered_timestamp'3 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 108 8 108 59
+let%span stiered_timestamp'4 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 108 71 108 73
+let%span stiered_timestamp'5 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 108 75 108 77
+let%span stiered_timestamp'6 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 108 8 108 79
+let%span stiered_timestamp'7 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 110 40 110 42
+let%span stiered_timestamp'8 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 110 14 110 43
+let%span stiered_timestamp'9 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 109 4 115 6
+let%span stiered_timestamp'10 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 67 11 67 71
+let%span stiered_timestamp'11 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 68 11 68 81
+let%span stiered_timestamp'12 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 69 11 69 11
+let%span stiered_timestamp'13 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 71 11 71 11
+let%span stiered_timestamp'14 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 73 10 94 1
+let%span stiered_timestamp'15 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 34 11 34 41
+let%span stiered_timestamp'16 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 35 10 43 1
+let%span stiered_timestamp'17 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 104 33 104 50
+let%span stiered_timestamp'18 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 104 33 104 58
+let%span stiered_timestamp'19 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 106 33 106 49
+let%span stiered_timestamp'20 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 106 33 106 57
+let%span stiered_timestamp'21 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 25 8 26 74
+let%span stiered_timestamp'22 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 104 13 104 32
+let%span stiered_timestamp'23 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 106 13 106 32
+let%span stimestamp_candidate = "/workspace/crates/verified/src/list_offsets/timestamp_candidate.rs" 7 10 7 63
+let%span stimestamp_candidate'0 = "/workspace/crates/verified/src/list_offsets/timestamp_candidate.rs" 8 10 13 1
+let%span stimestamp_candidate'1 = "/workspace/crates/verified/src/list_offsets/timestamp_candidate.rs" 14 10 17 1
+
+use creusot.slice.Slice64
+use creusot.int.Int64
+use creusot.int.UInt64
+use seq.Seq
+use creusot.prelude.Opaque
+use creusot.prelude.Any
+use creusot.int.Int16
+use creusot.int.Int32
+use int.Int
+
+type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+
+type tup2_ref_slice_ref_slice_tup2_i64_i64_ref_slice_i64 = {
+  f0'0: Slice64.slice (Slice64.slice tup2_i64_i64);
+  f1'0: Slice64.slice Int64.t }
+
+type tup2_usize_usize = { f0'1: UInt64.t; f1'1: UInt64.t }
+
+type t_Option_tup2_usize_usize = None | Some tup2_usize_usize
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate first_candidate [#"/workspace/crates/verified/src/composition/tiered_timestamp.rs" 23 0 23 74] (largest: Seq.seq Int64.t) (target: int) (candidate: int) =
+  [%#stiered_timestamp'21] 0 <= candidate
+  /\ candidate < Seq.length largest
+  /\ ge_log_Int (Int64.to_int (Seq.get largest candidate)) target
+  /\ (forall i: int. 0 <= i /\ i < candidate -> Int64.to_int (Seq.get largest i) < target)
+
+let first_candidate_record (tier: tup2_ref_slice_ref_slice_tup2_i64_i64_ref_slice_i64) (minimum: Int64.t)
+  (target: Int64.t) (return (x: t_Option_tup2_usize_usize)) =
+{[@stop_split] [@expl:first_candidate_record requires] [%#stiered_timestamp'15] Seq.length (Slice64.view tier.f0'0)
+  = Seq.length (Slice64.view tier.f1'0)}
+  any
+  [ return (result: t_Option_tup2_usize_usize) ->
+  {[@stop_split] [@expl:first_candidate_record ensures] [%#stiered_timestamp'16] match result with
+      | Some {f0'1 = segment; f1'1 = record} -> first_candidate (Slice64.view tier.f1'0) (Int64.to_int target) (UInt64.t'int segment)
+      /\ UInt64.t'int record < Seq.length (Slice64.view (Seq.get (Slice64.view tier.f0'0) (UInt64.t'int segment)))
+      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view tier.f0'0) (UInt64.t'int segment))) (UInt64.t'int record)).f0) (Int64.to_int minimum)
+      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view tier.f0'0) (UInt64.t'int segment))) (UInt64.t'int record)).f1) (Int64.to_int target)
+      /\ (forall i: int. 0 <= i /\ i < UInt64.t'int record
+        -> Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view tier.f0'0) (UInt64.t'int segment))) i).f0
+          < Int64.to_int minimum
+        \/ Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view tier.f0'0) (UInt64.t'int segment))) i).f1
+        < Int64.to_int target)
+      | None -> forall c: int, i: int. first_candidate (Slice64.view tier.f1'0) (Int64.to_int target) c
+          /\ 0 <= i /\ i < Seq.length (Slice64.view (Seq.get (Slice64.view tier.f0'0) c))
+        -> Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view tier.f0'0) c)) i).f0 < Int64.to_int minimum
+        \/ Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view tier.f0'0) c)) i).f1 < Int64.to_int target
+      end}
+    (! return {result}) ]
+
+type closure0 = { c0: Slice64.slice (Slice64.slice tup2_i64_i64) }
+
+let closure0 [#"/workspace/crates/verified/src/composition/tiered_timestamp.rs" 104 13 104 32] [@coma:extspec]
+  (self: closure0) (_0: tup2_usize_usize) (return (x: tup2_i64_i64)) = bb0
+  [ bb0 = s0
+    [ s0 = [ &segment <- _0.f0'1 ] s1
+    | s1 = [ &record <- _0.f1'1 ] s2
+    | s2 = [ &_5 <- segment ] s3
+    | s3 = Opaque.fresh_ptr
+        (fun (_ptr: Opaque.ptr) -> -{Slice64.slice_ptr_len _ptr = Slice64.length self.c0}- [ &_6 <- _ptr ] s4)
+    | s4 = [ &_7 <- Slice64.slice_ptr_len _6 ] s5
+    | s5 = [ &_8 <- UInt64.lt _5 _7 ] s6
+    | s6 = {[@expl:index in bounds] [%#stiered_timestamp'17] _8} s7
+    | s7 = [ &_10 <- record ] s8
+    | s8 = Opaque.fresh_ptr
+        (fun (_ptr: Opaque.ptr) ->
+          Slice64.get [%#stiered_timestamp'18] <Slice64.slice tup2_i64_i64> {self.c0} {_5}
+            (fun (r: Slice64.slice tup2_i64_i64) ->
+              -{Slice64.slice_ptr_len _ptr = Slice64.length r}-
+              [ &_11 <- _ptr ] s9))
+    | s9 = [ &_12 <- Slice64.slice_ptr_len _11 ] s10
+    | s10 = [ &_13 <- UInt64.lt _10 _12 ] s11
+    | s11 = {[@expl:index in bounds] [%#stiered_timestamp'18] _13} s12
+    | s12 = Slice64.get [%#stiered_timestamp'18] <Slice64.slice tup2_i64_i64> {self.c0} {_5}
+        (fun (r: Slice64.slice tup2_i64_i64) ->
+          Slice64.get [%#stiered_timestamp'18] <tup2_i64_i64> {r} {_10}
+            (fun (r'0: tup2_i64_i64) -> [ &_ret <- r'0 ] s13))
+    | s13 = return {_ret} ] ]
+  [ & _ret: tup2_i64_i64 = Any.any_l ()
+  | & self: closure0 = self
+  | & _0: tup2_usize_usize = _0
+  | & segment: UInt64.t = Any.any_l ()
+  | & record: UInt64.t = Any.any_l ()
+  | & _5: UInt64.t = Any.any_l ()
+  | & _6: Opaque.ptr = Any.any_l ()
+  | & _7: UInt64.t = Any.any_l ()
+  | & _8: bool = Any.any_l ()
+  | & _10: UInt64.t = Any.any_l ()
+  | & _11: Opaque.ptr = Any.any_l ()
+  | & _12: UInt64.t = Any.any_l ()
+  | & _13: bool = Any.any_l () ] [ return (result: tup2_i64_i64) -> return {result} ]
+
+meta "rewrite_def" predicate closure0'pre
+
+meta "rewrite_def" predicate closure0'post'return
+
+type t_Option_tup2_i64_i64 = None'0 | Some'0 tup2_i64_i64
+
+predicate precondition_closure0 (self: closure0) (args: tup2_usize_usize) =
+  [%#stiered_timestamp'22] let _0 = args in closure0'pre self _0
+
+meta "rewrite_def" predicate precondition_closure0
+
+predicate resolve_closure0 [@inline:trivial] (_1: closure0) = true
+
+meta "rewrite_def" predicate resolve_closure0
+
+predicate postcondition_once_closure0 (self: closure0) (args: tup2_usize_usize) (result: tup2_i64_i64) =
+  [%#stiered_timestamp'22] let _0 = args in closure0'post'return self _0 result
+
+meta "rewrite_def" predicate postcondition_once_closure0
+
+let map_tup2_usize_usize (self: t_Option_tup2_usize_usize) (f: closure0) (return (x: t_Option_tup2_i64_i64)) =
+{[@stop_split] [@expl:map requires] [%#soption] match self with
+    | None -> true
+    | Some t -> precondition_closure0 f t
+    end}
+  any
+  [ return (result: t_Option_tup2_i64_i64) -> {[@stop_split] [@expl:map ensures] [%#soption'0] match self with
+      | None -> resolve_closure0 f /\ result = None'0
+      | Some t -> exists r: tup2_i64_i64. result = Some'0 r /\ postcondition_once_closure0 f t r
+      end}
+    (! return {result}) ]
+
+type closure1 = { c0'0: Slice64.slice (Slice64.slice tup2_i64_i64) }
+
+let closure1 [#"/workspace/crates/verified/src/composition/tiered_timestamp.rs" 106 13 106 32] [@coma:extspec]
+  (self: closure1) (_0: tup2_usize_usize) (return (x: tup2_i64_i64)) = bb0
+  [ bb0 = s0
+    [ s0 = [ &segment <- _0.f0'1 ] s1
+    | s1 = [ &record <- _0.f1'1 ] s2
+    | s2 = [ &_5 <- segment ] s3
+    | s3 = Opaque.fresh_ptr
+        (fun (_ptr: Opaque.ptr) -> -{Slice64.slice_ptr_len _ptr = Slice64.length self.c0'0}- [ &_6 <- _ptr ] s4)
+    | s4 = [ &_7 <- Slice64.slice_ptr_len _6 ] s5
+    | s5 = [ &_8 <- UInt64.lt _5 _7 ] s6
+    | s6 = {[@expl:index in bounds] [%#stiered_timestamp'19] _8} s7
+    | s7 = [ &_10 <- record ] s8
+    | s8 = Opaque.fresh_ptr
+        (fun (_ptr: Opaque.ptr) ->
+          Slice64.get [%#stiered_timestamp'20] <Slice64.slice tup2_i64_i64> {self.c0'0} {_5}
+            (fun (r: Slice64.slice tup2_i64_i64) ->
+              -{Slice64.slice_ptr_len _ptr = Slice64.length r}-
+              [ &_11 <- _ptr ] s9))
+    | s9 = [ &_12 <- Slice64.slice_ptr_len _11 ] s10
+    | s10 = [ &_13 <- UInt64.lt _10 _12 ] s11
+    | s11 = {[@expl:index in bounds] [%#stiered_timestamp'20] _13} s12
+    | s12 = Slice64.get [%#stiered_timestamp'20] <Slice64.slice tup2_i64_i64> {self.c0'0} {_5}
+        (fun (r: Slice64.slice tup2_i64_i64) ->
+          Slice64.get [%#stiered_timestamp'20] <tup2_i64_i64> {r} {_10}
+            (fun (r'0: tup2_i64_i64) -> [ &_ret <- r'0 ] s13))
+    | s13 = return {_ret} ] ]
+  [ & _ret: tup2_i64_i64 = Any.any_l ()
+  | & self: closure1 = self
+  | & _0: tup2_usize_usize = _0
+  | & segment: UInt64.t = Any.any_l ()
+  | & record: UInt64.t = Any.any_l ()
+  | & _5: UInt64.t = Any.any_l ()
+  | & _6: Opaque.ptr = Any.any_l ()
+  | & _7: UInt64.t = Any.any_l ()
+  | & _8: bool = Any.any_l ()
+  | & _10: UInt64.t = Any.any_l ()
+  | & _11: Opaque.ptr = Any.any_l ()
+  | & _12: UInt64.t = Any.any_l ()
+  | & _13: bool = Any.any_l () ] [ return (result: tup2_i64_i64) -> return {result} ]
+
+meta "rewrite_def" predicate closure1'pre
+
+meta "rewrite_def" predicate closure1'post'return
+
+predicate precondition_closure1 (self: closure1) (args: tup2_usize_usize) =
+  [%#stiered_timestamp'23] let _0 = args in closure1'pre self _0
+
+meta "rewrite_def" predicate precondition_closure1
+
+predicate resolve_closure1 [@inline:trivial] (_1: closure1) = true
+
+meta "rewrite_def" predicate resolve_closure1
+
+predicate postcondition_once_closure1 (self: closure1) (args: tup2_usize_usize) (result: tup2_i64_i64) =
+  [%#stiered_timestamp'23] let _0 = args in closure1'post'return self _0 result
+
+meta "rewrite_def" predicate postcondition_once_closure1
+
+let map_tup2_usize_usize'0 (self: t_Option_tup2_usize_usize) (f: closure1) (return (x: t_Option_tup2_i64_i64)) =
+{[@stop_split] [@expl:map requires] [%#soption] match self with
+    | None -> true
+    | Some t -> precondition_closure1 f t
+    end}
+  any
+  [ return (result: t_Option_tup2_i64_i64) -> {[@stop_split] [@expl:map ensures] [%#soption'0] match self with
+      | None -> resolve_closure1 f /\ result = None'0
+      | Some t -> exists r: tup2_i64_i64. result = Some'0 r /\ postcondition_once_closure1 f t r
+      end}
+    (! return {result}) ]
+
+type tup2_Option_tup2_i64_i64_Option_tup2_i64_i64 = { f0'2: t_Option_tup2_i64_i64; f1'2: t_Option_tup2_i64_i64 }
+
+let earliest_timestamp_candidate (remote: t_Option_tup2_i64_i64) (local: t_Option_tup2_i64_i64)
+  (return (x: t_Option_tup2_i64_i64)) = any
+  [ return (result: t_Option_tup2_i64_i64) ->
+  {[@stop_split] [@expl:earliest_timestamp_candidate ensures] ([@stop_split] [@expl:earliest_timestamp_candidate ensures #0] [%#stimestamp_candidate] (result
+        = None'0)
+      = (remote = None'0 /\ local = None'0))
+    /\ ([@stop_split] [@expl:earliest_timestamp_candidate ensures #1] [%#stimestamp_candidate'0] match result with
+        | Some'0 {f0 = offset} -> (result = remote \/ result = local)
+        /\ match remote with
+            | Some'0 {f0 = r} -> Int64.to_int offset <= Int64.to_int r
+            | None'0 -> true
+            end
+        /\ match local with
+          | Some'0 {f0 = l} -> Int64.to_int offset <= Int64.to_int l
+          | None'0 -> true
+          end
+        | None'0 -> true
+        end)
+    /\ ([@stop_split] [@expl:earliest_timestamp_candidate ensures #2] [%#stimestamp_candidate'1] match { f0'2 = remote;
+                                                                                                         f1'2 = local } with
+      | {f0'2 = Some'0 {f0 = r}; f1'2 = Some'0 {f0 = l}} -> Int64.to_int r <= Int64.to_int l -> result = remote
+      | _ -> true
+      end)}
+    (! return {result}) ]
+
+predicate resolve_tup2_i64_i64 [@inline:trivial] (_1: tup2_i64_i64) = true
+
+meta "rewrite_def" predicate resolve_tup2_i64_i64
+
+let unwrap_or_tup2_i64_i64 (self: t_Option_tup2_i64_i64) (default: tup2_i64_i64) (return (x: tup2_i64_i64)) = any
+  [ return (result: tup2_i64_i64) ->
+  {[@stop_split] [@expl:unwrap_or_tup2_i64_i64 ensures] ([@stop_split] [@expl:unwrap_or ensures #0] [%#soption'1] self
+        = None'0 -> result = default)
+    /\ ([@stop_split] [@expl:unwrap_or ensures #1] [%#soption'2] self = None'0
+    \/ self = Some'0 result /\ resolve_tup2_i64_i64 default)}
+    (! return {result}) ]
+
+type t_ListOffsetsKind =
+  | Unsupported
+  | Earliest
+  | Latest
+  | MaxTimestamp
+  | EarliestLocal
+  | LatestTiered
+  | EarliestPendingUpload
+  | Timestamp
+
+let list_offsets_kind (timestamp: Int64.t) (version: Int16.t) (return (x: t_ListOffsetsKind)) = any
+  [ return (result: t_ListOffsetsKind) ->
+  {[@stop_split] [@expl:list_offsets_kind ensures] [%#sselection_model] match result with
+      | Earliest -> Int64.to_int timestamp = - 2
+      | Latest -> Int64.to_int timestamp = - 1
+      | MaxTimestamp -> Int64.to_int timestamp = - 3 /\ ge_log_Int (Int16.to_int version) 7
+      | EarliestLocal -> Int64.to_int timestamp = - 4 /\ ge_log_Int (Int16.to_int version) 8
+      | LatestTiered -> Int64.to_int timestamp = - 5 /\ ge_log_Int (Int16.to_int version) 9
+      | EarliestPendingUpload -> Int64.to_int timestamp = - 6 /\ ge_log_Int (Int16.to_int version) 11
+      | Timestamp -> ge_log_Int (Int64.to_int timestamp) 0
+      | Unsupported -> Int64.to_int timestamp < - 6
+      \/ Int64.to_int timestamp = - 6 /\ Int16.to_int version < 11
+      \/ Int64.to_int timestamp = - 5 /\ Int16.to_int version < 9
+      \/ Int64.to_int timestamp = - 4 /\ Int16.to_int version < 8
+      \/ Int64.to_int timestamp = - 3 /\ Int16.to_int version < 7
+      end}
+    (! return {result}) ]
+
+type t_ListOffsetsSelectionFacts = {
+  kind: t_ListOffsetsKind;
+  candidate_offset: Int64.t;
+  candidate_timestamp: Int64.t;
+  candidate_epoch: Int32.t;
+  last_fetchable: Int64.t }
+
+type t_ListOffsetsSelectionDecision = RejectMalformed | Unknown | Resolved Int64.t Int64.t Int32.t
+
+function list_offsets_selection_model [#"/workspace/crates/verified/src/list_offsets/selection_model.rs" 158 0 160 33] (facts: t_ListOffsetsSelectionFacts) : t_ListOffsetsSelectionDecision
+ = [%#sselection_model'0] if facts.kind = Unsupported
+  \/ Int64.to_int facts.candidate_offset < - 1
+  \/ Int32.to_int facts.candidate_epoch < - 1 \/ Int64.to_int facts.last_fetchable < 0 then
+    RejectMalformed
+  else
+    if Int64.to_int facts.candidate_offset = - 1 then
+      Unknown
+    else
+      if facts.kind = Earliest \/ facts.kind = EarliestLocal then
+        Resolved (facts.candidate_offset) (facts.candidate_timestamp) (facts.candidate_epoch)
+      else
+        if facts.kind = Latest then
+          Resolved (if Int64.to_int facts.last_fetchable < Int64.to_int facts.candidate_offset then
+            facts.last_fetchable
+          else
+            facts.candidate_offset
+          ) (facts.candidate_timestamp) (facts.candidate_epoch)
+        else
+          if Int64.to_int facts.candidate_offset < Int64.to_int facts.last_fetchable then
+            Resolved (facts.candidate_offset) (facts.candidate_timestamp) (facts.candidate_epoch)
+          else
+            Unknown
+        
+      
+    
+  
+
+
+let list_offsets_selection_decision (facts: t_ListOffsetsSelectionFacts) (return (x: t_ListOffsetsSelectionDecision)) =
+any
+  [ return (result: t_ListOffsetsSelectionDecision) ->
+  {[@stop_split] [@expl:list_offsets_selection_decision ensures] [%#sselection_decision] result
+    = list_offsets_selection_model facts}
+    (! return {result}) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let tiered_timestamp_lookup_answers_first_candidate [#"/workspace/crates/verified/src/composition/tiered_timestamp.rs" 95 0 102 33]
+  (remote: tup2_ref_slice_ref_slice_tup2_i64_i64_ref_slice_i64)
+  (local: tup2_ref_slice_ref_slice_tup2_i64_i64_ref_slice_i64) (target: Int64.t) (minimum: Int64.t) (bound: Int64.t)
+  (epoch: Int32.t) (return (x: t_ListOffsetsSelectionDecision)) =
+{[@stop_split] [@expl:tiered_timestamp_lookup_answers_first_candidate requires] ([@stop_split] [@expl:tiered_timestamp_lookup_answers_first_candidate requires #0] [%#stiered_timestamp'10] ge_log_Int (Int64.to_int target) 0
+    /\ ge_log_Int (Int64.to_int minimum) 0
+    /\ ge_log_Int (Int64.to_int bound) 0 /\ ge_log_Int (Int32.to_int epoch) (- 1))
+  /\ ([@stop_split] [@expl:tiered_timestamp_lookup_answers_first_candidate requires #1] [%#stiered_timestamp'11] Seq.length (Slice64.view remote.f0'0)
+      = Seq.length (Slice64.view remote.f1'0)
+    /\ Seq.length (Slice64.view local.f0'0) = Seq.length (Slice64.view local.f1'0))
+  /\ ([@stop_split] [@expl:tiered_timestamp_lookup_answers_first_candidate requires #2] [%#stiered_timestamp'12] forall s: int, i: int, j: int. 0
+          <= s
+        /\ s < Seq.length (Slice64.view remote.f0'0)
+        /\ 0 <= i /\ i < j /\ j < Seq.length (Slice64.view (Seq.get (Slice64.view remote.f0'0) s))
+      -> Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view remote.f0'0) s)) i).f0
+      < Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view remote.f0'0) s)) j).f0)
+  /\ ([@stop_split] [@expl:tiered_timestamp_lookup_answers_first_candidate requires #3] [%#stiered_timestamp'13] forall s: int, i: int, j: int. 0
+        <= s
+      /\ s < Seq.length (Slice64.view local.f0'0)
+      /\ 0 <= i /\ i < j /\ j < Seq.length (Slice64.view (Seq.get (Slice64.view local.f0'0) s))
+    -> Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view local.f0'0) s)) i).f0
+    < Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view local.f0'0) s)) j).f0)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = first_candidate_record [%#stiered_timestamp] {remote} {minimum} {target}
+        (fun (_x: t_Option_tup2_usize_usize) -> [ &_31 <- _x ] s1)
+    | s1 = [ &_35 <- { c0 = remote.f0'0 } ] s2
+    | s2 = map_tup2_usize_usize [%#stiered_timestamp'0] {_31} {_35}
+        (fun (_x: t_Option_tup2_i64_i64) -> [ &remote_hit <- _x ] s3)
+    | s3 = first_candidate_record [%#stiered_timestamp'1] {local} {minimum} {target}
+        (fun (_x: t_Option_tup2_usize_usize) -> [ &_38 <- _x ] s4)
+    | s4 = [ &_42 <- { c0'0 = local.f0'0 } ] s5
+    | s5 = map_tup2_usize_usize'0 [%#stiered_timestamp'2] {_38} {_42}
+        (fun (_x: t_Option_tup2_i64_i64) -> [ &local_hit <- _x ] s6)
+    | s6 = earliest_timestamp_candidate [%#stiered_timestamp'3] {remote_hit} {local_hit}
+        (fun (_x: t_Option_tup2_i64_i64) -> [ &_47 <- _x ] s7)
+    | s7 = [ &_50 <- { f0 = ([%#stiered_timestamp'4] (-1: Int64.t)); f1 = ([%#stiered_timestamp'5] (-1: Int64.t)) } ] s8
+    | s8 = unwrap_or_tup2_i64_i64 [%#stiered_timestamp'6] {_47} {_50} (fun (_x: tup2_i64_i64) -> [ &_46 <- _x ] s9)
+    | s9 = [ &offset <- _46.f0 ] s10
+    | s10 = [ &timestamp <- _46.f1 ] s11
+    | s11 = list_offsets_kind [%#stiered_timestamp'8] {target} {[%#stiered_timestamp'7] (11: Int16.t)}
+        (fun (_x: t_ListOffsetsKind) -> [ &_52 <- _x ] s12)
+    | s12 = [ &_51 <- { kind = _52;
+                        candidate_offset = offset;
+                        candidate_timestamp = timestamp;
+                        candidate_epoch = epoch;
+                        last_fetchable = bound } ] s13
+    | s13 = list_offsets_selection_decision [%#stiered_timestamp'9] {_51}
+        (fun (_x: t_ListOffsetsSelectionDecision) -> [ &_ret <- _x ] s14)
+    | s14 = return {_ret} ] ]
+  [ & _ret: t_ListOffsetsSelectionDecision = Any.any_l ()
+  | & remote: tup2_ref_slice_ref_slice_tup2_i64_i64_ref_slice_i64 = remote
+  | & local: tup2_ref_slice_ref_slice_tup2_i64_i64_ref_slice_i64 = local
+  | & target: Int64.t = target
+  | & minimum: Int64.t = minimum
+  | & bound: Int64.t = bound
+  | & epoch: Int32.t = epoch
+  | & remote_hit: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & _31: t_Option_tup2_usize_usize = Any.any_l ()
+  | & _35: closure0 = Any.any_l ()
+  | & local_hit: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & _38: t_Option_tup2_usize_usize = Any.any_l ()
+  | & _42: closure1 = Any.any_l ()
+  | & offset: Int64.t = Any.any_l ()
+  | & timestamp: Int64.t = Any.any_l ()
+  | & _46: tup2_i64_i64 = Any.any_l ()
+  | & _47: t_Option_tup2_i64_i64 = Any.any_l ()
+  | & _50: tup2_i64_i64 = Any.any_l ()
+  | & _51: t_ListOffsetsSelectionFacts = Any.any_l ()
+  | & _52: t_ListOffsetsKind = Any.any_l () ])
+  [ return (result: t_ListOffsetsSelectionDecision) ->
+  {[@stop_split] [@expl:tiered_timestamp_lookup_answers_first_candidate ensures] [%#stiered_timestamp'14] match result with
+      | RejectMalformed -> false
+      | Resolved offset timestamp leader_epoch -> Int64.to_int minimum <= Int64.to_int offset
+      /\ Int64.to_int offset < Int64.to_int bound
+      /\ ge_log_Int (Int64.to_int timestamp) (Int64.to_int target)
+      /\ leader_epoch = epoch
+      /\ ((exists s: int, i: int. first_candidate (Slice64.view remote.f1'0) (Int64.to_int target) s
+            /\ 0 <= i
+            /\ i < Seq.length (Slice64.view (Seq.get (Slice64.view remote.f0'0) s))
+            /\ { f0 = offset; f1 = timestamp } = Seq.get (Slice64.view (Seq.get (Slice64.view remote.f0'0) s)) i)
+        \/ (exists s: int, i: int. first_candidate (Slice64.view local.f1'0) (Int64.to_int target) s
+          /\ 0 <= i
+          /\ i < Seq.length (Slice64.view (Seq.get (Slice64.view local.f0'0) s))
+          /\ { f0 = offset; f1 = timestamp } = Seq.get (Slice64.view (Seq.get (Slice64.view local.f0'0) s)) i))
+      /\ (forall s: int, i: int. first_candidate (Slice64.view remote.f1'0) (Int64.to_int target) s
+            /\ 0 <= i
+            /\ i < Seq.length (Slice64.view (Seq.get (Slice64.view remote.f0'0) s))
+            /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view remote.f0'0) s)) i).f0) (Int64.to_int minimum)
+            /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view remote.f0'0) s)) i).f1) (Int64.to_int target)
+          -> Int64.to_int offset <= Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view remote.f0'0) s)) i).f0)
+      /\ (forall s: int, i: int. first_candidate (Slice64.view local.f1'0) (Int64.to_int target) s
+          /\ 0 <= i
+          /\ i < Seq.length (Slice64.view (Seq.get (Slice64.view local.f0'0) s))
+          /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view local.f0'0) s)) i).f0) (Int64.to_int minimum)
+          /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view local.f0'0) s)) i).f1) (Int64.to_int target)
+        -> Int64.to_int offset <= Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view local.f0'0) s)) i).f0)
+      | Unknown -> (forall s: int, i: int. first_candidate (Slice64.view remote.f1'0) (Int64.to_int target) s
+            /\ 0 <= i /\ i < Seq.length (Slice64.view (Seq.get (Slice64.view remote.f0'0) s))
+          -> Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view remote.f0'0) s)) i).f0 < Int64.to_int minimum
+          \/ Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view remote.f0'0) s)) i).f1 < Int64.to_int target
+          \/ ge_log_Int (Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view remote.f0'0) s)) i).f0) (Int64.to_int bound))
+      /\ (forall s: int, i: int. first_candidate (Slice64.view local.f1'0) (Int64.to_int target) s
+          /\ 0 <= i /\ i < Seq.length (Slice64.view (Seq.get (Slice64.view local.f0'0) s))
+        -> Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view local.f0'0) s)) i).f0 < Int64.to_int minimum
+        \/ Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view local.f0'0) s)) i).f1 < Int64.to_int target
+        \/ ge_log_Int (Int64.to_int (Seq.get (Slice64.view (Seq.get (Slice64.view local.f0'0) s)) i).f0) (Int64.to_int bound))
+      end}
+    (! return {result}) ]

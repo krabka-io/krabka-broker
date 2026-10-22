@@ -9,12 +9,17 @@
 //! repeated runs and allow the larger of a fixed floor and a multiple of the
 //! relative median absolute deviation: [`calibrated_tolerance`].
 //!
+//! Each criterion summary also names the bench executables its pass ran, as
+//! [`executables`] verified them, so a verdict says which binaries produced
+//! its numbers.
+//!
 //! Note: If a shared `krabka-tools` repository is established across the
 //! `krabka-io` organization, this crate can be migrated there as a common
 //! benchmark utility for `krabka-broker`, `krabka-protocol`, and `krabka-client-rs`.
 
 pub mod budget;
 pub mod contract;
+pub mod executables;
 mod num;
 pub mod record;
 pub mod render;
@@ -23,6 +28,7 @@ use {
     budget::evaluate,
     clap::{Parser, Subcommand},
     contract::{BudgetError, Contract, contract_digest},
+    executables::{BenchExecutable, ExecutableManifest, manifest_from_cargo_messages, verify_pass},
     record::{PerformanceRecord, assemble},
     regex::Regex,
     render::render_markdown,
@@ -106,6 +112,49 @@ pub enum ParseBenchesError {
     /// The configured tolerance was negative, NaN, or infinite.
     #[error("minimum tolerance must be a finite non-negative ratio")]
     InvalidTolerance,
+
+    /// Cargo's JSON messages named no bench executable.
+    #[error("cargo built no bench executable")]
+    NoBenchExecutables,
+
+    /// A pass's Cargo log named no executable that it ran.
+    #[error("the cargo log names no bench executable that ran")]
+    NoExecutableRan,
+
+    /// An executable manifest was built from a different commit than the pass.
+    #[error("executables were built from {manifest} but the pass is labelled {pass}")]
+    CommitMismatch {
+        /// The commit the manifest records.
+        manifest: String,
+        /// The commit the pass was labelled with.
+        pass: String,
+    },
+
+    /// A pass ran an executable that its side's manifest does not list.
+    #[error("pass ran '{0}', which its side did not prebuild")]
+    UnrecordedExecutable(PathBuf),
+
+    /// A prebuilt executable's bytes changed after the manifest recorded them.
+    #[error("executable '{0}' changed after it was prebuilt")]
+    ExecutableChanged(PathBuf),
+
+    /// A side's summaries name no executable.
+    #[error("{0} summaries do not record which executables ran")]
+    MissingExecutableIdentity(&'static str),
+
+    /// A side's passes ran different executables.
+    #[error("{0} passes ran different executables")]
+    ExecutableDrift(&'static str),
+
+    /// Reference and candidate ran the same executable file.
+    #[error(
+        "reference and candidate both ran '{0}'; they must build into separate target directories"
+    )]
+    SharedExecutable(PathBuf),
+
+    /// A broker performance lane command failed.
+    #[error(transparent)]
+    Budget(#[from] BudgetError),
 }
 
 /// A single benchmark measurement in nanoseconds per iteration.
@@ -138,6 +187,9 @@ pub struct BenchmarkSummary {
     pub timestamp: String,
     /// Map of canonical benchmark names to metrics, sorted alphabetically.
     pub benchmarks: BTreeMap<String, BenchmarkMetric>,
+    /// The bench executables this pass ran; empty when none were recorded.
+    #[serde(default)]
+    pub executables: Vec<BenchExecutable>,
 }
 
 /// One benchmark's variance-calibrated reference/candidate decision.
@@ -162,6 +214,10 @@ pub struct BenchmarkVerdict {
     pub reference_commits: Vec<String>,
     /// Exact commits represented by the candidate samples.
     pub candidate_commits: Vec<String>,
+    /// The executables every reference pass ran.
+    pub reference_executables: Vec<BenchExecutable>,
+    /// The executables every candidate pass ran.
+    pub candidate_executables: Vec<BenchExecutable>,
     /// Per-benchmark decisions.
     pub benchmarks: BTreeMap<String, BenchmarkComparison>,
     /// True only when every benchmark passed.
@@ -200,7 +256,30 @@ pub fn calibrated_tolerance(
     floor.max(multiplier * reference_spread.max(candidate_spread))
 }
 
+/// The executables every summary of one side ran.
+fn side_executables(
+    side: &'static str,
+    summaries: &[BenchmarkSummary],
+) -> Result<Vec<BenchExecutable>, ParseBenchesError> {
+    let first = &summaries[0].executables;
+    if first.is_empty() {
+        return Err(ParseBenchesError::MissingExecutableIdentity(side));
+    }
+    if summaries
+        .iter()
+        .any(|summary| summary.executables != *first)
+    {
+        return Err(ParseBenchesError::ExecutableDrift(side));
+    }
+    Ok(first.clone())
+}
+
 /// Compare at least three repeated reference and candidate summaries.
+///
+/// Every summary must name the executables its pass ran. Each side's passes
+/// must all have run the same executables, and no executable path may appear
+/// on both sides: a shared path means the two revisions were measured with
+/// the same binary.
 ///
 /// The tolerance is three times the larger side's median absolute deviation,
 /// with `minimum_tolerance` as a floor. Bilateral all-zero samples are tied
@@ -210,7 +289,7 @@ pub fn calibrated_tolerance(
 /// # Errors
 ///
 /// Returns [`ParseBenchesError`] for too few samples, mismatched benchmark
-/// sets, or invalid measurements.
+/// sets, missing, drifting or shared executables, or invalid measurements.
 pub fn compare_summaries(
     reference: &[BenchmarkSummary],
     candidate: &[BenchmarkSummary],
@@ -243,6 +322,15 @@ pub fn compare_summaries(
             .ne(reference_names.iter().copied())
     }) {
         return Err(ParseBenchesError::BenchmarkSetMismatch);
+    }
+    let reference_executables = side_executables("reference", reference)?;
+    let candidate_executables = side_executables("candidate", candidate)?;
+    if let Some(shared) = reference_executables.iter().find(|reference| {
+        candidate_executables
+            .iter()
+            .any(|candidate| candidate.path == reference.path)
+    }) {
+        return Err(ParseBenchesError::SharedExecutable(shared.path.clone()));
     }
 
     let mut benchmarks = BTreeMap::new();
@@ -296,6 +384,8 @@ pub fn compare_summaries(
             .iter()
             .map(|summary| summary.commit.clone())
             .collect(),
+        reference_executables,
+        candidate_executables,
         benchmarks,
         passed,
     })
@@ -367,6 +457,22 @@ pub struct Args {
     #[arg(long, requires = "reference_dir")]
     pub candidate_dir: Option<PathBuf>,
 
+    /// The executable manifest this pass's side was prebuilt into. With it,
+    /// the summary records which executables the pass ran, and parsing fails
+    /// unless they are the manifest's, unchanged.
+    #[arg(long, requires = "cargo_log")]
+    pub executables: Option<PathBuf>,
+
+    /// Cargo's standard error from this pass, whose `Running` lines name the
+    /// executables it ran.
+    #[arg(long, requires = "executables")]
+    pub cargo_log: Option<PathBuf>,
+
+    /// The directory Cargo ran in, against which relative `Running` paths
+    /// resolve (defaults to the current directory).
+    #[arg(long, requires = "executables")]
+    pub source_dir: Option<PathBuf>,
+
     /// Minimum allowed slowdown percentage for comparison mode.
     #[arg(long, default_value_t = 3.0)]
     pub minimum_tolerance_percent: f64,
@@ -376,9 +482,21 @@ pub struct Args {
     pub command: Option<Command>,
 }
 
-/// The broker performance lane's commands.
+/// The commands besides parsing and comparing criterion output.
 #[derive(Subcommand, Debug, Clone)]
 pub enum Command {
+    /// Record the bench executables `cargo bench --no-run
+    /// --message-format=json` built, with their digests.
+    Executables {
+        /// Cargo's JSON messages.
+        cargo_messages: PathBuf,
+        /// The commit the executables were built from.
+        #[arg(long)]
+        commit: String,
+        /// Where to write the manifest JSON.
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Validate a regression contract and print its digest.
     CheckContract {
         /// The contract JSON.
@@ -560,12 +678,26 @@ pub fn generate_summary(args: &Args) -> Result<BenchmarkSummary, ParseBenchesErr
     let env_sha = std::env::var("GITHUB_SHA").ok();
     let commit = resolve_commit_sha(args.commit.as_deref(), env_sha.as_deref());
     let timestamp = format_rfc3339_utc(SystemTime::now());
+    let executables = match (&args.executables, &args.cargo_log) {
+        (Some(manifest), Some(cargo_log)) => {
+            let manifest: ExecutableManifest = serde_json::from_reader(File::open(manifest)?)?;
+            let source_dir = args.source_dir.clone().unwrap_or_default();
+            verify_pass(
+                &manifest,
+                &fs::read_to_string(cargo_log)?,
+                &source_dir,
+                &commit,
+            )?
+        }
+        _ => Vec::new(),
+    };
 
     Ok(BenchmarkSummary {
         suite: args.suite.clone(),
         commit,
         timestamp,
         benchmarks,
+        executables,
     })
 }
 
@@ -604,7 +736,7 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), BudgetError> {
     Ok(())
 }
 
-/// Run one broker performance lane command and say what it found.
+/// Run one subcommand and say what it found.
 ///
 /// The returned message is printed on success. `Ok(false)` means the command
 /// ran and the comparison was rejected; the verdict and Markdown are written
@@ -612,9 +744,27 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), BudgetError> {
 ///
 /// # Errors
 ///
-/// Returns [`BudgetError`] when an input cannot be read, parsed or judged.
-pub fn run_command(command: &Command) -> Result<(bool, String), BudgetError> {
+/// Returns [`ParseBenchesError`] when an input cannot be read, parsed or
+/// judged.
+pub fn run_command(command: &Command) -> Result<(bool, String), ParseBenchesError> {
     match command {
+        Command::Executables {
+            cargo_messages,
+            commit,
+            output,
+        } => {
+            let manifest =
+                manifest_from_cargo_messages(&fs::read_to_string(cargo_messages)?, commit)?;
+            write_json(output, &manifest)?;
+            Ok((
+                true,
+                format!(
+                    "{} bench executables of {commit} recorded in {}",
+                    manifest.executables.len(),
+                    output.display()
+                ),
+            ))
+        }
         Command::CheckContract { contract } => {
             let bytes = fs::read(contract)?;
             let parsed = Contract::from_json(&bytes)?;
