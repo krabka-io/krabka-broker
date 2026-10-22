@@ -10,7 +10,7 @@ DOCS_ONLY = [
     "docs/style_guides/code_style_guide.md",
     "README.md",
     "CHANGELOG.md",
-    ".github/workflows/ci.yml",
+    ".github/workflows/docs-pages.yml",
     "renovate.json",
 ]
 
@@ -132,16 +132,20 @@ def _test_the_proof_inputs_need_proofs(_ctx):
     check_eq("toolchain", touches_proofs(["rust-toolchain.toml"]), True)
 
 def _test_a_ci_workflow_edit_runs_the_jobs_it_could_change(_ctx):
-    # The workflow edit itself carries no Rust, but it can rewrite either job,
-    # so the pull request that edits it has to run them.
+    # The workflow edit itself carries no Rust, but it can rewrite any of these
+    # jobs, so the pull request that edits it has to run them.
     paths = [".github/workflows/ci.yml"]
-    check_eq("rust", touches_rust(paths), False)
+    check_eq("rust", touches_rust(paths), True)
     check_eq("kubernetes", touches_kubernetes(paths), True)
     check_eq("proofs", touches_proofs(paths), True)
 
+def _test_a_local_action_edit_runs_the_rust_jobs(_ctx):
+    # `.github/actions/buildbuddy-run` decides where the Cargo lane runs.
+    check_eq("action", touches_rust([".github/actions/buildbuddy-run/action.yml"]), True)
+    check_eq("other workflow", touches_rust([".github/workflows/docs-pages.yml"]), False)
+
 def _test_documentation_needs_no_scoped_job(_ctx):
-    docs = [path for path in DOCS_ONLY if path != ".github/workflows/ci.yml"]
-    check_eq("scopes", decide(True, docs), {"rust": False, "kubernetes": False, "proofs": False})
+    check_eq("scopes", decide(True, DOCS_ONLY), {"rust": False, "kubernetes": False, "proofs": False})
 
 def _test_an_unresolvable_base_runs_everything(_ctx):
     # Fail open: a diff nobody could compute is not a diff that changed
@@ -189,6 +193,7 @@ changed_scope_tests = suite("changed-scope", [
     _test_packaging_and_cluster_config_need_kubernetes,
     _test_the_proof_inputs_need_proofs,
     _test_a_ci_workflow_edit_runs_the_jobs_it_could_change,
+    _test_a_local_action_edit_runs_the_rust_jobs,
     _test_documentation_needs_no_scoped_job,
     _test_an_unresolvable_base_runs_everything,
     _test_a_resolved_base_defers_to_the_paths,
